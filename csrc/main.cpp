@@ -1,30 +1,11 @@
-#include <iostream>
-#include <glm/glm.hpp>
-#include <glm/gtc/type_ptr.hpp>
-
-
+#include "tgaimage.h"
 int main() {
-    const int d = 4;
-    const int N = d * d;
-    float *test = new float[N];
-    for (int i = 0; i < N; ++i) {
-        test[i] = i;
-    }
-
-    glm::mat4 A = glm::make_mat4(test);
-    for (int i = 0; i < d; ++i) {
-        for (int j = 0; j < d; ++j) {
-            std::cout << A[i][j] << std::endl;
-        }
-    }
-
-    glm::mat3 B = glm::mat3(glm::vec3(A[0]),glm::vec3(A[1]), glm::vec3(A[2]));
-    for (int i = 0; i < d-1; ++i) {
-        for (int j = 0; j < d-1; ++j) {
-            std::cout << B[i][j] << std::endl;
-        }
-    }
-
-    delete[] test;
+    TGAColor red;
+    red[2] = 255;
+    red[3] = 255;
+    TGAImage image(100, 100, TGAImage::RGB);
+    image.set(52, 41, red);
+    image.flip_vertically(); // i want to have the origin at the left bottom corner of the image
+    image.write_tga_file("output.tga");
     return 0;
 }
