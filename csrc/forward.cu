@@ -18,7 +18,6 @@ void project_gaussians_forward_impl(
     float *covs3d
 ) {
     int num_threads = 16;
-    printf("%.2f %.2f %.2f\n", scales[0], scales[1], scales[2]);
     project_gaussians_forward_kernel
     <<< (num_points + num_threads - 1) / num_threads, num_threads >>> (
         num_points, scales, glob_scale, rots_quat, covs3d
@@ -43,8 +42,9 @@ __global__ void project_gaussians_forward_kernel(
     }
     // float3 p_world = ((float3*) means3d)[idx];
     printf("hello %d", idx);
+    printf("%.2f %.2f %.2f\n", scales[0], scales[1], scales[2]);
     float3 scale = {scales[3*idx], scales[3*idx+1], scales[3*idx+2]};
-    float4 quat = {rots_quat[4*idx], rots_quat[4*idx+1], rots_quat[4*idx +2], rots_quat[4*idx + 3]};
+    float4 quat = {rots_quat[4*idx+1], rots_quat[4*idx +2], rots_quat[4*idx + 3], rots_quat[4*idx]};
     printf("0 scale %.2f %.2f %.2f\n", scale.x, scale.y, scale.z);
     printf("0 quat %.2f %.2f %.2f %.2f\n", quat.w, quat.x, quat.y, quat.z);
     compute_cov3d(scale, glob_scale, quat, &(covs3d[6 * idx]));
@@ -114,7 +114,6 @@ __device__ void compute_cov3d(
     float s = rsqrtf(
         quat.w * quat.w + quat.x * quat.x + quat.y * quat.y + quat.z * quat.z
     );
-    printf("length %.2f\n", s);
     float w = quat.w * s;
     float x = quat.x * s;
     float y = quat.y * s;
@@ -126,7 +125,7 @@ __device__ void compute_cov3d(
         2.f * (x * y - w * z), 1.f - 2.f * (x * x + z * z), 2.f * (y * z + w * x),
         2.f * (x * z + w * y), 2.f * (y * z - w * x), 1.f - 2.f * (x * x + x * x)
     );
-    printf("R %.2f %.2f %.2f\n", R[0][0], R[0][1], R[0][2]);
+    printf("R %.2f %.2f %.2f\n", R[0][0], R[1][1], R[2][2]);
 
     glm::mat3 S = glm::mat3(1.f);
     S[0][0] = glob_scale * scale.x;
@@ -137,7 +136,7 @@ __device__ void compute_cov3d(
     glm::mat3 M = R * S;
     glm::mat tmp = M * glm::transpose(M);
 
-    printf("tmp %.2f %.2f %.2f\n", tmp[0][0], tmp[0][1], tmp[0][2]);
+    printf("tmp %.2f %.2f %.2f\n", tmp[0][0], tmp[1][1], tmp[2][2]);
 
     // save upper right because symmetric
     cov3d[0] = tmp[0][0];

@@ -39,8 +39,10 @@ int main() {
     stat = cudaMalloc((void**)&covs3d_d, num_cov * sizeof(float));
     std::cout << stat << std::endl;
 
-    cudaMemcpy(scales_d, scales, num_scale * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(rots_quat_d, rots_quat, num_quat * sizeof(float), cudaMemcpyHostToDevice);
+    stat = cudaMemcpy(scales_d, scales, num_scale * sizeof(float), cudaMemcpyHostToDevice);
+    std::cout << stat << std::endl;
+    stat = cudaMemcpy(rots_quat_d, rots_quat, num_quat * sizeof(float), cudaMemcpyHostToDevice);
+    std::cout << stat << std::endl;
 
     project_gaussians_forward_impl(num_points, scales_d, glob_scale, rots_quat_d, covs3d_d);
     cudaMemcpy(covs3d, covs3d_d, num_cov * sizeof(float), cudaMemcpyDeviceToHost);
