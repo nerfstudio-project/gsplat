@@ -7,10 +7,12 @@ void project_gaussians_forward_impl(
     const float *means3d,
     const float *scales,
     const float glob_scale,
-    const float *rots_quat,
+    const float *quats,
     const float *viewmat,
     float *covs3d,
-    float *covs2d
+    float *xys,
+    float *depths,
+    int *radii
 );
 
 // kernel function for projecting each gaussian on device
@@ -20,21 +22,22 @@ __global__ void project_gaussians_forward_kernel(
     const float *means3d,
     const float *scales,
     const float glob_scale,
-    const float *rots_quat,
+    const float *quats,
     const float *viewmat,
     float *covs3d,
-    float *covs2d
+    float *xys,
+    float *depths,
+    int *radii
 );
 
-__device__ void project_cov3d_ewa(
+__device__ float3 project_cov3d_ewa(
     const float3 &mean3d,
     const float *cov3d,
     const float *viewmat,
     const float fx,
-    const float fy,
+    const float fy
     // const float tan_fovx,
     // const float tan_fovy,
-    float *cov2d
 );
 
 __device__ void compute_cov3d(

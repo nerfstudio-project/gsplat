@@ -1,4 +1,5 @@
 #include "forward.h"
+#include "helpers.h"
 #include <iostream>
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -13,10 +14,12 @@ void project_gaussians_forward_impl(
     const float *means3d,
     const float *scales,
     const float glob_scale,
-    const float *rots_quat,
+    const float *quats,
     const float *viewmat,
     float *covs3d,
-    float *covs2d
+    float *xys,
+    float *depths,
+    int *radii
 ) {
     int num_threads = 16;
     project_gaussians_forward_kernel
@@ -25,10 +28,12 @@ void project_gaussians_forward_impl(
         means3d,
         scales,
         glob_scale,
-        rots_quat,
+        quats,
         viewmat,
         covs3d,
-        covs2d
+        xys,
+        depths,
+        radii
     );
 }
 
@@ -40,24 +45,55 @@ __global__ void project_gaussians_forward_kernel(
     const float *means3d,
     const float *scales,
     const float glob_scale,
-    const float *rots_quat,
+    const float *quats,
     const float *viewmat,
     float *covs3d,
-    float *covs2d
+    float *xys,
+    float *depths,
+    int *radii
 ) {
     unsigned idx = cg::this_grid().thread_rank();  // idx of thread within grid
     if (idx >= num_points) {
         return;
     }
-    float3 p_world = {means3d[3*idx], means3d[3*idx+1], means3d[3*idx+2]};
-    // printf("hello %d", idx);
+
+    // float3 p_world = {means3d[3*idx], means3d[3*idx+1], means3d[3*idx+2]};
+    float3 *test = (float3 *) means3d;
+    float3 p_world = test[idx];
+    printf("p_world %d %.2f %.2f %.2f\n", idx, p_world.x, p_world.y, p_world.z);
+    float3 p_view, p_proj;
+    if (!in_frustum(p_world, viewmat, viewmat, 1.f, 1.f, p_view, p_proj)) {
+        printf("%d is out of frustum z %.2f x %.2f y %.2f, returning\n", idx, p_view.z, p_proj.x, p_proj.y);
+        return;
+    }
+    printf("p_view %d %.2f %.2f %.2f\n", idx, p_view.x, p_view.y, p_view.z);
+    printf("p_proj %d %.2f %.2f %.2f\n", idx, p_proj.x, p_proj.y, p_proj.z);
+
     // printf("%.2f %.2f %.2f\n", scales[0], scales[1], scales[2]);
     float3 scale = {scales[3*idx], scales[3*idx+1], scales[3*idx+2]};
-    float4 quat = {rots_quat[4*idx+1], rots_quat[4*idx +2], rots_quat[4*idx + 3], rots_quat[4*idx]};
+    float4 quat = {quats[4*idx+1], quats[4*idx +2], quats[4*idx + 3], quats[4*idx]};
     // printf("0 scale %.2f %.2f %.2f\n", scale.x, scale.y, scale.z);
     // printf("0 quat %.2f %.2f %.2f %.2f\n", quat.w, quat.x, quat.y, quat.z);
-    compute_cov3d(scale, glob_scale, quat, &(covs3d[6 * idx]));
-    project_cov3d_ewa(p_world, &(covs3d[6*idx]), viewmat, 1.f, 1.f, &(covs2d[3*idx]));
+    float *cur_cov3d = &(covs3d[6 * idx]);
+    compute_cov3d(scale, glob_scale, quat, cur_cov3d);
+
+    // project to 2d with ewa approximation
+    float3 cov2d = project_cov3d_ewa(p_world, cur_cov3d, viewmat, 1.f, 1.f);
+    printf("cov2d %d, %.2f %.2f %.2f\n", idx, cov2d.x, cov2d.y, cov2d.z);
+
+    float3 conic;
+    float radius;
+    bool ok = compute_cov2d_bounds(cov2d, conic, radius);
+    if (!ok) return; // zero determinant
+    printf("conic %d %.2f %.2f %.2f\n", idx, conic.x, conic.y, conic.z);
+    printf("radius %d %.2f\n", idx, radius);
+
+    // project means to 2d
+    depths[idx] = p_view.z;
+    radii[idx] = (int) ceil(radius);
+    // TODO convert to ndc
+    xys[2*idx] = p_proj.x;
+    xys[2*idx+1] = p_proj.y;
 }
 
 
@@ -74,15 +110,14 @@ __global__ void render_forward_kernel(
 
 
 // device helper to approximate projected 2d cov from 3d mean and cov
-__device__ void project_cov3d_ewa(
+__device__ float3 project_cov3d_ewa(
     const float3 &mean3d,
     const float *cov3d,
     const float *viewmat,
     const float fx,
-    const float fy,
+    const float fy
     // const float tan_fovx,
     // const float tan_fovy,
-    float *cov2d
 ) {
     // we expect row major matrices as input,
     // glm uses column major
@@ -117,9 +152,10 @@ __device__ void project_cov3d_ewa(
     // we only care about the top 2x2 submatrix
     glm::mat3 cov = T * V * glm::transpose(T);
     // add a little blur along axes and save upper triangular elements
-    cov2d[0] = float(cov[0][0]) + 0.1f;
-    cov2d[1] = float(cov[0][1]);
-    cov2d[2] = float(cov[1][1]) + 0.1f;
+    // cov2d[0] = float(cov[0][0]) + 0.1f;
+    // cov2d[1] = float(cov[0][1]);
+    // cov2d[2] = float(cov[1][1]) + 0.1f;
+    return (float3) {float(cov[0][0]) + 0.1f, float(cov[0][1]), float(cov[1][1]) + 0.1f};
 }
 
 

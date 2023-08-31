@@ -11,24 +11,27 @@ int main() {
     int num_scale = num_points * 3;
     int num_quat = num_points * 4;
     int num_cov3d = num_points * 6;
-    int num_cov2d = num_points * 3;
+    int num_xy = num_points * 2;
+    int num_z = num_points;
+    int num_radii = num_points;
     int num_view = 16;
 
     float *means = new float[num_mean];
     float *scales = new float[num_scale];
     float *quats = new float[num_quat];
     float *covs3d = new float[num_cov3d];
-    float *covs2d = new float[num_cov2d];
+    float *xy = new float[num_xy];
+    float *z = new float[num_z];
+    int *radii = new int[num_radii];
     float viewmat [] = {
         1.f, 0.f, 0.f, 0.f,
         0.f, 1.f, 0.f, 0.f,
-        0.f, 0.f, 1.f, -1.f,
+        0.f, 0.f, 1.f, 8.f,
         0.f, 0.f, 0.f, 1.f
     };
 
     for (int i = 0; i < num_points; ++i) {
-        // float x [] = {(float) i * 0.2, (float) i * 0.4, (float) i * 0.6};
-        float x [] = {0.f, 0.f, 0.f};
+        float x [] = {(float) i * 0.1f, (float) i * 0.1f, (float) i};
         float s [] = {(float) i + 0.1f, (float) i + 0.1f, (float) i + 0.1f};
         float q [] = {1.f, 0.f, 0.f, 0.f};
         std::memcpy(&means[3 * i], &x, sizeof(float) * 3);
@@ -38,7 +41,8 @@ int main() {
         // printf("quats %d, %.2f, %.2f, %.2f, %.2f\n", i, quats[4*i], quats[4*i+1], quats[4*i+2], quats[4*i+3]);
     }
 
-    float *scales_d, *means_d, *quats_d, *viewmat_d, *covs3d_d, *covs2d_d;
+    float *scales_d, *means_d, *quats_d, *viewmat_d, *covs3d_d, *xy_d, *z_d;
+    int *radii_d;
 
     cudaMalloc((void**) &scales_d, num_scale * sizeof(float));
     cudaMalloc((void**) &means_d, num_mean * sizeof(float));
@@ -52,11 +56,15 @@ int main() {
 
     // allocate memory for outputs
     cudaMalloc((void**)&covs3d_d, num_cov3d * sizeof(float));
-    cudaMalloc((void**)&covs2d_d, num_cov2d * sizeof(float));
+    cudaMalloc((void**)&xy_d, num_xy * sizeof(float));
+    cudaMalloc((void**)&z_d, num_z * sizeof(float));
+    cudaMalloc((void**)&radii_d, num_radii * sizeof(int));
 
-    project_gaussians_forward_impl(num_points, means_d, scales_d, 1.f, quats_d, viewmat_d, covs3d_d, covs2d_d);
+    project_gaussians_forward_impl(num_points, means_d, scales_d, 1.f, quats_d, viewmat_d, covs3d_d, xy_d, z_d, radii_d);
     cudaMemcpy(covs3d, covs3d_d, num_cov3d * sizeof(float), cudaMemcpyDeviceToHost);
-    cudaMemcpy(covs2d, covs2d_d, num_cov2d * sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(xy, xy_d, num_xy * sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(z, z_d, num_z * sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(radii, radii_d, num_radii * sizeof(int), cudaMemcpyDeviceToHost);
 
     for (int i = 0; i < num_points; ++i) {
         printf("covs3d %d ", i);
@@ -65,11 +73,11 @@ int main() {
         }
         printf("\n");
 
-        printf("covs2d %d ", i);
-        for (int j=0; j < 3; ++j) {
-            printf("%.2f,", covs2d[3*i+j]);
-        }
-        printf("\n");
+        // printf("xy %d ", i);
+        // for (int j=0; j < 3; ++j) {
+        //     printf("%.2f,", xy[3*i+j]);
+        // }
+        // printf("\n");
     }
 
     cudaFree(scales_d);
@@ -80,6 +88,6 @@ int main() {
     delete[] means;
     delete[] quats;
     delete[] covs3d;
-    delete[] covs2d;
+    delete[] xy;
     return 0;
 }
