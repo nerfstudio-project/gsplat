@@ -1,10 +1,10 @@
-#include "forward.h"
-#include "helpers.h"
+#include "forward.cuh"
 #include <iostream>
-#include <glm/glm.hpp>
-#include <glm/gtc/type_ptr.hpp>
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
+#include <cub/cub.cuh>
+#include <cub/device/device_radix_sort.cuh>
+
 namespace cg = cooperative_groups;
 
 
@@ -26,9 +26,12 @@ __global__ void project_gaussians_forward_kernel(
     float *covs3d,
     float *xys,
     float *depths,
-    int *radii
+    int *radii,
+    uint32_t *num_tiles_hit
 ) {
     unsigned idx = cg::this_grid().thread_rank();  // idx of thread within grid
+    radii[idx] = 0;
+    num_tiles_hit[idx] = 0;
     if (idx >= num_points) {
         return;
     }
@@ -66,21 +69,26 @@ __global__ void project_gaussians_forward_kernel(
     bool ok = compute_cov2d_bounds(cov2d, conic, radius);
     if (!ok) return; // zero determinant
     printf("conic %d %.2f %.2f %.2f\n", idx, conic.x, conic.y, conic.z);
-    printf("radius %d %.2f\n", idx, radius);
 
+    // get the bbox of gaussian in tile coordinates
     float2 center = {ndc2pix(p_proj.x, W), ndc2pix(p_proj.y, H)};
     uint2 bb_min, bb_max;
     get_bbox(center, radius, tile_bounds, bb_min, bb_max);
-    if ((bb_max.x - bb_min.x) * (bb_max.y - bb_min.y) <= 0) {
+    uint32_t bb_area = (bb_max.x - bb_min.x) * (bb_max.y - bb_min.y);
+    if (bb_area <= 0) {
         printf("bbox outside of bounds\n");
         return;
     }
 
-    // project means to 2d
+    num_tiles_hit[idx] = bb_area;
     depths[idx] = p_view.z;
     radii[idx] = (int) ceil(radius);
     xys[2*idx] = center.x;
     xys[2*idx+1] = center.y;
+    printf(
+        "thread %d x %.2f y %.2f z %.2f, # tiles %d, radii %d\n",
+        idx, center.x, center.y, depths[idx], bb_area, radii[idx]
+    );
 }
 
 // host function to launch the projection in parallel on device
@@ -96,15 +104,15 @@ void project_gaussians_forward_impl(
     const float fy,
     const int W,
     const int H,
+    const dim3 tile_bounds,
     float *covs3d,
     float *xys,
     float *depths,
-    int *radii
+    int *radii,
+    uint32_t *num_tiles_hit
 ) {
-    int num_threads = 16;
-    dim3 tile_bounds = {(W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, 1};
     project_gaussians_forward_kernel
-    <<< (num_points + num_threads - 1) / num_threads, num_threads >>> (
+    <<< (num_points + N_THREADS - 1) / N_THREADS, N_THREADS >>> (
         num_points,
         means3d,
         scales,
@@ -120,20 +128,167 @@ void project_gaussians_forward_impl(
         covs3d,
         xys,
         depths,
-        radii
+        radii,
+        num_tiles_hit
     );
 }
 
 
-
-// host function to launch parallel rendering of sorted gaussians on device
-void render_forward_impl(
+// kernel to map each intersection from tile ID and depth to a gaussian
+__global__ void map_gaussian_to_intersects(
+    const int num_points,
+    const float *xys,
+    const float *depths,
+    const int *radii,
+    const uint32_t *cum_tiles_hit,
+    const dim3 tile_bounds,
+    uint64_t *intersect_ids,
+    uint32_t *gaussian_ids
 ) {
+    unsigned idx = cg::this_grid().thread_rank();
+    if (idx >= num_points)
+        return;
+    if (radii[idx] <= 0)
+        return;
+    // get the bbox for gaussian
+    uint2 bb_min, bb_max;
+    float2 center = {xys[2*idx], xys[2*idx+1]};
+    get_bbox(center, radii[idx], tile_bounds, bb_min, bb_max);
+
+    // update the intersection info for all tiles this gaussian hits
+    uint32_t cur_idx = (idx == 0) ? 0 : cum_tiles_hit[idx - 1];
+    uint64_t depth_id = (uint64_t) *(uint32_t *) &(depths[idx]);
+    for (int i = bb_min.y; i < bb_max.y; ++i) {
+        for (int j = bb_min.x; j < bb_max.x; ++j) {
+            // isect_id is tile ID and depth as uint32
+            uint64_t tile_id = i * tile_bounds.x + j;  // tile within image
+            intersect_ids[cur_idx] = (tile_id << 32) | depth_id;
+            gaussian_ids[cur_idx] = idx;
+            ++cur_idx;
+        }
+    }
+}
+
+
+// kernel to map sorted intersection IDs to tile bins
+// expect that intersection IDs are sorted by increasing tile ID
+// i.e. intersections of a tile are in contiguous chunks
+__global__ void get_tile_bin_edges(
+    const int num_intersects,
+    const uint64_t *isect_ids_sorted,
+    uint2 *tile_bins
+) {
+    unsigned idx = cg::this_grid().thread_rank();
+    if (idx >= num_intersects)
+        return;
+    // save the indices where the tile_id changes
+    uint32_t cur_tile_idx = (uint32_t) (isect_ids_sorted[idx] >> 32);
+    if (idx == 0) {
+        tile_bins[cur_tile_idx].x = 0;
+        return;
+    } 
+    if (idx == num_intersects - 1) {
+        tile_bins[cur_tile_idx].y = num_intersects;
+        return;
+    }
+    uint32_t prev_tile_idx = (uint32_t) (isect_ids_sorted[idx - 1] >> 32);
+    if (prev_tile_idx != cur_tile_idx) {
+        tile_bins[prev_tile_idx].y = idx;
+        tile_bins[cur_tile_idx].x = idx;
+        return;
+    }
+}
+
+
+// launch on-device prefix sum to get the cumulative number of tiles for gaussians
+void compute_cumulative_intersects(
+    const int num_points,
+    const uint32_t *num_tiles_hit,
+    uint32_t &num_intersects,
+    uint32_t *cum_tiles_hit
+) {
+    // allocate sum workspace
+    void *sum_ws = nullptr;
+    size_t sum_ws_bytes;
+    cub::DeviceScan::InclusiveSum(sum_ws, sum_ws_bytes, num_tiles_hit, cum_tiles_hit, num_points);
+    cudaMalloc(&sum_ws, sum_ws_bytes);
+    cub::DeviceScan::InclusiveSum(sum_ws, sum_ws_bytes, num_tiles_hit, cum_tiles_hit, num_points);
+    cudaMemcpy(&num_intersects, &(cum_tiles_hit[num_points-1]), sizeof(uint32_t), cudaMemcpyDeviceToHost);
+    cudaFree(sum_ws);
+}
+
+
+// figure out which gaussians, sorted by depth, to render for which tile of the output image
+// output gaussian IDs for each tile, sorted by depth, as continguous array
+// output start and end indices in this list of gaussians for each tile
+void bin_and_sort_gaussians(
+    const int num_points,
+    const int num_intersects,
+    const float *xys,
+    const float *depths,
+    const int *radii,
+    const uint32_t *cum_tiles_hit,
+    const dim3 tile_bounds,
+    uint32_t *gaussian_ids_sorted,
+    uint2 *tile_bins
+) {
+    // for each intersection map the tile ID and depth to a gaussian ID
+    // allocate intermediate results
+    uint32_t *gaussian_ids_unsorted;
+    uint64_t *isect_ids_unsorted, *isect_ids_sorted;
+    cudaMalloc((void**) &gaussian_ids_unsorted, num_intersects * sizeof(uint32_t));
+    cudaMalloc((void**) &isect_ids_unsorted, num_intersects * sizeof(uint64_t));
+    cudaMalloc((void**) &isect_ids_sorted, num_intersects * sizeof(uint64_t));
+    map_gaussian_to_intersects <<< (num_points + N_THREADS - 1) / N_THREADS, N_THREADS >>> (
+        num_points,
+        xys,
+        depths,
+        radii,
+        cum_tiles_hit,
+        tile_bounds,
+        isect_ids_unsorted,
+        gaussian_ids_unsorted
+    );
+
+    // sort intersections by ascending tile ID and depth
+    // allocate workspace memory
+    void *sort_ws = nullptr;
+    size_t sort_ws_bytes;
+    cub::DeviceRadixSort::SortPairs(
+        sort_ws, sort_ws_bytes,
+        isect_ids_unsorted, isect_ids_sorted,
+        gaussian_ids_unsorted, gaussian_ids_sorted,
+        num_intersects
+    );
+    cudaMalloc(&sort_ws, sort_ws_bytes);
+    cub::DeviceRadixSort::SortPairs(
+        sort_ws, sort_ws_bytes,
+        isect_ids_unsorted, isect_ids_sorted,
+        gaussian_ids_unsorted, gaussian_ids_sorted,
+        num_intersects
+    );
+    cudaFree(sort_ws);
+
+    // get the start and end indices for the gaussians in each tile
+    get_tile_bin_edges <<< (num_intersects + N_THREADS - 1) / N_THREADS, N_THREADS >>> (
+        num_intersects, isect_ids_sorted, tile_bins
+    );
+
+    // free intermediate work spaces
+    cudaFree(isect_ids_unsorted);
+    cudaFree(isect_ids_sorted);
+    cudaFree(gaussian_ids_unsorted);
 }
 
 
 // kernel function for rendering each gaussian on device
 __global__ void render_forward_kernel(
+) {
+}
+
+
+// host function to launch parallel rendering of sorted gaussians on device
+void render_forward_impl(
 ) {
 }
 

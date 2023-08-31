@@ -1,7 +1,11 @@
 #include "cuda_runtime.h"
+#include <iostream>
+#include <glm/glm.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 #define BLOCK_X 16
 #define BLOCK_Y 16
+#define N_THREADS 16
 
 inline __device__ float ndc2pix(float x, float W) {
     return 0.5 * ((1.f + x) * W - 1.f);
@@ -15,6 +19,7 @@ inline __device__ void get_bbox(
     uint2& bb_max
 ) {
     // get bounding box with center and radius, within bounds
+    // bounding box coords returned in tile coords
     // clamp between 0 and tile bounds
     bb_min.x = min(max(0, (int)((center.x - radius) / BLOCK_X)), tile_bounds.x);
     bb_max.x = min(max(0, (int)((center.x + radius + BLOCK_X - 1) / BLOCK_X)), tile_bounds.x);
@@ -73,4 +78,3 @@ inline __device__ bool clip_near_plane(
     }
     return false;
 }
-
