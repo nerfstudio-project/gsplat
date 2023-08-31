@@ -1,7 +1,25 @@
 #include "cuda_runtime.h"
 
+#define BLOCK_X 16
+#define BLOCK_Y 16
+
 inline __device__ float ndc2pix(float x, float W) {
     return 0.5 * ((1.f + x) * W - 1.f);
+}
+
+inline __device__ void get_bbox(
+    const float2 center,
+    const float radius,
+    const dim3 tile_bounds,
+    uint2& bb_min,
+    uint2& bb_max
+) {
+    // get bounding box with center and radius, within bounds
+    // clamp between 0 and tile bounds
+    bb_min.x = min(max(0, (int)((center.x - radius) / BLOCK_X)), tile_bounds.x);
+    bb_max.x = min(max(0, (int)((center.x + radius + BLOCK_X - 1) / BLOCK_X)), tile_bounds.x);
+    bb_min.y = min(max(0, (int)((center.y - radius) / BLOCK_Y)), tile_bounds.y);
+    bb_max.y = min(max(0, (int)((center.y + radius + BLOCK_Y - 1) / BLOCK_Y)), tile_bounds.y);
 }
 
 inline __device__ bool compute_cov2d_bounds(float3 cov2d, float3 &conic, float& radius) {
@@ -46,28 +64,13 @@ inline __device__ float4 transform_4x4(const float *mat, const float3 p) {
 }
 
 // device helper for culling near points
-inline __device__ bool in_frustum(
-    const float3 p,
-    const float *viewmat,
-    const float *projmat,
-    const float tan_fovx,
-    const float tan_fovy,
-    float3& p_view,
-    float3& p_proj
+inline __device__ bool clip_near_plane(
+    const float3 p, const float *viewmat, float3& p_view
 ) {
-    float4 p_homo = transform_4x4(projmat, p);
-    float p_w = 1.f / (p_homo.w + 1e-5f);
-    p_proj = {p_homo.x * p_w, p_homo.y * p_w, p_homo.z * p_w};
     p_view = transform_4x3(viewmat, p);
     if (p_view.z <= 0.1f) {
-        return false;
+        return true;
     }
-
-    const float xlim = 1.5f * tan_fovx;
-    const float ylim = 1.5f * tan_fovy;
-    if ((p_proj.x < -xlim) || (p_proj.x > xlim) || (p_proj.y < -ylim) || (p_proj.y > ylim)) {
-        return false;
-    }
-    return true;
+    return false;
 }
 

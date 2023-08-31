@@ -8,36 +8,6 @@
 namespace cg = cooperative_groups;
 
 
-// host function to launch the projection in parallel on device
-void project_gaussians_forward_impl(
-    const int num_points,
-    const float *means3d,
-    const float *scales,
-    const float glob_scale,
-    const float *quats,
-    const float *viewmat,
-    float *covs3d,
-    float *xys,
-    float *depths,
-    int *radii
-) {
-    int num_threads = 16;
-    project_gaussians_forward_kernel
-    <<< (num_points + num_threads - 1) / num_threads, num_threads >>> (
-        num_points,
-        means3d,
-        scales,
-        glob_scale,
-        quats,
-        viewmat,
-        covs3d,
-        xys,
-        depths,
-        radii
-    );
-}
-
-
 // kernel function for projecting each gaussian on device
 // each thread processes one gaussian
 __global__ void project_gaussians_forward_kernel(
@@ -47,6 +17,12 @@ __global__ void project_gaussians_forward_kernel(
     const float glob_scale,
     const float *quats,
     const float *viewmat,
+    const float *projmat,
+    const float fx,
+    const float fy,
+    const int W,
+    const int H,
+    const dim3 tile_bounds,
     float *covs3d,
     float *xys,
     float *depths,
@@ -61,12 +37,16 @@ __global__ void project_gaussians_forward_kernel(
     float3 *test = (float3 *) means3d;
     float3 p_world = test[idx];
     printf("p_world %d %.2f %.2f %.2f\n", idx, p_world.x, p_world.y, p_world.z);
-    float3 p_view, p_proj;
-    if (!in_frustum(p_world, viewmat, viewmat, 1.f, 1.f, p_view, p_proj)) {
-        printf("%d is out of frustum z %.2f x %.2f y %.2f, returning\n", idx, p_view.z, p_proj.x, p_proj.y);
+    float3 p_view;
+    if (clip_near_plane(p_world, viewmat, p_view)) {
+        printf("%d is out of frustum z %.2f, returning\n", idx, p_view.z);
         return;
     }
     printf("p_view %d %.2f %.2f %.2f\n", idx, p_view.x, p_view.y, p_view.z);
+
+    float4 p_hom = transform_4x4(projmat, p_world);
+    float p_w = 1.f / (p_hom.w + 1e-5f);
+    float3 p_proj = {p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w};
     printf("p_proj %d %.2f %.2f %.2f\n", idx, p_proj.x, p_proj.y, p_proj.z);
 
     // printf("%.2f %.2f %.2f\n", scales[0], scales[1], scales[2]);
@@ -78,7 +58,7 @@ __global__ void project_gaussians_forward_kernel(
     compute_cov3d(scale, glob_scale, quat, cur_cov3d);
 
     // project to 2d with ewa approximation
-    float3 cov2d = project_cov3d_ewa(p_world, cur_cov3d, viewmat, 1.f, 1.f);
+    float3 cov2d = project_cov3d_ewa(p_world, cur_cov3d, viewmat, fx, fy);
     printf("cov2d %d, %.2f %.2f %.2f\n", idx, cov2d.x, cov2d.y, cov2d.z);
 
     float3 conic;
@@ -88,13 +68,62 @@ __global__ void project_gaussians_forward_kernel(
     printf("conic %d %.2f %.2f %.2f\n", idx, conic.x, conic.y, conic.z);
     printf("radius %d %.2f\n", idx, radius);
 
+    float2 center = {ndc2pix(p_proj.x, W), ndc2pix(p_proj.y, H)};
+    uint2 bb_min, bb_max;
+    get_bbox(center, radius, tile_bounds, bb_min, bb_max);
+    if ((bb_max.x - bb_min.x) * (bb_max.y - bb_min.y) <= 0) {
+        printf("bbox outside of bounds\n");
+        return;
+    }
+
     // project means to 2d
     depths[idx] = p_view.z;
     radii[idx] = (int) ceil(radius);
-    // TODO convert to ndc
-    xys[2*idx] = p_proj.x;
-    xys[2*idx+1] = p_proj.y;
+    xys[2*idx] = center.x;
+    xys[2*idx+1] = center.y;
 }
+
+// host function to launch the projection in parallel on device
+void project_gaussians_forward_impl(
+    const int num_points,
+    const float *means3d,
+    const float *scales,
+    const float glob_scale,
+    const float *quats,
+    const float *viewmat,
+    const float *projmat,
+    const float fx,
+    const float fy,
+    const int W,
+    const int H,
+    float *covs3d,
+    float *xys,
+    float *depths,
+    int *radii
+) {
+    int num_threads = 16;
+    dim3 tile_bounds = {(W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, 1};
+    project_gaussians_forward_kernel
+    <<< (num_points + num_threads - 1) / num_threads, num_threads >>> (
+        num_points,
+        means3d,
+        scales,
+        glob_scale,
+        quats,
+        viewmat,
+        projmat,
+        fx,
+        fy,
+        W,
+        H,
+        tile_bounds,
+        covs3d,
+        xys,
+        depths,
+        radii
+    );
+}
+
 
 
 // host function to launch parallel rendering of sorted gaussians on device

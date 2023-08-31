@@ -9,21 +9,11 @@ void project_gaussians_forward_impl(
     const float glob_scale,
     const float *quats,
     const float *viewmat,
-    float *covs3d,
-    float *xys,
-    float *depths,
-    int *radii
-);
-
-// kernel function for projecting each gaussian on device
-// each thread processes one gaussian
-__global__ void project_gaussians_forward_kernel(
-    const int num_points,
-    const float *means3d,
-    const float *scales,
-    const float glob_scale,
-    const float *quats,
-    const float *viewmat,
+    const float *projmat,
+    const float fx,
+    const float fy,
+    const int W,
+    const int H,
     float *covs3d,
     float *xys,
     float *depths,

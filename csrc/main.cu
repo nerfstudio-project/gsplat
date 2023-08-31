@@ -1,11 +1,16 @@
 #include <iostream>
 #include <cstring>
+#include <math.h>
 
 #include "forward.h"
 
 
 int main() {
     int num_points = 24;
+    const float fov_x = M_PI / 2.f;
+    const int W = 128;
+    const int H = 128;
+    const float focal = 0.5 * (float) W / tan(0.5 * fov_x);
 
     int num_mean = num_points * 3;
     int num_scale = num_points * 3;
@@ -60,7 +65,23 @@ int main() {
     cudaMalloc((void**)&z_d, num_z * sizeof(float));
     cudaMalloc((void**)&radii_d, num_radii * sizeof(int));
 
-    project_gaussians_forward_impl(num_points, means_d, scales_d, 1.f, quats_d, viewmat_d, covs3d_d, xy_d, z_d, radii_d);
+    project_gaussians_forward_impl(
+        num_points,
+        means_d,
+        scales_d,
+        1.f,
+        quats_d,
+        viewmat_d,
+        viewmat_d,
+        focal,
+        focal,
+        W,
+        H,
+        covs3d_d,
+        xy_d,
+        z_d,
+        radii_d
+    );
     cudaMemcpy(covs3d, covs3d_d, num_cov3d * sizeof(float), cudaMemcpyDeviceToHost);
     cudaMemcpy(xy, xy_d, num_xy * sizeof(float), cudaMemcpyDeviceToHost);
     cudaMemcpy(z, z_d, num_z * sizeof(float), cudaMemcpyDeviceToHost);
