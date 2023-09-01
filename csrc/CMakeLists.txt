@@ -16,7 +16,7 @@ target_include_directories(helpers PRIVATE
 
 # Add the executable
 # add_executable(test main.cpp tgaimage.h tgaimage.cpp)
-add_executable(test_cuda main.cu)
+add_executable(test_cuda main.cu tgaimage.cpp)
 
 # Link against CUDA runtime library
 target_link_libraries(test_cuda PUBLIC cuda helpers)

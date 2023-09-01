@@ -5,10 +5,10 @@
 
 void project_gaussians_forward_impl(
     const int num_points,
-    const float *means3d,
-    const float *scales,
+    const float3 *means3d,
+    const float3 *scales,
     const float glob_scale,
-    const float *quats,
+    const float4 *quats,
     const float *viewmat,
     const float *projmat,
     const float fx,
@@ -17,9 +17,10 @@ void project_gaussians_forward_impl(
     const int H,
     const dim3 tile_bounds,
     float *covs3d,
-    float *xys,
+    float2 *xys,
     float *depths,
     int *radii,
+    float3 *conics,
     uint32_t *num_tiles_hit
 );
 
@@ -33,13 +34,26 @@ void compute_cumulative_intersects(
 void bin_and_sort_gaussians(
     const int num_points,
     const int num_intersects,
-    const float *xys,
+    const float2 *xys,
     const float *depths,
     const int *radii,
     const uint32_t *cum_tiles_hit,
     const dim3 tile_bounds,
     uint32_t *gaussian_ids_sorted,
     uint2 *tile_bins
+);
+
+void rasterize_forward_impl(
+    const dim3 tile_bounds,
+    const dim3 block,
+    const dim3 img_size,
+    const uint32_t *gaussian_ids_sorted,
+    const uint2 *tile_bins,
+    const float2 *xys,
+    const float3 *conics,
+    const float3 *rgbs,
+    const float *opacities,
+    float3 *out_img
 );
 
 // device helper to approximate projected 2d cov from 3d mean and cov

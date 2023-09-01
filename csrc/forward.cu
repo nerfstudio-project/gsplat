@@ -12,10 +12,10 @@ namespace cg = cooperative_groups;
 // each thread processes one gaussian
 __global__ void project_gaussians_forward_kernel(
     const int num_points,
-    const float *means3d,
-    const float *scales,
+    const float3 *means3d,
+    const float3 *scales,
     const float glob_scale,
-    const float *quats,
+    const float4 *quats,
     const float *viewmat,
     const float *projmat,
     const float fx,
@@ -24,9 +24,10 @@ __global__ void project_gaussians_forward_kernel(
     const int H,
     const dim3 tile_bounds,
     float *covs3d,
-    float *xys,
+    float2 *xys,
     float *depths,
     int *radii,
+    float3 *conics,
     uint32_t *num_tiles_hit
 ) {
     unsigned idx = cg::this_grid().thread_rank();  // idx of thread within grid
@@ -36,39 +37,37 @@ __global__ void project_gaussians_forward_kernel(
         return;
     }
 
-    // float3 p_world = {means3d[3*idx], means3d[3*idx+1], means3d[3*idx+2]};
-    float3 *test = (float3 *) means3d;
-    float3 p_world = test[idx];
-    printf("p_world %d %.2f %.2f %.2f\n", idx, p_world.x, p_world.y, p_world.z);
+    float3 p_world = means3d[idx];
+    // printf("p_world %d %.2f %.2f %.2f\n", idx, p_world.x, p_world.y, p_world.z);
     float3 p_view;
     if (clip_near_plane(p_world, viewmat, p_view)) {
         printf("%d is out of frustum z %.2f, returning\n", idx, p_view.z);
         return;
     }
-    printf("p_view %d %.2f %.2f %.2f\n", idx, p_view.x, p_view.y, p_view.z);
+    // printf("p_view %d %.2f %.2f %.2f\n", idx, p_view.x, p_view.y, p_view.z);
 
     float4 p_hom = transform_4x4(projmat, p_world);
     float p_w = 1.f / (p_hom.w + 1e-5f);
     float3 p_proj = {p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w};
-    printf("p_proj %d %.2f %.2f %.2f\n", idx, p_proj.x, p_proj.y, p_proj.z);
+    // printf("p_proj %d %.2f %.2f %.2f\n", idx, p_proj.x, p_proj.y, p_proj.z);
 
-    // printf("%.2f %.2f %.2f\n", scales[0], scales[1], scales[2]);
-    float3 scale = {scales[3*idx], scales[3*idx+1], scales[3*idx+2]};
-    float4 quat = {quats[4*idx+1], quats[4*idx +2], quats[4*idx + 3], quats[4*idx]};
-    // printf("0 scale %.2f %.2f %.2f\n", scale.x, scale.y, scale.z);
-    // printf("0 quat %.2f %.2f %.2f %.2f\n", quat.w, quat.x, quat.y, quat.z);
+    float3 scale = scales[idx];
+    float4 quat = quats[idx];
+    // printf("%d scale %.2f %.2f %.2f\n", idx, scale.x, scale.y, scale.z);
+    // printf("%d quat %.2f %.2f %.2f %.2f\n", idx, quat.w, quat.x, quat.y, quat.z);
     float *cur_cov3d = &(covs3d[6 * idx]);
     compute_cov3d(scale, glob_scale, quat, cur_cov3d);
 
     // project to 2d with ewa approximation
     float3 cov2d = project_cov3d_ewa(p_world, cur_cov3d, viewmat, fx, fy);
-    printf("cov2d %d, %.2f %.2f %.2f\n", idx, cov2d.x, cov2d.y, cov2d.z);
+    // printf("cov2d %d, %.2f %.2f %.2f\n", idx, cov2d.x, cov2d.y, cov2d.z);
 
     float3 conic;
     float radius;
     bool ok = compute_cov2d_bounds(cov2d, conic, radius);
     if (!ok) return; // zero determinant
-    printf("conic %d %.2f %.2f %.2f\n", idx, conic.x, conic.y, conic.z);
+    // printf("conic %d %.2f %.2f %.2f\n", idx, conic.x, conic.y, conic.z);
+    conics[idx] = conic;
 
     // get the bbox of gaussian in tile coordinates
     float2 center = {ndc2pix(p_proj.x, W), ndc2pix(p_proj.y, H)};
@@ -83,8 +82,9 @@ __global__ void project_gaussians_forward_kernel(
     num_tiles_hit[idx] = bb_area;
     depths[idx] = p_view.z;
     radii[idx] = (int) ceil(radius);
-    xys[2*idx] = center.x;
-    xys[2*idx+1] = center.y;
+    xys[idx] = center;
+    // xys[2*idx] = center.x;
+    // xys[2*idx+1] = center.y;
     printf(
         "thread %d x %.2f y %.2f z %.2f, # tiles %d, radii %d\n",
         idx, center.x, center.y, depths[idx], bb_area, radii[idx]
@@ -94,10 +94,10 @@ __global__ void project_gaussians_forward_kernel(
 // host function to launch the projection in parallel on device
 void project_gaussians_forward_impl(
     const int num_points,
-    const float *means3d,
-    const float *scales,
+    const float3 *means3d,
+    const float3 *scales,
     const float glob_scale,
-    const float *quats,
+    const float4 *quats,
     const float *viewmat,
     const float *projmat,
     const float fx,
@@ -106,9 +106,10 @@ void project_gaussians_forward_impl(
     const int H,
     const dim3 tile_bounds,
     float *covs3d,
-    float *xys,
+    float2 *xys,
     float *depths,
     int *radii,
+    float3 *conics,
     uint32_t *num_tiles_hit
 ) {
     project_gaussians_forward_kernel
@@ -129,20 +130,22 @@ void project_gaussians_forward_impl(
         xys,
         depths,
         radii,
+        conics,
         num_tiles_hit
     );
 }
 
 
 // kernel to map each intersection from tile ID and depth to a gaussian
+// writes output to isect_ids and gaussian_ids
 __global__ void map_gaussian_to_intersects(
     const int num_points,
-    const float *xys,
+    const float2 *xys,
     const float *depths,
     const int *radii,
     const uint32_t *cum_tiles_hit,
     const dim3 tile_bounds,
-    uint64_t *intersect_ids,
+    uint64_t *isect_ids,
     uint32_t *gaussian_ids
 ) {
     unsigned idx = cg::this_grid().thread_rank();
@@ -152,7 +155,7 @@ __global__ void map_gaussian_to_intersects(
         return;
     // get the bbox for gaussian
     uint2 bb_min, bb_max;
-    float2 center = {xys[2*idx], xys[2*idx+1]};
+    float2 center = xys[idx];
     get_bbox(center, radii[idx], tile_bounds, bb_min, bb_max);
 
     // update the intersection info for all tiles this gaussian hits
@@ -162,7 +165,7 @@ __global__ void map_gaussian_to_intersects(
         for (int j = bb_min.x; j < bb_max.x; ++j) {
             // isect_id is tile ID and depth as uint32
             uint64_t tile_id = i * tile_bounds.x + j;  // tile within image
-            intersect_ids[cur_idx] = (tile_id << 32) | depth_id;
+            isect_ids[cur_idx] = (tile_id << 32) | depth_id;
             gaussian_ids[cur_idx] = idx;
             ++cur_idx;
         }
@@ -186,7 +189,7 @@ __global__ void get_tile_bin_edges(
     if (idx == 0) {
         tile_bins[cur_tile_idx].x = 0;
         return;
-    } 
+    }
     if (idx == num_intersects - 1) {
         tile_bins[cur_tile_idx].y = num_intersects;
         return;
@@ -210,10 +213,16 @@ void compute_cumulative_intersects(
     // allocate sum workspace
     void *sum_ws = nullptr;
     size_t sum_ws_bytes;
-    cub::DeviceScan::InclusiveSum(sum_ws, sum_ws_bytes, num_tiles_hit, cum_tiles_hit, num_points);
+    cub::DeviceScan::InclusiveSum(
+        sum_ws, sum_ws_bytes, num_tiles_hit, cum_tiles_hit, num_points
+    );
     cudaMalloc(&sum_ws, sum_ws_bytes);
-    cub::DeviceScan::InclusiveSum(sum_ws, sum_ws_bytes, num_tiles_hit, cum_tiles_hit, num_points);
-    cudaMemcpy(&num_intersects, &(cum_tiles_hit[num_points-1]), sizeof(uint32_t), cudaMemcpyDeviceToHost);
+    cub::DeviceScan::InclusiveSum(
+        sum_ws, sum_ws_bytes, num_tiles_hit, cum_tiles_hit, num_points
+    );
+    cudaMemcpy(
+        &num_intersects, &(cum_tiles_hit[num_points-1]), sizeof(uint32_t), cudaMemcpyDeviceToHost
+    );
     cudaFree(sum_ws);
 }
 
@@ -224,7 +233,7 @@ void compute_cumulative_intersects(
 void bin_and_sort_gaussians(
     const int num_points,
     const int num_intersects,
-    const float *xys,
+    const float2 *xys,
     const float *depths,
     const int *radii,
     const uint32_t *cum_tiles_hit,
@@ -281,15 +290,89 @@ void bin_and_sort_gaussians(
 }
 
 
-// kernel function for rendering each gaussian on device
-__global__ void render_forward_kernel(
+// kernel function for rasterizing each tile
+// each thread treats a single pixel
+// each thread group uses the same gaussian data in a tile
+__global__ void rasterize_forward_kernel(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const uint32_t *gaussian_ids_sorted,
+    const uint2 *tile_bins,
+    const float2 *xys,
+    const float3 *conics,
+    const float3 *rgbs,
+    const float *opacities,
+    float3 *out_img
 ) {
+    // current naive implementation where tile data loading is redundant
+    // TODO tile data should be shared between tile threads
+    uint32_t tile_id = blockIdx.y * tile_bounds.x + blockIdx.x;
+    unsigned i = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
+    float px = (float) j;
+    float py = (float) i;
+    uint32_t pix_id = i * img_size.x + j;
+    printf("%d %d %d %d\n", i, j, pix_id, tile_id);
+    // get the gaussians in this tile
+    uint2 range = tile_bins[tile_id];
+    float3 out_color, rgb, conic;
+    float2 center, delta;
+    float sigma, opac, alpha, next_T;
+    float T = 1.f;
+    for (int idx = range.x; idx < range.y; ++idx) {
+        uint32_t g = gaussian_ids_sorted[idx];
+        rgb = rgbs[g];
+        conic = conics[g];
+        center = xys[g];
+        opac = opacities[g];
+        delta = {center.x - px, center.y - py};
+        sigma= 0.5f * (
+            conic.x * delta.x * delta.x + conic.z * delta.y * delta.y
+        ) - conic.y * delta.x * delta.y;
+        if (sigma <= 0.f) {
+            continue;
+        }
+        alpha = min(0.999f, opac * exp(-sigma));
+        if (alpha <= 1e-4f) {
+            continue;
+        }
+        next_T = T * (1.f - alpha);
+        if (next_T <= 1e-4f) {
+            break;
+        }
+        out_color.x += rgb.x * alpha * T;
+        out_color.y += rgb.y * alpha * T;
+        out_color.z += rgb.z * alpha * T;
+        T = next_T;
+    }
+    out_img[pix_id] = out_color;
 }
 
 
-// host function to launch parallel rendering of sorted gaussians on device
-void render_forward_impl(
+// host function to launch parallel rasterization of sorted gaussians on device
+void rasterize_forward_impl(
+    const dim3 tile_bounds,
+    const dim3 block,
+    const dim3 img_size,
+    const uint32_t *gaussian_ids_sorted,
+    const uint2 *tile_bins,
+    const float2 *xys,
+    const float3 *conics,
+    const float3 *rgbs,
+    const float *opacities,
+    float3 *out_img
 ) {
+    rasterize_forward_kernel <<< tile_bounds, block >>> (
+        tile_bounds,
+        img_size,
+        gaussian_ids_sorted,
+        tile_bins,
+        xys,
+        conics,
+        rgbs,
+        opacities,
+        out_img
+    );
 }
 
 
