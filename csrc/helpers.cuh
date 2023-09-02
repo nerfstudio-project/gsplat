@@ -5,7 +5,7 @@
 
 #define BLOCK_X 16
 #define BLOCK_Y 16
-#define N_THREADS 16
+#define N_THREADS 256
 
 inline __device__ float ndc2pix(float x, float W) {
     return 0.5 * ((1.f + x) * W - 1.f);
@@ -13,18 +13,30 @@ inline __device__ float ndc2pix(float x, float W) {
 
 inline __device__ void get_bbox(
     const float2 center,
-    const float radius,
-    const dim3 tile_bounds,
+    const float2 dims,
+    const dim3 img_size,
     uint2& bb_min,
     uint2& bb_max
 ) {
-    // get bounding box with center and radius, within bounds
-    // bounding box coords returned in tile coords
+    // get bounding box with center and dims, within bounds
+    // bounding box coords returned in tile coords, inclusive min, exclusive max
     // clamp between 0 and tile bounds
-    bb_min.x = min(max(0, (int)((center.x - radius) / BLOCK_X)), tile_bounds.x);
-    bb_max.x = min(max(0, (int)((center.x + radius + BLOCK_X - 1) / BLOCK_X)), tile_bounds.x);
-    bb_min.y = min(max(0, (int)((center.y - radius) / BLOCK_Y)), tile_bounds.y);
-    bb_max.y = min(max(0, (int)((center.y + radius + BLOCK_Y - 1) / BLOCK_Y)), tile_bounds.y);
+    bb_min.x = min(max(0, (int) (center.x - dims.x)), img_size.x);
+    bb_max.x = min(max(0, (int) (center.x + dims.x + 1)), img_size.x);
+    bb_min.y = min(max(0, (int) (center.y - dims.y)), img_size.y);
+    bb_max.y = min(max(0, (int) (center.y + dims.y + 1)), img_size.y);
+}
+
+inline __device__ void get_tile_bbox(
+    const float2 pix_center,
+    const float pix_radius,
+    const dim3 tile_bounds,
+    uint2 &tile_min,
+    uint2 &tile_max
+) {
+    float2 tile_center = {pix_center.x / (float) BLOCK_X, pix_center.y / (float) BLOCK_Y};
+    float2 tile_radius = {pix_radius / (float) BLOCK_X, pix_radius / (float) BLOCK_Y};
+    get_bbox(tile_center, tile_radius, tile_bounds, tile_min, tile_max);
 }
 
 inline __device__ bool compute_cov2d_bounds(float3 cov2d, float3 &conic, float& radius) {
@@ -42,7 +54,8 @@ inline __device__ bool compute_cov2d_bounds(float3 cov2d, float3 &conic, float& 
 	float b = 0.5f * (cov2d.x + cov2d.z);
 	float v1 = b + sqrt(max(0.1f, b * b - det));
 	float v2 = b - sqrt(max(0.1f, b * b - det));
-	radius = 3.f * sqrt(max(v1, v2));
+    // take 3 sigma of covariance
+	radius = ceil(3.f * sqrt(max(v1, v2)));
     return true;
 }
 

@@ -13,8 +13,7 @@ void project_gaussians_forward_impl(
     const float *projmat,
     const float fx,
     const float fy,
-    const int W,
-    const int H,
+    const dim3 img_size,
     const dim3 tile_bounds,
     float *covs3d,
     float2 *xys,
@@ -39,6 +38,9 @@ void bin_and_sort_gaussians(
     const int *radii,
     const uint32_t *cum_tiles_hit,
     const dim3 tile_bounds,
+    uint64_t *isect_ids_unsorted,
+    uint32_t *gaussian_ids_unsorted,
+    uint64_t *isect_ids_sorted,
     uint32_t *gaussian_ids_sorted,
     uint2 *tile_bins
 );

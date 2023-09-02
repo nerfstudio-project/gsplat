@@ -1,4 +1,6 @@
 #include <iostream>
+#include <cstdlib>
+#include <ctime>
 #include <cstring>
 #include <math.h>
 
@@ -6,11 +8,16 @@
 #include "tgaimage.h"
 
 
+float random_float() {
+    return (float) std::rand() / RAND_MAX;
+}
+
+
 int main() {
-    int num_points = 24;
+    int num_points = 2048;
     const float fov_x = M_PI / 2.f;
-    const int W = 128;
-    const int H = 128;
+    const int W = 512;
+    const int H = 512;
     const float focal = 0.5 * (float) W / tan(0.5 * fov_x);
     const dim3 tile_bounds = {(W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, 1};
     const dim3 img_size = {W, H, 1};
@@ -32,13 +39,37 @@ int main() {
     };
 
     // silly initialization of gaussians
+    // rotate pi/4 about (1, 1, 0)
+    float bd = 2.f;
+    // float norm = sqrt(2);
+    // float theta = M_PI / 4.f;
+    // float w = norm / tan(theta / 2.f);
+    float u, v, w;
+    std::srand(std::time(nullptr));
     for (int i = 0; i < num_points; ++i) {
-        float v = (float) i - (float) num_points * 0.5f;
-        means[i] = {v * 0.2f, v * 0.2f, (float) i};
-        scales[i] = {1.f, 2.f, 3.f};
-        quats[i] = {1.f, 0.f, 0.f, 0.f};  // w x y z convention
-        rgbs[i] = {1.f, 1.f, 1.f};
-        opacities[i] = 0.8f;
+        means[i] = {bd * (random_float() - 0.5f), bd * (random_float() - 0.5f), bd * (random_float() - 0.5f)};
+        scales[i] = {random_float(), random_float(), random_float()};
+        rgbs[i] = {random_float(), random_float(), random_float()};
+
+        // float v = (float) i - (float) num_points * 0.5f;
+        // means[i] = {v * 0.1f, v * 0.1f, (float) i};
+        // scales[i] = {0.5f, 5.f, 1.f};
+        // rgbs[i] = {(float) (i % 3 == 0), (float) (i % 3 == 1), (float) (i % 3 == 2)};
+
+        // quats[i] = {w, norm, norm, 0.f};  // w x y z convention
+        // quats[i] = {1.f, 0.f, 0.f, 0.f};  // w x y z convention
+        // random quat
+        u = random_float();
+        v = random_float();
+        w = random_float();
+        quats[i] = {
+            sqrt(1.f - u) * sin(2.f * (float) M_PI * v),
+            sqrt(1.f - u) * cos(2.f * (float) M_PI * v),
+            sqrt(u) * sin(2.f * (float) M_PI * w),
+            sqrt(u) * cos(2.f * (float) M_PI * w)
+        };
+
+        opacities[i] = 0.9f;
     }
 
     float3 *scales_d, *means_d, *rgbs_d;
@@ -89,8 +120,7 @@ int main() {
         viewmat_d,
         focal,
         focal,
-        W,
-        H,
+        img_size,
         tile_bounds,
         covs3d_d,
         xy_d,
@@ -105,32 +135,34 @@ int main() {
     cudaMemcpy(radii, radii_d, num_points * sizeof(int), cudaMemcpyDeviceToHost);
     cudaMemcpy(num_tiles_hit, num_tiles_hit_d, num_points * sizeof(uint32_t), cudaMemcpyDeviceToHost);
 
-    // for (int i = 0; i < num_points; ++i) {
-    //     printf("covs3d %d ", i);
-    //     for (int j=0; j < 6; ++j) {
-    //         printf("%.2f,", covs3d[6*i+j]);
-    //     }
-    //     printf("\n");
-    // }
-
     uint32_t num_intersects;
     uint32_t *cum_tiles_hit = new uint32_t[num_points];
     uint32_t *cum_tiles_hit_d;
     cudaMalloc((void**) &cum_tiles_hit_d, num_points * sizeof(uint32_t));
     compute_cumulative_intersects(num_points, num_tiles_hit_d, num_intersects, cum_tiles_hit_d);
-    printf("num_intersects %d\n", num_intersects);
-    cudaMemcpy(cum_tiles_hit, cum_tiles_hit_d, num_points * sizeof(uint32_t), cudaMemcpyDeviceToHost);
-    for (int i = 0; i < num_points; ++i) {
-        printf("cum_tiles_hit %d, %d\n", i, cum_tiles_hit[i]);
-    }
+    // printf("num_intersects %d\n", num_intersects);
+    // cudaMemcpy(cum_tiles_hit, cum_tiles_hit_d, num_points * sizeof(uint32_t), cudaMemcpyDeviceToHost);
+    // for (int i = 0; i < num_points; ++i) {
+    //     printf("num_tiles_hit %d, %d\n", i, num_tiles_hit[i]);
+    // }
 
+    uint64_t *isect_ids_sorted_d;
     uint32_t *gaussian_ids_sorted_d;  // sorted by tile and depth
+    uint64_t *isect_ids_sorted = new uint64_t[num_intersects];
     uint32_t *gaussian_ids_sorted = new uint32_t[num_intersects];
+    cudaMalloc((void**) &isect_ids_sorted_d, num_intersects * sizeof(uint64_t));
+    cudaMalloc((void**) &gaussian_ids_sorted_d, num_intersects * sizeof(uint32_t));
+
+    uint64_t *isect_ids_unsorted_d;
+    uint32_t *gaussian_ids_unsorted_d;  // sorted by tile and depth
+    uint64_t *isect_ids_unsorted = new uint64_t[num_intersects];
+    uint32_t *gaussian_ids_unsorted = new uint32_t[num_intersects];
+    cudaMalloc((void**) &isect_ids_unsorted_d, num_intersects * sizeof(uint64_t));
+    cudaMalloc((void**) &gaussian_ids_unsorted_d, num_intersects * sizeof(uint32_t));
 
     int num_tiles = tile_bounds.x * tile_bounds.y;
     uint2 *tile_bins_d;  // start and end indices for each tile
     uint2 *tile_bins = new uint2[num_tiles];
-    cudaMalloc((void**) &gaussian_ids_sorted_d, num_intersects * sizeof(uint32_t));
     cudaMalloc((void**) &tile_bins_d, num_tiles * sizeof(uint2));
 
     bin_and_sort_gaussians(
@@ -141,17 +173,28 @@ int main() {
         radii_d,
         cum_tiles_hit_d,
         tile_bounds,
+        isect_ids_unsorted_d,
+        gaussian_ids_unsorted_d,
+        isect_ids_sorted_d,
         gaussian_ids_sorted_d,
         tile_bins_d
     );
+    cudaMemcpy(isect_ids_unsorted, isect_ids_unsorted_d, num_intersects * sizeof(uint64_t), cudaMemcpyDeviceToHost);
+    cudaMemcpy(gaussian_ids_unsorted, gaussian_ids_unsorted_d, num_intersects * sizeof(uint32_t), cudaMemcpyDeviceToHost);
+    cudaMemcpy(isect_ids_sorted, isect_ids_sorted_d, num_intersects * sizeof(uint64_t), cudaMemcpyDeviceToHost);
     cudaMemcpy(gaussian_ids_sorted, gaussian_ids_sorted_d, num_intersects * sizeof(uint32_t), cudaMemcpyDeviceToHost);
-    cudaMemcpy(tile_bins, tile_bins_d, num_tiles * sizeof(uint2), cudaMemcpyDeviceToHost);
-    for (int i = 0; i < num_intersects; ++i) {
-        printf("gaussian_id %d %d\n", i, gaussian_ids_sorted[i]);
-    }
-    for (int i = 0; i < num_tiles; ++i) {
-        printf("tile_bins %d %d %d\n", i, tile_bins[i].x, tile_bins[i].y);
-    }
+
+    // for (int i = 0; i < num_intersects; ++i) {
+    //     printf("%d unsorted isect %016lx point %03d\n", i, isect_ids_unsorted[i], gaussian_ids_unsorted[i]);
+    // }
+    // for (int i = 0; i < num_intersects; ++i) {
+    //     printf("sorted isect %016lx point %03d\n", isect_ids_sorted[i], gaussian_ids_sorted[i]);
+    // }
+    // cudaMemcpy(tile_bins, tile_bins_d, num_tiles * sizeof(uint2), cudaMemcpyDeviceToHost);
+    // for (int i = 0; i < num_tiles; ++i) {
+    //     printf("tile_bins %d %d %d\t", i, tile_bins[i].x, tile_bins[i].y);
+    // }
+    // std::cout << std::endl;
 
     float3 *out_img = new float3[W * H];
     float3 *out_img_d;
@@ -201,6 +244,9 @@ int main() {
     cudaFree(num_tiles_hit_d);
     cudaFree(cum_tiles_hit_d);
     cudaFree(tile_bins_d);
+    cudaFree(isect_ids_unsorted_d);
+    cudaFree(gaussian_ids_unsorted_d);
+    cudaFree(isect_ids_sorted_d);
     cudaFree(gaussian_ids_sorted_d);
     cudaFree(conics_d);
     cudaFree(out_img_d);

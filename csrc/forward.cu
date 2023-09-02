@@ -20,8 +20,7 @@ __global__ void project_gaussians_forward_kernel(
     const float *projmat,
     const float fx,
     const float fy,
-    const int W,
-    const int H,
+    const dim3 img_size,
     const dim3 tile_bounds,
     float *covs3d,
     float2 *xys,
@@ -70,25 +69,24 @@ __global__ void project_gaussians_forward_kernel(
     conics[idx] = conic;
 
     // get the bbox of gaussian in tile coordinates
-    float2 center = {ndc2pix(p_proj.x, W), ndc2pix(p_proj.y, H)};
-    uint2 bb_min, bb_max;
-    get_bbox(center, radius, tile_bounds, bb_min, bb_max);
-    uint32_t bb_area = (bb_max.x - bb_min.x) * (bb_max.y - bb_min.y);
-    if (bb_area <= 0) {
-        printf("bbox outside of bounds\n");
+    float2 center = {ndc2pix(p_proj.x, img_size.x), ndc2pix(p_proj.y, img_size.y)};
+    uint2 tile_min, tile_max;
+    get_tile_bbox(center, radius, tile_bounds, tile_min, tile_max);
+    uint32_t tile_area = (tile_max.x - tile_min.x) * (tile_max.y - tile_min.y);
+    if (tile_area <= 0) {
+        printf("%d point bbox outside of bounds\n", idx);
         return;
     }
 
-    num_tiles_hit[idx] = bb_area;
+    num_tiles_hit[idx] = tile_area;
     depths[idx] = p_view.z;
-    radii[idx] = (int) ceil(radius);
+    radii[idx] = (int) radius;
     xys[idx] = center;
-    // xys[2*idx] = center.x;
-    // xys[2*idx+1] = center.y;
-    printf(
-        "thread %d x %.2f y %.2f z %.2f, # tiles %d, radii %d\n",
-        idx, center.x, center.y, depths[idx], bb_area, radii[idx]
-    );
+    // printf(
+    //     "point %d x %.2f y %.2f z %.2f, radius %d, # tiles %d, tile_min %d %d, tile_max %d %d\n",
+    //     idx, center.x, center.y, depths[idx], radii[idx],
+    //     tile_area, tile_min.x, tile_min.y, tile_max.x, tile_max.y
+    // );
 }
 
 // host function to launch the projection in parallel on device
@@ -102,8 +100,7 @@ void project_gaussians_forward_impl(
     const float *projmat,
     const float fx,
     const float fy,
-    const int W,
-    const int H,
+    const dim3 img_size,
     const dim3 tile_bounds,
     float *covs3d,
     float2 *xys,
@@ -123,8 +120,7 @@ void project_gaussians_forward_impl(
         projmat,
         fx,
         fy,
-        W,
-        H,
+        img_size,
         tile_bounds,
         covs3d,
         xys,
@@ -153,16 +149,18 @@ __global__ void map_gaussian_to_intersects(
         return;
     if (radii[idx] <= 0)
         return;
-    // get the bbox for gaussian
-    uint2 bb_min, bb_max;
+    // get the tile bbox for gaussian
+    uint2 tile_min, tile_max;
     float2 center = xys[idx];
-    get_bbox(center, radii[idx], tile_bounds, bb_min, bb_max);
+    get_tile_bbox(center, radii[idx], tile_bounds, tile_min, tile_max);
+    // printf("point %d, %d radius, min %d %d, max %d %d\n", idx, radii[idx], tile_min.x, tile_min.y, tile_max.x, tile_max.y);
 
     // update the intersection info for all tiles this gaussian hits
     uint32_t cur_idx = (idx == 0) ? 0 : cum_tiles_hit[idx - 1];
+    // printf("point %d starting at %d\n", idx, cur_idx);
     uint64_t depth_id = (uint64_t) *(uint32_t *) &(depths[idx]);
-    for (int i = bb_min.y; i < bb_max.y; ++i) {
-        for (int j = bb_min.x; j < bb_max.x; ++j) {
+    for (int i = tile_min.y; i < tile_max.y; ++i) {
+        for (int j = tile_min.x; j < tile_max.x; ++j) {
             // isect_id is tile ID and depth as uint32
             uint64_t tile_id = i * tile_bounds.x + j;  // tile within image
             isect_ids[cur_idx] = (tile_id << 32) | depth_id;
@@ -170,6 +168,7 @@ __global__ void map_gaussian_to_intersects(
             ++cur_idx;
         }
     }
+    // printf("point %d ending at %d\n", idx, cur_idx);
 }
 
 
@@ -238,16 +237,19 @@ void bin_and_sort_gaussians(
     const int *radii,
     const uint32_t *cum_tiles_hit,
     const dim3 tile_bounds,
+    uint64_t *isect_ids_unsorted,
+    uint32_t *gaussian_ids_unsorted,
+    uint64_t *isect_ids_sorted,
     uint32_t *gaussian_ids_sorted,
     uint2 *tile_bins
 ) {
     // for each intersection map the tile ID and depth to a gaussian ID
     // allocate intermediate results
-    uint32_t *gaussian_ids_unsorted;
-    uint64_t *isect_ids_unsorted, *isect_ids_sorted;
-    cudaMalloc((void**) &gaussian_ids_unsorted, num_intersects * sizeof(uint32_t));
-    cudaMalloc((void**) &isect_ids_unsorted, num_intersects * sizeof(uint64_t));
-    cudaMalloc((void**) &isect_ids_sorted, num_intersects * sizeof(uint64_t));
+    // uint32_t *gaussian_ids_unsorted;
+    // uint64_t *isect_ids_unsorted; // *isect_ids_sorted;
+    // cudaMalloc((void**) &gaussian_ids_unsorted, num_intersects * sizeof(uint32_t));
+    // cudaMalloc((void**) &isect_ids_unsorted, num_intersects * sizeof(uint64_t));
+    // cudaMalloc((void**) &isect_ids_sorted, num_intersects * sizeof(uint64_t));
     map_gaussian_to_intersects <<< (num_points + N_THREADS - 1) / N_THREADS, N_THREADS >>> (
         num_points,
         xys,
@@ -284,9 +286,9 @@ void bin_and_sort_gaussians(
     );
 
     // free intermediate work spaces
-    cudaFree(isect_ids_unsorted);
-    cudaFree(isect_ids_sorted);
-    cudaFree(gaussian_ids_unsorted);
+    // cudaFree(isect_ids_unsorted);
+    // cudaFree(isect_ids_sorted);
+    // cudaFree(gaussian_ids_unsorted);
 }
 
 
@@ -307,18 +309,20 @@ __global__ void rasterize_forward_kernel(
     // current naive implementation where tile data loading is redundant
     // TODO tile data should be shared between tile threads
     uint32_t tile_id = blockIdx.y * tile_bounds.x + blockIdx.x;
+    bool bg_white = (blockIdx.x % 2) == (blockIdx.y % 2);
     unsigned i = blockIdx.y * blockDim.y + threadIdx.y;
     unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
     float px = (float) j;
     float py = (float) i;
     uint32_t pix_id = i * img_size.x + j;
-    printf("%d %d %d %d\n", i, j, pix_id, tile_id);
-    // get the gaussians in this tile
+    // which gaussians to look through in this tile
     uint2 range = tile_bins[tile_id];
-    float3 out_color, rgb, conic;
+    float3 rgb, conic;
     float2 center, delta;
     float sigma, opac, alpha, next_T;
+    float3 out_color = {0.f, 0.f, 0.f};
     float T = 1.f;
+    // iterate over all gaussians
     for (int idx = range.x; idx < range.y; ++idx) {
         uint32_t g = gaussian_ids_sorted[idx];
         rgb = rgbs[g];
@@ -326,7 +330,7 @@ __global__ void rasterize_forward_kernel(
         center = xys[g];
         opac = opacities[g];
         delta = {center.x - px, center.y - py};
-        sigma= 0.5f * (
+        sigma = 0.5f * (
             conic.x * delta.x * delta.x + conic.z * delta.y * delta.y
         ) - conic.y * delta.x * delta.y;
         if (sigma <= 0.f) {
@@ -344,6 +348,11 @@ __global__ void rasterize_forward_kernel(
         out_color.y += rgb.y * alpha * T;
         out_color.z += rgb.z * alpha * T;
         T = next_T;
+    }
+    if (bg_white) {
+        out_color.x += T;
+        out_color.y += T;
+        out_color.z += T;
     }
     out_img[pix_id] = out_color;
 }
@@ -395,6 +404,7 @@ __device__ float3 project_cov3d_ewa(
     // printf("t %.2f %.2f %.2f %.2f\n", t.w, t.x, t.y, t.z);
 
     // column major
+    // we only care about the top 2x2 submatrix
     glm::mat3 J = glm::transpose(glm::mat3(
         fx / t.z, 0.f, -fx * t.x / (t.z * t.z),
         0.f, fy / t.z, -fy * t.y / (t.z * t.z),
@@ -412,16 +422,8 @@ __device__ float3 project_cov3d_ewa(
         cov3d[2], cov3d[4], cov3d[5]
     );
 
-    // printf("J %.2f %.2f %.2f\n", J[0][0], J[1][1], J[2][2]);
-    // printf("W %.2f %.2f %.2f\n", W[0][0], W[1][1], W[2][2]);
-    // printf("V %.2f %.2f %.2f\n", V[0][0], V[1][1], V[2][2]);
-
-    // we only care about the top 2x2 submatrix
     glm::mat3 cov = T * V * glm::transpose(T);
     // add a little blur along axes and save upper triangular elements
-    // cov2d[0] = float(cov[0][0]) + 0.1f;
-    // cov2d[1] = float(cov[0][1]);
-    // cov2d[2] = float(cov[1][1]) + 0.1f;
     return (float3) {float(cov[0][0]) + 0.1f, float(cov[0][1]), float(cov[1][1]) + 0.1f};
 }
 
