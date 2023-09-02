@@ -55,7 +55,7 @@ __global__ void project_gaussians_forward_kernel(
     // printf("%d scale %.2f %.2f %.2f\n", idx, scale.x, scale.y, scale.z);
     // printf("%d quat %.2f %.2f %.2f %.2f\n", idx, quat.w, quat.x, quat.y, quat.z);
     float *cur_cov3d = &(covs3d[6 * idx]);
-    compute_cov3d(scale, glob_scale, quat, cur_cov3d);
+    scale_rot_to_cov3d(scale, glob_scale, quat, cur_cov3d);
 
     // project to 2d with ewa approximation
     float3 cov2d = project_cov3d_ewa(p_world, cur_cov3d, viewmat, fx, fy);
@@ -429,32 +429,12 @@ __device__ float3 project_cov3d_ewa(
 
 
 // device helper to get 3D covariance from scale and quat parameters
-__device__ void compute_cov3d(
+__device__ void scale_rot_to_cov3d(
     const float3 scale, const float glob_scale, const float4 quat, float *cov3d
 ) {
-    // printf("scale %.2f %.2f %.2f\n", scale.x, scale.y, scale.z);
-    // printf("quat %.2f %.2f %.2f %.2f\n", quat.w, quat.x, quat.y, quat.z);
-    // quat to rotation matrix
-    float s = rsqrtf(
-        quat.w * quat.w + quat.x * quat.x + quat.y * quat.y + quat.z * quat.z
-    );
-    float w = quat.w * s;
-    float x = quat.x * s;
-    float y = quat.y * s;
-    float z = quat.z * s;
-
-    // glm matrices are column-major
-    glm::mat3 R = glm::mat3(
-        1.f - 2.f * (y * y + z * z), 2.f * (x * y + w * z), 2.f * (x * z - w * y),
-        2.f * (x * y - w * z), 1.f - 2.f * (x * x + z * z), 2.f * (y * z + w * x),
-        2.f * (x * z + w * y), 2.f * (y * z - w * x), 1.f - 2.f * (x * x + x * x)
-    );
+    glm::mat3 R = quat_to_rotmat(quat);
     // printf("R %.2f %.2f %.2f\n", R[0][0], R[1][1], R[2][2]);
-
-    glm::mat3 S = glm::mat3(1.f);
-    S[0][0] = glob_scale * scale.x;
-    S[1][1] = glob_scale * scale.y;
-    S[2][2] = glob_scale * scale.z;
+    glm::mat3 S = scale_to_mat(scale, glob_scale);
     // printf("S %.2f %.2f %.2f\n", S[0][0], S[1][1], S[2][2]);
 
     glm::mat3 M = R * S;

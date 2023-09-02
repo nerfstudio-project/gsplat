@@ -3,6 +3,7 @@
 
 #include "helpers.cuh"
 
+// compute the 2d gaussian parameters from 3d gaussian parameters
 void project_gaussians_forward_impl(
     const int num_points,
     const float3 *means3d,
@@ -30,6 +31,7 @@ void compute_cumulative_intersects(
     uint32_t *cum_tiles_hit
 );
 
+// bin and sort gaussians by tile and depth
 void bin_and_sort_gaussians(
     const int num_points,
     const int num_intersects,
@@ -45,6 +47,7 @@ void bin_and_sort_gaussians(
     uint2 *tile_bins
 );
 
+// compute output color image from binned and sorted gaussians
 void rasterize_forward_impl(
     const dim3 tile_bounds,
     const dim3 block,
@@ -70,6 +73,6 @@ __device__ float3 project_cov3d_ewa(
 );
 
 // device helper to get 3D covariance from scale and quat parameters
-__device__ void compute_cov3d(
+__device__ void scale_rot_to_cov3d(
     const float3 scale, const float glob_scale, const float4 quat, float *cov3d
 );

@@ -81,6 +81,69 @@ inline __device__ float4 transform_4x4(const float *mat, const float3 p) {
     return out;
 }
 
+inline __device__ glm::mat3 quat_to_rotmat(const float4 quat) {
+    // quat to rotation matrix
+    float s = rsqrtf(
+        quat.w * quat.w + quat.x * quat.x + quat.y * quat.y + quat.z * quat.z
+    );
+    float w = quat.w * s;
+    float x = quat.x * s;
+    float y = quat.y * s;
+    float z = quat.z * s;
+
+    // glm matrices are column-major
+    return glm::mat3(
+        1.f - 2.f * (y * y + z * z), 2.f * (x * y + w * z), 2.f * (x * z - w * y),
+        2.f * (x * y - w * z), 1.f - 2.f * (x * x + z * z), 2.f * (y * z + w * x),
+        2.f * (x * z + w * y), 2.f * (y * z - w * x), 1.f - 2.f * (x * x + y * y)
+    );
+}
+
+inline __device__ float4 quat_to_rotmat_vjp(const float4 quat, const glm::mat3 v_Rmat) {
+    float s = rsqrtf(
+        quat.w * quat.w + quat.x * quat.x + quat.y * quat.y + quat.z * quat.z
+    );
+    float w = quat.w * s;
+    float x = quat.x * s;
+    float y = quat.y * s;
+    float z = quat.z * s;
+
+    float4 v_quat;
+    float *v_R = (float *) &v_Rmat[0][0];
+    v_quat.w = (
+        2.f * z * (v_R[1] - v_R[3])
+        + 2.f * y * (v_R[6] - v_R[2])
+        + 2.f * x * (v_R[5] - v_R[7])
+    );
+    v_quat.x = (
+        2.f * y * (v_R[1] + v_R[3])
+        + 2.f * z * (v_R[6] - v_R[2])
+        + 2.f * w * (v_R[5] - v_R[7])
+        - 4.f * x * (v_R[4] + v_R[8])
+    );
+    v_quat.y = (
+        -4.f * y * (v_R[0] + v_R[8])
+        + 2.f * x * (v_R[1] + v_R[3])
+        + 2.f * z * (v_R[5] + v_R[7])
+        + 2.f * w * (v_R[6] - v_R[2])
+    );
+    v_quat.z = (
+        -4.f * z * (v_R[0] + v_R[4])
+        + 2.f * x * (v_R[6] + v_R[2])
+        + 2.f * y * (v_R[5] + v_R[7])
+        + 2.f * w * (v_R[1] - v_R[3])
+    );
+    return v_quat;
+}
+
+inline __device__ glm::mat3 scale_to_mat(const float3 scale, const float glob_scale) {
+    glm::mat3 S = glm::mat3(1.f);
+    S[0][0] = glob_scale * scale.x;
+    S[1][1] = glob_scale * scale.y;
+    S[2][2] = glob_scale * scale.z;
+    return S;
+}
+
 // device helper for culling near points
 inline __device__ bool clip_near_plane(
     const float3 p, const float *viewmat, float3& p_view
