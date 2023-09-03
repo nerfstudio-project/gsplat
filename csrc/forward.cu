@@ -397,21 +397,19 @@ __device__ float3 project_cov3d_ewa(
 ) {
     // we expect row major matrices as input,
     // glm uses column major
-    glm::mat4 viewmat_glm = glm::transpose(glm::make_mat4(viewmat));
-    glm::vec4 t = viewmat_glm * glm::vec4(mean3d.x, mean3d.y, mean3d.z, 1.f);
-    // printf("viewmat_glm %.2f %.2f %.2f %.2f\n", viewmat_glm[0][0], viewmat_glm[1][1], viewmat_glm[2][2], viewmat_glm[3][3]);
-    // printf("t %.2f %.2f %.2f %.2f\n", t[0], t[1], t[2], t[3]);
-    // printf("t %.2f %.2f %.2f %.2f\n", t.w, t.x, t.y, t.z);
+    glm::mat4 P = glm::transpose(glm::make_mat4(viewmat));
+    glm::vec4 t = P * glm::vec4(mean3d.x, mean3d.y, mean3d.z, 1.f);
 
     // column major
     // we only care about the top 2x2 submatrix
-    glm::mat3 J = glm::transpose(glm::mat3(
-        fx / t.z, 0.f, -fx * t.x / (t.z * t.z),
-        0.f, fy / t.z, -fy * t.y / (t.z * t.z),
-        0.f, 0.f, 0.f
-    ));
+    glm::mat3 J = glm::mat3(
+        fx / t.z, 0.f, 0.f,
+        0.f, fy / t.z, 0.f,
+        -fx * t.x / (t.z * t.z), -fy * t.y / (t.z * t.z), 0.f
+    );
+    // upper 3x3 sub of view matrix
     glm::mat3 W = glm::mat3(
-        glm::vec3(viewmat_glm[0]), glm::vec3(viewmat_glm[1]), glm::vec3(viewmat_glm[2])
+        glm::vec3(P[0]), glm::vec3(P[1]), glm::vec3(P[2])
     );
 
     glm::mat3 T = J * W;
