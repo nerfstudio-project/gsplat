@@ -12,12 +12,13 @@
 #include "bindings.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include "forward.cuh"
 
 namespace cg = cooperative_groups;
 
 
 template <typename scalar_t>
-__global__ void compute_cov2d_bounds_kernel_forward(
+__global__ void compute_cov2d_bounds_forward_kernel(
     const int num_pts,
     const scalar_t * __restrict__ A,
     scalar_t * __restrict__ conics,
@@ -43,20 +44,20 @@ std::tuple<
     torch::Tensor, // output conics
     torch::Tensor // ouptut radii
     >
-compute_cov2d_bounds_cu_forward(
-    int num_pts,
+compute_cov2d_bounds_forward_tensor(
+    const int num_pts,
     torch::Tensor A
 ){
+    CHECK_INPUT(A);
 
     torch::Tensor conics = torch::zeros({num_pts, A.size(1)}, A.options().dtype(torch::kFloat32));
     torch::Tensor radii = torch::zeros({num_pts, 1}, A.options().dtype(torch::kFloat32));
 
-    const int threads = 256;
-    int blocks = (num_pts + threads - 1) / threads;
+    int blocks = (num_pts + N_THREADS - 1) / N_THREADS;
     // instantiate kernel
     AT_DISPATCH_FLOATING_TYPES(A.type(), "compute_cov2d_bounds_cu_forward", 
     ([&] {
-        compute_cov2d_bounds_kernel_forward<scalar_t><<<blocks, threads>>>(
+        compute_cov2d_bounds_forward_kernel<scalar_t><<<blocks, N_THREADS>>>(
             num_pts,
             A.contiguous().data_ptr<scalar_t>(),
             conics.contiguous().data_ptr<scalar_t>(),
@@ -65,16 +66,4 @@ compute_cov2d_bounds_cu_forward(
     })
     );
     return std::make_tuple(conics, radii);
-}
-
-std::tuple<
-    torch::Tensor, // output conics
-    torch::Tensor // output radii
-    >
-compute_cov2d_bounds_forward(
-    const int num_pts,
-    torch::Tensor A)
-{
-    CHECK_INPUT(A);
-    return compute_cov2d_bounds_cu_forward(num_pts, A);
 }
