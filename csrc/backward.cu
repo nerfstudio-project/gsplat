@@ -32,10 +32,10 @@ __device__ void project_cov3d_ewa_vjp(
 
     // vjp of cov3d parameters
     v_cov3d[0] = v_V[0][0];
-    v_cov3d[1] = 0.5f * (v_V[0][1] + v_V[1][0]);
-    v_cov3d[2] = 0.5f * (v_V[0][2] + v_V[2][0]);
+    v_cov3d[1] = v_V[0][1] + v_V[1][0];
+    v_cov3d[2] = v_V[0][2] + v_V[2][0];
     v_cov3d[3] = v_V[1][1];
-    v_cov3d[4] = 0.5f * (v_V[1][2] + v_V[2][1]);
+    v_cov3d[4] = v_V[1][2] + v_V[2][1];
     v_cov3d[5] = v_V[2][2];
 
     // compute df wrt mean3d
@@ -75,7 +75,8 @@ __device__ void scale_rot_to_cov3d_vjp(
     &float4 v_quat,
 ) {
     // cov3d is upper triangular elements of matrix
-    // off-diagonal elements considered 0.5 * (V_ij + V_ji)
+    // off-diagonal elements count grads from both ij and ji elements,
+    // must halve when expanding back into symmetric matrix
     glm::mat3 v_V = glm::mat3(
         v_cov3d[0], 0.5 * v_cov3d[1], 0.5 * v_cov3d[2],
         0.5 * v_cov3d[1], v_cov3d[3], 0.5 * v_cov3d[4],
