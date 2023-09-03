@@ -7,6 +7,10 @@ import diff_rast  # make sure to import torch before diff_rast
 from jaxtyping import Float
 from torch import Tensor
 from torch.autograd import Function
+from pathlib import Path
+import os
+from PIL import Image
+import numpy as np
 
 
 class rasterize(Function):
@@ -38,6 +42,8 @@ class rasterize(Function):
         proj_matrix: Float[Tensor, "4 4"],
         img_height: int,
         img_width: int,
+        fx: int,
+        fy: int,
     ):
         for name, input in {
             "means3d": means3d,
@@ -72,18 +78,19 @@ class rasterize(Function):
 
         # move tensors to cuda and call forward
         outputs = diff_rast.rasterize_forward(
-            means3d.cuda(),
-            scales.cuda(),
+            means3d.contiguous().cuda(),
+            scales.contiguous().cuda(),
             glob_scale,
-            rotations_quat.cuda(),
-            colors.cuda(),
-            opacity.cuda(),
-            view_matrix.cuda(),
-            proj_matrix.cuda(),
+            rotations_quat.contiguous().cuda(),
+            colors.contiguous().cuda(),
+            opacity.contiguous().cuda(),
+            view_matrix.contiguous().cuda(),
+            proj_matrix.contiguous().cuda(),
             img_height,
             img_width,
+            fx,
+            fy,
         )
-
         return outputs
 
     @staticmethod
@@ -114,6 +121,22 @@ class compute_cov2d_bounds(Function):
         raise NotImplementedError
 
 
+# helper to save image
+def vis_image(image, image_path):
+    """Generic image saver"""
+    if torch.is_tensor(image):
+        image = image.detach().cpu().numpy() * 255
+        image = image.astype(np.uint8)
+        image = image[..., [2, 1, 0]].copy()
+        # image = image[..., ::-1].copy()
+    if not Path(os.path.dirname(image_path)).exists():
+        Path(os.path.dirname(image_path)).mkdir()
+
+    im = Image.fromarray(image)
+    print("saving to: ", image_path)
+    im.save(image_path)
+
+
 if __name__ == "__main__":
     """Test bindings"""
     # rasterizer testing
@@ -124,8 +147,8 @@ if __name__ == "__main__":
     BLOCK_Y = 16
     num_points = 2048
     fov_x = math.pi / 2.0
-    W = 512
-    H = 512
+    W = 256
+    H = 256
     focal = 0.5 * float(W) / math.tan(0.5 * fov_x)
     tile_bounds = torch.tensor([(W + BLOCK_X - 1) // BLOCK_X, (H + BLOCK_Y - 1) // BLOCK_Y, 1])
     img_size = torch.tensor([W, H, 1])
@@ -137,7 +160,6 @@ if __name__ == "__main__":
     rgbs = torch.empty((num_points, 3))
     opacities = torch.empty(num_points)
     viewmat = torch.tensor([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 8.0], [0.0, 0.0, 0.0, 1.0]])
-    viewmat = torch.eye(3, 4)
     bd = 2.0
     random.seed()
     for i in range(num_points):
@@ -160,22 +182,13 @@ if __name__ == "__main__":
         opacities[i] = 0.9
 
     # currently proj_mat = view_mat
-    rasterize().apply(
-        means,
-        scales,
-        1,
-        quats,
-        rgbs,
-        opacities,
-        viewmat,
-        viewmat,
-        H,
-        W,
+    num_rendered, out_img, out_radii = rasterize().apply(
+        means, scales, 1, quats, rgbs, opacities, viewmat, viewmat, H, W, focal, focal
     )
-    quit()
+    print(out_img.shape)
+    vis_image(out_img.permute(2, 1, 0), os.getcwd() + "/python_forward.png")
+
     # cov2d bounds
     f = compute_cov2d_bounds()
     A = torch.rand(4, 3, device="cuda:0").requires_grad_()
     conics, radii = f.apply(A)
-    # print(A)
-    # print(conics, radii)
