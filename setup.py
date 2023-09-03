@@ -9,7 +9,7 @@ setup(
     ext_modules=[
         CUDAExtension(
             "diff_rast",
-            ["csrc/ext.cpp", "csrc/rasterize.cu", "csrc/bindings.cu"],
+            ["csrc/ext.cpp", "csrc/rasterize.cu", "csrc/bindings.cu", "csrc/forward.cu"],
             extra_compile_args={"nvcc": [f"-I {PROJ_ROOT}/csrc/third_party/glm/"]},
         ),
     ],
