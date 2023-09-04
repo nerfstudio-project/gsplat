@@ -45,11 +45,7 @@ __global__ void project_gaussians_forward_kernel(
     }
     // printf("p_view %d %.2f %.2f %.2f\n", idx, p_view.x, p_view.y, p_view.z);
 
-    float4 p_hom = transform_4x4(projmat, p_world);
-    float p_w = 1.f / (p_hom.w + 1e-5f);
-    float3 p_proj = {p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w};
-    // printf("p_proj %d %.2f %.2f %.2f\n", idx, p_proj.x, p_proj.y, p_proj.z);
-
+    // compute the projected covariance
     float3 scale = scales[idx];
     float4 quat = quats[idx];
     // printf("%d scale %.2f %.2f %.2f\n", idx, scale.x, scale.y, scale.z);
@@ -67,6 +63,12 @@ __global__ void project_gaussians_forward_kernel(
     if (!ok) return; // zero determinant
     // printf("conic %d %.2f %.2f %.2f\n", idx, conic.x, conic.y, conic.z);
     conics[idx] = conic;
+
+    // compute the projected mean
+    float4 p_hom = transform_4x4(projmat, p_world);
+    float p_w = 1.f / (p_hom.w + 1e-5f);
+    float3 p_proj = {p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w};
+    // printf("p_proj %d %.2f %.2f %.2f\n", idx, p_proj.x, p_proj.y, p_proj.z);
 
     // get the bbox of gaussian in tile coordinates
     float2 center = {ndc2pix(p_proj.x, img_size.x), ndc2pix(p_proj.y, img_size.y)};
@@ -304,6 +306,8 @@ __global__ void rasterize_forward_kernel(
     const float3 *conics,
     const float3 *rgbs,
     const float *opacities,
+    float *final_Ts,
+    int *final_index,
     float3 *out_img
 ) {
     // current naive implementation where tile data loading is redundant
@@ -315,6 +319,7 @@ __global__ void rasterize_forward_kernel(
     float px = (float) j;
     float py = (float) i;
     uint32_t pix_id = i * img_size.x + j;
+
     // which gaussians to look through in this tile
     uint2 range = tile_bins[tile_id];
     float3 rgb, conic;
@@ -323,12 +328,11 @@ __global__ void rasterize_forward_kernel(
     float3 out_color = {0.f, 0.f, 0.f};
     float T = 1.f;
     // iterate over all gaussians
-    for (int idx = range.x; idx < range.y; ++idx) {
+    int idx;
+    for (idx = 0; idx < range.y; ++idx) {
         uint32_t g = gaussian_ids_sorted[idx];
-        rgb = rgbs[g];
         conic = conics[g];
         center = xys[g];
-        opac = opacities[g];
         delta = {center.x - px, center.y - py};
         sigma = 0.5f * (
             conic.x * delta.x * delta.x + conic.z * delta.y * delta.y
@@ -336,19 +340,23 @@ __global__ void rasterize_forward_kernel(
         if (sigma <= 0.f) {
             continue;
         }
-        alpha = min(0.999f, opac * exp(-sigma));
-        if (alpha <= 1e-4f) {
+        opac = opacities[g];
+        alpha = min(0.99f, opac * exp(-sigma));
+        if (alpha < 1.f / 255.f) {
             continue;
         }
         next_T = T * (1.f - alpha);
         if (next_T <= 1e-4f) {
             break;
         }
+        rgb = rgbs[g];
         out_color.x += rgb.x * alpha * T;
         out_color.y += rgb.y * alpha * T;
         out_color.z += rgb.z * alpha * T;
         T = next_T;
     }
+    final_Ts[pix_id] = T;  // transmittance at last gaussian in this pixel
+    final_index[pix_id] = idx;  // index of in bin of last gaussian in this pixel
     if (bg_white) {
         out_color.x += T;
         out_color.y += T;
@@ -369,6 +377,7 @@ void rasterize_forward_impl(
     const float3 *conics,
     const float3 *rgbs,
     const float *opacities,
+    float *final_Ts,
     float3 *out_img
 ) {
     rasterize_forward_kernel <<< tile_bounds, block >>> (
@@ -380,6 +389,7 @@ void rasterize_forward_impl(
         conics,
         rgbs,
         opacities,
+        final_Ts,
         out_img
     );
 }
@@ -395,10 +405,15 @@ __device__ float3 project_cov3d_ewa(
     // const float tan_fovx,
     // const float tan_fovy,
 ) {
-    // we expect row major matrices as input,
-    // glm uses column major
-    glm::mat4 P = glm::transpose(glm::make_mat4(viewmat));
-    glm::vec4 t = P * glm::vec4(mean3d.x, mean3d.y, mean3d.z, 1.f);
+    // we expect row major matrices as input, glm uses column major
+    // upper 3x3 submatrix
+    glm::mat3 W = glm::mat3(
+        viewmat[0], viewmat[4], viewmat[8],
+        viewmat[1], viewmat[5], viewmat[9],
+        viewmat[2], viewmat[6], viewmat[10]
+    );
+    glm::vec3 p = glm::vec3(viewmat[3], viewmat[7], viewmat[11]);
+    glm::vec3 t = W * glm::vec3(mean3d.x, mean3d.y, mean3d.z) + p;
 
     // column major
     // we only care about the top 2x2 submatrix
@@ -406,10 +421,6 @@ __device__ float3 project_cov3d_ewa(
         fx / t.z, 0.f, 0.f,
         0.f, fy / t.z, 0.f,
         -fx * t.x / (t.z * t.z), -fy * t.y / (t.z * t.z), 0.f
-    );
-    // upper 3x3 sub of view matrix
-    glm::mat3 W = glm::mat3(
-        glm::vec3(P[0]), glm::vec3(P[1]), glm::vec3(P[2])
     );
 
     glm::mat3 T = J * W;
