@@ -3,7 +3,7 @@
 from typing import Tuple
 
 import torch
-import diff_rast  # make sure to import torch before diff_rast
+from diff_rast import cuda_lib  # make sure to import torch before diff_rast
 from jaxtyping import Float
 from torch import Tensor
 from torch.autograd import Function
@@ -77,7 +77,7 @@ class rasterize(Function):
         ), f"Incorrect shape for view matrix, got{view_matrix.shape}, should be (4,4)."
 
         # move tensors to cuda and call forward
-        outputs = diff_rast.rasterize_forward(
+        outputs = cuda_lib.rasterize_forward(
             means3d.contiguous().cuda(),
             scales.contiguous().cuda(),
             glob_scale,
@@ -113,7 +113,7 @@ class compute_cov2d_bounds(Function):
         num_pts = cov2d.shape[0]
         assert num_pts > 0
 
-        output = diff_rast.compute_cov2d_bounds_forward(num_pts, cov2d)
+        output = cuda_lib.compute_cov2d_bounds_forward(num_pts, cov2d)
         return output
 
     @staticmethod
@@ -182,7 +182,7 @@ if __name__ == "__main__":
         opacities[i] = 0.9
 
     # currently proj_mat = view_mat
-    num_rendered, out_img, out_radii = rasterize().apply(
+    num_rendered, out_img, out_radii = rasterize.apply(
         means, scales, 1, quats, rgbs, opacities, viewmat, viewmat, H, W, focal, focal
     )
     print(out_img.shape)
