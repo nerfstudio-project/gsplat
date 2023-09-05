@@ -65,10 +65,10 @@ int main() {
         v = random_float();
         w = random_float();
         quats[i] = {
-            sqrt(1.f - u) * sin(2.f * (float) M_PI * v),
-            sqrt(1.f - u) * cos(2.f * (float) M_PI * v),
-            sqrt(u) * sin(2.f * (float) M_PI * w),
-            sqrt(u) * cos(2.f * (float) M_PI * w)
+            sqrtf(1.f - u) * sinf(2.f * (float) M_PI * v),
+            sqrtf(1.f - u) * cosf(2.f * (float) M_PI * v),
+            sqrtf(u) * sinf(2.f * (float) M_PI * w),
+            sqrtf(u) * cosf(2.f * (float) M_PI * w)
         };
 
         opacities[i] = 0.9f;
