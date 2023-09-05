@@ -93,6 +93,29 @@ inline __device__ float4 transform_4x4(const float *mat, const float3 p) {
     return out;
 }
 
+inline __device__ float2 project_pix(const float *mat, const float3 p, const dim3 img_size) {
+    float4 p_hom = transform_4x4(mat, p);
+    float rw = 1.f / (p_hom.w + 1e-5f);
+    float3 p_proj = {p_hom.x * rw, p_hom.y * rw, p_hom.z * rw};
+    return {ndc2pix(p_proj.x, img_size.x), ndc2pix(p_proj.y, img_size.y)};
+}
+
+// given v_xy_pix, get v_xyz
+inline __device__ float3 project_pix_vjp(const float *mat, const float3 p, const dim3 img_size, const float2 v_xy) {
+    float4 p_hom = transform_4x4(mat, p);
+    float w = 1.f / (p_hom.w + 1e-5f);
+
+    float3 v_ndc = {img_size.x * v_xy.x, img_size.y * v_xy.y};
+    float4 v_proj = {v_ndc.x * w, v_ndc.y * w, 0., -(v_ndc.x + v_ndc.y) * w * w};
+    // df / d_world = df / d_cam * d_cam / d_world
+    // = v_proj * P[:3, :3]
+    return {
+        mat[0] * v_proj.x + mat[4] * v_proj.y + mat[8] * v_proj.z,
+        mat[1] * v_proj.x + mat[5] * v_proj.y + mat[9] * v_proj.z,
+        mat[2] * v_proj.x + mat[6] * v_proj.y + mat[10] * v_proj.z
+    };
+}
+
 inline __device__ glm::mat3 quat_to_rotmat(const float4 quat) {
     // quat to rotation matrix
     float s = rsqrtf(

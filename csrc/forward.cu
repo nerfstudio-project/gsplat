@@ -66,13 +66,7 @@ __global__ void project_gaussians_forward_kernel(
     conics[idx] = conic;
 
     // compute the projected mean
-    float4 p_hom = transform_4x4(projmat, p_world);
-    float p_w = 1.f / (p_hom.w + 1e-5f);
-    float3 p_proj = {p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w};
-    // printf("p_proj %d %.2f %.2f %.2f\n", idx, p_proj.x, p_proj.y, p_proj.z);
-
-    // get the bbox of gaussian in tile coordinates
-    float2 center = {ndc2pix(p_proj.x, img_size.x), ndc2pix(p_proj.y, img_size.y)};
+    float2 center = project_pix(projmat, p_world, img_size);
     uint2 tile_min, tile_max;
     get_tile_bbox(center, radius, tile_bounds, tile_min, tile_max);
     uint32_t tile_area = (tile_max.x - tile_min.x) * (tile_max.y - tile_min.y);

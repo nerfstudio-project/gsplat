@@ -42,6 +42,7 @@ __global__ void rasterize_backward_kernel(
     float T = final_Ts[pix_id];
     float3 S = {0.f, 0.f, 0.f};
     int bin_final = final_index[pix_id];
+
     // iterate backward to compute the jacobians wrt rgb, opacity, mean2d, and conic
     // recursively compute T_{n-1} from T_n, where T_i = prod(j < i) (1 - alpha_j),
     // and S_{n-1} from S_n, where S_j = sum_{i > j}(rgb_i * alpha_i * T_i)
@@ -164,6 +165,9 @@ __global__ void project_gaussians_backward_kernel(
         return;
     }
     float3 p_world = means3d[idx];
+    // get v_mean3d from v_xy
+    v_mean3d[idx] = project_pix_vjp(projmat, p_world, img_size, v_xy[idx]);
+
     // get v_cov2d
     cov2d_to_conic_vjp(conics[idx], v_conic[idx], v_cov2d[idx]);
     // get v_cov3d (and v_mean3d contribution)
@@ -181,19 +185,6 @@ __global__ void project_gaussians_backward_kernel(
     scale_rot_to_cov3d_vjp(
         scales[idx], glob_scale, quats[idx], &(v_cov3d[6 * idx]), v_scale[idx], v_quat[idx]
     );
-
-    // get v_mean3d
-    // p_cam = P[:3, :3] * p_world + P[:3, 3:]
-    float4 p_cam = transform_4x4(projmat, p_world);
-    float w = 1.f / (p_cam.w + 1e-5f);
-
-    float3 v_ndc = {img_size.x * v_xy[idx].x, img_size.y * v_xy[idx].y};
-    float4 v_proj = {v_ndc.x * w, v_ndc.y * w, 0., -(v_ndc.x + v_ndc.y) * w * w};
-    // df / d_world = df / d_cam * d_cam / d_world
-    // = v_proj * P[:3, :3]
-    v_mean3d[idx].x += projmat[0] * v_proj.x + projmat[4] * v_proj.y + projmat[8] * v_proj.z;
-    v_mean3d[idx].y += projmat[1] * v_proj.x + projmat[5] * v_proj.y + projmat[9] * v_proj.z;
-    v_mean3d[idx].z += projmat[2] * v_proj.x + projmat[6] * v_proj.y + projmat[10] * v_proj.z;
 }
 
 void project_gaussians_backward_impl(
