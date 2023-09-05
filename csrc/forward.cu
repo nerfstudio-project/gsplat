@@ -1,3 +1,4 @@
+#include "helpers.cuh"
 #include "forward.cuh"
 #include <iostream>
 #include <cooperative_groups.h>
@@ -341,7 +342,7 @@ __global__ void rasterize_forward_kernel(
             continue;
         }
         opac = opacities[g];
-        alpha = min(0.99f, opac * exp(-sigma));
+        alpha = min(0.999f, opac * exp(-sigma));
         if (alpha < 1.f / 255.f) {
             continue;
         }
@@ -378,6 +379,7 @@ void rasterize_forward_impl(
     const float3 *rgbs,
     const float *opacities,
     float *final_Ts,
+    int *final_index,
     float3 *out_img
 ) {
     rasterize_forward_kernel <<< tile_bounds, block >>> (
@@ -390,6 +392,7 @@ void rasterize_forward_impl(
         rgbs,
         opacities,
         final_Ts,
+        final_index,
         out_img
     );
 }
@@ -435,7 +438,6 @@ __device__ float3 project_cov3d_ewa(
     // add a little blur along axes and save upper triangular elements
     return (float3) {float(cov[0][0]) + 0.1f, float(cov[0][1]), float(cov[1][1]) + 0.1f};
 }
-
 
 // device helper to get 3D covariance from scale and quat parameters
 __device__ void scale_rot_to_cov3d(

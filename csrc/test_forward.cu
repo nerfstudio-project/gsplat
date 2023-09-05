@@ -5,6 +5,7 @@
 #include <math.h>
 
 #include "forward.cuh"
+#include "config.h"
 #include "tgaimage.h"
 
 
@@ -14,7 +15,7 @@ float random_float() {
 
 
 int main() {
-    int num_points = 2048;
+    int num_points = 16;
     const float fov_x = M_PI / 2.f;
     const int W = 512;
     const int H = 512;
@@ -34,7 +35,7 @@ int main() {
     float viewmat [] = {
         1.f, 0.f, 0.f, 0.f,
         0.f, 1.f, 0.f, 0.f,
-        0.f, 0.f, 1.f, 8.f,
+        0.f, 0.f, 1.f, 10.f,
         0.f, 0.f, 0.f, 1.f
     };
 
@@ -47,14 +48,14 @@ int main() {
     float u, v, w;
     std::srand(std::time(nullptr));
     for (int i = 0; i < num_points; ++i) {
-        means[i] = {bd * (random_float() - 0.5f), bd * (random_float() - 0.5f), bd * (random_float() - 0.5f)};
-        scales[i] = {random_float(), random_float(), random_float()};
-        rgbs[i] = {random_float(), random_float(), random_float()};
+        // means[i] = {bd * (random_float() - 0.5f), bd * (random_float() - 0.5f), bd * (random_float() - 0.5f)};
+        // scales[i] = {random_float(), random_float(), random_float()};
+        // rgbs[i] = {random_float(), random_float(), random_float()};
 
-        // float v = (float) i - (float) num_points * 0.5f;
-        // means[i] = {v * 0.1f, v * 0.1f, (float) i};
-        // scales[i] = {0.5f, 5.f, 1.f};
-        // rgbs[i] = {(float) (i % 3 == 0), (float) (i % 3 == 1), (float) (i % 3 == 2)};
+        float v = (float) i - (float) num_points * 0.5f;
+        means[i] = {v * 0.1f, v * 0.1f, (float) i};
+        scales[i] = {1.f, 0.5f, 1.f};
+        rgbs[i] = {(float) (i % 3 == 0), (float) (i % 3 == 1), (float) (i % 3 == 2)};
 
         // quats[i] = {w, norm, norm, 0.f};  // w x y z convention
         // quats[i] = {1.f, 0.f, 0.f, 0.f};  // w x y z convention
@@ -198,7 +199,11 @@ int main() {
 
     float3 *out_img = new float3[W * H];
     float3 *out_img_d;
+    float *final_Ts_d;
+    int *final_idx_d;
     cudaMalloc((void**)&out_img_d, W * H * sizeof(float3));
+    cudaMalloc((void**)&final_Ts_d, W * H * sizeof(float));
+    cudaMalloc((void**)&final_idx_d, W * H * sizeof(int));
 
     rasterize_forward_impl(
         tile_bounds,
@@ -210,6 +215,8 @@ int main() {
         conics_d,
         rgbs_d,
         opacities_d,
+        final_Ts_d,
+        final_idx_d,
         out_img_d
     );
     cudaMemcpy(out_img, out_img_d, W * H * sizeof(float3), cudaMemcpyDeviceToHost);

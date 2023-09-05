@@ -1,7 +1,6 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
-#include "helpers.cuh"
 
 // compute the 2d gaussian parameters from 3d gaussian parameters
 void project_gaussians_forward_impl(
@@ -58,6 +57,8 @@ void rasterize_forward_impl(
     const float3 *conics,
     const float3 *rgbs,
     const float *opacities,
+    float *final_Ts,
+    int *final_index,
     float3 *out_img
 );
 

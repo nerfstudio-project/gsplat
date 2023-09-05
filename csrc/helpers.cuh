@@ -1,13 +1,11 @@
+#include "config.h"
 #include "cuda_runtime.h"
 #include <iostream>
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
-#define BLOCK_X 16
-#define BLOCK_Y 16
-#define N_THREADS 256
 
-inline __device__ float ndc2pix(float x, float W) {
+inline __device__ float ndc2pix(const float x, const float W) {
     return 0.5 * ((1.f + x) * W - 1.f);
 }
 
@@ -39,10 +37,11 @@ inline __device__ void get_tile_bbox(
     get_bbox(tile_center, tile_radius, tile_bounds, tile_min, tile_max);
 }
 
-inline __device__ bool compute_cov2d_bounds(float3 cov2d, float3 &conic, float& radius) {
+inline __device__ bool compute_cov2d_bounds(const float3 cov2d, float3 &conic, float& radius) {
     // find eigenvalues of 2d covariance matrix
     // expects upper triangular values of cov matrix as float3
     // then compute the radius and conic dimensions
+    // the conic is the inverse cov2d matrix
     float det = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
     if (det == 0.f)
         return false;
@@ -57,6 +56,19 @@ inline __device__ bool compute_cov2d_bounds(float3 cov2d, float3 &conic, float& 
     // take 3 sigma of covariance
 	radius = ceil(3.f * sqrt(max(v1, v2)));
     return true;
+}
+
+// compute vjp from df/d_conic to df/c_cov2d
+inline __device__ bool cov2d_to_conic_vjp(const float3 conic, const float3 v_conic, float3 &v_cov2d)
+{
+    // conic = inverse cov2d
+    // df/d_cov2d = -conic * df/d_conic * conic
+    glm::mat2 X = glm::mat2(conic.x, conic.y, conic.y, conic.z);
+    glm::mat2 G = glm::mat2(v_conic.x, v_conic.y, v_conic.y, v_conic.z);
+    glm::mat2 v_Sigma = -X * G * X;
+    v_cov2d.x = v_Sigma[0][0];
+    v_cov2d.y = v_Sigma[0][1];
+    v_cov2d.z = v_Sigma[1][1];
 }
 
 // helper for applying R * p + T, expect mat to be ROW MAJOR
