@@ -15,14 +15,6 @@ std::tuple<
     torch::Tensor, // output conics
     torch::Tensor  // ouptut radii
     >
-compute_cov2d_bounds_cu_forward(
-    const int num_pts,
-    torch::Tensor A);
-
-std::tuple<
-    torch::Tensor, // output conics
-    torch::Tensor  // ouptut radii
-    >
-compute_cov2d_bounds_forward(
+compute_cov2d_bounds_forward_tensor(
     const int num_pts,
     torch::Tensor A);
