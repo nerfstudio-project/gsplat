@@ -1,16 +1,17 @@
 """Python bindings for custom Cuda functions"""
 
+import os
+from pathlib import Path
 from typing import Tuple
 
+import numpy as np
 import torch
-from diff_rast import cuda_lib  # make sure to import torch before diff_rast
 from jaxtyping import Float
+from PIL import Image
 from torch import Tensor
 from torch.autograd import Function
-from pathlib import Path
-import os
-from PIL import Image
-import numpy as np
+
+from diff_rast import cuda_lib  # make sure to import torch before diff_rast
 
 
 class rasterize(Function):
@@ -61,11 +62,19 @@ class rasterize(Function):
 
         if proj_matrix.shape == (3, 4):
             proj_matrix = torch.cat(
-                [proj_matrix, torch.Tensor([0, 0, 0, 1], device=proj_matrix.device).unsqueeze(0)], dim=0
+                [
+                    proj_matrix,
+                    torch.Tensor([0, 0, 0, 1], device=proj_matrix.device).unsqueeze(0),
+                ],
+                dim=0,
             )
         if view_matrix.shape == (3, 4):
             view_matrix = torch.cat(
-                [view_matrix, torch.Tensor([0, 0, 0, 1], device=proj_matrix.device).unsqueeze(0)], dim=0
+                [
+                    view_matrix,
+                    torch.Tensor([0, 0, 0, 1], device=proj_matrix.device).unsqueeze(0),
+                ],
+                dim=0,
             )
         assert proj_matrix.shape == (
             4,
@@ -150,7 +159,9 @@ if __name__ == "__main__":
     W = 256
     H = 256
     focal = 0.5 * float(W) / math.tan(0.5 * fov_x)
-    tile_bounds = torch.tensor([(W + BLOCK_X - 1) // BLOCK_X, (H + BLOCK_Y - 1) // BLOCK_Y, 1])
+    tile_bounds = torch.tensor(
+        [(W + BLOCK_X - 1) // BLOCK_X, (H + BLOCK_Y - 1) // BLOCK_Y, 1]
+    )
     img_size = torch.tensor([W, H, 1])
     block = torch.tensor([BLOCK_X, BLOCK_Y, 1])
 
@@ -159,12 +170,23 @@ if __name__ == "__main__":
     quats = torch.empty((num_points, 4))
     rgbs = torch.empty((num_points, 3))
     opacities = torch.empty(num_points)
-    viewmat = torch.tensor([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 8.0], [0.0, 0.0, 0.0, 1.0]])
+    viewmat = torch.tensor(
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 8.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+    )
     bd = 2.0
     random.seed()
     for i in range(num_points):
         means[i] = torch.tensor(
-            [bd * (random.random() - 0.5), bd * (random.random() - 0.5), bd * (random.random() - 0.5)]
+            [
+                bd * (random.random() - 0.5),
+                bd * (random.random() - 0.5),
+                bd * (random.random() - 0.5),
+            ]
         )
         scales[i] = torch.tensor([random.random(), random.random(), random.random()])
         rgbs[i] = torch.tensor([random.random(), random.random(), random.random()])
