@@ -4,7 +4,9 @@
 #include <cstring>
 #include <math.h>
 
+#include "forward.cuh"
 #include "backward.cuh"
+#include "config.h"
 #include "tgaimage.h"
 
 
@@ -14,7 +16,7 @@ float random_float() {
 
 
 int main() {
-    int num_points = 2048;
+    int num_points = 16;
     const float fov_x = M_PI / 2.f;
     const int W = 512;
     const int H = 512;
@@ -135,4 +137,178 @@ int main() {
     cudaMemcpy(radii, radii_d, num_points * sizeof(int), cudaMemcpyDeviceToHost);
     cudaMemcpy(num_tiles_hit, num_tiles_hit_d, num_points * sizeof(uint32_t), cudaMemcpyDeviceToHost);
 
+    uint32_t num_intersects;
+    uint32_t *cum_tiles_hit = new uint32_t[num_points];
+    uint32_t *cum_tiles_hit_d;
+    cudaMalloc((void**) &cum_tiles_hit_d, num_points * sizeof(uint32_t));
+    compute_cumulative_intersects(num_points, num_tiles_hit_d, num_intersects, cum_tiles_hit_d);
+    // printf("num_intersects %d\n", num_intersects);
+    // cudaMemcpy(cum_tiles_hit, cum_tiles_hit_d, num_points * sizeof(uint32_t), cudaMemcpyDeviceToHost);
+    // for (int i = 0; i < num_points; ++i) {
+    //     printf("num_tiles_hit %d, %d\n", i, num_tiles_hit[i]);
+    // }
 
+    uint64_t *isect_ids_sorted_d;
+    uint32_t *gaussian_ids_sorted_d;  // sorted by tile and depth
+    uint64_t *isect_ids_sorted = new uint64_t[num_intersects];
+    uint32_t *gaussian_ids_sorted = new uint32_t[num_intersects];
+    cudaMalloc((void**) &isect_ids_sorted_d, num_intersects * sizeof(uint64_t));
+    cudaMalloc((void**) &gaussian_ids_sorted_d, num_intersects * sizeof(uint32_t));
+
+    uint64_t *isect_ids_unsorted_d;
+    uint32_t *gaussian_ids_unsorted_d;  // sorted by tile and depth
+    uint64_t *isect_ids_unsorted = new uint64_t[num_intersects];
+    uint32_t *gaussian_ids_unsorted = new uint32_t[num_intersects];
+    cudaMalloc((void**) &isect_ids_unsorted_d, num_intersects * sizeof(uint64_t));
+    cudaMalloc((void**) &gaussian_ids_unsorted_d, num_intersects * sizeof(uint32_t));
+
+    int num_tiles = tile_bounds.x * tile_bounds.y;
+    uint2 *tile_bins_d;  // start and end indices for each tile
+    uint2 *tile_bins = new uint2[num_tiles];
+    cudaMalloc((void**) &tile_bins_d, num_tiles * sizeof(uint2));
+
+    bin_and_sort_gaussians(
+        num_points,
+        num_intersects,
+        xy_d,
+        z_d,
+        radii_d,
+        cum_tiles_hit_d,
+        tile_bounds,
+        isect_ids_unsorted_d,
+        gaussian_ids_unsorted_d,
+        isect_ids_sorted_d,
+        gaussian_ids_sorted_d,
+        tile_bins_d
+    );
+    cudaMemcpy(isect_ids_unsorted, isect_ids_unsorted_d, num_intersects * sizeof(uint64_t), cudaMemcpyDeviceToHost);
+    cudaMemcpy(gaussian_ids_unsorted, gaussian_ids_unsorted_d, num_intersects * sizeof(uint32_t), cudaMemcpyDeviceToHost);
+    cudaMemcpy(isect_ids_sorted, isect_ids_sorted_d, num_intersects * sizeof(uint64_t), cudaMemcpyDeviceToHost);
+    cudaMemcpy(gaussian_ids_sorted, gaussian_ids_sorted_d, num_intersects * sizeof(uint32_t), cudaMemcpyDeviceToHost);
+
+    // for (int i = 0; i < num_intersects; ++i) {
+    //     printf("%d unsorted isect %016lx point %03d\n", i, isect_ids_unsorted[i], gaussian_ids_unsorted[i]);
+    // }
+    // for (int i = 0; i < num_intersects; ++i) {
+    //     printf("sorted isect %016lx point %03d\n", isect_ids_sorted[i], gaussian_ids_sorted[i]);
+    // }
+    // cudaMemcpy(tile_bins, tile_bins_d, num_tiles * sizeof(uint2), cudaMemcpyDeviceToHost);
+    // for (int i = 0; i < num_tiles; ++i) {
+    //     printf("tile_bins %d %d %d\t", i, tile_bins[i].x, tile_bins[i].y);
+    // }
+    // std::cout << std::endl;
+
+    float3 *out_img = new float3[W * H];
+    float3 *out_img_d;
+    float *final_Ts_d;
+    int *final_idx_d;
+    cudaMalloc((void**)&out_img_d, W * H * sizeof(float3));
+    cudaMalloc((void**)&final_Ts_d, W * H * sizeof(float));
+    cudaMalloc((void**)&final_idx_d, W * H * sizeof(int));
+
+    rasterize_forward_impl(
+        tile_bounds,
+        block,
+        img_size,
+        gaussian_ids_sorted_d,
+        tile_bins_d,
+        xy_d,
+        conics_d,
+        rgbs_d,
+        opacities_d,
+        final_Ts_d,
+        final_idx_d,
+        out_img_d
+    );
+    cudaMemcpy(out_img, out_img_d, W * H * sizeof(float3), cudaMemcpyDeviceToHost);
+
+    float3 *v_output_d;
+    float3 *v_rgb_d, *v_conic_d, *v_cov2d_d;
+    float2 *v_xy_d;
+    float *v_opacity_d;
+    float *v_cov3d_d;
+    float3 *v_mean3d_d, *v_scale_d;
+    float4 *v_quat_d;
+
+    cudaMalloc((void**)&v_output_d, W * H * sizeof(float3));
+    cudaMalloc((void**)&v_rgb_d, num_points * sizeof(float3));
+    cudaMalloc((void**)&v_conic_d, num_points * sizeof(float3));
+    cudaMalloc((void**)&v_cov2d_d, num_points * sizeof(float3));
+    cudaMalloc((void**)&v_xy_d, num_points * sizeof(float2));
+    cudaMalloc((void**)&v_opacity_d, num_points * sizeof(float));
+    cudaMalloc((void**)&v_cov3d_d, num_points * 6 * sizeof(float));
+    cudaMalloc((void**)&v_mean3d_d, num_points * sizeof(float3));
+    cudaMalloc((void**)&v_scale_d, num_points * sizeof(float3));
+    cudaMalloc((void**)&v_quat_d, num_points * sizeof(float4));
+
+    rasterize_backward_impl(
+        tile_bounds,
+        block,
+        img_size,
+        gaussian_ids_sorted_d,
+        tile_bins_d,
+        xy_d,
+        conics_d,
+        rgbs_d,
+        opacities_d,
+        final_Ts_d,
+        final_idx_d,
+        v_output_d,
+        v_xy_d,
+        v_conic_d,
+        v_rgb_d,
+        v_opacity_d
+    );
+
+    printf("freeing memory...\n");
+
+    cudaFree(scales_d);
+    cudaFree(quats_d);
+    cudaFree(rgbs_d);
+    cudaFree(opacities_d);
+    cudaFree(covs3d_d);
+    cudaFree(viewmat_d);
+    cudaFree(xy_d);
+    cudaFree(z_d);
+    cudaFree(radii_d);
+    cudaFree(num_tiles_hit_d);
+    cudaFree(cum_tiles_hit_d);
+    cudaFree(tile_bins_d);
+    cudaFree(isect_ids_unsorted_d);
+    cudaFree(gaussian_ids_unsorted_d);
+    cudaFree(isect_ids_sorted_d);
+    cudaFree(gaussian_ids_sorted_d);
+    cudaFree(conics_d);
+    cudaFree(out_img_d);
+    cudaFree(final_Ts_d);
+    cudaFree(final_idx_d);
+
+    printf("freeing jacobians...\n");
+    cudaFree(v_output_d);
+    cudaFree(v_rgb_d);
+    cudaFree(v_conic_d);
+    cudaFree(v_cov2d_d);
+    cudaFree(v_xy_d);
+    cudaFree(v_opacity_d);
+    cudaFree(v_cov3d_d);
+    cudaFree(v_mean3d_d);
+    cudaFree(v_scale_d);
+    cudaFree(v_quat_d);
+
+    delete[] scales;
+    delete[] means;
+    delete[] rgbs;
+    delete[] opacities;
+    delete[] quats;
+    delete[] covs3d;
+    delete[] xy;
+    delete[] z;
+    delete[] radii;
+    delete[] num_tiles_hit;
+    delete[] cum_tiles_hit;
+    delete[] tile_bins;
+    delete[] gaussian_ids_sorted;
+    delete[] out_img;
+    return 0;
+
+}
