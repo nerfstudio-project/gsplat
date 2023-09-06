@@ -50,7 +50,7 @@ std::
     auto int_opts = means3d.options().dtype(torch::kInt32);
     auto float_opts = means3d.options().dtype(torch::kFloat32);
     torch::Tensor out_img = torch::zeros(
-        {3, img_height, img_width}, means3d.options().dtype(torch::kFloat32)
+        {img_height, img_width, 3}, means3d.options().dtype(torch::kFloat32)
     );
     torch::Tensor out_radii =
         torch::zeros({num_points}, means3d.options().dtype(torch::kFloat32));

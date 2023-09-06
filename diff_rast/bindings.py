@@ -207,8 +207,7 @@ if __name__ == "__main__":
     num_rendered, out_img, out_radii = rasterize.apply(
         means, scales, 1, quats, rgbs, opacities, viewmat, viewmat, H, W, focal, focal
     )
-    print(out_img.shape)
-    vis_image(out_img.permute(2, 1, 0), os.getcwd() + "/python_forward.png")
+    vis_image(out_img, os.getcwd() + "/python_forward.png")
 
     # cov2d bounds
     f = compute_cov2d_bounds()
