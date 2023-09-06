@@ -85,7 +85,7 @@ __global__ void rasterize_backward_kernel(
         atomicAdd(&(v_opacity[g]), vis * v_alpha);
 
         // compute vjps for conics and means
-        // d_sigma / d_delta = 2 * conic * delta
+        // d_sigma / d_delta = conic * delta
         // d_sigma / d_conic = delta * delta.T
         v_sigma = -opac * vis * v_alpha;
 
@@ -94,11 +94,11 @@ __global__ void rasterize_backward_kernel(
         atomicAdd(&(v_conic[g].z), v_sigma * delta.y * delta.y);
         atomicAdd(
             &(v_xy[g].x),
-            v_sigma * 2.f * (conic.x * delta.x + conic.y * delta.y)
+            v_sigma * (conic.x * delta.x + conic.y * delta.y)
         );
         atomicAdd(
             &(v_xy[g].y),
-            v_sigma * 2.f * (conic.y * delta.x + conic.z * delta.y)
+            v_sigma * (conic.y * delta.x + conic.z * delta.y)
         );
     }
 }
