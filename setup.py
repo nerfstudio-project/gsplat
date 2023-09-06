@@ -18,6 +18,7 @@ setup(
                 "csrc/rasterize.cu",
                 "csrc/bindings.cu",
                 "csrc/forward.cu",
+                "csrc/backward.cu",
             ],
             extra_compile_args={"nvcc": [f"-I {PROJ_ROOT}/csrc/third_party/glm/"]},
         ),

@@ -124,19 +124,19 @@ int main() {
     float *z = new float[num_points];
     int *radii = new int[num_points];
     float3 *conics = new float3[num_points];
-    uint32_t *num_tiles_hit = new uint32_t[num_points];
+    int32_t *num_tiles_hit = new int32_t[num_points];
 
     float *covs3d_d, *z_d;
     float2 *xy_d;
     float3 *conics_d;
     int *radii_d;
-    uint32_t *num_tiles_hit_d;
+    int32_t *num_tiles_hit_d;
     cudaMalloc((void **)&covs3d_d, num_cov3d * sizeof(float));
     cudaMalloc((void **)&xy_d, num_points * sizeof(float2));
     cudaMalloc((void **)&z_d, num_points * sizeof(float));
     cudaMalloc((void **)&radii_d, num_points * sizeof(int));
     cudaMalloc((void **)&conics_d, num_points * sizeof(float3));
-    cudaMalloc((void **)&num_tiles_hit_d, num_points * sizeof(uint32_t));
+    cudaMalloc((void **)&num_tiles_hit_d, num_points * sizeof(int32_t));
 
     project_gaussians_forward_impl(
         num_points,
@@ -168,41 +168,41 @@ int main() {
     cudaMemcpy(
         num_tiles_hit,
         num_tiles_hit_d,
-        num_points * sizeof(uint32_t),
+        num_points * sizeof(int32_t),
         cudaMemcpyDeviceToHost
     );
 
-    uint32_t num_intersects;
-    uint32_t *cum_tiles_hit = new uint32_t[num_points];
-    uint32_t *cum_tiles_hit_d;
-    cudaMalloc((void **)&cum_tiles_hit_d, num_points * sizeof(uint32_t));
+    int32_t num_intersects;
+    int32_t *cum_tiles_hit = new int32_t[num_points];
+    int32_t *cum_tiles_hit_d;
+    cudaMalloc((void **)&cum_tiles_hit_d, num_points * sizeof(int32_t));
     compute_cumulative_intersects(
         num_points, num_tiles_hit_d, num_intersects, cum_tiles_hit_d
     );
     // printf("num_intersects %d\n", num_intersects);
-    // cudaMemcpy(cum_tiles_hit, cum_tiles_hit_d, num_points * sizeof(uint32_t),
+    // cudaMemcpy(cum_tiles_hit, cum_tiles_hit_d, num_points * sizeof(int32_t),
     // cudaMemcpyDeviceToHost); for (int i = 0; i < num_points; ++i) {
     //     printf("num_tiles_hit %d, %d\n", i, num_tiles_hit[i]);
     // }
 
-    uint64_t *isect_ids_sorted_d;
-    uint32_t *gaussian_ids_sorted_d; // sorted by tile and depth
-    uint64_t *isect_ids_sorted = new uint64_t[num_intersects];
-    uint32_t *gaussian_ids_sorted = new uint32_t[num_intersects];
-    cudaMalloc((void **)&isect_ids_sorted_d, num_intersects * sizeof(uint64_t));
+    int64_t *isect_ids_sorted_d;
+    int32_t *gaussian_ids_sorted_d; // sorted by tile and depth
+    int64_t *isect_ids_sorted = new int64_t[num_intersects];
+    int32_t *gaussian_ids_sorted = new int32_t[num_intersects];
+    cudaMalloc((void **)&isect_ids_sorted_d, num_intersects * sizeof(int64_t));
     cudaMalloc(
-        (void **)&gaussian_ids_sorted_d, num_intersects * sizeof(uint32_t)
+        (void **)&gaussian_ids_sorted_d, num_intersects * sizeof(int32_t)
     );
 
-    uint64_t *isect_ids_unsorted_d;
-    uint32_t *gaussian_ids_unsorted_d; // sorted by tile and depth
-    uint64_t *isect_ids_unsorted = new uint64_t[num_intersects];
-    uint32_t *gaussian_ids_unsorted = new uint32_t[num_intersects];
+    int64_t *isect_ids_unsorted_d;
+    int32_t *gaussian_ids_unsorted_d; // sorted by tile and depth
+    int64_t *isect_ids_unsorted = new int64_t[num_intersects];
+    int32_t *gaussian_ids_unsorted = new int32_t[num_intersects];
     cudaMalloc(
-        (void **)&isect_ids_unsorted_d, num_intersects * sizeof(uint64_t)
+        (void **)&isect_ids_unsorted_d, num_intersects * sizeof(int64_t)
     );
     cudaMalloc(
-        (void **)&gaussian_ids_unsorted_d, num_intersects * sizeof(uint32_t)
+        (void **)&gaussian_ids_unsorted_d, num_intersects * sizeof(int32_t)
     );
 
     int num_tiles = tile_bounds.x * tile_bounds.y;
@@ -227,25 +227,25 @@ int main() {
     cudaMemcpy(
         isect_ids_unsorted,
         isect_ids_unsorted_d,
-        num_intersects * sizeof(uint64_t),
+        num_intersects * sizeof(int64_t),
         cudaMemcpyDeviceToHost
     );
     cudaMemcpy(
         gaussian_ids_unsorted,
         gaussian_ids_unsorted_d,
-        num_intersects * sizeof(uint32_t),
+        num_intersects * sizeof(int32_t),
         cudaMemcpyDeviceToHost
     );
     cudaMemcpy(
         isect_ids_sorted,
         isect_ids_sorted_d,
-        num_intersects * sizeof(uint64_t),
+        num_intersects * sizeof(int64_t),
         cudaMemcpyDeviceToHost
     );
     cudaMemcpy(
         gaussian_ids_sorted,
         gaussian_ids_sorted_d,
-        num_intersects * sizeof(uint32_t),
+        num_intersects * sizeof(int32_t),
         cudaMemcpyDeviceToHost
     );
 
