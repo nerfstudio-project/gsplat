@@ -149,7 +149,7 @@ inline __host__ __device__ glm::mat3 quat_to_rotmat(const float4 quat) {
 }
 
 inline __host__ __device__ float4
-quat_to_rotmat_vjp(const float4 quat, const glm::mat3 v_Rmat) {
+quat_to_rotmat_vjp(const float4 quat, const glm::mat3 v_R) {
     float s = rsqrtf(
         quat.w * quat.w + quat.x * quat.x + quat.y * quat.y + quat.z * quat.z
     );
