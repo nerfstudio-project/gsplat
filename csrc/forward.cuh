@@ -19,14 +19,14 @@ void project_gaussians_forward_impl(
     float *depths,
     int *radii,
     float3 *conics,
-    uint32_t *num_tiles_hit
+    int32_t *num_tiles_hit
 );
 
 void compute_cumulative_intersects(
     const int num_points,
-    const uint32_t *num_tiles_hit,
-    uint32_t &num_intersects,
-    uint32_t *cum_tiles_hit
+    const int32_t *num_tiles_hit,
+    int32_t &num_intersects,
+    int32_t *cum_tiles_hit
 );
 
 // bin and sort gaussians by tile and depth
@@ -36,12 +36,12 @@ void bin_and_sort_gaussians(
     const float2 *xys,
     const float *depths,
     const int *radii,
-    const uint32_t *cum_tiles_hit,
+    const int32_t *cum_tiles_hit,
     const dim3 tile_bounds,
-    uint64_t *isect_ids_unsorted,
-    uint32_t *gaussian_ids_unsorted,
-    uint64_t *isect_ids_sorted,
-    uint32_t *gaussian_ids_sorted,
+    int64_t *isect_ids_unsorted,
+    int32_t *gaussian_ids_unsorted,
+    int64_t *isect_ids_sorted,
+    int32_t *gaussian_ids_sorted,
     uint2 *tile_bins
 );
 
@@ -50,7 +50,7 @@ void rasterize_forward_impl(
     const dim3 tile_bounds,
     const dim3 block,
     const dim3 img_size,
-    const uint32_t *gaussian_ids_sorted,
+    const int32_t *gaussian_ids_sorted,
     const uint2 *tile_bins,
     const float2 *xys,
     const float3 *conics,
