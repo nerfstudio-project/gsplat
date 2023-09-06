@@ -4,377 +4,63 @@
 #include <iostream>
 #include <math.h>
 
-#include "backward.cuh"
+#include "helpers.cuh"
 #include "config.h"
-#include "forward.cuh"
 #include "tgaimage.h"
 
-float random_float() { return (float)std::rand() / RAND_MAX; }
+float random_float() {
+    return (float) std::rand() / RAND_MAX;
+}
+
+float4 random_quat() {
+    float u = random_float();
+    float v = random_float();
+    float w = random_float();
+    return {
+        sqrt(1.f - u) * sin(2.f * (float) M_PI * v),
+        sqrt(1.f - u) * cos(2.f * (float) M_PI * v),
+        sqrt(u) * sin(2.f * (float) M_PI * w),
+        sqrt(u) * cos(2.f * (float) M_PI * w)
+    };
+}
+
+void test_quat_to_rotmat_jvp() {
+    float4 quat = random_quat();
+    printf("quat %.2e %.2e %.2e %.2e\n", quat.x, quat.y, quat.z, quat.w); 
+    glm::vec4 quat_v = glm::vec4(quat.x, quat.y, quat.z, quat.w);
+    glm::vec3 ones = glm::vec3(0.1f);
+    glm::mat3 v_Rmat = glm::mat3(ones, ones, ones);
+    // estimate columns of vjp
+    glm::vec4 v_quat_est;
+    glm::mat3 Rdiff;
+    float eps = 1e-7f;
+    glm::vec4 eps_v, quat_p, quat_m;
+
+    for (int c = 0; c < 4; ++c) {
+        eps_v = glm::vec4();
+        eps_v[c] = eps;
+        quat_p = quat_v + eps_v;
+        quat_m = quat_v - eps_v;
+        printf("eps_v %.2e %.2e %.2e %.2e\n", eps_v[0], eps_v[1], eps_v[2], eps_v[3]);
+        Rdiff = quat_to_rotmat(
+            {quat_p[0], quat_p[1], quat_p[2], quat_p[3]}
+        ) - quat_to_rotmat(
+            {quat_m[0], quat_m[1], quat_m[2], quat_m[3]}
+        );
+        v_quat_est[c] = 0;
+        for (int i = 0; i < 3; ++i) {
+            for (int j = 0; j < 3; ++j) {
+                v_quat_est[c] += v_Rmat[i][j] * Rdiff[i][j] * 0.5f / eps;
+            }
+        }
+    }
+    printf("v_quat_est %.2e %.2e %.2e %.2e\n", v_quat_est[0], v_quat_est[1], v_quat_est[2], v_quat_est[3]);
+    float4 v_quat = quat_to_rotmat_vjp(quat, v_Rmat);
+    printf("v_quat %.2e %.2e %.2e %.2e\n", v_quat.x, v_quat.y, v_quat.z, v_quat.w); 
+}
+
 
 int main() {
-    int num_points = 16;
-    const float fov_x = M_PI / 2.f;
-    const int W = 512;
-    const int H = 512;
-    const float focal = 0.5 * (float)W / tan(0.5 * fov_x);
-    const dim3 tile_bounds = {
-        (W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, 1};
-    const dim3 img_size = {W, H, 1};
-    const dim3 block = {BLOCK_X, BLOCK_Y, 1};
-
-    int num_cov3d = num_points * 6;
-    int num_view = 16;
-
-    float3 *means = new float3[num_points];
-    float3 *scales = new float3[num_points];
-    float4 *quats = new float4[num_points];
-    float3 *rgbs = new float3[num_points];
-    float *opacities = new float[num_points];
-    float viewmat[] = {
-        1.f,
-        0.f,
-        0.f,
-        0.f,
-        0.f,
-        1.f,
-        0.f,
-        0.f,
-        0.f,
-        0.f,
-        1.f,
-        8.f,
-        0.f,
-        0.f,
-        0.f,
-        1.f};
-
-    // silly initialization of gaussians
-    // rotate pi/4 about (1, 1, 0)
-    float bd = 2.f;
-    // float norm = sqrt(2);
-    // float theta = M_PI / 4.f;
-    // float w = norm / tan(theta / 2.f);
-    float u, v, w;
-    std::srand(std::time(nullptr));
-    for (int i = 0; i < num_points; ++i) {
-        means[i] = {
-            bd * (random_float() - 0.5f),
-            bd * (random_float() - 0.5f),
-            bd * (random_float() - 0.5f)};
-        scales[i] = {random_float(), random_float(), random_float()};
-        rgbs[i] = {random_float(), random_float(), random_float()};
-
-        // float v = (float) i - (float) num_points * 0.5f;
-        // means[i] = {v * 0.1f, v * 0.1f, (float) i};
-        // scales[i] = {0.5f, 5.f, 1.f};
-        // rgbs[i] = {(float) (i % 3 == 0), (float) (i % 3 == 1), (float) (i % 3
-        // == 2)};
-
-        // quats[i] = {w, norm, norm, 0.f};  // w x y z convention
-        // quats[i] = {1.f, 0.f, 0.f, 0.f};  // w x y z convention
-        // random quat
-        u = random_float();
-        v = random_float();
-        w = random_float();
-        quats[i] = {
-            sqrtf(1.f - u) * sinf(2.f * (float)M_PI * v),
-            sqrtf(1.f - u) * cosf(2.f * (float)M_PI * v),
-            sqrtf(u) * sinf(2.f * (float)M_PI * w),
-            sqrtf(u) * cosf(2.f * (float)M_PI * w)};
-
-        opacities[i] = 0.9f;
-    }
-
-    float3 *scales_d, *means_d, *rgbs_d;
-    float4 *quats_d;
-    float *viewmat_d, *opacities_d;
-
-    cudaMalloc((void **)&scales_d, num_points * sizeof(float3));
-    cudaMalloc((void **)&means_d, num_points * sizeof(float3));
-    cudaMalloc((void **)&quats_d, num_points * sizeof(float4));
-    cudaMalloc((void **)&rgbs_d, num_points * sizeof(float3));
-    cudaMalloc((void **)&opacities_d, num_points * sizeof(float));
-    cudaMalloc((void **)&viewmat_d, num_view * sizeof(float));
-
-    cudaMemcpy(
-        scales_d, scales, num_points * sizeof(float3), cudaMemcpyHostToDevice
-    );
-    cudaMemcpy(
-        means_d, means, num_points * sizeof(float3), cudaMemcpyHostToDevice
-    );
-    cudaMemcpy(
-        rgbs_d, rgbs, num_points * sizeof(float3), cudaMemcpyHostToDevice
-    );
-    cudaMemcpy(
-        opacities_d,
-        opacities,
-        num_points * sizeof(float),
-        cudaMemcpyHostToDevice
-    );
-    cudaMemcpy(
-        quats_d, quats, num_points * sizeof(float4), cudaMemcpyHostToDevice
-    );
-    cudaMemcpy(
-        viewmat_d, viewmat, num_view * sizeof(float), cudaMemcpyHostToDevice
-    );
-
-    // allocate memory for outputs
-    float *covs3d = new float[num_cov3d];
-    float2 *xy = new float2[num_points];
-    float *z = new float[num_points];
-    int *radii = new int[num_points];
-    float3 *conics = new float3[num_points];
-    int32_t *num_tiles_hit = new int32_t[num_points];
-
-    float *covs3d_d, *z_d;
-    float2 *xy_d;
-    float3 *conics_d;
-    int *radii_d;
-    int32_t *num_tiles_hit_d;
-    cudaMalloc((void **)&covs3d_d, num_cov3d * sizeof(float));
-    cudaMalloc((void **)&xy_d, num_points * sizeof(float2));
-    cudaMalloc((void **)&z_d, num_points * sizeof(float));
-    cudaMalloc((void **)&radii_d, num_points * sizeof(int));
-    cudaMalloc((void **)&conics_d, num_points * sizeof(float3));
-    cudaMalloc((void **)&num_tiles_hit_d, num_points * sizeof(int32_t));
-
-    project_gaussians_forward_impl(
-        num_points,
-        means_d,
-        scales_d,
-        1.f,
-        quats_d,
-        viewmat_d,
-        viewmat_d,
-        focal,
-        focal,
-        img_size,
-        tile_bounds,
-        covs3d_d,
-        xy_d,
-        z_d,
-        radii_d,
-        conics_d,
-        num_tiles_hit_d
-    );
-    cudaMemcpy(
-        covs3d, covs3d_d, num_cov3d * sizeof(float), cudaMemcpyDeviceToHost
-    );
-    cudaMemcpy(xy, xy_d, num_points * sizeof(float2), cudaMemcpyDeviceToHost);
-    cudaMemcpy(z, z_d, num_points * sizeof(float), cudaMemcpyDeviceToHost);
-    cudaMemcpy(
-        radii, radii_d, num_points * sizeof(int), cudaMemcpyDeviceToHost
-    );
-    cudaMemcpy(
-        num_tiles_hit,
-        num_tiles_hit_d,
-        num_points * sizeof(int32_t),
-        cudaMemcpyDeviceToHost
-    );
-
-    int32_t num_intersects;
-    int32_t *cum_tiles_hit = new int32_t[num_points];
-    int32_t *cum_tiles_hit_d;
-    cudaMalloc((void **)&cum_tiles_hit_d, num_points * sizeof(int32_t));
-    compute_cumulative_intersects(
-        num_points, num_tiles_hit_d, num_intersects, cum_tiles_hit_d
-    );
-    // printf("num_intersects %d\n", num_intersects);
-    // cudaMemcpy(cum_tiles_hit, cum_tiles_hit_d, num_points * sizeof(int32_t),
-    // cudaMemcpyDeviceToHost); for (int i = 0; i < num_points; ++i) {
-    //     printf("num_tiles_hit %d, %d\n", i, num_tiles_hit[i]);
-    // }
-
-    int64_t *isect_ids_sorted_d;
-    int32_t *gaussian_ids_sorted_d; // sorted by tile and depth
-    int64_t *isect_ids_sorted = new int64_t[num_intersects];
-    int32_t *gaussian_ids_sorted = new int32_t[num_intersects];
-    cudaMalloc((void **)&isect_ids_sorted_d, num_intersects * sizeof(int64_t));
-    cudaMalloc(
-        (void **)&gaussian_ids_sorted_d, num_intersects * sizeof(int32_t)
-    );
-
-    int64_t *isect_ids_unsorted_d;
-    int32_t *gaussian_ids_unsorted_d; // sorted by tile and depth
-    int64_t *isect_ids_unsorted = new int64_t[num_intersects];
-    int32_t *gaussian_ids_unsorted = new int32_t[num_intersects];
-    cudaMalloc(
-        (void **)&isect_ids_unsorted_d, num_intersects * sizeof(int64_t)
-    );
-    cudaMalloc(
-        (void **)&gaussian_ids_unsorted_d, num_intersects * sizeof(int32_t)
-    );
-
-    int num_tiles = tile_bounds.x * tile_bounds.y;
-    uint2 *tile_bins_d; // start and end indices for each tile
-    uint2 *tile_bins = new uint2[num_tiles];
-    cudaMalloc((void **)&tile_bins_d, num_tiles * sizeof(uint2));
-
-    bin_and_sort_gaussians(
-        num_points,
-        num_intersects,
-        xy_d,
-        z_d,
-        radii_d,
-        cum_tiles_hit_d,
-        tile_bounds,
-        isect_ids_unsorted_d,
-        gaussian_ids_unsorted_d,
-        isect_ids_sorted_d,
-        gaussian_ids_sorted_d,
-        tile_bins_d
-    );
-    cudaMemcpy(
-        isect_ids_unsorted,
-        isect_ids_unsorted_d,
-        num_intersects * sizeof(int64_t),
-        cudaMemcpyDeviceToHost
-    );
-    cudaMemcpy(
-        gaussian_ids_unsorted,
-        gaussian_ids_unsorted_d,
-        num_intersects * sizeof(int32_t),
-        cudaMemcpyDeviceToHost
-    );
-    cudaMemcpy(
-        isect_ids_sorted,
-        isect_ids_sorted_d,
-        num_intersects * sizeof(int64_t),
-        cudaMemcpyDeviceToHost
-    );
-    cudaMemcpy(
-        gaussian_ids_sorted,
-        gaussian_ids_sorted_d,
-        num_intersects * sizeof(int32_t),
-        cudaMemcpyDeviceToHost
-    );
-
-    // for (int i = 0; i < num_intersects; ++i) {
-    //     printf("%d unsorted isect %016lx point %03d\n", i,
-    //     isect_ids_unsorted[i], gaussian_ids_unsorted[i]);
-    // }
-    // for (int i = 0; i < num_intersects; ++i) {
-    //     printf("sorted isect %016lx point %03d\n", isect_ids_sorted[i],
-    //     gaussian_ids_sorted[i]);
-    // }
-    // cudaMemcpy(tile_bins, tile_bins_d, num_tiles * sizeof(uint2),
-    // cudaMemcpyDeviceToHost); for (int i = 0; i < num_tiles; ++i) {
-    //     printf("tile_bins %d %d %d\t", i, tile_bins[i].x, tile_bins[i].y);
-    // }
-    // std::cout << std::endl;
-
-    float3 *out_img = new float3[W * H];
-    float3 *out_img_d;
-    float *final_Ts_d;
-    int *final_idx_d;
-    cudaMalloc((void **)&out_img_d, W * H * sizeof(float3));
-    cudaMalloc((void **)&final_Ts_d, W * H * sizeof(float));
-    cudaMalloc((void **)&final_idx_d, W * H * sizeof(int));
-
-    rasterize_forward_impl(
-        tile_bounds,
-        block,
-        img_size,
-        gaussian_ids_sorted_d,
-        tile_bins_d,
-        xy_d,
-        conics_d,
-        rgbs_d,
-        opacities_d,
-        final_Ts_d,
-        final_idx_d,
-        out_img_d
-    );
-    cudaMemcpy(
-        out_img, out_img_d, W * H * sizeof(float3), cudaMemcpyDeviceToHost
-    );
-
-    float3 *v_output_d;
-    float3 *v_rgb_d, *v_conic_d, *v_cov2d_d;
-    float2 *v_xy_d;
-    float *v_opacity_d;
-    float *v_cov3d_d;
-    float3 *v_mean3d_d, *v_scale_d;
-    float4 *v_quat_d;
-
-    cudaMalloc((void **)&v_output_d, W * H * sizeof(float3));
-    cudaMalloc((void **)&v_rgb_d, num_points * sizeof(float3));
-    cudaMalloc((void **)&v_conic_d, num_points * sizeof(float3));
-    cudaMalloc((void **)&v_cov2d_d, num_points * sizeof(float3));
-    cudaMalloc((void **)&v_xy_d, num_points * sizeof(float2));
-    cudaMalloc((void **)&v_opacity_d, num_points * sizeof(float));
-    cudaMalloc((void **)&v_cov3d_d, num_points * 6 * sizeof(float));
-    cudaMalloc((void **)&v_mean3d_d, num_points * sizeof(float3));
-    cudaMalloc((void **)&v_scale_d, num_points * sizeof(float3));
-    cudaMalloc((void **)&v_quat_d, num_points * sizeof(float4));
-
-    rasterize_backward_impl(
-        tile_bounds,
-        block,
-        img_size,
-        gaussian_ids_sorted_d,
-        tile_bins_d,
-        xy_d,
-        conics_d,
-        rgbs_d,
-        opacities_d,
-        final_Ts_d,
-        final_idx_d,
-        v_output_d,
-        v_xy_d,
-        v_conic_d,
-        v_rgb_d,
-        v_opacity_d
-    );
-
-    printf("freeing memory...\n");
-
-    cudaFree(scales_d);
-    cudaFree(quats_d);
-    cudaFree(rgbs_d);
-    cudaFree(opacities_d);
-    cudaFree(covs3d_d);
-    cudaFree(viewmat_d);
-    cudaFree(xy_d);
-    cudaFree(z_d);
-    cudaFree(radii_d);
-    cudaFree(num_tiles_hit_d);
-    cudaFree(cum_tiles_hit_d);
-    cudaFree(tile_bins_d);
-    cudaFree(isect_ids_unsorted_d);
-    cudaFree(gaussian_ids_unsorted_d);
-    cudaFree(isect_ids_sorted_d);
-    cudaFree(gaussian_ids_sorted_d);
-    cudaFree(conics_d);
-    cudaFree(out_img_d);
-    cudaFree(final_Ts_d);
-    cudaFree(final_idx_d);
-
-    printf("freeing jacobians...\n");
-    cudaFree(v_output_d);
-    cudaFree(v_rgb_d);
-    cudaFree(v_conic_d);
-    cudaFree(v_cov2d_d);
-    cudaFree(v_xy_d);
-    cudaFree(v_opacity_d);
-    cudaFree(v_cov3d_d);
-    cudaFree(v_mean3d_d);
-    cudaFree(v_scale_d);
-    cudaFree(v_quat_d);
-
-    delete[] scales;
-    delete[] means;
-    delete[] rgbs;
-    delete[] opacities;
-    delete[] quats;
-    delete[] covs3d;
-    delete[] xy;
-    delete[] z;
-    delete[] radii;
-    delete[] num_tiles_hit;
-    delete[] cum_tiles_hit;
-    delete[] tile_bins;
-    delete[] gaussian_ids_sorted;
-    delete[] out_img;
+    test_quat_to_rotmat_jvp();
     return 0;
 }
