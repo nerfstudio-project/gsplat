@@ -1,7 +1,6 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
-
 // compute the 2d gaussian parameters from 3d gaussian parameters
 void project_gaussians_forward_impl(
     const int num_points,

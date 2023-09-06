@@ -1,13 +1,12 @@
-#include <iostream>
 #include <cstdlib>
-#include <ctime>
 #include <cstring>
+#include <ctime>
+#include <iostream>
 #include <math.h>
 
 #include "helpers.cuh"
 #include "config.h"
 #include "tgaimage.h"
-
 
 float random_float() {
     return (float) std::rand() / RAND_MAX;

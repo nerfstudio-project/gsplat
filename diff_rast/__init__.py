@@ -1,6 +1,7 @@
-from . import bindings
 from jaxtyping import Float
 from torch import Tensor
+
+from . import bindings
 
 
 def rasterize(
