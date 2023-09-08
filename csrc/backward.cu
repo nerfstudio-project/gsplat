@@ -36,7 +36,7 @@ __global__ void rasterize_backward_kernel(
     float3 v_out = v_output[pix_id];
     float3 rgb, conic;
     float2 center, delta;
-    float sigma, vis, fac, opac, alpha;
+    float sigma, vis, fac, opac, alpha, ra;
     float v_alpha, v_sigma;
     // this is the T AFTER the last gaussian in this pixel
     float T = final_Ts[pix_id];
@@ -67,7 +67,8 @@ __global__ void rasterize_backward_kernel(
         }
 
         // compute the current T for this gaussian
-        T /= (1.f - alpha);
+        ra = 1.f / (1.f - alpha);
+        T *= ra;
         rgb = rgbs[g];
         // update v_rgb for this gaussian
         fac = alpha * T;
@@ -75,9 +76,9 @@ __global__ void rasterize_backward_kernel(
         atomicAdd(&(v_rgb[g].y), fac * v_out.y);
         atomicAdd(&(v_rgb[g].z), fac * v_out.z);
 
-        v_alpha += (rgb.x * T - S.x / (1.f - alpha)) * v_out.x;
-        v_alpha += (rgb.y * T - S.y / (1.f - alpha)) * v_out.y;
-        v_alpha += (rgb.z * T - S.z / (1.f - alpha)) * v_out.z;
+        v_alpha = (rgb.x * T - S.x * ra) * v_out.x
+            + (rgb.y * T - S.y * ra) * v_out.y
+            + (rgb.z * T - S.z * ra) * v_out.z;
 
         // update contribution from back
         S.x += rgb.x * fac;
@@ -92,9 +93,9 @@ __global__ void rasterize_backward_kernel(
         // d_sigma / d_conic = delta * delta.T
         v_sigma = -opac * vis * v_alpha;
 
-        atomicAdd(&(v_conic[g].x), v_sigma * delta.x * delta.x);
-        atomicAdd(&(v_conic[g].y), v_sigma * delta.x * delta.y);
-        atomicAdd(&(v_conic[g].z), v_sigma * delta.y * delta.y);
+        atomicAdd(&(v_conic[g].x), 0.5f * v_sigma * delta.x * delta.x);
+        atomicAdd(&(v_conic[g].y), 0.5f * v_sigma * delta.x * delta.y);
+        atomicAdd(&(v_conic[g].z), 0.5f * v_sigma * delta.y * delta.y);
         atomicAdd(
             &(v_xy[g].x),
             v_sigma * (conic.x * delta.x + conic.y * delta.y)

@@ -69,7 +69,7 @@ cov2d_to_conic_vjp(const float3 &conic, const float3 &v_conic, float3 &v_cov2d) 
     glm::mat2 G = glm::mat2(v_conic.x, v_conic.y, v_conic.y, v_conic.z);
     glm::mat2 v_Sigma = -X * G * X;
     v_cov2d.x = v_Sigma[0][0];
-    v_cov2d.y = v_Sigma[0][1];
+    v_cov2d.y = v_Sigma[1][0] + v_Sigma[0][1];
     v_cov2d.z = v_Sigma[1][1];
 }
 
@@ -112,7 +112,7 @@ inline __host__ __device__ float3 project_pix_vjp(
     float4 p_hom = transform_4x4(mat, p);
     float rw = 1.f / (p_hom.w + 1e-6f);
 
-    float3 v_ndc = {0.5 * img_size.x * v_xy.x, 0.5 * img_size.y * v_xy.y};
+    float3 v_ndc = {0.5f * img_size.x * v_xy.x, 0.5f * img_size.y * v_xy.y};
     float4 v_proj = {
         v_ndc.x * rw, v_ndc.y * rw, 0., -(v_ndc.x + v_ndc.y) * rw * rw
     };

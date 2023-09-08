@@ -34,6 +34,9 @@ __host__ __device__ void computeCov2DBackward(
 
 __host__ __device__ void rasterizeBackward(
     const int N,
+    const int W,
+    const int H,
+    const float2 pixf,
     const float2 *collected_xy,
     const float4 *collected_conic_opacity,
     const float *collected_colors,
@@ -42,7 +45,7 @@ __host__ __device__ void rasterizeBackward(
     float *dL_dcolor,
     float *dL_dopacity,
     float2 *dL_dmean2D,
-    float3 *dL_dconic2D,
+    float3 *dL_dconic2D
 );
 
 __host__ __device__ void rasterize_vjp(
@@ -54,8 +57,8 @@ __host__ __device__ void rasterize_vjp(
     const float3 *rgbs,
     const float T_final,
     const float3 v_out,
-    float *dL_dcolor,
+    float3 *dL_dcolor,
     float *dL_dopacity,
     float2 *dL_dmean2D,
-    float3 *dL_dconic2D,
+    float3 *dL_dconic2D
 );
