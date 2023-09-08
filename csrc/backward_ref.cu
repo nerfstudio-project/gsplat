@@ -261,6 +261,8 @@ __host__ __device__ void computeCov2DBackward(
 // test function rasterizing N gaussians in 1 pixel
 __host__ __device__ void rasterizeBackward(
     const int N,
+    const int W,
+    const int H,
     const float2 pixf,
     const float2 *collected_xy,
     const float4 *collected_conic_opacity,
@@ -270,12 +272,12 @@ __host__ __device__ void rasterizeBackward(
     float *dL_dcolor,
     float *dL_dopacity,
     float2 *dL_dmean2D,
-    float3 *dL_dconic2D,
+    float3 *dL_dconic2D
 ) {
 	// In the forward, we stored the final value for T, the
 	// product of all (1 - alpha) factors. 
 	float T = T_final;
-    int C = 3;
+    const int C = 3;
 
 	float accum_rec[C] = { 0.f };
 	float last_color[C] = { 0 };
@@ -312,7 +314,7 @@ __host__ __device__ void rasterizeBackward(
         // const int global_id = collected_id[j];
         for (int ch = 0; ch < C; ch++)
         {
-            const float c = collected_colors[ch * BLOCK_SIZE + j];
+            const float c = collected_colors[C * j + ch];
             // Update last color (to be used in the next iteration)
             accum_rec[ch] = last_alpha * last_color[ch] + (1.f - last_alpha) * accum_rec[ch];
             last_color[ch] = c;
@@ -322,19 +324,20 @@ __host__ __device__ void rasterizeBackward(
             // Update the gradients w.r.t. color of the Gaussian. 
             // Atomic, since this pixel is just one of potentially
             // many that were affected by this Gaussian.
-            dL_dcolor[j * C + ch] += dchannel_dcolor * dL_dchannel;
+            dL_dcolor[C * j + ch] += dchannel_dcolor * dL_dchannel;
             // atomicAdd(&(dL_dcolors[global_id * C + ch]), dchannel_dcolor * dL_dchannel);
         }
         dL_dalpha *= T;
+        // printf("ref %d dL_dalpha %.2e alpha %.2e T %.2e\n", j, dL_dalpha, alpha, T);
         // Update last alpha (to be used in the next iteration)
         last_alpha = alpha;
 
         // Account for fact that alpha also influences how much of
         // the background color is added if nothing left to blend
-        float bg_dot_dpixel = 0;
-        for (int i = 0; i < C; i++)
-            bg_dot_dpixel += bg_color[i] * dL_dpixel[i];
-        dL_dalpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel;
+        // float bg_dot_dpixel = 0;
+        // for (int i = 0; i < C; i++)
+        //     bg_dot_dpixel += bg_color[i] * dL_dpixel[i];
+        // dL_dalpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel;
 
 
         // Helpful reusable temporary variables
@@ -364,6 +367,7 @@ __host__ __device__ void rasterizeBackward(
     }
 }
 
+// copying the part that's relevant from our rasterize method
 __host__ __device__ void rasterize_vjp(
     const int N,
     const float2 p,
@@ -373,12 +377,18 @@ __host__ __device__ void rasterize_vjp(
     const float3 *rgbs,
     const float T_final,
     const float3 v_out,
-    float *dL_dcolor,
-    float *dL_dopacity,
-    float2 *dL_dmean2D,
-    float3 *dL_dconic2D,
+    float3 *v_rgb,
+    float *v_opacity,
+    float2 *v_xy,
+    float3 *v_conic
 ) {
     float T = T_final;
+    float3 S = {0.f, 0.f, 0.f};
+    float3 rgb, conic;
+    float2 center, delta;
+    float sigma, vis, fac, opac, alpha, ra;
+    float v_alpha, v_sigma;
+
     for (int g = 0; g < N; ++g) {
         conic = conics[g];
         center = xys[g];
@@ -386,7 +396,7 @@ __host__ __device__ void rasterize_vjp(
         sigma =
             0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) -
             conic.y * delta.x * delta.y;
-        if (sigma <= 0.f) {
+        if (sigma < 0.f) {
             continue;
         }
         opac = opacities[g];
@@ -395,9 +405,10 @@ __host__ __device__ void rasterize_vjp(
         if (alpha < 1.f / 255.f) {
             continue;
         }
+        ra = 1.f / (1.f - alpha);
 
         // compute the current T for this gaussian
-        T /= (1.f - alpha);
+        T *= ra;
         rgb = rgbs[g];
         // update v_rgb for this gaussian
         fac = alpha * T;
@@ -408,9 +419,11 @@ __host__ __device__ void rasterize_vjp(
         // atomicAdd(&(v_rgb[g].y), fac * v_out.y);
         // atomicAdd(&(v_rgb[g].z), fac * v_out.z);
 
-        v_alpha += (rgb.x * T - S.x / (1.f - alpha)) * v_out.x;
-        v_alpha += (rgb.y * T - S.y / (1.f - alpha)) * v_out.y;
-        v_alpha += (rgb.z * T - S.z / (1.f - alpha)) * v_out.z;
+        v_alpha = 0.f;
+        v_alpha += (rgb.x * T - S.x * ra) * v_out.x;
+        v_alpha += (rgb.y * T - S.y * ra) * v_out.y;
+        v_alpha += (rgb.z * T - S.z * ra) * v_out.z;
+        // printf("ours %d v_alpha %.2e alpha %.2e T %.2e\n", g, v_alpha, alpha, T);
 
         // update contribution from back
         S.x += rgb.x * fac;
@@ -426,15 +439,15 @@ __host__ __device__ void rasterize_vjp(
         // d_sigma / d_conic = delta * delta.T
         v_sigma = -opac * vis * v_alpha;
 
-        v_conic[g].x += v_sigma * delta.x * delta.x;
-        v_conic[g].y += v_sigma * delta.x * delta.y;
-        v_conic[g].z += v_sigma * delta.y * delta.y;
+        v_conic[g].x += 0.5f * v_sigma * delta.x * delta.x;
+        v_conic[g].y += 0.5f * v_sigma * delta.x * delta.y;
+        v_conic[g].z += 0.5f * v_sigma * delta.y * delta.y;
         // atomicAdd(&(v_conic[g].x), v_sigma * delta.x * delta.x);
         // atomicAdd(&(v_conic[g].y), v_sigma * delta.x * delta.y);
         // atomicAdd(&(v_conic[g].z), v_sigma * delta.y * delta.y);
 
-        v_xy[g].x += v_sigma * (conic.x * delta.x + conic.y * delta.y;
-        v_xy[g].y += v_sigma * (conic.y * delta.x + conic.z * delta.y;
+        v_xy[g].x += v_sigma * (conic.x * delta.x + conic.y * delta.y);
+        v_xy[g].y += v_sigma * (conic.y * delta.x + conic.z * delta.y);
         // atomicAdd(
         //     &(v_xy[g].x),
         //     v_sigma * (conic.x * delta.x + conic.y * delta.y)
