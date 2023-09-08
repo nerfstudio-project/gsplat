@@ -163,9 +163,9 @@ __global__ void map_gaussian_to_intersects(
         for (int j = tile_min.x; j < tile_max.x; ++j) {
             // isect_id is tile ID and depth as int32
             int64_t tile_id = i * tile_bounds.x + j; // tile within image
-            isect_ids[cur_idx] = (tile_id << 32) | depth_id;
-            gaussian_ids[cur_idx] = idx;
-            ++cur_idx;
+            isect_ids[cur_idx] = (tile_id << 32) | depth_id; // tile | depth id
+            gaussian_ids[cur_idx] = idx; // 3D gaussian id
+            ++cur_idx; // handles gaussians that hit more than one tile
         }
     }
     // printf("point %d ending at %d\n", idx, cur_idx);
@@ -206,6 +206,7 @@ void compute_cumulative_intersects(
     int32_t &num_intersects,
     int32_t *cum_tiles_hit
 ) {
+    // ref: https://nvlabs.github.io/cub/structcub_1_1_device_scan.html#a9416ac1ea26f9fde669d83ddc883795a
     // allocate sum workspace
     void *sum_ws = nullptr;
     size_t sum_ws_bytes;
@@ -264,7 +265,7 @@ void bin_and_sort_gaussians(
         gaussian_ids_unsorted
     );
 
-    // sort intersections by ascending tile ID and depth
+    // sort intersections by ascending tile ID and depth with RadixSort
     // allocate workspace memory
     void *sort_ws = nullptr;
     size_t sort_ws_bytes;
@@ -333,13 +334,17 @@ __global__ void rasterize_forward_kernel(
     float sigma, opac, alpha, next_T;
     float3 out_color = {0.f, 0.f, 0.f};
     float T = 1.f;
-    // iterate over all gaussians
+
+    // iterate over all gaussians and apply rendering EWA equation (e.q. 2 from paper)
     int idx;
     for (idx = 0; idx < range.y; ++idx) {
         int32_t g = gaussian_ids_sorted[idx];
         conic = conics[g];
         center = xys[g];
         delta = {center.x - px, center.y - py};
+
+        // Mahalanobis distance (here referred to as sigma) measures how many standard deviations away distance delta is. 
+        // sigma = -0.5(d.T * conic * d)
         sigma =
             0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) -
             conic.y * delta.x * delta.y;
@@ -347,7 +352,10 @@ __global__ void rasterize_forward_kernel(
             continue;
         }
         opac = opacities[g];
+        
         alpha = min(0.999f, opac * exp(-sigma));
+
+        // break out conditions
         if (alpha < 1.f / 255.f) {
             continue;
         }
@@ -356,6 +364,8 @@ __global__ void rasterize_forward_kernel(
             break;
         }
         rgb = rgbs[g];
+
+        // accumulate colors
         out_color.x += rgb.x * alpha * T;
         out_color.y += rgb.y * alpha * T;
         out_color.z += rgb.z * alpha * T;

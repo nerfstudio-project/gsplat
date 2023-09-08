@@ -43,11 +43,13 @@ compute_cov2d_bounds(const float3 cov2d, float3 &conic, float &radius) {
     // find eigenvalues of 2d covariance matrix
     // expects upper triangular values of cov matrix as float3
     // then compute the radius and conic dimensions
-    // the conic is the inverse cov2d matrix
+    // the conic is the inverse cov2d matrix, represented here with upper triangular values.  
     float det = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
     if (det == 0.f)
         return false;
     float inv_det = 1.f / det;
+
+    // inverse of 2x2 cov2d matrix
     conic.x = cov2d.z * inv_det;
     conic.y = -cov2d.y * inv_det;
     conic.z = cov2d.x * inv_det;
