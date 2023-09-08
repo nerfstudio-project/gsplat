@@ -38,7 +38,9 @@ __global__ void rasterize_backward_kernel(
     float2 center, delta;
     float sigma, vis, fac, opac, alpha;
     float v_alpha, v_sigma;
+    // this is the T AFTER the last gaussian in this pixel
     float T = final_Ts[pix_id];
+    // the contribution from gaussians behind the current one
     float3 S = {0.f, 0.f, 0.f};
     int bin_final = final_index[pix_id];
 
@@ -64,6 +66,7 @@ __global__ void rasterize_backward_kernel(
             continue;
         }
 
+        // compute the current T for this gaussian
         T /= (1.f - alpha);
         rgb = rgbs[g];
         // update v_rgb for this gaussian
@@ -244,7 +247,7 @@ void project_gaussians_backward_impl(
 }
 
 // output space: 2D covariance, input space: cov3d
-__device__ void project_cov3d_ewa_vjp(
+__host__ __device__ void project_cov3d_ewa_vjp(
     const float3 &mean3d,
     const float *cov3d,
     const float *viewmat,
@@ -269,16 +272,20 @@ __device__ void project_cov3d_ewa_vjp(
     );
     glm::vec3 p = glm::vec3(viewmat[3], viewmat[7], viewmat[11]);
     glm::vec3 t = W * glm::vec3(mean3d.x, mean3d.y, mean3d.z) + p;
+    float rz = 1.f / t.z;
+    float rz2 = rz * rz;
 
+    // column major
+    // we only care about the top 2x2 submatrix
     glm::mat3 J = glm::mat3(
-        fx / t.z,
+        fx * rz,
         0.f,
         0.f,
         0.f,
-        fy / t.z,
+        fy * rz,
         0.f,
-        -fx * t.x / (t.z * t.z),
-        -fy * t.y / (t.z * t.z),
+        -fx * t.x * rz2,
+        -fy * t.y * rz2,
         0.f
     );
 
@@ -296,8 +303,9 @@ __device__ void project_cov3d_ewa_vjp(
         cov3d[5]
     );
 
-    // df/dcov is nonzero only in upper 2x2 submatrix,
-    // bc we crop, so no gradients elsewhere
+    // cov = T * V * Tt; G = df/dcov = v_cov
+    // -> d/dV = Tt * G * T
+    // -> df/dT = G * T * Vt + Gt * T * V
     glm::mat3 v_cov = glm::mat3(
         v_cov2d.x,
         0.5f * v_cov2d.y,
@@ -309,10 +317,6 @@ __device__ void project_cov3d_ewa_vjp(
         0.f,
         0.f
     );
-
-    // cov = T * V * Tt; G = df/dcov
-    // -> df/dT = G * T * Vt + Gt * T * V
-    // -> d/dV = Tt * G * T
     glm::mat3 Tt = glm::transpose(T);
     glm::mat3 Vt = glm::transpose(V);
     glm::mat3 v_V = Tt * v_cov * T;
@@ -331,15 +335,15 @@ __device__ void project_cov3d_ewa_vjp(
     // compute df/d_mean3d
     // T = J * W
     glm::mat3 v_J = v_T * glm::transpose(W);
-    float rz = 1.f / t.z;
-    float rz2 = rz * rz;
     float rz3 = rz2 * rz;
     glm::vec3 v_t = glm::vec3(
-        -fx * rz2 * v_J[0][2],
-        -fy * rz2 * v_J[1][2],
-        -fx * rz2 * v_J[0][0] + 2.f * fx * t.x * rz3 * v_J[0][2] -
-            fy * rz2 * v_J[1][1] + 2.f * fy * t.y * rz3 * v_J[1][2]
+        -fx * rz2 * v_J[2][0],
+        -fy * rz2 * v_J[2][1],
+        -fx * rz2 * v_J[0][0] + 2.f * fx * t.x * rz3 * v_J[2][0]
+            - fy * rz2 * v_J[1][1] + 2.f * fy * t.y * rz3 * v_J[2][1]
     );
+    // printf("v_t %.2f %.2f %.2f\n", v_t[0], v_t[1], v_t[2]);
+    // printf("W %.2f %.2f %.2f\n", W[0][0], W[0][1], W[0][2]);
     v_mean3d.x += (float)glm::dot(v_t, W[0]);
     v_mean3d.y += (float)glm::dot(v_t, W[1]);
     v_mean3d.z += (float)glm::dot(v_t, W[2]);
@@ -347,7 +351,7 @@ __device__ void project_cov3d_ewa_vjp(
 
 // given cotangent v in output space (e.g. d_L/d_cov3d) in R(6)
 // compute vJp for scale and rotation
-__device__ void scale_rot_to_cov3d_vjp(
+__host__ __device__ void scale_rot_to_cov3d_vjp(
     const float3 scale,
     const float glob_scale,
     const float4 quat,

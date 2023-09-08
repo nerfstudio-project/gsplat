@@ -402,7 +402,7 @@ void rasterize_forward_impl(
 }
 
 // device helper to approximate projected 2d cov from 3d mean and cov
-__device__ float3 project_cov3d_ewa(
+__host__ __device__ float3 project_cov3d_ewa(
     const float3 &mean3d,
     const float *cov3d,
     const float *viewmat,
@@ -426,18 +426,20 @@ __device__ float3 project_cov3d_ewa(
     );
     glm::vec3 p = glm::vec3(viewmat[3], viewmat[7], viewmat[11]);
     glm::vec3 t = W * glm::vec3(mean3d.x, mean3d.y, mean3d.z) + p;
+    float rz = 1.f / t.z;
+    float rz2 = rz * rz;
 
     // column major
     // we only care about the top 2x2 submatrix
     glm::mat3 J = glm::mat3(
-        fx / t.z,
+        fx * rz,
         0.f,
         0.f,
         0.f,
-        fy / t.z,
+        fy * rz,
         0.f,
-        -fx * t.x / (t.z * t.z),
-        -fy * t.y / (t.z * t.z),
+        -fx * t.x * rz2,
+        -fy * t.y * rz2,
         0.f
     );
 
@@ -462,7 +464,7 @@ __device__ float3 project_cov3d_ewa(
 }
 
 // device helper to get 3D covariance from scale and quat parameters
-__device__ void scale_rot_to_cov3d(
+__host__ __device__ void scale_rot_to_cov3d(
     const float3 scale, const float glob_scale, const float4 quat, float *cov3d
 ) {
     glm::mat3 R = quat_to_rotmat(quat);

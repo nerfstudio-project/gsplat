@@ -47,7 +47,7 @@ void rasterize_backward_impl(
     float *v_opacity
 );
 
-__device__ void project_cov3d_ewa_vjp(
+__host__ __device__ void project_cov3d_ewa_vjp(
     const float3 &mean3d,
     const float *cov3d,
     const float *viewmat,
@@ -58,7 +58,7 @@ __device__ void project_cov3d_ewa_vjp(
     float *v_cov3d
 );
 
-__device__ void scale_rot_to_cov3d_vjp(
+__host__ __device__ void scale_rot_to_cov3d_vjp(
     const float3 scale,
     const float glob_scale,
     const float4 quat,
