@@ -86,7 +86,17 @@ class rasterize(Function):
         ), f"Incorrect shape for view matrix, got{view_matrix.shape}, should be (4,4)."
 
         # move tensors to cuda and call forward
-        outputs = cuda_lib.rasterize_forward(
+        (
+            num_rendered,
+            out_img,
+            out_radii,
+            final_Ts,
+            final_idx,
+            gaussian_ids_sorted,
+            tile_bins,
+            xy,
+            conics,
+        ) = cuda_lib.rasterize_forward(
             means3d.contiguous().cuda(),
             scales.contiguous().cuda(),
             glob_scale,
@@ -100,34 +110,93 @@ class rasterize(Function):
             fx,
             fy,
         )
-        return outputs
+
+        ctx.num_rendered = num_rendered
+        ctx.glob_scale = glob_scale
+        ctx.view_matrix = view_matrix
+        ctx.proj_matrix = proj_matrix
+        ctx.img_width = img_width
+        ctx.img_height = img_height
+        ctx.fx = fx
+        ctx.fy = fy
+        ctx.save_for_backward(
+            colors,
+            means3d,
+            scales,
+            rotations_quat,
+            out_radii,
+            final_Ts,
+            final_idx,
+            gaussian_ids_sorted,
+            tile_bins,
+            xy,
+            conics,
+        )
+
+        return num_rendered, out_img, out_radii
 
     @staticmethod
-    def backward(ctx, grad_out):
-        raise NotImplementedError
+    def backward(ctx, _, grad_out_img, grad_out_radii):
+        num_rendered = ctx.num_rendered
+        glob_scale = ctx.glob_scale
+        view_matrix = ctx.view_matrix
+        proj_matrix = ctx.proj_matrix
+        img_height = ctx.img_height
+        img_width = ctx.img_width
+        fx = ctx.fx
+        fy = ctx.fy
 
+        (
+            colors,
+            means3d,
+            scales,
+            rotations_quat,
+            out_radii,
+            final_Ts,
+            final_idx,
+            gaussian_ids_sorted,
+            tile_bins,
+            xy,
+            conics,
+        ) = ctx.saved_tensors
 
-class compute_cov2d_bounds(Function):
-    """Computes bounds of 2D covariance matrix
+        num_rendered, out_img, out_radii, final_Ts, final_idx = cuda_lib.rasterize_backward(
+            means3d.contiguous().cuda(),
+            out_radii.contiguous().cuda(),
+            colors.contiguous().cuda(),
+            scales.contiguous().cuda(),
+            rotations_quat.contiguous().cuda(),
+            glob_scale,
+            view_matrix.contiguous().cuda(),
+            proj_matrix.contiguous().cuda(),
+            grad_out_img.contiguous().cuda(),  # v_output also called dL_dout_color
+            int(img_height),
+            int(img_width),
+            float(fx),
+            float(fy),
+            gaussian_ids_sorted,
+            tile_bins,
+            conics,
+            colors,
+            opacities,
+            final_Ts,
+            final_idx,
+        )
 
-    expects input cov2d to be size (batch, 3) of upper triangular values
-
-    Returns: tuple of conics (batch, 3) and radii (batch, 1)
-    """
-
-    @staticmethod
-    def forward(
-        ctx, cov2d: Float[Tensor, "batch 3"]
-    ) -> Tuple[Float[Tensor, "batch_conics 3"], Float[Tensor, "batch_radii 1"]]:
-        num_pts = cov2d.shape[0]
-        assert num_pts > 0
-
-        output = cuda_lib.compute_cov2d_bounds_forward(num_pts, cov2d)
-        return output
-
-    @staticmethod
-    def backward(ctx, grad_out):
-        raise NotImplementedError
+        return (
+            None,  # means3d
+            None,  # scales
+            None,  # glob_scale
+            None,  # rotations_quat
+            None,  # colors
+            None,  # opacity
+            None,  # view_matrix
+            None,  # proj_matrix
+            None,  # img_height
+            None,  # img_width
+            None,  # fx
+            None,  # fy
+        )
 
 
 # helper to save image
@@ -137,7 +206,6 @@ def vis_image(image, image_path):
         image = image.detach().cpu().numpy() * 255
         image = image.astype(np.uint8)
         image = image[..., [2, 1, 0]].copy()
-        # image = image[..., ::-1].copy()
     if not Path(os.path.dirname(image_path)).exists():
         Path(os.path.dirname(image_path)).mkdir()
 
@@ -159,9 +227,7 @@ if __name__ == "__main__":
     W = 256
     H = 256
     focal = 0.5 * float(W) / math.tan(0.5 * fov_x)
-    tile_bounds = torch.tensor(
-        [(W + BLOCK_X - 1) // BLOCK_X, (H + BLOCK_Y - 1) // BLOCK_Y, 1]
-    )
+    tile_bounds = torch.tensor([(W + BLOCK_X - 1) // BLOCK_X, (H + BLOCK_Y - 1) // BLOCK_Y, 1])
     img_size = torch.tensor([W, H, 1])
     block = torch.tensor([BLOCK_X, BLOCK_Y, 1])
 
@@ -203,13 +269,21 @@ if __name__ == "__main__":
         )
         opacities[i] = 0.9
 
+    means.requires_grad = True
+    scales.requires_grad = True
+    quats.requires_grad = True
+    rgbs.requires_grad = True
+    opacities.requires_grad = True
+    viewmat.requires_grad = True
+
     # currently proj_mat = view_mat
     num_rendered, out_img, out_radii = rasterize.apply(
         means, scales, 1, quats, rgbs, opacities, viewmat, viewmat, H, W, focal, focal
     )
-    vis_image(out_img, os.getcwd() + "/python_forward.png")
+    # vis_image(out_img, os.getcwd() + "/python_forward.png")
 
-    # cov2d bounds
-    f = compute_cov2d_bounds()
-    A = torch.rand(4, 3, device="cuda:0").requires_grad_()
-    conics, radii = f.apply(A)
+    gt_rgb = torch.ones((W, H, 3), dtype=out_img.dtype).cuda()
+    mse = torch.nn.MSELoss()
+    out_img = out_img.cuda()
+    loss = mse(out_img.cpu(), gt_rgb.cpu())  # BUG: why cpu required here
+    loss.backward()
