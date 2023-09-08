@@ -155,7 +155,6 @@ class project_gaussians(Function):
 
 
 if __name__ == "__main__":
-
     device = torch.device("cuda:0")
     num_points = 256
     means3d = torch.randn((num_points, 3), device=device, requires_grad=True)
@@ -164,7 +163,9 @@ if __name__ == "__main__":
     quats = torch.randn((num_points, 4), device=device)
     quats /= torch.linalg.norm(quats, dim=-1, keepdim=True)
     viewmat = torch.eye(4, device=device)
-    projmat = torch.eye(4, device=device)
+    viewmat[2, 3] = 2
+    # projmat = torch.eye(4, device=device)
+    projmat = viewmat
     fx = 3.0
     fy = 3.0
     img_height = 256
@@ -192,8 +193,10 @@ if __name__ == "__main__":
     print(f"{xys.shape=}")
     print(f"{conics.shape=}")
 
-    loss = xys.sum() + conics.sum()
+    mse = torch.nn.MSELoss()
+    loss = mse(xys, torch.ones(size=xys.shape, device=xys.device))
+    # loss = xys.sum() + conics.sum()
     loss.backward()
-
-    print(f"{means3d.grad.shape=}")
-    print(f"{means3d.grad.sum()}")
+    print("HERE")
+    # print(f"{means3d.grad.shape=}")
+    # print(f"{means3d.grad.sum()}")
