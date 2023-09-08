@@ -135,6 +135,10 @@ void compare_cov2d_ewa_backward() {
     printf("\n");
 }
 
+void compare_rasterize_backward() {
+    int N = 16;
+}
+
 int main() {
     compare_project2d_mean_backward();
     compare_conic_backward();
