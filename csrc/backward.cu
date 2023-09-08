@@ -7,7 +7,7 @@ namespace cg = cooperative_groups;
 __global__ void rasterize_backward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
-    const uint32_t *gaussians_ids_sorted,
+    const int32_t *gaussians_ids_sorted,
     const uint2 *tile_bins,
     const float2 *xys,
     const float3 *conics,
@@ -23,12 +23,12 @@ __global__ void rasterize_backward_kernel(
 ) {
     // current naive implementation where tile data loading is redundant
     // TODO tile data should be shared between tile threads
-    uint32_t tile_id = blockIdx.y * tile_bounds.x + blockIdx.x;
+    int32_t tile_id = blockIdx.y * tile_bounds.x + blockIdx.x;
     unsigned i = blockIdx.y * blockDim.y + threadIdx.y;
     unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
     float px = (float)j;
     float py = (float)i;
-    uint32_t pix_id = i * img_size.x + j;
+    int32_t pix_id = i * img_size.x + j;
 
     // which gaussians get gradients for this pixel
     uint2 range = tile_bins[tile_id];
@@ -49,7 +49,7 @@ __global__ void rasterize_backward_kernel(
     // alpha_j), and S_{n-1} from S_n, where S_j = sum_{i > j}(rgb_i * alpha_i *
     // T_i) df/dalpha_i = rgb_i * T_i - S_{i+1| / (1 - alpha_i)
     for (int idx = bin_final - 1; idx >= range.x; --idx) {
-        uint32_t g = gaussians_ids_sorted[idx];
+        int32_t g = gaussians_ids_sorted[idx];
         conic = conics[g];
         center = xys[g];
         delta = {center.x - px, center.y - py};
@@ -110,7 +110,7 @@ void rasterize_backward_impl(
     const dim3 tile_bounds,
     const dim3 block,
     const dim3 img_size,
-    const uint32_t *gaussians_ids_sorted,
+    const int32_t *gaussians_ids_sorted,
     const uint2 *tile_bins,
     const float2 *xys,
     const float3 *conics,
