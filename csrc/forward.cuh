@@ -62,7 +62,7 @@ void rasterize_forward_impl(
 );
 
 // device helper to approximate projected 2d cov from 3d mean and cov
-__device__ float3 project_cov3d_ewa(
+__host__ __device__ float3 project_cov3d_ewa(
     const float3 &mean3d,
     const float *cov3d,
     const float *viewmat,
@@ -73,6 +73,6 @@ __device__ float3 project_cov3d_ewa(
 );
 
 // device helper to get 3D covariance from scale and quat parameters
-__device__ void scale_rot_to_cov3d(
+__host__ __device__ void scale_rot_to_cov3d(
     const float3 scale, const float glob_scale, const float4 quat, float *cov3d
 );

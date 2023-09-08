@@ -61,8 +61,8 @@ compute_cov2d_bounds(const float3 cov2d, float3 &conic, float &radius) {
 }
 
 // compute vjp from df/d_conic to df/c_cov2d
-inline __host__ __device__ bool
-cov2d_to_conic_vjp(const float3 conic, const float3 v_conic, float3 &v_cov2d) {
+inline __host__ __device__ void
+cov2d_to_conic_vjp(const float3 &conic, const float3 &v_conic, float3 &v_cov2d) {
     // conic = inverse cov2d
     // df/d_cov2d = -conic * df/d_conic * conic
     glm::mat2 X = glm::mat2(conic.x, conic.y, conic.y, conic.z);
