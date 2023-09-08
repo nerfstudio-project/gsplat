@@ -256,3 +256,192 @@ __host__ __device__ void computeCov2DBackward(
 	// t = transformPoint4x3(mean, view_matrix);
 	dL_dmean = transformVec4x3Transpose({ dL_dtx, dL_dty, dL_dtz }, view_matrix);
 }
+
+
+// test function rasterizing N gaussians in 1 pixel
+__host__ __device__ void rasterizeBackward(
+    const int N,
+    const float2 pixf,
+    const float2 *collected_xy,
+    const float4 *collected_conic_opacity,
+    const float *collected_colors,
+    const float T_final,
+    const float *dL_dpixel,
+    float *dL_dcolor,
+    float *dL_dopacity,
+    float2 *dL_dmean2D,
+    float3 *dL_dconic2D,
+) {
+	// In the forward, we stored the final value for T, the
+	// product of all (1 - alpha) factors. 
+	float T = T_final;
+    int C = 3;
+
+	float accum_rec[C] = { 0.f };
+	float last_color[C] = { 0 };
+	float last_alpha = 0;
+
+	// Gradient of pixel coordinate w.r.t. normalized 
+	// screen-space viewport corrdinates (-1 to 1)
+	const float ddelx_dx = 0.5 * W;
+	const float ddely_dy = 0.5 * H;
+
+    // Iterate over Gaussians
+    for (int j = 0; j < N; j++)
+    {
+        // Compute blending values, as before.
+        const float2 xy = collected_xy[j];
+        const float2 d = { xy.x - pixf.x, xy.y - pixf.y };
+        const float4 con_o = collected_conic_opacity[j];
+        const float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
+        if (power > 0.0f)
+            continue;
+
+        const float G = exp(power);
+        const float alpha = min(0.99f, con_o.w * G);
+        if (alpha < 1.0f / 255.0f)
+            continue;
+
+        T = T / (1.f - alpha);
+        const float dchannel_dcolor = alpha * T;
+
+        // Propagate gradients to per-Gaussian colors and keep
+        // gradients w.r.t. alpha (blending factor for a Gaussian/pixel
+        // pair).
+        float dL_dalpha = 0.0f;
+        // const int global_id = collected_id[j];
+        for (int ch = 0; ch < C; ch++)
+        {
+            const float c = collected_colors[ch * BLOCK_SIZE + j];
+            // Update last color (to be used in the next iteration)
+            accum_rec[ch] = last_alpha * last_color[ch] + (1.f - last_alpha) * accum_rec[ch];
+            last_color[ch] = c;
+
+            const float dL_dchannel = dL_dpixel[ch];
+            dL_dalpha += (c - accum_rec[ch]) * dL_dchannel;
+            // Update the gradients w.r.t. color of the Gaussian. 
+            // Atomic, since this pixel is just one of potentially
+            // many that were affected by this Gaussian.
+            dL_dcolor[j * C + ch] += dchannel_dcolor * dL_dchannel;
+            // atomicAdd(&(dL_dcolors[global_id * C + ch]), dchannel_dcolor * dL_dchannel);
+        }
+        dL_dalpha *= T;
+        // Update last alpha (to be used in the next iteration)
+        last_alpha = alpha;
+
+        // Account for fact that alpha also influences how much of
+        // the background color is added if nothing left to blend
+        float bg_dot_dpixel = 0;
+        for (int i = 0; i < C; i++)
+            bg_dot_dpixel += bg_color[i] * dL_dpixel[i];
+        dL_dalpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel;
+
+
+        // Helpful reusable temporary variables
+        const float dL_dG = con_o.w * dL_dalpha;
+        const float gdx = G * d.x;
+        const float gdy = G * d.y;
+        const float dG_ddelx = -gdx * con_o.x - gdy * con_o.y;
+        const float dG_ddely = -gdy * con_o.z - gdx * con_o.y;
+
+        // Update gradients w.r.t. 2D mean position of the Gaussian
+        dL_dmean2D[j].x += dL_dG * dG_ddelx * ddelx_dx;
+        dL_dmean2D[j].y += dL_dG * dG_ddely * ddely_dy;
+        // atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx * ddelx_dx);
+        // atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely * ddely_dy);
+
+        // Update gradients w.r.t. 2D covariance (2x2 matrix, symmetric)
+        dL_dconic2D[j].x = -0.5f * gdx * d.x * dL_dG;
+        dL_dconic2D[j].y = -0.5f * gdx * d.y * dL_dG;
+        dL_dconic2D[j].z = -0.5f * gdy * d.y * dL_dG;
+        // atomicAdd(&dL_dconic2D[global_id].x, -0.5f * gdx * d.x * dL_dG);
+        // atomicAdd(&dL_dconic2D[global_id].y, -0.5f * gdx * d.y * dL_dG);
+        // atomicAdd(&dL_dconic2D[global_id].w, -0.5f * gdy * d.y * dL_dG);
+
+        // Update gradients w.r.t. opacity of the Gaussian
+        dL_dopacity[j] += G * dL_dalpha;
+        // atomicAdd(&(dL_dopacity[global_id]), G * dL_dalpha);
+    }
+}
+
+__host__ __device__ void rasterize_vjp(
+    const int N,
+    const float2 p,
+    const float2 *xys,
+    const float3 *conics,
+    const float *opacities,
+    const float3 *rgbs,
+    const float T_final,
+    const float3 v_out,
+    float *dL_dcolor,
+    float *dL_dopacity,
+    float2 *dL_dmean2D,
+    float3 *dL_dconic2D,
+) {
+    float T = T_final;
+    for (int g = 0; g < N; ++g) {
+        conic = conics[g];
+        center = xys[g];
+        delta = {center.x - p.x, center.y - p.y};
+        sigma =
+            0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) -
+            conic.y * delta.x * delta.y;
+        if (sigma <= 0.f) {
+            continue;
+        }
+        opac = opacities[g];
+        vis = exp(-sigma);
+        alpha = min(0.99f, opac * vis);
+        if (alpha < 1.f / 255.f) {
+            continue;
+        }
+
+        // compute the current T for this gaussian
+        T /= (1.f - alpha);
+        rgb = rgbs[g];
+        // update v_rgb for this gaussian
+        fac = alpha * T;
+        v_rgb[g].x += fac * v_out.x;
+        v_rgb[g].y += fac * v_out.y;
+        v_rgb[g].z += fac * v_out.z;
+        // atomicAdd(&(v_rgb[g].x), fac * v_out.x);
+        // atomicAdd(&(v_rgb[g].y), fac * v_out.y);
+        // atomicAdd(&(v_rgb[g].z), fac * v_out.z);
+
+        v_alpha += (rgb.x * T - S.x / (1.f - alpha)) * v_out.x;
+        v_alpha += (rgb.y * T - S.y / (1.f - alpha)) * v_out.y;
+        v_alpha += (rgb.z * T - S.z / (1.f - alpha)) * v_out.z;
+
+        // update contribution from back
+        S.x += rgb.x * fac;
+        S.y += rgb.y * fac;
+        S.z += rgb.z * fac;
+
+        // update v_opacity for this gaussian
+        v_opacity[g] += vis * v_alpha;
+        // atomicAdd(&(v_opacity[g]), vis * v_alpha);
+
+        // compute vjps for conics and means
+        // d_sigma / d_delta = conic * delta
+        // d_sigma / d_conic = delta * delta.T
+        v_sigma = -opac * vis * v_alpha;
+
+        v_conic[g].x += v_sigma * delta.x * delta.x;
+        v_conic[g].y += v_sigma * delta.x * delta.y;
+        v_conic[g].z += v_sigma * delta.y * delta.y;
+        // atomicAdd(&(v_conic[g].x), v_sigma * delta.x * delta.x);
+        // atomicAdd(&(v_conic[g].y), v_sigma * delta.x * delta.y);
+        // atomicAdd(&(v_conic[g].z), v_sigma * delta.y * delta.y);
+
+        v_xy[g].x += v_sigma * (conic.x * delta.x + conic.y * delta.y;
+        v_xy[g].y += v_sigma * (conic.y * delta.x + conic.z * delta.y;
+        // atomicAdd(
+        //     &(v_xy[g].x),
+        //     v_sigma * (conic.x * delta.x + conic.y * delta.y)
+        // );
+        // atomicAdd(
+        //     &(v_xy[g].y),
+        //     v_sigma * (conic.y * delta.x + conic.z * delta.y)
+        // );
+    }
+}

@@ -31,3 +31,31 @@ __host__ __device__ void computeCov2DBackward(
     float3 &dL_dmean,
     float *dL_dcov
 );
+
+__host__ __device__ void rasterizeBackward(
+    const int N,
+    const float2 *collected_xy,
+    const float4 *collected_conic_opacity,
+    const float *collected_colors,
+    const float T_final,
+    const float *dL_dpixel,
+    float *dL_dcolor,
+    float *dL_dopacity,
+    float2 *dL_dmean2D,
+    float3 *dL_dconic2D,
+);
+
+__host__ __device__ void rasterize_vjp(
+    const int N,
+    const float2 p,
+    const float2 *xys,
+    const float3 *conics,
+    const float *opacities,
+    const float3 *rgbs,
+    const float T_final,
+    const float3 v_out,
+    float *dL_dcolor,
+    float *dL_dopacity,
+    float2 *dL_dmean2D,
+    float3 *dL_dconic2D,
+);
