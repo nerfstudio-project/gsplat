@@ -27,7 +27,7 @@ __global__ void project_gaussians_forward_kernel(
     float *depths,
     int *radii,
     float3 *conics,
-    uint32_t *num_tiles_hit
+    int32_t *num_tiles_hit
 ) {
     unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
     radii[idx] = 0;
@@ -71,7 +71,7 @@ __global__ void project_gaussians_forward_kernel(
     float2 center = project_pix(projmat, p_world, img_size);
     uint2 tile_min, tile_max;
     get_tile_bbox(center, radius, tile_bounds, tile_min, tile_max);
-    uint32_t tile_area = (tile_max.x - tile_min.x) * (tile_max.y - tile_min.y);
+    int32_t tile_area = (tile_max.x - tile_min.x) * (tile_max.y - tile_min.y);
     if (tile_area <= 0) {
         printf("%d point bbox outside of bounds\n", idx);
         return;
@@ -106,7 +106,7 @@ void project_gaussians_forward_impl(
     float *depths,
     int *radii,
     float3 *conics,
-    uint32_t *num_tiles_hit
+    int *num_tiles_hit
 ) {
     project_gaussians_forward_kernel<<<
         (num_points + N_THREADS - 1) / N_THREADS,
@@ -138,10 +138,10 @@ __global__ void map_gaussian_to_intersects(
     const float2 *xys,
     const float *depths,
     const int *radii,
-    const uint32_t *cum_tiles_hit,
+    const int32_t *cum_tiles_hit,
     const dim3 tile_bounds,
-    uint64_t *isect_ids,
-    uint32_t *gaussian_ids
+    int64_t *isect_ids,
+    int32_t *gaussian_ids
 ) {
     unsigned idx = cg::this_grid().thread_rank();
     if (idx >= num_points)
@@ -156,13 +156,13 @@ __global__ void map_gaussian_to_intersects(
     // tile_min.x, tile_min.y, tile_max.x, tile_max.y);
 
     // update the intersection info for all tiles this gaussian hits
-    uint32_t cur_idx = (idx == 0) ? 0 : cum_tiles_hit[idx - 1];
+    int32_t cur_idx = (idx == 0) ? 0 : cum_tiles_hit[idx - 1];
     // printf("point %d starting at %d\n", idx, cur_idx);
-    uint64_t depth_id = (uint64_t) * (uint32_t *)&(depths[idx]);
+    int64_t depth_id = (int64_t) * (int32_t *)&(depths[idx]);
     for (int i = tile_min.y; i < tile_max.y; ++i) {
         for (int j = tile_min.x; j < tile_max.x; ++j) {
-            // isect_id is tile ID and depth as uint32
-            uint64_t tile_id = i * tile_bounds.x + j; // tile within image
+            // isect_id is tile ID and depth as int32
+            int64_t tile_id = i * tile_bounds.x + j; // tile within image
             isect_ids[cur_idx] = (tile_id << 32) | depth_id;
             gaussian_ids[cur_idx] = idx;
             ++cur_idx;
@@ -175,13 +175,13 @@ __global__ void map_gaussian_to_intersects(
 // expect that intersection IDs are sorted by increasing tile ID
 // i.e. intersections of a tile are in contiguous chunks
 __global__ void get_tile_bin_edges(
-    const int num_intersects, const uint64_t *isect_ids_sorted, uint2 *tile_bins
+    const int num_intersects, const int64_t *isect_ids_sorted, uint2 *tile_bins
 ) {
     unsigned idx = cg::this_grid().thread_rank();
     if (idx >= num_intersects)
         return;
     // save the indices where the tile_id changes
-    uint32_t cur_tile_idx = (uint32_t)(isect_ids_sorted[idx] >> 32);
+    int32_t cur_tile_idx = (int32_t)(isect_ids_sorted[idx] >> 32);
     if (idx == 0) {
         tile_bins[cur_tile_idx].x = 0;
         return;
@@ -190,7 +190,7 @@ __global__ void get_tile_bin_edges(
         tile_bins[cur_tile_idx].y = num_intersects;
         return;
     }
-    uint32_t prev_tile_idx = (uint32_t)(isect_ids_sorted[idx - 1] >> 32);
+    int32_t prev_tile_idx = (int32_t)(isect_ids_sorted[idx - 1] >> 32);
     if (prev_tile_idx != cur_tile_idx) {
         tile_bins[prev_tile_idx].y = idx;
         tile_bins[cur_tile_idx].x = idx;
@@ -202,9 +202,9 @@ __global__ void get_tile_bin_edges(
 // gaussians
 void compute_cumulative_intersects(
     const int num_points,
-    const uint32_t *num_tiles_hit,
-    uint32_t &num_intersects,
-    uint32_t *cum_tiles_hit
+    const int32_t *num_tiles_hit,
+    int32_t &num_intersects,
+    int32_t *cum_tiles_hit
 ) {
     // allocate sum workspace
     void *sum_ws = nullptr;
@@ -219,7 +219,7 @@ void compute_cumulative_intersects(
     cudaMemcpy(
         &num_intersects,
         &(cum_tiles_hit[num_points - 1]),
-        sizeof(uint32_t),
+        sizeof(int32_t),
         cudaMemcpyDeviceToHost
     );
     cudaFree(sum_ws);
@@ -235,22 +235,22 @@ void bin_and_sort_gaussians(
     const float2 *xys,
     const float *depths,
     const int *radii,
-    const uint32_t *cum_tiles_hit,
+    const int32_t *cum_tiles_hit,
     const dim3 tile_bounds,
-    uint64_t *isect_ids_unsorted,
-    uint32_t *gaussian_ids_unsorted,
-    uint64_t *isect_ids_sorted,
-    uint32_t *gaussian_ids_sorted,
+    int64_t *isect_ids_unsorted,
+    int32_t *gaussian_ids_unsorted,
+    int64_t *isect_ids_sorted,
+    int32_t *gaussian_ids_sorted,
     uint2 *tile_bins
 ) {
     // for each intersection map the tile ID and depth to a gaussian ID
     // allocate intermediate results
-    // uint32_t *gaussian_ids_unsorted;
-    // uint64_t *isect_ids_unsorted; // *isect_ids_sorted;
+    // int32_t *gaussian_ids_unsorted;
+    // int64_t *isect_ids_unsorted; // *isect_ids_sorted;
     // cudaMalloc((void**) &gaussian_ids_unsorted, num_intersects *
-    // sizeof(uint32_t)); cudaMalloc((void**) &isect_ids_unsorted,
-    // num_intersects * sizeof(uint64_t)); cudaMalloc((void**)
-    // &isect_ids_sorted, num_intersects * sizeof(uint64_t));
+    // sizeof(int32_t)); cudaMalloc((void**) &isect_ids_unsorted,
+    // num_intersects * sizeof(int64_t)); cudaMalloc((void**)
+    // &isect_ids_sorted, num_intersects * sizeof(int64_t));
     map_gaussian_to_intersects<<<
         (num_points + N_THREADS - 1) / N_THREADS,
         N_THREADS>>>(
@@ -306,7 +306,7 @@ void bin_and_sort_gaussians(
 __global__ void rasterize_forward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
-    const uint32_t *gaussian_ids_sorted,
+    const int32_t *gaussian_ids_sorted,
     const uint2 *tile_bins,
     const float2 *xys,
     const float3 *conics,
@@ -318,13 +318,13 @@ __global__ void rasterize_forward_kernel(
 ) {
     // current naive implementation where tile data loading is redundant
     // TODO tile data should be shared between tile threads
-    uint32_t tile_id = blockIdx.y * tile_bounds.x + blockIdx.x;
+    int32_t tile_id = blockIdx.y * tile_bounds.x + blockIdx.x;
     bool bg_white = (blockIdx.x % 2) == (blockIdx.y % 2);
     unsigned i = blockIdx.y * blockDim.y + threadIdx.y;
     unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
     float px = (float)j;
     float py = (float)i;
-    uint32_t pix_id = i * img_size.x + j;
+    int32_t pix_id = i * img_size.x + j;
 
     // which gaussians to look through in this tile
     uint2 range = tile_bins[tile_id];
@@ -336,7 +336,7 @@ __global__ void rasterize_forward_kernel(
     // iterate over all gaussians
     int idx;
     for (idx = 0; idx < range.y; ++idx) {
-        uint32_t g = gaussian_ids_sorted[idx];
+        int32_t g = gaussian_ids_sorted[idx];
         conic = conics[g];
         center = xys[g];
         delta = {center.x - px, center.y - py};
@@ -376,7 +376,7 @@ void rasterize_forward_impl(
     const dim3 tile_bounds,
     const dim3 block,
     const dim3 img_size,
-    const uint32_t *gaussian_ids_sorted,
+    const int32_t *gaussian_ids_sorted,
     const uint2 *tile_bins,
     const float2 *xys,
     const float3 *conics,
