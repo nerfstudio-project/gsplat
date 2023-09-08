@@ -112,7 +112,7 @@ inline __host__ __device__ float3 project_pix_vjp(
     float4 p_hom = transform_4x4(mat, p);
     float rw = 1.f / (p_hom.w + 1e-6f);
 
-    float3 v_ndc = {img_size.x * v_xy.x, img_size.y * v_xy.y};
+    float3 v_ndc = {0.5 * img_size.x * v_xy.x, 0.5 * img_size.y * v_xy.y};
     float4 v_proj = {
         v_ndc.x * rw, v_ndc.y * rw, 0., -(v_ndc.x + v_ndc.y) * rw * rw
     };
