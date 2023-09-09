@@ -110,7 +110,6 @@ class rasterize(Function):
             fx,
             fy,
         )
-
         ctx.num_rendered = num_rendered
         ctx.glob_scale = glob_scale
         ctx.view_matrix = view_matrix
@@ -122,6 +121,7 @@ class rasterize(Function):
         ctx.save_for_backward(
             colors,
             means3d,
+            opacities,
             scales,
             rotations_quat,
             out_radii,
@@ -149,6 +149,7 @@ class rasterize(Function):
         (
             colors,
             means3d,
+            opacities,
             scales,
             rotations_quat,
             out_radii,
@@ -160,36 +161,33 @@ class rasterize(Function):
             conics,
         ) = ctx.saved_tensors
 
-        num_rendered, out_img, out_radii, final_Ts, final_idx = cuda_lib.rasterize_backward(
-            means3d.contiguous().cuda(),
-            out_radii.contiguous().cuda(),
-            colors.contiguous().cuda(),
-            scales.contiguous().cuda(),
-            rotations_quat.contiguous().cuda(),
-            glob_scale,
-            view_matrix.contiguous().cuda(),
-            proj_matrix.contiguous().cuda(),
-            grad_out_img.contiguous().cuda(),  # v_output also called dL_dout_color
-            int(img_height),
-            int(img_width),
-            float(fx),
-            float(fy),
+        v_colors, v_opacity = cuda_lib.rasterize_backward(
+            means3d,
+            colors,
+            scales,
+            grad_out_img,  # v_output also called dL_dout_color
+            img_height,
+            img_width,
+            fx,
+            fy,
             gaussian_ids_sorted,
             tile_bins,
+            xy,
             conics,
-            colors,
             opacities,
             final_Ts,
             final_idx,
         )
+
+        v_opacity = v_opacity.squeeze(-1)
 
         return (
             None,  # means3d
             None,  # scales
             None,  # glob_scale
             None,  # rotations_quat
-            None,  # colors
-            None,  # opacity
+            v_colors,  # colors
+            v_opacity,  # opacity
             None,  # view_matrix
             None,  # proj_matrix
             None,  # img_height
@@ -219,6 +217,9 @@ if __name__ == "__main__":
     # rasterizer testing
     import math
     import random
+    import torch.optim as optim
+
+    device = torch.device("cuda:0")
 
     BLOCK_X = 16
     BLOCK_Y = 16
@@ -227,22 +228,23 @@ if __name__ == "__main__":
     W = 256
     H = 256
     focal = 0.5 * float(W) / math.tan(0.5 * fov_x)
-    tile_bounds = torch.tensor([(W + BLOCK_X - 1) // BLOCK_X, (H + BLOCK_Y - 1) // BLOCK_Y, 1])
-    img_size = torch.tensor([W, H, 1])
-    block = torch.tensor([BLOCK_X, BLOCK_Y, 1])
+    tile_bounds = torch.tensor([(W + BLOCK_X - 1) // BLOCK_X, (H + BLOCK_Y - 1) // BLOCK_Y, 1], device=device)
+    img_size = torch.tensor([W, H, 1], device=device)
+    block = torch.tensor([BLOCK_X, BLOCK_Y, 1], device=device)
 
-    means = torch.empty((num_points, 3))
-    scales = torch.empty((num_points, 3))
-    quats = torch.empty((num_points, 4))
-    rgbs = torch.empty((num_points, 3))
-    opacities = torch.empty(num_points)
+    means = torch.empty((num_points, 3), device=device)
+    scales = torch.empty((num_points, 3), device=device)
+    quats = torch.empty((num_points, 4), device=device)
+    rgbs = torch.empty((num_points, 3), device=device)
+    opacities = torch.empty(num_points, device=device)
     viewmat = torch.tensor(
         [
             [1.0, 0.0, 0.0, 0.0],
             [0.0, 1.0, 0.0, 0.0],
             [0.0, 0.0, 1.0, 8.0],
             [0.0, 0.0, 0.0, 1.0],
-        ]
+        ],
+        device=device,
     )
     bd = 2.0
     random.seed()
@@ -252,10 +254,11 @@ if __name__ == "__main__":
                 bd * (random.random() - 0.5),
                 bd * (random.random() - 0.5),
                 bd * (random.random() - 0.5),
-            ]
+            ],
+            device=device,
         )
-        scales[i] = torch.tensor([random.random(), random.random(), random.random()])
-        rgbs[i] = torch.tensor([random.random(), random.random(), random.random()])
+        scales[i] = torch.tensor([random.random(), random.random(), random.random()], device=device)
+        rgbs[i] = torch.tensor([random.random(), random.random(), random.random()], device=device)
         u = random.random()
         v = random.random()
         w = random.random()
@@ -265,7 +268,8 @@ if __name__ == "__main__":
                 math.sqrt(1.0 - u) * math.cos(2.0 * math.pi * v),
                 math.sqrt(u) * math.sin(2.0 * math.pi * w),
                 math.sqrt(u) * math.cos(2.0 * math.pi * w),
-            ]
+            ],
+            device=device,
         )
         opacities[i] = 0.9
 
@@ -276,14 +280,21 @@ if __name__ == "__main__":
     opacities.requires_grad = True
     viewmat.requires_grad = True
 
-    # currently proj_mat = view_mat
+    means = means.to(device)
+    scales = scales.to(device)
+    quats = quats.to(device)
+    rgbs = rgbs.to(device)
+    viewmat = viewmat.to(device)
+
     num_rendered, out_img, out_radii = rasterize.apply(
         means, scales, 1, quats, rgbs, opacities, viewmat, viewmat, H, W, focal, focal
     )
+
     # vis_image(out_img, os.getcwd() + "/python_forward.png")
 
-    gt_rgb = torch.ones((W, H, 3), dtype=out_img.dtype).cuda()
+    gt_rgb = torch.ones((W, H, 3), dtype=out_img.dtype).to("cuda:0")
     mse = torch.nn.MSELoss()
-    out_img = out_img.cuda()
-    loss = mse(out_img.cpu(), gt_rgb.cpu())  # BUG: why cpu required here
+    out_img = out_img.cpu()
+    gt_rgb = gt_rgb.cpu()
+    loss = mse(out_img, gt_rgb)  # BUG: why cpu required here
     loss.backward()

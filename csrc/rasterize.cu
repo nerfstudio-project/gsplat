@@ -1,4 +1,5 @@
 #include "forward.cuh"
+#include "backward.cuh"
 #include "helpers.cuh"
 #include "rasterize.h"
 #include <cub/cub.cuh>
@@ -88,7 +89,6 @@ std::
     torch::Tensor conics =
         torch::zeros({num_points, 6}, means3d.options().dtype(torch::kFloat32));
 
-
     rasterize_forward_impl(
         num_points,
         means3d.contiguous().data_ptr<float>(),
@@ -138,21 +138,23 @@ int rasterize_forward_impl(
     int *tile_bins,
     float *xy,
     float *conics
-   
 ) {
+    const int channels = 3; // TODO: make this a var
     const int W = img_width;
     const int H = img_height;
 
     // launch projection of 3d gaussians into 2d
     // project_gaussians_forward_impl(...)
-    float3 *scales_d, *means_d, *rgbs_d;
+    float3 *scales_d, *means_d;
+    float *rgbs_d;
     float4 *quats_d;
-    float *viewmat_d, *opacities_d;
+    float *viewmat_d;
+    float *opacities_d;
     int num_view = 16; // 16 entries in 4x4 projection matrix
     cudaMalloc((void **)&scales_d, num_points * sizeof(float3));
     cudaMalloc((void **)&means_d, num_points * sizeof(float3));
     cudaMalloc((void **)&quats_d, num_points * sizeof(float4));
-    cudaMalloc((void **)&rgbs_d, num_points * sizeof(float3));
+    cudaMalloc((void **)&rgbs_d, num_points * sizeof(float) * channels);
     cudaMalloc((void **)&opacities_d, num_points * sizeof(float));
     cudaMalloc((void **)&viewmat_d, num_view * sizeof(float));
 
@@ -163,7 +165,7 @@ int rasterize_forward_impl(
         means_d, means3d, num_points * sizeof(float3), cudaMemcpyHostToDevice
     );
     cudaMemcpy(
-        rgbs_d, colors, num_points * sizeof(float3), cudaMemcpyHostToDevice
+        rgbs_d, colors, num_points * sizeof(float) * channels, cudaMemcpyHostToDevice
     );
     cudaMemcpy(
         opacities_d, opacity, num_points * sizeof(float), cudaMemcpyHostToDevice
@@ -311,19 +313,21 @@ int rasterize_forward_impl(
     // rasterize_forward_impl(...)
     float *final_Ts_d;
     int *final_idx_d;
-    float3 *out_img_d;
-    cudaMalloc((void **)&out_img_d, W * H * sizeof(float3));
+    float *out_img_d;
+    cudaMalloc((void **)&out_img_d, W * H * sizeof(float)*channels);
     cudaMalloc((void **)&final_Ts_d, W * H * sizeof(float));
     cudaMalloc((void **)&final_idx_d, W * H * sizeof(int));
 
     const dim3 block = {
         BLOCK_X, BLOCK_Y, 1}; // TODO: make this a user custom setting.
 
-    rasterize_forward_impl( // Should this be renamed? it is overloaded with two
-                            // implementations
+    
+
+    rasterize_forward_impl( // Should this be renamed? it is overloaded with two implementations
         tile_bounds,
         block,
         img_size,
+        channels,
         gaussian_ids_sorted_d,
         tile_bins_d,
         xy_d,
@@ -358,24 +362,13 @@ int rasterize_forward_impl(
 
 std::
     tuple<
-        int,
-        torch::Tensor, // dL_dmeans2D also referred to as dL_dxys
         torch::Tensor, // dL_dcolors
-        torch::Tensor, // dL_dopacity
-        torch::Tensor, // dL_dmeans3D
-        torch::Tensor, // dL_dcov3D
-        torch::Tensor, // dL_dscales
-        torch::Tensor  // dL_drotations_quat
+        torch::Tensor // dL_dopacity
         >
     rasterize_backward_tensor(
         const torch::Tensor &means3D,
-        const torch::Tensor &radii,
         const torch::Tensor &colors,
         const torch::Tensor &scales,
-        const torch::Tensor &rotations_quat,
-        const float glob_scale,
-        const torch::Tensor &view_matrix,
-        const torch::Tensor &proj_matrix,
         const torch::Tensor &v_output, //dL_dout_color
         const int img_height,
         const int img_width,
@@ -391,25 +384,17 @@ std::
     ){
     
         CHECK_INPUT(means3D);
-        CHECK_INPUT(radii);
         CHECK_INPUT(scales);
-        CHECK_INPUT(rotations_quat);
         CHECK_INPUT(colors);
-        CHECK_INPUT(view_matrix);
-        CHECK_INPUT(proj_matrix);
 
         const int num_points = means3D.size(0);
         const int H = v_output.size(1);
         const int W = v_output.size(2);
 
-        torch::Tensor dL_dmeans3D = torch::zeros({num_points, 3}, means3D.options());
-        torch::Tensor dL_dmeans2D = torch::zeros({num_points, 3}, means3D.options());
-        torch::Tensor dL_dcolors = torch::zeros({num_points, 3}, means3D.options());
-        torch::Tensor dL_dconic = torch::zeros({num_points, 2, 2}, means3D.options());
-        torch::Tensor dL_dopacity = torch::zeros({num_points, 1}, means3D.options());
-        torch::Tensor dL_dcov3D = torch::zeros({num_points, 6}, means3D.options());
-        torch::Tensor dL_dscales = torch::zeros({num_points, 3}, means3D.options());
-        torch::Tensor dL_drotations_quat = torch::zeros({num_points, 4}, means3D.options());
+        torch::Tensor v_xy = torch::zeros({num_points, 3}, means3D.options());
+        torch::Tensor v_colors = torch::zeros({num_points, 3}, means3D.options());
+        torch::Tensor v_conic = torch::zeros({num_points, 2, 2}, means3D.options());
+        torch::Tensor v_opacity = torch::zeros({num_points, 1}, means3D.options());
 
         const dim3 tile_bounds = {
             (img_width + BLOCK_X - 1) / BLOCK_X,
@@ -424,25 +409,26 @@ std::
 
         const dim3 img_size = {img_width,img_height,1};
         
+        const int channels = 3; // TODO: make this a user var
 
-        //rasterize_backward_impl(
-        //    tile_bounds,
-        //    block,
-        //    img_size,
-        //    gaussians_ids_sorted, // TODO: need to store these. done
-        //    tile_bins, // TODO: need to store these. done
-        //    xy, // TODO: need to store these. called means2D. done
-        //    conics, //TODO: need to store these. done
-        //    colors, //renamed from rgbs. done
-        //    opacities, //TODO: need to store these... not done yet
-        //    final_Ts, //TODO: need to store these. done
-        //    final_index, //TODO: need to store these.done
-        //    v_output,
-        //    v_xy,
-        //    v_conic,
-        //    v_rgb,
-        //    v_opacity);
+        rasterize_backward_impl(
+            tile_bounds,
+            block,
+            img_size,
+            channels,
+            gaussians_ids_sorted.contiguous().data_ptr<int>(),
+            (uint2 *)tile_bins.contiguous().data_ptr<int>(), 
+            (float2 *)xy.contiguous().data_ptr<float>(),
+            (float3 *)conics.contiguous().data_ptr<float>(),
+            colors.contiguous().data_ptr<float>(),
+            opacities.contiguous().data_ptr<float>(),
+            final_Ts.contiguous().data_ptr<float>(),
+            final_idx.contiguous().data_ptr<int>(),
+            v_output.contiguous().data_ptr<float>(),
+            (float2 *)v_xy.contiguous().data_ptr<float>(),
+            (float3 *)v_conic.contiguous().data_ptr<float>(),
+            v_colors.contiguous().data_ptr<float>(),
+            v_opacity.contiguous().data_ptr<float>());
 
-        //return std::make_tuple(rendered, out_img, out_radii, final_Ts, final_idx);
-        
+        return std::make_tuple(v_colors,v_opacity);
     }
