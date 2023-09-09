@@ -139,28 +139,29 @@ void compare_rasterize_backward() {
     int N = 8;
     float2 p = {0.f, 0.f};
     float T_final = 5e-3;
-    float3 dL_dout = {random_float(), random_float(), random_float()};
-    float dL_dout_ref[3] = {dL_dout.x, dL_dout.y, dL_dout.z};
+    const int C = 3;
+    float dL_dout[C];
+    for (int i = 0; i < C; ++i) {
+        dL_dout[i] = random_float();
+    }
 
     float2 xys[N];
     float3 conics[N];
     float opacities[N];
     float4 conics_o[N];
-    float3 rgbs[N];
-    float rgbs_ref[3*N];
+    float rgbs[C * N];
     for (int i = 0; i < N; ++i) {
         float v = (float) i - (float) N * 0.5f;
         xys[i] = {0.1f * v, 0.1f * v};
         conics[i] = {10.f, 0.f, 10.f};
         opacities[i] = 0.5f;
         conics_o[i] = {conics[i].x, conics[i].y, conics[i].z, opacities[i]};
-        rgbs[i] = {random_float(), random_float(), random_float()};
-        rgbs_ref[3*i] = rgbs[i].x;
-        rgbs_ref[3*i+1] = rgbs[i].y;
-        rgbs_ref[3*i+2] = rgbs[i].z;
+        for (int c = 0; c < C; ++c) {
+            rgbs[C * i + c] = random_float();
+        }
     }
-    float3 dL_drgb[N] = {0.f};
-    float dL_drgb_ref[3*N] = {0.f};
+    float dL_drgb[C*N] = {0.f};
+    float dL_drgb_ref[C*N] = {0.f};
     float dL_do[N] = {0.f};
     float dL_do_ref[N] = {0.f};
     float2 dL_dm[N] = {0.f};
@@ -169,7 +170,14 @@ void compare_rasterize_backward() {
     float3 dL_dc_ref[N] = {0.f};
 
     rasterize_vjp(
-        N, p, xys, conics, opacities, rgbs, T_final,
+        N,
+        p,
+        C,
+        xys,
+        conics,
+        opacities,
+        rgbs,
+        T_final,
         dL_dout,
         dL_drgb,
         dL_do,
@@ -183,23 +191,26 @@ void compare_rasterize_backward() {
         p,
         xys,
         conics_o,
-        rgbs_ref,
+        rgbs,
         T_final,
-        dL_dout_ref,
+        dL_dout,
         dL_drgb_ref,
         dL_do_ref,
         dL_dm_ref,
         dL_dc_ref
     );
     printf("rasterize backward\n");
-    printf("dL_dout %.2e %.2e %.2e\n", dL_dout.x, dL_dout.y, dL_dout.z);
+    printf("dL_dout %.2e %.2e %.2e\n", dL_dout[0], dL_dout[1], dL_dout[2]);
     for (int i = 0; i < N; ++i) {
         printf("dL_drgb %d\n", i);
-        printf("ours %.2e %.2e %.2e\n", dL_drgb[i].x, dL_drgb[i].y, dL_drgb[i].z); 
+        printf("ours %.2e %.2e %.2e\n",
+            dL_drgb[C*i + 0],
+            dL_drgb[C*i + 1],
+            dL_drgb[C*i + 2]);
         printf("theirs %.2e %.2e %.2e\n",
-            dL_drgb_ref[3*i + 0],
-            dL_drgb_ref[3*i + 1],
-            dL_drgb_ref[3*i + 2]);
+            dL_drgb_ref[C*i + 0],
+            dL_drgb_ref[C*i + 1],
+            dL_drgb_ref[C*i + 2]);
         printf("\n");
         printf("dL_do %d\n", i);
         printf("ours %.2e\n", dL_do[i]);

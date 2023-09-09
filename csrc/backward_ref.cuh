@@ -51,13 +51,14 @@ __host__ __device__ void rasterizeBackward(
 __host__ __device__ void rasterize_vjp(
     const int N,
     const float2 p,
+    const int channels,
     const float2 *xys,
     const float3 *conics,
     const float *opacities,
-    const float3 *rgbs,
+    const float *rgbs,
     const float T_final,
-    const float3 v_out,
-    float3 *dL_dcolor,
+    const float *v_out,
+    float *dL_dcolor,
     float *dL_dopacity,
     float2 *dL_dmean2D,
     float3 *dL_dconic2D

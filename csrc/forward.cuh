@@ -50,15 +50,16 @@ void rasterize_forward_impl(
     const dim3 tile_bounds,
     const dim3 block,
     const dim3 img_size,
+    const int channels,
     const int32_t *gaussian_ids_sorted,
     const uint2 *tile_bins,
     const float2 *xys,
     const float3 *conics,
-    const float3 *rgbs,
+    const float *colors,
     const float *opacities,
     float *final_Ts,
     int *final_index,
-    float3 *out_img
+    float *out_img
 );
 
 // device helper to approximate projected 2d cov from 3d mean and cov

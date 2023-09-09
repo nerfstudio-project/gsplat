@@ -23,11 +23,12 @@ int main() {
 
     int num_cov3d = num_points * 6;
     int num_view = 16;
+    const int C = 3;
 
     float3 *means = new float3[num_points];
     float3 *scales = new float3[num_points];
     float4 *quats = new float4[num_points];
-    float3 *rgbs = new float3[num_points];
+    float *rgbs = new float[C * num_points];
     float *opacities = new float[num_points];
     float viewmat[] = {
         1.f,
@@ -56,16 +57,22 @@ int main() {
     float u, v, w;
     std::srand(std::time(nullptr));
     for (int i = 0; i < num_points; ++i) {
-        // means[i] = {bd * (random_float() - 0.5f), bd * (random_float() -
-        // 0.5f), bd * (random_float() - 0.5f)}; scales[i] = {random_float(),
-        // random_float(), random_float()}; rgbs[i] = {random_float(),
-        // random_float(), random_float()};
+        // means[i] = {
+        //     bd * (random_float() - 0.5f),
+        //     bd * (random_float() - 0.5f),
+        //     bd * (random_float() - 0.5f)
+        // };
+        // scales[i] = {random_float(), random_float(), random_float()};
+        // for (int c = 0; c < C; ++c) {
+        //     rgbs[C * i + c] = random_float();
+        // }
 
         float v = (float)i - (float)num_points * 0.5f;
         means[i] = {v * 0.1f, v * 0.1f, (float)i};
         scales[i] = {1.f, 0.5f, 1.f};
-        rgbs[i] = {
-            (float)(i % 3 == 0), (float)(i % 3 == 1), (float)(i % 3 == 2)};
+        for (int c = 0; c < C; ++c) {
+            rgbs[C * i + c] = (float)(i % C == c);
+        }
 
         // quats[i] = {w, norm, norm, 0.f};  // w x y z convention
         // quats[i] = {1.f, 0.f, 0.f, 0.f};  // w x y z convention
@@ -82,14 +89,15 @@ int main() {
         opacities[i] = 0.9f;
     }
 
-    float3 *scales_d, *means_d, *rgbs_d;
+    float3 *scales_d, *means_d;
+    float *rgbs_d;
     float4 *quats_d;
     float *viewmat_d, *opacities_d;
 
     cudaMalloc((void **)&scales_d, num_points * sizeof(float3));
     cudaMalloc((void **)&means_d, num_points * sizeof(float3));
     cudaMalloc((void **)&quats_d, num_points * sizeof(float4));
-    cudaMalloc((void **)&rgbs_d, num_points * sizeof(float3));
+    cudaMalloc((void **)&rgbs_d, C * num_points * sizeof(float));
     cudaMalloc((void **)&opacities_d, num_points * sizeof(float));
     cudaMalloc((void **)&viewmat_d, num_view * sizeof(float));
 
@@ -100,7 +108,7 @@ int main() {
         means_d, means, num_points * sizeof(float3), cudaMemcpyHostToDevice
     );
     cudaMemcpy(
-        rgbs_d, rgbs, num_points * sizeof(float3), cudaMemcpyHostToDevice
+        rgbs_d, rgbs, C * num_points * sizeof(float), cudaMemcpyHostToDevice
     );
     cudaMemcpy(
         opacities_d,
@@ -260,18 +268,19 @@ int main() {
     // }
     // std::cout << std::endl;
 
-    float3 *out_img = new float3[W * H];
-    float3 *out_img_d;
+    float *out_img = new float[C * W * H];
+    float *out_img_d;
     float *final_Ts_d;
     int *final_idx_d;
-    cudaMalloc((void **)&out_img_d, W * H * sizeof(float3));
+    cudaMalloc((void **)&out_img_d, C * W * H * sizeof(float));
     cudaMalloc((void **)&final_Ts_d, W * H * sizeof(float));
     cudaMalloc((void **)&final_idx_d, W * H * sizeof(int));
 
-    rasterize_forward_impl(
+    rasterize_forward_impl (
         tile_bounds,
         block,
         img_size,
+        C,
         gaussian_ids_sorted_d,
         tile_bins_d,
         xy_d,
@@ -283,7 +292,7 @@ int main() {
         out_img_d
     );
     cudaMemcpy(
-        out_img, out_img_d, W * H * sizeof(float3), cudaMemcpyDeviceToHost
+        out_img, out_img_d, C * W * H * sizeof(float), cudaMemcpyDeviceToHost
     );
     TGAImage image(W, H, TGAImage::RGB);
     int idx;
@@ -292,10 +301,9 @@ int main() {
     for (int y = 0; y < H; ++y) {
         for (int x = 0; x < W; ++x) {
             idx = y * W + x;
-            c = out_img[idx];
-            col[0] = (uint8_t)(255.f * c.x);
-            col[1] = (uint8_t)(255.f * c.y);
-            col[2] = (uint8_t)(255.f * c.z);
+            for (int c = 0; c < C; ++c) {
+                col[c] = (uint8_t)(255.f * out_img[C * idx + c]);
+            }
             col[3] = 255;
             image.set(x, y, col);
         }
