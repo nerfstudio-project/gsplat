@@ -55,24 +55,13 @@ int rasterize_forward_impl(
 
 std::
     tuple<
-        int,
-        torch::Tensor, // dL_dmeans2D also referred to as dL_dxys
         torch::Tensor, // dL_dcolors
-        torch::Tensor, // dL_dopacity
-        torch::Tensor, // dL_dmeans3D
-        torch::Tensor, // dL_dcov3D
-        torch::Tensor, // dL_dscales
-        torch::Tensor  // dL_drotations_quat
+        torch::Tensor  // dL_dopacity
         >
     rasterize_backward_tensor(
         const torch::Tensor &means3D,
-        const torch::Tensor &radii,
         const torch::Tensor &colors,
         const torch::Tensor &scales,
-        const torch::Tensor &rotations_quat,
-        const float glob_scale,
-        const torch::Tensor &view_matrix,
-        const torch::Tensor &proj_matrix,
         const torch::Tensor &v_output,
         const int img_height,
         const int img_width,
@@ -85,5 +74,4 @@ std::
         const torch::Tensor opacities,
         const torch::Tensor final_Ts,
         const torch::Tensor final_idx
-
     );
