@@ -7,18 +7,19 @@ namespace cg = cooperative_groups;
 __global__ void rasterize_backward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
+    const int channels,
     const int32_t *gaussians_ids_sorted,
     const uint2 *tile_bins,
     const float2 *xys,
     const float3 *conics,
-    const float3 *rgbs,
+    const float *rgbs,
     const float *opacities,
     const float *final_Ts,
     const int *final_index,
-    const float3 *v_output,
+    const float *v_output,
     float2 *v_xy,
     float3 *v_conic,
-    float3 *v_rgb,
+    float *v_rgb,
     float *v_opacity
 ) {
     // current naive implementation where tile data loading is redundant
@@ -33,15 +34,16 @@ __global__ void rasterize_backward_kernel(
     // which gaussians get gradients for this pixel
     uint2 range = tile_bins[tile_id];
     // df/d_out for this pixel
-    float3 v_out = v_output[pix_id];
-    float3 rgb, conic;
+    const float *v_out = &(v_output[channels * pix_id]);
+    float3 conic;
     float2 center, delta;
     float sigma, vis, fac, opac, alpha, ra;
     float v_alpha, v_sigma;
     // this is the T AFTER the last gaussian in this pixel
     float T = final_Ts[pix_id];
     // the contribution from gaussians behind the current one
-    float3 S = {0.f, 0.f, 0.f};
+    float *S = new float[channels];
+    // float S[channels] = {0.f};
     int bin_final = final_index[pix_id];
 
     // iterate backward to compute the jacobians wrt rgb, opacity, mean2d, and
@@ -69,21 +71,24 @@ __global__ void rasterize_backward_kernel(
         // compute the current T for this gaussian
         ra = 1.f / (1.f - alpha);
         T *= ra;
-        rgb = rgbs[g];
+        // rgb = rgbs[g];
         // update v_rgb for this gaussian
         fac = alpha * T;
-        atomicAdd(&(v_rgb[g].x), fac * v_out.x);
-        atomicAdd(&(v_rgb[g].y), fac * v_out.y);
-        atomicAdd(&(v_rgb[g].z), fac * v_out.z);
+        v_alpha = 0.f;
+        for (int c = 0; c < channels; ++c) {
+            atomicAdd(&(v_rgb[channels * g + c]), fac * v_out[c]);
+            v_alpha += (rgbs[channels * g + c] * T - S[c] * ra) * v_out[c];
+            S[c] += rgbs[channels * g + c] * fac;
+        }
 
-        v_alpha = (rgb.x * T - S.x * ra) * v_out.x
-            + (rgb.y * T - S.y * ra) * v_out.y
-            + (rgb.z * T - S.z * ra) * v_out.z;
-
-        // update contribution from back
-        S.x += rgb.x * fac;
-        S.y += rgb.y * fac;
-        S.z += rgb.z * fac;
+        // v_alpha = (rgb.x * T - S.x * ra) * v_out.x
+        //     + (rgb.y * T - S.y * ra) * v_out.y
+        //     + (rgb.z * T - S.z * ra) * v_out.z;
+        //
+        // // update contribution from back
+        // S.x += rgb.x * fac;
+        // S.y += rgb.y * fac;
+        // S.z += rgb.z * fac;
 
         // update v_opacity for this gaussian
         atomicAdd(&(v_opacity[g]), vis * v_alpha);
@@ -105,30 +110,33 @@ __global__ void rasterize_backward_kernel(
             v_sigma * (conic.y * delta.x + conic.z * delta.y)
         );
     }
+    delete S;
 }
 
 void rasterize_backward_impl(
     const dim3 tile_bounds,
     const dim3 block,
     const dim3 img_size,
+    const int channels,
     const int32_t *gaussians_ids_sorted,
     const uint2 *tile_bins,
-    const float2 *xy,
+    const float2 *xys,
     const float3 *conics,
-    const float3 *rgbs,
+    const float *rgbs,
     const float *opacities,
     const float *final_Ts,
     const int *final_index,
-    const float3 *v_output,
+    const float *v_output,
     float2 *v_xy,
     float3 *v_conic,
-    float3 *v_rgb,
+    float *v_rgb,
     float *v_opacity
 
 ) {
     rasterize_backward_kernel<<<tile_bounds, block>>>(
         tile_bounds,
         img_size,
+        channels,
         gaussians_ids_sorted,
         tile_bins,
         xys,

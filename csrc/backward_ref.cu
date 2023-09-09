@@ -371,20 +371,22 @@ __host__ __device__ void rasterizeBackward(
 __host__ __device__ void rasterize_vjp(
     const int N,
     const float2 p,
+    const int channels,
     const float2 *xys,
     const float3 *conics,
     const float *opacities,
-    const float3 *rgbs,
+    const float *rgbs,
     const float T_final,
-    const float3 v_out,
-    float3 *v_rgb,
+    const float *v_out,
+    float *v_rgb,
     float *v_opacity,
     float2 *v_xy,
     float3 *v_conic
 ) {
     float T = T_final;
-    float3 S = {0.f, 0.f, 0.f};
-    float3 rgb, conic;
+    // float S[channels] = {0.f};
+    float *S = new float[channels];
+    float3 conic;
     float2 center, delta;
     float sigma, vis, fac, opac, alpha, ra;
     float v_alpha, v_sigma;
@@ -409,26 +411,15 @@ __host__ __device__ void rasterize_vjp(
 
         // compute the current T for this gaussian
         T *= ra;
-        rgb = rgbs[g];
         // update v_rgb for this gaussian
         fac = alpha * T;
-        v_rgb[g].x += fac * v_out.x;
-        v_rgb[g].y += fac * v_out.y;
-        v_rgb[g].z += fac * v_out.z;
-        // atomicAdd(&(v_rgb[g].x), fac * v_out.x);
-        // atomicAdd(&(v_rgb[g].y), fac * v_out.y);
-        // atomicAdd(&(v_rgb[g].z), fac * v_out.z);
-
         v_alpha = 0.f;
-        v_alpha += (rgb.x * T - S.x * ra) * v_out.x;
-        v_alpha += (rgb.y * T - S.y * ra) * v_out.y;
-        v_alpha += (rgb.z * T - S.z * ra) * v_out.z;
-        // printf("ours %d v_alpha %.2e alpha %.2e T %.2e\n", g, v_alpha, alpha, T);
-
-        // update contribution from back
-        S.x += rgb.x * fac;
-        S.y += rgb.y * fac;
-        S.z += rgb.z * fac;
+        for (int c = 0; c < channels; ++c) {
+            v_rgb[channels * g + c] += fac * v_out[c];
+            v_alpha += (rgbs[channels * g + c] * T - S[c] * ra) * v_out[c];
+            // update contribution from back
+            S[c] += rgbs[channels * g + c] * fac;
+        }
 
         // update v_opacity for this gaussian
         v_opacity[g] += vis * v_alpha;
@@ -457,4 +448,5 @@ __host__ __device__ void rasterize_vjp(
         //     v_sigma * (conic.y * delta.x + conic.z * delta.y)
         // );
     }
+    delete S;
 }

@@ -307,15 +307,16 @@ void bin_and_sort_gaussians(
 __global__ void rasterize_forward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
+    const int channels,
     const int32_t *gaussian_ids_sorted,
     const uint2 *tile_bins,
     const float2 *xys,
     const float3 *conics,
-    const float3 *rgbs,
+    const float *colors,
     const float *opacities,
     float *final_Ts,
     int *final_index,
-    float3 *out_img
+    float *out_img
 ) {
     // current naive implementation where tile data loading is redundant
     // TODO tile data should be shared between tile threads
@@ -329,16 +330,16 @@ __global__ void rasterize_forward_kernel(
 
     // which gaussians to look through in this tile
     uint2 range = tile_bins[tile_id];
-    float3 rgb, conic;
+    float3 conic;
     float2 center, delta;
-    float sigma, opac, alpha, next_T;
-    float3 out_color = {0.f, 0.f, 0.f};
+    float sigma, opac, alpha, vis, next_T;
     float T = 1.f;
 
     // iterate over all gaussians and apply rendering EWA equation (e.q. 2 from paper)
     int idx;
+    int32_t g;
     for (idx = 0; idx < range.y; ++idx) {
-        int32_t g = gaussian_ids_sorted[idx];
+        g = gaussian_ids_sorted[idx];
         conic = conics[g];
         center = xys[g];
         delta = {center.x - px, center.y - py};
@@ -363,22 +364,19 @@ __global__ void rasterize_forward_kernel(
         if (next_T <= 1e-4f) {
             break;
         }
-        rgb = rgbs[g];
-
-        // accumulate colors
-        out_color.x += rgb.x * alpha * T;
-        out_color.y += rgb.y * alpha * T;
-        out_color.z += rgb.z * alpha * T;
+        vis = alpha * T;
+        for (int c = 0; c < channels; ++c) {
+            out_img[channels * pix_id + c] += colors[channels * g + c] * vis;
+        }
         T = next_T;
     }
     final_Ts[pix_id] = T;      // transmittance at last gaussian in this pixel
     final_index[pix_id] = idx; // index of in bin of last gaussian in this pixel
     if (bg_white) {
-        out_color.x += T;
-        out_color.y += T;
-        out_color.z += T;
+        for (int c = 0; c < channels; ++c) {
+            out_img[channels * pix_id + c] += T;
+        }
     }
-    out_img[pix_id] = out_color;
 }
 
 // host function to launch parallel rasterization of sorted gaussians on device
@@ -386,24 +384,26 @@ void rasterize_forward_impl(
     const dim3 tile_bounds,
     const dim3 block,
     const dim3 img_size,
+    const int channels,
     const int32_t *gaussian_ids_sorted,
     const uint2 *tile_bins,
     const float2 *xys,
     const float3 *conics,
-    const float3 *rgbs,
+    const float *colors,
     const float *opacities,
     float *final_Ts,
     int *final_index,
-    float3 *out_img
+    float *out_img
 ) {
-    rasterize_forward_kernel<<<tile_bounds, block>>>(
+    rasterize_forward_kernel <<<tile_bounds, block>>>(
         tile_bounds,
         img_size,
+        channels,
         gaussian_ids_sorted,
         tile_bins,
         xys,
         conics,
-        rgbs,
+        colors,
         opacities,
         final_Ts,
         final_index,
