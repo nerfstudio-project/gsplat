@@ -1,7 +1,7 @@
 from jaxtyping import Float
 from torch import Tensor
 
-from . import bindings
+from . import rasterize
 
 
 def rasterize(
@@ -19,7 +19,7 @@ def rasterize(
     fy: int,
 ):
     """Alias for diff_rast.cuda_lib.rasterize."""
-    return bindings.rasterize.apply(
+    return rasterize.rasterize.apply(
         means3d,
         scales,
         glob_scale,
