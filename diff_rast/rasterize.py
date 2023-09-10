@@ -43,8 +43,9 @@ class rasterize(Function):
         proj_matrix: Float[Tensor, "4 4"],
         img_height: int,
         img_width: int,
-        fx: int,
-        fy: int,
+        fx: float,
+        fy: float,
+        channels: int = 3,
     ):
         for name, input in {
             "means3d": means3d,
@@ -99,7 +100,7 @@ class rasterize(Function):
         ) = cuda_lib.rasterize_forward(
             means3d.contiguous().cuda(),
             scales.contiguous().cuda(),
-            glob_scale,
+            float(glob_scale),
             rotations_quat.contiguous().cuda(),
             colors.contiguous().cuda(),
             opacity.contiguous().cuda(),
@@ -107,9 +108,11 @@ class rasterize(Function):
             proj_matrix.contiguous().cuda(),
             img_height,
             img_width,
-            fx,
-            fy,
+            float(fx),
+            float(fy),
+            int(channels),
         )
+
         ctx.num_rendered = num_rendered
         ctx.glob_scale = glob_scale
         ctx.view_matrix = view_matrix
@@ -118,6 +121,7 @@ class rasterize(Function):
         ctx.img_height = img_height
         ctx.fx = fx
         ctx.fy = fy
+        ctx.channels = channels
         ctx.save_for_backward(
             colors,
             means3d,
@@ -145,6 +149,7 @@ class rasterize(Function):
         img_width = ctx.img_width
         fx = ctx.fx
         fy = ctx.fy
+        channels = ctx.channels
 
         (
             colors,
@@ -170,6 +175,7 @@ class rasterize(Function):
             img_width,
             fx,
             fy,
+            channels,
             gaussian_ids_sorted,
             tile_bins,
             xy,
@@ -296,5 +302,5 @@ if __name__ == "__main__":
     mse = torch.nn.MSELoss()
     out_img = out_img.cpu()
     gt_rgb = gt_rgb.cpu()
-    loss = mse(out_img, gt_rgb)  # BUG: why cpu required here
+    loss = mse(out_img.cpu(), gt_rgb.cpu())  # BUG: why cpu required here
     loss.backward()
