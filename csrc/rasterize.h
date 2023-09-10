@@ -26,11 +26,13 @@ std::
         const int img_height,
         const int img_width,
         const float fx,
-        const float fy
+        const float fy,
+        const int channels
     );
 
 int rasterize_forward_impl(
     const int num_points,
+    const int channels,
     const float *means3d,
     const float *scales,
     const float glob_scale,
@@ -44,7 +46,7 @@ int rasterize_forward_impl(
     const float fx,
     const float fy,
     float *out_img,
-    float *out_radii,
+    float *radii,
     float *final_Ts,
     int *final_idx,
     int *gaussian_ids_sorted,
@@ -67,6 +69,7 @@ std::
         const int img_width,
         const float fx,
         const float fy,
+        const int channels,
         const torch::Tensor gaussians_ids_sorted,
         const torch::Tensor tile_bins,
         const torch::Tensor xy,
