@@ -15,8 +15,8 @@ def rasterize(
     proj_matrix: Float[Tensor, "4 4"],
     img_height: int,
     img_width: int,
-    fx: int,
-    fy: int,
+    fx: float,
+    fy: float,
 ):
     """Alias for diff_rast.cuda_lib.rasterize."""
     return rasterize.rasterize.apply(
