@@ -86,6 +86,9 @@ class rasterize(Function):
             4,
         ), f"Incorrect shape for view matrix, got{view_matrix.shape}, should be (4,4)."
 
+        if colors.dtype == torch.uint8:
+            colors = colors.float() / 255
+
         # move tensors to cuda and call forward
         (
             num_rendered,
@@ -125,7 +128,7 @@ class rasterize(Function):
         ctx.save_for_backward(
             colors,
             means3d,
-            opacities,
+            opacity,
             scales,
             rotations_quat,
             out_radii,
