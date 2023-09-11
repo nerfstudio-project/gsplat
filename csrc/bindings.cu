@@ -88,8 +88,6 @@ project_gaussians_forward_tensor(
     const std::tuple<int, int> img_size,
     const std::tuple<int, int, int> tile_bounds
 ) {
-    const auto num_cov3d = num_points * 6;
-
     dim3 img_size_dim3;
     img_size_dim3.x = std::get<0>(img_size);
     img_size_dim3.y = std::get<1>(img_size);
@@ -101,7 +99,7 @@ project_gaussians_forward_tensor(
 
     // Triangular covariance.
     torch::Tensor cov3d_d =
-        torch::zeros({num_cov3d, 6}, means3d.options().dtype(torch::kFloat32));
+        torch::zeros({num_points, 6}, means3d.options().dtype(torch::kFloat32));
     torch::Tensor xys_d =
         torch::zeros({num_points, 2}, means3d.options().dtype(torch::kFloat32));
     torch::Tensor depths_d =
