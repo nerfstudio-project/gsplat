@@ -41,7 +41,7 @@ __global__ void project_gaussians_forward_kernel(
     // p_world.z);
     float3 p_view;
     if (clip_near_plane(p_world, viewmat, p_view)) {
-        printf("%d is out of frustum z %.2f, returning\n", idx, p_view.z);
+        // printf("%d is out of frustum z %.2f, returning\n", idx, p_view.z);
         return;
     }
     // printf("p_view %d %.2f %.2f %.2f\n", idx, p_view.x, p_view.y, p_view.z);
@@ -73,7 +73,7 @@ __global__ void project_gaussians_forward_kernel(
     get_tile_bbox(center, radius, tile_bounds, tile_min, tile_max);
     int32_t tile_area = (tile_max.x - tile_min.x) * (tile_max.y - tile_min.y);
     if (tile_area <= 0) {
-        printf("%d point bbox outside of bounds\n", idx);
+        // printf("%d point bbox outside of bounds\n", idx);
         return;
     }
 
