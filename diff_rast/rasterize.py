@@ -233,3 +233,6 @@ if __name__ == "__main__":
     gt_rgb = gt_rgb
     loss = mse(out_img, gt_rgb)
     loss.backward()
+
+    import pdb
+    pdb.set_trace()
