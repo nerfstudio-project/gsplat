@@ -73,7 +73,7 @@ class rasterize(Function):
             xys,
             conics,
             colors,
-            opacities,
+            opacity,
             final_Ts,
             final_idx,
         )
@@ -91,7 +91,7 @@ class rasterize(Function):
             xys,
             conics,
             colors,
-            opacities,
+            opacity,
             final_Ts,
             final_idx,
         ) = ctx.saved_tensors
@@ -104,7 +104,7 @@ class rasterize(Function):
             xys,
             conics,
             colors,
-            opacities,
+            opacity,
             final_Ts,
             final_idx,
             v_out_img,
