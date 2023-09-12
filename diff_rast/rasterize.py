@@ -48,8 +48,11 @@ class rasterize(Function):
             out_img,
             final_Ts,
             final_idx,
-            gaussian_ids_sorted,
             tile_bins,
+            gaussian_ids_sorted,
+            gaussian_ids_unsorted,
+            isect_ids_sorted,
+            isect_ids_unsorted,
         ) = cuda_lib.rasterize_forward(
             xys.contiguous().cuda(),
             depths.contiguous().cuda(),

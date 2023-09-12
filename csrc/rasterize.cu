@@ -18,8 +18,11 @@ std::tuple<
     torch::Tensor, // output image
     torch::Tensor, // final_Ts
     torch::Tensor, // final_idx
+    torch::Tensor, // tile_bins
     torch::Tensor, // gaussian_ids_sorted 
-    torch::Tensor // tile_bins
+    torch::Tensor, // gaussian_ids_unsorted 
+    torch::Tensor, // isect_ids_sorted 
+    torch::Tensor // isect_ids_unsorted 
 >
 rasterize_forward_tensor(
     const torch::Tensor &xys,
@@ -54,50 +57,59 @@ rasterize_forward_tensor(
     const dim3 img_size = {img_width, img_height, 1};
     int num_tiles = tile_bounds.x * tile_bounds.y;
     
-    int32_t *cum_tiles_hit_d;
-    cudaMalloc((void **)&cum_tiles_hit_d, num_points * sizeof(int32_t));
+    // int32_t *cum_tiles_hit_d;
+    // cudaMalloc((void **)&cum_tiles_hit_d, num_points * sizeof(int32_t));
     torch::Tensor cum_tiles_hit =
         torch::zeros({num_points}, xys.options().dtype(torch::kInt32));
 
     int32_t num_intersects;
     compute_cumulative_intersects(
         num_points,
-        num_tiles_hit.contiguous().data_ptr<int>(),
+        num_tiles_hit.contiguous().data_ptr<int32_t>(),
         num_intersects,
-        cum_tiles_hit_d
+        cum_tiles_hit.contiguous().data_ptr<int32_t>()
     );
+    printf("%d num intersects\n", num_intersects);
 
     torch::Tensor gaussian_ids_sorted = torch::zeros({num_intersects}, xys.options().dtype(torch::kInt32));
+    torch::Tensor gaussian_ids_unsorted = torch::zeros({num_intersects}, xys.options().dtype(torch::kInt32));
+    torch::Tensor isect_ids_sorted = torch::zeros({num_intersects}, xys.options().dtype(torch::kInt64));
+    torch::Tensor isect_ids_unsorted = torch::zeros({num_intersects}, xys.options().dtype(torch::kInt64));
     torch::Tensor tile_bins = torch::zeros({num_tiles, 2}, xys.options().dtype(torch::kInt32));
     // allocate temporary variables
     // TODO dunno be smarter about this?
-    int64_t *isect_ids_unsorted_d;
-    int32_t *gaussian_ids_unsorted_d;
-    int64_t *isect_ids_sorted_d;
-    cudaMalloc((void **)&isect_ids_sorted_d, num_intersects * sizeof(int64_t));
-    cudaMalloc(
-        (void **)&isect_ids_unsorted_d, num_intersects * sizeof(int64_t)
-    );
-    cudaMalloc(
-        (void **)&gaussian_ids_unsorted_d, num_intersects * sizeof(int32_t)
-    );
-    int32_t *sorted_ids_ptr = (int32_t *) gaussian_ids_sorted.contiguous().data_ptr<int>();
-    uint2 *bins_ptr = (uint2 *) tile_bins.contiguous().data_ptr<int>();
-    float2 *xys_ptr = (float2 *) xys.contiguous().data_ptr<float>();
+    // int64_t *isect_ids_unsorted_d;
+    // int32_t *gaussian_ids_unsorted_d;
+    // int64_t *isect_ids_sorted_d;
+    // cudaMalloc((void **)&isect_ids_sorted_d, num_intersects * sizeof(int64_t));
+    // cudaMalloc(
+    //     (void **)&isect_ids_unsorted_d, num_intersects * sizeof(int64_t)
+    // );
+    // cudaMalloc(
+    //     (void **)&gaussian_ids_unsorted_d, num_intersects * sizeof(int32_t)
+    // );
+    // int32_t *sorted_ids_ptr = gaussian_ids_sorted.contiguous().data_ptr<int32_t>();
+    // int2 *bins_ptr = (int2 *) tile_bins.contiguous().data_ptr<int>();
+    // float2 *xys_ptr = (float2 *) xys.contiguous().data_ptr<float>();
 
     bin_and_sort_gaussians(
         num_points,
         num_intersects,
-        xys_ptr,
+        (float2 *) xys.contiguous().data_ptr<float>(),
         depths.contiguous().data_ptr<float>(),
         radii.contiguous().data_ptr<int>(),
         (int32_t *)cum_tiles_hit.contiguous().data_ptr<int>(),
         tile_bounds,
-        isect_ids_unsorted_d,
-        gaussian_ids_unsorted_d,
-        isect_ids_sorted_d,
-        sorted_ids_ptr,
-        bins_ptr
+        // isect_ids_unsorted_d,
+        // gaussian_ids_unsorted_d,
+        // isect_ids_sorted_d,
+        isect_ids_unsorted.contiguous().data_ptr<int64_t>(),
+        gaussian_ids_unsorted.contiguous().data_ptr<int32_t>(),
+        isect_ids_sorted.contiguous().data_ptr<int64_t>(),
+        gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
+        (int2 *) tile_bins.contiguous().data_ptr<int>()
+        // sorted_ids_ptr,
+        // bins_ptr
     );
 
     torch::Tensor out_img = torch::zeros(
@@ -113,9 +125,12 @@ rasterize_forward_tensor(
         block,
         img_size,
         channels,
-        sorted_ids_ptr,
-        bins_ptr,
-        xys_ptr,
+        // sorted_ids_ptr,
+        // bins_ptr,
+        // xys_ptr,
+        gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
+        (int2 *) tile_bins.contiguous().data_ptr<int>(),
+        (float2 *) xys.contiguous().data_ptr<float>(),
         (float3 *)conics.contiguous().data_ptr<float>(),
         colors.contiguous().data_ptr<float>(),
         opacity.contiguous().data_ptr<float>(),
@@ -124,7 +139,21 @@ rasterize_forward_tensor(
         out_img.contiguous().data_ptr<float>()
     );
 
-    return std::make_tuple(out_img, final_Ts, final_idx, gaussian_ids_sorted, tile_bins);
+    // cudaFree(cum_tiles_hit_d);
+    // cudaFree(isect_ids_unsorted_d);
+    // cudaFree(isect_ids_sorted_d);
+    // cudaFree(gaussian_ids_unsorted_d);
+
+    return std::make_tuple(
+        out_img,
+        final_Ts,
+        final_idx,
+        tile_bins,
+        gaussian_ids_sorted,
+        isect_ids_sorted,
+        gaussian_ids_unsorted,
+        isect_ids_unsorted
+    );
 }
 
 //std::tuple<

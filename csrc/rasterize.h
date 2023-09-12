@@ -7,8 +7,11 @@ std::
         torch::Tensor, // output image
         torch::Tensor, // final_Ts
         torch::Tensor, // final_idx
+        torch::Tensor,  // tile_bins
         torch::Tensor, // gaussian_ids_sorted
-        torch::Tensor  // tile_bins
+        torch::Tensor, // gaussian_ids_unsorted 
+        torch::Tensor, // isect_ids_sorted 
+        torch::Tensor // isect_ids_unsorted 
         >
     rasterize_forward_tensor(
         const torch::Tensor &xys,
