@@ -175,7 +175,7 @@ __global__ void map_gaussian_to_intersects(
 // expect that intersection IDs are sorted by increasing tile ID
 // i.e. intersections of a tile are in contiguous chunks
 __global__ void get_tile_bin_edges(
-    const int num_intersects, const int64_t *isect_ids_sorted, uint2 *tile_bins
+    const int num_intersects, const int64_t *isect_ids_sorted, int2 *tile_bins
 ) {
     unsigned idx = cg::this_grid().thread_rank();
     if (idx >= num_intersects)
@@ -242,7 +242,7 @@ void bin_and_sort_gaussians(
     int32_t *gaussian_ids_unsorted,
     int64_t *isect_ids_sorted,
     int32_t *gaussian_ids_sorted,
-    uint2 *tile_bins
+    int2 *tile_bins
 ) {
     // for each intersection map the tile ID and depth to a gaussian ID
     // allocate intermediate results
@@ -297,6 +297,9 @@ void bin_and_sort_gaussians(
     cudaFree(sort_ws);
 
     // get the start and end indices for the gaussians in each tile
+    printf("launching tile binning %d %d\n", 
+        (num_intersects + N_THREADS - 1) / N_THREADS,
+        N_THREADS);
     get_tile_bin_edges<<<
         (num_intersects + N_THREADS - 1) / N_THREADS,
         N_THREADS>>>(num_intersects, isect_ids_sorted, tile_bins);
@@ -315,7 +318,7 @@ __global__ void rasterize_forward_kernel(
     const dim3 img_size,
     const int channels,
     const int32_t *gaussian_ids_sorted,
-    const uint2 *tile_bins,
+    const int2 *tile_bins,
     const float2 *xys,
     const float3 *conics,
     const float *colors,
@@ -335,7 +338,7 @@ __global__ void rasterize_forward_kernel(
     int32_t pix_id = i * img_size.x + j;
 
     // which gaussians to look through in this tile
-    uint2 range = tile_bins[tile_id];
+    int2 range = tile_bins[tile_id];
     float3 conic;
     float2 center, delta;
     float sigma, opac, alpha, vis, next_T;
@@ -392,7 +395,7 @@ void rasterize_forward_impl(
     const dim3 img_size,
     const int channels,
     const int32_t *gaussian_ids_sorted,
-    const uint2 *tile_bins,
+    const int2 *tile_bins,
     const float2 *xys,
     const float3 *conics,
     const float *colors,

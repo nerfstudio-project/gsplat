@@ -34,7 +34,7 @@ void rasterize_backward_impl(
     const dim3 img_size,
     const int channels,
     const int *gaussians_ids_sorted,
-    const uint2 *tile_bins,
+    const int2 *tile_bins,
     const float2 *xys,
     const float3 *conics,
     const float *rgbs,
