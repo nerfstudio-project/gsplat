@@ -2,6 +2,7 @@
 #include <cstring>
 #include <ctime>
 #include <iostream>
+#include <sstream>
 #include <math.h>
 
 #include "config.h"
@@ -10,8 +11,36 @@
 
 float random_float() { return (float)std::rand() / RAND_MAX; }
 
-int main() {
-    int num_points = 16;
+
+float4 random_quat() {
+    float u = random_float();
+    float v = random_float();
+    float w = random_float();
+    return {
+        sqrt(1.f - u) * sin(2.f * (float) M_PI * v),
+        sqrt(1.f - u) * cos(2.f * (float) M_PI * v),
+        sqrt(u) * sin(2.f * (float) M_PI * w),
+        sqrt(u) * cos(2.f * (float) M_PI * w)
+    };
+}
+
+int main(int argc, char *argv[]) {
+    int num_points = 1000;
+    if (argc > 1) {
+        num_points = std::stoi(argv[1]);
+    }
+    printf("rendering %d points\n", num_points);
+
+    float bd = 2.f;
+    if (argc > 2) {
+        bd = std::stof(argv[2]);
+    }
+    printf("using scene bounds %.2f\n", bd);
+
+    bool rand = true;
+    if (argc > 3) {  // debug
+        rand = false;
+    }
     const float fov_x = M_PI / 2.f;
     const int W = 512;
     const int H = 512;
@@ -48,43 +77,29 @@ int main() {
         0.f,
         1.f};
 
-    // silly initialization of gaussians
-    // rotate pi/4 about (1, 1, 0)
-    float bd = 2.f;
-    // float norm = sqrt(2);
-    // float theta = M_PI / 4.f;
-    // float w = norm / tan(theta / 2.f);
-    float u, v, w;
+    // random initialization of gaussians
     std::srand(std::time(nullptr));
     for (int i = 0; i < num_points; ++i) {
-        // means[i] = {
-        //     bd * (random_float() - 0.5f),
-        //     bd * (random_float() - 0.5f),
-        //     bd * (random_float() - 0.5f)
-        // };
-        // scales[i] = {random_float(), random_float(), random_float()};
-        // for (int c = 0; c < C; ++c) {
-        //     rgbs[C * i + c] = random_float();
-        // }
-
-        float v = (float)i - (float)num_points * 0.5f;
-        means[i] = {v * 0.1f, v * 0.1f, (float)i};
-        scales[i] = {1.f, 0.5f, 1.f};
-        for (int c = 0; c < C; ++c) {
-            rgbs[C * i + c] = (float)(i % C == c);
+        if (rand) {
+            means[i] = {
+                bd * (random_float() - 0.5f),
+                bd * (random_float() - 0.5f),
+                bd * (random_float() - 0.5f)
+            };
+            scales[i] = {random_float(), random_float(), random_float()};
+            for (int c = 0; c < C; ++c) {
+                rgbs[C * i + c] = random_float();
+            }
+            quats[i] = random_quat();
+        } else {
+            float v = (float)i - (float)num_points * 0.5f;
+            means[i] = {v * 0.1f, v * 0.1f, (float)i};
+            scales[i] = {1.f, 0.5f, 1.f};
+            for (int c = 0; c < C; ++c) {
+                rgbs[C * i + c] = (float)(i % C == c);
+            }
+            quats[i] = {1.f, 0.f, 0.f, 0.f};  // w x y z convention
         }
-
-        // quats[i] = {w, norm, norm, 0.f};  // w x y z convention
-        // quats[i] = {1.f, 0.f, 0.f, 0.f};  // w x y z convention
-        // random quat
-        u = random_float();
-        v = random_float();
-        w = random_float();
-        quats[i] = {
-            sqrt(1.f - u) * sin(2.f * (float)M_PI * v),
-            sqrt(1.f - u) * cos(2.f * (float)M_PI * v),
-            sqrt(u) * sin(2.f * (float)M_PI * w),
-            sqrt(u) * cos(2.f * (float)M_PI * w)};
 
         opacities[i] = 0.9f;
     }
@@ -143,6 +158,7 @@ int main() {
     cudaMalloc((void **)&conics_d, num_points * sizeof(float3));
     cudaMalloc((void **)&num_tiles_hit_d, num_points * sizeof(int32_t));
 
+    printf("projecting into 2d...\n");
     project_gaussians_forward_impl(
         num_points,
         means_d,
@@ -177,6 +193,7 @@ int main() {
         cudaMemcpyDeviceToHost
     );
 
+    printf("binning and sorting...\n");
     int32_t num_intersects;
     int32_t *cum_tiles_hit = new int32_t[num_points];
     int32_t *cum_tiles_hit_d;
@@ -229,31 +246,32 @@ int main() {
         gaussian_ids_sorted_d,
         tile_bins_d
     );
-    cudaMemcpy(
-        isect_ids_unsorted,
-        isect_ids_unsorted_d,
-        num_intersects * sizeof(int64_t),
-        cudaMemcpyDeviceToHost
-    );
-    cudaMemcpy(
-        gaussian_ids_unsorted,
-        gaussian_ids_unsorted_d,
-        num_intersects * sizeof(int32_t),
-        cudaMemcpyDeviceToHost
-    );
-    cudaMemcpy(
-        isect_ids_sorted,
-        isect_ids_sorted_d,
-        num_intersects * sizeof(int64_t),
-        cudaMemcpyDeviceToHost
-    );
-    cudaMemcpy(
-        gaussian_ids_sorted,
-        gaussian_ids_sorted_d,
-        num_intersects * sizeof(int32_t),
-        cudaMemcpyDeviceToHost
-    );
 
+    // cudaMemcpy(
+    //     isect_ids_unsorted,
+    //     isect_ids_unsorted_d,
+    //     num_intersects * sizeof(int64_t),
+    //     cudaMemcpyDeviceToHost
+    // );
+    // cudaMemcpy(
+    //     gaussian_ids_unsorted,
+    //     gaussian_ids_unsorted_d,
+    //     num_intersects * sizeof(int32_t),
+    //     cudaMemcpyDeviceToHost
+    // );
+    // cudaMemcpy(
+    //     isect_ids_sorted,
+    //     isect_ids_sorted_d,
+    //     num_intersects * sizeof(int64_t),
+    //     cudaMemcpyDeviceToHost
+    // );
+    // cudaMemcpy(
+    //     gaussian_ids_sorted,
+    //     gaussian_ids_sorted_d,
+    //     num_intersects * sizeof(int32_t),
+    //     cudaMemcpyDeviceToHost
+    // );
+    //
     // for (int i = 0; i < num_intersects; ++i) {
     //     printf("%d unsorted isect %016lx point %03d\n", i,
     //     isect_ids_unsorted[i], gaussian_ids_unsorted[i]);
@@ -276,6 +294,7 @@ int main() {
     cudaMalloc((void **)&final_Ts_d, W * H * sizeof(float));
     cudaMalloc((void **)&final_idx_d, W * H * sizeof(int));
 
+    printf("final rasterize pass\n");
     rasterize_forward_impl (
         tile_bounds,
         block,
