@@ -201,7 +201,7 @@ int main(int argc, char *argv[]) {
     compute_cumulative_intersects(
         num_points, num_tiles_hit_d, num_intersects, cum_tiles_hit_d
     );
-    // printf("num_intersects %d\n", num_intersects);
+    printf("num_intersects %d\n", num_intersects);
     // cudaMemcpy(cum_tiles_hit, cum_tiles_hit_d, num_points * sizeof(int32_t),
     // cudaMemcpyDeviceToHost); for (int i = 0; i < num_points; ++i) {
     //     printf("num_tiles_hit %d, %d\n", i, num_tiles_hit[i]);
@@ -228,9 +228,9 @@ int main(int argc, char *argv[]) {
     );
 
     int num_tiles = tile_bounds.x * tile_bounds.y;
-    uint2 *tile_bins_d; // start and end indices for each tile
-    uint2 *tile_bins = new uint2[num_tiles];
-    cudaMalloc((void **)&tile_bins_d, num_tiles * sizeof(uint2));
+    int2 *tile_bins_d; // start and end indices for each tile
+    int2 *tile_bins = new int2[num_tiles];
+    cudaMalloc((void **)&tile_bins_d, num_tiles * sizeof(int2));
 
     bin_and_sort_gaussians(
         num_points,
@@ -265,22 +265,22 @@ int main(int argc, char *argv[]) {
     //     num_intersects * sizeof(int64_t),
     //     cudaMemcpyDeviceToHost
     // );
-    // cudaMemcpy(
-    //     gaussian_ids_sorted,
-    //     gaussian_ids_sorted_d,
-    //     num_intersects * sizeof(int32_t),
-    //     cudaMemcpyDeviceToHost
-    // );
+    cudaMemcpy(
+        gaussian_ids_sorted,
+        gaussian_ids_sorted_d,
+        num_intersects * sizeof(int32_t),
+        cudaMemcpyDeviceToHost
+    );
     //
     // for (int i = 0; i < num_intersects; ++i) {
     //     printf("%d unsorted isect %016lx point %03d\n", i,
     //     isect_ids_unsorted[i], gaussian_ids_unsorted[i]);
     // }
-    // for (int i = 0; i < num_intersects; ++i) {
-    //     printf("sorted isect %016lx point %03d\n", isect_ids_sorted[i],
-    //     gaussian_ids_sorted[i]);
-    // }
-    // cudaMemcpy(tile_bins, tile_bins_d, num_tiles * sizeof(uint2),
+    for (int i = 0; i < num_intersects; ++i) {
+        printf("sorted isect %016lx point %03d\n", isect_ids_sorted[i],
+        gaussian_ids_sorted[i]);
+    }
+    // cudaMemcpy(tile_bins, tile_bins_d, num_tiles * sizeof(int2),
     // cudaMemcpyDeviceToHost); for (int i = 0; i < num_tiles; ++i) {
     //     printf("tile_bins %d %d %d\t", i, tile_bins[i].x, tile_bins[i].y);
     // }
