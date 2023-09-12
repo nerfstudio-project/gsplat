@@ -84,10 +84,10 @@ class project_gaussians(Function):
             conics,
         )
 
-        return (xys, conics)
+        return (xys, depths, radii, conics, num_tiles_hit)
 
     @staticmethod
-    def backward(ctx, v_xys, v_conics):
+    def backward(ctx, v_xys, v_depths, v_radii, v_conics, v_num_tiles_hit):
         (
             means3d,
             scales,
@@ -193,6 +193,5 @@ if __name__ == "__main__":
     loss = mse(xys, torch.ones(size=xys.shape, device=xys.device))
     # loss = xys.sum() + conics.sum()
     loss.backward()
-    print("HERE")
     # print(f"{means3d.grad.shape=}")
     # print(f"{means3d.grad.sum()}")
