@@ -19,7 +19,7 @@ std::tuple<
     torch::Tensor, // final_Ts
     torch::Tensor, // final_idx
     torch::Tensor, // gaussian_ids_sorted 
-    torch::Tensor, // tile_bins
+    torch::Tensor // tile_bins
 >
 rasterize_forward_tensor(
     const torch::Tensor &xys,
@@ -30,11 +30,13 @@ rasterize_forward_tensor(
     const torch::Tensor &colors,
     const torch::Tensor &opacity,
     const int img_height,
-    const int img_width,
+    const int img_width
 ) {
     CHECK_INPUT(xys);
     CHECK_INPUT(depths);
+    CHECK_INPUT(radii);
     CHECK_INPUT(conics);
+    CHECK_INPUT(num_tiles_hit);
     CHECK_INPUT(colors);
     CHECK_INPUT(opacity);
 
@@ -51,11 +53,11 @@ rasterize_forward_tensor(
     const dim3 block = {BLOCK_X, BLOCK_Y, 1};
     const dim3 img_size = {img_width, img_height, 1};
     int num_tiles = tile_bounds.x * tile_bounds.y;
-
+    
     int32_t *cum_tiles_hit_d;
     cudaMalloc((void **)&cum_tiles_hit_d, num_points * sizeof(int32_t));
     torch::Tensor cum_tiles_hit =
-        torch::zeros({num_points}, means3d.options().dtype(torch::kInt32));
+        torch::zeros({num_points}, xys.options().dtype(torch::kInt32));
 
     int32_t num_intersects;
     compute_cumulative_intersects(
@@ -89,7 +91,7 @@ rasterize_forward_tensor(
         xys_ptr,
         depths.contiguous().data_ptr<float>(),
         radii.contiguous().data_ptr<int>(),
-        cum_tiles_hit,
+        (int32_t *)cum_tiles_hit.contiguous().data_ptr<int>(),
         tile_bounds,
         isect_ids_unsorted_d,
         gaussian_ids_unsorted_d,
@@ -99,7 +101,7 @@ rasterize_forward_tensor(
     );
 
     torch::Tensor out_img = torch::zeros(
-        {img_height, img_width, channnels}, xys.options().dtype(torch::kFloat32)
+        {img_height, img_width, channels}, xys.options().dtype(torch::kFloat32)
     );
     torch::Tensor final_Ts =
         torch::zeros({img_width, img_height}, xys.options().dtype(torch::kFloat32));
@@ -108,102 +110,103 @@ rasterize_forward_tensor(
 
     rasterize_forward_impl(
         tile_bounds,
+        block,
         img_size,
         channels,
         sorted_ids_ptr,
         bins_ptr,
         xys_ptr,
-        (float3 *) conics.contiguous().data_ptr<float>(),
+        (float3 *)conics.contiguous().data_ptr<float>(),
         colors.contiguous().data_ptr<float>(),
         opacity.contiguous().data_ptr<float>(),
         final_Ts.contiguous().data_ptr<float>(),
         final_idx.contiguous().data_ptr<int>(),
-        out_img.contiguous().data_ptr<float>(),
+        out_img.contiguous().data_ptr<float>()
     );
 
     return std::make_tuple(out_img, final_Ts, final_idx, gaussian_ids_sorted, tile_bins);
 }
 
-std::tuple<
-    torch::Tensor, // covs3d
-    torch::Tensor, // xys
-    torch::Tensor, // depths
-    torch::Tensor, // radiii
-    torch::Tensor, // conics
-    torch::Tensor, // num_tiles_hit
->
-void project_gaussians_tensor(
-    const torch::Tensor &means3d,
-    const torch::Tensor &scales,
-    const float glob_scale,
-    const torch::Tensor &rotations_quat,
-    const torch::Tensor &colors,
-    const torch::Tensor &opacity,
-    const torch::Tensor &view_matrix,
-    const torch::Tensor &proj_matrix,
-    const int img_height,
-    const int img_width,
-    const float fx,
-    const float fy,
-    const int channels
-) {
-    CHECK_INPUT(means3d);
-    CHECK_INPUT(scales);
-    CHECK_INPUT(rotations_quat);
-    CHECK_INPUT(colors);
-    CHECK_INPUT(opacity);
-    CHECK_INPUT(view_matrix);
-    CHECK_INPUT(proj_matrix);
-
-    if (means3d.ndimension() != 2 || means3d.size(1) != 3) {
-        AT_ERROR("means3d must have dimensions (num_points, 3)");
-    }
-
-    torch::Tensor covs3d =
-        torch::zeros({num_points, 6}, means3d.options().dtype(torch::kFloat32));
-
-    torch::Tensor xys =
-        torch::zeros({num_points, 2}, means3d.options().dtype(torch::kFloat32));
-
-    torch::Tensor depths =
-        torch::zeros({num_points}, means3d.options().dtype(torch::kFloat32));
-
-    torch::Tensor radii =
-        torch::zeros({num_points}, means3d.options().dtype(torch::kInt32));
-
-    torch::Tensor conics =
-        torch::zeros({num_points, 3}, means3d.options().dtype(torch::kFloat32));
-
-    torch::Tensor num_tiles_hit =
-        torch::zeros({num_points}, means3d.options().dtype(torch::kInt32));
-
-    const dim3 tile_bounds = {
-        (img_width + BLOCK_X - 1) / BLOCK_X,
-        (img_height + BLOCK_Y - 1) / BLOCK_Y,
-        1};
-    const dim3 img_size = {img_width, img_height, 1};
- 
-    project_gaussians_forward_impl(
-        num_points,
-        (float3 *) means3d.contiguous().data_ptr<float>(),
-        (float3 *) scales.contiguous().data_ptr<float>(),
-        glob_scale,
-        (float4 *) rotations_quat.contiguous().data_ptr<float>(),
-        view_matrix.contiguous().data_ptr<float>(),
-        proj_matrix.contiguous().data_ptr<float>(),
-        fx,
-        fy,
-        img_size,
-        tile_bounds,
-        covs3d.contiguous().data_ptr<float>(),
-        (float2 *) xys.contiguous().data_ptr<float>(),
-        depths.contiguous().data_ptr<float>(),
-        radii.contiguous().data_ptr<int>(),
-        (float3 *) conics.contiguous().data_ptr<float>()
-        num_tiles_hit.contiguous().data_ptr<int>(),
-    );
-    return std::make_tuple(covs3d, xys, depths, radii, conics, num_tiles_hit);
-}
+//std::tuple<
+//    torch::Tensor, // covs3d
+//    torch::Tensor, // xys
+//    torch::Tensor, // depths
+//    torch::Tensor, // radiii
+//    torch::Tensor, // conics
+//    torch::Tensor // num_tiles_hit
+//    >
+//void project_gaussians_tensor(
+//    const torch::Tensor &means3d,
+//    const torch::Tensor &scales,
+//    const float glob_scale,
+//    const torch::Tensor &rotations_quat,
+//    const torch::Tensor &colors,
+//    const torch::Tensor &opacity,
+//    const torch::Tensor &view_matrix,
+//    const torch::Tensor &proj_matrix,
+//    const int img_height,
+//    const int img_width,
+//    const float fx,
+//    const float fy,
+//    const int channels
+//) {
+//    CHECK_INPUT(means3d);
+//    CHECK_INPUT(scales);
+//    CHECK_INPUT(rotations_quat);
+//    CHECK_INPUT(colors);
+//    CHECK_INPUT(opacity);
+//    CHECK_INPUT(view_matrix);
+//    CHECK_INPUT(proj_matrix);
+//
+//    if (means3d.ndimension() != 2 || means3d.size(1) != 3) {
+//        AT_ERROR("means3d must have dimensions (num_points, 3)");
+//    }
+//    const int num_points = means3d.size(0);
+//    torch::Tensor covs3d =
+//        torch::zeros({num_points, 6}, means3d.options().dtype(torch::kFloat32));
+//
+//    torch::Tensor xys =
+//        torch::zeros({num_points, 2}, means3d.options().dtype(torch::kFloat32));
+//
+//    torch::Tensor depths =
+//        torch::zeros({num_points}, means3d.options().dtype(torch::kFloat32));
+//
+//    torch::Tensor radii =
+//        torch::zeros({num_points}, means3d.options().dtype(torch::kInt32));
+//
+//    torch::Tensor conics =
+//        torch::zeros({num_points, 3}, means3d.options().dtype(torch::kFloat32));
+//
+//    torch::Tensor num_tiles_hit =
+//        torch::zeros({num_points}, means3d.options().dtype(torch::kInt32));
+//
+//    const dim3 tile_bounds = {
+//        (img_width + BLOCK_X - 1) / BLOCK_X,
+//        (img_height + BLOCK_Y - 1) / BLOCK_Y,
+//        1};
+//    const dim3 img_size = {img_width, img_height, 1};
+// 
+//    project_gaussians_forward_impl(
+//        num_points,
+//        (float3 *) means3d.contiguous().data_ptr<float>(),
+//        (float3 *) scales.contiguous().data_ptr<float>(),
+//        glob_scale,
+//        (float4 *) rotations_quat.contiguous().data_ptr<float>(),
+//        view_matrix.contiguous().data_ptr<float>(),
+//        proj_matrix.contiguous().data_ptr<float>(),
+//        fx,
+//        fy,
+//        img_size,
+//        tile_bounds,
+//        covs3d.contiguous().data_ptr<float>(),
+//        (float2 *) xys.contiguous().data_ptr<float>(),
+//        depths.contiguous().data_ptr<float>(),
+//        radii.contiguous().data_ptr<int>(),
+//        (float3 *) conics.contiguous().data_ptr<float>(),
+//        num_tiles_hit.contiguous().data_ptr<int>()
+//    );
+//    return std::make_tuple(covs3d, xys, depths, radii, conics, num_tiles_hit);
+//}
 
 int render_gaussians_forward(
     const int num_points,
@@ -334,49 +337,45 @@ int render_gaussians_forward(
 
 std::
     tuple<
+        torch::Tensor, // dL_dxy
+        torch::Tensor, // dL_dconic
         torch::Tensor, // dL_dcolors
         torch::Tensor // dL_dopacity
         >
     rasterize_backward_tensor(
-        const torch::Tensor &means3D,
-        const torch::Tensor &colors,
-        const torch::Tensor &scales,
-        const torch::Tensor &v_output, //dL_dout_color
         const int img_height,
         const int img_width,
-        const float fx,
-        const float fy,
-        const int channels,
-        const torch::Tensor gaussians_ids_sorted,
-        const torch::Tensor tile_bins,
-        const torch::Tensor xy,
-        const torch::Tensor conics,
-        const torch::Tensor opacities,
-        const torch::Tensor final_Ts,
-        const torch::Tensor final_idx
+        const torch::Tensor &gaussians_ids_sorted,
+        const torch::Tensor &tile_bins,
+        const torch::Tensor &xys,
+        const torch::Tensor &conics,
+        const torch::Tensor &colors,
+        const torch::Tensor &opacities,
+        const torch::Tensor &final_Ts,
+        const torch::Tensor &final_idx,
+        const torch::Tensor &v_output //dL_dout_color
     ){
     
-        CHECK_INPUT(means3D);
-        CHECK_INPUT(scales);
+        CHECK_INPUT(xys);
         CHECK_INPUT(colors);
-        if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
-            AT_ERROR("means3d must have dimensions (num_points, 3)");
+
+        if (xys.ndimension() != 2 || xys.size(1) != 2) {
+            AT_ERROR("xys must have dimensions (num_points, 2)");
         }
 
-        const int num_points = means3D.size(0);
-        const int H = v_output.size(1);
-        const int W = v_output.size(2);
+        const int num_points = xys.size(0);
         const dim3 tile_bounds = {
             (img_width + BLOCK_X - 1) / BLOCK_X,
             (img_height + BLOCK_Y - 1) / BLOCK_Y,
             1};
         const dim3 block(BLOCK_X, BLOCK_Y, 1);
         const dim3 img_size = {img_width,img_height,1};
+        const int channels = colors.size(1);
 
-        torch::Tensor v_xy = torch::zeros({num_points, 3}, means3D.options());
-        torch::Tensor v_colors = torch::zeros({num_points, 3}, means3D.options());
-        torch::Tensor v_conic = torch::zeros({num_points, 2, 2}, means3D.options());
-        torch::Tensor v_opacity = torch::zeros({num_points, 1}, means3D.options());
+        torch::Tensor v_xy = torch::zeros({num_points, 2}, xys.options());
+        torch::Tensor v_conic = torch::zeros({num_points, 3}, xys.options());
+        torch::Tensor v_colors = torch::zeros({num_points, 3}, xys.options());
+        torch::Tensor v_opacity = torch::zeros({num_points, 1}, xys.options());
 
         rasterize_backward_impl(
             tile_bounds,
@@ -385,7 +384,7 @@ std::
             channels,
             gaussians_ids_sorted.contiguous().data_ptr<int>(),
             (uint2 *)tile_bins.contiguous().data_ptr<int>(), 
-            (float2 *)xy.contiguous().data_ptr<float>(),
+            (float2 *)xys.contiguous().data_ptr<float>(),
             (float3 *)conics.contiguous().data_ptr<float>(),
             colors.contiguous().data_ptr<float>(),
             opacities.contiguous().data_ptr<float>(),
@@ -397,5 +396,5 @@ std::
             v_colors.contiguous().data_ptr<float>(),
             v_opacity.contiguous().data_ptr<float>());
 
-        return std::make_tuple(v_colors,v_opacity);
+        return std::make_tuple(v_xy,v_conic,v_colors,v_opacity);
     }
