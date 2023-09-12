@@ -2,11 +2,10 @@
 
 import os
 from pathlib import Path
-from typing import Tuple
 
 import numpy as np
 import torch
-from jaxtyping import Float
+from jaxtyping import Float, Int
 from torch import Tensor
 from torch.autograd import Function
 
@@ -17,191 +16,109 @@ class rasterize(Function):
     """Main gaussian-splatting rendering function
 
     Args:
-       means3d (Tensor): xyzs of gaussians.
-       scales (Tensor): scales of the gaussians.
-       glob_scale (float): A global scaling factor applied to the scene.
-       rotations_quat (Tensor): rotations in quaternion [w,x,y,z] format.
-       colors (Tensor): colors associated with the gaussians.
-       opacity (Tensor): opacity/transparency of the gaussians.
-       view_matrix (Tensor): view matrix for rendering.
-       proj_matrix (Tensor): projection matrix for rendering.
-       img_height (int): height of the rendered image.
-       img_width (int): width of the rendered image.
+        xys (Tensor): xy coords of 2D gaussians.
+        depths (Tensor): depths of 2D gaussians.
+        radii (Tensor): radii of 2D gaussians
+        conics (Tensor): conics (inverse of covariance) of 2D gaussians in upper triangular format
+        num_tiles_hit (Tensor): number of tiles hit per gaussian
+        colors (Tensor): colors associated with the gaussians.
+        opacity (Tensor): opacity associated with the gaussians.
+        img_height (int): height of the rendered image.
+        img_width (int): width of the rendered image.
     """
 
     @staticmethod
     def forward(
         ctx,
-        means3d: Float[Tensor, "*batch 3"],
-        scales: Float[Tensor, "*batch 3"],
-        glob_scale: float,
-        rotations_quat: Float[Tensor, "*batch 4"],
+        xys: Float[Tensor, "*batch 2"],
+        depths: Float[Tensor, "*batch 1"],
+        radii: Float[Tensor, "*batch 1"],
+        conics: Float[Tensor, "*batch 3"],
+        num_tiles_hit: Int[Tensor, "*batch 1"],
         colors: Float[Tensor, "*batch 3"],
         opacity: Float[Tensor, "*batch 1"],
-        view_matrix: Float[Tensor, "4 4"],
-        proj_matrix: Float[Tensor, "4 4"],
         img_height: int,
         img_width: int,
-        fx: float,
-        fy: float,
-        channels: int = 3,
     ):
-        for name, input in {
-            "means3d": means3d,
-            "scales": scales,
-            "rotations.quat": rotations_quat,
-            "colors": colors,
-            "opacity": opacity,
-        }.items():
-            assert (
-                getattr(input, "shape")[0] == means3d.shape[0]
-            ), f"Incorrect shape of input {name}. Batch size should be {means.shape[0]}, but got {input.shape[0]}."
-            assert (
-                getattr(input, "dim") != 2
-            ), f"Incorrect number of dimensions for input {name}. Num of dimensions should be 2, got {input.dim()}"
-
-        if proj_matrix.shape == (3, 4):
-            proj_matrix = torch.cat(
-                [
-                    proj_matrix,
-                    torch.Tensor([0, 0, 0, 1], device=proj_matrix.device).unsqueeze(0),
-                ],
-                dim=0,
-            )
-        if view_matrix.shape == (3, 4):
-            view_matrix = torch.cat(
-                [
-                    view_matrix,
-                    torch.Tensor([0, 0, 0, 1], device=proj_matrix.device).unsqueeze(0),
-                ],
-                dim=0,
-            )
-        assert proj_matrix.shape == (
-            4,
-            4,
-        ), f"Incorrect shape for projection matrix, got{proj_matrix.shape}, should be (4,4)."
-        assert view_matrix.shape == (
-            4,
-            4,
-        ), f"Incorrect shape for view matrix, got{view_matrix.shape}, should be (4,4)."
-
         if colors.dtype == torch.uint8:
+            # make sure colors are float [0,1]
             colors = colors.float() / 255
 
-        # move tensors to cuda and call forward
         (
-            num_rendered,
             out_img,
-            out_radii,
             final_Ts,
             final_idx,
             gaussian_ids_sorted,
             tile_bins,
-            xy,
-            conics,
         ) = cuda_lib.rasterize_forward(
-            means3d.contiguous().cuda(),
-            scales.contiguous().cuda(),
-            float(glob_scale),
-            rotations_quat.contiguous().cuda(),
+            xys.contiguous().cuda(),
+            depths.contiguous().cuda(),
+            radii.contiguous().cuda(),
+            conics.contiguous().cuda(),
+            num_tiles_hit.contiguous().cuda(),
             colors.contiguous().cuda(),
             opacity.contiguous().cuda(),
-            view_matrix.contiguous().cuda(),
-            proj_matrix.contiguous().cuda(),
             img_height,
             img_width,
-            float(fx),
-            float(fy),
-            int(channels),
         )
 
-        ctx.num_rendered = num_rendered
-        ctx.glob_scale = glob_scale
-        ctx.view_matrix = view_matrix
-        ctx.proj_matrix = proj_matrix
         ctx.img_width = img_width
         ctx.img_height = img_height
-        ctx.fx = fx
-        ctx.fy = fy
-        ctx.channels = channels
         ctx.save_for_backward(
-            colors,
-            means3d,
-            opacity,
-            scales,
-            rotations_quat,
-            out_radii,
-            final_Ts,
-            final_idx,
             gaussian_ids_sorted,
             tile_bins,
-            xy,
+            xys,
             conics,
+            colors,
+            opacities,
+            final_Ts,
+            final_idx,
         )
 
-        return num_rendered, out_img, out_radii
+        return out_img
 
     @staticmethod
-    def backward(ctx, _, grad_out_img, grad_out_radii):
-        num_rendered = ctx.num_rendered
-        glob_scale = ctx.glob_scale
-        view_matrix = ctx.view_matrix
-        proj_matrix = ctx.proj_matrix
+    def backward(ctx, v_out_img):
         img_height = ctx.img_height
         img_width = ctx.img_width
-        fx = ctx.fx
-        fy = ctx.fy
-        channels = ctx.channels
 
         (
-            colors,
-            means3d,
-            opacities,
-            scales,
-            rotations_quat,
-            out_radii,
-            final_Ts,
-            final_idx,
             gaussian_ids_sorted,
             tile_bins,
-            xy,
+            xys,
             conics,
+            colors,
+            opacities,
+            final_Ts,
+            final_idx,
         ) = ctx.saved_tensors
 
-        v_colors, v_opacity = cuda_lib.rasterize_backward(
-            means3d,
-            colors,
-            scales,
-            grad_out_img,  # v_output also called dL_dout_color
+        v_xy, v_conic, v_colors, v_opacity = cuda_lib.rasterize_backward(
             img_height,
             img_width,
-            fx,
-            fy,
-            channels,
             gaussian_ids_sorted,
             tile_bins,
-            xy,
+            xys,
             conics,
+            colors,
             opacities,
             final_Ts,
             final_idx,
+            v_out_img,
         )
 
         v_opacity = v_opacity.squeeze(-1)
 
         return (
-            None,  # means3d
-            None,  # scales
-            None,  # glob_scale
-            None,  # rotations_quat
+            v_xy,  # xys
+            None,  # depths
+            None,  # radii
+            v_conic,  # conics
+            None,  # num_tiles_hit
             v_colors,  # colors
             v_opacity,  # opacity
-            None,  # view_matrix
-            None,  # proj_matrix
             None,  # img_height
             None,  # img_width
-            None,  # fx
-            None,  # fy
         )
 
 
@@ -227,7 +144,6 @@ if __name__ == "__main__":
     # rasterizer testing
     import math
     import random
-    import torch.optim as optim
 
     device = torch.device("cuda:0")
 
@@ -238,7 +154,7 @@ if __name__ == "__main__":
     W = 256
     H = 256
     focal = 0.5 * float(W) / math.tan(0.5 * fov_x)
-    tile_bounds = torch.tensor([(W + BLOCK_X - 1) // BLOCK_X, (H + BLOCK_Y - 1) // BLOCK_Y, 1], device=device)
+    tile_bounds = (W + BLOCK_X - 1) // BLOCK_X, (H + BLOCK_Y - 1) // BLOCK_Y, 1
     img_size = torch.tensor([W, H, 1], device=device)
     block = torch.tensor([BLOCK_X, BLOCK_Y, 1], device=device)
 
@@ -256,7 +172,7 @@ if __name__ == "__main__":
         ],
         device=device,
     )
-    bd = 2.0
+    bd = 2
     random.seed()
     for i in range(num_points):
         means[i] = torch.tensor(
@@ -281,7 +197,7 @@ if __name__ == "__main__":
             ],
             device=device,
         )
-        opacities[i] = 0.9
+        opacities[i] = 0.90
 
     means.requires_grad = True
     scales.requires_grad = True
@@ -296,15 +212,21 @@ if __name__ == "__main__":
     rgbs = rgbs.to(device)
     viewmat = viewmat.to(device)
 
-    num_rendered, out_img, out_radii = rasterize.apply(
-        means, scales, 1, quats, rgbs, opacities, viewmat, viewmat, H, W, focal, focal
+    # Test new rasterizer
+    # 1. Project gaussians
+    from diff_rast import project_gaussians
+
+    xys, depths, radii, conics, num_tiles_hit = project_gaussians(
+        means, scales, 1, quats, viewmat, viewmat, focal, focal, H, W, tile_bounds
     )
 
-    # vis_image(out_img, os.getcwd() + "/python_forward.png")
+    # 2. Rasterize gaussians
+    out_img = rasterize.apply(xys, depths, radii, conics, num_tiles_hit, rgbs, opacities, H, W)
 
+    vis_image(out_img, os.getcwd() + "/python_forward.png")
     gt_rgb = torch.ones((W, H, 3), dtype=out_img.dtype).to("cuda:0")
     mse = torch.nn.MSELoss()
-    out_img = out_img.cpu()
-    gt_rgb = gt_rgb.cpu()
-    loss = mse(out_img.cpu(), gt_rgb.cpu())  # BUG: why cpu required here
+    out_img = out_img
+    gt_rgb = gt_rgb
+    loss = mse(out_img, gt_rgb)
     loss.backward()
