@@ -266,6 +266,8 @@ void bin_and_sort_gaussians(
     );
 
     // sort intersections by ascending tile ID and depth with RadixSort
+    int32_t max_tile_id = (int32_t) (tile_bounds.x * tile_bounds.y);
+    int msb = 32 - __builtin_clz(max_tile_id) + 1;
     // allocate workspace memory
     void *sort_ws = nullptr;
     size_t sort_ws_bytes;
@@ -276,7 +278,9 @@ void bin_and_sort_gaussians(
         isect_ids_sorted,
         gaussian_ids_unsorted,
         gaussian_ids_sorted,
-        num_intersects
+        num_intersects,
+        0,
+        32 + msb
     );
     cudaMalloc(&sort_ws, sort_ws_bytes);
     cub::DeviceRadixSort::SortPairs(
@@ -286,7 +290,9 @@ void bin_and_sort_gaussians(
         isect_ids_sorted,
         gaussian_ids_unsorted,
         gaussian_ids_sorted,
-        num_intersects
+        num_intersects,
+        0,
+        32 + msb
     );
     cudaFree(sort_ws);
 
