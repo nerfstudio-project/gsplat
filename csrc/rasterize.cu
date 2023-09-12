@@ -336,7 +336,7 @@ int render_gaussians_forward(
         gaussian_ids_unsorted,
         isect_ids_sorted,
         gaussian_ids_sorted,
-        (uint2 *)tile_bins
+        (int2 *)tile_bins
     );
 
     // 3. launch final rasterization method
@@ -350,7 +350,7 @@ int render_gaussians_forward(
         img_size,
         channels,
         (int32_t *)gaussian_ids_sorted,
-        (uint2 *)tile_bins,
+        (int2 *)tile_bins,
         (float2 *)xy,
         (float3 *)conics,
         colors,
@@ -412,7 +412,7 @@ std::
             img_size,
             channels,
             gaussians_ids_sorted.contiguous().data_ptr<int>(),
-            (uint2 *)tile_bins.contiguous().data_ptr<int>(), 
+            (int2 *)tile_bins.contiguous().data_ptr<int>(), 
             (float2 *)xys.contiguous().data_ptr<float>(),
             (float3 *)conics.contiguous().data_ptr<float>(),
             colors.contiguous().data_ptr<float>(),
