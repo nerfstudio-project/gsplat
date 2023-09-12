@@ -42,7 +42,7 @@ void bin_and_sort_gaussians(
     int32_t *gaussian_ids_unsorted,
     int64_t *isect_ids_sorted,
     int32_t *gaussian_ids_sorted,
-    uint2 *tile_bins
+    int2 *tile_bins
 );
 
 // compute output color image from binned and sorted gaussians
@@ -52,7 +52,7 @@ void rasterize_forward_impl(
     const dim3 img_size,
     const int channels,
     const int32_t *gaussian_ids_sorted,
-    const uint2 *tile_bins,
+    const int2 *tile_bins,
     const float2 *xys,
     const float3 *conics,
     const float *colors,

@@ -9,7 +9,7 @@ __global__ void rasterize_backward_kernel(
     const dim3 img_size,
     const int channels,
     const int32_t *gaussians_ids_sorted,
-    const uint2 *tile_bins,
+    const int2 *tile_bins,
     const float2 *xys,
     const float3 *conics,
     const float *rgbs,
@@ -32,7 +32,7 @@ __global__ void rasterize_backward_kernel(
     int32_t pix_id = i * img_size.x + j;
 
     // which gaussians get gradients for this pixel
-    uint2 range = tile_bins[tile_id];
+    int2 range = tile_bins[tile_id];
     // df/d_out for this pixel
     const float *v_out = &(v_output[channels * pix_id]);
     float3 conic;
@@ -119,7 +119,7 @@ void rasterize_backward_impl(
     const dim3 img_size,
     const int channels,
     const int *gaussians_ids_sorted,
-    const uint2 *tile_bins,
+    const int2 *tile_bins,
     const float2 *xys,
     const float3 *conics,
     const float *rgbs,
