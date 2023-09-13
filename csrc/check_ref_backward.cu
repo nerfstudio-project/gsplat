@@ -36,23 +36,14 @@ float3 compute_conic(const float3 cov2d) {
 
 void compare_project2d_mean_backward() {
     float3 mean = {random_float(), random_float(), random_float()};
+    // clang-format off
     float proj[] = {
-        1.f,
-        0.f,
-        0.f,
-        0.f,
-        0.f,
-        1.f,
-        0.f,
-        0.f,
-        0.f,
-        0.f,
-        1.f,
-        0.f,
-        0.f,
-        0.f,
-        0.f,
-        1.f};
+        1.f, 0.f, 0.f, 0.f,
+        0.f, 1.f, 0.f, 0.f,
+        0.f, 0.f, 1.f, 0.f,
+        0.f, 0.f, 0.f, 1.f
+    };
+    // clang-format on
     float2 dL_dmean2d = {random_float(), random_float()};
 
     float3 dL_dmean = project_pix_vjp(proj, mean, (dim3){1, 1, 1}, dL_dmean2d);
@@ -307,15 +298,15 @@ void compare_rasterize_backward() {
                 printf("\n");
             };
 
-            if(abs(dL_drgb[C * i + 0] - dL_drgb_ref[C * i + 0]) > 1e-3) {
+            if (abs(dL_drgb[C * i + 0] - dL_drgb_ref[C * i + 0]) > 1e-3) {
                 something_went_wrong();
                 assert(false);
             }
-            if(abs(dL_drgb[C * i + 1] - dL_drgb_ref[C * i + 1]) > 1e-3) {
+            if (abs(dL_drgb[C * i + 1] - dL_drgb_ref[C * i + 1]) > 1e-3) {
                 something_went_wrong();
                 assert(false);
             }
-            if(abs(dL_drgb[C * i + 2] - dL_drgb_ref[C * i + 2]) > 1e-3) {
+            if (abs(dL_drgb[C * i + 2] - dL_drgb_ref[C * i + 2]) > 1e-3) {
                 something_went_wrong();
                 assert(false);
             }
@@ -324,29 +315,29 @@ void compare_rasterize_backward() {
                 something_went_wrong();
                 assert(false);
             }
-            if(abs(dL_do[i] - dL_do_ref[i]) > 1e-3) {
+            if (abs(dL_do[i] - dL_do_ref[i]) > 1e-3) {
                 something_went_wrong();
                 assert(false);
             }
 
-            if(abs(dL_dm[i].x - dL_dm_ref[i].x) > 1e-3) {
+            if (abs(dL_dm[i].x - dL_dm_ref[i].x) > 1e-3) {
                 something_went_wrong();
                 assert(false);
             }
-            if(abs(dL_dm[i].y - dL_dm_ref[i].y) > 1e-3) {
+            if (abs(dL_dm[i].y - dL_dm_ref[i].y) > 1e-3) {
                 something_went_wrong();
                 assert(false);
             }
 
-            if(abs(dL_dc[i].x - dL_dc_ref[i].x) > 1e-3) {
+            if (abs(dL_dc[i].x - dL_dc_ref[i].x) > 1e-3) {
                 something_went_wrong();
                 assert(false);
             }
-            if(abs(dL_dc[i].y - dL_dc_ref[i].y) > 1e-3) {
+            if (abs(dL_dc[i].y - dL_dc_ref[i].y) > 1e-3) {
                 something_went_wrong();
                 assert(false);
             }
-            if(abs(dL_dc[i].z - dL_dc_ref[i].z) > 1e-3) {
+            if (abs(dL_dc[i].z - dL_dc_ref[i].z) > 1e-3) {
                 something_went_wrong();
                 assert(false);
             }
