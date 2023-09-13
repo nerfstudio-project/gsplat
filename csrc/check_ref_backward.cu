@@ -295,46 +295,46 @@ void compare_rasterize_backward() {
             printf("\n");
         };
 
-        if (abs(dL_drgb[C * i + 0] - dL_drgb_ref[C * i + 0]) > 1e-3) {
+        if (abs(dL_drgb[C * i + 0] - dL_drgb_ref[C * i + 0]) > 1e-6) {
             something_went_wrong();
             assert(false);
         }
-        if (abs(dL_drgb[C * i + 1] - dL_drgb_ref[C * i + 1]) > 1e-3) {
+        if (abs(dL_drgb[C * i + 1] - dL_drgb_ref[C * i + 1]) > 1e-6) {
             something_went_wrong();
             assert(false);
         }
-        if (abs(dL_drgb[C * i + 2] - dL_drgb_ref[C * i + 2]) > 1e-3) {
-            something_went_wrong();
-            assert(false);
-        }
-
-        if (abs(dL_do[i] - dL_do_ref[i]) > 1e-3) {
-            something_went_wrong();
-            assert(false);
-        }
-        if (abs(dL_do[i] - dL_do_ref[i]) > 1e-3) {
+        if (abs(dL_drgb[C * i + 2] - dL_drgb_ref[C * i + 2]) > 1e-6) {
             something_went_wrong();
             assert(false);
         }
 
-        if (abs(dL_dm[i].x - dL_dm_ref[i].x) > 1e-3) {
+        if (abs(dL_do[i] - dL_do_ref[i]) > 1e-6) {
             something_went_wrong();
             assert(false);
         }
-        if (abs(dL_dm[i].y - dL_dm_ref[i].y) > 1e-3) {
+        if (abs(dL_do[i] - dL_do_ref[i]) > 1e-6) {
             something_went_wrong();
             assert(false);
         }
 
-        if (abs(dL_dc[i].x - dL_dc_ref[i].x) > 1e-3) {
+        if (abs(dL_dm[i].x - dL_dm_ref[i].x) > 1e-6) {
             something_went_wrong();
             assert(false);
         }
-        if (abs(dL_dc[i].y - dL_dc_ref[i].y) > 1e-3) {
+        if (abs(dL_dm[i].y - dL_dm_ref[i].y) > 1e-6) {
             something_went_wrong();
             assert(false);
         }
-        if (abs(dL_dc[i].z - dL_dc_ref[i].z) > 1e-3) {
+
+        if (abs(dL_dc[i].x - dL_dc_ref[i].x) > 1e-6) {
+            something_went_wrong();
+            assert(false);
+        }
+        if (abs(dL_dc[i].y - dL_dc_ref[i].y) > 1e-6) {
+            something_went_wrong();
+            assert(false);
+        }
+        if (abs(dL_dc[i].z - dL_dc_ref[i].z) > 1e-6) {
             something_went_wrong();
             assert(false);
         }
