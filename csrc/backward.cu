@@ -42,7 +42,7 @@ __global__ void rasterize_backward_kernel(
     // this is the T AFTER the last gaussian in this pixel
     float T = final_Ts[pix_id];
     // the contribution from gaussians behind the current one
-    float *S = new float[channels];
+    float *S = new float[channels]();
     // float S[channels] = {0.f};
     int bin_final = final_index[pix_id];
 
@@ -102,12 +102,10 @@ __global__ void rasterize_backward_kernel(
         atomicAdd(&(v_conic[g].y), 0.5f * v_sigma * delta.x * delta.y);
         atomicAdd(&(v_conic[g].z), 0.5f * v_sigma * delta.y * delta.y);
         atomicAdd(
-            &(v_xy[g].x),
-            v_sigma * (conic.x * delta.x + conic.y * delta.y)
+            &(v_xy[g].x), v_sigma * (conic.x * delta.x + conic.y * delta.y)
         );
         atomicAdd(
-            &(v_xy[g].y),
-            v_sigma * (conic.y * delta.x + conic.z * delta.y)
+            &(v_xy[g].y), v_sigma * (conic.y * delta.x + conic.z * delta.y)
         );
     }
     delete S;
@@ -348,8 +346,8 @@ __host__ __device__ void project_cov3d_ewa_vjp(
     glm::vec3 v_t = glm::vec3(
         -fx * rz2 * v_J[2][0],
         -fy * rz2 * v_J[2][1],
-        -fx * rz2 * v_J[0][0] + 2.f * fx * t.x * rz3 * v_J[2][0]
-            - fy * rz2 * v_J[1][1] + 2.f * fy * t.y * rz3 * v_J[2][1]
+        -fx * rz2 * v_J[0][0] + 2.f * fx * t.x * rz3 * v_J[2][0] -
+            fy * rz2 * v_J[1][1] + 2.f * fy * t.y * rz3 * v_J[2][1]
     );
     // printf("v_t %.2f %.2f %.2f\n", v_t[0], v_t[1], v_t[2]);
     // printf("W %.2f %.2f %.2f\n", W[0][0], W[0][1], W[0][2]);
