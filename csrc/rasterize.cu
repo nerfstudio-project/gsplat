@@ -403,7 +403,7 @@ std::
 
         torch::Tensor v_xy = torch::zeros({num_points, 2}, xys.options());
         torch::Tensor v_conic = torch::zeros({num_points, 3}, xys.options());
-        torch::Tensor v_colors = torch::zeros({num_points, 3}, xys.options());
+        torch::Tensor v_colors = torch::zeros({num_points, channels}, xys.options());
         torch::Tensor v_opacity = torch::zeros({num_points, 1}, xys.options());
 
         rasterize_backward_impl(
