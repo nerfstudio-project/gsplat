@@ -5,6 +5,7 @@ Make sure you have the ref bindings installed:
     - install ref bindings: pip install -e .
 """
 
+import math
 import os
 from typing import Optional
 
@@ -18,7 +19,7 @@ from diff_rast import project_gaussians, rasterize
 from torch import Tensor
 
 device = torch.device("cuda:0")
-NUM_POINTS = 2048
+NUM_POINTS = 100
 fx, fy = 1.0, 1.0
 H, W = 256, 256
 GLOBAL_SCALE = 1
@@ -54,13 +55,13 @@ def test_bindings_forward(save_img=False):
 
 
 def _init_gaussians():
-    means = torch.randn((NUM_POINTS, 3), device=device, requires_grad=True)
+    means = torch.randn((NUM_POINTS, 3), device=device)
     scales = torch.randn((NUM_POINTS, 3), device=device)
     quats = torch.randn((NUM_POINTS, 4), device=device)
     quats /= torch.linalg.norm(quats, dim=-1, keepdim=True)
     viewmat = torch.eye(4, device=device)
     projmat = torch.eye(4, device=device)
-    rgbs = torch.ones((NUM_POINTS, 3), device=device)
+    rgbs = torch.rand((NUM_POINTS, 3), device=device)
     opacities = torch.ones(NUM_POINTS, device=device) * 0.9
 
     means.requires_grad = True
@@ -180,4 +181,4 @@ def _save_img(image, image_path):
 
 
 if __name__ == "__main__":
-    test_bindings_forward(save_img=False)
+    test_bindings_forward(save_img=True)
