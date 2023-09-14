@@ -1,5 +1,5 @@
 from jaxtyping import Float, Int
-from typing import Tuple
+from typing import Tuple, Optional
 from torch import Tensor
 
 from .rasterize import rasterize as rast
@@ -12,10 +12,11 @@ def rasterize(
     radii: Float[Tensor, "*batch 1"],
     conics: Float[Tensor, "*batch 3"],  # upper triangular?
     num_tiles_hit: Int[Tensor, "*batch 1"],  # (num points, 1)
-    colors: Float[Tensor, "*batch 3"],
+    colors: Float[Tensor, "*batch channels"],
     opacity: Float[Tensor, "*batch 1"],
     img_height: int,
     img_width: int,
+    background: Optional[Float[Tensor, "channels"]] = None,
 ):
     """Alias for diff_rast.cuda_lib.rasterize."""
     return rast.apply(
@@ -28,6 +29,7 @@ def rasterize(
         opacity,
         img_height,
         img_width,
+        background,
     )
 
 

@@ -325,12 +325,12 @@ __global__ void rasterize_forward_kernel(
     const float *opacities,
     float *final_Ts,
     int *final_index,
-    float *out_img
+    float *out_img,
+    const float *background
 ) {
     // current naive implementation where tile data loading is redundant
     // TODO tile data should be shared between tile threads
     int32_t tile_id = blockIdx.y * tile_bounds.x + blockIdx.x;
-    bool bg_white = (blockIdx.x % 2) == (blockIdx.y % 2);
     unsigned i = blockIdx.y * blockDim.y + threadIdx.y;
     unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
     float px = (float)j;
@@ -381,10 +381,8 @@ __global__ void rasterize_forward_kernel(
     }
     final_Ts[pix_id] = T;      // transmittance at last gaussian in this pixel
     final_index[pix_id] = idx; // index of in bin of last gaussian in this pixel
-    if (bg_white) {
-        for (int c = 0; c < channels; ++c) {
-            out_img[channels * pix_id + c] += T;
-        }
+    for (int c = 0; c < channels; ++c) {
+            out_img[channels * pix_id + c] += T * background[c];
     }
 }
 
@@ -402,7 +400,8 @@ void rasterize_forward_impl(
     const float *opacities,
     float *final_Ts,
     int *final_index,
-    float *out_img
+    float *out_img,
+    const float* background
 ) {
     rasterize_forward_kernel <<<tile_bounds, block>>>(
         tile_bounds,
@@ -416,7 +415,8 @@ void rasterize_forward_impl(
         opacities,
         final_Ts,
         final_index,
-        out_img
+        out_img,
+        background
     );
 }
 

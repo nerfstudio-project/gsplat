@@ -59,7 +59,8 @@ void rasterize_forward_impl(
     const float *opacities,
     float *final_Ts,
     int *final_index,
-    float *out_img
+    float *out_img,
+    const float *background
 );
 
 // device helper to approximate projected 2d cov from 3d mean and cov
