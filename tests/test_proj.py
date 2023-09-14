@@ -66,16 +66,18 @@ def test_project_gaussians_forward():
         tile_bounds,
     )
 
-    assert torch.allclose(
+    torch.testing.assert_close(
         cov3d[_masks],
         _cov3d.view(-1, 9)[_masks][:, [0, 1, 2, 4, 5, 8]],
         atol=1e-5,
+        rtol=1e-5,
     )
-    assert torch.allclose(xys[_masks], xys[_masks])
-    assert torch.allclose(depths[_masks], depths[_masks])
-    assert torch.allclose(radii[_masks], radii[_masks])
-    assert torch.allclose(conics[_masks], conics[_masks])
-    assert torch.allclose(num_tiles_hit[_masks], num_tiles_hit[_masks])
+    torch.testing.assert_close(xys[_masks], _xys[_masks])
+    torch.testing.assert_close(depths[_masks], _depths[_masks])
+    torch.testing.assert_close(radii[_masks], _radii[_masks])
+    torch.testing.assert_close(conics[_masks], _conics[_masks])
+    torch.testing.assert_close(num_tiles_hit[_masks], _num_tiles_hit[_masks])
+
 
 
 if __name__ == "__main__":
