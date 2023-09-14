@@ -4,14 +4,6 @@ import torch
 device = torch.device("cuda:0")
 
 
-def _assert_tensors_close(t1: torch.Tensor, t2: torch.Tensor, **kwargs):
-    assert torch.allclose(t1, t2, **kwargs), (
-        f"Tensors not close: {t1} != {t2}"
-        f"\nDiff: {t1 - t2}"
-        f"\nmax atol: {torch.max(torch.abs(t1 - t2))}"
-        f"\nmax rtol: {torch.max(torch.abs((t1 - t2) / t1))}"
-    )
-
 @pytest.mark.skipif(not torch.cuda.is_available, reason="No CUDA device")
 def test_project_gaussians_forward():
     from diff_rast import _torch_impl, cuda_lib
@@ -74,16 +66,17 @@ def test_project_gaussians_forward():
         tile_bounds,
     )
 
-    _assert_tensors_close(
+    torch.testing.assert_close(
         cov3d[_masks],
         _cov3d.view(-1, 9)[_masks][:, [0, 1, 2, 4, 5, 8]],
         atol=1e-5,
+        rtol=1e-5,
     )
-    _assert_tensors_close(xys[_masks], _xys[_masks])
-    _assert_tensors_close(depths[_masks], _depths[_masks])
-    _assert_tensors_close(radii[_masks], _radii[_masks])
-    _assert_tensors_close(conics[_masks], _conics[_masks])
-    _assert_tensors_close(num_tiles_hit[_masks], _num_tiles_hit[_masks])
+    torch.testing.assert_close(xys[_masks], _xys[_masks])
+    torch.testing.assert_close(depths[_masks], _depths[_masks])
+    torch.testing.assert_close(radii[_masks], _radii[_masks])
+    torch.testing.assert_close(conics[_masks], _conics[_masks])
+    torch.testing.assert_close(num_tiles_hit[_masks], _num_tiles_hit[_masks])
 
 
 
