@@ -294,6 +294,7 @@ int main(int argc, char *argv[]) {
     cudaMalloc((void **)&final_Ts_d, W * H * sizeof(float));
     cudaMalloc((void **)&final_idx_d, W * H * sizeof(int));
 
+    const float background[3] = {1.0f, 1.0f, 1.0f};
     printf("final rasterize pass\n");
     rasterize_forward_impl (
         tile_bounds,
@@ -308,7 +309,8 @@ int main(int argc, char *argv[]) {
         opacities_d,
         final_Ts_d,
         final_idx_d,
-        out_img_d
+        out_img_d,
+        background
     );
     cudaMemcpy(
         out_img, out_img_d, C * W * H * sizeof(float), cudaMemcpyDeviceToHost

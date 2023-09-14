@@ -33,7 +33,8 @@ rasterize_forward_tensor(
     const torch::Tensor &colors,
     const torch::Tensor &opacity,
     const int img_height,
-    const int img_width
+    const int img_width,
+    const torch::Tensor &background
 ) {
     CHECK_INPUT(xys);
     CHECK_INPUT(depths);
@@ -42,6 +43,7 @@ rasterize_forward_tensor(
     CHECK_INPUT(num_tiles_hit);
     CHECK_INPUT(colors);
     CHECK_INPUT(opacity);
+    CHECK_INPUT(background);
 
     if (xys.ndimension() != 2 || xys.size(1) != 2) {
         AT_ERROR("xys must have dimensions (N, 2)");
@@ -136,7 +138,8 @@ rasterize_forward_tensor(
         opacity.contiguous().data_ptr<float>(),
         final_Ts.contiguous().data_ptr<float>(),
         final_idx.contiguous().data_ptr<int>(),
-        out_img.contiguous().data_ptr<float>()
+        out_img.contiguous().data_ptr<float>(),
+        background.contiguous().data_ptr<float>()
     );
 
     // cudaFree(cum_tiles_hit_d);
@@ -264,6 +267,7 @@ int render_gaussians_forward(
     const int W = img_width;
     const int H = img_height;
 
+    const float background[3] = {1.0f, 1.0f, 1.0f};
     // 1. launch projection of 3d gaussians into 2d
     // project_gaussians_forward_impl(...)
     int num_cov3d = num_points * 6;
@@ -357,7 +361,8 @@ int render_gaussians_forward(
         opacity,
         final_Ts,
         final_idx,
-        out_img
+        out_img,
+        background
     );
 
     return 0;

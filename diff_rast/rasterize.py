@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import torch
@@ -25,6 +26,7 @@ class rasterize(Function):
         opacity (Tensor): opacity associated with the gaussians.
         img_height (int): height of the rendered image.
         img_width (int): width of the rendered image.
+        background (Tensor): background color
     """
 
     @staticmethod
@@ -35,15 +37,22 @@ class rasterize(Function):
         radii: Float[Tensor, "*batch 1"],
         conics: Float[Tensor, "*batch 3"],
         num_tiles_hit: Int[Tensor, "*batch 1"],
-        colors: Float[Tensor, "*batch 3"],
+        colors: Float[Tensor, "*batch channels"],
         opacity: Float[Tensor, "*batch 1"],
         img_height: int,
         img_width: int,
+        background: Optional[Float[Tensor, "channels"]],
     ):
         if colors.dtype == torch.uint8:
             # make sure colors are float [0,1]
             colors = colors.float() / 255
 
+        if background is not None:
+            assert (
+                background.shape[0] == colors.shape[-1]
+            ), f"incorrect shape of background color tensor, expected shape {colors.shape[-1]}"
+        else:
+            background = torch.ones(3, dtype=torch.float32)
         (
             out_img,
             final_Ts,
@@ -63,6 +72,7 @@ class rasterize(Function):
             opacity.contiguous().cuda(),
             img_height,
             img_width,
+            background.contiguous().cuda(),
         )
 
         ctx.img_width = img_width
@@ -99,15 +109,15 @@ class rasterize(Function):
         v_xy, v_conic, v_colors, v_opacity = cuda_lib.rasterize_backward(
             img_height,
             img_width,
-            gaussian_ids_sorted,
+            gaussian_ids_sorted.contiguous().cuda(),
             tile_bins,
-            xys,
-            conics,
-            colors,
-            opacity,
-            final_Ts,
-            final_idx,
-            v_out_img,
+            xys.contiguous().cuda(),
+            conics.contiguous().cuda(),
+            colors.contiguous().cuda(),
+            opacity.contiguous().cuda(),
+            final_Ts.contiguous().cuda(),
+            final_idx.contiguous().cuda(),
+            v_out_img.contiguous().cuda(),
         )
 
         v_opacity = v_opacity.squeeze(-1)
@@ -122,6 +132,7 @@ class rasterize(Function):
             v_opacity,  # opacity
             None,  # img_height
             None,  # img_width
+            None,  # background
         )
 
 
@@ -235,4 +246,5 @@ if __name__ == "__main__":
     loss.backward()
 
     import pdb
+
     pdb.set_trace()
