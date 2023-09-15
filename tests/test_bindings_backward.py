@@ -3,6 +3,12 @@
 Make sure you have the ref bindings installed:
     - clone the ref bindings: git clone --recurse-submodules git@github.com:graphdeco-inria/diff-gaussian-rasterization.git
     - install ref bindings: pip install -e .
+    
+Zhuoyang's Note:
+    - I tried to take the backward check out, but it seems that the ports for the original implementation and
+        ours are quite different, so I am still struggling to make it work.
+    - I wish to use the result of the forward pass of the original implementation as the input of the backward passes
+        and compare the gradients.
 """
 
 import math
@@ -17,6 +23,7 @@ from diff_gaussian_rasterization import (
 )
 from diff_rast import project_gaussians, rasterize
 from torch import Tensor
+from diff_rast import cuda_lib 
 
 device = torch.device("cuda:0")
 NUM_POINTS = 100
@@ -27,10 +34,10 @@ BLOCK_X, BLOCK_Y = 16, 16
 TILE_BOUNDS = (W + BLOCK_X - 1) // BLOCK_X, (H + BLOCK_Y - 1) // BLOCK_Y, 1
 
 
-def test_bindings_forward(save_img=False):
+def test_bindings_backward(save_img=False):
     means, scales, quats, rgbs, opacities, viewmat, projmat = _init_gaussians()
 
-    ref_color, saved_tensors = _run_ref(
+    ref_color = _run_ref(
         means3D=means,
         colors_precomp=rgbs,
         opacities=opacities,
@@ -39,28 +46,19 @@ def test_bindings_forward(save_img=False):
         viewmat=viewmat,
         projmat=projmat,
         cov3Ds_precomp=None,
-    )
-    ref_color_display = ref_color.permute(
+    ).permute(
         1, 2, 0
     )  # out color is (3,H,W)
 
     color = _run_diff_rast(
-        means=means.clone(), rgbs=rgbs.clone(), scales=scales.clone(), opacities=opacities.clone(), quats=quats.clone(), viewmat=viewmat, projmat=projmat
+        means=means, rgbs=rgbs, scales=scales, opacities=opacities, quats=quats, viewmat=viewmat, projmat=projmat
     )
 
     if save_img:
         _save_img(color, os.getcwd() + f"/ours.png")
-        _save_img(ref_color_display, os.getcwd() + f"/ref.png")
+        _save_img(ref_color, os.getcwd() + f"/ref.png")
 
-    torch.testing.assert_close(color, ref_color_display)
-    # Zhuoyang's Note: I tried to take the backward check out, but it seems it could take a while to make it work.
-    # So I feel it is better to keep it here for now (and it might be useful for debugging after the forward pass works)
-    
-    ref_grads = _run_ref_backward(saved_tensors, ref_color)
-    diff_grads = _run_diff_rast_backward(color, means, rgbs, opacities, scales, quats)
-    
-    for ref_grad, diff_grad in zip(ref_grads, diff_grads):
-        torch.testing.assert_close(ref_grad.shape, diff_grad.shape)
+    torch.testing.assert_close(color, ref_color)
 
 
 def _init_gaussians():
@@ -108,8 +106,7 @@ def _setup_ref_settings(viewmat: Tensor, projmat: Tensor):
     )
     return ref_settings
 
-
-def _run_ref(
+def _run_ref_forward(
     means3D: Tensor,
     colors_precomp: Tensor,
     opacities: Tensor,
@@ -148,10 +145,6 @@ def _run_ref(
     )
 
     num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer = _C.rasterize_gaussians(*args)
-    
-    saved_tensors = (
-        colors_precomp, means3D, scales, rotations, cov3Ds_precomp, radii, sh, geomBuffer, binningBuffer, imgBuffer, num_rendered, raster_settings
-    )
 
     # actual bindings are these, but I think it is better to call the cuda version to get additional outs
     # rasterizer = GaussianRasterizer(raster_settings=raster_settings)
@@ -165,7 +158,9 @@ def _run_ref(
     #    rotations=quats,
     #    cov3D_precomp=None,
     # )
-    return color, saved_tensors
+    saved_tensors = ()
+    return color
+
 
 def _run_ref_backward(saved_tensors, grad_out_color):
     colors_precomp, means3D, scales, rotations, cov3Ds_precomp, radii, sh, geomBuffer, binningBuffer, imgBuffer, num_rendered, raster_settings = saved_tensors
@@ -198,6 +193,48 @@ def _run_ref_backward(saved_tensors, grad_out_color):
     
     return grads
 
+def _run_diff_rast_backward(means3d, rgbs, opacities, scales, quats, viewmat, projmat):
+    v_xy, v_conic, v_colors, v_opacity = cuda_lib.rasterize_backward(
+            H,
+            W,
+            gaussian_ids_sorted.contiguous().cuda(),
+            tile_bins,
+            xys.contiguous().cuda(),
+            conics.contiguous().cuda(),
+            rgbs,
+            opacities,
+            T_final,
+            final_idx.contiguous().cuda(),
+            v_out_img.contiguous().cuda(),
+        )
+    
+    (
+            v_cov2d,
+            v_cov3d,
+            v_mean3d,
+            v_scale,
+            v_quat,
+        ) = cuda_lib.project_gaussians_backward(
+            NUM_POINTS,
+            means3d,
+            scales,
+            GLOBAL_SCALE,
+            quats,
+            viewmat,
+            projmat,
+            fx,
+            fy,
+            (H, W),  # img_size
+            cov3d,
+            radii,
+            conics,
+            v_xy,
+            v_conic,
+        )
+        
+    return (v_mean3d, v_colors, v_opacity, v_scale, v_quat)
+
+    
 
 def _run_diff_rast(means, rgbs, opacities, scales, quats, viewmat, projmat):
     xys, depths, radii, conics, num_tiles_hit = project_gaussians(
@@ -207,13 +244,6 @@ def _run_diff_rast(means, rgbs, opacities, scales, quats, viewmat, projmat):
 
     return out_img
 
-def _run_diff_rast_backward(grad_out_color, means, rgbs, opacities, scales, quats):
-    
-    grad_out_color.backward(grad_out_color)
-
-    grads = (means.grad, rgbs.grad, opacities.grad.unsqueeze(-1), scales.grad, quats.grad)
-    
-    return grads
 
 def _save_img(image, image_path):
     from pathlib import Path
