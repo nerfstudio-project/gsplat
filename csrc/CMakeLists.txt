@@ -8,7 +8,7 @@ set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 
 # our library library
-add_library(diffrast forward.cu backward.cu helpers.cuh backward_ref.cu)
+add_library(diffrast forward.cu backward.cu helpers.cuh serial_backward.cu)
 target_link_libraries(diffrast PUBLIC cuda)
 target_include_directories(diffrast PRIVATE
     ${PROJECT_SOURCE_DIR}/third_party/glm
@@ -36,16 +36,16 @@ set_target_properties(CudaRasterizer PROPERTIES CUDA_ARCHITECTURES "70;75;86")
 # Add the executable
 # add_executable(test main.cpp tgaimage.h tgaimage.cpp)
 add_executable(test_forward test_forward.cu tgaimage.cpp)
-add_executable(check_ref_backward check_ref_backward.cu)
+add_executable(check_serial_backward check_serial_backward.cu)
 
 # Link against CUDA runtime library
 target_link_libraries(test_forward PUBLIC cuda diffrast)
-target_link_libraries(check_ref_backward PUBLIC cuda diffrast)
+target_link_libraries(check_serial_backward PUBLIC cuda diffrast)
 
 # Include directories for the header-only library
 target_include_directories(test_forward PRIVATE
     ${PROJECT_SOURCE_DIR}/third_party/glm
 )
-target_include_directories(check_ref_backward PRIVATE
+target_include_directories(check_serial_backward PRIVATE
     ${PROJECT_SOURCE_DIR}/third_party/glm
 )
