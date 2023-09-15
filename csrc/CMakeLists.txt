@@ -17,7 +17,7 @@ target_include_directories(diffrast PRIVATE
 set_target_properties(diffrast PROPERTIES CUDA_ARCHITECTURES "70;75;86")
 
 # their library
-set(REF_SOURCE_DIR ${PROJECT_SOURCE_DIR}/reference)
+set(REF_SOURCE_DIR ${PROJECT_SOURCE_DIR}/reference/cuda_rasterizer)
 add_library(CudaRasterizer
     ${REF_SOURCE_DIR}/backward.h
     ${REF_SOURCE_DIR}/backward.cu
