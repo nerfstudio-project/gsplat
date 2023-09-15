@@ -5,7 +5,7 @@
 #include <math.h>
 
 #include "backward.cuh"
-#include "backward_ref.cuh"
+#include "serial_backward.cuh"
 #include "forward.cuh"
 #include "helpers.cuh"
 
