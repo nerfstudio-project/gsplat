@@ -1,9 +1,14 @@
 # diff_rast
-Python package and cuda bindings for differentiable gaussian rasterization
+Our version of differentiable gaussian rasterizer
+
+# ref_rast
+Copied official version of differentiable gaussian rasterizer
+
 # Installation 
 ```
 python3 -m pip install --upgrade pip
-pip install -e .
+cd diff_rast; pip install -e .
+cd ../ref_rast; pip install -e .
 ```
 
 # Brief walkthrough
