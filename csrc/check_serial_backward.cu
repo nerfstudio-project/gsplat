@@ -237,7 +237,7 @@ void compare_cov2d_ewa_backward() {
         {dL_dmean.x, dL_dmean_ref.x},
         {dL_dmean.x, dL_dmean_ref.x},
     };
-    print_errors(dmean_data, "ds (cov2d_ewa)");
+    print_errors(dmean_data, "dmean (cov2d_ewa)");
 
     std::vector<std::pair<float,float>> dcov_data;
     for (int i = 0; i < 6; ++i)
