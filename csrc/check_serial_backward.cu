@@ -152,10 +152,10 @@ void compare_cov3d_backward() {
     }
 
     const bool is_dL_dquat_off {
-        outside_error(dL_dq.x, dL_dq_ref.x) ||
-        outside_error(dL_dq.y, dL_dq_ref.y) ||
-        outside_error(dL_dq.z, dL_dq_ref.z) ||
-        outside_error(dL_dq.w, dL_dq_ref.w)
+        outside_error(dL_dq.x, dL_dq_ref.y) ||
+        outside_error(dL_dq.y, dL_dq_ref.z) ||
+        outside_error(dL_dq.z, dL_dq_ref.w) ||
+        outside_error(dL_dq.w, dL_dq_ref.x)
     };
 
     if (is_dL_dquat_off) {
@@ -167,10 +167,10 @@ void compare_cov3d_backward() {
         printf("ours %.2e %.2e %.2e %.2e\n", dL_dq.x, dL_dq.y, dL_dq.z, dL_dq.w);
         printf(
             "ref  %.2e %.2e %.2e %.2e\n",
-            dL_dq_ref.x,
             dL_dq_ref.y,
             dL_dq_ref.z,
-            dL_dq_ref.w
+            dL_dq_ref.w,
+            dL_dq_ref.x
         );
 
         std::cout << "\n\n";
