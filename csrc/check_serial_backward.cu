@@ -2,7 +2,9 @@
 #include <cstring>
 #include <ctime>
 #include <iostream>
+#include <iomanip>
 #include <math.h>
+#include <vector>
 
 #include "backward.cuh"
 #include "serial_backward.cuh"
@@ -34,9 +36,61 @@ float3 compute_conic(const float3 cov2d) {
     return conic;
 }
 
-bool outside_error (float x, float y, float acceptable_error=1e-6) {
-    return abs(x - y) > acceptable_error;
-};
+float percent_error(float exp_val, float true_val) {
+    return (abs(true_val - exp_val) / true_val ) * 100.f;
+}
+
+// takes a vector of float pairs, where first value is experimental, 
+// and second is true value
+std::vector<float> percent_errors(
+    const std::vector<std::pair<float,float>>& values
+) {
+    std::vector<float> p_errors;
+
+    for (int i = 0; i < values.size(); ++i) {
+        const float exp_val  = values[i].first;
+        const float true_val = values[i].second;
+        const float p_error{ percent_error(exp_val, true_val) };
+        p_errors.push_back(p_error);
+    }
+
+    return p_errors;
+}
+
+// takes a vector of float pairs, where pair's first value is 
+// "experimental value", and second is "true value". If any pair's percent exceeds 
+// error threshold, the entire vector will be displayed in a nice lil format
+void print_errors(
+    const std::vector<std::pair<float,float>>& values,
+    const std::string& name,
+    float error_threshold = 0.01f // percent error (0.01%)
+) {
+    const std::vector<float> p_errors{ percent_errors(values) };
+
+    // only print if input is unexpected
+    bool data_within_error{ true };
+    for (float p : p_errors) 
+        if (p > error_threshold)
+            data_within_error = false;
+
+    if (data_within_error)
+        return;
+
+    // format cout for how we want to display data
+    std::cout << std::setprecision(2);;
+
+    std::cout << name << ":\n"
+        << "     ours:     refs:\n";
+
+    for (int i = 0; i < values.size(); ++i) {
+        const float d1 = values[i].first;
+        const float d2 = values[i].second;
+        std::cout << '[' << i << "]: " << std::scientific
+            << std::setw(10) << d1 << ", " << std::setw(10) << d2
+            << "\t(percent error=" << std::fixed << p_errors[i] << ")\n";
+    }
+    std::cout << '\n';
+}
 
 void compare_project2d_mean_backward() {
     float3 mean = {random_float(), random_float(), random_float()};
@@ -53,27 +107,13 @@ void compare_project2d_mean_backward() {
     float3 dL_dmean = project_pix_vjp(proj, mean, (dim3){1, 1, 1}, dL_dmean2d);
     float3 dL_dmean_ref = projectMean2DBackward(mean, proj, dL_dmean2d);
 
-    const bool is_dL_dmean_off {
-        outside_error(dL_dmean.x, dL_dmean_ref.x) ||
-        outside_error(dL_dmean.y, dL_dmean_ref.y) ||
-        outside_error(dL_dmean.z, dL_dmean_ref.z)
+    // comparison
+    const std::vector<std::pair<float,float>> dmean_data {
+        {dL_dmean.x, dL_dmean_ref.x},
+        {dL_dmean.y, dL_dmean_ref.y},
+        {dL_dmean.z, dL_dmean_ref.z},
     };
-
-    if (is_dL_dmean_off) {
-
-        std::cout << "dL_dmean is off!\n"
-        << "-------------------------------\n";
-
-        printf("project2d backward\n");
-        printf("dL_dmean\n");
-        printf("ours %.2e %.2e %.2e\n", dL_dmean.x, dL_dmean.y, dL_dmean.z);
-        printf(
-            "ref  %.2e %.2e %.2e\n", dL_dmean_ref.x, dL_dmean_ref.y, dL_dmean_ref.z
-        );
-
-        std::cout << "\n\n";
-    }
-
+    print_errors(dmean_data, "dmean (project2d)");
 }
 
 void compare_conic_backward() {
@@ -84,34 +124,13 @@ void compare_conic_backward() {
     cov2d_to_conic_vjp(conic, dL_dconic, dL_dcov2d);
     float3 dL_dcov2d_ref = computeConicBackward(cov2d, dL_dconic);
 
-    // Jonathan Zakharov:
-    // TODO: Figure out why this is sometimes giving false positives
-    //       or why fires off but all values are equal when printed out
-    // IDEA: Maybe there is no bug, just that error thershold is finer
-    //       than the float precision we're displaying
-    const bool is_dL_dcov2d_off {
-        outside_error(dL_dcov2d.x, dL_dcov2d_ref.x) ||
-        outside_error(dL_dcov2d.y, dL_dcov2d_ref.y) ||
-        outside_error(dL_dcov2d.z, dL_dcov2d_ref.z)
+    // comparison
+    const std::vector<std::pair<float,float>> dcov2d_data {
+        {dL_dcov2d.x, dL_dcov2d_ref.x},
+        {dL_dcov2d.y, dL_dcov2d_ref.y},
+        {dL_dcov2d.z, dL_dcov2d_ref.z},
     };
-
-    if (is_dL_dcov2d_off) {
-
-        std::cout << "dL_dcov2d is off!\n" 
-            << "-------------------\n";
-
-        printf("dL_dcov2d\n");
-        printf("ours %.2e %.2e %.2e\n", dL_dcov2d.x, dL_dcov2d.y, dL_dcov2d.z);
-        printf(
-            "ref  %.2e %.2e %.2e\n",
-            dL_dcov2d_ref.x,
-            dL_dcov2d_ref.y,
-            dL_dcov2d_ref.z
-        );
-
-        std::cout << "\n\n";
-    }
-
+    print_errors(dcov2d_data, "dcov2d (conic)");
 }
 
 void compare_cov3d_backward() {
@@ -133,48 +152,21 @@ void compare_cov3d_backward() {
     float4 dL_dq_ref = {0.f, 0.f, 0.f, 0.f};
     computeCov3DBackward(scale, 1.f, quat_ref, dL_dcov3d, dL_ds_ref, dL_dq_ref);
 
-    const bool is_dL_dscale_off {
-        outside_error(dL_ds.x, dL_ds_ref.x) ||
-        outside_error(dL_ds.y, dL_ds_ref.y) ||
-        outside_error(dL_ds.z, dL_ds_ref.z)
+    // comparison
+    const std::vector<std::pair<float,float>> ds_data {
+        {dL_ds.x, dL_ds_ref.x},
+        {dL_ds.y, dL_ds_ref.y},
+        {dL_ds.z, dL_ds_ref.z},
     };
+    print_errors(ds_data, "ds (cov3d)");
 
-    if (is_dL_dscale_off) {
-
-        std::cout << "dL_dscale is off!\n"
-            << "---------------------\n";
-
-        printf("dL_dscale\n");
-        printf("ours %.2e %.2e %.2e\n", dL_ds.x, dL_ds.y, dL_ds.z);
-        printf("ref  %.2e %.2e %.2e\n", dL_ds_ref.x, dL_ds_ref.y, dL_ds_ref.z);
-
-        std::cout << "\n\n";
-    }
-
-    const bool is_dL_dquat_off {
-        outside_error(dL_dq.x, dL_dq_ref.y) ||
-        outside_error(dL_dq.y, dL_dq_ref.z) ||
-        outside_error(dL_dq.z, dL_dq_ref.w) ||
-        outside_error(dL_dq.w, dL_dq_ref.x)
+    const std::vector<std::pair<float,float>> dquat_data {
+        {dL_dq.x, dL_dq_ref.y},
+        {dL_dq.y, dL_dq_ref.z},
+        {dL_dq.z, dL_dq_ref.w},
+        {dL_dq.w, dL_dq_ref.x},
     };
-
-    if (is_dL_dquat_off) {
-
-        std::cout << "dL_dquat is off!\n"
-            << "-----------------\n";
-
-        printf("dL_dquat\n");
-        printf("ours %.2e %.2e %.2e %.2e\n", dL_dq.x, dL_dq.y, dL_dq.z, dL_dq.w);
-        printf(
-            "ref  %.2e %.2e %.2e %.2e\n",
-            dL_dq_ref.y,
-            dL_dq_ref.z,
-            dL_dq_ref.w,
-            dL_dq_ref.x
-        );
-
-        std::cout << "\n\n";
-    }
+    print_errors(dquat_data, "dquat (cov3d)");
 }
 
 void compare_cov2d_ewa_backward() {
@@ -239,48 +231,19 @@ void compare_cov2d_ewa_backward() {
         mean, cov3d, viewmat, 1.f, 1.f, dL_dcov2d, dL_dmean, dL_dcov
     );
     
-    const bool is_dL_dmean_off {
-        outside_error(dL_dmean.x, dL_dmean_ref.x) ||
-        outside_error(dL_dmean.y, dL_dmean_ref.y) ||
-        outside_error(dL_dmean.z, dL_dmean_ref.z)
+    // comparison
+    const std::vector<std::pair<float,float>> dmean_data {
+        {dL_dmean.x, dL_dmean_ref.x},
+        {dL_dmean.x, dL_dmean_ref.x},
+        {dL_dmean.x, dL_dmean_ref.x},
     };
+    print_errors(dmean_data, "ds (cov2d_ewa)");
 
-    //printf("cov2d_ewa backward\n");
-    if (is_dL_dmean_off) {
+    std::vector<std::pair<float,float>> dcov_data;
+    for (int i = 0; i < 6; ++i)
+        dcov_data.push_back({dL_dcov[i], dL_dcov_ref[i]});
 
-        std::cout << "dL_dmean is off!\n"
-            << "-----------------\n";
-
-        printf("dL_dmean\n");
-        printf("ours %.2e %.2e %.2e\n", dL_dmean.x, dL_dmean.y, dL_dmean.z);
-        printf(
-            "ref  %.2e %.2e %.2e\n", dL_dmean_ref.x, dL_dmean_ref.y, dL_dmean_ref.z
-        );
-
-        std::cout << "\n\n";
-    }
-
-    bool is_dL_dcov_off{ false };
-    for (int i = 0; i < 6; ++i) // if any of dL_dcov[i] is off
-        if (outside_error(dL_dcov[i], dL_dcov_ref[i])) {
-            is_dL_dcov_off = true;
-            break;
-        }
-
-    if (is_dL_dcov_off) {   
-        std::cout << "dL_dcov is off!\n"
-            << "-----------------\n";
-
-        printf("dL_dcov\nours ");
-        for (int i = 0; i < 6; ++i)
-            printf("%.2e ", dL_dcov[i]);
-
-        printf("\ntheirs ");
-        for (int i = 0; i < 6; ++i)
-            printf("%.2e ", dL_dcov_ref[i]);
-
-        std::cout << "\n\n";
-    }
+    print_errors(dcov_data, "dcov (cov2d_ewa)");
 }
 
 void compare_rasterize_backward() {
@@ -348,81 +311,31 @@ void compare_rasterize_backward() {
         dL_dc_ref
     );
 
-    //printf("rasterize backward\n");
-    //printf("dL_dout %.2e %.2e %.2e\n", dL_dout[0], dL_dout[1], dL_dout[2]);
+    // comparison
+    std::vector<std::pair<float,float>> drgb_data;
+    for (int i = 0; i < C*N; ++i)
+        drgb_data.push_back({dL_drgb[i], dL_drgb_ref[i]});
+    print_errors(drgb_data, "drgb (rasterize)");
+
+    std::vector<std::pair<float,float>> do_data;
+    for (int i = 0; i < C*N; ++i)
+        do_data.push_back({dL_do[i], dL_do_ref[i]});
+    print_errors(do_data, "do (rasterize)");
+
+    std::vector<std::pair<float,float>> dm_data;
     for (int i = 0; i < N; ++i) {
-        const auto something_went_wrong = [&]() {
-            printf("\n");
-            printf("\n");
-            printf("Something went wrong!");
-            printf("\n");
-            printf("\n");
-            printf("dL_drgb %d\n", i);
-            printf(
-                "ours %.2e %.2e %.2e\n",
-                dL_drgb[C * i + 0],
-                dL_drgb[C * i + 1],
-                dL_drgb[C * i + 2]
-            );
-            printf(
-                "theirs %.2e %.2e %.2e\n",
-                dL_drgb_ref[C * i + 0],
-                dL_drgb_ref[C * i + 1],
-                dL_drgb_ref[C * i + 2]
-            );
-            printf("\n");
-            printf("dL_do %d\n", i);
-            printf("ours %.2e\n", dL_do[i]);
-            printf("theirs %.2e\n", dL_do_ref[i]);
-            printf("\n");
-            printf("dL_dm %d\n", i);
-            printf("ours %.2e %.2e\n", dL_dm[i].x, dL_dm[i].y);
-            printf("theirs %.2e %.2e\n", dL_dm_ref[i].x, dL_dm_ref[i].y);
-            printf("\n");
-            printf("dL_dc %d\n", i);
-            printf("ours %.2e %.2e %.2e\n", dL_dc[i].x, dL_dc[i].y, dL_dc[i].z);
-            printf(
-                "theirs %.2e %.2e %.2e\n",
-                dL_dc_ref[i].x,
-                dL_dc_ref[i].y,
-                dL_dc_ref[i].z
-            );
-            printf("\n");
-        };
-
-        const bool is_dL_drgb_off{
-            outside_error(dL_drgb[C * i + 0], dL_drgb_ref[C * i + 0]) ||
-            outside_error(dL_drgb[C * i + 1], dL_drgb_ref[C * i + 1]) ||
-            outside_error(dL_drgb[C * i + 2], dL_drgb_ref[C * i + 2]) 
-        };
-            
-        const bool is_dL_do_off{
-            outside_error(dL_do[i], dL_do_ref[i])
-        };
-
-        const bool is_dL_dm_off{
-            outside_error(dL_dm[i].x, dL_dm_ref[i].x) ||
-            outside_error(dL_dm[i].y, dL_dm_ref[i].y)
-        };
-
-        const bool is_dL_dc_off{
-            outside_error(dL_dc[i].x, dL_dc_ref[i].x) ||
-            outside_error(dL_dc[i].y, dL_dc_ref[i].y) ||
-            outside_error(dL_dc[i].z, dL_dc_ref[i].z)
-        };
-
-        const bool error_occured{
-            is_dL_drgb_off ||
-            is_dL_do_off   ||
-            is_dL_dm_off   ||
-            is_dL_dc_off
-        };
-
-        if (error_occured) {
-            something_went_wrong();
-            assert(false);
-        }
+        dm_data.push_back({dL_dm[i].x, dL_dm_ref[i].x});
+        dm_data.push_back({dL_dm[i].y, dL_dm_ref[i].y});
     }
+    print_errors(dm_data, "dm (rasterize)");
+
+    std::vector<std::pair<float,float>> dc_data;
+    for (int i = 0; i < N; ++i) {
+        dc_data.push_back({dL_dc[i].x, dL_dc_ref[i].x});
+        dc_data.push_back({dL_dc[i].y, dL_dc_ref[i].y});
+        dc_data.push_back({dL_dc[i].z, dL_dc_ref[i].z});
+    }
+    print_errors(dc_data, "dc (rasterize)");
 }
 
 int main() {
