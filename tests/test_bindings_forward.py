@@ -1,8 +1,7 @@
 """Test against ref bindings
 
 Make sure you have the ref bindings installed:
-    - clone the ref bindings: git clone --recurse-submodules git@github.com:graphdeco-inria/diff-gaussian-rasterization.git
-    - install ref bindings: pip install -e .
+    - install ref bindings: cd ref_rast && pip install -e .
 """
 
 import math
