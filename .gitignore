@@ -119,3 +119,7 @@ venv.bak/
 
 *build
 compile_commands.json
+
+*.png
+*.txt
+*.dump
