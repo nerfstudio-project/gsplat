@@ -318,7 +318,7 @@ void compare_rasterize_backward() {
     print_errors(drgb_data, "drgb (rasterize)");
 
     std::vector<std::pair<float,float>> do_data;
-    for (int i = 0; i < C*N; ++i)
+    for (int i = 0; i < N; ++i)
         do_data.push_back({dL_do[i], dL_do_ref[i]});
     print_errors(do_data, "do (rasterize)");
 
@@ -338,8 +338,12 @@ void compare_rasterize_backward() {
     print_errors(dc_data, "dc (rasterize)");
 }
 
-int main() {
-    for (int x = 0; x < 100000; x++) {
+int main(int argc, char *argv[]) {
+    int num_iters = 1000;
+    if (argc > 1) {
+        num_iters = std::stoi(argv[1]);
+    }
+    for (int x = 0; x < num_iters; x++) {
         std::cout << "<Check " << x << ">\n"
             << "=====================\n";
         compare_project2d_mean_backward();
