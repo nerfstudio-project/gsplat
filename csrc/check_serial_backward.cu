@@ -104,7 +104,7 @@ void compare_project2d_mean_backward() {
     // clang-format on
     float2 dL_dmean2d = {random_float(), random_float()};
 
-    float3 dL_dmean = project_pix_vjp(proj, mean, (dim3){1, 1, 1}, dL_dmean2d);
+    float3 dL_dmean = project_pix_vjp(proj, mean, (dim3){2, 2, 1}, dL_dmean2d);
     float3 dL_dmean_ref = projectMean2DBackward(mean, proj, dL_dmean2d);
 
     // comparison
@@ -246,8 +246,7 @@ void compare_cov2d_ewa_backward() {
     print_errors(dcov_data, "dcov (cov2d_ewa)");
 }
 
-void compare_rasterize_backward() {
-    constexpr int N = 8;
+void compare_rasterize_backward(const int N) {
     float2 p = {0.f, 0.f};
     float T_final = 5e-3;
     constexpr int C = 3;
@@ -343,6 +342,10 @@ int main(int argc, char *argv[]) {
     if (argc > 1) {
         num_iters = std::stoi(argv[1]);
     }
+    int num_points = 8;
+    if (argc > 2) {
+        num_points = std::stoi(argv[2]);
+    }
     for (int x = 0; x < num_iters; x++) {
         std::cout << "<Check " << x << ">\n"
             << "=====================\n";
@@ -350,7 +353,7 @@ int main(int argc, char *argv[]) {
         compare_conic_backward();
         compare_cov3d_backward();
         compare_cov2d_ewa_backward();
-        compare_rasterize_backward();
+        compare_rasterize_backward(num_points);
     }
     return 0;
 }
