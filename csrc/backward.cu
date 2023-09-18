@@ -287,12 +287,12 @@ __host__ __device__ void project_cov3d_ewa_vjp(
     glm::mat3 J = glm::mat3(
         fx * rz,
         0.f,
-        0.f,
+        -fx * t.x * rz2,
         0.f,
         fy * rz,
-        0.f,
-        -fx * t.x * rz2,
         -fy * t.y * rz2,
+        0.f,
+        0.f,
         0.f
     );
 
