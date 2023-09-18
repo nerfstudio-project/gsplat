@@ -276,10 +276,10 @@ int main(int argc, char *argv[]) {
     //     printf("%d unsorted isect %016lx point %03d\n", i,
     //     isect_ids_unsorted[i], gaussian_ids_unsorted[i]);
     // }
-    for (int i = 0; i < num_intersects; ++i) {
-        printf("sorted isect %016lx point %03d\n", isect_ids_sorted[i],
-        gaussian_ids_sorted[i]);
-    }
+    // for (int i = 0; i < num_intersects; ++i) {
+    //     printf("sorted isect %016lx point %03d\n", isect_ids_sorted[i],
+    //     gaussian_ids_sorted[i]);
+    // }
     // cudaMemcpy(tile_bins, tile_bins_d, num_tiles * sizeof(int2),
     // cudaMemcpyDeviceToHost); for (int i = 0; i < num_tiles; ++i) {
     //     printf("tile_bins %d %d %d\t", i, tile_bins[i].x, tile_bins[i].y);
@@ -295,6 +295,12 @@ int main(int argc, char *argv[]) {
     cudaMalloc((void **)&final_idx_d, W * H * sizeof(int));
 
     const float background[3] = {1.0f, 1.0f, 1.0f};
+    float *background_d;
+    cudaMalloc((void **)&background_d, C * sizeof(float));
+    cudaMemcpy(
+        background_d, background, C * sizeof(float), cudaMemcpyHostToDevice
+    );
+
     printf("final rasterize pass\n");
     rasterize_forward_impl (
         tile_bounds,
@@ -310,7 +316,7 @@ int main(int argc, char *argv[]) {
         final_Ts_d,
         final_idx_d,
         out_img_d,
-        background
+        background_d
     );
     cudaMemcpy(
         out_img, out_img_d, C * W * H * sizeof(float), cudaMemcpyDeviceToHost
