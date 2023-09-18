@@ -136,6 +136,18 @@ inline __host__ __device__ glm::mat3 quat_to_rotmat(const float4 quat) {
     float y = quat.y * s;
     float z = quat.z * s;
 
+    float rr = x;
+	float xx = y;
+	float yy = z;
+	float zz = w;
+
+    glm::mat3 R = glm::mat3(
+		1.f - 2.f * (yy * yy + zz * zz), 2.f * (xx * yy - rr * zz), 2.f * (xx * zz + rr * yy),
+		2.f * (xx * yy + rr * zz), 1.f - 2.f * (xx * xx + zz * zz), 2.f * (yy * zz - rr * xx),
+		2.f * (xx * zz - rr * yy), 2.f * (yy * zz + rr * xx), 1.f - 2.f * (xx * xx + yy * yy)
+	);
+
+    return R;
     // glm matrices are column-major
     return glm::mat3(
         1.f - 2.f * (y * y + z * z),
