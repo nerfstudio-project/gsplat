@@ -487,13 +487,15 @@ __host__ __device__ void scale_rot_to_cov3d(
     const float3 scale, const float glob_scale, const float4 quat, float *cov3d
 ) {
     glm::mat3 R = quat_to_rotmat(quat);
-    // printf("R %.2f %.2f %.2f\n", R[0][0], R[1][1], R[2][2]);
+    //printf("R %.2f %.2f %.2f %.2f %.2f %.2f\n", R[0][0], R[1][1], R[2][2], R[0][1],R[0][2],R[1][2]);
     glm::mat3 S = scale_to_mat(scale, glob_scale);
-    // printf("S %.2f %.2f %.2f\n", S[0][0], S[1][1], S[2][2]);
+    //printf("S %.2f %.2f %.2f %.2f %.2f %.2f\n", S[0][0], S[1][1], S[2][2], S[0][1],S[0][2],S[1][2]);
 
-    glm::mat3 M = R * S;
-    glm::mat tmp = M * glm::transpose(M);
-    // printf("tmp %.2f %.2f %.2f\n", tmp[0][0], tmp[1][1], tmp[2][2]);
+    glm::mat3 M = S*R; // changed from S*R
+    //printf("M %.2f %.2f %.2f  %.2f  %.2f  %.2f\n", M[0][0], M[1][1], M[2][2], M[0][1],M[0][2],M[1][2]);
+
+    glm::mat tmp =  glm::transpose(M) * M; // changed from M * M.T
+    //printf("tmp %.2f %.2f %.2f\n", tmp[0][0], tmp[1][1], tmp[2][2]);
 
     // save upper right because symmetric
     cov3d[0] = tmp[0][0];
