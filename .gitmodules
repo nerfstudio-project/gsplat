@@ -1,3 +1,6 @@
 [submodule "csrc/third_party/glm"]
 	path = csrc/third_party/glm
 	url = https://github.com/g-truc/glm.git
+[submodule "csrc/third_party/doctest"]
+	path = csrc/third_party/doctest
+	url = https://github.com/doctest/doctest.git

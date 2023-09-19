@@ -9,8 +9,10 @@
 #include "forward.cuh"
 #include "tgaimage.h"
 
-float random_float() { return (float)std::rand() / RAND_MAX; }
+#define DOCTEST_CONFIG_IMPLEMENT
+#include <doctest/doctest.h>
 
+float random_float() { return (float)std::rand() / RAND_MAX; }
 
 float4 random_quat() {
     float u = random_float();
@@ -24,7 +26,7 @@ float4 random_quat() {
     };
 }
 
-int main(int argc, char *argv[]) {
+void test_forward(int argc, char *argv[]) {
     int num_points = 1000;
     if (argc > 1) {
         num_points = std::stoi(argv[1]);
@@ -276,10 +278,10 @@ int main(int argc, char *argv[]) {
     //     printf("%d unsorted isect %016lx point %03d\n", i,
     //     isect_ids_unsorted[i], gaussian_ids_unsorted[i]);
     // }
-    for (int i = 0; i < num_intersects; ++i) {
-        printf("sorted isect %016lx point %03d\n", isect_ids_sorted[i],
-        gaussian_ids_sorted[i]);
-    }
+    // for (int i = 0; i < num_intersects; ++i) {
+    //     printf("sorted isect %016lx point %03d\n", isect_ids_sorted[i],
+    //     gaussian_ids_sorted[i]);
+    // }
     // cudaMemcpy(tile_bins, tile_bins_d, num_tiles * sizeof(int2),
     // cudaMemcpyDeviceToHost); for (int i = 0; i < num_tiles; ++i) {
     //     printf("tile_bins %d %d %d\t", i, tile_bins[i].x, tile_bins[i].y);
@@ -364,5 +366,29 @@ int main(int argc, char *argv[]) {
     delete[] tile_bins;
     delete[] gaussian_ids_sorted;
     delete[] out_img;
-    return 0;
+}
+
+// doctest example code start
+int factorial(int number) { return number <= 1 ? number : factorial(number - 1) * number; }
+
+TEST_CASE("testing the factorial function") {
+    CHECK(factorial(1) == 1);
+    CHECK(factorial(2) == 2);
+    CHECK(factorial(3) == 6);
+    CHECK(factorial(10) == 3628800);
+    CHECK(factorial(0) == -123);    // intentional failure; remove me to see
+                                    // what passing tests looks like :)
+}
+// doctest example code end
+
+int main(int argc, char *argv[]) {
+
+    // TODO: convert to doctest units tests
+    test_forward(argc, argv);
+
+    doctest::Context context;
+
+    int results = context.run(); // actually run doctest tests
+
+    return results;
 }

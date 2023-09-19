@@ -12,6 +12,7 @@ add_library(librast forward.cu backward.cu helpers.cuh backward_ref.cu)
 target_link_libraries(librast PUBLIC cuda)
 target_include_directories(librast PRIVATE
     ${PROJECT_SOURCE_DIR}/third_party/glm
+    ${PROJECT_SOURCE_DIR}/third_party/doctest
 )
 
 # Add the executable
@@ -26,7 +27,9 @@ target_link_libraries(check_ref_backward PUBLIC cuda librast)
 # Include directories for the header-only library
 target_include_directories(test_forward PRIVATE
     ${PROJECT_SOURCE_DIR}/third_party/glm
+    ${PROJECT_SOURCE_DIR}/third_party/doctest
 )
 target_include_directories(check_ref_backward PRIVATE
     ${PROJECT_SOURCE_DIR}/third_party/glm
+    ${PROJECT_SOURCE_DIR}/third_party/doctest
 )
