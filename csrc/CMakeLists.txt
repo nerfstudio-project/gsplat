@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.12)  # You can adjust the minimum required version
+set(CMAKE_CUDA_ARCHITECTURES 70 75)  # Ti 2080 uses 75. V100 uses 70.
 
 project(diff_rast CXX CUDA)
 set(CMAKE_CXX_STANDARD 17)
