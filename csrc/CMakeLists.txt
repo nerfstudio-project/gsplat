@@ -37,8 +37,8 @@ set_target_properties(CudaRasterizer PROPERTIES CUDA_ARCHITECTURES "70;75;86")
 # Add the executable
 # add_executable(test main.cpp tgaimage.h tgaimage.cpp)
 add_executable(test_forward test_forward.cu tgaimage.cpp)
-add_executable(check_serial_backward check_serial_backward.cu)
-add_executable(check_serial_forward check_serial_forward.cu forward.cu)
+add_executable(check_serial_backward check_serial_backward.cu debug_utils.cpp)
+add_executable(check_serial_forward check_serial_forward.cu forward.cu debug_utils.cpp)
 
 # Link against CUDA runtime library
 target_link_libraries(test_forward PUBLIC cuda diffrast)

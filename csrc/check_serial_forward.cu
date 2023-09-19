@@ -9,6 +9,8 @@
 #include "forward.cuh"
 #include "helpers.cuh"
 
+#include "debug_utils.h"
+
 #include "reference/cuda_rasterizer/forward.cu"
 
 #define DOCTEST_CONFIG_IMPLEMENT
@@ -60,6 +62,14 @@ void compare_cov2d_forward(){
     // ref rast
     float3 res = computeCov2D(mean, fx, fy, tan_fovx, tan_fovy, cov3d, viewmatColumnMajor);
     std::cout<<"ref rast cov2d:  "<<res.x<<" "<<res.y<<" "<<res.z<<std::endl;
+
+
+    const std::vector<std::pair<float,float>> cov2d_data {
+        {diff_rast_cov2d.x, res.x},
+        {diff_rast_cov2d.y, res.y},
+        {diff_rast_cov2d.z, res.z},
+    };
+    print_errors(cov2d_data, "diff_rast_cov2d (cov2d_forward)");
 }
 
 void compare_scale_rot_to_cov3d(){
@@ -80,6 +90,13 @@ void compare_scale_rot_to_cov3d(){
     float* ref_cov3d = new float[6 * num_points];
     computeCov3D(glm::vec3({scale.x,scale.y,scale.z}), glob_scale, glm::vec4({quat.x, quat.y, quat.z, quat.w}), ref_cov3d);
     std::cout << "ref rast cov3d: " <<ref_cov3d[0]<<" "<<ref_cov3d[1]<<" "<<ref_cov3d[2]<<std::endl;
+
+
+    std::vector<std::pair<float,float>> cov3d_data;
+    for (int i = 0; i < 3; ++i)   // Jonathan: is this supposed to just go to 3?
+        cov3d_data.push_back({cov3d[i], ref_cov3d[i]});
+
+    print_errors(cov3d_data, "diff rast cov3d (scale_rot_to_cov3d)");
 }
 
 // doctest example code start
@@ -100,9 +117,10 @@ int main(){
     compare_cov2d_forward();
     compare_scale_rot_to_cov3d();
 
+    // todo: write doctest tests
     doctest::Context context;
 
-    int results = context.run(); // actually run doctest tests
+    int results = context.run();    // runs tests
 
     return results;
 }
