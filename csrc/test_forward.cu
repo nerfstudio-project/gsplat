@@ -25,7 +25,8 @@ float4 random_quat() {
 }
 
 int main(int argc, char *argv[]) {
-    int num_points = 1000;
+    int num_points = 256;
+    int n = 16;
     if (argc > 1) {
         num_points = std::stoi(argv[1]);
     }
@@ -59,6 +60,7 @@ int main(int argc, char *argv[]) {
     float4 *quats = new float4[num_points];
     float *rgbs = new float[C * num_points];
     float *opacities = new float[num_points];
+    // world to camera matrix
     float viewmat[] = {
         1.f,
         0.f,
@@ -79,29 +81,51 @@ int main(int argc, char *argv[]) {
 
     // random initialization of gaussians
     std::srand(std::time(nullptr));
-    for (int i = 0; i < num_points; ++i) {
-        if (rand) {
-            means[i] = {
-                bd * (random_float() - 0.5f),
-                bd * (random_float() - 0.5f),
-                bd * (random_float() - 0.5f)
-            };
-            scales[i] = {random_float(), random_float(), random_float()};
-            for (int c = 0; c < C; ++c) {
-                rgbs[C * i + c] = random_float();
-            }
-            quats[i] = random_quat();
-        } else {
+    if (rand) {
+        for (int i = 0; i < num_points; ++i) {
             float v = (float)i - (float)num_points * 0.5f;
             means[i] = {v * 0.1f, v * 0.1f, (float)i};
+            printf("%d, %.2f %.2f %.2f\n", i, means[i].x, means[i].y, means[i].z);
             scales[i] = {1.f, 0.5f, 1.f};
             for (int c = 0; c < C; ++c) {
                 rgbs[C * i + c] = (float)(i % C == c);
             }
-            quats[i] = {1.f, 0.f, 0.f, 0.f};  // w x y z convention
+            quats[i] = {1.f, 0.f, 0.f, 0.f};
+            opacities[i] = 0.9f;
         }
-
-        opacities[i] = 0.9f;
+        // for (int i = 0; i < num_points; ++i) {
+        //     means[i] = {
+        //         bd * (random_float() - 0.5f),
+        //         bd * (random_float() - 0.5f),
+        //         bd * (random_float() - 0.5f)
+        //     };
+        //     printf("%d, %.2f %.2f %.2f\n", i, means[i].x, means[i].y, means[i].z);
+        //     scales[i] = {random_float(), random_float(), random_float()};
+        //     for (int c = 0; c < C; ++c) {
+        //         rgbs[C * i + c] = random_float();
+        //     }
+        //     quat();
+        //     opacities[i] = 0.9f;
+        // }
+    } else {
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j < n; ++j) {
+                int idx = n * i + j;
+                float x = 2.f * ((float) j / (float) n - 0.5f);
+                float y = 2.f * ((float) i / (float) n - 0.5f);
+                // float z = 2.f * (float) idx / (float) num_points;
+                float z = 2.f;
+                means[idx] = {x, y, z};
+                printf("%d, %.2f %.2f %.2f\n", idx, x, y, z);
+                scales[idx] = {1.f, 1.f, 1.f};
+                for (int c = 0; c < C; ++c) {
+                    // rgbs[C * idx + c] = (float)(i % C == c);
+                    rgbs[C * i + c] = random_float();
+                }
+                quats[idx] = {0.f, 0.f, 0.f, 1.f};  // w x y z convention
+                opacities[idx] = 0.9f;
+            }
+        }
     }
 
     float3 *scales_d, *means_d;
