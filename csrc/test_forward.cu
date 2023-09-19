@@ -85,7 +85,7 @@ int main(int argc, char *argv[]) {
     if (mode == 0) {
         for (int i = 0; i < num_points; ++i) {
             float v = (float)i - (float)num_points * 0.5f;
-            means[i] = {v * 0.1f, v * 0.1f, (float)i};
+            means[i] = {v * 0.1f, v * 0.1f, (float)i * 0.1f};
             printf("%d, %.2f %.2f %.2f\n", i, means[i].x, means[i].y, means[i].z);
             scales[i] = {1.f, 0.5f, 1.f};
             for (int c = 0; c < C; ++c) {
@@ -113,8 +113,8 @@ int main(int argc, char *argv[]) {
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j < n; ++j) {
                 int idx = n * i + j;
-                float x = 2.f * ((float) j / (float) n - 0.5f) + 0.1f * random_float();
-                float y = 2.f * ((float) i / (float) n - 0.5f) + 0.1f * random_float();
+                float x = 2.f * ((float) j / (float) n - 0.5f);
+                float y = 2.f * ((float) i / (float) n - 0.5f);
                 // float z = 2.f * (float) idx / (float) num_points;
                 float z = 5.f + random_float();
                 // float z = (float) idx;

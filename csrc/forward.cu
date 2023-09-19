@@ -347,7 +347,7 @@ __global__ void rasterize_forward_kernel(
     // iterate over all gaussians and apply rendering EWA equation (e.q. 2 from paper)
     int idx;
     int32_t g;
-    for (idx = 0; idx < range.y; ++idx) {
+    for (idx = range.x; idx < range.y; ++idx) {
         g = gaussian_ids_sorted[idx];
         conic = conics[g];
         center = xys[g];
