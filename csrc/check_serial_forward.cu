@@ -11,6 +11,9 @@
 
 #include "reference/cuda_rasterizer/forward.cu"
 
+#define DOCTEST_CONFIG_IMPLEMENT
+#include <doctest/doctest.h>
+
 float random_float() { return (float)std::rand() / RAND_MAX; }
 
 float4 random_quat() {
@@ -79,8 +82,27 @@ void compare_scale_rot_to_cov3d(){
     std::cout << "ref rast cov3d: " <<ref_cov3d[0]<<" "<<ref_cov3d[1]<<" "<<ref_cov3d[2]<<std::endl;
 }
 
+// doctest example code start
+int factorial(int number) { return number <= 1 ? number : factorial(number - 1) * number; }
+
+TEST_CASE("testing the factorial function") {
+    CHECK(factorial(1) == 1);
+    CHECK(factorial(2) == 2);
+    CHECK(factorial(3) == 6);
+    CHECK(factorial(10) == 3628800);
+    CHECK(factorial(0) == -123);    // intentional failure; remove me to see
+                                    // what passing tests looks like :)
+}
+// doctest example code end
 
 int main(){
+
     compare_cov2d_forward();
     compare_scale_rot_to_cov3d();
+
+    doctest::Context context;
+
+    int results = context.run(); // actually run doctest tests
+
+    return results;
 }

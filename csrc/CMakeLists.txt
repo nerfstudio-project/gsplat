@@ -13,6 +13,7 @@ target_link_libraries(diffrast PUBLIC cuda)
 target_include_directories(diffrast PRIVATE
     ${PROJECT_SOURCE_DIR}/third_party/glm
     ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}
+    ${PROJECT_SOURCE_DIR}/third_party/doctest
 )
 set_target_properties(diffrast PROPERTIES CUDA_ARCHITECTURES "70;75;86")
 
@@ -47,10 +48,13 @@ target_link_libraries(check_serial_forward PUBLIC cuda diffrast CudaRasterizer)
 # Include directories for the header-only library
 target_include_directories(test_forward PRIVATE
     ${PROJECT_SOURCE_DIR}/third_party/glm
+    ${PROJECT_SOURCE_DIR}/third_party/doctest
 )
 target_include_directories(check_serial_backward PRIVATE
     ${PROJECT_SOURCE_DIR}/third_party/glm
+    ${PROJECT_SOURCE_DIR}/third_party/doctest
 )
 target_include_directories(check_serial_forward PRIVATE
     ${PROJECT_SOURCE_DIR}/third_party/glm
+    ${PROJECT_SOURCE_DIR}/third_party/doctest
 )
