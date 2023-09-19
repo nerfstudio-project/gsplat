@@ -71,25 +71,31 @@ __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const 
 }
 
 // Forward version of 2D covariance matrix computation
-__device__ float3 computeCov2D(const float3& mean, float focal_x, float focal_y, float tan_fovx, float tan_fovy, const float* cov3D, const float* viewmatrix)
+__host__ __device__ float3 computeCov2D(const float3& mean, float focal_x, float focal_y, float tan_fovx, float tan_fovy, const float* cov3D, const float* viewmatrix)
 {
 	// The following models the steps outlined by equations 29
 	// and 31 in "EWA Splatting" (Zwicker et al., 2002). 
 	// Additionally considers aspect / scaling of viewport.
 	// Transposes used to account for row-/column-major conventions.
 	float3 t = transformPoint4x3(mean, viewmatrix);
+    // printf("ref %f %f %f\n", t.x, t.y, t.z);
 
-	const float limx = 1.3f * tan_fovx;
-	const float limy = 1.3f * tan_fovy;
+    const float limx = 1.3f * tan_fovx;
+    const float limy = 1.3f * tan_fovy;
 	const float txtz = t.x / t.z;
 	const float tytz = t.y / t.z;
 	t.x = min(limx, max(-limx, txtz)) * t.z;
 	t.y = min(limy, max(-limy, tytz)) * t.z;
+    // printf("ref clipped %f %f %f\n", t.x, t.y, t.z);
 
 	glm::mat3 J = glm::mat3(
 		focal_x / t.z, 0.0f, -(focal_x * t.x) / (t.z * t.z),
 		0.0f, focal_y / t.z, -(focal_y * t.y) / (t.z * t.z),
 		0, 0, 0);
+    // printf("ref J\n %f %f %f\n %f %f %f\n",
+    //     J[0][0], J[1][0], J[2][0],
+    //     J[0][1], J[1][1], J[2][1]
+    // );
 
 	glm::mat3 W = glm::mat3(
 		viewmatrix[0], viewmatrix[4], viewmatrix[8],
@@ -98,12 +104,28 @@ __device__ float3 computeCov2D(const float3& mean, float focal_x, float focal_y,
 
 	glm::mat3 T = W * J;
 
+    // printf("ref T\n %f %f %f\n %f %f %f\n %f %f %f\n",
+    //     T[0][0], T[1][0], T[2][0],
+    //     T[0][1], T[1][1], T[2][1],
+    //     T[0][2], T[1][2], T[2][2]
+    // );
+
 	glm::mat3 Vrk = glm::mat3(
 		cov3D[0], cov3D[1], cov3D[2],
 		cov3D[1], cov3D[3], cov3D[4],
 		cov3D[2], cov3D[4], cov3D[5]);
 
+    // printf("ref Vrk\n %f %f %f\n %f %f %f\n %f %f %f\n",
+    //     Vrk[0][0], Vrk[1][0], Vrk[2][0],
+    //     Vrk[0][1], Vrk[1][1], Vrk[2][1],
+    //     Vrk[0][2], Vrk[1][2], Vrk[2][2]
+    // );
 	glm::mat3 cov = glm::transpose(T) * glm::transpose(Vrk) * T;
+    // printf("ref cov\n %f %f %f\n %f %f %f\n %f %f %f\n",
+    //     cov[0][0], cov[1][0], cov[2][0],
+    //     cov[0][1], cov[1][1], cov[2][1],
+    //     cov[0][2], cov[1][2], cov[2][2]
+    // );
 
 	// Apply low-pass filter: every Gaussian should be at least
 	// one pixel wide/high. Discard 3rd row and column.
@@ -115,7 +137,7 @@ __device__ float3 computeCov2D(const float3& mean, float focal_x, float focal_y,
 // Forward method for converting scale and rotation properties of each
 // Gaussian to a 3D covariance matrix in world space. Also takes care
 // of quaternion normalization.
-__device__ void computeCov3D(const glm::vec3 scale, float mod, const glm::vec4 rot, float* cov3D)
+__host__ __device__ void computeCov3D(const glm::vec3 scale, float mod, const glm::vec4 rot, float* cov3D)
 {
 	// Create scaling matrix
 	glm::mat3 S = glm::mat3(1.0f);

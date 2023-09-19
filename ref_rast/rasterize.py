@@ -311,13 +311,21 @@ if __name__ == "__main__":
 
     device = torch.device("cuda:0")
     num_points = 256
-    means3d = torch.randn((num_points, 3), device=device, requires_grad=True)
+    n = 16
+    # means3d = torch.randn((num_points, 3), device=device, requires_grad=True)
+    linspace = torch.linspace(-1, 1, n, device=device)
+    x, y = torch.meshgrid(linspace, linspace)
+    z = torch.linspace(0, 1, num_points, device=device)
+    print(x.shape, y.shape, z.shape)
+    means3d = torch.stack([x.flatten(), y.flatten(), z], dim=-1)
+    print(means3d.shape)
     means2d = torch.zeros((num_points, 2), device=device)
     sh = torch.zeros((num_points, 1), device=device)
     opacities = torch.ones((num_points, 1), device=device)
     colors = torch.rand((num_points, 3), device=device)
     covs3d = torch.zeros((num_points, 6), device=device)
-    scales = torch.rand((num_points, 3), device=device)
+    # scales = torch.rand((num_points, 3), device=device)
+    scales = torch.ones((num_points, 3), device=device)
     quats = torch.randn((num_points, 4), device=device)
     quats /= torch.linalg.norm(quats, dim=-1, keepdim=True)
 
@@ -332,7 +340,7 @@ if __name__ == "__main__":
     img_width = 256
     tanfovx = 0.5 * img_width / fx
     tanfovy = 0.5 * img_height / fy
-    bg = torch.zeros(3, device=device)
+    bg = torch.ones(3, device=device)
     scale_modifier = 1.0
 
     settings = GaussianRasterizationSettings(

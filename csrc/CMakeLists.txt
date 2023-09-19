@@ -38,15 +38,20 @@ set_target_properties(CudaRasterizer PROPERTIES CUDA_ARCHITECTURES "70;75;86")
 # add_executable(test main.cpp tgaimage.h tgaimage.cpp)
 add_executable(test_forward test_forward.cu tgaimage.cpp)
 add_executable(check_serial_backward check_serial_backward.cu)
+add_executable(check_serial_forward check_serial_forward.cu forward.cu)
 
 # Link against CUDA runtime library
 target_link_libraries(test_forward PUBLIC cuda diffrast)
 target_link_libraries(check_serial_backward PUBLIC cuda diffrast)
+target_link_libraries(check_serial_forward PUBLIC cuda diffrast CudaRasterizer)
 
 # Include directories for the header-only library
 target_include_directories(test_forward PRIVATE
     ${PROJECT_SOURCE_DIR}/third_party/glm
 )
 target_include_directories(check_serial_backward PRIVATE
+    ${PROJECT_SOURCE_DIR}/third_party/glm
+)
+target_include_directories(check_serial_forward PRIVATE
     ${PROJECT_SOURCE_DIR}/third_party/glm
 )

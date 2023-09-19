@@ -55,7 +55,7 @@ __forceinline__ __device__ void getRect(const float2 p, int max_radius, uint2& r
 	};
 }
 
-__forceinline__ __device__ float3 transformPoint4x3(const float3& p, const float* matrix)
+__forceinline__ __host__ __device__ float3 transformPoint4x3(const float3& p, const float* matrix)
 {
 	float3 transformed = {
 		matrix[0] * p.x + matrix[4] * p.y + matrix[8] * p.z + matrix[12],
@@ -65,7 +65,7 @@ __forceinline__ __device__ float3 transformPoint4x3(const float3& p, const float
 	return transformed;
 }
 
-__forceinline__ __device__ float4 transformPoint4x4(const float3& p, const float* matrix)
+__forceinline__ __host__ __device__ float4 transformPoint4x4(const float3& p, const float* matrix)
 {
 	float4 transformed = {
 		matrix[0] * p.x + matrix[4] * p.y + matrix[8] * p.z + matrix[12],
