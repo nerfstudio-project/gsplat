@@ -347,7 +347,7 @@ __global__ void rasterize_forward_kernel(
     // iterate over all gaussians and apply rendering EWA equation (e.q. 2 from paper)
     int idx;
     int32_t g;
-    for (idx = 0; idx < range.y; ++idx) {
+    for (idx = range.x; idx < range.y; ++idx) {
         g = gaussian_ids_sorted[idx];
         conic = conics[g];
         center = xys[g];
@@ -445,6 +445,7 @@ __host__ __device__ float3 project_cov3d_ewa(
     );
     glm::vec3 p = glm::vec3(viewmat[3], viewmat[7], viewmat[11]);
     glm::vec3 t = W * glm::vec3(mean3d.x, mean3d.y, mean3d.z) + p;
+    // printf("ours %f %f %f\n", t[0], t[1], t[2]);
     float rz = 1.f / t.z;
     float rz2 = rz * rz;
 
@@ -462,8 +463,19 @@ __host__ __device__ float3 project_cov3d_ewa(
         0.f
     );
 
+    // printf("ours J\n %f %f %f\n %f %f %f\n",
+    //     J[0][0], J[1][0], J[2][0],
+    //     J[0][1], J[1][1], J[2][1]
+    // );
+
+
     glm::mat3 T = J * W;
 
+    // printf("ours T\n %f %f %f\n %f %f %f\n %f %f %f\n",
+    //     T[0][0], T[1][0], T[2][0],
+    //     T[0][1], T[1][1], T[2][1],
+    //     T[0][2], T[1][2], T[2][2]
+    // );
     glm::mat3 V = glm::mat3(
         cov3d[0],
         cov3d[1],
@@ -475,8 +487,18 @@ __host__ __device__ float3 project_cov3d_ewa(
         cov3d[4],
         cov3d[5]
     );
+    // printf("ours V\n %f %f %f\n %f %f %f\n %f %f %f\n",
+    //     V[0][0], V[1][0], V[2][0],
+    //     V[0][1], V[1][1], V[2][1],
+    //     V[0][2], V[1][2], V[2][2]
+    // );
 
     glm::mat3 cov = T * V * glm::transpose(T);
+    // printf("ours cov\n %f %f %f\n %f %f %f\n %f %f %f\n",
+    //     cov[0][0], cov[1][0], cov[2][0],
+    //     cov[0][1], cov[1][1], cov[2][1],
+    //     cov[0][2], cov[1][2], cov[2][2]
+    // );
     // add a little blur along axes and save upper triangular elements
     return (float3
     ){float(cov[0][0]) + 0.3f, float(cov[0][1]), float(cov[1][1]) + 0.3f};

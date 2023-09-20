@@ -25,7 +25,8 @@ float4 random_quat() {
 }
 
 int main(int argc, char *argv[]) {
-    int num_points = 1000;
+    int num_points = 256;
+    int n = 16;
     if (argc > 1) {
         num_points = std::stoi(argv[1]);
     }
@@ -37,10 +38,11 @@ int main(int argc, char *argv[]) {
     }
     printf("using scene bounds %.2f\n", bd);
 
-    bool rand = true;
+    int mode = 0;
     if (argc > 3) {  // debug
-        rand = false;
+        mode = std::stoi(argv[3]);
     }
+    printf("%d mode\n", mode);
     const float fov_x = M_PI / 2.f;
     const int W = 512;
     const int H = 512;
@@ -59,6 +61,7 @@ int main(int argc, char *argv[]) {
     float4 *quats = new float4[num_points];
     float *rgbs = new float[C * num_points];
     float *opacities = new float[num_points];
+    // world to camera matrix
     float viewmat[] = {
         1.f,
         0.f,
@@ -79,29 +82,53 @@ int main(int argc, char *argv[]) {
 
     // random initialization of gaussians
     std::srand(std::time(nullptr));
-    for (int i = 0; i < num_points; ++i) {
-        if (rand) {
+    if (mode == 0) {
+        for (int i = 0; i < num_points; ++i) {
+            float v = (float)i - (float)num_points * 0.5f;
+            means[i] = {v * 0.1f, v * 0.1f, (float)i * 0.1f};
+            printf("%d, %.2f %.2f %.2f\n", i, means[i].x, means[i].y, means[i].z);
+            scales[i] = {1.f, 0.5f, 1.f};
+            for (int c = 0; c < C; ++c) {
+                rgbs[C * i + c] = (float)(i % C == c);
+            }
+            quats[i] = {1.f, 0.f, 0.f, 0.f};
+            opacities[i] = 0.9f;
+        }
+    } else if (mode == 1) {
+        for (int i = 0; i < num_points; ++i) {
             means[i] = {
                 bd * (random_float() - 0.5f),
                 bd * (random_float() - 0.5f),
                 bd * (random_float() - 0.5f)
             };
+            printf("%d, %.2f %.2f %.2f\n", i, means[i].x, means[i].y, means[i].z);
             scales[i] = {random_float(), random_float(), random_float()};
             for (int c = 0; c < C; ++c) {
                 rgbs[C * i + c] = random_float();
             }
-            quats[i] = random_quat();
-        } else {
-            float v = (float)i - (float)num_points * 0.5f;
-            means[i] = {v * 0.1f, v * 0.1f, (float)i};
-            scales[i] = {1.f, 0.5f, 1.f};
-            for (int c = 0; c < C; ++c) {
-                rgbs[C * i + c] = (float)(i % C == c);
-            }
-            quats[i] = {1.f, 0.f, 0.f, 0.f};  // w x y z convention
+            quats[i] = {1.f, 0.f, 0.f, 0.f};
+            opacities[i] = 0.9f;
         }
-
-        opacities[i] = 0.9f;
+    } else {
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j < n; ++j) {
+                int idx = n * i + j;
+                float x = 2.f * ((float) j / (float) n - 0.5f);
+                float y = 2.f * ((float) i / (float) n - 0.5f);
+                // float z = 2.f * (float) idx / (float) num_points;
+                float z = 5.f + random_float();
+                // float z = (float) idx;
+                means[idx] = {x, y, z};
+                printf("%d, %.2f %.2f %.2f\n", idx, x, y, z);
+                scales[idx] = {0.5f, 0.5f, 0.5f};
+                for (int c = 0; c < C; ++c) {
+                    // rgbs[C * idx + c] = (float)(i % C == c);
+                    rgbs[C * idx + c] = random_float();
+                }
+                quats[idx] = {0.f, 0.f, 0.f, 1.f};  // w x y z convention
+                opacities[idx] = 0.9f;
+            }
+        }
     }
 
     float3 *scales_d, *means_d;
@@ -276,10 +303,10 @@ int main(int argc, char *argv[]) {
     //     printf("%d unsorted isect %016lx point %03d\n", i,
     //     isect_ids_unsorted[i], gaussian_ids_unsorted[i]);
     // }
-    for (int i = 0; i < num_intersects; ++i) {
-        printf("sorted isect %016lx point %03d\n", isect_ids_sorted[i],
-        gaussian_ids_sorted[i]);
-    }
+    // for (int i = 0; i < num_intersects; ++i) {
+    //     printf("sorted isect %016lx point %03d\n", isect_ids_sorted[i],
+    //     gaussian_ids_sorted[i]);
+    // }
     // cudaMemcpy(tile_bins, tile_bins_d, num_tiles * sizeof(int2),
     // cudaMemcpyDeviceToHost); for (int i = 0; i < num_tiles; ++i) {
     //     printf("tile_bins %d %d %d\t", i, tile_bins[i].x, tile_bins[i].y);
@@ -294,7 +321,14 @@ int main(int argc, char *argv[]) {
     cudaMalloc((void **)&final_Ts_d, W * H * sizeof(float));
     cudaMalloc((void **)&final_idx_d, W * H * sizeof(int));
 
-    const float background[3] = {1.0f, 1.0f, 1.0f};
+    // const float background[3] = {1.0f, 1.0f, 1.0f};
+    const float background[3] = {0.0f, 0.0f, 0.0f};
+    float *background_d;
+    cudaMalloc((void **)&background_d, C * sizeof(float));
+    cudaMemcpy(
+        background_d, background, C * sizeof(float), cudaMemcpyHostToDevice
+    );
+
     printf("final rasterize pass\n");
     rasterize_forward_impl (
         tile_bounds,
@@ -310,7 +344,7 @@ int main(int argc, char *argv[]) {
         final_Ts_d,
         final_idx_d,
         out_img_d,
-        background
+        background_d
     );
     cudaMemcpy(
         out_img, out_img_d, C * W * H * sizeof(float), cudaMemcpyDeviceToHost

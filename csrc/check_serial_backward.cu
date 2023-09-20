@@ -136,7 +136,8 @@ void compare_conic_backward() {
 void compare_cov3d_backward() {
     float3 scale = {random_float(), random_float(), random_float()};
     float4 quat = random_quat();
-    float4 quat_ref = {quat.w, quat.x, quat.y, quat.z};
+    float4 quat_ref = quat;
+    // float4 quat_ref = {quat.w, quat.x, quat.y, quat.z};
     float dL_dcov3d[] = {
         random_float(),
         random_float(),
@@ -161,10 +162,14 @@ void compare_cov3d_backward() {
     print_errors(ds_data, "ds (cov3d)");
 
     const std::vector<std::pair<float,float>> dquat_data {
-        {dL_dq.x, dL_dq_ref.y},
-        {dL_dq.y, dL_dq_ref.z},
-        {dL_dq.z, dL_dq_ref.w},
-        {dL_dq.w, dL_dq_ref.x},
+        // {dL_dq.x, dL_dq_ref.y},
+        // {dL_dq.y, dL_dq_ref.z},
+        // {dL_dq.z, dL_dq_ref.w},
+        // {dL_dq.w, dL_dq_ref.x},
+        {dL_dq.x, dL_dq_ref.x},
+        {dL_dq.y, dL_dq_ref.y},
+        {dL_dq.z, dL_dq_ref.z},
+        {dL_dq.w, dL_dq_ref.w},
     };
     print_errors(dquat_data, "dquat (cov3d)");
 }

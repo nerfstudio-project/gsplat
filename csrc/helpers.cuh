@@ -8,7 +8,7 @@ inline __host__ __device__ float ndc2pix(const float x, const float W) {
     return 0.5 * ((1.f + x) * W - 1.f);
 }
 
-inline __device__ void get_bbox(
+inline __host__ __device__ void get_bbox(
     const float2 center,
     const float2 dims,
     const dim3 img_size,
@@ -24,13 +24,14 @@ inline __device__ void get_bbox(
     bb_max.y = min(max(0, (int)(center.y + dims.y + 1)), img_size.y);
 }
 
-inline __device__ void get_tile_bbox(
+inline __host__ __device__ void get_tile_bbox(
     const float2 pix_center,
     const float pix_radius,
     const dim3 tile_bounds,
     uint2 &tile_min,
     uint2 &tile_max
 ) {
+    // gets gaussian dimensions in tile space, i.e. the span of a gaussian in tile_grid (image divided into tiles)
     float2 tile_center = {
         pix_center.x / (float)BLOCK_X, pix_center.y / (float)BLOCK_Y};
     float2 tile_radius = {
@@ -131,10 +132,10 @@ inline __host__ __device__ glm::mat3 quat_to_rotmat(const float4 quat) {
     float s = rsqrtf(
         quat.w * quat.w + quat.x * quat.x + quat.y * quat.y + quat.z * quat.z
     );
-    float w = quat.w * s;
-    float x = quat.x * s;
-    float y = quat.y * s;
-    float z = quat.z * s;
+    float w = quat.x * s;
+    float x = quat.y * s;
+    float y = quat.z * s;
+    float z = quat.w * s;
 
     float rr = x;
 	float xx = y;
@@ -167,31 +168,39 @@ quat_to_rotmat_vjp(const float4 quat, const glm::mat3 v_R) {
     float s = rsqrtf(
         quat.w * quat.w + quat.x * quat.x + quat.y * quat.y + quat.z * quat.z
     );
-    float w = quat.w * s;
-    float x = quat.x * s;
-    float y = quat.y * s;
-    float z = quat.z * s;
+    float w = quat.x * s;
+    float x = quat.y * s;
+    float y = quat.z * s;
+    float z = quat.w * s;
 
     float4 v_quat;
     // v_R is COLUMN MAJOR
-    v_quat.w = 2.f * (
+    // w element stored in x field
+    v_quat.x = 2.f * (
+    // v_quat.w = 2.f * (
         x * (v_R[1][2] - v_R[2][1])
         + y * (v_R[2][0] - v_R[0][2])
         + z * (v_R[0][1] - v_R[1][0])
     );
-    v_quat.x = 2.f * (
+    // x element in y field
+    v_quat.y = 2.f * (
+    // v_quat.x = 2.f * (
         -2.f * x * (v_R[1][1] + v_R[2][2])
         + y * (v_R[0][1] + v_R[1][0])
         + z * (v_R[0][2] + v_R[2][0])
         + w * (v_R[1][2] - v_R[2][1])
     );
-    v_quat.y = 2.f * (
+    // y element in z field
+    v_quat.z = 2.f * (
+    // v_quat.y = 2.f * (
         x * (v_R[0][1] + v_R[1][0])
         - 2.f * y * (v_R[0][0] + v_R[2][2])
         + z * (v_R[1][2] + v_R[2][1])
         + w * (v_R[2][0] - v_R[0][2])
     );
-    v_quat.z = 2.f * (
+    // z element in w field
+    v_quat.w = 2.f * (
+    // v_quat.z = 2.f * (
         x * (v_R[0][2] + v_R[2][0])
         + y * (v_R[1][2] + v_R[2][1])
         - 2.f * z * (v_R[0][0] + v_R[1][1])
@@ -210,7 +219,7 @@ scale_to_mat(const float3 scale, const float glob_scale) {
 }
 
 // device helper for culling near points
-inline __device__ bool
+inline __host__ __device__ bool
 clip_near_plane(const float3 p, const float *viewmat, float3 &p_view) {
     p_view = transform_4x3(viewmat, p);
     if (p_view.z <= 0.1f) {
