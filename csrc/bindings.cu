@@ -1,14 +1,14 @@
 #include "backward.cuh"
 #include "bindings.h"
 #include "helpers.cuh"
+#include "third_party/glm/glm/glm.hpp"
+#include "third_party/glm/glm/gtc/type_ptr.hpp"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 #include <cstdio>
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
-#include <glm/glm.hpp>
-#include <glm/gtc/type_ptr.hpp>
 #include <iostream>
 #include <math.h>
 #include <torch/extension.h>
