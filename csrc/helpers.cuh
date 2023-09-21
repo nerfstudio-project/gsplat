@@ -8,7 +8,7 @@ inline __host__ __device__ float ndc2pix(const float x, const float W) {
     return 0.5 * ((1.f + x) * W - 1.f);
 }
 
-inline __device__ void get_bbox(
+inline __host__ __device__ void get_bbox(
     const float2 center,
     const float2 dims,
     const dim3 img_size,
@@ -24,13 +24,14 @@ inline __device__ void get_bbox(
     bb_max.y = min(max(0, (int)(center.y + dims.y + 1)), img_size.y);
 }
 
-inline __device__ void get_tile_bbox(
+inline __host__ __device__ void get_tile_bbox(
     const float2 pix_center,
     const float pix_radius,
     const dim3 tile_bounds,
     uint2 &tile_min,
     uint2 &tile_max
 ) {
+    // gets gaussian dimensions in tile space, i.e. the span of a gaussian in tile_grid (image divided into tiles)
     float2 tile_center = {
         pix_center.x / (float)BLOCK_X, pix_center.y / (float)BLOCK_Y};
     float2 tile_radius = {
@@ -206,7 +207,7 @@ scale_to_mat(const float3 scale, const float glob_scale) {
 }
 
 // device helper for culling near points
-inline __device__ bool
+inline __host__ __device__ bool
 clip_near_plane(const float3 p, const float *viewmat, float3 &p_view) {
     p_view = transform_4x3(viewmat, p);
     if (p_view.z <= 0.1f) {
