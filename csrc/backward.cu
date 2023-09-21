@@ -56,9 +56,9 @@ __global__ void rasterize_backward_kernel(
         center = xys[g];
         delta = {center.x - px, center.y - py};
         sigma =
-            0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) -
+            0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
             conic.y * delta.x * delta.y;
-        if (sigma <= 0.f) {
+        if (sigma < 0.f) {
             continue;
         }
         opac = opacities[g];

@@ -356,9 +356,9 @@ __global__ void rasterize_forward_kernel(
         // Mahalanobis distance (here referred to as sigma) measures how many standard deviations away distance delta is. 
         // sigma = -0.5(d.T * conic * d)
         sigma =
-            0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) -
+            0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
             conic.y * delta.x * delta.y;
-        if (sigma <= 0.f) {
+        if (sigma < 0.f) {
             continue;
         }
         opac = opacities[g];
