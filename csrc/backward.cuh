@@ -39,6 +39,7 @@ void rasterize_backward_impl(
     const float3 *conics,
     const float *rgbs,
     const float *opacities,
+    const float *background,
     const float *final_Ts,
     const int *final_index,
     const float *v_output,

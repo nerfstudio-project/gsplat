@@ -14,6 +14,7 @@ __global__ void rasterize_backward_kernel(
     const float3 *conics,
     const float *rgbs,
     const float *opacities,
+    const float *background,
     const float *final_Ts,
     const int *final_index,
     const float *v_output,
@@ -40,7 +41,8 @@ __global__ void rasterize_backward_kernel(
     float sigma, vis, fac, opac, alpha, ra;
     float v_alpha, v_sigma;
     // this is the T AFTER the last gaussian in this pixel
-    float T = final_Ts[pix_id];
+    float T_final = final_Ts[pix_id];
+    float T = T_final;
     // the contribution from gaussians behind the current one
     float *S = new float[channels]();
     // float S[channels] = {0.f};
@@ -76,10 +78,16 @@ __global__ void rasterize_backward_kernel(
         fac = alpha * T;
         v_alpha = 0.f;
         for (int c = 0; c < channels; ++c) {
+            // gradient wrt rgb
             atomicAdd(&(v_rgb[channels * g + c]), fac * v_out[c]);
+            // contribution from this pixel
             v_alpha += (rgbs[channels * g + c] * T - S[c] * ra) * v_out[c];
+            // contribution from background pixel
+            v_alpha += -T_final * ra * background[c] * v_out[c];
+            // update the running sum
             S[c] += rgbs[channels * g + c] * fac;
         }
+
 
         // v_alpha = (rgb.x * T - S.x * ra) * v_out.x
         //     + (rgb.y * T - S.y * ra) * v_out.y
@@ -122,6 +130,7 @@ void rasterize_backward_impl(
     const float3 *conics,
     const float *rgbs,
     const float *opacities,
+    const float *background,
     const float *final_Ts,
     const int *final_index,
     const float *v_output,
@@ -141,6 +150,7 @@ void rasterize_backward_impl(
         conics,
         rgbs,
         opacities,
+        background,
         final_Ts,
         final_index,
         v_output,
