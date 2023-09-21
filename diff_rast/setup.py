@@ -9,6 +9,8 @@ setup(
     name="diff_rast",
     description=" Python package for differentiable rasterization of gaussians",
     keywords="gaussian, splatting, cuda",
+    # package_dir = {'': '.'},
+    packages=['diff_rast'],
     ext_modules=[
         CUDAExtension(
             name="cuda_lib",

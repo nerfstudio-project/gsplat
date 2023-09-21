@@ -10,10 +10,10 @@ from jaxtyping import Float, Int
 from torch import Tensor
 from torch.autograd import Function
 
-from diff_rast import cuda_lib  # make sure to import torch before diff_rast
+import cuda_lib  # make sure to import torch before diff_rast
 
 
-class rasterize(Function):
+class RasterizeGaussians(Function):
     """Main gaussian-splatting rendering function
 
     Args:
@@ -41,7 +41,7 @@ class rasterize(Function):
         opacity: Float[Tensor, "*batch 1"],
         img_height: int,
         img_width: int,
-        background: Optional[Float[Tensor, "channels"]],
+        background: Optional[Float[Tensor, "channels"]] = None,
     ):
         if colors.dtype == torch.uint8:
             # make sure colors are float [0,1]
@@ -228,14 +228,13 @@ if __name__ == "__main__":
 
     # Test new rasterizer
     # 1. Project gaussians
-    from diff_rast import project_gaussians
-
-    xys, depths, radii, conics, num_tiles_hit = project_gaussians(
+    from diff_rast.project_gaussians import ProjectGaussians
+    xys, depths, radii, conics, num_tiles_hit = ProjectGaussians(
         means, scales, 1, quats, viewmat, viewmat, focal, focal, H, W, tile_bounds
     )
 
     # 2. Rasterize gaussians
-    out_img = rasterize.apply(xys, depths, radii, conics, num_tiles_hit, rgbs, opacities, H, W)
+    out_img = RasterizeGaussians.apply(xys, depths, radii, conics, num_tiles_hit, rgbs, opacities, H, W)
 
     vis_image(out_img, os.getcwd() + "/python_forward.png")
     gt_rgb = torch.ones((W, H, 3), dtype=out_img.dtype).to("cuda:0")

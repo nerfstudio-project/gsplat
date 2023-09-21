@@ -10,6 +10,7 @@ from torch import Tensor, optim
 
 from diff_rast.rasterize import RasterizeGaussians
 from diff_rast.project_gaussians import ProjectGaussians
+from ref_rast.rasterize import _RasterizeGaussians
 
 
 class SimpleTrainer:
@@ -92,35 +93,50 @@ class SimpleTrainer:
         print("saving to: ", image_path)
         im.save(image_path)
 
-    def train(self, iterations: int = 1000, lr: float = 0.01, save_imgs: bool = True):
+    def train(self, iterations: int = 1000, lr: float = 0.01, save_imgs: bool = True,impl = 'ours'):
         optimizer = optim.Adam([self.rgbs,self.means,self.scales,self.opacities,self.quats], lr)  # try training self.opacities/scales etc.
         mse_loss = torch.nn.MSELoss()
         frames = []
         for iter in range(iterations):
-            xys, depths, radii, conics, num_tiles_hit = ProjectGaussians.apply(
-                self.means,
-                self.scales,
-                1,
-                self.quats,
-                self.viewmat,
-                self.viewmat,
-                self.focal,
-                self.focal,
-                self.H,
-                self.W,
-                self.tile_bounds,
-            )
+            if impl =='ours':
+                xys, depths, radii, conics, num_tiles_hit = ProjectGaussians.apply(
+                    self.means,
+                    self.scales,
+                    1,
+                    self.quats,
+                    self.viewmat,
+                    self.viewmat,
+                    self.focal,
+                    self.focal,
+                    self.H,
+                    self.W,
+                    self.tile_bounds,
+                )
 
-            out_img = RasterizeGaussians.apply(xys, depths, radii, conics, num_tiles_hit, torch.sigmoid(self.rgbs), torch.sigmoid(self.opacities), self.H, self.W)
-            loss = mse_loss(out_img, self.gt_image)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            print(f"Iteration {iter + 1}/{iterations}, Loss: {loss.item()}")
-            print("RGB MIN", self.rgbs.min().item(), "RGB MAX", self.rgbs.max().item())
-            print("OPACITY MIN", self.opacities.min().item(), "OPACITY MAX", self.opacities.max().item())
-            #same line but for out_img
-            print("OUT_IMG MIN", out_img.min().item(), "OUT_IMG MAX", out_img.max().item())
+                out_img = RasterizeGaussians.apply(xys, depths, radii, conics, num_tiles_hit, torch.sigmoid(self.rgbs), torch.sigmoid(self.opacities), self.H, self.W)
+                loss = mse_loss(out_img, self.gt_image)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                print(f"Iteration {iter + 1}/{iterations}, Loss: {loss.item()}")
+                print("RGB MIN", self.rgbs.min().item(), "RGB MAX", self.rgbs.max().item())
+                print("OPACITY MIN", self.opacities.min().item(), "OPACITY MAX", self.opacities.max().item())
+                #same line but for out_img
+                print("OUT_IMG MIN", out_img.min().item(), "OUT_IMG MAX", out_img.max().item())
+            elif impl=='ref':
+                means2d = torch.zeros((self.num_points, 2), device=self.device)
+                sh = torch.zeros((self.num_points, 1), device=self.device)
+                out_img,_ = _RasterizeGaussians.apply(
+                    means3D,
+                    means2d,
+                    sh,
+                    self.rgbs,
+                    self.opacities,
+                    self.scales,
+                    self.quats,
+                    cov3Ds_precomp,
+                    raster_settings,
+                )
             if save_imgs and iter % 5 == 0:
                 frames.append((out_img.detach().cpu().numpy() * 255).astype(np.uint8))
         if save_imgs:
