@@ -7,10 +7,10 @@ from jaxtyping import Float
 from torch import Tensor
 from torch.autograd import Function
 
-from diff_rast import cuda_lib  # make sure to import torch before diff_rast
+import cuda_lib  # make sure to import torch before diff_rast
 
 
-class project_gaussians(Function):
+class ProjectGaussians(Function):
     """Project 3D Gaussians to 2D.
 
     Args:
@@ -173,7 +173,7 @@ if __name__ == "__main__":
     BLOCK_Y = 16
     tile_bounds = (W + BLOCK_X - 1) // BLOCK_X, (H + BLOCK_Y - 1) // BLOCK_Y, 1
 
-    xys, conics = project_gaussians.apply(
+    xys, conics = ProjectGaussians.apply(
         means3d,
         scales,
         glob_scale,

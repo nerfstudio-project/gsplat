@@ -17,8 +17,8 @@ The main python bindings for rasterization are found by importing diff_rast
 import diff_rast
 help(diff_rast)
 ```
-Additional supported cuda functions are found by importing cuda_lib from diff_rast
+Additional supported cuda functions are found by importing cuda_lib
 ```
-from diff_rast import cuda_lib
+import cuda_lib
 help(cuda_lib)
 ```
