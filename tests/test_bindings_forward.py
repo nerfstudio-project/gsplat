@@ -8,6 +8,9 @@ Make sure you have the ref bindings installed:
 import torch
 import imageio
 
+import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from diff_rast import project_gaussians, rasterize
 from ref_rast import GaussianRasterizationSettings, rasterize_gaussians
 

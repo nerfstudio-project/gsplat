@@ -210,7 +210,8 @@ scale_to_mat(const float3 scale, const float glob_scale) {
 inline __host__ __device__ bool
 clip_near_plane(const float3 p, const float *viewmat, float3 &p_view) {
     p_view = transform_4x3(viewmat, p);
-    if (p_view.z <= 0.1f) {
+    // Zhuoyang NOTE: I found that 0.2f is the value in the original implementation, and after testing, the forwarding mismatched is smaller than 0.1%
+    if (p_view.z <= 0.2f) { 
         return true;
     }
     return false;
