@@ -28,6 +28,24 @@ def random_quat_tensor(N, **kwargs):
     )
 
 
+def projection_matrix(znear, zfar, fovx, fovy, **kwargs):
+    t = math.tan(0.5 * fovy)
+    b = -t
+    r = math.tan(0.5 * fovx)
+    l = -r
+    n = znear
+    f = zfar
+    return torch.tensor(
+        [
+            [2 * n / (r - l), 0.0, (r + l) / (r - l), 0.0],
+            [0.0, 2 * n / (t - b), (t + b) / (t - b), 0.0],
+            [0.0, 0.0, -(f + n) / (f - n), -2.0 * f * n / (f - n)],
+            [0.0, 0.0, -1.0, 0.0],
+        ],
+        **kwargs
+    )
+
+
 class CompareReference:
     def __init__(
         self,
@@ -39,9 +57,12 @@ class CompareReference:
         self.num_points = num_points
 
         BLOCK_X, BLOCK_Y = 16, 16
-        fov_x = math.pi / 2.0
         H, W = gt_image.shape[:2]
-        fx = fy = 0.5 * float(W) / math.tan(0.5 * fov_x)
+        fovx = math.pi / 2.0
+        fx = fy = 0.5 * float(W) / math.tan(0.5 * fovx)
+        fovy = 2.0 * math.atan(0.5 * float(H) / fy)
+        self.fovx = fovx
+        self.fovy = fovy
         self.scale_mod = 1.0
         self.tanfovx = 0.5 * W / fx
         self.tanfovy = 0.5 * H / fy
@@ -65,7 +86,7 @@ class CompareReference:
         self.quats = random_quat_tensor(self.num_points, device=self.device)
         self.rgbs = torch.rand(self.num_points, 3, device=self.device)
         self.opacities = 0.5 * torch.ones(self.num_points, device=self.device)
-        self.shs = torch.empty(0, device=self.device)
+        self.shs = torch.Tensor([])
         self.viewmat = torch.tensor(
             [
                 [1.0, 0.0, 0.0, 0.0],
@@ -75,6 +96,8 @@ class CompareReference:
             ],
             device=self.device,
         )
+        pmat = projection_matrix(0.1, 1e4, self.fovx, self.fovy, device=self.device)
+        self.projmat = pmat @ self.viewmat
         self.means.requires_grad = False
         self.scales.requires_grad = False
         self.quats.requires_grad = False
@@ -89,7 +112,7 @@ class CompareReference:
             self.scale_mod,
             self.quats,
             self.viewmat,
-            self.viewmat,
+            self.projmat,
             self.focal,
             self.focal,
             self.H,
@@ -121,14 +144,14 @@ class CompareReference:
             self.background,
             self.scale_mod,
             self.viewmat.T,
-            self.viewmat.T,
+            self.projmat.T,
             sh_degree=0,
             campos=torch.zeros(3, device=self.device),
             prefiltered=False,
             debug=True,
         )
-        means2d = torch.zeros(self.num_points, 2, device=self.device)
-        covs3d = torch.zeros(self.num_points, 6, device=self.device)
+        means2d = torch.Tensor([])
+        covs3d = torch.Tensor([])
         out_color, _ = _RasterizeGaussians.apply(
             self.means,
             means2d,
@@ -139,13 +162,13 @@ class CompareReference:
             self.quats,
             covs3d,
             settings,
-        ) # (C, H, W)
+        )  # (C, H, W)
         return out_color.permute(1, 2, 0)
 
     def train(
         self,
-        iterations: int = 1000,
-        lr: float = 0.01,
+        iterations: int = 100,
+        lr: float = 0.001,
         save_imgs: bool = True,
     ):
         names = ["rgbs", "means", "scales", "opacities", "quats"]
@@ -173,15 +196,30 @@ class CompareReference:
             for i in range(len(params)):
                 if our_grads[i] is None:
                     continue
-                print(names[i], "our grads", our_grads[i].min().item(), our_grads[i].max().item())
-                print(names[i], "ref grads", ref_grads[i].min().item(), ref_grads[i].max().item())
+                print(
+                    names[i],
+                    "our grads",
+                    our_grads[i].min().item(),
+                    our_grads[i].max().item(),
+                )
+                print(
+                    names[i],
+                    "ref grads",
+                    ref_grads[i].min().item(),
+                    ref_grads[i].max().item(),
+                )
 
             optimizer.step()
             if save_imgs and iter % 5 == 0:
-                our_writer.append_data((our_img.detach().cpu().numpy() * 255).astype(np.uint8))
-                ref_writer.append_data((ref_img.detach().cpu().numpy() * 255).astype(np.uint8))
+                our_writer.append_data(
+                    (our_img.detach().cpu().numpy() * 255).astype(np.uint8)
+                )
+                ref_writer.append_data(
+                    (ref_img.detach().cpu().numpy() * 255).astype(np.uint8)
+                )
         our_writer.close()
         ref_writer.close()
+
 
 if __name__ == "__main__":
     gt_image = torch.ones((256, 256, 3)) * 1.0
