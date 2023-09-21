@@ -1,7 +1,7 @@
 #include "serial_backward.cuh"
+#include "third_party/glm/glm/glm.hpp"
+#include "third_party/glm/glm/gtc/type_ptr.hpp"
 #include <cooperative_groups.h>
-#include <glm/glm.hpp>
-#include <glm/gtc/type_ptr.hpp>
 #include <iostream>
 
 #define BLOCK_X 16

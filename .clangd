@@ -1,7 +1,0 @@
-CompileFlags:
-  Add:
-    - -xc++
-    - --cuda-gpu-arch=sm_75
-  Remove:
-    - --generate-code=*
-    - -forward-unknown-to-host-compiler
