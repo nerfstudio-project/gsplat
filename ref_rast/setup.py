@@ -7,8 +7,7 @@ CSRC = os.path.abspath(f"{__file__}/../../csrc")
 
 setup(
     name="ref_rast",
-    # packages=["ref_rast"],
-    # package_dir={"ref_rast": ""},
+    packages=["ref_rast"],
     description="reference package for differentiable rasterization of gaussians",
     keywords="gaussian, splatting, cuda",
     ext_modules=[
