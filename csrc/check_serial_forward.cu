@@ -75,6 +75,8 @@ __host__ void host_preprocessCUDA(
 	float4 p_hom = transformPoint4x4(p_orig, projmatrix);
 	float p_w = 1.0f / (p_hom.w + 0.0000001f);
 	float3 p_proj = { p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w };
+    //printf("reff rast: p_proj %.2f %.2f \n", p_proj.x, p_proj.y);
+
 
 	// If 3D covariance matrix is precomputed, use it, otherwise compute
 	// from scaling and rotation parameters. 
@@ -195,16 +197,15 @@ __host__ __device__ void host_project_gaussians_forward_kernel(
     conics[idx] = conic;
 
     // compute the projected mean
-    float2 center = project_pix(projmat, p_world, img_size);
+    dim3 img_size_width_height = {img_size.y, img_size.x, 1}; // bug. img_size = (height, width) here. Proj pix expects (width,height)
+
+    float2 center = project_pix(projmat, p_world, img_size_width_height);
     //printf("diff rast: point_image %d %.2f %.2f \n", idx, center.x, center.y);
     uint2 tile_min, tile_max;
     get_tile_bbox(center, radius, tile_bounds, tile_min, tile_max);
     //printf("diff rast: tile_min %d %d \n", tile_min.x, tile_min.y);
     int32_t tile_area = (tile_max.x - tile_min.x) * (tile_max.y - tile_min.y);
-    if (tile_area <= 0) {
-        // printf("%d point bbox outside of bounds\n", idx);
-        return;
-    }
+    
     num_tiles_hit[idx] = tile_area;
     depths[idx] = p_view.z;
     radii[idx] = (int)radius;
@@ -218,7 +219,7 @@ void compare_cov2d_forward(){
     float fx = 1;
     float fy = 1;
     const int W = 256;
-    const int H = 256;
+    const int H = 256*2;
     float tan_fovx = 0.5 * W / fx;
     float tan_fovy = 0.5 * H / fy;
     float viewmat[] = {
@@ -270,7 +271,7 @@ void compare_scale_rot_to_cov3d(){
 void compare_project_preprocess(){
     // setup
     const int num_points = 1;
-    const float3 mean = {1.f, 1.f, 1.f};
+    const float3 mean = {5.f, 1.f, 1.f};
     float3* means3d = new float3[num_points];
     means3d[0] = mean;
     const float3 scale = {random_float(), random_float(), random_float()};
@@ -296,13 +297,13 @@ void compare_project_preprocess(){
 
     const float fov_x = M_PI / 2.f;
     const int W = 512;
-    const int H = 512;
+    const int H = 512*2;
     const float focal = 0.5 * (float)W / tan(0.5 * fov_x);
     float tan_fovx = 0.5 * W / focal;
     float tan_fovy = 0.5 * H / focal;
     const dim3 tile_bounds = {
         (W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, 1};
-    const dim3 img_size = {W, H, 1};
+    const dim3 img_size = {H, W, 1};
     const dim3 block = {BLOCK_X, BLOCK_Y, 1};
     
     // diff rast
