@@ -319,18 +319,19 @@ if __name__ == "__main__":
     print(x.shape, y.shape, z.shape)
     means3d = torch.stack([x.flatten(), y.flatten(), z], dim=-1)
     print(means3d.shape)
-    means2d = torch.zeros((num_points, 2), device=device)
-    sh = torch.zeros((num_points, 1), device=device)
+    means2d = torch.tensor([])
+    sh = torch.Tensor([])
     opacities = torch.ones((num_points, 1), device=device)
     colors = torch.rand((num_points, 3), device=device)
-    covs3d = torch.zeros((num_points, 6), device=device)
+    covs3d = torch.Tensor([])
     # scales = torch.rand((num_points, 3), device=device)
     scales = torch.ones((num_points, 3), device=device)
     quats = torch.randn((num_points, 4), device=device)
     quats /= torch.linalg.norm(quats, dim=-1, keepdim=True)
 
+    # expects view matrix be column major
     viewmat = torch.eye(4, device=device)
-    viewmat[2, 3] = 2
+    viewmat[3, 2] = 2
     # projmat = torch.eye(4, device=device)
     projmat = viewmat
 
