@@ -28,6 +28,12 @@ def random_quat_tensor(N, **kwargs):
     )
 
 
+def identity_quat(N, **kwargs):
+    quat = torch.zeros(N, 4, **kwargs)
+    quat[:, 0] = 1
+    return quat
+
+
 def projection_matrix(znear, zfar, fovx, fovy, **kwargs):
     t = math.tan(0.5 * fovy)
     b = -t
@@ -83,26 +89,27 @@ class CompareReference:
         """Random gaussians"""
         self.means = 2 * (torch.rand(self.num_points, 3, device=self.device) - 0.5)
         self.scales = torch.rand(self.num_points, 3, device=self.device)
-        self.quats = random_quat_tensor(self.num_points, device=self.device)
+        # self.quats = random_quat_tensor(self.num_points, device=self.device)
+        self.quats = identity_quat(self.num_points, device=self.device)
         self.rgbs = torch.rand(self.num_points, 3, device=self.device)
-        self.opacities = 0.5 * torch.ones(self.num_points, device=self.device)
+        self.opacities = 0.5 * torch.ones(self.num_points, 1, device=self.device)
         self.shs = torch.Tensor([])
         self.viewmat = torch.tensor(
             [
                 [1.0, 0.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 8.0],
+                [0.0, 0.0, 1.0, 4.0],
                 [0.0, 0.0, 0.0, 1.0],
             ],
             device=self.device,
         )
         pmat = projection_matrix(0.1, 1e4, self.fovx, self.fovy, device=self.device)
         self.projmat = pmat @ self.viewmat
-        self.means.requires_grad = False
-        self.scales.requires_grad = False
-        self.quats.requires_grad = False
+        self.means.requires_grad = True
+        self.scales.requires_grad = True
+        self.quats.requires_grad = True
         self.rgbs.requires_grad = True
-        self.opacities.requires_grad = False
+        self.opacities.requires_grad = True
         self.viewmat.requires_grad = False
 
     def forward_ours(self):
@@ -126,10 +133,10 @@ class CompareReference:
             radii,
             conics,
             num_tiles_hit,
-            self.rgbs,
-            self.opacities,
-            # torch.sigmoid(self.rgbs),
-            # torch.sigmoid(self.opacities),
+            # self.rgbs,
+            # self.opacities,
+            torch.sigmoid(self.rgbs),
+            torch.sigmoid(self.opacities),
             self.H,
             self.W,
             self.background,
@@ -156,8 +163,10 @@ class CompareReference:
             self.means,
             means2d,
             self.shs,
-            self.rgbs,
-            self.opacities,
+            # self.rgbs,
+            # self.opacities,
+            torch.sigmoid(self.rgbs),
+            torch.sigmoid(self.opacities),
             self.scales,
             self.quats,
             covs3d,
@@ -168,7 +177,7 @@ class CompareReference:
     def train(
         self,
         iterations: int = 100,
-        lr: float = 0.001,
+        lr: float = 0.01,
         save_imgs: bool = True,
     ):
         names = ["rgbs", "means", "scales", "opacities", "quats"]
@@ -180,19 +189,25 @@ class CompareReference:
         ref_writer = imageio.get_writer("renders/refs.gif")
         for iter in range(iterations):
             our_img = self.forward_ours()
+            ref_img = self.forward_ref()
+            diff = our_img - ref_img
+
             loss = mse_loss(our_img, self.gt_image)
             optimizer.zero_grad()
             loss.backward()
             our_grads = [x.grad for x in params]
-            ref_img = self.forward_ref()
+
             ref_loss = mse_loss(ref_img, self.gt_image)
-            diff = our_img - ref_img
-            print("our_img", our_img.min().item(), our_img.max().item())
-            print("ref_img", ref_img.min().item(), ref_img.max().item())
-            print("diff", diff.min().item(), diff.max().item())
             optimizer.zero_grad()
             ref_loss.backward()
             ref_grads = [x.grad for x in params]
+
+            optimizer.step()
+
+            print("LOSS", loss.item())
+            print("our_img", our_img.min().item(), our_img.max().item())
+            print("ref_img", ref_img.min().item(), ref_img.max().item())
+            print("diff", diff.min().item(), diff.max().item())
             for i in range(len(params)):
                 if our_grads[i] is None:
                     continue
@@ -209,7 +224,6 @@ class CompareReference:
                     ref_grads[i].max().item(),
                 )
 
-            optimizer.step()
             if save_imgs and iter % 5 == 0:
                 our_writer.append_data(
                     (our_img.detach().cpu().numpy() * 255).astype(np.uint8)

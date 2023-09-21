@@ -120,7 +120,7 @@ class RasterizeGaussians(Function):
             v_out_img.contiguous().cuda(),
         )
 
-        v_opacity = v_opacity.squeeze(-1)
+        # v_opacity = v_opacity.squeeze(-1)
 
         return (
             v_xy,  # xys
