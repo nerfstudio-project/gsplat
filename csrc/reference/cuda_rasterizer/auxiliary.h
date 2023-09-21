@@ -38,12 +38,12 @@ __device__ const float SH_C3[] = {
 	-0.5900435899266435f
 };
 
-__forceinline__ __device__ float ndc2Pix(float v, int S)
+__forceinline__ __host__ __device__ float ndc2Pix(float v, int S)
 {
 	return ((v + 1.0) * S - 1.0) * 0.5;
 }
 
-__forceinline__ __device__ void getRect(const float2 p, int max_radius, uint2& rect_min, uint2& rect_max, dim3 grid)
+__forceinline__ __host__ __device__ void getRect(const float2 p, int max_radius, uint2& rect_min, uint2& rect_max, dim3 grid)
 {
 	rect_min = {
 		min(grid.x, max((int)0, (int)((p.x - max_radius) / BLOCK_X))),
@@ -136,7 +136,7 @@ __forceinline__ __device__ float sigmoid(float x)
 	return 1.0f / (1.0f + expf(-x));
 }
 
-__forceinline__ __device__ bool in_frustum(int idx,
+__forceinline__ __host__ __device__ bool in_frustum(int idx,
 	const float* orig_points,
 	const float* viewmatrix,
 	const float* projmatrix,
@@ -156,7 +156,7 @@ __forceinline__ __device__ bool in_frustum(int idx,
 		if (prefiltered)
 		{
 			printf("Point is filtered although prefiltered is set. This shouldn't happen!");
-			__trap();
+			//__trap();
 		}
 		return false;
 	}
