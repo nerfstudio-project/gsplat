@@ -118,9 +118,9 @@ rasterize_forward_tensor(
         {img_height, img_width, channels}, xys.options().dtype(torch::kFloat32)
     );
     torch::Tensor final_Ts =
-        torch::zeros({img_width, img_height}, xys.options().dtype(torch::kFloat32));
+        torch::zeros({img_height, img_width}, xys.options().dtype(torch::kFloat32));
     torch::Tensor final_idx =
-        torch::zeros({img_width, img_height}, xys.options().dtype(torch::kInt32));
+        torch::zeros({img_height, img_width}, xys.options().dtype(torch::kInt32));
 
     rasterize_forward_impl(
         tile_bounds,
