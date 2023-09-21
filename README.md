@@ -30,20 +30,19 @@ import cuda_lib
 help(cuda_lib)
 ```
 
-# `clangd` setup
+# clangd setup (for Neovim)
 
 [clangd](https://clangd.llvm.org/) is a nice tool for providing completions,
 type checking, and other helpful features in C++. It requires some extra effort
 to get set up for CUDA development, but there are fortunately only three steps
 here.
 
-**First,** we should install a `clangd` extension for our IDE/editor. Probably
-this is very easy with VS Code.
+**First,** we should install a `clangd` extension for our IDE/editor.
 
-For Neovim+lspconfig users, this is also easy, we can simply install `clangd`
+For Neovim+lspconfig users, this is very easy, we can simply install `clangd`
 via Mason and add a few setup lines in Lua:
 
-```
+```lua
 require("lspconfig").clangd.setup{
     capabilities = capabilities
 }
@@ -66,7 +65,7 @@ file.
 If we're working on PyTorch bindings, one option is to generate this using
 [`bear`](https://github.com/rizsotto/Bear):
 
-```
+```sh
 sudo apt update
 sudo apt install bear
 
@@ -83,7 +82,7 @@ cat compile_commands.json
 Alternatively: if we're working directly in C (and don't need any PyTorch
 binding stuff), we can generate via CMake:
 
-```
+```sh
 # From 3dgs-exercise/csrc/build.
 #
 # This will save a file at 3dgs-exercise/csrc/build/compile_commands.json, which
