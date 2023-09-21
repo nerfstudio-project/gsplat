@@ -473,7 +473,7 @@ __host__ __device__ void rasterize_vjp(
         center = xys[g];
         delta = {center.x - p.x, center.y - p.y};
         sigma =
-            0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) -
+            0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
             conic.y * delta.x * delta.y;
         if (sigma < 0.f) {
             continue;
