@@ -56,7 +56,7 @@ class CompareReference:
     def __init__(
         self,
         gt_image: Tensor,
-        num_points: int = 2000,
+        num_points: int = 1024,
     ):
         self.device = torch.device("cuda:0")
         self.gt_image = gt_image.to(device=self.device)
@@ -81,7 +81,7 @@ class CompareReference:
         )
         self.img_size = torch.tensor([self.W, self.H, 1], device=self.device)
         self.block = torch.tensor([BLOCK_X, BLOCK_Y, 1], device=self.device)
-        self.background = torch.ones(3, device=self.device)
+        self.background = torch.zeros(3, device=self.device)
 
         self._init_gaussians()
 
@@ -117,7 +117,8 @@ class CompareReference:
             self.means,
             self.scales,
             self.scale_mod,
-            self.quats,
+            # self.quats,
+            self.quats / torch.norm(self.quats, dim=-1, keepdim=True),
             self.viewmat,
             self.projmat,
             self.focal,
@@ -168,7 +169,8 @@ class CompareReference:
             torch.sigmoid(self.rgbs),
             torch.sigmoid(self.opacities),
             self.scales,
-            self.quats,
+            # self.quats,
+            self.quats / torch.norm(self.quats, dim=-1, keepdim=True),
             covs3d,
             settings,
         )  # (C, H, W)
@@ -176,7 +178,7 @@ class CompareReference:
 
     def train(
         self,
-        iterations: int = 100,
+        iterations: int = 1000,
         lr: float = 0.01,
         save_imgs: bool = True,
     ):
@@ -192,15 +194,15 @@ class CompareReference:
             ref_img = self.forward_ref()
             diff = our_img - ref_img
 
-            loss = mse_loss(our_img, self.gt_image)
-            optimizer.zero_grad()
-            loss.backward()
-            our_grads = [x.grad for x in params]
-
             ref_loss = mse_loss(ref_img, self.gt_image)
             optimizer.zero_grad()
             ref_loss.backward()
             ref_grads = [x.grad for x in params]
+
+            loss = mse_loss(our_img, self.gt_image)
+            optimizer.zero_grad()
+            loss.backward()
+            our_grads = [x.grad for x in params]
 
             optimizer.step()
 
