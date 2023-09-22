@@ -276,17 +276,13 @@ __host__ __device__ void project_cov3d_ewa_vjp(
 ) {
     // viewmat is row major, glm is column major
     // upper 3x3 submatrix
+    // clang-format off
     glm::mat3 W = glm::mat3(
-        viewmat[0],
-        viewmat[4],
-        viewmat[8],
-        viewmat[1],
-        viewmat[5],
-        viewmat[9],
-        viewmat[2],
-        viewmat[6],
-        viewmat[10]
+        viewmat[0], viewmat[4], viewmat[8],
+        viewmat[1], viewmat[5], viewmat[9],
+        viewmat[2], viewmat[6], viewmat[10]
     );
+    // clang-format on
     glm::vec3 p = glm::vec3(viewmat[3], viewmat[7], viewmat[11]);
     glm::vec3 t = W * glm::vec3(mean3d.x, mean3d.y, mean3d.z) + p;
     float rz = 1.f / t.z;
@@ -294,46 +290,28 @@ __host__ __device__ void project_cov3d_ewa_vjp(
 
     // column major
     // we only care about the top 2x2 submatrix
+    // clang-format off
     glm::mat3 J = glm::mat3(
-        fx * rz,
-        0.f,
-        0.f,
-        0.f,
-        fy * rz,
-        0.f,
-        -fx * t.x * rz2,
-        -fy * t.y * rz2,
-        0.f
+        fx * rz,         0.f,             0.f,
+        0.f,             fy * rz,         0.f,
+        -fx * t.x * rz2, -fy * t.y * rz2, 0.f
     );
-
-    glm::mat3 T = J * W;
-
     glm::mat3 V = glm::mat3(
-        cov3d[0],
-        cov3d[1],
-        cov3d[2],
-        cov3d[1],
-        cov3d[3],
-        cov3d[4],
-        cov3d[2],
-        cov3d[4],
-        cov3d[5]
+        cov3d[0], cov3d[1], cov3d[2],
+        cov3d[1], cov3d[3], cov3d[4],
+        cov3d[2], cov3d[4], cov3d[5]
     );
-
     // cov = T * V * Tt; G = df/dcov = v_cov
     // -> d/dV = Tt * G * T
     // -> df/dT = G * T * Vt + Gt * T * V
     glm::mat3 v_cov = glm::mat3(
-        v_cov2d.x,
-        0.5f * v_cov2d.y,
-        0.f,
-        0.5f * v_cov2d.y,
-        v_cov2d.z,
-        0.f,
-        0.f,
-        0.f,
-        0.f
+        v_cov2d.x,        0.5f * v_cov2d.y, 0.f,
+        0.5f * v_cov2d.y, v_cov2d.z,        0.f,
+        0.f,              0.f,              0.f
     );
+    // clang-format on
+
+    glm::mat3 T = J * W;
     glm::mat3 Tt = glm::transpose(T);
     glm::mat3 Vt = glm::transpose(V);
     glm::mat3 v_V = Tt * v_cov * T;

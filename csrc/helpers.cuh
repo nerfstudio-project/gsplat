@@ -70,10 +70,20 @@ cov2d_to_conic_vjp(const float3 &conic, const float3 &v_conic, float3 &v_cov2d) 
     // df/d_cov2d = -conic * df/d_conic * conic
     glm::mat2 X = glm::mat2(conic.x, conic.y, conic.y, conic.z);
     glm::mat2 G = glm::mat2(v_conic.x, v_conic.y, v_conic.y, v_conic.z);
-    glm::mat2 v_Sigma = -X * G * X;
-    v_cov2d.x = v_Sigma[0][0];
-    v_cov2d.y = v_Sigma[1][0] + v_Sigma[0][1];
-    v_cov2d.z = v_Sigma[1][1];
+    float conic_det = conic.x * conic.z - conic.y * conic.y;
+    // TODO(vye): confirm if it's okay that this gradient gives inf if conic_det is 0.
+    // The reference implementation adds 1e-7f to the denominator to prevent inf.
+    float cov_det_squared = 1.f / (conic_det * conic_det);
+    if (cov_det_squared == 0.f) {
+        v_cov2d.x = 0.f;
+        v_cov2d.y = 0.f;
+        v_cov2d.z = 0.f;
+    } else {
+        glm::mat2 v_Sigma = -X * G * X;
+        v_cov2d.x = v_Sigma[0][0];
+        v_cov2d.y = v_Sigma[1][0] + v_Sigma[0][1];
+        v_cov2d.z = v_Sigma[1][1];
+    }
 }
 
 // helper for applying R * p + T, expect mat to be ROW MAJOR
