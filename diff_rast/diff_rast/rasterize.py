@@ -84,6 +84,7 @@ class RasterizeGaussians(Function):
             conics,
             colors,
             opacity,
+            background,
             final_Ts,
             final_idx,
         )
@@ -102,6 +103,7 @@ class RasterizeGaussians(Function):
             conics,
             colors,
             opacity,
+            background,
             final_Ts,
             final_idx,
         ) = ctx.saved_tensors
@@ -115,12 +117,13 @@ class RasterizeGaussians(Function):
             conics.contiguous().cuda(),
             colors.contiguous().cuda(),
             opacity.contiguous().cuda(),
+            background.contiguous().cuda(),
             final_Ts.contiguous().cuda(),
             final_idx.contiguous().cuda(),
             v_out_img.contiguous().cuda(),
         )
 
-        v_opacity = v_opacity.squeeze(-1)
+        # v_opacity = v_opacity.squeeze(-1)
 
         return (
             v_xy,  # xys

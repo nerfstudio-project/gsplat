@@ -118,9 +118,9 @@ rasterize_forward_tensor(
         {img_height, img_width, channels}, xys.options().dtype(torch::kFloat32)
     );
     torch::Tensor final_Ts =
-        torch::zeros({img_width, img_height}, xys.options().dtype(torch::kFloat32));
+        torch::zeros({img_height, img_width}, xys.options().dtype(torch::kFloat32));
     torch::Tensor final_idx =
-        torch::zeros({img_width, img_height}, xys.options().dtype(torch::kInt32));
+        torch::zeros({img_height, img_width}, xys.options().dtype(torch::kInt32));
 
     rasterize_forward_impl(
         tile_bounds,
@@ -385,6 +385,7 @@ std::
         const torch::Tensor &conics,
         const torch::Tensor &colors,
         const torch::Tensor &opacities,
+        const torch::Tensor &background,
         const torch::Tensor &final_Ts,
         const torch::Tensor &final_idx,
         const torch::Tensor &v_output //dL_dout_color
@@ -422,6 +423,7 @@ std::
             (float3 *)conics.contiguous().data_ptr<float>(),
             colors.contiguous().data_ptr<float>(),
             opacities.contiguous().data_ptr<float>(),
+            background.contiguous().data_ptr<float>(),
             final_Ts.contiguous().data_ptr<float>(),
             final_idx.contiguous().data_ptr<int>(),
             v_output.contiguous().data_ptr<float>(),
