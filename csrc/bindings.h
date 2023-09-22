@@ -35,7 +35,8 @@ project_gaussians_forward_tensor(
     torch::Tensor projmat,
     const float fx,
     const float fy,
-    const std::tuple<int, int> img_size,
+    const float img_height,
+    const float img_width,
     const std::tuple<int, int, int> tile_bounds
 );
 
@@ -55,7 +56,8 @@ project_gaussians_backward_tensor(
     torch::Tensor projmat,
     const float fx,
     const float fy,
-    const std::tuple<int, int> img_size,
+    const float img_height,
+    const float img_width,
     torch::Tensor cov3d,
     torch::Tensor radii,
     torch::Tensor conics,

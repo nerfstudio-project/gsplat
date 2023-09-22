@@ -8,9 +8,10 @@ Make sure you have the ref bindings installed:
 import torch
 import imageio
 
-from diff_rast import project_gaussians, rasterize
-from ref_rast import GaussianRasterizationSettings, rasterize_gaussians
+from diff_rast.rasterize import RasterizeGaussians
+from diff_rast.project_gaussians import ProjectGaussians
 
+from ref_rast import GaussianRasterizationSettings, rasterize_gaussians
 
 def test_bindings_forward(save_img=False):
     means3d, sh, opacities, colors, covs3d, scales, quats, viewmat, projmat = _init_gaussians()
@@ -60,10 +61,10 @@ def _run_ref(means3D, sh, opacities, colors, covs3d, scales, quats, viewmat, pro
 
 
 def _run_diff_rast(means, rgbs, opacities, scales, quats, viewmat, projmat):
-    xys, depths, radii, conics, num_tiles_hit = project_gaussians(
+    xys, depths, radii, conics, num_tiles_hit = ProjectGaussians.apply(
         means, scales, scale_modifier, quats, viewmat, projmat, fx, fy, img_height, img_width, TILE_BOUNDS
     )
-    out_img = rasterize(xys, depths, radii, conics, num_tiles_hit, rgbs, opacities, img_height, img_width)
+    out_img = RasterizeGaussians.apply(xys, depths, radii, conics, num_tiles_hit, rgbs, opacities, img_height, img_width)
 
     return out_img
 
@@ -97,7 +98,7 @@ if __name__ == "__main__":
 
     fx = 3.0
     fy = 3.0
-    img_height = 256
+    img_height = 256*2
     img_width = 256
     tanfovx = 0.5 * img_width / fx
     tanfovy = 0.5 * img_height / fy
