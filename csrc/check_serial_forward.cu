@@ -197,9 +197,7 @@ __host__ __device__ void host_project_gaussians_forward_kernel(
     conics[idx] = conic;
 
     // compute the projected mean
-    dim3 img_size_width_height = {img_size.y, img_size.x, 1}; // bug. img_size = (height, width) here. Proj pix expects (width,height)
-
-    float2 center = project_pix(projmat, p_world, img_size_width_height);
+    float2 center = project_pix(projmat, p_world, img_size);
     //printf("diff rast: point_image %d %.2f %.2f \n", idx, center.x, center.y);
     uint2 tile_min, tile_max;
     get_tile_bbox(center, radius, tile_bounds, tile_min, tile_max);
@@ -303,7 +301,7 @@ void compare_project_preprocess(){
     float tan_fovy = 0.5 * H / focal;
     const dim3 tile_bounds = {
         (W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, 1};
-    const dim3 img_size = {H, W, 1};
+    const dim3 img_size = {W, H, 1};
     const dim3 block = {BLOCK_X, BLOCK_Y, 1};
     
     // diff rast

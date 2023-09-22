@@ -68,9 +68,7 @@ __global__ void project_gaussians_forward_kernel(
     conics[idx] = conic;
 
     // compute the projected mean
-    const dim3 img_size_width_height = {img_size.y, img_size.x, 1}; // img_size = (height, width) here however project_pix expects (width,height)
-
-    float2 center = project_pix(projmat, p_world, img_size_width_height);
+    float2 center = project_pix(projmat, p_world, img_size);
     uint2 tile_min, tile_max;
     get_tile_bbox(center, radius, tile_bounds, tile_min, tile_max);
     int32_t tile_area = (tile_max.x - tile_min.x) * (tile_max.y - tile_min.y);

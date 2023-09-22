@@ -85,12 +85,13 @@ project_gaussians_forward_tensor(
     torch::Tensor projmat,
     const float fx,
     const float fy,
-    const std::tuple<int, int> img_size,
+    const float img_height,
+    const float img_width,
     const std::tuple<int, int, int> tile_bounds
 ) {
     dim3 img_size_dim3;
-    img_size_dim3.x = std::get<0>(img_size);
-    img_size_dim3.y = std::get<1>(img_size);
+    img_size_dim3.x = img_width;
+    img_size_dim3.y = img_height;
 
     dim3 tile_bounds_dim3;
     tile_bounds_dim3.x = std::get<0>(tile_bounds);
@@ -153,7 +154,8 @@ project_gaussians_backward_tensor(
     torch::Tensor projmat,
     const float fx,
     const float fy,
-    const std::tuple<int, int> img_size,
+    const float img_height,
+    const float img_width,
     torch::Tensor cov3d,
     torch::Tensor radii,
     torch::Tensor conics,
@@ -161,8 +163,8 @@ project_gaussians_backward_tensor(
     torch::Tensor v_conic
 ) {
     dim3 img_size_dim3;
-    img_size_dim3.x = std::get<0>(img_size);
-    img_size_dim3.y = std::get<1>(img_size);
+    img_size_dim3.x = img_width;
+    img_size_dim3.y = img_height;
 
     const auto num_cov3d = num_points * 6;
 
