@@ -62,7 +62,8 @@ percent_errors(const std::vector<std::pair<float, float>> &values) {
 // format
 void print_errors(
     const std::vector<std::pair<float, float>> &values,
-    const std::string &name,
+    const std::string& name,
+    const int check_index,
     float error_threshold = 0.01f // percent error (0.01%)
 ) {
     const std::vector<float> p_errors{percent_errors(values)};
@@ -80,6 +81,7 @@ void print_errors(
     std::cout << std::setprecision(2);
     ;
 
+    std::cout << "Error on check: " << check_index << '\n';
     std::cout << name << ":\n"
               << "     ours:     refs:\n";
 
@@ -93,7 +95,7 @@ void print_errors(
     std::cout << '\n';
 }
 
-void compare_project2d_mean_backward() {
+void compare_project2d_mean_backward(int check_index) {
     float3 mean = {random_float(), random_float(), random_float()};
     // clang-format off
     float proj[] = {
@@ -114,10 +116,10 @@ void compare_project2d_mean_backward() {
         {dL_dmean.y, dL_dmean_ref.y},
         {dL_dmean.z, dL_dmean_ref.z},
     };
-    print_errors(dmean_data, "dmean (project2d)");
+    print_errors(dmean_data, "dmean (project2d)", check_index);
 }
 
-void compare_conic_backward() {
+void compare_conic_backward(int check_index) {
     float3 cov2d = {random_float(), random_float(), random_float()};
     float3 conic = compute_conic(cov2d);
     float3 dL_dconic = {random_float(), random_float(), random_float()};
@@ -131,10 +133,10 @@ void compare_conic_backward() {
         {dL_dcov2d.y, dL_dcov2d_ref.y},
         {dL_dcov2d.z, dL_dcov2d_ref.z},
     };
-    print_errors(dcov2d_data, "dcov2d (conic)");
+    print_errors(dcov2d_data, "dcov2d (conic)", check_index);
 }
 
-void compare_cov3d_backward() {
+void compare_cov3d_backward(int check_index) {
     float3 scale = {random_float(), random_float(), random_float()};
     float4 quat = random_quat();
     float4 quat_ref = quat;
@@ -160,67 +162,44 @@ void compare_cov3d_backward() {
         {dL_ds.y, dL_ds_ref.y},
         {dL_ds.z, dL_ds_ref.z},
     };
-    print_errors(ds_data, "ds (cov3d)");
+    print_errors(ds_data, "ds (cov3d)", check_index);
 
     const std::vector<std::pair<float, float>> dquat_data{
-        // {dL_dq.x, dL_dq_ref.y},
-        // {dL_dq.y, dL_dq_ref.z},
-        // {dL_dq.z, dL_dq_ref.w},
-        // {dL_dq.w, dL_dq_ref.x},
         {dL_dq.x, dL_dq_ref.x},
         {dL_dq.y, dL_dq_ref.y},
         {dL_dq.z, dL_dq_ref.z},
         {dL_dq.w, dL_dq_ref.w},
     };
-    print_errors(dquat_data, "dquat (cov3d)");
+    print_errors(dquat_data, "dquat (cov3d)", check_index);
 }
 
-void compare_cov2d_ewa_backward() {
+void compare_cov2d_ewa_backward(int check_index) {
     float3 mean = {random_float(), random_float(), random_float()};
     float3 scale = {random_float(), random_float(), random_float()};
     float4 quat = random_quat();
     float cov3d[] = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
     scale_rot_to_cov3d(scale, 1.f, quat, cov3d);
     float3 dL_dcov2d = {random_float(), random_float(), random_float()};
-    float3 dL_dmean, dL_dmean_ref;
+    float3 dL_dmean = {0.f, 0.f, 0.f};
+    float3 dL_dmean_ref = {0.f, 0.f, 0.f};
     float dL_dcov[] = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
     float dL_dcov_ref[] = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
 
     // functions expect different view matrix convention
+    // clang-format off
     float viewmat[] = {
-        1.f,
-        0.f,
-        0.f,
-        0.f,
-        0.f,
-        1.f,
-        0.f,
-        0.f,
-        0.f,
-        0.f,
-        1.f,
-        10.f,
-        0.f,
-        0.f,
-        0.f,
-        1.f};
+        1.f, 0.f, 0.f, 0.f,
+        0.f, 1.f, 0.f, 0.f,
+        0.f, 0.f, 1.f, 10.f,
+        0.f, 0.f, 0.f, 1.f
+    };
     float viewmat_ref[] = {
-        1.f,
-        0.f,
-        0.f,
-        0.f,
-        0.f,
-        1.f,
-        0.f,
-        0.f,
-        0.f,
-        0.f,
-        1.f,
-        0.f,
-        0.f,
-        0.f,
-        10.f,
-        1.f};
+        1.f, 0.f, 0.f, 0.f,
+        0.f, 1.f, 0.f, 0.f,
+        0.f, 0.f, 1.f, 0.f,
+        0.f, 0.f, 10.f, 1.f
+    };
+    // clang-format on
     computeCov2DBackward(
         mean,
         cov3d,
@@ -243,16 +222,16 @@ void compare_cov2d_ewa_backward() {
         {dL_dmean.x, dL_dmean_ref.x},
         {dL_dmean.x, dL_dmean_ref.x},
     };
-    print_errors(dmean_data, "dmean (cov2d_ewa)");
+    print_errors(dmean_data, "dmean (cov2d_ewa)", check_index);
 
     std::vector<std::pair<float, float>> dcov_data;
     for (int i = 0; i < 6; ++i)
         dcov_data.push_back({dL_dcov[i], dL_dcov_ref[i]});
 
-    print_errors(dcov_data, "dcov (cov2d_ewa)");
+    print_errors(dcov_data, "dcov (cov2d_ewa)", check_index);
 }
 
-void compare_rasterize_backward(const int N) {
+void compare_rasterize_backward(const int N, int check_index) {
     float2 p = {0.f, 0.f};
     float T_final = 5e-3;
     constexpr int C = 3;
@@ -320,19 +299,19 @@ void compare_rasterize_backward(const int N) {
     std::vector<std::pair<float, float>> drgb_data;
     for (int i = 0; i < C * N; ++i)
         drgb_data.push_back({dL_drgb[i], dL_drgb_ref[i]});
-    print_errors(drgb_data, "drgb (rasterize)");
+    print_errors(drgb_data, "drgb (rasterize)", check_index);
 
     std::vector<std::pair<float, float>> do_data;
     for (int i = 0; i < N; ++i)
         do_data.push_back({dL_do[i], dL_do_ref[i]});
-    print_errors(do_data, "do (rasterize)");
+    print_errors(do_data, "do (rasterize)", check_index);
 
     std::vector<std::pair<float, float>> dm_data;
     for (int i = 0; i < N; ++i) {
         dm_data.push_back({dL_dm[i].x, dL_dm_ref[i].x});
         dm_data.push_back({dL_dm[i].y, dL_dm_ref[i].y});
     }
-    print_errors(dm_data, "dm (rasterize)");
+    print_errors(dm_data, "dm (rasterize)", check_index);
 
     std::vector<std::pair<float, float>> dc_data;
     for (int i = 0; i < N; ++i) {
@@ -340,7 +319,7 @@ void compare_rasterize_backward(const int N) {
         dc_data.push_back({dL_dc[i].y, dL_dc_ref[i].y});
         dc_data.push_back({dL_dc[i].z, dL_dc_ref[i].z});
     }
-    print_errors(dc_data, "dc (rasterize)");
+    print_errors(dc_data, "dc (rasterize)", check_index);
 }
 
 int main(int argc, char *argv[]) {
@@ -353,13 +332,11 @@ int main(int argc, char *argv[]) {
         num_points = std::stoi(argv[2]);
     }
     for (int x = 0; x < num_iters; x++) {
-        std::cout << "<Check " << x << ">\n"
-                  << "=====================\n";
-        compare_project2d_mean_backward();
-        compare_conic_backward();
-        compare_cov3d_backward();
-        compare_cov2d_ewa_backward();
-        compare_rasterize_backward(num_points);
+        compare_project2d_mean_backward(x);
+        compare_conic_backward(x);
+        compare_cov3d_backward(x);
+        compare_cov2d_ewa_backward(x);
+        compare_rasterize_backward(num_points, x);
     }
     return 0;
 }
