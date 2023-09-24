@@ -1,15 +1,15 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
-#include <iostream>
 #include <iomanip>
+#include <iostream>
 #include <math.h>
 #include <vector>
 
 #include "backward.cuh"
-#include "serial_backward.cuh"
 #include "forward.cuh"
 #include "helpers.cuh"
+#include "serial_backward.cuh"
 
 float random_float() { return (float)std::rand() / RAND_MAX; }
 
@@ -37,39 +37,39 @@ float3 compute_conic(const float3 cov2d) {
 }
 
 float percent_error(float exp_val, float true_val) {
-    return (abs(true_val - exp_val) / true_val ) * 100.f;
+    return (abs(true_val - exp_val) / true_val) * 100.f;
 }
 
-// takes a vector of float pairs, where first value is experimental, 
+// takes a vector of float pairs, where first value is experimental,
 // and second is true value
-std::vector<float> percent_errors(
-    const std::vector<std::pair<float,float>>& values
-) {
+std::vector<float>
+percent_errors(const std::vector<std::pair<float, float>> &values) {
     std::vector<float> p_errors;
 
     for (int i = 0; i < values.size(); ++i) {
-        const float exp_val  = values[i].first;
+        const float exp_val = values[i].first;
         const float true_val = values[i].second;
-        const float p_error{ percent_error(exp_val, true_val) };
+        const float p_error{percent_error(exp_val, true_val)};
         p_errors.push_back(p_error);
     }
 
     return p_errors;
 }
 
-// takes a vector of float pairs, where pair's first value is 
-// "experimental value", and second is "true value". If any pair's percent exceeds 
-// error threshold, the entire vector will be displayed in a nice lil format
+// takes a vector of float pairs, where pair's first value is
+// "experimental value", and second is "true value". If any pair's percent
+// exceeds error threshold, the entire vector will be displayed in a nice lil
+// format
 void print_errors(
-    const std::vector<std::pair<float,float>>& values,
-    const std::string& name,
+    const std::vector<std::pair<float, float>> &values,
+    const std::string &name,
     float error_threshold = 0.01f // percent error (0.01%)
 ) {
-    const std::vector<float> p_errors{ percent_errors(values) };
+    const std::vector<float> p_errors{percent_errors(values)};
 
     // only print if input is unexpected
-    bool data_within_error{ true };
-    for (float p : p_errors) 
+    bool data_within_error{true};
+    for (float p : p_errors)
         if (p > error_threshold)
             data_within_error = false;
 
@@ -77,17 +77,18 @@ void print_errors(
         return;
 
     // format cout for how we want to display data
-    std::cout << std::setprecision(2);;
+    std::cout << std::setprecision(2);
+    ;
 
     std::cout << name << ":\n"
-        << "     ours:     refs:\n";
+              << "     ours:     refs:\n";
 
     for (int i = 0; i < values.size(); ++i) {
         const float d1 = values[i].first;
         const float d2 = values[i].second;
-        std::cout << '[' << i << "]: " << std::scientific
-            << std::setw(10) << d1 << ", " << std::setw(10) << d2
-            << "\t(percent error=" << std::fixed << p_errors[i] << ")\n";
+        std::cout << '[' << i << "]: " << std::scientific << std::setw(10) << d1
+                  << ", " << std::setw(10) << d2
+                  << "\t(percent error=" << std::fixed << p_errors[i] << ")\n";
     }
     std::cout << '\n';
 }
@@ -108,7 +109,7 @@ void compare_project2d_mean_backward() {
     float3 dL_dmean_ref = projectMean2DBackward(mean, proj, dL_dmean2d);
 
     // comparison
-    const std::vector<std::pair<float,float>> dmean_data {
+    const std::vector<std::pair<float, float>> dmean_data{
         {dL_dmean.x, dL_dmean_ref.x},
         {dL_dmean.y, dL_dmean_ref.y},
         {dL_dmean.z, dL_dmean_ref.z},
@@ -125,7 +126,7 @@ void compare_conic_backward() {
     float3 dL_dcov2d_ref = computeConicBackward(cov2d, dL_dconic);
 
     // comparison
-    const std::vector<std::pair<float,float>> dcov2d_data {
+    const std::vector<std::pair<float, float>> dcov2d_data{
         {dL_dcov2d.x, dL_dcov2d_ref.x},
         {dL_dcov2d.y, dL_dcov2d_ref.y},
         {dL_dcov2d.z, dL_dcov2d_ref.z},
@@ -154,14 +155,14 @@ void compare_cov3d_backward() {
     computeCov3DBackward(scale, 1.f, quat_ref, dL_dcov3d, dL_ds_ref, dL_dq_ref);
 
     // comparison
-    const std::vector<std::pair<float,float>> ds_data {
+    const std::vector<std::pair<float, float>> ds_data{
         {dL_ds.x, dL_ds_ref.x},
         {dL_ds.y, dL_ds_ref.y},
         {dL_ds.z, dL_ds_ref.z},
     };
     print_errors(ds_data, "ds (cov3d)");
 
-    const std::vector<std::pair<float,float>> dquat_data {
+    const std::vector<std::pair<float, float>> dquat_data{
         // {dL_dq.x, dL_dq_ref.y},
         // {dL_dq.y, dL_dq_ref.z},
         // {dL_dq.z, dL_dq_ref.w},
@@ -235,16 +236,16 @@ void compare_cov2d_ewa_backward() {
     project_cov3d_ewa_vjp(
         mean, cov3d, viewmat, 1.f, 1.f, dL_dcov2d, dL_dmean, dL_dcov
     );
-    
+
     // comparison
-    const std::vector<std::pair<float,float>> dmean_data {
+    const std::vector<std::pair<float, float>> dmean_data{
         {dL_dmean.x, dL_dmean_ref.x},
         {dL_dmean.x, dL_dmean_ref.x},
         {dL_dmean.x, dL_dmean_ref.x},
     };
     print_errors(dmean_data, "dmean (cov2d_ewa)");
 
-    std::vector<std::pair<float,float>> dcov_data;
+    std::vector<std::pair<float, float>> dcov_data;
     for (int i = 0; i < 6; ++i)
         dcov_data.push_back({dL_dcov[i], dL_dcov_ref[i]});
 
@@ -316,24 +317,24 @@ void compare_rasterize_backward(const int N) {
     );
 
     // comparison
-    std::vector<std::pair<float,float>> drgb_data;
-    for (int i = 0; i < C*N; ++i)
+    std::vector<std::pair<float, float>> drgb_data;
+    for (int i = 0; i < C * N; ++i)
         drgb_data.push_back({dL_drgb[i], dL_drgb_ref[i]});
     print_errors(drgb_data, "drgb (rasterize)");
 
-    std::vector<std::pair<float,float>> do_data;
+    std::vector<std::pair<float, float>> do_data;
     for (int i = 0; i < N; ++i)
         do_data.push_back({dL_do[i], dL_do_ref[i]});
     print_errors(do_data, "do (rasterize)");
 
-    std::vector<std::pair<float,float>> dm_data;
+    std::vector<std::pair<float, float>> dm_data;
     for (int i = 0; i < N; ++i) {
         dm_data.push_back({dL_dm[i].x, dL_dm_ref[i].x});
         dm_data.push_back({dL_dm[i].y, dL_dm_ref[i].y});
     }
     print_errors(dm_data, "dm (rasterize)");
 
-    std::vector<std::pair<float,float>> dc_data;
+    std::vector<std::pair<float, float>> dc_data;
     for (int i = 0; i < N; ++i) {
         dc_data.push_back({dL_dc[i].x, dL_dc_ref[i].x});
         dc_data.push_back({dL_dc[i].y, dL_dc_ref[i].y});
@@ -353,7 +354,7 @@ int main(int argc, char *argv[]) {
     }
     for (int x = 0; x < num_iters; x++) {
         std::cout << "<Check " << x << ">\n"
-            << "=====================\n";
+                  << "=====================\n";
         compare_project2d_mean_backward();
         compare_conic_backward();
         compare_cov3d_backward();
