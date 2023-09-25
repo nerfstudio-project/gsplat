@@ -337,6 +337,11 @@ __global__ void rasterize_forward_kernel(
     float py = (float)i;
     int32_t pix_id = i * img_size.x + j;
 
+    // return if out of bounds
+    if (i >= img_size.y || j >= img_size.x) {
+        return;
+    }
+    
     // which gaussians to look through in this tile
     int2 range = tile_bins[tile_id];
     float3 conic;
