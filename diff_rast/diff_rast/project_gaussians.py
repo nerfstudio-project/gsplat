@@ -60,7 +60,8 @@ class ProjectGaussians(Function):
             projmat,
             fx,
             fy,
-            (img_height, img_width),
+            img_height,
+            img_width,
             tile_bounds,
         )
 
@@ -115,7 +116,8 @@ class ProjectGaussians(Function):
             projmat,
             ctx.fx,
             ctx.fy,
-            (ctx.img_height, ctx.img_width),  # img_size
+            ctx.img_height,
+            ctx.img_width,
             cov3d,
             radii,
             conics,

@@ -26,7 +26,7 @@ class SimpleTrainer:
 
         BLOCK_X, BLOCK_Y = 16, 16
         fov_x = math.pi / 2.0
-        self.W, self.H = gt_image.shape[0], gt_image.shape[1]
+        self.H, self.W = gt_image.shape[0], gt_image.shape[1]
         self.focal = 0.5 * float(self.W) / math.tan(0.5 * fov_x)
         self.tile_bounds = (self.W + BLOCK_X - 1) // BLOCK_X, (self.H + BLOCK_Y - 1) // BLOCK_Y, 1
         self.img_size = torch.tensor([self.W, self.H, 1], device=self.device)
