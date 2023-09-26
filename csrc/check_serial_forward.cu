@@ -183,7 +183,9 @@ __host__ __device__ void host_project_gaussians_forward_kernel(
     scale_rot_to_cov3d(scale, glob_scale, quat, cur_cov3d);
 
     // project to 2d with ewa approximation
-    float3 cov2d = project_cov3d_ewa(p_world, cur_cov3d, viewmat, fx, fy);
+    float tan_fovx = 0.5 * img_size.x / fx;
+    float tan_fovy = 0.5 * img_size.y / fy;
+    float3 cov2d = project_cov3d_ewa(p_world, cur_cov3d, viewmat, fx, fy, tan_fovx, tan_fovy);
     //printf("diff rast: cov2d %d, %.2f %.2f %.2f\n", idx, cov2d.x, cov2d.y, cov2d.z);
 
     float3 conic;
@@ -239,7 +241,7 @@ void compare_cov2d_forward(){
     float3 mean = {1.f, 1.f, 1.f};
 
     // diff rast
-    float3 diff_rast_cov2d = project_cov3d_ewa(mean,cov3d, viewmat, fx,fy);
+    float3 diff_rast_cov2d = project_cov3d_ewa(mean,cov3d, viewmat, fx, fy, tan_fovx, tan_fovy);
     std::cout<<"diff rast cov2d: "<<diff_rast_cov2d.x<<" "<<diff_rast_cov2d.y<<" "<<diff_rast_cov2d.z<<std::endl; 
     
     // ref rast
