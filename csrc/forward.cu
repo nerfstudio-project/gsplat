@@ -379,6 +379,8 @@ __global__ void rasterize_forward_kernel(
         }
         next_T = T * (1.f - alpha);
         if (next_T <= 1e-4f) {
+            // we want to render the last gaussian that contributes and note that here idx > range.x so we don't underflow
+            idx -= 1; 
             break;
         }
         vis = alpha * T;
