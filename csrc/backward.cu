@@ -32,6 +32,11 @@ __global__ void rasterize_backward_kernel(
     float py = (float)i;
     int32_t pix_id = i * img_size.x + j;
 
+    // return if out of bounds
+    if (i >= img_size.y || j >= img_size.x) {
+        return;
+    }
+
     // which gaussians get gradients for this pixel
     int2 range = tile_bins[tile_id];
     // df/d_out for this pixel

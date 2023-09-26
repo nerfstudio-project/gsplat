@@ -31,11 +31,11 @@ __global__ void project_gaussians_forward_kernel(
     int32_t *num_tiles_hit
 ) {
     unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
-    radii[idx] = 0;
-    num_tiles_hit[idx] = 0;
     if (idx >= num_points) {
         return;
     }
+    radii[idx] = 0;
+    num_tiles_hit[idx] = 0;
 
     float3 p_world = means3d[idx];
     // printf("p_world %d %.2f %.2f %.2f\n", idx, p_world.x, p_world.y,
@@ -300,9 +300,9 @@ void bin_and_sort_gaussians(
     cudaFree(sort_ws);
 
     // get the start and end indices for the gaussians in each tile
-    printf("launching tile binning %d %d\n",
-        (num_intersects + N_THREADS - 1) / N_THREADS,
-        N_THREADS);
+    // printf("launching tile binning %d %d\n", 
+        // (num_intersects + N_THREADS - 1) / N_THREADS,
+        // N_THREADS);
     get_tile_bin_edges<<<
         (num_intersects + N_THREADS - 1) / N_THREADS,
         N_THREADS>>>(num_intersects, isect_ids_sorted, tile_bins);
@@ -340,6 +340,11 @@ __global__ void rasterize_forward_kernel(
     float py = (float)i;
     int32_t pix_id = i * img_size.x + j;
 
+    // return if out of bounds
+    if (i >= img_size.y || j >= img_size.x) {
+        return;
+    }
+    
     // which gaussians to look through in this tile
     int2 range = tile_bins[tile_id];
     float3 conic;
