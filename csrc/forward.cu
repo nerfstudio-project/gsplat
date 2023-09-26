@@ -5,6 +5,7 @@
 #include <cub/cub.cuh>
 #include <cub/device/device_radix_sort.cuh>
 #include <iostream>
+#include <algorithm>
 
 namespace cg = cooperative_groups;
 
@@ -56,7 +57,9 @@ __global__ void project_gaussians_forward_kernel(
     scale_rot_to_cov3d(scale, glob_scale, quat, cur_cov3d);
 
     // project to 2d with ewa approximation
-    float3 cov2d = project_cov3d_ewa(p_world, cur_cov3d, viewmat, fx, fy);
+    float tan_fovx = 0.5 * img_size.x / fx;
+    float tan_fovy = 0.5 * img_size.y / fy;
+    float3 cov2d = project_cov3d_ewa(p_world, cur_cov3d, viewmat, fx, fy, tan_fovx, tan_fovy);
     // printf("cov2d %d, %.2f %.2f %.2f\n", idx, cov2d.x, cov2d.y, cov2d.z);
 
     float3 conic;
@@ -297,7 +300,7 @@ void bin_and_sort_gaussians(
     cudaFree(sort_ws);
 
     // get the start and end indices for the gaussians in each tile
-    printf("launching tile binning %d %d\n", 
+    printf("launching tile binning %d %d\n",
         (num_intersects + N_THREADS - 1) / N_THREADS,
         N_THREADS);
     get_tile_bin_edges<<<
@@ -353,7 +356,7 @@ __global__ void rasterize_forward_kernel(
         center = xys[g];
         delta = {center.x - px, center.y - py};
 
-        // Mahalanobis distance (here referred to as sigma) measures how many standard deviations away distance delta is. 
+        // Mahalanobis distance (here referred to as sigma) measures how many standard deviations away distance delta is.
         // sigma = -0.5(d.T * conic * d)
         sigma =
             0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
@@ -362,7 +365,7 @@ __global__ void rasterize_forward_kernel(
             continue;
         }
         opac = opacities[g];
-        
+
         alpha = min(0.999f, opac * exp(-sigma));
 
         // break out conditions
@@ -426,10 +429,11 @@ __host__ __device__ float3 project_cov3d_ewa(
     const float *cov3d,
     const float *viewmat,
     const float fx,
-    const float fy
-    // const float tan_fovx,
-    // const float tan_fovy,
+    const float fy,
+    const float tan_fovx,
+    const float tan_fovy
 ) {
+    // clip the
     // we expect row major matrices as input, glm uses column major
     // upper 3x3 submatrix
     glm::mat3 W = glm::mat3(
@@ -445,7 +449,13 @@ __host__ __device__ float3 project_cov3d_ewa(
     );
     glm::vec3 p = glm::vec3(viewmat[3], viewmat[7], viewmat[11]);
     glm::vec3 t = W * glm::vec3(mean3d.x, mean3d.y, mean3d.z) + p;
-    // printf("ours %f %f %f\n", t[0], t[1], t[2]);
+
+    // clip so that the covariance
+    float lim_x = 1.3f * tan_fovx;
+    float lim_y = 1.3f * tan_fovy;
+    t.x = t.z * std::min(lim_x, std::max(-lim_x, t.x / t.z));
+    t.y = t.z * std::min(lim_y, std::max(-lim_y, t.y / t.z));
+
     float rz = 1.f / t.z;
     float rz2 = rz * rz;
 
@@ -467,7 +477,6 @@ __host__ __device__ float3 project_cov3d_ewa(
     //     J[0][0], J[1][0], J[2][0],
     //     J[0][1], J[1][1], J[2][1]
     // );
-
 
     glm::mat3 T = J * W;
 

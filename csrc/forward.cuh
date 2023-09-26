@@ -69,9 +69,9 @@ __host__ __device__ float3 project_cov3d_ewa(
     const float *cov3d,
     const float *viewmat,
     const float fx,
-    const float fy
-    // const float tan_fovx,
-    // const float tan_fovy,
+    const float fy,
+    const float tan_fovx,
+    const float tan_fovy
 );
 
 // device helper to get 3D covariance from scale and quat parameters
