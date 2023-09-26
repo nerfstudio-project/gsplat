@@ -30,11 +30,11 @@ __global__ void project_gaussians_forward_kernel(
     int32_t *num_tiles_hit
 ) {
     unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
-    radii[idx] = 0;
-    num_tiles_hit[idx] = 0;
     if (idx >= num_points) {
         return;
     }
+    radii[idx] = 0;
+    num_tiles_hit[idx] = 0;
 
     float3 p_world = means3d[idx];
     // printf("p_world %d %.2f %.2f %.2f\n", idx, p_world.x, p_world.y,
@@ -297,9 +297,9 @@ void bin_and_sort_gaussians(
     cudaFree(sort_ws);
 
     // get the start and end indices for the gaussians in each tile
-    printf("launching tile binning %d %d\n", 
-        (num_intersects + N_THREADS - 1) / N_THREADS,
-        N_THREADS);
+    // printf("launching tile binning %d %d\n", 
+        // (num_intersects + N_THREADS - 1) / N_THREADS,
+        // N_THREADS);
     get_tile_bin_edges<<<
         (num_intersects + N_THREADS - 1) / N_THREADS,
         N_THREADS>>>(num_intersects, isect_ids_sorted, tile_bins);
@@ -431,9 +431,9 @@ __host__ __device__ float3 project_cov3d_ewa(
     const float *cov3d,
     const float *viewmat,
     const float fx,
-    const float fy
-    // const float tan_fovx,
-    // const float tan_fovy,
+    const float fy,
+    const float tan_fovx,
+    const float tan_fovy
 ) {
     // we expect row major matrices as input, glm uses column major
     // upper 3x3 submatrix
