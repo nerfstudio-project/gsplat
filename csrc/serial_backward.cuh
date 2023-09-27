@@ -48,10 +48,10 @@ __host__ __device__ void rasterizeBackward(
     float3 *dL_dconic2D
 );
 
+template <int CHANNELS>
 __host__ __device__ void rasterize_vjp(
     const int N,
     const float2 p,
-    const int channels,
     const float2 *xys,
     const float3 *conics,
     const float *opacities,
