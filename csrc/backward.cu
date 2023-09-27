@@ -49,7 +49,10 @@ __global__ void rasterize_backward_kernel(
     float T_final = final_Ts[pix_id];
     float T = T_final;
     // the contribution from gaussians behind the current one
-    float *S = new float[channels]();
+    float S[3]; // TODO: this currently doesn't match the channel count input.
+    S[0] = 0.0;
+    S[1] = 0.0;
+    S[2] = 0.0;
     // float S[channels] = {0.f};
     int bin_final = final_index[pix_id];
 
@@ -121,7 +124,6 @@ __global__ void rasterize_backward_kernel(
             &(v_xy[g].y), v_sigma * (conic.y * delta.x + conic.z * delta.y)
         );
     }
-    delete S;
 }
 
 void rasterize_backward_impl(
