@@ -4,10 +4,10 @@
 
 namespace cg = cooperative_groups;
 
+template<int CHANNELS>
 __global__ void rasterize_backward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
-    const int channels,
     const int32_t *gaussians_ids_sorted,
     const int2 *tile_bins,
     const float2 *xys,
@@ -40,7 +40,7 @@ __global__ void rasterize_backward_kernel(
     // which gaussians get gradients for this pixel
     int2 range = tile_bins[tile_id];
     // df/d_out for this pixel
-    const float *v_out = &(v_output[channels * pix_id]);
+    const float *v_out = &(v_output[CHANNELS * pix_id]);
     float3 conic;
     float2 center, delta;
     float sigma, vis, fac, opac, alpha, ra;
@@ -49,10 +49,10 @@ __global__ void rasterize_backward_kernel(
     float T_final = final_Ts[pix_id];
     float T = T_final;
     // the contribution from gaussians behind the current one
-    float S[3]; // TODO: this currently doesn't match the channel count input.
-    S[0] = 0.0;
-    S[1] = 0.0;
-    S[2] = 0.0;
+    float S[CHANNELS] = {0.f}; // TODO: this currently doesn't match the channel count input.
+    // S[0] = 0.0;
+    // S[1] = 0.0;
+    // S[2] = 0.0;
     // float S[channels] = {0.f};
     int bin_final = final_index[pix_id];
 
@@ -85,15 +85,15 @@ __global__ void rasterize_backward_kernel(
         // update v_rgb for this gaussian
         fac = alpha * T;
         v_alpha = 0.f;
-        for (int c = 0; c < channels; ++c) {
+        for (int c = 0; c < CHANNELS; ++c) {
             // gradient wrt rgb
-            atomicAdd(&(v_rgb[channels * g + c]), fac * v_out[c]);
+            atomicAdd(&(v_rgb[CHANNELS * g + c]), fac * v_out[c]);
             // contribution from this pixel
-            v_alpha += (rgbs[channels * g + c] * T - S[c] * ra) * v_out[c];
+            v_alpha += (rgbs[CHANNELS * g + c] * T - S[c] * ra) * v_out[c];
             // contribution from background pixel
             v_alpha += -T_final * ra * background[c] * v_out[c];
             // update the running sum
-            S[c] += rgbs[channels * g + c] * fac;
+            S[c] += rgbs[CHANNELS * g + c] * fac;
         }
 
 
@@ -130,7 +130,6 @@ void rasterize_backward_impl(
     const dim3 tile_bounds,
     const dim3 block,
     const dim3 img_size,
-    const int channels,
     const int *gaussians_ids_sorted,
     const int2 *tile_bins,
     const float2 *xys,
@@ -147,10 +146,9 @@ void rasterize_backward_impl(
     float *v_opacity
 
 ) {
-    rasterize_backward_kernel<<<tile_bounds, block>>>(
+    rasterize_backward_kernel<3> <<<tile_bounds, block>>>(
         tile_bounds,
         img_size,
-        channels,
         gaussians_ids_sorted,
         tile_bins,
         xys,

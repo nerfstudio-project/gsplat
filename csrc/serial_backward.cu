@@ -448,10 +448,10 @@ __host__ __device__ void rasterizeBackward(
 }
 
 // copying the part that's relevant from our rasterize method
+template <int CHANNELS>
 __host__ __device__ void rasterize_vjp(
     const int N,
     const float2 p,
-    const int channels,
     const float2 *xys,
     const float3 *conics,
     const float *opacities,
@@ -464,8 +464,7 @@ __host__ __device__ void rasterize_vjp(
     float3 *v_conic
 ) {
     float T = T_final;
-    // float S[channels] = {0.f};
-    float *S = new float[channels]();
+    float S[CHANNELS] = {0.f};
     float3 conic;
     float2 center, delta;
     float sigma, vis, fac, opac, alpha, ra;
@@ -494,11 +493,11 @@ __host__ __device__ void rasterize_vjp(
         // update v_rgb for this gaussian
         fac = alpha * T;
         v_alpha = 0.f;
-        for (int c = 0; c < channels; ++c) {
-            v_rgb[channels * g + c] += fac * v_out[c];
-            v_alpha += (rgbs[channels * g + c] * T - S[c] * ra) * v_out[c];
+        for (int c = 0; c < CHANNELS; ++c) {
+            v_rgb[CHANNELS * g + c] += fac * v_out[c];
+            v_alpha += (rgbs[CHANNELS * g + c] * T - S[c] * ra) * v_out[c];
             // update contribution from back
-            S[c] += rgbs[channels * g + c] * fac;
+            S[c] += rgbs[CHANNELS * g + c] * fac;
         }
 
         // update v_opacity for this gaussian
@@ -528,5 +527,4 @@ __host__ __device__ void rasterize_vjp(
         //     v_sigma * (conic.y * delta.x + conic.z * delta.y)
         // );
     }
-    delete S;
 }

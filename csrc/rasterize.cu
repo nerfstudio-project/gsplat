@@ -32,8 +32,8 @@ std::
         const torch::Tensor &num_tiles_hit,
         const torch::Tensor &colors,
         const torch::Tensor &opacity,
-        const int img_height,
-        const int img_width,
+        const unsigned img_height,
+        const unsigned img_width,
         const torch::Tensor &background
     ) {
     CHECK_INPUT(xys);
@@ -47,6 +47,10 @@ std::
 
     if (xys.ndimension() != 2 || xys.size(1) != 2) {
         AT_ERROR("xys must have dimensions (N, 2)");
+    }
+
+    if (colors.ndimension() != 2 || colors.size(1) != 3) {
+        AT_ERROR("colors must have dimensions (num_points, 3)");
     }
 
     const int channels = colors.size(1);
@@ -134,7 +138,6 @@ std::
         tile_bounds,
         block,
         img_size,
-        channels,
         // sorted_ids_ptr,
         // bins_ptr,
         // xys_ptr,
@@ -175,8 +178,8 @@ std::
         torch::Tensor  // dL_dopacity
         >
     rasterize_backward_tensor(
-        const int img_height,
-        const int img_width,
+        const unsigned img_height,
+        const unsigned img_width,
         const torch::Tensor &gaussians_ids_sorted,
         const torch::Tensor &tile_bins,
         const torch::Tensor &xys,
@@ -194,6 +197,10 @@ std::
 
     if (xys.ndimension() != 2 || xys.size(1) != 2) {
         AT_ERROR("xys must have dimensions (num_points, 2)");
+    }
+
+    if (colors.ndimension() != 2 || colors.size(1) != 3) {
+        AT_ERROR("colors must have dimensions (num_points, 3)");
     }
 
     const int num_points = xys.size(0);
@@ -215,7 +222,6 @@ std::
         tile_bounds,
         block,
         img_size,
-        channels,
         gaussians_ids_sorted.contiguous().data_ptr<int>(),
         (int2 *)tile_bins.contiguous().data_ptr<int>(),
         (float2 *)xys.contiguous().data_ptr<float>(),
