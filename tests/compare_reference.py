@@ -35,12 +35,12 @@ def identity_quat(N, **kwargs):
 
 
 def projection_matrix(znear, zfar, fovx, fovy, **kwargs):
-    t = math.tan(0.5 * fovy)
-    b = -t
-    r = math.tan(0.5 * fovx)
-    l = -r
     n = znear
     f = zfar
+    t = n * math.tan(0.5 * fovy)
+    b = -t
+    r = n * math.tan(0.5 * fovx)
+    l = -r
     return torch.tensor(
         [
             [2 * n / (r - l), 0.0, (r + l) / (r - l), 0.0],
