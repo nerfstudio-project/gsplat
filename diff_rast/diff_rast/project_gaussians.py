@@ -85,10 +85,10 @@ class ProjectGaussians(Function):
             conics,
         )
 
-        return (xys, depths, radii, conics, num_tiles_hit)
+        return (xys, depths, radii, conics, num_tiles_hit,cov3d)
 
     @staticmethod
-    def backward(ctx, v_xys, v_depths, v_radii, v_conics, v_num_tiles_hit):
+    def backward(ctx, v_xys, v_depths, v_radii, v_conics, v_num_tiles_hit,v_cov3d):
         (
             means3d,
             scales,
