@@ -210,7 +210,7 @@ scale_to_mat(const float3 scale, const float glob_scale) {
 inline __host__ __device__ bool
 clip_near_plane(const float3 p, const float *viewmat, float3 &p_view) {
     p_view = transform_4x3(viewmat, p);
-    if (p_view.z <= 0.2f) {
+    if (p_view.z <= 0.01f) {
         return true;
     }
     return false;
