@@ -18,6 +18,20 @@ std::tuple<
     torch::Tensor> // output radii
 compute_cov2d_bounds_forward_tensor(const int num_pts, torch::Tensor A);
 
+torch::Tensor compute_sh_forward_tensor(
+    unsigned num_points,
+    unsigned degree,
+    torch::Tensor viewdirs,
+    torch::Tensor coeffs
+);
+
+torch::Tensor compute_sh_backward_tensor(
+    unsigned num_points,
+    unsigned degree,
+    torch::Tensor viewdirs,
+    torch::Tensor v_colors
+);
+
 std::tuple<
     torch::Tensor,
     torch::Tensor,
