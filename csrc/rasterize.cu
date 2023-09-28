@@ -75,7 +75,7 @@ std::
         num_intersects,
         cum_tiles_hit.contiguous().data_ptr<int32_t>()
     );
-    printf("%d num intersects\n", num_intersects);
+    // printf("%d num intersects\n", num_intersects);
 
     torch::Tensor gaussian_ids_sorted =
         torch::zeros({num_intersects}, xys.options().dtype(torch::kInt32));
