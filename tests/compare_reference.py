@@ -113,7 +113,7 @@ class CompareReference:
         self.viewmat.requires_grad = False
 
     def forward_ours(self):
-        xys, depths, radii, conics, num_tiles_hit = ProjectGaussians.apply(
+        xys, depths, radii, conics, num_tiles_hit,cov3d = ProjectGaussians.apply(
             self.means,
             self.scales,
             self.scale_mod,
