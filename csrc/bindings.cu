@@ -1,6 +1,8 @@
 #include "backward.cuh"
 #include "bindings.h"
+#include "forward.cuh"
 #include "helpers.cuh"
+#include "sh.cuh"
 #include "third_party/glm/glm/glm.hpp"
 #include "third_party/glm/glm/gtc/type_ptr.hpp"
 #include <cooperative_groups.h>
@@ -66,6 +68,59 @@ compute_cov2d_bounds_forward_tensor(const int num_pts, torch::Tensor A) {
         })
     );
     return std::make_tuple(conics, radii);
+}
+
+torch::Tensor compute_sh_forward_tensor(
+    unsigned num_points,
+    unsigned degree,
+    torch::Tensor viewdirs,
+    torch::Tensor coeffs
+) {
+    unsigned num_bases = num_sh_bases(degree);
+    if (coeffs.ndimension() != 3 || coeffs.size(0) != num_points ||
+        coeffs.size(1) != num_bases || coeffs.size(2) != 3) {
+        AT_ERROR("coeffs must have dimensions (N, D, 3)");
+    }
+    torch::Tensor colors = torch::empty({num_points, 3}, coeffs.options());
+    compute_sh_forward_kernel<<<
+        (num_points + N_THREADS - 1) / N_THREADS,
+        N_THREADS>>>(
+        num_points,
+        degree,
+        (float3 *)viewdirs.contiguous().data_ptr<float>(),
+        coeffs.contiguous().data_ptr<float>(),
+        colors.contiguous().data_ptr<float>()
+    );
+    return colors;
+}
+
+torch::Tensor compute_sh_backward_tensor(
+    unsigned num_points,
+    unsigned degree,
+    torch::Tensor viewdirs,
+    torch::Tensor v_colors
+) {
+    if (viewdirs.ndimension() != 2 || viewdirs.size(0) != num_points ||
+        viewdirs.size(1) != 3) {
+        AT_ERROR("viewdirs must have dimensions (N, 3)");
+    }
+    if (v_colors.ndimension() != 2 || v_colors.size(0) != num_points ||
+        v_colors.size(1) != 3) {
+        AT_ERROR("v_colors must have dimensions (N, 3)");
+    }
+    unsigned num_bases = num_sh_bases(degree);
+    torch::Tensor v_coeffs =
+        torch::empty({num_points, num_bases, 3}, v_colors.options());
+    compute_sh_backward_kernel<<<
+        (num_points + N_THREADS - 1) / N_THREADS,
+        N_THREADS>>>(
+        num_points,
+        degree,
+        (float3 *)viewdirs.contiguous().data_ptr<float>(),
+        v_colors.contiguous().data_ptr<float>(),
+        v_coeffs.contiguous().data_ptr<float>()
+    );
+    return v_coeffs;
 }
 
 std::tuple<

@@ -8,4 +8,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("compute_cov2d_bounds_forward", &compute_cov2d_bounds_forward_tensor);
     m.def("project_gaussians_forward", &project_gaussians_forward_tensor);
     m.def("project_gaussians_backward", &project_gaussians_backward_tensor);
+    m.def("compute_sh_forward", &compute_sh_forward_tensor);
+    m.def("compute_sh_backward", &compute_sh_backward_tensor);
 }
