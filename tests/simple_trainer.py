@@ -44,7 +44,7 @@ class SimpleTrainer:
         self.scales = torch.empty((self.num_points, 3), device=self.device)
         self.quats = torch.empty((self.num_points, 4), device=self.device)
         self.rgbs = torch.ones((self.num_points, 3), device=self.device)
-        self.opacities = torch.ones(self.num_points, device=self.device)
+        self.opacities = torch.ones((self.num_points,1), device=self.device)
         bd = 2
         for i in range(self.num_points):
             self.means[i] = torch.tensor(
@@ -83,22 +83,12 @@ class SimpleTrainer:
             ],
             device=self.device,
         )
-        self.means.requires_grad = False
-        self.scales.requires_grad = False
-        self.quats.requires_grad = False
+        self.means.requires_grad = True
+        self.scales.requires_grad = True
+        self.quats.requires_grad = True
         self.rgbs.requires_grad = True
-        self.opacities.requires_grad = False
+        self.opacities.requires_grad = True
         self.viewmat.requires_grad = False
-
-    def _save_img(self, image, image_path):
-        if torch.is_tensor(image):
-            image = image.detach().cpu().numpy() * 255
-            image = image.astype(np.uint8)
-        if not Path(os.path.dirname(image_path)).exists():
-            Path(os.path.dirname(image_path)).mkdir()
-        im = Image.fromarray(image)
-        print("saving to: ", image_path)
-        im.save(image_path)
 
     def train(self, iterations: int = 1000, lr: float = 0.01, save_imgs: bool = True):
         optimizer = optim.Adam(
@@ -107,7 +97,7 @@ class SimpleTrainer:
         mse_loss = torch.nn.MSELoss()
         frames = []
         for iter in range(iterations):
-            xys, depths, radii, conics, num_tiles_hit,cov3d = ProjectGaussians.apply(
+            xys, depths, radii, conics, num_tiles_hit, cov3d = ProjectGaussians.apply(
                 self.means,
                 self.scales,
                 1,
@@ -139,17 +129,7 @@ class SimpleTrainer:
             torch.cuda.synchronize()
             optimizer.step()
             print(f"Iteration {iter + 1}/{iterations}, Loss: {loss.item()}")
-            print("RGB MIN", self.rgbs.min().item(), "RGB MAX", self.rgbs.max().item())
-            print(
-                "OPACITY MIN",
-                self.opacities.min().item(),
-                "OPACITY MAX",
-                self.opacities.max().item(),
-            )
-            # same line but for out_img
-            print(
-                "OUT_IMG MIN", out_img.min().item(), "OUT_IMG MAX", out_img.max().item()
-            )
+
             if save_imgs and iter % 5 == 0:
                 frames.append((out_img.detach().cpu().numpy() * 255).astype(np.uint8))
         if save_imgs:
@@ -164,12 +144,19 @@ class SimpleTrainer:
                 loop=0,
             )
 
+def image_path_to_tensor(image_path):
+    import torchvision.transforms as transforms
+    img = Image.open(image_path)
+    transform = transforms.ToTensor()
+    img_tensor = transform(img).permute(1,2,0)
+    return img_tensor
 
 def main(height: int = 256, width: int = 256) -> None:
     gt_image = torch.ones((height, width, 3)) * 1.0
     # make top left and bottom right red,blue
     gt_image[: height // 2, : width // 2, :] = torch.tensor([1.0, 0.0, 0.0])
     gt_image[height // 2 :, width // 2 :, :] = torch.tensor([0.0, 0.0, 1.0])
+    # gt_image = image_path_to_tensor(os.getcwd() + "path_to_your_image")
     trainer = SimpleTrainer(gt_image=gt_image)
 
     trainer.train()
