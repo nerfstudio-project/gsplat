@@ -1,4 +1,5 @@
 """Python bindings for SH"""
+
 import torch
 import cuda_lib
 
@@ -20,6 +21,13 @@ def num_sh_bases(degree: int):
 
 
 class SphericalHarmonics(Function):
+     """Compute spherical harmonics  
+    
+    Args:
+        degree (int): degree of SHs.
+        viewdirs (Tensor): viewing directions.
+        coeffs (Tensor): harmonic coefficients.
+    """
     @staticmethod
     def forward(
         ctx,
