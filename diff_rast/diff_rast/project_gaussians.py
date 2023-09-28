@@ -1,8 +1,7 @@
-"""Python bindings for custom Cuda functions"""
+"""Python bindings for 3D gaussian projection"""
 
 from typing import Tuple
 
-import torch
 from jaxtyping import Float
 from torch import Tensor
 from torch.autograd import Function
@@ -17,13 +16,14 @@ class ProjectGaussians(Function):
        means3d (Tensor): xyzs of gaussians.
        scales (Tensor): scales of the gaussians.
        glob_scale (float): A global scaling factor applied to the scene.
-       rotations_quat (Tensor): rotations in quaternion [w,x,y,z] format.
-       colors (Tensor): colors associated with the gaussians.
-       opacity (Tensor): opacity/transparency of the gaussians.
-       view_matrix (Tensor): view matrix for rendering.
-       proj_matrix (Tensor): projection matrix for rendering.
+       quats (Tensor): rotations in quaternion [w,x,y,z] format.
+       viewmat (Tensor): view matrix for rendering.
+       projmat (Tensor): projection matrix for rendering.
+       fx (float): focal length x.
+       fy (float): focal length y.
        img_height (int): height of the rendered image.
        img_width (int): width of the rendered image.
+       tile_bounds (Tuple): tile dimensions as a len 3 tuple (tiles.x , tiles.y, 1).
     """
 
     @staticmethod
@@ -85,10 +85,10 @@ class ProjectGaussians(Function):
             conics,
         )
 
-        return (xys, depths, radii, conics, num_tiles_hit,cov3d)
+        return (xys, depths, radii, conics, num_tiles_hit, cov3d)
 
     @staticmethod
-    def backward(ctx, v_xys, v_depths, v_radii, v_conics, v_num_tiles_hit,v_cov3d):
+    def backward(ctx, v_xys, v_depths, v_radii, v_conics, v_num_tiles_hit, v_cov3d):
         (
             means3d,
             scales,
@@ -150,50 +150,3 @@ class ProjectGaussians(Function):
             # tile_bounds: Tuple[int, int, int],
             None,
         )
-
-
-if __name__ == "__main__":
-    device = torch.device("cuda:0")
-    num_points = 256
-    means3d = torch.randn((num_points, 3), device=device, requires_grad=True)
-    scales = torch.randn((num_points, 3), device=device)
-    glob_scale = 0.3
-    quats = torch.randn((num_points, 4), device=device)
-    quats /= torch.linalg.norm(quats, dim=-1, keepdim=True)
-    viewmat = torch.eye(4, device=device)
-    viewmat[2, 3] = 2
-    # projmat = torch.eye(4, device=device)
-    projmat = viewmat
-    fx = 3.0
-    fy = 3.0
-    img_height = 256
-    img_width = 256
-
-    W = 256
-    H = 256
-    BLOCK_X = 16
-    BLOCK_Y = 16
-    tile_bounds = (W + BLOCK_X - 1) // BLOCK_X, (H + BLOCK_Y - 1) // BLOCK_Y, 1
-
-    xys, conics = ProjectGaussians.apply(
-        means3d,
-        scales,
-        glob_scale,
-        quats,
-        viewmat,
-        projmat,
-        fx,
-        fy,
-        img_height,
-        img_width,
-        tile_bounds,
-    )
-    print(f"{xys.shape=}")
-    print(f"{conics.shape=}")
-
-    mse = torch.nn.MSELoss()
-    loss = mse(xys, torch.ones(size=xys.shape, device=xys.device))
-    # loss = xys.sum() + conics.sum()
-    loss.backward()
-    # print(f"{means3d.grad.shape=}")
-    # print(f"{means3d.grad.sum()}")
