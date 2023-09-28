@@ -1,5 +1,6 @@
 """Pure PyTorch implementation"""
 
+from jaxtyping import Float
 import torch
 import torch.nn.functional as F
 from torch import Tensor
@@ -176,6 +177,17 @@ def project_gaussians_forward(
     conics = conic
 
     return cov3d, xys, depths, radii, conics, num_tiles_hit, mask
+
+
+def compute_sh_color(viewdirs: Float[Tensor, "*batch 3"], sh_coeffs : Float[Tensor, "*batch D C"]):
+    """
+    :param viewdirs (*, C)
+    :param sh_coeffs (*, D, C) sh coefficients for each color channel
+    return colors (*, C)
+    """
+    *dims, dim_sh, C = sh_coeffs.shape
+    bases = eval_sh_bases(dim_sh, viewdirs)  # (*, dim_sh)
+    return (bases[..., None] * sh_coeffs).sum(dim=-2)
 
 
 """
