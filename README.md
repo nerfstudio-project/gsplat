@@ -43,7 +43,7 @@ Because we check for black formatting, it is recommend to run black before commi
 black . diff_rast/ tests/ examples/
 ```
 
-Since there is no GPU supported on github workflow container, we test against those cuda unit tests under `tests/`. So it is recommended to check test pass locally before committing:
+Since there is no GPU supported on github workflow container, we don't test against those cuda unit tests under `tests/` in PR. So it is recommended to check test pass locally before committing:
 
 ```bash
 pytest tests/  # check for all tests
