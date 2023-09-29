@@ -50,6 +50,8 @@ pytest tests/  # check for all tests
 pytest tests/test_cov2d_bounds.py  # check for a single test file.
 ```
 
+Note that `pytest` recognizes and runs all functions named as `test_*`, so you should name the
+test functions in this pattern. See `test_cov2d_bounds.py` as an example.
 
 
 ## Build the Doc Locally
