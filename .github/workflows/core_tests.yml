@@ -21,7 +21,7 @@ jobs:
           python-version: "3.8.12"
       - name: Install dependencies
         run: |
-          pip install black[jupyter]==22.3.0
+          pip install black[jupyter]==22.3.0 pytest
       - name: Run Black Format Check
         run: black . diff_rast/ tests/ examples/ --check
       - name: Run Tests.
