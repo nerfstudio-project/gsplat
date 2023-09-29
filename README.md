@@ -23,13 +23,6 @@ import diff_rast
 help(diff_rast)
 ```
 
-Additional supported cuda functions are found by importing cuda_lib
-
-```
-import cuda_lib
-help(cuda_lib)
-```
-
 # clangd setup (for Neovim)
 
 [clangd](https://clangd.llvm.org/) is a nice tool for providing completions,

@@ -29,16 +29,16 @@ def get_extensions():
     from torch.utils.cpp_extension import CUDAExtension
 
     extensions_dir = osp.join("diff_rast", "cuda", "csrc")
-    # sources = glob.glob(osp.join(extensions_dir, "*.cu")) + glob.glob(
-    #     osp.join(extensions_dir, "*.cpp")
-    # )
-    sources = [
-        osp.join(extensions_dir, "ext.cpp"),
-        osp.join(extensions_dir, "rasterize.cu"),
-        osp.join(extensions_dir, "bindings.cu"),
-        osp.join(extensions_dir, "forward.cu"),
-        osp.join(extensions_dir, "backward.cu"),
-    ]
+    sources = glob.glob(osp.join(extensions_dir, "*.cu")) + glob.glob(
+        osp.join(extensions_dir, "*.cpp")
+    )
+    # sources = [
+    #     osp.join(extensions_dir, "ext.cpp"),
+    #     osp.join(extensions_dir, "rasterize.cu"),
+    #     osp.join(extensions_dir, "bindings.cu"),
+    #     osp.join(extensions_dir, "forward.cu"),
+    #     osp.join(extensions_dir, "backward.cu"),
+    # ]
     # remove generated 'hip' files, in case of rebuilds
     sources = [path for path in sources if "hip" not in path]
 
