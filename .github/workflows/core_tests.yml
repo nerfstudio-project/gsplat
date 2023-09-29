@@ -22,10 +22,5 @@ jobs:
       - name: Install dependencies
         run: |
           pip install isort==5.10.1 black[jupyter]==22.3.0
-      # - name: Run isort
-      #   run: isort docs/ diff_rast/ scripts/ examples/ tests/ --profile black --skip examples/pycolmap --check
-      - name: Run Black
+      - name: Run Black Format Check
         run: black diff_rast/ tests/ examples/ --check
-      # - name: Python Pylint
-      #   run: |
-      #     pylint diff_rast/ tests/ scripts/ examples/
