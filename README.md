@@ -2,10 +2,11 @@
 
 Our version of differentiable gaussian rasterizer
 
-# Installation
+## Installation
+
 Clone the repository and submodules with
 
-```
+```bash
 git clone --recurse-submodules URL
 ```
 
@@ -15,30 +16,43 @@ first run. The benefit of JIT compiling is that it does incremental compiling as
 you modify your cuda code so it is much faster than re-compile through pip. Note
 the JIT compiled library can be found under `~/.cache/torch_extensions/py*-cu*/`.
 
-```
+```bash
 BUILD_NO_CUDA=1 pip install -e .[dev]
 ```
 
 If you won't touch the underlying CUDA code, you can just install with compiling:
 
-```
+```bash
 pip install -e .[dev]
 ```
 
-# Development
+## Development
 
 ## Protect Main Branch over Pull Request.
-It is recommend to commit the code into the main branch as a PR over a hard push, as the
-PR would protect the main branch if the code break tests but a hard push won't.
+
+It is recommended to commit the code into the main branch as a PR over a hard push, as the PR would protect the main branch if the code break tests but a hard push won't. Also squash the commits before merging the PR so it won't span the git history.
 
 The curret tests that will be triggered by PR:
-- `.github/workflows/core_tests.yml`: Black formating.
+
+- `.github/workflows/core_tests.yml`: Black formating. Pytests.
 - `.github/workflows/doc.yml`: Doc build.
 
 Because we check for black formatting, it is recommend to run black before commit in the code:
+
+```bash
+black . diff_rast/ tests/ examples/
 ```
-black . diff_rast/ tests/ examples/ --check
+
+Since there is no GPU supported on github workflow container, we test against those cuda unit tests under `tests/`. So it is recommended to check test pass locally before committing:
+
+```bash
+pytest tests/  # check for all tests
+pytest tests/test_cov2d_bounds.py  # check for a single test file.
 ```
+
+Note that `pytest` recognizes and runs all functions named as `test_*`, so you should name the
+test functions in this pattern. See `test_cov2d_bounds.py` as an example.
+
 
 ## Build the Doc Locally
 If you want to contribute to the doc, here is the way to build it locally. The source code of the doc can be found in `docs/source` and the built doc will be in `_build/`. Here are some examples on documentation: [viser](https://github.com/nerfstudio-project/viser/tree/main/docs/source), [nerfstudio](https://github.com/nerfstudio-project/nerfstudio/tree/main/docs), [nerfacc](https://github.com/KAIR-BAIR/nerfacc/tree/master/docs/source).
