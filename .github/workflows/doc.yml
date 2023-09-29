@@ -2,8 +2,6 @@ name: Docs
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -32,4 +30,5 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: _build/
           force_orphan: true
+        if: github.event_name != 'pull_request'
         #   cname: ...
