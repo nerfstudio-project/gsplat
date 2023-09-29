@@ -208,9 +208,9 @@ scale_to_mat(const float3 scale, const float glob_scale) {
 
 // device helper for culling near points
 inline __host__ __device__ bool
-clip_near_plane(const float3 p, const float *viewmat, float3 &p_view) {
+clip_near_plane(const float3 p, const float *viewmat, float3 &p_view, float thresh) {
     p_view = transform_4x3(viewmat, p);
-    if (p_view.z <= 0.01f) {
+    if (p_view.z <= thresh) {
         return true;
     }
     return false;

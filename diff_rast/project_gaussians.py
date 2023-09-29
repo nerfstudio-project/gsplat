@@ -40,6 +40,7 @@ class ProjectGaussians(Function):
         img_height: int,
         img_width: int,
         tile_bounds: Tuple[int, int, int],
+        clip_thresh:float=0.01
     ):
         num_points = means3d.shape[-2]
 
@@ -63,6 +64,7 @@ class ProjectGaussians(Function):
             img_height,
             img_width,
             tile_bounds,
+            clip_thresh,
         )
 
         # Save non-tensors.
@@ -100,7 +102,13 @@ class ProjectGaussians(Function):
             conics,
         ) = ctx.saved_tensors
 
-        (v_cov2d, v_cov3d, v_mean3d, v_scale, v_quat,) = _C.project_gaussians_backward(
+        (
+            v_cov2d,
+            v_cov3d,
+            v_mean3d,
+            v_scale,
+            v_quat,
+        ) = _C.project_gaussians_backward(
             ctx.num_points,
             means3d,
             scales,

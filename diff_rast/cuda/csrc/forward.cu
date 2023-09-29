@@ -1,11 +1,11 @@
 #include "forward.cuh"
 #include "helpers.cuh"
+#include <algorithm>
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 #include <cub/cub.cuh>
 #include <cub/device/device_radix_sort.cuh>
 #include <iostream>
-#include <algorithm>
 
 namespace cg = cooperative_groups;
 
@@ -23,6 +23,7 @@ __global__ void project_gaussians_forward_kernel(
     const float fy,
     const dim3 img_size,
     const dim3 tile_bounds,
+    const float clip_thresh,
     float *covs3d,
     float2 *xys,
     float *depths,
@@ -41,7 +42,7 @@ __global__ void project_gaussians_forward_kernel(
     // printf("p_world %d %.2f %.2f %.2f\n", idx, p_world.x, p_world.y,
     // p_world.z);
     float3 p_view;
-    if (clip_near_plane(p_world, viewmat, p_view)) {
+    if (clip_near_plane(p_world, viewmat, p_view, clip_thresh)) {
         // printf("%d is out of frustum z %.2f, returning\n", idx, p_view.z);
         return;
     }
@@ -59,7 +60,9 @@ __global__ void project_gaussians_forward_kernel(
     // project to 2d with ewa approximation
     float tan_fovx = 0.5 * img_size.x / fx;
     float tan_fovy = 0.5 * img_size.y / fy;
-    float3 cov2d = project_cov3d_ewa(p_world, cur_cov3d, viewmat, fx, fy, tan_fovx, tan_fovy);
+    float3 cov2d = project_cov3d_ewa(
+        p_world, cur_cov3d, viewmat, fx, fy, tan_fovx, tan_fovy
+    );
     // printf("cov2d %d, %.2f %.2f %.2f\n", idx, cov2d.x, cov2d.y, cov2d.z);
 
     float3 conic;
@@ -104,6 +107,7 @@ void project_gaussians_forward_impl(
     const float fy,
     const dim3 img_size,
     const dim3 tile_bounds,
+    const float clip_thresh,
     float *covs3d,
     float2 *xys,
     float *depths,
@@ -125,6 +129,7 @@ void project_gaussians_forward_impl(
         fy,
         img_size,
         tile_bounds,
+        clip_thresh,
         covs3d,
         xys,
         depths,
@@ -167,7 +172,7 @@ __global__ void map_gaussian_to_intersects(
             // isect_id is tile ID and depth as int32
             int64_t tile_id = i * tile_bounds.x + j; // tile within image
             isect_ids[cur_idx] = (tile_id << 32) | depth_id; // tile | depth id
-            gaussian_ids[cur_idx] = idx; // 3D gaussian id
+            gaussian_ids[cur_idx] = idx;                     // 3D gaussian id
             ++cur_idx; // handles gaussians that hit more than one tile
         }
     }
@@ -209,7 +214,8 @@ void compute_cumulative_intersects(
     int32_t &num_intersects,
     int32_t *cum_tiles_hit
 ) {
-    // ref: https://nvlabs.github.io/cub/structcub_1_1_device_scan.html#a9416ac1ea26f9fde669d83ddc883795a
+    // ref:
+    // https://nvlabs.github.io/cub/structcub_1_1_device_scan.html#a9416ac1ea26f9fde669d83ddc883795a
     // allocate sum workspace
     void *sum_ws = nullptr;
     size_t sum_ws_bytes;
@@ -269,7 +275,7 @@ void bin_and_sort_gaussians(
     );
 
     // sort intersections by ascending tile ID and depth with RadixSort
-    int32_t max_tile_id = (int32_t) (tile_bounds.x * tile_bounds.y);
+    int32_t max_tile_id = (int32_t)(tile_bounds.x * tile_bounds.y);
     int msb = 32 - __builtin_clz(max_tile_id) + 1;
     // allocate workspace memory
     void *sort_ws = nullptr;
@@ -300,9 +306,9 @@ void bin_and_sort_gaussians(
     cudaFree(sort_ws);
 
     // get the start and end indices for the gaussians in each tile
-    // printf("launching tile binning %d %d\n", 
-        // (num_intersects + N_THREADS - 1) / N_THREADS,
-        // N_THREADS);
+    // printf("launching tile binning %d %d\n",
+    // (num_intersects + N_THREADS - 1) / N_THREADS,
+    // N_THREADS);
     get_tile_bin_edges<<<
         (num_intersects + N_THREADS - 1) / N_THREADS,
         N_THREADS>>>(num_intersects, isect_ids_sorted, tile_bins);
@@ -316,7 +322,7 @@ void bin_and_sort_gaussians(
 // kernel function for rasterizing each tile
 // each thread treats a single pixel
 // each thread group uses the same gaussian data in a tile
-template<int CHANNELS>
+template <int CHANNELS>
 __global__ void rasterize_forward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
@@ -344,7 +350,7 @@ __global__ void rasterize_forward_kernel(
     if (i >= img_size.y || j >= img_size.x) {
         return;
     }
-    
+
     // which gaussians to look through in this tile
     int2 range = tile_bins[tile_id];
     float3 conic;
@@ -352,7 +358,8 @@ __global__ void rasterize_forward_kernel(
     float sigma, opac, alpha, vis, next_T;
     float T = 1.f;
 
-    // iterate over all gaussians and apply rendering EWA equation (e.q. 2 from paper)
+    // iterate over all gaussians and apply rendering EWA equation (e.q. 2 from
+    // paper)
     int idx;
     int32_t g;
     for (idx = range.x; idx < range.y; ++idx) {
@@ -361,8 +368,9 @@ __global__ void rasterize_forward_kernel(
         center = xys[g];
         delta = {center.x - px, center.y - py};
 
-        // Mahalanobis distance (here referred to as sigma) measures how many standard deviations away distance delta is.
-        // sigma = -0.5(d.T * conic * d)
+        // Mahalanobis distance (here referred to as sigma) measures how many
+        // standard deviations away distance delta is. sigma = -0.5(d.T * conic
+        // * d)
         sigma =
             0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
             conic.y * delta.x * delta.y;
@@ -379,8 +387,9 @@ __global__ void rasterize_forward_kernel(
         }
         next_T = T * (1.f - alpha);
         if (next_T <= 1e-4f) {
-            // we want to render the last gaussian that contributes and note that here idx > range.x so we don't underflow
-            idx -= 1; 
+            // we want to render the last gaussian that contributes and note
+            // that here idx > range.x so we don't underflow
+            idx -= 1;
             break;
         }
         vis = alpha * T;
@@ -392,7 +401,7 @@ __global__ void rasterize_forward_kernel(
     final_Ts[pix_id] = T;      // transmittance at last gaussian in this pixel
     final_index[pix_id] = idx; // index of in bin of last gaussian in this pixel
     for (int c = 0; c < CHANNELS; ++c) {
-            out_img[CHANNELS * pix_id + c] += T * background[c];
+        out_img[CHANNELS * pix_id + c] += T * background[c];
     }
 }
 
@@ -410,9 +419,9 @@ void rasterize_forward_impl(
     float *final_Ts,
     int *final_index,
     float *out_img,
-    const float* background
+    const float *background
 ) {
-    rasterize_forward_kernel<3> <<<tile_bounds, block>>>(
+    rasterize_forward_kernel<3><<<tile_bounds, block>>>(
         tile_bounds,
         img_size,
         gaussian_ids_sorted,

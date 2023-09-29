@@ -14,6 +14,7 @@ void project_gaussians_forward_impl(
     const float fy,
     const dim3 img_size,
     const dim3 tile_bounds,
+    const float clip_thresh,
     float *covs3d,
     float2 *xys,
     float *depths,

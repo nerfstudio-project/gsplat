@@ -19,10 +19,7 @@
 namespace cg = cooperative_groups;
 
 __global__ void compute_cov2d_bounds_forward_kernel(
-    const unsigned num_pts, 
-    const float *covs2d, 
-    float *conics, 
-    float *radii
+    const unsigned num_pts, const float *covs2d, float *conics, float *radii
 ) {
     unsigned row = cg::this_grid().thread_rank();
     if (row >= num_pts) {
@@ -31,7 +28,9 @@ __global__ void compute_cov2d_bounds_forward_kernel(
     int index = row * 3;
     float3 conic;
     float radius;
-    float3 cov2d{(float)covs2d[index], (float)covs2d[index + 1], (float)covs2d[index + 2]};
+    float3 cov2d{
+        (float)covs2d[index], (float)covs2d[index + 1], (float)covs2d[index + 2]
+    };
     compute_cov2d_bounds(cov2d, conic, radius);
     conics[index] = conic.x;
     conics[index + 1] = conic.y;
@@ -42,10 +41,11 @@ __global__ void compute_cov2d_bounds_forward_kernel(
 std::tuple<
     torch::Tensor, // output conics
     torch::Tensor> // output radii
-compute_cov2d_bounds_forward_tensor(const int num_pts, torch::Tensor covs2d) {
+compute_cov2d_bounds_forward_tensor(const int num_pts, torch::Tensor &covs2d) {
     CHECK_INPUT(covs2d);
-    torch::Tensor conics =
-        torch::zeros({num_pts, covs2d.size(1)}, covs2d.options().dtype(torch::kFloat32));
+    torch::Tensor conics = torch::zeros(
+        {num_pts, covs2d.size(1)}, covs2d.options().dtype(torch::kFloat32)
+    );
     torch::Tensor radii =
         torch::zeros({num_pts, 1}, covs2d.options().dtype(torch::kFloat32));
 
@@ -63,8 +63,8 @@ compute_cov2d_bounds_forward_tensor(const int num_pts, torch::Tensor covs2d) {
 torch::Tensor compute_sh_forward_tensor(
     const unsigned num_points,
     const unsigned degree,
-    torch::Tensor viewdirs,
-    torch::Tensor coeffs
+    torch::Tensor &viewdirs,
+    torch::Tensor &coeffs
 ) {
     unsigned num_bases = num_sh_bases(degree);
     if (coeffs.ndimension() != 3 || coeffs.size(0) != num_points ||
@@ -87,8 +87,8 @@ torch::Tensor compute_sh_forward_tensor(
 torch::Tensor compute_sh_backward_tensor(
     const unsigned num_points,
     const unsigned degree,
-    torch::Tensor viewdirs,
-    torch::Tensor v_colors
+    torch::Tensor &viewdirs,
+    torch::Tensor &v_colors
 ) {
     if (viewdirs.ndimension() != 2 || viewdirs.size(0) != num_points ||
         viewdirs.size(1) != 3) {
@@ -122,17 +122,18 @@ std::tuple<
     torch::Tensor>
 project_gaussians_forward_tensor(
     const int num_points,
-    torch::Tensor means3d,
-    torch::Tensor scales,
+    torch::Tensor &means3d,
+    torch::Tensor &scales,
     const float glob_scale,
-    torch::Tensor quats,
-    torch::Tensor viewmat,
-    torch::Tensor projmat,
+    torch::Tensor &quats,
+    torch::Tensor &viewmat,
+    torch::Tensor &projmat,
     const float fx,
     const float fy,
     const unsigned img_height,
     const unsigned img_width,
-    const std::tuple<int, int, int> tile_bounds
+    const std::tuple<int, int, int> tile_bounds,
+    const float clip_thresh
 ) {
     dim3 img_size_dim3;
     img_size_dim3.x = img_width;
@@ -169,6 +170,7 @@ project_gaussians_forward_tensor(
         fy,
         img_size_dim3,
         tile_bounds_dim3,
+        clip_thresh,
         // Outputs.
         cov3d_d.contiguous().data_ptr<float>(),
         (float2 *)xys_d.contiguous().data_ptr<float>(),
@@ -191,21 +193,21 @@ std::tuple<
     torch::Tensor>
 project_gaussians_backward_tensor(
     const int num_points,
-    torch::Tensor means3d,
-    torch::Tensor scales,
+    torch::Tensor &means3d,
+    torch::Tensor &scales,
     const float glob_scale,
-    torch::Tensor quats,
-    torch::Tensor viewmat,
-    torch::Tensor projmat,
+    torch::Tensor &quats,
+    torch::Tensor &viewmat,
+    torch::Tensor &projmat,
     const float fx,
     const float fy,
     const unsigned img_height,
     const unsigned img_width,
-    torch::Tensor cov3d,
-    torch::Tensor radii,
-    torch::Tensor conics,
-    torch::Tensor v_xy,
-    torch::Tensor v_conic
+    torch::Tensor &cov3d,
+    torch::Tensor &radii,
+    torch::Tensor &conics,
+    torch::Tensor &v_xy,
+    torch::Tensor &v_conic
 ) {
     dim3 img_size_dim3;
     img_size_dim3.x = img_width;
@@ -251,4 +253,3 @@ project_gaussians_backward_tensor(
 
     return std::make_tuple(v_cov2d, v_cov3d, v_mean3d, v_scale, v_quat);
 }
-
