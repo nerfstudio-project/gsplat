@@ -24,3 +24,5 @@ jobs:
           pip install black[jupyter]==22.3.0
       - name: Run Black Format Check
         run: black . diff_rast/ tests/ examples/ --check
+      - name: Run Tests.
+        run: pytest tests/
