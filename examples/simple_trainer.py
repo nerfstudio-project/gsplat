@@ -44,7 +44,7 @@ class SimpleTrainer:
         self.scales = torch.empty((self.num_points, 3), device=self.device)
         self.quats = torch.empty((self.num_points, 4), device=self.device)
         self.rgbs = torch.ones((self.num_points, 3), device=self.device)
-        self.opacities = torch.ones((self.num_points,1), device=self.device)
+        self.opacities = torch.ones((self.num_points, 1), device=self.device)
         bd = 2
         for i in range(self.num_points):
             self.means[i] = torch.tensor(
@@ -144,12 +144,15 @@ class SimpleTrainer:
                 loop=0,
             )
 
+
 def image_path_to_tensor(image_path):
     import torchvision.transforms as transforms
+
     img = Image.open(image_path)
     transform = transforms.ToTensor()
-    img_tensor = transform(img).permute(1,2,0)
+    img_tensor = transform(img).permute(1, 2, 0)
     return img_tensor
+
 
 def main(height: int = 256, width: int = 256) -> None:
     gt_image = torch.ones((height, width, 3)) * 1.0

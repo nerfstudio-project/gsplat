@@ -80,6 +80,5 @@ def test_project_gaussians_forward():
     torch.testing.assert_close(num_tiles_hit[_masks], _num_tiles_hit[_masks])
 
 
-
 if __name__ == "__main__":
     test_project_gaussians_forward()

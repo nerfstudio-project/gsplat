@@ -13,8 +13,19 @@ from diff_rast.project_gaussians import ProjectGaussians
 
 from ref_rast import GaussianRasterizationSettings, rasterize_gaussians
 
+
 def test_bindings_forward(save_img=False):
-    means3d, sh, opacities, colors, covs3d, scales, quats, viewmat, projmat = _init_gaussians()
+    (
+        means3d,
+        sh,
+        opacities,
+        colors,
+        covs3d,
+        scales,
+        quats,
+        viewmat,
+        projmat,
+    ) = _init_gaussians()
 
     out_color = _run_ref(
         means3d.clone(),
@@ -54,7 +65,15 @@ def _run_ref(means3D, sh, opacities, colors, covs3d, scales, quats, viewmat, pro
     )
 
     out_color, radii = rasterize_gaussians(
-        means3D.clone(), None, sh, colors.clone(), opacities.clone(), scales.clone(), quats.clone(), covs3d, settings
+        means3D.clone(),
+        None,
+        sh,
+        colors.clone(),
+        opacities.clone(),
+        scales.clone(),
+        quats.clone(),
+        covs3d,
+        settings,
     )
 
     return out_color.permute(1, 2, 0)
@@ -62,9 +81,29 @@ def _run_ref(means3D, sh, opacities, colors, covs3d, scales, quats, viewmat, pro
 
 def _run_diff_rast(means, rgbs, opacities, scales, quats, viewmat, projmat):
     xys, depths, radii, conics, num_tiles_hit = ProjectGaussians.apply(
-        means, scales, scale_modifier, quats, viewmat, projmat, fx, fy, img_height, img_width, TILE_BOUNDS
+        means,
+        scales,
+        scale_modifier,
+        quats,
+        viewmat,
+        projmat,
+        fx,
+        fy,
+        img_height,
+        img_width,
+        TILE_BOUNDS,
     )
-    out_img = RasterizeGaussians.apply(xys, depths, radii, conics, num_tiles_hit, rgbs, opacities, img_height, img_width)
+    out_img = RasterizeGaussians.apply(
+        xys,
+        depths,
+        radii,
+        conics,
+        num_tiles_hit,
+        rgbs,
+        opacities,
+        img_height,
+        img_width,
+    )
 
     return out_img
 
@@ -98,7 +137,7 @@ if __name__ == "__main__":
 
     fx = 3.0
     fy = 3.0
-    img_height = 256*2
+    img_height = 256 * 2
     img_width = 256
     tanfovx = 0.5 * img_width / fx
     tanfovy = 0.5 * img_height / fy

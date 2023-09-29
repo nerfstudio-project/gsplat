@@ -1,0 +1,31 @@
+name: Core Tests.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python 3.8.12
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.8.12"
+      - name: Install dependencies
+        run: |
+          pip install isort==5.10.1 black[jupyter]==22.3.0
+      # - name: Run isort
+      #   run: isort docs/ diff_rast/ scripts/ examples/ tests/ --profile black --skip examples/pycolmap --check
+      - name: Run Black
+        run: black diff_rast/ tests/ examples/ --check
+      # - name: Python Pylint
+      #   run: |
+      #     pylint diff_rast/ tests/ scripts/ examples/
