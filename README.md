@@ -40,7 +40,7 @@ The curret tests that will be triggered by PR:
 Because we check for black formatting, it is recommend to run black before commit in the code:
 
 ```bash
-black . diff_rast/ tests/ examples/ --check
+black . diff_rast/ tests/ examples/
 ```
 
 Since there is no GPU supported on github workflow container, we test against those cuda unit tests under `tests/`. So it is recommended to check test pass locally before committing:
