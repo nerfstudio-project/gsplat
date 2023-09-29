@@ -9,6 +9,7 @@ from torch.autograd import Function
 
 import diff_rast.cuda as _C
 
+
 class RasterizeGaussians(Function):
     """Rasterize 2D gaussians.
 
