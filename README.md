@@ -55,7 +55,7 @@ test functions in this pattern. See `test_cov2d_bounds.py` as an example.
 
 
 ## Build the Doc Locally
-If you want to contribute to the doc, here is the way to build it locally. The source code of the doc can be found in `docs/source` and the built doc will be in `_build/`. Here are some examples on documentation: [viser](https://github.com/nerfstudio-project/viser/tree/main/docs/source), [nerfstudio](https://github.com/nerfstudio-project/nerfstudio/tree/main/docs), [nerfacc](https://github.com/KAIR-BAIR/nerfacc/tree/master/docs/source).
+If you want to contribute to the doc, here is the way to build it locally. The source code of the doc can be found in `docs/source` and the built doc will be in `_build/`. If you are interested in contributing with the doc, here are some examples on documentation: [viser](https://github.com/nerfstudio-project/viser/tree/main/docs/source), [nerfstudio](https://github.com/nerfstudio-project/nerfstudio/tree/main/docs), [nerfacc](https://github.com/KAIR-BAIR/nerfacc/tree/master/docs/source).
 
 ```
 pip install -e .[dev]
