@@ -18,25 +18,21 @@
 
 namespace cg = cooperative_groups;
 
-template <typename scalar_t>
 __global__ void compute_cov2d_bounds_forward_kernel(
-    const int num_pts,
-    const scalar_t *__restrict__ A,
-    scalar_t *__restrict__ conics,
-    scalar_t *__restrict__ radii
+    const unsigned num_pts, 
+    const float *covs2d, 
+    float *conics, 
+    float *radii
 ) {
-    unsigned row = cg::this_grid().thread_rank(
-    ); // same as threadIdx.x + blockIdx.x * blockDim.x;
+    unsigned row = cg::this_grid().thread_rank();
     if (row >= num_pts) {
         return;
     }
     int index = row * 3;
-
     float3 conic;
     float radius;
-    float3 cov2d{(float)A[index], (float)A[index + 1], (float)A[index + 2]};
+    float3 cov2d{(float)covs2d[index], (float)covs2d[index + 1], (float)covs2d[index + 2]};
     compute_cov2d_bounds(cov2d, conic, radius);
-
     conics[index] = conic.x;
     conics[index + 1] = conic.y;
     conics[index + 2] = conic.z;
@@ -46,33 +42,27 @@ __global__ void compute_cov2d_bounds_forward_kernel(
 std::tuple<
     torch::Tensor, // output conics
     torch::Tensor> // output radii
-compute_cov2d_bounds_forward_tensor(const int num_pts, torch::Tensor A) {
-    CHECK_INPUT(A);
-
+compute_cov2d_bounds_forward_tensor(const int num_pts, torch::Tensor covs2d) {
+    CHECK_INPUT(covs2d);
     torch::Tensor conics =
-        torch::zeros({num_pts, A.size(1)}, A.options().dtype(torch::kFloat32));
+        torch::zeros({num_pts, covs2d.size(1)}, covs2d.options().dtype(torch::kFloat32));
     torch::Tensor radii =
-        torch::zeros({num_pts, 1}, A.options().dtype(torch::kFloat32));
+        torch::zeros({num_pts, 1}, covs2d.options().dtype(torch::kFloat32));
 
     int blocks = (num_pts + N_THREADS - 1) / N_THREADS;
-    // instantiate kernel
-    AT_DISPATCH_FLOATING_TYPES(
-        A.type(), "compute_cov2d_bounds_cu_forward", ([&] {
-            compute_cov2d_bounds_forward_kernel<scalar_t>
-                <<<blocks, N_THREADS>>>(
-                    num_pts,
-                    A.contiguous().data_ptr<scalar_t>(),
-                    conics.contiguous().data_ptr<scalar_t>(),
-                    radii.contiguous().data_ptr<scalar_t>()
-                );
-        })
+
+    compute_cov2d_bounds_forward_kernel<<<blocks, N_THREADS>>>(
+        num_pts,
+        covs2d.contiguous().data_ptr<float>(),
+        conics.contiguous().data_ptr<float>(),
+        radii.contiguous().data_ptr<float>()
     );
     return std::make_tuple(conics, radii);
 }
 
 torch::Tensor compute_sh_forward_tensor(
-    unsigned num_points,
-    unsigned degree,
+    const unsigned num_points,
+    const unsigned degree,
     torch::Tensor viewdirs,
     torch::Tensor coeffs
 ) {
@@ -95,8 +85,8 @@ torch::Tensor compute_sh_forward_tensor(
 }
 
 torch::Tensor compute_sh_backward_tensor(
-    unsigned num_points,
-    unsigned degree,
+    const unsigned num_points,
+    const unsigned degree,
     torch::Tensor viewdirs,
     torch::Tensor v_colors
 ) {
@@ -261,3 +251,4 @@ project_gaussians_backward_tensor(
 
     return std::make_tuple(v_cov2d, v_cov3d, v_mean3d, v_scale, v_quat);
 }
+
