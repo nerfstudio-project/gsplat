@@ -21,6 +21,6 @@ jobs:
           python-version: "3.8.12"
       - name: Install dependencies
         run: |
-          pip install isort==5.10.1 black[jupyter]==22.3.0
+          pip install black[jupyter]==22.3.0
       - name: Run Black Format Check
         run: black . diff_rast/ tests/ examples/ --check

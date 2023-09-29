@@ -25,6 +25,31 @@ If you won't touch the underlying CUDA code, you can just install with compiling
 pip install -e .[dev]
 ```
 
+# Development
+
+## Protect Main Branch over Pull Request.
+It is recommend to commit the code into the main branch as a PR over a hard push, as the
+PR would protect the main branch if the code break tests but a hard push won't.
+
+The curret tests that will be triggered by PR:
+- `.github/workflows/core_tests.yml`: Black formating.
+- `.github/workflows/doc.yml`: Doc build.
+
+Because we check for black formatting, it is recommend to run black before commit in the code:
+```
+black . diff_rast/ tests/ examples/ --check
+```
+
+## Build the Doc Locally
+If you want to contribute to the doc, here is the way to build it locally. The source code of the doc can be found in `docs/source` and the built doc will be in `_build/`. Here are some examples on documentation: [viser](https://github.com/nerfstudio-project/viser/tree/main/docs/source), [nerfstudio](https://github.com/nerfstudio-project/nerfstudio/tree/main/docs), [nerfacc](https://github.com/KAIR-BAIR/nerfacc/tree/master/docs/source).
+
+```
+pip install -e .[dev]
+pip install -r docs/requirements.txt
+sphinx-build docs/source _build 
+```
+
+
 
 # Brief walkthrough
 
