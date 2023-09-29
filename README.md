@@ -2,10 +2,11 @@
 
 Our version of differentiable gaussian rasterizer
 
-# Installation
+## Installation
+
 Clone the repository and submodules with
 
-```
+```bash
 git clone --recurse-submodules URL
 ```
 
@@ -15,22 +16,21 @@ first run. The benefit of JIT compiling is that it does incremental compiling as
 you modify your cuda code so it is much faster than re-compile through pip. Note
 the JIT compiled library can be found under `~/.cache/torch_extensions/py*-cu*/`.
 
-```
+```bash
 BUILD_NO_CUDA=1 pip install -e .[dev]
 ```
 
 If you won't touch the underlying CUDA code, you can just install with compiling:
 
-```
+```bash
 pip install -e .[dev]
 ```
 
-# Development
+## Development
 
 ## Protect Main Branch over Pull Request.
 
-It is recommended to commit the code into the main branch as a PR over a hard push, as the
-PR would protect the main branch if the code break tests but a hard push won't.
+It is recommended to commit the code into the main branch as a PR over a hard push, as the PR would protect the main branch if the code break tests but a hard push won't. Also squash the commits before merging the PR so it won't span the git history.
 
 The curret tests that will be triggered by PR:
 
