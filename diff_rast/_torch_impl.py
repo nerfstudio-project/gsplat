@@ -112,7 +112,7 @@ def eval_sh_bases(basis_dim: int, dirs: torch.Tensor):
 
 def quat_to_rotmat(quat: Tensor) -> Tensor:
     assert quat.shape[-1] == 4, quat.shape
-    x, y, z, w = torch.unbind(F.normalize(quat, dim=-1), dim=-1)
+    w, x, y, z = torch.unbind(F.normalize(quat, dim=-1), dim=-1)
     return torch.stack(
         [
             torch.stack(
@@ -163,6 +163,9 @@ def project_cov3d_ewa(
     W = viewmat[..., :3, :3]  # (..., 3, 3)
     p = viewmat[..., :3, 3]  # (..., 3)
     t = torch.matmul(W, mean3d[..., None])[..., 0] + p  # (..., 3)
+    raise NotImplementedError(
+        "Need to incorporate changes from this commit: 85e76e1c8b8e102145922f561800a74262ceb196!"
+    )
     rz = 1.0 / t[..., 2]  # (...,)
     rz2 = rz**2  # (...,)
     J = torch.stack(
