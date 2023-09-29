@@ -2,17 +2,24 @@
 
 Our version of differentiable gaussian rasterizer
 
-# ref_rast
-
-Copied official version of differentiable gaussian rasterizer
-
 # Installation
 
+For CUDA development, it is recommend to install with `BUILD_NO_CUDA=1`, which
+will disable compiling during pip install, and instead use JIT compiling on your
+first run. The benefit of JIT compiling is that it does incremental compiling as
+you modify your cuda code so it is much faster than re-compile through pip. Note
+the JIT compiled library can be found under `~/.cache/torch_extensions/py*-cu*/`.
+
 ```
-python3 -m pip install --upgrade pip
-cd diff_rast; pip install -e .
-cd ../ref_rast; pip install -e .
+BUILD_NO_CUDA=1 pip install -e .[dev]
 ```
+
+If you won't touch the underlying CUDA code, you can just install with compiling:
+
+```
+pip install -e .[dev]
+```
+
 
 # Brief walkthrough
 
