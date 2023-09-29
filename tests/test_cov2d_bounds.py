@@ -14,9 +14,16 @@ def compare_binding_to_pytorch():
 
     num_cov2ds = 2
 
-    _covs2d = torch.rand((num_cov2ds, 2, 2), dtype=torch.float32, device=device, requires_grad=True)
+    _covs2d = torch.rand(
+        (num_cov2ds, 2, 2), dtype=torch.float32, device=device, requires_grad=True
+    )
     covs2d = torch.stack(
-        [torch.triu(_covs2d)[:, 0, 0], torch.triu(_covs2d)[:, 0, 1], torch.triu(_covs2d)[:, 1, 1]], dim=-1
+        [
+            torch.triu(_covs2d)[:, 0, 0],
+            torch.triu(_covs2d)[:, 0, 1],
+            torch.triu(_covs2d)[:, 1, 1],
+        ],
+        dim=-1,
     )
 
     conic, radii = compute_cov2d_bounds.apply(covs2d)
