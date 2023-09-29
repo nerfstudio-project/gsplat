@@ -117,12 +117,6 @@ venv.bak/
 # line_profiler
 *.lprof
 
-# vscode
-.vsocde
-
 *build
 compile_commands.json
-
-*.png
-*.txt
 *.dump

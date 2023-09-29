@@ -1,7 +1,6 @@
 """Python bindings for SH"""
 
-import torch
-import cuda_lib
+import diff_rast.cuda as _C
 
 from jaxtyping import Float
 from torch import Tensor
@@ -21,13 +20,14 @@ def num_sh_bases(degree: int):
 
 
 class SphericalHarmonics(Function):
-     """Compute spherical harmonics  
-    
+    """Compute spherical harmonics
+
     Args:
         degree (int): degree of SHs.
         viewdirs (Tensor): viewing directions.
         coeffs (Tensor): harmonic coefficients.
     """
+
     @staticmethod
     def forward(
         ctx,
@@ -39,7 +39,7 @@ class SphericalHarmonics(Function):
         assert coeffs.shape[-2] == num_sh_bases(degree)
         ctx.degree = degree
         ctx.save_for_backward(viewdirs)
-        return cuda_lib.compute_sh_forward(num_points, degree, viewdirs, coeffs)
+        return _C.compute_sh_forward(num_points, degree, viewdirs, coeffs)
 
     @staticmethod
     def backward(ctx, v_colors: Float[Tensor, "*batch 3"]):
@@ -49,5 +49,5 @@ class SphericalHarmonics(Function):
         return (
             None,
             None,
-            cuda_lib.compute_sh_backward(num_points, degree, viewdirs, v_colors),
+            _C.compute_sh_backward(num_points, degree, viewdirs, v_colors),
         )

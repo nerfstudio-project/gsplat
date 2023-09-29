@@ -6,7 +6,7 @@ from jaxtyping import Float
 from torch import Tensor
 from torch.autograd import Function
 
-import cuda_lib  # make sure to import torch before diff_rast
+import diff_rast.cuda as _C
 
 
 class ProjectGaussians(Function):
@@ -50,7 +50,7 @@ class ProjectGaussians(Function):
             radii,
             conics,
             num_tiles_hit,
-        ) = cuda_lib.project_gaussians_forward(
+        ) = _C.project_gaussians_forward(
             num_points,
             means3d,
             scales,
@@ -100,13 +100,7 @@ class ProjectGaussians(Function):
             conics,
         ) = ctx.saved_tensors
 
-        (
-            v_cov2d,
-            v_cov3d,
-            v_mean3d,
-            v_scale,
-            v_quat,
-        ) = cuda_lib.project_gaussians_backward(
+        (v_cov2d, v_cov3d, v_mean3d, v_scale, v_quat,) = _C.project_gaussians_backward(
             ctx.num_points,
             means3d,
             scales,

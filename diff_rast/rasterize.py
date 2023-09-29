@@ -7,7 +7,7 @@ from jaxtyping import Float, Int
 from torch import Tensor
 from torch.autograd import Function
 
-import cuda_lib  # make sure to import torch before diff_rast
+import diff_rast.cuda as _C
 
 
 class RasterizeGaussians(Function):
@@ -59,7 +59,7 @@ class RasterizeGaussians(Function):
             gaussian_ids_unsorted,
             isect_ids_sorted,
             isect_ids_unsorted,
-        ) = cuda_lib.rasterize_forward(
+        ) = _C.rasterize_forward(
             xys.contiguous().cuda(),
             depths.contiguous().cuda(),
             radii.contiguous().cuda(),
@@ -105,7 +105,7 @@ class RasterizeGaussians(Function):
             final_idx,
         ) = ctx.saved_tensors
 
-        v_xy, v_conic, v_colors, v_opacity = cuda_lib.rasterize_backward(
+        v_xy, v_conic, v_colors, v_opacity = _C.rasterize_backward(
             img_height,
             img_width,
             gaussian_ids_sorted.contiguous().cuda(),
@@ -132,5 +132,3 @@ class RasterizeGaussians(Function):
             None,  # img_width
             None,  # background
         )
-
-

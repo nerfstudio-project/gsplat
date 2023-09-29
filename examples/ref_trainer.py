@@ -27,7 +27,7 @@ def projection_matrix(znear, zfar, fovx, fovy, **kwargs):
             [0.0, 0.0, (f + n) / (f - n), -2.0 * f * n / (f - n)],
             [0.0, 0.0, 1.0, 0.0],
         ],
-        **kwargs
+        **kwargs,
     )
 
 
@@ -163,7 +163,6 @@ class SimpleTrainer:
             settings,
         )  # (C, H, W)
         return out_color.permute(1, 2, 0)
-
 
     def train(self, iterations: int = 1000, lr: float = 0.01, save_imgs: bool = True):
         optimizer = optim.Adam(

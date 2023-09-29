@@ -522,6 +522,7 @@ __host__ __device__ float3 project_cov3d_ewa(
 __host__ __device__ void scale_rot_to_cov3d(
     const float3 scale, const float glob_scale, const float4 quat, float *cov3d
 ) {
+    // printf("quat %.2f %.2f %.2f %.2f\n", quat.x, quat.y, quat.z, quat.w);
     glm::mat3 R = quat_to_rotmat(quat);
     // printf("R %.2f %.2f %.2f\n", R[0][0], R[1][1], R[2][2]);
     glm::mat3 S = scale_to_mat(scale, glob_scale);

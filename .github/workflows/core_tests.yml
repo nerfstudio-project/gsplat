@@ -1,0 +1,26 @@
+name: Core Tests.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python 3.8.12
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.8.12"
+      - name: Install dependencies
+        run: |
+          pip install isort==5.10.1 black[jupyter]==22.3.0
+      - name: Run Black Format Check
+        run: black . diff_rast/ tests/ examples/ --check
