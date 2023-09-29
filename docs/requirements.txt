@@ -1,0 +1,4 @@
+furo
+sphinx
+sphinx-copybutton
+sphinx-design

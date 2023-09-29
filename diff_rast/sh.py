@@ -21,13 +21,14 @@ def num_sh_bases(degree: int):
 
 
 class SphericalHarmonics(Function):
-     """Compute spherical harmonics  
-    
+    """Compute spherical harmonics
+
     Args:
         degree (int): degree of SHs.
         viewdirs (Tensor): viewing directions.
         coeffs (Tensor): harmonic coefficients.
     """
+
     @staticmethod
     def forward(
         ctx,
