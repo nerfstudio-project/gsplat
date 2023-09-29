@@ -3,6 +3,11 @@
 Our version of differentiable gaussian rasterizer
 
 # Installation
+Clone the repository and submodules with
+
+```
+git clone --recurse-submodules URL
+```
 
 For CUDA development, it is recommend to install with `BUILD_NO_CUDA=1`, which
 will disable compiling during pip install, and instead use JIT compiling on your
