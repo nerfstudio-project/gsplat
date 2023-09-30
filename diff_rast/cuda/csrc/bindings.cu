@@ -8,6 +8,8 @@
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 #include <cstdio>
+#include <cub/cub.cuh>
+#include <cub/device/device_radix_sort.cuh>
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
@@ -252,4 +254,35 @@ project_gaussians_backward_tensor(
     );
 
     return std::make_tuple(v_cov2d, v_cov3d, v_mean3d, v_scale, v_quat);
+}
+
+torch::Tensor compute_cumulative_intersects_tensor(
+    const int num_points,
+    torch::Tensor &num_tiles_hit,
+    int32_t &num_intersects
+) {
+    // ref:
+    // https://nvlabs.github.io/cub/structcub_1_1_device_scan.html#a9416ac1ea26f9fde669d83ddc883795a
+    // allocate sum workspace
+    CHECK_INPUT(num_tiles_hit);
+    void *sum_ws = nullptr;
+    size_t sum_ws_bytes;
+    torch::Tensor cum_tiles_hit =
+        torch::zeros({num_points}, num_tiles_hit.options().dtype(torch::kInt32));
+    cub::DeviceScan::InclusiveSum(
+        sum_ws, sum_ws_bytes, (int32_t *)num_tiles_hit.contiguous().data_ptr<int32_t>(), (int32_t *)cum_tiles_hit.contiguous().data_ptr<int32_t>(), num_points
+    );
+    cudaMalloc(&sum_ws, sum_ws_bytes);
+    cub::DeviceScan::InclusiveSum(
+        sum_ws, sum_ws_bytes, (int32_t *)num_tiles_hit.contiguous().data_ptr<int32_t>(), (int32_t *)cum_tiles_hit.contiguous().data_ptr<int32_t>(), num_points
+    );
+    // cudaMemcpy(
+    //     &num_intersects,
+    //     &(cum_tiles_hit[num_points - 1]),
+    //     sizeof(int32_t),
+    //     cudaMemcpyDeviceToHost
+    // );
+    cudaFree(sum_ws);
+
+    return cum_tiles_hit;
 }

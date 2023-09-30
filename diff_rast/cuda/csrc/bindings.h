@@ -79,3 +79,9 @@ project_gaussians_backward_tensor(
     torch::Tensor &v_xy,
     torch::Tensor &v_conic
 );
+
+torch::Tensor compute_cumulative_intersects_tensor(
+    const int num_points,
+    torch::Tensor &num_tiles_hit,
+    int32_t &num_intersects
+);
