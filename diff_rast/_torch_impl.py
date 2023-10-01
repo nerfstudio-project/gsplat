@@ -6,7 +6,9 @@ from jaxtyping import Float
 from torch import Tensor
 
 
-def compute_sh_color(viewdirs: Float[Tensor, "*batch 3"], sh_coeffs: Float[Tensor, "*batch D C"]):
+def compute_sh_color(
+    viewdirs: Float[Tensor, "*batch 3"], sh_coeffs: Float[Tensor, "*batch D C"]
+):
     """
     :param viewdirs (*, C)
     :param sh_coeffs (*, D, C) sh coefficients for each color channel
@@ -66,7 +68,9 @@ def eval_sh_bases(basis_dim: int, dirs: torch.Tensor):
 
     :return: torch.Tensor (..., basis_dim)
     """
-    result = torch.empty((*dirs.shape[:-1], basis_dim), dtype=dirs.dtype, device=dirs.device)
+    result = torch.empty(
+        (*dirs.shape[:-1], basis_dim), dtype=dirs.dtype, device=dirs.device
+    )
     result[..., 0] = SH_C0
     if basis_dim > 1:
         x, y, z = dirs.unbind(-1)
@@ -100,13 +104,15 @@ def eval_sh_bases(basis_dim: int, dirs: torch.Tensor):
                     result[..., 21] = SH_C4[5] * xz * (7 * zz - 3)
                     result[..., 22] = SH_C4[6] * (xx - yy) * (7 * zz - 1)
                     result[..., 23] = SH_C4[7] * xz * (xx - 3 * yy)
-                    result[..., 24] = SH_C4[8] * (xx * (xx - 3 * yy) - yy * (3 * xx - yy))
+                    result[..., 24] = SH_C4[8] * (
+                        xx * (xx - 3 * yy) - yy * (3 * xx - yy)
+                    )
     return result
 
 
 def quat_to_rotmat(quat: Tensor) -> Tensor:
     assert quat.shape[-1] == 4, quat.shape
-    x, y, z, w = torch.unbind(F.normalize(quat, dim=-1), dim=-1)
+    w, x, y, z = torch.unbind(F.normalize(quat, dim=-1), dim=-1)
     return torch.stack(
         [
             torch.stack(
@@ -148,13 +154,18 @@ def scale_rot_to_cov3d(scale: Tensor, glob_scale: float, quat: Tensor) -> Tensor
     return M @ M.transpose(-1, -2)  # (..., 3, 3)
 
 
-def project_cov3d_ewa(mean3d: Tensor, cov3d: Tensor, viewmat: Tensor, fx: float, fy: float) -> Tensor:
+def project_cov3d_ewa(
+    mean3d: Tensor, cov3d: Tensor, viewmat: Tensor, fx: float, fy: float
+) -> Tensor:
     assert mean3d.shape[-1] == 3, mean3d.shape
     assert cov3d.shape[-2:] == (3, 3), cov3d.shape
     assert viewmat.shape[-2:] == (4, 4), viewmat.shape
     W = viewmat[..., :3, :3]  # (..., 3, 3)
     p = viewmat[..., :3, 3]  # (..., 3)
     t = torch.matmul(W, mean3d[..., None])[..., 0] + p  # (..., 3)
+    raise NotImplementedError(
+        "Need to incorporate changes from this commit: 85e76e1c8b8e102145922f561800a74262ceb196!"
+    )
     rz = 1.0 / t[..., 2]  # (...,)
     rz2 = rz**2  # (...,)
     J = torch.stack(
@@ -212,7 +223,9 @@ def clip_near_plane(p, viewmat, thresh=0.1):
 
 
 def get_tile_bbox(pix_center, pix_radius, tile_bounds, BLOCK_X=16, BLOCK_Y=16):
-    tile_size = torch.tensor([BLOCK_X, BLOCK_Y], dtype=torch.float32, device=pix_center.device)
+    tile_size = torch.tensor(
+        [BLOCK_X, BLOCK_Y], dtype=torch.float32, device=pix_center.device
+    )
     tile_center = pix_center / tile_size
     tile_radius = pix_radius[..., None] / tile_size
 
@@ -253,7 +266,9 @@ def project_gaussians_forward(
     conic, radius, det_valid = compute_cov2d_bounds(cov2d)
     center = project_pix(projmat, means3d, img_size)
     tile_min, tile_max = get_tile_bbox(center, radius, tile_bounds)
-    tile_area = (tile_max[..., 0] - tile_min[..., 0]) * (tile_max[..., 1] - tile_min[..., 1])
+    tile_area = (tile_max[..., 0] - tile_min[..., 0]) * (
+        tile_max[..., 1] - tile_min[..., 1]
+    )
     mask = (tile_area > 0) & (~is_close) & det_valid
 
     num_tiles_hit = tile_area
