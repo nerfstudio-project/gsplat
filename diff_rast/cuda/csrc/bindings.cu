@@ -256,33 +256,74 @@ project_gaussians_backward_tensor(
     return std::make_tuple(v_cov2d, v_cov3d, v_mean3d, v_scale, v_quat);
 }
 
-torch::Tensor compute_cumulative_intersects_tensor(
+std::tuple<
+    torch::Tensor,
+    torch::Tensor>
+compute_cumulative_intersects_tensor(
     const int num_points,
-    torch::Tensor &num_tiles_hit,
-    int32_t &num_intersects
+    torch::Tensor &num_tiles_hit
 ) {
     // ref:
     // https://nvlabs.github.io/cub/structcub_1_1_device_scan.html#a9416ac1ea26f9fde669d83ddc883795a
     // allocate sum workspace
     CHECK_INPUT(num_tiles_hit);
-    void *sum_ws = nullptr;
-    size_t sum_ws_bytes;
+    
     torch::Tensor cum_tiles_hit =
         torch::zeros({num_points}, num_tiles_hit.options().dtype(torch::kInt32));
-    cub::DeviceScan::InclusiveSum(
-        sum_ws, sum_ws_bytes, (int32_t *)num_tiles_hit.contiguous().data_ptr<int32_t>(), (int32_t *)cum_tiles_hit.contiguous().data_ptr<int32_t>(), num_points
+    
+    int32_t num_intersects;
+    compute_cumulative_intersects(
+        num_points,
+        num_tiles_hit.contiguous().data_ptr<int32_t>(),
+        num_intersects,
+        cum_tiles_hit.contiguous().data_ptr<int32_t>()
     );
-    cudaMalloc(&sum_ws, sum_ws_bytes);
-    cub::DeviceScan::InclusiveSum(
-        sum_ws, sum_ws_bytes, (int32_t *)num_tiles_hit.contiguous().data_ptr<int32_t>(), (int32_t *)cum_tiles_hit.contiguous().data_ptr<int32_t>(), num_points
-    );
-    // cudaMemcpy(
-    //     &num_intersects,
-    //     &(cum_tiles_hit[num_points - 1]),
-    //     sizeof(int32_t),
-    //     cudaMemcpyDeviceToHost
-    // );
-    cudaFree(sum_ws);
 
-    return cum_tiles_hit;
+    return std::make_tuple(torch::tensor(num_intersects, num_tiles_hit.options().dtype(torch::kInt32)),
+                            cum_tiles_hit);
+}
+
+std::tuple<
+    torch::Tensor,
+    torch::Tensor>
+map_gaussian_to_intersects_tensor(
+    const int num_points,
+    torch::Tensor &xys,
+    torch::Tensor &depths,
+    torch::Tensor &radii,
+    torch::Tensor &cum_tiles_hit,
+    const std::tuple<int, int, int> tile_bounds
+) {
+    CHECK_INPUT(xys);
+    CHECK_INPUT(depths);
+    CHECK_INPUT(radii);
+    CHECK_INPUT(cum_tiles_hit);
+
+    dim3 tile_bounds_dim3;
+    tile_bounds_dim3.x = std::get<0>(tile_bounds);
+    tile_bounds_dim3.y = std::get<1>(tile_bounds);
+    tile_bounds_dim3.z = std::get<2>(tile_bounds);
+
+    int32_t num_intersects = cum_tiles_hit[num_points - 1].item<int32_t>();
+
+    torch::Tensor gaussian_ids_unsorted =
+        torch::zeros({num_intersects}, xys.options().dtype(torch::kInt32));
+    torch::Tensor isect_ids_unsorted =
+        torch::zeros({num_intersects}, xys.options().dtype(torch::kInt64));
+    
+    map_gaussian_to_intersects<<<
+        (num_points + N_THREADS - 1) / N_THREADS,
+        N_THREADS>>>(
+        num_points,
+        (float2 *)xys.contiguous().data_ptr<float>(),
+        depths.contiguous().data_ptr<float>(),
+        radii.contiguous().data_ptr<int32_t>(),
+        cum_tiles_hit.contiguous().data_ptr<int32_t>(),
+        tile_bounds_dim3,
+        // Outputs.
+        isect_ids_unsorted.contiguous().data_ptr<int64_t>(),
+        gaussian_ids_unsorted.contiguous().data_ptr<int32_t>()
+    );
+
+    return std::make_tuple(gaussian_ids_unsorted, isect_ids_unsorted);
 }
