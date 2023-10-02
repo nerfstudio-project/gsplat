@@ -325,5 +325,5 @@ map_gaussian_to_intersects_tensor(
         gaussian_ids_unsorted.contiguous().data_ptr<int32_t>()
     );
 
-    return std::make_tuple(gaussian_ids_unsorted, isect_ids_unsorted);
+    return std::make_tuple(isect_ids_unsorted, gaussian_ids_unsorted);
 }
