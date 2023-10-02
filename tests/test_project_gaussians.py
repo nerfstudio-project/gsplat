@@ -4,7 +4,7 @@ import torch
 device = torch.device("cuda:0")
 
 
-@pytest.mark.skipif(not torch.cuda.is_available, reason="No CUDA device")
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_project_gaussians_forward():
     from diff_rast import _torch_impl
     import diff_rast.cuda as _C
