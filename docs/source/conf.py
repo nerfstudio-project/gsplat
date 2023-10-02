@@ -19,7 +19,6 @@ extensions = [
     "sphinx.ext.autosummary",
     "sphinx.ext.intersphinx",
     "sphinxcontrib.bibtex",
-
 ]
 
 intersphinx_mapping = {
@@ -44,4 +43,4 @@ epub_show_urls = "footnote"
 autodoc_typehints = "description"
 
 # citations
-bibtex_bibfiles = ['references.bib']
+bibtex_bibfiles = ["references.bib"]
