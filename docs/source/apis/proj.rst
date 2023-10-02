@@ -1,4 +1,4 @@
-Projection
+ProjectGaussians
 ===================================
 
 .. currentmodule:: diff_rast
