@@ -43,7 +43,7 @@ def test_project_gaussians_forward():
         projmat,
         fx,
         fy,
-        H, 
+        H,
         W,
         tile_bounds,
         clip_thresh,
@@ -77,7 +77,12 @@ def test_project_gaussians_forward():
         atol=1e-5,
         rtol=1e-5,
     )
-    torch.testing.assert_close(xys[_masks], _xys[_masks], atol=1e-4, rtol=1e-4,)
+    torch.testing.assert_close(
+        xys[_masks],
+        _xys[_masks],
+        atol=1e-4,
+        rtol=1e-4,
+    )
     torch.testing.assert_close(depths[_masks], _depths[_masks])
     torch.testing.assert_close(radii[_masks], _radii[_masks])
     torch.testing.assert_close(conics[_masks], _conics[_masks])

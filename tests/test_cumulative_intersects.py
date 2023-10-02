@@ -13,10 +13,14 @@ def test_cumulative_intersects():
 
     num_points = 10
 
-    num_tiles_hit = torch.randint(0, 100, (num_points,), device=device, dtype=torch.int32)
-    
-    num_intersects, cum_tiles_hit = _C.compute_cumulative_intersects(num_points, num_tiles_hit)
-    
+    num_tiles_hit = torch.randint(
+        0, 100, (num_points,), device=device, dtype=torch.int32
+    )
+
+    num_intersects, cum_tiles_hit = _C.compute_cumulative_intersects(
+        num_points, num_tiles_hit
+    )
+
     _cum_tiles_hit = torch.cumsum(num_tiles_hit, dim=0, dtype=torch.int32)
     _num_intersects = _cum_tiles_hit[-1]
 
