@@ -155,7 +155,13 @@ def scale_rot_to_cov3d(scale: Tensor, glob_scale: float, quat: Tensor) -> Tensor
 
 
 def project_cov3d_ewa(
-    mean3d: Tensor, cov3d: Tensor, viewmat: Tensor, fx: float, fy: float
+    mean3d: Tensor,
+    cov3d: Tensor,
+    viewmat: Tensor,
+    fx: float,
+    fy: float,
+    tan_fovx: float,
+    tan_fovy: float,
 ) -> Tensor:
     assert mean3d.shape[-1] == 3, mean3d.shape
     assert cov3d.shape[-2:] == (3, 3), cov3d.shape
@@ -163,9 +169,13 @@ def project_cov3d_ewa(
     W = viewmat[..., :3, :3]  # (..., 3, 3)
     p = viewmat[..., :3, 3]  # (..., 3)
     t = torch.matmul(W, mean3d[..., None])[..., 0] + p  # (..., 3)
-    raise NotImplementedError(
-        "Need to incorporate changes from this commit: 85e76e1c8b8e102145922f561800a74262ceb196!"
-    )
+
+    lim_x = 1.3 * torch.tensor([tan_fovx], device=mean3d.device)
+    lim_y = 1.3 * torch.tensor([tan_fovy], device=mean3d.device)
+
+    t[..., 0] = t[..., 2] * torch.min(lim_x, torch.max(-lim_x, t[..., 0] / t[..., 2]))
+    t[..., 1] = t[..., 2] * torch.min(lim_y, torch.max(-lim_y, t[..., 1] / t[..., 2]))
+
     rz = 1.0 / t[..., 2]  # (...,)
     rz2 = rz**2  # (...,)
     J = torch.stack(
@@ -178,8 +188,8 @@ def project_cov3d_ewa(
     T = J @ W  # (..., 2, 3)
     cov2d = T @ cov3d @ T.transpose(-1, -2)  # (..., 2, 2)
     # add a little blur along axes and (TODO save upper triangular elements)
-    cov2d[..., 0, 0] = cov2d[..., 0, 0] + 0.1
-    cov2d[..., 1, 1] = cov2d[..., 1, 1] + 0.1
+    cov2d[..., 0, 0] = cov2d[..., 0, 0] + 0.3
+    cov2d[..., 1, 1] = cov2d[..., 1, 1] + 0.3
     return cov2d
 
 
@@ -215,11 +225,11 @@ def project_pix(mat, p, img_size, eps=1e-6):
     return torch.stack([u, v], dim=-1)
 
 
-def clip_near_plane(p, viewmat, thresh=0.1):
+def clip_near_plane(p, viewmat, clip_thresh=0.01):
     R = viewmat[..., :3, :3]
     T = viewmat[..., :3, 3]
     p_view = torch.matmul(R, p[..., None])[..., 0] + T
-    return p_view, p_view[..., 2] < thresh
+    return p_view, p_view[..., 2] < clip_thresh
 
 
 def get_tile_bbox(pix_center, pix_radius, tile_bounds, BLOCK_X=16, BLOCK_Y=16):
@@ -259,10 +269,13 @@ def project_gaussians_forward(
     fy,
     img_size,
     tile_bounds,
+    clip_thresh=0.01,
 ):
-    p_view, is_close = clip_near_plane(means3d, viewmat)
+    tan_fovx = 0.5 * img_size[1] / fx
+    tan_fovy = 0.5 * img_size[0] / fy
+    p_view, is_close = clip_near_plane(means3d, viewmat, clip_thresh)
     cov3d = scale_rot_to_cov3d(scales, glob_scale, quats)
-    cov2d = project_cov3d_ewa(means3d, cov3d, viewmat, fx, fy)
+    cov2d = project_cov3d_ewa(means3d, cov3d, viewmat, fx, fy, tan_fovx, tan_fovy)
     conic, radius, det_valid = compute_cov2d_bounds(cov2d)
     center = project_pix(projmat, means3d, img_size)
     tile_min, tile_max = get_tile_bbox(center, radius, tile_bounds)
