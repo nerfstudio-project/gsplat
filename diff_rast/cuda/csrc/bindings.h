@@ -99,3 +99,8 @@ map_gaussian_to_intersects_tensor(
     torch::Tensor &cum_tiles_hit,
     const std::tuple<int, int, int> tile_bounds
 );
+
+torch::Tensor get_tile_bin_edges_tensor(
+    int num_intersects,
+    torch::Tensor &isect_ids_sorted
+);

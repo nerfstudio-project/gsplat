@@ -327,3 +327,20 @@ map_gaussian_to_intersects_tensor(
 
     return std::make_tuple(isect_ids_unsorted, gaussian_ids_unsorted);
 }
+
+torch::Tensor get_tile_bin_edges_tensor(
+    int num_intersects,
+    torch::Tensor &isect_ids_sorted
+) {
+    CHECK_INPUT(isect_ids_sorted);
+    torch::Tensor tile_bins =
+        torch::zeros({num_intersects, 2}, isect_ids_sorted.options().dtype(torch::kInt32));
+    get_tile_bin_edges<<<
+        (num_intersects + N_THREADS - 1) / N_THREADS,
+        N_THREADS>>>(
+        num_intersects,
+        isect_ids_sorted.contiguous().data_ptr<int64_t>(),
+        (int2 *)tile_bins.contiguous().data_ptr<int>()
+    );
+    return tile_bins;
+}
