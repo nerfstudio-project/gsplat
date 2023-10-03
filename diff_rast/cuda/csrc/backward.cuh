@@ -19,6 +19,7 @@ void project_gaussians_backward_impl(
     const int *radii,
     const float3 *conics,
     const float2 *v_xy,
+    const float *v_depth,
     const float3 *v_conic,
     float3 *v_cov2d,
     float *v_cov3d,

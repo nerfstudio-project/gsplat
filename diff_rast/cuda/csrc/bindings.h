@@ -77,5 +77,6 @@ project_gaussians_backward_tensor(
     torch::Tensor &radii,
     torch::Tensor &conics,
     torch::Tensor &v_xy,
+    torch::Tensor &v_depth,
     torch::Tensor &v_conic
 );
