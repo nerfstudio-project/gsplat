@@ -3,5 +3,33 @@ RasterizeGaussians
 
 .. currentmodule:: diff_rast
 
+Given 2D gaussians that are parametrized by their means `μ'` and covariances `Σ'` as well as their radii and conic parameters,
+the RasterizeGaussians function first sorts each gaussian such that all gaussians within the bounds of a tile are grouped and sorted by increasing depth `z`,
+and then renders each pixel within a tile with alpha-compositing. 
+
+The discrete rendering equation is given by: 
+
+.. math::
+
+    \sum_{t=n}^{N}c_{n}·α_{n}·T_{n}
+
+Where 
+
+.. math::
+
+    T_{n} = \prod_{t=m}^{M}(1-α_{m})
+
+And 
+
+.. math::
+
+    α_{n} = o_{n} \exp(-σ_{n})
+    
+    σ_{n} = \frac{1}{2} ∆^{⊤}_{n} Σ'^{−1} ∆_{n}
+
+
+:math:`σ ∈ R^{2}` is the Mahalanobis distance (here referred to as sigma) which measures how many standard deviations away the center of a gaussian and the rendered pixel center is which is denoted by delta `∆`.
+
+
 .. autoclass:: RasterizeGaussians
     :members:
