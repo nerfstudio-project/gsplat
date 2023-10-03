@@ -54,5 +54,5 @@ Tests
 Citations
 -------------
 .. bibliography::
-   :all:
    :style: unsrt
+   :filter: docname in docnames
