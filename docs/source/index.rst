@@ -31,6 +31,26 @@ Links
 
    apis/*
 
+Cuda Lib
+-------------
+
+.. toctree::    
+   :glob:
+   :maxdepth: 1
+   :caption: Cuda Lib
+
+   _C/*
+
+Tests
+-------------
+
+.. toctree::    
+   :glob:
+   :maxdepth: 1
+   :caption: Tests
+
+   tests/*
+
 Citations
 -------------
 .. bibliography::
