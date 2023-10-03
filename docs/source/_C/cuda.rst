@@ -25,7 +25,7 @@ The following functions are currently supported:
 
 
 rasterize_forward
--------
+-----------------
 
 .. code-block:: python
 
@@ -44,7 +44,7 @@ rasterize_forward
             background: Float[Tensor, "channels"]
 
 rasterize_backward
--------
+------------------
 
 .. code-block:: python
 
@@ -66,7 +66,7 @@ rasterize_backward
 
 
 compute_cov2d_bounds_forward
--------
+----------------------------
 
 .. code-block:: python
 
@@ -77,7 +77,7 @@ compute_cov2d_bounds_forward
 
 
 project_gaussians_forward
--------
+-------------------------
 
 .. code-block:: python
 
@@ -100,7 +100,7 @@ project_gaussians_forward
 
 
 project_gaussians_backward
--------
+--------------------------
 
 .. code-block:: python
 
@@ -126,7 +126,7 @@ project_gaussians_backward
 
 
 compute_sh_forward
--------
+------------------
 
 .. code-block:: python
 
@@ -140,7 +140,7 @@ compute_sh_forward
 
 
 compute_sh_backward
--------
+-------------------
 
 .. code-block:: python
 
@@ -154,7 +154,7 @@ compute_sh_backward
 
 
 compute_cumulative_intersects
--------
+-----------------------------
 
 .. code-block:: python
 
@@ -166,7 +166,7 @@ compute_cumulative_intersects
 
 
 map_gaussian_to_intersects
--------
+--------------------------
 
 .. code-block:: python
 
