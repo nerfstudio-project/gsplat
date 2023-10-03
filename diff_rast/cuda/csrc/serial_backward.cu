@@ -164,8 +164,8 @@ computeConicBackward(const float3 &cov2D, const float3 &dL_dconic) {
     float denom2inv = 1.0f / ((denom * denom) + 0.0000001f);
 
     if (denom2inv != 0) {
-        // This is slightly different from the original implementation, but we include this line to make
-        // equality checks easier.
+        // This is slightly different from the original implementation, but we
+        // include this line to make equality checks easier.
         float denom2inv = 1.0f / (denom * denom);
         // Gradients of loss w.r.t. entries of 2D covariance matrix,
         // given gradients of loss w.r.t. conic matrix (inverse covariance
