@@ -2,6 +2,7 @@ import math
 import os
 import random
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import torch
@@ -93,7 +94,7 @@ class SimpleTrainer:
     def train(self, iterations: int = 1000, lr: float = 0.01, save_imgs: bool = True):
         optimizer = optim.Adam(
             [self.rgbs, self.means, self.scales, self.opacities, self.quats], lr
-        )  # try training self.opacities/scales etc.
+        )
         mse_loss = torch.nn.MSELoss()
         frames = []
         for iter in range(iterations):
@@ -124,9 +125,7 @@ class SimpleTrainer:
             )
             loss = mse_loss(out_img, self.gt_image)
             optimizer.zero_grad()
-            torch.cuda.synchronize()
             loss.backward()
-            torch.cuda.synchronize()
             optimizer.step()
             print(f"Iteration {iter + 1}/{iterations}, Loss: {loss.item()}")
 
@@ -136,7 +135,7 @@ class SimpleTrainer:
             # save them as a gif with PIL
             frames = [Image.fromarray(frame) for frame in frames]
             frames[0].save(
-                os.getcwd() + f"/renders/training.gif",
+                os.getcwd() + "/renders/training.gif",
                 save_all=True,
                 append_images=frames[1:],
                 optimize=False,
@@ -145,24 +144,39 @@ class SimpleTrainer:
             )
 
 
-def image_path_to_tensor(image_path):
+def image_path_to_tensor(image_path: Path):
     import torchvision.transforms as transforms
 
     img = Image.open(image_path)
     transform = transforms.ToTensor()
-    img_tensor = transform(img).permute(1, 2, 0)
+    img_tensor = transform(img).permute(1, 2, 0)[..., :3]
     return img_tensor
 
 
-def main(height: int = 256, width: int = 256) -> None:
-    gt_image = torch.ones((height, width, 3)) * 1.0
-    # make top left and bottom right red,blue
-    gt_image[: height // 2, : width // 2, :] = torch.tensor([1.0, 0.0, 0.0])
-    gt_image[height // 2 :, width // 2 :, :] = torch.tensor([0.0, 0.0, 1.0])
-    # gt_image = image_path_to_tensor(os.getcwd() + "path_to_your_image")
-    trainer = SimpleTrainer(gt_image=gt_image)
+def main(
+    height: int = 256,
+    width: int = 256,
+    num_points: int = 2000,
+    save_imgs: bool = True,
+    img_path: Optional[Path] = None,
+    iterations: int = 1000,
+    lr: float = 0.01,
+) -> None:
 
-    trainer.train()
+    if img_path:
+        gt_image = image_path_to_tensor(img_path)
+    else:
+        gt_image = torch.ones((height, width, 3)) * 1.0
+        # make top left and bottom right red, blue
+        gt_image[: height // 2, : width // 2, :] = torch.tensor([1.0, 0.0, 0.0])
+        gt_image[height // 2 :, width // 2 :, :] = torch.tensor([0.0, 0.0, 1.0])
+
+    trainer = SimpleTrainer(gt_image=gt_image, num_points=num_points)
+    trainer.train(
+        iterations=iterations,
+        lr=lr,
+        save_imgs=save_imgs,
+    )
 
 
 if __name__ == "__main__":
