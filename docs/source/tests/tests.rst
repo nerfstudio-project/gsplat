@@ -9,6 +9,7 @@ Testing and verifying CUDA implementations
 The `tests/` folder provides automatic test scripts that are ran to verify that the CUDA implementations agree with native PyTorch ones.
 They are also ran with any pull-requests into main branch on our github repository.
 
+The tests include: 
 
 .. code-block:: python
     :caption: tests/
@@ -17,4 +18,5 @@ They are also ran with any pull-requests into main branch on our github reposito
     ./test_map_gaussians.py
     ./test_cumulative_intersects.py
     ./test_cov2d_bounds.py
+    ./test_sh.py
 
