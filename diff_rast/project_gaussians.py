@@ -30,6 +30,7 @@ class ProjectGaussians(Function):
     def forward(
         ctx,
         means3d: Float[Tensor, "*batch 3"],
+        means2d: Float[Tensor, "*batch 2"],
         scales: Float[Tensor, "*batch 3"],
         glob_scale: float,
         quats: Float[Tensor, "*batch 4"],
@@ -125,6 +126,8 @@ class ProjectGaussians(Function):
         return (
             # means3d: Float[Tensor, "*batch 3"],
             v_mean3d,
+            # means2d: Float[Tensor, "*batch 2"],
+            v_xys,
             # scales: Float[Tensor, "*batch 3"],
             v_scale,
             # glob_scale: float,
