@@ -181,6 +181,7 @@ __global__ void project_gaussians_backward_kernel(
     const int *radii,
     const float3 *conics,
     const float2 *v_xy,
+    const float *v_depth,
     const float3 *v_conic,
     float3 *v_cov2d,
     float *v_cov3d,
@@ -195,6 +196,13 @@ __global__ void project_gaussians_backward_kernel(
     float3 p_world = means3d[idx];
     // get v_mean3d from v_xy
     v_mean3d[idx] = project_pix_vjp(projmat, p_world, img_size, v_xy[idx]);
+
+    // get z gradient contribution to mean3d gradient
+    // z = viemwat[8] * mean3d.x + viewmat[9] * mean3d.y + viewmat[10] * mean3d.z + viewmat[11]
+    float v_z = v_depth[idx];
+    v_mean3d[idx].x += viewmat[8] * v_z;
+    v_mean3d[idx].y += viewmat[9] * v_z;
+    v_mean3d[idx].z += viewmat[10] * v_z;
 
     // get v_cov2d
     cov2d_to_conic_vjp(conics[idx], v_conic[idx], v_cov2d[idx]);
@@ -235,6 +243,7 @@ void project_gaussians_backward_impl(
     const int *radii,
     const float3 *conics,
     const float2 *v_xy,
+    const float *v_depth,
     const float3 *v_conic,
     float3 *v_cov2d,
     float *v_cov3d,
@@ -259,6 +268,7 @@ void project_gaussians_backward_impl(
         radii,
         conics,
         v_xy,
+        v_depth,
         v_conic,
         v_cov2d,
         v_cov3d,
@@ -267,6 +277,7 @@ void project_gaussians_backward_impl(
         v_quat
     );
 }
+
 
 // output space: 2D covariance, input space: cov3d
 __host__ __device__ void project_cov3d_ewa_vjp(

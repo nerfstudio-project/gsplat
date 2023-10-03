@@ -119,6 +119,7 @@ class ProjectGaussians(Function):
             radii,
             conics,
             v_xys,
+            v_depths,
             v_conics,
         )
 
