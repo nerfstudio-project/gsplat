@@ -312,7 +312,7 @@ def map_gaussian_to_intersects(
         raw_bytes = struct.pack("f", depths[idx])
 
         # Interpret those bytes as an int32_t
-        depth_id_n = struct.unpack("i", raw_bytes)[0]
+        depth_id_n = struct.unpack("I", raw_bytes)[0]
 
         for i in range(tile_min[1], tile_max[1]):
             for j in range(tile_min[0], tile_max[0]):
@@ -322,3 +322,29 @@ def map_gaussian_to_intersects(
                 cur_idx += 1
 
     return isect_ids, gaussian_ids
+
+
+def get_tile_bin_edges(num_intersects, isect_ids_sorted):
+    tile_bins = torch.zeros(
+        (num_intersects, 2), dtype=torch.int32, device=isect_ids_sorted.device
+    )
+
+    for idx in range(num_intersects):
+
+        cur_tile_idx = isect_ids_sorted[idx] >> 32
+
+        if idx == 0:
+            tile_bins[cur_tile_idx, 0] = 0
+            continue
+
+        if idx == num_intersects - 1:
+            tile_bins[cur_tile_idx, 1] = num_intersects
+            break
+
+        prev_tile_idx = isect_ids_sorted[idx - 1] >> 32
+
+        if cur_tile_idx != prev_tile_idx:
+            tile_bins[prev_tile_idx, 1] = idx
+            tile_bins[cur_tile_idx, 0] = idx
+
+    return tile_bins
