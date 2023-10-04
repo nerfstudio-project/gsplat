@@ -49,6 +49,14 @@ def test_get_tile_bin_edges():
         clip_thresh,
     )
 
+    _xys = _xys[_masks]
+    _depths = _depths[_masks]
+    _radii = _radii[_masks]
+    _conics = _conics[_masks]
+    _num_tiles_hit = _num_tiles_hit[_masks]
+
+    num_points = num_points - torch.count_nonzero(~_masks).item()
+
     _cum_tiles_hit = torch.cumsum(_num_tiles_hit, dim=0, dtype=torch.int32)
     _num_intersects = _cum_tiles_hit[-1].item()
     _depths = _depths.contiguous()
