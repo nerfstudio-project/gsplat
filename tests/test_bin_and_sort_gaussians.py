@@ -6,7 +6,7 @@ device = torch.device("cuda:0")
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_map_gaussians():
+def test_bin_and_sort_gaussians():
     from diff_rast import _torch_impl
     import diff_rast.cuda as _C
 
@@ -48,6 +48,7 @@ def test_map_gaussians():
         tile_bounds,
         clip_thresh,
     )
+
     _xys = _xys[_masks]
     _depths = _depths[_masks]
     _radii = _radii[_masks]
@@ -57,18 +58,35 @@ def test_map_gaussians():
     num_points = num_points - torch.count_nonzero(~_masks).item()
 
     _cum_tiles_hit = torch.cumsum(_num_tiles_hit, dim=0, dtype=torch.int32)
+    _num_intersects = _cum_tiles_hit[-1].item()
     _depths = _depths.contiguous()
 
-    _isect_ids, _gaussian_ids = _torch_impl.map_gaussian_to_intersects(
-        num_points, _xys, _depths, _radii, _cum_tiles_hit, tile_bounds
-    )
-    isect_ids, gaussian_ids = _C.map_gaussian_to_intersects(
-        num_points, _xys, _depths, _radii, _cum_tiles_hit, tile_bounds
+    (
+        _isect_ids_unsorted,
+        _gaussian_ids_unsorted,
+        _isect_ids_sorted,
+        _gaussian_ids_sorted,
+        _tile_bins,
+    ) = _torch_impl.bin_and_sort_gaussians(
+        num_points, _num_intersects, _xys, _depths, _radii, _cum_tiles_hit, tile_bounds
     )
 
-    torch.testing.assert_close(gaussian_ids, _gaussian_ids)
-    torch.testing.assert_close(isect_ids, _isect_ids)
+    (
+        isect_ids_unsorted,
+        gaussian_ids_unsorted,
+        isect_ids_sorted,
+        gaussian_ids_sorted,
+        tile_bins,
+    ) = _C.bin_and_sort_gaussians(
+        num_points, _num_intersects, _xys, _depths, _radii, _cum_tiles_hit, tile_bounds
+    )
+
+    torch.testing.assert_close(_isect_ids_unsorted, isect_ids_unsorted)
+    torch.testing.assert_close(_gaussian_ids_unsorted, gaussian_ids_unsorted)
+    torch.testing.assert_close(_isect_ids_sorted, isect_ids_sorted)
+    torch.testing.assert_close(_gaussian_ids_sorted, gaussian_ids_sorted)
+    torch.testing.assert_close(_tile_bins, tile_bins)
 
 
 if __name__ == "__main__":
-    test_map_gaussians()
+    test_bin_and_sort_gaussians()

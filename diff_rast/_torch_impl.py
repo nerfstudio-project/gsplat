@@ -306,13 +306,13 @@ def map_gaussian_to_intersects(
 
         tile_min, tile_max = get_tile_bbox(xys[idx], radii[idx], tile_bounds)
 
-        cur_idx = 0 if idx == 0 else cum_tiles_hit[idx - 1]
+        cur_idx = 0 if idx == 0 else cum_tiles_hit[idx - 1].item()
 
         # Get raw byte representation of the float value at the given index
         raw_bytes = struct.pack("f", depths[idx])
 
         # Interpret those bytes as an int32_t
-        depth_id_n = struct.unpack("I", raw_bytes)[0]
+        depth_id_n = struct.unpack("i", raw_bytes)[0]
 
         for i in range(tile_min[1], tile_max[1]):
             for j in range(tile_min[0], tile_max[0]):
@@ -348,3 +348,21 @@ def get_tile_bin_edges(num_intersects, isect_ids_sorted):
             tile_bins[cur_tile_idx, 0] = idx
 
     return tile_bins
+
+
+def bin_and_sort_gaussians(
+    num_points, num_intersects, xys, depths, radii, cum_tiles_hit, tile_bounds
+):
+    isect_ids, gaussian_ids = map_gaussian_to_intersects(
+        num_points, xys, depths, radii, cum_tiles_hit, tile_bounds
+    )
+
+    # Sorting isect_ids_unsorted
+    sorted_values, sorted_indices = torch.sort(isect_ids)
+
+    isect_ids_sorted = sorted_values
+    gaussian_ids_sorted = torch.gather(gaussian_ids, 0, sorted_indices)
+
+    tile_bins = get_tile_bin_edges(num_intersects, isect_ids_sorted)
+
+    return isect_ids, gaussian_ids, isect_ids_sorted, gaussian_ids_sorted, tile_bins

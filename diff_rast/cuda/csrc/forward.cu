@@ -166,7 +166,7 @@ __global__ void map_gaussian_to_intersects(
     // update the intersection info for all tiles this gaussian hits
     int32_t cur_idx = (idx == 0) ? 0 : cum_tiles_hit[idx - 1];
     // printf("point %d starting at %d\n", idx, cur_idx);
-    u_int64_t depth_id = (u_int64_t) * (u_int32_t *)&(depths[idx]);
+    int64_t depth_id = (int64_t) * (int32_t *)&(depths[idx]);
     for (int i = tile_min.y; i < tile_max.y; ++i) {
         for (int j = tile_min.x; j < tile_max.x; ++j) {
             // isect_id is tile ID and depth as int32
