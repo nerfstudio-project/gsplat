@@ -7,7 +7,7 @@ Given 3D gaussians parametrized by means :math:`μ`, covariances :math:`Σ`, col
 ProjectGaussians function computes the projected 2D gaussians in the camera frame with means :math:`μ'`, covariances :math:`Σ'`, and depths :math:`z`
 as well as their maximum radii in screen space and conic parameters. 
 
-Note, covariances are reparametrized by the eigen decomposition 
+Note, covariances are reparametrized by the eigen decomposition:
 
 .. math::
    
