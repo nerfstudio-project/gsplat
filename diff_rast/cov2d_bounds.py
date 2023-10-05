@@ -17,8 +17,10 @@ class ComputeCov2dBounds(Function):
         cov2d (Tensor): input cov2d of size  (batch, 3) of upper triangular 2D covariance values
 
     Returns:
-        conic (Tensor): conic parameters for 2D gaussian.
-        radii (Tensor): radii of 2D gaussian projections.
+        A tuple of {Tensor, Tensor}:
+
+        - **conic** (Tensor): conic parameters for 2D gaussian.
+        - **radii** (Tensor): radii of 2D gaussian projections.
     """
 
     @staticmethod
