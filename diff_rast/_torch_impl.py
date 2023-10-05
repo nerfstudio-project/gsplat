@@ -1,7 +1,7 @@
 """Pure PyTorch implementations of various functions"""
-
 import torch
 import torch.nn.functional as F
+import struct
 from jaxtyping import Float
 from torch import Tensor
 
@@ -155,7 +155,13 @@ def scale_rot_to_cov3d(scale: Tensor, glob_scale: float, quat: Tensor) -> Tensor
 
 
 def project_cov3d_ewa(
-    mean3d: Tensor, cov3d: Tensor, viewmat: Tensor, fx: float, fy: float
+    mean3d: Tensor,
+    cov3d: Tensor,
+    viewmat: Tensor,
+    fx: float,
+    fy: float,
+    tan_fovx: float,
+    tan_fovy: float,
 ) -> Tensor:
     assert mean3d.shape[-1] == 3, mean3d.shape
     assert cov3d.shape[-2:] == (3, 3), cov3d.shape
@@ -163,9 +169,13 @@ def project_cov3d_ewa(
     W = viewmat[..., :3, :3]  # (..., 3, 3)
     p = viewmat[..., :3, 3]  # (..., 3)
     t = torch.matmul(W, mean3d[..., None])[..., 0] + p  # (..., 3)
-    raise NotImplementedError(
-        "Need to incorporate changes from this commit: 85e76e1c8b8e102145922f561800a74262ceb196!"
-    )
+
+    lim_x = 1.3 * torch.tensor([tan_fovx], device=mean3d.device)
+    lim_y = 1.3 * torch.tensor([tan_fovy], device=mean3d.device)
+
+    t[..., 0] = t[..., 2] * torch.min(lim_x, torch.max(-lim_x, t[..., 0] / t[..., 2]))
+    t[..., 1] = t[..., 2] * torch.min(lim_y, torch.max(-lim_y, t[..., 1] / t[..., 2]))
+
     rz = 1.0 / t[..., 2]  # (...,)
     rz2 = rz**2  # (...,)
     J = torch.stack(
@@ -178,8 +188,8 @@ def project_cov3d_ewa(
     T = J @ W  # (..., 2, 3)
     cov2d = T @ cov3d @ T.transpose(-1, -2)  # (..., 2, 2)
     # add a little blur along axes and (TODO save upper triangular elements)
-    cov2d[..., 0, 0] = cov2d[..., 0, 0] + 0.1
-    cov2d[..., 1, 1] = cov2d[..., 1, 1] + 0.1
+    cov2d[..., 0, 0] = cov2d[..., 0, 0] + 0.3
+    cov2d[..., 1, 1] = cov2d[..., 1, 1] + 0.3
     return cov2d
 
 
@@ -215,11 +225,11 @@ def project_pix(mat, p, img_size, eps=1e-6):
     return torch.stack([u, v], dim=-1)
 
 
-def clip_near_plane(p, viewmat, thresh=0.1):
+def clip_near_plane(p, viewmat, clip_thresh=0.01):
     R = viewmat[..., :3, :3]
     T = viewmat[..., :3, 3]
     p_view = torch.matmul(R, p[..., None])[..., 0] + T
-    return p_view, p_view[..., 2] < thresh
+    return p_view, p_view[..., 2] < clip_thresh
 
 
 def get_tile_bbox(pix_center, pix_radius, tile_bounds, BLOCK_X=16, BLOCK_Y=16):
@@ -259,10 +269,13 @@ def project_gaussians_forward(
     fy,
     img_size,
     tile_bounds,
+    clip_thresh=0.01,
 ):
-    p_view, is_close = clip_near_plane(means3d, viewmat)
+    tan_fovx = 0.5 * img_size[1] / fx
+    tan_fovy = 0.5 * img_size[0] / fy
+    p_view, is_close = clip_near_plane(means3d, viewmat, clip_thresh)
     cov3d = scale_rot_to_cov3d(scales, glob_scale, quats)
-    cov2d = project_cov3d_ewa(means3d, cov3d, viewmat, fx, fy)
+    cov2d = project_cov3d_ewa(means3d, cov3d, viewmat, fx, fy, tan_fovx, tan_fovy)
     conic, radius, det_valid = compute_cov2d_bounds(cov2d)
     center = project_pix(projmat, means3d, img_size)
     tile_min, tile_max = get_tile_bbox(center, radius, tile_bounds)
@@ -278,3 +291,78 @@ def project_gaussians_forward(
     conics = conic
 
     return cov3d, xys, depths, radii, conics, num_tiles_hit, mask
+
+
+def map_gaussian_to_intersects(
+    num_points, xys, depths, radii, cum_tiles_hit, tile_bounds
+):
+    num_intersects = cum_tiles_hit[-1]
+    isect_ids = torch.zeros(num_intersects, dtype=torch.int64, device=xys.device)
+    gaussian_ids = torch.zeros(num_intersects, dtype=torch.int32, device=xys.device)
+
+    for idx in range(num_points):
+        if radii[idx] <= 0:
+            break
+
+        tile_min, tile_max = get_tile_bbox(xys[idx], radii[idx], tile_bounds)
+
+        cur_idx = 0 if idx == 0 else cum_tiles_hit[idx - 1].item()
+
+        # Get raw byte representation of the float value at the given index
+        raw_bytes = struct.pack("f", depths[idx])
+
+        # Interpret those bytes as an int32_t
+        depth_id_n = struct.unpack("i", raw_bytes)[0]
+
+        for i in range(tile_min[1], tile_max[1]):
+            for j in range(tile_min[0], tile_max[0]):
+                tile_id = i * tile_bounds[0] + j
+                isect_ids[cur_idx] = (tile_id << 32) | depth_id_n
+                gaussian_ids[cur_idx] = idx
+                cur_idx += 1
+
+    return isect_ids, gaussian_ids
+
+
+def get_tile_bin_edges(num_intersects, isect_ids_sorted):
+    tile_bins = torch.zeros(
+        (num_intersects, 2), dtype=torch.int32, device=isect_ids_sorted.device
+    )
+
+    for idx in range(num_intersects):
+
+        cur_tile_idx = isect_ids_sorted[idx] >> 32
+
+        if idx == 0:
+            tile_bins[cur_tile_idx, 0] = 0
+            continue
+
+        if idx == num_intersects - 1:
+            tile_bins[cur_tile_idx, 1] = num_intersects
+            break
+
+        prev_tile_idx = isect_ids_sorted[idx - 1] >> 32
+
+        if cur_tile_idx != prev_tile_idx:
+            tile_bins[prev_tile_idx, 1] = idx
+            tile_bins[cur_tile_idx, 0] = idx
+
+    return tile_bins
+
+
+def bin_and_sort_gaussians(
+    num_points, num_intersects, xys, depths, radii, cum_tiles_hit, tile_bounds
+):
+    isect_ids, gaussian_ids = map_gaussian_to_intersects(
+        num_points, xys, depths, radii, cum_tiles_hit, tile_bounds
+    )
+
+    # Sorting isect_ids_unsorted
+    sorted_values, sorted_indices = torch.sort(isect_ids)
+
+    isect_ids_sorted = sorted_values
+    gaussian_ids_sorted = torch.gather(gaussian_ids, 0, sorted_indices)
+
+    tile_bins = get_tile_bin_edges(num_intersects, isect_ids_sorted)
+
+    return isect_ids, gaussian_ids, isect_ids_sorted, gaussian_ids_sorted, tile_bins

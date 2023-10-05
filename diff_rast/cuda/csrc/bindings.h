@@ -79,3 +79,37 @@ project_gaussians_backward_tensor(
     torch::Tensor &v_xy,
     torch::Tensor &v_conic
 );
+
+std::tuple<torch::Tensor, torch::Tensor> compute_cumulative_intersects_tensor(
+    const int num_points, const torch::Tensor &num_tiles_hit
+);
+
+std::tuple<torch::Tensor, torch::Tensor> map_gaussian_to_intersects_tensor(
+    const int num_points,
+    const torch::Tensor &xys,
+    const torch::Tensor &depths,
+    const torch::Tensor &radii,
+    const torch::Tensor &cum_tiles_hit,
+    const std::tuple<int, int, int> tile_bounds
+);
+
+torch::Tensor get_tile_bin_edges_tensor(
+    int num_intersects,
+    const torch::Tensor &isect_ids_sorted
+);
+
+std::tuple<
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor>
+bin_and_sort_gaussians_tensor(
+    const int num_points,
+    const int num_intersects,
+    const torch::Tensor &xys,
+    const torch::Tensor &depths,
+    const torch::Tensor &radii,
+    const torch::Tensor &cum_tiles_hit,
+    const std::tuple<int, int, int> tile_bounds
+);
