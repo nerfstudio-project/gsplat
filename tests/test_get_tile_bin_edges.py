@@ -8,11 +8,12 @@ device = torch.device("cuda:0")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_get_tile_bin_edges():
     from diff_rast import _torch_impl
-    import diff_rast.cuda as _C
+    from diff_rast.get_tile_bin_edges import GetTileBinEdges
 
     torch.manual_seed(42)
 
     num_points = 100
+
     means3d = torch.randn((num_points, 3), device=device, requires_grad=True)
     scales = torch.randn((num_points, 3), device=device)
     glob_scale = 0.3
@@ -75,7 +76,7 @@ def test_get_tile_bin_edges():
     _gaussian_ids_sorted = torch.gather(_gaussian_ids_unsorted, 0, sorted_indices)
 
     _tile_bins = _torch_impl.get_tile_bin_edges(_num_intersects, _isect_ids_sorted)
-    tile_bins = _C.get_tile_bin_edges(_num_intersects, _isect_ids_sorted)
+    tile_bins = GetTileBinEdges.apply(_num_intersects, _isect_ids_sorted)
 
     torch.testing.assert_close(_tile_bins, tile_bins)
 
