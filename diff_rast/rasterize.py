@@ -11,7 +11,7 @@ import diff_rast.cuda as _C
 
 
 class RasterizeGaussians(Function):
-    """Rasterize 2D gaussians.
+    """Rasterizes 2D gaussians by sorting and binning gaussian intersections for each tile and returns an output image using alpha-compositing.
 
     Args:
         xys (Tensor): xy coords of 2D gaussians.
@@ -24,6 +24,9 @@ class RasterizeGaussians(Function):
         img_height (int): height of the rendered image.
         img_width (int): width of the rendered image.
         background (Tensor): background color
+
+    Returns:
+        out_img (Tensor): the rendered output image.
     """
 
     @staticmethod
