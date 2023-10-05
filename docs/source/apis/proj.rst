@@ -40,4 +40,3 @@ Citations
     :filter: docname in docnames
 
 .. autoclass:: ProjectGaussians
-    :members:

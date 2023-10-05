@@ -1,8 +1,6 @@
 Tests
 ===================================
 
-.. currentmodule:: diff_rast
-
 Testing and verifying CUDA implementations
 --------------------------------------------
 
@@ -11,12 +9,14 @@ They are also ran with any pull-requests into main branch on our github reposito
 
 The tests include: 
 
-.. code-block:: python
+.. code-block:: bash
     :caption: tests/
 
-    ./test_project_gaussians.py
-    ./test_map_gaussians.py
-    ./test_cumulative_intersects.py
+    ./test_bin_and_sort_gaussians.py
     ./test_cov2d_bounds.py
+    ./test_cumulative_intersects.py
+    ./test_get_tile_bin_edges.py
+    ./test_map_gaussians.py
+    ./test_project_gaussians
     ./test_sh.py
 
