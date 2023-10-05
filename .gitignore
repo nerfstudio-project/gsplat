@@ -120,3 +120,4 @@ venv.bak/
 *build
 compile_commands.json
 *.dump
+renders/

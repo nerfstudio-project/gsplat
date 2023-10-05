@@ -1,3 +1,19 @@
+"""
+Run the script:
+
+```bash
+python examples/simple_trainer.py --height 256 --width 256 --num_points 400 --save_imgs
+```
+
+Number of GSs: 400
+Total trainable params: 400 * 14 = 5600
+MSE Loss: 0.00175
+
+Number of GSs: 80
+Total trainable params: 80 * 14 = 1120
+MSE Loss: 0.00627
+"""
+
 import math
 import os
 import random
@@ -164,6 +180,7 @@ class SimpleTrainer:
         if save_imgs:
             # save them as a gif with PIL
             frames = [Image.fromarray(frame) for frame in frames]
+            os.makedirs(os.getcwd() + "/renders", exist_ok=True)
             frames[0].save(
                 os.getcwd() + "/renders/training.gif",
                 save_all=True,

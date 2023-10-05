@@ -1,3 +1,15 @@
+"""
+Run the script:
+
+```bash
+python examples/simple_trainer_hash.py --height 256 --width 256 --num_points 400 --save_imgs
+```
+
+Effective number of GSs: 400
+Total trainable params: 1072
+MSE Loss: 0.00174
+"""
+
 import math
 import os
 from pathlib import Path
@@ -151,14 +163,8 @@ class SimpleTrainer:
         mse_loss = torch.nn.MSELoss()
         frames = []
 
-        with torch.no_grad():
-            means = self.means()
-            means_min = means.min(dim=0).values
-            means_max = means.max(dim=0).values
-
         for iter in range(iterations):
             means = self.means()
-            # means = (means - means_min) / (means_max - means_min) * 2 - 1
             scales = self.scales()
             rgbs = self.rgbs()
             quats = self.quats()
@@ -209,6 +215,7 @@ class SimpleTrainer:
         if save_imgs:
             # save them as a gif with PIL
             frames = [Image.fromarray(frame) for frame in frames]
+            os.makedirs(os.getcwd() + "/renders", exist_ok=True)
             frames[0].save(
                 os.getcwd() + "/training.gif",
                 save_all=True,
