@@ -8,7 +8,7 @@ device = torch.device("cuda:0")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_bin_and_sort_gaussians():
     from diff_rast import _torch_impl
-    import diff_rast.cuda as _C
+    from diff_rast.bin_and_sort_gaussians import BinAndSortGaussians
 
     torch.manual_seed(42)
 
@@ -77,7 +77,7 @@ def test_bin_and_sort_gaussians():
         isect_ids_sorted,
         gaussian_ids_sorted,
         tile_bins,
-    ) = _C.bin_and_sort_gaussians(
+    ) = BinAndSortGaussians.apply(
         num_points, _num_intersects, _xys, _depths, _radii, _cum_tiles_hit, tile_bounds
     )
 
