@@ -24,11 +24,13 @@ class BinAndSortGaussians(Function):
         tile_bounds (Tuple): tile dimensions as a len 3 tuple (tiles.x , tiles.y, 1).
 
     Returns:
-        isect_ids_unsorted (Tensor): unique IDs for each gaussian in the form (tile | depth id).
-        gaussian_ids_unsorted (Tensor): Tensor that maps isect_ids back to cum_tiles_hit. Useful for identifying gaussians.
-        isect_ids_sorted (Tensor): sorted unique IDs for each gaussian in the form (tile | depth id).
-        gaussian_ids_sorted (Tensor): sorted Tensor that maps isect_ids back to cum_tiles_hit. Useful for identifying gaussians.
-        tile_bins (Tensor): range of gaussians hit per tile.
+        A tuple of {Tensor, Tensor, Tensor, Tensor, Tensor}:
+
+        - **isect_ids_unsorted** (Tensor): unique IDs for each gaussian in the form (tile | depth id).
+        - **gaussian_ids_unsorted** (Tensor): Tensor that maps isect_ids back to cum_tiles_hit. Useful for identifying gaussians.
+        - **isect_ids_sorted** (Tensor): sorted unique IDs for each gaussian in the form (tile | depth id).
+        - **gaussian_ids_sorted** (Tensor): sorted Tensor that maps isect_ids back to cum_tiles_hit. Useful for identifying gaussians.
+        - **tile_bins** (Tensor): range of gaussians hit per tile.
     """
 
     @staticmethod

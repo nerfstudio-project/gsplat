@@ -26,12 +26,14 @@ class ProjectGaussians(Function):
        tile_bounds (Tuple): tile dimensions as a len 3 tuple (tiles.x , tiles.y, 1).
 
     Returns:
-        xys (Tensor): x,y locations of 2D gaussian projections.
-        depths (Tensor): z depth of gaussians.
-        radii (Tensor): radii of 2D gaussian projections.
-        conics (Tensor): conic parameters for 2D gaussian.
-        num_tiles_hit (int): number of tiles hit.
-        cov3d (Tensor): 3D covariances.
+        A tuple of {Tensor, Tensor, Tensor, Tensor, int, Tensor}:
+
+        - **xys** (Tensor): x,y locations of 2D gaussian projections.
+        - **depths** (Tensor): z depth of gaussians.
+        - **radii** (Tensor): radii of 2D gaussian projections.
+        - **conics** (Tensor): conic parameters for 2D gaussian.
+        - **num_tiles_hit** (int): number of tiles hit.
+        - **cov3d** (Tensor): 3D covariances.
     """
 
     @staticmethod
