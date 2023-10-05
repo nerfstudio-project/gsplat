@@ -26,7 +26,9 @@ class RasterizeGaussians(Function):
         background (Tensor): background color
 
     Returns:
-        out_img (Tensor): the rendered output image.
+        A Tensor:
+
+        - **out_img** (Tensor): the rendered output image.
     """
 
     @staticmethod
