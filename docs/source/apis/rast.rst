@@ -32,4 +32,3 @@ And
 
 
 .. autoclass:: RasterizeGaussians
-    :members:

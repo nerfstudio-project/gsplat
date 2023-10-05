@@ -10,7 +10,7 @@ and their differentiability on a single training image. This allows you to overf
 
 Simply run the script with:
 
-.. code-block:: python
+.. code-block:: bash
     :caption: simple_trainer.py
 
     python examples/simple_trainer.py --height 256 --width 256 --num_points 2000 --save_imgs
@@ -23,6 +23,6 @@ to get a result similar to the one below:
 
 You can also provide a path to your own custom image file using the ``--img_path`` flag:
 
-.. code-block:: python
+.. code-block:: bash
 
     python examples/simple_trainer.py --img_path PATH_TO_IMG --save_imgs
