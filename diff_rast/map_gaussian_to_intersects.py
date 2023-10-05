@@ -21,8 +21,10 @@ class MapGaussiansToIntersects(Function):
         tile_bounds (Tuple): tile dimensions as a len 3 tuple (tiles.x , tiles.y, 1).
 
     Returns:
-        isect_ids (Tensor): unique IDs for each gaussian in the form (tile | depth id).
-        gaussian_ids (Tensor): Tensor that maps isect_ids back to cum_tiles_hit. Useful for identifying gaussians.
+        A tuple of {Tensor, Tensor}:
+
+        - **isect_ids** (Tensor): unique IDs for each gaussian in the form (tile | depth id).
+        - **gaussian_ids** (Tensor): Tensor that maps isect_ids back to cum_tiles_hit.
     """
 
     @staticmethod

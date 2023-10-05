@@ -16,12 +16,14 @@ class GetTileBinEdges(Function):
 
     Indexing into tile_bins[tile_idx] returns the range (lower,upper) of gaussian IDs that hit tile_idx.
 
-        Args:
-            num_intersects (int): total number of gaussian intersects.
-            isect_ids_sorted (Tensor): sorted unique IDs for each gaussian in the form (tile | depth id).
+    Args:
+        num_intersects (int): total number of gaussian intersects.
+        isect_ids_sorted (Tensor): sorted unique IDs for each gaussian in the form (tile | depth id).
 
-        Returns:
-            tile_bins (Tensor): range of gaussians IDs hit per tile.
+    Returns:
+        A Tensor:
+
+        - **tile_bins** (Tensor): range of gaussians IDs hit per tile.
     """
 
     @staticmethod
