@@ -113,3 +113,20 @@ bin_and_sort_gaussians_tensor(
     const torch::Tensor &cum_tiles_hit,
     const std::tuple<int, int, int> tile_bounds
 );
+
+std::tuple<
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor
+> rasterize_forward_impl_tensor(
+    const std::tuple<int, int, int> tile_bounds,
+    const std::tuple<int, int, int> block,
+    const std::tuple<int, int, int> img_size,
+    const torch::Tensor &gaussian_ids_sorted,
+    const torch::Tensor &tile_bins,
+    const torch::Tensor &xys,
+    const torch::Tensor &conics,
+    const torch::Tensor &colors,
+    const torch::Tensor &opacities,
+    const torch::Tensor &blackground
+);
