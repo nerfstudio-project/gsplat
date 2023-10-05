@@ -8,11 +8,11 @@ device = torch.device("cuda:0")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_compare_binding_to_pytorch():
     from diff_rast._torch_impl import compute_cov2d_bounds as _compute_cov2d_bounds
-    from diff_rast.cov2d_bounds import compute_cov2d_bounds
+    from diff_rast.cov2d_bounds import ComputeCov2dBounds
 
     torch.manual_seed(42)
 
-    num_cov2ds = 2
+    num_cov2ds = 100
 
     _covs2d = torch.rand(
         (num_cov2ds, 2, 2), dtype=torch.float32, device=device, requires_grad=True
@@ -26,7 +26,7 @@ def test_compare_binding_to_pytorch():
         dim=-1,
     )
 
-    conic, radii = compute_cov2d_bounds.apply(covs2d)
+    conic, radii = ComputeCov2dBounds.apply(covs2d)
     _conic, _radii, _mask = _compute_cov2d_bounds(_covs2d)
 
     radii = radii.squeeze(-1)

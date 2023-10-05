@@ -89,3 +89,7 @@ __global__ void map_gaussian_to_intersects(
     int64_t *isect_ids,
     int32_t *gaussian_ids
 );
+
+__global__ void get_tile_bin_edges(
+    const int num_intersects, const int64_t *isect_ids_sorted, int2 *tile_bins
+);

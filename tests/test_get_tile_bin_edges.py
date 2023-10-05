@@ -6,9 +6,9 @@ device = torch.device("cuda:0")
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_project_gaussians_forward():
+def test_get_tile_bin_edges():
     from diff_rast import _torch_impl
-    import diff_rast.cuda as _C
+    from diff_rast.get_tile_bin_edges import GetTileBinEdges
 
     torch.manual_seed(42)
 
@@ -27,22 +27,6 @@ def test_project_gaussians_forward():
 
     BLOCK_X, BLOCK_Y = 16, 16
     tile_bounds = (W + BLOCK_X - 1) // BLOCK_X, (H + BLOCK_Y - 1) // BLOCK_Y, 1
-
-    (cov3d, xys, depths, radii, conics, num_tiles_hit,) = _C.project_gaussians_forward(
-        num_points,
-        means3d,
-        scales,
-        glob_scale,
-        quats,
-        viewmat,
-        projmat,
-        fx,
-        fy,
-        H,
-        W,
-        tile_bounds,
-        clip_thresh,
-    )
 
     (
         _cov3d,
@@ -66,23 +50,36 @@ def test_project_gaussians_forward():
         clip_thresh,
     )
 
-    torch.testing.assert_close(
-        cov3d[_masks],
-        _cov3d.view(-1, 9)[_masks][:, [0, 1, 2, 4, 5, 8]],
-        atol=1e-5,
-        rtol=1e-5,
+    _xys = _xys[_masks]
+    _depths = _depths[_masks]
+    _radii = _radii[_masks]
+    _conics = _conics[_masks]
+    _num_tiles_hit = _num_tiles_hit[_masks]
+
+    num_points = num_points - torch.count_nonzero(~_masks).item()
+
+    _cum_tiles_hit = torch.cumsum(_num_tiles_hit, dim=0, dtype=torch.int32)
+    _num_intersects = _cum_tiles_hit[-1].item()
+    _depths = _depths.contiguous()
+
+    (
+        _isect_ids_unsorted,
+        _gaussian_ids_unsorted,
+    ) = _torch_impl.map_gaussian_to_intersects(
+        num_points, _xys, _depths, _radii, _cum_tiles_hit, tile_bounds
     )
-    torch.testing.assert_close(
-        xys[_masks],
-        _xys[_masks],
-        atol=1e-4,
-        rtol=1e-4,
-    )
-    torch.testing.assert_close(depths[_masks], _depths[_masks])
-    torch.testing.assert_close(radii[_masks], _radii[_masks])
-    torch.testing.assert_close(conics[_masks], _conics[_masks])
-    torch.testing.assert_close(num_tiles_hit[_masks], _num_tiles_hit[_masks])
+
+    # Sorting isect_ids_unsorted
+    sorted_values, sorted_indices = torch.sort(_isect_ids_unsorted)
+
+    _isect_ids_sorted = sorted_values
+    _gaussian_ids_sorted = torch.gather(_gaussian_ids_unsorted, 0, sorted_indices)
+
+    _tile_bins = _torch_impl.get_tile_bin_edges(_num_intersects, _isect_ids_sorted)
+    tile_bins = GetTileBinEdges.apply(_num_intersects, _isect_ids_sorted)
+
+    torch.testing.assert_close(_tile_bins, tile_bins)
 
 
 if __name__ == "__main__":
-    test_project_gaussians_forward()
+    test_get_tile_bin_edges()
