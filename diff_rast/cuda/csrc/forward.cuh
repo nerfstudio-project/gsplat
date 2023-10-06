@@ -50,6 +50,7 @@ void rasterize_forward_impl(
     const dim3 tile_bounds,
     const dim3 block,
     const dim3 img_size,
+    const unsigned channels,
     const int32_t *gaussian_ids_sorted,
     const int2 *tile_bins,
     const float2 *xys,
