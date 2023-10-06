@@ -10,7 +10,7 @@ import diff_rast.cuda as _C
 
 
 class ProjectGaussians(Function):
-    """Project 3D Gaussians to 2D.
+    """This function projects 3D gaussians to 2D using the EWA splatting method for gaussian splatting.
 
     Args:
        means3d (Tensor): xyzs of gaussians.
@@ -24,6 +24,16 @@ class ProjectGaussians(Function):
        img_height (int): height of the rendered image.
        img_width (int): width of the rendered image.
        tile_bounds (Tuple): tile dimensions as a len 3 tuple (tiles.x , tiles.y, 1).
+
+    Returns:
+        A tuple of {Tensor, Tensor, Tensor, Tensor, int, Tensor}:
+
+        - **xys** (Tensor): x,y locations of 2D gaussian projections.
+        - **depths** (Tensor): z depth of gaussians.
+        - **radii** (Tensor): radii of 2D gaussian projections.
+        - **conics** (Tensor): conic parameters for 2D gaussian.
+        - **num_tiles_hit** (int): number of tiles hit.
+        - **cov3d** (Tensor): 3D covariances.
     """
 
     @staticmethod

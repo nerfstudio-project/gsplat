@@ -89,3 +89,23 @@ __global__ void map_gaussian_to_intersects(
     int64_t *isect_ids,
     int32_t *gaussian_ids
 );
+
+__global__ void get_tile_bin_edges(
+    const int num_intersects, const int64_t *isect_ids_sorted, int2 *tile_bins
+);
+
+template <int CHANNELS>
+__global__ void rasterize_forward_kernel(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const int32_t *gaussian_ids_sorted,
+    const int2 *tile_bins,
+    const float2 *xys,
+    const float3 *conics,
+    const float *colors,
+    const float *opacities,
+    float *final_Ts,
+    int *final_index,
+    float *out_img,
+    const float *background
+);

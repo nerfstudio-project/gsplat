@@ -8,11 +8,12 @@ device = torch.device("cuda:0")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_map_gaussians():
     from diff_rast import _torch_impl
-    import diff_rast.cuda as _C
+    from diff_rast.map_gaussian_to_intersects import MapGaussiansToIntersects
 
     torch.manual_seed(42)
 
     num_points = 100
+
     means3d = torch.randn((num_points, 3), device=device, requires_grad=True)
     scales = torch.randn((num_points, 3), device=device)
     glob_scale = 0.3
@@ -48,15 +49,22 @@ def test_map_gaussians():
         tile_bounds,
         clip_thresh,
     )
+    _xys = _xys[_masks]
+    _depths = _depths[_masks]
+    _radii = _radii[_masks]
+    _conics = _conics[_masks]
+    _num_tiles_hit = _num_tiles_hit[_masks]
+
+    num_points = num_points - torch.count_nonzero(~_masks).item()
 
     _cum_tiles_hit = torch.cumsum(_num_tiles_hit, dim=0, dtype=torch.int32)
     _depths = _depths.contiguous()
 
-    isect_ids, gaussian_ids = _C.map_gaussian_to_intersects(
+    _isect_ids, _gaussian_ids = _torch_impl.map_gaussian_to_intersects(
         num_points, _xys, _depths, _radii, _cum_tiles_hit, tile_bounds
     )
 
-    _isect_ids, _gaussian_ids = _torch_impl.map_gaussian_to_intersects(
+    isect_ids, gaussian_ids = MapGaussiansToIntersects.apply(
         num_points, _xys, _depths, _radii, _cum_tiles_hit, tile_bounds
     )
 
