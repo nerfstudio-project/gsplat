@@ -366,3 +366,73 @@ def bin_and_sort_gaussians(
     tile_bins = get_tile_bin_edges(num_intersects, isect_ids_sorted)
 
     return isect_ids, gaussian_ids, isect_ids_sorted, gaussian_ids_sorted, tile_bins
+
+
+def rasterize_forward_kernel(
+    tile_bounds,
+    block,
+    img_size,
+    gaussian_ids_sorted,
+    tile_bins,
+    xys,
+    conics,
+    colors,
+    opacities,
+    background,
+):
+    channels = colors.shape[1]
+    out_img = torch.zeros(
+        (img_size[1], img_size[0], channels), dtype=torch.float32, device=xys.device
+    )
+    final_Ts = torch.zeros(
+        (img_size[1], img_size[0]), dtype=torch.float32, device=xys.device
+    )
+    final_idx = torch.zeros(
+        (img_size[1], img_size[0]), dtype=torch.int32, device=xys.device
+    )
+    for i in range(img_size[1]):
+        for j in range(img_size[0]):
+            tile_id = (i // block[0]) * tile_bounds[0] + (j // block[1])
+            tile_bin_start = tile_bins[tile_id, 0]
+            tile_bin_end = tile_bins[tile_id, 1]
+            T = 1.0
+
+            for idx in range(tile_bin_start, tile_bin_end):
+                gaussian_id = gaussian_ids_sorted[idx]
+                conic = conics[gaussian_id]
+                center = xys[gaussian_id]
+                delta = center - torch.tensor(
+                    [j, i], dtype=torch.float32, device=xys.device
+                )
+
+                sigma = (
+                    0.5
+                    * (conic[0] * delta[0] * delta[0] + conic[2] * delta[1] * delta[1])
+                    + conic[1] * delta[0] * delta[1]
+                )
+
+                if sigma < 0:
+                    continue
+
+                opac = opacities[gaussian_id]
+                alpha = min(0.999, opac * torch.exp(-sigma))
+
+                if alpha < 1 / 255:
+                    continue
+
+                next_T = T * (1 - alpha)
+
+                if next_T <= 1e-4:
+                    idx -= 1
+                    break
+
+                vis = alpha * T
+
+                out_img[i, j] += vis * colors[gaussian_id]
+                T = next_T
+
+            final_Ts[i, j] = T
+            final_idx[i, j] = idx
+            out_img[i, j] += T * background
+
+    return out_img, final_Ts, final_idx
