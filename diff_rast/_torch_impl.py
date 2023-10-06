@@ -368,7 +368,7 @@ def bin_and_sort_gaussians(
     return isect_ids, gaussian_ids, isect_ids_sorted, gaussian_ids_sorted, tile_bins
 
 
-def rasterize_forward_impl(
+def rasterize_forward_kernel(
     tile_bounds,
     block,
     img_size,
