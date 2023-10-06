@@ -13,6 +13,7 @@ def test_rasterize_forward_kernel():
     torch.manual_seed(42)
 
     num_points = 100
+
     means3d = torch.randn((num_points, 3), device=device, requires_grad=True)
     scales = torch.randn((num_points, 3), device=device)
     colors = torch.randn((num_points, 3), device=device)

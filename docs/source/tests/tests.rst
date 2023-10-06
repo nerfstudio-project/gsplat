@@ -18,5 +18,5 @@ The tests include:
     ./test_get_tile_bin_edges.py
     ./test_map_gaussians.py
     ./test_project_gaussians
+    ./test_rasterize_forward_kernel.py
     ./test_sh.py
-
