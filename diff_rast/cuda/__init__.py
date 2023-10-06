@@ -22,4 +22,4 @@ compute_cumulative_intersects = _make_lazy_cuda_func("compute_cumulative_interse
 map_gaussian_to_intersects = _make_lazy_cuda_func("map_gaussian_to_intersects")
 get_tile_bin_edges = _make_lazy_cuda_func("get_tile_bin_edges")
 bin_and_sort_gaussians = _make_lazy_cuda_func("bin_and_sort_gaussians")
-rasterize_forward_impl = _make_lazy_cuda_func("rasterize_forward_impl")
+rasterize_forward_kernel = _make_lazy_cuda_func("rasterize_forward_kernel")

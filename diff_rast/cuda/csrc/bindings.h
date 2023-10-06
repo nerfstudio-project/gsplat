@@ -118,7 +118,7 @@ std::tuple<
     torch::Tensor,
     torch::Tensor,
     torch::Tensor
-> rasterize_forward_impl_tensor(
+> rasterize_forward_kernel_tensor(
     const std::tuple<int, int, int> tile_bounds,
     const std::tuple<int, int, int> block,
     const std::tuple<int, int, int> img_size,
@@ -128,5 +128,5 @@ std::tuple<
     const torch::Tensor &conics,
     const torch::Tensor &colors,
     const torch::Tensor &opacities,
-    const torch::Tensor &blackground
+    const torch::Tensor &background
 );

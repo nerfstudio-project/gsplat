@@ -6,9 +6,9 @@ device = torch.device("cuda:0")
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_rasterize_forward_impl():
+def test_rasterize_forward_kernel():
     from diff_rast import _torch_impl
-    import diff_rast.cuda as _C
+    from diff_rast.rasterize_forward_kernel import RasterizeForwardKernel
 
     torch.manual_seed(42)
 
@@ -76,7 +76,7 @@ def test_rasterize_forward_impl():
         num_points, _num_intersects, _xys, _depths, _radii, _cum_tiles_hit, tile_bounds
     )
 
-    (out_img, final_Ts, final_idx,) = _C.rasterize_forward_impl(
+    (out_img, final_Ts, final_idx,) = RasterizeForwardKernel.apply(
         tile_bounds,
         block,
         img_size,
@@ -108,4 +108,4 @@ def test_rasterize_forward_impl():
 
 
 if __name__ == "__main__":
-    test_rasterize_forward_impl()
+    test_rasterize_forward_kernel()
