@@ -10,14 +10,17 @@ from torch.autograd import Function
 import diff_rast.cuda as _C
 
 
-class compute_cov2d_bounds(Function):
+class ComputeCov2dBounds(Function):
     """Computes bounds of 2D covariance matrix
 
     Args:
         cov2d (Tensor): input cov2d of size  (batch, 3) of upper triangular 2D covariance values
 
     Returns:
-        conics (batch, 3) and radii (batch, 1)
+        A tuple of {Tensor, Tensor}:
+
+        - **conic** (Tensor): conic parameters for 2D gaussian.
+        - **radii** (Tensor): radii of 2D gaussian projections.
     """
 
     @staticmethod
