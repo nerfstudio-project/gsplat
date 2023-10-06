@@ -17,8 +17,10 @@ class ComputeCumulativeIntersects(Function):
         num_tiles_hit (Tensor): number of intersected tiles per gaussian.
 
     Returns:
-        num_intersects (int): total number of tile intersections.
-        cum_tiles_hit (Tensor): a tensor of cumulated intersections (used for sorting).
+        A tuple of {int, Tensor}:
+
+        - **num_intersects** (int): total number of tile intersections.
+        - **cum_tiles_hit** (Tensor): a tensor of cumulated intersections (used for sorting).
     """
 
     @staticmethod
