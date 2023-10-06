@@ -57,12 +57,8 @@ class RasterizeForwardKernel(Function):
             ), f"incorrect shape of background color tensor, expected shape {colors.shape[-1]}"
         else:
             background = torch.ones(3, dtype=torch.float32)
-        
-        (
-            out_img,
-            final_Ts,
-            final_idx,
-        ) = _C.rasterize_forward_kernel(
+
+        (out_img, final_Ts, final_idx,) = _C.rasterize_forward_kernel(
             tile_bounds,
             block,
             img_size,
