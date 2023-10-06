@@ -89,7 +89,7 @@ def test_rasterize_forward_kernel():
         background,
     )
 
-    (_out_img, _final_Ts, _final_idx,) = _torch_impl.rasterize_forward_impl(
+    (_out_img, _final_Ts, _final_idx,) = _torch_impl.rasterize_forward_kernel(
         tile_bounds,
         block,
         img_size,
