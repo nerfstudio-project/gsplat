@@ -4,7 +4,7 @@
 
 namespace cg = cooperative_groups;
 
-template<int CHANNELS>
+template <int CHANNELS>
 __global__ void rasterize_backward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
@@ -49,7 +49,8 @@ __global__ void rasterize_backward_kernel(
     float T_final = final_Ts[pix_id];
     float T = T_final;
     // the contribution from gaussians behind the current one
-    float S[CHANNELS] = {0.f}; // TODO: this currently doesn't match the channel count input.
+    float S[CHANNELS] = {
+        0.f}; // TODO: this currently doesn't match the channel count input.
     // S[0] = 0.0;
     // S[1] = 0.0;
     // S[2] = 0.0;
@@ -95,7 +96,6 @@ __global__ void rasterize_backward_kernel(
             // update the running sum
             S[c] += rgbs[CHANNELS * g + c] * fac;
         }
-
 
         // v_alpha = (rgb.x * T - S.x * ra) * v_out.x
         //     + (rgb.y * T - S.y * ra) * v_out.y
@@ -146,7 +146,7 @@ void rasterize_backward_impl(
     float *v_opacity
 
 ) {
-    rasterize_backward_kernel<3> <<<tile_bounds, block>>>(
+    rasterize_backward_kernel<3><<<tile_bounds, block>>>(
         tile_bounds,
         img_size,
         gaussians_ids_sorted,
