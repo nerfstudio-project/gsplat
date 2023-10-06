@@ -36,8 +36,10 @@ class ProjectGaussians(Function):
         quats: Float[Tensor, "*batch 4"],
         viewmat: Float[Tensor, "4 4"],
         projmat: Float[Tensor, "4 4"],
-        fx: int,
-        fy: int,
+        fx: float,
+        fy: float,
+        cx: float,
+        cy: float,
         img_height: int,
         img_width: int,
         tile_bounds: Tuple[int, int, int],
@@ -62,6 +64,8 @@ class ProjectGaussians(Function):
             projmat,
             fx,
             fy,
+            cx,
+            cy,
             img_height,
             img_width,
             tile_bounds,
@@ -75,6 +79,8 @@ class ProjectGaussians(Function):
         ctx.glob_scale = glob_scale
         ctx.fx = fx
         ctx.fy = fy
+        ctx.cx = cx
+        ctx.cy = cy
 
         # Save tensors.
         ctx.save_for_backward(
@@ -113,6 +119,8 @@ class ProjectGaussians(Function):
             projmat,
             ctx.fx,
             ctx.fy,
+            ctx.cx,
+            ctx.cy,
             ctx.img_height,
             ctx.img_width,
             cov3d,
@@ -139,9 +147,13 @@ class ProjectGaussians(Function):
             None,
             # projmat: Float[Tensor, "4 4"],
             None,
-            # fx: int,
+            # fx: float,
             None,
-            # fy: int,
+            # fy: float,
+            None,
+            # cx: float,
+            None,
+            # cy: float,
             None,
             # img_height: int,
             None,

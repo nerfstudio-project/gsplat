@@ -19,8 +19,7 @@ __global__ void project_gaussians_forward_kernel(
     const float4 *quats,
     const float *viewmat,
     const float *projmat,
-    const float fx,
-    const float fy,
+    const float4 intrins,
     const dim3 img_size,
     const dim3 tile_bounds,
     const float clip_thresh,
@@ -58,6 +57,10 @@ __global__ void project_gaussians_forward_kernel(
     scale_rot_to_cov3d(scale, glob_scale, quat, cur_cov3d);
 
     // project to 2d with ewa approximation
+    float fx = intrins.x;
+    float fy = intrins.y;
+    float cx = intrins.z;
+    float cy = intrins.w;
     float tan_fovx = 0.5 * img_size.x / fx;
     float tan_fovy = 0.5 * img_size.y / fy;
     float3 cov2d = project_cov3d_ewa(
@@ -74,7 +77,7 @@ __global__ void project_gaussians_forward_kernel(
     conics[idx] = conic;
 
     // compute the projected mean
-    float2 center = project_pix(projmat, p_world, img_size);
+    float2 center = project_pix(projmat, p_world, img_size, {cx, cy});
     uint2 tile_min, tile_max;
     get_tile_bbox(center, radius, tile_bounds, tile_min, tile_max);
     int32_t tile_area = (tile_max.x - tile_min.x) * (tile_max.y - tile_min.y);

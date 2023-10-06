@@ -4,8 +4,8 @@
 #include "third_party/glm/glm/gtc/type_ptr.hpp"
 #include <iostream>
 
-inline __host__ __device__ float ndc2pix(const float x, const float W) {
-    return 0.5 * ((1.f + x) * W - 1.f);
+inline __host__ __device__ float ndc2pix(const float x, const float W, const float cx) {
+    return 0.5f * W * x + 0.5f + cx;
 }
 
 inline __host__ __device__ void get_bbox(
@@ -99,12 +99,12 @@ inline __host__ __device__ float4 transform_4x4(const float *mat, const float3 p
 }
 
 inline __host__ __device__ float2
-project_pix(const float *mat, const float3 p, const dim3 img_size) {
+project_pix(const float *mat, const float3 p, const dim3 img_size, const float2 pp) {
     // ROW MAJOR mat
     float4 p_hom = transform_4x4(mat, p);
     float rw = 1.f / (p_hom.w + 1e-6f);
     float3 p_proj = {p_hom.x * rw, p_hom.y * rw, p_hom.z * rw};
-    return {ndc2pix(p_proj.x, img_size.x), ndc2pix(p_proj.y, img_size.y)};
+    return {ndc2pix(p_proj.x, img_size.x, pp.x), ndc2pix(p_proj.y, img_size.y, pp.y)};
 }
 
 // given v_xy_pix, get v_xyz

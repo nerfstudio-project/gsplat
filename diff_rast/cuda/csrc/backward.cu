@@ -174,8 +174,7 @@ __global__ void project_gaussians_backward_kernel(
     const float4 *quats,
     const float *viewmat,
     const float *projmat,
-    const float fx,
-    const float fy,
+    const float4 intrins,
     const dim3 img_size,
     const float *cov3d,
     const int *radii,
@@ -194,11 +193,16 @@ __global__ void project_gaussians_backward_kernel(
         return;
     }
     float3 p_world = means3d[idx];
+    float fx = intrins.x;
+    float fy = intrins.y;
+    float cx = intrins.z;
+    float cy = intrins.w;
     // get v_mean3d from v_xy
     v_mean3d[idx] = project_pix_vjp(projmat, p_world, img_size, v_xy[idx]);
 
     // get z gradient contribution to mean3d gradient
-    // z = viemwat[8] * mean3d.x + viewmat[9] * mean3d.y + viewmat[10] * mean3d.z + viewmat[11]
+    // z = viemwat[8] * mean3d.x + viewmat[9] * mean3d.y + viewmat[10] *
+    // mean3d.z + viewmat[11]
     float v_z = v_depth[idx];
     v_mean3d[idx].x += viewmat[8] * v_z;
     v_mean3d[idx].y += viewmat[9] * v_z;
@@ -236,8 +240,7 @@ void project_gaussians_backward_impl(
     const float4 *quats,
     const float *viewmat,
     const float *projmat,
-    const float fx,
-    const float fy,
+    const float4 intrins,
     const dim3 img_size,
     const float *cov3d,
     const int *radii,
@@ -261,8 +264,7 @@ void project_gaussians_backward_impl(
         quats,
         viewmat,
         projmat,
-        fx,
-        fy,
+        intrins,
         img_size,
         cov3d,
         radii,
@@ -277,7 +279,6 @@ void project_gaussians_backward_impl(
         v_quat
     );
 }
-
 
 // output space: 2D covariance, input space: cov3d
 __host__ __device__ void project_cov3d_ewa_vjp(
