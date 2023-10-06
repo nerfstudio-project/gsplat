@@ -410,7 +410,7 @@ std::tuple<
     torch::Tensor,
     torch::Tensor,
     torch::Tensor
-> rasterize_forward_impl_tensor(
+> rasterize_forward_kernel_tensor(
     const std::tuple<int, int, int> tile_bounds,
     const std::tuple<int, int, int> block,
     const std::tuple<int, int, int> img_size,
@@ -420,7 +420,7 @@ std::tuple<
     const torch::Tensor &conics,
     const torch::Tensor &colors,
     const torch::Tensor &opacities,
-    const torch::Tensor &blackground
+    const torch::Tensor &background
 ){
     CHECK_INPUT(gaussian_ids_sorted);
     CHECK_INPUT(tile_bins);
@@ -428,7 +428,7 @@ std::tuple<
     CHECK_INPUT(conics);
     CHECK_INPUT(colors);
     CHECK_INPUT(opacities);
-    CHECK_INPUT(blackground);
+    CHECK_INPUT(background);
 
     dim3 tile_bounds_dim3;
     tile_bounds_dim3.x = std::get<0>(tile_bounds);
@@ -472,7 +472,7 @@ std::tuple<
         final_Ts.contiguous().data_ptr<float>(),
         final_idx.contiguous().data_ptr<int>(),
         out_img.contiguous().data_ptr<float>(),
-        blackground.contiguous().data_ptr<float>()
+        background.contiguous().data_ptr<float>()
     );
 
     return std::make_tuple(out_img, final_Ts, final_idx);
