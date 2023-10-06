@@ -1,4 +1,4 @@
-"""Python bindings for mapping gaussians to interset IDs"""
+"""Python bindings for forward rasterization"""
 
 from typing import Tuple, Any, Optional
 
@@ -11,7 +11,7 @@ import diff_rast.cuda as _C
 
 
 class RasterizeForwardKernel(Function):
-    """Kernel function for rasterizing each tile.
+    """Kernel function for rasterizing and alpha-composing each tile.
 
     Args:
         tile_bounds (Tuple): tile dimensions as a len 3 tuple (tiles.x , tiles.y, 1).
