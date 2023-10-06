@@ -56,8 +56,8 @@ class RasterizeGaussians(Function):
             final_idx,
             tile_bins,
             gaussian_ids_sorted,
-            gaussian_ids_unsorted,
             isect_ids_sorted,
+            gaussian_ids_unsorted,
             isect_ids_unsorted,
         ) = _C.rasterize_forward(
             xys.contiguous().cuda(),
