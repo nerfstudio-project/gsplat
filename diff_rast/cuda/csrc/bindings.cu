@@ -130,6 +130,8 @@ project_gaussians_forward_tensor(
     torch::Tensor &projmat,
     const float fx,
     const float fy,
+    const float cx,
+    const float cy,
     const unsigned img_height,
     const unsigned img_width,
     const std::tuple<int, int, int> tile_bounds,
@@ -143,6 +145,8 @@ project_gaussians_forward_tensor(
     tile_bounds_dim3.x = std::get<0>(tile_bounds);
     tile_bounds_dim3.y = std::get<1>(tile_bounds);
     tile_bounds_dim3.z = std::get<2>(tile_bounds);
+
+    float4 intrins = {fx, fy, cx, cy};
 
     // Triangular covariance.
     torch::Tensor cov3d_d =
@@ -166,8 +170,7 @@ project_gaussians_forward_tensor(
         (float4 *)quats.contiguous().data_ptr<float>(),
         viewmat.contiguous().data_ptr<float>(),
         projmat.contiguous().data_ptr<float>(),
-        fx,
-        fy,
+        intrins,
         img_size_dim3,
         tile_bounds_dim3,
         clip_thresh,
@@ -201,6 +204,8 @@ project_gaussians_backward_tensor(
     torch::Tensor &projmat,
     const float fx,
     const float fy,
+    const float cx,
+    const float cy,
     const unsigned img_height,
     const unsigned img_width,
     torch::Tensor &cov3d,
@@ -213,6 +218,8 @@ project_gaussians_backward_tensor(
     dim3 img_size_dim3;
     img_size_dim3.x = img_width;
     img_size_dim3.y = img_height;
+
+    float4 intrins = {fx, fy, cx, cy};
 
     const auto num_cov3d = num_points * 6;
 
@@ -236,8 +243,7 @@ project_gaussians_backward_tensor(
         (float4 *)quats.contiguous().data_ptr<float>(),
         viewmat.contiguous().data_ptr<float>(),
         projmat.contiguous().data_ptr<float>(),
-        fx,
-        fy,
+        intrins,
         img_size_dim3,
         cov3d.contiguous().data_ptr<float>(),
         radii.contiguous().data_ptr<int32_t>(),
