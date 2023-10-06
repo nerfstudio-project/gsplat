@@ -49,8 +49,8 @@ std::
         AT_ERROR("xys must have dimensions (N, 2)");
     }
 
-    if (colors.ndimension() != 2 || colors.size(1) != 3) {
-        AT_ERROR("colors must have dimensions (num_points, 3)");
+    if (colors.ndimension() != 2) {
+        AT_ERROR("colors must have dimensions (N, 3)");
     }
 
     const int channels = colors.size(1);
@@ -138,6 +138,7 @@ std::
         tile_bounds,
         block,
         img_size,
+        channels,
         // sorted_ids_ptr,
         // bins_ptr,
         // xys_ptr,
@@ -199,8 +200,8 @@ std::
         AT_ERROR("xys must have dimensions (num_points, 2)");
     }
 
-    if (colors.ndimension() != 2 || colors.size(1) != 3) {
-        AT_ERROR("colors must have dimensions (num_points, 3)");
+    if (colors.ndimension() != 2) {
+        AT_ERROR("colors must have 2 dimensions");
     }
 
     const int num_points = xys.size(0);
@@ -222,6 +223,7 @@ std::
         tile_bounds,
         block,
         img_size,
+        channels,
         gaussians_ids_sorted.contiguous().data_ptr<int>(),
         (int2 *)tile_bins.contiguous().data_ptr<int>(),
         (float2 *)xys.contiguous().data_ptr<float>(),
