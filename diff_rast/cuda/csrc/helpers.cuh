@@ -31,7 +31,8 @@ inline __host__ __device__ void get_tile_bbox(
     uint2 &tile_min,
     uint2 &tile_max
 ) {
-    // gets gaussian dimensions in tile space, i.e. the span of a gaussian in tile_grid (image divided into tiles)
+    // gets gaussian dimensions in tile space, i.e. the span of a gaussian in
+    // tile_grid (image divided into tiles)
     float2 tile_center = {
         pix_center.x / (float)BLOCK_X, pix_center.y / (float)BLOCK_Y};
     float2 tile_radius = {
@@ -44,7 +45,8 @@ compute_cov2d_bounds(const float3 cov2d, float3 &conic, float &radius) {
     // find eigenvalues of 2d covariance matrix
     // expects upper triangular values of cov matrix as float3
     // then compute the radius and conic dimensions
-    // the conic is the inverse cov2d matrix, represented here with upper triangular values.  
+    // the conic is the inverse cov2d matrix, represented here with upper
+    // triangular values.
     float det = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
     if (det == 0.f)
         return false;
@@ -64,8 +66,9 @@ compute_cov2d_bounds(const float3 cov2d, float3 &conic, float &radius) {
 }
 
 // compute vjp from df/d_conic to df/c_cov2d
-inline __host__ __device__ void
-cov2d_to_conic_vjp(const float3 &conic, const float3 &v_conic, float3 &v_cov2d) {
+inline __host__ __device__ void cov2d_to_conic_vjp(
+    const float3 &conic, const float3 &v_conic, float3 &v_cov2d
+) {
     // conic = inverse cov2d
     // df/d_cov2d = -conic * df/d_conic * conic
     glm::mat2 X = glm::mat2(conic.x, conic.y, conic.y, conic.z);
@@ -77,7 +80,8 @@ cov2d_to_conic_vjp(const float3 &conic, const float3 &v_conic, float3 &v_cov2d) 
 }
 
 // helper for applying R * p + T, expect mat to be ROW MAJOR
-inline __host__ __device__ float3 transform_4x3(const float *mat, const float3 p) {
+inline __host__ __device__ float3
+transform_4x3(const float *mat, const float3 p) {
     float3 out = {
         mat[0] * p.x + mat[1] * p.y + mat[2] * p.z + mat[3],
         mat[4] * p.x + mat[5] * p.y + mat[6] * p.z + mat[7],
@@ -88,7 +92,8 @@ inline __host__ __device__ float3 transform_4x3(const float *mat, const float3 p
 
 // helper to apply 4x4 transform to 3d vector, return homo coords
 // expects mat to be ROW MAJOR
-inline __host__ __device__ float4 transform_4x4(const float *mat, const float3 p) {
+inline __host__ __device__ float4
+transform_4x4(const float *mat, const float3 p) {
     float4 out = {
         mat[0] * p.x + mat[1] * p.y + mat[2] * p.z + mat[3],
         mat[4] * p.x + mat[5] * p.y + mat[6] * p.z + mat[7],
@@ -117,8 +122,7 @@ inline __host__ __device__ float3 project_pix_vjp(
 
     float3 v_ndc = {0.5f * img_size.x * v_xy.x, 0.5f * img_size.y * v_xy.y};
     float4 v_proj = {
-        v_ndc.x * rw, v_ndc.y * rw, 0., -(v_ndc.x + v_ndc.y) * rw * rw
-    };
+        v_ndc.x * rw, v_ndc.y * rw, 0., -(v_ndc.x + v_ndc.y) * rw * rw};
     // df / d_world = df / d_cam * d_cam / d_world
     // = v_proj * P[:3, :3]
     return {
@@ -164,36 +168,36 @@ quat_to_rotmat_vjp(const float4 quat, const glm::mat3 v_R) {
     float4 v_quat;
     // v_R is COLUMN MAJOR
     // w element stored in x field
-    v_quat.x = 2.f * (
-    // v_quat.w = 2.f * (
-        x * (v_R[1][2] - v_R[2][1])
-        + y * (v_R[2][0] - v_R[0][2])
-        + z * (v_R[0][1] - v_R[1][0])
-    );
+    v_quat.x =
+        2.f * (
+                  // v_quat.w = 2.f * (
+                  x * (v_R[1][2] - v_R[2][1]) + y * (v_R[2][0] - v_R[0][2]) +
+                  z * (v_R[0][1] - v_R[1][0])
+              );
     // x element in y field
-    v_quat.y = 2.f * (
-    // v_quat.x = 2.f * (
-        -2.f * x * (v_R[1][1] + v_R[2][2])
-        + y * (v_R[0][1] + v_R[1][0])
-        + z * (v_R[0][2] + v_R[2][0])
-        + w * (v_R[1][2] - v_R[2][1])
-    );
+    v_quat.y =
+        2.f *
+        (
+            // v_quat.x = 2.f * (
+            -2.f * x * (v_R[1][1] + v_R[2][2]) + y * (v_R[0][1] + v_R[1][0]) +
+            z * (v_R[0][2] + v_R[2][0]) + w * (v_R[1][2] - v_R[2][1])
+        );
     // y element in z field
-    v_quat.z = 2.f * (
-    // v_quat.y = 2.f * (
-        x * (v_R[0][1] + v_R[1][0])
-        - 2.f * y * (v_R[0][0] + v_R[2][2])
-        + z * (v_R[1][2] + v_R[2][1])
-        + w * (v_R[2][0] - v_R[0][2])
-    );
+    v_quat.z =
+        2.f *
+        (
+            // v_quat.y = 2.f * (
+            x * (v_R[0][1] + v_R[1][0]) - 2.f * y * (v_R[0][0] + v_R[2][2]) +
+            z * (v_R[1][2] + v_R[2][1]) + w * (v_R[2][0] - v_R[0][2])
+        );
     // z element in w field
-    v_quat.w = 2.f * (
-    // v_quat.z = 2.f * (
-        x * (v_R[0][2] + v_R[2][0])
-        + y * (v_R[1][2] + v_R[2][1])
-        - 2.f * z * (v_R[0][0] + v_R[1][1])
-        + w * (v_R[0][1] - v_R[1][0])
-    );
+    v_quat.w =
+        2.f *
+        (
+            // v_quat.z = 2.f * (
+            x * (v_R[0][2] + v_R[2][0]) + y * (v_R[1][2] + v_R[2][1]) -
+            2.f * z * (v_R[0][0] + v_R[1][1]) + w * (v_R[0][1] - v_R[1][0])
+        );
     return v_quat;
 }
 
@@ -207,8 +211,9 @@ scale_to_mat(const float3 scale, const float glob_scale) {
 }
 
 // device helper for culling near points
-inline __host__ __device__ bool
-clip_near_plane(const float3 p, const float *viewmat, float3 &p_view, float thresh) {
+inline __host__ __device__ bool clip_near_plane(
+    const float3 p, const float *viewmat, float3 &p_view, float thresh
+) {
     p_view = transform_4x3(viewmat, p);
     if (p_view.z <= thresh) {
         return true;
