@@ -400,7 +400,8 @@ __global__ void rasterize_forward_kernel(
         T = next_T;
     }
     final_Ts[pix_id] = T;      // transmittance at last gaussian in this pixel
-    final_index[pix_id] = idx; // index of in bin of last gaussian in this pixel
+    final_index[pix_id] = (idx == range.y) ? idx - 1 : idx; // index of in bin of last gaussian in this pixel
+
     for (int c = 0; c < CHANNELS; ++c) {
         out_img[CHANNELS * pix_id + c] += T * background[c];
     }
