@@ -41,9 +41,6 @@ __global__ void rasterize_backward_kernel(
     if (i >= img_size.y || j >= img_size.x) {
         return;
     }
-    if (pix_id == 0) {
-        printf("hello");
-    }
 
     // which gaussians get gradients for this pixel
     int2 range = tile_bins[tile_id];
@@ -57,7 +54,16 @@ __global__ void rasterize_backward_kernel(
     float T_final = final_Ts[pix_id];
     float T = T_final;
     // the contribution from gaussians behind the current one
-    float S[MAX_REGISTER_CHANNELS] = {0.f};
+    float buffer[MAX_REGISTER_CHANNELS] = {0.f};
+    float *S;
+    if (channels <= MAX_REGISTER_CHANNELS) {
+        S = &buffer[0];
+    } else {
+        // if (pix_id == 0) {
+        //     printf("hello using workspace");
+        // }
+        S = &workspace[channels * pix_id];
+    }
     int bin_final = final_index[pix_id];
 
     // iterate backward to compute the jacobians wrt rgb, opacity, mean2d, and
@@ -147,9 +153,9 @@ void rasterize_backward_impl(
     float2 *v_xy,
     float3 *v_conic,
     float *v_rgb,
-    float *v_opacity
+    float *v_opacity,
+    float *workspace
 ) {
-    float *workspace = nullptr;
     // if (channels > 3) {
     //     cudaMalloc(&workspace, sizeof(float) * img_size.x * img_size.y * channels);
     // }

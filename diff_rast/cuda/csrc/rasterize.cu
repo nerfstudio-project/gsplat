@@ -219,6 +219,13 @@ std::
         torch::zeros({num_points, channels}, xys.options());
     torch::Tensor v_opacity = torch::zeros({num_points, 1}, xys.options());
 
+    torch::Tensor workspace;
+    if (channels > 3){
+        workspace = torch::zeros({img_height, img_width, channels}, xys.options().dtype(torch::kFloat32));
+    } else {
+        workspace = torch::zeros({0}, xys.options().dtype(torch::kFloat32));
+    }
+
     rasterize_backward_impl(
         tile_bounds,
         block,
@@ -237,7 +244,8 @@ std::
         (float2 *)v_xy.contiguous().data_ptr<float>(),
         (float3 *)v_conic.contiguous().data_ptr<float>(),
         v_colors.contiguous().data_ptr<float>(),
-        v_opacity.contiguous().data_ptr<float>()
+        v_opacity.contiguous().data_ptr<float>(),
+        workspace.data_ptr<float>()
     );
 
     return std::make_tuple(v_xy, v_conic, v_colors, v_opacity);
