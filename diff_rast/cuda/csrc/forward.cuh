@@ -94,10 +94,10 @@ __global__ void get_tile_bin_edges(
     const int num_intersects, const int64_t *isect_ids_sorted, int2 *tile_bins
 );
 
-template <int CHANNELS>
 __global__ void rasterize_forward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
+    const unsigned channels,
     const int32_t *gaussian_ids_sorted,
     const int2 *tile_bins,
     const float2 *xys,
