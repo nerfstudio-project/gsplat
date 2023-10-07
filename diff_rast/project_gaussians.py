@@ -24,6 +24,7 @@ class ProjectGaussians(Function):
        img_height (int): height of the rendered image.
        img_width (int): width of the rendered image.
        tile_bounds (Tuple): tile dimensions as a len 3 tuple (tiles.x , tiles.y, 1).
+       clip_thresh (float): minimum z depth threshold.
 
     Returns:
         A tuple of {Tensor, Tensor, Tensor, Tensor, int, Tensor}:
