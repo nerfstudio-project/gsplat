@@ -110,7 +110,7 @@ class RasterizeGaussians(Function):
             final_idx,
         ) = ctx.saved_tensors
 
-        v_xy, v_conic, v_colors, v_opacity = _C.rasterize_backward(
+        v_xy, v_conic, v_colors, v_opacity = _C.slow_rasterize_backward(
             img_height,
             img_width,
             gaussian_ids_sorted.contiguous().cuda(),
