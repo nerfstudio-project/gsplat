@@ -106,15 +106,6 @@ __global__ void slow_rasterize_backward_kernel(
             S[c] += rgbs[channels * g + c] * fac;
         }
 
-        // v_alpha = (rgb.x * T - S.x * ra) * v_out.x
-        //     + (rgb.y * T - S.y * ra) * v_out.y
-        //     + (rgb.z * T - S.z * ra) * v_out.z;
-        //
-        // // update contribution from back
-        // S.x += rgb.x * fac;
-        // S.y += rgb.y * fac;
-        // S.z += rgb.z * fac;
-
         // update v_opacity for this gaussian
         atomicAdd(&(v_opacity[g]), vis * v_alpha);
 
@@ -296,6 +287,49 @@ __global__ void rasterize_backward_kernel(
     }
 }
 
+void slow_rasterize_backward_impl(
+    const dim3 tile_bounds,
+    const dim3 block,
+    const dim3 img_size,
+    const unsigned channels,
+    const int *gaussians_ids_sorted,
+    const int2 *tile_bins,
+    const float2 *xys,
+    const float3 *conics,
+    const float *rgbs,
+    const float *opacities,
+    const float *background,
+    const float *final_Ts,
+    const int *final_index,
+    const float *v_output,
+    float2 *v_xy,
+    float3 *v_conic,
+    float *v_rgb,
+    float *v_opacity,
+    float *workspace
+) {
+    slow_rasterize_backward_kernel<3><<<tile_bounds, block>>>(
+        tile_bounds,
+        img_size,
+        channels,
+        gaussians_ids_sorted,
+        tile_bins,
+        xys,
+        conics,
+        rgbs,
+        opacities,
+        background,
+        final_Ts,
+        final_index,
+        v_output,
+        v_xy,
+        v_conic,
+        v_rgb,
+        v_opacity,
+        workspace
+    );
+}
+
 void rasterize_backward_impl(
     const dim3 tile_bounds,
     const dim3 block,
@@ -317,10 +351,6 @@ void rasterize_backward_impl(
     float *v_opacity,
     float *workspace
 ) {
-    // if (channels > 3) {
-    //     cudaMalloc(&workspace, sizeof(float) * img_size.x * img_size.y *
-    //     channels);
-    // }
     rasterize_backward_kernel<3><<<tile_bounds, block>>>(
         tile_bounds,
         img_size,
@@ -341,9 +371,6 @@ void rasterize_backward_impl(
         v_opacity,
         workspace
     );
-    // if (channels == 3) {
-    //     cudaFree(workspace);
-    // }
 }
 
 __global__ void project_gaussians_backward_kernel(
