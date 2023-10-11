@@ -185,6 +185,12 @@ __global__ void rasterize_backward_kernel(
     __shared__ float2 xy_batch[BLOCK_SIZE];
     __shared__ float3 conic_batch[BLOCK_SIZE];
     __shared__ float opacity_batch[BLOCK_SIZE];
+    __shared__ float rgb_batch[MAX_REGISTER_CHANNELS * BLOCK_SIZE];
+
+    __shared__ float v_rgb_batch[MAX_REGISTER_CHANNELS * BLOCK_SIZE];
+    __shared__ float3 v_conic_batch[BLOCK_SIZE];
+    __shared__ float2 v_xy_batch[BLOCK_SIZE];
+    __shared__ float v_opacity_batch[BLOCK_SIZE];
 
     // df/d_out for this pixel
     const float *v_out = &(v_output[channels * pix_id]);
@@ -207,6 +213,13 @@ __global__ void rasterize_backward_kernel(
             xy_batch[tr] = xys[g_id];
             conic_batch[tr] = conics[g_id];
             opacity_batch[tr] = opacities[g_id];
+            for (int c = 0; c < channels; ++c) {
+                rgb_batch[tr * channels + c] = rgbs[channels * g_id + c];
+                v_rgb_batch[tr * channels + c] = 0.f;
+            }
+            v_conic_batch[tr] = make_float3(0.f,0.f,0.f);
+            v_xy_batch[tr] = make_float2(0.f,0.f);
+            v_opacity_batch[tr] = 0.f;
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -235,7 +248,7 @@ __global__ void rasterize_backward_kernel(
             if (alpha < 1.f / 255.f) {
                 continue;
             }
-            int32_t g = id_batch[t];
+            // int32_t g = id_batch[t];
 
             // compute the current T for this gaussian
             float ra = 1.f / (1.f - alpha);
@@ -246,33 +259,55 @@ __global__ void rasterize_backward_kernel(
             float v_alpha = 0.f;
             for (int c = 0; c < channels; ++c) {
                 // gradient wrt rgb
-                atomicAdd(&(v_rgb[channels * g + c]), fac * v_out[c]);
+                atomicAdd(&(v_rgb_batch[channels * t + c]), fac * v_out[c]);
                 // contribution from this pixel
-                v_alpha += (rgbs[channels * g + c] * T - S[c] * ra) * v_out[c];
+                v_alpha += (rgb_batch[channels * t + c] * T - S[c] * ra) * v_out[c];
                 // contribution from background pixel
                 v_alpha += -T_final * ra * background[c] * v_out[c];
                 // update the running sum
-                S[c] += rgbs[channels * g + c] * fac;
+                S[c] += rgb_batch[channels * t + c] * fac;
             }
 
             // update v_opacity for this gaussian
-            atomicAdd(&(v_opacity[g]), vis * v_alpha);
+            atomicAdd(&(v_opacity_batch[t]), vis * v_alpha);
 
             // compute vjps for conics and means
             // d_sigma / d_delta = conic * delta
             // d_sigma / d_conic = delta * delta.T
             float v_sigma = -opac * vis * v_alpha;
 
-            atomicAdd(&(v_conic[g].x), 0.5f * v_sigma * delta.x * delta.x);
-            atomicAdd(&(v_conic[g].y), 0.5f * v_sigma * delta.x * delta.y);
-            atomicAdd(&(v_conic[g].z), 0.5f * v_sigma * delta.y * delta.y);
+            atomicAdd(&(v_conic_batch[t].x), 0.5f * v_sigma * delta.x * delta.x);
+            atomicAdd(&(v_conic_batch[t].y), 0.5f * v_sigma * delta.x * delta.y);
+            atomicAdd(&(v_conic_batch[t].z), 0.5f * v_sigma * delta.y * delta.y);
             atomicAdd(
-                &(v_xy[g].x), v_sigma * (conic.x * delta.x + conic.y * delta.y)
+                &(v_xy_batch[t].x), v_sigma * (conic.x * delta.x + conic.y * delta.y)
             );
             atomicAdd(
-                &(v_xy[g].y), v_sigma * (conic.y * delta.x + conic.z * delta.y)
+                &(v_xy_batch[t].y), v_sigma * (conic.y * delta.x + conic.z * delta.y)
             );
         }
+
+        block.sync();
+
+        // each thread fetch 1 gaussian from back to front
+        // 0 index will be furthest back in batch
+        // index of gaussian to load
+        // int batch_end = range.y - 1 - BLOCK_SIZE * b;
+        // int idx = batch_end - tr;
+        if (idx >= range.x) {
+            int32_t gid = gaussian_ids_sorted[idx];
+            atomicAdd(&(v_opacity[gid]),  v_opacity_batch[tr]);
+            atomicAdd(&(v_conic[gid].x),  v_conic_batch[tr].x);
+            atomicAdd(&(v_conic[gid].y),  v_conic_batch[tr].y);
+            atomicAdd(&(v_conic[gid].z),  v_conic_batch[tr].z);
+            atomicAdd(&(v_xy[gid].x),  v_xy_batch[tr].x);
+            atomicAdd(&(v_xy[gid].y),  v_xy_batch[tr].y);
+
+            for (int c = 0; c < channels; ++c) {
+                atomicAdd(&(v_rgb[channels * gid + c]), v_rgb_batch[tr * channels + c]);
+            }
+        }
+
     }
 }
 
