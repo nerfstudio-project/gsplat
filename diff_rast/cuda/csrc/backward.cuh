@@ -28,6 +28,28 @@ void project_gaussians_backward_impl(
 );
 
 // compute jacobians of output image wrt binned and sorted gaussians
+void slow_rasterize_backward_impl(
+    const dim3 tile_bounds,
+    const dim3 block,
+    const dim3 img_size,
+    const unsigned channels,
+    const int *gaussians_ids_sorted,
+    const int2 *tile_bins,
+    const float2 *xys,
+    const float3 *conics,
+    const float *rgbs,
+    const float *opacities,
+    const float *background,
+    const float *final_Ts,
+    const int *final_index,
+    const float *v_output,
+    float2 *v_xy,
+    float3 *v_conic,
+    float *v_rgb,
+    float *v_opacity,
+    float *workspace
+);
+
 void rasterize_backward_impl(
     const dim3 tile_bounds,
     const dim3 block,
