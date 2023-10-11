@@ -443,6 +443,7 @@ void slow_rasterize_forward_impl(
     );
 }
 
+template <int MAX_REGISTER_CHANNELS>
 __global__ void rasterize_forward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
@@ -498,7 +499,7 @@ __global__ void rasterize_forward_kernel(
     // each thread loads one gaussian at a time before rasterizing its
     // designated pixel
     int tr = block.thread_rank();
-    float pix_out[128];
+    float pix_out[MAX_REGISTER_CHANNELS];
     for(int c = 0; c < channels; ++c) {
         pix_out[c] = 0.f;
     }
@@ -588,7 +589,7 @@ void rasterize_forward_impl(
     float *out_img,
     const float *background
 ) {
-    rasterize_forward_kernel<<<tile_bounds, block>>>(
+    rasterize_forward_kernel<3><<<tile_bounds, block>>>(
         tile_bounds,
         img_size,
         channels,
