@@ -503,6 +503,7 @@ __global__ void rasterize_forward_kernel(
         pix_out[c] = 0.f;
     }
     for (int b = 0; b < num_batches; ++b) {
+        // resync all threads before beginning next batch
         // end early if entire tile is done
         int num_done = __syncthreads_count(done);
         if (num_done >= BLOCK_SIZE) {

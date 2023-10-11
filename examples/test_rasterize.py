@@ -93,10 +93,8 @@ class SimpleTrainer:
         self.viewmat.requires_grad = False
 
     def forward_new(self):
-        means2d = torch.zeros_like(self.means[:, :2])
         xys, depths, radii, conics, num_tiles_hit, cov3d = ProjectGaussians.apply(
             self.means,
-            means2d,
             self.scales,
             1,
             self.quats,
@@ -124,10 +122,8 @@ class SimpleTrainer:
         )
 
     def forward_slow(self):
-        means2d = torch.zeros_like(self.means[:, :2])
         xys, depths, radii, conics, num_tiles_hit, cov3d = ProjectGaussians.apply(
             self.means,
-            means2d,
             self.scales,
             1,
             self.quats,
