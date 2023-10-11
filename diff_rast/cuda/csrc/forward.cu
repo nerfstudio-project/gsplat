@@ -498,6 +498,10 @@ __global__ void rasterize_forward_kernel(
     // each thread loads one gaussian at a time before rasterizing its
     // designated pixel
     int tr = block.thread_rank();
+    float pix_out[128];
+    for(int c = 0; c < channels; ++c) {
+        pix_out[c] = 0.f;
+    }
     for (int b = 0; b < num_batches; ++b) {
         // end early if entire tile is done
         int num_done = __syncthreads_count(done);
@@ -523,34 +527,31 @@ __global__ void rasterize_forward_kernel(
         // process gaussians in the current batch for this pixel
         int batch_size = min(BLOCK_SIZE, range.y - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
-            float3 conic = conic_batch[t];
-            float2 center = xy_batch[t];
-            float2 delta = {center.x - px, center.y - py};
-            float sigma = 0.5f * (conic.x * delta.x * delta.x +
+            const float3 conic = conic_batch[t];
+            const float2 center = xy_batch[t];
+            const float opac = opacity_batch[t];
+            const float2 delta = {center.x - px, center.y - py};
+            const float sigma = 0.5f * (conic.x * delta.x * delta.x +
                                   conic.z * delta.y * delta.y) +
                           conic.y * delta.x * delta.y;
-            if (sigma < 0.f) {
+            const float alpha = min(0.999f, opac * exp(-sigma));
+            if (sigma < 0.f || alpha < 1.f / 255.f) {
                 continue;
             }
 
-            float opac = opacity_batch[t];
-            float alpha = min(0.999f, opac * exp(-sigma));
-            if (alpha < 1.f / 255.f) {
-                continue;
-            }
-
-            float next_T = T * (1.f - alpha);
+            const float next_T = T * (1.f - alpha);
             if (next_T <= 1e-4f) { // this pixel is done
                 // we want to render the last gaussian that contributes and note
                 // that here idx > range.x so we don't underflow
+                done = true;
                 break;
             }
 
             int32_t g = id_batch[t];
-            float vis = alpha * T;
+            const float vis = alpha * T;
             for (int c = 0; c < channels; ++c) {
-                out_img[channels * pix_id + c] +=
-                    colors[channels * g + c] * vis;
+                pix_out[c] += colors[channels * g + c] * vis;
+                // out_img[channels * pix_id + c] += colors[channels * g + c] * vis;
             }
             T = next_T;
             cur_idx = batch_start + t;
@@ -563,7 +564,8 @@ __global__ void rasterize_forward_kernel(
         final_index[pix_id] =
             cur_idx; // index of in bin of last gaussian in this pixel
         for (int c = 0; c < channels; ++c) {
-            out_img[channels * pix_id + c] += T * background[c];
+            out_img[channels * pix_id + c] += pix_out[c] + T * background[c];
+            // out_img[channels * pix_id + c] += T * background[c];
         }
     }
 }
