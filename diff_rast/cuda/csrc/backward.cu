@@ -171,16 +171,7 @@ __global__ void rasterize_backward_kernel(
     float T_final = final_Ts[pix_id];
     float T = T_final;
     // the contribution from gaussians behind the current one
-    float buffer[MAX_REGISTER_CHANNELS] = {0.f};
-    float *S;
-    if (channels <= MAX_REGISTER_CHANNELS) {
-        S = &buffer[0];
-    } else {
-        // if (pix_id == 0) {
-        //     printf("hello using workspace");
-        // }
-        S = &workspace[channels * pix_id];
-    }
+    float S[MAX_REGISTER_CHANNELS] = {0.f};
     // index of last gaussian to contribute to this pixel
     int bin_final = final_index[pix_id];
 

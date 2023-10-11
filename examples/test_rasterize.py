@@ -183,13 +183,15 @@ class SimpleTrainer:
                 self.opacities.grad.detach(),
             ]
 
-            diff_out = slow_out.detach() - new_out.detach()  # type: ignore
-            print("OUT DIFF:", diff_out.min(), diff_out.max())
-            for slow_grad, new_grad in zip(slow_grads, new_grads):
-                diff_grad = slow_grad - new_grad
-                print("GRAD DIFF:", diff_grad.min(), diff_grad.max())
             optimizer.step()
-            print(f"ITER {i}/{iterations}, LOSS: {loss.item()}")
+
+            if i % 10 == 0:
+                diff_out = slow_out.detach() - new_out.detach()  # type: ignore
+                print("OUT DIFF:", diff_out.min(), diff_out.max())
+                for slow_grad, new_grad in zip(slow_grads, new_grads):
+                    diff_grad = slow_grad - new_grad
+                    print("GRAD DIFF:", diff_grad.min(), diff_grad.max())
+                print(f"ITER {i}/{iterations}, LOSS: {loss.item()}")
 
 
 def image_path_to_tensor(image_path: Path):
@@ -204,7 +206,7 @@ def image_path_to_tensor(image_path: Path):
 def main(
     height: int = 256,
     width: int = 256,
-    num_points: int = 2000,
+    num_points: int = 100000,
     save_imgs: bool = True,
     img_path: Optional[Path] = None,
     iterations: int = 1000,
