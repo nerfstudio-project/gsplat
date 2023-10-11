@@ -28,7 +28,7 @@ void project_gaussians_backward_impl(
 );
 
 // compute jacobians of output image wrt binned and sorted gaussians
-void slow_rasterize_backward_impl(
+void nd_rasterize_backward_impl(
     const dim3 tile_bounds,
     const dim3 block,
     const dim3 img_size,

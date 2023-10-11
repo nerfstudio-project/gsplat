@@ -64,7 +64,7 @@ void rasterize_forward_impl(
 );
 
 // compute output color image from binned and sorted gaussians
-void slow_rasterize_forward_impl(
+void nd_rasterize_forward_impl(
     const dim3 tile_bounds,
     const dim3 block,
     const dim3 img_size,

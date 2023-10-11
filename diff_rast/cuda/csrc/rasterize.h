@@ -13,7 +13,7 @@ std::
         torch::Tensor, // isect_ids_sorted
         torch::Tensor  // isect_ids_unsorted
         >
-    slow_rasterize_forward_tensor(
+    nd_rasterize_forward_tensor(
         const torch::Tensor &xys,
         const torch::Tensor &depths,
         const torch::Tensor &radii,
@@ -57,7 +57,7 @@ std::
         torch::Tensor, // dL_dcolors
         torch::Tensor  // dL_dopacity
         >
-    slow_rasterize_backward_tensor(
+    nd_rasterize_backward_tensor(
         const unsigned img_height,
         const unsigned img_width,
         const torch::Tensor &gaussians_ids_sorted,

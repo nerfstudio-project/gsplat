@@ -55,6 +55,12 @@ class RasterizeGaussians(Function):
             ), f"incorrect shape of background color tensor, expected shape {colors.shape[-1]}"
         else:
             background = torch.ones(3, dtype=torch.float32)
+        chans = colors.shape[-1]
+        if chans == 3:
+            raster_fn = _C.rasterize_forward
+        else:
+            raster_fn = _C.nd_rasterize_forward
+
         (
             out_img,
             final_Ts,
@@ -64,7 +70,7 @@ class RasterizeGaussians(Function):
             isect_ids_sorted,
             gaussian_ids_unsorted,
             isect_ids_unsorted,
-        ) = _C.rasterize_forward(
+        ) = raster_fn(
             xys.contiguous().cuda(),
             depths.contiguous().cuda(),
             radii.contiguous().cuda(),
@@ -110,7 +116,14 @@ class RasterizeGaussians(Function):
             final_idx,
         ) = ctx.saved_tensors
 
-        v_xy, v_conic, v_colors, v_opacity = _C.rasterize_backward(
+        chans = colors.shape[-1]
+        if chans == 3:
+            #TODO the shared memory optimized rasterize_backward impl is broken, so for now we use nd_ for everything
+            raster_fn = _C.nd_rasterize_backward
+        else:
+            raster_fn = _C.nd_rasterize_backward
+
+        v_xy, v_conic, v_colors, v_opacity = raster_fn(
             img_height,
             img_width,
             gaussian_ids_sorted.contiguous().cuda(),

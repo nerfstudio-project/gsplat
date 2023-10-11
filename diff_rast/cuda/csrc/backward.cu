@@ -5,7 +5,7 @@
 namespace cg = cooperative_groups;
 
 template <int MAX_REGISTER_CHANNELS>
-__global__ void slow_rasterize_backward_kernel(
+__global__ void nd_rasterize_backward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
     const unsigned channels,
@@ -276,7 +276,7 @@ __global__ void rasterize_backward_kernel(
     }
 }
 
-void slow_rasterize_backward_impl(
+void nd_rasterize_backward_impl(
     const dim3 tile_bounds,
     const dim3 block,
     const dim3 img_size,
@@ -297,7 +297,7 @@ void slow_rasterize_backward_impl(
     float *v_opacity,
     float *workspace
 ) {
-    slow_rasterize_backward_kernel<3><<<tile_bounds, block>>>(
+    nd_rasterize_backward_kernel<3><<<tile_bounds, block>>>(
         tile_bounds,
         img_size,
         channels,

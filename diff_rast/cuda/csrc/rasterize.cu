@@ -25,7 +25,7 @@ std::
         torch::Tensor, // isect_ids_sorted
         torch::Tensor  // isect_ids_unsorted
         >
-    slow_rasterize_forward_tensor(
+    nd_rasterize_forward_tensor(
         const torch::Tensor &xys,
         const torch::Tensor &depths,
         const torch::Tensor &radii,
@@ -134,7 +134,7 @@ std::
         {img_height, img_width}, xys.options().dtype(torch::kInt32)
     );
 
-    slow_rasterize_forward_impl(
+    nd_rasterize_forward_impl(
         tile_bounds,
         block,
         img_size,
@@ -236,15 +236,15 @@ std::
     );
 
     torch::Tensor gaussian_ids_sorted =
-        torch::zeros({num_intersects}, xys.options().dtype(torch::kInt32));
+        torch::empty({num_intersects}, xys.options().dtype(torch::kInt32));
     torch::Tensor gaussian_ids_unsorted =
-        torch::zeros({num_intersects}, xys.options().dtype(torch::kInt32));
+        torch::empty({num_intersects}, xys.options().dtype(torch::kInt32));
     torch::Tensor isect_ids_sorted =
-        torch::zeros({num_intersects}, xys.options().dtype(torch::kInt64));
+        torch::empty({num_intersects}, xys.options().dtype(torch::kInt64));
     torch::Tensor isect_ids_unsorted =
-        torch::zeros({num_intersects}, xys.options().dtype(torch::kInt64));
+        torch::empty({num_intersects}, xys.options().dtype(torch::kInt64));
     torch::Tensor tile_bins =
-        torch::zeros({num_tiles, 2}, xys.options().dtype(torch::kInt32));
+        torch::empty({num_tiles, 2}, xys.options().dtype(torch::kInt32));
     // allocate temporary variables
     // TODO dunno be smarter about this?
     // int64_t *isect_ids_unsorted_d;
@@ -336,7 +336,7 @@ std::
         torch::Tensor, // dL_dcolors
         torch::Tensor  // dL_dopacity
         >
-    slow_rasterize_backward_tensor(
+    nd_rasterize_backward_tensor(
         const unsigned img_height,
         const unsigned img_width,
         const torch::Tensor &gaussians_ids_sorted,
@@ -384,7 +384,7 @@ std::
         workspace = torch::zeros({0}, xys.options().dtype(torch::kFloat32));
     }
 
-    slow_rasterize_backward_impl(
+    nd_rasterize_backward_impl(
         tile_bounds,
         block,
         img_size,

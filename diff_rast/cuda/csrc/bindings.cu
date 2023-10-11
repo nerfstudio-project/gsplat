@@ -153,17 +153,17 @@ project_gaussians_forward_tensor(
 
     // Triangular covariance.
     torch::Tensor cov3d_d =
-        torch::zeros({num_points, 6}, means3d.options().dtype(torch::kFloat32));
+        torch::empty({num_points, 6}, means3d.options().dtype(torch::kFloat32));
     torch::Tensor xys_d =
-        torch::zeros({num_points, 2}, means3d.options().dtype(torch::kFloat32));
+        torch::empty({num_points, 2}, means3d.options().dtype(torch::kFloat32));
     torch::Tensor depths_d =
-        torch::zeros({num_points}, means3d.options().dtype(torch::kFloat32));
+        torch::empty({num_points}, means3d.options().dtype(torch::kFloat32));
     torch::Tensor radii_d =
-        torch::zeros({num_points}, means3d.options().dtype(torch::kInt32));
+        torch::empty({num_points}, means3d.options().dtype(torch::kInt32));
     torch::Tensor conics_d =
-        torch::zeros({num_points, 3}, means3d.options().dtype(torch::kFloat32));
+        torch::empty({num_points, 3}, means3d.options().dtype(torch::kFloat32));
     torch::Tensor num_tiles_hit_d =
-        torch::zeros({num_points}, means3d.options().dtype(torch::kInt32));
+        torch::empty({num_points}, means3d.options().dtype(torch::kInt32));
 
     project_gaussians_forward_impl(
         num_points,
