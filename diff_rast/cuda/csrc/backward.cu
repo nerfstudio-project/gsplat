@@ -5,7 +5,7 @@
 namespace cg = cooperative_groups;
 
 template <int MAX_REGISTER_CHANNELS>
-__global__ void rasterize_backward_kernel(
+__global__ void slow_rasterize_backward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
     const unsigned channels,
@@ -135,6 +135,167 @@ __global__ void rasterize_backward_kernel(
     }
 }
 
+template <int MAX_REGISTER_CHANNELS>
+__global__ void rasterize_backward_kernel(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const unsigned channels,
+    const int32_t *gaussian_ids_sorted,
+    const int2 *tile_bins,
+    const float2 *xys,
+    const float3 *conics,
+    const float *rgbs,
+    const float *opacities,
+    const float *background,
+    const float *final_Ts,
+    const int *final_index,
+    const float *v_output,
+    float2 *v_xy,
+    float3 *v_conic,
+    float *v_rgb,
+    float *v_opacity,
+    float *workspace
+) {
+    if (channels > MAX_REGISTER_CHANNELS && workspace == nullptr) {
+        return;
+    }
+
+    auto block = cg::this_thread_block();
+    int32_t tile_id =
+        block.group_index().y * tile_bounds.x + block.group_index().x;
+    unsigned i =
+        block.group_index().y * block.group_dim().y + block.thread_index().y;
+    unsigned j =
+        block.group_index().x * block.group_dim().x + block.thread_index().x;
+
+    float px = (float)j;
+    float py = (float)i;
+    int32_t pix_id = i * img_size.x + j;
+
+    // return if out of bounds
+    // keep not rasterizing threads around for reading data
+    bool inside = (i < img_size.y && j < img_size.x);
+    bool done = !inside;
+
+    // this is the T AFTER the last gaussian in this pixel
+    float T_final = final_Ts[pix_id];
+    float T = T_final;
+    // the contribution from gaussians behind the current one
+    float buffer[MAX_REGISTER_CHANNELS] = {0.f};
+    float *S;
+    if (channels <= MAX_REGISTER_CHANNELS) {
+        S = &buffer[0];
+    } else {
+        // if (pix_id == 0) {
+        //     printf("hello using workspace");
+        // }
+        S = &workspace[channels * pix_id];
+    }
+    int bin_final = final_index[pix_id];
+
+    // have all threads in tile process the same gaussians in batches
+    // first collect gaussians between range.x and range.y in batches
+    // which gaussians to look through in this tile
+    int2 range = tile_bins[tile_id];
+    int num_batches = (range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE;
+
+    __shared__ int32_t id_batch[BLOCK_SIZE];
+    __shared__ float2 xy_batch[BLOCK_SIZE];
+    __shared__ float3 conic_batch[BLOCK_SIZE];
+    __shared__ float opacity_batch[BLOCK_SIZE];
+
+    // df/d_out for this pixel
+    const float *v_out = &(v_output[channels * pix_id]);
+
+    // collect and process batches of gaussians
+    // each thread loads one gaussian at a time before rasterizing
+    int tr = block.thread_rank();
+    for (int b = 0; b < num_batches; ++b) {
+        // end early if entire tile is done
+        int num_done = __syncthreads_count(done);
+        if (num_done >= BLOCK_SIZE) {
+            break;
+        }
+
+        // each thread fetch 1 gaussian from back to front
+        // 0 index will be furthest back in batch
+        // index of gaussian to load
+        int batch_end = range.y - 1 - BLOCK_SIZE * b;
+        int idx = batch_end - tr;
+        if (idx >= range.x) {
+            int32_t g_id = gaussian_ids_sorted[idx];
+            id_batch[tr] = g_id;
+            xy_batch[tr] = xys[g_id];
+            conic_batch[tr] = conics[g_id];
+            opacity_batch[tr] = opacities[g_id];
+        }
+
+        // wait for other threads to collect the gaussians in batch
+        block.sync();
+
+        // process gaussians in the current batch for this pixel
+        int batch_size = min(BLOCK_SIZE, batch_end + 1 - range.x);
+        for (int t = 0; (t < batch_size) && !done; ++t) {
+            if (batch_end - t > bin_final) {
+                continue;
+            }
+            float3 conic = conic_batch[t];
+            float2 center = xy_batch[t];
+            float2 delta = {center.x - px, center.y - py};
+            float sigma = 0.5f * (conic.x * delta.x * delta.x +
+                                  conic.z * delta.y * delta.y) +
+                          conic.y * delta.x * delta.y;
+            if (sigma < 0.f) {
+                continue;
+            }
+
+            float opac = opacity_batch[t];
+            float vis = exp(-sigma);
+            float alpha = min(0.99f, opac * vis);
+            if (alpha < 1.f / 255.f) {
+                continue;
+            }
+            int32_t g = id_batch[t];
+
+            // compute the current T for this gaussian
+            float ra = 1.f / (1.f - alpha);
+            T *= ra;
+            // rgb = rgbs[g];
+            // update v_rgb for this gaussian
+            float fac = alpha * T;
+            float v_alpha = 0.f;
+            for (int c = 0; c < channels; ++c) {
+                // gradient wrt rgb
+                atomicAdd(&(v_rgb[channels * g + c]), fac * v_out[c]);
+                // contribution from this pixel
+                v_alpha += (rgbs[channels * g + c] * T - S[c] * ra) * v_out[c];
+                // contribution from background pixel
+                v_alpha += -T_final * ra * background[c] * v_out[c];
+                // update the running sum
+                S[c] += rgbs[channels * g + c] * fac;
+            }
+
+            // update v_opacity for this gaussian
+            atomicAdd(&(v_opacity[g]), vis * v_alpha);
+
+            // compute vjps for conics and means
+            // d_sigma / d_delta = conic * delta
+            // d_sigma / d_conic = delta * delta.T
+            float v_sigma = -opac * vis * v_alpha;
+
+            atomicAdd(&(v_conic[g].x), 0.5f * v_sigma * delta.x * delta.x);
+            atomicAdd(&(v_conic[g].y), 0.5f * v_sigma * delta.x * delta.y);
+            atomicAdd(&(v_conic[g].z), 0.5f * v_sigma * delta.y * delta.y);
+            atomicAdd(
+                &(v_xy[g].x), v_sigma * (conic.x * delta.x + conic.y * delta.y)
+            );
+            atomicAdd(
+                &(v_xy[g].y), v_sigma * (conic.y * delta.x + conic.z * delta.y)
+            );
+        }
+    }
+}
+
 void rasterize_backward_impl(
     const dim3 tile_bounds,
     const dim3 block,
@@ -157,7 +318,8 @@ void rasterize_backward_impl(
     float *workspace
 ) {
     // if (channels > 3) {
-    //     cudaMalloc(&workspace, sizeof(float) * img_size.x * img_size.y * channels);
+    //     cudaMalloc(&workspace, sizeof(float) * img_size.x * img_size.y *
+    //     channels);
     // }
     rasterize_backward_kernel<3><<<tile_bounds, block>>>(
         tile_bounds,
