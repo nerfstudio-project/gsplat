@@ -166,7 +166,6 @@ __global__ void rasterize_backward_kernel(
     // return if out of bounds
     // keep not rasterizing threads around for reading data
     bool inside = (i < img_size.y && j < img_size.x);
-    bool done = !inside;
 
     // this is the T AFTER the last gaussian in this pixel
     float T_final = final_Ts[pix_id];
@@ -182,6 +181,7 @@ __global__ void rasterize_backward_kernel(
         // }
         S = &workspace[channels * pix_id];
     }
+    // index of last gaussian to contribute to this pixel
     int bin_final = final_index[pix_id];
 
     // have all threads in tile process the same gaussians in batches
@@ -202,11 +202,8 @@ __global__ void rasterize_backward_kernel(
     // each thread loads one gaussian at a time before rasterizing
     int tr = block.thread_rank();
     for (int b = 0; b < num_batches; ++b) {
-        // end early if entire tile is done
-        int num_done = __syncthreads_count(done);
-        if (num_done >= BLOCK_SIZE) {
-            break;
-        }
+        // resync all threads before writing next batch of shared mem
+        block.sync();
 
         // each thread fetch 1 gaussian from back to front
         // 0 index will be furthest back in batch
@@ -225,8 +222,9 @@ __global__ void rasterize_backward_kernel(
         block.sync();
 
         // process gaussians in the current batch for this pixel
+        // 0 index is the furthest back gaussian in the batch
         int batch_size = min(BLOCK_SIZE, batch_end + 1 - range.x);
-        for (int t = 0; (t < batch_size) && !done; ++t) {
+        for (int t = 0; (t < batch_size) && inside; ++t) {
             if (batch_end - t > bin_final) {
                 continue;
             }
