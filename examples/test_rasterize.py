@@ -154,6 +154,47 @@ class SimpleTrainer:
             self.W,
         )
 
+    def train(self, iterations: int = 1000, lr: float = 0.01, save_imgs: bool = True):
+        optimizer = optim.Adam(
+            [self.rgbs, self.means, self.scales, self.opacities, self.quats], lr
+        )
+        mse_loss = torch.nn.MSELoss()
+        frames = []
+        for i in range(iterations):
+            optimizer.zero_grad()
+            slow_out = self.forward_slow()
+
+            loss = mse_loss(slow_out, self.gt_image)
+            loss.backward()
+            slow_grads = [
+                self.means.grad.detach(),
+                self.scales.grad.detach(),
+                self.quats.grad.detach(),
+                self.rgbs.grad.detach(),
+                self.opacities.grad.detach(),
+            ]
+
+            optimizer.zero_grad()
+            new_out = self.forward_new()
+            loss = mse_loss(new_out, self.gt_image)
+            loss.backward()
+
+            new_grads = [
+                self.means.grad.detach(),
+                self.scales.grad.detach(),
+                self.quats.grad.detach(),
+                self.rgbs.grad.detach(),
+                self.opacities.grad.detach(),
+            ]
+
+            diff_out = slow_out.detach() - new_out.detach()  # type: ignore
+            print("OUT DIFF:", diff_out.min(), diff_out.max())
+            for slow_grad, new_grad in zip(slow_grads, new_grads):
+                diff_grad = slow_grad - new_grad
+                print("GRAD DIFF:", diff_grad.min(), diff_grad.max())
+            optimizer.step()
+            print(f"ITER {i}/{iterations}, LOSS: {loss.item()}")
+
 
 def image_path_to_tensor(image_path: Path):
     import torchvision.transforms as transforms
@@ -173,7 +214,6 @@ def main(
     iterations: int = 1000,
     lr: float = 0.01,
 ) -> None:
-
     if img_path:
         gt_image = image_path_to_tensor(img_path)
     else:
@@ -183,9 +223,7 @@ def main(
         gt_image[height // 2 :, width // 2 :, :] = torch.tensor([0.0, 0.0, 1.0])
 
     trainer = SimpleTrainer(gt_image=gt_image, num_points=num_points)
-    slow_out = trainer.forward_slow()
-    new_out = trainer.forward_new()
-    import ipdb; ipdb.set_trace()
+    trainer.train()
 
 
 if __name__ == "__main__":

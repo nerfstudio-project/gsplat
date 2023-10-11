@@ -44,7 +44,7 @@ class SlowRasterizeGaussians(Function):
         img_height: int,
         img_width: int,
         background: Optional[Float[Tensor, "channels"]] = None,
-    ):
+    ) -> Tensor:
         if colors.dtype == torch.uint8:
             # make sure colors are float [0,1]
             colors = colors.float() / 255
