@@ -551,10 +551,6 @@ __global__ void rasterize_forward_kernel(
             pix_out.x = pix_out.x + c.x * vis;
             pix_out.y = pix_out.y + c.y * vis;
             pix_out.z = pix_out.z + c.z * vis;
-            // for (int c = 0; c < channels; ++c) {
-            //     pix_out[c] += colors[channels * g + c] * vis;
-            //     // out_img[channels * pix_id + c] += colors[channels * g + c] * vis;
-            // }
             T = next_T;
             cur_idx = batch_start + t;
         }
@@ -570,14 +566,6 @@ __global__ void rasterize_forward_kernel(
         final_color.y = pix_out.y + T * background[1];
         final_color.z = pix_out.z + T * background[2];
         *out = final_color;
-
-        // out_img[channels * pix_id + 0] = pix_out.x + T * background[0];
-        // out_img[channels * pix_id + 1] = pix_out.y + T * background[1];
-        // out_img[channels * pix_id + 2] = pix_out.z + T * background[2];
-
-        // for (int c = 0; c < channels; ++c) {
-            // out_img[channels * pix_id + c] += T * background[c];
-        // }
     }
 }
 
