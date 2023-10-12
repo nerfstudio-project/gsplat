@@ -7,9 +7,9 @@ from typing import Optional
 import numpy as np
 import torch
 import tyro
-from diff_rast.project_gaussians import ProjectGaussians
-from diff_rast.rasterize import RasterizeGaussians
-from diff_rast.nd_rasterize import NDRasterizeGaussians
+from gsplat.project_gaussians import ProjectGaussians
+from gsplat.rasterize import RasterizeGaussians
+from gsplat.nd_rasterize import NDRasterizeGaussians
 from PIL import Image
 from torch import Tensor, optim
 

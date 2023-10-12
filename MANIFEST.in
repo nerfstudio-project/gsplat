@@ -1,1 +1,1 @@
-recursive-include diff_rast/cuda/csrc *
+recursive-include gsplat/cuda/csrc *

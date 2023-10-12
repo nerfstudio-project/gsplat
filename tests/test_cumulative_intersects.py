@@ -7,7 +7,7 @@ device = torch.device("cuda:0")
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_cumulative_intersects():
-    from diff_rast.compute_cumulative_intersects import ComputeCumulativeIntersects
+    from gsplat.compute_cumulative_intersects import ComputeCumulativeIntersects
 
     torch.manual_seed(42)
 
