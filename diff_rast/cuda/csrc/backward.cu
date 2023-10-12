@@ -44,10 +44,6 @@ __global__ void nd_rasterize_backward_kernel(
     int2 range = tile_bins[tile_id];
     // df/d_out for this pixel
     const float *v_out = &(v_output[channels * pix_id]);
-    float3 conic;
-    float2 center, delta;
-    float sigma, vis, fac, opac, alpha, ra;
-    float v_alpha, v_sigma;
     // this is the T AFTER the last gaussian in this pixel
     float T_final = final_Ts[pix_id];
     float T = T_final;
@@ -57,9 +53,6 @@ __global__ void nd_rasterize_backward_kernel(
     if (channels <= MAX_REGISTER_CHANNELS) {
         S = &buffer[0];
     } else {
-        // if (pix_id == 0) {
-        //     printf("hello using workspace");
-        // }
         S = &workspace[channels * pix_id];
     }
     int bin_final = final_index[pix_id];
@@ -69,30 +62,30 @@ __global__ void nd_rasterize_backward_kernel(
     // alpha_j), and S_{n-1} from S_n, where S_j = sum_{i > j}(rgb_i * alpha_i *
     // T_i) df/dalpha_i = rgb_i * T_i - S_{i+1| / (1 - alpha_i)
     for (int idx = bin_final - 1; idx >= range.x; --idx) {
-        int32_t g = gaussians_ids_sorted[idx];
-        conic = conics[g];
-        center = xys[g];
-        delta = {center.x - px, center.y - py};
-        sigma =
+        const int32_t g = gaussians_ids_sorted[idx];
+        const float3 conic = conics[g];
+        const float2 center = xys[g];
+        const float2 delta = {center.x - px, center.y - py};
+        const float sigma =
             0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
             conic.y * delta.x * delta.y;
         if (sigma < 0.f) {
             continue;
         }
-        opac = opacities[g];
-        vis = exp(-sigma);
-        alpha = min(0.99f, opac * vis);
+        const float opac = opacities[g];
+        const float vis = exp(-sigma);
+        const float alpha = min(0.99f, opac * vis);
         if (alpha < 1.f / 255.f) {
             continue;
         }
 
         // compute the current T for this gaussian
-        ra = 1.f / (1.f - alpha);
+        const float ra = 1.f / (1.f - alpha);
         T *= ra;
         // rgb = rgbs[g];
         // update v_rgb for this gaussian
-        fac = alpha * T;
-        v_alpha = 0.f;
+        const float fac = alpha * T;
+        float v_alpha = 0.f;
         for (int c = 0; c < channels; ++c) {
             // gradient wrt rgb
             atomicAdd(&(v_rgb[channels * g + c]), fac * v_out[c]);
@@ -110,7 +103,7 @@ __global__ void nd_rasterize_backward_kernel(
         // compute vjps for conics and means
         // d_sigma / d_delta = conic * delta
         // d_sigma / d_conic = delta * delta.T
-        v_sigma = -opac * vis * v_alpha;
+        const float v_sigma = -opac * vis * v_alpha;
 
         atomicAdd(&(v_conic[g].x), 0.5f * v_sigma * delta.x * delta.x);
         atomicAdd(&(v_conic[g].y), 0.5f * v_sigma * delta.x * delta.y);
@@ -177,6 +170,7 @@ __global__ void rasterize_backward_kernel(
     __shared__ float3 conic_batch[BLOCK_SIZE];
     __shared__ float3 rgbs_batch[BLOCK_SIZE];
     __shared__ float opacity_batch[BLOCK_SIZE];
+
     // df/d_out for this pixel
     const float3 v_out = v_output[pix_id];
 

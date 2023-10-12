@@ -354,46 +354,42 @@ __global__ void nd_rasterize_forward_kernel(
 
     // which gaussians to look through in this tile
     int2 range = tile_bins[tile_id];
-    float3 conic;
-    float2 center, delta;
-    float sigma, opac, alpha, vis, next_T;
     float T = 1.f;
 
     // iterate over all gaussians and apply rendering EWA equation (e.q. 2 from
     // paper)
     int idx;
-    int32_t g;
     for (idx = range.x; idx < range.y; ++idx) {
-        g = gaussian_ids_sorted[idx];
-        conic = conics[g];
-        center = xys[g];
-        delta = {center.x - px, center.y - py};
+        const int32_t g = gaussian_ids_sorted[idx];
+        const float3 conic = conics[g];
+        const float2 center = xys[g];
+        const float2 delta = {center.x - px, center.y - py};
 
         // Mahalanobis distance (here referred to as sigma) measures how many
         // standard deviations away distance delta is. sigma = -0.5(d.T * conic
         // * d)
-        sigma =
+        const float sigma =
             0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
             conic.y * delta.x * delta.y;
         if (sigma < 0.f) {
             continue;
         }
-        opac = opacities[g];
+        const float opac = opacities[g];
 
-        alpha = min(0.999f, opac * exp(-sigma));
+        const float alpha = min(0.999f, opac * exp(-sigma));
 
         // break out conditions
         if (alpha < 1.f / 255.f) {
             continue;
         }
-        next_T = T * (1.f - alpha);
+        const float next_T = T * (1.f - alpha);
         if (next_T <= 1e-4f) {
             // we want to render the last gaussian that contributes and note
             // that here idx > range.x so we don't underflow
             idx -= 1;
             break;
         }
-        vis = alpha * T;
+        const float vis = alpha * T;
         for (int c = 0; c < channels; ++c) {
             out_img[channels * pix_id + c] += colors[channels * g + c] * vis;
         }
@@ -648,19 +644,8 @@ __host__ __device__ float3 project_cov3d_ewa(
         -fy * t.y * rz2,
         0.f
     );
-
-    // printf("ours J\n %f %f %f\n %f %f %f\n",
-    //     J[0][0], J[1][0], J[2][0],
-    //     J[0][1], J[1][1], J[2][1]
-    // );
-
     glm::mat3 T = J * W;
 
-    // printf("ours T\n %f %f %f\n %f %f %f\n %f %f %f\n",
-    //     T[0][0], T[1][0], T[2][0],
-    //     T[0][1], T[1][1], T[2][1],
-    //     T[0][2], T[1][2], T[2][2]
-    // );
     glm::mat3 V = glm::mat3(
         cov3d[0],
         cov3d[1],
@@ -672,18 +657,9 @@ __host__ __device__ float3 project_cov3d_ewa(
         cov3d[4],
         cov3d[5]
     );
-    // printf("ours V\n %f %f %f\n %f %f %f\n %f %f %f\n",
-    //     V[0][0], V[1][0], V[2][0],
-    //     V[0][1], V[1][1], V[2][1],
-    //     V[0][2], V[1][2], V[2][2]
-    // );
 
     glm::mat3 cov = T * V * glm::transpose(T);
-    // printf("ours cov\n %f %f %f\n %f %f %f\n %f %f %f\n",
-    //     cov[0][0], cov[1][0], cov[2][0],
-    //     cov[0][1], cov[1][1], cov[2][1],
-    //     cov[0][2], cov[1][2], cov[2][2]
-    // );
+
     // add a little blur along axes and save upper triangular elements
     return (float3
     ){float(cov[0][0]) + 0.3f, float(cov[0][1]), float(cov[1][1]) + 0.3f};
