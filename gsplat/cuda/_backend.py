@@ -33,7 +33,7 @@ def cuda_toolkit_version():
     return cuda_version
 
 
-name = "diff_rast_cuda"
+name = "gsplat_cuda"
 build_dir = _get_build_directory(name, verbose=False)
 extra_include_paths = [os.path.join(PATH, "csrc/third_party/glm")]
 extra_cflags = ["-O3"]
@@ -53,7 +53,7 @@ sources = list(glob.glob(os.path.join(PATH, "csrc/*.cu"))) + list(
 
 try:
     # try to import the compiled module (via setup.py)
-    from diff_rast import csrc as _C
+    from gsplat import csrc as _C
 except ImportError:
     # if failed, try with JIT compilation
     if cuda_toolkit_available():

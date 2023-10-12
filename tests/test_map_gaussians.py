@@ -7,8 +7,8 @@ device = torch.device("cuda:0")
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_map_gaussians():
-    from diff_rast import _torch_impl
-    from diff_rast.map_gaussian_to_intersects import MapGaussiansToIntersects
+    from gsplat import _torch_impl
+    from gsplat.map_gaussian_to_intersects import MapGaussiansToIntersects
 
     torch.manual_seed(42)
 
