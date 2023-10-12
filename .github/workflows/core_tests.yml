@@ -25,6 +25,6 @@ jobs:
           pip install torch==2.0.0 --index-url https://download.pytorch.org/whl/cpu
           BUILD_NO_CUDA=1 pip install .
       - name: Run Black Format Check
-        run: black . diff_rast/ tests/ examples/ --check
+        run: black . gsplat/ tests/ examples/ --check
       - name: Run Tests.
         run: pytest tests/

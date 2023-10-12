@@ -1,7 +1,7 @@
 ProjectGaussians
 ===================================
 
-.. currentmodule:: diff_rast
+.. currentmodule:: gsplat
 
 Given 3D gaussians parametrized by means :math:`μ`, covariances :math:`Σ`, colors :math:`c`, and opacities :math:`o`, the 
 ProjectGaussians function computes the projected 2D gaussians in the camera frame with means :math:`μ'`, covariances :math:`Σ'`, and depths :math:`z`

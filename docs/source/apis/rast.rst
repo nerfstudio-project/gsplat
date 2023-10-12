@@ -1,7 +1,7 @@
 RasterizeGaussians
 ===================================
 
-.. currentmodule:: diff_rast
+.. currentmodule:: gsplat
 
 Given 2D gaussians that are parametrized by their means :math:`μ'` and covariances :math:`Σ'` as well as their radii and conic parameters,
 the RasterizeGaussians function first sorts each gaussian such that all gaussians within the bounds of a tile are grouped and sorted by increasing depth :math:`z`,

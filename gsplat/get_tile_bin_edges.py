@@ -6,7 +6,7 @@ from jaxtyping import Int
 from torch import Tensor
 from torch.autograd import Function
 
-import diff_rast.cuda as _C
+import gsplat.cuda as _C
 
 
 class GetTileBinEdges(Function):

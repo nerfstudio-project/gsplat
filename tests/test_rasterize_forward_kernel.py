@@ -7,8 +7,8 @@ device = torch.device("cuda:0")
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_rasterize_forward_kernel():
-    from diff_rast import _torch_impl
-    from diff_rast.rasterize_forward_kernel import RasterizeForwardKernel
+    from gsplat import _torch_impl
+    from gsplat.rasterize_forward_kernel import RasterizeForwardKernel
 
     torch.manual_seed(42)
 

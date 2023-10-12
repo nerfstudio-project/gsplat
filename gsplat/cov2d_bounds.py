@@ -7,7 +7,7 @@ from jaxtyping import Float
 from torch import Tensor
 from torch.autograd import Function
 
-import diff_rast.cuda as _C
+import gsplat.cuda as _C
 
 
 class ComputeCov2dBounds(Function):

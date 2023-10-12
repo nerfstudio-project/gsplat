@@ -1,7 +1,7 @@
 Data Conventions
 ===================================
 
-.. currentmodule:: diff_rast
+.. currentmodule:: gsplat
 
 Here we explain the various conventions used in our repo.
 
