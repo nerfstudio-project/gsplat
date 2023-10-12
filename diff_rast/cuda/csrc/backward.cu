@@ -463,7 +463,7 @@ void project_gaussians_backward_impl(
 }
 
 // output space: 2D covariance, input space: cov3d
-__host__ __device__ void project_cov3d_ewa_vjp(
+__device__ void project_cov3d_ewa_vjp(
     const float3 &mean3d,
     const float *cov3d,
     const float *viewmat,
@@ -545,7 +545,7 @@ __host__ __device__ void project_cov3d_ewa_vjp(
 
 // given cotangent v in output space (e.g. d_L/d_cov3d) in R(6)
 // compute vJp for scale and rotation
-__host__ __device__ void scale_rot_to_cov3d_vjp(
+__device__ void scale_rot_to_cov3d_vjp(
     const float3 scale,
     const float glob_scale,
     const float4 quat,

@@ -525,8 +525,8 @@ __global__ void rasterize_forward_kernel(
             const float opac = opacity_batch[t];
             const float2 delta = {center.x - px, center.y - py};
             const float sigma = 0.5f * (conic.x * delta.x * delta.x +
-                                  conic.z * delta.y * delta.y) +
-                          conic.y * delta.x * delta.y;
+                                        conic.z * delta.y * delta.y) +
+                                conic.y * delta.x * delta.y;
             const float alpha = min(0.999f, opac * exp(-sigma));
             if (sigma < 0.f || alpha < 1.f / 255.f) {
                 continue;
@@ -554,7 +554,8 @@ __global__ void rasterize_forward_kernel(
     if (inside) {
         // add background
         final_Ts[pix_id] = T; // transmittance at last gaussian in this pixel
-        final_index[pix_id] = cur_idx; // index of in bin of last gaussian in this pixel
+        final_index[pix_id] =
+            cur_idx; // index of in bin of last gaussian in this pixel
         float3 final_color;
         final_color.x = pix_out.x + T * background.x;
         final_color.y = pix_out.y + T * background.y;
@@ -596,7 +597,7 @@ void rasterize_forward_impl(
 }
 
 // device helper to approximate projected 2d cov from 3d mean and cov
-__host__ __device__ float3 project_cov3d_ewa(
+__device__ float3 project_cov3d_ewa(
     const float3 &mean3d,
     const float *cov3d,
     const float *viewmat,
@@ -666,7 +667,7 @@ __host__ __device__ float3 project_cov3d_ewa(
 }
 
 // device helper to get 3D covariance from scale and quat parameters
-__host__ __device__ void scale_rot_to_cov3d(
+__device__ void scale_rot_to_cov3d(
     const float3 scale, const float glob_scale, const float4 quat, float *cov3d
 ) {
     // printf("quat %.2f %.2f %.2f %.2f\n", quat.x, quat.y, quat.z, quat.w);
