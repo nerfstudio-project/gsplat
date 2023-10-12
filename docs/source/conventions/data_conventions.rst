@@ -3,7 +3,7 @@ Data Conventions
 
 .. currentmodule:: diff_rast
 
-Here we explain the various conventions used in our repo.
+Here we explain the various data conventions used in our repo.
 
 Rotation Convention
 -------------------
