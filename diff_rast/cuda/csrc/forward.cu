@@ -323,7 +323,7 @@ void bin_and_sort_gaussians(
 // kernel function for rasterizing each tile
 // each thread treats a single pixel
 // each thread group uses the same gaussian data in a tile
-__global__ void slow_rasterize_forward_kernel(
+__global__ void nd_rasterize_forward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
     const unsigned channels,
@@ -410,7 +410,7 @@ __global__ void slow_rasterize_forward_kernel(
 }
 
 // host function to launch parallel rasterization of sorted gaussians on device
-void slow_rasterize_forward_impl(
+void nd_rasterize_forward_impl(
     const dim3 tile_bounds,
     const dim3 block,
     const dim3 img_size,
@@ -426,7 +426,7 @@ void slow_rasterize_forward_impl(
     float *out_img,
     const float *background
 ) {
-    slow_rasterize_forward_kernel<<<tile_bounds, block>>>(
+    nd_rasterize_forward_kernel<<<tile_bounds, block>>>(
         tile_bounds,
         img_size,
         channels,
@@ -446,17 +446,16 @@ void slow_rasterize_forward_impl(
 __global__ void rasterize_forward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
-    const unsigned channels,
     const int32_t *gaussian_ids_sorted,
     const int2 *tile_bins,
     const float2 *xys,
     const float3 *conics,
-    const float *colors,
+    const float3 *colors,
     const float *opacities,
     float *final_Ts,
     int *final_index,
-    float *out_img,
-    const float *background
+    float3 *out_img,
+    const float3 &background
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
@@ -547,7 +546,7 @@ __global__ void rasterize_forward_kernel(
 
             int32_t g = id_batch[t];
             const float vis = alpha * T;
-            const float3 c = ((float3*)colors)[g];
+            const float3 c = colors[g];
             pix_out.x = pix_out.x + c.x * vis;
             pix_out.y = pix_out.y + c.y * vis;
             pix_out.z = pix_out.z + c.z * vis;
@@ -560,12 +559,11 @@ __global__ void rasterize_forward_kernel(
         // add background
         final_Ts[pix_id] = T; // transmittance at last gaussian in this pixel
         final_index[pix_id] = cur_idx; // index of in bin of last gaussian in this pixel
-        float3 *out = ((float3*)out_img) + pix_id;
         float3 final_color;
-        final_color.x = pix_out.x + T * background[0];
-        final_color.y = pix_out.y + T * background[1];
-        final_color.z = pix_out.z + T * background[2];
-        *out = final_color;
+        final_color.x = pix_out.x + T * background.x;
+        final_color.y = pix_out.y + T * background.y;
+        final_color.z = pix_out.z + T * background.z;
+        out_img[pix_id] = final_color;
     }
 }
 
@@ -574,22 +572,20 @@ void rasterize_forward_impl(
     const dim3 tile_bounds,
     const dim3 block,
     const dim3 img_size,
-    const unsigned channels,
     const int32_t *gaussian_ids_sorted,
     const int2 *tile_bins,
     const float2 *xys,
     const float3 *conics,
-    const float *colors,
+    const float3 *colors,
     const float *opacities,
     float *final_Ts,
     int *final_index,
-    float *out_img,
-    const float *background
+    float3 *out_img,
+    const float3 &background
 ) {
     rasterize_forward_kernel<<<tile_bounds, block>>>(
         tile_bounds,
         img_size,
-        channels,
         gaussian_ids_sorted,
         tile_bins,
         xys,

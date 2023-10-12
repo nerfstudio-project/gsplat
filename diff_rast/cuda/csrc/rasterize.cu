@@ -13,7 +13,6 @@
     CHECK_CUDA(x);                                                             \
     CHECK_CONTIGUOUS(x)
 
-
 std::
     tuple<
         torch::Tensor, // output image
@@ -25,7 +24,7 @@ std::
         torch::Tensor, // isect_ids_sorted
         torch::Tensor  // isect_ids_unsorted
         >
-    slow_rasterize_forward_tensor(
+    nd_rasterize_forward_tensor(
         const torch::Tensor &xys,
         const torch::Tensor &depths,
         const torch::Tensor &radii,
@@ -59,7 +58,8 @@ std::
     const dim3 tile_bounds = {
         (img_width + BLOCK_X - 1) / BLOCK_X,
         (img_height + BLOCK_Y - 1) / BLOCK_Y,
-        1};
+        1
+    };
     const dim3 block = {BLOCK_X, BLOCK_Y, 1};
     const dim3 img_size = {img_width, img_height, 1};
     int num_tiles = tile_bounds.x * tile_bounds.y;
@@ -87,18 +87,7 @@ std::
         torch::zeros({num_intersects}, xys.options().dtype(torch::kInt64));
     torch::Tensor tile_bins =
         torch::zeros({num_tiles, 2}, xys.options().dtype(torch::kInt32));
-    // allocate temporary variables
-    // TODO dunno be smarter about this?
-    // int64_t *isect_ids_unsorted_d;
-    // int32_t *gaussian_ids_unsorted_d;
-    // int64_t *isect_ids_sorted_d;
-    // cudaMalloc((void **)&isect_ids_sorted_d, num_intersects *
-    // sizeof(int64_t)); cudaMalloc(
-    //     (void **)&isect_ids_unsorted_d, num_intersects * sizeof(int64_t)
-    // );
-    // cudaMalloc(
-    //     (void **)&gaussian_ids_unsorted_d, num_intersects * sizeof(int32_t)
-    // );
+
     // int32_t *sorted_ids_ptr =
     // gaussian_ids_sorted.contiguous().data_ptr<int32_t>(); int2 *bins_ptr =
     // (int2 *) tile_bins.contiguous().data_ptr<int>(); float2 *xys_ptr =
@@ -134,7 +123,7 @@ std::
         {img_height, img_width}, xys.options().dtype(torch::kInt32)
     );
 
-    slow_rasterize_forward_impl(
+    nd_rasterize_forward_impl(
         tile_bounds,
         block,
         img_size,
@@ -154,11 +143,6 @@ std::
         background.contiguous().data_ptr<float>()
     );
 
-    // cudaFree(cum_tiles_hit_d);
-    // cudaFree(isect_ids_unsorted_d);
-    // cudaFree(isect_ids_sorted_d);
-    // cudaFree(gaussian_ids_unsorted_d);
-
     return std::make_tuple(
         out_img,
         final_Ts,
@@ -170,7 +154,6 @@ std::
         isect_ids_unsorted
     );
 }
-
 
 std::
     tuple<
@@ -208,7 +191,7 @@ std::
         AT_ERROR("xys must have dimensions (N, 2)");
     }
 
-    if (colors.ndimension() != 2) {
+    if (colors.ndimension() != 2 || colors.size(1) != 3) {
         AT_ERROR("colors must have dimensions (N, 3)");
     }
 
@@ -217,7 +200,8 @@ std::
     const dim3 tile_bounds = {
         (img_width + BLOCK_X - 1) / BLOCK_X,
         (img_height + BLOCK_Y - 1) / BLOCK_Y,
-        1};
+        1
+    };
     const dim3 block = {BLOCK_X, BLOCK_Y, 1};
     const dim3 img_size = {img_width, img_height, 1};
     int num_tiles = tile_bounds.x * tile_bounds.y;
@@ -245,18 +229,7 @@ std::
         torch::zeros({num_intersects}, xys.options().dtype(torch::kInt64));
     torch::Tensor tile_bins =
         torch::zeros({num_tiles, 2}, xys.options().dtype(torch::kInt32));
-    // allocate temporary variables
-    // TODO dunno be smarter about this?
-    // int64_t *isect_ids_unsorted_d;
-    // int32_t *gaussian_ids_unsorted_d;
-    // int64_t *isect_ids_sorted_d;
-    // cudaMalloc((void **)&isect_ids_sorted_d, num_intersects *
-    // sizeof(int64_t)); cudaMalloc(
-    //     (void **)&isect_ids_unsorted_d, num_intersects * sizeof(int64_t)
-    // );
-    // cudaMalloc(
-    //     (void **)&gaussian_ids_unsorted_d, num_intersects * sizeof(int32_t)
-    // );
+
     // int32_t *sorted_ids_ptr =
     // gaussian_ids_sorted.contiguous().data_ptr<int32_t>(); int2 *bins_ptr =
     // (int2 *) tile_bins.contiguous().data_ptr<int>(); float2 *xys_ptr =
@@ -296,7 +269,6 @@ std::
         tile_bounds,
         block,
         img_size,
-        channels,
         // sorted_ids_ptr,
         // bins_ptr,
         // xys_ptr,
@@ -304,18 +276,13 @@ std::
         (int2 *)tile_bins.contiguous().data_ptr<int>(),
         (float2 *)xys.contiguous().data_ptr<float>(),
         (float3 *)conics.contiguous().data_ptr<float>(),
-        colors.contiguous().data_ptr<float>(),
+        (float3 *)colors.contiguous().data_ptr<float>(),
         opacity.contiguous().data_ptr<float>(),
         final_Ts.contiguous().data_ptr<float>(),
         final_idx.contiguous().data_ptr<int>(),
-        out_img.contiguous().data_ptr<float>(),
-        background.contiguous().data_ptr<float>()
+        (float3 *)out_img.contiguous().data_ptr<float>(),
+        *(float3 *)background.contiguous().data_ptr<float>()
     );
-
-    // cudaFree(cum_tiles_hit_d);
-    // cudaFree(isect_ids_unsorted_d);
-    // cudaFree(isect_ids_sorted_d);
-    // cudaFree(gaussian_ids_unsorted_d);
 
     return std::make_tuple(
         out_img,
@@ -336,7 +303,7 @@ std::
         torch::Tensor, // dL_dcolors
         torch::Tensor  // dL_dopacity
         >
-    slow_rasterize_backward_tensor(
+    nd_rasterize_backward_tensor(
         const unsigned img_height,
         const unsigned img_width,
         const torch::Tensor &gaussians_ids_sorted,
@@ -366,7 +333,8 @@ std::
     const dim3 tile_bounds = {
         (img_width + BLOCK_X - 1) / BLOCK_X,
         (img_height + BLOCK_Y - 1) / BLOCK_Y,
-        1};
+        1
+    };
     const dim3 block(BLOCK_X, BLOCK_Y, 1);
     const dim3 img_size = {img_width, img_height, 1};
     const int channels = colors.size(1);
@@ -378,13 +346,16 @@ std::
     torch::Tensor v_opacity = torch::zeros({num_points, 1}, xys.options());
 
     torch::Tensor workspace;
-    if (channels > 3){
-        workspace = torch::zeros({img_height, img_width, channels}, xys.options().dtype(torch::kFloat32));
+    if (channels > 3) {
+        workspace = torch::zeros(
+            {img_height, img_width, channels},
+            xys.options().dtype(torch::kFloat32)
+        );
     } else {
         workspace = torch::zeros({0}, xys.options().dtype(torch::kFloat32));
     }
 
-    slow_rasterize_backward_impl(
+    nd_rasterize_backward_impl(
         tile_bounds,
         block,
         img_size,
@@ -408,7 +379,6 @@ std::
 
     return std::make_tuple(v_xy, v_conic, v_colors, v_opacity);
 }
-
 
 std::
     tuple<
@@ -439,7 +409,7 @@ std::
         AT_ERROR("xys must have dimensions (num_points, 2)");
     }
 
-    if (colors.ndimension() != 2) {
+    if (colors.ndimension() != 2 || colors.size(1) != 3) {
         AT_ERROR("colors must have 2 dimensions");
     }
 
@@ -447,7 +417,8 @@ std::
     const dim3 tile_bounds = {
         (img_width + BLOCK_X - 1) / BLOCK_X,
         (img_height + BLOCK_Y - 1) / BLOCK_Y,
-        1};
+        1
+    };
     const dim3 block(BLOCK_X, BLOCK_Y, 1);
     const dim3 img_size = {img_width, img_height, 1};
     const int channels = colors.size(1);
@@ -458,33 +429,24 @@ std::
         torch::zeros({num_points, channels}, xys.options());
     torch::Tensor v_opacity = torch::zeros({num_points, 1}, xys.options());
 
-    torch::Tensor workspace;
-    if (channels > 3){
-        workspace = torch::zeros({img_height, img_width, channels}, xys.options().dtype(torch::kFloat32));
-    } else {
-        workspace = torch::zeros({0}, xys.options().dtype(torch::kFloat32));
-    }
-
     rasterize_backward_impl(
         tile_bounds,
         block,
         img_size,
-        channels,
         gaussians_ids_sorted.contiguous().data_ptr<int>(),
         (int2 *)tile_bins.contiguous().data_ptr<int>(),
         (float2 *)xys.contiguous().data_ptr<float>(),
         (float3 *)conics.contiguous().data_ptr<float>(),
-        colors.contiguous().data_ptr<float>(),
+        (float3 *)colors.contiguous().data_ptr<float>(),
         opacities.contiguous().data_ptr<float>(),
-        background.contiguous().data_ptr<float>(),
+        *(float3 *)background.contiguous().data_ptr<float>(),
         final_Ts.contiguous().data_ptr<float>(),
         final_idx.contiguous().data_ptr<int>(),
-        v_output.contiguous().data_ptr<float>(),
+        (float3 *)v_output.contiguous().data_ptr<float>(),
         (float2 *)v_xy.contiguous().data_ptr<float>(),
         (float3 *)v_conic.contiguous().data_ptr<float>(),
-        v_colors.contiguous().data_ptr<float>(),
-        v_opacity.contiguous().data_ptr<float>(),
-        workspace.data_ptr<float>()
+        (float3 *)v_colors.contiguous().data_ptr<float>(),
+        v_opacity.contiguous().data_ptr<float>()
     );
 
     return std::make_tuple(v_xy, v_conic, v_colors, v_opacity);
