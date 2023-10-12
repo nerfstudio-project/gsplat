@@ -133,6 +133,8 @@ project_gaussians_forward_tensor(
     torch::Tensor &projmat,
     const float fx,
     const float fy,
+    const float cx,
+    const float cy,
     const unsigned img_height,
     const unsigned img_width,
     const std::tuple<int, int, int> tile_bounds,
@@ -146,6 +148,8 @@ project_gaussians_forward_tensor(
     tile_bounds_dim3.x = std::get<0>(tile_bounds);
     tile_bounds_dim3.y = std::get<1>(tile_bounds);
     tile_bounds_dim3.z = std::get<2>(tile_bounds);
+
+    float4 intrins = {fx, fy, cx, cy};
 
     // Triangular covariance.
     torch::Tensor cov3d_d =
@@ -169,8 +173,7 @@ project_gaussians_forward_tensor(
         (float4 *)quats.contiguous().data_ptr<float>(),
         viewmat.contiguous().data_ptr<float>(),
         projmat.contiguous().data_ptr<float>(),
-        fx,
-        fy,
+        intrins,
         img_size_dim3,
         tile_bounds_dim3,
         clip_thresh,
@@ -204,17 +207,22 @@ project_gaussians_backward_tensor(
     torch::Tensor &projmat,
     const float fx,
     const float fy,
+    const float cx,
+    const float cy,
     const unsigned img_height,
     const unsigned img_width,
     torch::Tensor &cov3d,
     torch::Tensor &radii,
     torch::Tensor &conics,
     torch::Tensor &v_xy,
+    torch::Tensor &v_depth,
     torch::Tensor &v_conic
 ) {
     dim3 img_size_dim3;
     img_size_dim3.x = img_width;
     img_size_dim3.y = img_height;
+
+    float4 intrins = {fx, fy, cx, cy};
 
     const auto num_cov3d = num_points * 6;
 
@@ -238,13 +246,13 @@ project_gaussians_backward_tensor(
         (float4 *)quats.contiguous().data_ptr<float>(),
         viewmat.contiguous().data_ptr<float>(),
         projmat.contiguous().data_ptr<float>(),
-        fx,
-        fy,
+        intrins,
         img_size_dim3,
         cov3d.contiguous().data_ptr<float>(),
         radii.contiguous().data_ptr<int32_t>(),
         (float3 *)conics.contiguous().data_ptr<float>(),
         (float2 *)v_xy.contiguous().data_ptr<float>(),
+        v_depth.contiguous().data_ptr<float>(),
         (float3 *)v_conic.contiguous().data_ptr<float>(),
         // Outputs.
         (float3 *)v_cov2d.contiguous().data_ptr<float>(),
@@ -460,19 +468,19 @@ std::tuple<
     );
 
 
-    rasterize_forward_kernel<3><<<tile_bounds_dim3, block_dim3>>>(
+    rasterize_forward_kernel <<<tile_bounds_dim3, block_dim3>>>(
         tile_bounds_dim3,
         img_size_dim3,
         gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
         (int2 *)tile_bins.contiguous().data_ptr<int>(),
         (float2 *)xys.contiguous().data_ptr<float>(),
         (float3 *)conics.contiguous().data_ptr<float>(),
-        colors.contiguous().data_ptr<float>(),
+        (float3 *)colors.contiguous().data_ptr<float>(),
         opacities.contiguous().data_ptr<float>(),
         final_Ts.contiguous().data_ptr<float>(),
         final_idx.contiguous().data_ptr<int>(),
-        out_img.contiguous().data_ptr<float>(),
-        background.contiguous().data_ptr<float>()
+        (float3 *)out_img.contiguous().data_ptr<float>(),
+        *(float3 *)background.contiguous().data_ptr<float>()
     );
 
     return std::make_tuple(out_img, final_Ts, final_idx);

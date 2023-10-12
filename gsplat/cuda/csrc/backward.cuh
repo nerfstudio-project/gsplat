@@ -12,13 +12,13 @@ void project_gaussians_backward_impl(
     const float4 *quats,
     const float *viewmat,
     const float *projmat,
-    const float fx,
-    const float fy,
+    const float4 intrins,
     const dim3 img_size,
     const float *cov3d,
     const int *radii,
     const float3 *conics,
     const float2 *v_xy,
+    const float *v_depth,
     const float3 *v_conic,
     float3 *v_cov2d,
     float *v_cov3d,
@@ -28,10 +28,11 @@ void project_gaussians_backward_impl(
 );
 
 // compute jacobians of output image wrt binned and sorted gaussians
-void rasterize_backward_impl(
+void nd_rasterize_backward_impl(
     const dim3 tile_bounds,
     const dim3 block,
     const dim3 img_size,
+    const unsigned channels,
     const int *gaussians_ids_sorted,
     const int2 *tile_bins,
     const float2 *xys,
@@ -45,10 +46,31 @@ void rasterize_backward_impl(
     float2 *v_xy,
     float3 *v_conic,
     float *v_rgb,
+    float *v_opacity,
+    float *workspace
+);
+
+void rasterize_backward_impl(
+    const dim3 tile_bounds,
+    const dim3 block,
+    const dim3 img_size,
+    const int *gaussians_ids_sorted,
+    const int2 *tile_bins,
+    const float2 *xys,
+    const float3 *conics,
+    const float3 *rgbs,
+    const float *opacities,
+    const float3 &background,
+    const float *final_Ts,
+    const int *final_index,
+    const float3 *v_output,
+    float2 *v_xy,
+    float3 *v_conic,
+    float3 *v_rgb,
     float *v_opacity
 );
 
-__host__ __device__ void project_cov3d_ewa_vjp(
+__device__ void project_cov3d_ewa_vjp(
     const float3 &mean3d,
     const float *cov3d,
     const float *viewmat,
@@ -59,7 +81,7 @@ __host__ __device__ void project_cov3d_ewa_vjp(
     float *v_cov3d
 );
 
-__host__ __device__ void scale_rot_to_cov3d_vjp(
+__device__ void scale_rot_to_cov3d_vjp(
     const float3 scale,
     const float glob_scale,
     const float4 quat,

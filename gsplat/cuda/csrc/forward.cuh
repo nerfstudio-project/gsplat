@@ -10,8 +10,7 @@ void project_gaussians_forward_impl(
     const float4 *quats,
     const float *viewmat,
     const float *projmat,
-    const float fx,
-    const float fy,
+    const float4 intrins,
     const dim3 img_size,
     const dim3 tile_bounds,
     const float clip_thresh,
@@ -55,6 +54,24 @@ void rasterize_forward_impl(
     const int2 *tile_bins,
     const float2 *xys,
     const float3 *conics,
+    const float3 *colors,
+    const float *opacities,
+    float *final_Ts,
+    int *final_index,
+    float3 *out_img,
+    const float3 &background
+);
+
+// compute output color image from binned and sorted gaussians
+void nd_rasterize_forward_impl(
+    const dim3 tile_bounds,
+    const dim3 block,
+    const dim3 img_size,
+    const unsigned channels,
+    const int32_t *gaussian_ids_sorted,
+    const int2 *tile_bins,
+    const float2 *xys,
+    const float3 *conics,
     const float *colors,
     const float *opacities,
     float *final_Ts,
@@ -64,7 +81,7 @@ void rasterize_forward_impl(
 );
 
 // device helper to approximate projected 2d cov from 3d mean and cov
-__host__ __device__ float3 project_cov3d_ewa(
+__device__ float3 project_cov3d_ewa(
     const float3 &mean3d,
     const float *cov3d,
     const float *viewmat,
@@ -75,7 +92,7 @@ __host__ __device__ float3 project_cov3d_ewa(
 );
 
 // device helper to get 3D covariance from scale and quat parameters
-__host__ __device__ void scale_rot_to_cov3d(
+__device__ void scale_rot_to_cov3d(
     const float3 scale, const float glob_scale, const float4 quat, float *cov3d
 );
 
@@ -94,7 +111,6 @@ __global__ void get_tile_bin_edges(
     const int num_intersects, const int64_t *isect_ids_sorted, int2 *tile_bins
 );
 
-template <int CHANNELS>
 __global__ void rasterize_forward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
@@ -102,10 +118,10 @@ __global__ void rasterize_forward_kernel(
     const int2 *tile_bins,
     const float2 *xys,
     const float3 *conics,
-    const float *colors,
+    const float3 *colors,
     const float *opacities,
     float *final_Ts,
     int *final_index,
-    float *out_img,
-    const float *background
+    float3 *out_img,
+    const float3 &background
 );

@@ -9,6 +9,7 @@ import torch
 import tyro
 from gsplat.project_gaussians import ProjectGaussians
 from gsplat.rasterize import RasterizeGaussians
+from gsplat.nd_rasterize import NDRasterizeGaussians
 from PIL import Image
 from torch import Tensor, optim
 
@@ -91,61 +92,104 @@ class SimpleTrainer:
         self.opacities.requires_grad = True
         self.viewmat.requires_grad = False
 
-    def train(self, iterations: int = 1000, lr: float = 0.01, save_imgs: bool = False):
+    def forward_new(self):
+        xys, depths, radii, conics, num_tiles_hit, cov3d = ProjectGaussians.apply(
+            self.means,
+            self.scales,
+            1,
+            self.quats / self.quats.norm(dim=1, keepdim=True),
+            self.viewmat,
+            self.viewmat,
+            self.focal,
+            self.focal,
+            self.W / 2,
+            self.H / 2,
+            self.H,
+            self.W,
+            self.tile_bounds,
+        )
+
+        return RasterizeGaussians.apply(
+            xys,
+            depths,
+            radii,
+            conics,
+            num_tiles_hit,
+            torch.sigmoid(self.rgbs),
+            torch.sigmoid(self.opacities),
+            self.H,
+            self.W,
+        )
+
+    def forward_slow(self):
+        xys, depths, radii, conics, num_tiles_hit, cov3d = ProjectGaussians.apply(
+            self.means,
+            self.scales,
+            1,
+            self.quats / self.quats.norm(dim=1, keepdim=True),
+            self.viewmat,
+            self.viewmat,
+            self.focal,
+            self.focal,
+            self.W / 2,
+            self.H / 2,
+            self.H,
+            self.W,
+            self.tile_bounds,
+        )
+
+        return NDRasterizeGaussians.apply(
+            xys,
+            depths,
+            radii,
+            conics,
+            num_tiles_hit,
+            torch.sigmoid(self.rgbs),
+            torch.sigmoid(self.opacities),
+            self.H,
+            self.W,
+        )
+
+    def train(self, iterations: int = 1000, lr: float = 0.01, save_imgs: bool = True):
         optimizer = optim.Adam(
             [self.rgbs, self.means, self.scales, self.opacities, self.quats], lr
         )
         mse_loss = torch.nn.MSELoss()
         frames = []
-        for iter in range(iterations):
-            xys, depths, radii, conics, num_tiles_hit, cov3d = ProjectGaussians.apply(
-                self.means,
-                self.scales,
-                1,
-                self.quats,
-                self.viewmat,
-                self.viewmat,
-                self.focal,
-                self.focal,
-                self.W / 2,
-                self.H / 2,
-                self.H,
-                self.W,
-                self.tile_bounds,
-            )
-
-            out_img = RasterizeGaussians.apply(
-                xys,
-                depths,
-                radii,
-                conics,
-                num_tiles_hit,
-                torch.sigmoid(self.rgbs),
-                torch.sigmoid(self.opacities),
-                self.H,
-                self.W,
-            )
-            loss = mse_loss(out_img, self.gt_image)
+        for i in range(iterations):
             optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            print(f"Iteration {iter + 1}/{iterations}, Loss: {loss.item()}")
+            slow_out = self.forward_slow()
 
-            if save_imgs and iter % 5 == 0:
-                frames.append((out_img.detach().cpu().numpy() * 255).astype(np.uint8))
-        if save_imgs:
-            # save them as a gif with PIL
-            frames = [Image.fromarray(frame) for frame in frames]
-            out_dir = os.path.join(os.getcwd(), "renders")
-            os.makedirs(out_dir, exist_ok=True)
-            frames[0].save(
-                f"{out_dir}/training.gif",
-                save_all=True,
-                append_images=frames[1:],
-                optimize=False,
-                duration=5,
-                loop=0,
-            )
+            loss = mse_loss(slow_out, self.gt_image)
+            loss.backward()
+            slow_grads = [
+                self.means.grad.detach(),
+                self.scales.grad.detach(),
+                self.quats.grad.detach(),
+                self.rgbs.grad.detach(),
+                self.opacities.grad.detach(),
+            ]
+
+            optimizer.zero_grad()
+            new_out = self.forward_new()
+            loss = mse_loss(new_out, self.gt_image)
+            loss.backward()
+
+            new_grads = [
+                self.means.grad.detach(),
+                self.scales.grad.detach(),
+                self.quats.grad.detach(),
+                self.rgbs.grad.detach(),
+                self.opacities.grad.detach(),
+            ]
+
+            diff_out = slow_out.detach() - new_out.detach()  # type: ignore
+            print("OUT DIFF:", diff_out.min(), diff_out.max())
+            for slow_grad, new_grad in zip(slow_grads, new_grads):
+                diff_grad = slow_grad - new_grad
+                print("GRAD DIFF:", diff_grad.min(), diff_grad.max())
+            optimizer.step()
+            print(f"ITER {i}/{iterations}, LOSS: {loss.item()}")
 
 
 def image_path_to_tensor(image_path: Path):
@@ -166,7 +210,6 @@ def main(
     iterations: int = 1000,
     lr: float = 0.01,
 ) -> None:
-
     if img_path:
         gt_image = image_path_to_tensor(img_path)
     else:
@@ -176,11 +219,7 @@ def main(
         gt_image[height // 2 :, width // 2 :, :] = torch.tensor([0.0, 0.0, 1.0])
 
     trainer = SimpleTrainer(gt_image=gt_image, num_points=num_points)
-    trainer.train(
-        iterations=iterations,
-        lr=lr,
-        save_imgs=save_imgs,
-    )
+    trainer.train()
 
 
 if __name__ == "__main__":
