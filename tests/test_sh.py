@@ -7,8 +7,8 @@ device = torch.device("cuda:0")
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_sh():
-    from diff_rast import _torch_impl
-    from diff_rast import sh
+    from gsplat import _torch_impl
+    from gsplat import sh
 
     num_points = 1
     degree = 4
