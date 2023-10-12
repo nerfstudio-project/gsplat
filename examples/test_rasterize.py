@@ -9,7 +9,7 @@ import torch
 import tyro
 from diff_rast.project_gaussians import ProjectGaussians
 from diff_rast.rasterize import RasterizeGaussians
-from diff_rast.slow_rasterize import SlowRasterizeGaussians
+from diff_rast.nd_rasterize import NDRasterizeGaussians
 from PIL import Image
 from torch import Tensor, optim
 
@@ -138,7 +138,7 @@ class SimpleTrainer:
             self.tile_bounds,
         )
 
-        return SlowRasterizeGaussians.apply(
+        return NDRasterizeGaussians.apply(
             xys,
             depths,
             radii,

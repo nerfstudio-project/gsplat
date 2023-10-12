@@ -471,17 +471,16 @@ std::tuple<
     rasterize_forward_kernel <<<tile_bounds_dim3, block_dim3>>>(
         tile_bounds_dim3,
         img_size_dim3,
-        channels,
         gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
         (int2 *)tile_bins.contiguous().data_ptr<int>(),
         (float2 *)xys.contiguous().data_ptr<float>(),
         (float3 *)conics.contiguous().data_ptr<float>(),
-        colors.contiguous().data_ptr<float>(),
+        (float3 *)colors.contiguous().data_ptr<float>(),
         opacities.contiguous().data_ptr<float>(),
         final_Ts.contiguous().data_ptr<float>(),
         final_idx.contiguous().data_ptr<int>(),
-        out_img.contiguous().data_ptr<float>(),
-        background.contiguous().data_ptr<float>()
+        (float3 *)out_img.contiguous().data_ptr<float>(),
+        *(float3 *)background.contiguous().data_ptr<float>()
     );
 
     return std::make_tuple(out_img, final_Ts, final_idx);
