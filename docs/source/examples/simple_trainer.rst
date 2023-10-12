@@ -1,7 +1,7 @@
 Simple Trainer
 ===================================
 
-.. currentmodule:: diff_rast
+.. currentmodule:: gsplat
 
 Training on an image
 -----------------------------------

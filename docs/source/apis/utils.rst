@@ -3,7 +3,7 @@ Utils
 In addition to the main projection and rasterization functions, a few CUDA kernel and helper functions are exposed to python with the following bindings:
 
 
-.. currentmodule:: diff_rast
+.. currentmodule:: gsplat
 
 .. autoclass:: BinAndSortGaussians
 
