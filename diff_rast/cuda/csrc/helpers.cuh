@@ -4,11 +4,11 @@
 #include "third_party/glm/glm/gtc/type_ptr.hpp"
 #include <iostream>
 
-inline __host__ __device__ float ndc2pix(const float x, const float W, const float cx) {
+inline __device__ float ndc2pix(const float x, const float W, const float cx) {
     return 0.5f * W * x + 0.5f + cx;
 }
 
-inline __host__ __device__ void get_bbox(
+inline __device__ void get_bbox(
     const float2 center,
     const float2 dims,
     const dim3 img_size,
@@ -24,7 +24,7 @@ inline __host__ __device__ void get_bbox(
     bb_max.y = min(max(0, (int)(center.y + dims.y + 1)), img_size.y);
 }
 
-inline __host__ __device__ void get_tile_bbox(
+inline __device__ void get_tile_bbox(
     const float2 pix_center,
     const float pix_radius,
     const dim3 tile_bounds,
@@ -34,13 +34,15 @@ inline __host__ __device__ void get_tile_bbox(
     // gets gaussian dimensions in tile space, i.e. the span of a gaussian in
     // tile_grid (image divided into tiles)
     float2 tile_center = {
-        pix_center.x / (float)BLOCK_X, pix_center.y / (float)BLOCK_Y};
+        pix_center.x / (float)BLOCK_X, pix_center.y / (float)BLOCK_Y
+    };
     float2 tile_radius = {
-        pix_radius / (float)BLOCK_X, pix_radius / (float)BLOCK_Y};
+        pix_radius / (float)BLOCK_X, pix_radius / (float)BLOCK_Y
+    };
     get_bbox(tile_center, tile_radius, tile_bounds, tile_min, tile_max);
 }
 
-inline __host__ __device__ bool
+inline __device__ bool
 compute_cov2d_bounds(const float3 cov2d, float3 &conic, float &radius) {
     // find eigenvalues of 2d covariance matrix
     // expects upper triangular values of cov matrix as float3
@@ -66,7 +68,7 @@ compute_cov2d_bounds(const float3 cov2d, float3 &conic, float &radius) {
 }
 
 // compute vjp from df/d_conic to df/c_cov2d
-inline __host__ __device__ void cov2d_to_conic_vjp(
+inline __device__ void cov2d_to_conic_vjp(
     const float3 &conic, const float3 &v_conic, float3 &v_cov2d
 ) {
     // conic = inverse cov2d
@@ -80,8 +82,7 @@ inline __host__ __device__ void cov2d_to_conic_vjp(
 }
 
 // helper for applying R * p + T, expect mat to be ROW MAJOR
-inline __host__ __device__ float3
-transform_4x3(const float *mat, const float3 p) {
+inline __device__ float3 transform_4x3(const float *mat, const float3 p) {
     float3 out = {
         mat[0] * p.x + mat[1] * p.y + mat[2] * p.z + mat[3],
         mat[4] * p.x + mat[5] * p.y + mat[6] * p.z + mat[7],
@@ -92,8 +93,7 @@ transform_4x3(const float *mat, const float3 p) {
 
 // helper to apply 4x4 transform to 3d vector, return homo coords
 // expects mat to be ROW MAJOR
-inline __host__ __device__ float4
-transform_4x4(const float *mat, const float3 p) {
+inline __device__ float4 transform_4x4(const float *mat, const float3 p) {
     float4 out = {
         mat[0] * p.x + mat[1] * p.y + mat[2] * p.z + mat[3],
         mat[4] * p.x + mat[5] * p.y + mat[6] * p.z + mat[7],
@@ -103,17 +103,20 @@ transform_4x4(const float *mat, const float3 p) {
     return out;
 }
 
-inline __host__ __device__ float2
-project_pix(const float *mat, const float3 p, const dim3 img_size, const float2 pp) {
+inline __device__ float2 project_pix(
+    const float *mat, const float3 p, const dim3 img_size, const float2 pp
+) {
     // ROW MAJOR mat
     float4 p_hom = transform_4x4(mat, p);
     float rw = 1.f / (p_hom.w + 1e-6f);
     float3 p_proj = {p_hom.x * rw, p_hom.y * rw, p_hom.z * rw};
-    return {ndc2pix(p_proj.x, img_size.x, pp.x), ndc2pix(p_proj.y, img_size.y, pp.y)};
+    return {
+        ndc2pix(p_proj.x, img_size.x, pp.x), ndc2pix(p_proj.y, img_size.y, pp.y)
+    };
 }
 
 // given v_xy_pix, get v_xyz
-inline __host__ __device__ float3 project_pix_vjp(
+inline __device__ float3 project_pix_vjp(
     const float *mat, const float3 p, const dim3 img_size, const float2 v_xy
 ) {
     // ROW MAJOR mat
@@ -122,16 +125,18 @@ inline __host__ __device__ float3 project_pix_vjp(
 
     float3 v_ndc = {0.5f * img_size.x * v_xy.x, 0.5f * img_size.y * v_xy.y};
     float4 v_proj = {
-        v_ndc.x * rw, v_ndc.y * rw, 0., -(v_ndc.x + v_ndc.y) * rw * rw};
+        v_ndc.x * rw, v_ndc.y * rw, 0., -(v_ndc.x + v_ndc.y) * rw * rw
+    };
     // df / d_world = df / d_cam * d_cam / d_world
     // = v_proj * P[:3, :3]
     return {
         mat[0] * v_proj.x + mat[4] * v_proj.y + mat[8] * v_proj.z,
         mat[1] * v_proj.x + mat[5] * v_proj.y + mat[9] * v_proj.z,
-        mat[2] * v_proj.x + mat[6] * v_proj.y + mat[10] * v_proj.z};
+        mat[2] * v_proj.x + mat[6] * v_proj.y + mat[10] * v_proj.z
+    };
 }
 
-inline __host__ __device__ glm::mat3 quat_to_rotmat(const float4 quat) {
+inline __device__ glm::mat3 quat_to_rotmat(const float4 quat) {
     // quat to rotation matrix
     float s = rsqrtf(
         quat.w * quat.w + quat.x * quat.x + quat.y * quat.y + quat.z * quat.z
@@ -155,7 +160,7 @@ inline __host__ __device__ glm::mat3 quat_to_rotmat(const float4 quat) {
     );
 }
 
-inline __host__ __device__ float4
+inline __device__ float4
 quat_to_rotmat_vjp(const float4 quat, const glm::mat3 v_R) {
     float s = rsqrtf(
         quat.w * quat.w + quat.x * quat.x + quat.y * quat.y + quat.z * quat.z
@@ -201,7 +206,7 @@ quat_to_rotmat_vjp(const float4 quat, const glm::mat3 v_R) {
     return v_quat;
 }
 
-inline __host__ __device__ glm::mat3
+inline __device__ glm::mat3
 scale_to_mat(const float3 scale, const float glob_scale) {
     glm::mat3 S = glm::mat3(1.f);
     S[0][0] = glob_scale * scale.x;
@@ -211,7 +216,7 @@ scale_to_mat(const float3 scale, const float glob_scale) {
 }
 
 // device helper for culling near points
-inline __host__ __device__ bool clip_near_plane(
+inline __device__ bool clip_near_plane(
     const float3 p, const float *viewmat, float3 &p_view, float thresh
 ) {
     p_view = transform_4x3(viewmat, p);
