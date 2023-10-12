@@ -1,10 +1,10 @@
 #include "backward.cuh"
 #include "helpers.cuh"
 #include <cooperative_groups.h>
-
+#define MAX_REGISTER_CHANNELS 3
+#define CUDA_CALL(x) do { if((x) != cudaSuccess) { printf("Error at %s:%d - %s\n",__FILE__,__LINE__,cudaGetErrorString(cudaGetLastError())); exit(EXIT_FAILURE); }} while(0)
 namespace cg = cooperative_groups;
 
-template <int MAX_REGISTER_CHANNELS>
 __global__ void slow_rasterize_backward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
@@ -126,7 +126,6 @@ __global__ void slow_rasterize_backward_kernel(
     }
 }
 
-template <int MAX_REGISTER_CHANNELS>
 __global__ void rasterize_backward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
@@ -161,9 +160,9 @@ __global__ void rasterize_backward_kernel(
 
     float px = (float)j;
     float py = (float)i;
-    int32_t pix_id = i * img_size.x + j;
+    // clamp this value to the last pixel
+    int32_t pix_id = min(i * img_size.x + j, img_size.x * img_size.y - 1);
 
-    // return if out of bounds
     // keep not rasterizing threads around for reading data
     bool inside = (i < img_size.y && j < img_size.x);
 
@@ -171,16 +170,14 @@ __global__ void rasterize_backward_kernel(
     float T_final = final_Ts[pix_id];
     float T = T_final;
     // the contribution from gaussians behind the current one
-    float buffer[MAX_REGISTER_CHANNELS] = {0.f};
-    float *S;
-    if (channels <= MAX_REGISTER_CHANNELS) {
-        S = &buffer[0];
-    } else {
-        // if (pix_id == 0) {
-        //     printf("hello using workspace");
-        // }
-        S = &workspace[channels * pix_id];
-    }
+    float buffer[3] = {0.f};
+    // float buffer[MAX_REGISTER_CHANNELS] = {0.f};
+    // float *S;
+    // if (channels <= MAX_REGISTER_CHANNELS) {
+    //     S = &buffer[0];
+    // } else {
+    //     S = &workspace[channels * pix_id];
+    // }
     // index of last gaussian to contribute to this pixel
     int bin_final = final_index[pix_id];
 
@@ -194,9 +191,13 @@ __global__ void rasterize_backward_kernel(
     __shared__ float2 xy_batch[BLOCK_SIZE];
     __shared__ float3 conic_batch[BLOCK_SIZE];
     __shared__ float opacity_batch[BLOCK_SIZE];
-
     // df/d_out for this pixel
-    const float *v_out = &(v_output[channels * pix_id]);
+    // const float *v_out = &(v_output[channels * pix_id]);
+    const float v_out[3] = {
+        v_output[channels * pix_id],
+        v_output[channels * pix_id + 1],
+        v_output[channels * pix_id + 2]
+    };
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing
@@ -208,6 +209,7 @@ __global__ void rasterize_backward_kernel(
         // each thread fetch 1 gaussian from back to front
         // 0 index will be furthest back in batch
         // index of gaussian to load
+        //batch end is the index of the last gaussian in the batch
         int batch_end = range.y - 1 - BLOCK_SIZE * b;
         int idx = batch_end - tr;
         if (idx >= range.x) {
@@ -217,7 +219,6 @@ __global__ void rasterize_backward_kernel(
             conic_batch[tr] = conics[g_id];
             opacity_batch[tr] = opacities[g_id];
         }
-
         // wait for other threads to collect the gaussians in batch
         block.sync();
 
@@ -228,24 +229,19 @@ __global__ void rasterize_backward_kernel(
             if (batch_end - t > bin_final) {
                 continue;
             }
-            float3 conic = conic_batch[t];
-            float2 center = xy_batch[t];
-            float2 delta = {center.x - px, center.y - py};
-            float sigma = 0.5f * (conic.x * delta.x * delta.x +
+            const float3 conic = conic_batch[t];
+            const float2 center = xy_batch[t];
+            const float2 delta = {center.x - px, center.y - py};
+            const float sigma = 0.5f * (conic.x * delta.x * delta.x +
                                   conic.z * delta.y * delta.y) +
                           conic.y * delta.x * delta.y;
-            if (sigma < 0.f) {
-                continue;
-            }
-
-            float opac = opacity_batch[t];
-            float vis = exp(-sigma);
-            float alpha = min(0.99f, opac * vis);
-            if (alpha < 1.f / 255.f) {
+            const float opac = opacity_batch[t];
+            const float vis = exp(-sigma);
+            const float alpha = min(0.99f, opac * vis);
+            if (sigma < 0.f || alpha < 0.00392156862f) { // 1/255
                 continue;
             }
             int32_t g = id_batch[t];
-
             // compute the current T for this gaussian
             float ra = 1.f / (1.f - alpha);
             T *= ra;
@@ -253,17 +249,27 @@ __global__ void rasterize_backward_kernel(
             // update v_rgb for this gaussian
             float fac = alpha * T;
             float v_alpha = 0.f;
-            for (int c = 0; c < channels; ++c) {
+            // for (int c = 0; c < channels; ++c) {
+            //     // gradient wrt rgb
+            //     atomicAdd(&(v_rgb[channels * g + c]), fac * v_out[c]);
+            //     // contribution from this pixel
+            //     v_alpha += (rgbs[channels * g + c] * T - S[c] * ra) * v_out[c];
+            //     // contribution from background pixel
+            //     v_alpha += -T_final * ra * background[c] * v_out[c];
+            //     // update the running sum
+            //     S[c] += rgbs[channels * g + c] * fac;
+            // }
+            #pragma unroll
+            for (int c = 0; c < 3; ++c) {
                 // gradient wrt rgb
                 atomicAdd(&(v_rgb[channels * g + c]), fac * v_out[c]);
                 // contribution from this pixel
-                v_alpha += (rgbs[channels * g + c] * T - S[c] * ra) * v_out[c];
+                v_alpha += (rgbs[channels * g + c] * T - buffer[c] * ra) * v_out[c];
                 // contribution from background pixel
                 v_alpha += -T_final * ra * background[c] * v_out[c];
                 // update the running sum
-                S[c] += rgbs[channels * g + c] * fac;
+                buffer[c] += rgbs[channels * g + c] * fac;
             }
-
             // update v_opacity for this gaussian
             atomicAdd(&(v_opacity[g]), vis * v_alpha);
 
@@ -271,6 +277,7 @@ __global__ void rasterize_backward_kernel(
             // d_sigma / d_delta = conic * delta
             // d_sigma / d_conic = delta * delta.T
             float v_sigma = -opac * vis * v_alpha;
+            //convert the below lines into a single float3 atomicAdd
 
             atomicAdd(&(v_conic[g].x), 0.5f * v_sigma * delta.x * delta.x);
             atomicAdd(&(v_conic[g].y), 0.5f * v_sigma * delta.x * delta.y);
@@ -306,7 +313,7 @@ void slow_rasterize_backward_impl(
     float *v_opacity,
     float *workspace
 ) {
-    slow_rasterize_backward_kernel<3><<<tile_bounds, block>>>(
+    slow_rasterize_backward_kernel<<<tile_bounds, block>>>(
         tile_bounds,
         img_size,
         channels,
@@ -349,7 +356,7 @@ void rasterize_backward_impl(
     float *v_opacity,
     float *workspace
 ) {
-    rasterize_backward_kernel<3><<<tile_bounds, block>>>(
+    rasterize_backward_kernel<<<tile_bounds, block>>>(
         tile_bounds,
         img_size,
         channels,
@@ -369,6 +376,8 @@ void rasterize_backward_impl(
         v_opacity,
         workspace
     );
+    CUDA_CALL(cudaPeekAtLastError());
+    CUDA_CALL(cudaDeviceSynchronize());
 }
 
 __global__ void project_gaussians_backward_kernel(
