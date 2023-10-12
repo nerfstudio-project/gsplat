@@ -1,6 +1,6 @@
 """Python bindings for SH"""
 
-import diff_rast.cuda as _C
+import gsplat.cuda as _C
 
 from jaxtyping import Float
 from torch import Tensor

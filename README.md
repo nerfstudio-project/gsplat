@@ -1,4 +1,4 @@
-# diff_rast
+# gsplat
 
 Our version of differentiable gaussian rasterizer
 
@@ -40,7 +40,7 @@ The curret tests that will be triggered by PR:
 Because we check for black formatting, it is recommend to run black before commit in the code:
 
 ```bash
-black . diff_rast/ tests/ examples/
+black . gsplat/ tests/ examples/
 ```
 
 Since there is no GPU supported on github workflow container, we don't test against those cuda unit tests under `tests/` in PR. So it is recommended to check test pass locally before committing:
@@ -67,11 +67,11 @@ sphinx-build docs/source _build
 
 # Brief walkthrough
 
-The main python bindings for rasterization are found by importing diff_rast
+The main python bindings for rasterization are found by importing gsplat
 
 ```
-import diff_rast
-help(diff_rast)
+import gsplat
+help(gsplat)
 ```
 
 # clangd setup (for Neovim)
@@ -117,7 +117,7 @@ sudo apt install bear
 #
 # This will save a file at 3dgs-exercise/compile_commands.json, which clangd
 # should be able to detect.
-bear -- pip install -e diff_rast/
+bear -- pip install -e gsplat/
 
 # Make sure the file is not empty!
 cat compile_commands.json

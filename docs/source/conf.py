@@ -1,11 +1,11 @@
 __version__ = None
-exec(open("../../diff_rast/version.py", "r").read())
+exec(open("../../gsplat/version.py", "r").read())
 
 # -- Project information
 
-project = "diff_rast"
-copyright = "2023, Vickie"
-author = "Vickie"
+project = "gsplat"
+copyright = "2023, nerfstudio team"
+author = "nerfstudio"
 
 release = __version__
 

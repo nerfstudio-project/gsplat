@@ -7,7 +7,7 @@ import sys
 from setuptools import find_packages, setup
 
 __version__ = None
-exec(open("diff_rast/version.py", "r").read())
+exec(open("gsplat/version.py", "r").read())
 
 URL = ""  # TODO
 
@@ -26,7 +26,7 @@ def get_extensions():
     from torch.__config__ import parallel_info
     from torch.utils.cpp_extension import CUDAExtension
 
-    extensions_dir = osp.join("diff_rast", "cuda", "csrc")
+    extensions_dir = osp.join("gsplat", "cuda", "csrc")
     sources = glob.glob(osp.join(extensions_dir, "*.cu")) + glob.glob(
         osp.join(extensions_dir, "*.cpp")
     )
@@ -44,7 +44,7 @@ def get_extensions():
     define_macros = []
 
     if sys.platform == "win32":
-        define_macros += [("diff_rast_EXPORTS", None)]
+        define_macros += [("gsplat_EXPORTS", None)]
 
     extra_compile_args = {"cxx": ["-O3"]}
     if not os.name == "nt":  # Not on Windows:
@@ -83,7 +83,7 @@ def get_extensions():
     extra_compile_args["nvcc"] = nvcc_flags
 
     extension = CUDAExtension(
-        f"diff_rast.csrc",
+        f"gsplat.csrc",
         sources,
         include_dirs=[osp.join(extensions_dir, "third_party", "glm")],
         define_macros=define_macros,
@@ -96,7 +96,7 @@ def get_extensions():
 
 
 setup(
-    name="diff_rast",
+    name="gsplat",
     version=__version__,
     description=" Python package for differentiable rasterization of gaussians",
     keywords="gaussian, splatting, cuda",
@@ -110,7 +110,7 @@ setup(
         "typing_extensions; python_version<'3.8'",
     ],
     extras_require={
-        # dev dependencies. Install them by `pip install diff_rast[dev]`
+        # dev dependencies. Install them by `pip install gsplat[dev]`
         "dev": [
             "black[jupyter]==22.3.0",
             "isort==5.10.1",

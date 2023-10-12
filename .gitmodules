@@ -1,3 +1,3 @@
-[submodule "diff_rast/cuda/csrc/third_party/glm"]
-	path = diff_rast/cuda/csrc/third_party/glm
+[submodule "gsplat/cuda/csrc/third_party/glm"]
+	path = gsplat/cuda/csrc/third_party/glm
 	url = https://github.com/g-truc/glm.git
