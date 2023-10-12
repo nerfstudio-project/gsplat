@@ -209,7 +209,7 @@ def main(
     num_points: int = 100000,
     save_imgs: bool = True,
     img_path: Optional[Path] = None,
-    iterations: int = 1000,
+    iterations: int = 2,
     lr: float = 0.01,
 ) -> None:
     if img_path:

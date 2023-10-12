@@ -161,8 +161,8 @@ __global__ void rasterize_backward_kernel(
 
     float px = (float)j;
     float py = (float)i;
-    int32_t pix_id = i * img_size.x + j;
-
+    // int32_t pix_id = i * img_size.x + j;
+    int32_t pix_id = min(i * img_size.x + j, img_size.x * img_size.y - 1);
     // return if out of bounds
     // keep not rasterizing threads around for reading data
     bool inside = (i < img_size.y && j < img_size.x);

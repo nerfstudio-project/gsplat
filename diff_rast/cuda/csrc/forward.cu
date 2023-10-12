@@ -498,8 +498,7 @@ __global__ void rasterize_forward_kernel(
     // each thread loads one gaussian at a time before rasterizing its
     // designated pixel
     int tr = block.thread_rank();
-    // float3 pix_out = {0.f, 0.f, 0.f};
-    float pix_out[3] = {0.f};
+    float3 pix_out = {0.f, 0.f, 0.f};
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
@@ -548,14 +547,10 @@ __global__ void rasterize_forward_kernel(
 
             int32_t g = id_batch[t];
             const float vis = alpha * T;
-            // const float3 c = ((float3*)colors)[g];
-            // pix_out.x = pix_out.x + c.x * vis;
-            // pix_out.y = pix_out.y + c.y * vis;
-            // pix_out.z = pix_out.z + c.z * vis;
-            for (int c = 0; c < channels; ++c) {
-                pix_out[c] += colors[channels * g + c] * vis;
-                // out_img[channels * pix_id + c] += colors[channels * g + c] * vis;
-            }
+            const float3 c = ((float3*)colors)[g];
+            pix_out.x = pix_out.x + c.x * vis;
+            pix_out.y = pix_out.y + c.y * vis;
+            pix_out.z = pix_out.z + c.z * vis;
             T = next_T;
             cur_idx = batch_start + t;
         }
@@ -565,20 +560,12 @@ __global__ void rasterize_forward_kernel(
         // add background
         final_Ts[pix_id] = T; // transmittance at last gaussian in this pixel
         final_index[pix_id] = cur_idx; // index of in bin of last gaussian in this pixel
-        // float3 *out = ((float3*)out_img) + pix_id;
-        // float3 final_color;
-        // final_color.x = pix_out.x + T * background[0];
-        // final_color.y = pix_out.y + T * background[1];
-        // final_color.z = pix_out.z + T * background[2];
-        // *out = final_color;
-
-        // out_img[channels * pix_id + 0] = pix_out.x + T * background[0];
-        // out_img[channels * pix_id + 1] = pix_out.y + T * background[1];
-        // out_img[channels * pix_id + 2] = pix_out.z + T * background[2];
-
-        for (int c = 0; c < channels; ++c) {
-            out_img[channels * pix_id + c] += T * background[c];
-        }
+        float3 *out = ((float3*)out_img) + pix_id;
+        float3 final_color;
+        final_color.x = pix_out.x + T * background[0];
+        final_color.y = pix_out.y + T * background[1];
+        final_color.z = pix_out.z + T * background[2];
+        *out = final_color;
     }
 }
 

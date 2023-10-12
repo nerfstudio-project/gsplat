@@ -44,7 +44,7 @@ class SimpleTrainer:
         self.means = torch.empty((self.num_points, 3), device=self.device)
         self.scales = torch.empty((self.num_points, 3), device=self.device)
         self.quats = torch.empty((self.num_points, 4), device=self.device)
-        self.rgbs = torch.ones((self.num_points, 3), device=self.device)
+        self.rgbs = torch.zeros((self.num_points, 3), device=self.device)
         self.opacities = torch.ones((self.num_points, 1), device=self.device)
         bd = 2
         for i in range(self.num_points):
@@ -91,7 +91,7 @@ class SimpleTrainer:
         self.opacities.requires_grad = True
         self.viewmat.requires_grad = False
 
-    def train(self, iterations: int = 1000, lr: float = 0.01, save_imgs: bool = True):
+    def train(self, iterations: int = 50, lr: float = 0.01, save_imgs: bool = True):
         optimizer = optim.Adam(
             [self.rgbs, self.means, self.scales, self.opacities, self.quats], lr
         )
@@ -128,6 +128,7 @@ class SimpleTrainer:
             loss = mse_loss(out_img, self.gt_image)
             optimizer.zero_grad()
             loss.backward()
+            import pdb;pdb.set_trace()
             optimizer.step()
             print(f"Iteration {iter + 1}/{iterations}, Loss: {loss.item()}")
 
