@@ -91,7 +91,7 @@ class SimpleTrainer:
         self.opacities.requires_grad = True
         self.viewmat.requires_grad = False
 
-    def train(self, iterations: int = 1000, lr: float = 0.01, save_imgs: bool = True):
+    def train(self, iterations: int = 1000, lr: float = 0.01, save_imgs: bool = False):
         optimizer = optim.Adam(
             [self.rgbs, self.means, self.scales, self.opacities, self.quats], lr
         )
@@ -160,7 +160,7 @@ def image_path_to_tensor(image_path: Path):
 def main(
     height: int = 256,
     width: int = 256,
-    num_points: int = 2000,
+    num_points: int = 100000,
     save_imgs: bool = True,
     img_path: Optional[Path] = None,
     iterations: int = 1000,

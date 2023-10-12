@@ -158,50 +158,39 @@ __global__ void rasterize_backward_kernel(
     unsigned j =
         block.group_index().x * block.group_dim().x + block.thread_index().x;
 
-    float px = (float)j;
-    float py = (float)i;
+    const float px = (float)j;
+    const float py = (float)i;
     // clamp this value to the last pixel
-    int32_t pix_id = min(i * img_size.x + j, img_size.x * img_size.y - 1);
+    const int32_t pix_id = min(i * img_size.x + j, img_size.x * img_size.y - 1);
 
     // keep not rasterizing threads around for reading data
-    bool inside = (i < img_size.y && j < img_size.x);
+    const bool inside = (i < img_size.y && j < img_size.x);
 
     // this is the T AFTER the last gaussian in this pixel
     float T_final = final_Ts[pix_id];
     float T = T_final;
     // the contribution from gaussians behind the current one
-    float buffer[3] = {0.f};
-    // float buffer[MAX_REGISTER_CHANNELS] = {0.f};
-    // float *S;
-    // if (channels <= MAX_REGISTER_CHANNELS) {
-    //     S = &buffer[0];
-    // } else {
-    //     S = &workspace[channels * pix_id];
-    // }
+    float3 buffer = {0.f,0.f,0.f};
     // index of last gaussian to contribute to this pixel
-    int bin_final = final_index[pix_id];
+    const int bin_final = final_index[pix_id];
 
     // have all threads in tile process the same gaussians in batches
     // first collect gaussians between range.x and range.y in batches
     // which gaussians to look through in this tile
-    int2 range = tile_bins[tile_id];
-    int num_batches = (range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    const int2 range = tile_bins[tile_id];
+    const int num_batches = (range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
     __shared__ int32_t id_batch[BLOCK_SIZE];
     __shared__ float2 xy_batch[BLOCK_SIZE];
     __shared__ float3 conic_batch[BLOCK_SIZE];
+    __shared__ float3 rgbs_batch[BLOCK_SIZE];
     __shared__ float opacity_batch[BLOCK_SIZE];
     // df/d_out for this pixel
-    // const float *v_out = &(v_output[channels * pix_id]);
-    const float v_out[3] = {
-        v_output[channels * pix_id],
-        v_output[channels * pix_id + 1],
-        v_output[channels * pix_id + 2]
-    };
+    const float3 v_out = ((float3*)v_output)[pix_id];
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing
-    int tr = block.thread_rank();
+    const int tr = block.thread_rank();
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before writing next batch of shared mem
         block.sync();
@@ -210,14 +199,15 @@ __global__ void rasterize_backward_kernel(
         // 0 index will be furthest back in batch
         // index of gaussian to load
         //batch end is the index of the last gaussian in the batch
-        int batch_end = range.y - 1 - BLOCK_SIZE * b;
-        int idx = batch_end - tr;
+        const int batch_end = range.y - 1 - BLOCK_SIZE * b;
+        const int idx = batch_end - tr;
         if (idx >= range.x) {
             int32_t g_id = gaussian_ids_sorted[idx];
             id_batch[tr] = g_id;
             xy_batch[tr] = xys[g_id];
             conic_batch[tr] = conics[g_id];
             opacity_batch[tr] = opacities[g_id];
+            rgbs_batch[tr] = ((float3*)rgbs)[g_id];
         }
         // wait for other threads to collect the gaussians in batch
         block.sync();
@@ -238,45 +228,42 @@ __global__ void rasterize_backward_kernel(
             const float opac = opacity_batch[t];
             const float vis = exp(-sigma);
             const float alpha = min(0.99f, opac * vis);
-            if (sigma < 0.f || alpha < 0.00392156862f) { // 1/255
+            if (sigma < 0.f || alpha < 1.f/255.f) {
                 continue;
             }
-            int32_t g = id_batch[t];
+            const int32_t g = id_batch[t];
             // compute the current T for this gaussian
             float ra = 1.f / (1.f - alpha);
             T *= ra;
-            // rgb = rgbs[g];
             // update v_rgb for this gaussian
-            float fac = alpha * T;
+            const float fac = alpha * T;
             float v_alpha = 0.f;
-            // for (int c = 0; c < channels; ++c) {
-            //     // gradient wrt rgb
-            //     atomicAdd(&(v_rgb[channels * g + c]), fac * v_out[c]);
-            //     // contribution from this pixel
-            //     v_alpha += (rgbs[channels * g + c] * T - S[c] * ra) * v_out[c];
-            //     // contribution from background pixel
-            //     v_alpha += -T_final * ra * background[c] * v_out[c];
-            //     // update the running sum
-            //     S[c] += rgbs[channels * g + c] * fac;
-            // }
-            #pragma unroll
-            for (int c = 0; c < 3; ++c) {
-                // gradient wrt rgb
-                atomicAdd(&(v_rgb[channels * g + c]), fac * v_out[c]);
-                // contribution from this pixel
-                v_alpha += (rgbs[channels * g + c] * T - buffer[c] * ra) * v_out[c];
-                // contribution from background pixel
-                v_alpha += -T_final * ra * background[c] * v_out[c];
-                // update the running sum
-                buffer[c] += rgbs[channels * g + c] * fac;
-            }
+            
+            // gradient wrt rgb
+            atomicAdd(&(v_rgb[channels * g]), fac * v_out.x);
+            atomicAdd(&(v_rgb[channels * g + 1]), fac * v_out.y);
+            atomicAdd(&(v_rgb[channels * g + 2]), fac * v_out.z);
+            const float3 rgb = rgbs_batch[t];
+            // contribution from this pixel
+            v_alpha += (rgb.x * T - buffer.x * ra) * v_out.x;
+            v_alpha += (rgb.y * T - buffer.y * ra) * v_out.y;
+            v_alpha += (rgb.z * T - buffer.z * ra) * v_out.z;
+            // contribution from background pixel
+            v_alpha += -T_final * ra * background[0] * v_out.x;
+            v_alpha += -T_final * ra * background[1] * v_out.y;
+            v_alpha += -T_final * ra * background[2] * v_out.z;
+            // update the running sum
+            buffer.x += rgb.x * fac;
+            buffer.y += rgb.y * fac;
+            buffer.z += rgb.z * fac;
+                
             // update v_opacity for this gaussian
             atomicAdd(&(v_opacity[g]), vis * v_alpha);
 
             // compute vjps for conics and means
             // d_sigma / d_delta = conic * delta
             // d_sigma / d_conic = delta * delta.T
-            float v_sigma = -opac * vis * v_alpha;
+            const float v_sigma = -opac * vis * v_alpha;
             //convert the below lines into a single float3 atomicAdd
 
             atomicAdd(&(v_conic[g].x), 0.5f * v_sigma * delta.x * delta.x);
