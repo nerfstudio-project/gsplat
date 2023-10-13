@@ -1,4 +1,5 @@
-#include "cuda_runtime.h"
+#include <cuda_runtime.h>
+#include <cstdint>
 
 __host__ __device__ float3 projectMean2DBackward(
     const float3 m, const float *proj, const float2 dL_dmean2D

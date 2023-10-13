@@ -1,5 +1,6 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include <cstdint>
 
 // for f : R(n) -> R(m), J in R(m, n),
 // v is cotangent in R(m), e.g. dL/df in R(m),
