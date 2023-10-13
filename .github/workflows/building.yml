@@ -11,6 +11,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # os: [windows-2019]
+        # python-version: ['3.7']
+        # torch-version: [1.11.0]
+        # cuda-version: ['cu113']
         os: [ubuntu-20.04, windows-2019]
         # support version based on: https://download.pytorch.org/whl/torch/
         python-version: ['3.7', '3.8', '3.9', '3.10', '3.11']
