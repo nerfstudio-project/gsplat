@@ -277,7 +277,11 @@ void bin_and_sort_gaussians(
 
     // sort intersections by ascending tile ID and depth with RadixSort
     int32_t max_tile_id = (int32_t)(tile_bounds.x * tile_bounds.y);
+#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) && !defined(__CYGWIN__)
+    int msb = 32 - __lzcnt(max_tile_id) + 1;
+#else
     int msb = 32 - __builtin_clz(max_tile_id) + 1;
+#endif
     // allocate workspace memory
     void *sort_ws = nullptr;
     size_t sort_ws_bytes;
