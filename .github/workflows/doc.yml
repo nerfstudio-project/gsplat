@@ -13,6 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+        with:
+          submodules: 'recursive'
+          
       - uses: actions/setup-python@v3
         with:
           python-version: '3.9'
@@ -32,5 +35,5 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: _build/
           force_orphan: true
+          cname: docs.gsplat.studio
         if: github.event_name != 'pull_request'
-        #   cname: ...

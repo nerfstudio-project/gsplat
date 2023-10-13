@@ -3,15 +3,15 @@
 
 namespace cg = cooperative_groups;
 
-__host__ __device__ const float SH_C0 = 0.28209479177387814f;
-__host__ __device__ const float SH_C1 = 0.4886025119029199f;
-__host__ __device__ const float SH_C2[] = {
+__device__ const float SH_C0 = 0.28209479177387814f;
+__device__ const float SH_C1 = 0.4886025119029199f;
+__device__ const float SH_C2[] = {
     1.0925484305920792f,
     -1.0925484305920792f,
     0.31539156525252005f,
     -1.0925484305920792f,
     0.5462742152960396f};
-__host__ __device__ const float SH_C3[] = {
+__device__ const float SH_C3[] = {
     -0.5900435899266435f,
     2.890611442640554f,
     -0.4570457994644658f,
@@ -19,7 +19,7 @@ __host__ __device__ const float SH_C3[] = {
     -0.4570457994644658f,
     1.445305721320277f,
     -0.5900435899266435f};
-__host__ __device__ const float SH_C4[] = {
+__device__ const float SH_C4[] = {
     2.5033429417967046f,
     -1.7701307697799304,
     0.9461746957575601f,
@@ -30,7 +30,7 @@ __host__ __device__ const float SH_C4[] = {
     -1.7701307697799304f,
     0.6258357354491761f};
 
-__host__ __device__ unsigned num_sh_bases(const unsigned degree) {
+__device__ unsigned num_sh_bases(const unsigned degree) {
     if (degree == 0)
         return 1;
     if (degree == 1)
@@ -43,7 +43,7 @@ __host__ __device__ unsigned num_sh_bases(const unsigned degree) {
 }
 
 template <int CHANNELS>
-__host__ __device__ void sh_coeffs_to_color(
+__device__ void sh_coeffs_to_color(
     const unsigned degree,
     const float3 &viewdir,
     const float *coeffs,
@@ -118,7 +118,7 @@ __host__ __device__ void sh_coeffs_to_color(
 }
 
 template <int CHANNELS>
-__host__ __device__ void sh_coeffs_to_color_vjp(
+__device__ void sh_coeffs_to_color_vjp(
     const unsigned degree,
     const float3 &viewdir,
     const float *v_colors,
