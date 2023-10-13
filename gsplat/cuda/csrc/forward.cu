@@ -662,7 +662,7 @@ __device__ float3 project_cov3d_ewa(
     glm::mat3 cov = T * V * glm::transpose(T);
 
     // add a little blur along axes and save upper triangular elements
-    return float3(float(cov[0][0]) + 0.3f, float(cov[0][1]), float(cov[1][1]) + 0.3f);
+    return make_float3(float(cov[0][0]) + 0.3f, float(cov[0][1]), float(cov[1][1]) + 0.3f);
 }
 
 // device helper to get 3D covariance from scale and quat parameters
