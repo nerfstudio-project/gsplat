@@ -9,7 +9,7 @@ from setuptools import find_packages, setup
 __version__ = None
 exec(open("gsplat/version.py", "r").read())
 
-URL = ""  # TODO
+URL = "https://github.com/nerfstudio-project/gsplat"  # TODO
 
 BUILD_NO_CUDA = os.getenv("BUILD_NO_CUDA", "0") == "1"
 WITH_SYMBOLS = os.getenv("WITH_SYMBOLS", "0") == "1"
@@ -101,7 +101,7 @@ setup(
     description=" Python package for differentiable rasterization of gaussians",
     keywords="gaussian, splatting, cuda",
     url=URL,
-    download_url=f"{URL}/archive/{__version__}.tar.gz",
+    download_url=f"{URL}/archive/gsplat-{__version__}.tar.gz",
     python_requires=">=3.7",
     install_requires=[
         "jaxtyping",
