@@ -30,7 +30,8 @@ __device__ const float SH_C4[] = {
     -1.7701307697799304f,
     0.6258357354491761f};
 
-__device__ unsigned num_sh_bases(const unsigned degree) {
+// This function is used in both host and device code
+__host__ __device__ unsigned num_sh_bases(const unsigned degree) {
     if (degree == 0)
         return 1;
     if (degree == 1)
