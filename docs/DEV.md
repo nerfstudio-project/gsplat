@@ -28,7 +28,7 @@ pip install -e .[dev]
 
 It is recommended to commit the code into the main branch as a PR over a hard push, as the PR would protect the main branch if the code break tests but a hard push won't. Also squash the commits before merging the PR so it won't span the git history.
 
-The curret tests that will be triggered by PR:
+The current tests that will be triggered by PR:
 
 - `.github/workflows/core_tests.yml`: Black formating. Pytests.
 - `.github/workflows/doc.yml`: Doc build.
