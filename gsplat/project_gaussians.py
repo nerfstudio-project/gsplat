@@ -1,6 +1,5 @@
 """Python bindings for 3D gaussian projection"""
 
-import torch
 from typing import Tuple
 
 from jaxtyping import Float
@@ -148,27 +147,6 @@ class ProjectGaussians(Function):
             v_conics,
         )
 
-        with torch.no_grad():
-            # return projmat gradients
-            W, H = ctx.img_width, ctx.img_height
-            v_ndc_x = 0.5 * W * v_xys[..., 0]
-            v_ndc_y = 0.5 * H * v_xys[..., 1]
-            p_hom = torch.einsum("ij,nj", projmat[:3, :3], means3d) + projmat[None, :3, 3]
-            rw = 1 / (p_hom[..., 3] + 1e-5)
-            v_proj = torch.stack(
-                [
-                    v_ndc_x * rw,
-                    v_ndc_y * rw,
-                    torch.zeros_like(v_ndc_x),
-                    -(v_ndc_x + v_ndc_y) * torch.square(rw),
-                ],
-                dim=-1,
-            )
-            # proj = projmat * means3d
-            # v_projmat = sum(outer(v_proj, means3d))
-            means_h = torch.cat([means3d, torch.ones_like(means3d[..., :1])], dim=-1)
-            v_projmat = torch.einsum("ni,nj->ij", v_proj, means_h)  # (4, 4)
-
         # Return a gradient for each input.
         return (
             # means3d: Float[Tensor, "*batch 3"],
@@ -182,7 +160,7 @@ class ProjectGaussians(Function):
             # viewmat: Float[Tensor, "4 4"],
             None,
             # projmat: Float[Tensor, "4 4"],
-            v_projmat,
+            None,
             # fx: float,
             None,
             # fy: float,
