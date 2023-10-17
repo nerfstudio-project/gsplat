@@ -42,21 +42,24 @@ class SimpleTrainer:
     def _init_gaussians(self):
         """Random gaussians"""
         bd = 2
-        
+
         self.means = bd * (torch.rand(self.num_points, 3, device=self.device) - 0.5)
         self.scales = torch.rand(self.num_points, 3, device=self.device)
         self.rgbs = torch.rand(self.num_points, 3, device=self.device)
-        
+
         u = torch.rand(self.num_points, 1, device=self.device)
         v = torch.rand(self.num_points, 1, device=self.device)
         w = torch.rand(self.num_points, 1, device=self.device)
-        
-        self.quats = torch.cat([
-            torch.sqrt(1.0 - u) * torch.sin(2.0 * math.pi * v),
-            torch.sqrt(1.0 - u) * torch.cos(2.0 * math.pi * v),
-            torch.sqrt(u) * torch.sin(2.0 * math.pi * w),
-            torch.sqrt(u) * torch.cos(2.0 * math.pi * w),
-        ], -1)
+
+        self.quats = torch.cat(
+            [
+                torch.sqrt(1.0 - u) * torch.sin(2.0 * math.pi * v),
+                torch.sqrt(1.0 - u) * torch.cos(2.0 * math.pi * v),
+                torch.sqrt(u) * torch.sin(2.0 * math.pi * w),
+                torch.sqrt(u) * torch.cos(2.0 * math.pi * w),
+            ],
+            -1,
+        )
         self.opacities = torch.ones((self.num_points, 1), device=self.device)
 
         self.viewmat = torch.tensor(
