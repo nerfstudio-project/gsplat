@@ -41,39 +41,26 @@ class SimpleTrainer:
 
     def _init_gaussians(self):
         """Random gaussians"""
-        self.means = torch.empty((self.num_points, 3), device=self.device)
-        self.scales = torch.empty((self.num_points, 3), device=self.device)
-        self.quats = torch.empty((self.num_points, 4), device=self.device)
-        self.rgbs = torch.ones((self.num_points, 3), device=self.device)
-        self.opacities = torch.ones((self.num_points, 1), device=self.device)
         bd = 2
-        for i in range(self.num_points):
-            self.means[i] = torch.tensor(
-                [
-                    bd * (random.random() - 0.5),
-                    bd * (random.random() - 0.5),
-                    bd * (random.random() - 0.5),
-                ],
-                device=self.device,
-            )
-            self.scales[i] = torch.tensor(
-                [random.random(), random.random(), random.random()], device=self.device
-            )
-            self.rgbs[i] = torch.tensor(
-                [random.random(), random.random(), random.random()], device=self.device
-            )
-            u = random.random()
-            v = random.random()
-            w = random.random()
-            self.quats[i] = torch.tensor(
-                [
-                    math.sqrt(1.0 - u) * math.sin(2.0 * math.pi * v),
-                    math.sqrt(1.0 - u) * math.cos(2.0 * math.pi * v),
-                    math.sqrt(u) * math.sin(2.0 * math.pi * w),
-                    math.sqrt(u) * math.cos(2.0 * math.pi * w),
-                ],
-                device=self.device,
-            )
+
+        self.means = bd * (torch.rand(self.num_points, 3, device=self.device) - 0.5)
+        self.scales = torch.rand(self.num_points, 3, device=self.device)
+        self.rgbs = torch.rand(self.num_points, 3, device=self.device)
+
+        u = torch.rand(self.num_points, 1, device=self.device)
+        v = torch.rand(self.num_points, 1, device=self.device)
+        w = torch.rand(self.num_points, 1, device=self.device)
+
+        self.quats = torch.cat(
+            [
+                torch.sqrt(1.0 - u) * torch.sin(2.0 * math.pi * v),
+                torch.sqrt(1.0 - u) * torch.cos(2.0 * math.pi * v),
+                torch.sqrt(u) * torch.sin(2.0 * math.pi * w),
+                torch.sqrt(u) * torch.cos(2.0 * math.pi * w),
+            ],
+            -1,
+        )
+        self.opacities = torch.ones((self.num_points, 1), device=self.device)
 
         self.viewmat = torch.tensor(
             [
