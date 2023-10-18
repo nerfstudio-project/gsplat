@@ -28,7 +28,7 @@ class RasterizeGaussians(Function):
     Returns:
         A Tensor:
 
-        - **out_img** (Tensor): the rendered output image.
+        - **out_img** (Tensor): 3-channel RGB rendered output image.
     """
 
     @staticmethod
