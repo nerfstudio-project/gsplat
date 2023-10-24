@@ -212,17 +212,17 @@ def compute_cov2d_bounds(cov2d: Tensor, eps=1e-6):
     return conic, radius, det > eps
 
 
-def ndc2pix(x, W):
-    return 0.5 * ((x + 1.0) * W - 1.0)
+def ndc2pix(x, W, cx):
+    return 0.5 * W * x + 0.5 + cx
 
 
-def project_pix(mat, p, img_size, eps=1e-6):
+def project_pix(mat, p, img_size, cx, cy, eps=1e-6):
     p_hom = F.pad(p, (0, 1), value=1.0)
     p_hom = torch.einsum("...ij,...j->...i", mat, p_hom)
     rw = 1.0 / torch.clamp(p_hom[..., 3], min=eps)
     p_proj = p_hom[..., :3] * rw[..., None]
-    u = ndc2pix(p_proj[..., 0], img_size[0])
-    v = ndc2pix(p_proj[..., 1], img_size[1])
+    u = ndc2pix(p_proj[..., 0], img_size[0], cy)
+    v = ndc2pix(p_proj[..., 1], img_size[1], cx)
     return torch.stack([u, v], dim=-1)
 
 
@@ -268,6 +268,8 @@ def project_gaussians_forward(
     projmat,
     fx,
     fy,
+    cx,
+    cy,
     img_size,
     tile_bounds,
     clip_thresh=0.01,
@@ -278,12 +280,12 @@ def project_gaussians_forward(
     cov3d = scale_rot_to_cov3d(scales, glob_scale, quats)
     cov2d = project_cov3d_ewa(means3d, cov3d, viewmat, fx, fy, tan_fovx, tan_fovy)
     conic, radius, det_valid = compute_cov2d_bounds(cov2d)
-    center = project_pix(projmat, means3d, img_size)
+    center = project_pix(projmat, means3d, img_size, cx, cy)
     tile_min, tile_max = get_tile_bbox(center, radius, tile_bounds)
     tile_area = (tile_max[..., 0] - tile_min[..., 0]) * (
         tile_max[..., 1] - tile_min[..., 1]
     )
-    mask = (tile_area > 0) & (~is_close) & det_valid
+    mask = (tile_area > 0) & (~is_close) & det_valid & torch.all(center >= 0, dim=-1)
 
     num_tiles_hit = tile_area
     depths = p_view[..., 2]
@@ -318,6 +320,8 @@ def map_gaussian_to_intersects(
         for i in range(tile_min[1], tile_max[1]):
             for j in range(tile_min[0], tile_max[0]):
                 tile_id = i * tile_bounds[0] + j
+                if cur_idx == num_intersects:
+                    continue
                 isect_ids[cur_idx] = (tile_id << 32) | depth_id_n
                 gaussian_ids[cur_idx] = idx
                 cur_idx += 1
@@ -331,10 +335,11 @@ def get_tile_bin_edges(num_intersects, isect_ids_sorted):
     )
 
     for idx in range(num_intersects):
-
         cur_tile_idx = isect_ids_sorted[idx] >> 32
 
         if idx == 0:
+            # if cur_tile_idx >= num_intersects:
+            #    break
             tile_bins[cur_tile_idx, 0] = 0
             continue
 
@@ -346,6 +351,8 @@ def get_tile_bin_edges(num_intersects, isect_ids_sorted):
 
         if cur_tile_idx != prev_tile_idx:
             tile_bins[prev_tile_idx, 1] = idx
+            if cur_tile_idx >= num_intersects:
+                break
             tile_bins[cur_tile_idx, 0] = idx
 
     return tile_bins
@@ -397,7 +404,7 @@ def rasterize_forward_kernel(
             tile_bin_start = tile_bins[tile_id, 0]
             tile_bin_end = tile_bins[tile_id, 1]
             T = 1.0
-
+            idx = 0
             for idx in range(tile_bin_start, tile_bin_end):
                 gaussian_id = gaussian_ids_sorted[idx]
                 conic = conics[gaussian_id]
@@ -405,7 +412,6 @@ def rasterize_forward_kernel(
                 delta = center - torch.tensor(
                     [j, i], dtype=torch.float32, device=xys.device
                 )
-
                 sigma = (
                     0.5
                     * (conic[0] * delta[0] * delta[0] + conic[2] * delta[1] * delta[1])
@@ -423,7 +429,7 @@ def rasterize_forward_kernel(
 
                 next_T = T * (1 - alpha)
 
-                if next_T <= 1e-4:
+                if next_T <= 1e-4 and idx != 0:
                     idx -= 1
                     break
 

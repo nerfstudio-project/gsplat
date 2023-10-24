@@ -22,6 +22,7 @@ def test_bin_and_sort_gaussians():
     projmat = torch.eye(4, device=device)
     fx, fy = 3.0, 3.0
     H, W = 512, 512
+    cy, cx = H // 2, W // 2
     clip_thresh = 0.01
 
     BLOCK_X, BLOCK_Y = 16, 16
@@ -44,6 +45,8 @@ def test_bin_and_sort_gaussians():
         projmat,
         fx,
         fy,
+        cx,
+        cy,
         (H, W),
         tile_bounds,
         clip_thresh,
