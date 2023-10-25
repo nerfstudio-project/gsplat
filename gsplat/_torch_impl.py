@@ -338,8 +338,6 @@ def get_tile_bin_edges(num_intersects, isect_ids_sorted):
         cur_tile_idx = isect_ids_sorted[idx] >> 32
 
         if idx == 0:
-            # if cur_tile_idx >= num_intersects:
-            #    break
             tile_bins[cur_tile_idx, 0] = 0
             continue
 
