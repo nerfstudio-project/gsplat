@@ -116,7 +116,7 @@ def test_rasterize_forward_kernel():
 
     torch.testing.assert_close(_out_img, out_img, atol=1e-3, rtol=1e-3)
     torch.testing.assert_close(_final_Ts, final_Ts)
-    # torch.testing.assert_close(_final_idx, final_idx)
+    # torch.testing.assert_close(_final_idx, final_idx) TODO: maturk, check inconsistency with cuda kernel
 
 
 if __name__ == "__main__":
