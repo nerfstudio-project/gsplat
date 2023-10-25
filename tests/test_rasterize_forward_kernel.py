@@ -80,11 +80,7 @@ def test_rasterize_forward_kernel():
         num_points, _num_intersects, _xys, _depths, _radii, _cum_tiles_hit, tile_bounds
     )
 
-    (
-        out_img,
-        final_Ts,
-        final_idx,
-    ) = RasterizeForwardKernel.apply(
+    (out_img, final_Ts, final_idx,) = RasterizeForwardKernel.apply(
         tile_bounds,
         block,
         img_size,
@@ -97,11 +93,7 @@ def test_rasterize_forward_kernel():
         background,
     )
 
-    (
-        _out_img,
-        _final_Ts,
-        _final_idx,
-    ) = _torch_impl.rasterize_forward_kernel(
+    (_out_img, _final_Ts, _final_idx,) = _torch_impl.rasterize_forward_kernel(
         tile_bounds,
         block,
         img_size,

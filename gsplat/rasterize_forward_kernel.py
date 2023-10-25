@@ -58,11 +58,7 @@ class RasterizeForwardKernel(Function):
         else:
             background = torch.ones(3, dtype=torch.float32)
 
-        (
-            out_img,
-            final_Ts,
-            final_idx,
-        ) = _C.rasterize_forward_kernel(
+        (out_img, final_Ts, final_idx,) = _C.rasterize_forward_kernel(
             tile_bounds,
             block,
             img_size,
