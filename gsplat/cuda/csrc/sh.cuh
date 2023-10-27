@@ -1,17 +1,17 @@
 #include <cuda_runtime.h>
 #include <cooperative_groups.h>
-
+#define CHANNELS 3
 namespace cg = cooperative_groups;
 
-__device__ const float SH_C0 = 0.28209479177387814f;
-__device__ const float SH_C1 = 0.4886025119029199f;
-__device__ const float SH_C2[] = {
+__device__ __constant__ float SH_C0 = 0.28209479177387814f;
+__device__ __constant__ float SH_C1 = 0.4886025119029199f;
+__device__ __constant__ float SH_C2[] = {
     1.0925484305920792f,
     -1.0925484305920792f,
     0.31539156525252005f,
     -1.0925484305920792f,
     0.5462742152960396f};
-__device__ const float SH_C3[] = {
+__device__ __constant__ float SH_C3[] = {
     -0.5900435899266435f,
     2.890611442640554f,
     -0.4570457994644658f,
@@ -19,7 +19,7 @@ __device__ const float SH_C3[] = {
     -0.4570457994644658f,
     1.445305721320277f,
     -0.5900435899266435f};
-__device__ const float SH_C4[] = {
+__device__ __constant__ float SH_C4[] = {
     2.5033429417967046f,
     -1.7701307697799304,
     0.9461746957575601f,
@@ -43,7 +43,6 @@ __host__ __device__ unsigned num_sh_bases(const unsigned degree) {
     return 25;
 }
 
-template <int CHANNELS>
 __device__ void sh_coeffs_to_color(
     const unsigned degree,
     const float3 &viewdir,
@@ -118,7 +117,6 @@ __device__ void sh_coeffs_to_color(
     }
 }
 
-template <int CHANNELS>
 __device__ void sh_coeffs_to_color_vjp(
     const unsigned degree,
     const float3 &viewdir,
@@ -127,6 +125,7 @@ __device__ void sh_coeffs_to_color_vjp(
 ) {
     // Expects v_colors to be len CHANNELS
     // and v_coeffs to be num_bases * CHANNELS
+    #pragma unroll
     for (int c = 0; c < CHANNELS; ++c) {
         v_coeffs[c] = SH_C0 * v_colors[c];
     }
@@ -147,7 +146,8 @@ __device__ void sh_coeffs_to_color_vjp(
     float yy = y * y;
     float yz = y * z;
     float zz = z * z;
-
+    
+    #pragma unroll
     for (int c = 0; c < CHANNELS; ++c) {
         float v1 = -SH_C1 * y;
         float v2 = SH_C1 * z;
@@ -155,7 +155,6 @@ __device__ void sh_coeffs_to_color_vjp(
         v_coeffs[1 * CHANNELS + c] = v1 * v_colors[c];
         v_coeffs[2 * CHANNELS + c] = v2 * v_colors[c];
         v_coeffs[3 * CHANNELS + c] = v3 * v_colors[c];
-        // printf("c1 %.5e %.5e %.5e\n", v1, v2, v3);
         if (degree < 2) {
             continue;
         }
@@ -169,7 +168,6 @@ __device__ void sh_coeffs_to_color_vjp(
         v_coeffs[6 * CHANNELS + c] = v6 * v_colors[c];
         v_coeffs[7 * CHANNELS + c] = v7 * v_colors[c];
         v_coeffs[8 * CHANNELS + c] = v8 * v_colors[c];
-        // printf("c2 %.5e %.5e %.5e %.5e %.5e\n", v4, v5, v6, v7, v8);
         if (degree < 3) {
             continue;
         }
@@ -187,16 +185,6 @@ __device__ void sh_coeffs_to_color_vjp(
         v_coeffs[13 * CHANNELS + c] = v13 * v_colors[c];
         v_coeffs[14 * CHANNELS + c] = v14 * v_colors[c];
         v_coeffs[15 * CHANNELS + c] = v15 * v_colors[c];
-        // printf(
-        //     "c3 %.5e %.5e %.5e %.5e %.5e %.5e %.5e\n",
-        //     v9,
-        //     v10,
-        //     v11,
-        //     v12,
-        //     v13,
-        //     v14,
-        //     v15
-        // );
         if (degree < 4) {
             continue;
         }
@@ -218,18 +206,6 @@ __device__ void sh_coeffs_to_color_vjp(
         v_coeffs[22 * CHANNELS + c] = v22 * v_colors[c];
         v_coeffs[23 * CHANNELS + c] = v23 * v_colors[c];
         v_coeffs[24 * CHANNELS + c] = v24 * v_colors[c];
-        // printf(
-        //     "c4 %.5e %.5e %.5e %.5e %.5e %.5e %.5e %.5e %.5e\n",
-        //     v16,
-        //     v17,
-        //     v18,
-        //     v19,
-        //     v20,
-        //     v21,
-        //     v22,
-        //     v23,
-        //     v24
-        // );
     }
 }
 
@@ -249,7 +225,7 @@ __global__ void compute_sh_forward_kernel(
     unsigned idx_sh = num_bases * num_channels * idx;
     unsigned idx_col = num_channels * idx;
 
-    sh_coeffs_to_color<num_channels>(
+    sh_coeffs_to_color(
         degree, viewdirs[idx], &(coeffs[idx_sh]), &(colors[idx_col])
     );
 }
@@ -270,7 +246,7 @@ __global__ void compute_sh_backward_kernel(
     unsigned idx_sh = num_bases * num_channels * idx;
     unsigned idx_col = num_channels * idx;
 
-    sh_coeffs_to_color_vjp<num_channels>(
+    sh_coeffs_to_color_vjp(
         degree, viewdirs[idx], &(v_colors[idx_col]), &(v_coeffs[idx_sh])
     );
 }

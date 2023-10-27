@@ -1,6 +1,7 @@
 #include "backward.cuh"
 #include "helpers.cuh"
 #include <cooperative_groups.h>
+#include <cooperative_groups/reduce.h>
 namespace cg = cooperative_groups;
 
 __global__ void nd_rasterize_backward_kernel(
@@ -117,6 +118,21 @@ __global__ void nd_rasterize_backward_kernel(
     }
 }
 
+inline __device__ void warpSum3(float3& val, cg::thread_block_tile<32>& tile){
+    val.x = cg::reduce(tile, val.x, cg::plus<float>());
+    val.y = cg::reduce(tile, val.y, cg::plus<float>());
+    val.z = cg::reduce(tile, val.z, cg::plus<float>());
+}
+
+inline __device__ void warpSum2(float2& val, cg::thread_block_tile<32>& tile){
+    val.x = cg::reduce(tile, val.x, cg::plus<float>());
+    val.y = cg::reduce(tile, val.y, cg::plus<float>());
+}
+
+inline __device__ void warpSum(float& val, cg::thread_block_tile<32>& tile){
+    val = cg::reduce(tile, val, cg::plus<float>());
+}
+
 __global__ void rasterize_backward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
@@ -177,6 +193,8 @@ __global__ void rasterize_backward_kernel(
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing
     const int tr = block.thread_rank();
+    cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
+    const int warp_bin_final = cg::reduce(warp, bin_final, cg::greater<int>());
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before writing next batch of shared mem
         block.sync();
@@ -186,6 +204,7 @@ __global__ void rasterize_backward_kernel(
         // index of gaussian to load
         // batch end is the index of the last gaussian in the batch
         const int batch_end = range.y - 1 - BLOCK_SIZE * b;
+        int batch_size = min(BLOCK_SIZE, batch_end + 1 - range.x);
         const int idx = batch_end - tr;
         if (idx >= range.x) {
             int32_t g_id = gaussian_ids_sorted[idx];
@@ -197,71 +216,94 @@ __global__ void rasterize_backward_kernel(
         }
         // wait for other threads to collect the gaussians in batch
         block.sync();
-
         // process gaussians in the current batch for this pixel
         // 0 index is the furthest back gaussian in the batch
-        int batch_size = min(BLOCK_SIZE, batch_end + 1 - range.x);
-        for (int t = 0; (t < batch_size) && inside; ++t) {
+        for (int t = max(0,batch_end - warp_bin_final); t < batch_size; ++t) {
+            int valid = inside;
             if (batch_end - t > bin_final) {
+                valid = 0;
+            }
+            float alpha;
+            float opac;
+            float2 delta;
+            float3 conic;
+            float vis;
+            if(valid){
+                conic = conic_batch[t];
+                float2 center = xy_batch[t];
+                delta = {center.x - px, center.y - py};
+                float sigma = 0.5f * (conic.x * delta.x * delta.x +
+                                            conic.z * delta.y * delta.y) +
+                                    conic.y * delta.x * delta.y;
+                opac = opacity_batch[t];
+                vis = exp(-sigma);
+                alpha = min(0.99f, opac * vis);
+                if (sigma < 0.f || alpha < 1.f / 255.f) {
+                    valid = 0;
+                }
+            }
+            // if all threads are inactive in this warp, skip this loop
+            if(!warp.any(valid)){
                 continue;
             }
-            const float3 conic = conic_batch[t];
-            const float2 center = xy_batch[t];
-            const float2 delta = {center.x - px, center.y - py};
-            const float sigma = 0.5f * (conic.x * delta.x * delta.x +
-                                        conic.z * delta.y * delta.y) +
-                                conic.y * delta.x * delta.y;
-            const float opac = opacity_batch[t];
-            const float vis = exp(-sigma);
-            const float alpha = min(0.99f, opac * vis);
-            if (sigma < 0.f || alpha < 1.f / 255.f) {
-                continue;
+            float3 v_rgb_local = {0.f, 0.f, 0.f};
+            float3 v_conic_local = {0.f, 0.f, 0.f};
+            float2 v_xy_local = {0.f, 0.f};
+            float v_opacity_local = 0.f;
+            //initialize everything to 0, only set if the lane is valid
+            if(valid){
+                // compute the current T for this gaussian
+                float ra = 1.f / (1.f - alpha);
+                T *= ra;
+                // update v_rgb for this gaussian
+                const float fac = alpha * T;
+                float v_alpha = 0.f;
+                v_rgb_local = {fac * v_out.x, fac * v_out.y, fac * v_out.z};
+
+                const float3 rgb = rgbs_batch[t];
+                // contribution from this pixel
+                v_alpha += (rgb.x * T - buffer.x * ra) * v_out.x;
+                v_alpha += (rgb.y * T - buffer.y * ra) * v_out.y;
+                v_alpha += (rgb.z * T - buffer.z * ra) * v_out.z;
+                // contribution from background pixel
+                v_alpha += -T_final * ra * background.x * v_out.x;
+                v_alpha += -T_final * ra * background.y * v_out.y;
+                v_alpha += -T_final * ra * background.z * v_out.z;
+                // update the running sum
+                buffer.x += rgb.x * fac;
+                buffer.y += rgb.y * fac;
+                buffer.z += rgb.z * fac;
+
+                const float v_sigma = -opac * vis * v_alpha;
+                v_conic_local = {0.5f * v_sigma * delta.x * delta.x, 
+                                        0.5f * v_sigma * delta.x * delta.y, 
+                                        0.5f * v_sigma * delta.y * delta.y};
+                v_xy_local = {v_sigma * (conic.x * delta.x + conic.y * delta.y), 
+                                    v_sigma * (conic.y * delta.x + conic.z * delta.y)};
+                v_opacity_local = vis * v_alpha;
             }
-            const int32_t g = id_batch[t];
-            // compute the current T for this gaussian
-            float ra = 1.f / (1.f - alpha);
-            T *= ra;
-            // update v_rgb for this gaussian
-            const float fac = alpha * T;
-            float v_alpha = 0.f;
-
-            // gradient wrt rgb
-            atomicAdd(&(v_rgb[g].x), fac * v_out.x);
-            atomicAdd(&(v_rgb[g].y), fac * v_out.y);
-            atomicAdd(&(v_rgb[g].z), fac * v_out.z);
-
-            const float3 rgb = rgbs_batch[t];
-            // contribution from this pixel
-            v_alpha += (rgb.x * T - buffer.x * ra) * v_out.x;
-            v_alpha += (rgb.y * T - buffer.y * ra) * v_out.y;
-            v_alpha += (rgb.z * T - buffer.z * ra) * v_out.z;
-            // contribution from background pixel
-            v_alpha += -T_final * ra * background.x * v_out.x;
-            v_alpha += -T_final * ra * background.y * v_out.y;
-            v_alpha += -T_final * ra * background.z * v_out.z;
-            // update the running sum
-            buffer.x += rgb.x * fac;
-            buffer.y += rgb.y * fac;
-            buffer.z += rgb.z * fac;
-
-            // update v_opacity for this gaussian
-            atomicAdd(&(v_opacity[g]), vis * v_alpha);
-
-            // compute vjps for conics and means
-            // d_sigma / d_delta = conic * delta
-            // d_sigma / d_conic = delta * delta.T
-            const float v_sigma = -opac * vis * v_alpha;
-            // convert the below lines into a single float3 atomicAdd
-
-            atomicAdd(&(v_conic[g].x), 0.5f * v_sigma * delta.x * delta.x);
-            atomicAdd(&(v_conic[g].y), 0.5f * v_sigma * delta.x * delta.y);
-            atomicAdd(&(v_conic[g].z), 0.5f * v_sigma * delta.y * delta.y);
-            atomicAdd(
-                &(v_xy[g].x), v_sigma * (conic.x * delta.x + conic.y * delta.y)
-            );
-            atomicAdd(
-                &(v_xy[g].y), v_sigma * (conic.y * delta.x + conic.z * delta.y)
-            );
+            warpSum3(v_rgb_local, warp);
+            warpSum3(v_conic_local, warp);
+            warpSum2(v_xy_local, warp);
+            warpSum(v_opacity_local, warp);
+            if (warp.thread_rank() == 0) {
+                int32_t g = id_batch[t];
+                float* v_rgb_ptr = (float*)(v_rgb);
+                atomicAdd(v_rgb_ptr + 3*g + 0, v_rgb_local.x);
+                atomicAdd(v_rgb_ptr + 3*g + 1, v_rgb_local.y);
+                atomicAdd(v_rgb_ptr + 3*g + 2, v_rgb_local.z);
+                
+                float* v_conic_ptr = (float*)(v_conic);
+                atomicAdd(v_conic_ptr + 3*g + 0, v_conic_local.x);
+                atomicAdd(v_conic_ptr + 3*g + 1, v_conic_local.y);
+                atomicAdd(v_conic_ptr + 3*g + 2, v_conic_local.z);
+                
+                float* v_xy_ptr = (float*)(v_xy);
+                atomicAdd(v_xy_ptr + 2*g + 0, v_xy_local.x);
+                atomicAdd(v_xy_ptr + 2*g + 1, v_xy_local.y);
+                
+                atomicAdd(v_opacity + g, v_opacity_local);
+            }
         }
     }
 }
