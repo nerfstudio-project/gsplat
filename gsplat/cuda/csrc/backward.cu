@@ -74,7 +74,7 @@ __global__ void nd_rasterize_backward_kernel(
             continue;
         }
         const float opac = opacities[g];
-        const float vis = exp(-sigma);
+        const float vis = __expf(-sigma);
         const float alpha = min(0.99f, opac * vis);
         if (alpha < 1.f / 255.f) {
             continue;
@@ -182,10 +182,9 @@ __global__ void rasterize_backward_kernel(
     const int num_batches = (range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
     __shared__ int32_t id_batch[BLOCK_SIZE];
-    __shared__ float2 xy_batch[BLOCK_SIZE];
+    __shared__ float3 xy_opacity_batch[BLOCK_SIZE];
     __shared__ float3 conic_batch[BLOCK_SIZE];
     __shared__ float3 rgbs_batch[BLOCK_SIZE];
-    __shared__ float opacity_batch[BLOCK_SIZE];
 
     // df/d_out for this pixel
     const float3 v_out = v_output[pix_id];
@@ -209,9 +208,10 @@ __global__ void rasterize_backward_kernel(
         if (idx >= range.x) {
             int32_t g_id = gaussian_ids_sorted[idx];
             id_batch[tr] = g_id;
-            xy_batch[tr] = xys[g_id];
+            const float2 xy = xys[g_id];
+            const float opac = opacities[g_id];
+            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             conic_batch[tr] = conics[g_id];
-            opacity_batch[tr] = opacities[g_id];
             rgbs_batch[tr] = rgbs[g_id];
         }
         // wait for other threads to collect the gaussians in batch
@@ -230,13 +230,13 @@ __global__ void rasterize_backward_kernel(
             float vis;
             if(valid){
                 conic = conic_batch[t];
-                float2 center = xy_batch[t];
-                delta = {center.x - px, center.y - py};
+                float3 xy_opac = xy_opacity_batch[t];
+                opac = xy_opac.z;
+                delta = {xy_opac.x - px, xy_opac.y - py};
                 float sigma = 0.5f * (conic.x * delta.x * delta.x +
                                             conic.z * delta.y * delta.y) +
                                     conic.y * delta.x * delta.y;
-                opac = opacity_batch[t];
-                vis = exp(-sigma);
+                vis = __expf(-sigma);
                 alpha = min(0.99f, opac * vis);
                 if (sigma < 0.f || alpha < 1.f / 255.f) {
                     valid = 0;

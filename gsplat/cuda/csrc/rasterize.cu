@@ -206,8 +206,6 @@ std::
     const dim3 img_size = {img_width, img_height, 1};
     int num_tiles = tile_bounds.x * tile_bounds.y;
 
-    // int32_t *cum_tiles_hit_d;
-    // cudaMalloc((void **)&cum_tiles_hit_d, num_points * sizeof(int32_t));
     torch::Tensor cum_tiles_hit =
         torch::zeros({num_points}, xys.options().dtype(torch::kInt32));
 
@@ -230,10 +228,6 @@ std::
     torch::Tensor tile_bins =
         torch::zeros({num_tiles, 2}, xys.options().dtype(torch::kInt32));
 
-    // int32_t *sorted_ids_ptr =
-    // gaussian_ids_sorted.contiguous().data_ptr<int32_t>(); int2 *bins_ptr =
-    // (int2 *) tile_bins.contiguous().data_ptr<int>(); float2 *xys_ptr =
-    // (float2 *) xys.contiguous().data_ptr<float>();
 
     bin_and_sort_gaussians(
         num_points,

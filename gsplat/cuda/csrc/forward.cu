@@ -380,7 +380,7 @@ __global__ void nd_rasterize_forward_kernel(
         }
         const float opac = opacities[g];
 
-        const float alpha = min(0.999f, opac * exp(-sigma));
+        const float alpha = min(0.999f, opac * __expf(-sigma));
 
         // break out conditions
         if (alpha < 1.f / 255.f) {
@@ -484,9 +484,8 @@ __global__ void rasterize_forward_kernel(
     int num_batches = (range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
     __shared__ int32_t id_batch[BLOCK_SIZE];
-    __shared__ float2 xy_batch[BLOCK_SIZE];
+    __shared__ float3 xy_opacity_batch[BLOCK_SIZE];
     __shared__ float3 conic_batch[BLOCK_SIZE];
-    __shared__ float opacity_batch[BLOCK_SIZE];
 
     // current visibility left to render
     float T = 1.f;
@@ -501,8 +500,7 @@ __global__ void rasterize_forward_kernel(
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
-        int num_done = __syncthreads_count(done);
-        if (num_done >= BLOCK_SIZE) {
+        if (__syncthreads_count(done) >= BLOCK_SIZE) {
             break;
         }
 
@@ -513,9 +511,10 @@ __global__ void rasterize_forward_kernel(
         if (idx < range.y) {
             int32_t g_id = gaussian_ids_sorted[idx];
             id_batch[tr] = g_id;
-            xy_batch[tr] = xys[g_id];
+            const float2 xy = xys[g_id];
+            const float opac = opacities[g_id];
+            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             conic_batch[tr] = conics[g_id];
-            opacity_batch[tr] = opacities[g_id];
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -525,13 +524,13 @@ __global__ void rasterize_forward_kernel(
         int batch_size = min(BLOCK_SIZE, range.y - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
             const float3 conic = conic_batch[t];
-            const float2 center = xy_batch[t];
-            const float opac = opacity_batch[t];
-            const float2 delta = {center.x - px, center.y - py};
+            const float3 xy_opac = xy_opacity_batch[t];
+            const float opac = xy_opac.z;
+            const float2 delta = {xy_opac.x - px, xy_opac.y - py};
             const float sigma = 0.5f * (conic.x * delta.x * delta.x +
                                         conic.z * delta.y * delta.y) +
                                 conic.y * delta.x * delta.y;
-            const float alpha = min(0.999f, opac * exp(-sigma));
+            const float alpha = min(0.999f, opac * __expf(-sigma));
             if (sigma < 0.f || alpha < 1.f / 255.f) {
                 continue;
             }
