@@ -212,9 +212,9 @@ __device__ void sh_coeffs_to_color_vjp(
 __global__ void compute_sh_forward_kernel(
     const unsigned num_points,
     const unsigned degree,
-    const float3 *viewdirs,
-    const float *coeffs,
-    float *colors
+    const float3* __restrict__ viewdirs,
+    const float* __restrict__ coeffs,
+    float* __restrict__ colors
 ) {
     unsigned idx = cg::this_grid().thread_rank();
     if (idx >= num_points) {
@@ -233,9 +233,9 @@ __global__ void compute_sh_forward_kernel(
 __global__ void compute_sh_backward_kernel(
     const unsigned num_points,
     const unsigned degree,
-    const float3 *viewdirs,
-    const float *v_colors,
-    float *v_coeffs
+    const float3* __restrict__ viewdirs,
+    const float* __restrict__ v_colors,
+    float* __restrict__ v_coeffs
 ) {
     unsigned idx = cg::this_grid().thread_rank();
     if (idx >= num_points) {

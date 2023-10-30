@@ -19,7 +19,7 @@
 namespace cg = cooperative_groups;
 
 __global__ void compute_cov2d_bounds_forward_kernel(
-    const unsigned num_pts, const float *covs2d, float *conics, float *radii
+    const unsigned num_pts, const float* __restrict__ covs2d, float* __restrict__ conics, float* __restrict__ radii
 ) {
     unsigned row = cg::this_grid().thread_rank();
     if (row >= num_pts) {
