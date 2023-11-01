@@ -13,6 +13,7 @@ URL = "https://github.com/nerfstudio-project/gsplat"  # TODO
 
 BUILD_NO_CUDA = os.getenv("BUILD_NO_CUDA", "0") == "1"
 WITH_SYMBOLS = os.getenv("WITH_SYMBOLS", "0") == "1"
+LINE_INFO = os.getenv("LINE_INFO", "0") == "1"
 
 
 def get_ext():
@@ -72,7 +73,9 @@ def get_extensions():
 
     nvcc_flags = os.getenv("NVCC_FLAGS", "")
     nvcc_flags = [] if nvcc_flags == "" else nvcc_flags.split(" ")
-    nvcc_flags += ["-O3"]
+    nvcc_flags += ["-O3", "--use_fast_math"]
+    if LINE_INFO:
+        nvcc_flags += ["-lineinfo"]
     if torch.version.hip:
         # USE_ROCM was added to later versions of PyTorch.
         # Define here to support older PyTorch versions as well:

@@ -13,22 +13,22 @@ namespace cg = cooperative_groups;
 // each thread processes one gaussian
 __global__ void project_gaussians_forward_kernel(
     const int num_points,
-    const float3 *means3d,
-    const float3 *scales,
+    const float3* __restrict__ means3d,
+    const float3* __restrict__ scales,
     const float glob_scale,
-    const float4 *quats,
-    const float *viewmat,
-    const float *projmat,
+    const float4* __restrict__ quats,
+    const float* __restrict__ viewmat,
+    const float* __restrict__ projmat,
     const float4 intrins,
     const dim3 img_size,
     const dim3 tile_bounds,
     const float clip_thresh,
-    float *covs3d,
-    float2 *xys,
-    float *depths,
-    int *radii,
-    float3 *conics,
-    int32_t *num_tiles_hit
+    float* __restrict__ covs3d,
+    float2* __restrict__ xys,
+    float* __restrict__ depths,
+    int* __restrict__ radii,
+    float3* __restrict__ conics,
+    int32_t* __restrict__ num_tiles_hit
 ) {
     unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
     if (idx >= num_points) {
@@ -144,13 +144,13 @@ void project_gaussians_forward_impl(
 // writes output to isect_ids and gaussian_ids
 __global__ void map_gaussian_to_intersects(
     const int num_points,
-    const float2 *xys,
-    const float *depths,
-    const int *radii,
-    const int32_t *cum_tiles_hit,
+    const float2* __restrict__ xys,
+    const float* __restrict__ depths,
+    const int* __restrict__ radii,
+    const int32_t* __restrict__ cum_tiles_hit,
     const dim3 tile_bounds,
-    int64_t *isect_ids,
-    int32_t *gaussian_ids
+    int64_t* __restrict__ isect_ids,
+    int32_t* __restrict__ gaussian_ids
 ) {
     unsigned idx = cg::this_grid().thread_rank();
     if (idx >= num_points)
@@ -184,7 +184,7 @@ __global__ void map_gaussian_to_intersects(
 // expect that intersection IDs are sorted by increasing tile ID
 // i.e. intersections of a tile are in contiguous chunks
 __global__ void get_tile_bin_edges(
-    const int num_intersects, const int64_t *isect_ids_sorted, int2 *tile_bins
+    const int num_intersects, const int64_t* __restrict__ isect_ids_sorted, int2* __restrict__ tile_bins
 ) {
     unsigned idx = cg::this_grid().thread_rank();
     if (idx >= num_intersects)
@@ -227,7 +227,7 @@ void compute_cumulative_intersects(
     cub::DeviceScan::InclusiveSum(
         sum_ws, sum_ws_bytes, num_tiles_hit, cum_tiles_hit, num_points
     );
-    cudaMemcpy(
+    cudaMemcpyAsync(
         &num_intersects,
         &(cum_tiles_hit[num_points - 1]),
         sizeof(int32_t),
@@ -331,16 +331,16 @@ __global__ void nd_rasterize_forward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
     const unsigned channels,
-    const int32_t *gaussian_ids_sorted,
-    const int2 *tile_bins,
-    const float2 *xys,
-    const float3 *conics,
-    const float *colors,
-    const float *opacities,
-    float *final_Ts,
-    int *final_index,
-    float *out_img,
-    const float *background
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float2* __restrict__ xys,
+    const float3* __restrict__ conics,
+    const float* __restrict__ colors,
+    const float* __restrict__ opacities,
+    float* __restrict__ final_Ts,
+    int* __restrict__ final_index,
+    float* __restrict__ out_img,
+    const float* __restrict__ background
 ) {
     // current naive implementation where tile data loading is redundant
     // TODO tile data should be shared between tile threads
@@ -380,7 +380,7 @@ __global__ void nd_rasterize_forward_kernel(
         }
         const float opac = opacities[g];
 
-        const float alpha = min(0.999f, opac * exp(-sigma));
+        const float alpha = min(0.999f, opac * __expf(-sigma));
 
         // break out conditions
         if (alpha < 1.f / 255.f) {
@@ -446,16 +446,16 @@ void nd_rasterize_forward_impl(
 __global__ void rasterize_forward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
-    const int32_t *gaussian_ids_sorted,
-    const int2 *tile_bins,
-    const float2 *xys,
-    const float3 *conics,
-    const float3 *colors,
-    const float *opacities,
-    float *final_Ts,
-    int *final_index,
-    float3 *out_img,
-    const float3 &background
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float2* __restrict__ xys,
+    const float3* __restrict__ conics,
+    const float3* __restrict__ colors,
+    const float* __restrict__ opacities,
+    float* __restrict__ final_Ts,
+    int* __restrict__ final_index,
+    float3* __restrict__ out_img,
+    const float3& __restrict__ background
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
@@ -484,9 +484,8 @@ __global__ void rasterize_forward_kernel(
     int num_batches = (range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
     __shared__ int32_t id_batch[BLOCK_SIZE];
-    __shared__ float2 xy_batch[BLOCK_SIZE];
+    __shared__ float3 xy_opacity_batch[BLOCK_SIZE];
     __shared__ float3 conic_batch[BLOCK_SIZE];
-    __shared__ float opacity_batch[BLOCK_SIZE];
 
     // current visibility left to render
     float T = 1.f;
@@ -501,8 +500,7 @@ __global__ void rasterize_forward_kernel(
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
-        int num_done = __syncthreads_count(done);
-        if (num_done >= BLOCK_SIZE) {
+        if (__syncthreads_count(done) >= BLOCK_SIZE) {
             break;
         }
 
@@ -513,9 +511,10 @@ __global__ void rasterize_forward_kernel(
         if (idx < range.y) {
             int32_t g_id = gaussian_ids_sorted[idx];
             id_batch[tr] = g_id;
-            xy_batch[tr] = xys[g_id];
+            const float2 xy = xys[g_id];
+            const float opac = opacities[g_id];
+            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             conic_batch[tr] = conics[g_id];
-            opacity_batch[tr] = opacities[g_id];
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -525,13 +524,13 @@ __global__ void rasterize_forward_kernel(
         int batch_size = min(BLOCK_SIZE, range.y - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
             const float3 conic = conic_batch[t];
-            const float2 center = xy_batch[t];
-            const float opac = opacity_batch[t];
-            const float2 delta = {center.x - px, center.y - py};
+            const float3 xy_opac = xy_opacity_batch[t];
+            const float opac = xy_opac.z;
+            const float2 delta = {xy_opac.x - px, xy_opac.y - py};
             const float sigma = 0.5f * (conic.x * delta.x * delta.x +
                                         conic.z * delta.y * delta.y) +
                                 conic.y * delta.x * delta.y;
-            const float alpha = min(0.999f, opac * exp(-sigma));
+            const float alpha = min(0.999f, opac * __expf(-sigma));
             if (sigma < 0.f || alpha < 1.f / 255.f) {
                 continue;
             }
@@ -602,9 +601,9 @@ void rasterize_forward_impl(
 
 // device helper to approximate projected 2d cov from 3d mean and cov
 __device__ float3 project_cov3d_ewa(
-    const float3 &mean3d,
-    const float *cov3d,
-    const float *viewmat,
+    const float3& __restrict__ mean3d,
+    const float* __restrict__ cov3d,
+    const float* __restrict__ viewmat,
     const float fx,
     const float fy,
     const float tan_fovx,

@@ -19,7 +19,7 @@
 namespace cg = cooperative_groups;
 
 __global__ void compute_cov2d_bounds_forward_kernel(
-    const unsigned num_pts, const float *covs2d, float *conics, float *radii
+    const unsigned num_pts, const float* __restrict__ covs2d, float* __restrict__ conics, float* __restrict__ radii
 ) {
     unsigned row = cg::this_grid().thread_rank();
     if (row >= num_pts) {
@@ -63,6 +63,7 @@ compute_cov2d_bounds_forward_tensor(const int num_pts, torch::Tensor &covs2d) {
 torch::Tensor compute_sh_forward_tensor(
     const unsigned num_points,
     const unsigned degree,
+    const unsigned degrees_to_use,
     torch::Tensor &viewdirs,
     torch::Tensor &coeffs
 ) {
@@ -77,6 +78,7 @@ torch::Tensor compute_sh_forward_tensor(
         N_THREADS>>>(
         num_points,
         degree,
+        degrees_to_use,
         (float3 *)viewdirs.contiguous().data_ptr<float>(),
         coeffs.contiguous().data_ptr<float>(),
         colors.contiguous().data_ptr<float>()
@@ -87,6 +89,7 @@ torch::Tensor compute_sh_forward_tensor(
 torch::Tensor compute_sh_backward_tensor(
     const unsigned num_points,
     const unsigned degree,
+    const unsigned degrees_to_use,
     torch::Tensor &viewdirs,
     torch::Tensor &v_colors
 ) {
@@ -100,18 +103,20 @@ torch::Tensor compute_sh_backward_tensor(
     }
     unsigned num_bases = num_sh_bases(degree);
     torch::Tensor v_coeffs =
-        torch::empty({num_points, num_bases, 3}, v_colors.options());
+        torch::zeros({num_points, num_bases, 3}, v_colors.options());
     compute_sh_backward_kernel<<<
         (num_points + N_THREADS - 1) / N_THREADS,
         N_THREADS>>>(
         num_points,
         degree,
+        degrees_to_use,
         (float3 *)viewdirs.contiguous().data_ptr<float>(),
         v_colors.contiguous().data_ptr<float>(),
         v_coeffs.contiguous().data_ptr<float>()
     );
     return v_coeffs;
 }
+
 
 std::tuple<
     torch::Tensor,
