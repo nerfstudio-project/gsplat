@@ -81,6 +81,8 @@ def get_extensions():
     else:
         nvcc_flags += ["--expt-relaxed-constexpr"]
     extra_compile_args["nvcc"] = nvcc_flags
+    if sys.platform == "win32":
+        extra_compile_args["nvcc"] += ["-DWIN32_LEAN_AND_MEAN"]
 
     extension = CUDAExtension(
         f"gsplat.csrc",
