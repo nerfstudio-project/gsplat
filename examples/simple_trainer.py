@@ -1,6 +1,6 @@
 import math
 import os
-import random
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -84,7 +84,9 @@ class SimpleTrainer:
         )
         mse_loss = torch.nn.MSELoss()
         frames = []
+        times = [0] * 3  # project, rasterize, backward
         for iter in range(iterations):
+            start = time.time()
             xys, depths, radii, conics, num_tiles_hit, cov3d = ProjectGaussians.apply(
                 self.means,
                 self.scales,
@@ -100,7 +102,9 @@ class SimpleTrainer:
                 self.W,
                 self.tile_bounds,
             )
-
+            torch.cuda.synchronize()
+            times[0] += time.time() - start
+            start = time.time()
             out_img = RasterizeGaussians.apply(
                 xys,
                 depths,
@@ -112,9 +116,14 @@ class SimpleTrainer:
                 self.H,
                 self.W,
             )
+            torch.cuda.synchronize()
+            times[1] += time.time() - start
             loss = mse_loss(out_img, self.gt_image)
             optimizer.zero_grad()
+            start = time.time()
             loss.backward()
+            torch.cuda.synchronize()
+            times[2] += time.time() - start
             optimizer.step()
             print(f"Iteration {iter + 1}/{iterations}, Loss: {loss.item()}")
 
@@ -133,6 +142,12 @@ class SimpleTrainer:
                 duration=5,
                 loop=0,
             )
+        print(
+            f"Total(s):\nProject: {times[0]:.3f}, Rasterize: {times[1]:.3f}, Backward: {times[2]:.3f}"
+        )
+        print(
+            f"Per step(s):\nProject: {times[0]/iterations:.5f}, Rasterize: {times[1]/iterations:.5f}, Backward: {times[2]/iterations:.5f}"
+        )
 
 
 def image_path_to_tensor(image_path: Path):
@@ -153,7 +168,6 @@ def main(
     iterations: int = 1000,
     lr: float = 0.01,
 ) -> None:
-
     if img_path:
         gt_image = image_path_to_tensor(img_path)
     else:
