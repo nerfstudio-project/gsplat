@@ -212,6 +212,7 @@ __device__ void sh_coeffs_to_color_vjp(
 __global__ void compute_sh_forward_kernel(
     const unsigned num_points,
     const unsigned degree,
+    const unsigned degrees_to_use,
     const float3* __restrict__ viewdirs,
     const float* __restrict__ coeffs,
     float* __restrict__ colors
@@ -226,13 +227,14 @@ __global__ void compute_sh_forward_kernel(
     unsigned idx_col = num_channels * idx;
 
     sh_coeffs_to_color(
-        degree, viewdirs[idx], &(coeffs[idx_sh]), &(colors[idx_col])
+        degrees_to_use, viewdirs[idx], &(coeffs[idx_sh]), &(colors[idx_col])
     );
 }
 
 __global__ void compute_sh_backward_kernel(
     const unsigned num_points,
     const unsigned degree,
+    const unsigned degrees_to_use,
     const float3* __restrict__ viewdirs,
     const float* __restrict__ v_colors,
     float* __restrict__ v_coeffs
@@ -247,6 +249,6 @@ __global__ void compute_sh_backward_kernel(
     unsigned idx_col = num_channels * idx;
 
     sh_coeffs_to_color_vjp(
-        degree, viewdirs[idx], &(v_colors[idx_col]), &(v_coeffs[idx_sh])
+        degrees_to_use, viewdirs[idx], &(v_colors[idx_col]), &(v_coeffs[idx_sh])
     );
 }
