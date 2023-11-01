@@ -11,7 +11,7 @@ import gsplat.cuda as _C
 
 
 class NDRasterizeGaussians(Function):
-    """Rasterizes 2D gaussians by sorting and binning gaussian intersections for each tile and returns an output image using alpha-compositing.
+    """Rasterizes 2D gaussians by sorting and binning gaussian intersections for each tile and returns an N-dimensional output using alpha-compositing.
 
     Args:
         xys (Tensor): xy coords of 2D gaussians.
@@ -19,7 +19,7 @@ class NDRasterizeGaussians(Function):
         radii (Tensor): radii of 2D gaussians
         conics (Tensor): conics (inverse of covariance) of 2D gaussians in upper triangular format
         num_tiles_hit (Tensor): number of tiles hit per gaussian
-        colors (Tensor): colors associated with the gaussians.
+        colors (Tensor): N-dimensional features associated with the gaussians.
         opacity (Tensor): opacity associated with the gaussians.
         img_height (int): height of the rendered image.
         img_width (int): width of the rendered image.
@@ -28,7 +28,7 @@ class NDRasterizeGaussians(Function):
     Returns:
         A Tensor:
 
-        - **out_img** (Tensor): the rendered output image.
+        - **out_img** (Tensor): N-dimensional rendered output image.
     """
 
     @staticmethod

@@ -173,8 +173,9 @@ def project_cov3d_ewa(
     lim_x = 1.3 * torch.tensor([tan_fovx], device=mean3d.device)
     lim_y = 1.3 * torch.tensor([tan_fovy], device=mean3d.device)
 
-    t[..., 0] = t[..., 2] * torch.min(lim_x, torch.max(-lim_x, t[..., 0] / t[..., 2]))
-    t[..., 1] = t[..., 2] * torch.min(lim_y, torch.max(-lim_y, t[..., 1] / t[..., 2]))
+    min_lim_x = t[..., 2] * torch.min(lim_x, torch.max(-lim_x, t[..., 0] / t[..., 2]))
+    min_lim_y = t[..., 2] * torch.min(lim_y, torch.max(-lim_y, t[..., 1] / t[..., 2]))
+    t = torch.cat([min_lim_x[..., None], min_lim_y[..., None], t[..., 2, None]], dim=-1)
 
     rz = 1.0 / t[..., 2]  # (...,)
     rz2 = rz**2  # (...,)

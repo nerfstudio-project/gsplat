@@ -7,6 +7,7 @@ from .get_tile_bin_edges import GetTileBinEdges
 from .map_gaussian_to_intersects import MapGaussiansToIntersects
 from .sh import SphericalHarmonics
 from .rasterize_forward_kernel import RasterizeForwardKernel
+from .nd_rasterize import NDRasterizeGaussians
 from .version import __version__
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "MapGaussiansToIntersects",
     "SphericalHarmonics",
     "RasterizeForwardKernel",
+    "NDRasterizeGaussians",
 ]
