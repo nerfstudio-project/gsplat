@@ -145,7 +145,6 @@ class SimpleTrainer:
         print(
             f"Total(s):\nProject: {times[0]:.3f}, Rasterize: {times[1]:.3f}, Backward: {times[2]:.3f}"
         )
-        # print per-step time too with only 3 decimal precision
         print(
             f"Per step(s):\nProject: {times[0]/iterations:.5f}, Rasterize: {times[1]/iterations:.5f}, Backward: {times[2]/iterations:.5f}"
         )
