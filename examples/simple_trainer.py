@@ -84,7 +84,7 @@ class SimpleTrainer:
         )
         mse_loss = torch.nn.MSELoss()
         frames = []
-        times = [0]* 3 # project, rasterize, backward
+        times = [0] * 3  # project, rasterize, backward
         for iter in range(iterations):
             start = time.time()
             xys, depths, radii, conics, num_tiles_hit, cov3d = ProjectGaussians.apply(
@@ -142,9 +142,14 @@ class SimpleTrainer:
                 duration=5,
                 loop=0,
             )
-        print(f"Total(s):\nProject: {times[0]:.3f}, Rasterize: {times[1]:.3f}, Backward: {times[2]:.3f}")
+        print(
+            f"Total(s):\nProject: {times[0]:.3f}, Rasterize: {times[1]:.3f}, Backward: {times[2]:.3f}"
+        )
         # print per-step time too with only 3 decimal precision
-        print(f"Per step(s):\nProject: {times[0]/iterations:.5f}, Rasterize: {times[1]/iterations:.5f}, Backward: {times[2]/iterations:.5f}")
+        print(
+            f"Per step(s):\nProject: {times[0]/iterations:.5f}, Rasterize: {times[1]/iterations:.5f}, Backward: {times[2]/iterations:.5f}"
+        )
+
 
 def image_path_to_tensor(image_path: Path):
     import torchvision.transforms as transforms
@@ -164,7 +169,6 @@ def main(
     iterations: int = 1000,
     lr: float = 0.01,
 ) -> None:
-
     if img_path:
         gt_image = image_path_to_tensor(img_path)
     else:

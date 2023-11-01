@@ -18,6 +18,7 @@ def num_sh_bases(degree: int):
         return 16
     return 25
 
+
 def deg_from_sh(num_bases: int):
     if num_bases == 1:
         return 0
@@ -27,9 +28,10 @@ def deg_from_sh(num_bases: int):
         return 2
     if num_bases == 16:
         return 3
-    if num_bases ==25:
+    if num_bases == 25:
         return 4
     assert False, "Invalid number of SH bases"
+
 
 class SphericalHarmonics(Function):
     """Compute spherical harmonics
@@ -53,7 +55,9 @@ class SphericalHarmonics(Function):
         degree = deg_from_sh(coeffs.shape[-2])
         ctx.degree = degree
         ctx.save_for_backward(viewdirs)
-        return _C.compute_sh_forward(num_points, degree, degrees_to_use, viewdirs, coeffs)
+        return _C.compute_sh_forward(
+            num_points, degree, degrees_to_use, viewdirs, coeffs
+        )
 
     @staticmethod
     def backward(ctx, v_colors: Float[Tensor, "*batch 3"]):
@@ -64,5 +68,7 @@ class SphericalHarmonics(Function):
         return (
             None,
             None,
-            _C.compute_sh_backward(num_points, degree, degrees_to_use, viewdirs, v_colors),
+            _C.compute_sh_backward(
+                num_points, degree, degrees_to_use, viewdirs, v_colors
+            ),
         )
