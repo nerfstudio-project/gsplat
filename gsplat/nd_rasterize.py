@@ -99,7 +99,7 @@ class NDRasterizeGaussians(Function):
     def backward(ctx, v_out_img, v_out_alpha=None):
         img_height = ctx.img_height
         img_width = ctx.img_width
-        
+
         if v_out_alpha is None:
             v_out_alpha = torch.zeros_like(v_out_img[..., 0])
 
