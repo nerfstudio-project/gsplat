@@ -309,7 +309,8 @@ std::
         const torch::Tensor &background,
         const torch::Tensor &final_Ts,
         const torch::Tensor &final_idx,
-        const torch::Tensor &v_output // dL_dout_color
+        const torch::Tensor &v_output, // dL_dout_color
+        const torch::Tensor &v_output_alpha // dL_dout_alpha
     ) {
 
     CHECK_INPUT(xys);
@@ -364,6 +365,7 @@ std::
         final_Ts.contiguous().data_ptr<float>(),
         final_idx.contiguous().data_ptr<int>(),
         v_output.contiguous().data_ptr<float>(),
+        v_output_alpha.contiguous().data_ptr<float>(),
         (float2 *)v_xy.contiguous().data_ptr<float>(),
         (float3 *)v_conic.contiguous().data_ptr<float>(),
         v_colors.contiguous().data_ptr<float>(),
@@ -393,7 +395,8 @@ std::
         const torch::Tensor &background,
         const torch::Tensor &final_Ts,
         const torch::Tensor &final_idx,
-        const torch::Tensor &v_output // dL_dout_color
+        const torch::Tensor &v_output, // dL_dout_color
+        const torch::Tensor &v_output_alpha // dL_dout_alpha
     ) {
 
     CHECK_INPUT(xys);
@@ -437,6 +440,7 @@ std::
         final_Ts.contiguous().data_ptr<float>(),
         final_idx.contiguous().data_ptr<int>(),
         (float3 *)v_output.contiguous().data_ptr<float>(),
+        v_output_alpha.contiguous().data_ptr<float>(),
         (float2 *)v_xy.contiguous().data_ptr<float>(),
         (float3 *)v_conic.contiguous().data_ptr<float>(),
         (float3 *)v_colors.contiguous().data_ptr<float>(),

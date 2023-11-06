@@ -158,7 +158,7 @@ class SimpleTrainer:
         frames = []
         for i in range(iterations):
             optimizer.zero_grad()
-            slow_out = self.forward_slow()
+            slow_out, _ = self.forward_slow()
 
             loss = mse_loss(slow_out, self.gt_image)
             loss.backward()
@@ -171,7 +171,7 @@ class SimpleTrainer:
             ]
 
             optimizer.zero_grad()
-            new_out = self.forward_new()
+            new_out, _ = self.forward_new()
             loss = mse_loss(new_out, self.gt_image)
             loss.backward()
 

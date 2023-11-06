@@ -69,7 +69,8 @@ std::
         const torch::Tensor &background,
         const torch::Tensor &final_Ts,
         const torch::Tensor &final_idx,
-        const torch::Tensor &v_output // dL_dout_color
+        const torch::Tensor &v_output, // dL_dout_color
+        const torch::Tensor &v_output_alpha // dL_dout_alpha
     );
 
 std::
@@ -91,5 +92,6 @@ std::
         const torch::Tensor &background,
         const torch::Tensor &final_Ts,
         const torch::Tensor &final_idx,
-        const torch::Tensor &v_output // dL_dout_color
+        const torch::Tensor &v_output, // dL_dout_color
+        const torch::Tensor &v_output_alpha // dL_dout_alpha
     );
