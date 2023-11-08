@@ -23,6 +23,7 @@ def test_project_gaussians_forward():
     projmat = torch.eye(4, device=device)
     fx, fy = 3.0, 3.0
     H, W = 512, 512
+    cy, cx = H // 2, W // 2
     clip_thresh = 0.01
 
     BLOCK_X, BLOCK_Y = 16, 16
@@ -38,6 +39,8 @@ def test_project_gaussians_forward():
         projmat,
         fx,
         fy,
+        cx,
+        cy,
         H,
         W,
         tile_bounds,
@@ -61,11 +64,12 @@ def test_project_gaussians_forward():
         projmat,
         fx,
         fy,
+        cx,
+        cy,
         (H, W),
         tile_bounds,
         clip_thresh,
     )
-
     torch.testing.assert_close(
         cov3d[_masks],
         _cov3d.view(-1, 9)[_masks][:, [0, 1, 2, 4, 5, 8]],
