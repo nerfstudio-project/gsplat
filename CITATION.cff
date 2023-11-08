@@ -28,4 +28,3 @@ abstract: >-
   projection, sorting, and alpha compositing of gaussians
   and their associated backward passes for inverse
   rendering.
-license: Apache-2.0
