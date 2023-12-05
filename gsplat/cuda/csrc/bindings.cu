@@ -6,8 +6,6 @@
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 #include <cstdio>
-#include <cub/cub.cuh>
-#include <cub/device/device_radix_sort.cuh>
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
