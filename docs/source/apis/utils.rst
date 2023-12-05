@@ -16,5 +16,3 @@ In addition to the main projection and rasterization functions, a few CUDA kerne
 .. autoclass:: MapGaussiansToIntersects
 
 .. autoclass:: ComputeCumulativeIntersects
-
-.. autoclass:: RasterizeForwardKernel

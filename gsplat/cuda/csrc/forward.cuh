@@ -30,22 +30,6 @@ void compute_cumulative_intersects(
     int32_t *cum_tiles_hit
 );
 
-// bin and sort gaussians by tile and depth
-void bin_and_sort_gaussians(
-    const int num_points,
-    const int num_intersects,
-    const float2 *xys,
-    const float *depths,
-    const int *radii,
-    const int32_t *cum_tiles_hit,
-    const dim3 tile_bounds,
-    int64_t *isect_ids_unsorted,
-    int32_t *gaussian_ids_unsorted,
-    int64_t *isect_ids_sorted,
-    int32_t *gaussian_ids_sorted,
-    int2 *tile_bins
-);
-
 // compute output color image from binned and sorted gaussians
 void rasterize_forward_impl(
     const dim3 tile_bounds,
@@ -125,4 +109,20 @@ __global__ void rasterize_forward_kernel(
     int* __restrict__ final_index,
     float3* __restrict__ out_img,
     const float3& __restrict__ background
+);
+
+__global__ void nd_rasterize_forward_kernel(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const unsigned channels,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float2* __restrict__ xys,
+    const float3* __restrict__ conics,
+    const float* __restrict__ colors,
+    const float* __restrict__ opacities,
+    float* __restrict__ final_Ts,
+    int* __restrict__ final_index,
+    float* __restrict__ out_img,
+    const float* __restrict__ background
 );
