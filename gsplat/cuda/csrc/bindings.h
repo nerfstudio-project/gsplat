@@ -16,7 +16,7 @@
 std::tuple<
     torch::Tensor, // output conics
     torch::Tensor> // output radii
-compute_cov2d_bounds_forward_tensor(const int num_pts, torch::Tensor &A);
+compute_cov2d_bounds_tensor(const int num_pts, torch::Tensor &A);
 
 torch::Tensor compute_sh_forward_tensor(
     unsigned num_points,
@@ -93,6 +93,7 @@ std::tuple<torch::Tensor, torch::Tensor> compute_cumulative_intersects_tensor(
 
 std::tuple<torch::Tensor, torch::Tensor> map_gaussian_to_intersects_tensor(
     const int num_points,
+    const int num_intersects,
     const torch::Tensor &xys,
     const torch::Tensor &depths,
     const torch::Tensor &radii,
@@ -108,24 +109,8 @@ torch::Tensor get_tile_bin_edges_tensor(
 std::tuple<
     torch::Tensor,
     torch::Tensor,
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor>
-bin_and_sort_gaussians_tensor(
-    const int num_points,
-    const int num_intersects,
-    const torch::Tensor &xys,
-    const torch::Tensor &depths,
-    const torch::Tensor &radii,
-    const torch::Tensor &cum_tiles_hit,
-    const std::tuple<int, int, int> tile_bounds
-);
-
-std::tuple<
-    torch::Tensor,
-    torch::Tensor,
     torch::Tensor
-> rasterize_forward_kernel_tensor(
+> rasterize_forward_tensor(
     const std::tuple<int, int, int> tile_bounds,
     const std::tuple<int, int, int> block,
     const std::tuple<int, int, int> img_size,
@@ -137,3 +122,65 @@ std::tuple<
     const torch::Tensor &opacities,
     const torch::Tensor &background
 );
+
+std::tuple<
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor
+> nd_rasterize_forward_tensor(
+    const std::tuple<int, int, int> tile_bounds,
+    const std::tuple<int, int, int> block,
+    const std::tuple<int, int, int> img_size,
+    const torch::Tensor &gaussian_ids_sorted,
+    const torch::Tensor &tile_bins,
+    const torch::Tensor &xys,
+    const torch::Tensor &conics,
+    const torch::Tensor &colors,
+    const torch::Tensor &opacities,
+    const torch::Tensor &background
+);
+
+
+std::
+    tuple<
+        torch::Tensor, // dL_dxy
+        torch::Tensor, // dL_dconic
+        torch::Tensor, // dL_dcolors
+        torch::Tensor  // dL_dopacity
+        >
+    nd_rasterize_backward_tensor(
+        const unsigned img_height,
+        const unsigned img_width,
+        const torch::Tensor &gaussians_ids_sorted,
+        const torch::Tensor &tile_bins,
+        const torch::Tensor &xys,
+        const torch::Tensor &conics,
+        const torch::Tensor &colors,
+        const torch::Tensor &opacities,
+        const torch::Tensor &background,
+        const torch::Tensor &final_Ts,
+        const torch::Tensor &final_idx,
+        const torch::Tensor &v_output // dL_dout_color
+    );
+
+std::
+    tuple<
+        torch::Tensor, // dL_dxy
+        torch::Tensor, // dL_dconic
+        torch::Tensor, // dL_dcolors
+        torch::Tensor  // dL_dopacity
+        >
+    rasterize_backward_tensor(
+        const unsigned img_height,
+        const unsigned img_width,
+        const torch::Tensor &gaussians_ids_sorted,
+        const torch::Tensor &tile_bins,
+        const torch::Tensor &xys,
+        const torch::Tensor &conics,
+        const torch::Tensor &colors,
+        const torch::Tensor &opacities,
+        const torch::Tensor &background,
+        const torch::Tensor &final_Ts,
+        const torch::Tensor &final_idx,
+        const torch::Tensor &v_output // dL_dout_color
+    );

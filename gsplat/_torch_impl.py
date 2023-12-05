@@ -351,25 +351,7 @@ def get_tile_bin_edges(num_intersects, isect_ids_sorted):
     return tile_bins
 
 
-def bin_and_sort_gaussians(
-    num_points, num_intersects, xys, depths, radii, cum_tiles_hit, tile_bounds
-):
-    isect_ids, gaussian_ids = map_gaussian_to_intersects(
-        num_points, xys, depths, radii, cum_tiles_hit, tile_bounds
-    )
-
-    # Sorting isect_ids_unsorted
-    sorted_values, sorted_indices = torch.sort(isect_ids)
-
-    isect_ids_sorted = sorted_values
-    gaussian_ids_sorted = torch.gather(gaussian_ids, 0, sorted_indices)
-
-    tile_bins = get_tile_bin_edges(num_intersects, isect_ids_sorted)
-
-    return isect_ids, gaussian_ids, isect_ids_sorted, gaussian_ids_sorted, tile_bins
-
-
-def rasterize_forward_kernel(
+def rasterize_forward(
     tile_bounds,
     block,
     img_size,
