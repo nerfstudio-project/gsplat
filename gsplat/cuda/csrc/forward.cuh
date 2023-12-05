@@ -23,13 +23,6 @@ void project_gaussians_forward_impl(
     int32_t *num_tiles_hit
 );
 
-void compute_cumulative_intersects(
-    const int num_points,
-    const int32_t *num_tiles_hit,
-    int32_t &num_intersects,
-    int32_t *cum_tiles_hit
-);
-
 // compute output color image from binned and sorted gaussians
 void rasterize_forward_impl(
     const dim3 tile_bounds,

@@ -267,34 +267,6 @@ project_gaussians_backward_tensor(
     return std::make_tuple(v_cov2d, v_cov3d, v_mean3d, v_scale, v_quat);
 }
 
-std::tuple<torch::Tensor, torch::Tensor> compute_cumulative_intersects_tensor(
-    const int num_points, const torch::Tensor &num_tiles_hit
-) {
-    // ref:
-    // https://nvlabs.github.io/cub/structcub_1_1_device_scan.html#a9416ac1ea26f9fde669d83ddc883795a
-    // allocate sum workspace
-    CHECK_INPUT(num_tiles_hit);
-
-    torch::Tensor cum_tiles_hit = torch::zeros(
-        {num_points}, num_tiles_hit.options().dtype(torch::kInt32)
-    );
-
-    int32_t num_intersects;
-    compute_cumulative_intersects(
-        num_points,
-        num_tiles_hit.contiguous().data_ptr<int32_t>(),
-        num_intersects,
-        cum_tiles_hit.contiguous().data_ptr<int32_t>()
-    );
-
-    return std::make_tuple(
-        torch::tensor(
-            num_intersects, num_tiles_hit.options().dtype(torch::kInt32)
-        ),
-        cum_tiles_hit
-    );
-}
-
 std::tuple<torch::Tensor, torch::Tensor> map_gaussian_to_intersects_tensor(
     const int num_points,
     const int num_intersects,

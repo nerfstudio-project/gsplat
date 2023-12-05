@@ -207,35 +207,6 @@ __global__ void get_tile_bin_edges(
     }
 }
 
-// launch on-device prefix sum to get the cumulative number of tiles for
-// gaussians
-void compute_cumulative_intersects(
-    const int num_points,
-    const int32_t *num_tiles_hit,
-    int32_t &num_intersects,
-    int32_t *cum_tiles_hit
-) {
-    // ref:
-    // https://nvlabs.github.io/cub/structcub_1_1_device_scan.html#a9416ac1ea26f9fde669d83ddc883795a
-    // allocate sum workspace
-    void *sum_ws = nullptr;
-    size_t sum_ws_bytes;
-    cub::DeviceScan::InclusiveSum(
-        sum_ws, sum_ws_bytes, num_tiles_hit, cum_tiles_hit, num_points
-    );
-    cudaMalloc(&sum_ws, sum_ws_bytes);
-    cub::DeviceScan::InclusiveSum(
-        sum_ws, sum_ws_bytes, num_tiles_hit, cum_tiles_hit, num_points
-    );
-    cudaMemcpyAsync(
-        &num_intersects,
-        &(cum_tiles_hit[num_points - 1]),
-        sizeof(int32_t),
-        cudaMemcpyDeviceToHost
-    );
-    cudaFree(sum_ws);
-}
-
 // kernel function for rasterizing each tile
 // each thread treats a single pixel
 // each thread group uses the same gaussian data in a tile
