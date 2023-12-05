@@ -55,7 +55,7 @@ class RasterizeGaussians(Function):
                 background.shape[0] == colors.shape[-1]
             ), f"incorrect shape of background color tensor, expected shape {colors.shape[-1]}"
         else:
-            background = torch.ones(3, dtype=torch.float32)
+            background = torch.ones(3, dtype=torch.float32, device=colors.device)
 
         if xys.ndimension() != 2 or xys.size(1) != 2:
             raise ValueError("xys must have dimensions (N, 2)")
