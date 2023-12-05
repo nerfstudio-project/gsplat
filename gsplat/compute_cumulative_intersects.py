@@ -7,6 +7,7 @@ from torch import Tensor
 from torch.autograd import Function
 import torch
 
+
 class ComputeCumulativeIntersects(Function):
     """Computes cumulative intersections of gaussians. This is useful for creating unique gaussian IDs and for sorting.
 

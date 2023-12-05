@@ -64,6 +64,7 @@ class BinAndSortGaussians(Function):
     def backward(ctx: Any, *grad_outputs: Any) -> Any:
         raise NotImplementedError
 
+
 def bin_and_sort_gaussians(
     num_points: int,
     num_intersects: int,

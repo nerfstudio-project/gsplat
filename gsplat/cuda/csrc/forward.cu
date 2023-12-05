@@ -3,8 +3,6 @@
 #include <algorithm>
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
-#include <cub/cub.cuh>
-#include <cub/device/device_radix_sort.cuh>
 #include <iostream>
 
 namespace cg = cooperative_groups;

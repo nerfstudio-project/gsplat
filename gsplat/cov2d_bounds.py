@@ -31,9 +31,7 @@ class ComputeCov2dBounds(Function):
         ), f"Expected input cov2d to be of shape (*batch, 3) (upper triangular values), but got {tuple(cov2d.shape)}"
         num_pts = cov2d.shape[0]
         assert num_pts > 0
-        conic, radius = _C.compute_cov2d_bounds(
-            num_pts, cov2d.contiguous().cuda()
-        )
+        conic, radius = _C.compute_cov2d_bounds(num_pts, cov2d.contiguous().cuda())
         return (conic, radius)
 
     @staticmethod

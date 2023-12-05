@@ -76,7 +76,9 @@ class NDRasterizeGaussians(Function):
         img_size = (img_width, img_height, 1)
         num_tiles = tile_bounds[0] * tile_bounds[1]
 
-        num_intersects, cum_tiles_hit = compute_cumulative_intersects(num_points, num_tiles_hit)
+        num_intersects, cum_tiles_hit = compute_cumulative_intersects(
+            num_points, num_tiles_hit
+        )
 
         (
             isect_ids_unsorted,

@@ -11,6 +11,7 @@ import gsplat.cuda as _C
 from .bin_and_sort_gaussians import bin_and_sort_gaussians
 from .compute_cumulative_intersects import compute_cumulative_intersects
 
+
 class RasterizeGaussians(Function):
     """Rasterizes 2D gaussians by sorting and binning gaussian intersections for each tile and returns an output image using alpha-compositing.
 
@@ -68,12 +69,14 @@ class RasterizeGaussians(Function):
         tile_bounds = (
             (img_width + BLOCK_X - 1) // BLOCK_X,
             (img_height + BLOCK_Y - 1) // BLOCK_Y,
-            1
+            1,
         )
         block = (BLOCK_X, BLOCK_Y, 1)
         img_size = (img_width, img_height, 1)
 
-        num_intersects, cum_tiles_hit = compute_cumulative_intersects(num_points, num_tiles_hit)
+        num_intersects, cum_tiles_hit = compute_cumulative_intersects(
+            num_points, num_tiles_hit
+        )
 
         (
             isect_ids_unsorted,
