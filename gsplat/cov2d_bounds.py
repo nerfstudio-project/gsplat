@@ -2,7 +2,6 @@
 
 from typing import Any, Tuple
 
-import torch
 from jaxtyping import Float
 from torch import Tensor
 from torch.autograd import Function
