@@ -167,7 +167,9 @@ project_gaussians_forward_tensor(
     torch::Tensor num_tiles_hit_d =
         torch::zeros({num_points}, means3d.options().dtype(torch::kInt32));
 
-    project_gaussians_forward_impl(
+    project_gaussians_forward_kernel<<<
+        (num_points + N_THREADS - 1) / N_THREADS,
+        N_THREADS>>>(
         num_points,
         (float3 *)means3d.contiguous().data_ptr<float>(),
         (float3 *)scales.contiguous().data_ptr<float>(),
@@ -240,7 +242,9 @@ project_gaussians_backward_tensor(
     torch::Tensor v_quat =
         torch::zeros({num_points, 4}, means3d.options().dtype(torch::kFloat32));
 
-    project_gaussians_backward_impl(
+    project_gaussians_backward_kernel<<<
+        (num_points + N_THREADS - 1) / N_THREADS,
+        N_THREADS>>>(
         num_points,
         (float3 *)means3d.contiguous().data_ptr<float>(),
         (float3 *)scales.contiguous().data_ptr<float>(),
@@ -524,9 +528,8 @@ std::
         workspace = torch::zeros({0}, xys.options().dtype(torch::kFloat32));
     }
 
-    nd_rasterize_backward_impl(
+    nd_rasterize_backward_kernel<<<tile_bounds, block>>>(
         tile_bounds,
-        block,
         img_size,
         channels,
         gaussians_ids_sorted.contiguous().data_ptr<int>(),
@@ -598,9 +601,8 @@ std::
         torch::zeros({num_points, channels}, xys.options());
     torch::Tensor v_opacity = torch::zeros({num_points, 1}, xys.options());
 
-    rasterize_backward_impl(
+    rasterize_backward_kernel<<<tile_bounds, block>>>(
         tile_bounds,
-        block,
         img_size,
         gaussians_ids_sorted.contiguous().data_ptr<int>(),
         (int2 *)tile_bins.contiguous().data_ptr<int>(),

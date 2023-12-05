@@ -97,49 +97,6 @@ __global__ void project_gaussians_forward_kernel(
     // );
 }
 
-// host function to launch the projection in parallel on device
-void project_gaussians_forward_impl(
-    const int num_points,
-    const float3 *means3d,
-    const float3 *scales,
-    const float glob_scale,
-    const float4 *quats,
-    const float *viewmat,
-    const float *projmat,
-    const float4 intrins,
-    const dim3 img_size,
-    const dim3 tile_bounds,
-    const float clip_thresh,
-    float *covs3d,
-    float2 *xys,
-    float *depths,
-    int *radii,
-    float3 *conics,
-    int *num_tiles_hit
-) {
-    project_gaussians_forward_kernel<<<
-        (num_points + N_THREADS - 1) / N_THREADS,
-        N_THREADS>>>(
-        num_points,
-        means3d,
-        scales,
-        glob_scale,
-        quats,
-        viewmat,
-        projmat,
-        intrins,
-        img_size,
-        tile_bounds,
-        clip_thresh,
-        covs3d,
-        xys,
-        depths,
-        radii,
-        conics,
-        num_tiles_hit
-    );
-}
-
 // kernel to map each intersection from tile ID and depth to a gaussian
 // writes output to isect_ids and gaussian_ids
 __global__ void map_gaussian_to_intersects(
@@ -292,40 +249,6 @@ __global__ void nd_rasterize_forward(
     }
 }
 
-// host function to launch parallel rasterization of sorted gaussians on device
-void nd_rasterize_forward_impl(
-    const dim3 tile_bounds,
-    const dim3 block,
-    const dim3 img_size,
-    const unsigned channels,
-    const int32_t *gaussian_ids_sorted,
-    const int2 *tile_bins,
-    const float2 *xys,
-    const float3 *conics,
-    const float *colors,
-    const float *opacities,
-    float *final_Ts,
-    int *final_index,
-    float *out_img,
-    const float *background
-) {
-    nd_rasterize_forward<<<tile_bounds, block>>>(
-        tile_bounds,
-        img_size,
-        channels,
-        gaussian_ids_sorted,
-        tile_bins,
-        xys,
-        conics,
-        colors,
-        opacities,
-        final_Ts,
-        final_index,
-        out_img,
-        background
-    );
-}
-
 __global__ void rasterize_forward(
     const dim3 tile_bounds,
     const dim3 img_size,
@@ -448,38 +371,6 @@ __global__ void rasterize_forward(
         final_color.z = pix_out.z + T * background.z;
         out_img[pix_id] = final_color;
     }
-}
-
-// host function to launch parallel rasterization of sorted gaussians on device
-void rasterize_forward_impl(
-    const dim3 tile_bounds,
-    const dim3 block,
-    const dim3 img_size,
-    const int32_t *gaussian_ids_sorted,
-    const int2 *tile_bins,
-    const float2 *xys,
-    const float3 *conics,
-    const float3 *colors,
-    const float *opacities,
-    float *final_Ts,
-    int *final_index,
-    float3 *out_img,
-    const float3 &background
-) {
-    rasterize_forward<<<tile_bounds, block>>>(
-        tile_bounds,
-        img_size,
-        gaussian_ids_sorted,
-        tile_bins,
-        xys,
-        conics,
-        colors,
-        opacities,
-        final_Ts,
-        final_index,
-        out_img,
-        background
-    );
 }
 
 // device helper to approximate projected 2d cov from 3d mean and cov
