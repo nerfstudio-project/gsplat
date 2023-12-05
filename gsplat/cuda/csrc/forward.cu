@@ -210,7 +210,7 @@ __global__ void get_tile_bin_edges(
 // kernel function for rasterizing each tile
 // each thread treats a single pixel
 // each thread group uses the same gaussian data in a tile
-__global__ void nd_rasterize_forward_kernel(
+__global__ void nd_rasterize_forward(
     const dim3 tile_bounds,
     const dim3 img_size,
     const unsigned channels,
@@ -309,7 +309,7 @@ void nd_rasterize_forward_impl(
     float *out_img,
     const float *background
 ) {
-    nd_rasterize_forward_kernel<<<tile_bounds, block>>>(
+    nd_rasterize_forward<<<tile_bounds, block>>>(
         tile_bounds,
         img_size,
         channels,
@@ -326,7 +326,7 @@ void nd_rasterize_forward_impl(
     );
 }
 
-__global__ void rasterize_forward_kernel(
+__global__ void rasterize_forward(
     const dim3 tile_bounds,
     const dim3 img_size,
     const int32_t* __restrict__ gaussian_ids_sorted,
@@ -466,7 +466,7 @@ void rasterize_forward_impl(
     float3 *out_img,
     const float3 &background
 ) {
-    rasterize_forward_kernel<<<tile_bounds, block>>>(
+    rasterize_forward<<<tile_bounds, block>>>(
         tile_bounds,
         img_size,
         gaussian_ids_sorted,

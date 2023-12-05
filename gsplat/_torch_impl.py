@@ -351,7 +351,7 @@ def get_tile_bin_edges(num_intersects, isect_ids_sorted):
     return tile_bins
 
 
-def rasterize_forward_kernel(
+def rasterize_forward(
     tile_bounds,
     block,
     img_size,

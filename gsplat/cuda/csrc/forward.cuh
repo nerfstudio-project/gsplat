@@ -89,7 +89,7 @@ __global__ void get_tile_bin_edges(
     const int num_intersects, const int64_t* __restrict__ isect_ids_sorted, int2* __restrict__ tile_bins
 );
 
-__global__ void rasterize_forward_kernel(
+__global__ void rasterize_forward(
     const dim3 tile_bounds,
     const dim3 img_size,
     const int32_t* __restrict__ gaussian_ids_sorted,
@@ -104,7 +104,7 @@ __global__ void rasterize_forward_kernel(
     const float3& __restrict__ background
 );
 
-__global__ void nd_rasterize_forward_kernel(
+__global__ void nd_rasterize_forward(
     const dim3 tile_bounds,
     const dim3 img_size,
     const unsigned channels,

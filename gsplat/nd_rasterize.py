@@ -88,7 +88,7 @@ class NDRasterizeGaussians(Function):
             num_points, num_intersects, xys, depths, radii, cum_tiles_hit, tile_bounds
         )
 
-        out_img, final_Ts, final_idx = _C.nd_rasterize_forward_kernel(
+        out_img, final_Ts, final_idx = _C.nd_rasterize_forward(
             tile_bounds,
             block,
             img_size,
