@@ -8,6 +8,8 @@ from torch import Tensor
 from torch.autograd import Function
 
 import gsplat.cuda as _C
+from .bin_and_sort_gaussians import bin_and_sort_gaussians
+from .compute_cumulative_intersects import compute_cumulative_intersects
 
 
 class NDRasterizeGaussians(Function):
@@ -55,27 +57,51 @@ class NDRasterizeGaussians(Function):
                 background.shape[0] == colors.shape[-1]
             ), f"incorrect shape of background color tensor, expected shape {colors.shape[-1]}"
         else:
-            background = torch.ones(3, dtype=torch.float32)
+            background = torch.ones(3, dtype=torch.float32, device=colors.device)
+
+        if xys.ndimension() != 2 or xys.size(1) != 2:
+            raise ValueError("xys must have dimensions (N, 2)")
+
+        if colors.ndimension() != 2 or colors.size(1) != 3:
+            raise ValueError("colors must have dimensions (N, 3)")
+
+        channels = colors.size(1)
+        num_points = xys.size(0)
+        BLOCK_X, BLOCK_Y = 16, 16
+        tile_bounds = (
+            (img_width + BLOCK_X - 1) // BLOCK_X,
+            (img_height + BLOCK_Y - 1) // BLOCK_Y,
+            1,
+        )
+        block = (BLOCK_X, BLOCK_Y, 1)
+        img_size = (img_width, img_height, 1)
+        num_tiles = tile_bounds[0] * tile_bounds[1]
+
+        num_intersects, cum_tiles_hit = compute_cumulative_intersects(
+            num_points, num_tiles_hit
+        )
+
         (
-            out_img,
-            final_Ts,
-            final_idx,
-            tile_bins,
-            gaussian_ids_sorted,
-            isect_ids_sorted,
-            gaussian_ids_unsorted,
             isect_ids_unsorted,
-        ) = _C.nd_rasterize_forward(
-            xys.contiguous().cuda(),
-            depths.contiguous().cuda(),
-            radii.contiguous().cuda(),
-            conics.contiguous().cuda(),
-            num_tiles_hit.contiguous().cuda(),
-            colors.contiguous().cuda(),
-            opacity.contiguous().cuda(),
-            img_height,
-            img_width,
-            background.contiguous().cuda(),
+            gaussian_ids_unsorted,
+            isect_ids_sorted,
+            gaussian_ids_sorted,
+            tile_bins,
+        ) = bin_and_sort_gaussians(
+            num_points, num_intersects, xys, depths, radii, cum_tiles_hit, tile_bounds
+        )
+
+        out_img, final_Ts, final_idx = _C.nd_rasterize_forward(
+            tile_bounds,
+            block,
+            img_size,
+            gaussian_ids_sorted.contiguous(),
+            tile_bins,
+            xys.contiguous(),
+            conics.contiguous(),
+            colors.contiguous(),
+            opacity.contiguous(),
+            background.contiguous(),
         )
 
         ctx.img_width = img_width

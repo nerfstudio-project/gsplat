@@ -73,7 +73,7 @@ except ImportError:
             # if the build directory exists.
             shutil.rmtree(build_dir)
             with Console().status(
-                "[bold yellow]DiffRast: Setting up CUDA (This may take a few minutes the first time)",
+                "[bold yellow]gsplat: Setting up CUDA (This may take a few minutes the first time)",
                 spinner="bouncingBall",
             ):
                 _C = load(
@@ -85,7 +85,7 @@ except ImportError:
                 )
     else:
         Console().print(
-            "[yellow]DiffRast: No CUDA toolkit found. DiffRast will be disabled.[/yellow]"
+            "[yellow]gsplat: No CUDA toolkit found. gsplat will be disabled.[/yellow]"
         )
 
 

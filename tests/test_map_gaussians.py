@@ -58,6 +58,7 @@ def test_map_gaussians():
     num_points = num_points - torch.count_nonzero(~_masks).item()
 
     _cum_tiles_hit = torch.cumsum(_num_tiles_hit, dim=0, dtype=torch.int32)
+    _num_intersects = _cum_tiles_hit[-1].item()
     _depths = _depths.contiguous()
 
     _isect_ids, _gaussian_ids = _torch_impl.map_gaussian_to_intersects(
@@ -65,7 +66,7 @@ def test_map_gaussians():
     )
 
     isect_ids, gaussian_ids = MapGaussiansToIntersects.apply(
-        num_points, _xys, _depths, _radii, _cum_tiles_hit, tile_bounds
+        num_points, _num_intersects, _xys, _depths, _radii, _cum_tiles_hit, tile_bounds
     )
 
     torch.testing.assert_close(gaussian_ids, _gaussian_ids)

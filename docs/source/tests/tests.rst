@@ -12,7 +12,6 @@ The tests include:
 .. code-block:: bash
     :caption: tests/
 
-    ./test_bin_and_sort_gaussians.py
     ./test_cov2d_bounds.py
     ./test_cumulative_intersects.py
     ./test_get_tile_bin_edges.py
