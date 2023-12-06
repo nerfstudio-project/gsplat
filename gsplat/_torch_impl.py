@@ -113,35 +113,21 @@ def eval_sh_bases(basis_dim: int, dirs: torch.Tensor):
 def quat_to_rotmat(quat: Tensor) -> Tensor:
     assert quat.shape[-1] == 4, quat.shape
     w, x, y, z = torch.unbind(F.normalize(quat, dim=-1), dim=-1)
-    return torch.stack(
+    mat = torch.stack(
         [
-            torch.stack(
-                [
-                    1 - 2 * (y**2 + z**2),
-                    2 * (x * y - w * z),
-                    2 * (x * z + w * y),
-                ],
-                dim=-1,
-            ),
-            torch.stack(
-                [
-                    2 * (x * y + w * z),
-                    1 - 2 * (x**2 + z**2),
-                    2 * (y * z - w * x),
-                ],
-                dim=-1,
-            ),
-            torch.stack(
-                [
-                    2 * (x * z - w * y),
-                    2 * (y * z + w * x),
-                    1 - 2 * (x**2 + y**2),
-                ],
-                dim=-1,
-            ),
+            1 - 2 * (y**2 + z**2),
+            2 * (x * y - w * z),
+            2 * (x * z + w * y),
+            2 * (x * y + w * z),
+            1 - 2 * (x**2 + z**2),
+            2 * (y * z - w * x),
+            2 * (x * z - w * y),
+            2 * (y * z + w * x),
+            1 - 2 * (x**2 + y**2),
         ],
-        dim=-2,
+        dim=-1,
     )
+    return mat.reshape(quat.shape[:-1] + (3, 3))
 
 
 def scale_rot_to_cov3d(scale: Tensor, glob_scale: float, quat: Tensor) -> Tensor:
@@ -212,17 +198,17 @@ def compute_cov2d_bounds(cov2d: Tensor, eps=1e-6):
     return conic, radius, det > eps
 
 
-def ndc2pix(x, W):
-    return 0.5 * ((x + 1.0) * W - 1.0)
+def ndc2pix(x, W, c):
+    return 0.5 * W * x + 0.5 + c
 
 
-def project_pix(mat, p, img_size, eps=1e-6):
+def project_pix(fullmat, p, img_size, center, eps=1e-6):
     p_hom = F.pad(p, (0, 1), value=1.0)
-    p_hom = torch.einsum("...ij,...j->...i", mat, p_hom)
-    rw = 1.0 / torch.clamp(p_hom[..., 3], min=eps)
+    p_hom = torch.einsum("...ij,...j->...i", fullmat, p_hom)
+    rw = 1.0 / (p_hom[..., 3] + eps)
     p_proj = p_hom[..., :3] * rw[..., None]
-    u = ndc2pix(p_proj[..., 0], img_size[0])
-    v = ndc2pix(p_proj[..., 1], img_size[1])
+    u = ndc2pix(p_proj[..., 0], img_size[0], center[0])
+    v = ndc2pix(p_proj[..., 1], img_size[1], center[1])
     return torch.stack([u, v], dim=-1)
 
 
@@ -265,21 +251,21 @@ def project_gaussians_forward(
     glob_scale,
     quats,
     viewmat,
-    projmat,
-    fx,
-    fy,
+    fullmat,
+    intrins,
     img_size,
     tile_bounds,
     clip_thresh=0.01,
 ):
-    tan_fovx = 0.5 * img_size[1] / fx
-    tan_fovy = 0.5 * img_size[0] / fy
+    fx, fy, cx, cy = intrins
+    tan_fovx = 0.5 * img_size[0] / fx
+    tan_fovy = 0.5 * img_size[1] / fy
     p_view, is_close = clip_near_plane(means3d, viewmat, clip_thresh)
     cov3d = scale_rot_to_cov3d(scales, glob_scale, quats)
     cov2d = project_cov3d_ewa(means3d, cov3d, viewmat, fx, fy, tan_fovx, tan_fovy)
     conic, radius, det_valid = compute_cov2d_bounds(cov2d)
-    center = project_pix(projmat, means3d, img_size)
-    tile_min, tile_max = get_tile_bbox(center, radius, tile_bounds)
+    xys = project_pix(fullmat, means3d, img_size, (cx, cy))
+    tile_min, tile_max = get_tile_bbox(xys, radius, tile_bounds)
     tile_area = (tile_max[..., 0] - tile_min[..., 0]) * (
         tile_max[..., 1] - tile_min[..., 1]
     )
@@ -288,10 +274,10 @@ def project_gaussians_forward(
     num_tiles_hit = tile_area
     depths = p_view[..., 2]
     radii = radius.to(torch.int32)
-    xys = center
-    conics = conic
 
-    return cov3d, xys, depths, radii, conics, num_tiles_hit, mask
+    i, j = torch.triu_indices(3, 3)
+    cov3d_triu = cov3d[..., i, j]
+    return cov3d_triu, xys, depths, radii, conic, num_tiles_hit, mask
 
 
 def map_gaussian_to_intersects(
@@ -331,7 +317,6 @@ def get_tile_bin_edges(num_intersects, isect_ids_sorted):
     )
 
     for idx in range(num_intersects):
-
         cur_tile_idx = isect_ids_sorted[idx] >> 32
 
         if idx == 0:
@@ -380,6 +365,7 @@ def rasterize_forward(
             tile_bin_end = tile_bins[tile_id, 1]
             T = 1.0
 
+            idx = 0
             for idx in range(tile_bin_start, tile_bin_end):
                 gaussian_id = gaussian_ids_sorted[idx]
                 conic = conics[gaussian_id]
