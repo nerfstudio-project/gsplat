@@ -1,12 +1,13 @@
 import pytest
 import torch
+from torch.func import vjp
 
 
 device = torch.device("cuda:0")
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_project_gaussians_forward():
+def test_project_gaussians():
     from gsplat import _torch_impl
     import gsplat.cuda as _C
 
@@ -69,12 +70,12 @@ def test_project_gaussians_forward():
     ) = _torch_impl.project_gaussians_forward(
         means3d,
         scales,
-        glob_scale,
         quats,
         viewmat,
         fullmat,
         (fx, fy, cx, cy),
         (W, H),
+        glob_scale,
         tile_bounds,
         clip_thresh,
     )
@@ -98,6 +99,64 @@ def test_project_gaussians_forward():
     torch.testing.assert_close(num_tiles_hit[_masks], _num_tiles_hit[_masks])
     print("passed project_gaussians_forward test")
 
+    # Test backward pass
+
+    v_xys = torch.randn_like(xys)
+    v_depths = torch.randn_like(depths)
+    v_conics = torch.randn_like(conics)
+    _, _, v_mean3d, v_scale, v_quat = _C.project_gaussians_backward(
+        num_points,
+        means3d,
+        scales,
+        glob_scale,
+        quats,
+        viewmat,
+        fullmat,
+        fx,
+        fy,
+        cx,
+        cy,
+        H,
+        W,
+        cov3d,
+        radii,
+        conics,
+        v_xys,
+        v_depths,
+        v_conics,
+    )
+
+    def torch_project_forward(means3d, scales, quats):
+        (_, xys, depths, _, conics, _, masks) = _torch_impl.project_gaussians_forward(
+            means3d,
+            scales,
+            quats,
+            viewmat,
+            fullmat,
+            (fx, fy, cx, cy),
+            (W, H),
+            glob_scale,
+            tile_bounds,
+            clip_thresh,
+        )
+        xys[~masks] = 0
+        depths[~masks] = 0
+        conics[~masks] = 0
+        return xys, depths, conics
+
+    _, vjp_fnc = vjp(torch_project_forward, means3d, scales, quats)  # type: ignore
+    _v_mean3d, _v_scale, _v_quat = vjp_fnc((v_xys, v_depths, v_conics))
+
+    diff = torch.abs(v_mean3d[masks] - _v_mean3d[_masks])
+    tol = 1e-4
+    if diff.max() > tol:
+        import ipdb; ipdb.set_trace()
+    diff = torch.abs(v_scale[masks] - _v_scale[_masks])
+    if diff.max() > tol:
+        import ipdb; ipdb.set_trace()
+    diff = torch.abs(v_quat[masks] - _v_quat[_masks])
+    if diff.max() > tol:
+        import ipdb; ipdb.set_trace()
 
 if __name__ == "__main__":
-    test_project_gaussians_forward()
+    test_project_gaussians()

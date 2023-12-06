@@ -182,6 +182,7 @@ def project_cov3d_ewa(
 
 def compute_cov2d_bounds(cov2d: Tensor, eps=1e-6):
     det = cov2d[..., 0, 0] * cov2d[..., 1, 1] - cov2d[..., 0, 1] ** 2
+    valid = det > eps
     det = torch.clamp(det, min=eps)
     conic = torch.stack(
         [
@@ -195,7 +196,10 @@ def compute_cov2d_bounds(cov2d: Tensor, eps=1e-6):
     v1 = b + torch.sqrt(torch.clamp(b**2 - det, min=0.1))  # (...,)
     v2 = b - torch.sqrt(torch.clamp(b**2 - det, min=0.1))  # (...,)
     radius = torch.ceil(3.0 * torch.sqrt(torch.max(v1, v2)))  # (...,)
-    return conic, radius, det > eps
+    conic = torch.where(
+        valid.unsqueeze(-1).expand(conic.shape), conic, torch.zeros_like(conic)
+    )
+    return conic, radius, valid
 
 
 def ndc2pix(x, W, c):
@@ -248,12 +252,12 @@ def get_tile_bbox(pix_center, pix_radius, tile_bounds, BLOCK_X=16, BLOCK_Y=16):
 def project_gaussians_forward(
     means3d,
     scales,
-    glob_scale,
     quats,
     viewmat,
     fullmat,
     intrins,
     img_size,
+    glob_scale,
     tile_bounds,
     clip_thresh=0.01,
 ):
