@@ -49,8 +49,16 @@ url = {https://github.com/nerfstudio-project/gsplat}
 }
 ```
 
-
-We will soon release the mathematical supplement for the library, which we will post when it is out.
-
+We also have made the mathematical supplement, with conventions and derivations, available [here](https://arxiv.org/abs/2312.02121). If you find the supplement useful, please consider citing:
+```
+@misc{ye2023mathematical,
+    title={Mathematical Supplement for the $\texttt{gsplat}$ Library}, 
+    author={Vickie Ye and Angjoo Kanazawa},
+    year={2023},
+    eprint={2312.02121},
+    archivePrefix={arXiv},
+    primaryClass={cs.MS}
+}
+```
 
 We welcome contributions of any kind and are open to feedback, bug-reports, and improvements to help expand the capabilities of this software. Please check [docs/DEV.md](docs/DEV.md) for more info about development.
