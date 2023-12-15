@@ -57,7 +57,14 @@ try:
 except ImportError:
     # if failed, try with JIT compilation
     if cuda_toolkit_available():
-        if os.listdir(build_dir) != []:
+        # If JIT is interrupted it might leave a lock in the build directory.
+        # We dont want it to exist in any case.
+        try:
+            os.remove(os.path.join(build_dir, "lock"))
+        except OSError:
+            pass
+
+        if os.path.exists(os.path.join(build_dir, "gsplat_cuda.so")):
             # If the build exists, we assume the extension has been built
             # and we can load it.
 
@@ -70,7 +77,7 @@ except ImportError:
             )
         else:
             # Build from scratch. Remove the build directory just to be safe: pytorch jit might stuck
-            # if the build directory exists.
+            # if the build directory exists with a lock file in it.
             shutil.rmtree(build_dir)
             with Console().status(
                 "[bold yellow]gsplat: Setting up CUDA (This may take a few minutes the first time)",
