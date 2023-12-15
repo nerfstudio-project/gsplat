@@ -9,7 +9,7 @@ gsplat is an open-source library for CUDA accelerated rasterization of gaussians
 
 This project was greatly inspired by original paper [3D Gaussian Splatting
 for Real-Time Radiance Field Rendering
-](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/) by Kerbl* and Kopanas* et al. While building this library, we prioritized having a developer friendly Python API. As such, when this backend is plugged into the nerfstudio pipeline, it trains 5x~ slower than the original implementation. Please refer to the original [code release](https://github.com/graphdeco-inria/gaussian-splatting) for the optimized implementation. 
+](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/) by Kerbl* and Kopanas* et al. While building this library, we prioritized having a developer friendly Python API. 
 
 ![Teaser](/docs/source/imgs/training.gif?raw=true)
 
