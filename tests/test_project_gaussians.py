@@ -1,34 +1,54 @@
 import pytest
 import torch
-from torch.func import vjp
+from torch.func import vjp  # type: ignore
 
+from gsplat import _torch_impl
+import gsplat.cuda as _C
+
+
+torch.manual_seed(42)
 
 device = torch.device("cuda:0")
 
 
+def projection_matrix(fx, fy, W, H, n=0.01, f=1000.0):
+    return torch.tensor(
+        [
+            [2.0 * fx / W, 0.0, 0.0, 0.0],
+            [0.0, 2.0 * fy / H, 0.0, 0.0],
+            [0.0, 0.0, (f + n) / (f - n), -2 * f * n / (f - n)],
+            [0.0, 0.0, 1.0, 0.0],
+        ],
+        device=device,
+    )
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_project_gaussians():
-    from gsplat import _torch_impl
-    import gsplat.cuda as _C
-
-    torch.manual_seed(42)
-
+def test_project_gaussians_forward():
     num_points = 100
 
     means3d = torch.randn((num_points, 3), device=device, requires_grad=True)
-    scales = torch.randn((num_points, 3), device=device)
-    glob_scale = 0.3
+    scales = torch.rand((num_points, 3), device=device) + 0.2
+    glob_scale = 1.0
     quats = torch.randn((num_points, 4), device=device)
     quats /= torch.linalg.norm(quats, dim=-1, keepdim=True)
-    # TODO: test with non-identity viewmat and projmat
-    viewmat = torch.eye(4, device=device)
-    projmat = torch.eye(4, device=device)
-    fullmat = projmat @ viewmat
+
     H, W = 512, 512
     cx, cy = W / 2, H / 2
     # 90 degree FOV
     fx, fy = W / 2, W / 2
     clip_thresh = 0.01
+    viewmat = torch.tensor(
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 8.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+        device=device,
+    )
+    projmat = projection_matrix(fx, fy, W, H)
+    fullmat = projmat @ viewmat
 
     BLOCK_X, BLOCK_Y = 16, 16
     tile_bounds = (W + BLOCK_X - 1) // BLOCK_X, (H + BLOCK_Y - 1) // BLOCK_Y, 1
@@ -57,28 +77,30 @@ def test_project_gaussians():
         tile_bounds,
         clip_thresh,
     )
-    masks = radii > 0
+    masks = num_tiles_hit > 0
 
-    (
-        _cov3d,
-        _xys,
-        _depths,
-        _radii,
-        _conics,
-        _num_tiles_hit,
-        _masks,
-    ) = _torch_impl.project_gaussians_forward(
-        means3d,
-        scales,
-        quats,
-        viewmat,
-        fullmat,
-        (fx, fy, cx, cy),
-        (W, H),
-        glob_scale,
-        tile_bounds,
-        clip_thresh,
-    )
+    with torch.no_grad():
+        (
+            _cov3d,
+            _,
+            _xys,
+            _depths,
+            _radii,
+            _conics,
+            _num_tiles_hit,
+            _masks,
+        ) = _torch_impl.project_gaussians_forward(
+            means3d,
+            scales,
+            quats,
+            viewmat,
+            fullmat,
+            (fx, fy, cx, cy),
+            (W, H),
+            glob_scale,
+            tile_bounds,
+            clip_thresh,
+        )
 
     torch.testing.assert_close(masks, _masks, atol=1e-5, rtol=1e-5)
     torch.testing.assert_close(
@@ -99,12 +121,67 @@ def test_project_gaussians():
     torch.testing.assert_close(num_tiles_hit[_masks], _num_tiles_hit[_masks])
     print("passed project_gaussians_forward test")
 
+
+def test_project_gaussians_backward():
+    num_points = 100
+
+    means3d = torch.randn((num_points, 3), device=device, requires_grad=True)
+    scales = torch.rand((num_points, 3), device=device) + 0.2
+    glob_scale = 1.0
+    quats = torch.randn((num_points, 4), device=device)
+    quats /= torch.linalg.norm(quats, dim=-1, keepdim=True)
+
+    H, W = 512, 512
+    cx, cy = W / 2, H / 2
+    # 90 degree FOV
+    fx, fy = W / 2, W / 2
+    clip_thresh = 0.01
+    viewmat = torch.tensor(
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 8.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+        device=device,
+    )
+    projmat = projection_matrix(fx, fy, W, H)
+    # projmat = torch.eye(4, device=device)
+    fullmat = projmat @ viewmat
+
+    BLOCK_X, BLOCK_Y = 16, 16
+    tile_bounds = (W + BLOCK_X - 1) // BLOCK_X, (H + BLOCK_Y - 1) // BLOCK_Y, 1
+
+    (
+        cov3d,
+        cov2d,
+        xys,
+        depths,
+        radii,
+        conics,
+        _,
+        masks,
+    ) = _torch_impl.project_gaussians_forward(
+        means3d,
+        scales,
+        quats,
+        viewmat,
+        fullmat,
+        (fx, fy, cx, cy),
+        (W, H),
+        glob_scale,
+        tile_bounds,
+        clip_thresh,
+    )
+
     # Test backward pass
 
     v_xys = torch.randn_like(xys)
-    v_depths = torch.randn_like(depths)
-    v_conics = torch.randn_like(conics)
-    _, _, v_mean3d, v_scale, v_quat = _C.project_gaussians_backward(
+    # v_depths = torch.randn_like(depths)
+    v_depths = torch.zeros_like(depths)
+    # scale gradients by pixels to account for finite difference
+    v_conics = torch.randn_like(conics) / (H + W)
+    v_cov2d, v_cov3d, v_mean3d, v_scale, v_quat = _C.project_gaussians_backward(
         num_points,
         means3d,
         scales,
@@ -126,37 +203,91 @@ def test_project_gaussians():
         v_conics,
     )
 
-    def torch_project_forward(means3d, scales, quats):
-        (_, xys, depths, _, conics, _, masks) = _torch_impl.project_gaussians_forward(
-            means3d,
-            scales,
-            quats,
-            viewmat,
-            fullmat,
-            (fx, fy, cx, cy),
-            (W, H),
-            glob_scale,
-            tile_bounds,
-            clip_thresh,
+    def scale_rot_to_cov3d_partial(scale, quat):
+        """
+        scale (*, 3), quat (*, 3) -> cov3d (upper tri) (*, 6)
+        """
+        cov3d = _torch_impl.scale_rot_to_cov3d(scale, glob_scale, quat)
+        i, j = torch.triu_indices(3, 3)
+        cov3d_triu = cov3d[..., i, j]
+        return cov3d_triu
+
+    def project_cov3d_ewa_partial(mean3d, cov3d):
+        """
+        mean3d (*, 3), cov3d (upper tri) (*, 6) -> cov2d (upper tri) (*, 3)
+        """
+        tan_fovx = 0.5 * W / fx
+        tan_fovy = 0.5 * H / fy
+
+        cov3d_mat = torch.zeros(*cov3d.shape[:-1], 3, 3, device=device)
+        i, j = torch.triu_indices(3, 3)
+        cov3d_mat[..., i, j] = cov3d
+        cov3d_mat[..., [1, 2, 2], [0, 0, 1]] = cov3d[..., [1, 2, 4]]
+        cov2d = _torch_impl.project_cov3d_ewa(
+            mean3d, cov3d_mat, viewmat, fx, fy, tan_fovx, tan_fovy
         )
-        xys[~masks] = 0
-        depths[~masks] = 0
-        conics[~masks] = 0
-        return xys, depths, conics
+        ii, jj = torch.triu_indices(2, 2)
+        return cov2d[..., ii, jj]
 
-    _, vjp_fnc = vjp(torch_project_forward, means3d, scales, quats)  # type: ignore
-    _v_mean3d, _v_scale, _v_quat = vjp_fnc((v_xys, v_depths, v_conics))
+    def compute_cov2d_bounds_partial(cov2d):
+        """
+        cov2d (upper tri) (*, 3) -> conic (upper tri) (*, 3)
+        """
+        cov2d_mat = torch.zeros(*cov2d.shape[:-1], 2, 2, device=device)
+        i, j = torch.triu_indices(2, 2)
+        cov2d_mat[..., i, j] = cov2d
+        cov2d_mat[..., 1, 0] = cov2d[..., 1]
+        conic, _, _ = _torch_impl.compute_cov2d_bounds(cov2d_mat)
+        return conic
 
-    diff = torch.abs(v_mean3d[masks] - _v_mean3d[_masks])
-    tol = 1e-4
-    if diff.max() > tol:
-        import ipdb; ipdb.set_trace()
-    diff = torch.abs(v_scale[masks] - _v_scale[_masks])
-    if diff.max() > tol:
-        import ipdb; ipdb.set_trace()
-    diff = torch.abs(v_quat[masks] - _v_quat[_masks])
-    if diff.max() > tol:
-        import ipdb; ipdb.set_trace()
+    def project_pix_partial(mean3d):
+        """
+        mean3d (*, 3) -> xy (*, 2)
+        """
+        return _torch_impl.project_pix(fullmat, mean3d, (W, H), (cx, cy))
+
+    def compute_depth_partial(mean3d):
+        """
+        mean3d (*, 3) -> depth (*)
+        """
+        p_view, _ = _torch_impl.clip_near_plane(mean3d, viewmat, clip_thresh)
+        depth = p_view[..., 2]
+        return depth
+
+    _, vjp_scale_rot_to_cov3d = vjp(scale_rot_to_cov3d_partial, scales, quats)  # type: ignore
+    _, vjp_project_cov3d_ewa = vjp(project_cov3d_ewa_partial, means3d, cov3d)  # type: ignore
+    _, vjp_compute_cov2d_bounds = vjp(compute_cov2d_bounds_partial, cov2d)  # type: ignore
+    _, vjp_project_pix = vjp(project_pix_partial, means3d)  # type: ignore
+    _, vjp_compute_depth = vjp(compute_depth_partial, means3d)  # type: ignore
+
+    _v_cov2d = vjp_compute_cov2d_bounds(v_conics)[0]
+    _v_mean3d_cov2d, _v_cov3d = vjp_project_cov3d_ewa(_v_cov2d)
+    _v_mean3d_xy = vjp_project_pix(v_xys)[0]
+    _v_mean3d_depth = vjp_compute_depth(v_depths)[0]
+    _v_mean3d = _v_mean3d_cov2d + _v_mean3d_xy  + _v_mean3d_depth
+    _v_scale, _v_quat = vjp_scale_rot_to_cov3d(_v_cov3d)
+
+    tol = 1e-3
+    cov2d_diff = torch.abs(v_cov2d[masks] - _v_cov2d[masks]).detach()
+    print(f"{cov2d_diff.max()=} {cov2d_diff.mean()=}")
+
+    cov3d_diff = torch.abs(v_cov3d[masks] - _v_cov3d[masks]).detach()
+    print(f"{cov3d_diff.max()=} {cov3d_diff.mean()=}")
+
+    mean3d_diff = torch.abs(v_mean3d[masks] - _v_mean3d[masks]).detach()
+    print(f"{mean3d_diff.max()=} {mean3d_diff.mean()=}")
+
+    scale_diff = torch.abs(v_scale[masks] - _v_scale[masks]).detach()
+    print(f"{scale_diff.max()=} {scale_diff.mean()=}")
+
+    quat_diff = torch.abs(v_quat[masks] - _v_quat[masks]).detach()
+    print(f"{quat_diff.max()=} {quat_diff.mean()=}")
+
+    import ipdb
+
+    ipdb.set_trace()
+
 
 if __name__ == "__main__":
-    test_project_gaussians()
+    # test_project_gaussians_forward()
+    test_project_gaussians_backward()

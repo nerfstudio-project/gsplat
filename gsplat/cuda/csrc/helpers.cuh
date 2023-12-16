@@ -50,7 +50,7 @@ compute_cov2d_bounds(const float3 cov2d, float3 &conic, float &radius) {
     // the conic is the inverse cov2d matrix, represented here with upper
     // triangular values.
     float det = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
-    if (det == 0.f)
+    if (det <= 0.f)
         return false;
     float inv_det = 1.f / det;
 

@@ -154,36 +154,40 @@ def project_cov3d_ewa(
     assert viewmat.shape[-2:] == (4, 4), viewmat.shape
     W = viewmat[..., :3, :3]  # (..., 3, 3)
     p = viewmat[..., :3, 3]  # (..., 3)
-    t = torch.matmul(W, mean3d[..., None])[..., 0] + p  # (..., 3)
-
-    lim_x = 1.3 * torch.tensor([tan_fovx], device=mean3d.device)
-    lim_y = 1.3 * torch.tensor([tan_fovy], device=mean3d.device)
-
-    min_lim_x = t[..., 2] * torch.min(lim_x, torch.max(-lim_x, t[..., 0] / t[..., 2]))
-    min_lim_y = t[..., 2] * torch.min(lim_y, torch.max(-lim_y, t[..., 1] / t[..., 2]))
-    t = torch.cat([min_lim_x[..., None], min_lim_y[..., None], t[..., 2, None]], dim=-1)
+    t = torch.einsum("...ij,...j->...i", W, mean3d) + p  # (..., 3)
 
     rz = 1.0 / t[..., 2]  # (...,)
     rz2 = rz**2  # (...,)
+
+    lim_x = 1.3 * torch.tensor([tan_fovx], device=mean3d.device)
+    lim_y = 1.3 * torch.tensor([tan_fovy], device=mean3d.device)
+    x_clamp = t[..., 2] * torch.clamp(t[..., 0] * rz, min=-lim_x, max=lim_x)
+    y_clamp = t[..., 2] * torch.clamp(t[..., 1] * rz, min=-lim_y, max=lim_y)
+    t = torch.stack([x_clamp, y_clamp, t[..., 2]], dim=-1)
+
+    O = torch.zeros_like(rz)
     J = torch.stack(
-        [
-            torch.stack([fx * rz, torch.zeros_like(rz), -fx * t[..., 0] * rz2], dim=-1),
-            torch.stack([torch.zeros_like(rz), fy * rz, -fy * t[..., 1] * rz2], dim=-1),
-        ],
-        dim=-2,
-    )  # (..., 2, 3)
-    T = J @ W  # (..., 2, 3)
-    cov2d = T @ cov3d @ T.transpose(-1, -2)  # (..., 2, 2)
+        [fx * rz, O, -fx * t[..., 0] * rz2, O, fy * rz, -fy * t[..., 1] * rz2],
+        dim=-1,
+    ).reshape(*rz.shape, 2, 3)
+    T = torch.matmul(J, W)  # (..., 2, 3)
+    cov2d = torch.einsum("...ij,...jk,...kl->...il", T, cov3d, T.transpose(-1, -2))
     # add a little blur along axes and (TODO save upper triangular elements)
     cov2d[..., 0, 0] = cov2d[..., 0, 0] + 0.3
     cov2d[..., 1, 1] = cov2d[..., 1, 1] + 0.3
-    return cov2d
+    return cov2d[..., :2, :2]
 
 
-def compute_cov2d_bounds(cov2d: Tensor, eps=1e-6):
-    det = cov2d[..., 0, 0] * cov2d[..., 1, 1] - cov2d[..., 0, 1] ** 2
-    valid = det > eps
-    det = torch.clamp(det, min=eps)
+def compute_cov2d_bounds(cov2d_mat: Tensor):
+    """
+    param: cov2d matrix (*, 2, 2)
+    returns: conic parameters (*, 3)
+    """
+    det_all = cov2d_mat[..., 0, 0] * cov2d_mat[..., 1, 1] - cov2d_mat[..., 0, 1] ** 2
+    valid = det_all != 0
+    # det = torch.clamp(det, min=eps)
+    det = det_all[valid]
+    cov2d = cov2d_mat[valid]
     conic = torch.stack(
         [
             cov2d[..., 1, 1] / det,
@@ -196,10 +200,11 @@ def compute_cov2d_bounds(cov2d: Tensor, eps=1e-6):
     v1 = b + torch.sqrt(torch.clamp(b**2 - det, min=0.1))  # (...,)
     v2 = b - torch.sqrt(torch.clamp(b**2 - det, min=0.1))  # (...,)
     radius = torch.ceil(3.0 * torch.sqrt(torch.max(v1, v2)))  # (...,)
-    conic = torch.where(
-        valid.unsqueeze(-1).expand(conic.shape), conic, torch.zeros_like(conic)
-    )
-    return conic, radius, valid
+    radius_all = torch.zeros(*cov2d_mat.shape[:-2], device=cov2d_mat.device)
+    conic_all = torch.zeros(*cov2d_mat.shape[:-2], 3, device=cov2d_mat.device)
+    radius_all[valid] = radius
+    conic_all[valid] = conic
+    return conic_all, radius_all, valid
 
 
 def ndc2pix(x, W, c):
@@ -217,10 +222,10 @@ def project_pix(fullmat, p, img_size, center, eps=1e-6):
 
 
 def clip_near_plane(p, viewmat, clip_thresh=0.01):
-    R = viewmat[..., :3, :3]
-    T = viewmat[..., :3, 3]
-    p_view = torch.matmul(R, p[..., None])[..., 0] + T
-    return p_view, p_view[..., 2] < clip_thresh
+    R = viewmat[:3, :3]
+    T = viewmat[:3, 3]
+    p_view = torch.einsum("ij,nj->ni", R, p) + T[None]
+    return p_view, p_view[..., 2] <= clip_thresh
 
 
 def get_tile_bbox(pix_center, pix_radius, tile_bounds, BLOCK_X=16, BLOCK_Y=16):
@@ -231,7 +236,7 @@ def get_tile_bbox(pix_center, pix_radius, tile_bounds, BLOCK_X=16, BLOCK_Y=16):
     tile_radius = pix_radius[..., None] / tile_size
 
     top_left = (tile_center - tile_radius).to(torch.int32)
-    bottom_right = (tile_center + tile_radius).to(torch.int32) + 1
+    bottom_right = (tile_center + tile_radius + 1).to(torch.int32)
     tile_min = torch.stack(
         [
             torch.clamp(top_left[..., 0], 0, tile_bounds[0]),
@@ -281,7 +286,9 @@ def project_gaussians_forward(
 
     i, j = torch.triu_indices(3, 3)
     cov3d_triu = cov3d[..., i, j]
-    return cov3d_triu, xys, depths, radii, conic, num_tiles_hit, mask
+    i, j = torch.triu_indices(2, 2)
+    cov2d_triu = cov2d[..., i, j]
+    return cov3d_triu, cov2d_triu, xys, depths, radii, conic, num_tiles_hit, mask
 
 
 def map_gaussian_to_intersects(

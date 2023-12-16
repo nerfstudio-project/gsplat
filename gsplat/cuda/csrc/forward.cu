@@ -11,22 +11,22 @@ namespace cg = cooperative_groups;
 // each thread processes one gaussian
 __global__ void project_gaussians_forward_kernel(
     const int num_points,
-    const float3* __restrict__ means3d,
-    const float3* __restrict__ scales,
+    const float3 *__restrict__ means3d,
+    const float3 *__restrict__ scales,
     const float glob_scale,
-    const float4* __restrict__ quats,
-    const float* __restrict__ viewmat,
-    const float* __restrict__ projmat,
+    const float4 *__restrict__ quats,
+    const float *__restrict__ viewmat,
+    const float *__restrict__ projmat,
     const float4 intrins,
     const dim3 img_size,
     const dim3 tile_bounds,
     const float clip_thresh,
-    float* __restrict__ covs3d,
-    float2* __restrict__ xys,
-    float* __restrict__ depths,
-    int* __restrict__ radii,
-    float3* __restrict__ conics,
-    int32_t* __restrict__ num_tiles_hit
+    float *__restrict__ covs3d,
+    float2 *__restrict__ xys,
+    float *__restrict__ depths,
+    int *__restrict__ radii,
+    float3 *__restrict__ conics,
+    int32_t *__restrict__ num_tiles_hit
 ) {
     unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
     if (idx >= num_points) {
@@ -36,14 +36,11 @@ __global__ void project_gaussians_forward_kernel(
     num_tiles_hit[idx] = 0;
 
     float3 p_world = means3d[idx];
-    // printf("p_world %d %.2f %.2f %.2f\n", idx, p_world.x, p_world.y,
-    // p_world.z);
     float3 p_view;
-    if (clip_near_plane(p_world, viewmat, p_view, clip_thresh)) {
-        // printf("%d is out of frustum z %.2f, returning\n", idx, p_view.z);
+    bool clip = clip_near_plane(p_world, viewmat, p_view, clip_thresh);
+    if (clip)
         return;
-    }
-    // printf("p_view %d %.2f %.2f %.2f\n", idx, p_view.x, p_view.y, p_view.z);
+    depths[idx] = p_view.z;
 
     // compute the projected covariance
     float3 scale = scales[idx];
@@ -73,21 +70,20 @@ __global__ void project_gaussians_forward_kernel(
         return; // zero determinant
     // printf("conic %d %.2f %.2f %.2f\n", idx, conic.x, conic.y, conic.z);
     conics[idx] = conic;
+    radii[idx] = (int)radius;
 
     // compute the projected mean
     float2 center = project_pix(projmat, p_world, img_size, {cx, cy});
+    xys[idx] = center;
+
     uint2 tile_min, tile_max;
     get_tile_bbox(center, radius, tile_bounds, tile_min, tile_max);
+
     int32_t tile_area = (tile_max.x - tile_min.x) * (tile_max.y - tile_min.y);
-    if (tile_area <= 0) {
-        // printf("%d point bbox outside of bounds\n", idx);
+    if (tile_area <= 0)
         return;
-    }
 
     num_tiles_hit[idx] = tile_area;
-    depths[idx] = p_view.z;
-    radii[idx] = (int)radius;
-    xys[idx] = center;
     // printf(
     //     "point %d x %.2f y %.2f z %.2f, radius %d, # tiles %d, tile_min %d
     //     %d, tile_max %d %d\n", idx, center.x, center.y, depths[idx],
@@ -99,13 +95,13 @@ __global__ void project_gaussians_forward_kernel(
 // writes output to isect_ids and gaussian_ids
 __global__ void map_gaussian_to_intersects(
     const int num_points,
-    const float2* __restrict__ xys,
-    const float* __restrict__ depths,
-    const int* __restrict__ radii,
-    const int32_t* __restrict__ cum_tiles_hit,
+    const float2 *__restrict__ xys,
+    const float *__restrict__ depths,
+    const int *__restrict__ radii,
+    const int32_t *__restrict__ cum_tiles_hit,
     const dim3 tile_bounds,
-    int64_t* __restrict__ isect_ids,
-    int32_t* __restrict__ gaussian_ids
+    int64_t *__restrict__ isect_ids,
+    int32_t *__restrict__ gaussian_ids
 ) {
     unsigned idx = cg::this_grid().thread_rank();
     if (idx >= num_points)
@@ -139,7 +135,9 @@ __global__ void map_gaussian_to_intersects(
 // expect that intersection IDs are sorted by increasing tile ID
 // i.e. intersections of a tile are in contiguous chunks
 __global__ void get_tile_bin_edges(
-    const int num_intersects, const int64_t* __restrict__ isect_ids_sorted, int2* __restrict__ tile_bins
+    const int num_intersects,
+    const int64_t *__restrict__ isect_ids_sorted,
+    int2 *__restrict__ tile_bins
 ) {
     unsigned idx = cg::this_grid().thread_rank();
     if (idx >= num_intersects)
@@ -169,16 +167,16 @@ __global__ void nd_rasterize_forward(
     const dim3 tile_bounds,
     const dim3 img_size,
     const unsigned channels,
-    const int32_t* __restrict__ gaussian_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
-    const float* __restrict__ colors,
-    const float* __restrict__ opacities,
-    float* __restrict__ final_Ts,
-    int* __restrict__ final_index,
-    float* __restrict__ out_img,
-    const float* __restrict__ background
+    const int32_t *__restrict__ gaussian_ids_sorted,
+    const int2 *__restrict__ tile_bins,
+    const float2 *__restrict__ xys,
+    const float3 *__restrict__ conics,
+    const float *__restrict__ colors,
+    const float *__restrict__ opacities,
+    float *__restrict__ final_Ts,
+    int *__restrict__ final_index,
+    float *__restrict__ out_img,
+    const float *__restrict__ background
 ) {
     // current naive implementation where tile data loading is redundant
     // TODO tile data should be shared between tile threads
@@ -250,16 +248,16 @@ __global__ void nd_rasterize_forward(
 __global__ void rasterize_forward(
     const dim3 tile_bounds,
     const dim3 img_size,
-    const int32_t* __restrict__ gaussian_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
-    const float3* __restrict__ colors,
-    const float* __restrict__ opacities,
-    float* __restrict__ final_Ts,
-    int* __restrict__ final_index,
-    float3* __restrict__ out_img,
-    const float3& __restrict__ background
+    const int32_t *__restrict__ gaussian_ids_sorted,
+    const int2 *__restrict__ tile_bins,
+    const float2 *__restrict__ xys,
+    const float3 *__restrict__ conics,
+    const float3 *__restrict__ colors,
+    const float *__restrict__ opacities,
+    float *__restrict__ final_Ts,
+    int *__restrict__ final_index,
+    float3 *__restrict__ out_img,
+    const float3 &__restrict__ background
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
@@ -373,9 +371,9 @@ __global__ void rasterize_forward(
 
 // device helper to approximate projected 2d cov from 3d mean and cov
 __device__ float3 project_cov3d_ewa(
-    const float3& __restrict__ mean3d,
-    const float* __restrict__ cov3d,
-    const float* __restrict__ viewmat,
+    const float3 &__restrict__ mean3d,
+    const float *__restrict__ cov3d,
+    const float *__restrict__ viewmat,
     const float fx,
     const float fy,
     const float tan_fovx,
@@ -401,11 +399,10 @@ __device__ float3 project_cov3d_ewa(
     // clip so that the covariance
     float lim_x = 1.3f * tan_fovx;
     float lim_y = 1.3f * tan_fovy;
-    t.x = t.z * std::min(lim_x, std::max(-lim_x, t.x / t.z));
-    t.y = t.z * std::min(lim_y, std::max(-lim_y, t.y / t.z));
-
     float rz = 1.f / t.z;
     float rz2 = rz * rz;
+    t.x = t.z * std::min(lim_x, std::max(-lim_x, t.x * rz));
+    t.y = t.z * std::min(lim_y, std::max(-lim_y, t.y * rz));
 
     // column major
     // we only care about the top 2x2 submatrix
@@ -434,10 +431,12 @@ __device__ float3 project_cov3d_ewa(
         cov3d[5]
     );
 
-    glm::mat3 cov = T * V * glm::transpose(T);
+    glm::mat3 cov2d = T * V * glm::transpose(T);
 
     // add a little blur along axes and save upper triangular elements
-    return make_float3(float(cov[0][0]) + 0.3f, float(cov[0][1]), float(cov[1][1]) + 0.3f);
+    return make_float3(
+        float(cov2d[0][0]) + 0.3f, float(cov2d[0][1]), float(cov2d[1][1]) + 0.3f
+    );
 }
 
 // device helper to get 3D covariance from scale and quat parameters
