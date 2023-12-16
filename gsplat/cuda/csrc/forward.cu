@@ -16,7 +16,7 @@ __global__ void project_gaussians_forward_kernel(
     const float glob_scale,
     const float4 *__restrict__ quats,
     const float *__restrict__ viewmat,
-    const float *__restrict__ projmat,
+    const float *__restrict__ fullmat,
     const float4 intrins,
     const dim3 img_size,
     const dim3 tile_bounds,
@@ -73,7 +73,7 @@ __global__ void project_gaussians_forward_kernel(
     radii[idx] = (int)radius;
 
     // compute the projected mean
-    float2 center = project_pix(projmat, p_world, img_size, {cx, cy});
+    float2 center = project_pix(fullmat, p_world, img_size, {cx, cy});
     xys[idx] = center;
 
     uint2 tile_min, tile_max;
@@ -382,17 +382,13 @@ __device__ float3 project_cov3d_ewa(
     // clip the
     // we expect row major matrices as input, glm uses column major
     // upper 3x3 submatrix
+    // clang-format off
     glm::mat3 W = glm::mat3(
-        viewmat[0],
-        viewmat[4],
-        viewmat[8],
-        viewmat[1],
-        viewmat[5],
-        viewmat[9],
-        viewmat[2],
-        viewmat[6],
-        viewmat[10]
+        viewmat[0], viewmat[4], viewmat[8],
+        viewmat[1], viewmat[5], viewmat[9],
+        viewmat[2], viewmat[6], viewmat[10]
     );
+    // clang-format off
     glm::vec3 p = glm::vec3(viewmat[3], viewmat[7], viewmat[11]);
     glm::vec3 t = W * glm::vec3(mean3d.x, mean3d.y, mean3d.z) + p;
 

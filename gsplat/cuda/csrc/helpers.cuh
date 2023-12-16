@@ -1,7 +1,7 @@
 #include "config.h"
-#include <cuda_runtime.h>
 #include "third_party/glm/glm/glm.hpp"
 #include "third_party/glm/glm/gtc/type_ptr.hpp"
+#include <cuda_runtime.h>
 #include <iostream>
 
 inline __device__ float ndc2pix(const float x, const float W, const float cx) {
@@ -34,11 +34,9 @@ inline __device__ void get_tile_bbox(
     // gets gaussian dimensions in tile space, i.e. the span of a gaussian in
     // tile_grid (image divided into tiles)
     float2 tile_center = {
-        pix_center.x / (float)BLOCK_X, pix_center.y / (float)BLOCK_Y
-    };
+        pix_center.x / (float)BLOCK_X, pix_center.y / (float)BLOCK_Y};
     float2 tile_radius = {
-        pix_radius / (float)BLOCK_X, pix_radius / (float)BLOCK_Y
-    };
+        pix_radius / (float)BLOCK_X, pix_radius / (float)BLOCK_Y};
     get_bbox(tile_center, tile_radius, tile_bounds, tile_min, tile_max);
 }
 
@@ -111,28 +109,32 @@ inline __device__ float2 project_pix(
     float rw = 1.f / (p_hom.w + 1e-6f);
     float3 p_proj = {p_hom.x * rw, p_hom.y * rw, p_hom.z * rw};
     return {
-        ndc2pix(p_proj.x, img_size.x, pp.x), ndc2pix(p_proj.y, img_size.y, pp.y)
-    };
+        ndc2pix(p_proj.x, img_size.x, pp.x),
+        ndc2pix(p_proj.y, img_size.y, pp.y)};
 }
 
-// given v_xy_pix, get v_xyz
-inline __device__ float3 project_pix_vjp(
-    const float *mat, const float3 p, const dim3 img_size, const float2 v_xy
+// given v_xy_pix, get v_view
+inline __device__ float4 project_pix_vjp(
+    const float *P, const float *fullmat, const float3 p, const dim3 img_size, const float2 v_xy
 ) {
-    // ROW MAJOR mat
-    float4 p_hom = transform_4x4(mat, p);
-    float rw = 1.f / (p_hom.w + 1e-6f);
+    // ROW MAJOR PROJECTION MATRIX P
+    float4 t = transform_4x4(fullmat, p);
+    float rw = 1.f / (t.w + 1e-6f);
 
     float3 v_ndc = {0.5f * img_size.x * v_xy.x, 0.5f * img_size.y * v_xy.y};
     float4 v_proj = {
-        v_ndc.x * rw, v_ndc.y * rw, 0., -(v_ndc.x + v_ndc.y) * rw * rw
+        v_ndc.x * rw,
+        v_ndc.y * rw,
+        0.,
+        -(v_ndc.x * t.x + v_ndc.y * t.y) * rw * rw
     };
     // df / d_world = df / d_cam * d_cam / d_world
-    // = v_proj * P[:3, :3]
+    // = v_proj^T * P
     return {
-        mat[0] * v_proj.x + mat[4] * v_proj.y + mat[8] * v_proj.z,
-        mat[1] * v_proj.x + mat[5] * v_proj.y + mat[9] * v_proj.z,
-        mat[2] * v_proj.x + mat[6] * v_proj.y + mat[10] * v_proj.z
+        P[0] * v_proj.x + P[4] * v_proj.y + P[8] * v_proj.z + P[12] * v_proj.w,
+        P[1] * v_proj.x + P[5] * v_proj.y + P[9] * v_proj.z + P[13] * v_proj.w,
+        P[2] * v_proj.x + P[6] * v_proj.y + P[10] * v_proj.z + P[14] * v_proj.w,
+        P[3] * v_proj.x + P[7] * v_proj.y + P[11] * v_proj.z + P[15] * v_proj.w
     };
 }
 

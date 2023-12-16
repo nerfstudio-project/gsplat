@@ -180,7 +180,7 @@ def test_project_gaussians_backward():
     # v_depths = torch.randn_like(depths)
     v_depths = torch.zeros_like(depths)
     # scale gradients by pixels to account for finite difference
-    v_conics = torch.randn_like(conics) / (H + W)
+    v_conics = torch.randn_like(conics) * 1e-3
     v_cov2d, v_cov3d, v_mean3d, v_scale, v_quat = _C.project_gaussians_backward(
         num_points,
         means3d,
@@ -188,6 +188,7 @@ def test_project_gaussians_backward():
         glob_scale,
         quats,
         viewmat,
+        projmat,
         fullmat,
         fx,
         fy,
@@ -264,30 +265,37 @@ def test_project_gaussians_backward():
     _v_mean3d_cov2d, _v_cov3d = vjp_project_cov3d_ewa(_v_cov2d)
     _v_mean3d_xy = vjp_project_pix(v_xys)[0]
     _v_mean3d_depth = vjp_compute_depth(v_depths)[0]
-    _v_mean3d = _v_mean3d_cov2d + _v_mean3d_xy  + _v_mean3d_depth
+    _v_mean3d = _v_mean3d_cov2d + _v_mean3d_xy + _v_mean3d_depth
     _v_scale, _v_quat = vjp_scale_rot_to_cov3d(_v_cov3d)
 
-    tol = 1e-3
-    cov2d_diff = torch.abs(v_cov2d[masks] - _v_cov2d[masks]).detach()
-    print(f"{cov2d_diff.max()=} {cov2d_diff.mean()=}")
+    try:
+        atol = 5e-4
+        rtol = 1e-5
+        torch.testing.assert_close(v_cov2d, _v_cov2d, atol=atol, rtol=rtol)
+        torch.testing.assert_close(v_mean3d, _v_mean3d, atol=atol, rtol=rtol)
+        torch.testing.assert_close(v_scale, _v_scale, atol=atol, rtol=rtol)
+        torch.testing.assert_close(v_quat, _v_quat, atol=atol, rtol=rtol)
+        print("passed project_gaussians_backward test")
 
-    cov3d_diff = torch.abs(v_cov3d[masks] - _v_cov3d[masks]).detach()
-    print(f"{cov3d_diff.max()=} {cov3d_diff.mean()=}")
+    except AssertionError:
+        import traceback
+        import ipdb
 
-    mean3d_diff = torch.abs(v_mean3d[masks] - _v_mean3d[masks]).detach()
-    print(f"{mean3d_diff.max()=} {mean3d_diff.mean()=}")
+        traceback.print_exc()
 
-    scale_diff = torch.abs(v_scale[masks] - _v_scale[masks]).detach()
-    print(f"{scale_diff.max()=} {scale_diff.mean()=}")
-
-    quat_diff = torch.abs(v_quat[masks] - _v_quat[masks]).detach()
-    print(f"{quat_diff.max()=} {quat_diff.mean()=}")
-
-    import ipdb
-
-    ipdb.set_trace()
+        cov2d_diff = torch.abs(v_cov2d[masks] - _v_cov2d[masks]).detach()
+        print(f"{cov2d_diff.max()=} {cov2d_diff.mean()=}")
+        cov3d_diff = torch.abs(v_cov3d[masks] - _v_cov3d[masks]).detach()
+        print(f"{cov3d_diff.max()=} {cov3d_diff.mean()=}")
+        mean3d_diff = torch.abs(v_mean3d[masks] - _v_mean3d[masks]).detach()
+        print(f"{mean3d_diff.max()=} {mean3d_diff.mean()=}")
+        scale_diff = torch.abs(v_scale[masks] - _v_scale[masks]).detach()
+        print(f"{scale_diff.max()=} {scale_diff.mean()=}")
+        quat_diff = torch.abs(v_quat[masks] - _v_quat[masks]).detach()
+        print(f"{quat_diff.max()=} {quat_diff.mean()=}")
+        ipdb.set_trace()
 
 
 if __name__ == "__main__":
-    # test_project_gaussians_forward()
+    test_project_gaussians_forward()
     test_project_gaussians_backward()

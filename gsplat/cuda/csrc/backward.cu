@@ -8,21 +8,21 @@ __global__ void nd_rasterize_backward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
     const unsigned channels,
-    const int32_t* __restrict__ gaussians_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
-    const float* __restrict__ rgbs,
-    const float* __restrict__ opacities,
-    const float* __restrict__ background,
-    const float* __restrict__ final_Ts,
-    const int* __restrict__ final_index,
-    const float* __restrict__ v_output,
-    float2* __restrict__ v_xy,
-    float3* __restrict__ v_conic,
-    float* __restrict__ v_rgb,
-    float* __restrict__ v_opacity,
-    float* __restrict__ workspace
+    const int32_t *__restrict__ gaussians_ids_sorted,
+    const int2 *__restrict__ tile_bins,
+    const float2 *__restrict__ xys,
+    const float3 *__restrict__ conics,
+    const float *__restrict__ rgbs,
+    const float *__restrict__ opacities,
+    const float *__restrict__ background,
+    const float *__restrict__ final_Ts,
+    const int *__restrict__ final_index,
+    const float *__restrict__ v_output,
+    float2 *__restrict__ v_xy,
+    float3 *__restrict__ v_conic,
+    float *__restrict__ v_rgb,
+    float *__restrict__ v_opacity,
+    float *__restrict__ workspace
 ) {
     if (channels > MAX_REGISTER_CHANNELS && workspace == nullptr) {
         return;
@@ -118,38 +118,38 @@ __global__ void nd_rasterize_backward_kernel(
     }
 }
 
-inline __device__ void warpSum3(float3& val, cg::thread_block_tile<32>& tile){
+inline __device__ void warpSum3(float3 &val, cg::thread_block_tile<32> &tile) {
     val.x = cg::reduce(tile, val.x, cg::plus<float>());
     val.y = cg::reduce(tile, val.y, cg::plus<float>());
     val.z = cg::reduce(tile, val.z, cg::plus<float>());
 }
 
-inline __device__ void warpSum2(float2& val, cg::thread_block_tile<32>& tile){
+inline __device__ void warpSum2(float2 &val, cg::thread_block_tile<32> &tile) {
     val.x = cg::reduce(tile, val.x, cg::plus<float>());
     val.y = cg::reduce(tile, val.y, cg::plus<float>());
 }
 
-inline __device__ void warpSum(float& val, cg::thread_block_tile<32>& tile){
+inline __device__ void warpSum(float &val, cg::thread_block_tile<32> &tile) {
     val = cg::reduce(tile, val, cg::plus<float>());
 }
 
 __global__ void rasterize_backward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
-    const int32_t* __restrict__ gaussian_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
-    const float3* __restrict__ rgbs,
-    const float* __restrict__ opacities,
-    const float3& __restrict__ background,
-    const float* __restrict__ final_Ts,
-    const int* __restrict__ final_index,
-    const float3* __restrict__ v_output,
-    float2* __restrict__ v_xy,
-    float3* __restrict__ v_conic,
-    float3* __restrict__ v_rgb,
-    float* __restrict__ v_opacity
+    const int32_t *__restrict__ gaussian_ids_sorted,
+    const int2 *__restrict__ tile_bins,
+    const float2 *__restrict__ xys,
+    const float3 *__restrict__ conics,
+    const float3 *__restrict__ rgbs,
+    const float *__restrict__ opacities,
+    const float3 &__restrict__ background,
+    const float *__restrict__ final_Ts,
+    const int *__restrict__ final_index,
+    const float3 *__restrict__ v_output,
+    float2 *__restrict__ v_xy,
+    float3 *__restrict__ v_conic,
+    float3 *__restrict__ v_rgb,
+    float *__restrict__ v_opacity
 ) {
     auto block = cg::this_thread_block();
     int32_t tile_id =
@@ -173,7 +173,7 @@ __global__ void rasterize_backward_kernel(
     // the contribution from gaussians behind the current one
     float3 buffer = {0.f, 0.f, 0.f};
     // index of last gaussian to contribute to this pixel
-    const int bin_final = inside? final_index[pix_id] : 0;
+    const int bin_final = inside ? final_index[pix_id] : 0;
 
     // have all threads in tile process the same gaussians in batches
     // first collect gaussians between range.x and range.y in batches
@@ -218,7 +218,7 @@ __global__ void rasterize_backward_kernel(
         block.sync();
         // process gaussians in the current batch for this pixel
         // 0 index is the furthest back gaussian in the batch
-        for (int t = max(0,batch_end - warp_bin_final); t < batch_size; ++t) {
+        for (int t = max(0, batch_end - warp_bin_final); t < batch_size; ++t) {
             int valid = inside;
             if (batch_end - t > bin_final) {
                 valid = 0;
@@ -228,14 +228,14 @@ __global__ void rasterize_backward_kernel(
             float2 delta;
             float3 conic;
             float vis;
-            if(valid){
+            if (valid) {
                 conic = conic_batch[t];
                 float3 xy_opac = xy_opacity_batch[t];
                 opac = xy_opac.z;
                 delta = {xy_opac.x - px, xy_opac.y - py};
                 float sigma = 0.5f * (conic.x * delta.x * delta.x +
-                                            conic.z * delta.y * delta.y) +
-                                    conic.y * delta.x * delta.y;
+                                      conic.z * delta.y * delta.y) +
+                              conic.y * delta.x * delta.y;
                 vis = __expf(-sigma);
                 alpha = min(0.99f, opac * vis);
                 if (sigma < 0.f || alpha < 1.f / 255.f) {
@@ -243,15 +243,15 @@ __global__ void rasterize_backward_kernel(
                 }
             }
             // if all threads are inactive in this warp, skip this loop
-            if(!warp.any(valid)){
+            if (!warp.any(valid)) {
                 continue;
             }
             float3 v_rgb_local = {0.f, 0.f, 0.f};
             float3 v_conic_local = {0.f, 0.f, 0.f};
             float2 v_xy_local = {0.f, 0.f};
             float v_opacity_local = 0.f;
-            //initialize everything to 0, only set if the lane is valid
-            if(valid){
+            // initialize everything to 0, only set if the lane is valid
+            if (valid) {
                 // compute the current T for this gaussian
                 float ra = 1.f / (1.f - alpha);
                 T *= ra;
@@ -275,11 +275,13 @@ __global__ void rasterize_backward_kernel(
                 buffer.z += rgb.z * fac;
 
                 const float v_sigma = -opac * vis * v_alpha;
-                v_conic_local = {0.5f * v_sigma * delta.x * delta.x, 
-                                        0.5f * v_sigma * delta.x * delta.y, 
-                                        0.5f * v_sigma * delta.y * delta.y};
-                v_xy_local = {v_sigma * (conic.x * delta.x + conic.y * delta.y), 
-                                    v_sigma * (conic.y * delta.x + conic.z * delta.y)};
+                v_conic_local = {
+                    0.5f * v_sigma * delta.x * delta.x,
+                    0.5f * v_sigma * delta.x * delta.y,
+                    0.5f * v_sigma * delta.y * delta.y};
+                v_xy_local = {
+                    v_sigma * (conic.x * delta.x + conic.y * delta.y),
+                    v_sigma * (conic.y * delta.x + conic.z * delta.y)};
                 v_opacity_local = vis * v_alpha;
             }
             warpSum3(v_rgb_local, warp);
@@ -288,20 +290,20 @@ __global__ void rasterize_backward_kernel(
             warpSum(v_opacity_local, warp);
             if (warp.thread_rank() == 0) {
                 int32_t g = id_batch[t];
-                float* v_rgb_ptr = (float*)(v_rgb);
-                atomicAdd(v_rgb_ptr + 3*g + 0, v_rgb_local.x);
-                atomicAdd(v_rgb_ptr + 3*g + 1, v_rgb_local.y);
-                atomicAdd(v_rgb_ptr + 3*g + 2, v_rgb_local.z);
-                
-                float* v_conic_ptr = (float*)(v_conic);
-                atomicAdd(v_conic_ptr + 3*g + 0, v_conic_local.x);
-                atomicAdd(v_conic_ptr + 3*g + 1, v_conic_local.y);
-                atomicAdd(v_conic_ptr + 3*g + 2, v_conic_local.z);
-                
-                float* v_xy_ptr = (float*)(v_xy);
-                atomicAdd(v_xy_ptr + 2*g + 0, v_xy_local.x);
-                atomicAdd(v_xy_ptr + 2*g + 1, v_xy_local.y);
-                
+                float *v_rgb_ptr = (float *)(v_rgb);
+                atomicAdd(v_rgb_ptr + 3 * g + 0, v_rgb_local.x);
+                atomicAdd(v_rgb_ptr + 3 * g + 1, v_rgb_local.y);
+                atomicAdd(v_rgb_ptr + 3 * g + 2, v_rgb_local.z);
+
+                float *v_conic_ptr = (float *)(v_conic);
+                atomicAdd(v_conic_ptr + 3 * g + 0, v_conic_local.x);
+                atomicAdd(v_conic_ptr + 3 * g + 1, v_conic_local.y);
+                atomicAdd(v_conic_ptr + 3 * g + 2, v_conic_local.z);
+
+                float *v_xy_ptr = (float *)(v_xy);
+                atomicAdd(v_xy_ptr + 2 * g + 0, v_xy_local.x);
+                atomicAdd(v_xy_ptr + 2 * g + 1, v_xy_local.y);
+
                 atomicAdd(v_opacity + g, v_opacity_local);
             }
         }
@@ -310,25 +312,26 @@ __global__ void rasterize_backward_kernel(
 
 __global__ void project_gaussians_backward_kernel(
     const int num_points,
-    const float3* __restrict__ means3d,
-    const float3* __restrict__ scales,
+    const float3 *__restrict__ means3d,
+    const float3 *__restrict__ scales,
     const float glob_scale,
-    const float4* __restrict__ quats,
-    const float* __restrict__ viewmat,
-    const float* __restrict__ projmat,
+    const float4 *__restrict__ quats,
+    const float *__restrict__ viewmat,
+    const float *__restrict__ projmat,
+    const float *__restrict__ fullmat,
     const float4 intrins,
     const dim3 img_size,
-    const float* __restrict__ cov3d,
-    const int* __restrict__ radii,
-    const float3* __restrict__ conics,
-    const float2* __restrict__ v_xy,
-    const float* __restrict__ v_depth,
-    const float3* __restrict__ v_conic,
-    float3* __restrict__ v_cov2d,
-    float* __restrict__ v_cov3d,
-    float3* __restrict__ v_mean3d,
-    float3* __restrict__ v_scale,
-    float4* __restrict__ v_quat
+    const float *__restrict__ cov3d,
+    const int *__restrict__ radii,
+    const float3 *__restrict__ conics,
+    const float2 *__restrict__ v_xy,
+    const float *__restrict__ v_depth,
+    const float3 *__restrict__ v_conic,
+    float3 *__restrict__ v_cov2d,
+    float *__restrict__ v_cov3d,
+    float3 *__restrict__ v_mean3d,
+    float3 *__restrict__ v_scale,
+    float4 *__restrict__ v_quat
 ) {
     unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
     if (idx >= num_points || radii[idx] <= 0) {
@@ -339,20 +342,16 @@ __global__ void project_gaussians_backward_kernel(
     float fy = intrins.y;
     float cx = intrins.z;
     float cy = intrins.w;
-    // get v_mean3d from v_xy
-    v_mean3d[idx] = project_pix_vjp(projmat, p_world, img_size, v_xy[idx]);
 
-    // get z gradient contribution to mean3d gradient
-    // z = viemwat[8] * mean3d.x + viewmat[9] * mean3d.y + viewmat[10] *
-    // mean3d.z + viewmat[11]
-    float v_z = v_depth[idx];
-    v_mean3d[idx].x += viewmat[8] * v_z;
-    v_mean3d[idx].y += viewmat[9] * v_z;
-    v_mean3d[idx].z += viewmat[10] * v_z;
+    // get xy gradient contribution to view space xyz gradient
+    float4 v_view =
+        project_pix_vjp(projmat, fullmat, p_world, img_size, v_xy[idx]);
+    // add depth contribution to view space gradient
+    v_view.z += v_depth[idx];
 
-    // get v_cov2d
+    // get v_cov2d from v_conic
     cov2d_to_conic_vjp(conics[idx], v_conic[idx], v_cov2d[idx]);
-    // get v_cov3d (and v_mean3d contribution)
+    // get v_cov3d (and v_view contribution) from v_cov2d
     project_cov3d_ewa_vjp(
         p_world,
         &(cov3d[6 * idx]),
@@ -360,10 +359,10 @@ __global__ void project_gaussians_backward_kernel(
         fx,
         fy,
         v_cov2d[idx],
-        v_mean3d[idx],
+        v_view,
         &(v_cov3d[6 * idx])
     );
-    // get v_scale and v_quat
+    // get v_scale and v_quat from v_cov3d
     scale_rot_to_cov3d_vjp(
         scales[idx],
         glob_scale,
@@ -372,18 +371,26 @@ __global__ void project_gaussians_backward_kernel(
         v_scale[idx],
         v_quat[idx]
     );
+    // v_view -> v_mean3d in world space
+    // v_mean3d = viewmat^T * v_view
+    v_mean3d[idx].x =
+        viewmat[0] * v_view.x + viewmat[4] * v_view.y + viewmat[8] * v_view.z;
+    v_mean3d[idx].y =
+        viewmat[1] * v_view.x + viewmat[5] * v_view.y + viewmat[9] * v_view.z;
+    v_mean3d[idx].z =
+        viewmat[2] * v_view.x + viewmat[6] * v_view.y + viewmat[10] * v_view.z;
 }
 
 // output space: 2D covariance, input space: cov3d
 __device__ void project_cov3d_ewa_vjp(
-    const float3& __restrict__ mean3d,
-    const float* __restrict__ cov3d,
-    const float* __restrict__ viewmat,
+    const float3 &__restrict__ mean3d,
+    const float *__restrict__ cov3d,
+    const float *__restrict__ viewmat,
     const float fx,
     const float fy,
-    const float3& __restrict__ v_cov2d,
-    float3& __restrict__ v_mean3d,
-    float* __restrict__ v_cov3d
+    const float3 &__restrict__ v_cov2d,
+    float4 &__restrict__ v_view,
+    float *__restrict__ v_cov3d
 ) {
     // viewmat is row major, glm is column major
     // upper 3x3 submatrix
@@ -442,17 +449,11 @@ __device__ void project_cov3d_ewa_vjp(
     // T = J * W
     glm::mat3 v_J = v_T * glm::transpose(W);
     float rz3 = rz2 * rz;
-    glm::vec3 v_t = glm::vec3(
-        -fx * rz2 * v_J[2][0],
-        -fy * rz2 * v_J[2][1],
-        -fx * rz2 * v_J[0][0] + 2.f * fx * t.x * rz3 * v_J[2][0] -
-            fy * rz2 * v_J[1][1] + 2.f * fy * t.y * rz3 * v_J[2][1]
-    );
-    // printf("v_t %.2f %.2f %.2f\n", v_t[0], v_t[1], v_t[2]);
-    // printf("W %.2f %.2f %.2f\n", W[0][0], W[0][1], W[0][2]);
-    v_mean3d.x += (float)glm::dot(v_t, W[0]);
-    v_mean3d.y += (float)glm::dot(v_t, W[1]);
-    v_mean3d.z += (float)glm::dot(v_t, W[2]);
+    v_view.x += (float)(-fx * rz2 * v_J[2][0]);
+    v_view.y += (float)(-fy * rz2 * v_J[2][1]);
+    v_view.z += (float
+    )(-fx * rz2 * v_J[0][0] + 2.f * fx * t.x * rz3 * v_J[2][0] -
+      fy * rz2 * v_J[1][1] + 2.f * fy * t.y * rz3 * v_J[2][1]);
 }
 
 // given cotangent v in output space (e.g. d_L/d_cov3d) in R(6)
@@ -461,9 +462,9 @@ __device__ void scale_rot_to_cov3d_vjp(
     const float3 scale,
     const float glob_scale,
     const float4 quat,
-    const float* __restrict__ v_cov3d,
-    float3& __restrict__ v_scale,
-    float4& __restrict__ v_quat
+    const float *__restrict__ v_cov3d,
+    float3 &__restrict__ v_scale,
+    float4 &__restrict__ v_quat
 ) {
     // cov3d is upper triangular elements of matrix
     // off-diagonal elements count grads from both ij and ji elements,
