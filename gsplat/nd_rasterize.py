@@ -61,8 +61,8 @@ class NDRasterizeGaussians(Function):
         if xys.ndimension() != 2 or xys.size(1) != 2:
             raise ValueError("xys must have dimensions (N, 2)")
 
-        if colors.ndimension() != 2 or colors.size(1) != 3:
-            raise ValueError("colors must have dimensions (N, 3)")
+        if colors.ndimension() != 2:
+            raise ValueError("colors must have dimensions (N, D)")
 
         channels = colors.size(1)
         num_points = xys.size(0)
