@@ -208,7 +208,7 @@ def compute_cov2d_bounds(cov2d_mat: Tensor):
 
 
 def ndc2pix(x, W, c):
-    return 0.5 * W * x + 0.5 + c
+    return 0.5 * W * x - 0.5 + c
 
 
 def project_pix(fullmat, p, img_size, center, eps=1e-6):
