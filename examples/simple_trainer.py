@@ -105,7 +105,7 @@ class SimpleTrainer:
             torch.cuda.synchronize()
             times[0] += time.time() - start
             start = time.time()
-            out_img = RasterizeGaussians.apply(
+            out_img, _ = RasterizeGaussians.apply(
                 xys,
                 depths,
                 radii,

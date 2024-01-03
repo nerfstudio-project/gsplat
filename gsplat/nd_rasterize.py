@@ -31,6 +31,7 @@ class NDRasterizeGaussians(Function):
         A Tensor:
 
         - **out_img** (Tensor): N-dimensional rendered output image.
+        - **out_alpha** (Tensor): Alpha channel of the rendered output image.
     """
 
     @staticmethod
@@ -116,13 +117,17 @@ class NDRasterizeGaussians(Function):
             final_Ts,
             final_idx,
         )
+        out_alpha = 1 - final_Ts
 
-        return out_img
+        return out_img, out_alpha
 
     @staticmethod
-    def backward(ctx, v_out_img):
+    def backward(ctx, v_out_img, v_out_alpha=None):
         img_height = ctx.img_height
         img_width = ctx.img_width
+
+        if v_out_alpha is None:
+            v_out_alpha = torch.zeros_like(v_out_img[..., 0])
 
         (
             gaussian_ids_sorted,
@@ -149,6 +154,7 @@ class NDRasterizeGaussians(Function):
             final_Ts.contiguous().cuda(),
             final_idx.contiguous().cuda(),
             v_out_img.contiguous().cuda(),
+            v_out_alpha.contiguous().cuda(),
         )
 
         return (
