@@ -9,7 +9,7 @@ gsplat is an open-source library for CUDA accelerated rasterization of gaussians
 
 This project was greatly inspired by original paper [3D Gaussian Splatting
 for Real-Time Radiance Field Rendering
-](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/) by Kerbl* and Kopanas* et al. While building this library, we prioritized having a developer friendly Python API. As such, when this backend is plugged into the nerfstudio pipeline, it trains 5x~ slower than the original implementation. Please refer to the original [code release](https://github.com/graphdeco-inria/gaussian-splatting) for the optimized implementation. 
+](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/) by Kerbl* and Kopanas* et al. While building this library, we prioritized having a developer friendly Python API. 
 
 ![Teaser](/docs/source/imgs/training.gif?raw=true)
 
@@ -49,8 +49,16 @@ url = {https://github.com/nerfstudio-project/gsplat}
 }
 ```
 
-
-We will soon release the mathematical supplement for the library, which we will post when it is out.
-
+We also have made the mathematical supplement, with conventions and derivations, available [here](https://arxiv.org/abs/2312.02121). If you find the supplement useful, please consider citing:
+```
+@misc{ye2023mathematical,
+    title={Mathematical Supplement for the $\texttt{gsplat}$ Library}, 
+    author={Vickie Ye and Angjoo Kanazawa},
+    year={2023},
+    eprint={2312.02121},
+    archivePrefix={arXiv},
+    primaryClass={cs.MS}
+}
+```
 
 We welcome contributions of any kind and are open to feedback, bug-reports, and improvements to help expand the capabilities of this software. Please check [docs/DEV.md](docs/DEV.md) for more info about development.
