@@ -4,10 +4,6 @@
 #include "third_party/glm/glm/gtc/type_ptr.hpp"
 #include <iostream>
 
-inline __device__ float ndc2pix(const float x, const float W, const float cx) {
-    return 0.5f * W * x + cx - 0.5;
-}
-
 inline __device__ void get_bbox(
     const float2 center,
     const float2 dims,
@@ -81,6 +77,16 @@ inline __device__ void cov2d_to_conic_vjp(
     v_cov2d.z = v_Sigma[1][1];
 }
 
+// helper for applying R^T * p for a ROW MAJOR 4x3 matrix [R, t], ignoring t
+inline __device__ float3 transform_4x3_rot_only_transposed(const float *mat, const float3 p) {
+    float3 out = {
+        mat[0] * p.x + mat[4] * p.y + mat[8] * p.z,
+        mat[1] * p.x + mat[5] * p.y + mat[9] * p.z,
+        mat[2] * p.x + mat[6] * p.y + mat[10] * p.z,
+    };
+    return out;
+}
+
 // helper for applying R * p + T, expect mat to be ROW MAJOR
 inline __device__ float3 transform_4x3(const float *mat, const float3 p) {
     float3 out = {
@@ -104,36 +110,26 @@ inline __device__ float4 transform_4x4(const float *mat, const float3 p) {
 }
 
 inline __device__ float2 project_pix(
-    const float *mat, const float3 p, const dim3 img_size, const float2 pp
+    const float2 fxfy, const float3 p_view, const float2 pp
 ) {
-    // ROW MAJOR mat
-    float4 p_hom = transform_4x4(mat, p);
-    float rw = 1.f / (p_hom.w + 1e-6f);
-    float3 p_proj = {p_hom.x * rw, p_hom.y * rw, p_hom.z * rw};
-    return {
-        ndc2pix(p_proj.x, img_size.x, pp.x), ndc2pix(p_proj.y, img_size.y, pp.y)
-    };
+    float rw = 1.f / (p_view.z + 1e-6f);
+    float2 p_proj = { p_view.x * rw, p_view.y * rw };
+    // TODO: check if +-0.5 should be added to pix coords or not
+    // this depends on rasterize
+    float2 p_pix = { p_proj.x * fxfy.x + pp.x, p_proj.y * fxfy.y + pp.y };
+    return p_pix;
 }
 
 // given v_xy_pix, get v_xyz
 inline __device__ float3 project_pix_vjp(
-    const float *mat, const float3 p, const dim3 img_size, const float2 v_xy
+    const float2 fxfy, const float3 p_view, const float2 v_xy
 ) {
-    // ROW MAJOR mat
-    float4 p_hom = transform_4x4(mat, p);
-    float rw = 1.f / (p_hom.w + 1e-6f);
-
-    float3 v_ndc = {0.5f * img_size.x * v_xy.x, 0.5f * img_size.y * v_xy.y};
-    float4 v_proj = {
-        v_ndc.x * rw, v_ndc.y * rw, 0., -(v_ndc.x + v_ndc.y) * rw * rw
+    float rw = 1.f / (p_view.z + 1e-6f);
+    float2 v_proj = { fxfy.x * v_xy.x, fxfy.y * v_xy.y };
+    float3 v_view = {
+        v_proj.x * rw, v_proj.y * rw, -(v_proj.x * p_view.x + v_proj.y * p_view.y) * rw * rw
     };
-    // df / d_world = df / d_cam * d_cam / d_world
-    // = v_proj * P[:3, :3]
-    return {
-        mat[0] * v_proj.x + mat[4] * v_proj.y + mat[8] * v_proj.z,
-        mat[1] * v_proj.x + mat[5] * v_proj.y + mat[9] * v_proj.z,
-        mat[2] * v_proj.x + mat[6] * v_proj.y + mat[10] * v_proj.z
-    };
+    return v_view;
 }
 
 inline __device__ glm::mat3 quat_to_rotmat(const float4 quat) {

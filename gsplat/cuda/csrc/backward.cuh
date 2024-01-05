@@ -12,7 +12,6 @@ __global__ void project_gaussians_backward_kernel(
     const float glob_scale,
     const float4* __restrict__ quats,
     const float* __restrict__ viewmat,
-    const float* __restrict__ projmat,
     const float4 intrins,
     const dim3 img_size,
     const float* __restrict__ cov3d,

@@ -275,10 +275,10 @@ __global__ void rasterize_backward_kernel(
                 buffer.z += rgb.z * fac;
 
                 const float v_sigma = -opac * vis * v_alpha;
-                v_conic_local = {0.5f * v_sigma * delta.x * delta.x, 
-                                        0.5f * v_sigma * delta.x * delta.y, 
+                v_conic_local = {0.5f * v_sigma * delta.x * delta.x,
+                                        0.5f * v_sigma * delta.x * delta.y,
                                         0.5f * v_sigma * delta.y * delta.y};
-                v_xy_local = {v_sigma * (conic.x * delta.x + conic.y * delta.y), 
+                v_xy_local = {v_sigma * (conic.x * delta.x + conic.y * delta.y),
                                     v_sigma * (conic.y * delta.x + conic.z * delta.y)};
                 v_opacity_local = vis * v_alpha;
             }
@@ -292,16 +292,16 @@ __global__ void rasterize_backward_kernel(
                 atomicAdd(v_rgb_ptr + 3*g + 0, v_rgb_local.x);
                 atomicAdd(v_rgb_ptr + 3*g + 1, v_rgb_local.y);
                 atomicAdd(v_rgb_ptr + 3*g + 2, v_rgb_local.z);
-                
+
                 float* v_conic_ptr = (float*)(v_conic);
                 atomicAdd(v_conic_ptr + 3*g + 0, v_conic_local.x);
                 atomicAdd(v_conic_ptr + 3*g + 1, v_conic_local.y);
                 atomicAdd(v_conic_ptr + 3*g + 2, v_conic_local.z);
-                
+
                 float* v_xy_ptr = (float*)(v_xy);
                 atomicAdd(v_xy_ptr + 2*g + 0, v_xy_local.x);
                 atomicAdd(v_xy_ptr + 2*g + 1, v_xy_local.y);
-                
+
                 atomicAdd(v_opacity + g, v_opacity_local);
             }
         }
@@ -315,7 +315,6 @@ __global__ void project_gaussians_backward_kernel(
     const float glob_scale,
     const float4* __restrict__ quats,
     const float* __restrict__ viewmat,
-    const float* __restrict__ projmat,
     const float4 intrins,
     const dim3 img_size,
     const float* __restrict__ cov3d,
@@ -337,10 +336,11 @@ __global__ void project_gaussians_backward_kernel(
     float3 p_world = means3d[idx];
     float fx = intrins.x;
     float fy = intrins.y;
-    float cx = intrins.z;
-    float cy = intrins.w;
+    float3 p_view = transform_4x3(viewmat, p_world);
     // get v_mean3d from v_xy
-    v_mean3d[idx] = project_pix_vjp(projmat, p_world, img_size, v_xy[idx]);
+    v_mean3d[idx] = transform_4x3_rot_only_transposed(
+        viewmat,
+        project_pix_vjp({fx, fy}, p_view, v_xy[idx]));
 
     // get z gradient contribution to mean3d gradient
     // z = viemwat[8] * mean3d.x + viewmat[9] * mean3d.y + viewmat[10] *

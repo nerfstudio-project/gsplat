@@ -1,13 +1,12 @@
 """Python bindings for 3D gaussian projection"""
 
-from typing import Tuple
+from typing import Optional, Tuple
 
 from jaxtyping import Float
 from torch import Tensor
 from torch.autograd import Function
 
 import gsplat.cuda as _C
-
 
 class ProjectGaussians(Function):
     """This function projects 3D gaussians to 2D using the EWA splatting method for gaussian splatting.
@@ -18,7 +17,7 @@ class ProjectGaussians(Function):
        glob_scale (float): A global scaling factor applied to the scene.
        quats (Tensor): rotations in quaternion [w,x,y,z] format.
        viewmat (Tensor): view matrix for rendering.
-       projmat (Tensor): projection matrix for rendering.
+       projmat (Tensor): DEPRECATED and ignored. Set to None
        fx (float): focal length x.
        fy (float): focal length y.
        img_height (int): height of the rendered image.
@@ -45,7 +44,7 @@ class ProjectGaussians(Function):
         glob_scale: float,
         quats: Float[Tensor, "*batch 4"],
         viewmat: Float[Tensor, "4 4"],
-        projmat: Float[Tensor, "4 4"],
+        projmat: Optional[Float[Tensor, "4 4"]],
         fx: float,
         fy: float,
         cx: float,
@@ -71,7 +70,6 @@ class ProjectGaussians(Function):
             glob_scale,
             quats,
             viewmat,
-            projmat,
             fx,
             fy,
             cx,
@@ -98,7 +96,6 @@ class ProjectGaussians(Function):
             scales,
             quats,
             viewmat,
-            projmat,
             cov3d,
             radii,
             conics,
@@ -113,7 +110,6 @@ class ProjectGaussians(Function):
             scales,
             quats,
             viewmat,
-            projmat,
             cov3d,
             radii,
             conics,
@@ -126,7 +122,6 @@ class ProjectGaussians(Function):
             ctx.glob_scale,
             quats,
             viewmat,
-            projmat,
             ctx.fx,
             ctx.fy,
             ctx.cx,
