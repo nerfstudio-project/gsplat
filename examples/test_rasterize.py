@@ -119,7 +119,8 @@ class SimpleTrainer:
             torch.sigmoid(self.opacities),
             self.H,
             self.W,
-            return_depth=True,
+            None,
+            True,
         )
 
     def forward_slow(self):

@@ -105,7 +105,7 @@ class RasterizeGaussians(Function):
             )
         else:
             # TODO rasterize_depth_forward
-            out_img, out_depth, final_Ts, final_idx = _C.rasterize_with_depth_forward(
+            out_img, out_depth, final_Ts, final_idx = _C.rasterize_forward_depth(
                 tile_bounds,
                 block,
                 img_size,
