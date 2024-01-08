@@ -8,6 +8,7 @@ from torch import Tensor
 from torch.autograd import Function
 
 import gsplat.cuda as _C
+
 from .bin_and_sort_gaussians import bin_and_sort_gaussians
 from .compute_cumulative_intersects import compute_cumulative_intersects
 
@@ -46,6 +47,7 @@ class RasterizeGaussians(Function):
         img_height: int,
         img_width: int,
         background: Optional[Float[Tensor, "channels"]] = None,
+        return_depth: bool = False
     ):
         if colors.dtype == torch.uint8:
             # make sure colors are float [0,1]
@@ -88,18 +90,33 @@ class RasterizeGaussians(Function):
             num_points, num_intersects, xys, depths, radii, cum_tiles_hit, tile_bounds
         )
 
-        out_img, final_Ts, final_idx = _C.rasterize_forward(
-            tile_bounds,
-            block,
-            img_size,
-            gaussian_ids_sorted.contiguous(),
-            tile_bins,
-            xys.contiguous(),
-            conics.contiguous(),
-            colors.contiguous(),
-            opacity.contiguous(),
-            background.contiguous(),
-        )
+        if not return_depth:
+            out_img, final_Ts, final_idx = _C.rasterize_forward(
+                tile_bounds,
+                block,
+                img_size,
+                gaussian_ids_sorted.contiguous(),
+                tile_bins,
+                xys.contiguous(),
+                conics.contiguous(),
+                colors.contiguous(),
+                opacity.contiguous(),
+                background.contiguous(),
+            )
+        else:
+            # TODO rasterize_depth_forward
+            out_img, out_depth, final_Ts, final_idx = _C.rasterize_with_depth_forward(
+                tile_bounds,
+                block,
+                img_size,
+                gaussian_ids_sorted.contiguous(),
+                tile_bins,
+                xys.contiguous(),
+                conics.contiguous(),
+                colors.contiguous(),
+                opacity.contiguous(),
+                background.contiguous(),
+            )
 
         ctx.img_width = img_width
         ctx.img_height = img_height
@@ -114,8 +131,10 @@ class RasterizeGaussians(Function):
             final_Ts,
             final_idx,
         )
+        if not return_depth:
+            return out_img
 
-        return out_img
+        return out_img, out_depth
 
     @staticmethod
     def backward(ctx, v_out_img):
