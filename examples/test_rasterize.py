@@ -119,6 +119,7 @@ class SimpleTrainer:
             torch.sigmoid(self.opacities),
             self.H,
             self.W,
+            return_depth=True,
         )
 
     def forward_slow(self):
@@ -171,7 +172,7 @@ class SimpleTrainer:
             ]
 
             optimizer.zero_grad()
-            new_out = self.forward_new()
+            new_out, new_depth = self.forward_new()
             loss = mse_loss(new_out, self.gt_image)
             loss.backward()
 

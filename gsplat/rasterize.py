@@ -112,6 +112,7 @@ class RasterizeGaussians(Function):
                 gaussian_ids_sorted.contiguous(),
                 tile_bins,
                 xys.contiguous(),
+                depths.contiguous(),
                 conics.contiguous(),
                 colors.contiguous(),
                 opacity.contiguous(),
