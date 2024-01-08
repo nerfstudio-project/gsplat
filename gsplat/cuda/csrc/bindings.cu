@@ -464,7 +464,7 @@ rasterize_forward_depth_tensor(
         final_idx.contiguous().data_ptr<int>(),
         (float3 *)out_img.contiguous().data_ptr<float>(),
         out_depth.contiguous().data_ptr<float>(),
-        *(float3 *)background.contiguous().data_ptr<float>(),
+        *(float3 *)background.contiguous().data_ptr<float>()
     );
 
     return std::make_tuple(out_img, out_depth, final_Ts, final_idx);
