@@ -463,7 +463,7 @@ rasterize_forward_depth_tensor(
         final_Ts.contiguous().data_ptr<float>(),
         final_idx.contiguous().data_ptr<int>(),
         (float3 *)out_img.contiguous().data_ptr<float>(),
-        (float *)out_depth.contiguous().data_ptr<float>(),
+        out_depth.contiguous().data_ptr<float>(),
         *(float3 *)background.contiguous().data_ptr<float>(),
     );
 
