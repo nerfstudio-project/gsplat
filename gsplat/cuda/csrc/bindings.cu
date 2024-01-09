@@ -17,7 +17,10 @@
 namespace cg = cooperative_groups;
 
 __global__ void compute_cov2d_bounds_kernel(
-    const unsigned num_pts, const float* __restrict__ covs2d, float* __restrict__ conics, float* __restrict__ radii
+    const unsigned num_pts,
+    const float *__restrict__ covs2d,
+    float *__restrict__ conics,
+    float *__restrict__ radii
 ) {
     unsigned row = cg::this_grid().thread_rank();
     if (row >= num_pts) {
@@ -27,8 +30,9 @@ __global__ void compute_cov2d_bounds_kernel(
     float3 conic;
     float radius;
     float3 cov2d{
-        (float)covs2d[index], (float)covs2d[index + 1], (float)covs2d[index + 2]
-    };
+        (float)covs2d[index],
+        (float)covs2d[index + 1],
+        (float)covs2d[index + 2]};
     compute_cov2d_bounds(cov2d, conic, radius);
     conics[index] = conic.x;
     conics[index + 1] = conic.y;
@@ -115,7 +119,6 @@ torch::Tensor compute_sh_backward_tensor(
     return v_coeffs;
 }
 
-
 std::tuple<
     torch::Tensor,
     torch::Tensor,
@@ -130,7 +133,7 @@ project_gaussians_forward_tensor(
     const float glob_scale,
     torch::Tensor &quats,
     torch::Tensor &viewmat,
-    torch::Tensor &projmat,
+    torch::Tensor &fullmat,
     const float fx,
     const float fy,
     const float cx,
@@ -174,7 +177,7 @@ project_gaussians_forward_tensor(
         glob_scale,
         (float4 *)quats.contiguous().data_ptr<float>(),
         viewmat.contiguous().data_ptr<float>(),
-        projmat.contiguous().data_ptr<float>(),
+        fullmat.contiguous().data_ptr<float>(),
         intrins,
         img_size_dim3,
         tile_bounds_dim3,
@@ -207,6 +210,7 @@ project_gaussians_backward_tensor(
     torch::Tensor &quats,
     torch::Tensor &viewmat,
     torch::Tensor &projmat,
+    torch::Tensor &fullmat,
     const float fx,
     const float fy,
     const float cx,
@@ -250,6 +254,7 @@ project_gaussians_backward_tensor(
         (float4 *)quats.contiguous().data_ptr<float>(),
         viewmat.contiguous().data_ptr<float>(),
         projmat.contiguous().data_ptr<float>(),
+        fullmat.contiguous().data_ptr<float>(),
         intrins,
         img_size_dim3,
         cov3d.contiguous().data_ptr<float>(),
@@ -395,7 +400,6 @@ rasterize_forward_tensor(
     return std::make_tuple(out_img, final_Ts, final_idx);
 }
 
-
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 nd_rasterize_forward_tensor(
     const std::tuple<int, int, int> tile_bounds,
@@ -465,8 +469,6 @@ nd_rasterize_forward_tensor(
     return std::make_tuple(out_img, final_Ts, final_idx);
 }
 
-
-
 std::
     tuple<
         torch::Tensor, // dL_dxy
@@ -504,8 +506,7 @@ std::
     const dim3 tile_bounds = {
         (img_width + BLOCK_X - 1) / BLOCK_X,
         (img_height + BLOCK_Y - 1) / BLOCK_Y,
-        1
-    };
+        1};
     const dim3 block(BLOCK_X, BLOCK_Y, 1);
     const dim3 img_size = {img_width, img_height, 1};
     const int channels = colors.size(1);
@@ -587,8 +588,7 @@ std::
     const dim3 tile_bounds = {
         (img_width + BLOCK_X - 1) / BLOCK_X,
         (img_height + BLOCK_Y - 1) / BLOCK_Y,
-        1
-    };
+        1};
     const dim3 block(BLOCK_X, BLOCK_Y, 1);
     const dim3 img_size = {img_width, img_height, 1};
     const int channels = colors.size(1);

@@ -48,7 +48,7 @@ project_gaussians_forward_tensor(
     const float glob_scale,
     torch::Tensor &quats,
     torch::Tensor &viewmat,
-    torch::Tensor &projmat,
+    torch::Tensor &fullmat,
     const float fx,
     const float fy,
     const float cx,
@@ -73,6 +73,7 @@ project_gaussians_backward_tensor(
     torch::Tensor &quats,
     torch::Tensor &viewmat,
     torch::Tensor &projmat,
+    torch::Tensor &fullmat,
     const float fx,
     const float fy,
     const float cx,
@@ -99,15 +100,11 @@ std::tuple<torch::Tensor, torch::Tensor> map_gaussian_to_intersects_tensor(
 );
 
 torch::Tensor get_tile_bin_edges_tensor(
-    int num_intersects,
-    const torch::Tensor &isect_ids_sorted
+    int num_intersects, const torch::Tensor &isect_ids_sorted
 );
 
-std::tuple<
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor
-> rasterize_forward_tensor(
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+rasterize_forward_tensor(
     const std::tuple<int, int, int> tile_bounds,
     const std::tuple<int, int, int> block,
     const std::tuple<int, int, int> img_size,
@@ -120,11 +117,8 @@ std::tuple<
     const torch::Tensor &background
 );
 
-std::tuple<
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor
-> nd_rasterize_forward_tensor(
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+nd_rasterize_forward_tensor(
     const std::tuple<int, int, int> tile_bounds,
     const std::tuple<int, int, int> block,
     const std::tuple<int, int, int> img_size,
@@ -136,7 +130,6 @@ std::tuple<
     const torch::Tensor &opacities,
     const torch::Tensor &background
 );
-
 
 std::
     tuple<

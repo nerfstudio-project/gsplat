@@ -96,6 +96,7 @@ class _ProjectGaussians(Function):
         clip_thresh: float = 0.01,
     ):
         num_points = means3d.shape[-2]
+        fullmat = projmat @ viewmat
 
         (
             cov3d,
@@ -111,7 +112,7 @@ class _ProjectGaussians(Function):
             glob_scale,
             quats,
             viewmat,
-            projmat,
+            fullmat,
             fx,
             fy,
             cx,
@@ -139,6 +140,7 @@ class _ProjectGaussians(Function):
             quats,
             viewmat,
             projmat,
+            fullmat,
             cov3d,
             radii,
             conics,
@@ -154,6 +156,7 @@ class _ProjectGaussians(Function):
             quats,
             viewmat,
             projmat,
+            fullmat,
             cov3d,
             radii,
             conics,
@@ -167,6 +170,7 @@ class _ProjectGaussians(Function):
             quats,
             viewmat,
             projmat,
+            fullmat,
             ctx.fx,
             ctx.fy,
             ctx.cx,
