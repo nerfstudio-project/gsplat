@@ -4,7 +4,7 @@ ProjectGaussians
 .. currentmodule:: gsplat
 
 Given 3D gaussians parametrized by means :math:`μ`, covariances :math:`Σ`, colors :math:`c`, and opacities :math:`o`, the 
-ProjectGaussians function computes the projected 2D gaussians in the camera frame with means :math:`μ'`, covariances :math:`Σ'`, and depths :math:`z`
+:func:`gsplat.project_gaussians` function computes the projected 2D gaussians in the camera frame with means :math:`μ'`, covariances :math:`Σ'`, and depths :math:`z`
 as well as their maximum radii in screen space and conic parameters. 
 
 Note, covariances are reparametrized by the eigen decomposition:
@@ -39,4 +39,4 @@ Citations
     :style: unsrt
     :filter: docname in docnames
 
-.. autoclass:: ProjectGaussians
+.. autofunction:: project_gaussians

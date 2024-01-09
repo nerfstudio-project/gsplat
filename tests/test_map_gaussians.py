@@ -8,7 +8,7 @@ device = torch.device("cuda:0")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_map_gaussians():
     from gsplat import _torch_impl
-    from gsplat.map_gaussian_to_intersects import MapGaussiansToIntersects
+    from gsplat.map_gaussian_to_intersects import map_gaussian_to_intersects
 
     torch.manual_seed(42)
 
@@ -65,7 +65,7 @@ def test_map_gaussians():
         num_points, _xys, _depths, _radii, _cum_tiles_hit, tile_bounds
     )
 
-    isect_ids, gaussian_ids = MapGaussiansToIntersects.apply(
+    isect_ids, gaussian_ids = map_gaussian_to_intersects(
         num_points, _num_intersects, _xys, _depths, _radii, _cum_tiles_hit, tile_bounds
     )
 

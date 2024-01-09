@@ -4,7 +4,7 @@ RasterizeGaussians
 .. currentmodule:: gsplat
 
 Given 2D gaussians that are parametrized by their means :math:`μ'` and covariances :math:`Σ'` as well as their radii and conic parameters,
-the RasterizeGaussians function first sorts each gaussian such that all gaussians within the bounds of a tile are grouped and sorted by increasing depth :math:`z`,
+the :func:`gsplat.rasterize_gaussians` function first sorts each gaussian such that all gaussians within the bounds of a tile are grouped and sorted by increasing depth :math:`z`,
 and then renders each pixel within a tile with alpha-compositing. 
 
 The discrete rendering equation is given by: 
@@ -30,9 +30,9 @@ And
 
 :math:`σ ∈ R^{2}` is the Mahalanobis distance (here referred to as sigma) which measures how many standard deviations away the center of a gaussian and the rendered pixel center is which is denoted by delta :math:`∆.`
 
-The python bindings support conventional 3-channel RGB rasterization with `RasterizeGaussians` as well as N-dimensional rasterization with `NDRasterizeGaussians`.
+The python bindings support conventional 3-channel RGB rasterization with :func:`gsplat.rasterize_gaussians` as well as N-dimensional rasterization with :func:`gsplat.ndrasterize_gaussians`.
 
 
-.. autoclass:: RasterizeGaussians
+.. autofunction:: rasterize_gaussians
 
-.. autoclass:: NDRasterizeGaussians
+.. autofunction:: ndrasterize_gaussians

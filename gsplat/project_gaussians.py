@@ -10,32 +10,7 @@ import gsplat.cuda as _C
 
 
 class ProjectGaussians(Function):
-    """This function projects 3D gaussians to 2D using the EWA splatting method for gaussian splatting.
-
-    Args:
-       means3d (Tensor): xyzs of gaussians.
-       scales (Tensor): scales of the gaussians.
-       glob_scale (float): A global scaling factor applied to the scene.
-       quats (Tensor): rotations in quaternion [w,x,y,z] format.
-       viewmat (Tensor): view matrix for rendering.
-       projmat (Tensor): projection matrix for rendering.
-       fx (float): focal length x.
-       fy (float): focal length y.
-       img_height (int): height of the rendered image.
-       img_width (int): width of the rendered image.
-       tile_bounds (Tuple): tile dimensions as a len 3 tuple (tiles.x , tiles.y, 1).
-       clip_thresh (float): minimum z depth threshold.
-
-    Returns:
-        A tuple of {Tensor, Tensor, Tensor, Tensor, int, Tensor}:
-
-        - **xys** (Tensor): x,y locations of 2D gaussian projections.
-        - **depths** (Tensor): z depth of gaussians.
-        - **radii** (Tensor): radii of 2D gaussian projections.
-        - **conics** (Tensor): conic parameters for 2D gaussian.
-        - **num_tiles_hit** (int): number of tiles hit.
-        - **cov3d** (Tensor): 3D covariances.
-    """
+    """Project 3D gaussians to 2D."""
 
     @staticmethod
     def forward(
@@ -169,4 +144,70 @@ class ProjectGaussians(Function):
             None,
             # tile_bounds: Tuple[int, int, int],
             None,
+            # clip_thresh,
+            None,
         )
+
+def project_gaussians(
+    means3d: Float[Tensor, "*batch 3"],
+    scales: Float[Tensor, "*batch 3"],
+    glob_scale: float,
+    quats: Float[Tensor, "*batch 4"],
+    viewmat: Float[Tensor, "4 4"],
+    projmat: Float[Tensor, "4 4"],
+    fx: float,
+    fy: float,
+    cx: float,
+    cy: float,
+    img_height: int,
+    img_width: int,
+    tile_bounds: Tuple[int, int, int],
+    clip_thresh: float = 0.01,
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, int, Tensor]:
+    """This function projects 3D gaussians to 2D using the EWA splatting method for gaussian splatting.
+
+    Note:
+        This function is differentiable w.r.t the means3d, scales and quats inputs.
+    
+    Args:
+       means3d (Tensor): xyzs of gaussians.
+       scales (Tensor): scales of the gaussians.
+       glob_scale (float): A global scaling factor applied to the scene.
+       quats (Tensor): rotations in quaternion [w,x,y,z] format.
+       viewmat (Tensor): view matrix for rendering.
+       projmat (Tensor): projection matrix for rendering.
+       fx (float): focal length x.
+       fy (float): focal length y.
+       cx (float): principal point x.
+       cy (float): principal point y.
+       img_height (int): height of the rendered image.
+       img_width (int): width of the rendered image.
+       tile_bounds (Tuple): tile dimensions as a len 3 tuple (tiles.x , tiles.y, 1).
+       clip_thresh (float): minimum z depth threshold.
+
+    Returns:
+        A tuple of {Tensor, Tensor, Tensor, Tensor, int, Tensor}:
+
+        - **xys** (Tensor): x,y locations of 2D gaussian projections.
+        - **depths** (Tensor): z depth of gaussians.
+        - **radii** (Tensor): radii of 2D gaussian projections.
+        - **conics** (Tensor): conic parameters for 2D gaussian.
+        - **num_tiles_hit** (int): number of tiles hit.
+        - **cov3d** (Tensor): 3D covariances.
+    """
+    return ProjectGaussians.apply(
+        means3d.contiguous(),
+        scales.contiguous(),
+        glob_scale,
+        quats.contiguous(),
+        viewmat.contiguous(),
+        projmat.contiguous(),
+        fx,
+        fy,
+        cx,
+        cy,
+        img_height,
+        img_width,
+        tile_bounds,
+        clip_thresh,
+    )

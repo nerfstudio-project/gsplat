@@ -13,25 +13,7 @@ from .compute_cumulative_intersects import compute_cumulative_intersects
 
 
 class RasterizeGaussians(Function):
-    """Rasterizes 2D gaussians by sorting and binning gaussian intersections for each tile and returns an output image using alpha-compositing.
-
-    Args:
-        xys (Tensor): xy coords of 2D gaussians.
-        depths (Tensor): depths of 2D gaussians.
-        radii (Tensor): radii of 2D gaussians
-        conics (Tensor): conics (inverse of covariance) of 2D gaussians in upper triangular format
-        num_tiles_hit (Tensor): number of tiles hit per gaussian
-        colors (Tensor): colors associated with the gaussians.
-        opacity (Tensor): opacity associated with the gaussians.
-        img_height (int): height of the rendered image.
-        img_width (int): width of the rendered image.
-        background (Tensor): background color
-
-    Returns:
-        A Tensor:
-
-        - **out_img** (Tensor): 3-channel RGB rendered output image.
-    """
+    """Rasterizes 2D gaussians"""
 
     @staticmethod
     def forward(
@@ -75,7 +57,7 @@ class RasterizeGaussians(Function):
         img_size = (img_width, img_height, 1)
 
         num_intersects, cum_tiles_hit = compute_cumulative_intersects(
-            num_points, num_tiles_hit
+            num_tiles_hit
         )
 
         (
@@ -161,3 +143,50 @@ class RasterizeGaussians(Function):
             None,  # img_width
             None,  # background
         )
+
+def rasterize_gaussians(
+    xys: Float[Tensor, "*batch 2"],
+    depths: Float[Tensor, "*batch 1"],
+    radii: Float[Tensor, "*batch 1"],
+    conics: Float[Tensor, "*batch 3"],
+    num_tiles_hit: Int[Tensor, "*batch 1"],
+    colors: Float[Tensor, "*batch channels"],
+    opacity: Float[Tensor, "*batch 1"],
+    img_height: int,
+    img_width: int,
+    background: Optional[Float[Tensor, "channels"]] = None,
+):
+    """Rasterizes 2D gaussians by sorting and binning gaussian intersections for each tile and returns an output image using alpha-compositing.
+
+    Note:
+        This function is differentiable w.r.t the xys, conics, colors, and opacity inputs.
+
+    Args:
+        xys (Tensor): xy coords of 2D gaussians.
+        depths (Tensor): depths of 2D gaussians.
+        radii (Tensor): radii of 2D gaussians
+        conics (Tensor): conics (inverse of covariance) of 2D gaussians in upper triangular format
+        num_tiles_hit (Tensor): number of tiles hit per gaussian
+        colors (Tensor): colors associated with the gaussians.
+        opacity (Tensor): opacity associated with the gaussians.
+        img_height (int): height of the rendered image.
+        img_width (int): width of the rendered image.
+        background (Tensor): background color
+
+    Returns:
+        A Tensor:
+
+        - **out_img** (Tensor): 3-channel RGB rendered output image.
+    """
+    return RasterizeGaussians.apply(
+        xys,
+        depths,
+        radii,
+        conics,
+        num_tiles_hit,
+        colors,
+        opacity,
+        img_height,
+        img_width,
+        background,
+    )

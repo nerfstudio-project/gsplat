@@ -7,8 +7,8 @@ from typing import Optional
 import numpy as np
 import torch
 import tyro
-from gsplat.project_gaussians import ProjectGaussians
-from gsplat.rasterize import RasterizeGaussians
+from gsplat.project_gaussians import project_gaussians
+from gsplat.rasterize import rasterize_gaussians
 from PIL import Image
 from torch import Tensor, optim
 
@@ -87,7 +87,7 @@ class SimpleTrainer:
         times = [0] * 3  # project, rasterize, backward
         for iter in range(iterations):
             start = time.time()
-            xys, depths, radii, conics, num_tiles_hit, cov3d = ProjectGaussians.apply(
+            xys, depths, radii, conics, num_tiles_hit, cov3d = project_gaussians(
                 self.means,
                 self.scales,
                 1,
@@ -105,7 +105,7 @@ class SimpleTrainer:
             torch.cuda.synchronize()
             times[0] += time.time() - start
             start = time.time()
-            out_img = RasterizeGaussians.apply(
+            out_img = rasterize_gaussians(
                 xys,
                 depths,
                 radii,

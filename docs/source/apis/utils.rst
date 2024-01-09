@@ -5,14 +5,14 @@ In addition to the main projection and rasterization functions, a few CUDA kerne
 
 .. currentmodule:: gsplat
 
-.. autoclass:: BinAndSortGaussians
+.. autofunction:: bin_an_sort_gaussians
 
-.. autoclass:: ComputeCov2dBounds
+.. autofunction:: compute_cov2d_bounds
 
-.. autoclass:: GetTileBinEdges
+.. autofunction:: get_tile_bin_edges
 
-.. autoclass:: SphericalHarmonics
+.. autofunction:: spherical_harmonics
 
-.. autoclass:: MapGaussiansToIntersects
+.. autofunction:: map_gaussian_to_intersects
 
-.. autoclass:: ComputeCumulativeIntersects
+.. autofunction:: compute_cumulative_intersects

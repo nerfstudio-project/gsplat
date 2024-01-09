@@ -72,3 +72,23 @@ class SphericalHarmonics(Function):
                 num_points, degree, degrees_to_use, viewdirs, v_colors
             ),
         )
+
+def spherical_harmonics(
+    degrees_to_use: int,
+    viewdirs: Float[Tensor, "*batch 3"],
+    coeffs: Float[Tensor, "*batch D C"],
+) -> Float[Tensor, "*batch D C"]:
+    """Compute spherical harmonics
+
+    Note:
+        This function is only differentiable to the input coeffs.
+
+    Args:
+        degrees_to_use (int): degree of SHs to use (<= total number available).
+        viewdirs (Tensor): viewing directions.
+        coeffs (Tensor): harmonic coefficients.
+    
+    Returns:
+        The spherical harmonics.
+    """
+    return SphericalHarmonics.apply(degrees_to_use, viewdirs.contiguous(), coeffs.contiguous())
