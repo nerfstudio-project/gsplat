@@ -8,7 +8,7 @@ device = torch.device("cuda:0")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_compare_binding_to_pytorch():
     from gsplat._torch_impl import compute_cov2d_bounds as _compute_cov2d_bounds
-    from gsplat.cov2d_bounds import compute_cov2d_bounds
+    from gsplat import compute_cov2d_bounds
 
     torch.manual_seed(42)
 

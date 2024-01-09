@@ -30,9 +30,9 @@ And
 
 :math:`σ ∈ R^{2}` is the Mahalanobis distance (here referred to as sigma) which measures how many standard deviations away the center of a gaussian and the rendered pixel center is which is denoted by delta :math:`∆.`
 
-The python bindings support conventional 3-channel RGB rasterization with :func:`gsplat.rasterize_gaussians` as well as N-dimensional rasterization with :func:`gsplat.ndrasterize_gaussians`.
+The python bindings support conventional 3-channel RGB rasterization with :func:`gsplat.rasterize_gaussians` as well as N-dimensional rasterization with :func:`gsplat.nd_rasterize_gaussians`.
 
 
 .. autofunction:: rasterize_gaussians
 
-.. autofunction:: ndrasterize_gaussians
+.. autofunction:: nd_rasterize_gaussians

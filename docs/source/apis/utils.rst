@@ -5,7 +5,7 @@ In addition to the main projection and rasterization functions, a few CUDA kerne
 
 .. currentmodule:: gsplat
 
-.. autofunction:: bin_an_sort_gaussians
+.. autofunction:: bin_and_sort_gaussians
 
 .. autofunction:: compute_cov2d_bounds
 

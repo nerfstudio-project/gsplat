@@ -8,7 +8,7 @@ device = torch.device("cuda:0")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_get_tile_bin_edges():
     from gsplat import _torch_impl
-    from gsplat.get_tile_bin_edges import get_tile_bin_edges
+    from gsplat import get_tile_bin_edges
 
     torch.manual_seed(42)
 
