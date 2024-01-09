@@ -103,6 +103,17 @@ class RasterizeGaussians(Function):
                 opacity.contiguous(),
                 background.contiguous(),
             )
+            ctx.save_for_backward(
+                gaussian_ids_sorted,
+                tile_bins,
+                xys,
+                conics,
+                colors,
+                opacity,
+                background,
+                final_Ts,
+                final_idx,
+            )
         else:
             # TODO rasterize_depth_forward
             out_img, out_depth, final_Ts, final_idx = _C.rasterize_forward_depth(
@@ -118,56 +129,89 @@ class RasterizeGaussians(Function):
                 opacity.contiguous(),
                 background.contiguous(),
             )
+            ctx.save_for_backward(
+                gaussian_ids_sorted,
+                tile_bins,
+                xys,
+                depths,
+                conics,
+                colors,
+                opacity,
+                background,
+                final_Ts,
+                final_idx,
+            )
 
         ctx.img_width = img_width
         ctx.img_height = img_height
-        ctx.save_for_backward(
-            gaussian_ids_sorted,
-            tile_bins,
-            xys,
-            conics,
-            colors,
-            opacity,
-            background,
-            final_Ts,
-            final_idx,
-        )
+        
         if not return_depth:
             return out_img
 
         return out_img, out_depth
 
     @staticmethod
-    def backward(ctx, v_out_img):
+    def backward(ctx, v_out_img, v_out_depth=None):
         img_height = ctx.img_height
         img_width = ctx.img_width
 
-        (
-            gaussian_ids_sorted,
-            tile_bins,
-            xys,
-            conics,
-            colors,
-            opacity,
-            background,
-            final_Ts,
-            final_idx,
-        ) = ctx.saved_tensors
-
-        v_xy, v_conic, v_colors, v_opacity = _C.rasterize_backward(
-            img_height,
-            img_width,
-            gaussian_ids_sorted.contiguous(),
-            tile_bins,
-            xys.contiguous(),
-            conics.contiguous(),
-            colors.contiguous(),
-            opacity.contiguous(),
-            background.contiguous(),
-            final_Ts.contiguous(),
-            final_idx.contiguous(),
-            v_out_img.contiguous(),
-        )
+        print(f"v_out_depth {v_out_depth}")
+        if v_out_depth is None:
+            (
+                gaussian_ids_sorted,
+                tile_bins,
+                xys,
+                conics,
+                colors,
+                opacity,
+                background,
+                final_Ts,
+                final_idx,
+            ) = ctx.saved_tensors
+            v_depth = None
+            v_xy, v_conic, v_colors, v_opacity = _C.rasterize_backward(
+                img_height,
+                img_width,
+                gaussian_ids_sorted.contiguous(),
+                tile_bins,
+                xys.contiguous(),
+                conics.contiguous(),
+                colors.contiguous(),
+                opacity.contiguous(),
+                background.contiguous(),
+                final_Ts.contiguous(),
+                final_idx.contiguous(),
+                v_out_img.contiguous(),
+            )
+        else:
+            (
+                gaussian_ids_sorted,
+                tile_bins,
+                xys,
+                depths,
+                conics,
+                colors,
+                opacity,
+                background,
+                final_Ts,
+                final_idx,
+            ) = ctx.saved_tensors
+            v_xy, v_conic, v_colors, v_depth, v_opacity = _C.rasterize_backward_depth(
+                img_height,
+                img_width,
+                gaussian_ids_sorted.contiguous(),
+                tile_bins,
+                xys.contiguous(),
+                depths.contiguous(),
+                conics.contiguous(),
+                colors.contiguous(),
+                opacity.contiguous(),
+                background.contiguous(),
+                final_Ts.contiguous(),
+                final_idx.contiguous(),
+                v_out_img.contiguous(),
+                v_out_depth.contiguous(),
+            )
 
         return (
             v_xy,  # xys
@@ -176,6 +220,7 @@ class RasterizeGaussians(Function):
             v_conic,  # conics
             None,  # num_tiles_hit
             v_colors,  # colors
+            v_depth, # depth
             v_opacity,  # opacity
             None,  # img_height
             None,  # img_width

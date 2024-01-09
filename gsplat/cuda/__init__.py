@@ -20,6 +20,7 @@ get_tile_bin_edges = _make_lazy_cuda_func("get_tile_bin_edges")
 rasterize_forward = _make_lazy_cuda_func("rasterize_forward")
 rasterize_backward = _make_lazy_cuda_func("rasterize_backward")
 rasterize_forward_depth = _make_lazy_cuda_func("rasterize_forward_depth")
+rasterize_backward_depth = _make_lazy_cuda_func("rasterize_backward_depth")
 nd_rasterize_forward = _make_lazy_cuda_func("nd_rasterize_forward")
 nd_rasterize_backward = _make_lazy_cuda_func("nd_rasterize_backward")
 

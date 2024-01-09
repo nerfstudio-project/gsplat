@@ -203,3 +203,28 @@ std::
         const torch::Tensor &final_idx,
         const torch::Tensor &v_output // dL_dout_color
     );
+
+std::
+    tuple<
+        torch::Tensor, // dL_dxy
+        torch::Tensor, // dL_dconic
+        torch::Tensor, // dL_dcolors
+        torch::Tensor, // dl_ddepth
+        torch::Tensor  // dL_dopacity
+        >
+    rasterize_backward_depth_tensor(
+        const unsigned img_height,
+        const unsigned img_width,
+        const torch::Tensor &gaussians_ids_sorted,
+        const torch::Tensor &tile_bins,
+        const torch::Tensor &xys,
+        const torch::Tensor &conics,
+        const torch::Tensor &colors,
+        const torch::Tensor &depths,
+        const torch::Tensor &opacities,
+        const torch::Tensor &background,
+        const torch::Tensor &final_Ts,
+        const torch::Tensor &final_idx,
+        const torch::Tensor &v_output, // dL_dout_color
+        const torch::Tensor &v_depth_out // dL_dout_depth
+    );
