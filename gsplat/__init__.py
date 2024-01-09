@@ -4,7 +4,6 @@ from .project_gaussians import project_gaussians
 from .rasterize import rasterize_gaussians
 from .utils import map_gaussian_to_intersects, bin_and_sort_gaussians, compute_cumulative_intersects, compute_cov2d_bounds, get_tile_bin_edges
 from .sh import spherical_harmonics
-from .nd_rasterize import nd_rasterize_gaussians
 from .version import __version__
 import warnings
 
@@ -14,7 +13,6 @@ __all__ = [
 
     "project_gaussians",
     "rasterize_gaussians",
-    "nd_rasterize_gaussians",
     "spherical_harmonics",
 
     # utils
@@ -119,8 +117,8 @@ class NDRasterizeGaussians(torch.autograd.Function):
                 
     @staticmethod
     def forward(ctx, *args, **kwargs):
-        warnings.warn("NDRasterizeGaussians is deprecated, use nd_rasterize_gaussians instead", DeprecationWarning)
-        return nd_rasterize_gaussians(*args, **kwargs)
+        warnings.warn("NDRasterizeGaussians is deprecated, use rasterize_gaussians instead", DeprecationWarning)
+        return rasterize_gaussians(*args, **kwargs)
     
     @staticmethod
     def backward(ctx: Any, *grad_outputs: Any) -> Any:

@@ -1,15 +1,12 @@
 import math
-import os
 import random
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
 import torch
 import tyro
 from gsplat.project_gaussians import project_gaussians
 from gsplat.rasterize import rasterize_gaussians
-from gsplat.nd_rasterize import nd_rasterize_gaussians
 from PIL import Image
 from torch import Tensor, optim
 
@@ -138,7 +135,7 @@ class SimpleTrainer:
             self.tile_bounds,
         )
 
-        return nd_rasterize_gaussians(
+        return rasterize_gaussians(
             xys,
             depths,
             radii,

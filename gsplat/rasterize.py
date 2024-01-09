@@ -22,8 +22,8 @@ def rasterize_gaussians(
     img_height: int,
     img_width: int,
     background: Optional[Float[Tensor, "channels"]] = None,
-):
-    """Rasterizes 2D gaussians by sorting and binning gaussian intersections for each tile and returns an output image using alpha-compositing.
+) -> Tensor:
+    """Rasterizes 2D gaussians by sorting and binning gaussian intersections for each tile and returns an N-dimensional output using alpha-compositing.
 
     Note:
         This function is differentiable w.r.t the xys, conics, colors, and opacity inputs.
@@ -34,7 +34,7 @@ def rasterize_gaussians(
         radii (Tensor): radii of 2D gaussians
         conics (Tensor): conics (inverse of covariance) of 2D gaussians in upper triangular format
         num_tiles_hit (Tensor): number of tiles hit per gaussian
-        colors (Tensor): colors associated with the gaussians.
+        colors (Tensor): N-dimensional features associated with the gaussians.
         opacity (Tensor): opacity associated with the gaussians.
         img_height (int): height of the rendered image.
         img_width (int): width of the rendered image.
@@ -43,7 +43,7 @@ def rasterize_gaussians(
     Returns:
         A Tensor:
 
-        - **out_img** (Tensor): 3-channel RGB rendered output image.
+        - **out_img** (Tensor): N-dimensional rendered output image.
     """
     if colors.dtype == torch.uint8:
         # make sure colors are float [0,1]
@@ -54,13 +54,13 @@ def rasterize_gaussians(
             background.shape[0] == colors.shape[-1]
         ), f"incorrect shape of background color tensor, expected shape {colors.shape[-1]}"
     else:
-        background = torch.ones(3, dtype=torch.float32, device=colors.device)
+        background = torch.ones(colors.shape[-1], dtype=torch.float32, device=colors.device)
 
     if xys.ndimension() != 2 or xys.size(1) != 2:
         raise ValueError("xys must have dimensions (N, 2)")
 
-    if colors.ndimension() != 2 or colors.size(1) != 3:
-        raise ValueError("colors must have dimensions (N, 3)")
+    if colors.ndimension() != 2:
+        raise ValueError("colors must have dimensions (N, D)")
 
     return _RasterizeGaussians.apply(
         xys.contiguous(),
@@ -74,7 +74,6 @@ def rasterize_gaussians(
         img_width,
         background.contiguous(),
     )
-
 
 
 class _RasterizeGaussians(Function):
@@ -93,7 +92,7 @@ class _RasterizeGaussians(Function):
         img_height: int,
         img_width: int,
         background: Optional[Float[Tensor, "channels"]] = None,
-    ):
+    ) -> Tensor:
         num_points = xys.size(0)
         BLOCK_X, BLOCK_Y = 16, 16
         tile_bounds = (
@@ -118,7 +117,11 @@ class _RasterizeGaussians(Function):
             num_points, num_intersects, xys, depths, radii, cum_tiles_hit, tile_bounds
         )
 
-        out_img, final_Ts, final_idx = _C.rasterize_forward(
+        if colors.shape[-1] == 3:
+            rasterize_fn = _C.rasterize_forward
+        else:
+            rasterize_fn = _C.nd_rasterize_forward
+        out_img, final_Ts, final_idx = rasterize_fn(
             tile_bounds,
             block,
             img_size,
@@ -164,7 +167,11 @@ class _RasterizeGaussians(Function):
             final_idx,
         ) = ctx.saved_tensors
 
-        v_xy, v_conic, v_colors, v_opacity = _C.rasterize_backward(
+        if colors.shape[-1] == 3:
+            rasterize_fn = _C.rasterize_backward
+        else:
+            rasterize_fn = _C.nd_rasterize_backward
+        v_xy, v_conic, v_colors, v_opacity = rasterize_fn(
             img_height,
             img_width,
             gaussian_ids_sorted,
@@ -191,3 +198,4 @@ class _RasterizeGaussians(Function):
             None,  # img_width
             None,  # background
         )
+    
