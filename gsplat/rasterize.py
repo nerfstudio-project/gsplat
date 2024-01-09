@@ -54,7 +54,9 @@ def rasterize_gaussians(
             background.shape[0] == colors.shape[-1]
         ), f"incorrect shape of background color tensor, expected shape {colors.shape[-1]}"
     else:
-        background = torch.ones(colors.shape[-1], dtype=torch.float32, device=colors.device)
+        background = torch.ones(
+            colors.shape[-1], dtype=torch.float32, device=colors.device
+        )
 
     if xys.ndimension() != 2 or xys.size(1) != 2:
         raise ValueError("xys must have dimensions (N, 2)")
@@ -103,9 +105,7 @@ class _RasterizeGaussians(Function):
         block = (BLOCK_X, BLOCK_Y, 1)
         img_size = (img_width, img_height, 1)
 
-        num_intersects, cum_tiles_hit = compute_cumulative_intersects(
-            num_tiles_hit
-        )
+        num_intersects, cum_tiles_hit = compute_cumulative_intersects(num_tiles_hit)
 
         (
             isect_ids_unsorted,
@@ -198,4 +198,3 @@ class _RasterizeGaussians(Function):
             None,  # img_width
             None,  # background
         )
-    

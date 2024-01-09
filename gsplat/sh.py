@@ -32,6 +32,7 @@ def deg_from_sh(num_bases: int):
         return 4
     assert False, "Invalid number of SH bases"
 
+
 def spherical_harmonics(
     degrees_to_use: int,
     viewdirs: Float[Tensor, "*batch 3"],
@@ -46,12 +47,15 @@ def spherical_harmonics(
         degrees_to_use (int): degree of SHs to use (<= total number available).
         viewdirs (Tensor): viewing directions.
         coeffs (Tensor): harmonic coefficients.
-    
+
     Returns:
         The spherical harmonics.
     """
     assert coeffs.shape[-2] >= num_sh_bases(degrees_to_use)
-    return _SphericalHarmonics.apply(degrees_to_use, viewdirs.contiguous(), coeffs.contiguous())
+    return _SphericalHarmonics.apply(
+        degrees_to_use, viewdirs.contiguous(), coeffs.contiguous()
+    )
+
 
 class _SphericalHarmonics(Function):
     """Compute spherical harmonics
@@ -91,4 +95,3 @@ class _SphericalHarmonics(Function):
                 num_points, degree, degrees_to_use, viewdirs, v_colors
             ),
         )
-

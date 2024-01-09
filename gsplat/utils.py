@@ -39,9 +39,16 @@ def map_gaussian_to_intersects(
         - **gaussian_ids** (Tensor): Tensor that maps isect_ids back to cum_tiles_hit.
     """
     isect_ids, gaussian_ids = _C.map_gaussian_to_intersects(
-        num_points, num_intersects, xys.contiguous(), depths.contiguous(), radii.contiguous(), cum_tiles_hit.contiguous(), tile_bounds
+        num_points,
+        num_intersects,
+        xys.contiguous(),
+        depths.contiguous(),
+        radii.contiguous(),
+        cum_tiles_hit.contiguous(),
+        tile_bounds,
     )
     return (isect_ids, gaussian_ids)
+
 
 def get_tile_bin_edges(
     num_intersects: int, isect_ids_sorted: Int[Tensor, "num_intersects 1"]
@@ -96,7 +103,7 @@ def compute_cumulative_intersects(
 
     Note:
         This function is not differentiable to any input.
-    
+
     Args:
         num_tiles_hit (Tensor): number of intersected tiles per gaussian.
 
@@ -128,7 +135,7 @@ def bin_and_sort_gaussians(
 ]:
     """Mapping gaussians to sorted unique intersection IDs and tile bins used for fast rasterization.
 
-    We return both sorted and unsorted versions of intersect IDs and gaussian IDs for testing purposes. 
+    We return both sorted and unsorted versions of intersect IDs and gaussian IDs for testing purposes.
 
     Note:
         This function is not differentiable to any input.

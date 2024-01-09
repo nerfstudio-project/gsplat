@@ -8,6 +8,7 @@ from torch.autograd import Function
 
 import gsplat.cuda as _C
 
+
 def project_gaussians(
     means3d: Float[Tensor, "*batch 3"],
     scales: Float[Tensor, "*batch 3"],
@@ -28,7 +29,7 @@ def project_gaussians(
 
     Note:
         This function is differentiable w.r.t the means3d, scales and quats inputs.
-    
+
     Args:
        means3d (Tensor): xyzs of gaussians.
        scales (Tensor): scales of the gaussians.
