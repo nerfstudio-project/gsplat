@@ -215,14 +215,14 @@ class RasterizeGaussians(Function):
 
         return (
             v_xy,  # xys
-            None,  # depths
+            v_depth,  # depths
             None,  # radii
             v_conic,  # conics
             None,  # num_tiles_hit
             v_colors,  # colors
-            v_depth, # depth
             v_opacity,  # opacity
             None,  # img_height
             None,  # img_width
             None,  # background
+            None, # return_depth
         )
