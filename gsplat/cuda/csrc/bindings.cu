@@ -441,7 +441,7 @@ rasterize_forward_depth_tensor(
         {img_height, img_width, channels}, xys.options().dtype(torch::kFloat32)
     );
     torch::Tensor out_depth = torch::zeros(
-        {img_height, img_width, 1}, xys.options().dtype(torch::kFloat32)
+        {img_height, img_width}, xys.options().dtype(torch::kFloat32)
     );
     torch::Tensor final_Ts = torch::zeros(
         {img_height, img_width}, xys.options().dtype(torch::kFloat32)
