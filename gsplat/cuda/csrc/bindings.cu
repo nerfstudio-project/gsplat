@@ -49,12 +49,14 @@ compute_cov2d_bounds_tensor(const int num_pts, torch::Tensor &covs2d) {
 
     int blocks = (num_pts + N_THREADS - 1) / N_THREADS;
 
-    compute_cov2d_bounds_kernel<<<blocks, N_THREADS>>>(
-        num_pts,
-        covs2d.contiguous().data_ptr<float>(),
-        conics.contiguous().data_ptr<float>(),
-        radii.contiguous().data_ptr<float>()
-    );
+    if (num_pts > 0) {
+        compute_cov2d_bounds_kernel<<<blocks, N_THREADS>>>(
+            num_pts,
+            covs2d.contiguous().data_ptr<float>(),
+            conics.contiguous().data_ptr<float>(),
+            radii.contiguous().data_ptr<float>()
+        );
+    }
     return std::make_tuple(conics, radii);
 }
 
@@ -71,16 +73,19 @@ torch::Tensor compute_sh_forward_tensor(
         AT_ERROR("coeffs must have dimensions (N, D, 3)");
     }
     torch::Tensor colors = torch::empty({num_points, 3}, coeffs.options());
-    compute_sh_forward_kernel<<<
-        (num_points + N_THREADS - 1) / N_THREADS,
-        N_THREADS>>>(
-        num_points,
-        degree,
-        degrees_to_use,
-        (float3 *)viewdirs.contiguous().data_ptr<float>(),
-        coeffs.contiguous().data_ptr<float>(),
-        colors.contiguous().data_ptr<float>()
-    );
+
+    if (num_points > 0) {
+        compute_sh_forward_kernel<<<
+            (num_points + N_THREADS - 1) / N_THREADS,
+            N_THREADS>>>(
+            num_points,
+            degree,
+            degrees_to_use,
+            (float3 *)viewdirs.contiguous().data_ptr<float>(),
+            coeffs.contiguous().data_ptr<float>(),
+            colors.contiguous().data_ptr<float>()
+        );
+    }
     return colors;
 }
 
@@ -102,16 +107,19 @@ torch::Tensor compute_sh_backward_tensor(
     unsigned num_bases = num_sh_bases(degree);
     torch::Tensor v_coeffs =
         torch::zeros({num_points, num_bases, 3}, v_colors.options());
-    compute_sh_backward_kernel<<<
-        (num_points + N_THREADS - 1) / N_THREADS,
-        N_THREADS>>>(
-        num_points,
-        degree,
-        degrees_to_use,
-        (float3 *)viewdirs.contiguous().data_ptr<float>(),
-        v_colors.contiguous().data_ptr<float>(),
-        v_coeffs.contiguous().data_ptr<float>()
-    );
+
+    if (num_points > 0) {
+        compute_sh_backward_kernel<<<
+            (num_points + N_THREADS - 1) / N_THREADS,
+            N_THREADS>>>(
+            num_points,
+            degree,
+            degrees_to_use,
+            (float3 *)viewdirs.contiguous().data_ptr<float>(),
+            v_colors.contiguous().data_ptr<float>(),
+            v_coeffs.contiguous().data_ptr<float>()
+        );
+    }
     return v_coeffs;
 }
 
@@ -165,28 +173,30 @@ project_gaussians_forward_tensor(
     torch::Tensor num_tiles_hit_d =
         torch::zeros({num_points}, means3d.options().dtype(torch::kInt32));
 
-    project_gaussians_forward_kernel<<<
-        (num_points + N_THREADS - 1) / N_THREADS,
-        N_THREADS>>>(
-        num_points,
-        (float3 *)means3d.contiguous().data_ptr<float>(),
-        (float3 *)scales.contiguous().data_ptr<float>(),
-        glob_scale,
-        (float4 *)quats.contiguous().data_ptr<float>(),
-        viewmat.contiguous().data_ptr<float>(),
-        projmat.contiguous().data_ptr<float>(),
-        intrins,
-        img_size_dim3,
-        tile_bounds_dim3,
-        clip_thresh,
-        // Outputs.
-        cov3d_d.contiguous().data_ptr<float>(),
-        (float2 *)xys_d.contiguous().data_ptr<float>(),
-        depths_d.contiguous().data_ptr<float>(),
-        radii_d.contiguous().data_ptr<int>(),
-        (float3 *)conics_d.contiguous().data_ptr<float>(),
-        num_tiles_hit_d.contiguous().data_ptr<int32_t>()
-    );
+    if (num_points > 0) {
+        project_gaussians_forward_kernel<<<
+            (num_points + N_THREADS - 1) / N_THREADS,
+            N_THREADS>>>(
+            num_points,
+            (float3 *)means3d.contiguous().data_ptr<float>(),
+            (float3 *)scales.contiguous().data_ptr<float>(),
+            glob_scale,
+            (float4 *)quats.contiguous().data_ptr<float>(),
+            viewmat.contiguous().data_ptr<float>(),
+            projmat.contiguous().data_ptr<float>(),
+            intrins,
+            img_size_dim3,
+            tile_bounds_dim3,
+            clip_thresh,
+            // Outputs.
+            cov3d_d.contiguous().data_ptr<float>(),
+            (float2 *)xys_d.contiguous().data_ptr<float>(),
+            depths_d.contiguous().data_ptr<float>(),
+            radii_d.contiguous().data_ptr<int>(),
+            (float3 *)conics_d.contiguous().data_ptr<float>(),
+            num_tiles_hit_d.contiguous().data_ptr<int32_t>()
+        );
+    }
 
     return std::make_tuple(
         cov3d_d, xys_d, depths_d, radii_d, conics_d, num_tiles_hit_d
@@ -240,31 +250,33 @@ project_gaussians_backward_tensor(
     torch::Tensor v_quat =
         torch::zeros({num_points, 4}, means3d.options().dtype(torch::kFloat32));
 
-    project_gaussians_backward_kernel<<<
-        (num_points + N_THREADS - 1) / N_THREADS,
-        N_THREADS>>>(
-        num_points,
-        (float3 *)means3d.contiguous().data_ptr<float>(),
-        (float3 *)scales.contiguous().data_ptr<float>(),
-        glob_scale,
-        (float4 *)quats.contiguous().data_ptr<float>(),
-        viewmat.contiguous().data_ptr<float>(),
-        projmat.contiguous().data_ptr<float>(),
-        intrins,
-        img_size_dim3,
-        cov3d.contiguous().data_ptr<float>(),
-        radii.contiguous().data_ptr<int32_t>(),
-        (float3 *)conics.contiguous().data_ptr<float>(),
-        (float2 *)v_xy.contiguous().data_ptr<float>(),
-        v_depth.contiguous().data_ptr<float>(),
-        (float3 *)v_conic.contiguous().data_ptr<float>(),
-        // Outputs.
-        (float3 *)v_cov2d.contiguous().data_ptr<float>(),
-        v_cov3d.contiguous().data_ptr<float>(),
-        (float3 *)v_mean3d.contiguous().data_ptr<float>(),
-        (float3 *)v_scale.contiguous().data_ptr<float>(),
-        (float4 *)v_quat.contiguous().data_ptr<float>()
-    );
+    if (num_points > 0) {
+        project_gaussians_backward_kernel<<<
+            (num_points + N_THREADS - 1) / N_THREADS,
+            N_THREADS>>>(
+            num_points,
+            (float3 *)means3d.contiguous().data_ptr<float>(),
+            (float3 *)scales.contiguous().data_ptr<float>(),
+            glob_scale,
+            (float4 *)quats.contiguous().data_ptr<float>(),
+            viewmat.contiguous().data_ptr<float>(),
+            projmat.contiguous().data_ptr<float>(),
+            intrins,
+            img_size_dim3,
+            cov3d.contiguous().data_ptr<float>(),
+            radii.contiguous().data_ptr<int32_t>(),
+            (float3 *)conics.contiguous().data_ptr<float>(),
+            (float2 *)v_xy.contiguous().data_ptr<float>(),
+            v_depth.contiguous().data_ptr<float>(),
+            (float3 *)v_conic.contiguous().data_ptr<float>(),
+            // Outputs.
+            (float3 *)v_cov2d.contiguous().data_ptr<float>(),
+            v_cov3d.contiguous().data_ptr<float>(),
+            (float3 *)v_mean3d.contiguous().data_ptr<float>(),
+            (float3 *)v_scale.contiguous().data_ptr<float>(),
+            (float4 *)v_quat.contiguous().data_ptr<float>()
+        );
+    }
 
     return std::make_tuple(v_cov2d, v_cov3d, v_mean3d, v_scale, v_quat);
 }
@@ -293,37 +305,44 @@ std::tuple<torch::Tensor, torch::Tensor> map_gaussian_to_intersects_tensor(
     torch::Tensor isect_ids_unsorted =
         torch::zeros({num_intersects}, xys.options().dtype(torch::kInt64));
 
-    map_gaussian_to_intersects<<<
-        (num_points + N_THREADS - 1) / N_THREADS,
-        N_THREADS>>>(
-        num_points,
-        (float2 *)xys.contiguous().data_ptr<float>(),
-        depths.contiguous().data_ptr<float>(),
-        radii.contiguous().data_ptr<int32_t>(),
-        cum_tiles_hit.contiguous().data_ptr<int32_t>(),
-        tile_bounds_dim3,
-        // Outputs.
-        isect_ids_unsorted.contiguous().data_ptr<int64_t>(),
-        gaussian_ids_unsorted.contiguous().data_ptr<int32_t>()
-    );
+    if (num_points > 0) {
+        map_gaussian_to_intersects<<<
+            (num_points + N_THREADS - 1) / N_THREADS,
+            N_THREADS>>>(
+            num_points,
+            (float2 *)xys.contiguous().data_ptr<float>(),
+            depths.contiguous().data_ptr<float>(),
+            radii.contiguous().data_ptr<int32_t>(),
+            cum_tiles_hit.contiguous().data_ptr<int32_t>(),
+            tile_bounds_dim3,
+            // Outputs.
+            isect_ids_unsorted.contiguous().data_ptr<int64_t>(),
+            gaussian_ids_unsorted.contiguous().data_ptr<int32_t>()
+        );
+    }
 
     return std::make_tuple(isect_ids_unsorted, gaussian_ids_unsorted);
 }
 
 torch::Tensor get_tile_bin_edges_tensor(
-    int num_intersects, const torch::Tensor &isect_ids_sorted
+    int num_tiles, const torch::Tensor &isect_ids_sorted
 ) {
     CHECK_INPUT(isect_ids_sorted);
     torch::Tensor tile_bins = torch::zeros(
-        {num_intersects, 2}, isect_ids_sorted.options().dtype(torch::kInt32)
+        {num_tiles, 2}, isect_ids_sorted.options().dtype(torch::kInt32)
     );
-    get_tile_bin_edges<<<
-        (num_intersects + N_THREADS - 1) / N_THREADS,
-        N_THREADS>>>(
-        num_intersects,
-        isect_ids_sorted.contiguous().data_ptr<int64_t>(),
-        (int2 *)tile_bins.contiguous().data_ptr<int>()
-    );
+
+    size_t num_intersects = isect_ids_sorted.numel();
+    if (num_intersects > 0) {
+        get_tile_bin_edges<<<
+            (num_intersects + N_THREADS - 1) / N_THREADS,
+            N_THREADS>>>(
+            num_intersects,
+            isect_ids_sorted.contiguous().data_ptr<int64_t>(),
+            (int2 *)tile_bins.contiguous().data_ptr<int>()
+        );
+    }
+
     return tile_bins;
 }
 
@@ -377,20 +396,24 @@ rasterize_forward_tensor(
         {img_height, img_width}, xys.options().dtype(torch::kInt32)
     );
 
-    rasterize_forward<<<tile_bounds_dim3, block_dim3>>>(
-        tile_bounds_dim3,
-        img_size_dim3,
-        gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
-        (int2 *)tile_bins.contiguous().data_ptr<int>(),
-        (float2 *)xys.contiguous().data_ptr<float>(),
-        (float3 *)conics.contiguous().data_ptr<float>(),
-        (float3 *)colors.contiguous().data_ptr<float>(),
-        opacities.contiguous().data_ptr<float>(),
-        final_Ts.contiguous().data_ptr<float>(),
-        final_idx.contiguous().data_ptr<int>(),
-        (float3 *)out_img.contiguous().data_ptr<float>(),
-        *(float3 *)background.contiguous().data_ptr<float>()
-    );
+    if (gaussian_ids_sorted.size(0) > 0) {
+        rasterize_forward<<<tile_bounds_dim3, block_dim3>>>(
+            tile_bounds_dim3,
+            img_size_dim3,
+            gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
+            (int2 *)tile_bins.contiguous().data_ptr<int>(),
+            (float2 *)xys.contiguous().data_ptr<float>(),
+            (float3 *)conics.contiguous().data_ptr<float>(),
+            (float3 *)colors.contiguous().data_ptr<float>(),
+            opacities.contiguous().data_ptr<float>(),
+            final_Ts.contiguous().data_ptr<float>(),
+            final_idx.contiguous().data_ptr<int>(),
+            (float3 *)out_img.contiguous().data_ptr<float>(),
+            *(float3 *)background.contiguous().data_ptr<float>()
+        );
+    } else {
+        out_img.index_put_({torch::indexing::Slice(), torch::indexing::Slice()}, background);
+    }
 
     return std::make_tuple(out_img, final_Ts, final_idx);
 }
@@ -446,21 +469,25 @@ nd_rasterize_forward_tensor(
         {img_height, img_width}, xys.options().dtype(torch::kInt32)
     );
 
-    nd_rasterize_forward<<<tile_bounds_dim3, block_dim3>>>(
-        tile_bounds_dim3,
-        img_size_dim3,
-        channels,
-        gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
-        (int2 *)tile_bins.contiguous().data_ptr<int>(),
-        (float2 *)xys.contiguous().data_ptr<float>(),
-        (float3 *)conics.contiguous().data_ptr<float>(),
-        colors.contiguous().data_ptr<float>(),
-        opacities.contiguous().data_ptr<float>(),
-        final_Ts.contiguous().data_ptr<float>(),
-        final_idx.contiguous().data_ptr<int>(),
-        out_img.contiguous().data_ptr<float>(),
-        background.contiguous().data_ptr<float>()
-    );
+    if (gaussian_ids_sorted.size(0) > 0) {
+        nd_rasterize_forward<<<tile_bounds_dim3, block_dim3>>>(
+            tile_bounds_dim3,
+            img_size_dim3,
+            channels,
+            gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
+            (int2 *)tile_bins.contiguous().data_ptr<int>(),
+            (float2 *)xys.contiguous().data_ptr<float>(),
+            (float3 *)conics.contiguous().data_ptr<float>(),
+            colors.contiguous().data_ptr<float>(),
+            opacities.contiguous().data_ptr<float>(),
+            final_Ts.contiguous().data_ptr<float>(),
+            final_idx.contiguous().data_ptr<int>(),
+            out_img.contiguous().data_ptr<float>(),
+            background.contiguous().data_ptr<float>()
+        );
+    } else {
+        out_img.index_put_({torch::indexing::Slice(), torch::indexing::Slice()}, background);
+    }
 
     return std::make_tuple(out_img, final_Ts, final_idx);
 }
@@ -526,26 +553,28 @@ std::
         workspace = torch::zeros({0}, xys.options().dtype(torch::kFloat32));
     }
 
-    nd_rasterize_backward_kernel<<<tile_bounds, block>>>(
-        tile_bounds,
-        img_size,
-        channels,
-        gaussians_ids_sorted.contiguous().data_ptr<int>(),
-        (int2 *)tile_bins.contiguous().data_ptr<int>(),
-        (float2 *)xys.contiguous().data_ptr<float>(),
-        (float3 *)conics.contiguous().data_ptr<float>(),
-        colors.contiguous().data_ptr<float>(),
-        opacities.contiguous().data_ptr<float>(),
-        background.contiguous().data_ptr<float>(),
-        final_Ts.contiguous().data_ptr<float>(),
-        final_idx.contiguous().data_ptr<int>(),
-        v_output.contiguous().data_ptr<float>(),
-        (float2 *)v_xy.contiguous().data_ptr<float>(),
-        (float3 *)v_conic.contiguous().data_ptr<float>(),
-        v_colors.contiguous().data_ptr<float>(),
-        v_opacity.contiguous().data_ptr<float>(),
-        workspace.data_ptr<float>()
-    );
+    if (gaussians_ids_sorted.size(0) > 0) {
+        nd_rasterize_backward_kernel<<<tile_bounds, block>>>(
+            tile_bounds,
+            img_size,
+            channels,
+            gaussians_ids_sorted.contiguous().data_ptr<int>(),
+            (int2 *)tile_bins.contiguous().data_ptr<int>(),
+            (float2 *)xys.contiguous().data_ptr<float>(),
+            (float3 *)conics.contiguous().data_ptr<float>(),
+            colors.contiguous().data_ptr<float>(),
+            opacities.contiguous().data_ptr<float>(),
+            background.contiguous().data_ptr<float>(),
+            final_Ts.contiguous().data_ptr<float>(),
+            final_idx.contiguous().data_ptr<int>(),
+            v_output.contiguous().data_ptr<float>(),
+            (float2 *)v_xy.contiguous().data_ptr<float>(),
+            (float3 *)v_conic.contiguous().data_ptr<float>(),
+            v_colors.contiguous().data_ptr<float>(),
+            v_opacity.contiguous().data_ptr<float>(),
+            workspace.data_ptr<float>()
+        );
+    }
 
     return std::make_tuple(v_xy, v_conic, v_colors, v_opacity);
 }
@@ -599,24 +628,26 @@ std::
         torch::zeros({num_points, channels}, xys.options());
     torch::Tensor v_opacity = torch::zeros({num_points, 1}, xys.options());
 
-    rasterize_backward_kernel<<<tile_bounds, block>>>(
-        tile_bounds,
-        img_size,
-        gaussians_ids_sorted.contiguous().data_ptr<int>(),
-        (int2 *)tile_bins.contiguous().data_ptr<int>(),
-        (float2 *)xys.contiguous().data_ptr<float>(),
-        (float3 *)conics.contiguous().data_ptr<float>(),
-        (float3 *)colors.contiguous().data_ptr<float>(),
-        opacities.contiguous().data_ptr<float>(),
-        *(float3 *)background.contiguous().data_ptr<float>(),
-        final_Ts.contiguous().data_ptr<float>(),
-        final_idx.contiguous().data_ptr<int>(),
-        (float3 *)v_output.contiguous().data_ptr<float>(),
-        (float2 *)v_xy.contiguous().data_ptr<float>(),
-        (float3 *)v_conic.contiguous().data_ptr<float>(),
-        (float3 *)v_colors.contiguous().data_ptr<float>(),
-        v_opacity.contiguous().data_ptr<float>()
-    );
+    if (gaussians_ids_sorted.size(0) > 0) {
+        rasterize_backward_kernel<<<tile_bounds, block>>>(
+            tile_bounds,
+            img_size,
+            gaussians_ids_sorted.contiguous().data_ptr<int>(),
+            (int2 *)tile_bins.contiguous().data_ptr<int>(),
+            (float2 *)xys.contiguous().data_ptr<float>(),
+            (float3 *)conics.contiguous().data_ptr<float>(),
+            (float3 *)colors.contiguous().data_ptr<float>(),
+            opacities.contiguous().data_ptr<float>(),
+            *(float3 *)background.contiguous().data_ptr<float>(),
+            final_Ts.contiguous().data_ptr<float>(),
+            final_idx.contiguous().data_ptr<int>(),
+            (float3 *)v_output.contiguous().data_ptr<float>(),
+            (float2 *)v_xy.contiguous().data_ptr<float>(),
+            (float3 *)v_conic.contiguous().data_ptr<float>(),
+            (float3 *)v_colors.contiguous().data_ptr<float>(),
+            v_opacity.contiguous().data_ptr<float>()
+        );
+    }
 
     return std::make_tuple(v_xy, v_conic, v_colors, v_opacity);
 }

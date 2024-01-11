@@ -275,10 +275,10 @@ __global__ void rasterize_backward_kernel(
                 buffer.z += rgb.z * fac;
 
                 const float v_sigma = -opac * vis * v_alpha;
-                v_conic_local = {0.5f * v_sigma * delta.x * delta.x, 
-                                        0.5f * v_sigma * delta.x * delta.y, 
+                v_conic_local = {0.5f * v_sigma * delta.x * delta.x,
+                                        0.5f * v_sigma * delta.x * delta.y,
                                         0.5f * v_sigma * delta.y * delta.y};
-                v_xy_local = {v_sigma * (conic.x * delta.x + conic.y * delta.y), 
+                v_xy_local = {v_sigma * (conic.x * delta.x + conic.y * delta.y),
                                     v_sigma * (conic.y * delta.x + conic.z * delta.y)};
                 v_opacity_local = vis * v_alpha;
             }
@@ -292,16 +292,16 @@ __global__ void rasterize_backward_kernel(
                 atomicAdd(v_rgb_ptr + 3*g + 0, v_rgb_local.x);
                 atomicAdd(v_rgb_ptr + 3*g + 1, v_rgb_local.y);
                 atomicAdd(v_rgb_ptr + 3*g + 2, v_rgb_local.z);
-                
+
                 float* v_conic_ptr = (float*)(v_conic);
                 atomicAdd(v_conic_ptr + 3*g + 0, v_conic_local.x);
                 atomicAdd(v_conic_ptr + 3*g + 1, v_conic_local.y);
                 atomicAdd(v_conic_ptr + 3*g + 2, v_conic_local.z);
-                
+
                 float* v_xy_ptr = (float*)(v_xy);
                 atomicAdd(v_xy_ptr + 2*g + 0, v_xy_local.x);
                 atomicAdd(v_xy_ptr + 2*g + 1, v_xy_local.y);
-                
+
                 atomicAdd(v_opacity + g, v_opacity_local);
             }
         }

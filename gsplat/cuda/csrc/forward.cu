@@ -146,18 +146,17 @@ __global__ void get_tile_bin_edges(
         return;
     // save the indices where the tile_id changes
     int32_t cur_tile_idx = (int32_t)(isect_ids_sorted[idx] >> 32);
-    if (idx == 0 || idx == num_intersects - 1) {
-        if (idx == 0)
-            tile_bins[cur_tile_idx].x = 0;
-        if (idx == num_intersects - 1)
+    if (idx == 0) {
+        tile_bins[cur_tile_idx].x = 0;
+    } else {
+        int32_t prev_tile_idx = (int32_t)(isect_ids_sorted[idx - 1] >> 32);
+        if (prev_tile_idx != cur_tile_idx) {
+            tile_bins[prev_tile_idx].y = idx;
+            tile_bins[cur_tile_idx].x = idx;
+        }
+        if (idx == num_intersects - 1) {
             tile_bins[cur_tile_idx].y = num_intersects;
-        return;
-    }
-    int32_t prev_tile_idx = (int32_t)(isect_ids_sorted[idx - 1] >> 32);
-    if (prev_tile_idx != cur_tile_idx) {
-        tile_bins[prev_tile_idx].y = idx;
-        tile_bins[cur_tile_idx].x = idx;
-        return;
+        }
     }
 }
 

@@ -114,7 +114,7 @@ def compute_cumulative_intersects(
         - **cum_tiles_hit** (Tensor): a tensor of cumulated intersections (used for sorting).
     """
     cum_tiles_hit = torch.cumsum(num_tiles_hit, dim=0, dtype=torch.int32)
-    num_intersects = cum_tiles_hit[-1].item()
+    num_intersects = cum_tiles_hit[-1].item() if len(cum_tiles_hit) > 0 else 0
     return num_intersects, cum_tiles_hit
 
 
@@ -163,5 +163,9 @@ def bin_and_sort_gaussians(
     )
     isect_ids_sorted, sorted_indices = torch.sort(isect_ids)
     gaussian_ids_sorted = torch.gather(gaussian_ids, 0, sorted_indices)
-    tile_bins = get_tile_bin_edges(num_intersects, isect_ids_sorted)
+
+    num_tiles = tile_bounds[0] * tile_bounds[1]
+    assert isect_ids_sorted.numel() == 0 or isect_ids_sorted[-1] >> 32 < num_tiles
+
+    tile_bins = get_tile_bin_edges(num_tiles, isect_ids_sorted)
     return isect_ids, gaussian_ids, isect_ids_sorted, gaussian_ids_sorted, tile_bins
