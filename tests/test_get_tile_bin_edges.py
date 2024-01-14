@@ -8,7 +8,7 @@ device = torch.device("cuda:0")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_get_tile_bin_edges():
     from gsplat import _torch_impl
-    from gsplat.get_tile_bin_edges import GetTileBinEdges
+    from gsplat import get_tile_bin_edges
 
     torch.manual_seed(42)
 
@@ -76,7 +76,7 @@ def test_get_tile_bin_edges():
     _gaussian_ids_sorted = torch.gather(_gaussian_ids_unsorted, 0, sorted_indices)
 
     _tile_bins = _torch_impl.get_tile_bin_edges(_num_intersects, _isect_ids_sorted)
-    tile_bins = GetTileBinEdges.apply(_num_intersects, _isect_ids_sorted)
+    tile_bins = get_tile_bin_edges(_num_intersects, _isect_ids_sorted)
 
     torch.testing.assert_close(_tile_bins, tile_bins)
 

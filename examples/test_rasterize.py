@@ -1,15 +1,12 @@
 import math
-import os
 import random
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
 import torch
 import tyro
-from gsplat.project_gaussians import ProjectGaussians
-from gsplat.rasterize import RasterizeGaussians
-from gsplat.nd_rasterize import NDRasterizeGaussians
+from gsplat.project_gaussians import project_gaussians
+from gsplat.rasterize import rasterize_gaussians
 from PIL import Image
 from torch import Tensor, optim
 
@@ -93,7 +90,7 @@ class SimpleTrainer:
         self.viewmat.requires_grad = False
 
     def forward_new(self):
-        xys, depths, radii, conics, num_tiles_hit, cov3d = ProjectGaussians.apply(
+        xys, depths, radii, conics, num_tiles_hit, cov3d = project_gaussians(
             self.means,
             self.scales,
             1,
@@ -109,7 +106,7 @@ class SimpleTrainer:
             self.tile_bounds,
         )
 
-        return RasterizeGaussians.apply(
+        return rasterize_gaussians(
             xys,
             depths,
             radii,
@@ -122,7 +119,7 @@ class SimpleTrainer:
         )
 
     def forward_slow(self):
-        xys, depths, radii, conics, num_tiles_hit, cov3d = ProjectGaussians.apply(
+        xys, depths, radii, conics, num_tiles_hit, cov3d = project_gaussians(
             self.means,
             self.scales,
             1,
@@ -138,7 +135,7 @@ class SimpleTrainer:
             self.tile_bounds,
         )
 
-        return NDRasterizeGaussians.apply(
+        return rasterize_gaussians(
             xys,
             depths,
             radii,
