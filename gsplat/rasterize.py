@@ -152,7 +152,7 @@ class _RasterizeGaussians(Function):
             final_Ts,
             final_idx,
         )
-        
+
         if return_alpha:
             out_alpha = 1 - final_Ts
             return out_img, out_alpha
