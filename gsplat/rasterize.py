@@ -22,6 +22,7 @@ def rasterize_gaussians(
     img_height: int,
     img_width: int,
     background: Optional[Float[Tensor, "channels"]] = None,
+    return_alpha: Optional[bool] = False,
 ) -> Tensor:
     """Rasterizes 2D gaussians by sorting and binning gaussian intersections for each tile and returns an N-dimensional output using alpha-compositing.
 
@@ -75,6 +76,7 @@ def rasterize_gaussians(
         img_height,
         img_width,
         background.contiguous(),
+        return_alpha,
     )
 
 
@@ -94,6 +96,7 @@ class _RasterizeGaussians(Function):
         img_height: int,
         img_width: int,
         background: Optional[Float[Tensor, "channels"]] = None,
+        return_alpha: Optional[bool] = False,
     ) -> Tensor:
         num_points = xys.size(0)
         BLOCK_X, BLOCK_Y = 16, 16
@@ -147,9 +150,12 @@ class _RasterizeGaussians(Function):
             final_Ts,
             final_idx,
         )
-        out_alpha = 1 - final_Ts
-
-        return out_img, out_alpha
+        
+        if return_alpha:
+            out_alpha = 1 - final_Ts
+            return out_img, out_alpha
+        else:
+            return out_img
 
     @staticmethod
     def backward(ctx, v_out_img, v_out_alpha=None):
@@ -158,7 +164,7 @@ class _RasterizeGaussians(Function):
 
         if v_out_alpha is None:
             v_out_alpha = torch.zeros_like(v_out_img[..., 0])
-
+        print(v_out_alpha)
         (
             gaussian_ids_sorted,
             tile_bins,
@@ -202,4 +208,5 @@ class _RasterizeGaussians(Function):
             None,  # img_height
             None,  # img_width
             None,  # background
+            None,  # return_alpha
         )
