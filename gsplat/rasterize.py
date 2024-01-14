@@ -40,11 +40,13 @@ def rasterize_gaussians(
         img_height (int): height of the rendered image.
         img_width (int): width of the rendered image.
         background (Tensor): background color
+        return_alpha (bool): whether to return alpha channel
 
     Returns:
         A Tensor:
 
         - **out_img** (Tensor): N-dimensional rendered output image.
+        - **out_alpha** (Optional[Tensor]): Alpha channel of the rendered output image.
     """
     if colors.dtype == torch.uint8:
         # make sure colors are float [0,1]
@@ -164,7 +166,7 @@ class _RasterizeGaussians(Function):
 
         if v_out_alpha is None:
             v_out_alpha = torch.zeros_like(v_out_img[..., 0])
-        print(v_out_alpha)
+
         (
             gaussian_ids_sorted,
             tile_bins,
