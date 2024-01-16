@@ -5,8 +5,8 @@ from typing import Optional
 
 import torch
 import tyro
-from gsplat.project_gaussians import project_gaussians
-from gsplat.rasterize import rasterize_gaussians
+from gsplat.project_gaussians import ProjectGaussians
+from gsplat.rasterize import RasterizeGaussians
 from PIL import Image
 from torch import Tensor, optim
 
@@ -90,7 +90,7 @@ class SimpleTrainer:
         self.viewmat.requires_grad = False
 
     def forward_new(self):
-        xys, depths, radii, conics, num_tiles_hit, cov3d = project_gaussians(
+        xys, depths, radii, conics, num_tiles_hit, cov3d = ProjectGaussians.apply(
             self.means,
             self.scales,
             1,
@@ -106,7 +106,7 @@ class SimpleTrainer:
             self.tile_bounds,
         )
 
-        return rasterize_gaussians(
+        return RasterizeGaussians.apply(
             xys,
             depths,
             radii,
@@ -119,7 +119,7 @@ class SimpleTrainer:
         )
 
     def forward_slow(self):
-        xys, depths, radii, conics, num_tiles_hit, cov3d = project_gaussians(
+        xys, depths, radii, conics, num_tiles_hit, cov3d = ProjectGaussians.apply(
             self.means,
             self.scales,
             1,
@@ -135,7 +135,7 @@ class SimpleTrainer:
             self.tile_bounds,
         )
 
-        return rasterize_gaussians(
+        return RasterizeGaussians.apply(
             xys,
             depths,
             radii,
