@@ -22,6 +22,7 @@ def rasterize_gaussians(
     img_height: int,
     img_width: int,
     background: Optional[Float[Tensor, "channels"]] = None,
+    return_alpha: Optional[bool] = False,
 ) -> Tensor:
     """Rasterizes 2D gaussians by sorting and binning gaussian intersections for each tile and returns an N-dimensional output using alpha-compositing.
 
@@ -39,11 +40,13 @@ def rasterize_gaussians(
         img_height (int): height of the rendered image.
         img_width (int): width of the rendered image.
         background (Tensor): background color
+        return_alpha (bool): whether to return alpha channel
 
     Returns:
         A Tensor:
 
         - **out_img** (Tensor): N-dimensional rendered output image.
+        - **out_alpha** (Optional[Tensor]): Alpha channel of the rendered output image.
     """
     if colors.dtype == torch.uint8:
         # make sure colors are float [0,1]
@@ -75,6 +78,7 @@ def rasterize_gaussians(
         img_height,
         img_width,
         background.contiguous(),
+        return_alpha,
     )
 
 
@@ -94,6 +98,7 @@ class _RasterizeGaussians(Function):
         img_height: int,
         img_width: int,
         background: Optional[Float[Tensor, "channels"]] = None,
+        return_alpha: Optional[bool] = False,
     ) -> Tensor:
         num_points = xys.size(0)
         BLOCK_X, BLOCK_Y = 16, 16
@@ -148,12 +153,19 @@ class _RasterizeGaussians(Function):
             final_idx,
         )
 
-        return out_img
+        if return_alpha:
+            out_alpha = 1 - final_Ts
+            return out_img, out_alpha
+        else:
+            return out_img
 
     @staticmethod
-    def backward(ctx, v_out_img):
+    def backward(ctx, v_out_img, v_out_alpha=None):
         img_height = ctx.img_height
         img_width = ctx.img_width
+
+        if v_out_alpha is None:
+            v_out_alpha = torch.zeros_like(v_out_img[..., 0])
 
         (
             gaussian_ids_sorted,
@@ -184,6 +196,7 @@ class _RasterizeGaussians(Function):
             final_Ts,
             final_idx,
             v_out_img,
+            v_out_alpha,
         )
 
         return (
@@ -197,4 +210,5 @@ class _RasterizeGaussians(Function):
             None,  # img_height
             None,  # img_width
             None,  # background
+            None,  # return_alpha
         )
