@@ -47,13 +47,13 @@ def project_gaussians(
        clip_thresh (float): minimum z depth threshold.
 
     Returns:
-        A tuple of {Tensor, Tensor, Tensor, Tensor, int, Tensor}:
+        A tuple of {Tensor, Tensor, Tensor, Tensor, Tensor, Tensor}:
 
         - **xys** (Tensor): x,y locations of 2D gaussian projections.
         - **depths** (Tensor): z depth of gaussians.
         - **radii** (Tensor): radii of 2D gaussian projections.
         - **conics** (Tensor): conic parameters for 2D gaussian.
-        - **num_tiles_hit** (int): number of tiles hit.
+        - **num_tiles_hit** (Tensor): number of tiles hit per gaussian.
         - **cov3d** (Tensor): 3D covariances.
     """
     return _ProjectGaussians.apply(
