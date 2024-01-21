@@ -190,7 +190,7 @@ class DepthTrainer:
                 loop=0,
             )
         print(
-            f"Total(s):\nProject: {times[0]:.3f}, Unified RGB+Depth Rasterization: {times[1]:.3f}, Separate RGB and Depth RGB Rasterization: {times[3]:.3f}, RGB+Depth Backward: {times[2]:.3f}"
+            f"Total(s):\nProject: {times[0]:.3f}, Unified RGB+Depth Rasterization: {times[1]:.3f}, Separate RGB and Depth Rasterization: {times[3]:.3f}, RGB+Depth Backward: {times[2]:.3f}"
         )
         print(
             f"Per step(s):\nProject: {times[0]/iterations:.5f}, Unified RGB+Depth Rasterization: {times[1]/iterations:.5f}, Separate RGB and Depth Rasterization: {times[3]/iterations:.5f}, RGB+Depth Backward: {times[2]/iterations:.5f}"
