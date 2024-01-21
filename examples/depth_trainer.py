@@ -42,10 +42,10 @@ class DepthTrainer:
 
     def _init_gaussians(self):
         """Random gaussians"""
-        bd = 1
+        bd = 5
 
         self.means = bd * (torch.rand(self.num_points, 3, device=self.device) - 0.5)
-        self.scales = torch.rand(self.num_points, 3, device=self.device)
+        self.scales = torch.rand(self.num_points, 3, device=self.device) * 0.01
         self.rgbs = torch.rand(self.num_points, 3, device=self.device)
 
         u = torch.rand(self.num_points, 1, device=self.device)
@@ -67,7 +67,7 @@ class DepthTrainer:
             [
                 [1.0, 0.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 5.0],
+                [0.0, 0.0, 1.0, 2.0],
                 [0.0, 0.0, 0.0, 1.0],
             ],
             device=self.device,
@@ -87,7 +87,7 @@ class DepthTrainer:
         )
         mse_loss = torch.nn.MSELoss()
         frames = []
-        times = [0] * 3  # project, rasterize, backward
+        times = [0] * 4  # project, rasterize, backward
         for iter in range(iterations):
             start = time.time()
             xys, depths, radii, conics, num_tiles_hit, cov3d = _ProjectGaussians.apply(
@@ -109,8 +109,9 @@ class DepthTrainer:
             times[0] += time.time() - start
             start = time.time()
 
+            # Depth + RGB rasterization
             # TODO: come up with a cleaner solution now that return_alpha has been merged to main
-            _ , _, out_depth = _RasterizeGaussians.apply(
+            _, _, out_depth = _RasterizeGaussians.apply(
                 xys,
                 depths,
                 radii,
@@ -121,11 +122,30 @@ class DepthTrainer:
                 self.H,
                 self.W,
                 self.background,
-                False, # return alphas
-                True, # return depths
+                False,  # return alphas
+                True,  # return depths
             )
             torch.cuda.synchronize()
             times[1] += time.time() - start
+
+            start = time.time()
+            # RGB only rasterization
+            rgb_out = _RasterizeGaussians.apply(
+                xys,
+                depths,
+                radii,
+                conics,
+                num_tiles_hit,
+                torch.sigmoid(self.rgbs),
+                torch.sigmoid(self.opacities),
+                self.H,
+                self.W,
+                self.background,
+                False,  # return alphas
+                False,  # return depths
+            )
+            times[3] += time.time() - start
+
             loss = mse_loss(out_depth, self.gt_depth)
             optimizer.zero_grad()
             start = time.time()
@@ -133,11 +153,14 @@ class DepthTrainer:
             torch.cuda.synchronize()
             times[2] += time.time() - start
             optimizer.step()
+
             print(f"Iteration {iter + 1}/{iterations}, Loss: {loss.item()}")
 
             if save_imgs and iter % 5 == 0:
                 depth_colored = apply_float_colormap(out_depth)
-                frames.append((depth_colored.detach().cpu().numpy() * 255).astype(np.uint8))
+                frames.append(
+                    (depth_colored.detach().cpu().numpy() * 255).astype(np.uint8)
+                )
         if save_imgs:
             # save them as a gif with PIL
             frames = [Image.fromarray(frame) for frame in frames]
@@ -152,11 +175,12 @@ class DepthTrainer:
                 loop=0,
             )
         print(
-            f"Total(s):\nProject: {times[0]:.3f}, Rasterize: {times[1]:.3f}, Backward: {times[2]:.3f}"
+            f"Total(s):\nProject: {times[0]:.3f}, RGB+Depth Rasterization: {times[1]:.3f}, RGB only Rasterization: {times[3]:.3f}, RGB+Depth Backward: {times[2]:.3f}"
         )
         print(
-            f"Per step(s):\nProject: {times[0]/iterations:.5f}, Rasterize: {times[1]/iterations:.5f}, Backward: {times[2]/iterations:.5f}"
+            f"Per step(s):\nProject: {times[0]/iterations:.5f}, RGB+Depth Rasterization: {times[1]/iterations:.5f}, RGB only Rasterization: {times[3]/iterations:.5f}, RGB+Depth Backward: {times[2]/iterations:.5f}"
         )
+
 
 def apply_float_colormap(image, colormap: Literal["turbo", "grey"] = "turbo"):
     colormap = "turbo"
@@ -172,21 +196,25 @@ def apply_float_colormap(image, colormap: Literal["turbo", "grey"] = "turbo"):
     image_long_max = torch.max(image_long)
     assert image_long_min >= 0, f"the min value is {image_long_min}"
     assert image_long_max <= 255, f"the max value is {image_long_max}"
-    return torch.tensor(matplotlib.colormaps[colormap].colors, device=image.device)[image_long[..., 0]]
+    return torch.tensor(matplotlib.colormaps[colormap].colors, device=image.device)[
+        image_long[..., 0]
+    ]
 
 
 def main(
     height: int = 256,
     width: int = 256,
-    num_points: int = 10000, #10000
+    num_points: int = 10000,  # 10000
     save_imgs: bool = True,
     iterations: int = 500,
-    lr: float = 0.001,
+    lr: float = 0.01,
 ) -> None:
 
     # artificial depth image
     x, y = np.meshgrid(np.linspace(-1, 1, width), np.linspace(-1, 1, height))
-    gt_depth = np.sin(5 * np.sqrt(x**2 + y**2)) + 0.5 * np.sin(15 * np.sqrt(x**2 + y**2))
+    gt_depth = np.sin(5 * np.sqrt(x**2 + y**2)) + 0.5 * np.sin(
+        15 * np.sqrt(x**2 + y**2)
+    )
     gt_depth = (gt_depth - np.min(gt_depth)) / (np.max(gt_depth) - np.min(gt_depth))
     gt_depth = torch.from_numpy(gt_depth).float()
 
