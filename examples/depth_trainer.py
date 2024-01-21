@@ -130,13 +130,28 @@ class DepthTrainer:
 
             start = time.time()
             # RGB only rasterization
-            rgb_out = _RasterizeGaussians.apply(
+            rgb_forward = _RasterizeGaussians.apply(
                 xys,
                 depths,
                 radii,
                 conics,
                 num_tiles_hit,
                 torch.sigmoid(self.rgbs),
+                torch.sigmoid(self.opacities),
+                self.H,
+                self.W,
+                self.background,
+                False,  # return alphas
+                False,  # return depths
+            )
+            # RGB only rasterization
+            depth_forward = _RasterizeGaussians.apply(
+                xys,
+                depths,
+                radii,
+                conics,
+                num_tiles_hit,
+                depths.repeat(1, 1, 3),
                 torch.sigmoid(self.opacities),
                 self.H,
                 self.W,
@@ -175,10 +190,10 @@ class DepthTrainer:
                 loop=0,
             )
         print(
-            f"Total(s):\nProject: {times[0]:.3f}, RGB+Depth Rasterization: {times[1]:.3f}, RGB only Rasterization: {times[3]:.3f}, RGB+Depth Backward: {times[2]:.3f}"
+            f"Total(s):\nProject: {times[0]:.3f}, Unified RGB+Depth Rasterization: {times[1]:.3f}, Separate RGB and Depth RGB Rasterization: {times[3]:.3f}, RGB+Depth Backward: {times[2]:.3f}"
         )
         print(
-            f"Per step(s):\nProject: {times[0]/iterations:.5f}, RGB+Depth Rasterization: {times[1]/iterations:.5f}, RGB only Rasterization: {times[3]/iterations:.5f}, RGB+Depth Backward: {times[2]/iterations:.5f}"
+            f"Per step(s):\nProject: {times[0]/iterations:.5f}, Unified RGB+Depth Rasterization: {times[1]/iterations:.5f}, Separate RGB and Depth Rasterization: {times[3]/iterations:.5f}, RGB+Depth Backward: {times[2]/iterations:.5f}"
         )
 
 
