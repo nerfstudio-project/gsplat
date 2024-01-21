@@ -22,7 +22,7 @@ Kernel functions that depend on the number of input gaussians are organized into
     const int gridDim = (num_gaussian_operations + NUM_THREADS - 1) / NUM_THREADS;
     
 1-D blocks containing ``const int blockDim = NUM_THREADS;`` threads each. An example of a kernel function that depends on the number of gaussians (here denoted by the ``num_gaussian_operations`` variable)
-is the main `ProjectGaussians` kernel that projects an arbitrary number of 3D gaussians into 2D.
+is the main `project_gaussians` kernel that projects an arbitrary number of 3D gaussians into 2D.
 
 
 2D Grids
@@ -35,7 +35,7 @@ Kernel functions that depend on the rendered output image size are organized int
     const dim3 gridDim = {(img_width + NUM_THREADS_X - 1) / NUM_THREADS_X, (img_height + NUM_THREADS_Y - 1) / NUM_THREADS_Y, 1};
 
 where each individual block within the grid contains a layout of threads defined by ``const dim3 blockDim = {NUM_THREADS_X, NUM_THREADS_Y, 1};``.
-An example of a kernel function that requires two dimensional grids is the main `RasterizeGaussians` kernel that renders an arbitrary number of pixels in an output image.
+An example of a kernel function that requires two dimensional grids is the main :func:`gsplat.rasterize_gaussians` kernel that renders an arbitrary number of pixels in an output image.
 
 
 Config Constants

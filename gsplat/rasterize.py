@@ -8,13 +8,27 @@ from torch import Tensor
 from torch.autograd import Function
 
 import gsplat.cuda as _C
-
-from .bin_and_sort_gaussians import bin_and_sort_gaussians
-from .compute_cumulative_intersects import compute_cumulative_intersects
+from .utils import bin_and_sort_gaussians, compute_cumulative_intersects
 
 
-class RasterizeGaussians(Function):
-    """Rasterizes 2D gaussians by sorting and binning gaussian intersections for each tile and returns an output image using alpha-compositing.
+def rasterize_gaussians(
+    xys: Float[Tensor, "*batch 2"],
+    depths: Float[Tensor, "*batch 1"],
+    radii: Float[Tensor, "*batch 1"],
+    conics: Float[Tensor, "*batch 3"],
+    num_tiles_hit: Int[Tensor, "*batch 1"],
+    colors: Float[Tensor, "*batch channels"],
+    opacity: Float[Tensor, "*batch 1"],
+    img_height: int,
+    img_width: int,
+    background: Optional[Float[Tensor, "channels"]] = None,
+    return_alpha: Optional[bool] = False,
+    return_depth: Optional[bool] = False,
+) -> Tensor:
+    """Rasterizes 2D gaussians by sorting and binning gaussian intersections for each tile and returns an N-dimensional output using alpha-compositing.
+
+    Note:
+        This function is differentiable w.r.t the xys, conics, colors, and opacity inputs.
 
     Args:
         xys (Tensor): xy coords of 2D gaussians.
@@ -22,17 +36,58 @@ class RasterizeGaussians(Function):
         radii (Tensor): radii of 2D gaussians
         conics (Tensor): conics (inverse of covariance) of 2D gaussians in upper triangular format
         num_tiles_hit (Tensor): number of tiles hit per gaussian
-        colors (Tensor): colors associated with the gaussians.
+        colors (Tensor): N-dimensional features associated with the gaussians.
         opacity (Tensor): opacity associated with the gaussians.
         img_height (int): height of the rendered image.
         img_width (int): width of the rendered image.
         background (Tensor): background color
+        return_alpha (bool): whether to return alpha channel
+        return_depth (bool): wheter to return depth image
 
     Returns:
         A Tensor:
 
-        - **out_img** (Tensor): 3-channel RGB rendered output image.
+        - **out_img** (Tensor): N-dimensional rendered output image.
+        - **out_alpha** (Optional[Tensor]): Alpha channel of the rendered output image.
+        - **out_depth** (Optional[Tensor]): Depth image.
     """
+    if colors.dtype == torch.uint8:
+        # make sure colors are float [0,1]
+        colors = colors.float() / 255
+
+    if background is not None:
+        assert (
+            background.shape[0] == colors.shape[-1]
+        ), f"incorrect shape of background color tensor, expected shape {colors.shape[-1]}"
+    else:
+        background = torch.ones(
+            colors.shape[-1], dtype=torch.float32, device=colors.device
+        )
+
+    if xys.ndimension() != 2 or xys.size(1) != 2:
+        raise ValueError("xys must have dimensions (N, 2)")
+
+    if colors.ndimension() != 2:
+        raise ValueError("colors must have dimensions (N, D)")
+
+    return _RasterizeGaussians.apply(
+        xys.contiguous(),
+        depths.contiguous(),
+        radii.contiguous(),
+        conics.contiguous(),
+        num_tiles_hit.contiguous(),
+        colors.contiguous(),
+        opacity.contiguous(),
+        img_height,
+        img_width,
+        background.contiguous(),
+        return_alpha,
+        return_depth,
+    )
+
+
+class _RasterizeGaussians(Function):
+    """Rasterizes 2D gaussians"""
 
     @staticmethod
     def forward(
@@ -47,25 +102,9 @@ class RasterizeGaussians(Function):
         img_height: int,
         img_width: int,
         background: Optional[Float[Tensor, "channels"]] = None,
-        return_depth: bool = False
-    ):
-        if colors.dtype == torch.uint8:
-            # make sure colors are float [0,1]
-            colors = colors.float() / 255
-
-        if background is not None:
-            assert (
-                background.shape[0] == colors.shape[-1]
-            ), f"incorrect shape of background color tensor, expected shape {colors.shape[-1]}"
-        else:
-            background = torch.ones(3, dtype=torch.float32, device=colors.device)
-
-        if xys.ndimension() != 2 or xys.size(1) != 2:
-            raise ValueError("xys must have dimensions (N, 2)")
-
-        if colors.ndimension() != 2 or colors.size(1) != 3:
-            raise ValueError("colors must have dimensions (N, 3)")
-
+        return_alpha: Optional[bool] = False,
+        return_depth: Optional[bool] = False,
+    ) -> Tensor:
         num_points = xys.size(0)
         BLOCK_X, BLOCK_Y = 16, 16
         tile_bounds = (
@@ -76,9 +115,7 @@ class RasterizeGaussians(Function):
         block = (BLOCK_X, BLOCK_Y, 1)
         img_size = (img_width, img_height, 1)
 
-        num_intersects, cum_tiles_hit = compute_cumulative_intersects(
-            num_points, num_tiles_hit
-        )
+        num_intersects, cum_tiles_hit = compute_cumulative_intersects(num_tiles_hit)
 
         (
             isect_ids_unsorted,
@@ -90,19 +127,47 @@ class RasterizeGaussians(Function):
             num_points, num_intersects, xys, depths, radii, cum_tiles_hit, tile_bounds
         )
 
+        if colors.shape[-1] == 3:
+            rasterize_fn = _C.rasterize_forward
         if not return_depth:
-            out_img, final_Ts, final_idx = _C.rasterize_forward(
+            rasterize_fn = _C.nd_rasterize_forward
+        else:
+            # TODO check if we can return n-channel rasterization
+            assert colors.shape[-1] == 3
+            rasterize_fn = _C.rasterize_forward_depth
+        
+        if not return_depth:
+            out_img, final_Ts, final_idx = rasterize_fn(
                 tile_bounds,
                 block,
                 img_size,
-                gaussian_ids_sorted.contiguous(),
+                gaussian_ids_sorted,
                 tile_bins,
-                xys.contiguous(),
-                conics.contiguous(),
-                colors.contiguous(),
-                opacity.contiguous(),
-                background.contiguous(),
+                xys,
+                conics,
+                colors,
+                opacity,
+                background,
             )
+        else:
+            out_img, out_depth, final_Ts, final_idx = rasterize_fn(
+                tile_bounds,
+                block,
+                img_size,
+                gaussian_ids_sorted,
+                tile_bins,
+                xys,
+                depths,
+                conics,
+                colors,
+                opacity,
+                background,
+            )
+
+        ctx.img_width = img_width
+        ctx.img_height = img_height
+
+        if not return_depth:
             ctx.save_for_backward(
                 gaussian_ids_sorted,
                 tile_bins,
@@ -115,20 +180,6 @@ class RasterizeGaussians(Function):
                 final_idx,
             )
         else:
-            # TODO rasterize_depth_forward
-            out_img, out_depth, final_Ts, final_idx = _C.rasterize_forward_depth(
-                tile_bounds,
-                block,
-                img_size,
-                gaussian_ids_sorted.contiguous(),
-                tile_bins,
-                xys.contiguous(),
-                depths.contiguous(),
-                conics.contiguous(),
-                colors.contiguous(),
-                opacity.contiguous(),
-                background.contiguous(),
-            )
             ctx.save_for_backward(
                 gaussian_ids_sorted,
                 tile_bins,
@@ -142,21 +193,24 @@ class RasterizeGaussians(Function):
                 final_idx,
             )
 
-        ctx.img_width = img_width
-        ctx.img_height = img_height
-        
-        if not return_depth:
+        if return_alpha:
+            out_alpha = 1 - final_Ts
+            return out_img, out_alpha
+        elif not return_depth:
             return out_img
-
-        return out_img, out_depth
+        else:
+            return out_img, None, out_depth
 
     @staticmethod
-    def backward(ctx, v_out_img, v_out_depth=None):
+    def backward(ctx, v_out_img, v_out_alpha = None, v_out_depth = None):
         img_height = ctx.img_height
         img_width = ctx.img_width
 
-        print(f"v_out_depth {v_out_depth}")
+        if v_out_alpha is None:
+            v_out_alpha = torch.zeros_like(v_out_img[..., 0])
+        
         if v_out_depth is None:
+            v_depth = None
             (
                 gaussian_ids_sorted,
                 tile_bins,
@@ -168,20 +222,25 @@ class RasterizeGaussians(Function):
                 final_Ts,
                 final_idx,
             ) = ctx.saved_tensors
-            v_depth = None
-            v_xy, v_conic, v_colors, v_opacity = _C.rasterize_backward(
+
+            if colors.shape[-1] == 3:
+                rasterize_fn = _C.rasterize_backward
+            else:
+                rasterize_fn = _C.nd_rasterize_backward
+            v_xy, v_conic, v_colors, v_opacity = rasterize_fn(
                 img_height,
                 img_width,
-                gaussian_ids_sorted.contiguous(),
+                gaussian_ids_sorted,
                 tile_bins,
-                xys.contiguous(),
-                conics.contiguous(),
-                colors.contiguous(),
-                opacity.contiguous(),
-                background.contiguous(),
-                final_Ts.contiguous(),
-                final_idx.contiguous(),
-                v_out_img.contiguous(),
+                xys,
+                conics,
+                colors,
+                opacity,
+                background,
+                final_Ts,
+                final_idx,
+                v_out_img,
+                v_out_alpha,
             )
         else:
             (
@@ -224,5 +283,6 @@ class RasterizeGaussians(Function):
             None,  # img_height
             None,  # img_width
             None,  # background
-            None, # return_depth
+            None,  # return_alpha
+            None,  # return_depth
         )

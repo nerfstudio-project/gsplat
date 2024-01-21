@@ -1,15 +1,12 @@
 import math
-import os
 import random
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
 import torch
 import tyro
 from gsplat.project_gaussians import ProjectGaussians
 from gsplat.rasterize import RasterizeGaussians
-from gsplat.nd_rasterize import NDRasterizeGaussians
 from PIL import Image
 from torch import Tensor, optim
 
@@ -142,7 +139,7 @@ class SimpleTrainer:
             self.tile_bounds,
         )
 
-        return NDRasterizeGaussians.apply(
+        return RasterizeGaussians.apply(
             xys,
             depths,
             radii,
@@ -162,7 +159,7 @@ class SimpleTrainer:
         frames = []
         for i in range(iterations):
             optimizer.zero_grad()
-            slow_out = self.forward_slow()
+            slow_out, _ = self.forward_slow()
 
             loss = mse_loss(slow_out, self.gt_image)
             loss.backward()
@@ -175,10 +172,15 @@ class SimpleTrainer:
             ]
 
             optimizer.zero_grad()
+<<<<<<< HEAD
             new_out, new_depth = self.forward_new()
             rgb_loss = mse_loss(new_out, self.gt_image)
             depth_loss  = mse_loss(new_depth, self.gt_depth)
             loss = rgb_loss + depth_loss
+=======
+            new_out, _ = self.forward_new()
+            loss = mse_loss(new_out, self.gt_image)
+>>>>>>> main
             loss.backward()
 
             new_grads = [

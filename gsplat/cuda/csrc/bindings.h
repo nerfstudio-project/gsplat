@@ -87,9 +87,6 @@ project_gaussians_backward_tensor(
     torch::Tensor &v_conic
 );
 
-std::tuple<torch::Tensor, torch::Tensor> compute_cumulative_intersects_tensor(
-    const int num_points, const torch::Tensor &num_tiles_hit
-);
 
 std::tuple<torch::Tensor, torch::Tensor> map_gaussian_to_intersects_tensor(
     const int num_points,
@@ -117,25 +114,6 @@ std::tuple<
     const torch::Tensor &gaussian_ids_sorted,
     const torch::Tensor &tile_bins,
     const torch::Tensor &xys,
-    const torch::Tensor &conics,
-    const torch::Tensor &colors,
-    const torch::Tensor &opacities,
-    const torch::Tensor &background
-);
-
-std::tuple<
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor
-> rasterize_forward_depth_tensor(
-    const std::tuple<int, int, int> tile_bounds,
-    const std::tuple<int, int, int> block,
-    const std::tuple<int, int, int> img_size,
-    const torch::Tensor &gaussian_ids_sorted,
-    const torch::Tensor &tile_bins,
-    const torch::Tensor &xys,
-    const torch::Tensor &depths,
     const torch::Tensor &conics,
     const torch::Tensor &colors,
     const torch::Tensor &opacities,
@@ -179,7 +157,8 @@ std::
         const torch::Tensor &background,
         const torch::Tensor &final_Ts,
         const torch::Tensor &final_idx,
-        const torch::Tensor &v_output // dL_dout_color
+        const torch::Tensor &v_output, // dL_dout_color
+        const torch::Tensor &v_output_alpha
     );
 
 std::
@@ -201,8 +180,28 @@ std::
         const torch::Tensor &background,
         const torch::Tensor &final_Ts,
         const torch::Tensor &final_idx,
-        const torch::Tensor &v_output // dL_dout_color
+        const torch::Tensor &v_output, // dL_dout_color
+        const torch::Tensor &v_output_alpha
     );
+
+std::tuple<
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor
+> rasterize_forward_depth_tensor(
+    const std::tuple<int, int, int> tile_bounds,
+    const std::tuple<int, int, int> block,
+    const std::tuple<int, int, int> img_size,
+    const torch::Tensor &gaussian_ids_sorted,
+    const torch::Tensor &tile_bins,
+    const torch::Tensor &xys,
+    const torch::Tensor &depths,
+    const torch::Tensor &conics,
+    const torch::Tensor &colors,
+    const torch::Tensor &opacities,
+    const torch::Tensor &background
+);
 
 std::
     tuple<

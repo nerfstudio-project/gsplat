@@ -9,8 +9,26 @@ from torch.autograd import Function
 import gsplat.cuda as _C
 
 
-class ProjectGaussians(Function):
+def project_gaussians(
+    means3d: Float[Tensor, "*batch 3"],
+    scales: Float[Tensor, "*batch 3"],
+    glob_scale: float,
+    quats: Float[Tensor, "*batch 4"],
+    viewmat: Float[Tensor, "4 4"],
+    projmat: Float[Tensor, "4 4"],
+    fx: float,
+    fy: float,
+    cx: float,
+    cy: float,
+    img_height: int,
+    img_width: int,
+    tile_bounds: Tuple[int, int, int],
+    clip_thresh: float = 0.01,
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, int, Tensor]:
     """This function projects 3D gaussians to 2D using the EWA splatting method for gaussian splatting.
+
+    Note:
+        This function is differentiable w.r.t the means3d, scales and quats inputs.
 
     Args:
        means3d (Tensor): xyzs of gaussians.
@@ -21,21 +39,43 @@ class ProjectGaussians(Function):
        projmat (Tensor): projection matrix for rendering.
        fx (float): focal length x.
        fy (float): focal length y.
+       cx (float): principal point x.
+       cy (float): principal point y.
        img_height (int): height of the rendered image.
        img_width (int): width of the rendered image.
        tile_bounds (Tuple): tile dimensions as a len 3 tuple (tiles.x , tiles.y, 1).
        clip_thresh (float): minimum z depth threshold.
 
     Returns:
-        A tuple of {Tensor, Tensor, Tensor, Tensor, int, Tensor}:
+        A tuple of {Tensor, Tensor, Tensor, Tensor, Tensor, Tensor}:
 
         - **xys** (Tensor): x,y locations of 2D gaussian projections.
         - **depths** (Tensor): z depth of gaussians.
         - **radii** (Tensor): radii of 2D gaussian projections.
         - **conics** (Tensor): conic parameters for 2D gaussian.
-        - **num_tiles_hit** (int): number of tiles hit.
+        - **num_tiles_hit** (Tensor): number of tiles hit per gaussian.
         - **cov3d** (Tensor): 3D covariances.
     """
+    return _ProjectGaussians.apply(
+        means3d.contiguous(),
+        scales.contiguous(),
+        glob_scale,
+        quats.contiguous(),
+        viewmat.contiguous(),
+        projmat.contiguous(),
+        fx,
+        fy,
+        cx,
+        cy,
+        img_height,
+        img_width,
+        tile_bounds,
+        clip_thresh,
+    )
+
+
+class _ProjectGaussians(Function):
+    """Project 3D gaussians to 2D."""
 
     @staticmethod
     def forward(
@@ -168,5 +208,7 @@ class ProjectGaussians(Function):
             # img_width: int,
             None,
             # tile_bounds: Tuple[int, int, int],
+            None,
+            # clip_thresh,
             None,
         )
