@@ -64,7 +64,9 @@ except ImportError:
         except OSError:
             pass
 
-        if os.path.exists(os.path.join(build_dir, "gsplat_cuda.so")) or os.path.exists(os.path.join(build_dir, "gsplat_cuda.lib")):
+        if os.path.exists(os.path.join(build_dir, "gsplat_cuda.so")) or os.path.exists(
+            os.path.join(build_dir, "gsplat_cuda.lib")
+        ):
             # If the build exists, we assume the extension has been built
             # and we can load it.
 
