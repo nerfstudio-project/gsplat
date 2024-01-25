@@ -96,6 +96,8 @@ class _ProjectGaussians(Function):
         clip_thresh: float = 0.01,
     ):
         num_points = means3d.shape[-2]
+        if num_points < 1 or means3d.shape[-1] != 3:
+            raise ValueError(f"Invalid shape for means3d: {means3d.shape}")
 
         (
             cov3d,
