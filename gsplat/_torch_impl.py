@@ -328,7 +328,9 @@ def map_gaussian_to_intersects(
 
 def get_tile_bin_edges(num_intersects, isect_ids_sorted, tile_bounds):
     tile_bins = torch.zeros(
-        (tile_bounds[0] * tile_bounds[1], 2), dtype=torch.int32, device=isect_ids_sorted.device
+        (tile_bounds[0] * tile_bounds[1], 2),
+        dtype=torch.int32,
+        device=isect_ids_sorted.device,
     )
 
     for idx in range(num_intersects):
