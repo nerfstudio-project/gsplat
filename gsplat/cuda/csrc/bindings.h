@@ -100,7 +100,8 @@ std::tuple<torch::Tensor, torch::Tensor> map_gaussian_to_intersects_tensor(
 
 torch::Tensor get_tile_bin_edges_tensor(
     int num_intersects,
-    const torch::Tensor &isect_ids_sorted
+    const torch::Tensor &isect_ids_sorted,
+    const std::tuple<int, int, int> tile_bounds
 );
 
 std::tuple<
