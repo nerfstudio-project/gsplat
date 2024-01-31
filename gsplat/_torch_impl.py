@@ -1,7 +1,8 @@
 """Pure PyTorch implementations of various functions"""
+import struct
+
 import torch
 import torch.nn.functional as F
-import struct
 from jaxtyping import Float
 from torch import Tensor
 
@@ -325,9 +326,11 @@ def map_gaussian_to_intersects(
     return isect_ids, gaussian_ids
 
 
-def get_tile_bin_edges(num_intersects, isect_ids_sorted):
+def get_tile_bin_edges(num_intersects, isect_ids_sorted, tile_bounds):
     tile_bins = torch.zeros(
-        (num_intersects, 2), dtype=torch.int32, device=isect_ids_sorted.device
+        (tile_bounds[0] * tile_bounds[1], 2),
+        dtype=torch.int32,
+        device=isect_ids_sorted.device,
     )
 
     for idx in range(num_intersects):
