@@ -144,7 +144,7 @@ class _RasterizeGaussians(Function):
             )
             if colors.shape[-1] == 3:
                 if return_depth:
-                     rasterize_fn = _C.rasterize_forward_depth
+                    rasterize_fn = _C.rasterize_forward_depth
                 else:
                     rasterize_fn = _C.rasterize_forward
             else:
@@ -165,18 +165,18 @@ class _RasterizeGaussians(Function):
                 )
             else:
                 out_img, out_depth, final_Ts, final_idx = rasterize_fn(
-                tile_bounds,
-                block,
-                img_size,
-                gaussian_ids_sorted,
-                tile_bins,
-                xys,
-                depths,
-                conics,
-                colors,
-                opacity,
-                background,
-            )
+                    tile_bounds,
+                    block,
+                    img_size,
+                    gaussian_ids_sorted,
+                    tile_bins,
+                    xys,
+                    depths,
+                    conics,
+                    colors,
+                    opacity,
+                    background,
+                )
 
         ctx.img_width = img_width
         ctx.img_height = img_height
@@ -212,21 +212,20 @@ class _RasterizeGaussians(Function):
             if not return_depth:
                 return out_img, out_alpha
             else:
-                 return out_img, out_alpha, out_depth
+                return out_img, out_alpha, out_depth
         elif not return_depth:
             return out_img
         else:
             return out_img, None, out_depth
 
     @staticmethod
-    def backward(ctx, v_out_img, v_out_alpha = None, v_out_depth = None):
+    def backward(ctx, v_out_img, v_out_alpha=None, v_out_depth=None):
         img_height = ctx.img_height
         img_width = ctx.img_width
         num_intersects = ctx.num_intersects
 
         if v_out_alpha is None:
             v_out_alpha = torch.zeros_like(v_out_img[..., 0])
-        
 
         if v_out_depth is None:
             v_depth = None
@@ -286,7 +285,13 @@ class _RasterizeGaussians(Function):
                 v_opacity = torch.zeros_like(opacity)
                 v_depth = torch.zeros_like(depths)
             else:
-                v_xy, v_conic, v_colors, v_depth, v_opacity = _C.rasterize_backward_depth(
+                (
+                    v_xy,
+                    v_conic,
+                    v_colors,
+                    v_depth,
+                    v_opacity,
+                ) = _C.rasterize_backward_depth(
                     img_height,
                     img_width,
                     gaussian_ids_sorted.contiguous(),
