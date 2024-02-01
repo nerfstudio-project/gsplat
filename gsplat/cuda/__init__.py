@@ -10,6 +10,7 @@ def _make_lazy_cuda_func(name: str) -> Callable:
 
     return call_cuda
 
+
 compute_cov2d_bounds = _make_lazy_cuda_func("compute_cov2d_bounds")
 project_gaussians_forward = _make_lazy_cuda_func("project_gaussians_forward")
 project_gaussians_backward = _make_lazy_cuda_func("project_gaussians_backward")
@@ -23,4 +24,3 @@ rasterize_forward_depth = _make_lazy_cuda_func("rasterize_forward_depth")
 rasterize_backward_depth = _make_lazy_cuda_func("rasterize_backward_depth")
 nd_rasterize_forward = _make_lazy_cuda_func("nd_rasterize_forward")
 nd_rasterize_backward = _make_lazy_cuda_func("nd_rasterize_backward")
-
