@@ -75,8 +75,10 @@ def test_get_tile_bin_edges():
     _isect_ids_sorted = sorted_values
     _gaussian_ids_sorted = torch.gather(_gaussian_ids_unsorted, 0, sorted_indices)
 
-    _tile_bins = _torch_impl.get_tile_bin_edges(_num_intersects, _isect_ids_sorted)
-    tile_bins = get_tile_bin_edges(_num_intersects, _isect_ids_sorted)
+    _tile_bins = _torch_impl.get_tile_bin_edges(
+        _num_intersects, _isect_ids_sorted, tile_bounds
+    )
+    tile_bins = get_tile_bin_edges(_num_intersects, _isect_ids_sorted, tile_bounds)
 
     torch.testing.assert_close(_tile_bins, tile_bins)
 

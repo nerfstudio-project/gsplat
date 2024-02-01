@@ -5,7 +5,7 @@
 #include <iostream>
 
 inline __device__ float ndc2pix(const float x, const float W, const float cx) {
-    return 0.5f * W * x + cx - 0.5;
+    return 0.5f * W * x + cx - 0.5f;
 }
 
 inline __device__ void get_bbox(

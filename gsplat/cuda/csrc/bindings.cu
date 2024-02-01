@@ -311,11 +311,13 @@ std::tuple<torch::Tensor, torch::Tensor> map_gaussian_to_intersects_tensor(
 }
 
 torch::Tensor get_tile_bin_edges_tensor(
-    int num_intersects, const torch::Tensor &isect_ids_sorted
+    int num_intersects, const torch::Tensor &isect_ids_sorted, 
+    const std::tuple<int, int, int> tile_bounds
 ) {
     CHECK_INPUT(isect_ids_sorted);
+    int num_tiles = std::get<0>(tile_bounds) * std::get<1>(tile_bounds);
     torch::Tensor tile_bins = torch::zeros(
-        {num_intersects, 2}, isect_ids_sorted.options().dtype(torch::kInt32)
+        {num_tiles, 2}, isect_ids_sorted.options().dtype(torch::kInt32)
     );
     get_tile_bin_edges<<<
         (num_intersects + N_THREADS - 1) / N_THREADS,
