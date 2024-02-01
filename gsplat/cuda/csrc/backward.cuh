@@ -25,7 +25,9 @@ __global__ void project_gaussians_backward_kernel(
     float* __restrict__ v_cov3d,
     float3* __restrict__ v_mean3d,
     float3* __restrict__ v_scale,
-    float4* __restrict__ v_quat
+    float4* __restrict__ v_quat,
+    float* __restrict__ v_viewmat,
+    float* __restrict__ v_projmat
 );
 
 // compute jacobians of output image wrt binned and sorted gaussians
@@ -79,7 +81,8 @@ __device__ void project_cov3d_ewa_vjp(
     const float fy,
     const float3 &v_cov2d,
     float3 &v_mean3d,
-    float *v_cov3d
+    float *v_cov3d,
+    float *v_viewmat
 );
 
 __device__ void scale_rot_to_cov3d_vjp(

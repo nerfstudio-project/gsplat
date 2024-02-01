@@ -117,14 +117,18 @@ inline __device__ float2 project_pix(
 
 // given v_xy_pix, get v_xyz
 inline __device__ float3 project_pix_vjp(
-    const float *mat, const float3 p, const dim3 img_size, const float2 v_xy
+    const float *mat,
+    const float3 p,
+    const dim3 img_size,
+    const float2 v_xy,
+    float4 &v_proj
 ) {
     // ROW MAJOR mat
     float4 p_hom = transform_4x4(mat, p);
     float rw = 1.f / (p_hom.w + 1e-6f);
 
     float3 v_ndc = {0.5f * img_size.x * v_xy.x, 0.5f * img_size.y * v_xy.y};
-    float4 v_proj = {
+    v_proj = {
         v_ndc.x * rw, v_ndc.y * rw, 0., -(v_ndc.x + v_ndc.y) * rw * rw
     };
     // df / d_world = df / d_cam * d_cam / d_world

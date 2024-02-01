@@ -28,7 +28,7 @@ def project_gaussians(
     """This function projects 3D gaussians to 2D using the EWA splatting method for gaussian splatting.
 
     Note:
-        This function is differentiable w.r.t the means3d, scales and quats inputs.
+        This function is differentiable w.r.t the means3d, scales, quats, viewmat, and projmat inputs.
 
     Args:
        means3d (Tensor): xyzs of gaussians.
@@ -172,7 +172,7 @@ class _ProjectGaussians(Function):
             conics,
         ) = ctx.saved_tensors
 
-        (v_cov2d, v_cov3d, v_mean3d, v_scale, v_quat) = _C.project_gaussians_backward(
+        (v_cov2d, v_cov3d, v_mean3d, v_scale, v_quat, v_viewmat, v_projmat) = _C.project_gaussians_backward(
             ctx.num_points,
             means3d,
             scales,
@@ -205,9 +205,9 @@ class _ProjectGaussians(Function):
             # quats: Float[Tensor, "*batch 4"],
             v_quat,
             # viewmat: Float[Tensor, "4 4"],
-            None,
+            v_viewmat,
             # projmat: Float[Tensor, "4 4"],
-            None,
+            v_projmat,
             # fx: float,
             None,
             # fy: float,
