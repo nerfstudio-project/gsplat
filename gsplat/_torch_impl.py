@@ -226,7 +226,7 @@ def clip_near_plane(p, viewmat, clip_thresh=0.01):
     R = viewmat[:3, :3]
     T = viewmat[:3, 3]
     p_view = torch.einsum("ij,nj->ni", R, p) + T[None]
-    return p_view, p_view[..., 2] <= clip_thresh
+    return p_view, p_view[..., 2] < clip_thresh
 
 
 def get_tile_bbox(pix_center, pix_radius, tile_bounds, BLOCK_X=16, BLOCK_Y=16):

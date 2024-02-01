@@ -114,12 +114,12 @@ def test_project_gaussians_forward():
         )
 
     check_close(masks, _masks, atol=1e-5, rtol=1e-5)
-    check_close(cov3d[_masks], _cov3d[_masks])
-    check_close(xys[_masks], _xys[_masks])
-    check_close(depths[_masks], _depths[_masks])
-    check_close(radii[_masks], _radii[_masks])
-    check_close(conics[_masks], _conics[_masks])
-    check_close(num_tiles_hit[_masks], _num_tiles_hit[_masks])
+    check_close(cov3d, _cov3d)
+    check_close(xys, _xys)
+    check_close(depths, _depths)
+    check_close(radii, _radii)
+    check_close(conics, _conics)
+    check_close(num_tiles_hit, _num_tiles_hit)
     print("passed project_gaussians_forward test")
 
 
@@ -270,11 +270,11 @@ def test_project_gaussians_backward():
 
     atol = 5e-4
     rtol = 1e-5
-    check_close(v_cov2d[masks], _v_cov2d[masks], atol=atol, rtol=rtol)
-    check_close(v_cov3d[masks], _v_cov3d[masks], atol=atol, rtol=rtol)
-    check_close(v_mean3d[masks][:, :2], _v_mean3d[masks][:, :2], atol=atol, rtol=rtol)
-    check_close(v_scale[masks], _v_scale[masks], atol=atol, rtol=rtol)
-    check_close(v_quat[masks], _v_quat[masks], atol=atol, rtol=rtol)
+    check_close(v_cov2d, _v_cov2d, atol=atol, rtol=rtol)
+    check_close(v_cov3d, _v_cov3d, atol=atol, rtol=rtol)
+    check_close(v_mean3d[:, :2], _v_mean3d[:, :2], atol=atol, rtol=rtol)
+    check_close(v_scale, _v_scale, atol=atol, rtol=rtol)
+    check_close(v_quat, _v_quat, atol=atol, rtol=rtol)
     print("passed project_gaussians_backward test")
 
 
