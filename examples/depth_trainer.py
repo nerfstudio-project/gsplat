@@ -1,8 +1,7 @@
 import math
 import os
 import time
-from pathlib import Path
-from typing import Optional, Literal
+from typing import Literal
 
 import numpy as np
 import torch
@@ -87,7 +86,9 @@ class DepthTrainer:
         )
         mse_loss = torch.nn.MSELoss()
         frames = []
-        times = [0] * 4  # project, rasterize, backward
+        times = [
+            0
+        ] * 4  # project, unified rgb_depth_rasterize, original rgb_rasterize, backward
         for iter in range(iterations):
             start = time.time()
             xys, depths, radii, conics, num_tiles_hit, cov3d = _ProjectGaussians.apply(
@@ -129,7 +130,7 @@ class DepthTrainer:
             times[1] += time.time() - start
 
             start = time.time()
-            # RGB only rasterization
+            # Separate RGB followed by depth rasterizer
             rgb_forward = _RasterizeGaussians.apply(
                 xys,
                 depths,
@@ -144,7 +145,6 @@ class DepthTrainer:
                 False,  # return alphas
                 False,  # return depths
             )
-            # RGB only rasterization
             depth_forward = _RasterizeGaussians.apply(
                 xys,
                 depths,
@@ -159,14 +159,14 @@ class DepthTrainer:
                 False,  # return alphas
                 False,  # return depths
             )
-            times[3] += time.time() - start
+            times[2] += time.time() - start
 
             loss = mse_loss(out_depth, self.gt_depth)
             optimizer.zero_grad()
             start = time.time()
             loss.backward()
             torch.cuda.synchronize()
-            times[2] += time.time() - start
+            times[3] += time.time() - start
             optimizer.step()
 
             print(f"Iteration {iter + 1}/{iterations}, Loss: {loss.item()}")
@@ -190,10 +190,10 @@ class DepthTrainer:
                 loop=0,
             )
         print(
-            f"Total(s):\nProject: {times[0]:.3f}, Unified RGB+Depth Rasterization: {times[1]:.3f}, Separate RGB and Depth Rasterization: {times[3]:.3f}, RGB+Depth Backward: {times[2]:.3f}"
+            f"Total(s):\nProject: {times[0]:.3f}, Unified RGB+Depth Rasterization: {times[1]:.3f}, Separate RGB and Depth Rasterization: {times[2]:.3f}, RGB+Depth Backward: {times[3]:.3f}"
         )
         print(
-            f"Per step(s):\nProject: {times[0]/iterations:.5f}, Unified RGB+Depth Rasterization: {times[1]/iterations:.5f}, Separate RGB and Depth Rasterization: {times[3]/iterations:.5f}, RGB+Depth Backward: {times[2]/iterations:.5f}"
+            f"Per step(s):\nProject: {times[0]/iterations:.5f}, Unified RGB+Depth Rasterization: {times[1]/iterations:.5f}, Separate RGB and Depth Rasterization: {times[2]/iterations:.5f}, RGB+Depth Backward: {times[3]/iterations:.5f}"
         )
 
 
