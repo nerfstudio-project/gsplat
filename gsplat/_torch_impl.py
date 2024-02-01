@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
+from typing import Tuple
 
 
 def compute_sh_color(
@@ -116,15 +117,15 @@ def quat_to_rotmat(quat: Tensor) -> Tensor:
     w, x, y, z = torch.unbind(F.normalize(quat, dim=-1), dim=-1)
     mat = torch.stack(
         [
-            1 - 2 * (y ** 2 + z ** 2),
+            1 - 2 * (y**2 + z**2),
             2 * (x * y - w * z),
             2 * (x * z + w * y),
             2 * (x * y + w * z),
-            1 - 2 * (x ** 2 + z ** 2),
+            1 - 2 * (x**2 + z**2),
             2 * (y * z - w * x),
             2 * (x * z - w * y),
             2 * (y * z + w * x),
-            1 - 2 * (x ** 2 + y ** 2),
+            1 - 2 * (x**2 + y**2),
         ],
         dim=-1,
     )
@@ -149,7 +150,7 @@ def project_cov3d_ewa(
     fy: float,
     tan_fovx: float,
     tan_fovy: float,
-) -> Tensor:
+) -> Tuple[Tensor, Tensor]:
     assert mean3d.shape[-1] == 3, mean3d.shape
     assert cov3d.shape[-2:] == (3, 3), cov3d.shape
     assert viewmat.shape[-2:] == (4, 4), viewmat.shape
@@ -158,7 +159,7 @@ def project_cov3d_ewa(
     t = torch.einsum("...ij,...j->...i", W, mean3d) + p  # (..., 3)
 
     rz = 1.0 / t[..., 2]  # (...,)
-    rz2 = rz ** 2  # (...,)
+    rz2 = rz**2  # (...,)
 
     lim_x = 1.3 * torch.tensor([tan_fovx], device=mean3d.device)
     lim_y = 1.3 * torch.tensor([tan_fovy], device=mean3d.device)
@@ -174,9 +175,12 @@ def project_cov3d_ewa(
     T = torch.matmul(J, W)  # (..., 2, 3)
     cov2d = torch.einsum("...ij,...jk,...kl->...il", T, cov3d, T.transpose(-1, -2))
     # add a little blur along axes and (TODO save upper triangular elements)
+    det_orig = cov2d[..., 0, 0] * cov2d[..., 1, 1] - cov2d[..., 0, 1] * cov2d[..., 0, 1]
     cov2d[..., 0, 0] = cov2d[..., 0, 0] + 0.3
     cov2d[..., 1, 1] = cov2d[..., 1, 1] + 0.3
-    return cov2d[..., :2, :2]
+    det_blur = cov2d[..., 0, 0] * cov2d[..., 1, 1] - cov2d[..., 0, 1] * cov2d[..., 0, 1]
+    compensation = torch.sqrt(torch.clamp(det_orig / det_blur, min=0))
+    return cov2d[..., :2, :2], compensation.detach()
 
 
 def compute_cov2d_bounds(cov2d_mat: Tensor):
@@ -198,8 +202,8 @@ def compute_cov2d_bounds(cov2d_mat: Tensor):
         dim=-1,
     )  # (..., 3)
     b = (cov2d[..., 0, 0] + cov2d[..., 1, 1]) / 2  # (...,)
-    v1 = b + torch.sqrt(torch.clamp(b ** 2 - det, min=0.1))  # (...,)
-    v2 = b - torch.sqrt(torch.clamp(b ** 2 - det, min=0.1))  # (...,)
+    v1 = b + torch.sqrt(torch.clamp(b**2 - det, min=0.1))  # (...,)
+    v2 = b - torch.sqrt(torch.clamp(b**2 - det, min=0.1))  # (...,)
     radius = torch.ceil(3.0 * torch.sqrt(torch.max(v1, v2)))  # (...,)
     radius_all = torch.zeros(*cov2d_mat.shape[:-2], device=cov2d_mat.device)
     conic_all = torch.zeros(*cov2d_mat.shape[:-2], 3, device=cov2d_mat.device)
@@ -272,7 +276,9 @@ def project_gaussians_forward(
     tan_fovy = 0.5 * img_size[1] / fy
     p_view, is_close = clip_near_plane(means3d, viewmat, clip_thresh)
     cov3d = scale_rot_to_cov3d(scales, glob_scale, quats)
-    cov2d = project_cov3d_ewa(means3d, cov3d, viewmat, fx, fy, tan_fovx, tan_fovy)
+    cov2d, compensation = project_cov3d_ewa(
+        means3d, cov3d, viewmat, fx, fy, tan_fovx, tan_fovy
+    )
     conic, radius, det_valid = compute_cov2d_bounds(cov2d)
     xys = project_pix(fullmat, means3d, img_size, (cx, cy))
     tile_min, tile_max = get_tile_bbox(xys, radius, tile_bounds)
@@ -290,6 +296,7 @@ def project_gaussians_forward(
     xys = torch.where(~mask[..., None], 0, xys)
     cov3d = torch.where(~mask[..., None, None], 0, cov3d)
     cov2d = torch.where(~mask[..., None, None], 0, cov2d)
+    compensation = torch.where(~mask, 0, compensation)
     num_tiles_hit = torch.where(~mask, 0, num_tiles_hit)
     depths = torch.where(~mask, 0, depths)
 
@@ -297,7 +304,17 @@ def project_gaussians_forward(
     cov3d_triu = cov3d[..., i, j]
     i, j = torch.triu_indices(2, 2)
     cov2d_triu = cov2d[..., i, j]
-    return cov3d_triu, cov2d_triu, xys, depths, radii, conic, num_tiles_hit, mask
+    return (
+        cov3d_triu,
+        cov2d_triu,
+        xys,
+        depths,
+        radii,
+        conic,
+        compensation,
+        num_tiles_hit,
+        mask,
+    )
 
 
 def map_gaussian_to_intersects(
@@ -339,7 +356,6 @@ def get_tile_bin_edges(num_intersects, isect_ids_sorted, tile_bounds):
     )
 
     for idx in range(num_intersects):
-
         cur_tile_idx = isect_ids_sorted[idx] >> 32
 
         if idx == 0:

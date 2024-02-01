@@ -24,7 +24,7 @@ def project_gaussians(
     img_width: int,
     tile_bounds: Tuple[int, int, int],
     clip_thresh: float = 0.01,
-) -> Tuple[Tensor, Tensor, Tensor, Tensor, int, Tensor]:
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
     """This function projects 3D gaussians to 2D using the EWA splatting method for gaussian splatting.
 
     Note:
@@ -47,12 +47,13 @@ def project_gaussians(
        clip_thresh (float): minimum z depth threshold.
 
     Returns:
-        A tuple of {Tensor, Tensor, Tensor, Tensor, Tensor, Tensor}:
+        A tuple of {Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor}:
 
         - **xys** (Tensor): x,y locations of 2D gaussian projections.
         - **depths** (Tensor): z depth of gaussians.
         - **radii** (Tensor): radii of 2D gaussian projections.
         - **conics** (Tensor): conic parameters for 2D gaussian.
+        - **compensation** (Tensor): the density compensation for blurring 2D kernel
         - **num_tiles_hit** (Tensor): number of tiles hit per gaussian.
         - **cov3d** (Tensor): 3D covariances.
     """
@@ -105,6 +106,7 @@ class _ProjectGaussians(Function):
             depths,
             radii,
             conics,
+            compensation,
             num_tiles_hit,
         ) = _C.project_gaussians_forward(
             num_points,
@@ -146,10 +148,19 @@ class _ProjectGaussians(Function):
             conics,
         )
 
-        return (xys, depths, radii, conics, num_tiles_hit, cov3d)
+        return (xys, depths, radii, conics, compensation, num_tiles_hit, cov3d)
 
     @staticmethod
-    def backward(ctx, v_xys, v_depths, v_radii, v_conics, v_num_tiles_hit, v_cov3d):
+    def backward(
+        ctx,
+        v_xys,
+        v_depths,
+        v_radii,
+        v_conics,
+        v_compensation,
+        v_num_tiles_hit,
+        v_cov3d,
+    ):
         (
             means3d,
             scales,

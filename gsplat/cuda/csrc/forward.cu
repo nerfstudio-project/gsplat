@@ -26,6 +26,7 @@ __global__ void project_gaussians_forward_kernel(
     float* __restrict__ depths,
     int* __restrict__ radii,
     float3* __restrict__ conics,
+    float* __restrict__ compensation,
     int32_t* __restrict__ num_tiles_hit
 ) {
     unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
@@ -61,8 +62,11 @@ __global__ void project_gaussians_forward_kernel(
     float cy = intrins.w;
     float tan_fovx = 0.5 * img_size.x / fx;
     float tan_fovy = 0.5 * img_size.y / fy;
-    float3 cov2d = project_cov3d_ewa(
-        p_world, cur_cov3d, viewmat, fx, fy, tan_fovx, tan_fovy
+    float3 cov2d;
+    float comp;
+    project_cov3d_ewa(
+        p_world, cur_cov3d, viewmat, fx, fy, tan_fovx, tan_fovy,
+        cov2d, comp
     );
     // printf("cov2d %d, %.2f %.2f %.2f\n", idx, cov2d.x, cov2d.y, cov2d.z);
 
@@ -88,6 +92,7 @@ __global__ void project_gaussians_forward_kernel(
     depths[idx] = p_view.z;
     radii[idx] = (int)radius;
     xys[idx] = center;
+    compensation[idx] = comp;
     // printf(
     //     "point %d x %.2f y %.2f z %.2f, radius %d, # tiles %d, tile_min %d
     //     %d, tile_max %d %d\n", idx, center.x, center.y, depths[idx],
@@ -372,14 +377,16 @@ __global__ void rasterize_forward(
 }
 
 // device helper to approximate projected 2d cov from 3d mean and cov
-__device__ float3 project_cov3d_ewa(
+__device__ void project_cov3d_ewa(
     const float3& __restrict__ mean3d,
     const float* __restrict__ cov3d,
     const float* __restrict__ viewmat,
     const float fx,
     const float fy,
     const float tan_fovx,
-    const float tan_fovy
+    const float tan_fovy,
+    float3 &cov2d,
+    float &compensation
 ) {
     // clip the
     // we expect row major matrices as input, glm uses column major
@@ -437,7 +444,14 @@ __device__ float3 project_cov3d_ewa(
     glm::mat3 cov = T * V * glm::transpose(T);
 
     // add a little blur along axes and save upper triangular elements
-    return make_float3(float(cov[0][0]) + 0.3f, float(cov[0][1]), float(cov[1][1]) + 0.3f);
+    // and compute the density compensation factor due to the blurs
+    float c00 = cov[0][0], c11 = cov[1][1], c01 = cov[0][1];
+    float det_orig = c00 * c11 - c01 * c01;
+    cov2d.x = c00 + 0.3f;
+    cov2d.y = c01;
+    cov2d.z = c11 + 0.3f;
+    float det_blur = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
+    compensation = std::sqrt(std::max(0.f, det_orig / det_blur));
 }
 
 // device helper to get 3D covariance from scale and quat parameters
