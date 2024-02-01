@@ -284,6 +284,13 @@ def project_gaussians_forward(
     num_tiles_hit = tile_area
     depths = p_view[..., 2]
     radii = radius.to(torch.int32)
+    radii[~mask] = 0
+    depths[~mask] = 0
+    conic[~mask] = 0
+    num_tiles_hit[~mask] = 0
+    xys[~mask] = 0
+    cov3d[~mask] = 0
+    cov2d[~mask] = 0
 
     i, j = torch.triu_indices(3, 3)
     cov3d_triu = cov3d[..., i, j]
