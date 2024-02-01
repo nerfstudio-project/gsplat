@@ -17,12 +17,10 @@ class SimpleTrainer:
     def __init__(
         self,
         gt_image: Tensor,
-        gt_depth: Tensor,
         num_points: int = 2000,
     ):
         self.device = torch.device("cuda:0")
         self.gt_image = gt_image.to(device=self.device)
-        self.gt_depth = gt_depth.to(device=self.device)
         self.num_points = num_points
 
         BLOCK_X, BLOCK_Y = 16, 16
@@ -118,8 +116,6 @@ class SimpleTrainer:
             torch.sigmoid(self.opacities),
             self.H,
             self.W,
-            None,
-            True,
         )
 
     def forward_slow(self):
@@ -172,15 +168,8 @@ class SimpleTrainer:
             ]
 
             optimizer.zero_grad()
-<<<<<<< HEAD
-            new_out, new_depth = self.forward_new()
-            rgb_loss = mse_loss(new_out, self.gt_image)
-            depth_loss  = mse_loss(new_depth, self.gt_depth)
-            loss = rgb_loss + depth_loss
-=======
             new_out, _ = self.forward_new()
             loss = mse_loss(new_out, self.gt_image)
->>>>>>> main
             loss.backward()
 
             new_grads = [
@@ -225,9 +214,8 @@ def main(
         # make top left and bottom right red, blue
         gt_image[: height // 2, : width // 2, :] = torch.tensor([1.0, 0.0, 0.0])
         gt_image[height // 2 :, width // 2 :, :] = torch.tensor([0.0, 0.0, 1.0])
-    gt_depth = torch.ones((height, width, 1))
 
-    trainer = SimpleTrainer(gt_image=gt_image, gt_depth=gt_depth, num_points=num_points)
+    trainer = SimpleTrainer(gt_image=gt_image, num_points=num_points)
     trainer.train()
 
 
