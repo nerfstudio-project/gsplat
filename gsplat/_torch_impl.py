@@ -254,7 +254,6 @@ def get_tile_bbox(pix_center, pix_radius, tile_bounds, BLOCK_X=16, BLOCK_Y=16):
     )
     return tile_min, tile_max
 
-@torch.compile
 def project_gaussians_forward(
     means3d,
     scales,
