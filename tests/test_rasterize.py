@@ -8,6 +8,20 @@ from torch import Tensor
 device = torch.device("cuda:0")
 
 
+def _distortion_loss(
+    weights: Tensor, t_mids: Tensor, ray_indices: Tensor, n_rays: int
+) -> Tensor:
+    from nerfacc import accumulate_along_rays, exclusive_sum
+
+    loss_uni = 0.0
+    loss_bi_0 = weights * t_mids * exclusive_sum(weights, indices=ray_indices)
+    loss_bi_1 = weights * exclusive_sum(weights * t_mids, indices=ray_indices)
+    loss_bi = 2 * (loss_bi_0 - loss_bi_1)
+    loss = loss_uni + loss_bi
+    loss = accumulate_along_rays(loss, None, ray_indices, n_rays)
+    return loss
+
+
 def _rasterize_gaussians(
     xys: Float[Tensor, "*batch 2"],
     depths: Float[Tensor, "*batch 1"],
@@ -58,6 +72,9 @@ def _rasterize_gaussians(
     )
     render = accumulate_along_rays(weights, colors[gs_ids], pixel_ids, H * W)
     render = render.reshape(H, W, -1)
+
+    # distloss = _distortion_loss(weights, depths[gs_ids], pixel_ids, H * W)
+    # distloss = distloss.reshape(H, W, 1)
 
     if background is not None or return_alpha:
         render_alpha = accumulate_along_rays(weights, None, pixel_ids, H * W)
