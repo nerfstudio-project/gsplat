@@ -96,7 +96,7 @@ def rasterize_indices(
     """Rasterizes 2D gaussians by sorting and binning gaussian intersections for each tile and returns an N-dimensional output using alpha-compositing.
 
     Note:
-        This function is differentiable w.r.t the xys, conics, colors, and opacity inputs.
+        This function is not differentiable w.r.t any inputs.
 
     Args:
         xys (Tensor): xy coords of 2D gaussians.
