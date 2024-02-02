@@ -254,7 +254,7 @@ def get_tile_bbox(pix_center, pix_radius, tile_bounds, BLOCK_X=16, BLOCK_Y=16):
     )
     return tile_min, tile_max
 
-
+@torch.compile
 def project_gaussians_forward(
     means3d,
     scales,
@@ -284,13 +284,14 @@ def project_gaussians_forward(
     num_tiles_hit = tile_area
     depths = p_view[..., 2]
     radii = radius.to(torch.int32)
-    radii[~mask] = 0
-    depths[~mask] = 0
-    conic[~mask] = 0
-    num_tiles_hit[~mask] = 0
-    xys[~mask] = 0
-    cov3d[~mask] = 0
-    cov2d[~mask] = 0
+
+    radii = torch.where(~mask,0,radii)
+    conic = torch.where(~mask[...,None],0,conic)
+    xys = torch.where(~mask[...,None],0,xys)
+    cov3d = torch.where(~mask[...,None,None],0,cov3d)
+    cov2d = torch.where(~mask[...,None,None],0,cov2d)
+    num_tiles_hit = torch.where(~mask,0,num_tiles_hit)
+    depths = torch.where(~mask,0,depths)
 
     i, j = torch.triu_indices(3, 3)
     cov3d_triu = cov3d[..., i, j]
