@@ -2,7 +2,6 @@ from typing import Optional
 
 import pytest
 import torch
-import tqdm
 from jaxtyping import Float, Int
 from torch import Tensor
 
@@ -74,6 +73,8 @@ def _rasterize_gaussians(
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_rasterize(N: int = 1000, D: int = 3, profile: bool = False):
+    import tqdm
+
     from gsplat import project_gaussians, rasterize_gaussians
 
     torch.manual_seed(42)
