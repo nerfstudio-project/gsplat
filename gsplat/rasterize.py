@@ -149,12 +149,6 @@ def rasterize_indices(
             tile_bounds,
         )
 
-        # make the tile_bins continuous (i.e. fill the zero gaps)
-        tile_counts = tile_bins[:, 1] - tile_bins[:, 0]
-        tile_cumsum = tile_counts.cumsum(dim=0)
-        tile_bases = tile_cumsum - tile_counts
-        tile_bins = torch.stack([tile_bases, tile_cumsum], dim=-1).int()
-
         gaussian_ids, pixel_ids, intersects = _C.rasterize_indices(
             tile_bounds,
             block,
