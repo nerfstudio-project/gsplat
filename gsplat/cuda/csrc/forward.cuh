@@ -117,3 +117,17 @@ __global__ void nd_rasterize_forward(
     float* __restrict__ out_img,
     const float* __restrict__ background
 );
+
+__global__ void rasterize_indices(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float2* __restrict__ xys,
+    const float3* __restrict__ conics,
+    const float* __restrict__ opacities,
+    const int* __restrict__ chunk_starts,
+    int* __restrict__ chunk_cnts,
+    int* __restrict__ out_gaussian_ids,
+    int* __restrict__ out_pixel_ids
+);

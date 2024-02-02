@@ -8,6 +8,7 @@ from torch import Tensor
 from torch.autograd import Function
 
 import gsplat.cuda as _C
+
 from .utils import bin_and_sort_gaussians, compute_cumulative_intersects
 
 
@@ -80,6 +81,92 @@ def rasterize_gaussians(
         background.contiguous(),
         return_alpha,
     )
+
+
+def rasterize_indices(
+    xys: Float[Tensor, "*batch 2"],
+    depths: Float[Tensor, "*batch 1"],
+    radii: Float[Tensor, "*batch 1"],
+    conics: Float[Tensor, "*batch 3"],
+    num_tiles_hit: Int[Tensor, "*batch 1"],
+    opacity: Float[Tensor, "*batch 1"],
+    img_height: int,
+    img_width: int,
+) -> Tensor:
+    """Rasterizes 2D gaussians by sorting and binning gaussian intersections for each tile and returns an N-dimensional output using alpha-compositing.
+
+    Note:
+        This function is differentiable w.r.t the xys, conics, colors, and opacity inputs.
+
+    Args:
+        xys (Tensor): xy coords of 2D gaussians.
+        depths (Tensor): depths of 2D gaussians.
+        radii (Tensor): radii of 2D gaussians
+        conics (Tensor): conics (inverse of covariance) of 2D gaussians in upper triangular format
+        num_tiles_hit (Tensor): number of tiles hit per gaussian
+        opacity (Tensor): opacity associated with the gaussians.
+        img_height (int): height of the rendered image.
+        img_width (int): width of the rendered image.
+
+    Returns:
+        A Tensor:
+
+        - **gaussian_ids** (Tensor): Packed (flattened) gaussian ids for intersects. [M,]
+        - **pixel_ids** (Tensor): Packed (flattened) pixel ids for intersects. [M,]
+    """
+    if xys.ndimension() != 2 or xys.size(1) != 2:
+        raise ValueError("xys must have dimensions (N, 2)")
+
+    num_points = xys.size(0)
+    BLOCK_X, BLOCK_Y = 16, 16
+    tile_bounds = (
+        (img_width + BLOCK_X - 1) // BLOCK_X,
+        (img_height + BLOCK_Y - 1) // BLOCK_Y,
+        1,
+    )
+    block = (BLOCK_X, BLOCK_Y, 1)
+    img_size = (img_width, img_height, 1)
+
+    num_intersects, cum_tiles_hit = compute_cumulative_intersects(num_tiles_hit)
+
+    if num_intersects < 1:
+        gaussian_ids = torch.empty(0, device=xys.device, dtype=torch.int32)
+        pixel_ids = torch.empty(0, device=xys.device, dtype=torch.int32)
+    else:
+        (
+            isect_ids_unsorted,
+            gaussian_ids_unsorted,
+            isect_ids_sorted,
+            gaussian_ids_sorted,
+            tile_bins,
+        ) = bin_and_sort_gaussians(
+            num_points,
+            num_intersects,
+            xys,
+            depths,
+            radii,
+            cum_tiles_hit,
+            tile_bounds,
+        )
+
+        # make the tile_bins continuous (i.e. fill the zero gaps)
+        tile_counts = tile_bins[:, 1] - tile_bins[:, 0]
+        tile_cumsum = tile_counts.cumsum(dim=0)
+        tile_bases = tile_cumsum - tile_counts
+        tile_bins = torch.stack([tile_bases, tile_cumsum], dim=-1).int()
+
+        gaussian_ids, pixel_ids, intersects = _C.rasterize_indices(
+            tile_bounds,
+            block,
+            img_size,
+            gaussian_ids_sorted,
+            tile_bins,
+            xys,
+            conics,
+            opacity,
+        )
+
+    return gaussian_ids, pixel_ids
 
 
 class _RasterizeGaussians(Function):

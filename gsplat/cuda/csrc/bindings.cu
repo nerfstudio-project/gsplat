@@ -467,6 +467,88 @@ nd_rasterize_forward_tensor(
     return std::make_tuple(out_img, final_Ts, final_idx);
 }
 
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+rasterize_indices_tensor(
+    const std::tuple<int, int, int> tile_bounds,
+    const std::tuple<int, int, int> block,
+    const std::tuple<int, int, int> img_size,
+    const torch::Tensor &gaussian_ids_sorted,
+    const torch::Tensor &tile_bins,
+    const torch::Tensor &xys,
+    const torch::Tensor &conics,
+    const torch::Tensor &opacities
+) {
+    CHECK_INPUT(gaussian_ids_sorted);
+    CHECK_INPUT(tile_bins);
+    CHECK_INPUT(xys);
+    CHECK_INPUT(conics);
+    CHECK_INPUT(opacities);
+
+    dim3 tile_bounds_dim3;
+    tile_bounds_dim3.x = std::get<0>(tile_bounds);
+    tile_bounds_dim3.y = std::get<1>(tile_bounds);
+    tile_bounds_dim3.z = std::get<2>(tile_bounds);
+
+    dim3 block_dim3;
+    block_dim3.x = std::get<0>(block);
+    block_dim3.y = std::get<1>(block);
+    block_dim3.z = std::get<2>(block);
+
+    dim3 img_size_dim3;
+    img_size_dim3.x = std::get<0>(img_size);
+    img_size_dim3.y = std::get<1>(img_size);
+    img_size_dim3.z = std::get<2>(img_size);
+
+    const int img_width = img_size_dim3.x;
+    const int img_height = img_size_dim3.y;
+
+    // First pass: count the number of gaussians contributing to each pixel.
+    // Note: early stopping is applied.
+    torch::Tensor chunk_cnts = torch::empty(
+        {img_height * img_width}, xys.options().dtype(torch::kInt32)
+    );
+
+    rasterize_indices<<<tile_bounds_dim3, block_dim3>>>(
+        tile_bounds_dim3,
+        img_size_dim3,
+        gaussian_ids_sorted.contiguous().data_ptr<int>(),
+        (int2 *)tile_bins.contiguous().data_ptr<int>(),
+        (float2 *)xys.contiguous().data_ptr<float>(),
+        (float3 *)conics.contiguous().data_ptr<float>(),
+        opacities.contiguous().data_ptr<float>(),
+        nullptr, // chunk_starts
+        chunk_cnts.contiguous().data_ptr<int>(),
+        nullptr, // out_gaussian_ids
+        nullptr  // out_pixel_ids
+    );
+
+    // Second pass: allocate memory and write out the gaussian and pixel ids.
+    torch::Tensor cumsum = torch::cumsum(chunk_cnts, 0, chunk_cnts.scalar_type());
+    int64_t n_elems = cumsum[-1].item<int64_t>();
+    torch::Tensor chunk_starts = cumsum - chunk_cnts;
+
+    torch::Tensor out_gaussian_ids = torch::empty(
+        {n_elems}, xys.options().dtype(torch::kInt32)
+    );
+    torch::Tensor out_pixel_ids = torch::empty(
+        {n_elems}, xys.options().dtype(torch::kInt32)
+    );
+    rasterize_indices<<<tile_bounds_dim3, block_dim3>>>(
+        tile_bounds_dim3,
+        img_size_dim3,
+        gaussian_ids_sorted.contiguous().data_ptr<int>(),
+        (int2 *)tile_bins.contiguous().data_ptr<int>(),
+        (float2 *)xys.contiguous().data_ptr<float>(),
+        (float3 *)conics.contiguous().data_ptr<float>(),
+        opacities.contiguous().data_ptr<float>(),
+        chunk_starts.contiguous().data_ptr<int>(),
+        nullptr, // chunk_cnts
+        out_gaussian_ids.contiguous().data_ptr<int>(),
+        out_pixel_ids.contiguous().data_ptr<int>()
+    );
+
+    return std::make_tuple(out_gaussian_ids, out_pixel_ids, chunk_cnts);
+}
 
 
 std::
