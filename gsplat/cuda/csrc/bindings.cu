@@ -246,9 +246,9 @@ project_gaussians_backward_tensor(
     torch::Tensor v_quat =
         torch::zeros({num_points, 4}, means3d.options().dtype(torch::kFloat32));
     torch::Tensor v_viewmat =
-        torch::zeros({4, 4}, means3d.options().dtype(torch::kFloat32));
+        torch::zeros(viewmat.sizes(), means3d.options().dtype(torch::kFloat32));
     torch::Tensor v_projmat =
-        torch::zeros({4, 4}, means3d.options().dtype(torch::kFloat32));
+        torch::zeros(projmat.sizes(), means3d.options().dtype(torch::kFloat32));
 
     project_gaussians_backward_kernel<<<
         (num_points + N_THREADS - 1) / N_THREADS,
