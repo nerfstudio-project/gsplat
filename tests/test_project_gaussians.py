@@ -31,7 +31,9 @@ def check_close(a, b, atol=1e-5, rtol=1e-5):
         traceback.print_exc()
         diff = torch.abs(a - b).detach()
         print(f"{diff.max()=} {diff.mean()=}")
-        import ipdb; ipdb.set_trace()
+        import ipdb
+
+        ipdb.set_trace()
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
@@ -64,14 +66,7 @@ def test_project_gaussians_forward():
     BLOCK_X, BLOCK_Y = 16, 16
     tile_bounds = (W + BLOCK_X - 1) // BLOCK_X, (H + BLOCK_Y - 1) // BLOCK_Y, 1
 
-    (
-        cov3d,
-        xys,
-        depths,
-        radii,
-        conics,
-        num_tiles_hit,
-    ) = _C.project_gaussians_forward(
+    (cov3d, xys, depths, radii, conics, num_tiles_hit,) = _C.project_gaussians_forward(
         num_points,
         means3d,
         scales,
