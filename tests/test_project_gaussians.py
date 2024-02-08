@@ -66,7 +66,15 @@ def test_project_gaussians_forward():
     BLOCK_X, BLOCK_Y = 16, 16
     tile_bounds = (W + BLOCK_X - 1) // BLOCK_X, (H + BLOCK_Y - 1) // BLOCK_Y, 1
 
-    (cov3d, xys, depths, radii, conics, num_tiles_hit,) = _C.project_gaussians_forward(
+    (
+        cov3d,
+        xys,
+        depths,
+        radii,
+        conics,
+        compensation,
+        num_tiles_hit,
+    ) = _C.project_gaussians_forward(
         num_points,
         means3d,
         scales,
@@ -93,6 +101,7 @@ def test_project_gaussians_forward():
             _depths,
             _radii,
             _conics,
+            _compensation,
             _num_tiles_hit,
             _masks,
         ) = _torch_impl.project_gaussians_forward(
@@ -114,6 +123,7 @@ def test_project_gaussians_forward():
     check_close(depths, _depths)
     check_close(radii, _radii)
     check_close(conics, _conics)
+    check_close(compensation, _compensation)
     check_close(num_tiles_hit, _num_tiles_hit)
     print("passed project_gaussians_forward test")
 
@@ -155,6 +165,7 @@ def test_project_gaussians_backward():
         depths,
         radii,
         conics,
+        _,
         _,
         masks,
     ) = _torch_impl.project_gaussians_forward(
@@ -219,7 +230,7 @@ def test_project_gaussians_backward():
         i, j = torch.triu_indices(3, 3)
         cov3d_mat[..., i, j] = cov3d
         cov3d_mat[..., [1, 2, 2], [0, 0, 1]] = cov3d[..., [1, 2, 4]]
-        cov2d = _torch_impl.project_cov3d_ewa(
+        cov2d, _ = _torch_impl.project_cov3d_ewa(
             mean3d, cov3d_mat, viewmat, fx, fy, tan_fovx, tan_fovy
         )
         ii, jj = torch.triu_indices(2, 2)
