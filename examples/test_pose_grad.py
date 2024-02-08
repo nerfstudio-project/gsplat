@@ -78,7 +78,7 @@ class SimpleTrainer:
             bd
             * (torch.rand(3, device=self.device) - 0.5)
             * math.pi
-            / 9.0,  # +-20 degrees
+            / 32.0,  # +-5 degrees
             convention="XYZ",
         )
         self.noisy_pose[:3, :3] = torch.matmul(self.noisy_pose[:3, :3], rot_noise)
