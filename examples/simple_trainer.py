@@ -89,7 +89,7 @@ class SimpleTrainer:
         times = [0] * 3  # project, rasterize, backward
         for iter in range(iterations):
             start = time.time()
-            xys, depths, radii, conics, num_tiles_hit, cov3d = _ProjectGaussians.apply(
+            xys, depths, radii, conics, compensation, num_tiles_hit, cov3d = _ProjectGaussians.apply(
                 self.means,
                 self.scales,
                 1,
