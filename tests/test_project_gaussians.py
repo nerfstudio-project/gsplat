@@ -128,6 +128,7 @@ def test_project_gaussians_forward():
     print("passed project_gaussians_forward test")
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_project_gaussians_backward():
     num_points = 100
 
