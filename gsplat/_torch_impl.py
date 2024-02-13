@@ -117,15 +117,15 @@ def quat_to_rotmat(quat: Tensor) -> Tensor:
     w, x, y, z = torch.unbind(F.normalize(quat, dim=-1), dim=-1)
     mat = torch.stack(
         [
-            1 - 2 * (y**2 + z**2),
+            1 - 2 * (y ** 2 + z ** 2),
             2 * (x * y - w * z),
             2 * (x * z + w * y),
             2 * (x * y + w * z),
-            1 - 2 * (x**2 + z**2),
+            1 - 2 * (x ** 2 + z ** 2),
             2 * (y * z - w * x),
             2 * (x * z - w * y),
             2 * (y * z + w * x),
-            1 - 2 * (x**2 + y**2),
+            1 - 2 * (x ** 2 + y ** 2),
         ],
         dim=-1,
     )
@@ -159,7 +159,7 @@ def project_cov3d_ewa(
     t = torch.einsum("...ij,...j->...i", W, mean3d) + p  # (..., 3)
 
     rz = 1.0 / t[..., 2]  # (...,)
-    rz2 = rz**2  # (...,)
+    rz2 = rz ** 2  # (...,)
 
     lim_x = 1.3 * torch.tensor([tan_fovx], device=mean3d.device)
     lim_y = 1.3 * torch.tensor([tan_fovy], device=mean3d.device)
@@ -202,8 +202,8 @@ def compute_cov2d_bounds(cov2d_mat: Tensor):
         dim=-1,
     )  # (..., 3)
     b = (cov2d[..., 0, 0] + cov2d[..., 1, 1]) / 2  # (...,)
-    v1 = b + torch.sqrt(torch.clamp(b**2 - det, min=0.1))  # (...,)
-    v2 = b - torch.sqrt(torch.clamp(b**2 - det, min=0.1))  # (...,)
+    v1 = b + torch.sqrt(torch.clamp(b ** 2 - det, min=0.1))  # (...,)
+    v2 = b - torch.sqrt(torch.clamp(b ** 2 - det, min=0.1))  # (...,)
     radius = torch.ceil(3.0 * torch.sqrt(torch.max(v1, v2)))  # (...,)
     radius_all = torch.zeros(*cov2d_mat.shape[:-2], device=cov2d_mat.device)
     conic_all = torch.zeros(*cov2d_mat.shape[:-2], 3, device=cov2d_mat.device)
@@ -233,9 +233,9 @@ def clip_near_plane(p, viewmat, clip_thresh=0.01):
     return p_view, p_view[..., 2] < clip_thresh
 
 
-def get_tile_bbox(pix_center, pix_radius, tile_bounds, BLOCK_X=16, BLOCK_Y=16):
+def get_tile_bbox(pix_center, pix_radius, tile_bounds, block_size):
     tile_size = torch.tensor(
-        [BLOCK_X, BLOCK_Y], dtype=torch.float32, device=pix_center.device
+        [block_size, block_size], dtype=torch.float32, device=pix_center.device
     )
     tile_center = pix_center / tile_size
     tile_radius = pix_radius[..., None] / tile_size
@@ -268,9 +268,14 @@ def project_gaussians_forward(
     fullmat,
     intrins,
     img_size,
-    tile_bounds,
+    block_size,
     clip_thresh=0.01,
 ):
+    tile_bounds = (
+        (img_size[0] + block_size - 1) // block_size,
+        (img_size[1] + block_size - 1) // block_size,
+        1,
+    )
     fx, fy, cx, cy = intrins
     tan_fovx = 0.5 * img_size[0] / fx
     tan_fovy = 0.5 * img_size[1] / fy
@@ -281,7 +286,7 @@ def project_gaussians_forward(
     )
     conic, radius, det_valid = compute_cov2d_bounds(cov2d)
     xys = project_pix(fullmat, means3d, img_size, (cx, cy))
-    tile_min, tile_max = get_tile_bbox(xys, radius, tile_bounds)
+    tile_min, tile_max = get_tile_bbox(xys, radius, tile_bounds, block_size)
     tile_area = (tile_max[..., 0] - tile_min[..., 0]) * (
         tile_max[..., 1] - tile_min[..., 1]
     )
@@ -318,7 +323,7 @@ def project_gaussians_forward(
 
 
 def map_gaussian_to_intersects(
-    num_points, xys, depths, radii, cum_tiles_hit, tile_bounds
+    num_points, xys, depths, radii, cum_tiles_hit, tile_bounds, block_size
 ):
     num_intersects = cum_tiles_hit[-1]
     isect_ids = torch.zeros(num_intersects, dtype=torch.int64, device=xys.device)
@@ -328,7 +333,9 @@ def map_gaussian_to_intersects(
         if radii[idx] <= 0:
             break
 
-        tile_min, tile_max = get_tile_bbox(xys[idx], radii[idx], tile_bounds)
+        tile_min, tile_max = get_tile_bbox(
+            xys[idx], radii[idx], tile_bounds, block_size
+        )
 
         cur_idx = 0 if idx == 0 else cum_tiles_hit[idx - 1].item()
 

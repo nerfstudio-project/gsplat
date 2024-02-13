@@ -20,6 +20,7 @@ __global__ void project_gaussians_forward_kernel(
     const float4 intrins,
     const dim3 img_size,
     const dim3 tile_bounds,
+    const unsigned block_size,
     const float clip_thresh,
     float* __restrict__ covs3d,
     float2* __restrict__ xys,
@@ -81,7 +82,7 @@ __global__ void project_gaussians_forward_kernel(
     // compute the projected mean
     float2 center = project_pix(projmat, p_world, img_size, {cx, cy});
     uint2 tile_min, tile_max;
-    get_tile_bbox(center, radius, tile_bounds, tile_min, tile_max);
+    get_tile_bbox(center, radius, tile_bounds, tile_min, tile_max, block_size);
     int32_t tile_area = (tile_max.x - tile_min.x) * (tile_max.y - tile_min.y);
     if (tile_area <= 0) {
         // printf("%d point bbox outside of bounds\n", idx);
@@ -109,6 +110,7 @@ __global__ void map_gaussian_to_intersects(
     const int* __restrict__ radii,
     const int32_t* __restrict__ cum_tiles_hit,
     const dim3 tile_bounds,
+    const unsigned block_size,
     int64_t* __restrict__ isect_ids,
     int32_t* __restrict__ gaussian_ids
 ) {
@@ -120,7 +122,7 @@ __global__ void map_gaussian_to_intersects(
     // get the tile bbox for gaussian
     uint2 tile_min, tile_max;
     float2 center = xys[idx];
-    get_tile_bbox(center, radii[idx], tile_bounds, tile_min, tile_max);
+    get_tile_bbox(center, radii[idx], tile_bounds, tile_min, tile_max, block_size);
     // printf("point %d, %d radius, min %d %d, max %d %d\n", idx, radii[idx],
     // tile_min.x, tile_min.y, tile_max.x, tile_max.y);
 
@@ -290,11 +292,12 @@ __global__ void rasterize_forward(
     // first collect gaussians between range.x and range.y in batches
     // which gaussians to look through in this tile
     int2 range = tile_bins[tile_id];
-    int num_batches = (range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    const int block_size = block.size();
+    int num_batches = (range.y - range.x + block_size - 1) / block_size;
 
-    __shared__ int32_t id_batch[BLOCK_SIZE];
-    __shared__ float3 xy_opacity_batch[BLOCK_SIZE];
-    __shared__ float3 conic_batch[BLOCK_SIZE];
+    __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 conic_batch[MAX_BLOCK_SIZE];
 
     // current visibility left to render
     float T = 1.f;
@@ -309,13 +312,13 @@ __global__ void rasterize_forward(
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
-        if (__syncthreads_count(done) >= BLOCK_SIZE) {
+        if (__syncthreads_count(done) >= block_size) {
             break;
         }
 
         // each thread fetch 1 gaussian from front to back
         // index of gaussian to load
-        int batch_start = range.x + BLOCK_SIZE * b;
+        int batch_start = range.x + block_size * b;
         int idx = batch_start + tr;
         if (idx < range.y) {
             int32_t g_id = gaussian_ids_sorted[idx];
@@ -330,7 +333,7 @@ __global__ void rasterize_forward(
         block.sync();
 
         // process gaussians in the current batch for this pixel
-        int batch_size = min(BLOCK_SIZE, range.y - batch_start);
+        int batch_size = min(block_size, range.y - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
             const float3 conic = conic_batch[t];
             const float3 xy_opac = xy_opacity_batch[t];

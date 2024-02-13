@@ -14,6 +14,7 @@ __global__ void project_gaussians_forward_kernel(
     const float4 intrins,
     const dim3 img_size,
     const dim3 tile_bounds,
+    const unsigned block_size,
     const float clip_thresh,
     float* __restrict__ covs3d,
     float2* __restrict__ xys,
@@ -82,6 +83,7 @@ __global__ void map_gaussian_to_intersects(
     const int* __restrict__ radii,
     const int32_t* __restrict__ cum_tiles_hit,
     const dim3 tile_bounds,
+    const unsigned block_size,
     int64_t* __restrict__ isect_ids,
     int32_t* __restrict__ gaussian_ids
 );
