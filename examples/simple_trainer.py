@@ -38,7 +38,8 @@ class SimpleTrainer:
 
         self.means = bd * (torch.rand(self.num_points, 3, device=self.device) - 0.5)
         self.scales = torch.rand(self.num_points, 3, device=self.device)
-        self.rgbs = torch.rand(self.num_points, 3, device=self.device)
+        d = 128
+        self.rgbs = torch.rand(self.num_points, d, device=self.device)
 
         u = torch.rand(self.num_points, 1, device=self.device)
         v = torch.rand(self.num_points, 1, device=self.device)
@@ -64,7 +65,7 @@ class SimpleTrainer:
             ],
             device=self.device,
         )
-        self.background = torch.zeros(3, device=self.device)
+        self.background = torch.zeros(d, device=self.device)
 
         self.means.requires_grad = True
         self.scales.requires_grad = True
@@ -80,7 +81,7 @@ class SimpleTrainer:
         mse_loss = torch.nn.MSELoss()
         frames = []
         times = [0] * 3  # project, rasterize, backward
-        B_SIZE = 16
+        B_SIZE = 13
         for iter in range(iterations):
             start = time.time()
             (
@@ -121,7 +122,7 @@ class SimpleTrainer:
                 self.W,
                 B_SIZE,
                 self.background,
-            )
+            )[...,:3]
             torch.cuda.synchronize()
             times[1] += time.time() - start
             loss = mse_loss(out_img, self.gt_image)

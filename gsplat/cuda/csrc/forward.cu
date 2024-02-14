@@ -4,6 +4,7 @@
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 #include <iostream>
+#include "cuda_fp16.h"
 
 namespace cg = cooperative_groups;
 
@@ -187,70 +188,113 @@ __global__ void nd_rasterize_forward(
     float* __restrict__ out_img,
     const float* __restrict__ background
 ) {
-    // current naive implementation where tile data loading is redundant
-    // TODO tile data should be shared between tile threads
-    int32_t tile_id = blockIdx.y * tile_bounds.x + blockIdx.x;
-    unsigned i = blockIdx.y * blockDim.y + threadIdx.y;
-    unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
+    auto block = cg::this_thread_block();
+    int32_t tile_id =
+        block.group_index().y * tile_bounds.x + block.group_index().x;
+    unsigned i =
+        block.group_index().y * block.group_dim().y + block.thread_index().y;
+    unsigned j =
+        block.group_index().x * block.group_dim().x + block.thread_index().x;
+
     float px = (float)j;
     float py = (float)i;
     int32_t pix_id = i * img_size.x + j;
 
     // return if out of bounds
-    if (i >= img_size.y || j >= img_size.x) {
-        return;
-    }
+    // keep not rasterizing threads around for reading data
+    bool inside = (i < img_size.y && j < img_size.x);
+    bool done = !inside;
 
+    // have all threads in tile process the same gaussians in batches
+    // first collect gaussians between range.x and range.y in batches
     // which gaussians to look through in this tile
     int2 range = tile_bins[tile_id];
+    const int block_size = block.size();
+    int num_batches = (range.y - range.x + block_size - 1) / block_size;
+
+    extern __shared__ int s[];
+    int32_t* id_batch = (int32_t*)s;
+    float3* xy_opacity_batch = (float3*)&id_batch[block_size];
+    float3* conic_batch = (float3*)&xy_opacity_batch[block_size];
+    __half* color_out_batch = (__half*)&conic_batch[block_size];
+    for(int c = 0; c < channels; ++c)
+        color_out_batch[block.thread_rank() * channels + c] = __float2half(0.f);
+
+    // current visibility left to render
     float T = 1.f;
+    // index of most recent gaussian to write to this thread's pixel
+    int cur_idx = 0;
 
-    // iterate over all gaussians and apply rendering EWA equation (e.q. 2 from
-    // paper)
-    int idx;
-    for (idx = range.x; idx < range.y; ++idx) {
-        const int32_t g = gaussian_ids_sorted[idx];
-        const float3 conic = conics[g];
-        const float2 center = xys[g];
-        const float2 delta = {center.x - px, center.y - py};
-
-        // Mahalanobis distance (here referred to as sigma) measures how many
-        // standard deviations away distance delta is. sigma = -0.5(d.T * conic
-        // * d)
-        const float sigma =
-            0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
-            conic.y * delta.x * delta.y;
-        if (sigma < 0.f) {
-            continue;
-        }
-        const float opac = opacities[g];
-
-        const float alpha = min(0.999f, opac * __expf(-sigma));
-
-        // break out conditions
-        if (alpha < 1.f / 255.f) {
-            continue;
-        }
-        const float next_T = T * (1.f - alpha);
-        if (next_T <= 1e-4f) {
-            // we want to render the last gaussian that contributes and note
-            // that here idx > range.x so we don't underflow
-            idx -= 1;
+    // collect and process batches of gaussians
+    // each thread loads one gaussian at a time before rasterizing its
+    // designated pixel
+    int tr = block.thread_rank();
+    __half* pix_out = &color_out_batch[block.thread_rank() * channels];
+    // float* pix_out = out_img + pix_id * channels;
+    for (int b = 0; b < num_batches; ++b) {
+        // resync all threads before beginning next batch
+        // end early if entire tile is done
+        if (__syncthreads_count(done) >= block_size) {
             break;
         }
-        const float vis = alpha * T;
-        for (int c = 0; c < channels; ++c) {
-            out_img[channels * pix_id + c] += colors[channels * g + c] * vis;
+
+        // each thread fetch 1 gaussian from front to back
+        // index of gaussian to load
+        int batch_start = range.x + block_size * b;
+        int idx = batch_start + tr;
+        if (idx < range.y) {
+            int32_t g_id = gaussian_ids_sorted[idx];
+            id_batch[tr] = g_id;
+            const float2 xy = xys[g_id];
+            const float opac = opacities[g_id];
+            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
+            conic_batch[tr] = conics[g_id];
         }
-        T = next_T;
+
+        // wait for other threads to collect the gaussians in batch
+        block.sync();
+
+        // process gaussians in the current batch for this pixel
+        int batch_size = min(block_size, range.y - batch_start);
+        for (int t = 0; (t < batch_size) && !done; ++t) {
+            const float3 conic = conic_batch[t];
+            const float3 xy_opac = xy_opacity_batch[t];
+            const float opac = xy_opac.z;
+            const float2 delta = {xy_opac.x - px, xy_opac.y - py};
+            const float sigma = 0.5f * (conic.x * delta.x * delta.x +
+                                        conic.z * delta.y * delta.y) +
+                                conic.y * delta.x * delta.y;
+            const float alpha = min(0.999f, opac * __expf(-sigma));
+            if (sigma < 0.f || alpha < 1.f / 255.f) {
+                continue;
+            }
+
+            const float next_T = T * (1.f - alpha);
+            if (next_T <= 1e-4f) { // this pixel is done
+                // we want to render the last gaussian that contributes and note
+                // that here idx > range.x so we don't underflow
+                done = true;
+                break;
+            }
+
+            int32_t g = id_batch[t];
+            const float vis = alpha * T;
+            for (int c = 0; c < channels; ++c) {
+                pix_out[c] = __hadd(pix_out[c], __float2half(colors[channels * g + c] * vis));
+            }
+            T = next_T;
+            cur_idx = batch_start + t;
+        }
     }
-    final_Ts[pix_id] = T; // transmittance at last gaussian in this pixel
-    final_index[pix_id] =
-        (idx == range.y)
-            ? idx - 1
-            : idx; // index of in bin of last gaussian in this pixel
-    for (int c = 0; c < channels; ++c) {
-        out_img[channels * pix_id + c] += T * background[c];
+
+    if (inside) {
+        // add background
+        final_Ts[pix_id] = T; // transmittance at last gaussian in this pixel
+        final_index[pix_id] =
+            cur_idx; // index of in bin of last gaussian in this pixel
+        for (int c = 0; c < channels; ++c) {
+            out_img[pix_id * channels + c] = __half2float(pix_out[c]) + T * background[c];
+        }
     }
 }
 
