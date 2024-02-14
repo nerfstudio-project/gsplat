@@ -237,7 +237,6 @@ __global__ void nd_rasterize_forward(
         if (__syncthreads_count(done) >= block_size) {
             break;
         }
-
         // each thread fetch 1 gaussian from front to back
         // index of gaussian to load
         int batch_start = range.x + block_size * b;

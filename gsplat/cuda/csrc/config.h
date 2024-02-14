@@ -1,4 +1,4 @@
-#define MAX_BLOCK_SIZE ( 16 * 16 )
+#define MAX_BLOCK_SIZE ( 24 * 24 )
 #define N_THREADS 256
 
 #define MAX_REGISTER_CHANNELS 3

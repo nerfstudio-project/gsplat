@@ -43,7 +43,7 @@ def project_gaussians(
        cy (float): principal point y.
        img_height (int): height of the rendered image.
        img_width (int): width of the rendered image.
-       block_size (int): size of tiles inside projection/rasterization in pixels (always square). 16 is a good default value, must be between 2 and 16 inclusive.
+       block_size (int): size of tiles inside projection/rasterization in pixels (always square). 16 is a good default value, must be between 2 and 24 inclusive.
        clip_thresh (float): minimum z depth threshold.
 
     Returns:
@@ -57,7 +57,7 @@ def project_gaussians(
         - **num_tiles_hit** (Tensor): number of tiles hit per gaussian.
         - **cov3d** (Tensor): 3D covariances.
     """
-    assert block_size > 1 and block_size <= 16, "block_size must be between 1 and 16"
+    assert block_size > 1 and block_size <= 24, "block_size must be between 1 and 24"
     return _ProjectGaussians.apply(
         means3d.contiguous(),
         scales.contiguous(),

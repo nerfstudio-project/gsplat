@@ -40,7 +40,7 @@ def rasterize_gaussians(
         opacity (Tensor): opacity associated with the gaussians.
         img_height (int): height of the rendered image.
         img_width (int): width of the rendered image.
-        block_size (int): MUST match whatever block size was used in the project_gaussians call. integer number of pixels between 2 and 16 inclusive
+        block_size (int): MUST match whatever block size was used in the project_gaussians call. integer number of pixels between 2 and 24 inclusive
         background (Tensor): background color
         return_alpha (bool): whether to return alpha channel
 
@@ -50,7 +50,7 @@ def rasterize_gaussians(
         - **out_img** (Tensor): N-dimensional rendered output image.
         - **out_alpha** (Optional[Tensor]): Alpha channel of the rendered output image.
     """
-    assert block_size > 1 and block_size <= 16, "block_size must be between 1 and 16"
+    assert block_size > 1 and block_size <= 24, "block_size must be between 1 and 24"
     if colors.dtype == torch.uint8:
         # make sure colors are float [0,1]
         colors = colors.float() / 255

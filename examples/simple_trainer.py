@@ -74,14 +74,13 @@ class SimpleTrainer:
         self.opacities.requires_grad = True
         self.viewmat.requires_grad = False
 
-    def train(self, iterations: int = 1000, lr: float = 0.01, save_imgs: bool = False):
+    def train(self, iterations: int = 1000, lr: float = 0.01, save_imgs: bool = False, B_SIZE: int = 14):
         optimizer = optim.Adam(
             [self.rgbs, self.means, self.scales, self.opacities, self.quats], lr
         )
         mse_loss = torch.nn.MSELoss()
         frames = []
         times = [0] * 3  # project, rasterize, backward
-        B_SIZE = 14
         for iter in range(iterations):
             start = time.time()
             (
