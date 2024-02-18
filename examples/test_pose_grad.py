@@ -78,11 +78,11 @@ class SimpleTrainer:
             bd
             * (torch.rand(3, device=self.device) - 0.5)
             * math.pi
-            / 32.0,  # +-5 degrees
+            / 36.0,  # +-5 degrees
             convention="XYZ",
         )
         self.noisy_pose[:3, :3] = torch.matmul(self.noisy_pose[:3, :3], rot_noise)
-        self.noisy_pose[:3, 3] += (torch.rand(3, device=self.device) - 0.5) * 3.0
+        self.noisy_pose[:3, 3] += (torch.rand(3, device=self.device) - 0.5) * bd  # +-1 units
         self.pose_params = p3d.se3_log_map(
             self.noisy_pose.unsqueeze(0).permute(0, 2, 1)
         ).squeeze(0)
