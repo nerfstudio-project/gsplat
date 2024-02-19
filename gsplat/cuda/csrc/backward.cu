@@ -348,26 +348,7 @@ __global__ void project_gaussians_backward_kernel(
     float cx = intrins.z;
     float cy = intrins.w;
     // get v_mean3d from v_xy
-    float4 v_proj;
-    v_mean3d[idx] = project_pix_vjp(projmat, p_world, img_size, v_xy[idx], v_proj);
-
-    // get v_projmat contribution from v_proj
-    atomicAdd(&v_projmat[0], v_proj.x * p_world.x);
-    atomicAdd(&v_projmat[1], v_proj.x * p_world.y);
-    atomicAdd(&v_projmat[2], v_proj.x * p_world.z);
-    atomicAdd(&v_projmat[3], v_proj.x);
-    atomicAdd(&v_projmat[4], v_proj.y * p_world.x);
-    atomicAdd(&v_projmat[5], v_proj.y * p_world.y);
-    atomicAdd(&v_projmat[6], v_proj.y * p_world.z);
-    atomicAdd(&v_projmat[7], v_proj.y);
-    atomicAdd(&v_projmat[8], v_proj.z * p_world.x);
-    atomicAdd(&v_projmat[9], v_proj.z * p_world.y);
-    atomicAdd(&v_projmat[10], v_proj.z * p_world.z);
-    atomicAdd(&v_projmat[11], v_proj.z);
-    atomicAdd(&v_projmat[12], v_proj.w * p_world.x);
-    atomicAdd(&v_projmat[13], v_proj.w * p_world.y);
-    atomicAdd(&v_projmat[14], v_proj.w * p_world.z);
-    atomicAdd(&v_projmat[15], v_proj.w);
+    v_mean3d[idx] = project_pix_vjp(projmat, p_world, img_size, v_xy[idx], v_projmat);
 
     // get z gradient contribution to mean3d gradient and viewmat gradient
     // z = viemwat[8] * mean3d.x + viewmat[9] * mean3d.y + viewmat[10] *

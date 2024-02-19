@@ -121,16 +121,36 @@ inline __device__ float3 project_pix_vjp(
     const float3 p,
     const dim3 img_size,
     const float2 v_xy,
-    float4 &v_proj
+    float *v_projmat
 ) {
     // ROW MAJOR mat
     float4 p_hom = transform_4x4(mat, p);
     float rw = 1.f / (p_hom.w + 1e-6f);
 
     float3 v_ndc = {0.5f * img_size.x * v_xy.x, 0.5f * img_size.y * v_xy.y};
-    v_proj = {
+    float4 v_proj = {
         v_ndc.x * rw, v_ndc.y * rw, 0., -(v_ndc.x + v_ndc.y) * rw * rw
     };
+
+    // get v_projmat contribution from v_proj
+    float v_proj_w = -(v_ndc.x * p_hom.x + v_ndc.y * p_hom.y) * rw * rw;
+    atomicAdd(&v_projmat[0], v_proj.x * p.x);
+    atomicAdd(&v_projmat[1], v_proj.x * p.y);
+    atomicAdd(&v_projmat[2], v_proj.x * p.z);
+    atomicAdd(&v_projmat[3], v_proj.x);
+    atomicAdd(&v_projmat[4], v_proj.y * p.x);
+    atomicAdd(&v_projmat[5], v_proj.y * p.y);
+    atomicAdd(&v_projmat[6], v_proj.y * p.z);
+    atomicAdd(&v_projmat[7], v_proj.y);
+    atomicAdd(&v_projmat[8], v_proj.z * p.x);
+    atomicAdd(&v_projmat[9], v_proj.z * p.y);
+    atomicAdd(&v_projmat[10], v_proj.z * p.z);
+    atomicAdd(&v_projmat[11], v_proj.z);
+    atomicAdd(&v_projmat[12], v_proj_w * p.x);
+    atomicAdd(&v_projmat[13], v_proj_w * p.y);
+    atomicAdd(&v_projmat[14], v_proj_w * p.z);
+    atomicAdd(&v_projmat[15], v_proj_w);
+
     // df / d_world = df / d_cam * d_cam / d_world
     // = v_proj * P[:3, :3]
     return {
