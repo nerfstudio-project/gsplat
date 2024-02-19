@@ -30,7 +30,8 @@ def check_close(a, b, atol=1e-5, rtol=1e-5):
     except AssertionError:
         traceback.print_exc()
         diff = torch.abs(a - b).detach()
-        print(f"{diff.max()=} {diff.mean()=}")
+        print(f"diff min max: {diff.max()=} {diff.mean()=}")
+        print(f"a and b:\n{a.detach()}\n{b.detach()}")
         import ipdb
 
         ipdb.set_trace()
@@ -189,7 +190,7 @@ def test_project_gaussians_backward():
     v_depths = torch.zeros_like(depths)
     # scale gradients by pixels to account for finite difference
     v_conics = torch.randn_like(conics) * 1e-3
-    v_cov2d, v_cov3d, v_mean3d, v_scale, v_quat = _C.project_gaussians_backward(
+    v_cov2d, v_cov3d, v_mean3d, v_scale, v_quat, v_viewmat, v_fullmat = _C.project_gaussians_backward(
         num_points,
         means3d,
         scales,
@@ -220,7 +221,7 @@ def test_project_gaussians_backward():
         cov3d_triu = cov3d[..., i, j]
         return cov3d_triu
 
-    def project_cov3d_ewa_partial(mean3d, cov3d):
+    def project_cov3d_ewa_partial(mean3d, cov3d, viewmat):
         """
         mean3d (*, 3), cov3d (upper tri) (*, 6) -> cov2d (upper tri) (*, 3)
         """
@@ -248,13 +249,13 @@ def test_project_gaussians_backward():
         conic, _, _ = _torch_impl.compute_cov2d_bounds(cov2d_mat)
         return conic
 
-    def project_pix_partial(mean3d):
+    def project_pix_partial(mean3d, fullmat):
         """
         mean3d (*, 3) -> xy (*, 2)
         """
         return _torch_impl.project_pix(fullmat, mean3d, (W, H), (cx, cy))
 
-    def compute_depth_partial(mean3d):
+    def compute_depth_partial(mean3d, viewmat):
         """
         mean3d (*, 3) -> depth (*)
         """
@@ -263,16 +264,17 @@ def test_project_gaussians_backward():
         return depth
 
     _, vjp_scale_rot_to_cov3d = vjp(scale_rot_to_cov3d_partial, scales, quats)  # type: ignore
-    _, vjp_project_cov3d_ewa = vjp(project_cov3d_ewa_partial, means3d, cov3d)  # type: ignore
+    _, vjp_project_cov3d_ewa = vjp(project_cov3d_ewa_partial, means3d, cov3d, viewmat)  # type: ignore
     _, vjp_compute_cov2d_bounds = vjp(compute_cov2d_bounds_partial, cov2d)  # type: ignore
-    _, vjp_project_pix = vjp(project_pix_partial, means3d)  # type: ignore
-    _, vjp_compute_depth = vjp(compute_depth_partial, means3d)  # type: ignore
+    _, vjp_project_pix = vjp(project_pix_partial, means3d, fullmat)  # type: ignore
+    _, vjp_compute_depth = vjp(compute_depth_partial, means3d, viewmat)  # type: ignore
 
     _v_cov2d = vjp_compute_cov2d_bounds(v_conics)[0]
-    _v_mean3d_cov2d, _v_cov3d = vjp_project_cov3d_ewa(_v_cov2d)
-    _v_mean3d_xy = vjp_project_pix(v_xys)[0]
-    _v_mean3d_depth = vjp_compute_depth(v_depths)[0]
+    _v_mean3d_cov2d, _v_cov3d, _v_viewmat_cov2d = vjp_project_cov3d_ewa(_v_cov2d)
+    _v_mean3d_xy, _v_fullmat = vjp_project_pix(v_xys)
+    _v_mean3d_depth, _v_viewmat_depth = vjp_compute_depth(v_depths)
     _v_mean3d = _v_mean3d_cov2d + _v_mean3d_xy + _v_mean3d_depth
+    _v_viewmat = _v_viewmat_cov2d + _v_viewmat_depth
     _v_scale, _v_quat = vjp_scale_rot_to_cov3d(_v_cov3d)
 
     atol = 5e-4
@@ -282,6 +284,8 @@ def test_project_gaussians_backward():
     check_close(v_mean3d[:, :2], _v_mean3d[:, :2], atol=atol, rtol=rtol)
     check_close(v_scale, _v_scale, atol=atol, rtol=rtol)
     check_close(v_quat, _v_quat, atol=atol, rtol=rtol)
+    check_close(v_viewmat, _v_viewmat, atol=atol, rtol=rtol)
+    check_close(v_fullmat, _v_fullmat, atol=atol, rtol=rtol)
     print("passed project_gaussians_backward test")
 
 
