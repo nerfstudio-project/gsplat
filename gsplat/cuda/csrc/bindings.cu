@@ -533,9 +533,8 @@ std::
     torch::Tensor v_opacity = torch::zeros({num_points, 1}, xys.options());
 
     const int B = block.x * block.y;
-    //shared mem accounts for xys, conics, opacities, colors, v_colors, running_sum
+    //shared mem accounts for each thread having a local shared memory workspace for running sum
     const uint32_t shared_mem = B*channels*sizeof(half);
-    // above line is for old method while converting workspac to shared mem
     if(cudaFuncSetAttribute(nd_rasterize_backward_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shared_mem) != cudaSuccess){
         AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem, " bytes), try lowering block_size");
     }
