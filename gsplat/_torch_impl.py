@@ -1,4 +1,5 @@
 """Pure PyTorch implementations of various functions"""
+
 import struct
 
 import torch
@@ -233,9 +234,9 @@ def clip_near_plane(p, viewmat, clip_thresh=0.01):
     return p_view, p_view[..., 2] < clip_thresh
 
 
-def get_tile_bbox(pix_center, pix_radius, tile_bounds, block_size):
+def get_tile_bbox(pix_center, pix_radius, tile_bounds, block_width):
     tile_size = torch.tensor(
-        [block_size, block_size], dtype=torch.float32, device=pix_center.device
+        [block_width, block_width], dtype=torch.float32, device=pix_center.device
     )
     tile_center = pix_center / tile_size
     tile_radius = pix_radius[..., None] / tile_size
@@ -268,12 +269,12 @@ def project_gaussians_forward(
     fullmat,
     intrins,
     img_size,
-    block_size,
+    block_width,
     clip_thresh=0.01,
 ):
     tile_bounds = (
-        (img_size[0] + block_size - 1) // block_size,
-        (img_size[1] + block_size - 1) // block_size,
+        (img_size[0] + block_width - 1) // block_width,
+        (img_size[1] + block_width - 1) // block_width,
         1,
     )
     fx, fy, cx, cy = intrins
@@ -286,7 +287,7 @@ def project_gaussians_forward(
     )
     conic, radius, det_valid = compute_cov2d_bounds(cov2d)
     xys = project_pix(fullmat, means3d, img_size, (cx, cy))
-    tile_min, tile_max = get_tile_bbox(xys, radius, tile_bounds, block_size)
+    tile_min, tile_max = get_tile_bbox(xys, radius, tile_bounds, block_width)
     tile_area = (tile_max[..., 0] - tile_min[..., 0]) * (
         tile_max[..., 1] - tile_min[..., 1]
     )
@@ -323,7 +324,7 @@ def project_gaussians_forward(
 
 
 def map_gaussian_to_intersects(
-    num_points, xys, depths, radii, cum_tiles_hit, tile_bounds, block_size
+    num_points, xys, depths, radii, cum_tiles_hit, tile_bounds, block_width
 ):
     num_intersects = cum_tiles_hit[-1]
     isect_ids = torch.zeros(num_intersects, dtype=torch.int64, device=xys.device)
@@ -334,7 +335,7 @@ def map_gaussian_to_intersects(
             break
 
         tile_min, tile_max = get_tile_bbox(
-            xys[idx], radii[idx], tile_bounds, block_size
+            xys[idx], radii[idx], tile_bounds, block_width
         )
 
         cur_idx = 0 if idx == 0 else cum_tiles_hit[idx - 1].item()

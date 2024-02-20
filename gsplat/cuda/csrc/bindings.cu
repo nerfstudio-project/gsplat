@@ -138,7 +138,7 @@ project_gaussians_forward_tensor(
     const float cy,
     const unsigned img_height,
     const unsigned img_width,
-    const unsigned block_size,
+    const unsigned block_width,
     const float clip_thresh
 ) {
     dim3 img_size_dim3;
@@ -146,8 +146,8 @@ project_gaussians_forward_tensor(
     img_size_dim3.y = img_height;
 
     dim3 tile_bounds_dim3;
-    tile_bounds_dim3.x = int((img_width + block_size - 1) / block_size);
-    tile_bounds_dim3.y = int((img_height + block_size - 1) / block_size);;
+    tile_bounds_dim3.x = int((img_width + block_width - 1) / block_width);
+    tile_bounds_dim3.y = int((img_height + block_width - 1) / block_width);
     tile_bounds_dim3.z = 1;
 
     float4 intrins = {fx, fy, cx, cy};
@@ -181,7 +181,7 @@ project_gaussians_forward_tensor(
         intrins,
         img_size_dim3,
         tile_bounds_dim3,
-        block_size,
+        block_width,
         clip_thresh,
         // Outputs.
         cov3d_d.contiguous().data_ptr<float>(),
@@ -282,7 +282,7 @@ std::tuple<torch::Tensor, torch::Tensor> map_gaussian_to_intersects_tensor(
     const torch::Tensor &radii,
     const torch::Tensor &cum_tiles_hit,
     const std::tuple<int, int, int> tile_bounds,
-    const unsigned block_size
+    const unsigned block_width
 ) {
     CHECK_INPUT(xys);
     CHECK_INPUT(depths);
@@ -308,7 +308,7 @@ std::tuple<torch::Tensor, torch::Tensor> map_gaussian_to_intersects_tensor(
         radii.contiguous().data_ptr<int32_t>(),
         cum_tiles_hit.contiguous().data_ptr<int32_t>(),
         tile_bounds_dim3,
-        block_size,
+        block_width,
         // Outputs.
         isect_ids_unsorted.contiguous().data_ptr<int64_t>(),
         gaussian_ids_unsorted.contiguous().data_ptr<int32_t>()
@@ -486,7 +486,7 @@ std::
     nd_rasterize_backward_tensor(
         const unsigned img_height,
         const unsigned img_width,
-        const unsigned block_size,
+        const unsigned block_width,
         const torch::Tensor &gaussians_ids_sorted,
         const torch::Tensor &tile_bins,
         const torch::Tensor &xys,
@@ -513,11 +513,11 @@ std::
 
     const int num_points = xys.size(0);
     const dim3 tile_bounds = {
-        (img_width + block_size - 1) / block_size,
-        (img_height + block_size - 1) / block_size,
+        (img_width + block_width - 1) / block_width,
+        (img_height + block_width - 1) / block_width,
         1
     };
-    const dim3 block(block_size, block_size, 1);
+    const dim3 block(block_width, block_width, 1);
     const dim3 img_size = {img_width, img_height, 1};
     const int channels = colors.size(1);
 
@@ -572,7 +572,7 @@ std::
     rasterize_backward_tensor(
         const unsigned img_height,
         const unsigned img_width,
-        const unsigned block_size,
+        const unsigned block_width,
         const torch::Tensor &gaussians_ids_sorted,
         const torch::Tensor &tile_bins,
         const torch::Tensor &xys,
@@ -599,11 +599,11 @@ std::
 
     const int num_points = xys.size(0);
     const dim3 tile_bounds = {
-        (img_width + block_size - 1) / block_size,
-        (img_height + block_size - 1) / block_size,
+        (img_width + block_width - 1) / block_width,
+        (img_height + block_width - 1) / block_width,
         1
     };
-    const dim3 block(block_size, block_size, 1);
+    const dim3 block(block_width, block_width, 1);
     const dim3 img_size = {img_width, img_height, 1};
     const int channels = colors.size(1);
 

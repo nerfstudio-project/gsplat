@@ -22,7 +22,7 @@ def project_gaussians(
     cy: float,
     img_height: int,
     img_width: int,
-    block_size: int,
+    block_width: int,
     clip_thresh: float = 0.01,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
     """This function projects 3D gaussians to 2D using the EWA splatting method for gaussian splatting.
@@ -43,7 +43,7 @@ def project_gaussians(
        cy (float): principal point y.
        img_height (int): height of the rendered image.
        img_width (int): width of the rendered image.
-       block_size (int): size of tiles inside projection/rasterization in pixels (always square). 16 is a good default value, must be between 2 and 16 inclusive.
+       block_width (int): side length of tiles inside projection/rasterization in pixels (always square). 16 is a good default value, must be between 2 and 16 inclusive.
        clip_thresh (float): minimum z depth threshold.
 
     Returns:
@@ -57,7 +57,7 @@ def project_gaussians(
         - **num_tiles_hit** (Tensor): number of tiles hit per gaussian.
         - **cov3d** (Tensor): 3D covariances.
     """
-    assert block_size > 1 and block_size <= 16, "block_size must be between 1 and 16"
+    assert block_width > 1 and block_width <= 16, "block_width must be between 2 and 16"
     return _ProjectGaussians.apply(
         means3d.contiguous(),
         scales.contiguous(),
@@ -71,7 +71,7 @@ def project_gaussians(
         cy,
         img_height,
         img_width,
-        block_size,
+        block_width,
         clip_thresh,
     )
 
@@ -94,7 +94,7 @@ class _ProjectGaussians(Function):
         cy: float,
         img_height: int,
         img_width: int,
-        block_size: int,
+        block_width: int,
         clip_thresh: float = 0.01,
     ):
         num_points = means3d.shape[-2]
@@ -123,7 +123,7 @@ class _ProjectGaussians(Function):
             cy,
             img_height,
             img_width,
-            block_size,
+            block_width,
             clip_thresh,
         )
 
@@ -221,7 +221,7 @@ class _ProjectGaussians(Function):
             None,
             # img_width: int,
             None,
-            # block_size: int,
+            # block_width: int,
             None,
             # clip_thresh,
             None,
