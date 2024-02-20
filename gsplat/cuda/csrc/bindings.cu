@@ -454,8 +454,13 @@ nd_rasterize_forward_tensor(
     torch::Tensor final_idx = torch::zeros(
         {img_height, img_width}, xys.options().dtype(torch::kInt32)
     );
+    const int B = block_dim3.x * block_dim3.y;
+    const uint32_t shared_mem = B*sizeof(int) + B*sizeof(float3) + B*sizeof(float3) + B*channels*sizeof(half);
+    if(cudaFuncSetAttribute(nd_rasterize_forward, cudaFuncAttributeMaxDynamicSharedMemorySize, shared_mem) != cudaSuccess){
+        AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem, " bytes), try lowering block_size");
+    }
 
-    nd_rasterize_forward<<<tile_bounds_dim3, block_dim3>>>(
+    nd_rasterize_forward<<<tile_bounds_dim3, block_dim3, shared_mem>>>(
         tile_bounds_dim3,
         img_size_dim3,
         channels,
@@ -527,17 +532,13 @@ std::
         torch::zeros({num_points, channels}, xys.options());
     torch::Tensor v_opacity = torch::zeros({num_points, 1}, xys.options());
 
-    torch::Tensor workspace;
-    if (channels > 3) {
-        workspace = torch::zeros(
-            {img_height, img_width, channels},
-            xys.options().dtype(torch::kFloat32)
-        );
-    } else {
-        workspace = torch::zeros({0}, xys.options().dtype(torch::kFloat32));
+    const int B = block.x * block.y;
+    //shared mem accounts for each thread having a local shared memory workspace for running sum
+    const uint32_t shared_mem = B*channels*sizeof(half);
+    if(cudaFuncSetAttribute(nd_rasterize_backward_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shared_mem) != cudaSuccess){
+        AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem, " bytes), try lowering block_size");
     }
-
-    nd_rasterize_backward_kernel<<<tile_bounds, block>>>(
+    nd_rasterize_backward_kernel<<<tile_bounds, block, shared_mem>>>(
         tile_bounds,
         img_size,
         channels,
@@ -555,8 +556,7 @@ std::
         (float2 *)v_xy.contiguous().data_ptr<float>(),
         (float3 *)v_conic.contiguous().data_ptr<float>(),
         v_colors.contiguous().data_ptr<float>(),
-        v_opacity.contiguous().data_ptr<float>(),
-        workspace.data_ptr<float>()
+        v_opacity.contiguous().data_ptr<float>()
     );
 
     return std::make_tuple(v_xy, v_conic, v_colors, v_opacity);
