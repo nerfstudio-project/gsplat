@@ -4,7 +4,7 @@
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 #include <iostream>
-#include "cuda_fp16.h"
+#include <cuda_fp16.h>
 
 namespace cg = cooperative_groups;
 

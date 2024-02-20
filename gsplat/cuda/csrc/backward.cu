@@ -1,5 +1,6 @@
 #include "backward.cuh"
 #include "helpers.cuh"
+#include <cuda_fp16.h>
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 namespace cg = cooperative_groups;
