@@ -558,7 +558,6 @@ std::
         v_colors.contiguous().data_ptr<float>(),
         v_opacity.contiguous().data_ptr<float>()
     );
-    CUDA_CALL( cudaPeekAtLastError() );
 
     return std::make_tuple(v_xy, v_conic, v_colors, v_opacity);
 }
