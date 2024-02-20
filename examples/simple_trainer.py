@@ -38,7 +38,7 @@ class SimpleTrainer:
 
         self.means = bd * (torch.rand(self.num_points, 3, device=self.device) - 0.5)
         self.scales = torch.rand(self.num_points, 3, device=self.device)
-        d = 128
+        d = 3
         self.rgbs = torch.rand(self.num_points, d, device=self.device)
 
         u = torch.rand(self.num_points, 1, device=self.device)
