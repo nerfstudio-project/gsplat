@@ -74,7 +74,13 @@ class SimpleTrainer:
         self.opacities.requires_grad = True
         self.viewmat.requires_grad = False
 
-    def train(self, iterations: int = 1000, lr: float = 0.01, save_imgs: bool = False, B_SIZE: int = 14):
+    def train(
+        self,
+        iterations: int = 1000,
+        lr: float = 0.01,
+        save_imgs: bool = False,
+        B_SIZE: int = 14,
+    ):
         optimizer = optim.Adam(
             [self.rgbs, self.means, self.scales, self.opacities, self.quats], lr
         )
@@ -122,7 +128,7 @@ class SimpleTrainer:
                 self.W,
                 B_SIZE,
                 self.background,
-            )[...,:3]
+            )[..., :3]
             torch.cuda.synchronize()
             times[1] += time.time() - start
             loss = mse_loss(out_img, self.gt_image)
