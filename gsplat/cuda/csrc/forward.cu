@@ -21,7 +21,7 @@ __global__ void project_gaussians_forward_kernel(
     const float4 intrins,
     const dim3 img_size,
     const dim3 tile_bounds,
-    const unsigned block_size,
+    const unsigned block_width,
     const float clip_thresh,
     float* __restrict__ covs3d,
     float2* __restrict__ xys,
@@ -83,7 +83,7 @@ __global__ void project_gaussians_forward_kernel(
     // compute the projected mean
     float2 center = project_pix(projmat, p_world, img_size, {cx, cy});
     uint2 tile_min, tile_max;
-    get_tile_bbox(center, radius, tile_bounds, tile_min, tile_max, block_size);
+    get_tile_bbox(center, radius, tile_bounds, tile_min, tile_max, block_width);
     int32_t tile_area = (tile_max.x - tile_min.x) * (tile_max.y - tile_min.y);
     if (tile_area <= 0) {
         // printf("%d point bbox outside of bounds\n", idx);
@@ -111,7 +111,7 @@ __global__ void map_gaussian_to_intersects(
     const int* __restrict__ radii,
     const int32_t* __restrict__ cum_tiles_hit,
     const dim3 tile_bounds,
-    const unsigned block_size,
+    const unsigned block_width,
     int64_t* __restrict__ isect_ids,
     int32_t* __restrict__ gaussian_ids
 ) {
@@ -123,7 +123,7 @@ __global__ void map_gaussian_to_intersects(
     // get the tile bbox for gaussian
     uint2 tile_min, tile_max;
     float2 center = xys[idx];
-    get_tile_bbox(center, radii[idx], tile_bounds, tile_min, tile_max, block_size);
+    get_tile_bbox(center, radii[idx], tile_bounds, tile_min, tile_max, block_width);
     // printf("point %d, %d radius, min %d %d, max %d %d\n", idx, radii[idx],
     // tile_min.x, tile_min.y, tile_max.x, tile_max.y);
 

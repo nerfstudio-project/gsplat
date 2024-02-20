@@ -81,6 +81,7 @@ class SimpleTrainer:
         mse_loss = torch.nn.MSELoss()
         frames = []
         times = [0] * 3  # project, rasterize, backward
+        B_SIZE = 16
         for iter in range(iterations):
             start = time.time()
             (

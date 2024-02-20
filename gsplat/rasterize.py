@@ -21,7 +21,7 @@ def rasterize_gaussians(
     opacity: Float[Tensor, "*batch 1"],
     img_height: int,
     img_width: int,
-    block_size: int,
+    block_width: int,
     background: Optional[Float[Tensor, "channels"]] = None,
     return_alpha: Optional[bool] = False,
 ) -> Tensor:
@@ -40,7 +40,7 @@ def rasterize_gaussians(
         opacity (Tensor): opacity associated with the gaussians.
         img_height (int): height of the rendered image.
         img_width (int): width of the rendered image.
-        block_size (int): MUST match whatever block size was used in the project_gaussians call. integer number of pixels between 2 and 24 inclusive
+        block_width (int): MUST match whatever block width was used in the project_gaussians call. integer number of pixels between 2 and 16 inclusive
         background (Tensor): background color
         return_alpha (bool): whether to return alpha channel
 
@@ -50,7 +50,7 @@ def rasterize_gaussians(
         - **out_img** (Tensor): N-dimensional rendered output image.
         - **out_alpha** (Optional[Tensor]): Alpha channel of the rendered output image.
     """
-    assert block_size > 1 and block_size <= 24, "block_size must be between 1 and 24"
+    assert block_width > 1 and block_width <= 16, "block_width must be between 2 and 16"
     if colors.dtype == torch.uint8:
         # make sure colors are float [0,1]
         colors = colors.float() / 255
@@ -80,7 +80,7 @@ def rasterize_gaussians(
         opacity.contiguous(),
         img_height,
         img_width,
-        block_size,
+        block_width,
         background.contiguous(),
         return_alpha,
     )
@@ -101,17 +101,17 @@ class _RasterizeGaussians(Function):
         opacity: Float[Tensor, "*batch 1"],
         img_height: int,
         img_width: int,
-        block_size: int,
+        block_width: int,
         background: Optional[Float[Tensor, "channels"]] = None,
         return_alpha: Optional[bool] = False,
     ) -> Tensor:
         num_points = xys.size(0)
         tile_bounds = (
-            (img_width + block_size - 1) // block_size,
-            (img_height + block_size - 1) // block_size,
+            (img_width + block_width - 1) // block_width,
+            (img_height + block_width - 1) // block_width,
             1,
         )
-        block = (block_size, block_size, 1)
+        block = (block_width, block_width, 1)
         img_size = (img_width, img_height, 1)
 
         num_intersects, cum_tiles_hit = compute_cumulative_intersects(num_tiles_hit)
@@ -140,7 +140,7 @@ class _RasterizeGaussians(Function):
                 radii,
                 cum_tiles_hit,
                 tile_bounds,
-                block_size,
+                block_width,
             )
             if colors.shape[-1] == 3:
                 rasterize_fn = _C.rasterize_forward
@@ -163,7 +163,7 @@ class _RasterizeGaussians(Function):
         ctx.img_width = img_width
         ctx.img_height = img_height
         ctx.num_intersects = num_intersects
-        ctx.block_size = block_size
+        ctx.block_width = block_width
         ctx.save_for_backward(
             gaussian_ids_sorted,
             tile_bins,
@@ -217,7 +217,7 @@ class _RasterizeGaussians(Function):
             v_xy, v_conic, v_colors, v_opacity = rasterize_fn(
                 img_height,
                 img_width,
-                ctx.block_size,
+                ctx.block_width,
                 gaussian_ids_sorted,
                 tile_bins,
                 xys,
@@ -241,7 +241,7 @@ class _RasterizeGaussians(Function):
             v_opacity,  # opacity
             None,  # img_height
             None,  # img_width
-            None,  # block_size
+            None,  # block_width
             None,  # background
             None,  # return_alpha
         )
