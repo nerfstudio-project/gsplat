@@ -7,8 +7,8 @@ from typing import Optional
 import numpy as np
 import torch
 import tyro
-from gsplat.project_gaussians import _ProjectGaussians
-from gsplat.rasterize import _RasterizeGaussians
+from gsplat.project_gaussians import project_gaussians
+from gsplat.rasterize import rasterize_gaussians
 from PIL import Image
 from torch import Tensor, optim
 
@@ -25,17 +25,10 @@ class SimpleTrainer:
         self.gt_image = gt_image.to(device=self.device)
         self.num_points = num_points
 
-        BLOCK_X, BLOCK_Y = 16, 16
         fov_x = math.pi / 2.0
         self.H, self.W = gt_image.shape[0], gt_image.shape[1]
         self.focal = 0.5 * float(self.W) / math.tan(0.5 * fov_x)
-        self.tile_bounds = (
-            (self.W + BLOCK_X - 1) // BLOCK_X,
-            (self.H + BLOCK_Y - 1) // BLOCK_Y,
-            1,
-        )
         self.img_size = torch.tensor([self.W, self.H, 1], device=self.device)
-        self.block = torch.tensor([BLOCK_X, BLOCK_Y, 1], device=self.device)
 
         self._init_gaussians()
 
@@ -87,9 +80,18 @@ class SimpleTrainer:
         mse_loss = torch.nn.MSELoss()
         frames = []
         times = [0] * 3  # project, rasterize, backward
+        B_SIZE = 16
         for iter in range(iterations):
             start = time.time()
-            xys, depths, radii, conics, compensation, num_tiles_hit, cov3d = _ProjectGaussians.apply(
+            (
+                xys,
+                depths,
+                radii,
+                conics,
+                compensation,
+                num_tiles_hit,
+                cov3d,
+            ) = project_gaussians(
                 self.means,
                 self.scales,
                 1,
@@ -102,12 +104,12 @@ class SimpleTrainer:
                 self.H / 2,
                 self.H,
                 self.W,
-                self.tile_bounds,
+                B_SIZE,
             )
             torch.cuda.synchronize()
             times[0] += time.time() - start
             start = time.time()
-            out_img = _RasterizeGaussians.apply(
+            out_img = rasterize_gaussians(
                 xys,
                 depths,
                 radii,
@@ -117,6 +119,7 @@ class SimpleTrainer:
                 torch.sigmoid(self.opacities),
                 self.H,
                 self.W,
+                B_SIZE,
                 self.background,
             )
             torch.cuda.synchronize()

@@ -56,7 +56,7 @@ project_gaussians_forward_tensor(
     const float cy,
     const unsigned img_height,
     const unsigned img_width,
-    const std::tuple<int, int, int> tile_bounds,
+    const unsigned block_width,
     const float clip_thresh
 );
 
@@ -96,7 +96,8 @@ std::tuple<torch::Tensor, torch::Tensor> map_gaussian_to_intersects_tensor(
     const torch::Tensor &depths,
     const torch::Tensor &radii,
     const torch::Tensor &cum_tiles_hit,
-    const std::tuple<int, int, int> tile_bounds
+    const std::tuple<int, int, int> tile_bounds,
+    const unsigned block_width
 );
 
 torch::Tensor get_tile_bin_edges_tensor(
@@ -150,6 +151,7 @@ std::
     nd_rasterize_backward_tensor(
         const unsigned img_height,
         const unsigned img_width,
+        const unsigned block_width,
         const torch::Tensor &gaussians_ids_sorted,
         const torch::Tensor &tile_bins,
         const torch::Tensor &xys,
@@ -173,6 +175,7 @@ std::
     rasterize_backward_tensor(
         const unsigned img_height,
         const unsigned img_width,
+        const unsigned block_width,
         const torch::Tensor &gaussians_ids_sorted,
         const torch::Tensor &tile_bins,
         const torch::Tensor &xys,

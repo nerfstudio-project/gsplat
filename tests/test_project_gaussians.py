@@ -4,8 +4,8 @@ import torch
 from torch.func import vjp  # type: ignore
 
 from gsplat import _torch_impl
+from gsplat.project_gaussians import project_gaussians
 import gsplat.cuda as _C
-
 
 torch.manual_seed(42)
 
@@ -62,20 +62,17 @@ def test_project_gaussians_forward():
     )
     projmat = projection_matrix(fx, fy, W, H)
     fullmat = projmat @ viewmat
-
-    BLOCK_X, BLOCK_Y = 16, 16
-    tile_bounds = (W + BLOCK_X - 1) // BLOCK_X, (H + BLOCK_Y - 1) // BLOCK_Y, 1
+    BLOCK_SIZE = 16
 
     (
-        cov3d,
         xys,
         depths,
         radii,
         conics,
         compensation,
         num_tiles_hit,
-    ) = _C.project_gaussians_forward(
-        num_points,
+        cov3d,
+    ) = project_gaussians(
         means3d,
         scales,
         glob_scale,
@@ -88,7 +85,7 @@ def test_project_gaussians_forward():
         cy,
         H,
         W,
-        tile_bounds,
+        BLOCK_SIZE,
         clip_thresh,
     )
     masks = num_tiles_hit > 0
@@ -113,7 +110,7 @@ def test_project_gaussians_forward():
             fullmat,
             (fx, fy, cx, cy),
             (W, H),
-            tile_bounds,
+            BLOCK_SIZE,
             clip_thresh,
         )
 
@@ -156,8 +153,7 @@ def test_project_gaussians_backward():
     # projmat = torch.eye(4, device=device)
     fullmat = projmat @ viewmat
 
-    BLOCK_X, BLOCK_Y = 16, 16
-    tile_bounds = (W + BLOCK_X - 1) // BLOCK_X, (H + BLOCK_Y - 1) // BLOCK_Y, 1
+    BLOCK_SIZE = 16
 
     (
         cov3d,
@@ -178,7 +174,7 @@ def test_project_gaussians_backward():
         fullmat,
         (fx, fy, cx, cy),
         (W, H),
-        tile_bounds,
+        BLOCK_SIZE,
         clip_thresh,
     )
 
