@@ -1,9 +1,9 @@
 Evaluation
 ===================================
 
-We evaluate our implementation of Gaussian Splatting (Splatfacto) on the Mip-NeRF 360 dataset, benchmarking it against the original Inria method (commit 2eee0e26d2d5fd00ec462df47752223952f6bf4e). We report results at 7,000 and 30,000 steps. All evaluations were executed on an NVIDIA RTX 4090 GPU.
+We evaluate our implementation of Gaussian Splatting (`Splatfacto <https://github.com/nerfstudio-project/nerfstudio/tree/1d070f5625ab42d0a0dff1ad4c6cfb655aab6d3d>`_) on the Mip-NeRF 360 dataset, benchmarking it against the original `Inria <https://github.com/graphdeco-inria/gaussian-splatting/tree/2eee0e26d2d5fd00ec462df47752223952f6bf4e>`_ method. We evaluate all methods with the same resolution (2x downscale) and COLMAP params/undistortion, and we report results at 7,000 and 30,000 steps. All evaluations were executed on an NVIDIA RTX 4090 GPU.
 
-.. list-table:: Time
+.. list-table:: **Time**
    :widths: 10 10 10 10 10 10 10 10 10 10
    :header-rows: 1
 
@@ -78,7 +78,7 @@ We evaluate our implementation of Gaussian Splatting (Splatfacto) on the Mip-NeR
      - 25:26
      - 21:19
 
-.. list-table:: PSNR
+.. list-table:: **PSNR**
    :widths: 10 10 10 10 10 10 10 10 10 10
    :header-rows: 1
 
@@ -154,7 +154,7 @@ We evaluate our implementation of Gaussian Splatting (Splatfacto) on the Mip-NeR
      - 27.17
 
 
-.. list-table:: LPIPS
+.. list-table:: **LPIPS**
    :widths: 10 10 10 10 10 10 10 10 10 10
    :header-rows: 1
 
@@ -229,7 +229,7 @@ We evaluate our implementation of Gaussian Splatting (Splatfacto) on the Mip-NeR
      - 0.28
      - 0.17
 
-.. list-table:: SSIM
+.. list-table:: **SSIM**
    :widths: 10 10 10 10 10 10 10 10 10 10
    :header-rows: 1
 
