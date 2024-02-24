@@ -5,6 +5,7 @@
 #include <math.h>
 #include <torch/extension.h>
 #include <tuple>
+#include <c10/cuda/CUDAGuard.h>
 
 #define CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x)                                                    \
@@ -12,6 +13,8 @@
 #define CHECK_INPUT(x)                                                         \
     CHECK_CUDA(x);                                                             \
     CHECK_CONTIGUOUS(x)
+#define DEVICE_GUARD(_ten) \
+    const at::cuda::OptionalCUDAGuard device_guard(device_of(_ten));
 
 std::tuple<
     torch::Tensor, // output conics
