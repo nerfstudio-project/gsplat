@@ -1,3 +1,4 @@
 numpy
 tyro
 Pillow
+pytorch3d @ git+https://github.com/facebookresearch/pytorch3d@v0.7.5
