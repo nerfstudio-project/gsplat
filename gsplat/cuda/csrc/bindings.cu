@@ -225,10 +225,12 @@ project_gaussians_backward_tensor(
     torch::Tensor &cov3d,
     torch::Tensor &radii,
     torch::Tensor &conics,
+    torch::Tensor &compensation,
     torch::Tensor &v_xy,
     torch::Tensor &v_depth,
-    torch::Tensor &v_conic
-) {
+    torch::Tensor &v_conic,
+    torch::Tensor &v_compensation
+){
     DEVICE_GUARD(means3d);
     dim3 img_size_dim3;
     img_size_dim3.x = img_width;
@@ -265,9 +267,11 @@ project_gaussians_backward_tensor(
         cov3d.contiguous().data_ptr<float>(),
         radii.contiguous().data_ptr<int32_t>(),
         (float3 *)conics.contiguous().data_ptr<float>(),
+        (float *)compensation.contiguous().data_ptr<float>(),
         (float2 *)v_xy.contiguous().data_ptr<float>(),
         v_depth.contiguous().data_ptr<float>(),
         (float3 *)v_conic.contiguous().data_ptr<float>(),
+        (float *)v_compensation.contiguous().data_ptr<float>(),
         // Outputs.
         (float3 *)v_cov2d.contiguous().data_ptr<float>(),
         v_cov3d.contiguous().data_ptr<float>(),
