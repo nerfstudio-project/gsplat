@@ -75,7 +75,7 @@ inline __device__ void cov2d_to_conic_vjp(
     // conic = inverse cov2d
     // df/d_cov2d = -conic * df/d_conic * conic
     glm::mat2 X = glm::mat2(conic.x, conic.y, conic.y, conic.z);
-    glm::mat2 G = glm::mat2(v_conic.x, v_conic.y, v_conic.y, v_conic.z);
+    glm::mat2 G = glm::mat2(v_conic.x, v_conic.y / 2.f, v_conic.y / 2.f, v_conic.z);
     glm::mat2 v_Sigma = -X * G * X;
     v_cov2d.x = v_Sigma[0][0];
     v_cov2d.y = v_Sigma[1][0] + v_Sigma[0][1];
