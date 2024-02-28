@@ -497,9 +497,9 @@ __device__ void scale_rot_to_cov3d_vjp(
     // df/dW = G * XT, df/dX = WT * G
     glm::mat3 v_M = 2.f * v_V * M;
     // glm::mat3 v_S = glm::transpose(R) * v_M;
-    v_scale.x = (float)glm::dot(R[0], v_M[0]);
-    v_scale.y = (float)glm::dot(R[1], v_M[1]);
-    v_scale.z = (float)glm::dot(R[2], v_M[2]);
+    v_scale.x = (float)glm::dot(R[0], v_M[0]) * glob_scale;
+    v_scale.y = (float)glm::dot(R[1], v_M[1]) * glob_scale;
+    v_scale.z = (float)glm::dot(R[2], v_M[2]) * glob_scale;
 
     glm::mat3 v_R = v_M * S;
     v_quat = quat_to_rotmat_vjp(quat, v_R);

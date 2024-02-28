@@ -113,9 +113,9 @@ def eval_sh_bases(basis_dim: int, dirs: torch.Tensor):
     return result
 
 
-def quat_to_rotmat(quat: Tensor) -> Tensor:
+def normalized_quat_to_rotmat(quat: Tensor) -> Tensor:
     assert quat.shape[-1] == 4, quat.shape
-    w, x, y, z = torch.unbind(F.normalize(quat, dim=-1), dim=-1)
+    w, x, y, z = torch.unbind(quat, dim=-1)
     mat = torch.stack(
         [
             1 - 2 * (y**2 + z**2),
@@ -133,11 +133,16 @@ def quat_to_rotmat(quat: Tensor) -> Tensor:
     return mat.reshape(quat.shape[:-1] + (3, 3))
 
 
+def quat_to_rotmat(quat: Tensor) -> Tensor:
+    assert quat.shape[-1] == 4, quat.shape
+    return normalized_quat_to_rotmat(F.normalize(quat, dim=-1))
+
+
 def scale_rot_to_cov3d(scale: Tensor, glob_scale: float, quat: Tensor) -> Tensor:
     assert scale.shape[-1] == 3, scale.shape
     assert quat.shape[-1] == 4, quat.shape
     assert scale.shape[:-1] == quat.shape[:-1], (scale.shape, quat.shape)
-    R = quat_to_rotmat(quat)  # (..., 3, 3)
+    R = normalized_quat_to_rotmat(quat)  # (..., 3, 3)
     M = R * glob_scale * scale[..., None, :]  # (..., 3, 3)
     # TODO: save upper right because symmetric
     return M @ M.transpose(-1, -2)  # (..., 3, 3)

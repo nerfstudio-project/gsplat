@@ -42,7 +42,7 @@ def test_project_gaussians_forward():
 
     means3d = torch.randn((num_points, 3), device=device, requires_grad=True)
     scales = torch.rand((num_points, 3), device=device) + 0.2
-    glob_scale = 1.0
+    glob_scale = 0.1
     quats = torch.randn((num_points, 4), device=device)
     quats /= torch.linalg.norm(quats, dim=-1, keepdim=True)
 
@@ -131,7 +131,7 @@ def test_project_gaussians_backward():
 
     means3d = torch.randn((num_points, 3), device=device, requires_grad=True)
     scales = torch.rand((num_points, 3), device=device) + 0.2
-    glob_scale = 1.0
+    glob_scale = 0.1
     quats = torch.randn((num_points, 4), device=device)
     quats /= torch.linalg.norm(quats, dim=-1, keepdim=True)
 
@@ -184,7 +184,7 @@ def test_project_gaussians_backward():
     # v_depths = torch.randn_like(depths)
     v_depths = torch.zeros_like(depths)
     # scale gradients by pixels to account for finite difference
-    v_conics = torch.randn_like(conics) * 1e-3
+    v_conics = torch.randn_like(conics)
     v_cov2d, v_cov3d, v_mean3d, v_scale, v_quat = _C.project_gaussians_backward(
         num_points,
         means3d,
