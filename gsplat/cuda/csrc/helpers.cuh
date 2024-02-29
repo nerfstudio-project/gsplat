@@ -121,19 +121,19 @@ inline __device__ float3 project_pix_vjp(
     const float *mat, const float3 p, const dim3 img_size, const float2 v_xy
 ) {
     // ROW MAJOR mat
-    float4 p_hom = transform_4x4(mat, p);
-    float rw = 1.f / (p_hom.w + 1e-6f);
+    float4 t = transform_4x4(mat, p);
+    float rw = 1.f / (t.w + 1e-6f);
 
     float3 v_ndc = {0.5f * img_size.x * v_xy.x, 0.5f * img_size.y * v_xy.y};
-    float4 v_proj = {
-        v_ndc.x * rw, v_ndc.y * rw, 0., -(v_ndc.x + v_ndc.y) * rw * rw
+    float4 v_t = {
+        v_ndc.x * rw, v_ndc.y * rw, 0., -(v_ndc.x * t.x + v_ndc.y * t.y) * rw * rw
     };
     // df / d_world = df / d_cam * d_cam / d_world
-    // = v_proj * P[:3, :3]
+    // = v_t * mat[:3, :4]
     return {
-        mat[0] * v_proj.x + mat[4] * v_proj.y + mat[8] * v_proj.z,
-        mat[1] * v_proj.x + mat[5] * v_proj.y + mat[9] * v_proj.z,
-        mat[2] * v_proj.x + mat[6] * v_proj.y + mat[10] * v_proj.z
+        mat[0] * v_t.x + mat[4] * v_t.y + mat[8] * v_t.z + mat[12] * v_t.w,
+        mat[1] * v_t.x + mat[5] * v_t.y + mat[9] * v_t.z + mat[13] * v_t.w,
+        mat[2] * v_t.x + mat[6] * v_t.y + mat[10] * v_t.z + mat[14] * v_t.w,
     };
 }
 
