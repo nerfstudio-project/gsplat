@@ -229,20 +229,14 @@ def compute_cov2d_bounds(cov2d_mat: Tensor):
     conic_all[valid] = conic
     return conic_all, radius_all, valid
 
+def project_pix(fxfy, p_view, center, eps=1e-6):
+    fx, fy = fxfy
+    cx, cy = center
 
-def ndc2pix(x, W, c):
-    return 0.5 * W * x - 0.5 + c
-
-
-def project_pix(fullmat, p, img_size, center, eps=1e-6):
-    p_hom = F.pad(p, (0, 1), value=1.0)
-    p_hom = torch.einsum("...ij,...j->...i", fullmat, p_hom)
-    rw = 1.0 / (p_hom[..., 3] + eps)
-    p_proj = p_hom[..., :3] * rw[..., None]
-    u = ndc2pix(p_proj[..., 0], img_size[0], center[0])
-    v = ndc2pix(p_proj[..., 1], img_size[1], center[1])
+    rw = 1.0 / (p_view[..., 2] + 1e-6)
+    p_proj = ( p_view[..., 0] * rw, p_view[..., 1] * rw )
+    u, v = ( p_proj[0] * fx + cx, p_proj[1] * fy + cy )
     return torch.stack([u, v], dim=-1)
-
 
 def clip_near_plane(p, viewmat, clip_thresh=0.01):
     R = viewmat[:3, :3]
@@ -283,7 +277,6 @@ def project_gaussians_forward(
     glob_scale,
     quats,
     viewmat,
-    fullmat,
     intrins,
     img_size,
     block_width,
@@ -303,7 +296,7 @@ def project_gaussians_forward(
         means3d, cov3d, viewmat, fx, fy, tan_fovx, tan_fovy
     )
     conic, radius, det_valid = compute_cov2d_bounds(cov2d)
-    xys = project_pix(fullmat, means3d, img_size, (cx, cy))
+    xys = project_pix((fx, fy), p_view, (cx, cy))
     tile_min, tile_max = get_tile_bbox(xys, radius, tile_bounds, block_width)
     tile_area = (tile_max[..., 0] - tile_min[..., 0]) * (
         tile_max[..., 1] - tile_min[..., 1]
