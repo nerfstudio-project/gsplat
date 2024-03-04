@@ -60,6 +60,7 @@ def test_project_gaussians_forward():
         ],
         device=device,
     )
+    viewmat[:3, :3] = _torch_impl.quat_to_rotmat(torch.randn(4))
     projmat = projection_matrix(fx, fy, W, H)
     fullmat = projmat @ viewmat
     BLOCK_SIZE = 16
@@ -149,8 +150,8 @@ def test_project_gaussians_backward():
         ],
         device=device,
     )
+    viewmat[:3, :3] = _torch_impl.quat_to_rotmat(torch.randn(4))
     projmat = projection_matrix(fx, fy, W, H)
-    # projmat = torch.eye(4, device=device)
     fullmat = projmat @ viewmat
 
     BLOCK_SIZE = 16
@@ -181,9 +182,7 @@ def test_project_gaussians_backward():
     # Test backward pass
 
     v_xys = torch.randn_like(xys)
-    # v_depths = torch.randn_like(depths)
-    v_depths = torch.zeros_like(depths)
-    # scale gradients by pixels to account for finite difference
+    v_depths = torch.randn_like(depths)
     v_conics = torch.randn_like(conics)
     v_cov2d, v_cov3d, v_mean3d, v_scale, v_quat = _C.project_gaussians_backward(
         num_points,
@@ -275,7 +274,7 @@ def test_project_gaussians_backward():
     rtol = 1e-5
     check_close(v_cov2d, _v_cov2d, atol=atol, rtol=rtol)
     check_close(v_cov3d, _v_cov3d, atol=atol, rtol=rtol)
-    check_close(v_mean3d[:, :2], _v_mean3d[:, :2], atol=atol, rtol=rtol)
+    check_close(v_mean3d[:, :], _v_mean3d[:, :], atol=atol, rtol=rtol)
     check_close(v_scale, _v_scale, atol=atol, rtol=rtol)
     check_close(v_quat, _v_quat, atol=atol, rtol=rtol)
     print("passed project_gaussians_backward test")
