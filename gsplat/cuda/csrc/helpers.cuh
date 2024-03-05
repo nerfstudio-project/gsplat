@@ -82,6 +82,21 @@ inline __device__ void cov2d_to_conic_vjp(
     v_cov2d.z = v_Sigma[1][1];
 }
 
+inline __device__ void cov2d_to_compensation_vjp(
+    const float compensation, const float3 &conic, const float v_compensation, float3 &v_cov2d
+) {
+    // comp = sqrt(det(cov2d - 0.3 I) / det(cov2d))
+    // conic = inverse(cov2d)
+    // df / d_cov2d = df / d comp * 0.5 / comp * [ d comp^2 / d cov2d ]
+    // d comp^2 / d cov2d = (1 - comp^2) * conic - 0.3 I * det(conic)
+    float inv_det = conic.x * conic.z - conic.y * conic.y;
+    float one_minus_sqr_comp = 1 - compensation * compensation;
+    float v_sqr_comp = v_compensation * 0.5 / (compensation + 1e-6);
+    v_cov2d.x += v_sqr_comp * (one_minus_sqr_comp * conic.x - 0.3 * inv_det);
+    v_cov2d.y += 2 * v_sqr_comp * (one_minus_sqr_comp * conic.y);
+    v_cov2d.z += v_sqr_comp * (one_minus_sqr_comp * conic.z - 0.3 * inv_det);
+}
+
 // helper for applying R * p + T, expect mat to be ROW MAJOR
 inline __device__ float3 transform_4x3(const float *mat, const float3 p) {
     float3 out = {

@@ -163,7 +163,7 @@ def test_project_gaussians_backward():
         depths,
         radii,
         conics,
-        _,
+        compensation,
         _,
         masks,
     ) = _torch_impl.project_gaussians_forward(
@@ -184,6 +184,8 @@ def test_project_gaussians_backward():
     v_xys = torch.randn_like(xys)
     v_depths = torch.randn_like(depths)
     v_conics = torch.randn_like(conics)
+    # compensation gradients
+    v_compensation = torch.randn_like(compensation)
     v_cov2d, v_cov3d, v_mean3d, v_scale, v_quat = _C.project_gaussians_backward(
         num_points,
         means3d,
@@ -201,9 +203,11 @@ def test_project_gaussians_backward():
         cov3d,
         radii,
         conics,
+        compensation,
         v_xys,
         v_depths,
         v_conics,
+        v_compensation,
     )
 
     def scale_rot_to_cov3d_partial(scale, quat):
@@ -243,6 +247,16 @@ def test_project_gaussians_backward():
         conic, _, _ = _torch_impl.compute_cov2d_bounds(cov2d_mat)
         return conic
 
+    def compute_compensation_partial(cov2d):
+        """
+        cov2d (upper tri) (*, 3) -> compensation (*, 1)
+        """
+        cov2d_mat = torch.zeros(*cov2d.shape[:-1], 2, 2, device=device)
+        i, j = torch.triu_indices(2, 2)
+        cov2d_mat[..., i, j] = cov2d
+        cov2d_mat[..., 1, 0] = cov2d[..., 1]
+        return _torch_impl.compute_compensation(cov2d_mat)
+
     def project_pix_partial(mean3d):
         """
         mean3d (*, 3) -> xy (*, 2)
@@ -260,10 +274,12 @@ def test_project_gaussians_backward():
     _, vjp_scale_rot_to_cov3d = vjp(scale_rot_to_cov3d_partial, scales, quats)  # type: ignore
     _, vjp_project_cov3d_ewa = vjp(project_cov3d_ewa_partial, means3d, cov3d)  # type: ignore
     _, vjp_compute_cov2d_bounds = vjp(compute_cov2d_bounds_partial, cov2d)  # type: ignore
+    _, vjp_compute_compensation = vjp(compute_compensation_partial, cov2d)  # type: ignore
     _, vjp_project_pix = vjp(project_pix_partial, means3d)  # type: ignore
     _, vjp_compute_depth = vjp(compute_depth_partial, means3d)  # type: ignore
 
     _v_cov2d = vjp_compute_cov2d_bounds(v_conics)[0]
+    _v_cov2d = _v_cov2d + vjp_compute_compensation(v_compensation)[0]
     _v_mean3d_cov2d, _v_cov3d = vjp_project_cov3d_ewa(_v_cov2d)
     _v_mean3d_xy = vjp_project_pix(v_xys)[0]
     _v_mean3d_depth = vjp_compute_depth(v_depths)[0]

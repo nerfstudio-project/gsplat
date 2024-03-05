@@ -186,7 +186,19 @@ def project_cov3d_ewa(
     cov2d[..., 1, 1] = cov2d[..., 1, 1] + 0.3
     det_blur = cov2d[..., 0, 0] * cov2d[..., 1, 1] - cov2d[..., 0, 1] * cov2d[..., 0, 1]
     compensation = torch.sqrt(torch.clamp(det_orig / det_blur, min=0))
-    return cov2d[..., :2, :2], compensation.detach()
+    return cov2d[..., :2, :2], compensation
+
+
+def compute_compensation(cov2d_mat: Tensor):
+    """
+    params: cov2d matrix (*, 2, 2)
+    returns: compensation factor as calculated in project_cov3d_ewa
+    """
+    det_denom = cov2d_mat[..., 0, 0] * cov2d_mat[..., 1, 1] - cov2d_mat[..., 0, 1] ** 2
+    det_nomin = (cov2d_mat[..., 0, 0] - 0.3) * (cov2d_mat[..., 1, 1] - 0.3) - cov2d_mat[
+        ..., 0, 1
+    ] ** 2
+    return torch.sqrt(torch.clamp(det_nomin / det_denom, min=0))
 
 
 def compute_cov2d_bounds(cov2d_mat: Tensor):
