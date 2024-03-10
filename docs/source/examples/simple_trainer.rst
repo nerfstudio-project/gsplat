@@ -5,10 +5,10 @@ Simple Trainer
 
 Training on an image
 -----------------------------------
-The `examples/simple_trainer.py` script allows you to test the basic forward projection and rasterization of random gaussians
-and their differentiability on a single training image. This allows you to overfit gaussians on a single view.
+The `examples/simple_trainer.py` script allows you to test the basic projection and rasterization operations with randomly initialized Gaussians
+and their projection onto a single image. This allows you to overfit Gaussians on a single view.
 
-Simply run the script with:
+Run the script with:
 
 .. code-block:: bash
     :caption: simple_trainer.py
