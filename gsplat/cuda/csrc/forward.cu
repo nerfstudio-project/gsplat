@@ -4,6 +4,7 @@
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 #include <iostream>
+#include <cuda_fp16.h>
 
 namespace cg = cooperative_groups;
 
@@ -20,12 +21,14 @@ __global__ void project_gaussians_forward_kernel(
     const float4 intrins,
     const dim3 img_size,
     const dim3 tile_bounds,
+    const unsigned block_width,
     const float clip_thresh,
     float* __restrict__ covs3d,
     float2* __restrict__ xys,
     float* __restrict__ depths,
     int* __restrict__ radii,
     float3* __restrict__ conics,
+    float* __restrict__ compensation,
     int32_t* __restrict__ num_tiles_hit
 ) {
     unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
@@ -61,8 +64,11 @@ __global__ void project_gaussians_forward_kernel(
     float cy = intrins.w;
     float tan_fovx = 0.5 * img_size.x / fx;
     float tan_fovy = 0.5 * img_size.y / fy;
-    float3 cov2d = project_cov3d_ewa(
-        p_world, cur_cov3d, viewmat, fx, fy, tan_fovx, tan_fovy
+    float3 cov2d;
+    float comp;
+    project_cov3d_ewa(
+        p_world, cur_cov3d, viewmat, fx, fy, tan_fovx, tan_fovy,
+        cov2d, comp
     );
     // printf("cov2d %d, %.2f %.2f %.2f\n", idx, cov2d.x, cov2d.y, cov2d.z);
 
@@ -77,7 +83,7 @@ __global__ void project_gaussians_forward_kernel(
     // compute the projected mean
     float2 center = project_pix(projmat, p_world, img_size, {cx, cy});
     uint2 tile_min, tile_max;
-    get_tile_bbox(center, radius, tile_bounds, tile_min, tile_max);
+    get_tile_bbox(center, radius, tile_bounds, tile_min, tile_max, block_width);
     int32_t tile_area = (tile_max.x - tile_min.x) * (tile_max.y - tile_min.y);
     if (tile_area <= 0) {
         // printf("%d point bbox outside of bounds\n", idx);
@@ -88,6 +94,7 @@ __global__ void project_gaussians_forward_kernel(
     depths[idx] = p_view.z;
     radii[idx] = (int)radius;
     xys[idx] = center;
+    compensation[idx] = comp;
     // printf(
     //     "point %d x %.2f y %.2f z %.2f, radius %d, # tiles %d, tile_min %d
     //     %d, tile_max %d %d\n", idx, center.x, center.y, depths[idx],
@@ -104,6 +111,7 @@ __global__ void map_gaussian_to_intersects(
     const int* __restrict__ radii,
     const int32_t* __restrict__ cum_tiles_hit,
     const dim3 tile_bounds,
+    const unsigned block_width,
     int64_t* __restrict__ isect_ids,
     int32_t* __restrict__ gaussian_ids
 ) {
@@ -115,7 +123,7 @@ __global__ void map_gaussian_to_intersects(
     // get the tile bbox for gaussian
     uint2 tile_min, tile_max;
     float2 center = xys[idx];
-    get_tile_bbox(center, radii[idx], tile_bounds, tile_min, tile_max);
+    get_tile_bbox(center, radii[idx], tile_bounds, tile_min, tile_max, block_width);
     // printf("point %d, %d radius, min %d %d, max %d %d\n", idx, radii[idx],
     // tile_min.x, tile_min.y, tile_max.x, tile_max.y);
 
@@ -180,70 +188,112 @@ __global__ void nd_rasterize_forward(
     float* __restrict__ out_img,
     const float* __restrict__ background
 ) {
-    // current naive implementation where tile data loading is redundant
-    // TODO tile data should be shared between tile threads
-    int32_t tile_id = blockIdx.y * tile_bounds.x + blockIdx.x;
-    unsigned i = blockIdx.y * blockDim.y + threadIdx.y;
-    unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
+    auto block = cg::this_thread_block();
+    int32_t tile_id =
+        block.group_index().y * tile_bounds.x + block.group_index().x;
+    unsigned i =
+        block.group_index().y * block.group_dim().y + block.thread_index().y;
+    unsigned j =
+        block.group_index().x * block.group_dim().x + block.thread_index().x;
+
     float px = (float)j;
     float py = (float)i;
     int32_t pix_id = i * img_size.x + j;
 
     // return if out of bounds
-    if (i >= img_size.y || j >= img_size.x) {
-        return;
-    }
+    // keep not rasterizing threads around for reading data
+    bool inside = (i < img_size.y && j < img_size.x);
+    bool done = !inside;
 
+    // have all threads in tile process the same gaussians in batches
+    // first collect gaussians between range.x and range.y in batches
     // which gaussians to look through in this tile
     int2 range = tile_bins[tile_id];
+    const int block_size = block.size();
+    int num_batches = (range.y - range.x + block_size - 1) / block_size;
+
+    extern __shared__ int s[];
+    int32_t* id_batch = (int32_t*)s;
+    float3* xy_opacity_batch = (float3*)&id_batch[block_size];
+    float3* conic_batch = (float3*)&xy_opacity_batch[block_size];
+    __half* color_out_batch = (__half*)&conic_batch[block_size];
+    for(int c = 0; c < channels; ++c)
+        color_out_batch[block.thread_rank() * channels + c] = __float2half(0.f);
+
+    // current visibility left to render
     float T = 1.f;
+    // index of most recent gaussian to write to this thread's pixel
+    int cur_idx = 0;
 
-    // iterate over all gaussians and apply rendering EWA equation (e.q. 2 from
-    // paper)
-    int idx;
-    for (idx = range.x; idx < range.y; ++idx) {
-        const int32_t g = gaussian_ids_sorted[idx];
-        const float3 conic = conics[g];
-        const float2 center = xys[g];
-        const float2 delta = {center.x - px, center.y - py};
-
-        // Mahalanobis distance (here referred to as sigma) measures how many
-        // standard deviations away distance delta is. sigma = -0.5(d.T * conic
-        // * d)
-        const float sigma =
-            0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
-            conic.y * delta.x * delta.y;
-        if (sigma < 0.f) {
-            continue;
-        }
-        const float opac = opacities[g];
-
-        const float alpha = min(0.999f, opac * __expf(-sigma));
-
-        // break out conditions
-        if (alpha < 1.f / 255.f) {
-            continue;
-        }
-        const float next_T = T * (1.f - alpha);
-        if (next_T <= 1e-4f) {
-            // we want to render the last gaussian that contributes and note
-            // that here idx > range.x so we don't underflow
-            idx -= 1;
+    // collect and process batches of gaussians
+    // each thread loads one gaussian at a time before rasterizing its
+    // designated pixel
+    int tr = block.thread_rank();
+    __half* pix_out = &color_out_batch[block.thread_rank() * channels];
+    // float* pix_out = out_img + pix_id * channels;
+    for (int b = 0; b < num_batches; ++b) {
+        // resync all threads before beginning next batch
+        // end early if entire tile is done
+        if (__syncthreads_count(done) >= block_size) {
             break;
         }
-        const float vis = alpha * T;
-        for (int c = 0; c < channels; ++c) {
-            out_img[channels * pix_id + c] += colors[channels * g + c] * vis;
+        // each thread fetch 1 gaussian from front to back
+        // index of gaussian to load
+        int batch_start = range.x + block_size * b;
+        int idx = batch_start + tr;
+        if (idx < range.y) {
+            int32_t g_id = gaussian_ids_sorted[idx];
+            id_batch[tr] = g_id;
+            const float2 xy = xys[g_id];
+            const float opac = opacities[g_id];
+            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
+            conic_batch[tr] = conics[g_id];
         }
-        T = next_T;
+
+        // wait for other threads to collect the gaussians in batch
+        block.sync();
+
+        // process gaussians in the current batch for this pixel
+        int batch_size = min(block_size, range.y - batch_start);
+        for (int t = 0; (t < batch_size) && !done; ++t) {
+            const float3 conic = conic_batch[t];
+            const float3 xy_opac = xy_opacity_batch[t];
+            const float opac = xy_opac.z;
+            const float2 delta = {xy_opac.x - px, xy_opac.y - py};
+            const float sigma = 0.5f * (conic.x * delta.x * delta.x +
+                                        conic.z * delta.y * delta.y) +
+                                conic.y * delta.x * delta.y;
+            const float alpha = min(0.999f, opac * __expf(-sigma));
+            if (sigma < 0.f || alpha < 1.f / 255.f) {
+                continue;
+            }
+
+            const float next_T = T * (1.f - alpha);
+            if (next_T <= 1e-4f) { // this pixel is done
+                // we want to render the last gaussian that contributes and note
+                // that here idx > range.x so we don't underflow
+                done = true;
+                break;
+            }
+
+            int32_t g = id_batch[t];
+            const float vis = alpha * T;
+            for (int c = 0; c < channels; ++c) {
+                pix_out[c] = __hadd(pix_out[c], __float2half(colors[channels * g + c] * vis));
+            }
+            T = next_T;
+            cur_idx = batch_start + t;
+        }
     }
-    final_Ts[pix_id] = T; // transmittance at last gaussian in this pixel
-    final_index[pix_id] =
-        (idx == range.y)
-            ? idx - 1
-            : idx; // index of in bin of last gaussian in this pixel
-    for (int c = 0; c < channels; ++c) {
-        out_img[channels * pix_id + c] += T * background[c];
+
+    if (inside) {
+        // add background
+        final_Ts[pix_id] = T; // transmittance at last gaussian in this pixel
+        final_index[pix_id] =
+            cur_idx; // index of in bin of last gaussian in this pixel
+        for (int c = 0; c < channels; ++c) {
+            out_img[pix_id * channels + c] = __half2float(pix_out[c]) + T * background[c];
+        }
     }
 }
 
@@ -285,11 +335,12 @@ __global__ void rasterize_forward(
     // first collect gaussians between range.x and range.y in batches
     // which gaussians to look through in this tile
     int2 range = tile_bins[tile_id];
-    int num_batches = (range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    const int block_size = block.size();
+    int num_batches = (range.y - range.x + block_size - 1) / block_size;
 
-    __shared__ int32_t id_batch[BLOCK_SIZE];
-    __shared__ float3 xy_opacity_batch[BLOCK_SIZE];
-    __shared__ float3 conic_batch[BLOCK_SIZE];
+    __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 conic_batch[MAX_BLOCK_SIZE];
 
     // current visibility left to render
     float T = 1.f;
@@ -304,13 +355,13 @@ __global__ void rasterize_forward(
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
-        if (__syncthreads_count(done) >= BLOCK_SIZE) {
+        if (__syncthreads_count(done) >= block_size) {
             break;
         }
 
         // each thread fetch 1 gaussian from front to back
         // index of gaussian to load
-        int batch_start = range.x + BLOCK_SIZE * b;
+        int batch_start = range.x + block_size * b;
         int idx = batch_start + tr;
         if (idx < range.y) {
             int32_t g_id = gaussian_ids_sorted[idx];
@@ -325,7 +376,7 @@ __global__ void rasterize_forward(
         block.sync();
 
         // process gaussians in the current batch for this pixel
-        int batch_size = min(BLOCK_SIZE, range.y - batch_start);
+        int batch_size = min(block_size, range.y - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
             const float3 conic = conic_batch[t];
             const float3 xy_opac = xy_opacity_batch[t];
@@ -501,14 +552,16 @@ __global__ void rasterize_forward_depth(
 }
 
 // device helper to approximate projected 2d cov from 3d mean and cov
-__device__ float3 project_cov3d_ewa(
+__device__ void project_cov3d_ewa(
     const float3& __restrict__ mean3d,
     const float* __restrict__ cov3d,
     const float* __restrict__ viewmat,
     const float fx,
     const float fy,
     const float tan_fovx,
-    const float tan_fovy
+    const float tan_fovy,
+    float3 &cov2d,
+    float &compensation
 ) {
     // clip the
     // we expect row major matrices as input, glm uses column major
@@ -566,7 +619,14 @@ __device__ float3 project_cov3d_ewa(
     glm::mat3 cov = T * V * glm::transpose(T);
 
     // add a little blur along axes and save upper triangular elements
-    return make_float3(float(cov[0][0]) + 0.3f, float(cov[0][1]), float(cov[1][1]) + 0.3f);
+    // and compute the density compensation factor due to the blurs
+    float c00 = cov[0][0], c11 = cov[1][1], c01 = cov[0][1];
+    float det_orig = c00 * c11 - c01 * c01;
+    cov2d.x = c00 + 0.3f;
+    cov2d.y = c01;
+    cov2d.z = c11 + 0.3f;
+    float det_blur = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
+    compensation = std::sqrt(std::max(0.f, det_orig / det_blur));
 }
 
 // device helper to get 3D covariance from scale and quat parameters

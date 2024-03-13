@@ -17,6 +17,7 @@ def map_gaussian_to_intersects(
     radii: Float[Tensor, "batch 1"],
     cum_tiles_hit: Float[Tensor, "batch 1"],
     tile_bounds: Tuple[int, int, int],
+    block_size: int,
 ) -> Tuple[Float[Tensor, "cum_tiles_hit 1"], Float[Tensor, "cum_tiles_hit 1"]]:
     """Map each gaussian intersection to a unique tile ID and depth value for sorting.
 
@@ -46,6 +47,7 @@ def map_gaussian_to_intersects(
         radii.contiguous(),
         cum_tiles_hit.contiguous(),
         tile_bounds,
+        block_size,
     )
     return (isect_ids, gaussian_ids)
 
@@ -131,6 +133,7 @@ def bin_and_sort_gaussians(
     radii: Float[Tensor, "batch 1"],
     cum_tiles_hit: Float[Tensor, "batch 1"],
     tile_bounds: Tuple[int, int, int],
+    block_size: int,
 ) -> Tuple[
     Float[Tensor, "num_intersects 1"],
     Float[Tensor, "num_intersects 1"],
@@ -164,7 +167,14 @@ def bin_and_sort_gaussians(
         - **tile_bins** (Tensor): range of gaussians hit per tile.
     """
     isect_ids, gaussian_ids = map_gaussian_to_intersects(
-        num_points, num_intersects, xys, depths, radii, cum_tiles_hit, tile_bounds
+        num_points,
+        num_intersects,
+        xys,
+        depths,
+        radii,
+        cum_tiles_hit,
+        tile_bounds,
+        block_size,
     )
     isect_ids_sorted, sorted_indices = torch.sort(isect_ids)
     gaussian_ids_sorted = torch.gather(gaussian_ids, 0, sorted_indices)

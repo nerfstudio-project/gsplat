@@ -14,12 +14,14 @@ __global__ void project_gaussians_forward_kernel(
     const float4 intrins,
     const dim3 img_size,
     const dim3 tile_bounds,
+    const unsigned block_width,
     const float clip_thresh,
     float* __restrict__ covs3d,
     float2* __restrict__ xys,
     float* __restrict__ depths,
     int* __restrict__ radii,
     float3* __restrict__ conics,
+    float* __restrict__ compensation,
     int32_t* __restrict__ num_tiles_hit
 );
 
@@ -75,14 +77,16 @@ __global__ void nd_rasterize_forward(
 );
 
 // device helper to approximate projected 2d cov from 3d mean and cov
-__device__ float3 project_cov3d_ewa(
+__device__ void project_cov3d_ewa(
     const float3 &mean3d,
     const float *cov3d,
     const float *viewmat,
     const float fx,
     const float fy,
     const float tan_fovx,
-    const float tan_fovy
+    const float tan_fovy,
+    float3 &cov2d,
+    float &comp
 );
 
 // device helper to get 3D covariance from scale and quat parameters
@@ -97,6 +101,7 @@ __global__ void map_gaussian_to_intersects(
     const int* __restrict__ radii,
     const int32_t* __restrict__ cum_tiles_hit,
     const dim3 tile_bounds,
+    const unsigned block_width,
     int64_t* __restrict__ isect_ids,
     int32_t* __restrict__ gaussian_ids
 );

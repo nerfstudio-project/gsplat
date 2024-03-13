@@ -29,15 +29,16 @@ inline __device__ void get_tile_bbox(
     const float pix_radius,
     const dim3 tile_bounds,
     uint2 &tile_min,
-    uint2 &tile_max
+    uint2 &tile_max,
+    const int block_size
 ) {
     // gets gaussian dimensions in tile space, i.e. the span of a gaussian in
     // tile_grid (image divided into tiles)
     float2 tile_center = {
-        pix_center.x / (float)BLOCK_X, pix_center.y / (float)BLOCK_Y
+        pix_center.x / (float)block_size, pix_center.y / (float)block_size
     };
     float2 tile_radius = {
-        pix_radius / (float)BLOCK_X, pix_radius / (float)BLOCK_Y
+        pix_radius / (float)block_size, pix_radius / (float)block_size
     };
     get_bbox(tile_center, tile_radius, tile_bounds, tile_min, tile_max);
 }
@@ -74,11 +75,26 @@ inline __device__ void cov2d_to_conic_vjp(
     // conic = inverse cov2d
     // df/d_cov2d = -conic * df/d_conic * conic
     glm::mat2 X = glm::mat2(conic.x, conic.y, conic.y, conic.z);
-    glm::mat2 G = glm::mat2(v_conic.x, v_conic.y, v_conic.y, v_conic.z);
+    glm::mat2 G = glm::mat2(v_conic.x, v_conic.y / 2.f, v_conic.y / 2.f, v_conic.z);
     glm::mat2 v_Sigma = -X * G * X;
     v_cov2d.x = v_Sigma[0][0];
     v_cov2d.y = v_Sigma[1][0] + v_Sigma[0][1];
     v_cov2d.z = v_Sigma[1][1];
+}
+
+inline __device__ void cov2d_to_compensation_vjp(
+    const float compensation, const float3 &conic, const float v_compensation, float3 &v_cov2d
+) {
+    // comp = sqrt(det(cov2d - 0.3 I) / det(cov2d))
+    // conic = inverse(cov2d)
+    // df / d_cov2d = df / d comp * 0.5 / comp * [ d comp^2 / d cov2d ]
+    // d comp^2 / d cov2d = (1 - comp^2) * conic - 0.3 I * det(conic)
+    float inv_det = conic.x * conic.z - conic.y * conic.y;
+    float one_minus_sqr_comp = 1 - compensation * compensation;
+    float v_sqr_comp = v_compensation * 0.5 / (compensation + 1e-6);
+    v_cov2d.x += v_sqr_comp * (one_minus_sqr_comp * conic.x - 0.3 * inv_det);
+    v_cov2d.y += 2 * v_sqr_comp * (one_minus_sqr_comp * conic.y);
+    v_cov2d.z += v_sqr_comp * (one_minus_sqr_comp * conic.z - 0.3 * inv_det);
 }
 
 // helper for applying R * p + T, expect mat to be ROW MAJOR
@@ -120,19 +136,19 @@ inline __device__ float3 project_pix_vjp(
     const float *mat, const float3 p, const dim3 img_size, const float2 v_xy
 ) {
     // ROW MAJOR mat
-    float4 p_hom = transform_4x4(mat, p);
-    float rw = 1.f / (p_hom.w + 1e-6f);
+    float4 t = transform_4x4(mat, p);
+    float rw = 1.f / (t.w + 1e-6f);
 
     float3 v_ndc = {0.5f * img_size.x * v_xy.x, 0.5f * img_size.y * v_xy.y};
-    float4 v_proj = {
-        v_ndc.x * rw, v_ndc.y * rw, 0., -(v_ndc.x + v_ndc.y) * rw * rw
+    float4 v_t = {
+        v_ndc.x * rw, v_ndc.y * rw, 0., -(v_ndc.x * t.x + v_ndc.y * t.y) * rw * rw
     };
     // df / d_world = df / d_cam * d_cam / d_world
-    // = v_proj * P[:3, :3]
+    // = v_t * mat[:3, :4]
     return {
-        mat[0] * v_proj.x + mat[4] * v_proj.y + mat[8] * v_proj.z,
-        mat[1] * v_proj.x + mat[5] * v_proj.y + mat[9] * v_proj.z,
-        mat[2] * v_proj.x + mat[6] * v_proj.y + mat[10] * v_proj.z
+        mat[0] * v_t.x + mat[4] * v_t.y + mat[8] * v_t.z + mat[12] * v_t.w,
+        mat[1] * v_t.x + mat[5] * v_t.y + mat[9] * v_t.z + mat[13] * v_t.w,
+        mat[2] * v_t.x + mat[6] * v_t.y + mat[10] * v_t.z + mat[14] * v_t.w,
     };
 }
 

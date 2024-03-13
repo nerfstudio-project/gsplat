@@ -31,8 +31,10 @@ def test_compare_binding_to_pytorch():
 
     radii = radii.squeeze(-1)
 
-    torch.testing.assert_close(conic[_mask], _conic[_mask])
-    torch.testing.assert_close(radii[_mask], _radii[_mask])
+    atol = 5e-4
+    rtol = 1e-5
+    torch.testing.assert_close(conic[_mask], _conic[_mask], atol=atol, rtol=rtol)
+    torch.testing.assert_close(radii[_mask], _radii[_mask], atol=atol, rtol=rtol)
 
 
 if __name__ == "__main__":

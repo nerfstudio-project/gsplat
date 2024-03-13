@@ -25,15 +25,21 @@ def test_map_gaussians():
     H, W = 512, 512
     clip_thresh = 0.01
 
-    BLOCK_X, BLOCK_Y = 16, 16
-    tile_bounds = (W + BLOCK_X - 1) // BLOCK_X, (H + BLOCK_Y - 1) // BLOCK_Y, 1
+    BLOCK_SIZE = 16
+    tile_bounds = (
+        (W + BLOCK_SIZE - 1) // BLOCK_SIZE,
+        (H + BLOCK_SIZE - 1) // BLOCK_SIZE,
+        1,
+    )
 
     (
         _cov3d,
+        _cov2d,
         _xys,
         _depths,
         _radii,
         _conics,
+        _compensation,
         _num_tiles_hit,
         _masks,
     ) = _torch_impl.project_gaussians_forward(
@@ -43,10 +49,9 @@ def test_map_gaussians():
         quats,
         viewmat,
         projmat,
-        fx,
-        fy,
+        (fx, fy, W / 2, H / 2),
         (H, W),
-        tile_bounds,
+        BLOCK_SIZE,
         clip_thresh,
     )
     _xys = _xys[_masks]
@@ -62,11 +67,18 @@ def test_map_gaussians():
     _depths = _depths.contiguous()
 
     _isect_ids, _gaussian_ids = _torch_impl.map_gaussian_to_intersects(
-        num_points, _xys, _depths, _radii, _cum_tiles_hit, tile_bounds
+        num_points, _xys, _depths, _radii, _cum_tiles_hit, tile_bounds, BLOCK_SIZE
     )
 
     isect_ids, gaussian_ids = map_gaussian_to_intersects(
-        num_points, _num_intersects, _xys, _depths, _radii, _cum_tiles_hit, tile_bounds
+        num_points,
+        _num_intersects,
+        _xys,
+        _depths,
+        _radii,
+        _cum_tiles_hit,
+        tile_bounds,
+        BLOCK_SIZE,
     )
 
     torch.testing.assert_close(gaussian_ids, _gaussian_ids)

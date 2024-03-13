@@ -22,9 +22,9 @@ def project_gaussians(
     cy: float,
     img_height: int,
     img_width: int,
-    tile_bounds: Tuple[int, int, int],
+    block_width: int,
     clip_thresh: float = 0.01,
-) -> Tuple[Tensor, Tensor, Tensor, Tensor, int, Tensor]:
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
     """This function projects 3D gaussians to 2D using the EWA splatting method for gaussian splatting.
 
     Note:
@@ -43,19 +43,21 @@ def project_gaussians(
        cy (float): principal point y.
        img_height (int): height of the rendered image.
        img_width (int): width of the rendered image.
-       tile_bounds (Tuple): tile dimensions as a len 3 tuple (tiles.x , tiles.y, 1).
+       block_width (int): side length of tiles inside projection/rasterization in pixels (always square). 16 is a good default value, must be between 2 and 16 inclusive.
        clip_thresh (float): minimum z depth threshold.
 
     Returns:
-        A tuple of {Tensor, Tensor, Tensor, Tensor, Tensor, Tensor}:
+        A tuple of {Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor}:
 
         - **xys** (Tensor): x,y locations of 2D gaussian projections.
         - **depths** (Tensor): z depth of gaussians.
         - **radii** (Tensor): radii of 2D gaussian projections.
         - **conics** (Tensor): conic parameters for 2D gaussian.
+        - **compensation** (Tensor): the density compensation for blurring 2D kernel
         - **num_tiles_hit** (Tensor): number of tiles hit per gaussian.
         - **cov3d** (Tensor): 3D covariances.
     """
+    assert block_width > 1 and block_width <= 16, "block_width must be between 2 and 16"
     return _ProjectGaussians.apply(
         means3d.contiguous(),
         scales.contiguous(),
@@ -69,7 +71,7 @@ def project_gaussians(
         cy,
         img_height,
         img_width,
-        tile_bounds,
+        block_width,
         clip_thresh,
     )
 
@@ -92,7 +94,7 @@ class _ProjectGaussians(Function):
         cy: float,
         img_height: int,
         img_width: int,
-        tile_bounds: Tuple[int, int, int],
+        block_width: int,
         clip_thresh: float = 0.01,
     ):
         num_points = means3d.shape[-2]
@@ -105,6 +107,7 @@ class _ProjectGaussians(Function):
             depths,
             radii,
             conics,
+            compensation,
             num_tiles_hit,
         ) = _C.project_gaussians_forward(
             num_points,
@@ -120,7 +123,7 @@ class _ProjectGaussians(Function):
             cy,
             img_height,
             img_width,
-            tile_bounds,
+            block_width,
             clip_thresh,
         )
 
@@ -144,12 +147,22 @@ class _ProjectGaussians(Function):
             cov3d,
             radii,
             conics,
+            compensation,
         )
 
-        return (xys, depths, radii, conics, num_tiles_hit, cov3d)
+        return (xys, depths, radii, conics, compensation, num_tiles_hit, cov3d)
 
     @staticmethod
-    def backward(ctx, v_xys, v_depths, v_radii, v_conics, v_num_tiles_hit, v_cov3d):
+    def backward(
+        ctx,
+        v_xys,
+        v_depths,
+        v_radii,
+        v_conics,
+        v_compensation,
+        v_num_tiles_hit,
+        v_cov3d,
+    ):
         (
             means3d,
             scales,
@@ -159,6 +172,7 @@ class _ProjectGaussians(Function):
             cov3d,
             radii,
             conics,
+            compensation,
         ) = ctx.saved_tensors
 
         (v_cov2d, v_cov3d, v_mean3d, v_scale, v_quat) = _C.project_gaussians_backward(
@@ -178,9 +192,11 @@ class _ProjectGaussians(Function):
             cov3d,
             radii,
             conics,
+            compensation,
             v_xys,
             v_depths,
             v_conics,
+            v_compensation,
         )
 
         # Return a gradient for each input.
@@ -209,7 +225,7 @@ class _ProjectGaussians(Function):
             None,
             # img_width: int,
             None,
-            # tile_bounds: Tuple[int, int, int],
+            # block_width: int,
             None,
             # clip_thresh,
             None,

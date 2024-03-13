@@ -37,7 +37,7 @@ def spherical_harmonics(
     degrees_to_use: int,
     viewdirs: Float[Tensor, "*batch 3"],
     coeffs: Float[Tensor, "*batch D C"],
-) -> Float[Tensor, "*batch D C"]:
+) -> Float[Tensor, "*batch C"]:
     """Compute spherical harmonics
 
     Note:

@@ -25,15 +25,21 @@ def test_get_tile_bin_edges():
     H, W = 512, 512
     clip_thresh = 0.01
 
-    BLOCK_X, BLOCK_Y = 16, 16
-    tile_bounds = (W + BLOCK_X - 1) // BLOCK_X, (H + BLOCK_Y - 1) // BLOCK_Y, 1
+    BLOCK_SIZE = 16
+    tile_bounds = (
+        (W + BLOCK_SIZE - 1) // BLOCK_SIZE,
+        (H + BLOCK_SIZE - 1) // BLOCK_SIZE,
+        1,
+    )
 
     (
         _cov3d,
+        _cov2d,
         _xys,
         _depths,
         _radii,
         _conics,
+        _compensation,
         _num_tiles_hit,
         _masks,
     ) = _torch_impl.project_gaussians_forward(
@@ -43,10 +49,9 @@ def test_get_tile_bin_edges():
         quats,
         viewmat,
         projmat,
-        fx,
-        fy,
+        (fx, fy, W / 2, H / 2),
         (H, W),
-        tile_bounds,
+        BLOCK_SIZE,
         clip_thresh,
     )
 
@@ -66,7 +71,7 @@ def test_get_tile_bin_edges():
         _isect_ids_unsorted,
         _gaussian_ids_unsorted,
     ) = _torch_impl.map_gaussian_to_intersects(
-        num_points, _xys, _depths, _radii, _cum_tiles_hit, tile_bounds
+        num_points, _xys, _depths, _radii, _cum_tiles_hit, tile_bounds, BLOCK_SIZE
     )
 
     # Sorting isect_ids_unsorted
