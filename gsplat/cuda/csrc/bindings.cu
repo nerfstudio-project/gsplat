@@ -734,6 +734,7 @@ std::
     rasterize_backward_depth_tensor(
         const unsigned img_height,
         const unsigned img_width,
+        const unsigned block_width,
         const torch::Tensor &gaussians_ids_sorted,
         const torch::Tensor &tile_bins,
         const torch::Tensor &xys,
@@ -762,11 +763,11 @@ std::
 
     const int num_points = xys.size(0);
     const dim3 tile_bounds = {
-        (img_width + BLOCK_X - 1) / BLOCK_X,
-        (img_height + BLOCK_Y - 1) / BLOCK_Y,
+        (img_width + block_width - 1) / block_width,
+        (img_height + block_width - 1) / block_width,
         1
     };
-    const dim3 block(BLOCK_X, BLOCK_Y, 1);
+    const dim3 block(block_width, block_width, 1);
     const dim3 img_size = {img_width, img_height, 1};
     const int channels = colors.size(1);
 

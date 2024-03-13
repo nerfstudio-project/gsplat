@@ -224,6 +224,7 @@ std::
     rasterize_backward_depth_tensor(
         const unsigned img_height,
         const unsigned img_width,
+        const unsigned block_width,
         const torch::Tensor &gaussians_ids_sorted,
         const torch::Tensor &tile_bins,
         const torch::Tensor &xys,

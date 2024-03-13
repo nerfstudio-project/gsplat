@@ -370,13 +370,14 @@ __global__ void rasterize_backward_depth_kernel(
     // first collect gaussians between range.x and range.y in batches
     // which gaussians to look through in this tile
     const int2 range = tile_bins[tile_id];
-    const int num_batches = (range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    const int block_size = block.size();
+    const int num_batches = (range.y - range.x + block_size - 1) / block_size;
 
-    __shared__ int32_t id_batch[BLOCK_SIZE];
-    __shared__ float3 xy_opacity_batch[BLOCK_SIZE];
-    __shared__ float3 conic_batch[BLOCK_SIZE];
-    __shared__ float3 rgbs_batch[BLOCK_SIZE];
-    __shared__ float depths_batch[BLOCK_SIZE];
+    __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 conic_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 rgbs_batch[MAX_BLOCK_SIZE];
+    __shared__ float depths_batch[MAX_BLOCK_SIZE];
 
     // df/d_out for this pixel
     const float3 v_out = v_output[pix_id];
@@ -395,8 +396,8 @@ __global__ void rasterize_backward_depth_kernel(
         // 0 index will be furthest back in batch
         // index of gaussian to load
         // batch end is the index of the last gaussian in the batch
-        const int batch_end = range.y - 1 - BLOCK_SIZE * b;
-        int batch_size = min(BLOCK_SIZE, batch_end + 1 - range.x);
+        const int batch_end = range.y - 1 - block_size * b;
+        int batch_size = min(block_size, batch_end + 1 - range.x);
         const int idx = batch_end - tr;
         if (idx >= range.x) {
             int32_t g_id = gaussian_ids_sorted[idx];

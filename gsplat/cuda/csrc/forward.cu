@@ -462,11 +462,12 @@ __global__ void rasterize_forward_depth(
     // first collect gaussians between range.x and range.y in batches
     // which gaussians to look through in this tile
     int2 range = tile_bins[tile_id];
-    int num_batches = (range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    const int block_size = block.size();
+    int num_batches = (range.y - range.x + block_size - 1) / block_size;
 
-    __shared__ int32_t id_batch[BLOCK_SIZE];
-    __shared__ float3 xy_opacity_batch[BLOCK_SIZE];
-    __shared__ float3 conic_batch[BLOCK_SIZE];
+    __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 conic_batch[MAX_BLOCK_SIZE];
 
     // current visibility left to render
     float T = 1.f;
@@ -482,13 +483,13 @@ __global__ void rasterize_forward_depth(
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
-        if (__syncthreads_count(done) >= BLOCK_SIZE) {
+        if (__syncthreads_count(done) >= block_size) {
             break;
         }
 
         // each thread fetch 1 gaussian from front to back
         // index of gaussian to load
-        int batch_start = range.x + BLOCK_SIZE * b;
+        int batch_start = range.x + block_size * b;
         int idx = batch_start + tr;
         if (idx < range.y) {
             int32_t g_id = gaussian_ids_sorted[idx];
@@ -503,7 +504,7 @@ __global__ void rasterize_forward_depth(
         block.sync();
 
         // process gaussians in the current batch for this pixel
-        int batch_size = min(BLOCK_SIZE, range.y - batch_start);
+        int batch_size = min(block_size, range.y - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
             const float3 conic = conic_batch[t];
             const float3 xy_opac = xy_opacity_batch[t];
