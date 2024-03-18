@@ -266,6 +266,8 @@ __global__ void nd_rasterize_forward(
 
             const float next_T = T * (1.f - alpha);
             if (next_T <= 1e-4f) {
+                // we want to render the last gaussian that contributes and note
+                // that here idx > range.x so we don't underflow
                 done = true;
                 break;
             }
