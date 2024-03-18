@@ -200,14 +200,10 @@ __global__ void nd_rasterize_forward(
     float py = (float)i;
     int32_t pix_id = i * img_size.x + j;
 
-    // return if out of bounds
     // keep not rasterizing threads around for reading data
     bool inside = (i < img_size.y && j < img_size.x);
     bool done = !inside;
 
-    // have all threads in tile process the same gaussians in batches
-    // first collect gaussians between range.x and range.y in batches
-    // which gaussians to look through in this tile
     int2 range = tile_bins[tile_id];
     const int block_size = block.size();
     int num_batches = (range.y - range.x + block_size - 1) / block_size;
@@ -217,6 +213,7 @@ __global__ void nd_rasterize_forward(
     float3* xy_opacity_batch = (float3*)&id_batch[block_size];
     float3* conic_batch = (float3*)&xy_opacity_batch[block_size];
     __half* color_out_batch = (__half*)&conic_batch[block_size];
+    #pragma unroll
     for(int c = 0; c < channels; ++c)
         color_out_batch[block.thread_rank() * channels + c] = __float2half(0.f);
 
@@ -230,7 +227,7 @@ __global__ void nd_rasterize_forward(
     // designated pixel
     int tr = block.thread_rank();
     __half* pix_out = &color_out_batch[block.thread_rank() * channels];
-    // float* pix_out = out_img + pix_id * channels;
+
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
@@ -238,7 +235,7 @@ __global__ void nd_rasterize_forward(
             break;
         }
         // each thread fetch 1 gaussian from front to back
-        // index of gaussian to load
+
         int batch_start = range.x + block_size * b;
         int idx = batch_start + tr;
         if (idx < range.y) {
@@ -253,7 +250,6 @@ __global__ void nd_rasterize_forward(
         // wait for other threads to collect the gaussians in batch
         block.sync();
 
-        // process gaussians in the current batch for this pixel
         int batch_size = min(block_size, range.y - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
             const float3 conic = conic_batch[t];
@@ -269,7 +265,7 @@ __global__ void nd_rasterize_forward(
             }
 
             const float next_T = T * (1.f - alpha);
-            if (next_T <= 1e-4f) { // this pixel is done
+            if (next_T <= 1e-4f) {
                 // we want to render the last gaussian that contributes and note
                 // that here idx > range.x so we don't underflow
                 done = true;
@@ -278,6 +274,7 @@ __global__ void nd_rasterize_forward(
 
             int32_t g = id_batch[t];
             const float vis = alpha * T;
+            #pragma unroll
             for (int c = 0; c < channels; ++c) {
                 pix_out[c] = __hadd(pix_out[c], __float2half(colors[channels * g + c] * vis));
             }
@@ -289,8 +286,8 @@ __global__ void nd_rasterize_forward(
     if (inside) {
         // add background
         final_Ts[pix_id] = T; // transmittance at last gaussian in this pixel
-        final_index[pix_id] =
-            cur_idx; // index of in bin of last gaussian in this pixel
+        final_index[pix_id] = cur_idx; // index of in bin of last gaussian in this pixel
+        #pragma unroll
         for (int c = 0; c < channels; ++c) {
             out_img[pix_id * channels + c] = __half2float(pix_out[c]) + T * background[c];
         }

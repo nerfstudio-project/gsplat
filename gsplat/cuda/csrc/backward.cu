@@ -19,7 +19,6 @@ inline __device__ void warpSum2(float2& val, cg::thread_block_tile<32>& tile){
 inline __device__ void warpSum(float& val, cg::thread_block_tile<32>& tile){
     val = cg::reduce(tile, val, cg::plus<float>());
 }
-
 __global__ void nd_rasterize_backward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
@@ -64,6 +63,7 @@ __global__ void nd_rasterize_backward_kernel(
     extern __shared__ half workspace[];
 
     half *S = (half*)(&workspace[channels * tr]);
+    #pragma unroll
     for(int c=0; c<channels; ++c){
         S[c] = __float2half(0.f);
     }
@@ -79,15 +79,11 @@ __global__ void nd_rasterize_backward_kernel(
         const float sigma =
             0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
             conic.y * delta.x * delta.y;
-        if (sigma < 0.f) {
-            valid = 0;
-        }
+        valid &= (sigma >= 0.f);
         const float opac = opacities[g];
         const float vis = __expf(-sigma);
         const float alpha = min(0.99f, opac * vis);
-        if (alpha < 1.f / 255.f) {
-            valid = 0;
-        }
+        valid &= (alpha >= 1.f / 255.f);
         if(!warp.any(valid)){
             continue;
         }
@@ -125,14 +121,12 @@ __global__ void nd_rasterize_backward_kernel(
         warpSum(v_opacity_local, warp);
         if (warp.thread_rank() == 0) {
             float* v_conic_ptr = (float*)(v_conic);
+            float* v_xy_ptr = (float*)(v_xy);
             atomicAdd(v_conic_ptr + 3*g + 0, v_conic_local.x);
             atomicAdd(v_conic_ptr + 3*g + 1, v_conic_local.y);
             atomicAdd(v_conic_ptr + 3*g + 2, v_conic_local.z);
-            
-            float* v_xy_ptr = (float*)(v_xy);
             atomicAdd(v_xy_ptr + 2*g + 0, v_xy_local.x);
             atomicAdd(v_xy_ptr + 2*g + 1, v_xy_local.y);
-            
             atomicAdd(v_opacity + g, v_opacity_local);
         }
     }
