@@ -1,18 +1,19 @@
-from typing import Any
-import torch
-from .project_gaussians import project_gaussians
-from .rasterize import rasterize_gaussians
-from .utils import (
-    map_gaussian_to_intersects,
-    bin_and_sort_gaussians,
-    compute_cumulative_intersects,
-    compute_cov2d_bounds,
-    get_tile_bin_edges,
-)
-from .sh import spherical_harmonics
-from .version import __version__
 import warnings
+from typing import Any
 
+import torch
+
+from .project_gaussians import project_gaussians
+from .rasterize import rasterize_gaussians, rasterize_indices
+from .sh import spherical_harmonics
+from .utils import (
+    bin_and_sort_gaussians,
+    compute_cov2d_bounds,
+    compute_cumulative_intersects,
+    get_tile_bin_edges,
+    map_gaussian_to_intersects,
+)
+from .version import __version__
 
 __all__ = [
     "__version__",
@@ -20,6 +21,7 @@ __all__ = [
     "rasterize_gaussians",
     "spherical_harmonics",
     # utils
+    "rasterize_indices",
     "bin_and_sort_gaussians",
     "compute_cumulative_intersects",
     "compute_cov2d_bounds",
