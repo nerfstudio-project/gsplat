@@ -24,6 +24,7 @@ def rasterize_gaussians(
     block_width: int,
     background: Optional[Float[Tensor, "channels"]] = None,
     return_alpha: Optional[bool] = False,
+    return_depth: Optional[bool] = False,
 ) -> Tensor:
     """Rasterizes 2D gaussians by sorting and binning gaussian intersections for each tile and returns an N-dimensional output using alpha-compositing.
 
@@ -43,12 +44,14 @@ def rasterize_gaussians(
         block_width (int): MUST match whatever block width was used in the project_gaussians call. integer number of pixels between 2 and 16 inclusive
         background (Tensor): background color
         return_alpha (bool): whether to return alpha channel
+        return_depth (bool): wheter to return depth image
 
     Returns:
         A Tensor:
 
         - **out_img** (Tensor): N-dimensional rendered output image.
         - **out_alpha** (Optional[Tensor]): Alpha channel of the rendered output image.
+        - **out_depth** (Optional[Tensor]): Depth image.
     """
     assert block_width > 1 and block_width <= 16, "block_width must be between 2 and 16"
     if colors.dtype == torch.uint8:
@@ -83,6 +86,7 @@ def rasterize_gaussians(
         block_width,
         background.contiguous(),
         return_alpha,
+        return_depth,
     )
 
 
@@ -104,6 +108,7 @@ class _RasterizeGaussians(Function):
         block_width: int,
         background: Optional[Float[Tensor, "channels"]] = None,
         return_alpha: Optional[bool] = False,
+        return_depth: Optional[bool] = False,
     ) -> Tensor:
         num_points = xys.size(0)
         tile_bounds = (
@@ -143,81 +148,47 @@ class _RasterizeGaussians(Function):
                 block_width,
             )
             if colors.shape[-1] == 3:
-                rasterize_fn = _C.rasterize_forward
+                if return_depth:
+                    rasterize_fn = _C.rasterize_forward_depth
+                else:
+                    rasterize_fn = _C.rasterize_forward
             else:
                 rasterize_fn = _C.nd_rasterize_forward
 
-            out_img, final_Ts, final_idx = rasterize_fn(
-                tile_bounds,
-                block,
-                img_size,
-                gaussian_ids_sorted,
-                tile_bins,
-                xys,
-                conics,
-                colors,
-                opacity,
-                background,
-            )
+            if not return_depth:
+                out_img, final_Ts, final_idx = rasterize_fn(
+                    tile_bounds,
+                    block,
+                    img_size,
+                    gaussian_ids_sorted,
+                    tile_bins,
+                    xys,
+                    conics,
+                    colors,
+                    opacity,
+                    background,
+                )
+            else:
+                out_img, out_depth, final_Ts, final_idx = rasterize_fn(
+                    tile_bounds,
+                    block,
+                    img_size,
+                    gaussian_ids_sorted,
+                    tile_bins,
+                    xys,
+                    depths,
+                    conics,
+                    colors,
+                    opacity,
+                    background,
+                )
 
         ctx.img_width = img_width
         ctx.img_height = img_height
         ctx.num_intersects = num_intersects
         ctx.block_width = block_width
-        ctx.save_for_backward(
-            gaussian_ids_sorted,
-            tile_bins,
-            xys,
-            conics,
-            colors,
-            opacity,
-            background,
-            final_Ts,
-            final_idx,
-        )
-
-        if return_alpha:
-            out_alpha = 1 - final_Ts
-            return out_img, out_alpha
-        else:
-            return out_img
-
-    @staticmethod
-    def backward(ctx, v_out_img, v_out_alpha=None):
-        img_height = ctx.img_height
-        img_width = ctx.img_width
-        num_intersects = ctx.num_intersects
-
-        if v_out_alpha is None:
-            v_out_alpha = torch.zeros_like(v_out_img[..., 0])
-
-        (
-            gaussian_ids_sorted,
-            tile_bins,
-            xys,
-            conics,
-            colors,
-            opacity,
-            background,
-            final_Ts,
-            final_idx,
-        ) = ctx.saved_tensors
-
-        if num_intersects < 1:
-            v_xy = torch.zeros_like(xys)
-            v_conic = torch.zeros_like(conics)
-            v_colors = torch.zeros_like(colors)
-            v_opacity = torch.zeros_like(opacity)
-
-        else:
-            if colors.shape[-1] == 3:
-                rasterize_fn = _C.rasterize_backward
-            else:
-                rasterize_fn = _C.nd_rasterize_backward
-            v_xy, v_conic, v_colors, v_opacity = rasterize_fn(
-                img_height,
-                img_width,
-                ctx.block_width,
+        if not return_depth:
+            ctx.save_for_backward(
                 gaussian_ids_sorted,
                 tile_bins,
                 xys,
@@ -227,13 +198,126 @@ class _RasterizeGaussians(Function):
                 background,
                 final_Ts,
                 final_idx,
-                v_out_img,
-                v_out_alpha,
             )
+        else:
+            ctx.save_for_backward(
+                gaussian_ids_sorted,
+                tile_bins,
+                xys,
+                depths,
+                conics,
+                colors,
+                opacity,
+                background,
+                final_Ts,
+                final_idx,
+            )
+
+        if return_alpha:
+            out_alpha = 1 - final_Ts
+            if not return_depth:
+                return out_img, out_alpha
+            else:
+                return out_img, out_alpha, out_depth
+        elif not return_depth:
+            return out_img
+        else:
+            return out_img, None, out_depth
+
+    @staticmethod
+    def backward(ctx, v_out_img, v_out_alpha=None, v_out_depth=None):
+        img_height = ctx.img_height
+        img_width = ctx.img_width
+        num_intersects = ctx.num_intersects
+
+        if v_out_alpha is None:
+            v_out_alpha = torch.zeros_like(v_out_img[..., 0])
+
+        if v_out_depth is None:
+            v_depth = None
+            (
+                gaussian_ids_sorted,
+                tile_bins,
+                xys,
+                conics,
+                colors,
+                opacity,
+                background,
+                final_Ts,
+                final_idx,
+            ) = ctx.saved_tensors
+            if num_intersects < 1:
+                v_xy = torch.zeros_like(xys)
+                v_conic = torch.zeros_like(conics)
+                v_colors = torch.zeros_like(colors)
+                v_opacity = torch.zeros_like(opacity)
+            else:
+                if colors.shape[-1] == 3:
+                    rasterize_fn = _C.rasterize_backward
+                else:
+                    rasterize_fn = _C.nd_rasterize_backward
+                v_xy, v_conic, v_colors, v_opacity = rasterize_fn(
+                    img_height,
+                    img_width,
+                ctx.block_width,
+                    gaussian_ids_sorted,
+                    tile_bins,
+                    xys,
+                    conics,
+                    colors,
+                    opacity,
+                    background,
+                    final_Ts,
+                    final_idx,
+                    v_out_img,
+                    v_out_alpha,
+                )
+        else:
+            (
+                gaussian_ids_sorted,
+                tile_bins,
+                xys,
+                depths,
+                conics,
+                colors,
+                opacity,
+                background,
+                final_Ts,
+                final_idx,
+            ) = ctx.saved_tensors
+            if num_intersects < 1:
+                v_xy = torch.zeros_like(xys)
+                v_conic = torch.zeros_like(conics)
+                v_colors = torch.zeros_like(colors)
+                v_opacity = torch.zeros_like(opacity)
+                v_depth = torch.zeros_like(depths)
+            else:
+                (
+                    v_xy,
+                    v_conic,
+                    v_colors,
+                    v_depth,
+                    v_opacity,
+                ) = _C.rasterize_backward_depth(
+                    img_height,
+                    img_width,
+                    gaussian_ids_sorted.contiguous(),
+                    tile_bins,
+                    xys.contiguous(),
+                    depths.contiguous(),
+                    conics.contiguous(),
+                    colors.contiguous(),
+                    opacity.contiguous(),
+                    background.contiguous(),
+                    final_Ts.contiguous(),
+                    final_idx.contiguous(),
+                    v_out_img.contiguous(),
+                    v_out_depth.contiguous(),
+                )
 
         return (
             v_xy,  # xys
-            None,  # depths
+            v_depth,  # depths
             None,  # radii
             v_conic,  # conics
             None,  # num_tiles_hit
@@ -244,4 +328,5 @@ class _RasterizeGaussians(Function):
             None,  # block_width
             None,  # background
             None,  # return_alpha
+            None,  # return_depth
         )
