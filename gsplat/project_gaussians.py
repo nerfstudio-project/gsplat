@@ -223,7 +223,9 @@ class _ProjectGaussians(Function):
             # gradent w.r.t. view matrix rotation
             for j in range(3):
                 for l in range(3):
-                    v_viewmat[..., j, l] = torch.dot(v_mean3d_cam[..., j], means3d[..., l])
+                    v_viewmat[..., j, l] = torch.dot(
+                        v_mean3d_cam[..., j], means3d[..., l]
+                    )
         else:
             v_viewmat = None
 
