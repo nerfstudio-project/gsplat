@@ -2,6 +2,7 @@
 
 from typing import Optional, Tuple
 
+import torch
 from jaxtyping import Float
 from torch import Tensor
 from torch.autograd import Function
@@ -195,6 +196,41 @@ class _ProjectGaussians(Function):
             v_compensation,
         )
 
+        if viewmat.requires_grad:
+            v_viewmat = torch.zeros_like(viewmat)
+            R = viewmat[..., :3, :3]
+
+            # Denote ProjectGaussians for a single Gaussian (mean3d, q, s)
+            # viemwat = [R, t] as:
+            #
+            #   f(mean3d, q, s, R, t, intrinsics)
+            #       = g(R @ mean3d + t,
+            #           R @ cov3d_world(q, s) @ R^T ))
+            #
+            # Then, the Jacobian w.r.t., t is:
+            #
+            #   d f / d t = df / d mean3d @ R^T
+            #
+            # and, in the context of fine tuning camera poses, it is reasonable
+            # to assume that
+            #
+            #   d f / d R_ij =~ \sum_l d f / d t_l * d (R @ mean3d)_l / d R_ij
+            #                = d f / d_t_i * mean3d[j]
+            #
+            # Gradients for R and t can then be obtained by summing over
+            # all the Gaussians.
+            v_mean3d_cam = torch.matmul(v_mean3d, R.transpose(-1, -2))
+
+            # gradient w.r.t. view matrix translation
+            v_viewmat[..., :3, 3] = v_mean3d_cam.sum(-2)
+
+            # gradent w.r.t. view matrix rotation
+            for j in range(3):
+                for l in range(3):
+                    v_viewmat[..., j, l] = torch.dot(v_mean3d_cam[..., j], means3d[..., l])
+        else:
+            v_viewmat = None
+
         # Return a gradient for each input.
         return (
             # means3d: Float[Tensor, "*batch 3"],
@@ -206,7 +242,7 @@ class _ProjectGaussians(Function):
             # quats: Float[Tensor, "*batch 4"],
             v_quat,
             # viewmat: Float[Tensor, "4 4"],
-            None,
+            v_viewmat,
             # projmat: Float[Tensor, "4 4"],
             None,
             # fx: float,
