@@ -20,7 +20,6 @@ def test_map_gaussians():
     quats = torch.randn((num_points, 4), device=device)
     quats /= torch.linalg.norm(quats, dim=-1, keepdim=True)
     viewmat = torch.eye(4, device=device)
-    projmat = torch.eye(4, device=device)
     fx, fy = 3.0, 3.0
     H, W = 512, 512
     clip_thresh = 0.01
@@ -48,7 +47,6 @@ def test_map_gaussians():
         glob_scale,
         quats,
         viewmat,
-        projmat,
         (fx, fy, W / 2, H / 2),
         (H, W),
         BLOCK_SIZE,
