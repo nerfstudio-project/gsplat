@@ -77,7 +77,6 @@ def test_project_gaussians_forward():
         glob_scale,
         quats,
         viewmat,
-        None, # deprecated projmat/fullmat
         fx,
         fy,
         cx,
