@@ -16,7 +16,6 @@ def project_gaussians(
     glob_scale: float,
     quats: Float[Tensor, "*batch 4"],
     viewmat: Float[Tensor, "4 4"],
-    projmat: Optional[Float[Tensor, "4 4"]],
     fx: float,
     fy: float,
     cx: float,
@@ -37,7 +36,6 @@ def project_gaussians(
        glob_scale (float): A global scaling factor applied to the scene.
        quats (Tensor): rotations in quaternion [w,x,y,z] format.
        viewmat (Tensor): view matrix for rendering.
-       projmat (Tensor): DEPRECATED and ignored. Set to None
        fx (float): focal length x.
        fy (float): focal length y.
        cx (float): principal point x.
@@ -65,7 +63,6 @@ def project_gaussians(
         glob_scale,
         quats.contiguous(),
         viewmat.contiguous(),
-        None,
         fx,
         fy,
         cx,
@@ -88,7 +85,6 @@ class _ProjectGaussians(Function):
         glob_scale: float,
         quats: Float[Tensor, "*batch 4"],
         viewmat: Float[Tensor, "4 4"],
-        projmat: Optional[Float[Tensor, "4 4"]],
         fx: float,
         fy: float,
         cx: float,
@@ -227,7 +223,9 @@ class _ProjectGaussians(Function):
             # gradent w.r.t. view matrix rotation
             for j in range(3):
                 for l in range(3):
-                    v_viewmat[..., j, l] = torch.dot(v_mean3d_cam[..., j], means3d[..., l])
+                    v_viewmat[..., j, l] = torch.dot(
+                        v_mean3d_cam[..., j], means3d[..., l]
+                    )
         else:
             v_viewmat = None
 
@@ -243,8 +241,6 @@ class _ProjectGaussians(Function):
             v_quat,
             # viewmat: Float[Tensor, "4 4"],
             v_viewmat,
-            # projmat: Float[Tensor, "4 4"],
-            None,
             # fx: float,
             None,
             # fy: float,

@@ -104,7 +104,6 @@ class SimpleTrainer:
                 1,
                 self.quats,
                 self.viewmat,
-                self.viewmat,
                 self.focal,
                 self.focal,
                 self.W / 2,
