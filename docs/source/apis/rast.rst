@@ -3,34 +3,32 @@ RasterizeGaussians
 
 .. currentmodule:: gsplat
 
-Given 2D gaussians that are parametrized by their means :math:`μ'` and covariances :math:`Σ'` as well as their radii and conic parameters,
-the :func:`gsplat.rasterize_gaussians` function first sorts each gaussian such that all gaussians within the bounds of a tile are grouped and sorted by increasing depth :math:`z`,
-and then renders each pixel within a tile with alpha-compositing. 
+Given 2D Gaussians that are parametrized by their means :math:`μ'`, covariances :math:`Σ'`, and depths :math:`z`,
+the :func:`gsplat.rasterize_gaussians` function gives a unique ID to each Gaussian depending on what tile it hits and its depth value, sorts all Gaussians by depth in a single global sort,
+and then renders each pixel within a tile by alpha-compositing each Gaussian ovelapping the pixel. 
 
-The discrete rendering equation is given by: 
+The color at a pixel :math:`\hat{C}` is given by the discrete volume rendering equation: 
 
 .. math::
 
-    \sum_{t=n}^{N}c_{n}·α_{n}·T_{n}
+    \hat{C}  = \sum_{i \in N} c_{i} \alpha_{i} T_{i}
 
 Where 
 
 .. math::
 
-    T_{n} = \prod_{t=m}^{M}(1-α_{m})
+    T_{i} = \prod_{j=1}^{i-1}(1-\alpha_{j})
 
-And 
+is the accumulated transmittance at the pixel :math:`p` and 
 
 .. math::
 
-    α_{n} = o_{n} \exp(-σ_{n})
-    
-    σ_{n} = \frac{1}{2} ∆^{⊤}_{n} Σ'^{−1} ∆_{n}
+    {\alpha_i}  = o_i \cdot \exp{\left(\frac{1}{2}({p}-{\mu}_i)^\intercal {\Sigma}_i^{-1}({p}-{\mu}_i)\right)}
 
 
-:math:`σ ∈ R^{2}` is the Mahalanobis distance (here referred to as sigma) which measures how many standard deviations away the center of a gaussian and the rendered pixel center is which is denoted by delta :math:`∆.`
+is referred to as the alpha or density term in some work. 
 
-The python bindings support conventional 3-channel RGB rasterization as well as N-dimensional rasterization with :func:`gsplat.rasterize_gaussians`.
+The Python bindings support conventional 3-channel RGB rasterization as well as N-dimensional rasterization with :func:`gsplat.rasterize_gaussians`.
 
 
 .. autofunction:: rasterize_gaussians

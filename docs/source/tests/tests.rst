@@ -13,9 +13,7 @@ The tests include:
     :caption: tests/
 
     ./test_cov2d_bounds.py
-    ./test_cumulative_intersects.py
     ./test_get_tile_bin_edges.py
     ./test_map_gaussians.py
     ./test_project_gaussians
-    ./test_rasterize_forward_kernel.py
     ./test_sh.py
