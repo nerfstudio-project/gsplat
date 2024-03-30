@@ -44,8 +44,8 @@ __global__ void nd_rasterize_backward_kernel(
     int32_t tile_id = blockIdx.y * tile_bounds.x + blockIdx.x;
     unsigned i = blockIdx.y * blockDim.y + threadIdx.y;
     unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
-    float px = (float)j;
-    float py = (float)i;
+    float px = (float)j + 0.5;
+    float py = (float)i + 0.5;
     const int32_t pix_id = min(i * img_size.x + j, img_size.x * img_size.y - 1);
 
     // keep not rasterizing threads around for reading data
@@ -159,8 +159,8 @@ __global__ void rasterize_backward_kernel(
     unsigned j =
         block.group_index().x * block.group_dim().x + block.thread_index().x;
 
-    const float px = (float)j;
-    const float py = (float)i;
+    const float px = (float)j + 0.5;
+    const float py = (float)i + 0.5;
     // clamp this value to the last pixel
     const int32_t pix_id = min(i * img_size.x + j, img_size.x * img_size.y - 1);
 
