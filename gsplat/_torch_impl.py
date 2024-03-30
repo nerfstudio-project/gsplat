@@ -142,7 +142,7 @@ def scale_rot_to_cov3d(scale: Tensor, glob_scale: float, quat: Tensor) -> Tensor
     assert scale.shape[-1] == 3, scale.shape
     assert quat.shape[-1] == 4, quat.shape
     assert scale.shape[:-1] == quat.shape[:-1], (scale.shape, quat.shape)
-    R = normalized_quat_to_rotmat(quat)  # (..., 3, 3)
+    R = quat_to_rotmat(quat)  # (..., 3, 3)
     M = R * glob_scale * scale[..., None, :]  # (..., 3, 3)
     # TODO: save upper right because symmetric
     return M @ M.transpose(-1, -2)  # (..., 3, 3)

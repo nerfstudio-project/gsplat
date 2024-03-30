@@ -44,7 +44,6 @@ def test_project_gaussians_forward():
     scales = torch.rand((num_points, 3), device=device) + 0.2
     glob_scale = 0.1
     quats = torch.randn((num_points, 4), device=device)
-    quats /= torch.linalg.norm(quats, dim=-1, keepdim=True)
 
     H, W = 512, 512
     cx, cy = W / 2, H / 2
