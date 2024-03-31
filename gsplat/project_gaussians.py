@@ -34,7 +34,7 @@ def project_gaussians(
        means3d (Tensor): xyzs of gaussians.
        scales (Tensor): scales of the gaussians.
        glob_scale (float): A global scaling factor applied to the scene.
-       quats (Tensor): rotations in quaternion [w,x,y,z] format.
+       quats (Tensor): rotations in normalized quaternion [w,x,y,z] format.
        viewmat (Tensor): view matrix for rendering.
        fx (float): focal length x.
        fy (float): focal length y.
@@ -57,6 +57,7 @@ def project_gaussians(
         - **cov3d** (Tensor): 3D covariances.
     """
     assert block_width > 1 and block_width <= 16, "block_width must be between 2 and 16"
+    assert (quats.norm(dim=-1) - 1 < 1e-6).all(), "quats must be normalized"
     return _ProjectGaussians.apply(
         means3d.contiguous(),
         scales.contiguous(),
