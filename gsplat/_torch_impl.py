@@ -293,7 +293,7 @@ def project_gaussians_forward(
     tan_fovx = 0.5 * img_size[0] / fx
     tan_fovy = 0.5 * img_size[1] / fy
     p_view, is_close = clip_near_plane(means3d, viewmat, clip_thresh)
-    cov3d = scale_rot_to_cov3d(scales, glob_scale, quats)
+    cov3d = scale_rot_to_cov3d(scales, glob_scale, F.normalize(quats, dim=-1))
     cov2d, compensation = project_cov3d_ewa(
         means3d, cov3d, viewmat, fx, fy, tan_fovx, tan_fovy
     )
