@@ -118,15 +118,15 @@ def normalized_quat_to_rotmat(quat: Tensor) -> Tensor:
     w, x, y, z = torch.unbind(quat, dim=-1)
     mat = torch.stack(
         [
-            1 - 2 * (y ** 2 + z ** 2),
+            1 - 2 * (y**2 + z**2),
             2 * (x * y - w * z),
             2 * (x * z + w * y),
             2 * (x * y + w * z),
-            1 - 2 * (x ** 2 + z ** 2),
+            1 - 2 * (x**2 + z**2),
             2 * (y * z - w * x),
             2 * (x * z - w * y),
             2 * (y * z + w * x),
-            1 - 2 * (x ** 2 + y ** 2),
+            1 - 2 * (x**2 + y**2),
         ],
         dim=-1,
     )
@@ -165,7 +165,7 @@ def project_cov3d_ewa(
     t = torch.einsum("...ij,...j->...i", W, mean3d) + p  # (..., 3)
 
     rz = 1.0 / t[..., 2]  # (...,)
-    rz2 = rz ** 2  # (...,)
+    rz2 = rz**2  # (...,)
 
     lim_x = 1.3 * torch.tensor([tan_fovx], device=mean3d.device)
     lim_y = 1.3 * torch.tensor([tan_fovy], device=mean3d.device)
@@ -220,8 +220,8 @@ def compute_cov2d_bounds(cov2d_mat: Tensor):
         dim=-1,
     )  # (..., 3)
     b = (cov2d[..., 0, 0] + cov2d[..., 1, 1]) / 2  # (...,)
-    v1 = b + torch.sqrt(torch.clamp(b ** 2 - det, min=0.1))  # (...,)
-    v2 = b - torch.sqrt(torch.clamp(b ** 2 - det, min=0.1))  # (...,)
+    v1 = b + torch.sqrt(torch.clamp(b**2 - det, min=0.1))  # (...,)
+    v2 = b - torch.sqrt(torch.clamp(b**2 - det, min=0.1))  # (...,)
     radius = torch.ceil(3.0 * torch.sqrt(torch.max(v1, v2)))  # (...,)
     radius_all = torch.zeros(*cov2d_mat.shape[:-2], device=cov2d_mat.device)
     conic_all = torch.zeros(*cov2d_mat.shape[:-2], 3, device=cov2d_mat.device)

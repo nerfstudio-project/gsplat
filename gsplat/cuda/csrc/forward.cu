@@ -195,8 +195,8 @@ __global__ void nd_rasterize_forward(
     unsigned j =
         block.group_index().x * block.group_dim().x + block.thread_index().x;
 
-    float px = (float)j;
-    float py = (float)i;
+    float px = (float)j + 0.5;
+    float py = (float)i + 0.5;
     int32_t pix_id = i * img_size.x + j;
 
     // keep not rasterizing threads around for reading data
@@ -318,8 +318,8 @@ __global__ void rasterize_forward(
     unsigned j =
         block.group_index().x * block.group_dim().x + block.thread_index().x;
 
-    float px = (float)j;
-    float py = (float)i;
+    float px = (float)j + 0.5;
+    float py = (float)i + 0.5;
     int32_t pix_id = i * img_size.x + j;
 
     // return if out of bounds
