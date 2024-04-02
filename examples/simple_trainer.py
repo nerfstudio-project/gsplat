@@ -102,7 +102,7 @@ class SimpleTrainer:
                 self.means,
                 self.scales,
                 1,
-                self.quats,
+                self.quats / self.quats.norm(dim=-1, keepdim=True),
                 self.viewmat,
                 self.focal,
                 self.focal,

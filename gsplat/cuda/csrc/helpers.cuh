@@ -148,13 +148,10 @@ inline __device__ float3 project_pix_vjp(
 
 inline __device__ glm::mat3 quat_to_rotmat(const float4 quat) {
     // quat to rotation matrix
-    float s = rsqrtf(
-        quat.w * quat.w + quat.x * quat.x + quat.y * quat.y + quat.z * quat.z
-    );
-    float w = quat.x * s;
-    float x = quat.y * s;
-    float y = quat.z * s;
-    float z = quat.w * s;
+    float w = quat.x;
+    float x = quat.y;
+    float y = quat.z;
+    float z = quat.w;
 
     // glm matrices are column-major
     return glm::mat3(
@@ -172,13 +169,10 @@ inline __device__ glm::mat3 quat_to_rotmat(const float4 quat) {
 
 inline __device__ float4
 quat_to_rotmat_vjp(const float4 quat, const glm::mat3 v_R) {
-    float s = rsqrtf(
-        quat.w * quat.w + quat.x * quat.x + quat.y * quat.y + quat.z * quat.z
-    );
-    float w = quat.x * s;
-    float x = quat.y * s;
-    float y = quat.z * s;
-    float z = quat.w * s;
+    float w = quat.x;
+    float x = quat.y;
+    float y = quat.z;
+    float z = quat.w;
 
     float4 v_quat;
     // v_R is COLUMN MAJOR
