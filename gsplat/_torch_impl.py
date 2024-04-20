@@ -252,6 +252,7 @@ def eval_sh5_bases_codegen(dirs: torch.Tensor):
     result[..., 24] = fTmpC * fC1
     result[..., 16] = fTmpC * fS1
     return result
+
 def eval_sh_bases_codegen(basis_dim: int, dirs: torch.Tensor):
     """
     Evaluate spherical harmonics bases at unit direction for high orders
@@ -264,15 +265,74 @@ def eval_sh_bases_codegen(basis_dim: int, dirs: torch.Tensor):
     :param dirs: torch.Tensor (..., 3) unit directions
 
     :return: torch.Tensor (..., basis_dim)
+
+    See reference C++ code in https://jcgt.org/published/0002/02/06/code.zip
     """
+    result = torch.empty(
+        (*dirs.shape[:-1], basis_dim), dtype=dirs.dtype, device=dirs.device
+    )
+
+    result[..., 0] = 0.2820947917738781
+
+    if basis_dim <= 1:
+        return
+
+    x, y, z = dirs.unbind(-1)
+    z2 = z * z
+
+    fTmpA = -0.48860251190292
+    result[..., 2] = 0.4886025119029199 * z
+    result[..., 3] = fTmpA * x
+    result[..., 1] = fTmpA * y
+
     if basis_dim <= 4:
-        return eval_sh_bases(basis_dim, dirs)
-    if basis_dim == 9:
-        return eval_sh3_bases_codegen(dirs)
-    if basis_dim == 16:
-        return eval_sh4_bases_codegen(dirs)
-    if basis_dim == 25:
-        return eval_sh5_bases_codegen(dirs)
+        return
+
+    fTmpB = -1.092548430592079 * z
+    fTmpA = 0.5462742152960395
+    fC1 = x * x - y * y
+    fS1 = 2 * x * y
+    result[..., 6] = 0.9461746957575601 * z2 - 0.3153915652525201
+    result[..., 7] = fTmpB * x
+    result[..., 5] = fTmpB * y
+    result[..., 8] = fTmpA * fC1
+    result[..., 4] = fTmpA * fS1
+
+    if basis_dim <= 9:
+        return
+
+    fTmpC = -2.285228997322329 * z2 + 0.4570457994644658
+    fTmpB = 1.445305721320277 * z
+    fTmpA = -0.5900435899266435
+    fC0 = x * fC1 - y * fS1
+    fS0 = x * fS1 + y * fC1
+    result[..., 12] = z * (1.865881662950577 * z2 - 1.119528997770346)
+    result[..., 13] = fTmpC * x
+    result[..., 11] = fTmpC * y
+    result[..., 14] = fTmpB * fC1
+    result[..., 10] = fTmpB * fS1
+    result[..., 15] = fTmpA * fC0
+    result[..., 9] = fTmpA * fS0
+
+    if basis_dim <= 16:
+        return
+
+    fTmpD = z * (-4.683325804901025 * z2 + 2.007139630671868)
+    fTmpC = 3.31161143515146 * z2 - 0.47308734787878
+    fTmpB = -1.770130769779931 * z
+    fTmpA = 0.6258357354491763
+    fC1 = x * fC0 - y * fS0
+    fS1 = x * fS0 + y * fC0
+    result[..., 20] = 1.984313483298443 * z * result[..., 12] + -1.006230589874905 * result[..., 6]
+    result[..., 21] = fTmpD * x
+    result[..., 19] = fTmpD * y
+    result[..., 22] = fTmpC * fC1
+    result[..., 18] = fTmpC * fS1
+    result[..., 23] = fTmpB * fC0
+    result[..., 17] = fTmpB * fS0
+    result[..., 24] = fTmpA * fC1
+    result[..., 16] = fTmpA * fS1
+    return result
 
 
 def normalized_quat_to_rotmat(quat: Tensor) -> Tensor:

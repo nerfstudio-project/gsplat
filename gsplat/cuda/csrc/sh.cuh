@@ -170,9 +170,10 @@ __device__ void sh_coeffs_to_color_new_vjp(
     float y = viewdir.y / norm;
     float z = viewdir.z / norm;
 
+
+    float fTmp0A = 0.48860251190292f;
 #pragma unroll
     for (int c = 0; c < CHANNELS; ++c) {
-        float fTmp0A = 0.48860251190292f;
         v_coeffs[1 * CHANNELS + c] = -fTmp0A * y * v_colors[c];
         v_coeffs[2 * CHANNELS + c] = fTmp0A * z * v_colors[c];
         v_coeffs[3 * CHANNELS + c] = -fTmp0A * x * v_colors[c];
