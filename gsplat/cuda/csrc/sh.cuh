@@ -42,7 +42,7 @@ __host__ __device__ unsigned num_sh_bases(const unsigned degree) {
         return 16;
     return 25;
 }
-__device__ void sh_coeffs_to_color_new(
+__device__ void sh_coeffs_to_color_fast(
     const unsigned degree,
     const float3 &viewdir,
     const float *coeffs,
@@ -148,7 +148,7 @@ __device__ void sh_coeffs_to_color_new(
     }
 }
 
-__device__ void sh_coeffs_to_color_new_vjp(
+__device__ void sh_coeffs_to_color_fast_vjp(
     const unsigned degree,
     const float3 &viewdir,
     const float *v_colors,
@@ -441,7 +441,7 @@ __global__ void compute_sh_forward_kernel(
     unsigned idx_sh = num_bases * num_channels * idx;
     unsigned idx_col = num_channels * idx;
 
-    sh_coeffs_to_color_new(
+    sh_coeffs_to_color_fast(
         degrees_to_use, viewdirs[idx], &(coeffs[idx_sh]), &(colors[idx_col])
     );
 }
@@ -463,7 +463,7 @@ __global__ void compute_sh_backward_kernel(
     unsigned idx_sh = num_bases * num_channels * idx;
     unsigned idx_col = num_channels * idx;
 
-    sh_coeffs_to_color_new_vjp(
+    sh_coeffs_to_color_fast_vjp(
         degrees_to_use, viewdirs[idx], &(v_colors[idx_col]), &(v_coeffs[idx_sh])
     );
 }
