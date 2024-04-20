@@ -6,7 +6,7 @@ device = torch.device("cuda:0")
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_sh():
+def test_sh(method):
     from gsplat import _torch_impl
     from gsplat import sh
 
@@ -25,7 +25,7 @@ def test_sh():
         optim.zero_grad()
 
         # compute PyTorch's color and grad
-        check_colors = _torch_impl.compute_sh_color(viewdirs, sh_coeffs, "poly")
+        check_colors = _torch_impl.compute_sh_color(viewdirs, sh_coeffs, method)
         check_loss = torch.square(check_colors - gt_colors).mean()
         check_loss.backward()
         check_grad = sh_coeffs.grad.detach()
@@ -47,4 +47,5 @@ def test_sh():
 
 
 if __name__ == "__main__":
-    test_sh()
+    test_sh("poly")
+    test_sh("fast")

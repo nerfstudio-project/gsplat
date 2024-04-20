@@ -12,7 +12,7 @@ from typing import Tuple, Literal
 def compute_sh_color(
     viewdirs: Float[Tensor, "*batch 3"],
     sh_coeffs: Float[Tensor, "*batch D C"],
-    mode: Literal["poly", "fast"] = "fast",
+    method: Literal["poly", "fast"] = "fast",
 ):
     """
     :param viewdirs (*, C)
@@ -20,12 +20,12 @@ def compute_sh_color(
     return colors (*, C)
     """
     *dims, dim_sh, C = sh_coeffs.shape
-    if mode == "poly":
+    if method == "poly":
         bases = eval_sh_bases(dim_sh, viewdirs)  # (*, dim_sh)
-    elif mode == "fast":
+    elif method == "fast":
         bases = eval_sh_bases_fast(dim_sh, viewdirs)  # (*, dim_sh)
     else:
-        raise RuntimeError(f"Unknown mode: {mode} for compute sh color.")
+        raise RuntimeError(f"Unknown mode: {method} for compute sh color.")
     return (bases[..., None] * sh_coeffs).sum(dim=-2)
 
 
