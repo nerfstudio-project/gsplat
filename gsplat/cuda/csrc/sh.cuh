@@ -42,14 +42,16 @@ __host__ __device__ unsigned num_sh_bases(const unsigned degree) {
         return 16;
     return 25;
 }
+
+// Evaluate spherical harmonics bases at unit direction for high orders using approach described by
+// Efficient Spherical Harmonic Evaluation, Peter-Pike Sloan, JCGT 2013
+// See https://jcgt.org/published/0002/02/06/ for reference implementation
 __device__ void sh_coeffs_to_color_fast(
     const unsigned degree,
     const float3 &viewdir,
     const float *coeffs,
     float *colors
 ) {
-    // Expects v_colors to be len CHANNELS
-    // and v_coeffs to be num_bases * CHANNELS
     for (int c = 0; c < CHANNELS; ++c) {
         colors[c] = 0.2820947917738781f * coeffs[c];
     }
