@@ -11,7 +11,7 @@ from typing import Tuple, Literal
 
 def compute_sh_color(
         viewdirs: Float[Tensor, "*batch 3"], sh_coeffs: Float[Tensor, "*batch D C"],
-        mode: Literal["poly", "fast"] = "poly"
+        mode: Literal["poly", "fast"] = "fast"
 ):
     """
     :param viewdirs (*, C)
@@ -22,7 +22,7 @@ def compute_sh_color(
     if mode == "poly":
         bases = eval_sh_bases(dim_sh, viewdirs)  # (*, dim_sh)
     elif mode == "fast":
-        bases = eval_sh_bases_codegen(dim_sh, viewdirs)  # (*, dim_sh)
+        bases = eval_sh_bases_fast(dim_sh, viewdirs)  # (*, dim_sh)
     else:
         raise RuntimeError(f"Unknown mode: {mode} for compute sh color.")
     return (bases[..., None] * sh_coeffs).sum(dim=-2)
@@ -118,142 +118,7 @@ def eval_sh_bases(basis_dim: int, dirs: torch.Tensor):
                     )
     return result
 
-
-def eval_sh3_bases_codegen(dirs: torch.Tensor):
-    """
-    See reference C++ code in https://jcgt.org/published/0002/02/06/code.zip
-    """
-    x, y, z = dirs.unbind(-1)
-    result = torch.empty(
-        (*dirs.shape[:-1], 9), dtype=dirs.dtype, device=dirs.device
-    )
-
-    z2 = z * z
-
-    result[..., 0] = 0.2820947917738781
-    result[..., 2] = 0.4886025119029199 * z
-    result[..., 6] = 0.9461746957575601 * z2 - 0.3153915652525201
-    # fC0 = x
-    # fS0 = y
-
-    fTmpA = -0.48860251190292
-    result[..., 3] = fTmpA * x
-    result[..., 1] = fTmpA * y
-    fTmpB = -1.092548430592079 * z
-    result[..., 7] = fTmpB * x
-    result[..., 5] = fTmpB * y
-    fC1 = x * x - y * y
-    fS1 = 2 * x * y
-    fTmpC = 0.5462742152960395
-    result[..., 8] = fTmpC * fC1
-    result[..., 4] = fTmpC * fS1
-    return result
-
-def eval_sh4_bases_codegen(dirs: torch.Tensor):
-    """
-    See reference C++ code in https://jcgt.org/published/0002/02/06/code.zip
-    """
-    x, y, z = dirs.unbind(-1)
-    result = torch.empty(
-        (*dirs.shape[:-1], 16), dtype=dirs.dtype, device=dirs.device
-    )
-
-    z2 = z * z
-
-    result[..., 0] = 0.2820947917738781
-    result[..., 2] = 0.4886025119029199 * z
-    result[..., 6] = 0.9461746957575601 * z2 - 0.3153915652525201
-    result[..., 12] = z * (1.865881662950577 * z2 -1.119528997770346)
-    # fC0 = x
-    # fS0 = y
-
-    fTmpA = -0.48860251190292
-    result[..., 3] = fTmpA * x
-    result[..., 1] = fTmpA * y
-    fTmpB = -1.092548430592079 * z
-    result[..., 7] = fTmpB * x
-    result[..., 5] = fTmpB * y
-    fTmpC = -2.285228997322329 * z2 + 0.4570457994644658
-    result[..., 13] = fTmpC * x
-    result[..., 11] = fTmpC * y
-    fC1 = x * x - y * y
-    fS1 = 2 * x * y
-
-    fTmpA = 0.5462742152960395
-    result[..., 8] = fTmpA * fC1
-    result[..., 4] = fTmpA * fS1
-    fTmpB = 1.445305721320277 * z
-    result[..., 14] = fTmpB * fC1
-    result[..., 10] = fTmpB * fS1
-    fC0 = x * fC1 - y * fS1
-    fS0 = x * fS1 + y * fC1
-
-    fTmpC = -0.5900435899266435
-    result[..., 15] = fTmpC * fC0
-    result[..., 9] = fTmpC * fS0
-    return result
-
-def eval_sh5_bases_codegen(dirs: torch.Tensor):
-    """
-    See reference C++ code in https://jcgt.org/published/0002/02/06/code.zip
-    """
-    x, y, z = dirs.unbind(-1)
-    result = torch.empty(
-        (*dirs.shape[:-1], 25), dtype=dirs.dtype, device=dirs.device
-    )
-
-    z2 = z * z
-
-    result[..., 0] = 0.2820947917738781
-    result[..., 2] = 0.4886025119029199 * z
-    result[..., 6] = 0.9461746957575601 * z2 - 0.3153915652525201
-    result[..., 12] = z * (1.865881662950577 * z2 - 1.119528997770346)
-    result[..., 20] = 1.984313483298443 * z * result[..., 12] + -1.006230589874905 * result[..., 6]
-    # fC0 = x
-    # fS0 = y
-
-    fTmpA = -0.48860251190292
-    result[..., 3] = fTmpA * x
-    result[..., 1] = fTmpA * y
-    fTmpB = -1.092548430592079 * z
-    result[..., 7] = fTmpB * x
-    result[..., 5] = fTmpB * y
-    fTmpC = -2.285228997322329 * z2 + 0.4570457994644658
-    result[..., 13] = fTmpC * x
-    result[..., 11] = fTmpC * y
-    fTmpA = z * (-4.683325804901025 * z2 + 2.007139630671868)
-    result[..., 21] = fTmpA * x
-    result[..., 19] = fTmpA * y
-    fC1 = x * x - y * y
-    fS1 = 2 * x * y
-
-    fTmpA = 0.5462742152960395
-    result[..., 8] = fTmpA * fC1
-    result[..., 4] = fTmpA * fS1
-    fTmpB = 1.445305721320277 * z
-    result[..., 14] = fTmpB * fC1
-    result[..., 10] = fTmpB * fS1
-    fTmpC = 3.31161143515146 * z2 - 0.47308734787878
-    result[..., 22] = fTmpC * fC1
-    result[..., 18] = fTmpC * fS1
-    fC0 = x * fC1 - y * fS1
-    fS0 = x * fS1 + y * fC1
-
-    fTmpA = -0.5900435899266435
-    result[..., 15] = fTmpA * fC0
-    result[..., 9] = fTmpA * fS0
-    fTmpB = -1.770130769779931 * z
-    result[..., 23] = fTmpB * fC0
-    result[..., 17] = fTmpB * fS0
-    fC1 = x * fC0 - y * fS0
-    fS1 = x * fS0 + y * fC0
-
-    fTmpC = 0.6258357354491763
-    result[..., 24] = fTmpC * fC1
-    result[..., 16] = fTmpC * fS1
-    return result
-
-def eval_sh_bases_codegen(basis_dim: int, dirs: torch.Tensor):
+def eval_sh_bases_fast(basis_dim: int, dirs: torch.Tensor):
     """
     Evaluate spherical harmonics bases at unit direction for high orders
     using approach described by
