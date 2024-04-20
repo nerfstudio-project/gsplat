@@ -10,8 +10,9 @@ from typing import Tuple, Literal
 
 
 def compute_sh_color(
-        viewdirs: Float[Tensor, "*batch 3"], sh_coeffs: Float[Tensor, "*batch D C"],
-        mode: Literal["poly", "fast"] = "fast"
+    viewdirs: Float[Tensor, "*batch 3"],
+    sh_coeffs: Float[Tensor, "*batch D C"],
+    mode: Literal["poly", "fast"] = "fast",
 ):
     """
     :param viewdirs (*, C)
@@ -118,6 +119,7 @@ def eval_sh_bases(basis_dim: int, dirs: torch.Tensor):
                     )
     return result
 
+
 def eval_sh_bases_fast(basis_dim: int, dirs: torch.Tensor):
     """
     Evaluate spherical harmonics bases at unit direction for high orders
@@ -188,7 +190,9 @@ def eval_sh_bases_fast(basis_dim: int, dirs: torch.Tensor):
     fTmpA = 0.6258357354491763
     fC3 = x * fC2 - y * fS2
     fS3 = x * fS2 + y * fC2
-    result[..., 20] = 1.984313483298443 * z * result[..., 12] + -1.006230589874905 * result[..., 6]
+    result[..., 20] = (
+        1.984313483298443 * z * result[..., 12] + -1.006230589874905 * result[..., 6]
+    )
     result[..., 21] = fTmpD * x
     result[..., 19] = fTmpD * y
     result[..., 22] = fTmpC * fC1
