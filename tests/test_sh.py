@@ -66,7 +66,7 @@ def profile_sh(
     torch.cuda.synchronize()
     tic = time.time()
     for _ in range(n_iters_fwd):
-        _ = sh.spherical_harmonics(degree, viewdirs, sh_coeffs)
+        _ = sh.spherical_harmonics(degree, viewdirs, sh_coeffs, method)
     torch.cuda.synchronize()
     toc = time.time()
     ellipsed = (toc - tic) / n_iters_fwd * 1000  # ms
