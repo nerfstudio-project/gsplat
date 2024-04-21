@@ -34,7 +34,7 @@ def test_sh(method):
         optim.zero_grad()
 
         # compute our colors and grads
-        colors = sh.spherical_harmonics(degree, viewdirs, sh_coeffs)
+        colors = sh.spherical_harmonics(degree, viewdirs, sh_coeffs, method)
         loss = torch.square(colors - gt_colors).mean()
         loss.backward()
         grad = sh_coeffs.grad.detach()
