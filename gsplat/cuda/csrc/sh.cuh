@@ -3,6 +3,11 @@
 #define CHANNELS 3
 namespace cg = cooperative_groups;
 
+enum class SHType {
+	Poly,
+	Fast,
+};
+
 __device__ __constant__ float SH_C0 = 0.28209479177387814f;
 __device__ __constant__ float SH_C1 = 0.4886025119029199f;
 __device__ __constant__ float SH_C2[] = {
@@ -426,6 +431,7 @@ __device__ void sh_coeffs_to_color_vjp(
     }
 }
 
+template <SHType SH_TYPE>
 __global__ void compute_sh_forward_kernel(
     const unsigned num_points,
     const unsigned degree,
@@ -443,11 +449,22 @@ __global__ void compute_sh_forward_kernel(
     unsigned idx_sh = num_bases * num_channels * idx;
     unsigned idx_col = num_channels * idx;
 
-    sh_coeffs_to_color_fast(
-        degrees_to_use, viewdirs[idx], &(coeffs[idx_sh]), &(colors[idx_col])
-    );
+    switch (SH_TYPE)
+    {
+    case SHType::Poly:
+        sh_coeffs_to_color(
+            degrees_to_use, viewdirs[idx], &(coeffs[idx_sh]), &(colors[idx_col])
+        );
+        break;
+    case SHType::Fast:
+        sh_coeffs_to_color_fast(
+            degrees_to_use, viewdirs[idx], &(coeffs[idx_sh]), &(colors[idx_col])
+        );
+        break;
+    }
 }
 
+template <SHType SH_TYPE>
 __global__ void compute_sh_backward_kernel(
     const unsigned num_points,
     const unsigned degree,
@@ -464,8 +481,18 @@ __global__ void compute_sh_backward_kernel(
     unsigned num_bases = num_sh_bases(degree);
     unsigned idx_sh = num_bases * num_channels * idx;
     unsigned idx_col = num_channels * idx;
-
-    sh_coeffs_to_color_fast_vjp(
-        degrees_to_use, viewdirs[idx], &(v_colors[idx_col]), &(v_coeffs[idx_sh])
-    );
+    
+    switch (SH_TYPE)
+    {
+    case SHType::Poly:
+        sh_coeffs_to_color_vjp(
+            degrees_to_use, viewdirs[idx], &(v_colors[idx_col]), &(v_coeffs[idx_sh])
+        );
+        break;
+    case SHType::Fast:
+        sh_coeffs_to_color_fast_vjp(
+            degrees_to_use, viewdirs[idx], &(v_colors[idx_col]), &(v_coeffs[idx_sh])
+        );
+        break;
+    }
 }

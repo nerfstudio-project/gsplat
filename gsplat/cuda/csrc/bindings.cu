@@ -60,6 +60,7 @@ compute_cov2d_bounds_tensor(const int num_pts, torch::Tensor &covs2d) {
 }
 
 torch::Tensor compute_sh_forward_tensor(
+    const std::string &method,
     const unsigned num_points,
     const unsigned degree,
     const unsigned degrees_to_use,
@@ -72,21 +73,37 @@ torch::Tensor compute_sh_forward_tensor(
         coeffs.size(1) != num_bases || coeffs.size(2) != 3) {
         AT_ERROR("coeffs must have dimensions (N, D, 3)");
     }
-    torch::Tensor colors = torch::empty({num_points, 3}, coeffs.options());
-    compute_sh_forward_kernel<<<
-        (num_points + N_THREADS - 1) / N_THREADS,
-        N_THREADS>>>(
-        num_points,
-        degree,
-        degrees_to_use,
-        (float3 *)viewdirs.contiguous().data_ptr<float>(),
-        coeffs.contiguous().data_ptr<float>(),
-        colors.contiguous().data_ptr<float>()
-    );
+    torch::Tensor colors = torch::empty({num_points, 3}, coeffs.options());    
+    if (method == "poly") {
+        compute_sh_forward_kernel<SHType::Poly><<<
+            (num_points + N_THREADS - 1) / N_THREADS,
+            N_THREADS>>>(
+            num_points,
+            degree,
+            degrees_to_use,
+            (float3 *)viewdirs.contiguous().data_ptr<float>(),
+            coeffs.contiguous().data_ptr<float>(),
+            colors.contiguous().data_ptr<float>()
+        );
+    } else if (method == "fast") {
+        compute_sh_forward_kernel<SHType::Fast><<<
+            (num_points + N_THREADS - 1) / N_THREADS,
+            N_THREADS>>>(
+            num_points,
+            degree,
+            degrees_to_use,
+            (float3 *)viewdirs.contiguous().data_ptr<float>(),
+            coeffs.contiguous().data_ptr<float>(),
+            colors.contiguous().data_ptr<float>()
+        );
+    } else {
+        AT_ERROR("Invalid method: ", method);
+    }
     return colors;
 }
 
 torch::Tensor compute_sh_backward_tensor(
+    const std::string &method,
     const unsigned num_points,
     const unsigned degree,
     const unsigned degrees_to_use,
@@ -105,16 +122,31 @@ torch::Tensor compute_sh_backward_tensor(
     unsigned num_bases = num_sh_bases(degree);
     torch::Tensor v_coeffs =
         torch::zeros({num_points, num_bases, 3}, v_colors.options());
-    compute_sh_backward_kernel<<<
-        (num_points + N_THREADS - 1) / N_THREADS,
-        N_THREADS>>>(
-        num_points,
-        degree,
-        degrees_to_use,
-        (float3 *)viewdirs.contiguous().data_ptr<float>(),
-        v_colors.contiguous().data_ptr<float>(),
-        v_coeffs.contiguous().data_ptr<float>()
-    );
+    if (method == "poly") {
+        compute_sh_backward_kernel<SHType::Poly><<<
+            (num_points + N_THREADS - 1) / N_THREADS,
+            N_THREADS>>>(
+            num_points,
+            degree,
+            degrees_to_use,
+            (float3 *)viewdirs.contiguous().data_ptr<float>(),
+            v_colors.contiguous().data_ptr<float>(),
+            v_coeffs.contiguous().data_ptr<float>()
+        );
+    } else if (method == "fast") {
+        compute_sh_backward_kernel<SHType::Fast><<<
+            (num_points + N_THREADS - 1) / N_THREADS,
+            N_THREADS>>>(
+            num_points,
+            degree,
+            degrees_to_use,
+            (float3 *)viewdirs.contiguous().data_ptr<float>(),
+            v_colors.contiguous().data_ptr<float>(),
+            v_coeffs.contiguous().data_ptr<float>()
+        );
+    } else {
+        AT_ERROR("Invalid method: ", method);
+    }
     return v_coeffs;
 }
 
