@@ -5,6 +5,7 @@ import gsplat.cuda as _C
 from jaxtyping import Float
 from torch import Tensor
 from torch.autograd import Function
+from typing import Literal
 
 
 def num_sh_bases(degree: int):
@@ -37,6 +38,7 @@ def spherical_harmonics(
     degrees_to_use: int,
     viewdirs: Float[Tensor, "*batch 3"],
     coeffs: Float[Tensor, "*batch D C"],
+    method: Literal["poly", "fast"] = "fast",
 ) -> Float[Tensor, "*batch C"]:
     """Compute spherical harmonics
 
@@ -52,8 +54,9 @@ def spherical_harmonics(
         The spherical harmonics.
     """
     assert coeffs.shape[-2] >= num_sh_bases(degrees_to_use)
+    assert method in ["poly", "fast"]
     return _SphericalHarmonics.apply(
-        degrees_to_use, viewdirs.contiguous(), coeffs.contiguous()
+        method, degrees_to_use, viewdirs.contiguous(), coeffs.contiguous()
     )
 
 
@@ -69,6 +72,7 @@ class _SphericalHarmonics(Function):
     @staticmethod
     def forward(
         ctx,
+        method: Literal["poly", "fast"],
         degrees_to_use: int,
         viewdirs: Float[Tensor, "*batch 3"],
         coeffs: Float[Tensor, "*batch D C"],
@@ -77,21 +81,24 @@ class _SphericalHarmonics(Function):
         ctx.degrees_to_use = degrees_to_use
         degree = deg_from_sh(coeffs.shape[-2])
         ctx.degree = degree
+        ctx.method = method
         ctx.save_for_backward(viewdirs)
         return _C.compute_sh_forward(
-            num_points, degree, degrees_to_use, viewdirs, coeffs
+            method, num_points, degree, degrees_to_use, viewdirs, coeffs
         )
 
     @staticmethod
     def backward(ctx, v_colors: Float[Tensor, "*batch 3"]):
         degrees_to_use = ctx.degrees_to_use
         degree = ctx.degree
+        method = ctx.method
         viewdirs = ctx.saved_tensors[0]
         num_points = v_colors.shape[0]
         return (
             None,
             None,
+            None,
             _C.compute_sh_backward(
-                num_points, degree, degrees_to_use, viewdirs, v_colors
+                method, num_points, degree, degrees_to_use, viewdirs, v_colors
             ),
         )

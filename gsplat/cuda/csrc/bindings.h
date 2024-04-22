@@ -22,6 +22,7 @@ std::tuple<
 compute_cov2d_bounds_tensor(const int num_pts, torch::Tensor &A);
 
 torch::Tensor compute_sh_forward_tensor(
+    const std::string &method,
     unsigned num_points,
     unsigned degree,
     unsigned degrees_to_use,
@@ -30,6 +31,7 @@ torch::Tensor compute_sh_forward_tensor(
 );
 
 torch::Tensor compute_sh_backward_tensor(
+    const std::string &method,
     unsigned num_points,
     unsigned degree,
     unsigned degrees_to_use,
