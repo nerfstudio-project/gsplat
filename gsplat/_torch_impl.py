@@ -145,7 +145,6 @@ def eval_sh_bases_fast(basis_dim: int, dirs: torch.Tensor):
         return
 
     x, y, z = dirs.unbind(-1)
-    z2 = z * z
 
     fTmpA = -0.48860251190292
     result[..., 2] = 0.4886025119029199 * z
@@ -155,6 +154,7 @@ def eval_sh_bases_fast(basis_dim: int, dirs: torch.Tensor):
     if basis_dim <= 4:
         return
 
+    z2 = z * z
     fTmpB = -1.092548430592079 * z
     fTmpA = 0.5462742152960395
     fC1 = x * x - y * y
