@@ -8,6 +8,7 @@ from torch import Tensor
 from torch.autograd import Function
 
 import gsplat.cuda as _C
+
 from .utils import bin_and_sort_gaussians, compute_cumulative_intersects
 
 
@@ -205,6 +206,7 @@ class _RasterizeGaussians(Function):
 
         if num_intersects < 1:
             v_xy = torch.zeros_like(xys)
+            v_xy_abs = torch.zeros_like(xys)
             v_conic = torch.zeros_like(conics)
             v_colors = torch.zeros_like(colors)
             v_opacity = torch.zeros_like(opacity)
@@ -214,7 +216,7 @@ class _RasterizeGaussians(Function):
                 rasterize_fn = _C.rasterize_backward
             else:
                 rasterize_fn = _C.nd_rasterize_backward
-            v_xy, v_conic, v_colors, v_opacity = rasterize_fn(
+            v_xy, v_xy_abs, v_conic, v_colors, v_opacity = rasterize_fn(
                 img_height,
                 img_width,
                 ctx.block_width,
@@ -230,6 +232,11 @@ class _RasterizeGaussians(Function):
                 v_out_img,
                 v_out_alpha,
             )
+
+        # Abs grad for gaussian splitting criterion. See
+        # - "AbsGS: Recovering Fine Details for 3D Gaussian Splatting"
+        # - "EfficientGS: Streamlining Gaussian Splatting for Large-Scale High-Resolution Scene Representation"
+        xys.absgrad = v_xy_abs
 
         return (
             v_xy,  # xys
