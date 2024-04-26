@@ -139,15 +139,15 @@ def eval_sh_bases_fast(basis_dim: int, dirs: torch.Tensor):
         (*dirs.shape[:-1], basis_dim), dtype=dirs.dtype, device=dirs.device
     )
 
-    result[..., 0] = 0.2820947917738781
+    result[..., 0] = SH_C0
 
     if basis_dim <= 1:
         return
 
     x, y, z = dirs.unbind(-1)
 
-    fTmpA = -0.48860251190292
-    result[..., 2] = 0.4886025119029199 * z
+    fTmpA = -SH_C1
+    result[..., 2] = SH_C1 * z
     result[..., 3] = fTmpA * x
     result[..., 1] = fTmpA * y
 
@@ -155,11 +155,11 @@ def eval_sh_bases_fast(basis_dim: int, dirs: torch.Tensor):
         return
 
     z2 = z * z
-    fTmpB = -1.092548430592079 * z
-    fTmpA = 0.5462742152960395
+    fTmpB = -SH_C2[0] * z
+    fTmpA = SH_C2[4]
     fC1 = x * x - y * y
     fS1 = 2 * x * y
-    result[..., 6] = 0.9461746957575601 * z2 - 0.3153915652525201
+    result[..., 6] = SH_C4[2] * z2 - SH_C2[2]
     result[..., 7] = fTmpB * x
     result[..., 5] = fTmpB * y
     result[..., 8] = fTmpA * fC1
@@ -168,9 +168,9 @@ def eval_sh_bases_fast(basis_dim: int, dirs: torch.Tensor):
     if basis_dim <= 9:
         return
 
-    fTmpC = -2.285228997322329 * z2 + 0.4570457994644658
-    fTmpB = 1.445305721320277 * z
-    fTmpA = -0.5900435899266435
+    fTmpC = -2.285228997322329 * z2 - SH_C3[2]
+    fTmpB = SH_C3[5] * z
+    fTmpA = SH_C3[0]
     fC2 = x * fC1 - y * fS1
     fS2 = x * fS1 + y * fC1
     result[..., 12] = z * (1.865881662950577 * z2 - 1.119528997770346)
@@ -185,9 +185,9 @@ def eval_sh_bases_fast(basis_dim: int, dirs: torch.Tensor):
         return
 
     fTmpD = z * (-4.683325804901025 * z2 + 2.007139630671868)
-    fTmpC = 3.31161143515146 * z2 - 0.47308734787878
-    fTmpB = -1.770130769779931 * z
-    fTmpA = 0.6258357354491763
+    fTmpC = 3.31161143515146 * z2 - SH_C4[6]
+    fTmpB = SH_C4[1] * z
+    fTmpA = SH_C4[8]
     fC3 = x * fC2 - y * fS2
     fS3 = x * fS2 + y * fC2
     result[..., 20] = (
