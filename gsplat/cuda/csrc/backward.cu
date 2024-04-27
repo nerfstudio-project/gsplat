@@ -299,6 +299,7 @@ __global__ void rasterize_backward_kernel(
             warpSum3(v_rgb_local, warp);
             warpSum3(v_conic_local, warp);
             warpSum2(v_xy_local, warp);
+            warpSum2(v_xy_abs_local, warp);
             warpSum(v_opacity_local, warp);
             if (warp.thread_rank() == 0) {
                 int32_t g = id_batch[t];
