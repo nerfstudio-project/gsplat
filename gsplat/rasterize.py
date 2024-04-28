@@ -226,6 +226,7 @@ class _RasterizeGaussians(Function):
                 v_out_alpha,
             )
         v_background = torch.matmul(v_out_img.float().view(-1, 3).t(), final_Ts.float().view(-1, 1)).squeeze()
+        
         return (
             v_xy,  # xys
             None,  # depths
