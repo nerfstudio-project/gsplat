@@ -225,12 +225,7 @@ class _RasterizeGaussians(Function):
                 v_out_img,
                 v_out_alpha,
             )
-        # print(v_out_img)
-        # print("final_ts shape", final_Ts.shape)
-        # v_out_img = torch.tensor(v_out_img)
         v_background = torch.matmul(v_out_img.float().view(-1, 3).t(), final_Ts.float().view(-1, 1)).squeeze()
-
-        # v_background = torch.mm(v_out_img.view(-1, 3).t, final_Ts.view(-1, 1)).squeeze() # type: ignore
         return (
             v_xy,  # xys
             None,  # depths
