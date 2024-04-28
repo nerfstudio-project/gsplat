@@ -60,9 +60,7 @@ def rasterize_gaussians(
             background.shape[0] == colors.shape[-1]
         ), f"incorrect shape of background color tensor, expected shape {colors.shape[-1]}"
     else:
-        background = torch.ones(
-            colors.shape[-1], dtype=torch.float32, device=colors.device
-        )
+        background = torch.ones(colors.shape[-1], dtype=torch.float32, device=colors.device)
 
     if xys.ndimension() != 2 or xys.size(1) != 2:
         raise ValueError("xys must have dimensions (N, 2)")
@@ -117,10 +115,7 @@ class _RasterizeGaussians(Function):
         num_intersects, cum_tiles_hit = compute_cumulative_intersects(num_tiles_hit)
 
         if num_intersects < 1:
-            out_img = (
-                torch.ones(img_height, img_width, colors.shape[-1], device=xys.device)
-                * background
-            )
+            out_img = torch.ones(img_height, img_width, colors.shape[-1], device=xys.device) * background
             gaussian_ids_sorted = torch.zeros(0, 1, device=xys.device)
             tile_bins = torch.zeros(0, 2, device=xys.device)
             final_Ts = torch.zeros(img_height, img_width, device=xys.device)
@@ -230,7 +225,12 @@ class _RasterizeGaussians(Function):
                 v_out_img,
                 v_out_alpha,
             )
+        # print(v_out_img)
+        # print("final_ts shape", final_Ts.shape)
+        # v_out_img = torch.tensor(v_out_img)
+        v_background = torch.matmul(v_out_img.float().view(-1, 3).t(), final_Ts.float().view(-1, 1)).squeeze()
 
+        # v_background = torch.mm(v_out_img.view(-1, 3).t, final_Ts.view(-1, 1)).squeeze() # type: ignore
         return (
             v_xy,  # xys
             None,  # depths
@@ -242,6 +242,6 @@ class _RasterizeGaussians(Function):
             None,  # img_height
             None,  # img_width
             None,  # block_width
-            None,  # background
+            v_background,  # background
             None,  # return_alpha
         )
