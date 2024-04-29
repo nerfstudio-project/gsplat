@@ -279,14 +279,7 @@ def test_isect(test_data):
 
 
 def test_rasterize_to_pixels(test_data):
-    from gsplat.experimental.cuda import (
-        _rendering_gsplat,
-        isect_offset_encode,
-        isect_tiles,
-        projection,
-        quat_scale_to_covar_perci,
-        rasterize_to_pixels,
-    )
+    from gsplat.experimental.cuda import _rendering, rendering
 
     Ks = test_data["Ks"]
     viewmats = test_data["viewmats"]
@@ -304,31 +297,10 @@ def test_rasterize_to_pixels(test_data):
     scales.requires_grad = True
     means.requires_grad = True
 
-    tile_size = 16
-
-    covars, _ = quat_scale_to_covar_perci(quats, scales, compute_perci=False, triu=True)
-    radii, means2d, depths, conics = projection(
-        means, covars, viewmats, Ks, width, height
+    render_colors, render_alphas = rendering(
+        means, quats, scales, opacities, colors, viewmats, Ks, width, height
     )
-    tile_width = math.ceil(width / tile_size)
-    tile_height = math.ceil(height / tile_size)
-    tiles_per_gauss, isect_ids, gauss_ids = isect_tiles(
-        means2d, radii, depths, tile_size, tile_width, tile_height
-    )
-    isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
-    render_colors, render_alphas = rasterize_to_pixels(
-        means2d,
-        conics,
-        colors,
-        opacities,
-        width,
-        height,
-        tile_size,
-        isect_offsets,
-        gauss_ids,
-    )
-
-    _render_colors, _render_alphas = _rendering_gsplat(
+    _render_colors, _render_alphas = _rendering(
         means, quats, scales, opacities, colors, viewmats, Ks, width, height
     )
     assert torch.allclose(render_colors, _render_colors, atol=1e-2, rtol=1e-3)
