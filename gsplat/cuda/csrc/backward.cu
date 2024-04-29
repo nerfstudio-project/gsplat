@@ -35,6 +35,7 @@ __global__ void nd_rasterize_backward_kernel(
     const float* __restrict__ v_output,
     const float* __restrict__ v_output_alpha,
     float2* __restrict__ v_xy,
+    float2* __restrict__ v_xy_abs,
     float3* __restrict__ v_conic,
     float* __restrict__ v_rgb,
     float* __restrict__ v_opacity
@@ -90,6 +91,7 @@ __global__ void nd_rasterize_backward_kernel(
         float v_alpha = 0.f;
         float3 v_conic_local = {0.f, 0.f, 0.f};
         float2 v_xy_local = {0.f, 0.f};
+        float2 v_xy_abs_local = {0.f, 0.f};
         float v_opacity_local = 0.f;
         if(valid){
             // compute the current T for this gaussian
@@ -114,19 +116,24 @@ __global__ void nd_rasterize_backward_kernel(
                              0.5f * v_sigma * delta.y * delta.y};
             v_xy_local = {v_sigma * (conic.x * delta.x + conic.y * delta.y), 
                           v_sigma * (conic.y * delta.x + conic.z * delta.y)};
+            v_xy_abs_local = {abs(v_xy_local.x), abs(v_xy_local.y)};
             v_opacity_local = vis * v_alpha;
         }
         warpSum3(v_conic_local, warp);
         warpSum2(v_xy_local, warp);
+        warpSum2(v_xy_abs_local, warp);
         warpSum(v_opacity_local, warp);
         if (warp.thread_rank() == 0) {
             float* v_conic_ptr = (float*)(v_conic);
             float* v_xy_ptr = (float*)(v_xy);
+            float* v_xy_abs_ptr = (float*)(v_xy_abs);
             atomicAdd(v_conic_ptr + 3*g + 0, v_conic_local.x);
             atomicAdd(v_conic_ptr + 3*g + 1, v_conic_local.y);
             atomicAdd(v_conic_ptr + 3*g + 2, v_conic_local.z);
             atomicAdd(v_xy_ptr + 2*g + 0, v_xy_local.x);
             atomicAdd(v_xy_ptr + 2*g + 1, v_xy_local.y);
+            atomicAdd(v_xy_abs_ptr + 2*g + 0, v_xy_abs_local.x);
+            atomicAdd(v_xy_abs_ptr + 2*g + 1, v_xy_abs_local.y);
             atomicAdd(v_opacity + g, v_opacity_local);
         }
     }
@@ -147,6 +154,7 @@ __global__ void rasterize_backward_kernel(
     const float3* __restrict__ v_output,
     const float* __restrict__ v_output_alpha,
     float2* __restrict__ v_xy,
+    float2* __restrict__ v_xy_abs,
     float3* __restrict__ v_conic,
     float3* __restrict__ v_rgb,
     float* __restrict__ v_opacity
@@ -251,6 +259,7 @@ __global__ void rasterize_backward_kernel(
             float3 v_rgb_local = {0.f, 0.f, 0.f};
             float3 v_conic_local = {0.f, 0.f, 0.f};
             float2 v_xy_local = {0.f, 0.f};
+            float2 v_xy_abs_local = {0.f, 0.f};
             float v_opacity_local = 0.f;
             //initialize everything to 0, only set if the lane is valid
             if(valid){
@@ -284,11 +293,13 @@ __global__ void rasterize_backward_kernel(
                                  0.5f * v_sigma * delta.y * delta.y};
                 v_xy_local = {v_sigma * (conic.x * delta.x + conic.y * delta.y), 
                                     v_sigma * (conic.y * delta.x + conic.z * delta.y)};
+                v_xy_abs_local = {abs(v_xy_local.x), abs(v_xy_local.y)};
                 v_opacity_local = vis * v_alpha;
             }
             warpSum3(v_rgb_local, warp);
             warpSum3(v_conic_local, warp);
             warpSum2(v_xy_local, warp);
+            warpSum2(v_xy_abs_local, warp);
             warpSum(v_opacity_local, warp);
             if (warp.thread_rank() == 0) {
                 int32_t g = id_batch[t];
@@ -305,6 +316,10 @@ __global__ void rasterize_backward_kernel(
                 float* v_xy_ptr = (float*)(v_xy);
                 atomicAdd(v_xy_ptr + 2*g + 0, v_xy_local.x);
                 atomicAdd(v_xy_ptr + 2*g + 1, v_xy_local.y);
+
+                float* v_xy_abs_ptr = (float*)(v_xy_abs);
+                atomicAdd(v_xy_abs_ptr + 2*g + 0, v_xy_abs_local.x);
+                atomicAdd(v_xy_abs_ptr + 2*g + 1, v_xy_abs_local.y);
                 
                 atomicAdd(v_opacity + g, v_opacity_local);
             }
