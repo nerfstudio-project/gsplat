@@ -158,4 +158,8 @@ if __name__ == "__main__":
     # profile_bwd(batch_size=8, channels=32, viewmats_grad=False)  # 43.392ms/80.935ms
     # profile_bwd(batch_size=64, channels=32, viewmats_grad=False)  # 353.733ms/653.627ms
 
+    # profile_bwd(batch_size=1, channels=3, viewmats_grad=True)  # 2.183ms/2.721ms
+    # profile_bwd(batch_size=8, channels=3, viewmats_grad=True)  # 10.697ms/16.629ms
+    # profile_bwd(batch_size=64, channels=3, viewmats_grad=True)  # 85.817ms/130.977ms
+
     print("Profile Done.")
