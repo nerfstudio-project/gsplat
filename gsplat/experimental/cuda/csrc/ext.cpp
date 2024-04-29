@@ -19,4 +19,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("rasterize_to_pixels_fwd", &rasterize_to_pixels_fwd_tensor);
     m.def("rasterize_to_pixels_bwd", &rasterize_to_pixels_bwd_tensor);
+
+    m.def("rasterize_to_indices_iter", &rasterize_to_indices_iter_tensor);
 }

@@ -286,7 +286,7 @@ def test_rasterize_to_pixels(test_data):
     height = test_data["height"]
     width = test_data["width"]
     quats = test_data["quats"]
-    scales = test_data["scales"]
+    scales = test_data["scales"] * 0.1
     means = test_data["means"]
     opacities = test_data["opacities"]
     colors = test_data["colors"]
@@ -303,5 +303,26 @@ def test_rasterize_to_pixels(test_data):
     _render_colors, _render_alphas = _rendering(
         means, quats, scales, opacities, colors, viewmats, Ks, width, height
     )
-    assert torch.allclose(render_colors, _render_colors, atol=1e-2, rtol=1e-3)
-    assert torch.allclose(render_alphas, _render_alphas, atol=1e-4, rtol=1e-4)
+    assert torch.allclose(render_colors, _render_colors)
+    assert torch.allclose(render_alphas, _render_alphas)
+
+    v_render_colors = torch.randn_like(render_colors)
+    v_render_alphas = torch.randn_like(render_alphas)
+
+    v_viewmats, v_quats, v_scales, v_means = torch.autograd.grad(
+        (render_colors * v_render_colors).sum()
+        + (render_alphas * v_render_alphas).sum(),
+        (viewmats, quats, scales, means),
+        retain_graph=True,
+    )
+    _v_viewmats, _v_quats, _v_scales, _v_means = torch.autograd.grad(
+        (_render_colors * v_render_colors).sum()
+        + (_render_alphas * v_render_alphas).sum(),
+        (viewmats, quats, scales, means),
+        retain_graph=True,
+    )
+
+    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(v_quats, _v_quats, rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(v_scales, _v_scales, rtol=1e-4, atol=5e-4)
+    torch.testing.assert_close(v_means, _v_means, rtol=1e-4, atol=5e-4)

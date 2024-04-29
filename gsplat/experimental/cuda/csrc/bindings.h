@@ -135,3 +135,17 @@ rasterize_to_pixels_bwd_tensor(
     const torch::Tensor &v_render_colors, // [C, image_height, image_width, 3]
     const torch::Tensor &v_render_alphas  // [C, image_height, image_width, 1]
 );
+
+std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_iter_tensor(
+    const int step0, const int step1, // iteration steps
+    const torch::Tensor transmittances, // [C, image_height, image_width]
+    // Gaussian parameters
+    const torch::Tensor &means2d,   // [C, N, 2]
+    const torch::Tensor &conics,    // [C, N, 3]
+    const torch::Tensor &opacities, // [N]
+    // image size
+    const int image_width, const int image_height, const int tile_size,
+    // intersections
+    const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
+    const torch::Tensor &gauss_ids     // [n_isects]
+);

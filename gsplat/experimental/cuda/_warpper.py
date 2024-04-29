@@ -269,6 +269,49 @@ def rasterize_to_pixels(
     return render_colors, render_alphas
 
 
+@torch.no_grad()
+def rasterize_to_indices_iter(
+    step0: int,
+    step1: int,
+    transmittances: Tensor,  # [C, image_height, image_width]
+    means2d: Tensor,  # [C, N, 2]
+    conics: Tensor,  # [C, N, 3]
+    opacities: Tensor,  # [N]
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    isect_offsets: Tensor,  # [C, tile_height, tile_width]
+    gauss_ids: Tensor,  # [n_isects]
+) -> Tuple[Tensor, Tensor]:
+    C, N, _ = means2d.shape
+    assert conics.shape == (C, N, 3), conics.shape
+    assert opacities.shape == (N,), opacities.shape
+    assert isect_offsets.shape[0] == C, isect_offsets.shape
+
+    tile_height, tile_width = isect_offsets.shape[1:3]
+    assert (
+        tile_height * tile_size >= image_height
+    ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
+    assert (
+        tile_width * tile_size >= image_width
+    ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
+
+    out_gauss_ids, out_pixel_ids = _make_lazy_cuda_func("rasterize_to_indices_iter")(
+        step0,
+        step1,
+        transmittances.contiguous(),
+        means2d.contiguous(),
+        conics.contiguous(),
+        opacities.contiguous(),
+        image_width,
+        image_height,
+        tile_size,
+        isect_offsets.contiguous(),
+        gauss_ids.contiguous(),
+    )
+    return out_gauss_ids, out_pixel_ids
+
+
 class _QuatScaleToCovarPerci(torch.autograd.Function):
     """Converts quaternions and scales to covariance and precision matrices."""
 

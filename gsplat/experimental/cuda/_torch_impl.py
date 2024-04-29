@@ -243,3 +243,48 @@ def _isect_offset_encode(
     offsets = cum_tile_counts - tile_counts
     return offsets.int()
 
+
+def accumulate(
+    means2d: Tensor,  # [C, N, 2]
+    conics: Tensor,  # [C, N, 3]
+    opacities: Tensor,  # [N]
+    colors: Tensor,  # [C, N, channels]
+    gauss_ids: Tensor,  # [M]
+    pixel_ids: Tensor,  # [M]
+    camera_ids: Tensor,  # [M]
+    image_width: int,
+    image_height: int,
+    prefix_trans: Tensor = None,  # [C, image_height, image_width]
+):
+    from nerfacc import accumulate_along_rays, render_weight_from_alpha
+
+    C, N = means2d.shape[:2]
+    channels = colors.shape[-1]
+
+    pixel_ids_x = pixel_ids % image_width
+    pixel_ids_y = pixel_ids // image_width
+    pixel_coords = torch.stack([pixel_ids_x, pixel_ids_y], dim=-1) + 0.5  # [M, 2]
+    deltas = pixel_coords - means2d[camera_ids, gauss_ids]  # [M, 2]
+    c = conics[camera_ids, gauss_ids]  # [M, 3]
+    sigmas = (
+        0.5 * (c[:, 0] * deltas[:, 0] ** 2 + c[:, 2] * deltas[:, 1] ** 2)
+        + c[:, 1] * deltas[:, 0] * deltas[:, 1]
+    )  # [M]
+    alphas = torch.clamp_max(opacities[gauss_ids] * torch.exp(-sigmas), 0.999)
+
+    if prefix_trans is not None:
+        prefix_trans = prefix_trans[camera_ids, pixel_ids_y, pixel_ids_x]
+    indices = (camera_ids * image_height * image_width + pixel_ids).long()
+    total_pixels = C * image_height * image_width
+
+    weights, trans = render_weight_from_alpha(
+        alphas, ray_indices=indices, n_rays=total_pixels, prefix_trans=prefix_trans
+    )
+    renders = accumulate_along_rays(
+        weights, colors[camera_ids, gauss_ids], ray_indices=indices, n_rays=total_pixels
+    ).reshape(C, image_height, image_width, channels)
+    accs = accumulate_along_rays(
+        weights, None, ray_indices=indices, n_rays=total_pixels
+    ).reshape(C, image_height, image_width, 1)
+
+    return renders, accs

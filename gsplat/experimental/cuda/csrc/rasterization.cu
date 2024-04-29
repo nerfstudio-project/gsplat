@@ -207,6 +207,230 @@ torch::Tensor isect_offset_encode_tensor(const torch::Tensor &isect_ids, // [n_i
  * Rasterization
  ****************************************************************************/
 
+__global__ void rasterize_to_indices_iter_kernel(
+    const int step0, const int step1, const int C, const int N, const int n_isects,
+    const float2 *__restrict__ means2d,  // [C, N, 2]
+    const float3 *__restrict__ conics,   // [C, N, 3]
+    const float *__restrict__ opacities, // [N]
+    const int image_width, const int image_height, const int tile_size,
+    const int tile_width, const int tile_height,
+    const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
+    const int32_t *__restrict__ gauss_ids,    // [n_isects]
+    const double *__restrict__ transmittances,  // [C, image_height, image_width]
+    const int32_t *__restrict__ chunk_starts, // [C, image_height, image_width]
+    int32_t *__restrict__ chunk_cnts,         // [C, image_height, image_width]
+    int32_t *__restrict__ out_gauss_ids,      // [n_elems]
+    int32_t *__restrict__ out_pixel_ids       // [n_elems]
+) {
+    // each thread draws one pixel, but also timeshares caching gaussians in a
+    // shared tile
+
+    auto block = cg::this_thread_block();
+    int32_t camera_id = block.group_index().x;
+    int32_t tile_id = block.group_index().y * tile_width + block.group_index().z;
+    unsigned i = block.group_index().y * tile_size + block.thread_index().y;
+    unsigned j = block.group_index().z * tile_size + block.thread_index().x;
+
+    // move pointers to the current camera
+    means2d += camera_id * N;
+    conics += camera_id * N;
+    tile_offsets += camera_id * tile_height * tile_width;
+    transmittances += camera_id * image_height * image_width;
+
+    float px = (float)j + 0.5f;
+    float py = (float)i + 0.5f;
+    int32_t pix_id = i * image_width + j;
+
+    // return if out of bounds
+    // keep not rasterizing threads around for reading data
+    bool inside = (i < image_height && j < image_width);
+    bool done = !inside;
+
+    bool first_pass = chunk_starts == nullptr;
+    int base;
+    if (!first_pass && inside) {
+        chunk_starts += camera_id * image_height * image_width;
+        base = chunk_starts[pix_id];
+    }
+
+    // have all threads in tile process the same gaussians in batches
+    // first collect gaussians between range.x and range.y in batches
+    // which gaussians to look through in this tile
+    int32_t range_start = tile_offsets[tile_id];
+    int32_t range_end =
+        (camera_id == C - 1) && (tile_id == tile_width * tile_height - 1)
+            ? n_isects
+            : tile_offsets[tile_id + 1];
+    const int block_size = block.size();
+    int num_batches = (range_end - range_start + block_size - 1) / block_size;
+
+    if (step0 >= num_batches) {
+        // this entire tile has been processed in the previous iterations
+        // so we don't need to do anything.
+        return;
+    }
+
+    __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 conic_batch[MAX_BLOCK_SIZE];
+
+    // current visibility left to render
+    // transmittance is gonna be used in the backward pass which requires a high
+    // numerical precision so we use double for it.
+    double T, next_T;
+    if (inside) {
+        T = transmittances[pix_id];
+        next_T = T;
+    }
+    // index of most recent gaussian to write to this thread's pixel
+    int cur_idx = 0;
+
+    // collect and process batches of gaussians
+    // each thread loads one gaussian at a time before rasterizing its
+    // designated pixel
+    int tr = block.thread_rank();
+
+    int cnt = 0;
+    for (int b = step0; b < min(step1, num_batches); ++b) {
+        // resync all threads before beginning next batch
+        // end early if entire tile is done
+        if (__syncthreads_count(done) >= block_size) {
+            break;
+        }
+
+        // each thread fetch 1 gaussian from front to back
+        // index of gaussian to load
+        int batch_start = range_start + block_size * b;
+        int idx = batch_start + tr;
+        if (idx < range_end) {
+            int32_t g_id = gauss_ids[idx];
+            id_batch[tr] = g_id;
+            const float2 xy = means2d[g_id];
+            const float opac = opacities[g_id];
+            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
+            conic_batch[tr] = conics[g_id];
+        }
+
+        // wait for other threads to collect the gaussians in batch
+        block.sync();
+
+        // process gaussians in the current batch for this pixel
+        int batch_size = min(block_size, range_end - batch_start);
+        for (int t = 0; (t < batch_size) && !done; ++t) {
+            const float3 conic = conic_batch[t];
+            const float3 xy_opac = xy_opacity_batch[t];
+            const float opac = xy_opac.z;
+            const float2 delta = {xy_opac.x - px, xy_opac.y - py};
+            const float sigma =
+                0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
+                conic.y * delta.x * delta.y;
+            float alpha = min(0.999f, opac * __expf(-sigma));
+
+            if (sigma < 0.f || alpha < 1.f / 255.f) {
+                continue;
+            }
+
+            next_T = T * (1.0 - static_cast<double>(alpha));
+            if (next_T <= 1e-4) { // this pixel is done: exclusive
+                done = true;
+                break;
+            }
+
+            if (first_pass) {
+                // First pass of this function we count the number of gaussians
+                // that contribute to each pixel
+                cnt += 1;
+            } else {
+                // Second pass we write out the gaussian ids and pixel ids
+                int32_t g = id_batch[t];
+                out_gauss_ids[base + cnt] = g;
+                out_pixel_ids[base + cnt] =
+                    pix_id + camera_id * image_height * image_width;
+                cnt += 1;
+            }
+
+            T = next_T;
+        }
+    }
+
+    if (inside && first_pass) {
+        chunk_cnts += camera_id * image_height * image_width;
+        chunk_cnts[pix_id] = cnt;
+    }
+}
+
+
+std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_iter_tensor(
+    const int step0, const int step1, // iteration steps
+    const torch::Tensor transmittances, // [C, image_height, image_width]
+    // Gaussian parameters
+    const torch::Tensor &means2d,   // [C, N, 2]
+    const torch::Tensor &conics,    // [C, N, 3]
+    const torch::Tensor &opacities, // [N]
+    // image size
+    const int image_width, const int image_height, const int tile_size,
+    // intersections
+    const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
+    const torch::Tensor &gauss_ids     // [n_isects]
+) {
+    DEVICE_GUARD(means2d);
+    CHECK_INPUT(means2d);
+    CHECK_INPUT(conics);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(tile_offsets);
+    CHECK_INPUT(gauss_ids);
+
+    int C = means2d.size(0); // number of cameras
+    int N = means2d.size(1); // number of gaussians
+    int tile_height = tile_offsets.size(1);
+    int tile_width = tile_offsets.size(2);
+    int n_isects = gauss_ids.size(0);
+
+    // Each block covers a tile on the image. In total there are
+    // C * tile_height * tile_width blocks.
+    dim3 threads = {tile_size, tile_size, 1};
+    dim3 blocks = {C, tile_height, tile_width};
+
+    // First pass: count the number of gaussians that contribute to each pixel
+    int64_t n_elems;
+    torch::Tensor chunk_starts;
+    if (n_isects) {
+        torch::Tensor chunk_cnts = torch::zeros({C * image_height * image_width},
+                                        means2d.options().dtype(torch::kInt32));
+        rasterize_to_indices_iter_kernel<<<blocks, threads>>>(
+            step0, step1, C, N, n_isects, (float2 *)means2d.data_ptr<float>(),
+            (float3 *)conics.data_ptr<float>(), opacities.data_ptr<float>(),
+            image_width, image_height, tile_size, tile_width, tile_height,
+            tile_offsets.data_ptr<int32_t>(), gauss_ids.data_ptr<int32_t>(), 
+            transmittances.data_ptr<double>(),
+            nullptr, chunk_cnts.data_ptr<int32_t>(), nullptr, nullptr);
+
+        torch::Tensor cumsum = torch::cumsum(chunk_cnts, 0, chunk_cnts.scalar_type());
+        n_elems = cumsum[-1].item<int64_t>();
+        chunk_starts = cumsum - chunk_cnts;
+    } else {
+        n_elems = 0;
+    }
+
+    // Second pass: allocate memory and write out the gaussian and pixel ids.
+    torch::Tensor out_gauss_ids =
+        torch::empty({n_elems}, means2d.options().dtype(torch::kInt32));
+    torch::Tensor out_pixel_ids =
+        torch::empty({n_elems}, means2d.options().dtype(torch::kInt32));
+    if (n_elems) {
+        rasterize_to_indices_iter_kernel<<<blocks, threads>>>(
+            step0, step1, C, N, n_isects, (float2 *)means2d.data_ptr<float>(),
+            (float3 *)conics.data_ptr<float>(), opacities.data_ptr<float>(),
+            image_width, image_height, tile_size, tile_width, tile_height,
+            tile_offsets.data_ptr<int32_t>(), gauss_ids.data_ptr<int32_t>(), 
+            transmittances.data_ptr<double>(),
+            chunk_starts.data_ptr<int32_t>(), nullptr,
+            out_gauss_ids.data_ptr<int32_t>(), out_pixel_ids.data_ptr<int32_t>());
+    }
+    return std::make_tuple(out_gauss_ids, out_pixel_ids);
+}
+
+
 template <uint32_t COLOR_DIM>
 __global__ void rasterize_to_pixels_fwd_kernel(
     const int C, const int N, const int n_isects,
