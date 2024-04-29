@@ -187,7 +187,7 @@ def _isect_tiles(
     def binary(num):
         return "".join("{:0>8b}".format(c) for c in struct.pack("!f", num))
 
-    def _kernel(cam_id, gauss_id):
+    def kernel(cam_id, gauss_id):
         if radii[cam_id, gauss_id] <= 0.0:
             return
         index = cam_id * N + gauss_id
@@ -208,7 +208,7 @@ def _isect_tiles(
 
     for cam_id in range(C):
         for gauss_id in range(N):
-            _kernel(cam_id, gauss_id)
+            kernel(cam_id, gauss_id)
 
     if sort:
         isect_ids, sort_indices = torch.sort(isect_ids)

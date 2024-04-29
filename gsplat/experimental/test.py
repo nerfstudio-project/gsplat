@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 import pytest
 import torch
@@ -227,3 +229,42 @@ def test_projection(test_data):
     torch.testing.assert_close(v_quats, _v_quats, rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(v_scales, _v_scales, rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=6e-2)
+
+
+def test_isect(test_data):
+    from gsplat.experimental.cuda import (
+        _isect_offset_encode,
+        _isect_tiles,
+        isect_offset_encode,
+        isect_tiles,
+    )
+
+    torch.manual_seed(42)
+
+    C = 3
+    N = 1000
+
+    width = 40
+    height = 60
+    means2d = torch.randn(C, N, 2, device=device) * width
+    radii = torch.randint(0, width, (C, N), device=device, dtype=torch.int32)
+    depths = torch.rand(C, N, device=device)
+
+    tile_size = 16
+    tile_width = math.ceil(width / tile_size)
+    tile_height = math.ceil(height / tile_size)
+
+    tiles_per_gauss, isect_ids, gauss_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
+
+    _tiles_per_gauss, _isect_ids, _gauss_ids = _isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    _isect_offsets = _isect_offset_encode(_isect_ids, C, tile_width, tile_height)
+
+    torch.testing.assert_close(tiles_per_gauss, _tiles_per_gauss)
+    torch.testing.assert_close(isect_ids, _isect_ids)
+    torch.testing.assert_close(gauss_ids, _gauss_ids)
+    torch.testing.assert_close(isect_offsets, _isect_offsets)
