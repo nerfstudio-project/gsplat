@@ -120,7 +120,7 @@ def _rendering_gsplat(
     from gsplat import project_gaussians, rasterize_gaussians
 
     tile_size = 16
-    bkgd = torch.zeros(3, device=means.device)
+    bkgd = torch.zeros(colors.shape[-1], device=means.device)
     render_colors, render_alphas = [], []
     for viewmat, K, color in zip(viewmats, Ks, colors):
         cx, cy, fx, fy = K[0, 2], K[1, 2], K[0, 0], K[1, 1]
