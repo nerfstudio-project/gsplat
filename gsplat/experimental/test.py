@@ -279,7 +279,7 @@ def test_isect(test_data):
 
 
 def test_rasterize_to_pixels(test_data):
-    from gsplat.experimental.cuda import _rendering, rendering
+    from gsplat.experimental.cuda import _rendering, _rendering_gsplat, rendering
 
     Ks = test_data["Ks"]
     viewmats = test_data["viewmats"]
@@ -326,3 +326,25 @@ def test_rasterize_to_pixels(test_data):
     torch.testing.assert_close(v_quats, _v_quats, rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(v_scales, _v_scales, rtol=1e-4, atol=5e-4)
     torch.testing.assert_close(v_means, _v_means, rtol=1e-4, atol=5e-4)
+
+    # print("Mean Grad Diff: CUDA2 v.s. PyTorch")
+    # print("v_viewmats", torch.abs(v_viewmats - _v_viewmats).abs().mean())  # 0.0037
+    # print("v_quats", torch.abs(v_quats - _v_quats).abs().mean())  # 2e-7
+    # print("v_scales", torch.abs(v_scales - _v_scales).abs().mean())  # 5e-6
+    # print("v_means", torch.abs(v_means - _v_means).abs().mean())  # 3e-6
+
+    # __render_colors, __render_alphas = _rendering_gsplat(
+    #     means, quats, scales, opacities, colors, viewmats, Ks, width, height
+    # )
+    # __v_viewmats, __v_quats, __v_scales, __v_means = torch.autograd.grad(
+    #     (__render_colors * v_render_colors).sum()
+    #     + (__render_alphas * v_render_alphas).sum(),
+    #     (viewmats, quats, scales, means),
+    #     retain_graph=True,
+    # )
+
+    # print("Mean Grad Diff: Gsplat v.s. PyTorch")
+    # print("v_viewmats", torch.abs(__v_viewmats - _v_viewmats).abs().mean())  # 42.8834
+    # print("v_quats", torch.abs(__v_quats - _v_quats).abs().mean())  # 0.0002
+    # print("v_scales", torch.abs(__v_scales - _v_scales).abs().mean())  # 0.0054
+    # print("v_means", torch.abs(__v_means - _v_means).abs().mean())  # 0.0041
