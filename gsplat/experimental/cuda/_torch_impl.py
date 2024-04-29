@@ -242,3 +242,35 @@ def _isect_offset_encode(
     cum_tile_counts = torch.cumsum(tile_counts.flatten(), dim=0).reshape_as(tile_counts)
     offsets = cum_tile_counts - tile_counts
     return offsets.int()
+
+
+def _rendering_gsplat(
+    means, quats, scales, opacities, colors, viewmats, Ks, width, height
+):
+    from gsplat import project_gaussians, rasterize_gaussians
+
+    tile_size = 16
+    bkgd = torch.zeros(3, device=means.device)
+    render_colors, render_alphas = [], []
+    for viewmat, K, color in zip(viewmats, Ks, colors):
+        cx, cy, fx, fy = K[0, 2], K[1, 2], K[0, 0], K[1, 1]
+        means2d, depths, radii, conics, _, num_tiles_hit, _ = project_gaussians(
+            means, scales, 1.0, quats, viewmat, fx, fy, cx, cy, height, width, tile_size
+        )
+        _render_colors, _render_alphas = rasterize_gaussians(
+            means2d,
+            depths,
+            radii,
+            conics,
+            num_tiles_hit,
+            color,
+            opacities[..., None],
+            height,
+            width,
+            tile_size,
+            background=bkgd,
+            return_alpha=True,
+        )
+        render_colors.append(_render_colors)
+        render_alphas.append(_render_alphas[..., None])
+    return torch.stack(render_colors), torch.stack(render_alphas)

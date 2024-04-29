@@ -4,6 +4,7 @@ from ._torch_impl import (
     _persp_proj,
     _projection,
     _quat_scale_to_covar_perci,
+    _rendering_gsplat,
     _world_to_cam,
 )
 from ._warpper import (

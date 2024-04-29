@@ -768,6 +768,32 @@ rasterize_to_pixels_bwd_tensor(
     if (n_isects) {
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
         switch (COLOR_DIM) {
+        case 1:
+            rasterize_to_pixels_bwd_kernel<1><<<blocks, threads, 0, stream>>>(
+                C, N, n_isects, (float2 *)means2d.data_ptr<float>(),
+                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+                opacities.data_ptr<float>(), image_width, image_height, tile_size,
+                tile_width, tile_height, tile_offsets.data_ptr<int32_t>(),
+                gauss_ids.data_ptr<int32_t>(), render_alphas.data_ptr<double>(),
+                last_ids.data_ptr<int32_t>(), v_render_colors.data_ptr<float>(),
+                v_render_alphas.data_ptr<float>(),
+                (float2 *)v_means2d.data_ptr<float>(),
+                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
+                v_opacities.data_ptr<float>());
+            break;
+        case 2:
+            rasterize_to_pixels_bwd_kernel<2><<<blocks, threads, 0, stream>>>(
+                C, N, n_isects, (float2 *)means2d.data_ptr<float>(),
+                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+                opacities.data_ptr<float>(), image_width, image_height, tile_size,
+                tile_width, tile_height, tile_offsets.data_ptr<int32_t>(),
+                gauss_ids.data_ptr<int32_t>(), render_alphas.data_ptr<double>(),
+                last_ids.data_ptr<int32_t>(), v_render_colors.data_ptr<float>(),
+                v_render_alphas.data_ptr<float>(),
+                (float2 *)v_means2d.data_ptr<float>(),
+                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
+                v_opacities.data_ptr<float>());
+            break;
         case 3:
             rasterize_to_pixels_bwd_kernel<3><<<blocks, threads, 0, stream>>>(
                 C, N, n_isects, (float2 *)means2d.data_ptr<float>(),
@@ -781,6 +807,60 @@ rasterize_to_pixels_bwd_tensor(
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
             break;
+        case 4:
+            rasterize_to_pixels_bwd_kernel<4><<<blocks, threads, 0, stream>>>(
+                C, N, n_isects, (float2 *)means2d.data_ptr<float>(),
+                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+                opacities.data_ptr<float>(), image_width, image_height, tile_size,
+                tile_width, tile_height, tile_offsets.data_ptr<int32_t>(),
+                gauss_ids.data_ptr<int32_t>(), render_alphas.data_ptr<double>(),
+                last_ids.data_ptr<int32_t>(), v_render_colors.data_ptr<float>(),
+                v_render_alphas.data_ptr<float>(),
+                (float2 *)v_means2d.data_ptr<float>(),
+                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
+                v_opacities.data_ptr<float>());
+            break;
+        case 8:
+            rasterize_to_pixels_bwd_kernel<8><<<blocks, threads, 0, stream>>>(
+                C, N, n_isects, (float2 *)means2d.data_ptr<float>(),
+                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+                opacities.data_ptr<float>(), image_width, image_height, tile_size,
+                tile_width, tile_height, tile_offsets.data_ptr<int32_t>(),
+                gauss_ids.data_ptr<int32_t>(), render_alphas.data_ptr<double>(),
+                last_ids.data_ptr<int32_t>(), v_render_colors.data_ptr<float>(),
+                v_render_alphas.data_ptr<float>(),
+                (float2 *)v_means2d.data_ptr<float>(),
+                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
+                v_opacities.data_ptr<float>());
+            break;
+        case 16:
+            rasterize_to_pixels_bwd_kernel<16><<<blocks, threads, 0, stream>>>(
+                C, N, n_isects, (float2 *)means2d.data_ptr<float>(),
+                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+                opacities.data_ptr<float>(), image_width, image_height, tile_size,
+                tile_width, tile_height, tile_offsets.data_ptr<int32_t>(),
+                gauss_ids.data_ptr<int32_t>(), render_alphas.data_ptr<double>(),
+                last_ids.data_ptr<int32_t>(), v_render_colors.data_ptr<float>(),
+                v_render_alphas.data_ptr<float>(),
+                (float2 *)v_means2d.data_ptr<float>(),
+                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
+                v_opacities.data_ptr<float>());
+            break;
+        case 32:
+            rasterize_to_pixels_bwd_kernel<32><<<blocks, threads, 0, stream>>>(
+                C, N, n_isects, (float2 *)means2d.data_ptr<float>(),
+                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+                opacities.data_ptr<float>(), image_width, image_height, tile_size,
+                tile_width, tile_height, tile_offsets.data_ptr<int32_t>(),
+                gauss_ids.data_ptr<int32_t>(), render_alphas.data_ptr<double>(),
+                last_ids.data_ptr<int32_t>(), v_render_colors.data_ptr<float>(),
+                v_render_alphas.data_ptr<float>(),
+                (float2 *)v_means2d.data_ptr<float>(),
+                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
+                v_opacities.data_ptr<float>());
+            break;
+        default:
+            AT_ERROR("Unsupported number of channels: ", COLOR_DIM);
         }
     }
 

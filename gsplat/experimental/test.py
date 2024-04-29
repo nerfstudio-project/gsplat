@@ -1,3 +1,11 @@
+"""Tests for the functions in the CUDA extension.
+
+Usage:
+```bash
+pytest <THIS_PY_FILE> -s
+```
+"""
+
 import math
 
 import numpy as np
@@ -268,3 +276,60 @@ def test_isect(test_data):
     torch.testing.assert_close(isect_ids, _isect_ids)
     torch.testing.assert_close(gauss_ids, _gauss_ids)
     torch.testing.assert_close(isect_offsets, _isect_offsets)
+
+
+def test_rasterize_to_pixels(test_data):
+    from gsplat.experimental.cuda import (
+        _rendering_gsplat,
+        isect_offset_encode,
+        isect_tiles,
+        projection,
+        quat_scale_to_covar_perci,
+        rasterize_to_pixels,
+    )
+
+    Ks = test_data["Ks"]
+    viewmats = test_data["viewmats"]
+    height = test_data["height"]
+    width = test_data["width"]
+    quats = test_data["quats"]
+    scales = test_data["scales"]
+    means = test_data["means"]
+    opacities = test_data["opacities"]
+    colors = test_data["colors"]
+    C = len(Ks)
+
+    viewmats.requires_grad = True
+    quats.requires_grad = True
+    scales.requires_grad = True
+    means.requires_grad = True
+
+    tile_size = 16
+
+    covars, _ = quat_scale_to_covar_perci(quats, scales, compute_perci=False, triu=True)
+    radii, means2d, depths, conics = projection(
+        means, covars, viewmats, Ks, width, height
+    )
+    tile_width = math.ceil(width / tile_size)
+    tile_height = math.ceil(height / tile_size)
+    tiles_per_gauss, isect_ids, gauss_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
+    render_colors, render_alphas = rasterize_to_pixels(
+        means2d,
+        conics,
+        colors,
+        opacities,
+        width,
+        height,
+        tile_size,
+        isect_offsets,
+        gauss_ids,
+    )
+
+    _render_colors, _render_alphas = _rendering_gsplat(
+        means, quats, scales, opacities, colors, viewmats, Ks, width, height
+    )
+    assert torch.allclose(render_colors, _render_colors, atol=1e-2, rtol=1e-3)
+    assert torch.allclose(render_alphas, _render_alphas, atol=1e-4, rtol=1e-4)
