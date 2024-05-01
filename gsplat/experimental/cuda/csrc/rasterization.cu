@@ -160,6 +160,12 @@ __global__ void isect_offset_encode(const int n_isects,
         return;
     }
 
+    if (idx == n_isects - 1) {
+        // write out the rest of the offsets
+        for (int i = id_curr + 1; i < C * n_tiles; ++i)
+            offsets[i] = n_isects;
+    }
+
     // visit the current and previous isect_id and check if the (cid, tile_id)
     // pair changes.
     int64_t isect_id_prev = isect_ids[idx - 1] >> 32; // shift out the depth
@@ -172,12 +178,6 @@ __global__ void isect_offset_encode(const int n_isects,
     int64_t id_prev = cid_prev * n_tiles + tid_prev;
     for (int i = id_prev + 1; i < id_curr + 1; ++i)
         offsets[i] = idx;
-
-    if (idx == n_isects - 1) {
-        // write out the rest of the offsets
-        for (int i = id_curr + 1; i < C * n_tiles; ++i)
-            offsets[i] = n_isects;
-    }
 }
 
 torch::Tensor isect_offset_encode_tensor(const torch::Tensor &isect_ids, // [n_isects]
@@ -492,7 +492,6 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     // transmittance is gonna be used in the backward pass which requires a high
     // numerical precision so we use double for it.
     double T = 1.0;
-    double next_T = 1.0;
     // index of most recent gaussian to write to this thread's pixel
     int cur_idx = 0;
 
@@ -536,12 +535,11 @@ __global__ void rasterize_to_pixels_fwd_kernel(
                 0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
                 conic.y * delta.x * delta.y;
             float alpha = min(0.999f, opac * __expf(-sigma));
-
             if (sigma < 0.f || alpha < 1.f / 255.f) {
                 continue;
             }
 
-            next_T = T * (1.0 - static_cast<double>(alpha));
+            const double next_T = T * (1.0 - static_cast<double>(alpha));
             if (next_T <= 1e-4) { // this pixel is done: exclusive
                 done = true;
                 break;
