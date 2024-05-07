@@ -103,7 +103,7 @@ class _RasterizeGaussians(Function):
         img_height: int,
         img_width: int,
         block_width: int,
-        background: Optional[Float[Tensor, "channels"]] = None,
+        background: Float[Tensor, "channels"],
         return_alpha: Optional[bool] = False,
     ) -> Tensor:
         num_points = xys.size(0)
@@ -232,6 +232,11 @@ class _RasterizeGaussians(Function):
                 v_out_img,
                 v_out_alpha,
             )
+        v_background = None
+        if background.requires_grad:
+            v_background = torch.matmul(
+                v_out_img.float().view(-1, 3).t(), final_Ts.float().view(-1, 1)
+            ).squeeze()
 
         # Abs grad for gaussian splitting criterion. See
         # - "AbsGS: Recovering Fine Details for 3D Gaussian Splatting"
@@ -249,6 +254,6 @@ class _RasterizeGaussians(Function):
             None,  # img_height
             None,  # img_width
             None,  # block_width
-            None,  # background
+            v_background,  # background
             None,  # return_alpha
         )
