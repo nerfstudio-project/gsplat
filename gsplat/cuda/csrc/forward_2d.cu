@@ -28,7 +28,8 @@ __global__ void project_gaussians_forward_kernel(
     int* __restrict__ radii,
     float3* __restrict__ conics,
     float* __restrict__ compoensation,
-    int32_t* __restrict__ num_tiles_hit
+    int32_t* __restrict__ num_tiles_hit,
+    float3* __restrict__ transMats,
 ) {
     unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
     if (idx >= num_points) {
@@ -46,6 +47,24 @@ __global__ void project_gaussians_forward_kernel(
 
     float3 scale = scales[idx];
     float4 quat = quats[idx];
+
+    const float* transMat;
+    bool ok;
+    float3 normal;
+    ok = build_H(
+        p_world,
+        intrins,
+        scale,
+        quat,
+        viewmat,
+        fx,
+        fy, 
+        tan_fovx,
+        tan_fovy,
+        transMat
+    );
+    if (!ok) return;
+    transMat = transMats + idx * 9;
 
     float *cur_cov3d = &(covs3d[6 * idx]);
     scale_rot_to_cov3d(scale, glob_scale, quat, cur_cov3d);
@@ -318,16 +337,94 @@ __global__ void rasterize_forward(
 // Device helper to build the per gaussian transformation matrix
 __device__ void build_H(
     const float3& __restrict__ mean3d,
-    const float* __restrict__ cov3d,
+    const float4 __restrict__ intrins,
+    const float3 __restrict__ scale,
+    const float3 __restrict__ quat,
     const float* __restrict__ viewmat,
     const float fx,
     const float fy,
     const float tan_fovx,
     const float tan_fovy,
     float3 &H,
-    float &compensation
 ) {
-    ...
+    const glm::mat3 W = glm::mat3(
+        viewmat[0], viewmat[1], viewmat[2],
+        viewmat[4], viewmat[5], viewmat[6],
+        viewmat[8], viewmat[9], viewmat[10]
+    )
+
+    const glm::vec3 cam_pos = glm::vec3(viewmat[12], viewmat[13], viewmat[14]); 
+    const glm::mat4 P = glm::mat4(
+        intrins.x, 0.0, 0.0, 0.0,
+        0.0, intrins.y, 0.0, 0.0,
+        intrins.z, intrins.w, 1.0, 1.0,
+        0.0, 0.0, 0.0, 0.0
+    );
+
+    glm::vec3 p_view = W * p_world + cam_pos;
+    glm::mat3 R = quat_to_rotmat(quat) * scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
+    glm::mat3 M = glm::mat3(W * R[0], W * R[1], p_view);
+    glm::vec3 tn = W * R[2];
+    float cos = glm::dot(-tn, p_view);
+
+    glm::mat4x3 T = glm::transpose(P * glm::mat3x4(
+        glm::vec4(M[0], 0.0),
+        glm::vec4(M[1], 0.0),
+        glm::vec4(M[2], 1.0)
+    ));
+
+    transMat[0] = T[0].x;
+	transMat[1] = T[0].y;
+	transMat[2] = T[0].z;
+	transMat[3] = T[1].x;
+	transMat[4] = T[1].y;
+	transMat[5] = T[1].z;
+	transMat[6] = T[2].x;
+	transMat[7] = T[2].y;
+	transMat[8] = T[2].z;
+	normal = {tn.x, tn.y, tn.z};
+	return true;
+}
+
+
+// Compute the bounding box of the 2D Gaussian and its center,
+// where the center of the bounding box is used to create a low pass filter
+// in the image plane
+__device__ bool build_AABB(
+    const float *transMat,
+    float2 & center,
+    float2 & extent
+) {
+    glm::mat4x3 T = glm::mat4x3(
+        transMat[0], transMat[1], transMat[2],
+        transMat[3], transMat[4], transMat[5],
+        transMat[6], transMat[7], transMat[8],
+        transMat[6], transMat[7], transMat[8]
+    );
+
+    float d = glm::dot(glm::vec3(1.0, 1.0, -1.0), T[3] * T[3]);
+
+    if (d == 0.0f) return false;
+
+    glm::vec3 f = glm::vec3(1.0, 1.0, -1.0) * (1.0f / d);
+
+    glm::vec3 p = glm::vec3(
+        glm::dot(f, T[0] * T[3]),
+        glm::dot(f, T[1] * T[3]),
+        glm::dot(f, T[2] * T[3])
+    );
+
+    glm::vec3 h0 = p * p - 
+        glm::vec3(
+            glm::dot(f, T[0] * T[0]),
+            glm::dot(f, T[1] * T[1]),
+            glm::dot(f, T[2] * T[2])
+        );
+
+    glm::vec3 h = sqrt(max(glm::vec3(0.0), h0)) + glm::vec3(0.0, 0.0, 1e-2);
+    center = {p.x, p.y};
+    extent = {h.x, h.y};
+    return true;
 }
 
 // Device helper to approximate projected 2D cov from 3D mean and cov
