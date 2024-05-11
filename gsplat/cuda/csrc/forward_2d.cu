@@ -66,8 +66,25 @@ __global__ void project_gaussians_forward_kernel(
     if (!ok) return;
     transMat = transMats + idx * 9;
 
-    float *cur_cov3d = &(covs3d[6 * idx]);
-    scale_rot_to_cov3d(scale, glob_scale, quat, cur_cov3d);
+    float2 center;
+    float2 extent;
+    ok = build_AABB(transMat, center, extent);
+    if (!ok) return;
+
+    float truncated_R = 3.f;
+
+    float radius = ceil(truncated_R * max(max(extent.x, extent.y), FilterSize));
+
+    uint2 rect_min, rect_max;
+    getRect(center, radius, rect_min, rect_max, grid); //TODO: the grid here is not defined
+    if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y) == 0)
+        return;
+
+    int32_t tile_area = (rect_max.x - rect_min.x) * (rect_max.y - rect_min.y);
+
+    if (tile_area <= 0) {
+        return;
+    }
 
     float fx = intrins.x;
     float fy = intrins.y;
@@ -75,24 +92,12 @@ __global__ void project_gaussians_forward_kernel(
     float cy = intrins.w;
     float tan_fovx = 0.5 * img_size.x / fx;
     float tan_fovy = 0.5 * img_size.y / fy;
-    float3 cov2d;
-    float comp;
-    ...
 
-    float radius;
-    bool ok = compute_cov2d_bounds(...)
-    if (!ok) {
-        return; // zero determinant
-    }
+
 
     // compte the projected mean
     float2 center = project_pix({fx, fy}, p_view, {cx, cy});
-    uint2 tile_min, tile_max;
-    get_tile_bbox(center, radius, tile_bounds, tile_min, tile_max, block_width);
-    int32_t tile_area = (tile_max.x - tile_min.x) * (tile_max.y - tile_min.y);
-    if (tile_area <= 0) {
-        return;
-    }
+
 
     num_tiles_hit[idx] = tile_area;
     depths[idx] = p_view.z;
@@ -242,6 +247,11 @@ __global__ void rasterize_forward(
     __shared__ float3 xy_opacity_batch{MAX_BLOCK_SIZE};
     __shared__ float3 conic_batch[MAX_BLOCK_SIZE];
 
+    //====== 2D Splatting ======//
+    __shared__ float3 Tu_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 Tv_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 Tw_batch[MAX_BLOCK_SIZE];
+
     // current visibility left to render
     float T = 1.f;
     // index of most recent gaussian to write to this thread's pixel
@@ -271,10 +281,13 @@ __global__ void rasterize_forward(
         if (idx < range.y) {
             int32_t g_id = gaussian_ids_sorted[idx];
             id_batch[tr] = g_id;
-            const float2 xy = xys[g_id];
-            const float opac = opacities[g_id];
+            // const float2 xy = xys[g_id];
+            // const float opac = opacities[g_id];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
-            conic_batch[tr] = conics[g_id];
+            // conic_batch[tr] = conics[g_id];
+            Tu_batch[tr] = {transMats[9 * g_id + 0], transMats[9 * g_id + 1], transMats[9 * g_id + 2]};
+            Tv_batch[tr] = {transMats[9 * g_id + 3], transMats[9 * g_id + 4], transMats[9 * g_id + 5]};
+            Tw_batch[tr] = {transMats[9 * g_id + 6], transMats[9 * g_id + 7], transMats[9 * g_id + 8]};
         }
 
         // Wait for other threads to collect the gaussians in batch
@@ -288,18 +301,41 @@ __global__ void rasterize_forward(
             const float opac = xy_opac.z;
 
             // ================================== place where 2D Gaussian changes take place ========== //
-            const float2 delta = {xy_opac.x - px, xy_opac.y - py};
-            const float sigma = 0.5f * (conic.x * delta.x * delta.x + 
-                                        conic.z * delta.y * delta.y) +
-                                conic.y * delta.x * delta.y;
-            const float alpha = min(0.999f, opac * __expf(-sigma));
-            if (sigma < 0.f || alpha < 1.f / 255.f) {
-                continue;
-            }
+            float3 Tu = Tu_batch[t];
+            float3 Tv = Tv_batch[t];
+            float3 Tw = Tw_batch[t];
 
-            // ========================================================================================= //
+            float3 k = {-Tu.x + px * Tw.x, -Tu.y + px * Tw.y, -Tu.z + px * Tw.z};
+            float3 l = {-Tv.x + py * Tw.x, -Tv.y + py * Tw.y, -Tv.z + py * Tw.z};
 
-            const float next_T = T * (1.f - alpha);
+            // cross product of two planes is a line
+            float3 p = cross_product(k, l);
+
+            // There is no intersection
+            if (p.z == 0.0) continue;
+
+            // 3D homogeneous point to 2d point on the splat
+            float2 s = {p.x / p.z, p.y / p.z};
+            
+            // 3D distance. Compute Mahalanobis distance in the canonical splat space
+            float rho_3d = (s.x * s.x + s.y * s.y);
+
+            // Low pass filter Botsch et al. [2005]. Eq. (11) from 2DGS paper
+            float x = xy_opac[0];
+            float y = xy_opac[1];
+            float2 d = {x - px, y - py};
+            // 2d screen distance
+            float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
+            float rho = min(rho3d, rho2d);
+
+            //====== Depth, Normal calculation ======//
+
+            const float sigma = 0.5f * rho;
+            const float alpha = min(0.999f, opac * _expf(-sigma));
+
+            if (sigma < 0.f || alpha < 1.f / 255.f) continue;
+
+            const float next_T = T * (1.f  -alpha);
             if (next_T <= 1e-4f) {
                 // this pixel is done
                 // we want to render the last gaussian that contributes and note
@@ -308,6 +344,15 @@ __global__ void rasterize_forward(
                 break;
             }
 
+            //====== Render Depth distortion map ======//
+
+            //====== Render Normal Map ======//
+            
+            //====== Render Depth Map ======//
+
+
+
+            // ========================================================================================= //
             int32_t g = id_batch[t];
             const float vis = alpha * T;
             const float3 c = colors[g];
