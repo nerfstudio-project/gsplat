@@ -1,8 +1,8 @@
-#include "forward.cuh"
+#include "forward_2d.cuh"
 #include "helpers.cuh"
 #include <algorithm>
-#include <coorperative_groups.h>
-#include <coorperative_groups/reduce.h>
+#include <cooperative_groups.h>
+#include <cooperative_groups/reduce.h>
 #include <iostream>
 #include <cuda_fp16.h>
 
@@ -28,8 +28,6 @@ __global__ void project_gaussians_forward_kernel(
     float2* __restrict__ xys,
     float* __restrict__ depths,
     int* __restrict__ radii,
-    float3* __restrict__ conics,
-    float* __restrict__ compoensation,
     int32_t* __restrict__ num_tiles_hit,
     float3* __restrict__ transMats,
 ) {
@@ -61,7 +59,7 @@ __global__ void project_gaussians_forward_kernel(
     // In 3DGS we build 3D covariance matrix and project 
     // Here we build transformation matrix H in 2DGS
     //====== 2DGS Specific ======//
-    float* cur_transMat = &(transMat[9 * idx]); //TODO: indexing may have bug
+    float* cur_transMats = &(transMats[9 * idx]); //TODO: indexing may have bug
     bool ok;
     float3 normal;
     ok = build_H(
@@ -74,14 +72,14 @@ __global__ void project_gaussians_forward_kernel(
         fy, 
         tan_fovx,
         tan_fovy,
-        curr_transMat
+        cur_transMats
     );
     if (!ok) return;
     // transMat = transMats + idx * 9;
 
     float2 center;
     float2 extent;
-    ok = build_AABB(transMat, center, extent);
+    ok = build_AABB(transMats, center, extent);
     if (!ok) return;
 
     float truncated_R = 3.f;
@@ -89,8 +87,8 @@ __global__ void project_gaussians_forward_kernel(
     float radius = ceil(truncated_R * max(max(extent.x, extent.y), FilterSize));
 
     // compte the projected mean
-    float2 center = project_pix({fx, fy}, p_view, {cx, cy});
-    uint2 tile_min. tile_max;
+    center = project_pix({fx, fy}, p_view, {cx, cy});
+    uint2 tile_min, tile_max;
     get_tile_bbox(center, radius, tile_bounds, tile_min, tile_max, block_width);
     int32_t tile_area = (tile_max.x - tile_min.x) * (tile_max.y - tile_min.y);
     if (tile_area <= 0) return;
@@ -99,8 +97,8 @@ __global__ void project_gaussians_forward_kernel(
     num_tiles_hit[idx] = tile_area;
     depths[idx] = p_view.z;
     radii[idx] = (int)radius;
-    xyz[idx] = center;
-    compoensation[idx] = comp;
+    xys[idx] = center;
+    // compoensation[idx] = comp; // Used in project 3D covariance to 2D; not used in 2DGS
 }
 
 
@@ -118,30 +116,25 @@ __global__ void map_gaussian_to_intersects(
     int64_t* __restrict__ isect_ids,
     int32_t* __restrict__ gaussian_ids
 ) {
+    unsigned idx = cg::this_grid().thread_rank();
+    if (idx >= num_points) return;
 
-    // Not all of this function is needed here.
+    if (radii[idx] <= 0) return;
 
-    unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
-    if (idx >= num_points) {
-        return;
-    }
-
-    if (radii[idx] <= 0) {
-        return;
-    }
+    // get the tile bbox for gaussian
     uint2 tile_min, tile_max;
     float2 center = xys[idx];
     get_tile_bbox(center, radii[idx], tile_bounds, tile_min, tile_max, block_width);
 
-    // update the intersection info for all tiles this gaussian hits
-    int32_t cur_idx = (idx == 0) ? 0 : cum_tiles_hit[idx - 1];
+    // update the intersection info for all tiles this gaussian hits.
+    int32_t cur_idx = (idx == 0) ? 0 : cum_tiels_hit[idx - 1];
     int64_t depth_id = (int64_t) * (int32_t *)&(depths[idx]);
     for (int i = tile_min.y; i < tile_max.y; ++i) {
-        for (int j = tile_min.x; j < tile_max.x; ++j) {
+        for (int j = tile_min.x; j < tile_mx.x; ++j) {
             // isect_id is tile ID and depth as int32
             int64_t tile_id = i * tile_bounds.x + j; // tile within image
             isect_ids[cur_idx] = (tile_id << 32) | depth_id; // tile | depth id
-            gaussian_ids[cur_idx] = idx; // 3D gaussian id
+            gaussian_ids[cur_idx] = idx;
             ++cur_idx; // handles gaussians that hit more than one tile
         }
     }
@@ -197,7 +190,38 @@ __global__ void nd_rasterize_forward(
     int* __restrict__ final_index,
     float* __restrict__ out_img,
     const float* __restrict__ background
-) {}
+) {
+//     auto block = cg::this_thread_block();
+//     int32_t tile_id = 
+//         block.group_index().y * tile_bounds.x + block.group_index().x;
+//     unsigned i = 
+//         block.group_index().y * block.group_dim().y + block.thread_index().y;
+//     unsigned j =
+//         block.group_index().x * block.group_dim().x + block.thread_index().x;
+
+//     float px = (float)j + 0.5;
+//     float py = (float)i + 0.5;
+//     int32_t pix_id = i * img_size.x + j;
+
+//     // keep not rasterizing threads around for reading data
+//     bool inside = (i < img_size.y && j < img_size.x);
+//     bool done = !inside;
+
+//     int2 range = tile_bins[tile_id];
+//     const int block_size = block.size();
+//     int num_batches = (range.y - range.x + block_size - 1) / block_size;
+
+//     // extern: declare a variable or function that is defined in another source file
+//     // or in the host code. It signifies the shared memory is not statically allocated 
+//     // within the kernel but will be allocated dynamically when the kernel is launched.
+//     extern __shared__ int s[];
+//     int32_t* id_batch = (int32_t*)s;
+//     float3* xy_opacity_batch = (float3*)&id_batch[block_size];
+//     #pragma unroll
+//     for(int c = 0; c < channels; ++c) {
+
+//     }
+}
 
 __global__ void rasterize_forward(
     const dim3 tile_bounds,
@@ -218,7 +242,7 @@ __global__ void rasterize_forward(
 
     auto block = cg::this_thread_block();
     int32_t tile_id = 
-        block.group_index().y * tile_bounds.x + block.gorup_index().x;
+        block.group_index().y * tile_bounds.x + block.group_index().x;
     unsigned i = 
         block.group_index().y * block.group_dim().y + block.thread_index().y;
     unsigned j = 
@@ -378,7 +402,7 @@ __global__ void rasterize_forward(
 
 
 // Device helper to build the per gaussian transformation matrix
-__device__ void build_H(
+__device__ bool build_H(
     const float3& __restrict__ mean3d,
     const float4 __restrict__ intrins,
     const float3 __restrict__ scale,
@@ -388,7 +412,8 @@ __device__ void build_H(
     const float fy,
     const float tan_fovx,
     const float tan_fovy,
-    float3 &H,
+    float3 &transMat,
+    float3 &normal
 ) {
     const glm::mat3 W = glm::mat3(
         viewmat[0], viewmat[1], viewmat[2],
@@ -469,20 +494,6 @@ __device__ bool build_AABB(
     extent = {h.x, h.y};
     return true;
 }
-
-// Device helper to approximate projected 2D cov from 3D mean and cov
-// TODO: Do we need this for 2D surfel?
-__device__ void project_cov3d_ewa(
-    const float3& __restrict__ mean3d,
-    const float* __restrict__ cov3d,
-    const float* __restrict__ viewmat,
-    const float fx,
-    const float fy,
-    const float tan_fovx,
-    const float tan_fovy,
-    float3 &conv2d,
-    float &compensation
-) {}
 
 
 // Device helper to get 3D covariance from scale and quat parameters

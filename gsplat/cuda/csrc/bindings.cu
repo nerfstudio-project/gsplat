@@ -1,6 +1,6 @@
 #include "backward.cuh"
 #include "bindings.h"
-#include "forward.cuh"
+#include "forward_2d.cuh"
 #include "helpers.cuh"
 #include "sh.cuh"
 #include <cooperative_groups.h>
