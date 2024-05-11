@@ -10,6 +10,8 @@ namespace cg = cooperative_groups;
 
 // kernel function for projecting each gaussian on device
 // each thread processes one gaussian
+// WZ: So the only difference between 2DGS and 3DGS here is that 
+// we compute the transformation matrix H with 2DGS and no covariance projection for 2DGS
 __global__ void project_gaussians_forward_kernel(
     const int num_points,
     const float3* __restrict__ means3d,
@@ -41,14 +43,25 @@ __global__ void project_gaussians_forward_kernel(
     float3 p_world = means3d[idx];
     float3 p_view;
 
-    if (clip_near_plane(p_world, viewmat, p_view, clip_thresh)) {
-        return;
-    }
+    bool not_ok = clip_near_plane(p_world, viewmat, p_view, clip_thresh);
+    if (not_ok) return;
+
 
     float3 scale = scales[idx];
     float4 quat = quats[idx];
 
-    const float* transMat;
+
+    float fx = intrins.x;
+    float fy = intrins.y;
+    float cx = intrins.z;
+    float cy = intrins.w;
+    float tan_fovx = 0.5 * img_size.x / fx;
+    float tan_fovy = 0.5 * img_size.y / fy;
+
+    // In 3DGS we build 3D covariance matrix and project 
+    // Here we build transformation matrix H in 2DGS
+    //====== 2DGS Specific ======//
+    float* cur_transMat = &(transMat[9 * idx]); //TODO: indexing may have bug
     bool ok;
     float3 normal;
     ok = build_H(
@@ -61,10 +74,10 @@ __global__ void project_gaussians_forward_kernel(
         fy, 
         tan_fovx,
         tan_fovy,
-        transMat
+        curr_transMat
     );
     if (!ok) return;
-    transMat = transMats + idx * 9;
+    // transMat = transMats + idx * 9;
 
     float2 center;
     float2 extent;
@@ -75,28 +88,12 @@ __global__ void project_gaussians_forward_kernel(
 
     float radius = ceil(truncated_R * max(max(extent.x, extent.y), FilterSize));
 
-    uint2 rect_min, rect_max;
-    getRect(center, radius, rect_min, rect_max, grid); //TODO: the grid here is not defined
-    if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y) == 0)
-        return;
-
-    int32_t tile_area = (rect_max.x - rect_min.x) * (rect_max.y - rect_min.y);
-
-    if (tile_area <= 0) {
-        return;
-    }
-
-    float fx = intrins.x;
-    float fy = intrins.y;
-    float cx = intrins.z;
-    float cy = intrins.w;
-    float tan_fovx = 0.5 * img_size.x / fx;
-    float tan_fovy = 0.5 * img_size.y / fy;
-
-
-
     // compte the projected mean
     float2 center = project_pix({fx, fy}, p_view, {cx, cy});
+    uint2 tile_min. tile_max;
+    get_tile_bbox(center, radius, tile_bounds, tile_min, tile_max, block_width);
+    int32_t tile_area = (tile_max.x - tile_min.x) * (tile_max.y - tile_min.y);
+    if (tile_area <= 0) return;
 
 
     num_tiles_hit[idx] = tile_area;
@@ -109,6 +106,7 @@ __global__ void project_gaussians_forward_kernel(
 
 // Kernel to map each intersection from tile ID and depth to a gaussian
 // writes output to isect_ids and gaussian_ids
+// TODO: Hmm what does this function do?
 __global__ void map_gaussian_to_intersects(
     const int num_points,
     const float2* __restrict__ xys,
