@@ -72,7 +72,8 @@ __global__ void project_gaussians_forward_kernel(
         fy, 
         tan_fovx,
         tan_fovy,
-        cur_transMats
+        cur_transMats,
+        normal
     );
     if (!ok) return;
     // transMat = transMats + idx * 9;
@@ -127,10 +128,10 @@ __global__ void map_gaussian_to_intersects(
     get_tile_bbox(center, radii[idx], tile_bounds, tile_min, tile_max, block_width);
 
     // update the intersection info for all tiles this gaussian hits.
-    int32_t cur_idx = (idx == 0) ? 0 : cum_tiels_hit[idx - 1];
+    int32_t cur_idx = (idx == 0) ? 0 : cum_tiles_hit[idx - 1];
     int64_t depth_id = (int64_t) * (int32_t *)&(depths[idx]);
     for (int i = tile_min.y; i < tile_max.y; ++i) {
-        for (int j = tile_min.x; j < tile_mx.x; ++j) {
+        for (int j = tile_min.x; j < tile_max.x; ++j) {
             // isect_id is tile ID and depth as int32
             int64_t tile_id = i * tile_bounds.x + j; // tile within image
             isect_ids[cur_idx] = (tile_id << 32) | depth_id; // tile | depth id
@@ -229,7 +230,7 @@ __global__ void rasterize_forward(
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
+    const float3* __restrict__ transMats,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
     float* __restrict__ final_Ts,
@@ -303,8 +304,8 @@ __global__ void rasterize_forward(
         if (idx < range.y) {
             int32_t g_id = gaussian_ids_sorted[idx];
             id_batch[tr] = g_id;
-            // const float2 xy = xys[g_id];
-            // const float opac = opacities[g_id];
+            const float2 xy = xys[g_id];
+            const float opac = opacities[g_id];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             // conic_batch[tr] = conics[g_id];
             Tu_batch[tr] = {transMats[9 * g_id + 0], transMats[9 * g_id + 1], transMats[9 * g_id + 2]};
@@ -347,13 +348,13 @@ __global__ void rasterize_forward(
             float y = xy_opac[1];
             float2 d = {x - px, y - py};
             // 2d screen distance
-            float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
-            float rho = min(rho3d, rho2d);
+            float rho_2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
+            float rho = min(rho_3d, rho_2d);
 
             //====== Depth, Normal calculation ======//
 
             const float sigma = 0.5f * rho;
-            const float alpha = min(0.999f, opac * _expf(-sigma));
+            const float alpha = min(0.999f, opac * __expf(-sigma));
 
             if (sigma < 0.f || alpha < 1.f / 255.f) continue;
 
@@ -419,9 +420,9 @@ __device__ bool build_H(
         viewmat[0], viewmat[1], viewmat[2],
         viewmat[4], viewmat[5], viewmat[6],
         viewmat[8], viewmat[9], viewmat[10]
-    )
+    );
 
-    const glm::vec3 cam_pos = glm::vec3(viewmat[12], viewmat[13], viewmat[14]); 
+    const glm::vec3 cam_pos = glm::vec3(viewmat[12], viewmat[13], viewmat[14]);
     const glm::mat4 P = glm::mat4(
         intrins.x, 0.0, 0.0, 0.0,
         0.0, intrins.y, 0.0, 0.0,
@@ -429,7 +430,7 @@ __device__ bool build_H(
         0.0, 0.0, 0.0, 0.0
     );
 
-    glm::vec3 p_view = W * p_world + cam_pos;
+    glm::vec3 p_view = W * mean3d + cam_pos;
     glm::mat3 R = quat_to_rotmat(quat) * scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
     glm::mat3 M = glm::mat3(W * R[0], W * R[1], p_view);
     glm::vec3 tn = W * R[2];

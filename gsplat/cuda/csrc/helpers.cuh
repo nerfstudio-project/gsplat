@@ -5,6 +5,7 @@
 #include <iostream>
 
 #define FilterSize 0.7071067811865476
+#define FilterInvSquare 1/(FilterSize*FilterSize)
 
 inline __device__ void get_bbox(
     const float2 center,
