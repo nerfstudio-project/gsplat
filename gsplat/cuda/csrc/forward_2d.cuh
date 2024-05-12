@@ -61,3 +61,23 @@ __global__ void get_tile_bin_edges(
     int2* __restrict__ tile_bins
 );
 
+
+__device__ bool build_H(
+    const float3& __restrict__ mean3d,
+    const float4 __restrict__ intrins,
+    const float3 __restrict__ scale,
+    const float4 __restrict__ quat,
+    const float* __restrict__ viewmat,
+    const float fx,
+    const float fy,
+    const float tan_fovx,
+    const float tan_fovy,
+    float* transMat,
+    float3 &normal
+);
+
+__device__ bool build_AABB(
+    const float *transMat,
+    float2 & center,
+    float2 & extent
+);

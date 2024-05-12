@@ -29,7 +29,7 @@ __global__ void project_gaussians_forward_kernel(
     float* __restrict__ depths,
     int* __restrict__ radii,
     int32_t* __restrict__ num_tiles_hit,
-    float3* __restrict__ transMats
+    float* __restrict__ transMats
 ) {
     unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
     if (idx >= num_points) {
@@ -59,7 +59,7 @@ __global__ void project_gaussians_forward_kernel(
     // In 3DGS we build 3D covariance matrix and project 
     // Here we build transformation matrix H in 2DGS
     //====== 2DGS Specific ======//
-    float3* cur_transMats = &(transMats[9 * idx]); //TODO: indexing may have bug
+    float* cur_transMats = &(transMats[9 * idx]); //TODO: indexing may have bug
     bool ok;
     float3 normal;
     ok = build_H(
@@ -230,7 +230,7 @@ __global__ void rasterize_forward(
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
-    const float3* __restrict__ transMats,
+    const float* __restrict__ transMats,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
     float* __restrict__ final_Ts,
@@ -318,7 +318,6 @@ __global__ void rasterize_forward(
         // process gaussians in the current batch for this pixel
         int batch_size = min(block_size, range.y - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
-            const float3 conic = conic_batch[t];
             const float3 xy_opac = xy_opacity_batch[t];
             const float opac = xy_opac.z;
 
@@ -343,8 +342,8 @@ __global__ void rasterize_forward(
             float rho_3d = (s.x * s.x + s.y * s.y);
 
             // Low pass filter Botsch et al. [2005]. Eq. (11) from 2DGS paper
-            float x = xy_opac[0];
-            float y = xy_opac[1];
+            float x = xy_opac.x;
+            float y = xy_opac.y;
             float2 d = {x - px, y - py};
             // 2d screen distance
             float rho_2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
@@ -406,13 +405,13 @@ __device__ bool build_H(
     const float3& __restrict__ mean3d,
     const float4 __restrict__ intrins,
     const float3 __restrict__ scale,
-    const float3 __restrict__ quat,
+    const float4 __restrict__ quat,
     const float* __restrict__ viewmat,
     const float fx,
     const float fy,
     const float tan_fovx,
     const float tan_fovy,
-    float3 &transMat,
+    float* transMat,
     float3 &normal
 ) {
     const glm::mat3 W = glm::mat3(
@@ -429,7 +428,9 @@ __device__ bool build_H(
         0.0, 0.0, 0.0, 0.0
     );
 
-    glm::vec3 p_view = W * mean3d + cam_pos;
+    const glm::vec3 p_world = glm::vec3(mean3d.x, mean3d.y, mean3d.z);
+
+    glm::vec3 p_view = W * p_world + cam_pos;
     glm::mat3 R = quat_to_rotmat(quat) * scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
     glm::mat3 M = glm::mat3(W * R[0], W * R[1], p_view);
     glm::vec3 tn = W * R[2];
