@@ -202,6 +202,8 @@ project_gaussians_forward_tensor(
         torch::zeros({num_points}, means3d.options().dtype(torch::kFloat32));
     torch::Tensor num_tiles_hit_d =
         torch::zeros({num_points}, means3d.options().dtype(torch::kInt32));
+    torch::Tensor transMats = 
+        torch::zeros({num_points}, means3d.options().dtype(torch::kFloat32));
 
     project_gaussians_forward_kernel<<<
         (num_points + N_THREADS - 1) / N_THREADS,
@@ -222,13 +224,14 @@ project_gaussians_forward_tensor(
         (float2 *)xys_d.contiguous().data_ptr<float>(),
         depths_d.contiguous().data_ptr<float>(),
         radii_d.contiguous().data_ptr<int>(),
-        (float3 *)conics_d.contiguous().data_ptr<float>(),
-        compensation_d.contiguous().data_ptr<float>(),
-        num_tiles_hit_d.contiguous().data_ptr<int32_t>()
+        // (float3 *)conics_d.contiguous().data_ptr<float>(),
+        // compensation_d.contiguous().data_ptr<float>(),
+        num_tiles_hit_d.contiguous().data_ptr<int32_t>(),
+        transMats.contiguous().data_ptr<float>()
     );
 
     return std::make_tuple(
-        cov3d_d, xys_d, depths_d, radii_d, conics_d, compensation_d, num_tiles_hit_d
+        cov3d_d, xys_d, depths_d, radii_d, num_tiles_hit_d, transMats
     );
 }
 
@@ -383,7 +386,8 @@ rasterize_forward_tensor(
     const torch::Tensor &gaussian_ids_sorted,
     const torch::Tensor &tile_bins,
     const torch::Tensor &xys,
-    const torch::Tensor &conics,
+    // const torch::Tensor &conics,
+    const torch::Tensor &transMats,
     const torch::Tensor &colors,
     const torch::Tensor &opacities,
     const torch::Tensor &background
@@ -392,7 +396,8 @@ rasterize_forward_tensor(
     CHECK_INPUT(gaussian_ids_sorted);
     CHECK_INPUT(tile_bins);
     CHECK_INPUT(xys);
-    CHECK_INPUT(conics);
+    CHECK_INPUT(transMats);
+    // CHECK_INPUT(conics);
     CHECK_INPUT(colors);
     CHECK_INPUT(opacities);
     CHECK_INPUT(background);
@@ -432,7 +437,8 @@ rasterize_forward_tensor(
         gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
         (int2 *)tile_bins.contiguous().data_ptr<int>(),
         (float2 *)xys.contiguous().data_ptr<float>(),
-        (float3 *)conics.contiguous().data_ptr<float>(),
+        // (float3 *)conics.contiguous().data_ptr<float>(),
+        transMats.contiguous().data_ptr<float>(),
         (float3 *)colors.contiguous().data_ptr<float>(),
         opacities.contiguous().data_ptr<float>(),
         final_Ts.contiguous().data_ptr<float>(),

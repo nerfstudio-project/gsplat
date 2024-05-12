@@ -1,5 +1,5 @@
 #include "cuda_runtime.h"
-#include "forward.cuh"
+#include "forward_2d.cuh"
 #include <cstdio>
 #include <iostream>
 #include <math.h>
