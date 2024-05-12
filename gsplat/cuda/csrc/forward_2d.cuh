@@ -2,6 +2,26 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
+__global__ void project_gaussians_forward_kernel(
+    const int num_points,
+    const float3* __restrict__ means3d,
+    const float3* __restrict__ scales,
+    const float glob_scale,
+    const float4* __restrict__ quats,
+    const float* __restrict__ viewmat,
+    const float4 intrins,
+    const dim3 img_size,
+    const dim3 tile_bounds,
+    const unsigned block_width,
+    const float clip_thresh,
+    float* __restrict__ conv3d,
+    float2* __restrict__ xys,
+    float* __restrict__ depths,
+    int* __restrict__ radii,
+    int32_t* __restrict__ num_tiles_hit,
+    float* __restrict__ transMats
+);
+
 // compute output color image from binned and sorted gaussians
 __global__ void rasterize_forward(
     const dim3 tile_bounds,
