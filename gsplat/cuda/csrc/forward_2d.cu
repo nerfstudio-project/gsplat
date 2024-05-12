@@ -29,7 +29,7 @@ __global__ void project_gaussians_forward_kernel(
     float* __restrict__ depths,
     int* __restrict__ radii,
     int32_t* __restrict__ num_tiles_hit,
-    float3* __restrict__ transMats,
+    float3* __restrict__ transMats
 ) {
     unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
     if (idx >= num_points) {
@@ -59,7 +59,7 @@ __global__ void project_gaussians_forward_kernel(
     // In 3DGS we build 3D covariance matrix and project 
     // Here we build transformation matrix H in 2DGS
     //====== 2DGS Specific ======//
-    float* cur_transMats = &(transMats[9 * idx]); //TODO: indexing may have bug
+    float3* cur_transMats = &(transMats[9 * idx]); //TODO: indexing may have bug
     bool ok;
     float3 normal;
     ok = build_H(
@@ -267,8 +267,7 @@ __global__ void rasterize_forward(
 
     // The three lines declare memory arrays within the CUDA kernel function.
     __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 xy_opacity_batch{MAX_BLOCK_SIZE};
-    __shared__ float3 conic_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
 
     //====== 2D Splatting ======//
     __shared__ float3 Tu_batch[MAX_BLOCK_SIZE];
