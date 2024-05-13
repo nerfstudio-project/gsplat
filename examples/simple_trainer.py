@@ -115,10 +115,12 @@ class SimpleTrainer:
                 B_SIZE,
             )
 
-            pdb.set_trace()
+            # pdb.set_trace()
             torch.cuda.synchronize()
             times[0] += time.time() - start
             start = time.time()
+
+            pdb.set_trace()
             out_img = rasterize_gaussians(
                 xys,
                 depths,

@@ -99,8 +99,6 @@ class _ProjectGaussians(Function):
         if num_points < 1 or means3d.shape[-1] != 3:
             raise ValueError(f"Invalid shape for means3d: {means3d.shape}")
 
-        print(f"img_height: {img_height}")
-        print(f"img_width: {img_width}")
         (
             cov3d,
             xys,

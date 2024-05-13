@@ -178,13 +178,20 @@ project_gaussians_forward_tensor(
     dim3 img_size_dim3;
     img_size_dim3.x = img_width;
     img_size_dim3.y = img_height; 
-    printf("img_size.x: %.2f, img_size.y: %.2f \n", img_width, img_height);
-    printf("block_width: %.2f \n", block_width);
+    // printf("fx: %.2f \n", fx);
+    // printf("fy: %.2f \n", fy);
+    // printf("cx: %.2f \n", cx);
+    // printf("cy: %.2f \n", cy);
+    // printf("img_size.x: %.2f, img_size.y: %.2f \n", int(img_width), int(img_height));
+    // printf("block_width: %.2f \n", int(block_width));
 
     dim3 tile_bounds_dim3;
     tile_bounds_dim3.x = int((img_width + block_width - 1) / block_width);
     tile_bounds_dim3.y = int((img_height + block_width - 1) / block_width);
     tile_bounds_dim3.z = 1;
+
+    // printf("tile bound x: %.2f", tile_bounds_dim3.x);
+    // printf("tile bound y: %.2f", tile_bounds_dim3.y);
 
     float4 intrins = {fx, fy, cx, cy};
 
@@ -204,7 +211,7 @@ project_gaussians_forward_tensor(
     torch::Tensor num_tiles_hit_d =
         torch::zeros({num_points}, means3d.options().dtype(torch::kInt32));
     torch::Tensor transMats = 
-        torch::zeros({num_points}, means3d.options().dtype(torch::kFloat32));
+        torch::zeros({num_points, 3, 3}, means3d.options().dtype(torch::kFloat32));
 
     project_gaussians_forward_kernel<<<
         (num_points + N_THREADS - 1) / N_THREADS,
@@ -231,7 +238,7 @@ project_gaussians_forward_tensor(
         transMats.contiguous().data_ptr<float>()
     );
 
-    printf("transMats[0]: %.2f \n", transMats[0]);
+    // printf("transMats[0]: %.2f \n", transMats[0]);
 
     return std::make_tuple(
         cov3d_d, xys_d, depths_d, radii_d, num_tiles_hit_d, transMats

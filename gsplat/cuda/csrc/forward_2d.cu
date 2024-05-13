@@ -91,14 +91,15 @@ __global__ void project_gaussians_forward_kernel(
     // }
 
     // printf("%.2f, %.2f, %.2f \n %.2f, %.2f, %.2f \n %.2f, %.2f, %.2f \n", \
-        cur_transMats[start_index], cur_transMats[start_index + 1], cur_transMats[start_index + 2], \
-        cur_transMats[start_index + 3], cur_transMats[start_index + 4], cur_transMats[start_index + 5], \
-        cur_transMats[start_index + 6], cur_transMats[start_index + 7], cur_transMats[start_index + 8]);
+    //     cur_transMats[start_index], cur_transMats[start_index + 1], cur_transMats[start_index + 2], \
+    //     cur_transMats[start_index + 3], cur_transMats[start_index + 4], cur_transMats[start_index + 5], \
+    //     cur_transMats[start_index + 6], cur_transMats[start_index + 7], cur_transMats[start_index + 8]);
 
     float2 center;
     float2 extent;
-    ok = build_AABB(transMats, center, extent);
+    ok = build_AABB(cur_transMats, center, extent);
     if (!ok) return;
+    printf("%d \n", ok);
 
     float truncated_R = 3.f;
 
@@ -457,6 +458,7 @@ __device__ bool build_H(
     glm::mat3 R = quat_to_rotmat(quat) * scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
     glm::mat3 M = glm::mat3(W * R[0], W * R[1], p_view);
     glm::vec3 tn = W * R[2];
+    // printf("tn: %.2f, %.2f, %.2f \n", tn.x, tn.y, tn.z);
     float cos = glm::dot(-tn, p_view);
 
     glm::mat4x3 T = glm::transpose(P * glm::mat3x4(
@@ -474,6 +476,11 @@ __device__ bool build_H(
 	transMat[6] = T[2].x;
 	transMat[7] = T[2].y;
 	transMat[8] = T[2].z;
+
+    // printf("transMat: %.2f, %.2f, %.2f \n %.2f, %.2f, %.2f \n %.2f, %.2f, %.2f\n", \
+    //         transMat[0], transMat[1], transMat[2], \
+    //         transMat[3], transMat[4], transMat[5], \
+    //         transMat[6], transMat[7], transMat[8]);
 	normal = {tn.x, tn.y, tn.z};
 	return true;
 }
