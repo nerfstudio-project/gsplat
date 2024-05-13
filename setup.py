@@ -31,6 +31,13 @@ def get_extensions():
     sources = glob.glob(osp.join(extensions_dir, "*.cu")) + glob.glob(
         osp.join(extensions_dir, "*.cpp")
     )
+
+    extensions_dir_v2 = osp.join("gsplat", "cuda_v2", "csrc")
+    sources_v2 = glob.glob(osp.join(extensions_dir_v2, "*.cu")) + glob.glob(
+        osp.join(extensions_dir_v2, "*.cpp")
+    )
+
+    sources = sources + sources_v2
     # sources = [
     #     osp.join(extensions_dir, "ext.cpp"),
     #     osp.join(extensions_dir, "rasterize.cu"),
