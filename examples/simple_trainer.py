@@ -12,6 +12,8 @@ from gsplat.rasterize import rasterize_gaussians
 from PIL import Image
 from torch import Tensor, optim
 
+import pdb
+
 
 class SimpleTrainer:
     """Trains random gaussians to fit an image."""
@@ -90,14 +92,14 @@ class SimpleTrainer:
         B_SIZE = 16
         for iter in range(iterations):
             start = time.time()
+            # pdb.set_trace()
             (
                 xys,
                 depths,
                 radii,
-                conics,
-                compensation,
                 num_tiles_hit,
                 cov3d,
+                transMats
             ) = project_gaussians(
                 self.means,
                 self.scales,
@@ -112,6 +114,8 @@ class SimpleTrainer:
                 self.W,
                 B_SIZE,
             )
+
+            pdb.set_trace()
             torch.cuda.synchronize()
             times[0] += time.time() - start
             start = time.time()
@@ -134,6 +138,7 @@ class SimpleTrainer:
             optimizer.zero_grad()
             start = time.time()
             loss.backward()
+            # print("after backward")
             torch.cuda.synchronize()
             times[2] += time.time() - start
             optimizer.step()

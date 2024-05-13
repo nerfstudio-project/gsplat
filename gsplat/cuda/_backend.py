@@ -7,6 +7,8 @@ from subprocess import DEVNULL, call
 from rich.console import Console
 from torch.utils.cpp_extension import _get_build_directory, load
 
+import pdb
+
 PATH = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -64,12 +66,13 @@ except ImportError:
         except OSError:
             pass
 
-        if os.path.exists(os.path.join(build_dir, "gsplat_cuda.so")) or os.path.exists(
-            os.path.join(build_dir, "gsplat_cuda.lib")
-        ):
+        if os.path.exists(os.path.join(build_dir, "gsplat_cuda.so")) or \
+            os.path.exists(os.path.join(build_dir, "gsplat_cuda.lib")):
+        # if False:             # TODO (WZ): For debug purpose, disable
             # If the build exists, we assume the extension has been built
             # and we can load it.
 
+            # pdb.set_trace()
             _C = load(
                 name=name,
                 sources=sources,
@@ -80,6 +83,7 @@ except ImportError:
         else:
             # Build from scratch. Remove the build directory just to be safe: pytorch jit might stuck
             # if the build directory exists with a lock file in it.
+            # pdb.set_trace()
             shutil.rmtree(build_dir)
             with Console().status(
                 "[bold yellow]gsplat: Setting up CUDA (This may take a few minutes the first time)",

@@ -29,7 +29,7 @@ __global__ void rasterize_forward(
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
+    const float* __restrict__ transMats,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
     float* __restrict__ final_Ts,
@@ -39,21 +39,21 @@ __global__ void rasterize_forward(
 );
 
 // compute output color image from binned and sorted gaussians
-__global__ void nd_rasterize_forward(
-    const dim3 tile_bounds,
-    const dim3 img_size,
-    const unsigned channels,
-    const int32_t* __restrict__ gaussian_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
-    const float* __restrict__ colors,
-    const float* __restrict__ opacities,
-    float* __restrict__ final_Ts,
-    int* __restrict__ final_index,
-    float* __restrict__ out_img,
-    const float* __restrict__ background
-);
+// __global__ void nd_rasterize_forward(
+//     const dim3 tile_bounds,
+//     const dim3 img_size,
+//     const unsigned channels,
+//     const int32_t* __restrict__ gaussian_ids_sorted,
+//     const int2* __restrict__ tile_bins,
+//     const float2* __restrict__ xys,
+//     const float3* __restrict__ conics,
+//     const float* __restrict__ colors,
+//     const float* __restrict__ opacities,
+//     float* __restrict__ final_Ts,
+//     int* __restrict__ final_index,
+//     float* __restrict__ out_img,
+//     const float* __restrict__ background
+// );
 
 // device helper to get 3D covariance from scale and quat parameters
 __device__ void scale_rot_to_cov3d(

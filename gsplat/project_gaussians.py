@@ -99,14 +99,15 @@ class _ProjectGaussians(Function):
         if num_points < 1 or means3d.shape[-1] != 3:
             raise ValueError(f"Invalid shape for means3d: {means3d.shape}")
 
+        print(f"img_height: {img_height}")
+        print(f"img_width: {img_width}")
         (
             cov3d,
             xys,
             depths,
             radii,
-            conics,
-            compensation,
             num_tiles_hit,
+            transMats
         ) = _C.project_gaussians_forward(
             num_points,
             means3d,
@@ -142,11 +143,10 @@ class _ProjectGaussians(Function):
             viewmat,
             cov3d,
             radii,
-            conics,
-            compensation,
+            transMats
         )
 
-        return (xys, depths, radii, conics, compensation, num_tiles_hit, cov3d)
+        return (xys, depths, radii, num_tiles_hit, cov3d, transMats)
 
     @staticmethod
     def backward(

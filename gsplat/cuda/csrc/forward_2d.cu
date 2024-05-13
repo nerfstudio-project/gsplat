@@ -31,6 +31,7 @@ __global__ void project_gaussians_forward_kernel(
     int32_t* __restrict__ num_tiles_hit,
     float* __restrict__ transMats
 ) {
+    // printf("Here\n");
     unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
     if (idx >= num_points) {
         return;
@@ -56,12 +57,16 @@ __global__ void project_gaussians_forward_kernel(
     float tan_fovx = 0.5 * img_size.x / fx;
     float tan_fovy = 0.5 * img_size.y / fy;
 
+    // printf("img_size.x: %.3f \n", img_size.x);
+    // printf("img_size.y: %.3f \n", img_size.y);
+    // printf("fx: %.2f, fy: %.2f, tan_fovx: %.2f, tan_fovy: %.2f \n", fx, fy, tan_fovx, tan_fovy);
     // In 3DGS we build 3D covariance matrix and project 
     // Here we build transformation matrix H in 2DGS
     //====== 2DGS Specific ======//
     float* cur_transMats = &(transMats[9 * idx]); //TODO: indexing may have bug
     bool ok;
     float3 normal;
+
     ok = build_H(
         p_world,
         intrins,
@@ -75,8 +80,20 @@ __global__ void project_gaussians_forward_kernel(
         cur_transMats,
         normal
     );
+
+
     if (!ok) return;
     // transMat = transMats + idx * 9;
+
+    int start_index = 9 * idx;
+    // for (int i = 0; i < 9; ++i) {
+    //     printf("cur_transMats[%d] = %f\n", start_index + i, cur_transMats[start_index + i]);
+    // }
+
+    // printf("%.2f, %.2f, %.2f \n %.2f, %.2f, %.2f \n %.2f, %.2f, %.2f \n", \
+        cur_transMats[start_index], cur_transMats[start_index + 1], cur_transMats[start_index + 2], \
+        cur_transMats[start_index + 3], cur_transMats[start_index + 4], cur_transMats[start_index + 5], \
+        cur_transMats[start_index + 6], cur_transMats[start_index + 7], cur_transMats[start_index + 8]);
 
     float2 center;
     float2 extent;
@@ -177,52 +194,51 @@ __global__ void get_tile_bin_edges(
 // Kernel function for rasterizing each tile
 // each thread treats a single pixel
 // each thread group uses the same gaussian data in a tile
-__global__ void nd_rasterize_forward(
-    const dim3 tile_bounds,
-    const dim3 img_size,
-    const unsigned channels,
-    const int32_t* __restrict__ gaussian_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
-    const float* __restrict__ colors,
-    const float* __restrict__ opacities,
-    float* __restrict__ final_Ts,
-    int* __restrict__ final_index,
-    float* __restrict__ out_img,
-    const float* __restrict__ background
-) {
-//     auto block = cg::this_thread_block();
-//     int32_t tile_id = 
-//         block.group_index().y * tile_bounds.x + block.group_index().x;
-//     unsigned i = 
-//         block.group_index().y * block.group_dim().y + block.thread_index().y;
-//     unsigned j =
-//         block.group_index().x * block.group_dim().x + block.thread_index().x;
+// __global__ void nd_rasterize_forward(
+//     const dim3 tile_bounds,
+//     const dim3 img_size,
+//     const unsigned channels,
+//     const int32_t* __restrict__ gaussian_ids_sorted,
+//     const int2* __restrict__ tile_bins,
+//     const float2* __restrict__ xys,
+//     const float* __restrict__ colors,
+//     const float* __restrict__ opacities,
+//     float* __restrict__ final_Ts,
+//     int* __restrict__ final_index,
+//     float* __restrict__ out_img,
+//     const float* __restrict__ background
+// ) {
+// //     auto block = cg::this_thread_block();
+// //     int32_t tile_id = 
+// //         block.group_index().y * tile_bounds.x + block.group_index().x;
+// //     unsigned i = 
+// //         block.group_index().y * block.group_dim().y + block.thread_index().y;
+// //     unsigned j =
+// //         block.group_index().x * block.group_dim().x + block.thread_index().x;
 
-//     float px = (float)j + 0.5;
-//     float py = (float)i + 0.5;
-//     int32_t pix_id = i * img_size.x + j;
+// //     float px = (float)j + 0.5;
+// //     float py = (float)i + 0.5;
+// //     int32_t pix_id = i * img_size.x + j;
 
-//     // keep not rasterizing threads around for reading data
-//     bool inside = (i < img_size.y && j < img_size.x);
-//     bool done = !inside;
+// //     // keep not rasterizing threads around for reading data
+// //     bool inside = (i < img_size.y && j < img_size.x);
+// //     bool done = !inside;
 
-//     int2 range = tile_bins[tile_id];
-//     const int block_size = block.size();
-//     int num_batches = (range.y - range.x + block_size - 1) / block_size;
+// //     int2 range = tile_bins[tile_id];
+// //     const int block_size = block.size();
+// //     int num_batches = (range.y - range.x + block_size - 1) / block_size;
 
-//     // extern: declare a variable or function that is defined in another source file
-//     // or in the host code. It signifies the shared memory is not statically allocated 
-//     // within the kernel but will be allocated dynamically when the kernel is launched.
-//     extern __shared__ int s[];
-//     int32_t* id_batch = (int32_t*)s;
-//     float3* xy_opacity_batch = (float3*)&id_batch[block_size];
-//     #pragma unroll
-//     for(int c = 0; c < channels; ++c) {
+// //     // extern: declare a variable or function that is defined in another source file
+// //     // or in the host code. It signifies the shared memory is not statically allocated 
+// //     // within the kernel but will be allocated dynamically when the kernel is launched.
+// //     extern __shared__ int s[];
+// //     int32_t* id_batch = (int32_t*)s;
+// //     float3* xy_opacity_batch = (float3*)&id_batch[block_size];
+// //     #pragma unroll
+// //     for(int c = 0; c < channels; ++c) {
 
-//     }
-}
+// //     }
+// }
 
 __global__ void rasterize_forward(
     const dim3 tile_bounds,
@@ -428,9 +444,16 @@ __device__ bool build_H(
         0.0, 0.0, 0.0, 0.0
     );
 
+    // printf("intrins: %.2f, %.2f, %.2f, %.2f \n", intrins.x, intrins.y, intrins.z, intrins.w);
     const glm::vec3 p_world = glm::vec3(mean3d.x, mean3d.y, mean3d.z);
 
+
+    // printf("p_world: %.2f, %.2f, %.2f \n", p_world.x, p_world.y, p_world.z);
+    // printf("cam_pos: %.2f, %.2f, %.2f \n", cam_pos.x, cam_pos.y, cam_pos.z);
     glm::vec3 p_view = W * p_world + cam_pos;
+    // printf("p_world: %.2f, %.2f, %.2f \n p_view: %.2f, %.2f, %.2f \n", \
+    //         p_world.x, p_world.y, p_world.z, \
+    //         p_view.x, p_view.y, p_view.z);
     glm::mat3 R = quat_to_rotmat(quat) * scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
     glm::mat3 M = glm::mat3(W * R[0], W * R[1], p_view);
     glm::vec3 tn = W * R[2];
@@ -471,9 +494,14 @@ __device__ bool build_AABB(
         transMat[6], transMat[7], transMat[8]
     );
 
+
     float d = glm::dot(glm::vec3(1.0, 1.0, -1.0), T[3] * T[3]);
 
-    if (d == 0.0f) return false;
+    // printf("%d \n", d);
+    if (d == 0.0f) {
+        // printf("Here \n");
+        return false;
+    }
 
     glm::vec3 f = glm::vec3(1.0, 1.0, -1.0) * (1.0f / d);
 
