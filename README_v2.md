@@ -51,7 +51,7 @@ Note: Tested on a 16GB V100-SXM2. LPIPS metric is a different version with the o
 cd examples_v2
 pip install -r requirements.txt
 
-python simple_trainer.py --data_dir data/360_v2/garden --port 8080 --max_steps 7000
+python simple_trainer.py --data_dir data/360_v2/garden --port 8080 --max_steps 7000 --result_dir results/garden
 ```
 
 ### Plug-and-Play in the Official Implementation
