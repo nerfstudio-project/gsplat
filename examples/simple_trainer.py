@@ -62,12 +62,32 @@ class SimpleTrainer:
             [
                 [1.0, 0.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 8.0],
+                [0.0, 0.0, 1.0, 0.0],
                 [0.0, 0.0, 0.0, 1.0],
             ],
             device=self.device,
         )
         self.background = torch.zeros(d, device=self.device)
+
+        # pdb.set_trace()
+    
+        x_range = torch.linspace(-1, 1, self.gt_image.shape[0])
+        y_range = torch.linspace(-1, 1, self.gt_image.shape[1])
+
+        x, y = torch.meshgrid(x_range, y_range)
+
+        z = torch.ones_like(x)
+
+        # pdb.set_trace()
+        self.means = torch.stack((x, y, z), dim=-1).reshape((-1, 3)) #TODO (WZ): each pixel has one gaussian; normalized to [-1, 1]
+        self.scales = torch.ones_like(self.scales)
+        self.rgbs = self.gt_image.clone().reshape((-1, 3)) #TODO (WZ): set this to ground truth RGB; normalized to [0, 1]
+
+
+        self.means = self.means.to(self.device)
+        self.scales = self.scales.to(self.scales)
+        self.rgbs = self.rgbs.to(self.device)
+        # pdb.set_trace()
 
         self.means.requires_grad = True
         self.scales.requires_grad = True
@@ -75,6 +95,13 @@ class SimpleTrainer:
         self.rgbs.requires_grad = True
         self.opacities.requires_grad = True
         self.viewmat.requires_grad = False
+        
+        # self.means.requires_grad = False
+        # self.scales.requires_grad = False
+        # self.quats.requires_grad = False
+        # self.rgbs.requires_grad = False
+        # self.opacities.requires_grad = False
+        # self.viewmat.requires_grad = False
 
     def train(
         self,
@@ -90,64 +117,68 @@ class SimpleTrainer:
         frames = []
         times = [0] * 3  # project, rasterize, backward
         B_SIZE = 16
-        for iter in range(iterations):
-            start = time.time()
-            # pdb.set_trace()
-            (
-                xys,
-                depths,
-                radii,
-                num_tiles_hit,
-                cov3d,
-                transMats
-            ) = project_gaussians(
-                self.means,
-                self.scales,
-                1,
-                self.quats / self.quats.norm(dim=-1, keepdim=True),
-                self.viewmat,
-                self.focal,
-                self.focal,
-                self.W / 2,
-                self.H / 2,
-                self.H,
-                self.W,
-                B_SIZE,
-            )
+        with torch.no_grad():
+            for iter in range(iterations):
+                start = time.time()
+                # pdb.set_trace()
+                (
+                    xys,
+                    depths,
+                    radii,
+                    num_tiles_hit,
+                    cov3d,
+                    transMats
+                ) = project_gaussians(
+                    self.means,
+                    self.scales,
+                    1,
+                    self.quats / self.quats.norm(dim=-1, keepdim=True),
+                    self.viewmat,
+                    self.focal,
+                    self.focal,
+                    self.W / 2,
+                    self.H / 2,
+                    self.H,
+                    self.W,
+                    B_SIZE,
+                )
 
-            # pdb.set_trace()
-            torch.cuda.synchronize()
-            times[0] += time.time() - start
-            start = time.time()
+                # pdb.set_trace()
+                torch.cuda.synchronize()
+                times[0] += time.time() - start
+                start = time.time()
 
-            # pdb.set_trace()
-            out_img = rasterize_gaussians(
-                xys,
-                depths,
-                radii,
-                num_tiles_hit,
-                transMats,
-                torch.sigmoid(self.rgbs),
-                torch.sigmoid(self.opacities),
-                self.H,
-                self.W,
-                B_SIZE,
-                self.background,
-            )[..., :3]
-            torch.cuda.synchronize()
-            times[1] += time.time() - start
-            loss = mse_loss(out_img, self.gt_image)
-            optimizer.zero_grad()
-            start = time.time()
-            loss.backward()
-            # print("after backward")
-            torch.cuda.synchronize()
-            times[2] += time.time() - start
-            optimizer.step()
-            print(f"Iteration {iter + 1}/{iterations}, Loss: {loss.item()}")
+                # pdb.set_trace()
+                out_img = rasterize_gaussians(
+                    xys,
+                    depths,
+                    radii,
+                    num_tiles_hit,
+                    transMats,
+                    self.rgbs,
+                    self.opacities,
+                    # torch.sigmoid(self.rgbs),
+                    # torch.sigmoid(self.opacities),
+                    self.H,
+                    self.W,
+                    B_SIZE,
+                    self.background,
+                )[..., :3]
+                # pdb.set_trace()
+                torch.cuda.synchronize()
+                times[1] += time.time() - start
+                loss = mse_loss(out_img, self.gt_image)
+                optimizer.zero_grad()
+                start = time.time()
+                # loss.backward()
+                # print("after backward")
+                torch.cuda.synchronize()
+                times[2] += time.time() - start
+                # optimizer.step()
+                print(f"Iteration {iter + 1}/{iterations}, Loss: {loss.item()}")
 
-            if save_imgs and iter % 5 == 0:
-                frames.append((out_img.detach().cpu().numpy() * 255).astype(np.uint8))
+                if save_imgs and iter % 5 == 0:
+                    frames.append((out_img.detach().cpu().numpy() * 255).astype(np.uint8))
         if save_imgs:
             # save them as a gif with PIL
             frames = [Image.fromarray(frame) for frame in frames]
@@ -195,6 +226,7 @@ def main(
         gt_image[: height // 2, : width // 2, :] = torch.tensor([1.0, 0.0, 0.0])
         gt_image[height // 2 :, width // 2 :, :] = torch.tensor([0.0, 0.0, 1.0])
 
+    num_points = gt_image.shape[0] * gt_image.shape[1]
     trainer = SimpleTrainer(gt_image=gt_image, num_points=num_points)
     trainer.train(
         iterations=iterations,

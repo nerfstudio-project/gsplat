@@ -11,6 +11,8 @@ import gsplat.cuda as _C
 
 from .utils import bin_and_sort_gaussians, compute_cumulative_intersects
 
+import pdb
+
 
 def rasterize_gaussians(
     xys: Float[Tensor, "*batch 2"],
@@ -119,6 +121,8 @@ class _RasterizeGaussians(Function):
 
         num_intersects, cum_tiles_hit = compute_cumulative_intersects(num_tiles_hit)
 
+        # pdb.set_trace()
+
         if num_intersects < 1:
             out_img = (
                 torch.ones(img_height, img_width, colors.shape[-1], device=xys.device)
@@ -145,6 +149,9 @@ class _RasterizeGaussians(Function):
                 tile_bounds,
                 block_width,
             )
+
+            # pdb.set_trace()
+            
             if colors.shape[-1] == 3:
                 rasterize_fn = _C.rasterize_forward
             else:
@@ -164,6 +171,7 @@ class _RasterizeGaussians(Function):
                 opacity,
                 background,
             )
+            # pdb.set_trace()
 
         ctx.img_width = img_width
         ctx.img_height = img_height

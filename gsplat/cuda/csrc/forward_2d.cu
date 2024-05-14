@@ -349,11 +349,21 @@ __global__ void rasterize_forward(
             // cross product of two planes is a line
             float3 p = cross_product(k, l);
 
-            // There is no intersection
-            if (p.z == 0.0) continue;
+            // printf("k: %.2f, %.2f, %.2f \n l: %.2f, %.2f, %.2f \n", k.x, k.y, k.z, l.x, l.y, l.z);
+            // printf("l: %.2f, %.2f, %.2f \n", l.x, l.y, l.z);
+            // printf("p is: %.2f \n", p);
 
-            // 3D homogeneous point to 2d point on the splat
-            float2 s = {p.x / p.z, p.y / p.z};
+            // There is no intersection
+            float2 s;
+            if (p.z == 0.0) { 
+                // s = {px, py};
+                continue;
+            } else {
+                // printf("Here \n");
+                // 3D homogeneous point to 2d point on the splat
+                float2 s = {p.x / p.z, p.y / p.z};
+                // printf("s: %.2f, %.2f \n", s.x, s.y);
+            }
             
             // 3D distance. Compute Mahalanobis distance in the canonical splat space
             float rho_3d = (s.x * s.x + s.y * s.y);
