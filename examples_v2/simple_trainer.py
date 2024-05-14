@@ -104,6 +104,7 @@ def create_splats_with_optimizers(
     init_opacity: float = 0.1,
     init_scale: Optional[float] = None,
     sparse_grad: bool = False,
+    device: str = "cuda",
 ) -> torch.nn.ParameterDict:
     N = points.shape[0]
 
@@ -129,7 +130,7 @@ def create_splats_with_optimizers(
             "sh0": torch.nn.Parameter(colors[:, :1, :]),  # [N, 1, 3]
             "shN": torch.nn.Parameter(colors[:, 1:, :]),  # [N, K-1, 3]
         }
-    )
+    ).to(device)
     optimizers = [
         # gsplat2 supports sparse gradients for these parameters
         (torch.optim.SparseAdam if sparse_grad else torch.optim.Adam)(
@@ -138,6 +139,7 @@ def create_splats_with_optimizers(
                 {"params": splats["scales"], "lr": 5e-3, "name": "scales"},
             ],
             eps=1e-15,
+            # fused=True, TODO: benchmark fused optimizer
         ),
         torch.optim.Adam(
             [
@@ -147,6 +149,7 @@ def create_splats_with_optimizers(
                 {"params": splats["shN"], "lr": 2.5e-3 / 20, "name": "shN"},
             ],
             eps=1e-15,
+            # fused=True,
         ),
     ]
     return splats, optimizers
@@ -196,8 +199,8 @@ class Runner:
             init_opacity=args.init_opa,
             init_scale=args.init_scale,
             sparse_grad=args.sparse_grad,
+            device=self.device,
         )
-        self.splats = self.splats.to(self.device)
         print("Model initialized. Number of GS:", len(self.splats["means3d"]))
 
         # Losses & Metrics.

@@ -890,6 +890,11 @@ class _ProjectionPacked(torch.autograd.Function):
             v_means = None
         else:
             if sparse_grad:
+                # TODO: this is somehow consuming more memory than expected!
+                # Also cindices is duplicated so not idea.
+                # An idea is to directly set the attribute (e.g., .sparse_grad) of
+                # the tensor but this requires the tensor to be leaf node only. And
+                # a customized optimizer would be needed in this case.
                 v_means = torch.sparse_coo_tensor(
                     indices=cindices[None],  # [1, nnz]
                     values=v_means,  # [nnz, 3]
