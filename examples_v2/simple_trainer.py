@@ -6,8 +6,6 @@ import time
 from typing import Dict, Optional, Tuple
 
 import imageio
-
-# import line_profiler
 import numpy as np
 import torch
 import torch.nn.functional as F
