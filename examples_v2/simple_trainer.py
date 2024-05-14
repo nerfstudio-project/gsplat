@@ -5,6 +5,8 @@ import random
 import time
 from typing import Dict, Optional, Tuple
 
+import imageio
+
 # import line_profiler
 import numpy as np
 import torch
@@ -166,6 +168,8 @@ class Runner:
         os.makedirs(self.ckpt_dir, exist_ok=True)
         self.stats_dir = f"{args.result_dir}/stats"
         os.makedirs(self.stats_dir, exist_ok=True)
+        self.render_dir = f"{args.result_dir}/renders"
+        os.makedirs(self.render_dir, exist_ok=True)
 
         # Load data: Training data should contain initial points and colors.
         self.trainset = Dataset(
@@ -390,7 +394,9 @@ class Runner:
             if step in [i - 1 for i in args.eval_steps]:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
                 print(f"Step {step}: Memory: {mem:.2f}GB")
-                self.eval()
+                self.eval(step)
+                # save ckpt
+                torch.save(self.splats.state_dict(), f"{self.ckpt_dir}/ckpt_{step}.pt")
 
             view_lock.release()
 
@@ -537,7 +543,7 @@ class Runner:
             self.running_stats[k] = v[sel]
 
     @torch.no_grad()
-    def eval(self):
+    def eval(self, step: int):
         """Entry for evaluation."""
         print("Running evaluation...")
         args = self.args
@@ -548,7 +554,7 @@ class Runner:
         )
         ellipse_time = 0
         metrics = {"psnr": [], "ssim": [], "lpips": []}
-        for data in valloader:
+        for i, data in enumerate(valloader):
             camtoworlds = data["camtoworld"].to(device)
             Ks = data["K"].to(device)
             pixels = data["image"].to(device) / 255.0
@@ -569,11 +575,18 @@ class Runner:
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
 
+            # write images
+            canvas = torch.cat([pixels, colors], dim=2).squeeze(0).cpu().numpy()
+            imageio.imwrite(
+                f"{self.render_dir}/val_{i:04d}.png", (canvas * 255).astype(np.uint8)
+            )
+
             pixels = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
             colors = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
             metrics["psnr"].append(self.psnr(colors, pixels))
             metrics["ssim"].append(self.ssim(colors, pixels))
             metrics["lpips"].append(self.lpips(colors, pixels))
+
         ellipse_time /= len(valloader)
 
         psnr = torch.stack(metrics["psnr"]).mean()
@@ -584,6 +597,16 @@ class Runner:
             f"Time: {ellipse_time:.3f}s/image "
             f"Number of GS: {len(self.splats['means3d'])}"
         )
+        # save to stats as json
+        stats = {
+            "psnr": psnr.item(),
+            "ssim": ssim.item(),
+            "lpips": lpips.item(),
+            "ellipse_time": ellipse_time,
+            "num_GS": len(self.splats["means3d"]),
+        }
+        with open(f"{self.stats_dir}/val_step{step:04d}.json", "w") as f:
+            json.dump(stats, f)
 
     @torch.no_grad()
     def _viewer_render_fn(self, camera_state: CameraState, img_wh: Tuple[int, int]):
@@ -615,42 +638,6 @@ class Runner:
 
 
 if __name__ == "__main__":
-    """
-    Benchmark on Garden with a Tesla V100-SXM2-16GB.
-
-    # reference: 08m02s 4339420 GSs
-    SSIM :    0.8236788
-    PSNR :   26.1114292
-    LPIPS:    0.1656015
-    LPIPS:    0.1293903 (Our LPIPS)
-    # reference render with gsplat2
-    SSIM :    0.8236776
-    PSNR :   26.1114807
-    LPIPS:    0.1293920
-    # reference train&render with gsplat2: 11m07s 4364414 GSs
-    SSIM :    0.8235133
-    PSNR :   26.0940838
-    LPIPS:    0.1295346
-    # reference render with gsplat
-    SSIM :    0.8241773
-    PSNR :   26.1142445
-    LPIPS:    0.1286663
-    # reference train&render with gsplat: 10m57s 4300146 GSs
-    SSIM :    0.8234461
-    PSNR :   26.1044617
-    LPIPS:    0.1301723
-
-    After SH optimization
-    # reference train&render with gsplat2: 06m42s 4369218 GSs
-    SSIM :    0.8266271
-    PSNR :   26.1833248
-    LPIPS:    0.1629384
-    LPIPS:    0.1297959
-
-    This script: 07:35
-    PSNR: 26.392, SSIM: 0.838, LPIPS: 0.121 Time: 0.022s/image Number of GS: 4547515
-    """
-
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--data_dir",
