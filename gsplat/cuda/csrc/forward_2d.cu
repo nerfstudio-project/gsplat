@@ -99,7 +99,7 @@ __global__ void project_gaussians_forward_kernel(
     float2 extent;
     ok = build_AABB(cur_transMats, center, extent);
     if (!ok) return;
-    printf("%d \n", ok);
+    // printf("%d \n", ok);
 
     float truncated_R = 3.f;
 

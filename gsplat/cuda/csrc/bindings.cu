@@ -637,7 +637,8 @@ std::
         const torch::Tensor &gaussians_ids_sorted,
         const torch::Tensor &tile_bins,
         const torch::Tensor &xys,
-        const torch::Tensor &conics,
+        // const torch::Tensor &conics,
+        const torch::Tensor &transMats,
         const torch::Tensor &colors,
         const torch::Tensor &opacities,
         const torch::Tensor &background,
@@ -670,7 +671,8 @@ std::
 
     torch::Tensor v_xy = torch::zeros({num_points, 2}, xys.options());
     torch::Tensor v_xy_abs = torch::zeros({num_points, 2}, xys.options());
-    torch::Tensor v_conic = torch::zeros({num_points, 3}, xys.options());
+    // torch::Tensor v_conic = torch::zeros({num_points, 3}, xys.options());
+    torch::Tensor v_transMats = torch::zeros({num_points, 3, 3}, xys.options());
     torch::Tensor v_colors =
         torch::zeros({num_points, channels}, xys.options());
     torch::Tensor v_opacity = torch::zeros({num_points, 1}, xys.options());
@@ -681,7 +683,8 @@ std::
         gaussians_ids_sorted.contiguous().data_ptr<int>(),
         (int2 *)tile_bins.contiguous().data_ptr<int>(),
         (float2 *)xys.contiguous().data_ptr<float>(),
-        (float3 *)conics.contiguous().data_ptr<float>(),
+        // (float3 *)conics.contiguous().data_ptr<float>(),
+        transMats.contiguous().data_ptr<float>(),
         (float3 *)colors.contiguous().data_ptr<float>(),
         opacities.contiguous().data_ptr<float>(),
         *(float3 *)background.contiguous().data_ptr<float>(),
@@ -691,10 +694,11 @@ std::
         v_output_alpha.contiguous().data_ptr<float>(),
         (float2 *)v_xy.contiguous().data_ptr<float>(),
         (float2 *)v_xy_abs.contiguous().data_ptr<float>(),
-        (float3 *)v_conic.contiguous().data_ptr<float>(),
+        // (float3 *)v_conic.contiguous().data_ptr<float>(),
+        v_transMats.contiguous().data_ptr<float>(),
         (float3 *)v_colors.contiguous().data_ptr<float>(),
         v_opacity.contiguous().data_ptr<float>()
     );
 
-    return std::make_tuple(v_xy, v_xy_abs, v_conic, v_colors, v_opacity);
+    return std::make_tuple(v_xy, v_xy_abs, v_transMats, v_colors, v_opacity);
 }

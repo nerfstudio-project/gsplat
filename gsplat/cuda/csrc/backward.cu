@@ -145,7 +145,8 @@ __global__ void rasterize_backward_kernel(
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
-    const float3* __restrict__ conics,
+    // const float3* __restrict__ conics,
+    const float* __restrict__ transMats,
     const float3* __restrict__ rgbs,
     const float* __restrict__ opacities,
     const float3& __restrict__ background,
@@ -155,7 +156,8 @@ __global__ void rasterize_backward_kernel(
     const float* __restrict__ v_output_alpha,
     float2* __restrict__ v_xy,
     float2* __restrict__ v_xy_abs,
-    float3* __restrict__ v_conic,
+    // float3* __restrict__ v_conic,
+    float* __restrict__ v_transMats,
     float3* __restrict__ v_rgb,
     float* __restrict__ v_opacity
 ) {
@@ -192,7 +194,8 @@ __global__ void rasterize_backward_kernel(
 
     __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
     __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 conic_batch[MAX_BLOCK_SIZE];
+    // __shared__ float3 conic_batch[MAX_BLOCK_SIZE];
+    __shared__ float transMats_batch[MAX_BLOCK_SIZE];
     __shared__ float3 rgbs_batch[MAX_BLOCK_SIZE];
 
     // df/d_out for this pixel
@@ -221,7 +224,8 @@ __global__ void rasterize_backward_kernel(
             const float2 xy = xys[g_id];
             const float opac = opacities[g_id];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
-            conic_batch[tr] = conics[g_id];
+            // conic_batch[tr] = conics[g_id];
+            transMats_batch[tr] = transMats[g_id];
             rgbs_batch[tr] = rgbs[g_id];
         }
         // wait for other threads to collect the gaussians in batch
@@ -239,7 +243,8 @@ __global__ void rasterize_backward_kernel(
             float3 conic;
             float vis;
             if(valid){
-                conic = conic_batch[t];
+                // conic = conic_batch[t];
+                // transMats = transMats_batch[t];
                 float3 xy_opac = xy_opacity_batch[t];
                 opac = xy_opac.z;
                 delta = {xy_opac.x - px, xy_opac.y - py};
@@ -307,11 +312,13 @@ __global__ void rasterize_backward_kernel(
                 atomicAdd(v_rgb_ptr + 3*g + 0, v_rgb_local.x);
                 atomicAdd(v_rgb_ptr + 3*g + 1, v_rgb_local.y);
                 atomicAdd(v_rgb_ptr + 3*g + 2, v_rgb_local.z);
-                
-                float* v_conic_ptr = (float*)(v_conic);
-                atomicAdd(v_conic_ptr + 3*g + 0, v_conic_local.x);
-                atomicAdd(v_conic_ptr + 3*g + 1, v_conic_local.y);
-                atomicAdd(v_conic_ptr + 3*g + 2, v_conic_local.z);
+
+                //TODO: gradient for transMats
+
+                // float* v_conic_ptr = (float*)(v_conic);
+                // atomicAdd(v_conic_ptr + 3*g + 0, v_conic_local.x);
+                // atomicAdd(v_conic_ptr + 3*g + 1, v_conic_local.y);
+                // atomicAdd(v_conic_ptr + 3*g + 2, v_conic_local.z);
                 
                 float* v_xy_ptr = (float*)(v_xy);
                 atomicAdd(v_xy_ptr + 2*g + 0, v_xy_local.x);

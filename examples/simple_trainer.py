@@ -120,13 +120,13 @@ class SimpleTrainer:
             times[0] += time.time() - start
             start = time.time()
 
-            pdb.set_trace()
+            # pdb.set_trace()
             out_img = rasterize_gaussians(
                 xys,
                 depths,
                 radii,
-                conics,
                 num_tiles_hit,
+                transMats,
                 torch.sigmoid(self.rgbs),
                 torch.sigmoid(self.opacities),
                 self.H,
