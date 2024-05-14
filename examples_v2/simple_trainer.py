@@ -13,6 +13,7 @@ import torch
 import torch.nn.functional as F
 import tqdm
 from datasets.colmap import Dataset
+from datasets.traj import generate_interpolated_path
 from nerfview import CameraState, ViewerServer, view_lock
 from sklearn.neighbors import NearestNeighbors
 from torch import Tensor
@@ -395,6 +396,7 @@ class Runner:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
                 print(f"Step {step}: Memory: {mem:.2f}GB")
                 self.eval(step)
+                self.render_traj()
                 # save ckpt
                 torch.save(self.splats.state_dict(), f"{self.ckpt_dir}/ckpt_{step}.pt")
 
@@ -613,6 +615,55 @@ class Runner:
             json.dump(stats, f)
 
     @torch.no_grad()
+    def render_traj(self):
+        """Entry for trajectory rendering."""
+        print("Running trajectory rendering...")
+        args = self.args
+        device = self.device
+
+        camtoworlds = self.trainset.camtoworlds[5:-5]
+        camtoworlds = generate_interpolated_path(camtoworlds, 1)  # [N, 3, 4]
+        camtoworlds = np.concatenate(
+            [
+                camtoworlds,
+                np.repeat(np.array([[[0.0, 0.0, 0.0, 1.0]]]), len(camtoworlds), axis=0),
+            ],
+            axis=1,
+        )  # [N, 4, 4]
+
+        camtoworlds = torch.from_numpy(camtoworlds).float().to(device)
+        K = torch.from_numpy(self.trainset.K).float().to(device)
+        width = self.trainset.width
+        height = self.trainset.height
+
+        canvas_all = []
+        for i in tqdm.trange(len(camtoworlds), desc="Rendering trajectory"):
+            colors, _, _ = self.rasterize_splats(
+                camtoworlds=camtoworlds[i : i + 1],
+                Ks=K[None],
+                width=width,
+                height=height,
+                sh_degree=args.sh_degree,
+                near_plane=args.near_plane,
+                far_plane=args.far_plane,
+            )  # [1, H, W, 3]
+            colors = torch.clamp(colors, 0.0, 1.0)
+
+            # write images
+            canvas = colors.squeeze(0).cpu().numpy()
+            canvas = (canvas * 255).astype(np.uint8)
+            canvas_all.append(canvas)
+
+        # save to video
+        video_dir = f"{args.result_dir}/videos/"
+        os.makedirs(video_dir, exist_ok=True)
+        writer = imageio.get_writer(f"{video_dir}/traj.mp4", fps=30)
+        for canvas in canvas_all:
+            writer.append_data(canvas)
+        writer.close()
+        print(f"Video saved to {video_dir}/traj.mp4")
+
+    @torch.no_grad()
     def _viewer_render_fn(self, camera_state: CameraState, img_wh: Tuple[int, int]):
         """Callable function for the viewer."""
         fov = camera_state.fov
@@ -747,12 +798,25 @@ if __name__ == "__main__":
         action="store_true",
         help="Use sparse gradients for optimization",
     )
+    parser.add_argument(
+        "--ckpt",
+        type=str,
+        default=None,
+        help="path to the .pt file. If provide, it will skip training and render a video",
+    )
     args = parser.parse_args()
     if args.sparse_grad:
         assert args.packed, "Sparse gradients require packed mode"
 
     runner = Runner(args)
-    runner.train()
+
+    if args.ckpt is not None:
+        ckpt = torch.load(args.ckpt, map_location=runner.device)
+        for k in runner.splats.keys():
+            runner.splats[k].data = ckpt[k]
+        runner.render_traj()
+    else:
+        runner.train()
 
     print("Viewer running... Ctrl+C to exit.")
     time.sleep(1000000)

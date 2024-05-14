@@ -7,7 +7,7 @@ git+https://github.com/hangg7/nerfview@9dff4ef2dec489e17519f2124a92e023dea1254c
 # (optional) nerfacc for torch version rasterization 
 # git+https://github.com/nerfstudio-project/nerfacc
 
-imageio
+imageio[ffmpeg]
 numpy
 scikit-learn
 tqdm
