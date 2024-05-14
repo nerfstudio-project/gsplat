@@ -703,7 +703,7 @@ class Runner:
 if __name__ == "__main__":
     """
     python simple_trainer.py --data_dir data/progressive/university1/ --data_factor 1 \
-        --grow_scale3d 0.002 --result_dir  results/university1 
+        --grow_scale3d 0.001 --result_dir  results/university1 
     """
     parser = argparse.ArgumentParser()
     parser.add_argument(
