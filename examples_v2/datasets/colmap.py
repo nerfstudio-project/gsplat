@@ -2,6 +2,7 @@ import os
 import sys
 from typing import Any, Dict
 
+import cv2
 import imageio.v2 as imageio
 import numpy as np
 import torch
@@ -96,6 +97,9 @@ class Parser:
             camtype == "perspective"
         ), f"Only support perspective camera model, got {type_}"
 
+        if not (type_ == 0 or type_ == 1):
+            print(f"Warning: COLMAP Camera is not PINHOLE. Images have distortion.")
+
         # Previous Nerf results were generated with images sorted by filename,
         # ensure metrics are reported on the same test set.
         inds = np.argsort(image_names)
@@ -166,6 +170,16 @@ class Parser:
         self.height = height
         self.width = width
 
+        if len(self.params) > 0:
+            # Images are distorted. Undistort them.
+            K_undist, self.roi_undist = cv2.getOptimalNewCameraMatrix(
+                self.K, self.params, (width, height), 0
+            )
+            self.mapx, self.mapy = cv2.initUndistortRectifyMap(
+                self.K, self.params, None, K_undist, (width, height), cv2.CV_32FC1
+            )
+            self.K = K_undist
+
         # size of the scene measured by cameras
         camera_locations = camtoworlds[:, :3, 3]
         scene_center = np.mean(camera_locations, axis=0)
@@ -190,12 +204,16 @@ class Dataset(Parser):
 
     def __getitem__(self, item: int) -> Dict[str, Any]:
         index = self.indices[item % len(self.indices)]
+        image = imageio.imread(self.image_paths[index])[..., :3]
+        if len(self.params) > 0:
+            # Images are distorted. Undistort them.
+            image = cv2.remap(image, self.mapx, self.mapy, cv2.INTER_LINEAR)
+            x, y, w, h = self.roi_undist
+            image = image[y : y + h, x : x + w]
         return {
             "K": torch.from_numpy(self.K.copy()).float(),
             "camtoworld": torch.from_numpy(self.camtoworlds[index]).float(),
-            "image": torch.from_numpy(
-                imageio.imread(self.image_paths[index])[..., :3]
-            ).float(),
+            "image": torch.from_numpy(image).float(),
         }
 
 

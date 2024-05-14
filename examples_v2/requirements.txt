@@ -13,3 +13,4 @@ scikit-learn
 tqdm
 nerfview
 torchmetrics[image]
+opencv-python

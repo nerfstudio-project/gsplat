@@ -441,6 +441,7 @@ class Runner:
                 optimizer.param_groups[i]["params"] = [p_new]
                 optimizer.state[p_new] = p_state
                 self.splats[param_group["name"]] = p_new
+        torch.cuda.empty_cache()
 
     @torch.no_grad()
     def refine_split(self, mask: Tensor):
@@ -494,6 +495,7 @@ class Runner:
             repeats = [2] + [1] * (v.dim() - 1)
             v_new = v[sel].repeat(repeats)
             self.running_stats[k] = torch.cat((v[rest], v_new))
+        torch.cuda.empty_cache()
 
     @torch.no_grad()
     def refine_duplicate(self, mask: Tensor):
@@ -521,6 +523,7 @@ class Runner:
                 self.splats[name] = p_new
         for k, v in self.running_stats.items():
             self.running_stats[k] = torch.cat((v, v[sel]))
+        torch.cuda.empty_cache()
 
     @torch.no_grad()
     def refine_keep(self, mask: Tensor):
@@ -541,6 +544,7 @@ class Runner:
                 self.splats[name] = p_new
         for k, v in self.running_stats.items():
             self.running_stats[k] = v[sel]
+        torch.cuda.empty_cache()
 
     @torch.no_grad()
     def eval(self, step: int):
