@@ -638,7 +638,7 @@ class Runner:
 
         canvas_all = []
         for i in tqdm.trange(len(camtoworlds), desc="Rendering trajectory"):
-            colors, _, _ = self.rasterize_splats(
+            renders, _, _ = self.rasterize_splats(
                 camtoworlds=camtoworlds[i : i + 1],
                 Ks=K[None],
                 width=width,
@@ -646,12 +646,17 @@ class Runner:
                 sh_degree=args.sh_degree,
                 near_plane=args.near_plane,
                 far_plane=args.far_plane,
-            )  # [1, H, W, 3]
-            colors = torch.clamp(colors, 0.0, 1.0)
+                render_mode="RGB+D",
+            )  # [1, H, W, 4]
+            colors = torch.clamp(renders[0, ..., 0:3], 0.0, 1.0)  # [H, W, 3]
+            depths = renders[0, ..., 3:4]  # [H, W, 1]
+            depths = (depths - depths.min()) / (depths.max() - depths.min())
 
             # write images
-            canvas = colors.squeeze(0).cpu().numpy()
-            canvas = (canvas * 255).astype(np.uint8)
+            canvas = torch.cat(
+                [colors, depths.repeat(1, 1, 3)], dim=0 if width > height else 1
+            )
+            canvas = (canvas.cpu().numpy() * 255).astype(np.uint8)
             canvas_all.append(canvas)
 
         # save to video
@@ -693,6 +698,10 @@ class Runner:
 
 
 if __name__ == "__main__":
+    """
+    python simple_trainer.py --data_dir data/progressive/university1/ --data_factor 1 \
+        --grow_scale3d 0.002 --result_dir  results/university1 
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--data_dir",
