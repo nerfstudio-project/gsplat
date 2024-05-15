@@ -101,6 +101,7 @@ def create_splats_with_optimizers(
     sh_degree: int = 3,
     init_opacity: float = 0.1,
     init_scale: Optional[float] = None,
+    max_scale: Optional[float] = None,
     sparse_grad: bool = False,
     device: str = "cuda",
 ) -> torch.nn.ParameterDict:
@@ -109,8 +110,13 @@ def create_splats_with_optimizers(
     if init_scale is None:
         # Initialize the GS size to be the average dist of the 3 nearest neighbors
         dist2_avg = (_knn(points, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
-        scales = torch.log(torch.sqrt(dist2_avg)).unsqueeze(-1).repeat(1, 3)  # [N, 3]
+        dist_avg = torch.sqrt(dist2_avg)
+        if max_scale is not None:
+            dist_avg = torch.clamp(dist_avg, max=max_scale)
+        scales = torch.log(dist_avg).unsqueeze(-1).repeat(1, 3)  # [N, 3]
     else:
+        if max_scale is not None:
+            init_scale = min(init_scale, max_scale)
         scales = torch.log(torch.full((N, 3), init_scale))  # [N, 3]
     quats = torch.rand((N, 4))  # [N, 4]
     opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
@@ -130,24 +136,17 @@ def create_splats_with_optimizers(
         }
     ).to(device)
     optimizers = [
-        # gsplat2 supports sparse gradients for these parameters
         (torch.optim.SparseAdam if sparse_grad else torch.optim.Adam)(
             [
                 {"params": splats["means3d"], "name": "means3d"},  # has a lr schedule
                 {"params": splats["scales"], "lr": 5e-3, "name": "scales"},
-            ],
-            eps=1e-15,
-            # fused=True, TODO: benchmark fused optimizer
-        ),
-        torch.optim.Adam(
-            [
                 {"params": splats["quats"], "lr": 1e-3, "name": "quats"},
                 {"params": splats["opacities"], "lr": 5e-2, "name": "opacities"},
                 {"params": splats["sh0"], "lr": 2.5e-3, "name": "sh0"},
                 {"params": splats["shN"], "lr": 2.5e-3 / 20, "name": "shN"},
             ],
             eps=1e-15,
-            # fused=True,
+            # fused=True, TODO: benchmark fused optimizer
         ),
     ]
     return splats, optimizers
@@ -227,7 +226,6 @@ class Runner:
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         means = self.splats["means3d"]  # [N, 3]
-        # TODO: F.normalize is preventing sparse grad on quats!! Fuse it to CUDA kernel.
         quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
         scales = torch.exp(self.splats["scales"])  # [N, 3]
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
@@ -244,7 +242,6 @@ class Runner:
             width=width,
             height=height,
             packed=self.args.packed,
-            sparse_grad=self.args.sparse_grad,
             compute_means2d_absgrad=args.absgrad,
             **kwargs,
         )
@@ -387,6 +384,12 @@ class Runner:
 
                 if step % args.reset_every == 0:
                     self.reset_opa()
+
+            # Turn Gradients into Sparse Tensor before running optimizer
+            if args.sparse_grad:
+                for k in self.splats.keys():
+                    if self.splats[k].grad is not None:
+                        self.splats[k].grad = self.splats[k].grad.to_sparse()
 
             # optimize
             for optimizer in self.optimizers:
@@ -826,8 +829,6 @@ if __name__ == "__main__":
         help="Use absolute gradient for pruning. Be warned: This typically requires larger --grow_grad2d, e.g., 0.0008 or 0.0006",
     )
     args = parser.parse_args()
-    if args.sparse_grad:
-        assert args.packed, "Sparse gradients require packed mode"
 
     runner = Runner(args)
 
