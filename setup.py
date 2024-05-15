@@ -27,7 +27,8 @@ def get_extensions():
     from torch.__config__ import parallel_info
     from torch.utils.cpp_extension import CUDAExtension
 
-    extensions_dir = osp.join("gsplat", "cuda", "csrc")
+    # extensions_dir = osp.join("gsplat", "cuda", "csrc")
+    extensions_dir = osp.join("gsplat", "experimental" , "cuda", "csrc")
     sources = glob.glob(osp.join(extensions_dir, "*.cu")) + glob.glob(
         osp.join(extensions_dir, "*.cpp")
     )
@@ -88,7 +89,7 @@ def get_extensions():
         extra_compile_args["nvcc"] += ["-DWIN32_LEAN_AND_MEAN"]
 
     extension = CUDAExtension(
-        f"gsplat.csrc",
+        f"gsplat2.csrc",
         sources,
         include_dirs=[osp.join(extensions_dir, "third_party", "glm")],
         define_macros=define_macros,
@@ -101,7 +102,7 @@ def get_extensions():
 
 
 setup(
-    name="gsplat",
+    name="gsplat2",
     version=__version__,
     description=" Python package for differentiable rasterization of gaussians",
     keywords="gaussian, splatting, cuda",

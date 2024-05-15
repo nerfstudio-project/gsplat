@@ -117,6 +117,12 @@ venv.bak/
 # line_profiler
 *.lprof
 
+# Ignore JPG, jpeg, and ply files
+*.JPG
+*.jpeg
+*.ply
+
+
 *build
 compile_commands.json
 *.dump
