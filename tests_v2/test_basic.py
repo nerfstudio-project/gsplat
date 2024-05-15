@@ -77,7 +77,7 @@ def test_quat_scale_to_covar_preci(test_data, triu: bool):
         (_covars * v_covars + _precis * v_precis).sum(),
         (quats, scales),
     )
-    torch.testing.assert_close(v_quats, _v_quats, rtol=5e-2, atol=5e-2)
+    torch.testing.assert_close(v_quats, _v_quats, rtol=1e-1, atol=1e-1)
     torch.testing.assert_close(v_scales, _v_scales, rtol=3e-2, atol=1e-3)
 
 

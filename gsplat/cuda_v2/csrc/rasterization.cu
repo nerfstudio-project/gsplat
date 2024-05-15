@@ -775,10 +775,11 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         *__restrict__ v_render_colors, // [C, image_height, image_width, COLOR_DIM]
     const float *__restrict__ v_render_alphas, // [C, image_height, image_width, 1]
     // grad inputs
-    float2 *__restrict__ v_means2d, // [C, N, 2]
-    float3 *__restrict__ v_conics,  // [C, N, 3]
-    float *__restrict__ v_colors,   // [C, N, COLOR_DIM]
-    float *__restrict__ v_opacities // [N]
+    float2 *__restrict__ v_means2d_abs, // [C, N, 2]
+    float2 *__restrict__ v_means2d,     // [C, N, 2]
+    float3 *__restrict__ v_conics,      // [C, N, 3]
+    float *__restrict__ v_colors,       // [C, N, COLOR_DIM]
+    float *__restrict__ v_opacities     // [N]
 ) {
     auto block = cg::this_thread_block();
     int32_t camera_id = block.group_index().x;
@@ -799,6 +800,9 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     v_means2d += camera_id * N;
     v_conics += camera_id * N;
     v_colors += camera_id * N * COLOR_DIM;
+    if (v_means2d_abs != nullptr) {
+        v_means2d_abs += camera_id * N;
+    }
 
     const float px = (float)j + 0.5f;
     const float py = (float)i + 0.5f;
@@ -905,6 +909,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             float v_rgb_local[COLOR_DIM] = {0.f};
             float3 v_conic_local = {0.f, 0.f, 0.f};
             float2 v_xy_local = {0.f, 0.f};
+            float2 v_xy_abs_local = {0.f, 0.f};
             float v_opacity_local = 0.f;
             // initialize everything to 0, only set if the lane is valid
             if (valid) {
@@ -942,6 +947,9 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                                      0.5f * v_sigma * delta.y * delta.y};
                     v_xy_local = {v_sigma * (conic.x * delta.x + conic.y * delta.y),
                                   v_sigma * (conic.y * delta.x + conic.z * delta.y)};
+                    if (v_means2d_abs != nullptr) {
+                        v_xy_abs_local = {abs(v_xy_local.x), abs(v_xy_local.y)};
+                    }
                     v_opacity_local = vis * v_alpha;
                 }
 
@@ -953,6 +961,9 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             warpSum<COLOR_DIM, float>(v_rgb_local, warp);
             warpSum(v_conic_local, warp);
             warpSum(v_xy_local, warp);
+            if (v_means2d_abs != nullptr) {
+                warpSum(v_xy_abs_local, warp);
+            }
             warpSum(v_opacity_local, warp);
             if (warp.thread_rank() == 0) {
                 int32_t g = id_batch[t];
@@ -971,13 +982,19 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 atomicAdd(v_xy_ptr, v_xy_local.x);
                 atomicAdd(v_xy_ptr + 1, v_xy_local.y);
 
+                if (v_means2d_abs != nullptr) {
+                    float *v_xy_abs_ptr = (float *)(v_means2d_abs) + 2 * g;
+                    atomicAdd(v_xy_abs_ptr, v_xy_abs_local.x);
+                    atomicAdd(v_xy_abs_ptr + 1, v_xy_abs_local.y);
+                }
+
                 atomicAdd(v_opacities + g, v_opacity_local);
             }
         }
     }
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 rasterize_to_pixels_bwd_tensor(
     // Gaussian parameters
     const torch::Tensor &means2d,                   // [C, N, 2]
@@ -995,8 +1012,9 @@ rasterize_to_pixels_bwd_tensor(
     const torch::Tensor &last_ids,      // [C, image_height, image_width]
     // gradients of outputs
     const torch::Tensor &v_render_colors, // [C, image_height, image_width, 3]
-    const torch::Tensor &v_render_alphas  // [C, image_height, image_width, 1]
-) {
+    const torch::Tensor &v_render_alphas, // [C, image_height, image_width, 1]
+    // options
+    bool compute_means2d_absgrad) {
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
     CHECK_INPUT(conics);
@@ -1028,6 +1046,10 @@ rasterize_to_pixels_bwd_tensor(
     torch::Tensor v_conics = torch::zeros({C, N, 3}, conics.options());
     torch::Tensor v_colors = torch::zeros({C, N, COLOR_DIM}, colors.options());
     torch::Tensor v_opacities = torch::zeros({N}, opacities.options());
+    torch::Tensor v_means2d_abs;
+    if (compute_means2d_absgrad) {
+        v_means2d_abs = torch::zeros({C, N, 2}, means2d.options());
+    }
 
     if (n_isects) {
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
@@ -1043,6 +1065,8 @@ rasterize_to_pixels_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), gauss_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                compute_means2d_absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
+                                        : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
@@ -1058,6 +1082,8 @@ rasterize_to_pixels_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), gauss_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                compute_means2d_absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
+                                        : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
@@ -1073,6 +1099,8 @@ rasterize_to_pixels_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), gauss_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                compute_means2d_absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
+                                        : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
@@ -1088,6 +1116,8 @@ rasterize_to_pixels_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), gauss_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                compute_means2d_absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
+                                        : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
@@ -1103,6 +1133,8 @@ rasterize_to_pixels_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), gauss_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                compute_means2d_absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
+                                        : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
@@ -1118,6 +1150,8 @@ rasterize_to_pixels_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), gauss_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                compute_means2d_absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
+                                        : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
@@ -1133,6 +1167,8 @@ rasterize_to_pixels_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), gauss_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                compute_means2d_absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
+                                        : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
@@ -1142,7 +1178,7 @@ rasterize_to_pixels_bwd_tensor(
         }
     }
 
-    return std::make_tuple(v_means2d, v_conics, v_colors, v_opacities);
+    return std::make_tuple(v_means2d_abs, v_means2d, v_conics, v_colors, v_opacities);
 }
 
 /****************************************************************************
@@ -1649,7 +1685,7 @@ __global__ void rasterize_to_pixels_packed_bwd_kernel(
         *__restrict__ v_render_colors, // [C, image_height, image_width, COLOR_DIM]
     const float *__restrict__ v_render_alphas, // [C, image_height, image_width, 1]
     // grad inputs
-    float *__restrict__ v_means2d_norm, // [nnz]
+    float2 *__restrict__ v_means2d_abs, // [nnz]
     float2 *__restrict__ v_means2d,     // [nnz, 2]
     float3 *__restrict__ v_conics,      // [nnz, 3]
     float *__restrict__ v_colors,       // [nnz, COLOR_DIM]
@@ -1777,7 +1813,7 @@ __global__ void rasterize_to_pixels_packed_bwd_kernel(
             float v_rgb_local[COLOR_DIM] = {0.f};
             float3 v_conic_local = {0.f, 0.f, 0.f};
             float2 v_xy_local = {0.f, 0.f};
-            float v_xy_norm_local = 0.f;
+            float2 v_xy_abs_local = {0.f, 0.f};
             float v_opacity_local = 0.f;
             // initialize everything to 0, only set if the lane is valid
             if (valid) {
@@ -1815,8 +1851,9 @@ __global__ void rasterize_to_pixels_packed_bwd_kernel(
                                      0.5f * v_sigma * delta.y * delta.y};
                     v_xy_local = {v_sigma * (conic.x * delta.x + conic.y * delta.y),
                                   v_sigma * (conic.y * delta.x + conic.z * delta.y)};
-                    v_xy_norm_local = sqrtf(v_xy_local.x * v_xy_local.x +
-                                            v_xy_local.y * v_xy_local.y);
+                    if (v_means2d_abs != nullptr) {
+                        v_xy_abs_local = {abs(v_xy_local.x), abs(v_xy_local.y)};
+                    }
                     v_opacity_local = vis * v_alpha;
                 }
 
@@ -1828,7 +1865,9 @@ __global__ void rasterize_to_pixels_packed_bwd_kernel(
             warpSum<COLOR_DIM, float>(v_rgb_local, warp);
             warpSum(v_conic_local, warp);
             warpSum(v_xy_local, warp);
-            warpSum(v_xy_norm_local, warp);
+            if (v_means2d_abs != nullptr) {
+                warpSum(v_xy_abs_local, warp);
+            }
             warpSum(v_opacity_local, warp);
             if (warp.thread_rank() == 0) {
                 int32_t pack_id = id_batch[t];
@@ -1848,8 +1887,11 @@ __global__ void rasterize_to_pixels_packed_bwd_kernel(
                 atomicAdd(v_xy_ptr, v_xy_local.x);
                 atomicAdd(v_xy_ptr + 1, v_xy_local.y);
 
-                float *v_xy_norm_ptr = v_means2d_norm + pack_id;
-                atomicAdd(v_xy_norm_ptr, v_xy_norm_local);
+                if (v_means2d_abs != nullptr) {
+                    float *v_xy_abs_ptr = (float *)(v_means2d_abs) + 2 * pack_id;
+                    atomicAdd(v_xy_abs_ptr, v_xy_abs_local.x);
+                    atomicAdd(v_xy_abs_ptr + 1, v_xy_abs_local.y);
+                }
 
                 atomicAdd(v_opacities + g, v_opacity_local);
             }
@@ -1877,8 +1919,9 @@ rasterize_to_pixels_packed_bwd_tensor(
     const torch::Tensor &last_ids,      // [C, image_height, image_width]
     // gradients of outputs
     const torch::Tensor &v_render_colors, // [C, image_height, image_width, 3]
-    const torch::Tensor &v_render_alphas  // [C, image_height, image_width, 1]
-) {
+    const torch::Tensor &v_render_alphas, // [C, image_height, image_width, 1]
+    // options
+    const bool compute_means2d_absgrad) {
     DEVICE_GUARD(means2d);
     CHECK_INPUT(rindices);
     CHECK_INPUT(cindices);
@@ -1908,11 +1951,14 @@ rasterize_to_pixels_packed_bwd_tensor(
     dim3 threads = {tile_size, tile_size, 1};
     dim3 blocks = {C, tile_height, tile_width};
 
-    torch::Tensor v_means2d_norm = torch::zeros({nnz}, means2d.options());
     torch::Tensor v_means2d = torch::zeros_like(means2d);
     torch::Tensor v_conics = torch::zeros_like(conics);
     torch::Tensor v_colors = torch::zeros_like(colors);
     torch::Tensor v_opacities = torch::zeros_like(opacities);
+    torch::Tensor v_means2d_abs;
+    if (compute_means2d_absgrad) {
+        v_means2d_abs = torch::zeros_like(means2d);
+    }
 
     if (n_isects) {
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
@@ -1929,7 +1975,9 @@ rasterize_to_pixels_packed_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), pack_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                v_means2d_norm.data_ptr<float>(), (float2 *)v_means2d.data_ptr<float>(),
+                compute_means2d_absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
+                                        : nullptr,
+                (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
             break;
@@ -1945,7 +1993,9 @@ rasterize_to_pixels_packed_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), pack_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                v_means2d_norm.data_ptr<float>(), (float2 *)v_means2d.data_ptr<float>(),
+                compute_means2d_absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
+                                        : nullptr,
+                (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
             break;
@@ -1961,7 +2011,9 @@ rasterize_to_pixels_packed_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), pack_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                v_means2d_norm.data_ptr<float>(), (float2 *)v_means2d.data_ptr<float>(),
+                compute_means2d_absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
+                                        : nullptr,
+                (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
             break;
@@ -1977,7 +2029,9 @@ rasterize_to_pixels_packed_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), pack_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                v_means2d_norm.data_ptr<float>(), (float2 *)v_means2d.data_ptr<float>(),
+                compute_means2d_absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
+                                        : nullptr,
+                (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
             break;
@@ -1993,7 +2047,9 @@ rasterize_to_pixels_packed_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), pack_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                v_means2d_norm.data_ptr<float>(), (float2 *)v_means2d.data_ptr<float>(),
+                compute_means2d_absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
+                                        : nullptr,
+                (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
             break;
@@ -2009,7 +2065,9 @@ rasterize_to_pixels_packed_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), pack_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                v_means2d_norm.data_ptr<float>(), (float2 *)v_means2d.data_ptr<float>(),
+                compute_means2d_absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
+                                        : nullptr,
+                (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
             break;
@@ -2025,7 +2083,9 @@ rasterize_to_pixels_packed_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), pack_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                v_means2d_norm.data_ptr<float>(), (float2 *)v_means2d.data_ptr<float>(),
+                compute_means2d_absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
+                                        : nullptr,
+                (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
             break;
@@ -2034,5 +2094,5 @@ rasterize_to_pixels_packed_bwd_tensor(
         }
     }
 
-    return std::make_tuple(v_means2d_norm, v_means2d, v_conics, v_colors, v_opacities);
+    return std::make_tuple(v_means2d_abs, v_means2d, v_conics, v_colors, v_opacities);
 }

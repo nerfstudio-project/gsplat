@@ -348,6 +348,7 @@ def rasterize_to_pixels(
     packed: bool = False,
     rindices: Optional[Tensor] = None,
     cindices: Optional[Tensor] = None,
+    compute_means2d_absgrad: bool = False,
 ) -> Tuple[Tensor, Tensor]:
     C = isect_offsets.size(0)
     N = opacities.size(0)
@@ -417,6 +418,7 @@ def rasterize_to_pixels(
             tile_size,
             isect_offsets.contiguous(),
             gauss_ids.contiguous(),  # this is actually the pack_ids
+            compute_means2d_absgrad,
         )
     else:
         render_colors, render_alphas = _RasterizeToPixels.apply(
@@ -430,6 +432,7 @@ def rasterize_to_pixels(
             tile_size,
             isect_offsets.contiguous(),
             gauss_ids.contiguous(),
+            compute_means2d_absgrad,
         )
     if padded_channels > 0:
         render_colors = render_colors[..., :-padded_channels]
@@ -700,6 +703,7 @@ class _RasterizeToPixels(torch.autograd.Function):
         tile_size: int,
         isect_offsets: Tensor,  # [C, tile_height, tile_width]
         gauss_ids: Tensor,  # [n_isects]
+        compute_means2d_absgrad: bool,
     ) -> Tuple[Tensor, Tensor]:
         render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
             "rasterize_to_pixels_fwd"
@@ -730,6 +734,7 @@ class _RasterizeToPixels(torch.autograd.Function):
         ctx.width = width
         ctx.height = height
         ctx.tile_size = tile_size
+        ctx.compute_means2d_absgrad = compute_means2d_absgrad
 
         # double to float
         render_alphas = render_alphas.float()
@@ -755,8 +760,10 @@ class _RasterizeToPixels(torch.autograd.Function):
         width = ctx.width
         height = ctx.height
         tile_size = ctx.tile_size
+        compute_means2d_absgrad = ctx.compute_means2d_absgrad
 
         (
+            v_means2d_abs,
             v_means2d,
             v_conics,
             v_colors,
@@ -776,7 +783,11 @@ class _RasterizeToPixels(torch.autograd.Function):
             last_ids,
             v_render_colors.contiguous(),
             v_render_alphas.contiguous(),
+            compute_means2d_absgrad,
         )
+
+        if compute_means2d_absgrad:
+            means2d.absgrad = v_means2d_abs
 
         if ctx.needs_input_grad[4]:
             v_backgrounds = (v_render_colors * (1.0 - render_alphas).float()).sum(
@@ -791,6 +802,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             v_colors,
             v_opacities,
             v_backgrounds,
+            None,
             None,
             None,
             None,
@@ -978,6 +990,7 @@ class _RasterizeToPixelsPacked(torch.autograd.Function):
         tile_size: int,
         isect_offsets: Tensor,  # [C, tile_height, tile_width]
         pack_ids: Tensor,  # [n_isects]
+        compute_means2d_absgrad: bool,
     ) -> Tuple[Tensor, Tensor]:
         render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
             "rasterize_to_pixels_packed_fwd"
@@ -1012,6 +1025,7 @@ class _RasterizeToPixelsPacked(torch.autograd.Function):
         ctx.width = width
         ctx.height = height
         ctx.tile_size = tile_size
+        ctx.compute_means2d_absgrad = compute_means2d_absgrad
 
         # double to float
         render_alphas = render_alphas.float()
@@ -1039,9 +1053,10 @@ class _RasterizeToPixelsPacked(torch.autograd.Function):
         width = ctx.width
         height = ctx.height
         tile_size = ctx.tile_size
+        compute_means2d_absgrad = ctx.compute_means2d_absgrad
 
         (
-            v_means2d_norm,
+            v_means2d_abs,
             v_means2d,
             v_conics,
             v_colors,
@@ -1063,7 +1078,10 @@ class _RasterizeToPixelsPacked(torch.autograd.Function):
             last_ids,
             v_render_colors.contiguous(),
             v_render_alphas.contiguous(),
+            compute_means2d_absgrad,
         )
+        if compute_means2d_absgrad:
+            means2d.absgrad = v_means2d_abs
 
         if ctx.needs_input_grad[6]:
             v_backgrounds = (v_render_colors * (1.0 - render_alphas).float()).sum(
@@ -1071,8 +1089,6 @@ class _RasterizeToPixelsPacked(torch.autograd.Function):
             )
         else:
             v_backgrounds = None
-
-        means2d.normgrad = v_means2d_norm
 
         return (
             None,
@@ -1082,6 +1098,7 @@ class _RasterizeToPixelsPacked(torch.autograd.Function):
             v_colors,
             v_opacities,
             v_backgrounds,
+            None,
             None,
             None,
             None,

@@ -34,6 +34,7 @@ def rasterization(
     backgrounds: Optional[Tensor] = None,
     render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
     sparse_grad: bool = False,
+    compute_means2d_absgrad: bool = False,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of Gaussians to pixels.
 
@@ -174,6 +175,7 @@ def rasterization(
         packed=packed,
         rindices=rindices,
         cindices=cindices,
+        compute_means2d_absgrad=compute_means2d_absgrad,
     )
     if render_mode in ["D", "RGB+D"]:
         # normalize the expected depth by alpha

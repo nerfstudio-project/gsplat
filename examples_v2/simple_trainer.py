@@ -245,6 +245,7 @@ class Runner:
             height=height,
             packed=self.args.packed,
             sparse_grad=self.args.sparse_grad,
+            compute_means2d_absgrad=args.absgrad,
             **kwargs,
         )
         return render_colors, render_alphas, info
@@ -406,11 +407,16 @@ class Runner:
     @torch.no_grad()
     def update_running_stats(self, info: Dict):
         """Update running stats."""
+        args = self.args
+
         # normalize grads to [-1, 1] screen space
-        grads = info["means2d"].grad.clone()
+        if args.absgrad:
+            grads = info["means2d"].absgrad.clone()
+        else:
+            grads = info["means2d"].grad.clone()
         grads[..., 0] *= info["width"] / 2.0
         grads[..., 1] *= info["height"] / 2.0
-        if self.args.packed:
+        if args.packed:
             # grads is [nnz, 2]
             gs_ids = info["cindices"]  # [nnz] or None
             self.running_stats["grad2d"].index_add_(0, gs_ids, grads.norm(dim=-1))
@@ -600,7 +606,7 @@ class Runner:
         ssim = torch.stack(metrics["ssim"]).mean()
         lpips = torch.stack(metrics["lpips"]).mean()
         print(
-            f"PSNR: {psnr.item():.3f}, SSIM: {ssim.item():.3f}, LPIPS: {lpips.item():.3f} "
+            f"PSNR: {psnr.item():.3f}, SSIM: {ssim.item():.4f}, LPIPS: {lpips.item():.3f} "
             f"Time: {ellipse_time:.3f}s/image "
             f"Number of GS: {len(self.splats['means3d'])}"
         )
@@ -813,6 +819,11 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="path to the .pt file. If provide, it will skip training and render a video",
+    )
+    parser.add_argument(
+        "--absgrad",
+        action="store_true",
+        help="Use absolute gradient for pruning. Be warned: This typically requires larger --grow_grad2d, e.g., 0.0008 or 0.0006",
     )
     args = parser.parse_args()
     if args.sparse_grad:
