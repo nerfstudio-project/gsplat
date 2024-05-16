@@ -177,8 +177,8 @@ def rasterization(
         cindices=cindices,
         compute_means2d_absgrad=compute_means2d_absgrad,
     )
-    if render_mode in ["D", "RGB+D"]:
-        # normalize the expected depth by alpha
+    if render_mode in ["ED", "RGB+ED"]:
+        # normalize the accumulated depth to get the expected depth
         render_colors = torch.cat(
             [
                 render_colors[..., :-1],

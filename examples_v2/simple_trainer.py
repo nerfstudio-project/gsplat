@@ -656,7 +656,7 @@ class Runner:
                 sh_degree=args.sh_degree,
                 near_plane=args.near_plane,
                 far_plane=args.far_plane,
-                render_mode="RGB+D",
+                render_mode="RGB+ED",
             )  # [1, H, W, 4]
             colors = torch.clamp(renders[0, ..., 0:3], 0.0, 1.0)  # [H, W, 3]
             depths = renders[0, ..., 3:4]  # [H, W, 1]
