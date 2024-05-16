@@ -179,8 +179,12 @@ def rasterization(
     )
     if render_mode in ["D", "RGB+D"]:
         # normalize the expected depth by alpha
-        render_colors[..., -1:] = render_colors[..., -1:] / render_alphas.clamp(
-            min=1e-10
+        render_colors = torch.cat(
+            [
+                render_colors[..., :-1],
+                render_colors[..., -1:] / render_alphas.clamp(min=1e-10),
+            ],
+            dim=-1,
         )
 
     meta = {

@@ -242,7 +242,7 @@ class Runner:
             width=width,
             height=height,
             packed=self.args.packed,
-            compute_means2d_absgrad=args.absgrad,
+            compute_means2d_absgrad=self.args.absgrad,
             **kwargs,
         )
         return render_colors, render_alphas, info
