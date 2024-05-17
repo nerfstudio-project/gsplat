@@ -28,7 +28,7 @@ def get_extensions():
     from torch.utils.cpp_extension import CUDAExtension
 
     extensions_dir = osp.join("gsplat", "cuda", "csrc")
-    sources = glob.glob(osp.join(extensions_dir, "*.cu")) + glob.glob(
+    sources_v1 = glob.glob(osp.join(extensions_dir, "*.cu")) + glob.glob(
         osp.join(extensions_dir, "*.cpp")
     )
 
@@ -37,7 +37,8 @@ def get_extensions():
         osp.join(extensions_dir_v2, "*.cpp")
     )
 
-    sources = sources + sources_v2
+    # only builds v2
+    sources = sources_v2
     # sources = [
     #     osp.join(extensions_dir, "ext.cpp"),
     #     osp.join(extensions_dir, "rasterize.cu"),
