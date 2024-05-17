@@ -97,7 +97,7 @@ def get_extensions():
     extension = CUDAExtension(
         f"gsplat.csrc",
         sources,
-        include_dirs=[osp.join(extensions_dir, "third_party", "glm")],
+        include_dirs=[extensions_dir],
         define_macros=define_macros,
         undef_macros=undef_macros,
         extra_compile_args=extra_compile_args,
