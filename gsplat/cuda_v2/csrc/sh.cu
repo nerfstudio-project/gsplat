@@ -244,11 +244,13 @@ torch::Tensor compute_sh_fwd_tensor(const unsigned degrees_to_use,
     const unsigned N = dirs.numel() / 3;
     torch::Tensor colors = torch::empty_like(dirs); // [..., 3]
     // parallelize over N * 3
-    compute_sh_fwd_kernel<<<(N * 3 + N_THREADS - 1) / N_THREADS, N_THREADS>>>(
-        N, K, degrees_to_use, (float3 *)dirs.data_ptr<float>(),
-        coeffs.data_ptr<float>(),
-        masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
-        colors.data_ptr<float>());
+    if (N) {
+        compute_sh_fwd_kernel<<<(N * 3 + N_THREADS - 1) / N_THREADS, N_THREADS>>>(
+            N, K, degrees_to_use, (float3 *)dirs.data_ptr<float>(),
+            coeffs.data_ptr<float>(),
+            masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
+            colors.data_ptr<float>());
+    }
     return colors; // [..., 3]
 }
 
@@ -273,9 +275,11 @@ torch::Tensor compute_sh_bwd_tensor(const unsigned K, const unsigned degrees_to_
     batch_shape.push_back(K);
     batch_shape.push_back(3);
     torch::Tensor v_coeffs = torch::zeros(batch_shape, dirs.options());
-    compute_sh_bwd_kernel<<<(N * 3 + N_THREADS - 1) / N_THREADS, N_THREADS>>>(
-        N, K, degrees_to_use, (float3 *)dirs.data_ptr<float>(),
-        masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
-        v_colors.data_ptr<float>(), v_coeffs.data_ptr<float>());
+    if (N) {
+        compute_sh_bwd_kernel<<<(N * 3 + N_THREADS - 1) / N_THREADS, N_THREADS>>>(
+            N, K, degrees_to_use, (float3 *)dirs.data_ptr<float>(),
+            masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
+            v_colors.data_ptr<float>(), v_coeffs.data_ptr<float>());
+    }
     return v_coeffs; // [..., K, 3]
 }
