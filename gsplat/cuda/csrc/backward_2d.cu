@@ -262,19 +262,62 @@ __global__ void rasterize_backward_kernel(
                 buffer.y += rgb.y * fac;
                 buffer.z += rgb.z * fac;
 
-                const float v_sigma = -opac * vis * v_alpha;
-                v_conic_local = {0.5f * v_sigma * delta.x * delta.x,
-                                v_sigma * delta.x * delta.y,
-                                0.5f * v_sigma * delta.y * delta.y};
-                v_xy_local = {v_sigma * (conic.x * delta.x + conic.y * delta.y),
-                                v_sigma * (conic.y * delta.x + conic.z * delta.y)};
-                v_xy_abs_local = {abs(v_xy_local.x), abs(v_xy_local.y)};
+                // Helpful reusable temporary variable
+                const float dL_dG = opac * v_alpha;
+                float dL_dz = 0.0f;
+
+                // ====== 2D Splatting ====== //
+                if (rho3d <= rho2d) {
+                    // Update gradients w.r.t. covariance of Gaussian 3x3 (T)
+                    const float dL_ds = {
+                        dL_dG * -vis * s.x + dL_dz * Tw.x,
+                        dL_dG * -vis * s.y + dL_dz * Tw.y
+                    };
+                    const float3 dz_dTw = {s.x, s.y, 1.0};
+                    const float dsx_pz = dL_ds.x / p.z;
+                    const float dsy_pz = dL_ds.y / p.z;
+                    const float3 dL_dp = {dsx_pz, dsy_pz, -(dsx_pz * s.x + dsy_pz * s.y)};
+                    const float3 dL_dk = crossProduct(l, dL_dp);
+                    const float3 dL_dl = crossProduct(dL_dp, k);
+
+                    const float3 dL_dTu = {-dL_dk.x, -dL_dk.y, -dL_dk.z};
+                    const float3 dL_dTv = {-dL_dl.x, -dL_dl.y, -dL_dl.z};
+                    const float3 dL_dTw = {
+                        px * dL_dk.x + py * dL_dl.x + dL_dz * dz_dTw.x,
+                        px * dL_dk.y + py * dL_dl.y + dL_dz * dz_dTw.y,
+                        px * dL_dk.z + py * dL_dl.z + dL_dz * dz_dTw.z
+                    };
+                    atomicAdd(&dL_dtransMat[g * 9 + 0], dL_dTu.x);
+                    atomicAdd(&dL_dtransMat[g * 9 + 1], dL_dTu.y);
+                    atomicAdd(&dL_dtransMat[g * 9 + 2], dL_dTu.z);
+                    atomicAdd(&dL_dtransMat[g * 9 + 3], dL_dTv.x);
+                    atomicAdd(&dL_dtransMat[g * 9 + 4], dL_dTv.y);
+                    atomicAdd(&dL_dtransMat[g * 9 + 5], dL_dTv.z);
+                    atomicAdd(&dL_dtransMat[g * 9 + 6], dL_dTw.x);
+                    atomicAdd(&dL_dtransMat[g * 9 + 7], dL_dTw.y);
+                    atomicAdd(&dL_dtransMat[g * 9 + 8], dL_dTw.z);
+                } else {
+                    // Update gradient w.r.t center of Gaussian 2D mean position
+                    const float dG_ddelx = -vis * FilterInvSquare * d.x;
+                    const float dG_ddely = -vis * FilterInvSquare * d.y;
+                    atomicAdd(&dL_dmean2D[g].x, dL_dG * dG_ddelx); // not scaled
+                    atomicAdd(&dL_dmean2D[g].y, dL_dG * dG_ddely); // not scaled
+                    // atomicAdd(&dL_dttransMat[global_id * 9 + 8], dL_dz); // propagate depth loss, disable for now
+
+                }
+                // const float v_sigma = -opac * vis * v_alpha;
+                // v_conic_local = {0.5f * v_sigma * delta.x * delta.x,
+                //                 v_sigma * delta.x * delta.y,
+                //                 0.5f * v_sigma * delta.y * delta.y};
+                // v_xy_local = {v_sigma * (conic.x * delta.x + conic.y * delta.y),
+                //                 v_sigma * (conic.y * delta.x + conic.z * delta.y)};
+                // v_xy_abs_local = {abs(v_xy_local.x), abs(v_xy_local.y)};
                 v_opacity_local = vis * v_alpha;
             }
             warpSum3(v_rgb_local, warp);
-            warpSum3(v_conic_local, warp);
-            warpSum2(v_xy_local, warp);
-            warpSum2(v_xy_abs_local, warp);
+            // warpSum3(v_conic_local, warp);
+            // warpSum2(v_xy_local, warp);
+            // warpSum2(v_xy_abs_local, warp);
             warpSum(v_opacity_local, warp);
             if (warp.thread_rank() == 0) {
                 int32_t g = id_batch[t];
@@ -283,18 +326,18 @@ __global__ void rasterize_backward_kernel(
                 atomicAdd(v_rgb_ptr + 3 * g + 1, v_rgb_local.y);
                 atomicAdd(v_rgb_prt + 3 * g + 2, v_rgb_local.z);
 
-                float* v_conic_ptr = (float*)(v_conic);
-                atomicAdd(v_conic_ptr + 3 * g + 0, v_conic_local.x);
-                atomicAdd(v_conic_ptr + 3 * g + 1, v_conic_local.y);
-                atomicAdd(v_conic_ptr + 3 * g + 1, v_conic_local.z);
+                // float* v_conic_ptr = (float*)(v_conic);
+                // atomicAdd(v_conic_ptr + 3 * g + 0, v_conic_local.x);
+                // atomicAdd(v_conic_ptr + 3 * g + 1, v_conic_local.y);
+                // atomicAdd(v_conic_ptr + 3 * g + 1, v_conic_local.z);
 
-                float* v_xy_ptr = (float*)(v_xy);
-                atomicAdd(v_xy_ptr + 2 * g + 0, v_xy_local.x);
-                atmoicAdd(v_xy_ptr + 2 * g + 1, v_xy_local.y);
+                // float* v_xy_ptr = (float*)(v_xy);
+                // atomicAdd(v_xy_ptr + 2 * g + 0, v_xy_local.x);
+                // atmoicAdd(v_xy_ptr + 2 * g + 1, v_xy_local.y);
 
-                float* v_xy_abs_ptr = (float*)(v_xy_abs);
-                atomicAdd(v_xy_abs_ptr + 2 * g + 0, v_xy_abs_local.x);
-                atomicAdd(v_xy_abs_ptr + 2 * g + 1, v_xy_abs_local.y);
+                // float* v_xy_abs_ptr = (float*)(v_xy_abs);
+                // atomicAdd(v_xy_abs_ptr + 2 * g + 0, v_xy_abs_local.x);
+                // atomicAdd(v_xy_abs_ptr + 2 * g + 1, v_xy_abs_local.y);
 
                 atomicAdd(v_opacity + g, v_opacity_local);
             }
