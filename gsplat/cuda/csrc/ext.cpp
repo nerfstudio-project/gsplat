@@ -2,17 +2,37 @@
 #include <torch/extension.h>
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    // auto diff functions
-    m.def("nd_rasterize_forward", &nd_rasterize_forward_tensor);
-    m.def("nd_rasterize_backward", &nd_rasterize_backward_tensor);
-    m.def("rasterize_forward", &rasterize_forward_tensor);
-    m.def("rasterize_backward", &rasterize_backward_tensor);
-    m.def("project_gaussians_forward", &project_gaussians_forward_tensor);
-    m.def("project_gaussians_backward", &project_gaussians_backward_tensor);
-    m.def("compute_sh_forward", &compute_sh_forward_tensor);
-    m.def("compute_sh_backward", &compute_sh_backward_tensor);
-    // utils
-    m.def("compute_cov2d_bounds", &compute_cov2d_bounds_tensor);
-    m.def("map_gaussian_to_intersects", &map_gaussian_to_intersects_tensor);
-    m.def("get_tile_bin_edges", &get_tile_bin_edges_tensor);
+    m.def("compute_sh_fwd", &compute_sh_fwd_tensor);
+    m.def("compute_sh_bwd", &compute_sh_bwd_tensor);
+
+    m.def("quat_scale_to_covar_preci_fwd", &quat_scale_to_covar_preci_fwd_tensor);
+    m.def("quat_scale_to_covar_preci_bwd", &quat_scale_to_covar_preci_bwd_tensor);
+
+    m.def("persp_proj_fwd", &persp_proj_fwd_tensor);
+    m.def("persp_proj_bwd", &persp_proj_bwd_tensor);
+
+    m.def("world_to_cam_fwd", &world_to_cam_fwd_tensor);
+    m.def("world_to_cam_bwd", &world_to_cam_bwd_tensor);
+
+    m.def("projection_fwd", &projection_fwd_tensor);
+    m.def("projection_bwd", &projection_bwd_tensor);
+
+    m.def("isect_tiles", &isect_tiles_tensor);
+    m.def("isect_offset_encode", &isect_offset_encode_tensor);
+
+    m.def("rasterize_to_pixels_fwd", &rasterize_to_pixels_fwd_tensor);
+    m.def("rasterize_to_pixels_bwd", &rasterize_to_pixels_bwd_tensor);
+
+    m.def("rasterize_to_indices_iter", &rasterize_to_indices_iter_tensor);
+
+    // packed version
+    m.def("nonzero", &nonzero_tensor); // a unit test function for packing.
+    
+    m.def("projection_packed_fwd", &projection_packed_fwd_tensor);
+    m.def("projection_packed_bwd", &projection_packed_bwd_tensor);
+
+    m.def("isect_tiles_packed", &isect_tiles_packed_tensor);
+    
+    m.def("rasterize_to_pixels_packed_fwd", &rasterize_to_pixels_packed_fwd_tensor);
+    m.def("rasterize_to_pixels_packed_bwd", &rasterize_to_pixels_packed_bwd_tensor);
 }

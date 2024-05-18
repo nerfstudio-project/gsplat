@@ -18,7 +18,7 @@ from torch import Tensor
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
-from gsplat.rendering_v2 import rasterization
+from gsplat.rendering import rasterization
 
 
 def get_expon_lr_func(

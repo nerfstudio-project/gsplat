@@ -27,27 +27,17 @@ def get_extensions():
     from torch.__config__ import parallel_info
     from torch.utils.cpp_extension import CUDAExtension
 
-    extensions_dir = osp.join("gsplat", "cuda", "csrc")
-    sources_v1 = glob.glob(osp.join(extensions_dir, "*.cu")) + glob.glob(
-        osp.join(extensions_dir, "*.cpp")
+    extensions_dir_v1 = osp.join("gsplat", "cuda", "csrc")
+    sources_v1 = glob.glob(osp.join(extensions_dir_v1, "*.cu")) + glob.glob(
+        osp.join(extensions_dir_v1, "*.cpp")
     )
+    sources_v1 = [path for path in sources_v1 if "hip" not in path]
 
     extensions_dir_v2 = osp.join("gsplat", "cuda_v2", "csrc")
     sources_v2 = glob.glob(osp.join(extensions_dir_v2, "*.cu")) + glob.glob(
         osp.join(extensions_dir_v2, "*.cpp")
     )
-
-    # only builds v2
-    sources = sources_v2
-    # sources = [
-    #     osp.join(extensions_dir, "ext.cpp"),
-    #     osp.join(extensions_dir, "rasterize.cu"),
-    #     osp.join(extensions_dir, "bindings.cu"),
-    #     osp.join(extensions_dir, "forward.cu"),
-    #     osp.join(extensions_dir, "backward.cu"),
-    # ]
-    # remove generated 'hip' files, in case of rebuilds
-    sources = [path for path in sources if "hip" not in path]
+    sources_v2 = [path for path in sources_v2 if "hip" not in path]
 
     undef_macros = []
     define_macros = []
@@ -95,17 +85,26 @@ def get_extensions():
     if sys.platform == "win32":
         extra_compile_args["nvcc"] += ["-DWIN32_LEAN_AND_MEAN"]
 
-    extension = CUDAExtension(
+    extension_v1 = CUDAExtension(
+        f"gsplat.csrc_legacy",
+        sources_v1,
+        include_dirs=[extensions_dir_v1],  # glm lives in v1.
+        define_macros=define_macros,
+        undef_macros=undef_macros,
+        extra_compile_args=extra_compile_args,
+        extra_link_args=extra_link_args,
+    )
+    extension_v2 = CUDAExtension(
         f"gsplat.csrc",
-        sources,
-        include_dirs=[extensions_dir],
+        sources_v2,
+        include_dirs=[extensions_dir_v1],  # glm lives in v1.
         define_macros=define_macros,
         undef_macros=undef_macros,
         extra_compile_args=extra_compile_args,
         extra_link_args=extra_link_args,
     )
 
-    return [extension]
+    return [extension_v1, extension_v2]
 
 
 setup(

@@ -8,7 +8,6 @@ from rich.console import Console
 from torch.utils.cpp_extension import _get_build_directory, load
 
 PATH = os.path.dirname(os.path.abspath(__file__))
-NO_FAST_MATH = os.getenv("NO_FAST_MATH", "0") == "1"
 
 
 def cuda_toolkit_available():
@@ -34,15 +33,11 @@ def cuda_toolkit_version():
     return cuda_version
 
 
-name = "gsplat_cuda2"
+name = "gsplat_cuda_legacy"
 build_dir = _get_build_directory(name, verbose=False)
-# borrow `third_party` from `gsplat/cuda/`
-extra_include_paths = [os.path.join(PATH, "..", "cuda/", "csrc/")]
+extra_include_paths = [os.path.join(PATH, "csrc/third_party/glm")]
 extra_cflags = ["-O3"]
-if NO_FAST_MATH:
-    extra_cuda_cflags = ["-O3"]
-else:
-    extra_cuda_cflags = ["-O3", "--use_fast_math"]
+extra_cuda_cflags = ["-O3"]
 
 _C = None
 sources = list(glob.glob(os.path.join(PATH, "csrc/*.cu"))) + list(
@@ -51,7 +46,7 @@ sources = list(glob.glob(os.path.join(PATH, "csrc/*.cu"))) + list(
 
 try:
     # try to import the compiled module (via setup.py)
-    from gsplat import csrc as _C
+    from gsplat import csrc_legacy as _C
 except ImportError:
     # if failed, try with JIT compilation
     if cuda_toolkit_available():
@@ -62,11 +57,12 @@ except ImportError:
         except OSError:
             pass
 
-        if os.path.exists(os.path.join(build_dir, "gsplat_cuda2.so")) or os.path.exists(
-            os.path.join(build_dir, "gsplat_cuda2.lib")
-        ):
+        if os.path.exists(
+            os.path.join(build_dir, "gsplat_cuda_legacy.so")
+        ) or os.path.exists(os.path.join(build_dir, "gsplat_cuda_legacy.lib")):
             # If the build exists, we assume the extension has been built
             # and we can load it.
+
             _C = load(
                 name=name,
                 sources=sources,
@@ -79,7 +75,7 @@ except ImportError:
             # if the build directory exists with a lock file in it.
             shutil.rmtree(build_dir)
             with Console().status(
-                "[bold yellow]gsplat2: Setting up CUDA (This may take a few minutes the first time)",
+                "[bold yellow]gsplat (legacy): Setting up CUDA (This may take a few minutes the first time)",
                 spinner="bouncingBall",
             ):
                 _C = load(
@@ -91,7 +87,7 @@ except ImportError:
                 )
     else:
         Console().print(
-            "[yellow]gsplat2: No CUDA toolkit found. gsplat will be disabled.[/yellow]"
+            "[yellow]gsplat (legacy): No CUDA toolkit found. gsplat will be disabled.[/yellow]"
         )
 
 

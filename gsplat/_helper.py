@@ -77,7 +77,11 @@ def rasterization_legacy_wrapper(
     Note: This function exists for comparision purpose only. So we skip collecting
     the intermidiate variables, and only return an empty dict.
     """
-    from gsplat import project_gaussians, rasterize_gaussians, spherical_harmonics
+    from gsplat.cuda_legacy._wrapper import (
+        project_gaussians,
+        rasterize_gaussians,
+        spherical_harmonics,
+    )
 
     assert eps2d == 0.3, "This is hard-coded in CUDA to be 0.3"
     C = len(viewmats)

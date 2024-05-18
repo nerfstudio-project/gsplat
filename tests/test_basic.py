@@ -12,7 +12,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from gsplat._helper_v2 import load_test_data
+from gsplat._helper import load_test_data
 
 device = torch.device("cuda:0")
 
@@ -46,8 +46,8 @@ def test_data():
 
 @pytest.mark.parametrize("triu", [False, True])
 def test_quat_scale_to_covar_preci(test_data, triu: bool):
-    from gsplat._torch_impl_v2 import _quat_scale_to_covar_preci
-    from gsplat._wrapper_v2 import quat_scale_to_covar_preci
+    from gsplat.cuda._torch_impl import _quat_scale_to_covar_preci
+    from gsplat.cuda._wrapper import quat_scale_to_covar_preci
 
     torch.manual_seed(42)
 
@@ -82,8 +82,8 @@ def test_quat_scale_to_covar_preci(test_data, triu: bool):
 
 
 def test_world_to_cam(test_data):
-    from gsplat._torch_impl_v2 import _world_to_cam
-    from gsplat._wrapper_v2 import quat_scale_to_covar_preci, world_to_cam
+    from gsplat.cuda._torch_impl import _world_to_cam
+    from gsplat.cuda._wrapper import quat_scale_to_covar_preci, world_to_cam
 
     torch.manual_seed(42)
 
@@ -119,8 +119,8 @@ def test_world_to_cam(test_data):
 
 
 def test_persp_proj(test_data):
-    from gsplat._torch_impl_v2 import _persp_proj
-    from gsplat._wrapper_v2 import persp_proj, quat_scale_to_covar_preci, world_to_cam
+    from gsplat.cuda._torch_impl import _persp_proj
+    from gsplat.cuda._wrapper import persp_proj, quat_scale_to_covar_preci, world_to_cam
 
     torch.manual_seed(42)
 
@@ -156,8 +156,8 @@ def test_persp_proj(test_data):
 
 @pytest.mark.parametrize("fused", [False, True])
 def test_projection(test_data, fused: bool):
-    from gsplat._torch_impl_v2 import _projection
-    from gsplat._wrapper_v2 import projection, quat_scale_to_covar_preci
+    from gsplat.cuda._torch_impl import _projection
+    from gsplat.cuda._wrapper import projection, quat_scale_to_covar_preci
 
     torch.manual_seed(42)
 
@@ -221,7 +221,7 @@ def test_projection(test_data, fused: bool):
 @pytest.mark.parametrize("fused", [False, True])
 @pytest.mark.parametrize("sparse_grad", [False, True])
 def test_projection_packed(test_data, fused: bool, sparse_grad: bool):
-    from gsplat._wrapper_v2 import projection, quat_scale_to_covar_preci
+    from gsplat.cuda._wrapper import projection, quat_scale_to_covar_preci
 
     torch.manual_seed(42)
 
@@ -321,8 +321,8 @@ def test_projection_packed(test_data, fused: bool, sparse_grad: bool):
 
 
 def test_isect(test_data):
-    from gsplat._torch_impl_v2 import _isect_offset_encode, _isect_tiles
-    from gsplat._wrapper_v2 import isect_offset_encode, isect_tiles
+    from gsplat.cuda._torch_impl import _isect_offset_encode, _isect_tiles
+    from gsplat.cuda._wrapper import isect_offset_encode, isect_tiles
 
     torch.manual_seed(42)
 
@@ -353,8 +353,8 @@ def test_isect(test_data):
 
 
 def test_rasterize_to_pixels(test_data):
-    from gsplat._torch_impl_v2 import _rasterize_to_pixels
-    from gsplat._wrapper_v2 import (
+    from gsplat.cuda._torch_impl import _rasterize_to_pixels
+    from gsplat.cuda._wrapper import (
         isect_offset_encode,
         isect_tiles,
         persp_proj,
@@ -456,8 +456,8 @@ def test_rasterize_to_pixels(test_data):
 
 @pytest.mark.parametrize("sh_degree", [0, 1, 2, 3])
 def test_sh(test_data, sh_degree: int):
-    from gsplat._torch_impl_v2 import _spherical_harmonics
-    from gsplat._wrapper_v2 import spherical_harmonics
+    from gsplat.cuda._torch_impl import _spherical_harmonics
+    from gsplat.cuda._wrapper import spherical_harmonics
 
     torch.manual_seed(42)
 

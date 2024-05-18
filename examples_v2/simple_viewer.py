@@ -16,8 +16,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from gsplat._helper_v2 import load_test_data
-from gsplat.rendering_v2 import rasterization
+from gsplat._helper import load_test_data
+from gsplat.rendering import rasterization
 
 try:
     from nerfview import CameraState, ViewerServer
@@ -115,8 +115,8 @@ def viewer_render_fn(camera_state: CameraState, img_wh: Tuple[int, int]):
     viewmat = c2w.inverse()
 
     # Switch between different backends (read their docstrings before using them!)
-    # from gsplat2._helper import rasterization_inria_wrapper as rasterization
-    # from gsplat2._helper import rasterization_legacy_wrapper as rasterization
+    # from gsplat._helper_v2 import rasterization_inria_wrapper as rasterization
+    # from gsplat._helper_v2 import rasterization_legacy_wrapper as rasterization
     render_colors, render_alphas, meta = rasterization(
         means,  # [N, 3]
         quats,  # [N, 4]

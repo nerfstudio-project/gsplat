@@ -11,8 +11,8 @@ import time
 import torch
 from typing_extensions import Callable, Literal
 
-from gsplat._helper_v2 import load_test_data
-from gsplat.rendering_v2 import rasterization
+from gsplat._helper import load_test_data
+from gsplat.rendering import rasterization
 
 RESOLUTIONS = {
     "360p": (640, 360),
@@ -71,11 +71,11 @@ def main(
     if backend == "gsplat2":
         rasterization_fn = rasterization
     elif backend == "gsplat":
-        from gsplat2._helper import rasterization_legacy_wrapper
+        from gsplat._helper import rasterization_legacy_wrapper
 
         rasterization_fn = rasterization_legacy_wrapper
     elif backend == "inria":
-        from gsplat2._helper import rasterization_inria_wrapper
+        from gsplat._helper import rasterization_inria_wrapper
 
         rasterization_fn = rasterization_inria_wrapper
     else:

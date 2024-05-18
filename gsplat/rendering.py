@@ -5,7 +5,7 @@ import torch
 from torch import Tensor
 from typing_extensions import Literal
 
-from ._wrapper_v2 import (
+from .cuda._wrapper import (
     isect_offset_encode,
     isect_tiles,
     projection,

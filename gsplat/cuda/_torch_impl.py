@@ -319,7 +319,7 @@ def _rasterize_to_pixels(
     backgrounds: Optional[Tensor] = None,  # [C, channels]
     batch_per_iter: int = 100,
 ):
-    from ._wrapper_v2 import rasterize_to_indices_iter
+    from ._wrapper import rasterize_to_indices_iter
 
     C, N = means2d.shape[:2]
     device = means2d.device

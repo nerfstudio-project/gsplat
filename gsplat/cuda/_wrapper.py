@@ -4,6 +4,16 @@ import torch
 from torch import Tensor
 
 
+def _make_lazy_cuda_func(name: str) -> Callable:
+    def call_cuda(*args, **kwargs):
+        # pylint: disable=import-outside-toplevel
+        from ._backend import _C
+
+        return getattr(_C, name)(*args, **kwargs)
+
+    return call_cuda
+
+
 def spherical_harmonics(
     degrees_to_use: int,
     dirs: Tensor,  # [..., 3]
@@ -960,16 +970,6 @@ class _ProjectionPacked(torch.autograd.Function):
             None,
             None,
         )
-
-
-def _make_lazy_cuda_func(name: str) -> Callable:
-    def call_cuda(*args, **kwargs):
-        # pylint: disable=import-outside-toplevel
-        from .cuda_v2._backend import _C
-
-        return getattr(_C, name)(*args, **kwargs)
-
-    return call_cuda
 
 
 class _RasterizeToPixelsPacked(torch.autograd.Function):
