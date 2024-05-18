@@ -115,8 +115,8 @@ def viewer_render_fn(camera_state: CameraState, img_wh: Tuple[int, int]):
     viewmat = c2w.inverse()
 
     # Switch between different backends (read their docstrings before using them!)
-    # from gsplat._helper_v2 import rasterization_inria_wrapper as rasterization
-    # from gsplat._helper_v2 import rasterization_legacy_wrapper as rasterization
+    # from gsplat._helper import rasterization_inria_wrapper as rasterization
+    # from gsplat._helper import rasterization_legacy_wrapper as rasterization
     render_colors, render_alphas, meta = rasterization(
         means,  # [N, 3]
         quats,  # [N, 4]
