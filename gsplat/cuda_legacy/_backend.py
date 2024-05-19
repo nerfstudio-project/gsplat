@@ -35,7 +35,7 @@ def cuda_toolkit_version():
 
 name = "gsplat_cuda_legacy"
 build_dir = _get_build_directory(name, verbose=False)
-extra_include_paths = [os.path.join(PATH, "csrc/third_party/glm")]
+extra_include_paths = [os.path.join(PATH, "..", "cuda/", "csrc/")]
 extra_cflags = ["-O3"]
 extra_cuda_cflags = ["-O3"]
 

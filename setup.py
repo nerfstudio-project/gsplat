@@ -88,7 +88,7 @@ def get_extensions():
     extension_v1 = CUDAExtension(
         f"gsplat.csrc_legacy",
         sources_v1,
-        include_dirs=[extensions_dir_v1],  # glm lives in v1.
+        include_dirs=[extensions_dir_v2],  # glm lives in v2.
         define_macros=define_macros,
         undef_macros=undef_macros,
         extra_compile_args=extra_compile_args,
@@ -97,7 +97,7 @@ def get_extensions():
     extension_v2 = CUDAExtension(
         f"gsplat.csrc",
         sources_v2,
-        include_dirs=[extensions_dir_v1],  # glm lives in v1.
+        include_dirs=[extensions_dir_v2],  # glm lives in v2.
         define_macros=define_macros,
         undef_macros=undef_macros,
         extra_compile_args=extra_compile_args,
