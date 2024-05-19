@@ -14,6 +14,7 @@ URL = "https://github.com/nerfstudio-project/gsplat"  # TODO
 BUILD_NO_CUDA = os.getenv("BUILD_NO_CUDA", "0") == "1"
 WITH_SYMBOLS = os.getenv("WITH_SYMBOLS", "0") == "1"
 LINE_INFO = os.getenv("LINE_INFO", "0") == "1"
+PATH = os.path.dirname(os.path.abspath(__file__))
 
 
 def get_ext():
@@ -27,13 +28,13 @@ def get_extensions():
     from torch.__config__ import parallel_info
     from torch.utils.cpp_extension import CUDAExtension
 
-    extensions_dir_v1 = osp.join("gsplat", "cuda_legacy", "csrc")
+    extensions_dir_v1 = osp.join(PATH, "gsplat", "cuda_legacy", "csrc")
     sources_v1 = glob.glob(osp.join(extensions_dir_v1, "*.cu")) + glob.glob(
         osp.join(extensions_dir_v1, "*.cpp")
     )
     sources_v1 = [path for path in sources_v1 if "hip" not in path]
 
-    extensions_dir_v2 = osp.join("gsplat", "cuda", "csrc")
+    extensions_dir_v2 = osp.join(PATH, "gsplat", "cuda", "csrc")
     sources_v2 = glob.glob(osp.join(extensions_dir_v2, "*.cu")) + glob.glob(
         osp.join(extensions_dir_v2, "*.cpp")
     )
