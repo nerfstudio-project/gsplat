@@ -1,6 +1,6 @@
 #include "config.h"
 #include <cuda_runtime.h>
-#include "third_party/glm/glm/glm.hpp"
+#include "third_party/glm/glm.hpp"
 #include "third_party/glm/glm/gtc/type_ptr.hpp"
 #include <iostream>
 

@@ -2,7 +2,7 @@
 #define GSPLAT_CUDA_UTILS_H
 
 #include "helpers.cuh"
-#include "third_party/glm/glm/glm.hpp"
+#include "third_party/glm/glm.hpp"
 #include "third_party/glm/glm/gtc/type_ptr.hpp"
 #include <cuda.h>
 #include <cuda_runtime.h>
@@ -277,5 +277,22 @@ inline __device__ void inverse_vjp(const T Minv, const T v_Minv, T &v_M) {
     // df/dM = -P * df/dP * P
     v_M += -Minv * v_Minv * Minv;
 }
+
+// inline __device__ float add_blur(const float eps2d, glm::mat2 &covar,
+//                                  float &compensation) {
+//     float det_orig = covar[0][0] * covar[1][1] - covar[0][1] * covar[1][0];
+//     covar[0][0] += eps2d;
+//     covar[1][1] += eps2d;
+//     float det_blur = covar[0][0] * covar[1][1] - covar[0][1] * covar[1][0];
+//     compensation = sqrt(max(0.f, det_orig / det_blur));
+//     return det_blur;
+// }
+
+// template <class T>
+// inline __device__ void add_blur_vjp(const float eps2d, const glm::mat2 covar_blur,
+//                                     const float compensation,
+//                                     const float v_compensation, glm::mat2 &v_covar) {
+//     // comp = sqrt(det(covar_blur - eps2d * I) / det(covar_blur))
+// }
 
 #endif // GSPLAT_CUDA_UTILS_H
