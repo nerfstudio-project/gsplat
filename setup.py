@@ -14,6 +14,7 @@ URL = "https://github.com/nerfstudio-project/gsplat"  # TODO
 BUILD_NO_CUDA = os.getenv("BUILD_NO_CUDA", "0") == "1"
 WITH_SYMBOLS = os.getenv("WITH_SYMBOLS", "0") == "1"
 LINE_INFO = os.getenv("LINE_INFO", "0") == "1"
+PATH = os.path.dirname(os.path.abspath(__file__))
 
 
 def get_ext():
@@ -88,7 +89,7 @@ def get_extensions():
     extension_v1 = CUDAExtension(
         f"gsplat.csrc_legacy",
         sources_v1,
-        include_dirs=[extensions_dir_v2],  # glm lives in v2.
+        include_dirs=[os.path.join(PATH, extensions_dir_v2)],  # glm lives in v2.
         define_macros=define_macros,
         undef_macros=undef_macros,
         extra_compile_args=extra_compile_args,
@@ -97,7 +98,7 @@ def get_extensions():
     extension_v2 = CUDAExtension(
         f"gsplat.csrc",
         sources_v2,
-        include_dirs=[extensions_dir_v2],  # glm lives in v2.
+        include_dirs=[os.path.join(PATH, extensions_dir_v2)],  # glm lives in v2.
         define_macros=define_macros,
         undef_macros=undef_macros,
         extra_compile_args=extra_compile_args,
