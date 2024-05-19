@@ -153,32 +153,31 @@ __global__ void isect_offset_encode(const int n_isects,
     int64_t tid_curr = isect_id_curr & ((1 << tile_n_bits) - 1);
     int64_t id_curr = cid_curr * n_tiles + tid_curr;
 
-    if (idx == 0 || idx == n_isects - 1) {
-        if (idx == 0) {
-            // write out the offsets until the first valid tile (inclusive)
-            for (int i = 0; i < id_curr + 1; ++i)
-                offsets[i] = idx;
-        }
-        if (idx == n_isects - 1) {
-            // write out the rest of the offsets
-            for (int i = id_curr + 1; i < C * n_tiles; ++i)
-                offsets[i] = n_isects;
-        }
-        return;
+    if (idx == 0) {
+        // write out the offsets until the first valid tile (inclusive)
+        for (int i = 0; i < id_curr + 1; ++i)
+            offsets[i] = idx;
+    }
+    if (idx == n_isects - 1) {
+        // write out the rest of the offsets
+        for (int i = id_curr + 1; i < C * n_tiles; ++i)
+            offsets[i] = n_isects;
     }
 
-    // visit the current and previous isect_id and check if the (cid, tile_id)
-    // pair changes.
-    int64_t isect_id_prev = isect_ids[idx - 1] >> 32; // shift out the depth
-    if (isect_id_prev == isect_id_curr)
-        return;
+    if (idx > 0) {
+        // visit the current and previous isect_id and check if the (cid, tile_id)
+        // pair changes.
+        int64_t isect_id_prev = isect_ids[idx - 1] >> 32; // shift out the depth
+        if (isect_id_prev == isect_id_curr)
+            return;
 
-    // write out the offsets between the previous and current tiles
-    int64_t cid_prev = isect_id_prev >> tile_n_bits;
-    int64_t tid_prev = isect_id_prev & ((1 << tile_n_bits) - 1);
-    int64_t id_prev = cid_prev * n_tiles + tid_prev;
-    for (int i = id_prev + 1; i < id_curr + 1; ++i)
-        offsets[i] = idx;
+        // write out the offsets between the previous and current tiles
+        int64_t cid_prev = isect_id_prev >> tile_n_bits;
+        int64_t tid_prev = isect_id_prev & ((1 << tile_n_bits) - 1);
+        int64_t id_prev = cid_prev * n_tiles + tid_prev;
+        for (int i = id_prev + 1; i < id_curr + 1; ++i)
+            offsets[i] = idx;
+    }
 }
 
 torch::Tensor isect_offset_encode_tensor(const torch::Tensor &isect_ids, // [n_isects]
