@@ -1,6 +1,6 @@
 #include "bindings.h"
 #include "helpers.cuh"
-#include "third_party/glm/glm.hpp"
+#include "third_party/glm/glm/glm.hpp"
 #include "third_party/glm/glm/gtc/type_ptr.hpp"
 #include "utils.cuh"
 #include <cooperative_groups.h>
