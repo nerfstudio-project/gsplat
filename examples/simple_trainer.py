@@ -726,7 +726,7 @@ if __name__ == "__main__":
         help="Downsample factor for the dataset",
     )
     parser.add_argument(
-        "--result_dir", type=str, default="results", help="Directory to save results"
+        "--result_dir", type=str, default="results/garden", help="Directory to save results"
     )
     parser.add_argument(
         "--port", type=int, default=8080, help="Port for the viewer server"
