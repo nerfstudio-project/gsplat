@@ -44,15 +44,14 @@ __global__ void rasterize_backward_kernel(
     const int* __restrict__ final_index,
 
     // grad input
-    const float3* __restrict__ v_output,
-    const float* __restrict__ v_output_alpha,
+    const float3* __restrict__ dL_doutput,
+    const float* __restrict__ dL_doutput_alpha,
 
-    // grad output
-    float2* __restrict__ v_xy,
-    float2* __restrict__ v_xy_abs,
-    float* __restrict__ v_transMats,
-    float3* __restrict__ v_rgb,
-    float* __restrict__ v_opacity
+    // grad_output
+    float2* __restrict__ dL_dmean2D,
+    float* __restrict__ dL_dtransMat,
+    float3* __restrict__ dL_drgb,
+    float* __restrict__ dL_dopacity,
 );
 
 __device__ void build_H(

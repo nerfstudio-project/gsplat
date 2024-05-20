@@ -104,6 +104,8 @@ __global__ void project_gaussians_backward_kernel(
 
 }
 
+
+// For simplest 2DGS normal constraint is not used, therefore exclude it for now
 __global__ void rasterize_backward_kernel(
     const dim3 tile_bounds,
     const dim3 img_size,
@@ -116,20 +118,16 @@ __global__ void rasterize_backward_kernel(
     const float3& __restrict__ background,
     const float* __restrict__ final_Ts,
     const int* __restrict__ final_index,
-    const float3* __restrict__ v_output,
-    const float* __restrict__ v_output_alpha,
 
-    // float* __restrict__ dL_dtransMat,
-    // float3* __restrict__ dL_dmean2D,
-    // float* __restrict__ dL_dnormal3D,
-    // float* __restrict__ dL_dopacity,
-    // float* __restrict__ dL_dcolors
+    // grad input
+    const float3* __restrict__ dL_doutput,
+    const float* __restrict__ dL_doutput_alpha,
+
+    // grad_output
     float2* __restrict__ dL_dmean2D,
-    float2* __restrict__ v_xy_abs,
     float* __restrict__ dL_dtransMat,
-    float3* __restrict__ v_rgb,
-    float* __restrict__ v_opacity,
-    float* __restrict__ v_normal
+    float3* __restrict__ dL_drgb,
+    float* __restrict__ dL_dopacity,
 ) {
     auto block = cg::this_thread_block();
     int32_t tile_id = 
@@ -171,8 +169,8 @@ __global__ void rasterize_backward_kernel(
     
 
     // df/d_out for this pixel
-    const float3 v_out = v_output[pix_id];
-    const float v_out_alpha = v_output_alpha[pix_id];
+    const float3 v_out = dL_doutput[pix_id];
+    const float v_out_alpha = dL_doutput_alpha[pix_id];
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing
@@ -253,21 +251,20 @@ __global__ void rasterize_backward_kernel(
             // if all threads are inactive in this warp, skip this loop
             if (!warp.any(valid)) continue;
 
-            float3 v_rgb_local = {0.f, 0.f, 0.f};
+            float3 dL_drgb_local = {0.f, 0.f, 0.f};
             // float3 v_conic_local = {0.f, 0.f, 0.f};
             // float2 v_xy_local = {0.f, 0.f};
-            float2 v_xy_abs_local = 0.f;
-            float v_opacity_local = 0.f;
+            float dL_dopacity_local = 0.f;
             // initialize everything to 0, only set if the lane is valid
             // TODO (WZ) what is the lane?
             if (valid) {
                 // compute the current T for this gaussian
                 float ra = 1.f / (1.f - alpha);
                 T *= ra;
-                // update v_rgb for this gaussian
+                // update dL_drgb for this gaussian
                 const float fac = alpha * T;
                 float v_alpha = 0.f;
-                v_rgb_local = {fac * v_out.x, fac * v_out.y, fac * v_out.z};
+                dL_drgb_local = {fac * v_out.x, fac * v_out.y, fac * v_out.z};
 
                 const float3 rgb = rgbs_batch[t];
                 // contribution from this pixel
@@ -334,20 +331,18 @@ __global__ void rasterize_backward_kernel(
                 //                 0.5f * v_sigma * delta.y * delta.y};
                 // v_xy_local = {v_sigma * (conic.x * delta.x + conic.y * delta.y),
                 //                 v_sigma * (conic.y * delta.x + conic.z * delta.y)};
-                // v_xy_abs_local = {abs(v_xy_local.x), abs(v_xy_local.y)};
-                v_opacity_local = vis * v_alpha;
+                dL_dopacity_local = vis * v_alpha;
             }
-            warpSum3(v_rgb_local, warp);
+            warpSum3(dL_drgb_local, warp);
             // warpSum3(v_conic_local, warp);
             // warpSum2(v_xy_local, warp);
-            // warpSum2(v_xy_abs_local, warp);
-            warpSum(v_opacity_local, warp);
+            warpSum(dL_dopacity_local, warp);
             if (warp.thread_rank() == 0) {
                 int32_t g = id_batch[t];
-                float* v_rgb_ptr = (float*)(v_rgb);
-                atomicAdd(v_rgb_ptr + 3 * g + 0, v_rgb_local.x);
-                atomicAdd(v_rgb_ptr + 3 * g + 1, v_rgb_local.y);
-                atomicAdd(v_rgb_ptr + 3 * g + 2, v_rgb_local.z);
+                float* dL_drgb_ptr = (float*)(dL_drgb);
+                atomicAdd(dL_drgb_ptr + 3 * g + 0, dL_drgb_local.x);
+                atomicAdd(dL_drgb_ptr + 3 * g + 1, dL_drgb_local.y);
+                atomicAdd(dL_drgb_ptr + 3 * g + 2, dL_drgb_local.z);
 
                 // float* v_conic_ptr = (float*)(v_conic);
                 // atomicAdd(v_conic_ptr + 3 * g + 0, v_conic_local.x);
@@ -358,11 +353,7 @@ __global__ void rasterize_backward_kernel(
                 // atomicAdd(v_xy_ptr + 2 * g + 0, v_xy_local.x);
                 // atmoicAdd(v_xy_ptr + 2 * g + 1, v_xy_local.y);
 
-                // float* v_xy_abs_ptr = (float*)(v_xy_abs);
-                // atomicAdd(v_xy_abs_ptr + 2 * g + 0, v_xy_abs_local.x);
-                // atomicAdd(v_xy_abs_ptr + 2 * g + 1, v_xy_abs_local.y);
-
-                atomicAdd(v_opacity + g, v_opacity_local);
+                atomicAdd(dL_dopacity + g, dL_dopacity_local);
             }
         }
     }
