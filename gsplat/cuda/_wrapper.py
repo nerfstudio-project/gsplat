@@ -150,7 +150,8 @@ def projection(
     radius_clip: float = 0.0,
     packed: bool = False,
     sparse_grad: bool = False,
-) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    calc_compensations: bool = False,
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Projects Gaussians to 2D.
 
     Note:
@@ -226,6 +227,7 @@ def projection(
             far_plane,
             radius_clip,
             sparse_grad,
+            calc_compensations,
         )
     else:
         return _Projection.apply(
@@ -241,6 +243,7 @@ def projection(
             near_plane,
             far_plane,
             radius_clip,
+            calc_compensations,
         )
 
 
@@ -348,7 +351,7 @@ def rasterize_to_pixels(
     means2d: Tensor,  # [C, N, 2] or [nnz, 2]
     conics: Tensor,  # [C, N, 3] or [nnz, 3]
     colors: Tensor,  # [C, N, channels] or [nnz, channels]
-    opacities: Tensor,  # [N]
+    opacities: Tensor,  # [C, N] or [nnz]
     image_width: int,
     image_height: int,
     tile_size: int,
@@ -361,20 +364,21 @@ def rasterize_to_pixels(
     compute_means2d_absgrad: bool = False,
 ) -> Tuple[Tensor, Tensor]:
     C = isect_offsets.size(0)
-    N = opacities.size(0)
     device = means2d.device
     if packed:
         nnz = means2d.size(0)
         assert means2d.shape == (nnz, 2), means2d.shape
         assert conics.shape == (nnz, 3), conics.shape
         assert colors.shape[0] == nnz, colors.shape
+        assert opacities.shape == (nnz,), opacities.shape
         assert rindices is not None, "rindices is required if packed is True"
         assert cindices is not None, "cindices is required if packed is True"
     else:
+        N = means2d.size(1)
         assert means2d.shape == (C, N, 2), means2d.shape
         assert conics.shape == (C, N, 3), conics.shape
         assert colors.shape[:2] == (C, N), colors.shape
-        assert opacities.shape == (N,), opacities.shape
+        assert opacities.shape == (C, N), opacities.shape
     if backgrounds is not None:
         assert backgrounds.shape == (C, colors.shape[-1]), backgrounds.shape
         backgrounds = backgrounds.contiguous()
@@ -456,7 +460,7 @@ def rasterize_to_indices_iter(
     transmittances: Tensor,  # [C, image_height, image_width]
     means2d: Tensor,  # [C, N, 2]
     conics: Tensor,  # [C, N, 3]
-    opacities: Tensor,  # [N]
+    opacities: Tensor,  # [C, N]
     image_width: int,
     image_height: int,
     tile_size: int,
@@ -465,7 +469,7 @@ def rasterize_to_indices_iter(
 ) -> Tuple[Tensor, Tensor]:
     C, N, _ = means2d.shape
     assert conics.shape == (C, N, 3), conics.shape
-    assert opacities.shape == (N,), opacities.shape
+    assert opacities.shape == (C, N), opacities.shape
     assert isect_offsets.shape[0] == C, isect_offsets.shape
 
     tile_height, tile_width = isect_offsets.shape[1:3]
@@ -626,9 +630,12 @@ class _Projection(torch.autograd.Function):
         near_plane: float,
         far_plane: float,
         radius_clip: float,
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        calc_compensations: bool,
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         # "covars" and {"quats", "scales"} are mutually exclusive
-        radii, means2d, depths, conics = _make_lazy_cuda_func("projection_fwd")(
+        radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
+            "projection_fwd"
+        )(
             means,
             covars,
             quats,
@@ -641,18 +648,29 @@ class _Projection(torch.autograd.Function):
             near_plane,
             far_plane,
             radius_clip,
+            calc_compensations,
         )
-        ctx.save_for_backward(means, covars, quats, scales, viewmats, Ks, radii, conics)
+        if not calc_compensations:
+            compensations = None
+        ctx.save_for_backward(
+            means, covars, quats, scales, viewmats, Ks, radii, conics, compensations
+        )
         ctx.width = width
         ctx.height = height
+        ctx.eps2d = eps2d
 
-        return radii, means2d, depths, conics
+        return radii, means2d, depths, conics, compensations
 
     @staticmethod
-    def backward(ctx, v_radii, v_means2d, v_depths, v_conics):
-        means, covars, quats, scales, viewmats, Ks, radii, conics = ctx.saved_tensors
+    def backward(ctx, v_radii, v_means2d, v_depths, v_conics, v_compensations):
+        means, covars, quats, scales, viewmats, Ks, radii, conics, compensations = (
+            ctx.saved_tensors
+        )
         width = ctx.width
         height = ctx.height
+        eps2d = ctx.eps2d
+        if v_compensations is not None:
+            v_compensations = v_compensations.contiguous()
         v_means, v_covars, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
             "projection_bwd"
         )(
@@ -664,11 +682,14 @@ class _Projection(torch.autograd.Function):
             Ks,
             width,
             height,
+            eps2d,
             radii,
             conics,
+            compensations,
             v_means2d.contiguous(),
             v_depths.contiguous(),
             v_conics.contiguous(),
+            v_compensations,
             ctx.needs_input_grad[4],  # viewmats_requires_grad
         )
         if not ctx.needs_input_grad[0]:
@@ -694,6 +715,7 @@ class _Projection(torch.autograd.Function):
             None,
             None,
             None,
+            None,
         )
 
 
@@ -706,7 +728,7 @@ class _RasterizeToPixels(torch.autograd.Function):
         means2d: Tensor,  # [C, N, 2]
         conics: Tensor,  # [C, N, 3]
         colors: Tensor,  # [C, N, D]
-        opacities: Tensor,  # [N]
+        opacities: Tensor,  # [C, N]
         backgrounds: Tensor,  # [C, D], Optional
         width: int,
         height: int,
@@ -840,6 +862,7 @@ class _ProjectionPacked(torch.autograd.Function):
         far_plane: float,
         radius_clip: float,
         sparse_grad: bool,
+        calc_compensations: bool,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         (
             indptr,
@@ -849,6 +872,7 @@ class _ProjectionPacked(torch.autograd.Function):
             means2d,
             depths,
             conics,
+            compensations,
         ) = _make_lazy_cuda_func("projection_packed_fwd")(
             means,
             covars,  # optional
@@ -862,18 +886,40 @@ class _ProjectionPacked(torch.autograd.Function):
             near_plane,
             far_plane,
             radius_clip,
+            calc_compensations,
         )
+        if not calc_compensations:
+            compensations = None
         ctx.save_for_backward(
-            rindices, cindices, means, covars, quats, scales, viewmats, Ks, conics
+            rindices,
+            cindices,
+            means,
+            covars,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            conics,
+            compensations,
         )
         ctx.width = width
         ctx.height = height
+        ctx.eps2d = eps2d
         ctx.sparse_grad = sparse_grad
 
-        return rindices, cindices, radii, means2d, depths, conics
+        return rindices, cindices, radii, means2d, depths, conics, compensations
 
     @staticmethod
-    def backward(ctx, v_rindices, v_cindices, v_radii, v_means2d, v_depths, v_conics):
+    def backward(
+        ctx,
+        v_rindices,
+        v_cindices,
+        v_radii,
+        v_means2d,
+        v_depths,
+        v_conics,
+        v_compensations,
+    ):
         (
             rindices,
             cindices,
@@ -884,10 +930,15 @@ class _ProjectionPacked(torch.autograd.Function):
             viewmats,
             Ks,
             conics,
+            compensations,
         ) = ctx.saved_tensors
         width = ctx.width
         height = ctx.height
+        eps2d = ctx.eps2d
         sparse_grad = ctx.sparse_grad
+
+        if v_compensations is not None:
+            v_compensations = v_compensations.contiguous()
         v_means, v_covars, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
             "projection_packed_bwd"
         )(
@@ -899,12 +950,15 @@ class _ProjectionPacked(torch.autograd.Function):
             Ks,
             width,
             height,
+            eps2d,
             rindices,
             cindices,
             conics,
+            compensations,
             v_means2d.contiguous(),
             v_depths.contiguous(),
             v_conics.contiguous(),
+            v_compensations,
             ctx.needs_input_grad[4],  # viewmats_requires_grad
             sparse_grad,
         )
@@ -969,6 +1023,7 @@ class _ProjectionPacked(torch.autograd.Function):
             None,
             None,
             None,
+            None,
         )
 
 
@@ -983,7 +1038,7 @@ class _RasterizeToPixelsPacked(torch.autograd.Function):
         means2d: Tensor,  # [nnz, 2]
         conics: Tensor,  # [nnz, 3]
         colors: Tensor,  # [nnz, 3]
-        opacities: Tensor,  # [N]
+        opacities: Tensor,  # [nnz]
         backgrounds: Tensor,  # [C, 3] Optional
         width: int,
         height: int,

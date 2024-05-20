@@ -68,7 +68,7 @@ world_to_cam_bwd_tensor(const torch::Tensor &means,                    // [N, 3]
                         const bool means_requires_grad, const bool covars_requires_grad,
                         const bool viewmats_requires_grad);
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 projection_fwd_tensor(const torch::Tensor &means,                // [N, 3]
                       const at::optional<torch::Tensor> &covars, // [N, 6] optional
                       const at::optional<torch::Tensor> &quats,  // [N, 4] optional
@@ -77,7 +77,7 @@ projection_fwd_tensor(const torch::Tensor &means,                // [N, 3]
                       const torch::Tensor &Ks,                   // [C, 3, 3]
                       const int image_width, const int image_height, const float eps2d,
                       const float near_plane, const float far_plane,
-                      const float radius_clip);
+                      const float radius_clip, const bool calc_compensations);
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 projection_bwd_tensor(
@@ -88,14 +88,16 @@ projection_bwd_tensor(
     const at::optional<torch::Tensor> &scales, // [N, 3] optional
     const torch::Tensor &viewmats,             // [C, 4, 4]
     const torch::Tensor &Ks,                   // [C, 3, 3]
-    const int image_width, const int image_height,
+    const int image_width, const int image_height, const float eps2d,
     // fwd outputs
-    const torch::Tensor &radii,  // [C, N]
-    const torch::Tensor &conics, // [C, N, 3]
+    const torch::Tensor &radii,                       // [C, N]
+    const torch::Tensor &conics,                      // [C, N, 3]
+    const at::optional<torch::Tensor> &compensations, // [C, N] optional
     // grad outputs
-    const torch::Tensor &v_means2d, // [C, N, 2]
-    const torch::Tensor &v_depths,  // [C, N]
-    const torch::Tensor &v_conics,  // [C, N, 3]
+    const torch::Tensor &v_means2d,                     // [C, N, 2]
+    const torch::Tensor &v_depths,                      // [C, N]
+    const torch::Tensor &v_conics,                      // [C, N, 3]
+    const at::optional<torch::Tensor> &v_compensations, // [C, N] optional
     const bool viewmats_requires_grad);
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
@@ -166,8 +168,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 nonzero_tensor(const torch::Tensor &inputs);
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
-           torch::Tensor,
-           torch::Tensor>
+           torch::Tensor, torch::Tensor, torch::Tensor>
 projection_packed_fwd_tensor(const torch::Tensor &means,                // [N, 3]
                              const at::optional<torch::Tensor> &covars, // [N, 6]
                              const at::optional<torch::Tensor> &quats,  // [N, 3]
@@ -176,7 +177,8 @@ projection_packed_fwd_tensor(const torch::Tensor &means,                // [N, 3
                              const torch::Tensor &Ks,                   // [C, 3, 3]
                              const int image_width, const int image_height,
                              const float eps2d, const float near_plane,
-                             const float far_plane, const float radius_clip);
+                             const float far_plane, const float radius_clip,
+                             const bool calc_compensations);
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 projection_packed_bwd_tensor(
@@ -187,15 +189,17 @@ projection_packed_bwd_tensor(
     const at::optional<torch::Tensor> &scales, // [N, 3]
     const torch::Tensor &viewmats,             // [C, 4, 4]
     const torch::Tensor &Ks,                   // [C, 3, 3]
-    const int image_width, const int image_height,
+    const int image_width, const int image_height, const float eps2d,
     // fwd outputs
-    const torch::Tensor &rindices, // [nnz]
-    const torch::Tensor &cindices, // [nnz]
-    const torch::Tensor &conics,   // [nnz, 3]
+    const torch::Tensor &rindices,                    // [nnz]
+    const torch::Tensor &cindices,                    // [nnz]
+    const torch::Tensor &conics,                      // [nnz, 3]
+    const at::optional<torch::Tensor> &compensations, // [nnz] optional
     // grad outputs
-    const torch::Tensor &v_means2d, // [nnz, 2]
-    const torch::Tensor &v_depths,  // [nnz]
-    const torch::Tensor &v_conics,  // [nnz, 3]
+    const torch::Tensor &v_means2d,                     // [nnz, 2]
+    const torch::Tensor &v_depths,                      // [nnz]
+    const torch::Tensor &v_conics,                      // [nnz, 3]
+    const at::optional<torch::Tensor> &v_compensations, // [nnz] optional
     const bool viewmats_requires_grad, const bool sparse_grad);
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>

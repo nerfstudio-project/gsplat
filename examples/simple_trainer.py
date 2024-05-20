@@ -231,6 +231,7 @@ class Runner:
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
         colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
+        rasterize_mode = "antialiased" if args.antialiased else "classic"
         render_colors, render_alphas, info = rasterization(
             means=means,
             quats=quats,
@@ -243,6 +244,7 @@ class Runner:
             height=height,
             packed=self.args.packed,
             compute_means2d_absgrad=self.args.absgrad,
+            rasterize_mode=rasterize_mode,
             **kwargs,
         )
         return render_colors, render_alphas, info
@@ -726,7 +728,10 @@ if __name__ == "__main__":
         help="Downsample factor for the dataset",
     )
     parser.add_argument(
-        "--result_dir", type=str, default="results/garden", help="Directory to save results"
+        "--result_dir",
+        type=str,
+        default="results/garden",
+        help="Directory to save results",
     )
     parser.add_argument(
         "--port", type=int, default=8080, help="Port for the viewer server"
@@ -827,6 +832,11 @@ if __name__ == "__main__":
         "--absgrad",
         action="store_true",
         help="Use absolute gradient for pruning. Be warned: This typically requires larger --grow_grad2d, e.g., 0.0008 or 0.0006",
+    )
+    parser.add_argument(
+        "--antialiased",
+        action="store_true",
+        help="Anti-aliasing in rasterization",
     )
     args = parser.parse_args()
 

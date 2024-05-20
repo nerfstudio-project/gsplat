@@ -35,6 +35,7 @@ def rasterization(
     render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
     sparse_grad: bool = False,
     compute_means2d_absgrad: bool = False,
+    rasterize_mode: Literal["classic", "antialiased"] = "classic",
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of Gaussians to pixels.
 
@@ -111,15 +112,21 @@ def rasterization(
         far_plane=far_plane,
         radius_clip=radius_clip,
         sparse_grad=sparse_grad,
+        calc_compensations=(rasterize_mode == "antialiased"),
     )
 
     if packed:
         # The results are packed into shape [nnz, ...]. All elements are valid.
-        rindices, cindices, radii, means2d, depths, conics = proj_results
+        rindices, cindices, radii, means2d, depths, conics, compensations = proj_results
+        opacities = opacities[cindices.long()]  # [nnz]
     else:
         # The results are with shape [C, N, ...]. Only the elements with radii > 0 are valid.
-        radii, means2d, depths, conics = proj_results
+        radii, means2d, depths, conics, compensations = proj_results
+        opacities = opacities.repeat(C, 1)  # [C, N]
         rindices, cindices = None, None
+
+    if compensations is not None:
+        opacities = opacities * compensations
 
     # Identify intersecting tiles
     tile_width = math.ceil(width / float(tile_size))

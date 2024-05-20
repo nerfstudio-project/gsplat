@@ -211,7 +211,7 @@ __global__ void rasterize_to_indices_iter_kernel(
     const int step0, const int step1, const int C, const int N, const int n_isects,
     const float2 *__restrict__ means2d,  // [C, N, 2]
     const float3 *__restrict__ conics,   // [C, N, 3]
-    const float *__restrict__ opacities, // [N]
+    const float *__restrict__ opacities, // [C, N]
     const int image_width, const int image_height, const int tile_size,
     const int tile_width, const int tile_height,
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
@@ -234,6 +234,7 @@ __global__ void rasterize_to_indices_iter_kernel(
     // move pointers to the current camera
     means2d += camera_id * N;
     conics += camera_id * N;
+    opacities += camera_id * N;
     tile_offsets += camera_id * tile_height * tile_width;
     transmittances += camera_id * image_height * image_width;
 
@@ -366,7 +367,7 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_iter_tensor(
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2]
     const torch::Tensor &conics,    // [C, N, 3]
-    const torch::Tensor &opacities, // [N]
+    const torch::Tensor &opacities, // [C, N]
     // image size
     const int image_width, const int image_height, const int tile_size,
     // intersections
@@ -435,7 +436,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     const float2 *__restrict__ means2d,    // [C, N, 2]
     const float3 *__restrict__ conics,     // [C, N, 3]
     const float *__restrict__ colors,      // [C, N, COLOR_DIM]
-    const float *__restrict__ opacities,   // [N]
+    const float *__restrict__ opacities,   // [C, N]
     const float *__restrict__ backgrounds, // [C, COLOR_DIM]
     const int image_width, const int image_height, const int tile_size,
     const int tile_width, const int tile_height,
@@ -458,6 +459,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     means2d += camera_id * N;
     conics += camera_id * N;
     colors += camera_id * N * COLOR_DIM;
+    opacities += camera_id * N;
     tile_offsets += camera_id * tile_height * tile_width;
     render_colors += camera_id * image_height * image_width * COLOR_DIM;
     render_alphas += camera_id * image_height * image_width;
@@ -583,7 +585,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
     const torch::Tensor &means2d,                   // [C, N, 2]
     const torch::Tensor &conics,                    // [C, N, 3]
     const torch::Tensor &colors,                    // [C, N, 3]
-    const torch::Tensor &opacities,                 // [N]
+    const torch::Tensor &opacities,                 // [C, N]
     const at::optional<torch::Tensor> &backgrounds, // [C, 3]
     // image size
     const int image_width, const int image_height, const int tile_size,
@@ -761,7 +763,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     const float2 *__restrict__ means2d,    // [C, N, 2]
     const float3 *__restrict__ conics,     // [C, N, 3]
     const float *__restrict__ colors,      // [C, N, COLOR_DIM]
-    const float *__restrict__ opacities,   // [N]
+    const float *__restrict__ opacities,   // [C, N]
     const float *__restrict__ backgrounds, // [C, COLOR_DIM]
     const int image_width, const int image_height, const int tile_size,
     const int tile_width, const int tile_height,
@@ -779,7 +781,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     float2 *__restrict__ v_means2d,     // [C, N, 2]
     float3 *__restrict__ v_conics,      // [C, N, 3]
     float *__restrict__ v_colors,       // [C, N, COLOR_DIM]
-    float *__restrict__ v_opacities     // [N]
+    float *__restrict__ v_opacities     // [C, N]
 ) {
     auto block = cg::this_thread_block();
     int32_t camera_id = block.group_index().x;
@@ -791,6 +793,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     means2d += camera_id * N;
     conics += camera_id * N;
     colors += camera_id * N * COLOR_DIM;
+    opacities += camera_id * N;
     tile_offsets += camera_id * tile_height * tile_width;
     render_alphas += camera_id * image_height * image_width;
     last_ids += camera_id * image_height * image_width;
@@ -800,6 +803,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     v_means2d += camera_id * N;
     v_conics += camera_id * N;
     v_colors += camera_id * N * COLOR_DIM;
+    v_opacities += camera_id * N;
     if (v_means2d_abs != nullptr) {
         v_means2d_abs += camera_id * N;
     }
@@ -1000,7 +1004,7 @@ rasterize_to_pixels_bwd_tensor(
     const torch::Tensor &means2d,                   // [C, N, 2]
     const torch::Tensor &conics,                    // [C, N, 3]
     const torch::Tensor &colors,                    // [C, N, 3]
-    const torch::Tensor &opacities,                 // [N]
+    const torch::Tensor &opacities,                 // [C, N]
     const at::optional<torch::Tensor> &backgrounds, // [C, 3]
     // image size
     const int image_width, const int image_height, const int tile_size,
@@ -1045,7 +1049,7 @@ rasterize_to_pixels_bwd_tensor(
     torch::Tensor v_means2d = torch::zeros({C, N, 2}, means2d.options());
     torch::Tensor v_conics = torch::zeros({C, N, 3}, conics.options());
     torch::Tensor v_colors = torch::zeros({C, N, COLOR_DIM}, colors.options());
-    torch::Tensor v_opacities = torch::zeros({N}, opacities.options());
+    torch::Tensor v_opacities = torch::zeros({C, N}, opacities.options());
     torch::Tensor v_means2d_abs;
     if (compute_means2d_absgrad) {
         v_means2d_abs = torch::zeros({C, N, 2}, means2d.options());
@@ -1332,7 +1336,7 @@ __global__ void rasterize_to_pixels_packed_fwd_kernel(
     const float2 *__restrict__ means2d,    // [nnz, 2]
     const float3 *__restrict__ conics,     // [nnz, 3]
     const float *__restrict__ colors,      // [nnz, COLOR_DIM]
-    const float *__restrict__ opacities,   // [N]
+    const float *__restrict__ opacities,   // [nnz]
     const float *__restrict__ backgrounds, // [C, COLOR_DIM]
     const int image_width, const int image_height, const int tile_size,
     const int tile_width, const int tile_height,
@@ -1410,10 +1414,9 @@ __global__ void rasterize_to_pixels_packed_fwd_kernel(
         int idx = batch_start + tr;
         if (idx < range_end) {
             int32_t pack_id = pack_ids[idx];
-            int32_t g_id = cindices[pack_id];
             id_batch[tr] = pack_id;
             const float2 xy = means2d[pack_id];
-            const float opac = opacities[g_id];
+            const float opac = opacities[pack_id];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             conic_batch[tr] = conics[pack_id];
         }
@@ -1480,7 +1483,7 @@ rasterize_to_pixels_packed_fwd_tensor(
     const torch::Tensor &means2d,                   // [nnz, 2]
     const torch::Tensor &conics,                    // [nnz, 3]
     const torch::Tensor &colors,                    // [nnz, D]
-    const torch::Tensor &opacities,                 // [N]
+    const torch::Tensor &opacities,                 // [nnz]
     const at::optional<torch::Tensor> &backgrounds, // [C, D]
     // image size
     const int image_width, const int image_height, const int tile_size,
@@ -1671,7 +1674,7 @@ __global__ void rasterize_to_pixels_packed_bwd_kernel(
     const float2 *__restrict__ means2d,    // [nnz, 2]
     const float3 *__restrict__ conics,     // [nnz, 3]
     const float *__restrict__ colors,      // [nnz, COLOR_DIM]
-    const float *__restrict__ opacities,   // [N]
+    const float *__restrict__ opacities,   // [nnz]
     const float *__restrict__ backgrounds, // [C, COLOR_DIM]
     const int image_width, const int image_height, const int tile_size,
     const int tile_width, const int tile_height,
@@ -1689,7 +1692,7 @@ __global__ void rasterize_to_pixels_packed_bwd_kernel(
     float2 *__restrict__ v_means2d,     // [nnz, 2]
     float3 *__restrict__ v_conics,      // [nnz, 3]
     float *__restrict__ v_colors,       // [nnz, COLOR_DIM]
-    float *__restrict__ v_opacities     // [N]
+    float *__restrict__ v_opacities     // [nnz]
 ) {
     auto block = cg::this_thread_block();
     int32_t camera_id = block.group_index().x;
@@ -1765,10 +1768,9 @@ __global__ void rasterize_to_pixels_packed_bwd_kernel(
         const int idx = batch_end - tr;
         if (idx >= range_start) {
             int32_t pack_id = pack_ids[idx];
-            int32_t g_id = cindices[pack_id];
             id_batch[tr] = pack_id;
             const float2 xy = means2d[pack_id];
-            const float opac = opacities[g_id];
+            const float opac = opacities[pack_id];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             conic_batch[tr] = conics[pack_id];
 #pragma unroll COLOR_DIM
@@ -1871,7 +1873,6 @@ __global__ void rasterize_to_pixels_packed_bwd_kernel(
             warpSum(v_opacity_local, warp);
             if (warp.thread_rank() == 0) {
                 int32_t pack_id = id_batch[t];
-                int32_t g = cindices[pack_id];
                 float *v_rgb_ptr = (float *)(v_colors) + COLOR_DIM * pack_id;
 #pragma unroll COLOR_DIM
                 for (int k = 0; k < COLOR_DIM; ++k) {
@@ -1893,7 +1894,7 @@ __global__ void rasterize_to_pixels_packed_bwd_kernel(
                     atomicAdd(v_xy_abs_ptr + 1, v_xy_abs_local.y);
                 }
 
-                atomicAdd(v_opacities + g, v_opacity_local);
+                atomicAdd(v_opacities + pack_id, v_opacity_local);
             }
         }
     }
@@ -1907,7 +1908,7 @@ rasterize_to_pixels_packed_bwd_tensor(
     const torch::Tensor &means2d,                   // [nnz, 2]
     const torch::Tensor &conics,                    // [nnz, 3]
     const torch::Tensor &colors,                    // [nnz, 3]
-    const torch::Tensor &opacities,                 // [N]
+    const torch::Tensor &opacities,                 // [nnz]
     const at::optional<torch::Tensor> &backgrounds, // [C, 3]
     // image size
     const int image_width, const int image_height, const int tile_size,

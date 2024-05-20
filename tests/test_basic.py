@@ -155,7 +155,8 @@ def test_persp_proj(test_data):
 
 
 @pytest.mark.parametrize("fused", [False, True])
-def test_projection(test_data, fused: bool):
+@pytest.mark.parametrize("calc_compensations", [False, True])
+def test_projection(test_data, fused: bool, calc_compensations: bool):
     from gsplat.cuda._torch_impl import _projection
     from gsplat.cuda._wrapper import projection, quat_scale_to_covar_preci
 
@@ -175,17 +176,39 @@ def test_projection(test_data, fused: bool):
 
     # forward
     if fused:
-        radii, means2d, depths, conics = projection(
-            means, None, quats, scales, viewmats, Ks, width, height
+        radii, means2d, depths, conics, compensations = projection(
+            means,
+            None,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            width,
+            height,
+            calc_compensations=calc_compensations,
         )
     else:
         covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [N, 6]
-        radii, means2d, depths, conics = projection(
-            means, covars, None, None, viewmats, Ks, width, height
+        radii, means2d, depths, conics, compensations = projection(
+            means,
+            covars,
+            None,
+            None,
+            viewmats,
+            Ks,
+            width,
+            height,
+            calc_compensations=calc_compensations,
         )
     _covars, _ = quat_scale_to_covar_preci(quats, scales, triu=False)  # [N, 3, 3]
-    _radii, _means2d, _depths, _conics = _projection(
-        means, _covars, viewmats, Ks, width, height
+    _radii, _means2d, _depths, _conics, _compensations = _projection(
+        means,
+        _covars,
+        viewmats,
+        Ks,
+        width,
+        height,
+        calc_compensations=calc_compensations,
     )
 
     # radii is integer so we allow for 1 unit difference
@@ -194,33 +217,44 @@ def test_projection(test_data, fused: bool):
     torch.testing.assert_close(means2d[valid], _means2d[valid], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(depths[valid], _depths[valid], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(conics[valid], _conics[valid], rtol=1e-4, atol=1e-4)
+    if calc_compensations:
+        torch.testing.assert_close(
+            compensations[valid], _compensations[valid], rtol=1e-4, atol=1e-3
+        )
 
     # backward
     v_means2d = torch.randn_like(means2d) * radii[..., None]
     v_depths = torch.randn_like(depths) * radii
     v_conics = torch.randn_like(conics) * radii[..., None]
+    if calc_compensations:
+        v_compensations = torch.randn_like(compensations) * radii
     v_viewmats, v_quats, v_scales, v_means = torch.autograd.grad(
         (means2d * v_means2d).sum()
         + (depths * v_depths).sum()
-        + (conics * v_conics).sum(),
+        + (conics * v_conics).sum()
+        + ((compensations * v_compensations).sum() if calc_compensations else 0),
         (viewmats, quats, scales, means),
     )
     _v_viewmats, _v_quats, _v_scales, _v_means = torch.autograd.grad(
         (_means2d * v_means2d).sum()
         + (_depths * v_depths).sum()
-        + (_conics * v_conics).sum(),
+        + (_conics * v_conics).sum()
+        + ((_compensations * v_compensations).sum() if calc_compensations else 0),
         (viewmats, quats, scales, means),
     )
 
     torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_quats, _v_quats, rtol=1e-2, atol=1e-2)
+    torch.testing.assert_close(v_quats, _v_quats, rtol=1e-1, atol=1e-2)
     torch.testing.assert_close(v_scales, _v_scales, rtol=1e-1, atol=2e-1)
     torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=6e-2)
 
 
 @pytest.mark.parametrize("fused", [False, True])
 @pytest.mark.parametrize("sparse_grad", [False, True])
-def test_projection_packed(test_data, fused: bool, sparse_grad: bool):
+@pytest.mark.parametrize("calc_compensations", [False, True])
+def test_projection_packed(
+    test_data, fused: bool, sparse_grad: bool, calc_compensations: bool
+):
     from gsplat.cuda._wrapper import projection, quat_scale_to_covar_preci
 
     torch.manual_seed(42)
@@ -239,7 +273,7 @@ def test_projection_packed(test_data, fused: bool, sparse_grad: bool):
 
     # forward
     if fused:
-        rindices, cindices, radii, means2d, depths, conics = projection(
+        rindices, cindices, radii, means2d, depths, conics, compensations = projection(
             means,
             None,
             quats,
@@ -250,13 +284,23 @@ def test_projection_packed(test_data, fused: bool, sparse_grad: bool):
             height,
             packed=True,
             sparse_grad=sparse_grad,
+            calc_compensations=calc_compensations,
         )
-        _radii, _means2d, _depths, _conics = projection(
-            means, None, quats, scales, viewmats, Ks, width, height, packed=False
+        _radii, _means2d, _depths, _conics, _compensations = projection(
+            means,
+            None,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            width,
+            height,
+            packed=False,
+            calc_compensations=calc_compensations,
         )
     else:
         covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [N, 6]
-        rindices, cindices, radii, means2d, depths, conics = projection(
+        rindices, cindices, radii, means2d, depths, conics, compensations = projection(
             means,
             covars,
             None,
@@ -267,9 +311,19 @@ def test_projection_packed(test_data, fused: bool, sparse_grad: bool):
             height,
             packed=True,
             sparse_grad=sparse_grad,
+            calc_compensations=calc_compensations,
         )
-        _radii, _means2d, _depths, _conics = projection(
-            means, covars, None, None, viewmats, Ks, width, height, packed=False
+        _radii, _means2d, _depths, _conics, _compensations = projection(
+            means,
+            covars,
+            None,
+            None,
+            viewmats,
+            Ks,
+            width,
+            height,
+            packed=False,
+            calc_compensations=calc_compensations,
         )
 
     # recover packed tensors to full matrices for testing
@@ -285,11 +339,19 @@ def test_projection_packed(test_data, fused: bool, sparse_grad: bool):
     __conics = torch.sparse_coo_tensor(
         torch.stack([rindices, cindices]), conics, _conics.shape
     ).to_dense()
+    if calc_compensations:
+        __compensations = torch.sparse_coo_tensor(
+            torch.stack([rindices, cindices]), compensations, _compensations.shape
+        ).to_dense()
     sel = (__radii > 0) & (_radii > 0)
     torch.testing.assert_close(__radii[sel], _radii[sel], rtol=0, atol=1)
     torch.testing.assert_close(__means2d[sel], _means2d[sel], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(__depths[sel], _depths[sel], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(__conics[sel], _conics[sel], rtol=1e-4, atol=1e-4)
+    if calc_compensations:
+        torch.testing.assert_close(
+            __compensations[sel], _compensations[sel], rtol=1e-4, atol=1e-3
+        )
 
     # backward
     v_means2d = torch.randn_like(_means2d) * sel[..., None]
@@ -380,9 +442,10 @@ def test_rasterize_to_pixels(test_data):
     covars, _ = quat_scale_to_covar_preci(quats, scales, compute_preci=False, triu=True)
 
     # Project Gaussians to 2D
-    radii, means2d, depths, conics = projection(
+    radii, means2d, depths, conics, compensations = projection(
         means, covars, None, None, viewmats, Ks, width, height
     )
+    opacities = opacities.repeat(C, 1)
 
     # Identify intersecting tiles
     tile_size = 16

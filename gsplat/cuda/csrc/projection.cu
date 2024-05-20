@@ -614,10 +614,11 @@ projection_fwd_kernel(const int C, const int N,
                       const float eps2d, const float near_plane, const float far_plane,
                       const float radius_clip,
                       // outputs
-                      int32_t *__restrict__ radii, // [C, N]
-                      float *__restrict__ means2d, // [C, N, 2]
-                      float *__restrict__ depths,  // [C, N]
-                      float *__restrict__ conics   // [C, N, 3]
+                      int32_t *__restrict__ radii,      // [C, N]
+                      float *__restrict__ means2d,      // [C, N, 2]
+                      float *__restrict__ depths,       // [C, N]
+                      float *__restrict__ conics,       // [C, N, 3]
+                      float *__restrict__ compensations // [C, N] optional
 ) {
     // parallelize over C * N.
     unsigned idx = cg::this_grid().thread_rank();
@@ -670,19 +671,17 @@ projection_fwd_kernel(const int C, const int N,
     glm::vec2 mean2d;
     persp_proj(mean_c, covar_c, Ks[0], Ks[4], Ks[2], Ks[5], image_width, image_height,
                covar2d, mean2d);
-    if (eps2d > 0) {
-        // avoid singularity and introduce some bluryness
-        covar2d[0][0] += eps2d;
-        covar2d[1][1] += eps2d;
-    }
 
-    // compute the inverse of the 2d covariance
-    glm::mat2 covar2d_inv;
-    float det = inverse(covar2d, covar2d_inv);
+    float compensation;
+    float det = add_blur(eps2d, covar2d, compensation);
     if (det <= 0.f) {
         radii[idx] = 0;
         return;
     }
+
+    // compute the inverse of the 2d covariance
+    glm::mat2 covar2d_inv;
+    inverse(covar2d, covar2d_inv);
 
     // take 3 sigma as the radius (non differentiable)
     float b = 0.5f * (covar2d[0][0] + covar2d[1][1]);
@@ -711,6 +710,9 @@ projection_fwd_kernel(const int C, const int N,
     conics[idx * 3] = covar2d_inv[0][0];
     conics[idx * 3 + 1] = covar2d_inv[0][1];
     conics[idx * 3 + 2] = covar2d_inv[1][1];
+    if (compensations != nullptr) {
+        compensations[idx] = compensation;
+    }
 }
 
 __global__ void projection_bwd_kernel(
@@ -722,14 +724,16 @@ __global__ void projection_bwd_kernel(
     const float *__restrict__ scales,   // [N, 3] optional
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float *__restrict__ Ks,       // [C, 3, 3]
-    const int32_t image_width, const int32_t image_height,
+    const int32_t image_width, const int32_t image_height, const float eps2d,
     // fwd outputs
-    const int32_t *__restrict__ radii, // [C, N]
-    const float *__restrict__ conics,  // [C, N, 3]
+    const int32_t *__restrict__ radii,       // [C, N]
+    const float *__restrict__ conics,        // [C, N, 3]
+    const float *__restrict__ compensations, // [C, N] optional
     // grad outputs
-    const float *__restrict__ v_means2d, // [C, N, 2]
-    const float *__restrict__ v_depths,  // [C, N]
-    const float *__restrict__ v_conics,  // [C, N, 3]
+    const float *__restrict__ v_means2d,       // [C, N, 2]
+    const float *__restrict__ v_depths,        // [C, N]
+    const float *__restrict__ v_conics,        // [C, N, 3]
+    const float *__restrict__ v_compensations, // [C, N] optional
     // grad inputs
     float *__restrict__ v_means,   // [N, 3]
     float *__restrict__ v_covars,  // [N, 6] optional
@@ -762,6 +766,13 @@ __global__ void projection_bwd_kernel(
         glm::mat2(v_conics[0], v_conics[1] * .5f, v_conics[1] * .5f, v_conics[2]);
     glm::mat2 v_covar2d(0.f);
     inverse_vjp(covar2d_inv, v_covar2d_inv, v_covar2d);
+
+    if (v_compensations != nullptr) {
+        // vjp: compensation term
+        const float compensation = compensations[idx];
+        const float v_compensation = v_compensations[idx];
+        add_blur_vjp(eps2d, covar2d_inv, compensation, v_compensation, v_covar2d);
+    }
 
     // transform Gaussian to camera space
     glm::mat3 R = glm::mat3(viewmats[0], viewmats[4], viewmats[8], // 1st column
@@ -872,7 +883,7 @@ __global__ void projection_bwd_kernel(
     }
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 projection_fwd_tensor(const torch::Tensor &means,                // [N, 3]
                       const at::optional<torch::Tensor> &covars, // [N, 6] optional
                       const at::optional<torch::Tensor> &quats,  // [N, 4] optional
@@ -881,7 +892,7 @@ projection_fwd_tensor(const torch::Tensor &means,                // [N, 3]
                       const torch::Tensor &Ks,                   // [C, 3, 3]
                       const int image_width, const int image_height, const float eps2d,
                       const float near_plane, const float far_plane,
-                      const float radius_clip) {
+                      const float radius_clip, const bool calc_compensations) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
     if (covars.has_value()) {
@@ -902,6 +913,10 @@ projection_fwd_tensor(const torch::Tensor &means,                // [N, 3]
     torch::Tensor means2d = torch::empty({C, N, 2}, means.options());
     torch::Tensor depths = torch::empty({C, N}, means.options());
     torch::Tensor conics = torch::empty({C, N, 3}, means.options());
+    torch::Tensor compensations;
+    if (calc_compensations) {
+        compensations = torch::empty({C, N}, means.options());
+    }
     if (C && N) {
         projection_fwd_kernel<<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
                                 stream>>>(
@@ -912,9 +927,10 @@ projection_fwd_tensor(const torch::Tensor &means,                // [N, 3]
             viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
             eps2d, near_plane, far_plane, radius_clip, radii.data_ptr<int32_t>(),
             means2d.data_ptr<float>(), depths.data_ptr<float>(),
-            conics.data_ptr<float>());
+            conics.data_ptr<float>(),
+            calc_compensations ? compensations.data_ptr<float>() : nullptr);
     }
-    return std::make_tuple(radii, means2d, depths, conics);
+    return std::make_tuple(radii, means2d, depths, conics, compensations);
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
@@ -926,14 +942,16 @@ projection_bwd_tensor(
     const at::optional<torch::Tensor> &scales, // [N, 3] optional
     const torch::Tensor &viewmats,             // [C, 4, 4]
     const torch::Tensor &Ks,                   // [C, 3, 3]
-    const int image_width, const int image_height,
+    const int image_width, const int image_height, const float eps2d,
     // fwd outputs
-    const torch::Tensor &radii,  // [C, N]
-    const torch::Tensor &conics, // [C, N, 3]
+    const torch::Tensor &radii,                       // [C, N]
+    const torch::Tensor &conics,                      // [C, N, 3]
+    const at::optional<torch::Tensor> &compensations, // [C, N] optional
     // grad outputs
-    const torch::Tensor &v_means2d, // [C, N, 2]
-    const torch::Tensor &v_depths,  // [C, N]
-    const torch::Tensor &v_conics,  // [C, N, 3]
+    const torch::Tensor &v_means2d,                     // [C, N, 2]
+    const torch::Tensor &v_depths,                      // [C, N]
+    const torch::Tensor &v_conics,                      // [C, N, 3]
+    const at::optional<torch::Tensor> &v_compensations, // [C, N] optional
     const bool viewmats_requires_grad) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -951,6 +969,13 @@ projection_bwd_tensor(
     CHECK_INPUT(v_means2d);
     CHECK_INPUT(v_depths);
     CHECK_INPUT(v_conics);
+    if (compensations.has_value()) {
+        CHECK_INPUT(compensations.value());
+    }
+    if (v_compensations.has_value()) {
+        CHECK_INPUT(v_compensations.value());
+        assert(compensations.has_value());
+    }
 
     int N = means.size(0);    // number of gaussians
     int C = viewmats.size(0); // number of cameras
@@ -976,9 +1001,14 @@ projection_bwd_tensor(
             covars.has_value() ? nullptr : quats.value().data_ptr<float>(),
             covars.has_value() ? nullptr : scales.value().data_ptr<float>(),
             viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
-            radii.data_ptr<int32_t>(), conics.data_ptr<float>(),
+            eps2d, radii.data_ptr<int32_t>(), conics.data_ptr<float>(),
+            compensations.has_value() ? compensations.value().data_ptr<float>()
+                                      : nullptr,
             v_means2d.data_ptr<float>(), v_depths.data_ptr<float>(),
-            v_conics.data_ptr<float>(), v_means.data_ptr<float>(),
+            v_conics.data_ptr<float>(),
+            v_compensations.has_value() ? v_compensations.value().data_ptr<float>()
+                                        : nullptr,
+            v_means.data_ptr<float>(),
             covars.has_value() ? v_covars.data_ptr<float>() : nullptr,
             covars.has_value() ? nullptr : v_quats.data_ptr<float>(),
             covars.has_value() ? nullptr : v_scales.data_ptr<float>(),
@@ -1096,13 +1126,14 @@ __global__ void projection_packed_fwd_kernel(
     const int32_t *__restrict__ block_accum, // [C * blocks_per_row] packing helper
     int32_t *__restrict__ block_cnts,        // [C * blocks_per_row] packing helper
     // outputs
-    int32_t *__restrict__ indptr,   // [C + 1]
-    int32_t *__restrict__ rindices, // [nnz]
-    int32_t *__restrict__ cindices, // [nnz]
-    int32_t *__restrict__ radii,    // [nnz]
-    float *__restrict__ means2d,    // [nnz, 2]
-    float *__restrict__ depths,     // [nnz]
-    float *__restrict__ conics      // [nnz, 3]
+    int32_t *__restrict__ indptr,     // [C + 1]
+    int32_t *__restrict__ rindices,   // [nnz]
+    int32_t *__restrict__ cindices,   // [nnz]
+    int32_t *__restrict__ radii,      // [nnz]
+    float *__restrict__ means2d,      // [nnz, 2]
+    float *__restrict__ depths,       // [nnz]
+    float *__restrict__ conics,       // [nnz, 3]
+    float *__restrict__ compensations // [nnz] optional
 ) {
     int32_t blocks_per_row = gridDim.x;
 
@@ -1140,6 +1171,7 @@ __global__ void projection_packed_fwd_kernel(
     glm::mat2 covar2d;
     glm::vec2 mean2d;
     glm::mat2 covar2d_inv;
+    float compensation;
     float det;
     if (valid) {
         // transform Gaussian covariance to camera space
@@ -1165,16 +1197,13 @@ __global__ void projection_packed_fwd_kernel(
         Ks += row_idx * 9;
         persp_proj(mean_c, covar_c, Ks[0], Ks[4], Ks[2], Ks[5], image_width,
                    image_height, covar2d, mean2d);
-        if (eps2d > 0) {
-            // avoid singularity and introduce some bluryness
-            covar2d[0][0] += eps2d;
-            covar2d[1][1] += eps2d;
-        }
 
-        // compute the inverse of the 2d covariance
-        det = inverse(covar2d, covar2d_inv);
+        det = add_blur(eps2d, covar2d, compensation);
         if (det <= 0.f) {
             valid = false;
+        } else {
+            // compute the inverse of the 2d covariance
+            inverse(covar2d, covar2d_inv);
         }
     }
 
@@ -1234,6 +1263,9 @@ __global__ void projection_packed_fwd_kernel(
             conics[thread_data * 3] = covar2d_inv[0][0];
             conics[thread_data * 3 + 1] = covar2d_inv[0][1];
             conics[thread_data * 3 + 2] = covar2d_inv[1][1];
+            if (compensations != nullptr) {
+                compensations[thread_data] = compensation;
+            }
         }
         // lane 0 of the first block in each row writes the indptr
         if (threadIdx.x == 0 && block_col_idx == 0) {
@@ -1248,8 +1280,7 @@ __global__ void projection_packed_fwd_kernel(
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
-           torch::Tensor,
-           torch::Tensor>
+           torch::Tensor, torch::Tensor, torch::Tensor>
 projection_packed_fwd_tensor(const torch::Tensor &means,                // [N, 3]
                              const at::optional<torch::Tensor> &covars, // [N, 6]
                              const at::optional<torch::Tensor> &quats,  // [N, 3]
@@ -1258,7 +1289,8 @@ projection_packed_fwd_tensor(const torch::Tensor &means,                // [N, 3
                              const torch::Tensor &Ks,                   // [C, 3, 3]
                              const int image_width, const int image_height,
                              const float eps2d, const float near_plane,
-                             const float far_plane, const float radius_clip) {
+                             const float far_plane, const float radius_clip,
+                             const bool calc_compensations) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
     if (covars.has_value()) {
@@ -1297,7 +1329,7 @@ projection_packed_fwd_tensor(const torch::Tensor &means,                // [N, 3
             viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
             eps2d, near_plane, far_plane, radius_clip, nullptr,
             block_cnts.data_ptr<int32_t>(), nullptr, nullptr, nullptr, nullptr, nullptr,
-            nullptr, nullptr);
+            nullptr, nullptr, nullptr);
         block_accum = torch::cumsum(block_cnts, 0, torch::kInt32);
         nnz = block_accum[-1].item<int32_t>();
     } else {
@@ -1312,6 +1344,10 @@ projection_packed_fwd_tensor(const torch::Tensor &means,                // [N, 3
     torch::Tensor means2d = torch::empty({nnz, 2}, means.options());
     torch::Tensor depths = torch::empty({nnz}, means.options());
     torch::Tensor conics = torch::empty({nnz, 3}, means.options());
+    torch::Tensor compensations;
+    if (calc_compensations) {
+        compensations = torch::empty({nnz}, means.options());
+    }
 
     if (nnz) {
         projection_packed_fwd_kernel<<<blocks, threads, 0, stream>>>(
@@ -1324,12 +1360,14 @@ projection_packed_fwd_tensor(const torch::Tensor &means,                // [N, 3
             nullptr, indptr.data_ptr<int32_t>(), rindices.data_ptr<int32_t>(),
             cindices.data_ptr<int32_t>(), radii.data_ptr<int32_t>(),
             means2d.data_ptr<float>(), depths.data_ptr<float>(),
-            conics.data_ptr<float>());
+            conics.data_ptr<float>(),
+            calc_compensations ? compensations.data_ptr<float>() : nullptr);
     } else {
         indptr.fill_(0);
     }
 
-    return std::make_tuple(indptr, rindices, cindices, radii, means2d, depths, conics);
+    return std::make_tuple(indptr, rindices, cindices, radii, means2d, depths, conics,
+                           compensations);
 }
 
 __global__ void projection_packed_bwd_kernel(
@@ -1341,15 +1379,17 @@ __global__ void projection_packed_bwd_kernel(
     const float *__restrict__ scales,   // [N, 3] Optional
     const float *__restrict__ viewmats, // [C, 4, 4]
     const float *__restrict__ Ks,       // [C, 3, 3]
-    const int32_t image_width, const int32_t image_height,
+    const int32_t image_width, const int32_t image_height, const float eps2d,
     // fwd outputs
-    const int32_t *__restrict__ rindices, // [nnz]
-    const int32_t *__restrict__ cindices, // [nnz]
-    const float *__restrict__ conics,     // [nnz, 3]
+    const int32_t *__restrict__ rindices,    // [nnz]
+    const int32_t *__restrict__ cindices,    // [nnz]
+    const float *__restrict__ conics,        // [nnz, 3]
+    const float *__restrict__ compensations, // [nnz] optional
     // grad outputs
-    const float *__restrict__ v_means2d, // [nnz, 2]
-    const float *__restrict__ v_depths,  // [nnz]
-    const float *__restrict__ v_conics,  // [nnz, 3]
+    const float *__restrict__ v_means2d,       // [nnz, 2]
+    const float *__restrict__ v_depths,        // [nnz]
+    const float *__restrict__ v_conics,        // [nnz, 3]
+    const float *__restrict__ v_compensations, // [nnz] optional
     const bool sparse_grad, // whether the outputs are in COO format [nnz, ...]
     // grad inputs
     float *__restrict__ v_means,   // [N, 3] or [nnz, 3]
@@ -1383,6 +1423,13 @@ __global__ void projection_packed_bwd_kernel(
         glm::mat2(v_conics[0], v_conics[1] * .5f, v_conics[1] * .5f, v_conics[2]);
     glm::mat2 v_covar2d(0.f);
     inverse_vjp(covar2d_inv, v_covar2d_inv, v_covar2d);
+
+    if (v_compensations != nullptr) {
+        // vjp: compensation term
+        const float compensation = compensations[idx];
+        const float v_compensation = v_compensations[idx];
+        add_blur_vjp(eps2d, covar2d_inv, compensation, v_compensation, v_covar2d);
+    }
 
     // transform Gaussian to camera space
     glm::mat3 R = glm::mat3(viewmats[0], viewmats[4], viewmats[8], // 1st column
@@ -1538,15 +1585,17 @@ projection_packed_bwd_tensor(
     const at::optional<torch::Tensor> &scales, // [N, 3]
     const torch::Tensor &viewmats,             // [C, 4, 4]
     const torch::Tensor &Ks,                   // [C, 3, 3]
-    const int image_width, const int image_height,
+    const int image_width, const int image_height, const float eps2d,
     // fwd outputs
-    const torch::Tensor &rindices, // [nnz]
-    const torch::Tensor &cindices, // [nnz]
-    const torch::Tensor &conics,   // [nnz, 3]
+    const torch::Tensor &rindices,                    // [nnz]
+    const torch::Tensor &cindices,                    // [nnz]
+    const torch::Tensor &conics,                      // [nnz, 3]
+    const at::optional<torch::Tensor> &compensations, // [nnz] optional
     // grad outputs
-    const torch::Tensor &v_means2d, // [nnz, 2]
-    const torch::Tensor &v_depths,  // [nnz]
-    const torch::Tensor &v_conics,  // [nnz, 3]
+    const torch::Tensor &v_means2d,                     // [nnz, 2]
+    const torch::Tensor &v_depths,                      // [nnz]
+    const torch::Tensor &v_conics,                      // [nnz, 3]
+    const at::optional<torch::Tensor> &v_compensations, // [nnz] optional
     const bool viewmats_requires_grad, const bool sparse_grad) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -1565,6 +1614,13 @@ projection_packed_bwd_tensor(
     CHECK_INPUT(v_means2d);
     CHECK_INPUT(v_depths);
     CHECK_INPUT(v_conics);
+    if (compensations.has_value()) {
+        CHECK_INPUT(compensations.value());
+    }
+    if (v_compensations.has_value()) {
+        CHECK_INPUT(v_compensations.value());
+        assert(compensations.has_value());
+    }
 
     int N = means.size(0);    // number of gaussians
     int C = viewmats.size(0); // number of cameras
@@ -1603,10 +1659,15 @@ projection_packed_bwd_tensor(
             covars.has_value() ? nullptr : quats.value().data_ptr<float>(),
             covars.has_value() ? nullptr : scales.value().data_ptr<float>(),
             viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
-            rindices.data_ptr<int32_t>(), cindices.data_ptr<int32_t>(),
-            conics.data_ptr<float>(), v_means2d.data_ptr<float>(),
-            v_depths.data_ptr<float>(), v_conics.data_ptr<float>(), sparse_grad,
-            v_means.data_ptr<float>(),
+            eps2d, rindices.data_ptr<int32_t>(), cindices.data_ptr<int32_t>(),
+            conics.data_ptr<float>(),
+            compensations.has_value() ? compensations.value().data_ptr<float>()
+                                      : nullptr,
+            v_means2d.data_ptr<float>(), v_depths.data_ptr<float>(),
+            v_conics.data_ptr<float>(),
+            v_compensations.has_value() ? v_compensations.value().data_ptr<float>()
+                                        : nullptr,
+            sparse_grad, v_means.data_ptr<float>(),
             covars.has_value() ? v_covars.data_ptr<float>() : nullptr,
             covars.has_value() ? nullptr : v_quats.data_ptr<float>(),
             covars.has_value() ? nullptr : v_scales.data_ptr<float>(),

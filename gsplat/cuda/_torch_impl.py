@@ -108,18 +108,28 @@ def _projection(
     height: int,
     eps2d: float = 0.3,
     near_plane: float = 0.01,
+    calc_compensations: bool = False,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
     """PyTorch implementation."""
     means_c, covars_c = _world_to_cam(means, covars, viewmats)
     means2d, covars2d = _persp_proj(means_c, covars_c, Ks, width, height)
-    covars2d[..., 0, 0] = covars2d[..., 0, 0] + eps2d
-    covars2d[..., 1, 1] = covars2d[..., 1, 1] + eps2d
+    det_orig = (
+        covars2d[..., 0, 0] * covars2d[..., 1, 1]
+        - covars2d[..., 0, 1] * covars2d[..., 1, 0]
+    )
+    covars2d = covars2d + torch.eye(2, device=means.device, dtype=means.dtype) * eps2d
 
     det = (
         covars2d[..., 0, 0] * covars2d[..., 1, 1]
         - covars2d[..., 0, 1] * covars2d[..., 1, 0]
     )
     det = det.clamp(min=1e-10)
+
+    if calc_compensations:
+        compensations = torch.sqrt(torch.clamp(det_orig / det, min=0.0))
+    else:
+        compensations = None
+
     conics = torch.stack(
         [
             covars2d[..., 1, 1] / det,
@@ -149,7 +159,7 @@ def _projection(
     radius[~inside] = 0.0
 
     radii = radius.int()
-    return radii, means2d, depths, conics
+    return radii, means2d, depths, conics, compensations
 
 
 @torch.no_grad()
@@ -248,7 +258,7 @@ def _isect_offset_encode(
 def accumulate(
     means2d: Tensor,  # [C, N, 2]
     conics: Tensor,  # [C, N, 3]
-    opacities: Tensor,  # [N]
+    opacities: Tensor,  # [C, N]
     colors: Tensor,  # [C, N, channels]
     gauss_ids: Tensor,  # [M]
     pixel_ids: Tensor,  # [M]
@@ -277,7 +287,9 @@ def accumulate(
         0.5 * (c[:, 0] * deltas[:, 0] ** 2 + c[:, 2] * deltas[:, 1] ** 2)
         + c[:, 1] * deltas[:, 0] * deltas[:, 1]
     )  # [M]
-    alphas = torch.clamp_max(opacities[gauss_ids] * torch.exp(-sigmas), 0.999)
+    alphas = torch.clamp_max(
+        opacities[camera_ids, gauss_ids] * torch.exp(-sigmas), 0.999
+    )
 
     if prefix_trans is not None:
         prefix_trans = prefix_trans[camera_ids, pixel_ids_y, pixel_ids_x]
@@ -310,7 +322,7 @@ def _rasterize_to_pixels(
     means2d: Tensor,  # [C, N, 2]
     conics: Tensor,  # [C, N, 3]
     colors: Tensor,  # [C, N, channels]
-    opacities: Tensor,  # [N]
+    opacities: Tensor,  # [C, N]
     image_width: int,
     image_height: int,
     tile_size: int,

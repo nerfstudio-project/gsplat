@@ -278,21 +278,45 @@ inline __device__ void inverse_vjp(const T Minv, const T v_Minv, T &v_M) {
     v_M += -Minv * v_Minv * Minv;
 }
 
-// inline __device__ float add_blur(const float eps2d, glm::mat2 &covar,
-//                                  float &compensation) {
-//     float det_orig = covar[0][0] * covar[1][1] - covar[0][1] * covar[1][0];
-//     covar[0][0] += eps2d;
-//     covar[1][1] += eps2d;
-//     float det_blur = covar[0][0] * covar[1][1] - covar[0][1] * covar[1][0];
-//     compensation = sqrt(max(0.f, det_orig / det_blur));
-//     return det_blur;
-// }
+inline __device__ float add_blur(const float eps2d, glm::mat2 &covar,
+                                 float &compensation) {
+    float det_orig = covar[0][0] * covar[1][1] - covar[0][1] * covar[1][0];
+    covar[0][0] += eps2d;
+    covar[1][1] += eps2d;
+    float det_blur = covar[0][0] * covar[1][1] - covar[0][1] * covar[1][0];
+    compensation = sqrt(max(0.f, det_orig / det_blur));
+    return det_blur;
+}
 
-// template <class T>
-// inline __device__ void add_blur_vjp(const float eps2d, const glm::mat2 covar_blur,
-//                                     const float compensation,
-//                                     const float v_compensation, glm::mat2 &v_covar) {
-//     // comp = sqrt(det(covar_blur - eps2d * I) / det(covar_blur))
-// }
+inline __device__ void add_blur_vjp(const float eps2d, const glm::mat2 conic_blur,
+                                    const float compensation,
+                                    const float v_compensation, glm::mat2 &v_covar) {
+    // comp = sqrt(det(covar) / det(covar_blur))
+
+    // d [det(M)] / d M = adj(M)
+    // d [det(M + aI)] / d M  = adj(M + aI) = adj(M) + a * I
+    // d [det(M) / det(M + aI)] / d M
+    // = (det(M + aI) * adj(M) - det(M) * adj(M + aI)) / (det(M + aI))^2
+    // = adj(M) / det(M + aI) - adj(M + aI) / det(M + aI) * comp^2
+    // = (adj(M) - adj(M + aI) * comp^2) / det(M + aI)
+    // given that adj(M + aI) = adj(M) + a * I
+    // = (adj(M + aI) - aI - adj(M + aI) * comp^2) / det(M + aI)
+    // given that adj(M) / det(M) = inv(M)
+    // = (1 - comp^2) * inv(M + aI) - aI / det(M + aI)
+    // given det(inv(M)) = 1 / det(M)
+    // = (1 - comp^2) * inv(M + aI) - aI * det(inv(M + aI))
+    // = (1 - comp^2) * conic_blur - aI * det(conic_blur)
+
+    float det_conic_blur =
+        conic_blur[0][0] * conic_blur[1][1] - conic_blur[0][1] * conic_blur[1][0];
+    float v_sqr_comp = v_compensation * 0.5 / (compensation + 1e-6);
+    float one_minus_sqr_comp = 1 - compensation * compensation;
+    v_covar[0][0] +=
+        v_sqr_comp * (one_minus_sqr_comp * conic_blur[0][0] - eps2d * det_conic_blur);
+    v_covar[0][1] += v_sqr_comp * (one_minus_sqr_comp * conic_blur[0][1]);
+    v_covar[1][0] += v_sqr_comp * (one_minus_sqr_comp * conic_blur[1][0]);
+    v_covar[1][1] +=
+        v_sqr_comp * (one_minus_sqr_comp * conic_blur[1][1] - eps2d * det_conic_blur);
+}
 
 #endif // GSPLAT_CUDA_UTILS_H
