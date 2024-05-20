@@ -32,6 +32,7 @@ __global__ void project_gaussians_backward_kernel(
     const dim3 img_size,
     const float* __restrict__ cov3d,
     const int* __restrict__ radii,
+    const float* __restrict__ transMats,
 
     // grad input 
     const float* __restrict__ dL_dtransMats,
@@ -63,7 +64,7 @@ __global__ void project_gaussians_backward_kernel(
     glm::vec3 dL_drot;
 
     build_AABB(
-        num_points
+        num_points,
         radii,
         img_size.x,
         img_size.y,
@@ -95,7 +96,7 @@ __global__ void project_gaussians_backward_kernel(
     // Update 
     dL_dmean3Ds[idx] = dL_dmean3D;
     dL_dscales[idx] = dL_dscale;
-    dL_rots[idx] = dL_drot;
+    dL_drots[idx] = dL_drot;
    
     // v_mean3ds[idx] = v_dmean3D;
     // v_scales[idx] = v_scale;
@@ -123,12 +124,12 @@ __global__ void rasterize_backward_kernel(
     // float* __restrict__ dL_dnormal3D,
     // float* __restrict__ dL_dopacity,
     // float* __restrict__ dL_dcolors
-    float2* __restrict__ v_xy,
+    float2* __restrict__ dL_dmean2D,
     float2* __restrict__ v_xy_abs,
-    float* __restrict__ v_transMats,
+    float* __restrict__ dL_dtransMat,
     float3* __restrict__ v_rgb,
     float* __restrict__ v_opacity,
-    float* __restrict__ v_normal,
+    float* __restrict__ v_normal
 ) {
     auto block = cg::this_thread_block();
     int32_t tile_id = 
@@ -163,7 +164,6 @@ __global__ void rasterize_backward_kernel(
 
     __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
     __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 conic_batch[MAX_BLOCK_SIZE];
     __shared__ float3 rgbs_batch[MAX_BLOCK_SIZE];
     __shared__ float3 Tu_batch[MAX_BLOCK_SIZE];
     __shared__ float3 Tv_batch[MAX_BLOCK_SIZE];
@@ -196,7 +196,6 @@ __global__ void rasterize_backward_kernel(
             const float2 xy = xys[g_id];
             const float opac = opacities[g_id];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
-            conic_batch[tr] = conics[g_id];
             rgbs_batch[tr] = rgbs[g_id];
 
             //====== 2D Splatting ======//
@@ -216,15 +215,15 @@ __global__ void rasterize_backward_kernel(
             }
             float alpha;
             float opac;
-            float2 delta;
-            float3 conic;
+            // float2 delta;
+            // float3 conic;
             float vis;
             if (valid) {
                 // conic = conic_batch[t];
 
                 // Here we compute gaussian weights in forward pass again
                 float3 xy_opac = xy_opacity_batch[t];
-                
+                float opac = xy_opac.z;
                 const float2 xy = {xy_opac.x, xy_opac.y};
                 const float2 Tu = Tu_batch[t];
                 const float2 Tv = Tv_batch[t];
@@ -232,7 +231,7 @@ __global__ void rasterize_backward_kernel(
                 
                 float3 k = px * Tw - Tu;
                 float3 l = py * Tw - Tv;
-                float3 p = crossProduce(k, l);
+                float3 p = cross_product(k, l);
                 if (p.z == 0.0) continue;
                 float2 s = {p.x / p.z, p.y / p.z};
                 float rho3d = (s.x * s.x + s.y * s.y);
@@ -255,8 +254,8 @@ __global__ void rasterize_backward_kernel(
             if (!warp.any(valid)) continue;
 
             float3 v_rgb_local = {0.f, 0.f, 0.f};
-            float3 v_conic_local = {0.f, 0.f, 0.f};
-            float2 v_xy_local = {0.f, 0.f};
+            // float3 v_conic_local = {0.f, 0.f, 0.f};
+            // float2 v_xy_local = {0.f, 0.f};
             float2 v_xy_abs_local = 0.f;
             float v_opacity_local = 0.f;
             // initialize everything to 0, only set if the lane is valid
@@ -293,7 +292,7 @@ __global__ void rasterize_backward_kernel(
                 // ====== 2D Splatting ====== //
                 if (rho3d <= rho2d) {
                     // Update gradients w.r.t. covariance of Gaussian 3x3 (T)
-                    const float dL_ds = {
+                    const float2 dL_ds = {
                         dL_dG * -vis * s.x + dL_dz * Tw.x,
                         dL_dG * -vis * s.y + dL_dz * Tw.y
                     };
@@ -301,8 +300,8 @@ __global__ void rasterize_backward_kernel(
                     const float dsx_pz = dL_ds.x / p.z;
                     const float dsy_pz = dL_ds.y / p.z;
                     const float3 dL_dp = {dsx_pz, dsy_pz, -(dsx_pz * s.x + dsy_pz * s.y)};
-                    const float3 dL_dk = crossProduct(l, dL_dp);
-                    const float3 dL_dl = crossProduct(dL_dp, k);
+                    const float3 dL_dk = cross_product(l, dL_dp);
+                    const float3 dL_dl = cross_product(dL_dp, k);
 
                     const float3 dL_dTu = {-dL_dk.x, -dL_dk.y, -dL_dk.z};
                     const float3 dL_dTv = {-dL_dl.x, -dL_dl.y, -dL_dl.z};
@@ -348,7 +347,7 @@ __global__ void rasterize_backward_kernel(
                 float* v_rgb_ptr = (float*)(v_rgb);
                 atomicAdd(v_rgb_ptr + 3 * g + 0, v_rgb_local.x);
                 atomicAdd(v_rgb_ptr + 3 * g + 1, v_rgb_local.y);
-                atomicAdd(v_rgb_prt + 3 * g + 2, v_rgb_local.z);
+                atomicAdd(v_rgb_ptr + 3 * g + 2, v_rgb_local.z);
 
                 // float* v_conic_ptr = (float*)(v_conic);
                 // atomicAdd(v_conic_ptr + 3 * g + 0, v_conic_local.x);
@@ -409,7 +408,7 @@ __device__ void build_H(
     glm::mat3 R = quat_to_rotmat(quat);
     glm::mat3 RS = R * S;
     glm::vec3 p_view = W * p_world + cam_pos;
-    glm::mat3 W = glm::mat3(W * RS[0], W * RS[1], p_view);
+    glm::mat3 M = glm::mat3(W * RS[0], W * RS[1], p_view);
 
     glm::mat4x3 dL_dT = glm::mat4x3(
         dL_dtransMat[0], dL_dtransMat[1], dL_dtransMat[2],
@@ -441,7 +440,7 @@ __device__ void build_H(
     dL_drot = quat_to_rotmat_vjp(quat, dL_dR);
     dL_dscale = glm::vec2(
         (float)glm::dot(dL_dRS0, R[0]),
-        (float)glm::dot(dL_dRS1, R[1]),
+        (float)glm::dot(dL_dRS1, R[1])
     );
 
     dL_dmean3D = dL_dpw;
@@ -453,7 +452,7 @@ __device__ void build_AABB(
     const int * radii,
     const float W, 
     const float H,
-    const float * transMat,
+    const float * transMats,
 
     // grad output
     float3 * dL_dmean2Ds,

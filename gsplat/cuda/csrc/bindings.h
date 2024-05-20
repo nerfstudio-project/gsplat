@@ -1,5 +1,6 @@
 #include "cuda_runtime.h"
 #include "forward_2d.cuh"
+#include "backward_2d.cuh"
 #include <cstdio>
 #include <iostream>
 #include <math.h>
@@ -67,7 +68,6 @@ std::tuple<
     torch::Tensor,
     torch::Tensor,
     torch::Tensor,
-    torch::Tensor,
     torch::Tensor>
 project_gaussians_backward_tensor(
     const int num_points,
@@ -84,13 +84,16 @@ project_gaussians_backward_tensor(
     const unsigned img_width,
     torch::Tensor &cov3d,
     torch::Tensor &radii,
-    torch::Tensor &conics,
-    torch::Tensor &compensation,
-    torch::Tensor &v_xy,
-    torch::Tensor &v_depth,
-    torch::Tensor &v_conic,
-    torch::Tensor &v_compensation
+    torch::Tensor &dL_dtransMats,
+    torch::Tensor &dL_dnormal3Ds
+    // torch::Tensor &conics,
+    // torch::Tensor &compensation,
+    // torch::Tensor &v_xy,
+    // torch::Tensor &v_depth,
+    // torch::Tensor &v_conic,
+    // torch::Tensor &v_compensation
 );
+
 
 
 std::tuple<torch::Tensor, torch::Tensor> map_gaussian_to_intersects_tensor(
@@ -174,7 +177,7 @@ std::
     tuple<
         torch::Tensor, // dL_dxy
         torch::Tensor, // dL_dxy_abs
-        torch::Tensor, // dL_dconic
+        torch::Tensor, // dL_dtransMats
         torch::Tensor, // dL_dcolors
         torch::Tensor  // dL_dopacity
         >

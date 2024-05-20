@@ -1,6 +1,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <cstdint>
+#include <glm/glm.hpp>
 
 // for f : R(n) -> R(m), J in R(m, n),
 // v is cotangent in R(m), e.g. dL/df in R(m),
@@ -16,6 +17,7 @@ __global__ void project_gaussians_backward_kernel(
     const dim3 img_size,
     const float* __restrict__ cov3d,
     const int* __restrict__ radii,
+    const float* __restrict__ transMats,
 
     // grad input
     const float* __restrict__ dL_dtransMats,
@@ -25,7 +27,7 @@ __global__ void project_gaussians_backward_kernel(
     float3* __restrict__ dL_dmean3Ds,
     float3* __restrict__ dL_dscales,
     float3* __restrict__ dL_drots,
-    float3* __restrict__ dL_dmean2Ds,
+    float3* __restrict__ dL_dmean2Ds
 );
 
 __global__ void rasterize_backward_kernel(
@@ -40,8 +42,12 @@ __global__ void rasterize_backward_kernel(
     const float3& __restrict__ background,
     const float* __restrict__ final_Ts,
     const int* __restrict__ final_index,
+
+    // grad input
     const float3* __restrict__ v_output,
     const float* __restrict__ v_output_alpha,
+
+    // grad output
     float2* __restrict__ v_xy,
     float2* __restrict__ v_xy_abs,
     float* __restrict__ v_transMats,

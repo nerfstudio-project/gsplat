@@ -121,14 +121,15 @@ class SimpleTrainer:
             for iter in range(iterations):
                 start = time.time()
                 # pdb.set_trace()
-                (
-                    xys,
-                    depths,
-                    radii,
-                    num_tiles_hit,
-                    cov3d,
-                    transMats
-                ) = project_gaussians(
+                # (
+                #     xys,
+                #     depths,
+                #     radii,
+                #     num_tiles_hit,
+                #     cov3d,
+                #     transMats
+                # ) 
+                output = project_gaussians(
                     self.means,
                     self.scales,
                     1,
@@ -143,7 +144,7 @@ class SimpleTrainer:
                     B_SIZE,
                 )
 
-                # pdb.set_trace()
+                pdb.set_trace()
                 torch.cuda.synchronize()
                 times[0] += time.time() - start
                 start = time.time()

@@ -9,6 +9,7 @@ from torch.autograd import Function
 
 import gsplat.cuda as _C
 
+import pdb
 
 def project_gaussians(
     means3d: Float[Tensor, "*batch 3"],
@@ -143,7 +144,7 @@ class _ProjectGaussians(Function):
             radii,
             transMats
         )
-
+        pdb.set_trace()
         return (xys, depths, radii, num_tiles_hit, cov3d, transMats)
 
     @staticmethod

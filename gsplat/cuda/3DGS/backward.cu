@@ -156,8 +156,8 @@ __global__ void rasterize_backward_kernel(
     const float* __restrict__ v_output_alpha,
     float2* __restrict__ v_xy,
     float2* __restrict__ v_xy_abs,
-    // float3* __restrict__ v_conic,
-    float* __restrict__ v_transMats,
+    float3* __restrict__ v_conic,
+    // float* __restrict__ v_transMats,
     float3* __restrict__ v_rgb,
     float* __restrict__ v_opacity
 ) {
