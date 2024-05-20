@@ -51,7 +51,7 @@ __global__ void rasterize_backward_kernel(
     float2* __restrict__ dL_dmean2D,
     float* __restrict__ dL_dtransMat,
     float3* __restrict__ dL_drgb,
-    float* __restrict__ dL_dopacity,
+    float* __restrict__ dL_dopacity
 );
 
 __device__ void build_H(

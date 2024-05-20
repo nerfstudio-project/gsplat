@@ -216,28 +216,37 @@ __global__ void rasterize_backward_kernel(
             // float2 delta;
             // float3 conic;
             float vis;
+            float rho3d;
+            float rho2d;
+            float rho;
+            float2 s;
+            float2 d;
+            float3 k;
+            float3 l;
+            float3 p;
+            float2 Tw;
             if (valid) {
                 // conic = conic_batch[t];
 
                 // Here we compute gaussian weights in forward pass again
                 float3 xy_opac = xy_opacity_batch[t];
-                float opac = xy_opac.z;
+                opac = xy_opac.z;
                 const float2 xy = {xy_opac.x, xy_opac.y};
                 const float2 Tu = Tu_batch[t];
                 const float2 Tv = Tv_batch[t];
-                const float2 Tw = Tw_batch[t];
+                Tw = Tw_batch[t];
                 
-                float3 k = px * Tw - Tu;
-                float3 l = py * Tw - Tv;
-                float3 p = cross_product(k, l);
+                k = px * Tw - Tu;
+                l = py * Tw - Tv;
+                p = cross_product(k, l);
                 if (p.z == 0.0) continue;
-                float2 s = {p.x / p.z, p.y / p.z};
-                float rho3d = (s.x * s.x + s.y * s.y);
-                float2 d = {xy.x - px, xy.y - py};
-                float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
+                s = {p.x / p.z, p.y / p.z};
+                rho3d = (s.x * s.x + s.y * s.y);
+                d = {xy.x - px, xy.y - py};
+                rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
 
                 // compute intersection
-                float rho = min(rho3d, rho2d);
+                rho = min(rho3d, rho2d);
 
                 // accumulations
                 float sigma = 0.5f * rho;
@@ -286,6 +295,7 @@ __global__ void rasterize_backward_kernel(
                 const float dL_dG = opac * v_alpha;
                 float dL_dz = 0.0f;
 
+                int32_t g = id_batch[t];
                 // ====== 2D Splatting ====== //
                 if (rho3d <= rho2d) {
                     // Update gradients w.r.t. covariance of Gaussian 3x3 (T)
