@@ -16,13 +16,16 @@ __global__ void project_gaussians_backward_kernel(
     const dim3 img_size,
     const float* __restrict__ cov3d,
     const int* __restrict__ radii,
-    const float* __restrict__ transMats,
-    const float2* __restrict__ v_xy,
-    const float* __restrict__ v_depth,
-    const float3* __restrict__ v_transMats,
-    float3* __restrict__ v_mean3d,
-    float3* __restrict__ v_scale,
-    float4* __restrict__ v_quat
+
+    // grad input
+    const float* __restrict__ dL_dtransMats,
+    const float* __restrict__ dL_dnormal3Ds,
+
+    // grad output
+    float3* __restrict__ dL_dmean3Ds,
+    float3* __restrict__ dL_dscales,
+    float3* __restrict__ dL_drots,
+    float3* __restrict__ dL_dmean2Ds,
 );
 
 __global__ void rasterize_backward_kernel(
@@ -51,23 +54,29 @@ __device__ void build_H(
     const glm::vec4 & quat,
     const glm::vec2 & scale,
     const float* viewmat,
-    const float* projmat,
-    const int W,
-    const int H,
+    const float4 & intrins,
+    float tan_fovx,
+    float tan_fovy,
     const float* transMat,
-    const float* v_transMat,
-    const float* v_normal3D,
-    glm::vec3 & v_mean3D,
-    glm::vec2 & v_scale,
-    glm::vec4 & v_rot
+
+    // grad input
+    const float* dL_dtransMat,
+    const float* dL_dnormal3D,
+
+    // grad output
+    glm::vec3 & dL_dmean3D,
+    glm::vec2 & dL_dscale,
+    glm::vec4 & dL_drot
 );
 
 __device__ void build_AABB(
-    int P,
+    int idx,
     const int * radii,
     const float W,
     const float H,
     const float * transMats,
-    float3 * v_mean2D,
-    float *v_transMat
+
+    // grad output
+    float3 * dL_dmean2Ds,
+    float *dL_transMats
 );
