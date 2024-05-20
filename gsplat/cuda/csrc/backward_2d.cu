@@ -118,16 +118,17 @@ __global__ void rasterize_backward_kernel(
     const float3* __restrict__ v_output,
     const float* __restrict__ v_output_alpha,
 
-    float* __restrict__ dL_dtransMat,
-    float3* __restrict__ dL_dmean2D,
-    float* __restrict__ dL_dnormal3D,
-    float* __restrict__ dL_dopacity,
-    float* __restrict__ dL_dcolors
-    // float2* __restrict__ v_xy,
-    // float2* __restrict__ v_xy_abs,
-    // float* __restrict__ v_transMats,
-    // float3* __restrict__ v_rgb,
-    // float* __restrict__ v_opacity,
+    // float* __restrict__ dL_dtransMat,
+    // float3* __restrict__ dL_dmean2D,
+    // float* __restrict__ dL_dnormal3D,
+    // float* __restrict__ dL_dopacity,
+    // float* __restrict__ dL_dcolors
+    float2* __restrict__ v_xy,
+    float2* __restrict__ v_xy_abs,
+    float* __restrict__ v_transMats,
+    float3* __restrict__ v_rgb,
+    float* __restrict__ v_opacity,
+    float* __restrict__ v_normal,
 ) {
     auto block = cg::this_thread_block();
     int32_t tile_id = 
