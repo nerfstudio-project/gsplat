@@ -950,12 +950,12 @@ class _ProjectionPacked(torch.autograd.Function):
             ctx.needs_input_grad[4],  # viewmats_requires_grad
             sparse_grad,
         )
+
         if not ctx.needs_input_grad[0]:
             v_means = None
         else:
             if sparse_grad:
-                # TODO: this is somehow consuming more memory than expected!
-                # Also cindices is duplicated so not idea.
+                # TODO: cindices is duplicated so not ideal.
                 # An idea is to directly set the attribute (e.g., .sparse_grad) of
                 # the tensor but this requires the tensor to be leaf node only. And
                 # a customized optimizer would be needed in this case.
@@ -984,7 +984,7 @@ class _ProjectionPacked(torch.autograd.Function):
                     values=v_quats,  # [nnz, 4]
                     size=quats.size(),  # [N, 4]
                     is_coalesced=len(viewmats) == 1,
-                ).to_dense()  # TODO: F.normalize is preventing sparse gradients
+                )  # TODO: F.normalize is preventing sparse gradients
         if not ctx.needs_input_grad[3]:
             v_scales = None
         else:
@@ -997,6 +997,7 @@ class _ProjectionPacked(torch.autograd.Function):
                 )
         if not ctx.needs_input_grad[4]:
             v_viewmats = None
+
         return (
             v_means,
             v_covars,
