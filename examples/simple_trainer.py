@@ -136,11 +136,18 @@ def create_splats_with_optimizers(
         }
     ).to(device)
     optimizers = [
+        # These attributes have sparse gradients supported in gsplats
         (torch.optim.SparseAdam if sparse_grad else torch.optim.Adam)(
             [
                 {"params": splats["means3d"], "name": "means3d"},  # has a lr schedule
                 {"params": splats["scales"], "lr": 5e-3, "name": "scales"},
                 {"params": splats["quats"], "lr": 1e-3, "name": "quats"},
+            ],
+            eps=1e-15,
+            # fused=True, TODO: benchmark fused optimizer
+        ),
+        torch.optim.Adam(
+            [
                 {"params": splats["opacities"], "lr": 5e-2, "name": "opacities"},
                 {"params": splats["sh0"], "lr": 2.5e-3, "name": "sh0"},
                 {"params": splats["shN"], "lr": 2.5e-3 / 20, "name": "shN"},
@@ -226,7 +233,9 @@ class Runner:
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         means = self.splats["means3d"]  # [N, 3]
-        quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
+        # quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
+        # rasterization does normalization internally
+        quats = self.splats["quats"]  # [N, 4] 
         scales = torch.exp(self.splats["scales"])  # [N, 3]
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
         colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
@@ -244,6 +253,7 @@ class Runner:
             height=height,
             packed=self.args.packed,
             compute_means2d_absgrad=self.args.absgrad,
+            sparse_grad=self.args.sparse_grad,
             rasterize_mode=rasterize_mode,
             **kwargs,
         )
@@ -386,12 +396,6 @@ class Runner:
 
                 if step % args.reset_every == 0:
                     self.reset_opa()
-
-            # Turn Gradients into Sparse Tensor before running optimizer
-            if args.sparse_grad:
-                for k in self.splats.keys():
-                    if self.splats[k].grad is not None:
-                        self.splats[k].grad = self.splats[k].grad.to_sparse()
 
             # optimize
             for optimizer in self.optimizers:

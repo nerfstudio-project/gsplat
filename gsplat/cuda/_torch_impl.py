@@ -3,6 +3,7 @@ from typing import Optional, Tuple
 
 import torch
 from torch import Tensor
+import torch.nn.functional as F
 
 
 def _quat_scale_to_covar_preci(
@@ -13,6 +14,7 @@ def _quat_scale_to_covar_preci(
     triu: bool = False,
 ):
     """PyTorch implementation."""
+    quats = F.normalize(quats, p=2, dim=-1)
     w, x, y, z = torch.unbind(quats, dim=-1)
     R = torch.stack(
         [

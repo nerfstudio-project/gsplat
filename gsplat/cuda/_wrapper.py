@@ -984,7 +984,7 @@ class _ProjectionPacked(torch.autograd.Function):
                     values=v_quats,  # [nnz, 4]
                     size=quats.size(),  # [N, 4]
                     is_coalesced=len(viewmats) == 1,
-                )  # TODO: F.normalize is preventing sparse gradients
+                )
         if not ctx.needs_input_grad[3]:
             v_scales = None
         else:

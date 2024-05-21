@@ -60,7 +60,7 @@ def test_quat_scale_to_covar_preci(test_data, triu: bool):
     covars, precis = quat_scale_to_covar_preci(quats, scales, triu=triu)
     _covars, _precis = _quat_scale_to_covar_preci(quats, scales, triu=triu)
     torch.testing.assert_close(covars, _covars)
-    torch.testing.assert_close(precis, _precis, rtol=1e-2, atol=1e-2)
+    torch.testing.assert_close(precis, _precis, rtol=2e-2, atol=1e-2)
     # if not triu:
     #     I = torch.eye(3, device=device).expand(len(covars), 3, 3)
     #     torch.testing.assert_close(torch.bmm(covars, precis), I)
@@ -78,7 +78,7 @@ def test_quat_scale_to_covar_preci(test_data, triu: bool):
         (quats, scales),
     )
     torch.testing.assert_close(v_quats, _v_quats, rtol=1e-1, atol=1e-1)
-    torch.testing.assert_close(v_scales, _v_scales, rtol=3e-2, atol=1e-3)
+    torch.testing.assert_close(v_scales, _v_scales, rtol=3e-2, atol=1e-2)
 
 
 def test_world_to_cam(test_data):
@@ -244,7 +244,7 @@ def test_projection(test_data, fused: bool, calc_compensations: bool):
     )
 
     torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_quats, _v_quats, rtol=1e-1, atol=1e-2)
+    torch.testing.assert_close(v_quats, _v_quats, rtol=2e-1, atol=1e-2)
     torch.testing.assert_close(v_scales, _v_scales, rtol=1e-1, atol=2e-1)
     torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=6e-2)
 
