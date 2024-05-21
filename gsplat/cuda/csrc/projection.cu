@@ -915,7 +915,8 @@ projection_fwd_tensor(const torch::Tensor &means,                // [N, 3]
     torch::Tensor conics = torch::empty({C, N, 3}, means.options());
     torch::Tensor compensations;
     if (calc_compensations) {
-        compensations = torch::empty({C, N}, means.options());
+        // we dont want NaN to appear in this tensor, so we zero intialize it
+        compensations = torch::zeros({C, N}, means.options());
     }
     if (C && N) {
         projection_fwd_kernel<<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
