@@ -1048,10 +1048,8 @@ class _RasterizeToPixelsPacked(torch.autograd.Function):
         compute_means2d_absgrad: bool,
     ) -> Tuple[Tensor, Tensor]:
         render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
-            "rasterize_to_pixels_packed_fwd"
+            "rasterize_to_pixels_fwd"
         )(
-            rindices,
-            cindices,
             means2d,
             conics,
             colors,

@@ -212,22 +212,22 @@ isect_tiles_packed_tensor(const int32_t C,
                           const int tile_size, const int tile_width,
                           const int tile_height, const bool sort);
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-rasterize_to_pixels_packed_fwd_tensor(
-    const torch::Tensor &rindices, // [nnz]
-    const torch::Tensor &cindices, // [nnz]
-    // Gaussian parameters
-    const torch::Tensor &means2d,                   // [nnz, 2]
-    const torch::Tensor &conics,                    // [nnz, 3]
-    const torch::Tensor &colors,                    // [nnz, D]
-    const torch::Tensor &opacities,                 // [N]
-    const at::optional<torch::Tensor> &backgrounds, // [C, D]
-    // image size
-    const int image_width, const int image_height, const int tile_size,
-    // intersections
-    const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
-    const torch::Tensor &pack_ids      // [n_isects]
-);
+// std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+// rasterize_to_pixels_packed_fwd_tensor(
+//     const torch::Tensor &rindices, // [nnz]
+//     const torch::Tensor &cindices, // [nnz]
+//     // Gaussian parameters
+//     const torch::Tensor &means2d,                   // [nnz, 2]
+//     const torch::Tensor &conics,                    // [nnz, 3]
+//     const torch::Tensor &colors,                    // [nnz, D]
+//     const torch::Tensor &opacities,                 // [N]
+//     const at::optional<torch::Tensor> &backgrounds, // [C, D]
+//     // image size
+//     const int image_width, const int image_height, const int tile_size,
+//     // intersections
+//     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
+//     const torch::Tensor &pack_ids      // [n_isects]
+// );
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 rasterize_to_pixels_packed_bwd_tensor(
