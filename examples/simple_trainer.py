@@ -142,12 +142,6 @@ def create_splats_with_optimizers(
                 {"params": splats["means3d"], "name": "means3d"},  # has a lr schedule
                 {"params": splats["scales"], "lr": 5e-3, "name": "scales"},
                 {"params": splats["quats"], "lr": 1e-3, "name": "quats"},
-            ],
-            eps=1e-15,
-            # fused=True, TODO: benchmark fused optimizer
-        ),
-        torch.optim.Adam(
-            [
                 {"params": splats["opacities"], "lr": 5e-2, "name": "opacities"},
                 {"params": splats["sh0"], "lr": 2.5e-3, "name": "sh0"},
                 {"params": splats["shN"], "lr": 2.5e-3 / 20, "name": "shN"},
@@ -397,6 +391,21 @@ class Runner:
                 if step % args.reset_every == 0:
                     self.reset_opa()
 
+            # Turn Gradients into Sparse Tensor before running optimizer
+            if args.sparse_grad:
+                assert args.packed, "Sparse gradients only work with packed mode."
+                cindices = info["cindices"]
+                for k in self.splats.keys():
+                    grad = self.splats[k].grad
+                    if grad is None or grad.is_sparse:
+                        continue
+                    self.splats[k].grad = torch.sparse_coo_tensor(
+                        indices=cindices[None],  # [1, nnz]
+                        values=grad[cindices],  # [nnz, ...]
+                        size=self.splats[k].size(),  # [N, ...]
+                        is_coalesced=len(Ks) == 1,
+                    )
+                    
             # optimize
             for optimizer in self.optimizers:
                 optimizer.step()
