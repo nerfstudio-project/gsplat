@@ -9,21 +9,30 @@ namespace cg = cooperative_groups;
  * Gaussian Tile Intersection
  ****************************************************************************/
 
-__global__ void isect_tiles(const int C, const int N,
-                            const float2 *__restrict__ means2d, // [C, N, 2]
-                            const int32_t *__restrict__ radii,  // [C, N]
-                            const float *__restrict__ depths,   // [C, N]
-                            const int64_t *__restrict__ cum_tiles_per_gauss, // [C, N]
-                            const int tile_size, const int tile_width,
-                            const int tile_height, const int tile_n_bits,
-                            int32_t *__restrict__ tiles_per_gauss, // [C, N]
-                            int64_t *__restrict__ isect_ids,       // [n_isects]
-                            int32_t *__restrict__ gauss_ids        // [n_isects]
+__global__ void isect_tiles(
+    // if the data is [C, N, ...] or [nnz, ...] (packed)
+    const bool packed,
+    // parallelize over C * N, only used if packed is False
+    const int C, const int N,
+    // parallelize over nnz, only used if packed is True
+    const int nnz,
+    const int32_t *__restrict__ rindices, // [nnz] optional
+    const int32_t *__restrict__ cindices, // [nnz] optional
+    // data
+    const float2 *__restrict__ means2d,              // [C, N, 2] or [nnz, 2]
+    const int32_t *__restrict__ radii,               // [C, N] or [nnz]
+    const float *__restrict__ depths,                // [C, N] or [nnz]
+    const int64_t *__restrict__ cum_tiles_per_gauss, // [C, N] or [nnz]
+    const int tile_size, const int tile_width, const int tile_height,
+    const int tile_n_bits,
+    int32_t *__restrict__ tiles_per_gauss, // [C, N] or [nnz]
+    int64_t *__restrict__ isect_ids,       // [n_isects]
+    int32_t *__restrict__ gauss_ids        // [n_isects]
 ) {
     // parallelize over C * N.
     unsigned idx = cg::this_grid().thread_rank();
     bool first_pass = cum_tiles_per_gauss == nullptr;
-    if (idx >= C * N)
+    if (idx >= (packed ? nnz : C * N))
         return;
     if (radii[idx] <= 0) {
         if (first_pass)
@@ -48,8 +57,17 @@ __global__ void isect_tiles(const int C, const int N,
         return;
     }
 
-    const int64_t cid = idx / N; // camera id
-    const int32_t gid = idx % N; // gaussian id
+    int64_t cid; // camera id
+    int32_t gid; // gaussian id
+    if (packed) {
+        // parallelize over nnz
+        cid = rindices[idx];
+        gid = cindices[idx];
+    } else {
+        // parallelize over C * N
+        cid = idx / N;
+        gid = idx % N;
+    }
     const int64_t cid_enc = cid << (32 + tile_n_bits);
 
     int64_t depth_id_enc = (int64_t) * (int32_t *)&(depths[idx]);
@@ -60,25 +78,46 @@ __global__ void isect_tiles(const int C, const int N,
             // e.g. tile_n_bits = 22:
             // camera id (10 bits) | tile id (22 bits) | depth (32 bits)
             isect_ids[cur_idx] = cid_enc | (tile_id << 32) | depth_id_enc;
-            gauss_ids[cur_idx] = gid;
+            gauss_ids[cur_idx] = packed ? idx : gid;
             ++cur_idx;
         }
     }
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-isect_tiles_tensor(const torch::Tensor &means2d, // [C, N, 2]
-                   const torch::Tensor &radii,   // [C, N]
-                   const torch::Tensor &depths,  // [C, N]
-                   const int tile_size, const int tile_width, const int tile_height,
-                   const bool sort) {
+isect_tiles_tensor(const torch::Tensor &means2d,                // [C, N, 2] or [nnz, 2]
+                   const torch::Tensor &radii,                  // [C, N] or [nnz]
+                   const torch::Tensor &depths,                 // [C, N] or [nnz]
+                   const at::optional<torch::Tensor> &rindices, // [nnz]
+                   const at::optional<torch::Tensor> &cindices, // [nnz]
+                   const int C, const int tile_size, const int tile_width,
+                   const int tile_height, const bool sort) {
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
     CHECK_INPUT(radii);
     CHECK_INPUT(depths);
+    if (rindices.has_value()) {
+        CHECK_INPUT(rindices.value());
+    }
+    if (cindices.has_value()) {
+        CHECK_INPUT(cindices.value());
+    }
+    bool packed = means2d.dim() == 2;
 
-    int C = means2d.size(0); // number of cameras
-    int N = means2d.size(1); // number of gaussians
+    int N, nnz, totel_elems;
+    int32_t *rindices_ptr;
+    int32_t *cindices_ptr;
+    if (packed) {
+        nnz = means2d.size(0);
+        totel_elems = nnz;
+        assert(rindices.has_value() && cindices.has_value());
+        rindices_ptr = rindices.value().data_ptr<int32_t>();
+        cindices_ptr = cindices.value().data_ptr<int32_t>();
+    } else {
+        N = means2d.size(1); // number of gaussians
+        totel_elems = C * N;
+    }
+
     int n_tiles = tile_width * tile_height;
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
@@ -94,18 +133,21 @@ isect_tiles_tensor(const torch::Tensor &means2d, // [C, N, 2]
 
     // first pass: compute number of tiles per gaussian
     torch::Tensor tiles_per_gauss =
-        torch::empty({C, N}, depths.options().dtype(torch::kInt32));
+        torch::empty_like(depths, depths.options().dtype(torch::kInt32));
+
     int64_t n_isects;
     torch::Tensor cum_tiles_per_gauss;
-    if (C == 0 || N == 0) {
-        n_isects = 0;
-    } else {
-        isect_tiles<<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
-            C, N, (float2 *)means2d.data_ptr<float>(), radii.data_ptr<int32_t>(),
+    if (totel_elems) {
+        isect_tiles<<<(totel_elems + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
+                      stream>>>(
+            packed, C, N, nnz, rindices_ptr, cindices_ptr,
+            (float2 *)means2d.data_ptr<float>(), radii.data_ptr<int32_t>(),
             depths.data_ptr<float>(), nullptr, tile_size, tile_width, tile_height,
             tile_n_bits, tiles_per_gauss.data_ptr<int32_t>(), nullptr, nullptr);
         cum_tiles_per_gauss = torch::cumsum(tiles_per_gauss.view({-1}), 0);
         n_isects = cum_tiles_per_gauss[-1].item<int64_t>();
+    } else {
+        n_isects = 0;
     }
 
     // second pass: compute isect_ids and gauss_ids as a packed tensor
@@ -114,8 +156,10 @@ isect_tiles_tensor(const torch::Tensor &means2d, // [C, N, 2]
     torch::Tensor gauss_ids =
         torch::empty({n_isects}, depths.options().dtype(torch::kInt32));
     if (n_isects) {
-        isect_tiles<<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
-            C, N, (float2 *)means2d.data_ptr<float>(), radii.data_ptr<int32_t>(),
+        isect_tiles<<<(totel_elems + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
+                      stream>>>(
+            packed, C, N, nnz, rindices_ptr, cindices_ptr,
+            (float2 *)means2d.data_ptr<float>(), radii.data_ptr<int32_t>(),
             depths.data_ptr<float>(), cum_tiles_per_gauss.data_ptr<int64_t>(),
             tile_size, tile_width, tile_height, tile_n_bits, nullptr,
             isect_ids.data_ptr<int64_t>(), gauss_ids.data_ptr<int32_t>());
@@ -587,10 +631,10 @@ __global__ void rasterize_to_pixels_fwd_kernel(
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_tensor(
     // Gaussian parameters
-    const torch::Tensor &means2d,                   // [C, N, 2] or [nnz, 2]
-    const torch::Tensor &conics,                    // [C, N, 3] or [nnz, 3]
-    const torch::Tensor &colors,                    // [C, N, channels] or [nnz, channels]
-    const torch::Tensor &opacities,                 // [C, N]  or [nnz]
+    const torch::Tensor &means2d,   // [C, N, 2] or [nnz, 2]
+    const torch::Tensor &conics,    // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &colors,    // [C, N, channels] or [nnz, channels]
+    const torch::Tensor &opacities, // [C, N]  or [nnz]
     const at::optional<torch::Tensor> &backgrounds, // [C, channels]
     // image size
     const int image_width, const int image_height, const int tile_size,
@@ -609,8 +653,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
         CHECK_INPUT(backgrounds.value());
     }
     bool packed = means2d.dim() == 2;
-    
-    int C = tile_offsets.size(0); // number of cameras
+
+    int C = tile_offsets.size(0);          // number of cameras
     int N = packed ? -1 : means2d.size(1); // number of gaussians
     int channels = colors.size(-1);
     int tile_height = tile_offsets.size(1);
@@ -1048,8 +1092,8 @@ rasterize_to_pixels_bwd_tensor(
     }
 
     bool packed = means2d.dim() == 2;
-    
-    int C = tile_offsets.size(0); // number of cameras
+
+    int C = tile_offsets.size(0);          // number of cameras
     int N = packed ? -1 : means2d.size(1); // number of gaussians
     int n_isects = gauss_ids.size(0);
     int COLOR_DIM = colors.size(-1);
@@ -1204,140 +1248,144 @@ rasterize_to_pixels_bwd_tensor(
  * Gaussian Tile Intersection (Packed)
  ****************************************************************************/
 
-__global__ void
-isect_tiles_packed(int nnz,
-                   const int32_t *__restrict__ rindices,            // [nnz]
-                   const int32_t *__restrict__ cindices,            // [nnz]
-                   const float2 *__restrict__ means2d,              // [nnz, 2]
-                   const int32_t *__restrict__ radii,               // [nnz]
-                   const float *__restrict__ depths,                // [nnz]
-                   const int64_t *__restrict__ cum_tiles_per_gauss, // [nnz]
-                   const int tile_size, const int tile_width, const int tile_height,
-                   const int tile_n_bits,
-                   int32_t *__restrict__ tiles_per_gauss, // [nnz]
-                   int64_t *__restrict__ isect_ids,       // [n_isects]
-                   int32_t *__restrict__ pack_ids         // [n_isects]
-) {
-    // parallelize over nnz.
-    unsigned idx = cg::this_grid().thread_rank();
-    bool first_pass = cum_tiles_per_gauss == nullptr;
-    if (idx >= nnz)
-        return;
-    if (radii[idx] <= 0) {
-        if (first_pass)
-            tiles_per_gauss[idx] = 0;
-        return;
-    }
+// __global__ void
+// isect_tiles_packed(int nnz,
+//                    const int32_t *__restrict__ rindices,            // [nnz]
+//                    const int32_t *__restrict__ cindices,            // [nnz]
+//                    const float2 *__restrict__ means2d,              // [nnz, 2]
+//                    const int32_t *__restrict__ radii,               // [nnz]
+//                    const float *__restrict__ depths,                // [nnz]
+//                    const int64_t *__restrict__ cum_tiles_per_gauss, // [nnz]
+//                    const int tile_size, const int tile_width, const int tile_height,
+//                    const int tile_n_bits,
+//                    int32_t *__restrict__ tiles_per_gauss, // [nnz]
+//                    int64_t *__restrict__ isect_ids,       // [n_isects]
+//                    int32_t *__restrict__ pack_ids         // [n_isects]
+// ) {
+//     // parallelize over nnz.
+//     unsigned idx = cg::this_grid().thread_rank();
+//     bool first_pass = cum_tiles_per_gauss == nullptr;
+//     if (idx >= nnz)
+//         return;
+//     if (radii[idx] <= 0) {
+//         if (first_pass)
+//             tiles_per_gauss[idx] = 0;
+//         return;
+//     }
 
-    float tile_radius = radii[idx] / static_cast<float>(tile_size);
-    float tile_x = means2d[idx].x / tile_size;
-    float tile_y = means2d[idx].y / tile_size;
+//     float tile_radius = radii[idx] / static_cast<float>(tile_size);
+//     float tile_x = means2d[idx].x / tile_size;
+//     float tile_y = means2d[idx].y / tile_size;
 
-    // tile_min is inclusive, tile_max is exclusive
-    uint2 tile_min, tile_max;
-    tile_min.x = min(max(0, (int)floor(tile_x - tile_radius)), tile_width);
-    tile_min.y = min(max(0, (int)floor(tile_y - tile_radius)), tile_height);
-    tile_max.x = min(max(0, (int)ceil(tile_x + tile_radius)), tile_width);
-    tile_max.y = min(max(0, (int)ceil(tile_y + tile_radius)), tile_height);
+//     // tile_min is inclusive, tile_max is exclusive
+//     uint2 tile_min, tile_max;
+//     tile_min.x = min(max(0, (int)floor(tile_x - tile_radius)), tile_width);
+//     tile_min.y = min(max(0, (int)floor(tile_y - tile_radius)), tile_height);
+//     tile_max.x = min(max(0, (int)ceil(tile_x + tile_radius)), tile_width);
+//     tile_max.y = min(max(0, (int)ceil(tile_y + tile_radius)), tile_height);
 
-    if (first_pass) {
-        // first pass only writes out tiles_per_gauss
-        tiles_per_gauss[idx] = (tile_max.y - tile_min.y) * (tile_max.x - tile_min.x);
-        return;
-    }
+//     if (first_pass) {
+//         // first pass only writes out tiles_per_gauss
+//         tiles_per_gauss[idx] = (tile_max.y - tile_min.y) * (tile_max.x - tile_min.x);
+//         return;
+//     }
 
-    const int64_t cid = rindices[idx]; // camera id
-    const int32_t gid = cindices[idx]; // gaussian id
-    const int64_t cid_enc = cid << (32 + tile_n_bits);
+//     const int64_t cid = rindices[idx]; // camera id
+//     const int32_t gid = cindices[idx]; // gaussian id
+//     const int64_t cid_enc = cid << (32 + tile_n_bits);
 
-    int64_t depth_id_enc = (int64_t) * (int32_t *)&(depths[idx]);
-    int64_t cur_idx = (idx == 0) ? 0 : cum_tiles_per_gauss[idx - 1];
-    for (int i = tile_min.y; i < tile_max.y; ++i) {
-        for (int j = tile_min.x; j < tile_max.x; ++j) {
-            int64_t tile_id = i * tile_width + j;
-            // e.g. tile_n_bits = 22:
-            // camera id (10 bits) | tile id (22 bits) | depth (32 bits)
-            isect_ids[cur_idx] = cid_enc | (tile_id << 32) | depth_id_enc;
-            pack_ids[cur_idx] = idx;
-            ++cur_idx;
-        }
-    }
-}
+//     int64_t depth_id_enc = (int64_t) * (int32_t *)&(depths[idx]);
+//     int64_t cur_idx = (idx == 0) ? 0 : cum_tiles_per_gauss[idx - 1];
+//     for (int i = tile_min.y; i < tile_max.y; ++i) {
+//         for (int j = tile_min.x; j < tile_max.x; ++j) {
+//             int64_t tile_id = i * tile_width + j;
+//             // e.g. tile_n_bits = 22:
+//             // camera id (10 bits) | tile id (22 bits) | depth (32 bits)
+//             isect_ids[cur_idx] = cid_enc | (tile_id << 32) | depth_id_enc;
+//             pack_ids[cur_idx] = idx;
+//             ++cur_idx;
+//         }
+//     }
+// }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-isect_tiles_packed_tensor(const int32_t C,
-                          const torch::Tensor &rindices, // [nnz]
-                          const torch::Tensor &cindices, // [nnz]
-                          const torch::Tensor &means2d,  // [nnz, 2]
-                          const torch::Tensor &radii,    // [nnz]
-                          const torch::Tensor &depths,   // [nnz]
-                          const int tile_size, const int tile_width,
-                          const int tile_height, const bool sort) {
-    DEVICE_GUARD(means2d);
-    CHECK_INPUT(rindices);
-    CHECK_INPUT(cindices);
-    CHECK_INPUT(means2d);
-    CHECK_INPUT(radii);
-    CHECK_INPUT(depths);
+// std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+// isect_tiles_packed_tensor(const int32_t C,
+//                           const torch::Tensor &rindices, // [nnz]
+//                           const torch::Tensor &cindices, // [nnz]
+//                           const torch::Tensor &means2d,  // [nnz, 2]
+//                           const torch::Tensor &radii,    // [nnz]
+//                           const torch::Tensor &depths,   // [nnz]
+//                           const int tile_size, const int tile_width,
+//                           const int tile_height, const bool sort) {
+//     DEVICE_GUARD(means2d);
+//     CHECK_INPUT(rindices);
+//     CHECK_INPUT(cindices);
+//     CHECK_INPUT(means2d);
+//     CHECK_INPUT(radii);
+//     CHECK_INPUT(depths);
 
-    int nnz = rindices.size(0);
-    int n_tiles = tile_width * tile_height;
-    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+//     int nnz = rindices.size(0);
+//     int n_tiles = tile_width * tile_height;
+//     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
-    // the number of bits needed to encode the camera id and tile id
-    // Note: std::bit_width requires C++20
-    // int tile_n_bits = std::bit_width(n_tiles);
-    // int cam_n_bits = std::bit_width(C);
-    int tile_n_bits = (int)floor(log2(n_tiles)) + 1;
-    int cam_n_bits = (int)floor(log2(C)) + 1;
-    // the first 32 bits are used for the camera id and tile id altogether, so check if
-    // we have enough bits for them.
-    assert(tile_n_bits + cam_n_bits <= 32);
+//     // the number of bits needed to encode the camera id and tile id
+//     // Note: std::bit_width requires C++20
+//     // int tile_n_bits = std::bit_width(n_tiles);
+//     // int cam_n_bits = std::bit_width(C);
+//     int tile_n_bits = (int)floor(log2(n_tiles)) + 1;
+//     int cam_n_bits = (int)floor(log2(C)) + 1;
+//     // the first 32 bits are used for the camera id and tile id altogether, so check
+//     if
+//     // we have enough bits for them.
+//     assert(tile_n_bits + cam_n_bits <= 32);
 
-    // first pass: compute number of tiles per gaussian
-    torch::Tensor tiles_per_gauss =
-        torch::empty({nnz}, depths.options().dtype(torch::kInt32));
-    int64_t n_isects;
-    torch::Tensor cum_tiles_per_gauss;
-    if (nnz) {
-        isect_tiles_packed<<<(nnz + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
-            nnz, rindices.data_ptr<int32_t>(), cindices.data_ptr<int32_t>(),
-            (float2 *)means2d.data_ptr<float>(), radii.data_ptr<int32_t>(),
-            depths.data_ptr<float>(), nullptr, tile_size, tile_width, tile_height,
-            tile_n_bits, tiles_per_gauss.data_ptr<int32_t>(), nullptr, nullptr);
-        cum_tiles_per_gauss = torch::cumsum(tiles_per_gauss.view({-1}), 0);
-        n_isects = cum_tiles_per_gauss[-1].item<int64_t>();
-    } else {
-        n_isects = 0;
-    }
+//     // first pass: compute number of tiles per gaussian
+//     torch::Tensor tiles_per_gauss =
+//         torch::empty({nnz}, depths.options().dtype(torch::kInt32));
+//     int64_t n_isects;
+//     torch::Tensor cum_tiles_per_gauss;
+//     if (nnz) {
+//         isect_tiles_packed<<<(nnz + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
+//         stream>>>(
+//             nnz, rindices.data_ptr<int32_t>(), cindices.data_ptr<int32_t>(),
+//             (float2 *)means2d.data_ptr<float>(), radii.data_ptr<int32_t>(),
+//             depths.data_ptr<float>(), nullptr, tile_size, tile_width, tile_height,
+//             tile_n_bits, tiles_per_gauss.data_ptr<int32_t>(), nullptr, nullptr);
+//         cum_tiles_per_gauss = torch::cumsum(tiles_per_gauss.view({-1}), 0);
+//         n_isects = cum_tiles_per_gauss[-1].item<int64_t>();
+//     } else {
+//         n_isects = 0;
+//     }
 
-    // second pass: compute isect_ids and pack_ids as a packed tensor
-    torch::Tensor isect_ids =
-        torch::empty({n_isects}, depths.options().dtype(torch::kInt64));
-    torch::Tensor pack_ids =
-        torch::empty({n_isects}, depths.options().dtype(torch::kInt32));
-    if (n_isects) {
-        isect_tiles_packed<<<(nnz + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
-            nnz, rindices.data_ptr<int32_t>(), cindices.data_ptr<int32_t>(),
-            (float2 *)means2d.data_ptr<float>(), radii.data_ptr<int32_t>(),
-            depths.data_ptr<float>(), cum_tiles_per_gauss.data_ptr<int64_t>(),
-            tile_size, tile_width, tile_height, tile_n_bits, nullptr,
-            isect_ids.data_ptr<int64_t>(), pack_ids.data_ptr<int32_t>());
-    }
+//     // second pass: compute isect_ids and pack_ids as a packed tensor
+//     torch::Tensor isect_ids =
+//         torch::empty({n_isects}, depths.options().dtype(torch::kInt64));
+//     torch::Tensor pack_ids =
+//         torch::empty({n_isects}, depths.options().dtype(torch::kInt32));
+//     if (n_isects) {
+//         isect_tiles_packed<<<(nnz + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
+//         stream>>>(
+//             nnz, rindices.data_ptr<int32_t>(), cindices.data_ptr<int32_t>(),
+//             (float2 *)means2d.data_ptr<float>(), radii.data_ptr<int32_t>(),
+//             depths.data_ptr<float>(), cum_tiles_per_gauss.data_ptr<int64_t>(),
+//             tile_size, tile_width, tile_height, tile_n_bits, nullptr,
+//             isect_ids.data_ptr<int64_t>(), pack_ids.data_ptr<int32_t>());
+//     }
 
-    // optionally sort the Gaussians by isect_ids
-    if (n_isects && sort) {
-        torch::Tensor isect_ids_sorted = torch::empty_like(isect_ids);
-        torch::Tensor pack_ids_sorted = torch::empty_like(pack_ids);
-        CUB_WRAPPER(cub::DeviceRadixSort::SortPairs, isect_ids.data_ptr<int64_t>(),
-                    isect_ids_sorted.data_ptr<int64_t>(), pack_ids.data_ptr<int32_t>(),
-                    pack_ids_sorted.data_ptr<int32_t>(), n_isects, 0,
-                    32 + tile_n_bits + cam_n_bits, stream);
-        return std::make_tuple(tiles_per_gauss, isect_ids_sorted, pack_ids_sorted);
-    } else {
-        return std::make_tuple(tiles_per_gauss, isect_ids, pack_ids);
-    }
-}
+//     // optionally sort the Gaussians by isect_ids
+//     if (n_isects && sort) {
+//         torch::Tensor isect_ids_sorted = torch::empty_like(isect_ids);
+//         torch::Tensor pack_ids_sorted = torch::empty_like(pack_ids);
+//         CUB_WRAPPER(cub::DeviceRadixSort::SortPairs, isect_ids.data_ptr<int64_t>(),
+//                     isect_ids_sorted.data_ptr<int64_t>(),
+//                     pack_ids.data_ptr<int32_t>(),
+//                     pack_ids_sorted.data_ptr<int32_t>(), n_isects, 0,
+//                     32 + tile_n_bits + cam_n_bits, stream);
+//         return std::make_tuple(tiles_per_gauss, isect_ids_sorted, pack_ids_sorted);
+//     } else {
+//         return std::make_tuple(tiles_per_gauss, isect_ids, pack_ids);
+//     }
+// }
 
 /****************************************************************************
  * Rasterization (Packed)
@@ -1483,7 +1531,8 @@ isect_tiles_packed_tensor(const int32_t C,
 // #pragma unroll COLOR_DIM
 //         for (int k = 0; k < COLOR_DIM; ++k) {
 //             render_colors[pix_id * COLOR_DIM + k] =
-//                 backgrounds == nullptr ? pix_out[k] : (pix_out[k] + T * backgrounds[k]);
+//                 backgrounds == nullptr ? pix_out[k] : (pix_out[k] + T *
+//                 backgrounds[k]);
 //         }
 //         // index in bin of last gaussian in this pixel
 //         last_ids[pix_id] = cur_idx;
@@ -1538,7 +1587,8 @@ isect_tiles_packed_tensor(const int32_t C,
 
 //     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
-//     // TODO: an optimization can be done by passing the actual number of channels into
+//     // TODO: an optimization can be done by passing the actual number of channels
+//     into
 //     // the kernel functions and avoid necessary global memory writes. This requires
 //     // moving the channel padding from python to C side.
 //     switch (channels) {
@@ -1548,8 +1598,8 @@ isect_tiles_packed_tensor(const int32_t C,
 //             cindices.data_ptr<int32_t>(), (float2 *)means2d.data_ptr<float>(),
 //             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
 //             opacities.data_ptr<float>(),
-//             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
-//             image_width, image_height, tile_size, tile_width, tile_height,
+//             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() :
+//             nullptr, image_width, image_height, tile_size, tile_width, tile_height,
 //             tile_offsets.data_ptr<int32_t>(), pack_ids.data_ptr<int32_t>(),
 //             renders.data_ptr<float>(), alphas.data_ptr<float>(),
 //             last_ids.data_ptr<int32_t>());
@@ -1560,8 +1610,8 @@ isect_tiles_packed_tensor(const int32_t C,
 //             cindices.data_ptr<int32_t>(), (float2 *)means2d.data_ptr<float>(),
 //             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
 //             opacities.data_ptr<float>(),
-//             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
-//             image_width, image_height, tile_size, tile_width, tile_height,
+//             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() :
+//             nullptr, image_width, image_height, tile_size, tile_width, tile_height,
 //             tile_offsets.data_ptr<int32_t>(), pack_ids.data_ptr<int32_t>(),
 //             renders.data_ptr<float>(), alphas.data_ptr<float>(),
 //             last_ids.data_ptr<int32_t>());
@@ -1572,8 +1622,8 @@ isect_tiles_packed_tensor(const int32_t C,
 //             cindices.data_ptr<int32_t>(), (float2 *)means2d.data_ptr<float>(),
 //             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
 //             opacities.data_ptr<float>(),
-//             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
-//             image_width, image_height, tile_size, tile_width, tile_height,
+//             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() :
+//             nullptr, image_width, image_height, tile_size, tile_width, tile_height,
 //             tile_offsets.data_ptr<int32_t>(), pack_ids.data_ptr<int32_t>(),
 //             renders.data_ptr<float>(), alphas.data_ptr<float>(),
 //             last_ids.data_ptr<int32_t>());
@@ -1584,8 +1634,8 @@ isect_tiles_packed_tensor(const int32_t C,
 //             cindices.data_ptr<int32_t>(), (float2 *)means2d.data_ptr<float>(),
 //             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
 //             opacities.data_ptr<float>(),
-//             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
-//             image_width, image_height, tile_size, tile_width, tile_height,
+//             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() :
+//             nullptr, image_width, image_height, tile_size, tile_width, tile_height,
 //             tile_offsets.data_ptr<int32_t>(), pack_ids.data_ptr<int32_t>(),
 //             renders.data_ptr<float>(), alphas.data_ptr<float>(),
 //             last_ids.data_ptr<int32_t>());
@@ -1596,8 +1646,8 @@ isect_tiles_packed_tensor(const int32_t C,
 //             cindices.data_ptr<int32_t>(), (float2 *)means2d.data_ptr<float>(),
 //             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
 //             opacities.data_ptr<float>(),
-//             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
-//             image_width, image_height, tile_size, tile_width, tile_height,
+//             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() :
+//             nullptr, image_width, image_height, tile_size, tile_width, tile_height,
 //             tile_offsets.data_ptr<int32_t>(), pack_ids.data_ptr<int32_t>(),
 //             renders.data_ptr<float>(), alphas.data_ptr<float>(),
 //             last_ids.data_ptr<int32_t>());
@@ -1608,8 +1658,8 @@ isect_tiles_packed_tensor(const int32_t C,
 //             cindices.data_ptr<int32_t>(), (float2 *)means2d.data_ptr<float>(),
 //             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
 //             opacities.data_ptr<float>(),
-//             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
-//             image_width, image_height, tile_size, tile_width, tile_height,
+//             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() :
+//             nullptr, image_width, image_height, tile_size, tile_width, tile_height,
 //             tile_offsets.data_ptr<int32_t>(), pack_ids.data_ptr<int32_t>(),
 //             renders.data_ptr<float>(), alphas.data_ptr<float>(),
 //             last_ids.data_ptr<int32_t>());
@@ -1620,8 +1670,8 @@ isect_tiles_packed_tensor(const int32_t C,
 //             cindices.data_ptr<int32_t>(), (float2 *)means2d.data_ptr<float>(),
 //             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
 //             opacities.data_ptr<float>(),
-//             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
-//             image_width, image_height, tile_size, tile_width, tile_height,
+//             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() :
+//             nullptr, image_width, image_height, tile_size, tile_width, tile_height,
 //             tile_offsets.data_ptr<int32_t>(), pack_ids.data_ptr<int32_t>(),
 //             renders.data_ptr<float>(), alphas.data_ptr<float>(),
 //             last_ids.data_ptr<int32_t>());
@@ -1632,8 +1682,8 @@ isect_tiles_packed_tensor(const int32_t C,
 //             cindices.data_ptr<int32_t>(), (float2 *)means2d.data_ptr<float>(),
 //             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
 //             opacities.data_ptr<float>(),
-//             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
-//             image_width, image_height, tile_size, tile_width, tile_height,
+//             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() :
+//             nullptr, image_width, image_height, tile_size, tile_width, tile_height,
 //             tile_offsets.data_ptr<int32_t>(), pack_ids.data_ptr<int32_t>(),
 //             renders.data_ptr<float>(), alphas.data_ptr<float>(),
 //             last_ids.data_ptr<int32_t>());
@@ -1644,8 +1694,8 @@ isect_tiles_packed_tensor(const int32_t C,
 //             cindices.data_ptr<int32_t>(), (float2 *)means2d.data_ptr<float>(),
 //             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
 //             opacities.data_ptr<float>(),
-//             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
-//             image_width, image_height, tile_size, tile_width, tile_height,
+//             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() :
+//             nullptr, image_width, image_height, tile_size, tile_width, tile_height,
 //             tile_offsets.data_ptr<int32_t>(), pack_ids.data_ptr<int32_t>(),
 //             renders.data_ptr<float>(), alphas.data_ptr<float>(),
 //             last_ids.data_ptr<int32_t>());
@@ -1656,8 +1706,8 @@ isect_tiles_packed_tensor(const int32_t C,
 //             cindices.data_ptr<int32_t>(), (float2 *)means2d.data_ptr<float>(),
 //             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
 //             opacities.data_ptr<float>(),
-//             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
-//             image_width, image_height, tile_size, tile_width, tile_height,
+//             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() :
+//             nullptr, image_width, image_height, tile_size, tile_width, tile_height,
 //             tile_offsets.data_ptr<int32_t>(), pack_ids.data_ptr<int32_t>(),
 //             renders.data_ptr<float>(), alphas.data_ptr<float>(),
 //             last_ids.data_ptr<int32_t>());
@@ -1668,8 +1718,8 @@ isect_tiles_packed_tensor(const int32_t C,
 //             cindices.data_ptr<int32_t>(), (float2 *)means2d.data_ptr<float>(),
 //             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
 //             opacities.data_ptr<float>(),
-//             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
-//             image_width, image_height, tile_size, tile_width, tile_height,
+//             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() :
+//             nullptr, image_width, image_height, tile_size, tile_width, tile_height,
 //             tile_offsets.data_ptr<int32_t>(), pack_ids.data_ptr<int32_t>(),
 //             renders.data_ptr<float>(), alphas.data_ptr<float>(),
 //             last_ids.data_ptr<int32_t>());
@@ -1814,8 +1864,8 @@ isect_tiles_packed_tensor(const int32_t C,
 //                 opac = xy_opac.z;
 //                 delta = {xy_opac.x - px, xy_opac.y - py};
 //                 float sigma =
-//                     0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
-//                     conic.y * delta.x * delta.y;
+//                     0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y *
+//                     delta.y) + conic.y * delta.x * delta.y;
 //                 vis = __expf(-sigma);
 //                 alpha = min(0.999f, opac * vis);
 //                 if (sigma < 0.f || alpha < 1.f / 255.f) {
@@ -2070,7 +2120,8 @@ isect_tiles_packed_tensor(const int32_t C,
 //                 v_opacities.data_ptr<float>());
 //             break;
 //         case 16:
-//             rasterize_to_pixels_packed_bwd_kernel<16><<<blocks, threads, 0, stream>>>(
+//             rasterize_to_pixels_packed_bwd_kernel<16><<<blocks, threads, 0,
+//             stream>>>(
 //                 C, n_isects, nnz, rindices.data_ptr<int32_t>(),
 //                 cindices.data_ptr<int32_t>(), (float2 *)means2d.data_ptr<float>(),
 //                 (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
@@ -2088,7 +2139,8 @@ isect_tiles_packed_tensor(const int32_t C,
 //                 v_opacities.data_ptr<float>());
 //             break;
 //         case 32:
-//             rasterize_to_pixels_packed_bwd_kernel<32><<<blocks, threads, 0, stream>>>(
+//             rasterize_to_pixels_packed_bwd_kernel<32><<<blocks, threads, 0,
+//             stream>>>(
 //                 C, n_isects, nnz, rindices.data_ptr<int32_t>(),
 //                 cindices.data_ptr<int32_t>(), (float2 *)means2d.data_ptr<float>(),
 //                 (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
@@ -2110,5 +2162,6 @@ isect_tiles_packed_tensor(const int32_t C,
 //         }
 //     }
 
-//     return std::make_tuple(v_means2d_abs, v_means2d, v_conics, v_colors, v_opacities);
+//     return std::make_tuple(v_means2d_abs, v_means2d, v_conics, v_colors,
+//     v_opacities);
 // }

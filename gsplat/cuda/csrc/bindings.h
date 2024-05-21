@@ -101,11 +101,13 @@ projection_bwd_tensor(
     const bool viewmats_requires_grad);
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-isect_tiles_tensor(const torch::Tensor &means2d, // [C, N, 2]
-                   const torch::Tensor &radii,   // [C, N]
-                   const torch::Tensor &depths,  // [C, N]
-                   const int tile_size, const int tile_width, const int tile_height,
-                   const bool sort);
+isect_tiles_tensor(const torch::Tensor &means2d,                // [C, N, 2] or [nnz, 2]
+                   const torch::Tensor &radii,                  // [C, N] or [nnz]
+                   const torch::Tensor &depths,                 // [C, N] or [nnz]
+                   const at::optional<torch::Tensor> &rindices, // [nnz]
+                   const at::optional<torch::Tensor> &cindices, // [nnz]
+                   const int C, const int tile_size, const int tile_width,
+                   const int tile_height, const bool sort);
 
 torch::Tensor isect_offset_encode_tensor(const torch::Tensor &isect_ids, // [n_isects]
                                          const int C, const int tile_width,
@@ -202,15 +204,15 @@ projection_packed_bwd_tensor(
     const at::optional<torch::Tensor> &v_compensations, // [nnz] optional
     const bool viewmats_requires_grad, const bool sparse_grad);
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-isect_tiles_packed_tensor(const int32_t C,
-                          const torch::Tensor &rindices, // [nnz]
-                          const torch::Tensor &cindices, // [nnz]
-                          const torch::Tensor &means2d,  // [nnz, 2]
-                          const torch::Tensor &radii,    // [nnz]
-                          const torch::Tensor &depths,   // [nnz]
-                          const int tile_size, const int tile_width,
-                          const int tile_height, const bool sort);
+// std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+// isect_tiles_packed_tensor(const int32_t C,
+//                           const torch::Tensor &rindices, // [nnz]
+//                           const torch::Tensor &cindices, // [nnz]
+//                           const torch::Tensor &means2d,  // [nnz, 2]
+//                           const torch::Tensor &radii,    // [nnz]
+//                           const torch::Tensor &depths,   // [nnz]
+//                           const int tile_size, const int tile_width,
+//                           const int tile_height, const bool sort);
 
 // std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 // rasterize_to_pixels_packed_fwd_tensor(

@@ -296,34 +296,42 @@ def isect_tiles(
         assert rindices is not None, "rindices is required if packed is True"
         assert cindices is not None, "cindices is required if packed is True"
         assert n_cameras is not None, "n_cameras is required if packed is True"
-        tiles_per_gauss, isect_ids, gauss_ids = _make_lazy_cuda_func(
-            "isect_tiles_packed"
-        )(
-            n_cameras,
-            rindices.contiguous(),
-            cindices.contiguous(),
-            means2d.contiguous(),
-            radii.contiguous(),
-            depths.contiguous(),
-            tile_size,
-            tile_width,
-            tile_height,
-            sort,
-        )
+        rindices = rindices.contiguous()
+        cindices = cindices.contiguous()
+        C = n_cameras
+        
+        # tiles_per_gauss, isect_ids, gauss_ids = _make_lazy_cuda_func(
+        #     "isect_tiles_packed"
+        # )(
+        #     n_cameras,
+        #     rindices.contiguous(),
+        #     cindices.contiguous(),
+        #     means2d.contiguous(),
+        #     radii.contiguous(),
+        #     depths.contiguous(),
+        #     tile_size,
+        #     tile_width,
+        #     tile_height,
+        #     sort,
+        # )
     else:
         C, N, _ = means2d.shape
         assert means2d.shape == (C, N, 2), means2d.size()
         assert radii.shape == (C, N), radii.size()
         assert depths.shape == (C, N), depths.size()
-        tiles_per_gauss, isect_ids, gauss_ids = _make_lazy_cuda_func("isect_tiles")(
-            means2d.contiguous(),
-            radii.contiguous(),
-            depths.contiguous(),
-            tile_size,
-            tile_width,
-            tile_height,
-            sort,
-        )
+    
+    tiles_per_gauss, isect_ids, gauss_ids = _make_lazy_cuda_func("isect_tiles")(
+        means2d.contiguous(),
+        radii.contiguous(),
+        depths.contiguous(),
+        rindices,
+        cindices,
+        C,
+        tile_size,
+        tile_width,
+        tile_height,
+        sort,
+    )
     return tiles_per_gauss, isect_ids, gauss_ids
 
 
