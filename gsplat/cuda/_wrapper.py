@@ -359,8 +359,6 @@ def rasterize_to_pixels(
     gauss_ids: Tensor,  # [n_isects]
     backgrounds: Optional[Tensor] = None,  # [C, channels]
     packed: bool = False,
-    rindices: Optional[Tensor] = None,
-    cindices: Optional[Tensor] = None,
     compute_means2d_absgrad: bool = False,
 ) -> Tuple[Tensor, Tensor]:
     C = isect_offsets.size(0)
@@ -371,8 +369,6 @@ def rasterize_to_pixels(
         assert conics.shape == (nnz, 3), conics.shape
         assert colors.shape[0] == nnz, colors.shape
         assert opacities.shape == (nnz,), opacities.shape
-        assert rindices is not None, "rindices is required if packed is True"
-        assert cindices is not None, "cindices is required if packed is True"
     else:
         N = means2d.size(1)
         assert means2d.shape == (C, N, 2), means2d.shape
@@ -418,36 +414,20 @@ def rasterize_to_pixels(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-    if packed:
-        render_colors, render_alphas = _RasterizeToPixelsPacked.apply(
-            rindices.contiguous(),
-            cindices.contiguous(),
-            means2d.contiguous(),
-            conics.contiguous(),
-            colors.contiguous(),
-            opacities.contiguous(),
-            backgrounds,
-            image_width,
-            image_height,
-            tile_size,
-            isect_offsets.contiguous(),
-            gauss_ids.contiguous(),  # this is actually the pack_ids
-            compute_means2d_absgrad,
-        )
-    else:
-        render_colors, render_alphas = _RasterizeToPixels.apply(
-            means2d.contiguous(),
-            conics.contiguous(),
-            colors.contiguous(),
-            opacities.contiguous(),
-            backgrounds,
-            image_width,
-            image_height,
-            tile_size,
-            isect_offsets.contiguous(),
-            gauss_ids.contiguous(),
-            compute_means2d_absgrad,
-        )
+    render_colors, render_alphas = _RasterizeToPixels.apply(
+        means2d.contiguous(),
+        conics.contiguous(),
+        colors.contiguous(),
+        opacities.contiguous(),
+        backgrounds,
+        image_width,
+        image_height,
+        tile_size,
+        isect_offsets.contiguous(),
+        gauss_ids.contiguous(),
+        compute_means2d_absgrad,
+    )
+
     if padded_channels > 0:
         render_colors = render_colors[..., :-padded_channels]
     return render_colors, render_alphas
@@ -1027,137 +1007,135 @@ class _ProjectionPacked(torch.autograd.Function):
         )
 
 
-class _RasterizeToPixelsPacked(torch.autograd.Function):
-    """Rasterize gaussians packed"""
+# class _RasterizeToPixelsPacked(torch.autograd.Function):
+#     """Rasterize gaussians packed"""
 
-    @staticmethod
-    def forward(
-        ctx,
-        rindices: Tensor,  # [nnz]
-        cindices: Tensor,  # [nnz]
-        means2d: Tensor,  # [nnz, 2]
-        conics: Tensor,  # [nnz, 3]
-        colors: Tensor,  # [nnz, 3]
-        opacities: Tensor,  # [nnz]
-        backgrounds: Tensor,  # [C, 3] Optional
-        width: int,
-        height: int,
-        tile_size: int,
-        isect_offsets: Tensor,  # [C, tile_height, tile_width]
-        pack_ids: Tensor,  # [n_isects]
-        compute_means2d_absgrad: bool,
-    ) -> Tuple[Tensor, Tensor]:
-        render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
-            "rasterize_to_pixels_fwd"
-        )(
-            means2d,
-            conics,
-            colors,
-            opacities,
-            backgrounds,
-            width,
-            height,
-            tile_size,
-            isect_offsets,
-            pack_ids,
-        )
+#     @staticmethod
+#     def forward(
+#         ctx,
+#         rindices: Tensor,  # [nnz]
+#         cindices: Tensor,  # [nnz]
+#         means2d: Tensor,  # [nnz, 2]
+#         conics: Tensor,  # [nnz, 3]
+#         colors: Tensor,  # [nnz, 3]
+#         opacities: Tensor,  # [nnz]
+#         backgrounds: Tensor,  # [C, 3] Optional
+#         width: int,
+#         height: int,
+#         tile_size: int,
+#         isect_offsets: Tensor,  # [C, tile_height, tile_width]
+#         pack_ids: Tensor,  # [n_isects]
+#         compute_means2d_absgrad: bool,
+#     ) -> Tuple[Tensor, Tensor]:
+#         render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
+#             "rasterize_to_pixels_fwd"
+#         )(
+#             means2d,
+#             conics,
+#             colors,
+#             opacities,
+#             backgrounds,
+#             width,
+#             height,
+#             tile_size,
+#             isect_offsets,
+#             pack_ids,
+#         )
 
-        ctx.save_for_backward(
-            rindices,
-            cindices,
-            means2d,
-            conics,
-            colors,
-            opacities,
-            backgrounds,
-            isect_offsets,
-            pack_ids,
-            render_alphas,
-            last_ids,
-        )
-        ctx.width = width
-        ctx.height = height
-        ctx.tile_size = tile_size
-        ctx.compute_means2d_absgrad = compute_means2d_absgrad
+#         ctx.save_for_backward(
+#             rindices,
+#             cindices,
+#             means2d,
+#             conics,
+#             colors,
+#             opacities,
+#             backgrounds,
+#             isect_offsets,
+#             pack_ids,
+#             render_alphas,
+#             last_ids,
+#         )
+#         ctx.width = width
+#         ctx.height = height
+#         ctx.tile_size = tile_size
+#         ctx.compute_means2d_absgrad = compute_means2d_absgrad
 
-        # double to float
-        render_alphas = render_alphas.float()
-        return render_colors, render_alphas
+#         # double to float
+#         render_alphas = render_alphas.float()
+#         return render_colors, render_alphas
 
-    @staticmethod
-    def backward(
-        ctx,
-        v_render_colors: Tensor,  # [C, H, W, 3]
-        v_render_alphas: Tensor,  # [C, H, W, 1]
-    ):
-        (
-            rindices,
-            cindices,
-            means2d,
-            conics,
-            colors,
-            opacities,
-            backgrounds,
-            isect_offsets,
-            pack_ids,
-            render_alphas,
-            last_ids,
-        ) = ctx.saved_tensors
-        width = ctx.width
-        height = ctx.height
-        tile_size = ctx.tile_size
-        compute_means2d_absgrad = ctx.compute_means2d_absgrad
+#     @staticmethod
+#     def backward(
+#         ctx,
+#         v_render_colors: Tensor,  # [C, H, W, 3]
+#         v_render_alphas: Tensor,  # [C, H, W, 1]
+#     ):
+#         (
+#             rindices,
+#             cindices,
+#             means2d,
+#             conics,
+#             colors,
+#             opacities,
+#             backgrounds,
+#             isect_offsets,
+#             pack_ids,
+#             render_alphas,
+#             last_ids,
+#         ) = ctx.saved_tensors
+#         width = ctx.width
+#         height = ctx.height
+#         tile_size = ctx.tile_size
+#         compute_means2d_absgrad = ctx.compute_means2d_absgrad
 
-        (
-            v_means2d_abs,
-            v_means2d,
-            v_conics,
-            v_colors,
-            v_opacities,
-        ) = _make_lazy_cuda_func("rasterize_to_pixels_packed_bwd")(
-            rindices,
-            cindices,
-            means2d,
-            conics,
-            colors,
-            opacities,
-            backgrounds,
-            width,
-            height,
-            tile_size,
-            isect_offsets,
-            pack_ids,
-            render_alphas,
-            last_ids,
-            v_render_colors.contiguous(),
-            v_render_alphas.contiguous(),
-            compute_means2d_absgrad,
-        )
-        if compute_means2d_absgrad:
-            means2d.absgrad = v_means2d_abs
+#         (
+#             v_means2d_abs,
+#             v_means2d,
+#             v_conics,
+#             v_colors,
+#             v_opacities,
+#         ) = _make_lazy_cuda_func("rasterize_to_pixels_bwd")(
+#             means2d,
+#             conics,
+#             colors,
+#             opacities,
+#             backgrounds,
+#             width,
+#             height,
+#             tile_size,
+#             isect_offsets,
+#             pack_ids,
+#             render_alphas,
+#             last_ids,
+#             v_render_colors.contiguous(),
+#             v_render_alphas.contiguous(),
+#             compute_means2d_absgrad,
+#         )
+#         if compute_means2d_absgrad:
+#             means2d.absgrad = v_means2d_abs
 
-        if ctx.needs_input_grad[6]:
-            v_backgrounds = (v_render_colors * (1.0 - render_alphas).float()).sum(
-                dim=(1, 2)
-            )
-        else:
-            v_backgrounds = None
+#         if ctx.needs_input_grad[6]:
+#             v_backgrounds = (v_render_colors * (1.0 - render_alphas).float()).sum(
+#                 dim=(1, 2)
+#             )
+#         else:
+#             v_backgrounds = None
 
-        return (
-            None,
-            None,
-            v_means2d,
-            v_conics,
-            v_colors,
-            v_opacities,
-            v_backgrounds,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
+#         return (
+#             None,
+#             None,
+#             v_means2d,
+#             v_conics,
+#             v_colors,
+#             v_opacities,
+#             v_backgrounds,
+#             None,
+#             None,
+#             None,
+#             None,
+#             None,
+#             None,
+#         )
 
 
 class _SphericalHarmonics(torch.autograd.Function):

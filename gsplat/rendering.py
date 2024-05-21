@@ -180,8 +180,6 @@ def rasterization(
         gauss_ids,
         backgrounds=backgrounds,
         packed=packed,
-        rindices=rindices,
-        cindices=cindices,
         compute_means2d_absgrad=compute_means2d_absgrad,
     )
     if render_mode in ["ED", "RGB+ED"]:

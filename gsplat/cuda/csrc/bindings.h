@@ -229,29 +229,29 @@ isect_tiles_packed_tensor(const int32_t C,
 //     const torch::Tensor &pack_ids      // [n_isects]
 // );
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-rasterize_to_pixels_packed_bwd_tensor(
-    const torch::Tensor &rindices, // [nnz]
-    const torch::Tensor &cindices, // [nnz]
-    // Gaussian parameters
-    const torch::Tensor &means2d,                   // [nnz, 2]
-    const torch::Tensor &conics,                    // [nnz, 3]
-    const torch::Tensor &colors,                    // [nnz, 3]
-    const torch::Tensor &opacities,                 // [N]
-    const at::optional<torch::Tensor> &backgrounds, // [C, 3]
-    // image size
-    const int image_width, const int image_height, const int tile_size,
-    // intersections
-    const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
-    const torch::Tensor &pack_ids,     // [n_isects]
-    // forward outputs
-    const torch::Tensor &render_alphas, // [C, image_height, image_width, 1]
-    const torch::Tensor &last_ids,      // [C, image_height, image_width]
-    // gradients of outputs
-    const torch::Tensor &v_render_colors, // [C, image_height, image_width, 3]
-    const torch::Tensor &v_render_alphas, // [C, image_height, image_width, 1]
-    // options
-    const bool compute_means2d_absgrad);
+// std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+// rasterize_to_pixels_packed_bwd_tensor(
+//     const torch::Tensor &rindices, // [nnz]
+//     const torch::Tensor &cindices, // [nnz]
+//     // Gaussian parameters
+//     const torch::Tensor &means2d,                   // [nnz, 2]
+//     const torch::Tensor &conics,                    // [nnz, 3]
+//     const torch::Tensor &colors,                    // [nnz, 3]
+//     const torch::Tensor &opacities,                 // [N]
+//     const at::optional<torch::Tensor> &backgrounds, // [C, 3]
+//     // image size
+//     const int image_width, const int image_height, const int tile_size,
+//     // intersections
+//     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
+//     const torch::Tensor &pack_ids,     // [n_isects]
+//     // forward outputs
+//     const torch::Tensor &render_alphas, // [C, image_height, image_width, 1]
+//     const torch::Tensor &last_ids,      // [C, image_height, image_width]
+//     // gradients of outputs
+//     const torch::Tensor &v_render_colors, // [C, image_height, image_width, 3]
+//     const torch::Tensor &v_render_alphas, // [C, image_height, image_width, 1]
+//     // options
+//     const bool compute_means2d_absgrad);
 
 torch::Tensor compute_sh_fwd_tensor(const unsigned degrees_to_use,
                                     torch::Tensor &dirs,              // [..., 3]
