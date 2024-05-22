@@ -283,6 +283,7 @@ class Runner:
         trainloader_iter = iter(trainloader)
 
         # Training loop.
+        tic = time.time()
         pbar = tqdm.tqdm(range(init_step, max_steps))
         for step in pbar:
             while self.server.training_state == "paused":
@@ -413,12 +414,23 @@ class Runner:
 
             # eval the full set
             if step in [i - 1 for i in args.eval_steps]:
-                mem = torch.cuda.max_memory_allocated() / 1024**3
-                print(f"Step {step}: Memory: {mem:.2f}GB")
                 self.eval(step)
                 self.render_traj()
-                # save ckpt
-                torch.save(self.splats.state_dict(), f"{self.ckpt_dir}/ckpt_{step}.pt")
+
+            if step in [i - 1 for i in args.save_steps]:
+                mem = torch.cuda.max_memory_allocated() / 1024**3
+                toc = time.time()
+                stats = {
+                    "mem": mem,
+                    "ellipse_time": toc - tic,
+                    "num_GS": len(self.splats["means3d"]),
+                }
+                with open(f"{self.stats_dir}/train_step{step:04d}.json", "w") as f:
+                    json.dump(stats, f)
+                torch.save({
+                    "step": step,
+                    "splats": self.splats.state_dict(),
+                }, f"{self.ckpt_dir}/ckpt_{step}.pt")
 
             view_lock.release()
 
@@ -640,7 +652,7 @@ class Runner:
             json.dump(stats, f)
 
     @torch.no_grad()
-    def render_traj(self):
+    def render_traj(self, step: int):
         """Entry for trajectory rendering."""
         print("Running trajectory rendering...")
         args = self.args
@@ -687,11 +699,11 @@ class Runner:
         # save to video
         video_dir = f"{args.result_dir}/videos/"
         os.makedirs(video_dir, exist_ok=True)
-        writer = imageio.get_writer(f"{video_dir}/traj.mp4", fps=30)
+        writer = imageio.get_writer(f"{video_dir}/traj_{step}.mp4", fps=30)
         for canvas in canvas_all:
             writer.append_data(canvas)
         writer.close()
-        print(f"Video saved to {video_dir}/traj.mp4")
+        print(f"Video saved to {video_dir}/traj_{step}.mp4")
 
     @torch.no_grad()
     def _viewer_render_fn(self, camera_state: CameraState, img_wh: Tuple[int, int]):
@@ -758,6 +770,13 @@ if __name__ == "__main__":
         nargs="+",
         default=[7_000, 30_000],
         help="Steps to evaluate the model",
+    )
+    parser.add_argument(
+        "--save_steps",
+        type=int,
+        nargs="+",
+        default=[7_000, 30_000],
+        help="Steps to save the model",
     )
     parser.add_argument(
         "--sh_degree", type=int, default=3, help="Degree of spherical harmonics"
@@ -851,17 +870,25 @@ if __name__ == "__main__":
         action="store_true",
         help="Anti-aliasing in rasterization",
     )
+    parser.add_argument(
+        "--exit_once_done",
+        action="store_true",
+        help="Do not wait for the viewer to exit",
+    )
     args = parser.parse_args()
 
     runner = Runner(args)
 
     if args.ckpt is not None:
+        # run eval only
         ckpt = torch.load(args.ckpt, map_location=runner.device)
         for k in runner.splats.keys():
-            runner.splats[k].data = ckpt[k]
-        runner.render_traj()
+            runner.splats[k].data = ckpt["splats"][k]
+        runner.eval(step=ckpt["step"])
+        runner.render_traj(step=ckpt["step"])
     else:
         runner.train()
 
-    print("Viewer running... Ctrl+C to exit.")
-    time.sleep(1000000)
+    if not args.exit_once_done:
+        print("Viewer running... Ctrl+C to exit.")
+        time.sleep(1000000)

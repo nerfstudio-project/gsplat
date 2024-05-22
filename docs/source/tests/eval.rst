@@ -1,7 +1,62 @@
 Evaluation
 ===================================
 
-We evaluate our implementation of Gaussian Splatting (`Splatfacto <https://github.com/nerfstudio-project/nerfstudio/tree/1d070f5625ab42d0a0dff1ad4c6cfb655aab6d3d>`_) on the Mip-NeRF 360 dataset, benchmarking it against the original `Inria <https://github.com/graphdeco-inria/gaussian-splatting/tree/2eee0e26d2d5fd00ec462df47752223952f6bf4e>`_ method. We evaluate all methods with the same resolution (2x downscale) and COLMAP params/undistortion, and we report results at 7,000 and 30,000 steps. All evaluations were executed on an NVIDIA RTX 4090 GPU.
++------------+---------+--------+---------+--------+---------+-------+-------+
+| PSNR       | Bicycle | Bonsai | Counter | Garden | Kitchen |  Room | Stump |
++============+=========+========+=========+========+=========+=======+=======+
+| gsplat-30k |   25.22 |  32.30 |   29.32 |  27.32 |   31.93 | 31.86 | 26.53 |
++------------+---------+--------+---------+--------+---------+-------+-------+
+| gsplat-7k  |   23.71 |  29.93 |   27.46 |  26.30 |   29.45 | 29.70 | 25.62 |
++------------+---------+--------+---------+--------+---------+-------+-------+
+
++------------+---------+--------+---------+--------+---------+-------+-------+
+| SSIM       | Bicycle | Bonsai | Counter | Garden | Kitchen |  Room | Stump |
++============+=========+========+=========+========+=========+=======+=======+
+| gsplat-30k | 0.764   | 0.953  | 0.917   | 0.865  | 0.945   | 0.939 | 0.768 |
++------------+---------+--------+---------+--------+---------+-------+-------+
+| gsplat-7k  | 0.668   | 0.934  | 0.888   | 0.833  | 0.923   | 0.916 | 0.720 |
++------------+---------+--------+---------+--------+---------+-------+-------+
+
++------------+---------+--------+---------+--------+---------+-------+-------+
+| LPIPS      | Bicycle | Bonsai | Counter | Garden | Kitchen |  Room | Stump |
++============+=========+========+=========+========+=========+=======+=======+
+| gsplat-30k | 0.172   | 0.055  | 0.087   | 0.075  | 0.044   | 0.074 | 0.153 |
++------------+---------+--------+---------+--------+---------+-------+-------+
+| gsplat-7k  | 0.324   | 0.080  | 0.127   | 0.123  | 0.066   | 0.110 | 0.253 |
++------------+---------+--------+---------+--------+---------+-------+-------+
+
++-----------------+---------+--------+---------+--------+---------+-------+-------+
+| Train Mem (GB)  | Bicycle | Bonsai | Counter | Garden | Kitchen |  Room | Stump |
++=================+=========+========+=========+========+=========+=======+=======+
+| gsplat-30k      |   10.58 |   2.25 |    2.10 |   9.88 |    3.21 |  2.70 |  8.10 |
++-----------------+---------+--------+---------+--------+---------+-------+-------+
+| gsplat-7k       |    6.10 |   2.18 |    1.87 |   7.57 |    2.86 |  2.12 |  6.25 |
++-----------------+---------+--------+---------+--------+---------+-------+-------+
+
++-----------------+---------+--------+---------+--------+---------+-------+-------+
+| Train Time (s)  | Bicycle | Bonsai | Counter | Garden | Kitchen |  Room | Stump |
++=================+=========+========+=========+========+=========+=======+=======+
+| gsplat-30k      |   3995  |   811  |    886  |   3013 |    1253 |  946  |  2299 |
++-----------------+---------+--------+---------+--------+---------+-------+-------+
+| gsplat-7k       |    314  |   167  |    160  |    415 |    214  |  156  |  304  |
++-----------------+---------+--------+---------+--------+---------+-------+-------+
+
++-----------------+---------+--------+---------+--------+---------+-------+-------+
+| Number of GSs   | Bicycle | Bonsai | Counter | Garden | Kitchen |  Room | Stump |
++=================+=========+========+=========+========+=========+=======+=======+
+| gsplat-30k      |   6.26M |  1.23M |   1.17M |  5.84M |   1.86M | 1.59M | 4.81M |
++-----------------+---------+--------+---------+--------+---------+-------+-------+
+| gsplat-7k       |   3.62M |  1.18M |   1.00M |  4.48M |   1.65M | 1.16M | 3.71M |
++-----------------+---------+--------+---------+--------+---------+-------+-------+
+
+Note: Evaluations are conducted on a NVIDIA TITAN RTX GPU.
+
+
+
+We evaluate our implementation of Gaussian Splatting (`Splatfacto <https://github.com/nerfstudio-project/nerfstudio/tree/1d070f5625ab42d0a0dff1ad4c6cfb655aab6d3d>`_) 
+on the Mip-NeRF 360 dataset, benchmarking it against the original `Inria <https://github.com/graphdeco-inria/gaussian-splatting/tree/2eee0e26d2d5fd00ec462df47752223952f6bf4e>`_ method. 
+We evaluate all methods with the same resolution (2x downscale) and COLMAP params/undistortion, and we report results at 7,000 and 30,000 steps. All evaluations were executed on an NVIDIA RTX 4090 GPU.
+
 
 .. list-table:: **Time**
    :widths: 10 10 10 10 10 10 10 10 10 10
