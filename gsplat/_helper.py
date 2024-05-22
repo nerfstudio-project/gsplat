@@ -74,8 +74,10 @@ def rasterization_legacy_wrapper(
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Wrapper for old version gsplat.
 
-    Note: This function exists for comparision purpose only. So we skip collecting
-    the intermidiate variables, and only return an empty dict.
+    .. warning::
+        This function exists for comparision purpose only. So we skip collecting
+        the intermidiate variables, and only return an empty dict.
+
     """
     from gsplat.cuda_legacy._wrapper import (
         project_gaussians,
@@ -161,14 +163,17 @@ def rasterization_inria_wrapper(
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Wrapper for Inria's rasterization backend.
 
-    Note: This function exists for comparision purpose only. Only rendered image is
-    returned. Also, Inria's implementation will apply a
-    `torch.clamp(colors + 0.5, min=0.0)` after spherical harmonics calculation, which is
-    different from the behavior of gsplat. Use with caution!
+    .. warning::
+        This function exists for comparision purpose only. Only rendered image is
+        returned. Also, Inria's implementation will apply a
+        `torch.clamp(colors + 0.5, min=0.0)` after spherical harmonics calculation, which is
+        different from the behavior of gsplat. Use with caution!
 
-    Inria's CUDA backend has its own LICENSE, so this function should be used with
-    the respect to the original LICENSE at:
-    https://github.com/graphdeco-inria/diff-gaussian-rasterization
+    .. warning::
+        Inria's CUDA backend has its own LICENSE, so this function should be used with
+        the respect to the original LICENSE at:
+        https://github.com/graphdeco-inria/diff-gaussian-rasterization
+
     """
     from diff_gaussian_rasterization import (
         GaussianRasterizationSettings,

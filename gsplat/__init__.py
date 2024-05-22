@@ -1,6 +1,7 @@
 import warnings
 
 from .rendering import rasterization
+from ._helper import rasterization_legacy_wrapper, rasterization_inria_wrapper
 from .version import __version__
 
 
@@ -97,6 +98,8 @@ def get_tile_bin_edges(*args, **kwargs):
 
 all = [
     "rasterization",
+    "rasterization_legacy_wrapper",
+    "rasterization_inria_wrapper",
     "spherical_harmonics",
     "__version__",
     # deprecated

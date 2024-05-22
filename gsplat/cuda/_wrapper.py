@@ -62,9 +62,10 @@ def quat_scale_to_covar_preci(
         triu: If True, the return matrices will be upper triangular. Default: False.
 
     Returns:
-        A tuple of:
-        - Covariance matrices. If `triu` is True the returned shape is [N, 6], otherwise [N, 3, 3].
-        - Precision matrices. If `triu` is True the returned shape is [N, 6], otherwise [N, 3, 3].
+        A tuple:
+
+        - **Covariance matrices**. If `triu` is True the returned shape is [N, 6], otherwise [N, 3, 3].
+        - **Precision matrices**. If `triu` is True the returned shape is [N, 6], otherwise [N, 3, 3].
     """
     assert quats.dim() == 2 and quats.size(1) == 4, quats.size()
     assert scales.dim() == 2 and scales.size(1) == 3, scales.size()
@@ -93,9 +94,10 @@ def persp_proj(
         height: Image height.
 
     Returns:
-        A tuple of:
-        - Projected means. [C, N, 2]
-        - Projected covariances. [C, N, 2, 2]
+        A tuple:
+
+        - **Projected means**. [C, N, 2]
+        - **Projected covariances**. [C, N, 2, 2]
     """
     C, N, _ = means.shape
     assert means.shape == (C, N, 3), means.size()
@@ -120,9 +122,10 @@ def world_to_cam(
         viewmats: Camera-to-world matrices. [C, 4, 4]
 
     Returns:
-        A tuple of:
-        - Gaussian means in camera space. [C, N, 3]
-        - Gaussian covariances in camera space. [C, N, 3, 3]
+        A tuple:
+
+        - **Gaussian means in camera space**. [C, N, 3]
+        - **Gaussian covariances in camera space**. [C, N, 3, 3]
     """
     C = viewmats.size(0)
     N = means.size(0)
@@ -173,23 +176,23 @@ def projection(
         radius_clip: The minimum radius of the projected Gaussians in pixel unit. Default: 1e10.
 
     Returns:
-        A tuple of (if packed is True):
-        - Rindices. The row indices of the projected Gaussians. Int32 tensor of shape [nnz].
-        - Cindices. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].
-        - Radii. The maximum radius of the projected Gaussians in pixel unit.
-            Int32 tensor of shape [nnz].
-        - Projected means. [nnz, 2]
-        - Depths. The z-depth of the projected Gaussians. [nnz]
-        - Conics. Inverse of the projected covariances. Return the flattend upper
-            triangle with [nnz, 3]
+        A tuple:
+        
+        If `packed` is True:
 
-        A tuple of (if packed is False):
-        - Radii. The maximum radius of the projected Gaussians in pixel unit.
-            Int32 tensor of shape [C, N].
-        - Projected means. [C, N, 2]
-        - Depths. The z-depth of the projected Gaussians. [C, N]
-        - Conics. Inverse of the projected covariances. Return the flattend upper
-            triangle with [C, N, 3]
+        - **Rindices**. The row indices of the projected Gaussians. Int32 tensor of shape [nnz].
+        - **Cindices**. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].
+        - **Radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz].
+        - **Projected means**. [nnz, 2]
+        - **Depths**. The z-depth of the projected Gaussians. [nnz]
+        - **Conics**. Inverse of the projected covariances. Return the flattend upper triangle with [nnz, 3]
+
+        If `packed` is False:
+
+        - **Radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N].
+        - **Projected means**. [C, N, 2]
+        - **Depths**. The z-depth of the projected Gaussians. [C, N]
+        - **Conics**. Inverse of the projected covariances. Return the flattend upper triangle with [C, N, 3]
     """
     C = viewmats.size(0)
     N = means.size(0)
@@ -270,23 +273,18 @@ def isect_tiles(
         tile_size: Tile size.
         tile_width: Tile width.
         tile_height: Tile height.
-        sort: If True, the returned intersections will be sorted by the intersection
-            ids. Default: True.
+        sort: If True, the returned intersections will be sorted by the intersection ids. Default: True.
         packed: If True, the input tensors are packed. Default: False.
         n_cameras: Number of cameras. Required if packed is True.
         rindices: The row indices of the projected Gaussians. Required if packed is True.
         cindices: The column indices of the projected Gaussians. Required if packed is True.
 
     Returns:
-        A tuple of:
-        - Tiles per Gaussian. The number of tiles intersected by each Gaussian.
-            Int32 [C, N] if packed is False, Int32 [nnz] if packed is True.
-        - Intersection ids. Each id is an 64-bit integer with the following
-            information: camera_id (Xc bits) | tile_id (Xt bits) | depth (32 bits).
-            Xc and Xt are the maximum number of bits required to represent the camera
-            and tile ids, respectively. Int64 [n_isects]
-        - If pack, this is the indices in the nnz tensor. Else, this is the
-            Gaussian ids. Int32 [n_isects]
+        A tuple:
+
+        - **Tiles per Gaussian**. The number of tiles intersected by each Gaussian. Int32 [C, N] if packed is False, Int32 [nnz] if packed is True.
+        - **Intersection ids**. Each id is an 64-bit integer with the following information: camera_id (Xc bits) | tile_id (Xt bits) | depth (32 bits). Xc and Xt are the maximum number of bits required to represent the camera and tile ids, respectively. Int64 [n_isects]
+        - If pack, this is the indices in the nnz tensor. Else, this is the Gaussian ids. Int32 [n_isects]
     """
     if packed:
         nnz = means2d.size(0)

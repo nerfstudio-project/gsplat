@@ -7,6 +7,11 @@ Migratite to v1.0.0 from v0.1.11
 you to migrate to `v0.1.11` from `v1.0.0` and enjoys the latest and greatest. The APIs 
 of `v0.1.11` are still available here at :doc:`python_api_legacy`. 
 
+Below we demonstrate the API changes on a couple of use cases. If you want to take a closer
+look on the detailed API changes, we provide a wrapper function 
+:func:`rasterization_legacy_wrapper` on top of the old API from `v0.1.11`, that 
+aligns with the new API :func:`rasterization` in `v1.0.0`.
+
 Basic Usage
 ------------------
 
@@ -74,7 +79,7 @@ In `v1.0.0`, the equivalent code is:
 Color as Spherical Harmonics
 ----------------------------
 
-In `v0.1.11`, use needs to explicitly converting spherical harmonics coefficients to RGB,
+In `v0.1.11`, user needs to explicitly converting spherical harmonics coefficients to RGB,
 before passing it into `rasterize_gaussians`:
 
 .. code-block:: python
