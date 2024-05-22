@@ -54,9 +54,9 @@ Links
 .. toctree::    
    :glob:
    :maxdepth: 1
-   :caption: Change Log
+   :caption: Migration
 
-   changelog/*
+   migration/*
 
 
 Citations
