@@ -51,6 +51,13 @@ Links
 
    tests/*
 
+.. toctree::    
+   :glob:
+   :maxdepth: 1
+   :caption: Change Log
+
+   changelog/*
+
 
 Citations
 -------------
