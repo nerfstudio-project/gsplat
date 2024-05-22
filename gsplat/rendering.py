@@ -37,11 +37,26 @@ def rasterization(
     compute_means2d_absgrad: bool = False,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
 ) -> Tuple[Tensor, Tensor, Dict]:
-    """Rasterize a set of Gaussians to pixels.
+    """Rasterize a set of 3D Gaussians to a batch of image planes.
+
+    .. note::
+        This function supports rendering a batch of cameras at once, which is much faster
+        than looping over cameras one by one. However be aware that
+        rendering in batch would require more GPU memory than looped rendering.
+
+    .. note::
+        This function supports rendering N-D features. If `sh_degree` is None, 
+        the `colors` is expected to be with shape [N, D], in which D is the channel
+        of the features to be rendered, up to 32 at the moment. On the other hand, if 
+        `sh_degree` is set, the `colors` is expected to be SH coefficients with
+        shape [N, K, 3], where K is the number of bands. 
+    
+    .. warning::
+        This function is currently not differentiable w.r.t. the camera intrinsics `Ks`. 
 
     Args:
         means: The 3D centers of the Gaussians. [N, 3]
-        quats: The normalized quaternions of the Gaussians. [N, 4]
+        quats: The quaternions of the Gaussians. It's not required to be normalized. [N, 4]
         scales: The scales of the Gaussians. [N, 3]
         opacities: The opacities of the Gaussians. [N]
         colors: The colors of the Gaussians. [N, D] or [N, K, 3] for SH coefficients.
@@ -52,7 +67,8 @@ def rasterization(
         near_plane: The near plane for clipping. Default is 0.01.
         far_plane: The far plane for clipping. Default is 1e10.
         radius_clip: Gaussians with 2D radius smaller or equal than this value will be
-            skipped. Default is 0.0.
+            skipped. This is extremely helpful for speeding up large scale scenes. 
+            Default is 0.0.
         eps2d: An epsilon added to the egienvalues of projected 2D covariance matrices.
             This will prevents the projected GS to be too small. For example eps2d=0.3
             leads to minimal 3 pixel unit. Default is 0.3.
@@ -62,18 +78,30 @@ def rasterization(
         packed: Whether to use packed mode which is more memory efficient but might or
             might not be as fast. Default is True.
         tile_size: The size of the tiles for rasterization. Default is 16.
-            (Note: other values not tested)
-        backgrounds: The background colors. [C, 3]. Default is None.
+            (Note: other values are not tested)
+        backgrounds: The background colors. [C, D]. Default is None.
         render_mode: The rendering mode. Supported modes are "RGB", "D", "ED", "RGB+D",
-            and "RGB+ED". "RGB" renders the RGB image, "D" renders the depth image, and
-            "ED" renders the expected depth image. Default is "RGB".
+            and "RGB+ED". "RGB" renders the colored image, "D" renders the accumulated depth, and
+            "ED" renders the expected depth. Default is "RGB".
+        sparse_grad: If true, the gradients for {means, quats, scales} will be stored in
+            a COO sparse layout. This can be helpful on saving memory. Default is False.
+        compute_means2d_absgrad: If true, the absolute gradients of the projected 2D means
+            will be computed during the backward pass, which could be accessed by 
+            `meta["means2d"].absgrad`. Default is False.
+        rasterize_mode: The rasterization mode. Supported modes are "classic" and
+            "antialiased". Default is "classic".
 
     Returns:
-        A tuple of:
-        **render_colors**: The rendered colors. [C, width, height, X]. X depends on the
-            `render_mode`.
+        A tuple:
+
+        **render_colors**: The rendered colors. [C, width, height, X]. 
+        X depends on the `render_mode` and input `colors`. If `render_mode` is "RGB",
+        X is D; if `render_mode` is "D" or "ED", X is 1; if `render_mode` is "RGB+D" or
+        "RGB+ED", X is D+1.
+        
         **render_alphas**: The rendered alphas. [C, width, height, 1].
-        **meta**: A dictionary of intermediate results.
+
+        **meta**: A dictionary of intermediate results of the rasterization.
     """
 
     N = means.shape[0]
@@ -145,6 +173,7 @@ def rasterization(
     )
     isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
 
+    # TODO: SH also suport N-D.
     # Compute the per-view colors
     colors = (
         colors[cindices.long()] if packed else colors.expand(C, *([-1] * colors.dim()))
