@@ -22,6 +22,9 @@ def spherical_harmonics(
 ) -> Tensor:
     """Computes spherical harmonics.
 
+    .. warning::
+        This function is not differentiable w.r.t `dirs`.
+
     Args:
         degrees_to_use: The degree to be used.
         dirs: Directions. [..., 3]
