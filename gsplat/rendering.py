@@ -102,6 +102,33 @@ def rasterization(
         **render_alphas**: The rendered alphas. [C, width, height, 1].
 
         **meta**: A dictionary of intermediate results of the rasterization.
+
+    Examples:
+
+    .. code-block:: python
+
+        >>> # define Gaussians
+        >>> means = torch.randn((100, 3), device=device)
+        >>> quats = torch.randn((100, 4), device=device)
+        >>> scales = torch.rand((100, 3), device=device) * 0.1
+        >>> colors = torch.rand((100, 3), device=device)
+        >>> opacities = torch.rand((100,), device=device)
+        >>> # define cameras
+        >>> viewmats = torch.eye(4, device=device)[None, :, :]
+        >>> Ks = torch.tensor([
+        >>>    [300., 0., 100.], [0., 300., 100.], [0., 0., 1.]], device=device)[None, :, :]
+        >>> width, height = 200, 200
+        >>> # render
+        >>> colors, alphas, meta = rasterization(
+        >>>    means, quats, scales, opacities, colors, viewmats, Ks, width, height
+        >>> )
+        >>> print (colors.shape, alphas.shape)
+        torch.Size([1, 200, 200, 3]) torch.Size([1, 200, 200, 1])
+        >>> print (meta.keys())
+        dict_keys(['rindices', 'cindices', 'radii', 'means2d', 'depths', 'conics', 
+        'opacities', 'tile_width', 'tile_height', 'tiles_per_gauss', 'isect_ids', 
+        'gauss_ids', 'isect_offsets', 'width', 'height', 'tile_size'])
+
     """
 
     N = means.shape[0]
