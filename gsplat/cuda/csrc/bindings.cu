@@ -257,6 +257,7 @@ project_gaussians_backward_tensor(
     const float glob_scale,
     torch::Tensor &quats,
     torch::Tensor &viewmat,
+    torch::Tensor &transMats,
     const float fx,
     const float fy,
     const float cx,
@@ -291,7 +292,7 @@ project_gaussians_backward_tensor(
     torch::Tensor v_mean3d =
         torch::zeros({num_points, 3}, means3d.options().dtype(torch::kFloat32));
     torch::Tensor v_scale =
-        torch::zeros({num_points, 3}, means3d.options().dtype(torch::kFloat32));
+        torch::zeros({num_points, 2}, means3d.options().dtype(torch::kFloat32));
     torch::Tensor v_quat =
         torch::zeros({num_points, 4}, means3d.options().dtype(torch::kFloat32));
     torch::Tensor dL_dmean2d = 
@@ -302,7 +303,7 @@ project_gaussians_backward_tensor(
         N_THREADS>>>(
         num_points,
         (float3 *)means3d.contiguous().data_ptr<float>(),
-        (float3 *)scales.contiguous().data_ptr<float>(),
+        (float2 *)scales.contiguous().data_ptr<float>(),
         glob_scale,
         (float4 *)quats.contiguous().data_ptr<float>(),
         viewmat.contiguous().data_ptr<float>(),
@@ -310,6 +311,7 @@ project_gaussians_backward_tensor(
         img_size_dim3,
         cov3d.contiguous().data_ptr<float>(),
         radii.contiguous().data_ptr<int32_t>(),
+        (float *)transMats.contiguous().data_ptr<int32_t>(),
         // (float3 *)conics.contiguous().data_ptr<float>(),
         // (float *)compensation.contiguous().data_ptr<float>(),
         // (float2 *)v_xy.contiguous().data_ptr<float>(),
@@ -325,7 +327,7 @@ project_gaussians_backward_tensor(
         // (float3 *)v_cov2d.contiguous().data_ptr<float>(),
         // v_cov3d.contiguous().data_ptr<float>(),
         (float3 *)v_mean3d.contiguous().data_ptr<float>(),
-        (float3 *)v_scale.contiguous().data_ptr<float>(),
+        (float2 *)v_scale.contiguous().data_ptr<float>(),
         (float4 *)v_quat.contiguous().data_ptr<float>(),
         (float3 *)dL_dmean2d.contiguous().data_ptr<float>()
     );
@@ -685,7 +687,7 @@ std::
     torch::Tensor v_colors =
         torch::zeros({num_points, channels}, xys.options());
     torch::Tensor v_opacity = torch::zeros({num_points, 1}, xys.options());
-    torch::Tensor v_normal = torch.zeros({num_points, 3}, xys.options());
+    torch::Tensor v_normal = torch::zeros({num_points, 3}, xys.options());
 
     rasterize_backward_kernel<<<tile_bounds, block>>>(
         tile_bounds,
@@ -693,7 +695,6 @@ std::
         gaussians_ids_sorted.contiguous().data_ptr<int>(),
         (int2 *)tile_bins.contiguous().data_ptr<int>(),
         (float2 *)xys.contiguous().data_ptr<float>(),
-        // (float3 *)conics.contiguous().data_ptr<float>(),
         transMats.contiguous().data_ptr<float>(),
         (float3 *)colors.contiguous().data_ptr<float>(),
         opacities.contiguous().data_ptr<float>(),
@@ -707,12 +708,10 @@ std::
 
         // grad output
         (float2 *)v_xy.contiguous().data_ptr<float>(),
-        (float2 *)v_xy_abs.contiguous().data_ptr<float>(),
         v_transMats.contiguous().data_ptr<float>(),
         (float3 *)v_colors.contiguous().data_ptr<float>(),
-        v_opacity.contiguous().data_ptr<float>(),
-        v_normal.contiguous().data_ptr<float>()
+        v_opacity.contiguous().data_ptr<float>()
     );
 
-    return std::make_tuple(v_xy, v_xy_abs, v_transMats, v_colors, v_opacity, v_normal);
+    return std::make_tuple(v_xy, v_xy_abs, v_transMats, v_colors, v_opacity);
 }

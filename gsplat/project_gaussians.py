@@ -144,7 +144,7 @@ class _ProjectGaussians(Function):
             radii,
             transMats
         )
-        pdb.set_trace()
+        # pdb.set_trace()
         return (xys, depths, radii, num_tiles_hit, cov3d, transMats)
 
     @staticmethod

@@ -170,14 +170,14 @@ inline __device__ glm::mat3 quat_to_rotmat(const float4 quat) {
     );
 }
 
-inline __device__ float4
+inline __device__ glm::vec4
 quat_to_rotmat_vjp(const float4 quat, const glm::mat3 v_R) {
     float w = quat.x;
     float x = quat.y;
     float y = quat.z;
     float z = quat.w;
 
-    float4 v_quat;
+    glm::vec4 v_quat;
     // v_R is COLUMN MAJOR
     // w element stored in x field
     v_quat.x =

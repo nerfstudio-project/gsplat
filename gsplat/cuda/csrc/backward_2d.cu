@@ -24,7 +24,7 @@ inline __device__ void warpSum(float& val, cg::thread_block_tile<32>& tile) {
 __global__ void project_gaussians_backward_kernel(
     const int num_points,
     const float3* __restrict__ means3d,
-    const float3* __restrict__ scales,
+    const float2* __restrict__ scales,
     const float glob_scale,
     const float4* __restrict__ quats,
     const float* __restrict__ viewmat,
@@ -35,13 +35,13 @@ __global__ void project_gaussians_backward_kernel(
     const float* __restrict__ transMats,
 
     // grad input 
-    const float* __restrict__ dL_dtransMats,
+    float* __restrict__ dL_dtransMats,
     const float* __restrict__ dL_dnormal3Ds,
 
     // grad output
     float3* __restrict__ dL_dmean3Ds,
-    float3* __restrict__ dL_dscales,
-    float3* __restrict__ dL_drots,
+    float2* __restrict__ dL_dscales,
+    float4* __restrict__ dL_drots,
     float3* __restrict__ dL_dmean2Ds
 
 ) {
@@ -60,8 +60,8 @@ __global__ void project_gaussians_backward_kernel(
     float tan_fovy = intrins.w / fy;
     
     glm::vec3 dL_dmean3D;
-    glm::vec3 dL_dscale;
-    glm::vec3 dL_drot;
+    glm::vec2 dL_dscale;
+    glm::vec4 dL_drot;
 
     build_AABB(
         num_points,
@@ -69,6 +69,7 @@ __global__ void project_gaussians_backward_kernel(
         img_size.x,
         img_size.y,
         transMats,
+
         dL_dmean2Ds,
         dL_dtransMats
     );
@@ -94,9 +95,13 @@ __global__ void project_gaussians_backward_kernel(
     );
 
     // Update 
-    dL_dmean3Ds[idx] = dL_dmean3D;
-    dL_dscales[idx] = dL_dscale;
-    dL_drots[idx] = dL_drot;
+    float3 dL_dmean3D_float = {dL_dmean3D.x, dL_dmean3D.y, dL_dmean3D.z};
+    float2 dL_dscale_float = {dL_dscale.x, dL_dscale.y};
+    float4 dL_drot_float = {dL_drot.x, dL_drot.y, dL_drot.z, dL_drot.w};
+    
+    dL_dmean3Ds[idx] = dL_dmean3D_float;
+    dL_dscales[idx] = dL_dscale_float;
+    dL_drots[idx] = dL_drot_float;
    
     // v_mean3ds[idx] = v_dmean3D;
     // v_scales[idx] = v_scale;
@@ -127,7 +132,7 @@ __global__ void rasterize_backward_kernel(
     float2* __restrict__ dL_dmean2D,
     float* __restrict__ dL_dtransMat,
     float3* __restrict__ dL_drgb,
-    float* __restrict__ dL_dopacity,
+    float* __restrict__ dL_dopacity
 ) {
     auto block = cg::this_thread_block();
     int32_t tile_id = 
@@ -224,7 +229,7 @@ __global__ void rasterize_backward_kernel(
             float3 k;
             float3 l;
             float3 p;
-            float2 Tw;
+            float3 Tw;
             if (valid) {
                 // conic = conic_batch[t];
 
@@ -232,13 +237,16 @@ __global__ void rasterize_backward_kernel(
                 float3 xy_opac = xy_opacity_batch[t];
                 opac = xy_opac.z;
                 const float2 xy = {xy_opac.x, xy_opac.y};
-                const float2 Tu = Tu_batch[t];
-                const float2 Tv = Tv_batch[t];
+                const float3 Tu = Tu_batch[t];
+                const float3 Tv = Tv_batch[t];
                 Tw = Tw_batch[t];
                 
-                k = px * Tw - Tu;
-                l = py * Tw - Tv;
+
+                k = {-Tu.x + px * Tw.x, -Tu.y + px * Tw.y, -Tu.z + px * Tw.z};
+                l = {-Tv.x + py * Tw.x, -Tv.y + py * Tw.y, -Tv.z + py * Tw.z};
+                
                 p = cross_product(k, l);
+                
                 if (p.z == 0.0) continue;
                 s = {p.x / p.z, p.y / p.z};
                 rho3d = (s.x * s.x + s.y * s.y);
@@ -372,8 +380,8 @@ __global__ void rasterize_backward_kernel(
 
 __device__ void build_H(
     const glm::vec3 & p_world,
-    const glm::vec4 & quat,
-    const glm::vec2 & scale,
+    const float4 & quat,
+    const float2 & scale,
     const float* viewmat,
     const float4 & intrins,
     float tan_fovx,

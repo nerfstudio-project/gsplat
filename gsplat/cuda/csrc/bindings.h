@@ -76,6 +76,7 @@ project_gaussians_backward_tensor(
     const float glob_scale,
     torch::Tensor &quats,
     torch::Tensor &viewmat,
+    torch::Tensor &transMats,
     const float fx,
     const float fy,
     const float cx,

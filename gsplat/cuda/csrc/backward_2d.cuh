@@ -9,7 +9,7 @@
 __global__ void project_gaussians_backward_kernel(
     const int num_points,
     const float3* __restrict__ means3d,
-    const float3* __restrict__ scales,
+    const float2* __restrict__ scales,
     const float glob_scale,
     const float4* __restrict__ quats,
     const float* __restrict__ viewmat,
@@ -20,13 +20,13 @@ __global__ void project_gaussians_backward_kernel(
     const float* __restrict__ transMats,
 
     // grad input
-    const float* __restrict__ dL_dtransMats,
+    float* __restrict__ dL_dtransMats,
     const float* __restrict__ dL_dnormal3Ds,
 
     // grad output
     float3* __restrict__ dL_dmean3Ds,
-    float3* __restrict__ dL_dscales,
-    float3* __restrict__ dL_drots,
+    float2* __restrict__ dL_dscales,
+    float4* __restrict__ dL_drots,
     float3* __restrict__ dL_dmean2Ds
 );
 
@@ -56,8 +56,8 @@ __global__ void rasterize_backward_kernel(
 
 __device__ void build_H(
     const glm::vec3 & p_world,
-    const glm::vec4 & quat,
-    const glm::vec2 & scale,
+    const float4 & quat,
+    const float2 & scale,
     const float* viewmat,
     const float4 & intrins,
     float tan_fovx,

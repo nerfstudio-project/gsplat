@@ -356,8 +356,8 @@ __global__ void rasterize_forward(
             // There is no intersection
             float2 s;
             if (p.z == 0.0) { 
-                // s = {px, py};
-                continue;
+                s = {px, py};
+                // continue;
             } else {
                 // printf("Here \n");
                 // 3D homogeneous point to 2d point on the splat
