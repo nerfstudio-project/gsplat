@@ -1,4 +1,4 @@
-Fit 3D Gaussian to a Single Image
+Fit a Single Image
 ===================================
 
 .. currentmodule:: gsplat
@@ -14,7 +14,7 @@ Simply run the script under `examples/`:
 
 to get a result similar to the one below:
 
-.. image:: ../imgs/square.gif
+.. image:: ../assets/square.gif
     :alt: Gaussians overfit on a single image
     :width: 256
 

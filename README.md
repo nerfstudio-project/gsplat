@@ -11,7 +11,7 @@ This project was greatly inspired by original paper [3D Gaussian Splatting
 for Real-Time Radiance Field Rendering
 ](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/) by Kerbl* and Kopanas* et al. While building this library, we prioritized having a developer friendly Python API. 
 
-![Teaser](/docs/source/imgs/training.gif?raw=true)
+![Teaser](/docs/source/assets/training.gif?raw=true)
 
 ## Evaluation
 A full evalaution of Nerfstudio's implementation of Gaussian Splatting against the original Inria method can be found [here](https://docs.gsplat.studio/tests/eval.html).

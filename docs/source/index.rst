@@ -1,7 +1,7 @@
 gsplat
 ===================================
 
-.. image:: imgs/training.gif
+.. image:: assets/training.gif
     :width: 800
     :alt: Example training image
 

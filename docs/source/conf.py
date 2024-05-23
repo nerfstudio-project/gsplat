@@ -19,6 +19,7 @@ extensions = [
     "sphinx.ext.autosummary",
     "sphinx.ext.intersphinx",
     "sphinxcontrib.bibtex",
+    "sphinxcontrib.video",
 ]
 
 intersphinx_mapping = {
@@ -31,6 +32,7 @@ templates_path = ["_templates"]
 
 # -- Options for HTML output
 html_theme = "furo"
+html_static_path = ["assets/"]
 
 # Ignore >>> when copying code
 copybutton_prompt_text = r">>> |\.\.\. "
