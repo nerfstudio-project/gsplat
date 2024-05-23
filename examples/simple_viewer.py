@@ -33,6 +33,7 @@ parser.add_argument(
 )
 parser.add_argument("--ckpt", type=str, default=None, help="path to the .pt file")
 parser.add_argument("--port", type=int, default=8080, help="port for the viewer server")
+parser.add_argument("--backend", type=str, default="gsplat", help="gsplat, gsplat_legacy, inria")
 args = parser.parse_args()
 assert args.scene_grid % 2 == 1, "scene_grid must be odd"
 
@@ -84,7 +85,7 @@ if args.ckpt is None:
     )
     imageio.imsave(f"{args.output_dir}/render.png", (canvas * 255).astype(np.uint8))
 else:
-    ckpt = torch.load(args.ckpt, map_location=device)
+    ckpt = torch.load(args.ckpt, map_location=device)["splats"]
     means = ckpt["means3d"]
     quats = F.normalize(ckpt["quats"], p=2, dim=-1)
     scales = torch.exp(ckpt["scales"])
@@ -94,6 +95,32 @@ else:
     colors = torch.cat([sh0, shN], dim=-2)
     sh_degree = int(math.sqrt(colors.shape[-2]) - 1)
 
+    # crop
+    aabb = torch.tensor((-1., -1., -1., 1., 1., 0.7), device=device)
+    edges = aabb[3:] - aabb[:3]
+    sel = ((means >= aabb[:3]) & (means <= aabb[3:])).all(dim=-1)
+    sel = torch.where(sel)[0]
+    means, quats, scales, colors, opacities = (
+        means[sel], quats[sel], scales[sel], colors[sel], opacities[sel]
+    )
+
+    # repeat the scene into a grid (to mimic a large-scale setting)
+    repeats = args.scene_grid
+    gridx, gridy = torch.meshgrid(
+        [
+            torch.arange(-(repeats // 2), repeats // 2 + 1, device=device),
+            torch.arange(-(repeats // 2), repeats // 2 + 1, device=device),
+        ],
+        indexing="ij",
+    )
+    grid = torch.stack([gridx, gridy, torch.zeros_like(gridx)], dim=-1).reshape(-1, 3)
+    means = means[None, :, :] + grid[:, None, :] * edges[None, None, :]
+    means = means.reshape(-1, 3)
+    quats = quats.repeat(repeats**2, 1)
+    scales = scales.repeat(repeats**2, 1)
+    colors = colors.repeat(repeats**2, 1, 1)
+    opacities = opacities.repeat(repeats**2)
+    print("Number of Gaussians:", len(means))
 
 # register and open viewer
 @torch.no_grad()
@@ -113,11 +140,19 @@ def viewer_render_fn(camera_state: CameraState, img_wh: Tuple[int, int]):
     c2w = torch.from_numpy(c2w).float().to(device)
     K = torch.from_numpy(K).float().to(device)
     viewmat = c2w.inverse()
+    
+    if args.backend == "gsplat":
+        rasterization_fn = rasterization
+    elif args.backend == "gsplat_legacy":
+        from gsplat._helper import rasterization_legacy_wrapper
+        rasterization_fn = rasterization_legacy_wrapper
+    elif args.backend == "inria":
+        from gsplat._helper import rasterization_inria_wrapper
+        rasterization_fn = rasterization_inria_wrapper
+    else:
+        raise ValueError
 
-    # Switch between different backends (read their docstrings before using them!)
-    # from gsplat._helper import rasterization_inria_wrapper as rasterization
-    # from gsplat._helper import rasterization_legacy_wrapper as rasterization
-    render_colors, render_alphas, meta = rasterization(
+    render_colors, render_alphas, meta = rasterization_fn(
         means,  # [N, 3]
         quats,  # [N, 4]
         scales,  # [N, 3]
