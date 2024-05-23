@@ -713,5 +713,7 @@ std::
         v_opacity.contiguous().data_ptr<float>()
     );
 
+    printf("v_colors: %.2f \n", v_colors);
+    printf("v_transMats: %.2f, %.2f \n", v_transMats[0][0], v_transMats[0][1]);
     return std::make_tuple(v_xy, v_xy_abs, v_transMats, v_colors, v_opacity);
 }

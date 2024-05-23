@@ -248,6 +248,8 @@ class _RasterizeGaussians(Function):
                 v_out_img,
                 v_out_alpha,
             )
+            pdb.set_trace()
+
 
         # Abs grad for gaussian splitting criterion. See
         # - "AbsGS: Recovering Fine Details for 3D Gaussian Splatting"

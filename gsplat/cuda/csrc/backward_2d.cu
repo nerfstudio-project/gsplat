@@ -247,8 +247,11 @@ __global__ void rasterize_backward_kernel(
                 
                 p = cross_product(k, l);
                 
-                if (p.z == 0.0) continue;
-                s = {p.x / p.z, p.y / p.z};
+                if (p.z == 0.0) {
+                    s = {p.x, p.y};
+                } else {
+                    s = {p.x / p.z, p.y / p.z};
+                }
                 rho3d = (s.x * s.x + s.y * s.y);
                 d = {xy.x - px, xy.y - py};
                 rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
@@ -267,6 +270,7 @@ __global__ void rasterize_backward_kernel(
             }
             // if all threads are inactive in this warp, skip this loop
             if (!warp.any(valid)) continue;
+            // printf("Here! \n");
 
             float3 dL_drgb_local = {0.f, 0.f, 0.f};
             // float3 v_conic_local = {0.f, 0.f, 0.f};
@@ -314,6 +318,8 @@ __global__ void rasterize_backward_kernel(
                     const float3 dz_dTw = {s.x, s.y, 1.0};
                     const float dsx_pz = dL_ds.x / p.z;
                     const float dsy_pz = dL_ds.y / p.z;
+                    printf("dsx_pz: %.2f \n", dsx_pz);
+                    printf("dsy_pz: %.2f \n", dsy_pz);
                     const float3 dL_dp = {dsx_pz, dsy_pz, -(dsx_pz * s.x + dsy_pz * s.y)};
                     const float3 dL_dk = cross_product(l, dL_dp);
                     const float3 dL_dl = cross_product(dL_dp, k);
@@ -325,6 +331,8 @@ __global__ void rasterize_backward_kernel(
                         px * dL_dk.y + py * dL_dl.y + dL_dz * dz_dTw.y,
                         px * dL_dk.z + py * dL_dl.z + dL_dz * dz_dTw.z
                     };
+                    // printf("dL_dTu: %.2f, %.2f, %.2f", dL_dTu.x, dL_dTu.y, dL_dTu.z);
+                    // printf("dL_dTv: %.2f, %.2f, %.2f \n", dL_dTv.x, dL_dTv.y, dL_dTv.z);
                     atomicAdd(&dL_dtransMat[g * 9 + 0], dL_dTu.x);
                     atomicAdd(&dL_dtransMat[g * 9 + 1], dL_dTu.y);
                     atomicAdd(&dL_dtransMat[g * 9 + 2], dL_dTu.z);

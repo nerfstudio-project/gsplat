@@ -150,13 +150,15 @@ class _ProjectGaussians(Function):
     @staticmethod
     def backward(
         ctx,
-        v_xys,
-        v_depths,
-        v_radii,
-        v_conics,
-        v_compensation,
-        v_num_tiles_hit,
-        v_cov3d,
+        dL_dtransMats,
+        dL_dnormal3Ds,
+        # v_xys,
+        # v_depths,
+        # v_radii,
+        # v_conics,
+        # v_compensation,
+        # v_num_tiles_hit,
+        # v_cov3d,
     ):
         (
             means3d,
@@ -165,17 +167,18 @@ class _ProjectGaussians(Function):
             viewmat,
             cov3d,
             radii,
-            conics,
-            compensation,
+            transMats
         ) = ctx.saved_tensors
 
-        (v_cov2d, v_cov3d, v_mean3d, v_scale, v_quat) = _C.project_gaussians_backward(
+        pdb.set_trace()
+        (v_mean3d, v_scale, v_quat, v_normal2d) = _C.project_gaussians_backward(
             ctx.num_points,
             means3d,
             scales,
             ctx.glob_scale,
             quats,
             viewmat,
+            transMats,
             ctx.fx,
             ctx.fy,
             ctx.cx,
@@ -184,12 +187,14 @@ class _ProjectGaussians(Function):
             ctx.img_width,
             cov3d,
             radii,
-            conics,
-            compensation,
-            v_xys,
-            v_depths,
-            v_conics,
-            v_compensation,
+            dL_dtransMats,
+            dL_dnormal3Ds
+            # conics,
+            # compensation,
+            # v_xys,
+            # v_depths,
+            # v_conics,
+            # v_compensation,
         )
 
         if viewmat.requires_grad:
