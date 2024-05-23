@@ -485,7 +485,6 @@ def _spherical_harmonics(
     coeffs: torch.Tensor,  # [..., K, 3]
 ):
     num_bases = (degree + 1) ** 2
-    bases = _eval_sh_bases_fast(num_bases, dirs)
     bases = torch.zeros_like(coeffs[..., 0])
     bases[..., :num_bases] = _eval_sh_bases_fast(num_bases, dirs)
     return (bases[..., None] * coeffs).sum(dim=-2)

@@ -211,10 +211,11 @@ def rasterization(
             dirs = means[cindices.long(), :] - camtoworlds[rindices.long(), :3, 3]
         else:
             dirs = means[None, :, :] - camtoworlds[:, None, :3, 3]
-        # dirs = F.normalize(dirs, dim=-1).detach()  # [nnz, 3] or [C, N, 3]
         colors = spherical_harmonics(
             sh_degree, dirs, colors, masks=radii > 0
         )  # [nnz, D] or [C, N, 3]
+
+        # Enable this line to make it apple-to-apple with Inria's CUDA Backend.
         # colors = torch.clamp_min(colors + 0.5, 0.0)
 
     # Rasterize to pixels

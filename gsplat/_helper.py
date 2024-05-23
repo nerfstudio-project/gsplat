@@ -260,6 +260,8 @@ def rasterization_inria_wrapper(
             rotations=quats,
             cov3D_precomp=None,
         )
+        # -0.5 roughly brings the color back but not exactly!
+        render_colors_ = render_colors_ - 0.5
         render_colors_ = render_colors_.permute(1, 2, 0)  # [H, W, 3]
 
         render_colors.append(render_colors_)
