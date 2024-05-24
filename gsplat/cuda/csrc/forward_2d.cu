@@ -43,6 +43,7 @@ __global__ void project_gaussians_forward_kernel(
     float3 p_view;
 
     bool not_ok = clip_near_plane(p_world, viewmat, p_view, clip_thresh);
+    // printf("not_ok: %.2f \n", not_ok);
     if (not_ok) return;
 
 
@@ -476,7 +477,7 @@ __device__ bool build_H(
         viewmat[8], viewmat[9], viewmat[10]
     );
 
-    const glm::vec3 cam_pos = glm::vec3(viewmat[12], viewmat[13], viewmat[14]);
+    const glm::vec3 cam_pos = glm::vec3(viewmat[12], viewmat[13], viewmat[14]); // TODO: the viewmat format is a source of bug, transpose or not?
     const glm::mat4 P = glm::mat4(
         intrins.x, 0.0, 0.0, 0.0,
         0.0, intrins.y, 0.0, 0.0,
@@ -490,6 +491,14 @@ __device__ bool build_H(
 
     // printf("p_world: %.2f, %.2f, %.2f \n", p_world.x, p_world.y, p_world.z);
     // printf("cam_pos: %.2f, %.2f, %.2f \n", cam_pos.x, cam_pos.y, cam_pos.z);
+    // printf("viewmat: %.2f, %.2f, %.2f, %.2f \n \
+    //                 %.2f, %.2f, %.2f, %.2f \n \
+    //                 %.2f, %.2f, %.2f, %.2f \n \
+    //                 %.2f, %.2f, %.2f, %.2f \n", \
+    //                 viewmat[0], viewmat[1], viewmat[2], viewmat[3], \
+    //                 viewmat[4], viewmat[5], viewmat[6], viewmat[7], \
+    //                 viewmat[8], viewmat[9], viewmat[10], viewmat[11], \
+    //                 viewmat[12], viewmat[13], viewmat[14], viewmat[15]);
     glm::vec3 p_view = W * p_world + cam_pos;
     // printf("p_world: %.2f, %.2f, %.2f \n p_view: %.2f, %.2f, %.2f \n", \
     //         p_world.x, p_world.y, p_world.z, \

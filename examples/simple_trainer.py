@@ -146,6 +146,7 @@ class SimpleTrainer:
             ],
             device=self.device,
         )
+        self.viewmat = self.viewmat.T
         self.background = torch.zeros(d, device=self.device)
 
 
@@ -159,34 +160,35 @@ class SimpleTrainer:
         # pdb.set_trace()
         self.means = torch.stack((x, y, z), dim=-1).reshape((-1, 3)) #TODO (WZ): each pixel has one gaussian; normalized to [-1, 1]
         self.means = self.means.to(self.device)
-        self.rgbs = self.gt_image.clone().reshape((-1, 3))
+        self.rgbs = self.gt_image.clone().permute((1, 0, 2)).reshape((-1, 3))
         self.rgbs = self.rgbs.to(self.device)
-        self.scales = torch.zeros_like(self.scales)
+        self.scales = torch.ones_like(self.scales) * 1e-4
         self.scales.to(self.device)
 
 
 
-        num_points = 8
-        length = 0.4
-        x = np.linspace(-1, 1, num_points)
-        y = np.linspace(-1, 1, num_points)
-        x, y = np.meshgrid(x, y)
-        means3D = torch.from_numpy(np.stack([x, y, np.ones_like(x) ], axis=-1).reshape(-1,3)).cuda().float()
-        quats = torch.zeros(1,4).repeat(len(means3D), 1).cuda()
-        quats[..., 0] = 1.
-        scale = 0.6 / (num_points-1)
-        # scale = 1e-3
-        # scale = 0
-        scales = torch.zeros(1,3).repeat(len(means3D), 1).fill_(scale).cuda()
-        colors = matplotlib.colormaps['Accent'](np.random.randint(1,64, 64)/64)[..., :3]
-        colors = torch.from_numpy(colors).cuda()
-        opacity = torch.ones_like(means3D[:,:1])
+        ########### Toy Example ###############
+        # num_points = 8
+        # length = 0.4
+        # x = np.linspace(-1, 1, num_points)
+        # y = np.linspace(-1, 1, num_points)
+        # x, y = np.meshgrid(x, y)
+        # means3D = torch.from_numpy(np.stack([x, y, np.ones_like(x) ], axis=-1).reshape(-1,3)).cuda().float()
+        # quats = torch.zeros(1,4).repeat(len(means3D), 1).cuda()
+        # quats[..., 0] = 1.
+        # scale = 0.6 / (num_points-1)
+        # # scale = 1e-3
+        # # scale = 0
+        # scales = torch.zeros(1,3).repeat(len(means3D), 1).fill_(scale).cuda()
+        # colors = matplotlib.colormaps['Accent'](np.random.randint(1,64, 64)/64)[..., :3]
+        # colors = torch.from_numpy(colors).cuda()
+        # opacity = torch.ones_like(means3D[:,:1])
 
-        self.means = means3D.float()
-        self.scales = scales.float()
-        self.rgbs = colors.float()
-        self.opacities = opacity.float()
-        self.quats = quats.float()
+        # self.means = means3D.float()
+        # self.scales = scales.float()
+        # self.rgbs = colors.float()
+        # self.opacities = opacity.float()
+        # self.quats = quats.float()
         # u = torch.ones_like(u)
         # v = torch.ones_like(v)
         # w = torch.ones_like(w)
@@ -200,6 +202,7 @@ class SimpleTrainer:
         #     -1,
         # )
         # self.quats.to(self.device)
+        ##############
 
         self.means.requires_grad = True
         self.scales.requires_grad = True
