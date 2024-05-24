@@ -1,6 +1,18 @@
 Evaluation
 ===================================
 
++------------+-------+-------+-------+------------------+------------+
+|            | PSNR  | SSIM  | LPIPS | Train Mem        | Train Time |
++============+=======+=======+=======+==================+============+
+| inria-7k   | 27.23 | 0.829 | 0.204 | 7.7 GB           | 8m38s      |
++------------+-------+-------+-------+------------------+------------+
+| gsplat-7k  | 27.21 | 0.831 | 0.202 | **4.3GB**        | **5m35s**  |
++------------+-------+-------+-------+------------------+------------+
+| inria-30k  | 28.95 | 0.870 | 0.138 | 9.0 GB           | 48m29s     |
++------------+-------+-------+-------+------------------+------------+
+| gsplat-30k | 28.95 | 0.870 | 0.135 | **5.7 GB**       | **35m49s** |
++------------+-------+-------+-------+------------------+------------+
+
 This repo comes with a standalone script (`examples/simple_trainer.py`) that reproduces 
 the `Gaussian Splatting <https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/>`_ with
 exactly the same performance on PSNR, SSIM, LPIPS, and converged number of Gaussians. 
@@ -8,7 +20,7 @@ Powered by `gsplat`'s efficient CUDA implementation, the training takes up to
 **4x less GPU memory** with up to **2x less time** to finish than the official implementation.
 
 Trains Faster with Less GPU Memory
------------------------------------
+----------------------------------------------
 
 +-----------------+---------+--------+---------+--------+---------+--------+--------+
 | Train Mem (GB)  | Bicycle | Bonsai | Counter | Garden | Kitchen |  Room  | Stump  |
