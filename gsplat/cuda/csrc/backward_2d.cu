@@ -247,6 +247,7 @@ __global__ void rasterize_backward_kernel(
                 
                 p = cross_product(k, l);
                 
+                // printf("backward p.z: %.2d \n", p.z);
                 if (p.z == 0.0) {
                     s = {p.x, p.y};
                 } else {
@@ -318,8 +319,8 @@ __global__ void rasterize_backward_kernel(
                     const float3 dz_dTw = {s.x, s.y, 1.0};
                     const float dsx_pz = dL_ds.x / p.z;
                     const float dsy_pz = dL_ds.y / p.z;
-                    printf("dsx_pz: %.2f \n", dsx_pz);
-                    printf("dsy_pz: %.2f \n", dsy_pz);
+                    // printf("dsx_pz: %.2f \n", dsx_pz);
+                    // printf("dsy_pz: %.2f \n", dsy_pz);
                     const float3 dL_dp = {dsx_pz, dsy_pz, -(dsx_pz * s.x + dsy_pz * s.y)};
                     const float3 dL_dk = cross_product(l, dL_dp);
                     const float3 dL_dl = cross_product(dL_dp, k);

@@ -12,8 +12,39 @@ from gsplat.rasterize import rasterize_gaussians
 from PIL import Image
 from torch import Tensor, optim
 
+import matplotlib
 import pdb
 
+
+def getProjectionMatrix(znear, zfar, fovX, fovY):
+    import math
+    tanHalfFovY = math.tan((fovY / 2))
+    tanHalfFovX = math.tan((fovX / 2))
+
+    top = tanHalfFovY * znear
+    bottom = -top
+    right = tanHalfFovX * znear
+    left = -right
+
+    P = torch.zeros(4, 4)
+
+    z_sign = 1.0
+
+    P[0, 0] = 2.0 * znear / (right - left)
+    P[1, 1] = 2.0 * znear / (top - bottom)
+    P[0, 2] = (right + left) / (right - left)
+    P[1, 2] = (top + bottom) / (top - bottom)
+    P[3, 2] = z_sign
+    P[2, 2] = z_sign * zfar / (zfar - znear)
+    P[2, 3] = -(zfar * znear) / (zfar - znear)
+    return P
+
+def focal2fov(focal, pixels):
+    import math
+    return 2*math.atan(pixels/(2*focal))
+
+class SimpleTrainer:
+    """Trains random gaussians to fit an image."""
 
 class SimpleTrainer:
     """Trains random gaussians to fit an image."""
@@ -22,18 +53,66 @@ class SimpleTrainer:
         self,
         gt_image: Tensor,
         num_points: int = 2000,
+        toy_example: bool=False,
     ):
         self.device = torch.device("cuda:0")
         self.gt_image = gt_image.to(device=self.device)
-        self.num_points = num_points
 
+        if toy_example:
+            self._toy_init()
+        else:
+            self.num_points = num_points
+
+            fov_x = math.pi / 2.0
+            self.H, self.W = gt_image.shape[0], gt_image.shape[1]
+            self.focal = 0.5 * float(self.W) / math.tan(0.5 * fov_x)
+            self.img_size = torch.tensor([self.W, self.H, 1], device=self.device)
+
+            self._init_gaussians()
+
+    def _toy_init(self):
+        num_points = 64
+        length = 0.5
+        width = height = 512
+        x = np.linspace(-1, 1, num_points) 
+        y = np.linspace(-1, 1, num_points)
+        x, y = np.meshgrid(x, y)
+        means3D = torch.from_numpy(np.stack([x, y, 0], axis=-1).reshape(-1,3)).cuda().float()
+        quats = torch.zeros(1,4).repeat(len(means3D), 1).cuda()
+        quats[..., 0] = 1.
+        scale = length / (num_points-1)
+        scale = 5
+        scales = torch.zeros(1,3).repeat(len(means3D), 1).fill_(scale).cuda()
+        colors = matplotlib.colormaps['Accent'](np.random.randint(1,64, 64)/64)[..., :3]
+        colors = torch.from_numpy(colors).cuda()
+
+        opacity = torch.ones_like(means3D[:,:1])
+
+        self.viewmat = torch.tensor(
+            [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            device=self.device,
+        )        
+
+        self.H = height
+        self.W = width
         fov_x = math.pi / 2.0
-        self.H, self.W = gt_image.shape[0], gt_image.shape[1]
         self.focal = 0.5 * float(self.W) / math.tan(0.5 * fov_x)
+        print(self.focal)
+        self.focal = 711.1111
+        fov_x = focal2fov(self.focal)
+        self.means = means3D.float()
+        self.scales = scales.float()
+        self.rgbs = colors.float()
+        self.opacities = opacity.float()
+        self.quats = quats.float()
+        self.background = torch.zeros(3, device=self.device).float()
         self.img_size = torch.tensor([self.W, self.H, 1], device=self.device)
-
-        self._init_gaussians()
-
+    
     def _init_gaussians(self):
         """Random gaussians"""
         bd = 2
@@ -62,15 +141,14 @@ class SimpleTrainer:
             [
                 [1.0, 0.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0, 0.5],
                 [0.0, 0.0, 0.0, 1.0],
             ],
             device=self.device,
         )
         self.background = torch.zeros(d, device=self.device)
 
-        # pdb.set_trace()
-    
+
         x_range = torch.linspace(-1, 1, self.gt_image.shape[0])
         y_range = torch.linspace(-1, 1, self.gt_image.shape[1])
 
@@ -80,14 +158,48 @@ class SimpleTrainer:
 
         # pdb.set_trace()
         self.means = torch.stack((x, y, z), dim=-1).reshape((-1, 3)) #TODO (WZ): each pixel has one gaussian; normalized to [-1, 1]
-        # self.scales = torch.ones_like(self.scales)
-        self.rgbs = self.gt_image.clone().reshape((-1, 3)) #TODO (WZ): set this to ground truth RGB; normalized to [0, 1]
-
-
         self.means = self.means.to(self.device)
-        # self.scales = self.scales.to(self.scales)
+        self.rgbs = self.gt_image.clone().reshape((-1, 3))
         self.rgbs = self.rgbs.to(self.device)
-        # pdb.set_trace()
+        self.scales = torch.zeros_like(self.scales)
+        self.scales.to(self.device)
+
+
+
+        num_points = 8
+        length = 0.4
+        x = np.linspace(-1, 1, num_points)
+        y = np.linspace(-1, 1, num_points)
+        x, y = np.meshgrid(x, y)
+        means3D = torch.from_numpy(np.stack([x, y, np.ones_like(x) ], axis=-1).reshape(-1,3)).cuda().float()
+        quats = torch.zeros(1,4).repeat(len(means3D), 1).cuda()
+        quats[..., 0] = 1.
+        scale = 0.6 / (num_points-1)
+        # scale = 1e-3
+        # scale = 0
+        scales = torch.zeros(1,3).repeat(len(means3D), 1).fill_(scale).cuda()
+        colors = matplotlib.colormaps['Accent'](np.random.randint(1,64, 64)/64)[..., :3]
+        colors = torch.from_numpy(colors).cuda()
+        opacity = torch.ones_like(means3D[:,:1])
+
+        self.means = means3D.float()
+        self.scales = scales.float()
+        self.rgbs = colors.float()
+        self.opacities = opacity.float()
+        self.quats = quats.float()
+        # u = torch.ones_like(u)
+        # v = torch.ones_like(v)
+        # w = torch.ones_like(w)
+        # self.quats = torch.cat(
+        #     [
+        #         torch.sqrt(1.0 - u) * torch.sin(2.0 * math.pi * v),
+        #         torch.sqrt(1.0 - u) * torch.cos(2.0 * math.pi * v),
+        #         torch.sqrt(u) * torch.sin(2.0 * math.pi * w),
+        #         torch.sqrt(u) * torch.cos(2.0 * math.pi * w),
+        #     ],
+        #     -1,
+        # )
+        # self.quats.to(self.device)
 
         self.means.requires_grad = True
         self.scales.requires_grad = True
@@ -95,13 +207,7 @@ class SimpleTrainer:
         self.rgbs.requires_grad = True
         self.opacities.requires_grad = True
         self.viewmat.requires_grad = False
-        
-        # self.means.requires_grad = False
-        # self.scales.requires_grad = False
-        # self.quats.requires_grad = False
-        # self.rgbs.requires_grad = False
-        # self.opacities.requires_grad = False
-        # self.viewmat.requires_grad = False
+
 
     def train(
         self,
@@ -179,6 +285,8 @@ class SimpleTrainer:
 
                 if save_imgs and iter % 5 == 0:
                     frames.append((out_img.detach().cpu().numpy() * 255).astype(np.uint8))
+                break
+
         if save_imgs:
             # save them as a gif with PIL
             frames = [Image.fromarray(frame) for frame in frames]
@@ -218,6 +326,8 @@ def main(
     iterations: int = 1000,
     lr: float = 0.01,
 ) -> None:
+    height = 512
+    width = 512
     if img_path:
         gt_image = image_path_to_tensor(img_path)
     else:

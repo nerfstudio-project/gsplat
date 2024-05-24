@@ -81,11 +81,12 @@ __global__ void project_gaussians_forward_kernel(
         normal
     );
 
+    
 
     if (!ok) return;
     // transMat = transMats + idx * 9;
 
-    int start_index = 9 * idx;
+    int start_index = 0;
     // for (int i = 0; i < 9; ++i) {
     //     printf("cur_transMats[%d] = %f\n", start_index + i, cur_transMats[start_index + i]);
     // }
@@ -323,7 +324,6 @@ __global__ void rasterize_forward(
             const float2 xy = xys[g_id];
             const float opac = opacities[g_id];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
-            // conic_batch[tr] = conics[g_id];
             Tu_batch[tr] = {transMats[9 * g_id + 0], transMats[9 * g_id + 1], transMats[9 * g_id + 2]};
             Tv_batch[tr] = {transMats[9 * g_id + 3], transMats[9 * g_id + 4], transMats[9 * g_id + 5]};
             Tw_batch[tr] = {transMats[9 * g_id + 6], transMats[9 * g_id + 7], transMats[9 * g_id + 8]};
@@ -346,6 +346,10 @@ __global__ void rasterize_forward(
             float3 k = {-Tu.x + px * Tw.x, -Tu.y + px * Tw.y, -Tu.z + px * Tw.z};
             float3 l = {-Tv.x + py * Tw.x, -Tv.y + py * Tw.y, -Tv.z + py * Tw.z};
 
+            // printf("px: %.2f, py: %.2f \n", px, py);
+
+            // printf("Tv: %.2f, %.2f, %.2f \n", Tv.x, Tv.y, Tv.z);
+            // printf("Tw: %.2f, %.2f, %.2f \n", Tw.x, Tw.y, Tw.z);
             // cross product of two planes is a line
             float3 p = cross_product(k, l);
 
@@ -354,17 +358,37 @@ __global__ void rasterize_forward(
             // printf("p is: %.2f \n", p);
 
             // There is no intersection
+            // printf("forward p.z: %.2d \n", p.z);
+            // printf("p: %.2f, %.2f, %.2f \n", p.x, p.y, p.z);
+            // printf("Tu: %.2f, %.2f, %.2f \n \
+            //         Tv: %.2f, %.2f, %.2f \n \
+            //         Tw: %.2f, %.2f, %.2f \n \
+            //         px: %.2f, py: %.2f \n \
+            //         k: %.2f, %.2f, %.2f \n \
+            //         l: %.2f, %.2f, %.2f \n \
+            //         p: %.2f, %.2f, %.2f \n", 
+            //         Tu.x, Tu.y, Tu.z, 
+            //         Tv.x, Tv.y, Tv.z, 
+            //         Tw.x, Tw.y, Tw.z, 
+            //         px, py,
+            //         k.x, k.y, k.z,
+            //         l.x, l.y, l.z,
+            //         p.x, p.y, p.z);
             float2 s;
             if (p.z == 0.0) { 
-                s = {px, py};
-                // continue;
+                // s = {px, py};
+                // printf("Here \n");
+                continue;
             } else {
                 // printf("Here \n");
                 // 3D homogeneous point to 2d point on the splat
-                float2 s = {p.x / p.z, p.y / p.z};
+                s = {p.x / p.z, p.y / p.z};
+                // printf("p.z is not zero \n");
                 // printf("s: %.2f, %.2f \n", s.x, s.y);
             }
+            // printf("p.z: %.2f \n", p.z);
             
+            // printf("s: %.2f, %.2f \n", s.x, s.y);
             // 3D distance. Compute Mahalanobis distance in the canonical splat space
             float rho_3d = (s.x * s.x + s.y * s.y);
 
@@ -380,14 +404,19 @@ __global__ void rasterize_forward(
 
             const float sigma = 0.5f * rho;
             const float alpha = min(0.999f, opac * __expf(-sigma));
+            // printf("alpha: %.2f \n", alpha);
 
-            if (sigma < 0.f || alpha < 1.f / 255.f) continue;
+            if (sigma < 0.f || alpha < 1.f / 255.f) {
+                // printf("Here! \n");
+                continue;
+            }
 
             const float next_T = T * (1.f  -alpha);
             if (next_T <= 1e-4f) {
                 // this pixel is done
                 // we want to render the last gaussian that contributes and note
                 // that here idx > range.x so we don't underflow
+
                 done = true;
                 break;
             }
