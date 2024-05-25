@@ -21,7 +21,7 @@ __global__ void project_gaussians_backward_kernel(
 
     // grad input
     float* __restrict__ dL_dtransMats,
-    const float* __restrict__ dL_dnormal3Ds,
+    // const float* __restrict__ dL_dnormal3Ds,
 
     // grad output
     float3* __restrict__ dL_dmean3Ds,
@@ -66,7 +66,7 @@ __device__ void build_H(
 
     // grad input
     const float* dL_dtransMat,
-    const float* dL_dnormal3D,
+    // const float* dL_dnormal3D,
 
     // grad output
     glm::vec3 & dL_dmean3D,

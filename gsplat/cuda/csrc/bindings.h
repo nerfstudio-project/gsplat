@@ -85,8 +85,8 @@ project_gaussians_backward_tensor(
     const unsigned img_width,
     torch::Tensor &cov3d,
     torch::Tensor &radii,
-    torch::Tensor &dL_dtransMats,
-    torch::Tensor &dL_dnormal3Ds
+    torch::Tensor &dL_dtransMats
+    // torch::Tensor &dL_dnormal3Ds
     // torch::Tensor &conics,
     // torch::Tensor &compensation,
     // torch::Tensor &v_xy,

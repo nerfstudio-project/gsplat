@@ -197,6 +197,9 @@ class _RasterizeGaussians(Function):
 
     @staticmethod
     def backward(ctx, v_out_img, v_out_alpha=None):
+
+        # pdb.set_trace()
+
         img_height = ctx.img_height
         img_width = ctx.img_width
         num_intersects = ctx.num_intersects

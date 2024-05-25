@@ -266,8 +266,8 @@ project_gaussians_backward_tensor(
     const unsigned img_width,
     torch::Tensor &cov3d,
     torch::Tensor &radii,
-    torch::Tensor &dL_dtransMats,
-    torch::Tensor &dL_dnormal3Ds
+    torch::Tensor &dL_dtransMats
+    // torch::Tensor &dL_dnormal3Ds
     // torch::Tensor &conics,
     // torch::Tensor &compensation,
     // torch::Tensor &v_xy,
@@ -298,6 +298,12 @@ project_gaussians_backward_tensor(
     torch::Tensor dL_dmean2d = 
         torch::zeros({num_points, 3}, means3d.options().dtype(torch::kFloat32));
 
+    // printf("num_points: %.2f \n", num_points);
+    // printf("glob_scale: %.2f \n", glob_scale);
+    // printf("intrins: %.2f, %.2f, %.2f, %.2f \n", intrins.x, intrins.y, intrins.z, intrins.w);
+    // printf("img_size_dim3: %.2f, %.2f, %.2f \n", img_size_dim3.x, img_size_dim3.y, img_size_dim3.z);
+
+    printf("before \n");
     project_gaussians_backward_kernel<<<
         (num_points + N_THREADS - 1) / N_THREADS,
         N_THREADS>>>(
@@ -310,8 +316,8 @@ project_gaussians_backward_tensor(
         intrins,
         img_size_dim3,
         cov3d.contiguous().data_ptr<float>(),
-        radii.contiguous().data_ptr<int32_t>(),
-        (float *)transMats.contiguous().data_ptr<int32_t>(),
+        radii.contiguous().data_ptr<int>(),
+        (float *)transMats.contiguous().data_ptr<float>(),
         // (float3 *)conics.contiguous().data_ptr<float>(),
         // (float *)compensation.contiguous().data_ptr<float>(),
         // (float2 *)v_xy.contiguous().data_ptr<float>(),
@@ -320,8 +326,8 @@ project_gaussians_backward_tensor(
         // (float *)v_compensation.contiguous().data_ptr<float>(),
 
         // grad input
-        (float*) dL_dtransMats.contiguous().data_ptr<float>(),
-        (float*) dL_dnormal3Ds.contiguous().data_ptr<float>(),
+        (float *)dL_dtransMats.contiguous().data_ptr<float>(),
+        // (float*) dL_dnormal3Ds.contiguous().data_ptr<float>(),
 
         // Outputs.
         // (float3 *)v_cov2d.contiguous().data_ptr<float>(),
@@ -332,6 +338,7 @@ project_gaussians_backward_tensor(
         (float3 *)dL_dmean2d.contiguous().data_ptr<float>()
     );
 
+    printf("after \n");
     return std::make_tuple(v_mean3d, v_scale, v_quat, dL_dmean2d);
 }
 
@@ -715,5 +722,6 @@ std::
 
     printf("v_colors: %.2f \n", v_colors);
     printf("v_transMats: %.2f, %.2f \n", v_transMats[0][0], v_transMats[0][1]);
+    printf("v_xy: %.2f, %.2f \n", v_xy[0][0], v_xy[0][1]);
     return std::make_tuple(v_xy, v_xy_abs, v_transMats, v_colors, v_opacity);
 }

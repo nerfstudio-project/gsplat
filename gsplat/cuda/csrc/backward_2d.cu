@@ -36,7 +36,7 @@ __global__ void project_gaussians_backward_kernel(
 
     // grad input 
     float* __restrict__ dL_dtransMats,
-    const float* __restrict__ dL_dnormal3Ds,
+    // const float* __restrict__ dL_dnormal3Ds,
 
     // grad output
     float3* __restrict__ dL_dmean3Ds,
@@ -45,13 +45,14 @@ __global__ void project_gaussians_backward_kernel(
     float3* __restrict__ dL_dmean2Ds
 
 ) {
+    // printf("Here! \n");
     unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
     if (idx >= num_points || radii[idx] <= 0) return;
 
 
     const float* transMat = &(transMats[9 * idx]);
     const float* dL_dtransMat = &(dL_dtransMats[9 * idx]);
-    const float* dL_dnormal3D = &(dL_dnormal3Ds[3 * idx]);
+    // const float* dL_dnormal3D = &(dL_dnormal3Ds[3 * idx]);
 
     glm::vec3 p_world = glm::vec3(means3d[idx].x, means3d[idx].y, means3d[idx].z);
     float fx = intrins.x;
@@ -86,7 +87,7 @@ __global__ void project_gaussians_backward_kernel(
 
         // grad input
         dL_dtransMat,
-        dL_dnormal3D,
+        // dL_dnormal3D,
 
         // grad output
         dL_dmean3D,
@@ -249,7 +250,7 @@ __global__ void rasterize_backward_kernel(
                 
                 // printf("backward p.z: %.2d \n", p.z);
                 if (p.z == 0.0) {
-                    s = {p.x, p.y};
+                   continue;
                 } else {
                     s = {p.x / p.z, p.y / p.z};
                 }
@@ -271,7 +272,6 @@ __global__ void rasterize_backward_kernel(
             }
             // if all threads are inactive in this warp, skip this loop
             if (!warp.any(valid)) continue;
-            // printf("Here! \n");
 
             float3 dL_drgb_local = {0.f, 0.f, 0.f};
             // float3 v_conic_local = {0.f, 0.f, 0.f};
@@ -306,6 +306,8 @@ __global__ void rasterize_backward_kernel(
 
                 // Helpful reusable temporary variable
                 const float dL_dG = opac * v_alpha;
+                // printf("dL_dG: %.2f \n opac: %.2f \n v_alpha: %.2f \n", dL_dG, opac, v_alpha);
+
                 float dL_dz = 0.0f;
 
                 int32_t g = id_batch[t];
@@ -347,8 +349,13 @@ __global__ void rasterize_backward_kernel(
                     // Update gradient w.r.t center of Gaussian 2D mean position
                     const float dG_ddelx = -vis * FilterInvSquare * d.x;
                     const float dG_ddely = -vis * FilterInvSquare * d.y;
-                    atomicAdd(&dL_dmean2D[g].x, dL_dG * dG_ddelx); // not scaled
-                    atomicAdd(&dL_dmean2D[g].y, dL_dG * dG_ddely); // not scaled
+                    // printf("dL_dG: %.2f \n", dL_dG);
+                    // printf("vis: %.2f \n", vis);
+                    // printf("d.x: %.2f, d.y: %.2f \n", d.x, d.y);
+                    // printf("dL_dmean2D.x update: %.2f \n", dL_dG * dG_ddelx);
+                    // printf("dL_dmean2D.y update: %.2f \n", dL_dG * dG_ddely);
+                    atomicAdd(&dL_dmean2D[2 * g + 0].x, dL_dG * dG_ddelx); // not scaled
+                    atomicAdd(&dL_dmean2D[2 * g + 1].y, dL_dG * dG_ddely); // not scaled
                     // atomicAdd(&dL_dttransMat[global_id * 9 + 8], dL_dz); // propagate depth loss, disable for now
 
                 }
@@ -365,6 +372,7 @@ __global__ void rasterize_backward_kernel(
             // warpSum2(v_xy_local, warp);
             warpSum(dL_dopacity_local, warp);
             if (warp.thread_rank() == 0) {
+                // printf("Here!!! \n");
                 int32_t g = id_batch[t];
                 float* dL_drgb_ptr = (float*)(dL_drgb);
                 atomicAdd(dL_drgb_ptr + 3 * g + 0, dL_drgb_local.x);
@@ -399,7 +407,7 @@ __device__ void build_H(
 
     // grad input
     const float* dL_dtransMat,
-    const float* dL_dnormal3D,
+    // const float* dL_dnormal3D,
 
     // grad output
     glm::vec3 & dL_dmean3D,
@@ -414,7 +422,7 @@ __device__ void build_H(
         viewmat[8], viewmat[9], viewmat[10]
     ); // viewmat
 
-    const glm::vec3 cam_pos = glm::vec3(viewmat[12], viewmat[13], viewmat[14]); // camera center
+    const glm::vec3 cam_pos = glm::vec3(viewmat[3], viewmat[7], viewmat[11]); // camera center
     const glm::mat4 P = glm::mat4(
         intrins.x, 0.0, 0.0, 0.0,
         0.0, intrins.y, 0.0, 0.0,
@@ -447,7 +455,9 @@ __device__ void build_H(
     glm::vec3 dL_dRS0 = dL_dRS[0];
     glm::vec3 dL_dRS1 = dL_dRS[1];
     glm::vec3 dL_dpw = dL_dRS[2];
-    glm::vec3 dL_dtn = W_t * glm::vec3(dL_dnormal3D[0], dL_dnormal3D[1], dL_dnormal3D[2]);
+    // glm::vec3 dL_dtn = W_t * glm::vec3(dL_dnormal3D[0], dL_dnormal3D[1], dL_dnormal3D[2]);
+    glm::vec3 dL_dtn = W_t * glm::vec3(0.0, 0.0, 0.0);
+
     
     glm::mat3 dL_dR = glm::mat3(
         dL_dRS0 * glm::vec3(scale.x),

@@ -150,8 +150,12 @@ class _ProjectGaussians(Function):
     @staticmethod
     def backward(
         ctx,
-        dL_dtransMats,
-        dL_dnormal3Ds,
+        dL_dxys,
+        dL_ddepths,
+        dL_dradii,
+        dL_dnum_tile_hit,
+        dL_dcov3d,
+        dL_dtransMats
         # v_xys,
         # v_depths,
         # v_radii,
@@ -160,6 +164,7 @@ class _ProjectGaussians(Function):
         # v_num_tiles_hit,
         # v_cov3d,
     ):
+        # pdb.set_trace()
         (
             means3d,
             scales,
@@ -170,7 +175,7 @@ class _ProjectGaussians(Function):
             transMats
         ) = ctx.saved_tensors
 
-        pdb.set_trace()
+        # pdb.set_trace()
         (v_mean3d, v_scale, v_quat, v_normal2d) = _C.project_gaussians_backward(
             ctx.num_points,
             means3d,
@@ -188,7 +193,7 @@ class _ProjectGaussians(Function):
             cov3d,
             radii,
             dL_dtransMats,
-            dL_dnormal3Ds
+            # dL_dnormal3Ds
             # conics,
             # compensation,
             # v_xys,

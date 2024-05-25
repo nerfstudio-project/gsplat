@@ -477,7 +477,7 @@ __device__ bool build_H(
         viewmat[8], viewmat[9], viewmat[10]
     );
 
-    const glm::vec3 cam_pos = glm::vec3(viewmat[12], viewmat[13], viewmat[14]); // TODO: the viewmat format is a source of bug, transpose or not?
+    const glm::vec3 cam_pos = glm::vec3(viewmat[3], viewmat[7], viewmat[11]); // TODO: the viewmat format is a source of bug, transpose or not?
     const glm::mat4 P = glm::mat4(
         intrins.x, 0.0, 0.0, 0.0,
         0.0, intrins.y, 0.0, 0.0,
