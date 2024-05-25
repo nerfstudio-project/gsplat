@@ -213,7 +213,7 @@ def create_splats_with_optimizers(
                 {"params": splats["shN"], "lr": 2.5e-3 / 20, "name": "shN"},
             ],
             eps=1e-15,
-            # fused=True, TODO: benchmark fused optimizer
+            fused=True,  # TODO: benchmark fused optimizer
         ),
     ]
     return splats, optimizers
@@ -822,4 +822,5 @@ def main(cfg: Config):
 
 
 if __name__ == "__main__":
-    tyro.cli(main)
+    cfg = tyro.cli(Config)
+    main(cfg)
