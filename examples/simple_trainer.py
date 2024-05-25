@@ -3,7 +3,7 @@ import json
 import os
 import random
 import time
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List
 
 import imageio
 import numpy as np
@@ -17,8 +17,75 @@ from sklearn.neighbors import NearestNeighbors
 from torch import Tensor
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
+import tyro
+from dataclasses import dataclass, field
 
 from gsplat.rendering import rasterization
+
+
+@dataclass
+class Config:
+    # Path to the Mip-NeRF 360 dataset
+    data_dir: str = "data/360_v2/garden"
+    # Downsample factor for the dataset
+    data_factor: int = 4
+    # Directory to save results
+    result_dir: str = "results/garden"
+
+    # Port for the viewer server
+    port: int = 8080
+
+    # Number of training steps
+    max_steps: int = 30_000
+    # Steps to evaluate the model
+    eval_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    # Steps to save the model
+    save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+
+    # Degree of spherical harmonics
+    sh_degree: int = 3
+    # Turn on another SH degree every this steps
+    sh_degree_interval: int = 1000
+    # Initial opacity of GS
+    init_opa: float = 0.1
+    # Initial scale of GS
+    init_scale: Optional[float] = None
+    # Weight for SSIM loss
+    ssim_lambda: float = 0.2
+
+    # Near plane clipping distance
+    near_plane: float = 0.01
+    # Far plane clipping distance
+    far_plane: float = 1e10
+
+    # GSs with opacity below this value will be pruned
+    prune_opa: float = 0.005
+    # GSs with image plane gradient above this value will be split/duplicated
+    grow_grad2d: float = 0.0002
+    # GSs with scale below this value will be duplicated. Above will be split
+    grow_scale3d: float = 0.01
+
+    # Start refining GSs after this iteration
+    refine_start_iter: int = 500
+    # Stop refining GSs after this iteration
+    refine_stop_iter: int = 15_000
+    # Reset opacities every this steps
+    reset_every: int = 3000
+    # Refine GSs every this steps
+    refine_every: int = 100
+
+    # Use packed mode for rasterization (less memory usage but slightly slower)
+    packed: bool = False
+    # Use sparse gradients for optimization
+    sparse_grad: bool = False
+    # Path to the .pt file. If provide, it will skip training and render a video
+    ckpt: Optional[str] = None
+    # Use absolute gradient for pruning. Be warned: This typically requires larger --grow_grad2d, e.g., 0.0008 or 0.0006
+    absgrad: bool = False
+    # Anti-aliasing in rasterization
+    antialiased: bool = False
+    # Do not wait for the viewer to exit
+    exit_once_done: bool = False
 
 
 def get_expon_lr_func(
@@ -156,33 +223,33 @@ def create_splats_with_optimizers(
 class Runner:
     """Engine for training and testing."""
 
-    def __init__(self, args: argparse.Namespace) -> None:
+    def __init__(self, cfg: Config) -> None:
         _set_random_seed(42)
 
-        self.args = args
+        self.cfg = cfg
         self.device = "cuda"
 
         # Where to dump results.
-        os.makedirs(args.result_dir, exist_ok=True)
+        os.makedirs(cfg.result_dir, exist_ok=True)
 
         # Setup output directories.
-        self.ckpt_dir = f"{args.result_dir}/ckpts"
+        self.ckpt_dir = f"{cfg.result_dir}/ckpts"
         os.makedirs(self.ckpt_dir, exist_ok=True)
-        self.stats_dir = f"{args.result_dir}/stats"
+        self.stats_dir = f"{cfg.result_dir}/stats"
         os.makedirs(self.stats_dir, exist_ok=True)
-        self.render_dir = f"{args.result_dir}/renders"
+        self.render_dir = f"{cfg.result_dir}/renders"
         os.makedirs(self.render_dir, exist_ok=True)
 
         # Load data: Training data should contain initial points and colors.
         self.trainset = Dataset(
-            data_dir=args.data_dir,
-            factor=args.data_factor,
+            data_dir=cfg.data_dir,
+            factor=cfg.data_factor,
             normalize=True,
             split="train",
         )
         self.valset = Dataset(
-            data_dir=args.data_dir,
-            factor=args.data_factor,
+            data_dir=cfg.data_dir,
+            factor=cfg.data_factor,
             normalize=True,
             split="val",
         )
@@ -193,10 +260,10 @@ class Runner:
         self.splats, self.optimizers = create_splats_with_optimizers(
             torch.from_numpy(self.trainset.points).float(),
             torch.from_numpy(self.trainset.points_rgb / 255.0).float(),
-            sh_degree=args.sh_degree,
-            init_opacity=args.init_opa,
-            init_scale=args.init_scale,
-            sparse_grad=args.sparse_grad,
+            sh_degree=cfg.sh_degree,
+            init_opacity=cfg.init_opa,
+            init_scale=cfg.init_scale,
+            sparse_grad=cfg.sparse_grad,
             device=self.device,
         )
         print("Model initialized. Number of GS:", len(self.splats["means3d"]))
@@ -209,7 +276,7 @@ class Runner:
         )
 
         # Viewer
-        self.server = ViewerServer(port=args.port, render_fn=self._viewer_render_fn)
+        self.server = ViewerServer(port=cfg.port, render_fn=self._viewer_render_fn)
 
         # Running stats for prunning & growing.
         n_gauss = len(self.splats["means3d"])
@@ -234,7 +301,7 @@ class Runner:
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
         colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
-        rasterize_mode = "antialiased" if args.antialiased else "classic"
+        rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
         render_colors, render_alphas, info = rasterization(
             means=means,
             quats=quats,
@@ -245,9 +312,9 @@ class Runner:
             Ks=Ks,  # [C, 3, 3]
             width=width,
             height=height,
-            packed=self.args.packed,
-            compute_means2d_absgrad=self.args.absgrad,
-            sparse_grad=self.args.sparse_grad,
+            packed=self.cfg.packed,
+            compute_means2d_absgrad=self.cfg.absgrad,
+            sparse_grad=self.cfg.sparse_grad,
             rasterize_mode=rasterize_mode,
             **kwargs,
         )
@@ -255,14 +322,14 @@ class Runner:
 
     # @line_profiler.profile
     def train(self):
-        args = self.args
+        cfg = self.cfg
         device = self.device
 
-        # Dump args.
-        with open(f"{args.result_dir}/args.json", "w") as f:
-            json.dump(vars(args), f)
+        # Dump cfg.
+        with open(f"{cfg.result_dir}/cfg.json", "w") as f:
+            json.dump(vars(cfg), f)
 
-        max_steps = args.max_steps
+        max_steps = cfg.max_steps
         init_step = 0
 
         lr_func = get_expon_lr_func(
@@ -308,7 +375,7 @@ class Runner:
             height, width = pixels.shape[1:3]
 
             # sh schedule
-            sh_degree_to_use = min(step // args.sh_degree_interval, args.sh_degree)
+            sh_degree_to_use = min(step // cfg.sh_degree_interval, cfg.sh_degree)
 
             # forward
             colors, alphas, info = self.rasterize_splats(
@@ -317,8 +384,8 @@ class Runner:
                 width=width,
                 height=height,
                 sh_degree=sh_degree_to_use,
-                near_plane=args.near_plane,
-                far_plane=args.far_plane,
+                near_plane=cfg.near_plane,
+                far_plane=cfg.far_plane,
             )
             info["means2d"].retain_grad()  # used for running stats
 
@@ -327,26 +394,26 @@ class Runner:
             ssimloss = 1.0 - self.ssim(
                 pixels.permute(0, 3, 1, 2), colors.permute(0, 3, 1, 2)
             )
-            loss = l1loss * (1.0 - args.ssim_lambda) + ssimloss * args.ssim_lambda
+            loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
             loss.backward()
             pbar.set_description(
                 f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}|"
             )
 
             # update running stats for prunning & growing
-            if step < args.refine_stop_iter:
+            if step < cfg.refine_stop_iter:
                 self.update_running_stats(info)
 
-                if step > args.refine_start_iter and step % args.refine_every == 0:
+                if step > cfg.refine_start_iter and step % cfg.refine_every == 0:
                     grads = self.running_stats["grad2d"] / self.running_stats[
                         "count"
                     ].clamp_min(1)
 
                     # grow GSs
-                    is_grad_high = grads >= args.grow_grad2d
+                    is_grad_high = grads >= cfg.grow_grad2d
                     is_small = (
                         torch.exp(self.splats["scales"]).max(dim=-1).values
-                        <= args.grow_scale3d * self.scene_scale
+                        <= cfg.grow_scale3d * self.scene_scale
                     )
                     is_dupli = is_grad_high & is_small
                     n_dupli = is_dupli.sum().item()
@@ -368,8 +435,8 @@ class Runner:
                     )
 
                     # prune GSs
-                    is_prune = torch.sigmoid(self.splats["opacities"]) < args.prune_opa
-                    if step > args.reset_every:
+                    is_prune = torch.sigmoid(self.splats["opacities"]) < cfg.prune_opa
+                    if step > cfg.reset_every:
                         # The official code also implements sreen-size pruning but
                         # it's actually not being used due to a bug:
                         # https://github.com/graphdeco-inria/gaussian-splatting/issues/123
@@ -389,12 +456,12 @@ class Runner:
                     self.running_stats["grad2d"].zero_()
                     self.running_stats["count"].zero_()
 
-                if step % args.reset_every == 0:
+                if step % cfg.reset_every == 0:
                     self.reset_opa()
 
             # Turn Gradients into Sparse Tensor before running optimizer
-            if args.sparse_grad:
-                assert args.packed, "Sparse gradients only work with packed mode."
+            if cfg.sparse_grad:
+                assert cfg.packed, "Sparse gradients only work with packed mode."
                 cindices = info["cindices"]
                 for k in self.splats.keys():
                     grad = self.splats[k].grad
@@ -413,11 +480,11 @@ class Runner:
                 optimizer.zero_grad(set_to_none=True)
 
             # eval the full set
-            if step in [i - 1 for i in args.eval_steps]:
+            if step in [i - 1 for i in cfg.eval_steps]:
                 self.eval(step)
                 self.render_traj(step)
 
-            if step in [i - 1 for i in args.save_steps]:
+            if step in [i - 1 for i in cfg.save_steps]:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
                 toc = time.time()
                 stats = {
@@ -437,16 +504,16 @@ class Runner:
     @torch.no_grad()
     def update_running_stats(self, info: Dict):
         """Update running stats."""
-        args = self.args
+        cfg = self.cfg
 
         # normalize grads to [-1, 1] screen space
-        if args.absgrad:
+        if cfg.absgrad:
             grads = info["means2d"].absgrad.clone()
         else:
             grads = info["means2d"].grad.clone()
         grads[..., 0] *= info["width"] / 2.0
         grads[..., 1] *= info["height"] / 2.0
-        if args.packed:
+        if cfg.packed:
             # grads is [nnz, 2]
             gs_ids = info["cindices"]  # [nnz] or None
             self.running_stats["grad2d"].index_add_(0, gs_ids, grads.norm(dim=-1))
@@ -589,7 +656,7 @@ class Runner:
     def eval(self, step: int):
         """Entry for evaluation."""
         print("Running evaluation...")
-        args = self.args
+        cfg = self.cfg
         device = self.device
 
         valloader = torch.utils.data.DataLoader(
@@ -610,9 +677,9 @@ class Runner:
                 Ks=Ks,
                 width=width,
                 height=height,
-                sh_degree=args.sh_degree,
-                near_plane=args.near_plane,
-                far_plane=args.far_plane,
+                sh_degree=cfg.sh_degree,
+                near_plane=cfg.near_plane,
+                far_plane=cfg.far_plane,
             )  # [1, H, W, 3]
             colors = torch.clamp(colors, 0.0, 1.0)
             torch.cuda.synchronize()
@@ -655,7 +722,7 @@ class Runner:
     def render_traj(self, step: int):
         """Entry for trajectory rendering."""
         print("Running trajectory rendering...")
-        args = self.args
+        cfg = self.cfg
         device = self.device
 
         camtoworlds = self.trainset.camtoworlds[5:-5]
@@ -680,9 +747,9 @@ class Runner:
                 Ks=K[None],
                 width=width,
                 height=height,
-                sh_degree=args.sh_degree,
-                near_plane=args.near_plane,
-                far_plane=args.far_plane,
+                sh_degree=cfg.sh_degree,
+                near_plane=cfg.near_plane,
+                far_plane=cfg.far_plane,
                 render_mode="RGB+ED",
             )  # [1, H, W, 4]
             colors = torch.clamp(renders[0, ..., 0:3], 0.0, 1.0)  # [H, W, 3]
@@ -697,7 +764,7 @@ class Runner:
             canvas_all.append(canvas)
 
         # save to video
-        video_dir = f"{args.result_dir}/videos/"
+        video_dir = f"{cfg.result_dir}/videos/"
         os.makedirs(video_dir, exist_ok=True)
         writer = imageio.get_writer(f"{video_dir}/traj_{step}.mp4", fps=30)
         for canvas in canvas_all:
@@ -728,160 +795,17 @@ class Runner:
             Ks=K[None],
             width=W,
             height=H,
-            sh_degree=self.args.sh_degree,  # active all SH degrees
+            sh_degree=self.cfg.sh_degree,  # active all SH degrees
             radius_clip=3.0,  # skip GSs that have small image radius (in pixels)
         )  # [1, H, W, 3]
         return render_colors[0].cpu().numpy()
 
+def main(cfg: Config):
+    runner = Runner(cfg)
 
-if __name__ == "__main__":
-    """
-    python simple_trainer.py --data_dir data/progressive/university1/ --data_factor 1 \
-        --grow_scale3d 0.001 --result_dir  results/university1 
-    """
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--data_dir",
-        type=str,
-        default="data/360_v2/garden",
-        help="Path to the MipNeRF360 dataset",
-    )
-    parser.add_argument(
-        "--data_factor",
-        type=int,
-        default=4,
-        help="Downsample factor for the dataset",
-    )
-    parser.add_argument(
-        "--result_dir",
-        type=str,
-        default="results/garden",
-        help="Directory to save results",
-    )
-    parser.add_argument(
-        "--port", type=int, default=8080, help="Port for the viewer server"
-    )
-    parser.add_argument(
-        "--max_steps", type=int, default=30_000, help="Number of training steps"
-    )
-    parser.add_argument(
-        "--eval_steps",
-        type=int,
-        nargs="+",
-        default=[7_000, 30_000],
-        help="Steps to evaluate the model",
-    )
-    parser.add_argument(
-        "--save_steps",
-        type=int,
-        nargs="+",
-        default=[7_000, 30_000],
-        help="Steps to save the model",
-    )
-    parser.add_argument(
-        "--sh_degree", type=int, default=3, help="Degree of spherical harmonics"
-    )
-    parser.add_argument(
-        "--init_opa", type=float, default=0.1, help="Initial opacity of GS"
-    )
-    parser.add_argument(
-        "--init_scale", type=float, default=None, help="Initial scale of GS"
-    )
-    parser.add_argument(
-        "--ssim_lambda", type=float, default=0.2, help="Weight for SSIM loss"
-    )
-    parser.add_argument(
-        "--sh_degree_interval",
-        type=int,
-        default=1000,
-        help="Turn on another SH degree every this steps",
-    )
-    parser.add_argument(
-        "--near_plane", type=float, default=0.01, help="Near plane clipping distance"
-    )
-    parser.add_argument(
-        "--far_plane", type=float, default=1e10, help="Far plane clipping distance"
-    )
-    parser.add_argument(
-        "--prune_opa",
-        type=float,
-        default=0.005,
-        help="GSs with opacity below this value will be pruned",
-    )
-    parser.add_argument(
-        "--grow_grad2d",
-        type=float,
-        default=0.0002,
-        help="GSs with image plane gradient above this value will be split/duplicated",
-    )
-    parser.add_argument(
-        "--grow_scale3d",
-        type=float,
-        default=0.01,
-        help="GSs with scale below this value will be duplicated. Above will be split",
-    )
-    parser.add_argument(
-        "--refine_start_iter",
-        type=int,
-        default=500,
-        help="Start refining GSs after this iteration",
-    )
-    parser.add_argument(
-        "--refine_stop_iter",
-        type=int,
-        default=15_000,
-        help="Stop refining GSs after this iteration",
-    )
-    parser.add_argument(
-        "--reset_every",
-        type=int,
-        default=3000,
-        help="Reset opacities every this steps",
-    )
-    parser.add_argument(
-        "--refine_every",
-        type=int,
-        default=100,
-        help="Refine GSs every this steps",
-    )
-    parser.add_argument(
-        "--packed",
-        action="store_true",
-        help="Use packed mode for rasterization (less memory usage but slightly slower)",
-    )
-    parser.add_argument(
-        "--sparse_grad",
-        action="store_true",
-        help="Use sparse gradients for optimization",
-    )
-    parser.add_argument(
-        "--ckpt",
-        type=str,
-        default=None,
-        help="path to the .pt file. If provide, it will skip training and render a video",
-    )
-    parser.add_argument(
-        "--absgrad",
-        action="store_true",
-        help="Use absolute gradient for pruning. Be warned: This typically requires larger --grow_grad2d, e.g., 0.0008 or 0.0006",
-    )
-    parser.add_argument(
-        "--antialiased",
-        action="store_true",
-        help="Anti-aliasing in rasterization",
-    )
-    parser.add_argument(
-        "--exit_once_done",
-        action="store_true",
-        help="Do not wait for the viewer to exit",
-    )
-    args = parser.parse_args()
-
-    runner = Runner(args)
-
-    if args.ckpt is not None:
+    if cfg.ckpt is not None:
         # run eval only
-        ckpt = torch.load(args.ckpt, map_location=runner.device)
+        ckpt = torch.load(cfg.ckpt, map_location=runner.device)
         for k in runner.splats.keys():
             runner.splats[k].data = ckpt["splats"][k]
         runner.eval(step=ckpt["step"])
@@ -889,6 +813,10 @@ if __name__ == "__main__":
     else:
         runner.train()
 
-    if not args.exit_once_done:
+    if not cfg.exit_once_done:
         print("Viewer running... Ctrl+C to exit.")
         time.sleep(1000000)
+
+
+if __name__ == "__main__":
+    tyro.cli(main)    
