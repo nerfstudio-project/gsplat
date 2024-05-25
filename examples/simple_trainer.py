@@ -415,7 +415,7 @@ class Runner:
             # eval the full set
             if step in [i - 1 for i in args.eval_steps]:
                 self.eval(step)
-                self.render_traj()
+                self.render_traj(step)
 
             if step in [i - 1 for i in args.save_steps]:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
