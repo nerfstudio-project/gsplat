@@ -1,15 +1,16 @@
-import argparse
 import json
 import os
 import random
 import time
-from typing import Dict, Optional, Tuple, List
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
 
 import imageio
 import numpy as np
 import torch
 import torch.nn.functional as F
 import tqdm
+import tyro
 from datasets.colmap import Dataset
 from datasets.traj import generate_interpolated_path
 from nerfview import CameraState, ViewerServer, view_lock
@@ -17,8 +18,6 @@ from sklearn.neighbors import NearestNeighbors
 from torch import Tensor
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
-import tyro
-from dataclasses import dataclass, field
 
 from gsplat.rendering import rasterization
 
@@ -296,7 +295,7 @@ class Runner:
         means = self.splats["means3d"]  # [N, 3]
         # quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
         # rasterization does normalization internally
-        quats = self.splats["quats"]  # [N, 4] 
+        quats = self.splats["quats"]  # [N, 4]
         scales = torch.exp(self.splats["scales"])  # [N, 3]
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
         colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
@@ -473,7 +472,7 @@ class Runner:
                         size=self.splats[k].size(),  # [N, ...]
                         is_coalesced=len(Ks) == 1,
                     )
-                    
+
             # optimize
             for optimizer in self.optimizers:
                 optimizer.step()
@@ -494,10 +493,13 @@ class Runner:
                 }
                 with open(f"{self.stats_dir}/train_step{step:04d}.json", "w") as f:
                     json.dump(stats, f)
-                torch.save({
-                    "step": step,
-                    "splats": self.splats.state_dict(),
-                }, f"{self.ckpt_dir}/ckpt_{step}.pt")
+                torch.save(
+                    {
+                        "step": step,
+                        "splats": self.splats.state_dict(),
+                    },
+                    f"{self.ckpt_dir}/ckpt_{step}.pt",
+                )
 
             view_lock.release()
 
@@ -800,6 +802,7 @@ class Runner:
         )  # [1, H, W, 3]
         return render_colors[0].cpu().numpy()
 
+
 def main(cfg: Config):
     runner = Runner(cfg)
 
@@ -819,4 +822,4 @@ def main(cfg: Config):
 
 
 if __name__ == "__main__":
-    tyro.cli(main)    
+    tyro.cli(main)
