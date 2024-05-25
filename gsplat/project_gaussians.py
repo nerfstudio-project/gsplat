@@ -165,6 +165,7 @@ class _ProjectGaussians(Function):
         # v_cov3d,
     ):
         # pdb.set_trace()
+        print("inside backward")
         (
             means3d,
             scales,
@@ -201,6 +202,8 @@ class _ProjectGaussians(Function):
             # v_conics,
             # v_compensation,
         )
+
+        # pdb.set_trace()
 
         if viewmat.requires_grad:
             v_viewmat = torch.zeros_like(viewmat)
@@ -239,6 +242,8 @@ class _ProjectGaussians(Function):
         else:
             v_viewmat = None
 
+        v_scale = torch.concatenate((v_scale, torch.zeros((v_scale.shape[0], 1), device="cuda:0")), dim=-1)
+        # pdb.set_trace()
         # Return a gradient for each input.
         return (
             # means3d: Float[Tensor, "*batch 3"],

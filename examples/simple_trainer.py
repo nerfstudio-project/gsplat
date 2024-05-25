@@ -15,6 +15,8 @@ from torch import Tensor, optim
 import matplotlib
 import pdb
 
+os.environ['CUDA_LAUNCH_BLOCKING']="1"
+os.environ['TORCH_USE_CUDA_DSA'] = "1"
 
 def getProjectionMatrix(znear, zfar, fovX, fovY):
     import math
@@ -281,6 +283,7 @@ class SimpleTrainer:
             # pdb.set_trace()
             loss.backward()
             # print("after backward")
+            print("Here!!!")
             torch.cuda.synchronize()
             times[2] += time.time() - start
             optimizer.step()
