@@ -130,7 +130,7 @@ gsplat v0.1.11               n/a       n/a                  OOM   OOM         OO
 diff-gaussian-rasterization  n/a       n/a                  OOM   OOM         OOM
 ===========================  ========  =============  ==========  ==========  ==========
 
-Note: Evaluations are conducted on a NVIDIA TITAN RTX GPU. (commit 8ea2ea3). "Mem" indicates
+Note: Evaluations are conducted on a NVIDIA TITAN RTX GPU. (commit 8ea2ea3). "Mem" denotes for
 the amount of GPU memory required by the rasterization operation (excluding the input data),
 which is calculated by the diff of `torch.cuda.max_memory_allocated()` before and after the
 operation.
