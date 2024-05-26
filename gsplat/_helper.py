@@ -93,11 +93,6 @@ def rasterization_legacy_wrapper(
         fx, fy = Ks[cid, 0, 0], Ks[cid, 1, 1]
         cx, cy = Ks[cid, 0, 2], Ks[cid, 1, 2]
         viewmat = viewmats[cid]
-        background = (
-            backgrounds[cid]
-            if backgrounds is not None
-            else torch.zeros(3, device=means.device)
-        )
 
         means2d, depths, radii, conics, _, num_tiles_hit, _ = project_gaussians(
             means3d=means,
@@ -122,6 +117,12 @@ def rasterization_legacy_wrapper(
             if sh_degree is None:
                 sh_degree = int(math.sqrt(colors.shape[1]) - 1)
             colors = spherical_harmonics(sh_degree, viewdirs, colors)  # [N, 3]
+
+        background = (
+            backgrounds[cid]
+            if backgrounds is not None
+            else torch.zeros(colors.shape[-1], device=means.device)
+        )
 
         render_colors_, render_alphas_ = rasterize_gaussians(
             xys=means2d,

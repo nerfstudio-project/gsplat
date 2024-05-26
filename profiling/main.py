@@ -38,6 +38,7 @@ def timeit(repeats: int, f: Callable, *args, **kwargs) -> float:
 
 def main(
     batch_size: int = 1,
+    channels: int = 3,
     reso: Literal["360p", "720p", "1080p", "4k"] = "4k",
     scene_grid: int = 15,
     packed: bool = True,
@@ -48,18 +49,13 @@ def main(
     means, quats, scales, opacities, colors, viewmats, Ks, width, height = (
         load_test_data(device=device, scene_grid=scene_grid)
     )
-    sh_degree = None
-    viewmats, Ks = viewmats[:1], Ks[:1]  # a single image
 
     # to batch
-    viewmats = viewmats.repeat(batch_size, 1, 1)
-    Ks = Ks.repeat(batch_size, 1, 1)
+    viewmats = viewmats[:1].repeat(batch_size, 1, 1)
+    Ks = Ks[:1].repeat(batch_size, 1, 1)
 
-    # # to SH colors
-    # sh_degree = 3
-    # shs = torch.zeros((means.shape[0], (sh_degree + 1) ** 2, 3), device=device)
-    # shs[:, 0, :] = colors / 0.28209479177387814
-    # colors = shs
+    # more channels
+    colors = colors[:, :1].repeat(1, channels)
 
     means.requires_grad = True
     quats.requires_grad = True
@@ -102,7 +98,6 @@ def main(
         packed=packed,
         near_plane=0.01,
         far_plane=100.0,
-        sh_degree=sh_degree,
         sparse_grad=sparse_grad,
     )
     mem_toc_fwd = torch.cuda.max_memory_allocated() / 1024**3 - mem_tic
@@ -154,86 +149,101 @@ if __name__ == "__main__":
         default=[1, 11, 21],
         help="Scene grid size for profiling",
     )
+    parser.add_argument(
+        "--channels",
+        nargs="+",
+        type=int,
+        default=[3],
+        help="Number of color channels for profiling",
+    )
     args = parser.parse_args()
 
     # Tested on a NVIDIA TITAN RTX with (24 GB).
 
     for batch_size in args.batch_size:
-        print("========================================")
-        print(f"Batch Size: {batch_size}")
-        print("========================================")
-        if "gsplat" in args.backends:
-            print("gsplat packed[True] sparse_grad[True]")
-            # [FWD]2.21 GB, [All]2.54 GB Time: [FWD]0.028s, [BWD]0.060s
-            # [FWD]0.17 GB, [All]0.17 GB Time: [FWD]0.004s, [BWD]0.008s
-            # [FWD]0.83 GB, [All]0.83 GB Time: [FWD]0.012s, [BWD]0.020s
-            for scene_grid in args.scene_grid:
-                main(
-                    batch_size=batch_size,
-                    reso="1080p",
-                    scene_grid=scene_grid,
-                    packed=True,
-                    sparse_grad=True,
-                    repeats=args.repeats,
-                )
-                torch.cuda.empty_cache()
+        for channels in args.channels:
+            print("========================================")
+            print(f"Batch Size: {batch_size}, Channels: {channels}")
+            print("========================================")
+            if "gsplat" in args.backends:
+                print("gsplat packed[True] sparse_grad[True]")
+                # [FWD]2.21 GB, [All]2.54 GB Time: [FWD]0.028s, [BWD]0.060s
+                # [FWD]0.17 GB, [All]0.17 GB Time: [FWD]0.004s, [BWD]0.008s
+                # [FWD]0.83 GB, [All]0.83 GB Time: [FWD]0.012s, [BWD]0.020s
+                for scene_grid in args.scene_grid:
+                    main(
+                        batch_size=batch_size,
+                        channels=channels,
+                        reso="1080p",
+                        scene_grid=scene_grid,
+                        packed=True,
+                        sparse_grad=True,
+                        repeats=args.repeats,
+                    )
+                    torch.cuda.empty_cache()
 
-            print("gsplat packed[True] sparse_grad[False]")
-            # [FWD]0.17 GB, [All]0.17 GB Time: [FWD]0.004s, [BWD]0.006s
-            # [FWD]0.83 GB, [All]1.13 GB Time: [FWD]0.012s, [BWD]0.021s
-            # [FWD]2.21 GB, [All]3.81 GB Time: [FWD]0.028s, [BWD]0.063s
-            for scene_grid in args.scene_grid:
-                main(
-                    batch_size=batch_size,
-                    reso="1080p",
-                    scene_grid=scene_grid,
-                    packed=True,
-                    sparse_grad=False,
-                    repeats=args.repeats,
-                )
-                torch.cuda.empty_cache()
+                print("gsplat packed[True] sparse_grad[False]")
+                # [FWD]0.17 GB, [All]0.17 GB Time: [FWD]0.004s, [BWD]0.006s
+                # [FWD]0.83 GB, [All]1.13 GB Time: [FWD]0.012s, [BWD]0.021s
+                # [FWD]2.21 GB, [All]3.81 GB Time: [FWD]0.028s, [BWD]0.063s
+                for scene_grid in args.scene_grid:
+                    main(
+                        batch_size=batch_size,
+                        channels=channels,
+                        reso="1080p",
+                        scene_grid=scene_grid,
+                        packed=True,
+                        sparse_grad=False,
+                        repeats=args.repeats,
+                    )
+                    torch.cuda.empty_cache()
 
-            print("gsplat packed[False] sparse_grad[False]")
-            # [FWD]0.17 GB, [All]0.17 GB Time: [FWD]0.003s, [BWD]0.006s
-            # [FWD]1.50 GB, [All]1.66 GB Time: [FWD]0.011s, [BWD]0.017s
-            # [FWD]4.69 GB, [All]5.79 GB Time: [FWD]0.027s, [BWD]0.048s
-            for scene_grid in args.scene_grid:
-                main(
-                    batch_size=batch_size,
-                    reso="1080p",
-                    scene_grid=scene_grid,
-                    packed=False,
-                    sparse_grad=False,
-                    repeats=args.repeats,
-                )
-                torch.cuda.empty_cache()
+                print("gsplat packed[False] sparse_grad[False]")
+                # [FWD]0.17 GB, [All]0.17 GB Time: [FWD]0.003s, [BWD]0.006s
+                # [FWD]1.50 GB, [All]1.66 GB Time: [FWD]0.011s, [BWD]0.017s
+                # [FWD]4.69 GB, [All]5.79 GB Time: [FWD]0.027s, [BWD]0.048s
+                for scene_grid in args.scene_grid:
+                    main(
+                        batch_size=batch_size,
+                        channels=channels,
+                        reso="1080p",
+                        scene_grid=scene_grid,
+                        packed=False,
+                        sparse_grad=False,
+                        repeats=args.repeats,
+                    )
+                    torch.cuda.empty_cache()
 
-        if "gsplat-legacy" in args.backends:
-            # [FWD]0.20 GB, [All]0.20 GB Time: [FWD]0.005s, [BWD]0.009s
-            # [FWD]2.04 GB, [All]2.76 GB Time: [FWD]0.016s, [BWD]0.019s
-            # [FWD]6.53 GB, [All]9.86 GB Time: [FWD]0.042s, [BWD]0.047s
-            print("gsplat-legacy")
-            for scene_grid in args.scene_grid:
-                main(
-                    batch_size=batch_size,
-                    reso="1080p",
-                    scene_grid=scene_grid,
-                    backend="gsplat",
-                    repeats=args.repeats,
-                )
-                torch.cuda.empty_cache()
+            if "gsplat-legacy" in args.backends:
+                # [FWD]0.20 GB, [All]0.20 GB Time: [FWD]0.005s, [BWD]0.009s
+                # [FWD]2.04 GB, [All]2.76 GB Time: [FWD]0.016s, [BWD]0.019s
+                # [FWD]6.53 GB, [All]9.86 GB Time: [FWD]0.042s, [BWD]0.047s
+                print("gsplat-legacy")
+                for scene_grid in args.scene_grid:
+                    main(
+                        batch_size=batch_size,
+                        channels=channels,
+                        reso="1080p",
+                        scene_grid=scene_grid,
+                        backend="gsplat",
+                        repeats=args.repeats,
+                    )
+                    torch.cuda.empty_cache()
 
-        if "inria" in args.backends:
-            print("inria")
-            # [FWD]0.34 GB, [All]0.34 GB Time: [FWD]0.004s, [BWD]0.018s
-            # [FWD]3.18 GB, [All]3.18 GB Time: [FWD]0.010s, [BWD]0.032s
-            # [FWD]10.25 GB, [All]10.83 GB Time: [FWD]0.026s, [BWD]0.053s
-            for scene_grid in args.scene_grid:
-                main(
-                    batch_size=batch_size,
-                    reso="1080p",
-                    scene_grid=1,
-                    backend="inria",
-                    repeats=args.repeats,
-                )
-                torch.cuda.empty_cache()
+            if "inria" in args.backends:
+                print("inria")
+                # [FWD]0.34 GB, [All]0.34 GB Time: [FWD]0.004s, [BWD]0.018s
+                # [FWD]3.18 GB, [All]3.18 GB Time: [FWD]0.010s, [BWD]0.032s
+                # [FWD]10.25 GB, [All]10.83 GB Time: [FWD]0.026s, [BWD]0.053s
+                if channels != 3:
+                    print("Skipping inria for channels != 3")
+                else:
+                    for scene_grid in args.scene_grid:
+                        main(
+                            batch_size=batch_size,
+                            reso="1080p",
+                            scene_grid=1,
+                            backend="inria",
+                            repeats=args.repeats,
+                        )
+                        torch.cuda.empty_cache()
