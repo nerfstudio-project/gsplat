@@ -40,19 +40,14 @@ def rasterization(
     """Rasterize a set of 3D Gaussians to a batch of image planes.
 
     .. note::
-        This function supports rendering a batch of cameras at once, which is much faster
-        than looping over cameras one by one. However be aware that
-        rendering in batch would require more GPU memory than looped rendering.
-
-    .. note::
-        This function supports rendering N-D features. If `sh_degree` is None, 
+        This function supports rendering N-D features. If `sh_degree` is None,
         the `colors` is expected to be with shape [N, D], in which D is the channel
-        of the features to be rendered, up to 32 at the moment. On the other hand, if 
-        `sh_degree` is set, the `colors` is expected to be SH coefficients with
-        shape [N, K, 3], where K is the number of bands. 
-    
+        of the features to be rendered, up to 32 at the moment. On the other hand, if
+        `sh_degree` is set, the `colors` is expected to be the SH coefficients with
+        shape [N, K, 3], where K is the number of bands.
+
     .. warning::
-        This function is currently not differentiable w.r.t. the camera intrinsics `Ks`. 
+        This function is currently not differentiable w.r.t. the camera intrinsics `Ks`.
 
     Args:
         means: The 3D centers of the Gaussians. [N, 3]
@@ -67,7 +62,7 @@ def rasterization(
         near_plane: The near plane for clipping. Default is 0.01.
         far_plane: The far plane for clipping. Default is 1e10.
         radius_clip: Gaussians with 2D radius smaller or equal than this value will be
-            skipped. This is extremely helpful for speeding up large scale scenes. 
+            skipped. This is extremely helpful for speeding up large scale scenes.
             Default is 0.0.
         eps2d: An epsilon added to the egienvalues of projected 2D covariance matrices.
             This will prevents the projected GS to be too small. For example eps2d=0.3
@@ -86,7 +81,7 @@ def rasterization(
         sparse_grad: If true, the gradients for {means, quats, scales} will be stored in
             a COO sparse layout. This can be helpful on saving memory. Default is False.
         compute_means2d_absgrad: If true, the absolute gradients of the projected 2D means
-            will be computed during the backward pass, which could be accessed by 
+            will be computed during the backward pass, which could be accessed by
             `meta["means2d"].absgrad`. Default is False.
         rasterize_mode: The rasterization mode. Supported modes are "classic" and
             "antialiased". Default is "classic".
@@ -94,11 +89,11 @@ def rasterization(
     Returns:
         A tuple:
 
-        **render_colors**: The rendered colors. [C, width, height, X]. 
+        **render_colors**: The rendered colors. [C, width, height, X].
         X depends on the `render_mode` and input `colors`. If `render_mode` is "RGB",
         X is D; if `render_mode` is "D" or "ED", X is 1; if `render_mode` is "RGB+D" or
         "RGB+ED", X is D+1.
-        
+
         **render_alphas**: The rendered alphas. [C, width, height, 1].
 
         **meta**: A dictionary of intermediate results of the rasterization.
@@ -125,8 +120,8 @@ def rasterization(
         >>> print (colors.shape, alphas.shape)
         torch.Size([1, 200, 200, 3]) torch.Size([1, 200, 200, 1])
         >>> print (meta.keys())
-        dict_keys(['rindices', 'cindices', 'radii', 'means2d', 'depths', 'conics', 
-        'opacities', 'tile_width', 'tile_height', 'tiles_per_gauss', 'isect_ids', 
+        dict_keys(['rindices', 'cindices', 'radii', 'means2d', 'depths', 'conics',
+        'opacities', 'tile_width', 'tile_height', 'tiles_per_gauss', 'isect_ids',
         'gauss_ids', 'isect_offsets', 'width', 'height', 'tile_size'])
 
     """
