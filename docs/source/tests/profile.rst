@@ -131,6 +131,7 @@ diff-gaussian-rasterization  n/a       n/a                  OOM   OOM         OO
 ===========================  ========  =============  ==========  ==========  ==========
 
 Note: Evaluations are conducted on a NVIDIA TITAN RTX GPU. (commit 8ea2ea3). "Mem" denotes for
-the amount of GPU memory required by the rasterization operation (excluding the input data),
-which is calculated by the diff of `torch.cuda.max_memory_allocated()` before and after the
-operation.
+the amount of GPU memory required by the rasterization process (excluding the input data),
+which is calculated using the diff of 
+`torch.cuda.max_memory_allocated() <https://pytorch.org/docs/stable/generated/torch.cuda.max_memory_allocated.html>`_ 
+before and after the rasterization operation.
