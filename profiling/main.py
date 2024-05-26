@@ -116,10 +116,18 @@ def main(
         f"Rasterization Mem Allocation: [FWD]{mem_toc_fwd:.2f} GB, [All]{mem_toc_all:.2f} GB "
         f"Time: [FWD]{ellipse_time_fwd:.3f}s, [BWD]{ellipse_time_bwd:.3f}s"
     )
+    return {
+        "mem_fwd": mem_toc_fwd,
+        "mem_all": mem_toc_all,
+        "time_fwd": ellipse_time_fwd,
+        "time_bwd": ellipse_time_bwd,
+    }
 
 
 if __name__ == "__main__":
     import argparse
+
+    from tabulate import tabulate
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -160,6 +168,7 @@ if __name__ == "__main__":
 
     # Tested on a NVIDIA TITAN RTX with (24 GB).
 
+    collection = []
     for batch_size in args.batch_size:
         for channels in args.channels:
             print("========================================")
@@ -171,7 +180,7 @@ if __name__ == "__main__":
                 # [FWD]0.17 GB, [All]0.17 GB Time: [FWD]0.004s, [BWD]0.008s
                 # [FWD]0.83 GB, [All]0.83 GB Time: [FWD]0.012s, [BWD]0.020s
                 for scene_grid in args.scene_grid:
-                    main(
+                    stats = main(
                         batch_size=batch_size,
                         channels=channels,
                         reso="1080p",
@@ -180,6 +189,22 @@ if __name__ == "__main__":
                         sparse_grad=True,
                         repeats=args.repeats,
                     )
+                    collection.append(
+                        [
+                            "gsplat v1.0.0",
+                            True,
+                            True,
+                            # configs
+                            batch_size,
+                            channels,
+                            scene_grid,
+                            # stats
+                            # f"{stats['mem_fwd']:0.2f}",
+                            f"{stats['mem_all']:0.2f}",
+                            f"{int(1.0 / stats['time_fwd'])}",
+                            f"{int(1.0 / stats['time_bwd'])}",
+                        ]
+                    )
                     torch.cuda.empty_cache()
 
                 print("gsplat packed[True] sparse_grad[False]")
@@ -187,7 +212,7 @@ if __name__ == "__main__":
                 # [FWD]0.83 GB, [All]1.13 GB Time: [FWD]0.012s, [BWD]0.021s
                 # [FWD]2.21 GB, [All]3.81 GB Time: [FWD]0.028s, [BWD]0.063s
                 for scene_grid in args.scene_grid:
-                    main(
+                    stats = main(
                         batch_size=batch_size,
                         channels=channels,
                         reso="1080p",
@@ -196,6 +221,22 @@ if __name__ == "__main__":
                         sparse_grad=False,
                         repeats=args.repeats,
                     )
+                    collection.append(
+                        [
+                            "gsplat v1.0.0",
+                            True,
+                            False,
+                            # configs
+                            batch_size,
+                            channels,
+                            scene_grid,
+                            # stats
+                            # f"{stats['mem_fwd']:0.2f}",
+                            f"{stats['mem_all']:0.2f}",
+                            f"{int(1.0 / stats['time_fwd'])}",
+                            f"{int(1.0 / stats['time_bwd'])}",
+                        ]
+                    )
                     torch.cuda.empty_cache()
 
                 print("gsplat packed[False] sparse_grad[False]")
@@ -203,7 +244,7 @@ if __name__ == "__main__":
                 # [FWD]1.50 GB, [All]1.66 GB Time: [FWD]0.011s, [BWD]0.017s
                 # [FWD]4.69 GB, [All]5.79 GB Time: [FWD]0.027s, [BWD]0.048s
                 for scene_grid in args.scene_grid:
-                    main(
+                    stats = main(
                         batch_size=batch_size,
                         channels=channels,
                         reso="1080p",
@@ -211,6 +252,22 @@ if __name__ == "__main__":
                         packed=False,
                         sparse_grad=False,
                         repeats=args.repeats,
+                    )
+                    collection.append(
+                        [
+                            "gsplat v1.0.0",
+                            False,
+                            False,
+                            # configs
+                            batch_size,
+                            channels,
+                            scene_grid,
+                            # stats
+                            # f"{stats['mem_fwd']:0.2f}",
+                            f"{stats['mem_all']:0.2f}",
+                            f"{int(1.0 / stats['time_fwd'])}",
+                            f"{int(1.0 / stats['time_bwd'])}",
+                        ]
                     )
                     torch.cuda.empty_cache()
 
@@ -220,13 +277,29 @@ if __name__ == "__main__":
                 # [FWD]6.53 GB, [All]9.86 GB Time: [FWD]0.042s, [BWD]0.047s
                 print("gsplat-legacy")
                 for scene_grid in args.scene_grid:
-                    main(
+                    stats = main(
                         batch_size=batch_size,
                         channels=channels,
                         reso="1080p",
                         scene_grid=scene_grid,
                         backend="gsplat",
                         repeats=args.repeats,
+                    )
+                    collection.append(
+                        [
+                            "gsplat v0.1.11",
+                            "n/a",
+                            "n/a",
+                            # configs
+                            batch_size,
+                            channels,
+                            scene_grid,
+                            # stats
+                            # f"{stats['mem_fwd']:0.2f}",
+                            f"{stats['mem_all']:0.2f}",
+                            f"{int(1.0 / stats['time_fwd'])}",
+                            f"{int(1.0 / stats['time_bwd'])}",
+                        ]
                     )
                     torch.cuda.empty_cache()
 
@@ -237,13 +310,61 @@ if __name__ == "__main__":
                 # [FWD]10.25 GB, [All]10.83 GB Time: [FWD]0.026s, [BWD]0.053s
                 if channels != 3:
                     print("Skipping inria for channels != 3")
+                    collection.append(
+                        [
+                            "inria",
+                            "n/a",
+                            "n/a",
+                            # configs
+                            batch_size,
+                            channels,
+                            scene_grid,
+                            # stats
+                            "n/a",
+                            "n/a",
+                            "n/a",
+                            "n/a",
+                        ]
+                    )
                 else:
                     for scene_grid in args.scene_grid:
-                        main(
+                        stats = main(
                             batch_size=batch_size,
                             reso="1080p",
                             scene_grid=1,
                             backend="inria",
                             repeats=args.repeats,
                         )
+                        collection.append(
+                            [
+                                "inria",
+                                "n/a",
+                                "n/a",
+                                # configs
+                                batch_size,
+                                channels,
+                                scene_grid,
+                                # stats
+                                # f"{stats['mem_fwd']:0.2f}",
+                                f"{stats['mem_all']:0.2f}",
+                                f"{int(1.0 / stats['time_fwd'])}",
+                                f"{int(1.0 / stats['time_bwd'])}",
+                            ]
+                        )
                         torch.cuda.empty_cache()
+
+    headers = [
+        "Backend",
+        "Packed",
+        "Sparse Grad",
+        # configs
+        "Batch Size",
+        "Channels",
+        "Scene Size",
+        # stats
+        # "Mem[fwd] (GB)",
+        "Mem (GB)",
+        "FPS[fwd]",
+        "FPS[bwd]",
+    ]
+    print(tabulate(collection, headers, tablefmt="rst"))
