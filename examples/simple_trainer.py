@@ -29,6 +29,11 @@ from gsplat.rendering import rasterization
 
 @dataclass
 class Config:
+    # Disable viewer
+    disable_viewer: bool = False
+    # Path to the .pt file. If provide, it will skip training and render a video
+    ckpt: Optional[str] = None
+
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
     # Downsample factor for the dataset
@@ -76,18 +81,14 @@ class Config:
     # Refine GSs every this steps
     refine_every: int = 100
 
-    # Use packed mode for rasterization (less memory usage but slightly slower)
+    # Use packed mode for rasterization, this leads to less memory usage but slightly slower.
     packed: bool = False
-    # Use sparse gradients for optimization
+    # Use sparse gradients for optimization. (experimental)
     sparse_grad: bool = False
-    # Path to the .pt file. If provide, it will skip training and render a video
-    ckpt: Optional[str] = None
-    # Use absolute gradient for pruning. Be warned: This typically requires larger --grow_grad2d, e.g., 0.0008 or 0.0006
+    # Use absolute gradient for pruning. This typically requires larger --grow_grad2d, e.g., 0.0008 or 0.0006
     absgrad: bool = False
-    # Anti-aliasing in rasterization
+    # Anti-aliasing in rasterization. Might slightly hurt quantitative metrics.
     antialiased: bool = False
-    # Do not wait for the viewer to exit
-    exit_once_done: bool = False
 
 
 def create_splats_with_optimizers(
@@ -194,7 +195,8 @@ class Runner:
         )
 
         # Viewer
-        self.server = ViewerServer(port=cfg.port, render_fn=self._viewer_render_fn)
+        if not self.cfg.disable_viewer:
+            self.server = ViewerServer(port=cfg.port, render_fn=self._viewer_render_fn)
 
         # Running stats for prunning & growing.
         n_gauss = len(self.splats["means3d"])
@@ -271,9 +273,10 @@ class Runner:
         tic = time.time()
         pbar = tqdm.tqdm(range(init_step, max_steps))
         for step in pbar:
-            while self.server.training_state == "paused":
-                time.sleep(0.01)
-            view_lock.acquire()
+            if not cfg.disable_viewer:
+                while self.server.training_state == "paused":
+                    time.sleep(0.01)
+                view_lock.acquire()
 
             # Means3d has a learning rate schedule.
             for optimizer in self.optimizers:
@@ -397,12 +400,8 @@ class Runner:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
 
-            # eval the full set
-            if step in [i - 1 for i in cfg.eval_steps]:
-                self.eval(step)
-                self.render_traj(step)
-
-            if step in [i - 1 for i in cfg.save_steps]:
+            # save checkpoint
+            if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
                 toc = time.time()
                 stats = {
@@ -410,6 +409,7 @@ class Runner:
                     "ellipse_time": toc - tic,
                     "num_GS": len(self.splats["means3d"]),
                 }
+                print("Step: ", step, stats)
                 with open(f"{self.stats_dir}/train_step{step:04d}.json", "w") as f:
                     json.dump(stats, f)
                 torch.save(
@@ -420,7 +420,13 @@ class Runner:
                     f"{self.ckpt_dir}/ckpt_{step}.pt",
                 )
 
-            view_lock.release()
+            # eval the full set
+            if step in [i - 1 for i in cfg.eval_steps] or step == max_steps - 1:
+                self.eval(step)
+                self.render_traj(step)
+
+            if not cfg.disable_viewer:
+                view_lock.release()
 
     @torch.no_grad()
     def update_running_stats(self, info: Dict):
@@ -735,7 +741,7 @@ def main(cfg: Config):
     else:
         runner.train()
 
-    if not cfg.exit_once_done:
+    if not cfg.disable_viewer:
         print("Viewer running... Ctrl+C to exit.")
         time.sleep(1000000)
 

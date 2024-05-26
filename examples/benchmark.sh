@@ -1,3 +1,5 @@
+RESULT_DIR=results/benchmark
+
 for SCENE in bicycle bonsai counter garden kitchen room stump;
 do
     if [ "$SCENE" = "bicycle" ] || [ "$SCENE" = "stump" ] || [ "$SCENE" = "garden" ]; then
@@ -9,16 +11,16 @@ do
     echo "Running $SCENE"
 
     # train without eval
-    python simple_trainer.py --eval_steps -1 --exit_once_done --data_factor $DATA_FACTOR \
+    python simple_trainer.py --eval_steps -1 --disable_viewer --data_factor $DATA_FACTOR \
         --data_dir data/360_v2/$SCENE/ \
-        --result_dir results/benchmark/$SCENE/
+        --result_dir $RESULT_DIR/$SCENE/
 
     # run eval and render
     for CKPT in results/benchmark/$SCENE/ckpts/*;
     do
-        python simple_trainer.py --exit_once_done --data_factor $DATA_FACTOR \
+        python simple_trainer.py --disable_viewer --data_factor $DATA_FACTOR \
             --data_dir data/360_v2/$SCENE/ \
-            --result_dir results/benchmark/$SCENE/ \
+            --result_dir $RESULT_DIR/$SCENE/ \
             --ckpt $CKPT
     done
 done
@@ -28,7 +30,7 @@ for SCENE in bicycle bonsai counter garden kitchen room stump;
 do
     echo "=== Eval Stats ==="
 
-    for STATS in results/benchmark/$SCENE/stats/val*;
+    for STATS in $RESULT_DIR/$SCENE/stats/val*;
     do  
         echo $STATS
         cat $STATS; 
@@ -37,7 +39,7 @@ do
 
     echo "=== Train Stats ==="
 
-    for STATS in results/benchmark/$SCENE/stats/train*;
+    for STATS in $RESULT_DIR/$SCENE/stats/train*;
     do  
         echo $STATS
         cat $STATS; 
