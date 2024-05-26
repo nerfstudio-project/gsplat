@@ -22,10 +22,25 @@ faster, more memory efficient, and with a growing list of new features!
 * *gsplat* is equipped with the **latest and greatest** 3D Gaussian Splatting techniques, including `absgrad <https://ty424.github.io/AbsGS.github.io/>`_, `anti-aliasing <https://niujinshuchong.github.io/mip-splatting/>`_ etc. And more would come.
 
 
+.. raw:: html
+   
+   <iframe width="784" height="441" src="https://www.youtube.com/embed/G4SmXplWIrY?si=t1zLvrpvPyjB2n52" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
 
 
+Installation
+------------
 
-.. This libary contains the neccessary components for efficient 3D to 2D projection, sorting, and alpha compositing of gaussians and their associated backward passes for inverse rendering.
+*gsplat* is available on PyPI, and can be installed with pip:
+
+.. code-block:: bash
+
+    pip install gsplat
+
+Additionally, it can also be installed from source to get the latest features:
+
+.. code-block:: bash
+
+    pip install git+https://github.com/nerfstudio-project/gsplat
 
 Contributing
 ------------
