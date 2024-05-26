@@ -98,6 +98,7 @@ def main(
         packed=packed,
         near_plane=0.01,
         far_plane=100.0,
+        radius_clip=3.0,
         sparse_grad=sparse_grad,
     )
     mem_toc_fwd = torch.cuda.max_memory_allocated() / 1024**3 - mem_tic
@@ -114,7 +115,8 @@ def main(
     mem_toc_all = torch.cuda.max_memory_allocated() / 1024**3 - mem_tic
     print(
         f"Rasterization Mem Allocation: [FWD]{mem_toc_fwd:.2f} GB, [All]{mem_toc_all:.2f} GB "
-        f"Time: [FWD]{ellipse_time_fwd:.3f}s, [BWD]{ellipse_time_bwd:.3f}s"
+        f"Time: [FWD]{ellipse_time_fwd:.3f}s, [BWD]{ellipse_time_bwd:.3f}s "
+        f"N Gaussians: {means.shape[0]}"
     )
     return {
         "mem_fwd": mem_toc_fwd,
@@ -201,8 +203,8 @@ if __name__ == "__main__":
                             # stats
                             # f"{stats['mem_fwd']:0.2f}",
                             f"{stats['mem_all']:0.2f}",
-                            f"{int(1.0 / stats['time_fwd'])}",
-                            f"{int(1.0 / stats['time_bwd'])}",
+                            f"{1.0 / stats['time_fwd']:0.1f} x {(batch_size)}",
+                            f"{1.0 / stats['time_bwd']:0.1f} x {(batch_size)}",
                         ]
                     )
                     torch.cuda.empty_cache()
@@ -233,8 +235,8 @@ if __name__ == "__main__":
                             # stats
                             # f"{stats['mem_fwd']:0.2f}",
                             f"{stats['mem_all']:0.2f}",
-                            f"{int(1.0 / stats['time_fwd'])}",
-                            f"{int(1.0 / stats['time_bwd'])}",
+                            f"{1.0 / stats['time_fwd']:0.1f} x {(batch_size)}",
+                            f"{1.0 / stats['time_bwd']:0.1f} x {(batch_size)}",
                         ]
                     )
                     torch.cuda.empty_cache()
@@ -265,8 +267,8 @@ if __name__ == "__main__":
                             # stats
                             # f"{stats['mem_fwd']:0.2f}",
                             f"{stats['mem_all']:0.2f}",
-                            f"{int(1.0 / stats['time_fwd'])}",
-                            f"{int(1.0 / stats['time_bwd'])}",
+                            f"{1.0 / stats['time_fwd']:0.1f} x {(batch_size)}",
+                            f"{1.0 / stats['time_bwd']:0.1f} x {(batch_size)}",
                         ]
                     )
                     torch.cuda.empty_cache()
@@ -297,22 +299,26 @@ if __name__ == "__main__":
                             # stats
                             # f"{stats['mem_fwd']:0.2f}",
                             f"{stats['mem_all']:0.2f}",
-                            f"{int(1.0 / stats['time_fwd'])}",
-                            f"{int(1.0 / stats['time_bwd'])}",
+                            f"{1.0 / stats['time_fwd']:0.1f} x {(batch_size)}",
+                            f"{1.0 / stats['time_bwd']:0.1f} x {(batch_size)}",
                         ]
                     )
                     torch.cuda.empty_cache()
 
             if "inria" in args.backends:
                 print("inria")
-                # [FWD]0.34 GB, [All]0.34 GB Time: [FWD]0.004s, [BWD]0.018s
-                # [FWD]3.18 GB, [All]3.18 GB Time: [FWD]0.010s, [BWD]0.032s
-                # [FWD]10.25 GB, [All]10.83 GB Time: [FWD]0.026s, [BWD]0.053s
-                if channels != 3:
-                    print("Skipping inria for channels != 3")
+                for scene_grid in args.scene_grid:
+                    stats = main(
+                        batch_size=batch_size,
+                        channels=channels,
+                        reso="1080p",
+                        scene_grid=scene_grid,
+                        backend="inria",
+                        repeats=args.repeats,
+                    )
                     collection.append(
                         [
-                            "inria",
+                            "diff-gaussian-rasterization",
                             "n/a",
                             "n/a",
                             # configs
@@ -320,38 +326,13 @@ if __name__ == "__main__":
                             channels,
                             scene_grid,
                             # stats
-                            "n/a",
-                            "n/a",
-                            "n/a",
-                            "n/a",
+                            # f"{stats['mem_fwd']:0.2f}",
+                            f"{stats['mem_all']:0.2f}",
+                            f"{1.0 / stats['time_fwd']:0.1f} x {(batch_size)}",
+                            f"{1.0 / stats['time_bwd']:0.1f} x {(batch_size)}",
                         ]
                     )
-                else:
-                    for scene_grid in args.scene_grid:
-                        stats = main(
-                            batch_size=batch_size,
-                            reso="1080p",
-                            scene_grid=1,
-                            backend="inria",
-                            repeats=args.repeats,
-                        )
-                        collection.append(
-                            [
-                                "inria",
-                                "n/a",
-                                "n/a",
-                                # configs
-                                batch_size,
-                                channels,
-                                scene_grid,
-                                # stats
-                                # f"{stats['mem_fwd']:0.2f}",
-                                f"{stats['mem_all']:0.2f}",
-                                f"{int(1.0 / stats['time_fwd'])}",
-                                f"{int(1.0 / stats['time_bwd'])}",
-                            ]
-                        )
-                        torch.cuda.empty_cache()
+                    torch.cuda.empty_cache()
 
     headers = [
         "Backend",
@@ -367,4 +348,19 @@ if __name__ == "__main__":
         "FPS[fwd]",
         "FPS[bwd]",
     ]
+
+    # pop config columns that has only one option
+    if len(args.scene_grid) == 1:
+        headers.pop(5)
+        for row in collection:
+            row.pop(5)
+    if len(args.channels) == 1:
+        headers.pop(4)
+        for row in collection:
+            row.pop(4)
+    if len(args.batch_size) == 1:
+        headers.pop(3)
+        for row in collection:
+            row.pop(3)
+
     print(tabulate(collection, headers, tablefmt="rst"))

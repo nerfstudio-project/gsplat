@@ -203,10 +203,10 @@ def rasterization_inria_wrapper(
         P[2, 3] = -(zfar * znear) / (zfar - znear)
         return P
 
-    assert colors.shape[-1] == 3, "Only RGB colors are supported"
     assert eps2d == 0.3, "This is hard-coded in CUDA to be 0.3"
     C = len(viewmats)
     device = means.device
+    channels = colors.shape[-1]
 
     render_colors = []
     for cid in range(C):
@@ -248,19 +248,33 @@ def rasterization_inria_wrapper(
         rasterizer = GaussianRasterizer(raster_settings=raster_settings)
 
         means2D = torch.zeros_like(means, requires_grad=True, device=device)
+
         # Note: This implementation will apply a
         # torch.clamp(colors + 0.5, min=0.0) after spherical_harmonics, which is
         # different from the behavior of gsplat. Use with caution!
-        render_colors_, radii = rasterizer(
-            means3D=means,
-            means2D=means2D,
-            shs=colors if colors.dim() == 3 else None,
-            colors_precomp=colors if colors.dim() == 2 else None,
-            opacities=opacities[:, None],
-            scales=scales,
-            rotations=quats,
-            cov3D_precomp=None,
-        )
+        render_colors_ = []
+        for i in range(0, channels, 3):
+            _colors = colors[..., i : i + 3]
+            if _colors.shape[-1] < 3:
+                pad = torch.zeros(
+                    _colors.shape[0], 3 - _colors.shape[-1], device=device
+                )
+                _colors = torch.cat([_colors, pad], dim=-1)
+            _render_colors_, radii = rasterizer(
+                means3D=means,
+                means2D=means2D,
+                shs=_colors if colors.dim() == 3 else None,
+                colors_precomp=_colors if colors.dim() == 2 else None,
+                opacities=opacities[:, None],
+                scales=scales,
+                rotations=quats,
+                cov3D_precomp=None,
+            )
+            if _colors.shape[-1] < 3:
+                _render_colors_ = _render_colors_[:, :, : _colors.shape[-1]]
+            render_colors_.append(_render_colors_)
+        render_colors_ = torch.cat(render_colors_, dim=-1)
+
         # -0.5 roughly brings the color back but not exactly!
         render_colors_ = render_colors_ - 0.5
         render_colors_ = render_colors_.permute(1, 2, 0)  # [H, W, 3]
