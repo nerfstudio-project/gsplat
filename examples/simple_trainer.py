@@ -1,6 +1,5 @@
 import json
 import os
-import random
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -14,10 +13,16 @@ import tyro
 from datasets.colmap import Dataset
 from datasets.traj import generate_interpolated_path
 from nerfview import CameraState, ViewerServer, view_lock
-from sklearn.neighbors import NearestNeighbors
 from torch import Tensor
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
+from utils import (
+    get_expon_lr_func,
+    knn,
+    normalized_quat_to_rotmat,
+    rgb_to_sh,
+    set_random_seed,
+)
 
 from gsplat.rendering import rasterization
 
@@ -87,87 +92,12 @@ class Config:
     exit_once_done: bool = False
 
 
-def get_expon_lr_func(
-    lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000
-):
-    """
-    Continuous learning rate decay function. Adapted from JaxNeRF
-    The returned rate is lr_init when step=0 and lr_final when step=max_steps, and
-    is log-linearly interpolated elsewhere (equivalent to exponential decay).
-    If lr_delay_steps>0 then the learning rate will be scaled by some smooth
-    function of lr_delay_mult, such that the initial learning rate is
-    lr_init*lr_delay_mult at the beginning of optimization but will be eased back
-    to the normal learning rate when steps>lr_delay_steps.
-    :param conf: config subtree 'lr' or similar
-    :param max_steps: int, the number of steps during optimization.
-    :return HoF which takes step as input
-    """
-
-    def helper(step):
-        if step < 0 or (lr_init == 0.0 and lr_final == 0.0):
-            # Disable this parameter
-            return 0.0
-        if lr_delay_steps > 0:
-            # A kind of reverse cosine decay.
-            delay_rate = lr_delay_mult + (1 - lr_delay_mult) * np.sin(
-                0.5 * np.pi * np.clip(step / lr_delay_steps, 0, 1)
-            )
-        else:
-            delay_rate = 1.0
-        t = np.clip(step / max_steps, 0, 1)
-        log_lerp = np.exp(np.log(lr_init) * (1 - t) + np.log(lr_final) * t)
-        return delay_rate * log_lerp
-
-    return helper
-
-
-def normalized_quat_to_rotmat(quat: Tensor) -> Tensor:
-    assert quat.shape[-1] == 4, quat.shape
-    w, x, y, z = torch.unbind(quat, dim=-1)
-    mat = torch.stack(
-        [
-            1 - 2 * (y**2 + z**2),
-            2 * (x * y - w * z),
-            2 * (x * z + w * y),
-            2 * (x * y + w * z),
-            1 - 2 * (x**2 + z**2),
-            2 * (y * z - w * x),
-            2 * (x * z - w * y),
-            2 * (y * z + w * x),
-            1 - 2 * (x**2 + y**2),
-        ],
-        dim=-1,
-    )
-    return mat.reshape(quat.shape[:-1] + (3, 3))
-
-
-def _knn(x: Tensor, K: int = 4) -> Tensor:
-    x_np = x.cpu().numpy()
-    model = NearestNeighbors(n_neighbors=K, algorithm="auto", metric="euclidean").fit(
-        x_np
-    )
-    distances, _ = model.kneighbors(x_np)
-    return torch.from_numpy(distances).to(x)
-
-
-def _rgb_to_sh(rgb):
-    C0 = 0.28209479177387814
-    return rgb / C0
-
-
-def _set_random_seed(seed):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-
-
 def create_splats_with_optimizers(
     points: Tensor,  # [N, 3]
     rgbs: Tensor,  # [N, 3]
     sh_degree: int = 3,
     init_opacity: float = 0.1,
     init_scale: Optional[float] = None,
-    max_scale: Optional[float] = None,
     sparse_grad: bool = False,
     device: str = "cuda",
 ) -> torch.nn.ParameterDict:
@@ -175,21 +105,17 @@ def create_splats_with_optimizers(
 
     if init_scale is None:
         # Initialize the GS size to be the average dist of the 3 nearest neighbors
-        dist2_avg = (_knn(points, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
+        dist2_avg = (knn(points, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
         dist_avg = torch.sqrt(dist2_avg)
-        if max_scale is not None:
-            dist_avg = torch.clamp(dist_avg, max=max_scale)
         scales = torch.log(dist_avg).unsqueeze(-1).repeat(1, 3)  # [N, 3]
     else:
-        if max_scale is not None:
-            init_scale = min(init_scale, max_scale)
         scales = torch.log(torch.full((N, 3), init_scale))  # [N, 3]
     quats = torch.rand((N, 4))  # [N, 4]
     opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
 
     # Initialize the GS color
     colors = torch.zeros((N, (sh_degree + 1) ** 2, 3))  # [N, K, 3]
-    colors[:, 0, :] = _rgb_to_sh(rgbs)
+    colors[:, 0, :] = rgb_to_sh(rgbs)
 
     splats = torch.nn.ParameterDict(
         {
@@ -213,7 +139,7 @@ def create_splats_with_optimizers(
                 {"params": splats["shN"], "lr": 2.5e-3 / 20, "name": "shN"},
             ],
             eps=1e-15,
-            fused=True,  # TODO: benchmark fused optimizer
+            # fused=False,  # TODO: benchmark fused optimizer
         ),
     ]
     return splats, optimizers
@@ -223,7 +149,7 @@ class Runner:
     """Engine for training and testing."""
 
     def __init__(self, cfg: Config) -> None:
-        _set_random_seed(42)
+        set_random_seed(42)
 
         self.cfg = cfg
         self.device = "cuda"
