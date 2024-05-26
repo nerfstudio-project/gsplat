@@ -52,8 +52,6 @@ class Config:
     sh_degree_interval: int = 1000
     # Initial opacity of GS
     init_opa: float = 0.1
-    # Initial scale of GS
-    init_scale: Optional[float] = None
     # Weight for SSIM loss
     ssim_lambda: float = 0.2
 
@@ -97,19 +95,15 @@ def create_splats_with_optimizers(
     rgbs: Tensor,  # [N, 3]
     sh_degree: int = 3,
     init_opacity: float = 0.1,
-    init_scale: Optional[float] = None,
     sparse_grad: bool = False,
     device: str = "cuda",
 ) -> torch.nn.ParameterDict:
     N = points.shape[0]
 
-    if init_scale is None:
-        # Initialize the GS size to be the average dist of the 3 nearest neighbors
-        dist2_avg = (knn(points, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
-        dist_avg = torch.sqrt(dist2_avg)
-        scales = torch.log(dist_avg).unsqueeze(-1).repeat(1, 3)  # [N, 3]
-    else:
-        scales = torch.log(torch.full((N, 3), init_scale))  # [N, 3]
+    # Initialize the GS size to be the average dist of the 3 nearest neighbors
+    dist2_avg = (knn(points, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
+    dist_avg = torch.sqrt(dist2_avg)
+    scales = torch.log(dist_avg).unsqueeze(-1).repeat(1, 3)  # [N, 3]
     quats = torch.rand((N, 4))  # [N, 4]
     opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
 
@@ -187,7 +181,6 @@ class Runner:
             torch.from_numpy(self.trainset.points_rgb / 255.0).float(),
             sh_degree=cfg.sh_degree,
             init_opacity=cfg.init_opa,
-            init_scale=cfg.init_scale,
             sparse_grad=cfg.sparse_grad,
             device=self.device,
         )
