@@ -126,8 +126,8 @@ if __name__ == "__main__":
         "--backends",
         nargs="+",
         type=str,
-        default=["gsplat2"],
-        help="gsplat2, gsplat, inria",
+        default=["gsplat"],
+        help="gsplat, gsplat-legacy, inria",
     )
     parser.add_argument(
         "--repeats",
@@ -138,51 +138,87 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Tested on a NVIDIA TITAN RTX with (24 GB).
-    if "gsplat2" in args.backends:
-        print("gsplat2 packed[True] sparse_grad[True]")
+    if "gsplat" in args.backends:
+        print("gsplat packed[True] sparse_grad[True]")
         main(
-            reso="1080p", scene_grid=1, packed=True, sparse_grad=True, repeats=args.repeats
+            reso="1080p",
+            scene_grid=1,
+            packed=True,
+            sparse_grad=True,
+            repeats=args.repeats,
         )  # [FWD]0.17 GB, [All]0.17 GB Time: [FWD]0.004s, [BWD]0.008s
         torch.cuda.empty_cache()
         main(
-            reso="1080p", scene_grid=11, packed=True, sparse_grad=True, repeats=args.repeats
+            reso="1080p",
+            scene_grid=11,
+            packed=True,
+            sparse_grad=True,
+            repeats=args.repeats,
         )  # [FWD]0.83 GB, [All]0.83 GB Time: [FWD]0.012s, [BWD]0.020s
         torch.cuda.empty_cache()
         main(
-            reso="1080p", scene_grid=21, packed=True, sparse_grad=True, repeats=args.repeats
+            reso="1080p",
+            scene_grid=21,
+            packed=True,
+            sparse_grad=True,
+            repeats=args.repeats,
         )  # [FWD]2.21 GB, [All]2.54 GB Time: [FWD]0.028s, [BWD]0.060s
         torch.cuda.empty_cache()
 
-        print("gsplat2 packed[True] sparse_grad[False]")
+        print("gsplat packed[True] sparse_grad[False]")
         main(
-            reso="1080p", scene_grid=1, packed=True, sparse_grad=False, repeats=args.repeats
+            reso="1080p",
+            scene_grid=1,
+            packed=True,
+            sparse_grad=False,
+            repeats=args.repeats,
         )  # [FWD]0.17 GB, [All]0.17 GB Time: [FWD]0.004s, [BWD]0.006s
         torch.cuda.empty_cache()
         main(
-            reso="1080p", scene_grid=11, packed=True, sparse_grad=False, repeats=args.repeats
+            reso="1080p",
+            scene_grid=11,
+            packed=True,
+            sparse_grad=False,
+            repeats=args.repeats,
         )  # [FWD]0.83 GB, [All]1.13 GB Time: [FWD]0.012s, [BWD]0.021s
         torch.cuda.empty_cache()
         main(
-            reso="1080p", scene_grid=21, packed=True, sparse_grad=False, repeats=args.repeats
+            reso="1080p",
+            scene_grid=21,
+            packed=True,
+            sparse_grad=False,
+            repeats=args.repeats,
         )  # [FWD]2.21 GB, [All]3.81 GB Time: [FWD]0.028s, [BWD]0.063s
         torch.cuda.empty_cache()
 
-        print("gsplat2 packed[False] sparse_grad[False]")
+        print("gsplat packed[False] sparse_grad[False]")
         main(
-            reso="1080p", scene_grid=1, packed=False, sparse_grad=False, repeats=args.repeats
+            reso="1080p",
+            scene_grid=1,
+            packed=False,
+            sparse_grad=False,
+            repeats=args.repeats,
         )  # [FWD]0.17 GB, [All]0.17 GB Time: [FWD]0.003s, [BWD]0.006s
         torch.cuda.empty_cache()
         main(
-            reso="1080p", scene_grid=11, packed=False, sparse_grad=False, repeats=args.repeats
+            reso="1080p",
+            scene_grid=11,
+            packed=False,
+            sparse_grad=False,
+            repeats=args.repeats,
         )  # [FWD]1.50 GB, [All]1.66 GB Time: [FWD]0.011s, [BWD]0.017s
         torch.cuda.empty_cache()
         main(
-            reso="1080p", scene_grid=21, packed=False, sparse_grad=False, repeats=args.repeats
+            reso="1080p",
+            scene_grid=21,
+            packed=False,
+            sparse_grad=False,
+            repeats=args.repeats,
         )  # [FWD]4.69 GB, [All]5.79 GB Time: [FWD]0.027s, [BWD]0.048s
         torch.cuda.empty_cache()
 
-    if "gsplat" in args.backends:
-        print("gsplat")
+    if "gsplat-legacy" in args.backends:
+        print("gsplat-legacy")
         main(
             reso="1080p", scene_grid=1, backend="gsplat", repeats=args.repeats
         )  # [FWD]0.20 GB, [All]0.20 GB Time: [FWD]0.005s, [BWD]0.009s
