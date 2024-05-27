@@ -19,21 +19,65 @@ jobs:
       - uses: actions/setup-python@v3
         with:
           python-version: '3.9'
+      
       - name: Install dependencies
         run: |
           pip install -r docs/requirements.txt
           pip install torch==2.0.0 --index-url https://download.pytorch.org/whl/cpu
           BUILD_NO_CUDA=1 pip install .
+      
+      # Get version.
+      - name: Get version + subdirectory
+        run: |
+          VERSION=$(python -c "from gsplat import __version__; print(__version__)")
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "DOCS_SUBDIR=versions/$VERSION" >> $GITHUB_ENV
+
+      # Hack to overwrite version.
+      - name: Set version to 'latest' for pushes (this will appear in the doc banner)
+        run: |
+          sed -i 's/__version__ = ".*"/__version__ = "latest"/' gsplat/version.py
+        if: github.event_name == 'push'
+
+      # Get version.
+      - name: Override subdirectory to `latest/` for pushes
+        run: |
+          echo "DOCS_SUBDIR=latest" >> $GITHUB_ENV
+        if: github.event_name == 'push'
+
       - name: Sphinx build
         # fail on warnings: "-W --keep-going"
         run: |
           sphinx-build docs/source _build
-      - name: Deploy
-        uses: peaceiris/actions-gh-pages@v3
+
+      # Deploy to version-dependent subdirectory.
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          publish_branch: gh-pages
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: _build/
-          force_orphan: true
+          destination_dir: ${{ env.DOCS_SUBDIR }}
+          keep_files: false  # This will only erase the destination subdirectory.
           cname: docs.gsplat.studio
         if: github.event_name != 'pull_request'
+  
+      # We'll maintain an index of all versions under docs.gsplat.studio/versions.
+      # This will be useful for dynamically generating lists of possible doc links.
+      - name: Update versions index.txt
+        run: |
+          git checkout .  # Revert change to version.py from earlier...
+          git checkout gh-pages
+          git pull
+          git config --global user.email "ruilongli94@gmail.com"
+          git config --global user.name "Ruilong Li"
+          FILE="versions/index.txt"  # Replace with your file path
+          if ! grep -qx "$VERSION" "$FILE"; then
+            echo "$VERSION" >> "$FILE"
+            git add $FILE
+            git commit -m "Update versions.txt with new version $VERSION"
+            git push origin gh-pages
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ env.VERSION }}
+        if: github.event_name == 'release'
