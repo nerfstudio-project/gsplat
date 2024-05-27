@@ -7,7 +7,14 @@ project = "gsplat"
 copyright = "2023, nerfstudio team"
 author = "nerfstudio"
 
-release = __version__
+# Formatting!
+#     0.1.30 => v0.1.30
+#     dev => dev
+if not __version__.isalpha():
+    __version__ = "v" + __version__
+
+# The full version, including alpha/beta/rc tags
+release = ""
 
 # -- General configuration
 
