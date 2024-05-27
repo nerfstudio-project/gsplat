@@ -64,4 +64,4 @@ are the focal lengths of the camera.
 .. is which is denoted by delta :math:`\Delta`.
 
 
-.. autofunction:: rasterization
+.. autofunction:: gsplat.rasterization
