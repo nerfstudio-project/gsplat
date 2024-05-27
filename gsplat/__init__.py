@@ -1,12 +1,24 @@
 import warnings
 
-from .rendering import rasterization
-from ._helper import rasterization_legacy_wrapper, rasterization_inria_wrapper
+from .cuda._wrapper import (
+    isect_offset_encode,
+    isect_tiles,
+    persp_proj,
+    projection,
+    quat_scale_to_covar_preci,
+    rasterize_to_pixels,
+    world_to_cam,
+)
+from .rendering import (
+    rasterization,
+    rasterization_inria_wrapper,
+    rasterization_legacy_wrapper,
+)
 from .version import __version__
 
 
 def spherical_harmonics(*args, **kwargs):
-    # Always use new version which can be compatible with the old one.
+    # Always use new version which is compatible with the old one.
     from .cuda._wrapper import spherical_harmonics
 
     if ("method" in kwargs) or (len(args) == 4 and isinstance(args[-1], str)):
@@ -101,6 +113,13 @@ all = [
     "rasterization_legacy_wrapper",
     "rasterization_inria_wrapper",
     "spherical_harmonics",
+    "isect_offset_encode",
+    "isect_tiles",
+    "persp_proj",
+    "projection",
+    "quat_scale_to_covar_preci",
+    "rasterize_to_pixels",
+    "world_to_cam",
     "__version__",
     # deprecated
     "rasterize_gaussians",

@@ -73,11 +73,11 @@ def main(
     if backend == "gsplat2":
         rasterization_fn = rasterization
     elif backend == "gsplat":
-        from gsplat._helper import rasterization_legacy_wrapper
+        from gsplat import rasterization_legacy_wrapper
 
         rasterization_fn = rasterization_legacy_wrapper
     elif backend == "inria":
-        from gsplat._helper import rasterization_inria_wrapper
+        from gsplat import rasterization_inria_wrapper
 
         rasterization_fn = rasterization_inria_wrapper
     else:

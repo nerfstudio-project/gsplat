@@ -23,5 +23,5 @@ On top of that, there are more functionalities supported in `gsplat`, including
 **batched rasterization**, **trade-off between memory and speed**, **sparse gradient** etc.
 
 Additionally, we also provide a wrapper function 
-:func:`gsplat._helper.rasterization_inria_wrapper` on top of the `diff-gaussian-rasterization`, that 
-aligns with our API :func:`rasterization` in `v1.0.0`.
+:func:`gsplat.rasterization_inria_wrapper` on top of the `diff-gaussian-rasterization`, that 
+aligns with our API :func:`gsplat.rasterization` in `v1.0.0`.
