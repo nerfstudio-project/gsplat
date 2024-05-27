@@ -279,6 +279,9 @@ __global__ void rasterize_backward_kernel(
             // float2 v_xy_local = {0.f, 0.f};
             float dL_dopacity_local = 0.f;
             float2 dL_dmean2D_local = {0.f, 0.f};
+            float3 dL_dTu_local = {0.f, 0.f, 0.f};
+            float3 dL_dTv_local = {0.f, 0.f, 0.f};
+            float3 dL_dTw_local = {0.f, 0.f, 0.f};
             // initialize everything to 0, only set if the lane is valid
             // TODO (WZ) what is the lane?
             if (valid) {
@@ -341,15 +344,19 @@ __global__ void rasterize_backward_kernel(
                     };
                     // printf("dL_dTu: %.2f, %.2f, %.2f", dL_dTu.x, dL_dTu.y, dL_dTu.z);
                     // printf("dL_dTv: %.2f, %.2f, %.2f \n", dL_dTv.x, dL_dTv.y, dL_dTv.z);
-                    atomicAdd(&dL_dtransMat[g * 9 + 0], dL_dTu.x);
-                    atomicAdd(&dL_dtransMat[g * 9 + 1], dL_dTu.y);
-                    atomicAdd(&dL_dtransMat[g * 9 + 2], dL_dTu.z);
-                    atomicAdd(&dL_dtransMat[g * 9 + 3], dL_dTv.x);
-                    atomicAdd(&dL_dtransMat[g * 9 + 4], dL_dTv.y);
-                    atomicAdd(&dL_dtransMat[g * 9 + 5], dL_dTv.z);
-                    atomicAdd(&dL_dtransMat[g * 9 + 6], dL_dTw.x);
-                    atomicAdd(&dL_dtransMat[g * 9 + 7], dL_dTw.y);
-                    atomicAdd(&dL_dtransMat[g * 9 + 8], dL_dTw.z);
+                    dL_dTu_local = {dL_dTu.x, dL_dTu.y, dL_dTu.z};
+                    dL_dTv_local = {dL_dTv.x, dL_dTv.y, dL_dTv.z};
+                    dL_dTw_local = {dL_dTw.x, dL_dTw.y, dL_dTw.z};
+
+                    // atomicAdd(&dL_dtransMat[g * 9 + 0], dL_dTu.x);
+                    // atomicAdd(&dL_dtransMat[g * 9 + 1], dL_dTu.y);
+                    // atomicAdd(&dL_dtransMat[g * 9 + 2], dL_dTu.z);
+                    // atomicAdd(&dL_dtransMat[g * 9 + 3], dL_dTv.x);
+                    // atomicAdd(&dL_dtransMat[g * 9 + 4], dL_dTv.y);
+                    // atomicAdd(&dL_dtransMat[g * 9 + 5], dL_dTv.z);
+                    // atomicAdd(&dL_dtransMat[g * 9 + 6], dL_dTw.x);
+                    // atomicAdd(&dL_dtransMat[g * 9 + 7], dL_dTw.y);
+                    // atomicAdd(&dL_dtransMat[g * 9 + 8], dL_dTw.z);
                 } else {
                     // printf("rho3d > rho2d \n");
                     // Update gradient w.r.t center of Gaussian 2D mean position
@@ -397,11 +404,33 @@ __global__ void rasterize_backward_kernel(
                 // float* v_xy_ptr = (float*)(v_xy);
                 // atomicAdd(v_xy_ptr + 2 * g + 0, v_xy_local.x);
                 // atmoicAdd(v_xy_ptr + 2 * g + 1, v_xy_local.y);
+                if (rho3d <= rho2d) {
+                    
+                    float* dL_dtransMat_ptr = (float*)(dL_dtransMat);
+                    atomicAdd(dL_dtransMat_ptr + 9 * g + 0, dL_dTu_local.x);
+                    atomicAdd(dL_dtransMat_ptr + 9 * g + 1, dL_dTu_local.y);
+                    atomicAdd(dL_dtransMat_ptr + 9 * g + 2, dL_dTu_local.z);
+                    atomicAdd(dL_dtransMat_ptr + 9 * g + 3, dL_dTv_local.x);
+                    atomicAdd(dL_dtransMat_ptr + 9 * g + 4, dL_dTv_local.y);
+                    atomicAdd(dL_dtransMat_ptr + 9 * g + 5, dL_dTv_local.z);
+                    atomicAdd(dL_dtransMat_ptr + 9 * g + 6, dL_dTw_local.x);
+                    atomicAdd(dL_dtransMat_ptr + 9 * g + 7, dL_dTw_local.y);
+                    atomicAdd(dL_dtransMat_ptr + 9 * g + 8, dL_dTw_local.z);
 
-                float* dL_dmean2D_ptr = (float*)(dL_dmean2D);
-                atomicAdd(dL_dmean2D_ptr + 2 * g + 0, dL_dmean2D_local.x);
-                atomicAdd(dL_dmean2D_ptr + 2 * g + 1, dL_dmean2D_local.y);
-
+                    // atomicAdd(&dL_dtransMat[g * 9 + 0], dL_dTu.x);
+                    // atomicAdd(&dL_dtransMat[g * 9 + 1], dL_dTu.y);
+                    // atomicAdd(&dL_dtransMat[g * 9 + 2], dL_dTu.z);
+                    // atomicAdd(&dL_dtransMat[g * 9 + 3], dL_dTv.x);
+                    // atomicAdd(&dL_dtransMat[g * 9 + 4], dL_dTv.y);
+                    // atomicAdd(&dL_dtransMat[g * 9 + 5], dL_dTv.z);
+                    // atomicAdd(&dL_dtransMat[g * 9 + 6], dL_dTw.x);
+                    // atomicAdd(&dL_dtransMat[g * 9 + 7], dL_dTw.y);
+                    // atomicAdd(&dL_dtransMat[g * 9 + 8], dL_dTw.z);
+                } else {
+                    float* dL_dmean2D_ptr = (float*)(dL_dmean2D);
+                    atomicAdd(dL_dmean2D_ptr + 2 * g + 0, dL_dmean2D_local.x);
+                    atomicAdd(dL_dmean2D_ptr + 2 * g + 1, dL_dmean2D_local.y);
+                }
                 atomicAdd(dL_dopacity + g, dL_dopacity_local);
             }
         }

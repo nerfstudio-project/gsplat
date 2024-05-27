@@ -162,12 +162,12 @@ class SimpleTrainer:
         z = torch.ones_like(x)
 
         # pdb.set_trace()
-        self.means = torch.stack((x, y, z), dim=-1).reshape((-1, 3)) #TODO (WZ): each pixel has one gaussian; normalized to [-1, 1]
-        self.means = self.means.to(self.device)
+        # self.means = torch.stack((x, y, z), dim=-1).reshape((-1, 3)) #TODO (WZ): each pixel has one gaussian; normalized to [-1, 1]
+        # self.means = self.means.to(self.device)
         # self.rgbs = self.gt_image.clone().permute((1, 0, 2)).reshape((-1, 3))
         # self.rgbs = self.rgbs.to(self.device)
-        # self.scales = torch.ones_like(self.scales) * 1e-4
-        # self.scales.to(self.device)
+        self.scales = torch.ones_like(self.scales) * 1e-4
+        self.scales.to(self.device)
 
 
 
