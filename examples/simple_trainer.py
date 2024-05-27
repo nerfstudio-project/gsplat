@@ -15,6 +15,7 @@ from torch import Tensor, optim
 import matplotlib
 import pdb
 
+# os.environ['CUDA_ENABLE_COREDUMP_ON_EXCEPTION']='1'
 os.environ['CUDA_LAUNCH_BLOCKING']="1"
 os.environ['TORCH_USE_CUDA_DSA'] = "1"
 
@@ -165,8 +166,8 @@ class SimpleTrainer:
         self.means = self.means.to(self.device)
         # self.rgbs = self.gt_image.clone().permute((1, 0, 2)).reshape((-1, 3))
         # self.rgbs = self.rgbs.to(self.device)
-        self.scales = torch.ones_like(self.scales) * 1e-4
-        self.scales.to(self.device)
+        # self.scales = torch.ones_like(self.scales) * 1e-4
+        # self.scales.to(self.device)
 
 
 
@@ -283,7 +284,7 @@ class SimpleTrainer:
             # pdb.set_trace()
             loss.backward()
             # print("after backward")
-            print("Here!!!")
+            # print("Here!!!")
             torch.cuda.synchronize()
             times[2] += time.time() - start
             optimizer.step()

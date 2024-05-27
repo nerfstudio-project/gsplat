@@ -245,6 +245,9 @@ class _ProjectGaussians(Function):
         v_scale = torch.concatenate((v_scale, torch.zeros((v_scale.shape[0], 1), device="cuda:0")), dim=-1)
         # pdb.set_trace()
         # Return a gradient for each input.
+        # print(v_mean3d)
+        # print(v_scale)
+        # print(v_quat)
         return (
             # means3d: Float[Tensor, "*batch 3"],
             v_mean3d,

@@ -259,6 +259,12 @@ class _RasterizeGaussians(Function):
         # - "EfficientGS: Streamlining Gaussian Splatting for Large-Scale High-Resolution Scene Representation"
         xys.absgrad = v_xy_abs
 
+        # print("Here")
+        # print(v_xy)
+        # print(v_transMats)
+        # print(v_colors)
+        # print(v_opacity)
+
         return (
             v_xy,  # xys
             None,  # depths

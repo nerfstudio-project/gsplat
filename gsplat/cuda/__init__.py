@@ -6,7 +6,7 @@ def _make_lazy_cuda_func(name: str) -> Callable:
         # pylint: disable=import-outside-toplevel
         # pdb.set_trace()
         from ._backend import _C
-        print(name)
+        # print(name)
         return getattr(_C, name)(*args, **kwargs)
 
     return call_cuda

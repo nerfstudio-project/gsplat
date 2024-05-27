@@ -303,7 +303,6 @@ project_gaussians_backward_tensor(
     // printf("intrins: %.2f, %.2f, %.2f, %.2f \n", intrins.x, intrins.y, intrins.z, intrins.w);
     // printf("img_size_dim3: %.2f, %.2f, %.2f \n", img_size_dim3.x, img_size_dim3.y, img_size_dim3.z);
 
-    printf("before \n");
     project_gaussians_backward_kernel<<<
         (num_points + N_THREADS - 1) / N_THREADS,
         N_THREADS>>>(
@@ -338,7 +337,6 @@ project_gaussians_backward_tensor(
         (float3 *)dL_dmean2d.contiguous().data_ptr<float>()
     );
 
-    printf("after \n");
     return std::make_tuple(v_mean3d, v_scale, v_quat, dL_dmean2d);
 }
 
@@ -720,8 +718,8 @@ std::
         v_opacity.contiguous().data_ptr<float>()
     );
 
-    printf("v_colors: %.2f \n", v_colors);
-    printf("v_transMats: %.2f, %.2f \n", v_transMats[0][0], v_transMats[0][1]);
-    printf("v_xy: %.2f, %.2f \n", v_xy[0][0], v_xy[0][1]);
+    // printf("v_colors: %.2f \n", v_colors);
+    // printf("v_transMats: %.2f, %.2f \n", v_transMats[0][0], v_transMats[0][1]);
+    // printf("v_xy: %.2f, %.2f \n", v_xy[0][0], v_xy[0][1]);
     return std::make_tuple(v_xy, v_xy_abs, v_transMats, v_colors, v_opacity);
 }

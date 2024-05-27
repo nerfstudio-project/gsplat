@@ -135,6 +135,7 @@ __global__ void rasterize_backward_kernel(
     float3* __restrict__ dL_drgb,
     float* __restrict__ dL_dopacity
 ) {
+    // printf("Here \n");
     auto block = cg::this_thread_block();
     int32_t tile_id = 
         block.group_index().y * tile_bounds.x + block.group_index().x;
@@ -277,6 +278,7 @@ __global__ void rasterize_backward_kernel(
             // float3 v_conic_local = {0.f, 0.f, 0.f};
             // float2 v_xy_local = {0.f, 0.f};
             float dL_dopacity_local = 0.f;
+            float2 dL_dmean2D_local = {0.f, 0.f};
             // initialize everything to 0, only set if the lane is valid
             // TODO (WZ) what is the lane?
             if (valid) {
@@ -306,13 +308,16 @@ __global__ void rasterize_backward_kernel(
 
                 // Helpful reusable temporary variable
                 const float dL_dG = opac * v_alpha;
-                // printf("dL_dG: %.2f \n opac: %.2f \n v_alpha: %.2f \n", dL_dG, opac, v_alpha);
+                // printf("dL_dG: %.2f, opac: %.2f, v_alpha: %.2f \n", dL_dG, opac, v_alpha);
 
                 float dL_dz = 0.0f;
 
                 int32_t g = id_batch[t];
+
                 // ====== 2D Splatting ====== //
                 if (rho3d <= rho2d) {
+                    // printf("ever here? \n");
+                    // printf("rho3d <= rho2d \n");
                     // Update gradients w.r.t. covariance of Gaussian 3x3 (T)
                     const float2 dL_ds = {
                         dL_dG * -vis * s.x + dL_dz * Tw.x,
@@ -346,16 +351,20 @@ __global__ void rasterize_backward_kernel(
                     atomicAdd(&dL_dtransMat[g * 9 + 7], dL_dTw.y);
                     atomicAdd(&dL_dtransMat[g * 9 + 8], dL_dTw.z);
                 } else {
+                    // printf("rho3d > rho2d \n");
                     // Update gradient w.r.t center of Gaussian 2D mean position
                     const float dG_ddelx = -vis * FilterInvSquare * d.x;
                     const float dG_ddely = -vis * FilterInvSquare * d.y;
                     // printf("dL_dG: %.2f \n", dL_dG);
                     // printf("vis: %.2f \n", vis);
+                    // printf("dG_ddelx: %.2f, dG_ddely: %.2f \n", dG_ddelx, dG_ddely);
+                    // printf("dL_dG: %.2f \n", dL_dG);
                     // printf("d.x: %.2f, d.y: %.2f \n", d.x, d.y);
                     // printf("dL_dmean2D.x update: %.2f \n", dL_dG * dG_ddelx);
                     // printf("dL_dmean2D.y update: %.2f \n", dL_dG * dG_ddely);
-                    atomicAdd(&dL_dmean2D[2 * g + 0].x, dL_dG * dG_ddelx); // not scaled
-                    atomicAdd(&dL_dmean2D[2 * g + 1].y, dL_dG * dG_ddely); // not scaled
+                    dL_dmean2D_local = {dL_dG * dG_ddelx, dL_dG * dG_ddely};
+                    // atomicAdd(&dL_dmean2D[2 * g + 0].x, dL_dG * dG_ddelx); // not scaled
+                    // atomicAdd(&dL_dmean2D[2 * g + 1].y, dL_dG * dG_ddely); // not scaled
                     // atomicAdd(&dL_dttransMat[global_id * 9 + 8], dL_dz); // propagate depth loss, disable for now
 
                 }
@@ -371,6 +380,7 @@ __global__ void rasterize_backward_kernel(
             // warpSum3(v_conic_local, warp);
             // warpSum2(v_xy_local, warp);
             warpSum(dL_dopacity_local, warp);
+            warpSum2(dL_dmean2D_local, warp);
             if (warp.thread_rank() == 0) {
                 // printf("Here!!! \n");
                 int32_t g = id_batch[t];
@@ -387,6 +397,10 @@ __global__ void rasterize_backward_kernel(
                 // float* v_xy_ptr = (float*)(v_xy);
                 // atomicAdd(v_xy_ptr + 2 * g + 0, v_xy_local.x);
                 // atmoicAdd(v_xy_ptr + 2 * g + 1, v_xy_local.y);
+
+                float* dL_dmean2D_ptr = (float*)(dL_dmean2D);
+                atomicAdd(dL_dmean2D_ptr + 2 * g + 0, dL_dmean2D_local.x);
+                atomicAdd(dL_dmean2D_ptr + 2 * g + 1, dL_dmean2D_local.y);
 
                 atomicAdd(dL_dopacity + g, dL_dopacity_local);
             }
