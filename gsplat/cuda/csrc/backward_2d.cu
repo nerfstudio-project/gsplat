@@ -135,7 +135,7 @@ __global__ void rasterize_backward_kernel(
     float3* __restrict__ dL_drgb,
     float* __restrict__ dL_dopacity
 ) {
-    // printf("Here \n");
+    printf("It is real :) \n");
     auto block = cg::this_thread_block();
     int32_t tile_id = 
         block.group_index().y * tile_bounds.x + block.group_index().x;
@@ -388,6 +388,9 @@ __global__ void rasterize_backward_kernel(
             // warpSum2(v_xy_local, warp);
             warpSum(dL_dopacity_local, warp);
             warpSum2(dL_dmean2D_local, warp);
+            warpSum3(dL_dTu_local, warp);
+            warpSum3(dL_dTv_local, warp);
+            warpSum3(dL_dTw_local, warp);
             if (warp.thread_rank() == 0) {
                 // printf("Here!!! \n");
                 int32_t g = id_batch[t];
@@ -406,6 +409,7 @@ __global__ void rasterize_backward_kernel(
                 // atmoicAdd(v_xy_ptr + 2 * g + 1, v_xy_local.y);
                 if (rho3d <= rho2d) {
                     
+                    // printf("Here \n");
                     float* dL_dtransMat_ptr = (float*)(dL_dtransMat);
                     atomicAdd(dL_dtransMat_ptr + 9 * g + 0, dL_dTu_local.x);
                     atomicAdd(dL_dtransMat_ptr + 9 * g + 1, dL_dTu_local.y);

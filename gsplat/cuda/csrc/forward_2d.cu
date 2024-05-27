@@ -356,7 +356,7 @@ __global__ void rasterize_forward(
 
             // printf("k: %.2f, %.2f, %.2f \n l: %.2f, %.2f, %.2f \n", k.x, k.y, k.z, l.x, l.y, l.z);
             // printf("l: %.2f, %.2f, %.2f \n", l.x, l.y, l.z);
-            // printf("p is: %.2f \n", p);
+            // printf("p is: %.2f, %.2f, %.2f \n", p.x, p.y, p.z);
 
             // There is no intersection
             // printf("forward p.z: %.2d \n", p.z);
@@ -400,6 +400,10 @@ __global__ void rasterize_forward(
             // 2d screen distance
             float rho_2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
             float rho = min(rho_3d, rho_2d);
+            // if (rho_3d < rho_2d) {
+            //     printf("rho_3d < rho_2d \n");
+            // }
+            // float rho = rho_3d;
 
             //====== Depth, Normal calculation ======//
 

@@ -16,8 +16,8 @@ import matplotlib
 import pdb
 
 # os.environ['CUDA_ENABLE_COREDUMP_ON_EXCEPTION']='1'
-os.environ['CUDA_LAUNCH_BLOCKING']="1"
-os.environ['TORCH_USE_CUDA_DSA'] = "1"
+# os.environ['CUDA_LAUNCH_BLOCKING']="1"
+# os.environ['TORCH_USE_CUDA_DSA'] = "1"
 
 def getProjectionMatrix(znear, zfar, fovX, fovY):
     import math
@@ -144,7 +144,7 @@ class SimpleTrainer:
             [
                 [1.0, 0.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0, 8.0],
                 [0.0, 0.0, 0.0, 1.0],
             ],
             device=self.device,
@@ -166,8 +166,8 @@ class SimpleTrainer:
         # self.means = self.means.to(self.device)
         # self.rgbs = self.gt_image.clone().permute((1, 0, 2)).reshape((-1, 3))
         # self.rgbs = self.rgbs.to(self.device)
-        self.scales = torch.ones_like(self.scales) * 1e-4
-        self.scales.to(self.device)
+        # self.scales = torch.ones_like(self.scales) * 0.1
+        # self.scales.to(self.device)
 
 
 
@@ -230,6 +230,7 @@ class SimpleTrainer:
         frames = []
         times = [0] * 3  # project, rasterize, backward
         B_SIZE = 16
+        # with torch.no_grad():
         for iter in range(iterations):
             start = time.time()
             # pdb.set_trace()
@@ -293,6 +294,8 @@ class SimpleTrainer:
             if save_imgs and iter % 5 == 0:
                 frames.append((out_img.detach().cpu().numpy() * 255).astype(np.uint8))
 
+            # break
+
         if save_imgs:
             # save them as a gif with PIL
             frames = [Image.fromarray(frame) for frame in frames]
@@ -332,8 +335,9 @@ def main(
     iterations: int = 1000,
     lr: float = 0.01,
 ) -> None:
-    height = 512
-    width = 512
+    # height = 512
+    # width = 512
+    iterations=1000
     if img_path:
         gt_image = image_path_to_tensor(img_path)
     else:
