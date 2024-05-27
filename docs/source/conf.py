@@ -12,6 +12,8 @@ author = "nerfstudio"
 #     dev => dev
 if not __version__.isalpha():
     __version__ = "v" + __version__
+version = __version__
+del __version__
 
 # The full version, including alpha/beta/rc tags
 release = ""
