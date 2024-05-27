@@ -5,7 +5,9 @@ Migratite from gsplat v0.1.11
 
 `v1.0.0` is a major release that includes a huge API change. So this document will help 
 you to migrate to `v0.1.11` from `v1.0.0` and enjoys the latest and greatest. The APIs 
-of `v0.1.11` are still available here at :doc:`python_api_legacy`. 
+of `v0.1.11` are available at `here <https://docs.gsplat.studio/versions/0.1.11/>`_. Note
+you can still call the old APIs in `v1.0.0` but they are deprecated and will be removed in
+the future.
 
 Below we demonstrate the API changes on a couple of use cases. If you want to take a closer
 look on the detailed API changes, we provide a wrapper function :func:`gsplat.rasterization_legacy_wrapper` 
