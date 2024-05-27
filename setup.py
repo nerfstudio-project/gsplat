@@ -109,6 +109,7 @@ setup(
     download_url=f"{URL}/archive/gsplat-{__version__}.tar.gz",
     python_requires=">=3.7",
     install_requires=[
+        "numpy",
         "jaxtyping",
         "rich>=12",
         "torch",
