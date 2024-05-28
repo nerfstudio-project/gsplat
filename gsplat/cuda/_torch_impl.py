@@ -12,8 +12,8 @@ def _quat_scale_to_covar_preci(
     compute_covar: bool = True,
     compute_preci: bool = True,
     triu: bool = False,
-):
-    """PyTorch implementation."""
+) -> Tuple[Optional[Tensor], Optional[Tensor]]:
+    """PyTorch implementation of `gsplat.cuda._wrapper.quat_scale_to_covar_preci()`."""
     quats = F.normalize(quats, p=2, dim=-1)
     w, x, y, z = torch.unbind(quats, dim=-1)
     R = torch.stack(
@@ -60,8 +60,22 @@ def _persp_proj(
     Ks: Tensor,  # [C, 3, 3]
     width: int,
     height: int,
-) -> Tuple[Tensor, Tensor, Tensor]:
-    """PyTorch implementation."""
+) -> Tuple[Tensor, Tensor]:
+    """PyTorch implementation of prespective projection for 3D Gaussians.
+
+    Args:
+        means: Gaussian means in camera coordinate system. [C, N, 3].
+        covars: Gaussian covariances in camera coordinate system. [C, N, 3, 3].
+        Ks: Camera intrinsics. [C, 3, 3].
+        width: Image width.
+        height: Image height.
+
+    Returns:
+        A tuple:
+
+        - **means2d**: Projected means. [C, N, 2].
+        - **cov2d**: Projected covariances. [C, N, 2, 2].
+    """
     C, N, _ = means.shape
 
     tx, ty, tz = torch.unbind(means, dim=-1)  # [C, N]
@@ -93,7 +107,19 @@ def _world_to_cam(
     covars: Tensor,  # [N, 3, 3]
     viewmats: Tensor,  # [C, 4, 4]
 ) -> Tuple[Tensor, Tensor]:
-    """PyTorch implementation."""
+    """PyTorch implementation of world to camera transformation on Gaussians.
+
+    Args:
+        means: Gaussian means in world coordinate system. [C, N, 3].
+        covars: Gaussian covariances in world coordinate system. [C, N, 3, 3].
+        viewmats: world to camera transformation matrices. [C, 4, 4].
+
+    Returns:
+        A tuple:
+
+        - **means_c**: Gaussian means in camera coordinate system. [C, N, 3].
+        - **covars_c**: Gaussian covariances in camera coordinate system. [C, N, 3, 3].
+    """
     R = viewmats[:, :3, :3]  # [C, 3, 3]
     t = viewmats[:, :3, 3]  # [C, 3]
     means_c = torch.einsum("cij,nj->cni", R, means) + t[:, None, :]  # (C, N, 3)
@@ -110,9 +136,15 @@ def _projection(
     height: int,
     eps2d: float = 0.3,
     near_plane: float = 0.01,
+    far_plane: float = 1e10,
     calc_compensations: bool = False,
-) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
-    """PyTorch implementation."""
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, Optional[Tensor]]:
+    """PyTorch implementation of `gsplat.cuda._wrapper.projection()`
+
+    .. note::
+        This is a minimal implementation of fully fused version, which has more
+        arguments. Not all arguments are supported.
+    """
     means_c, covars_c = _world_to_cam(means, covars, viewmats)
     means2d, covars2d = _persp_proj(means_c, covars_c, Ks, width, height)
     det_orig = (
@@ -149,7 +181,7 @@ def _projection(
     # v2 = b - torch.sqrt(torch.clamp(b**2 - det, min=0.01))  # (...,)
     # radius = torch.ceil(3.0 * torch.sqrt(torch.max(v1, v2)))  # (...,)
 
-    valid = (det > 0) & (depths > near_plane)
+    valid = (det > 0) & (depths > near_plane) & (depths < far_plane)
     radius[~valid] = 0.0
 
     inside = (
@@ -174,7 +206,13 @@ def _isect_tiles(
     tile_height: int,
     sort: bool = True,
 ) -> Tuple[Tensor, Tensor, Tensor]:
-    """Pytorch implementation"""
+    """Pytorch implementation of `gsplat.cuda._wrapper.isect_tiles()`.
+
+    .. note::
+
+        This is a minimal implementation of the fully fused version, which has more
+        arguments. Not all arguments are supported.
+    """
     C, N = means2d.shape[:2]
     device = means2d.device
 
@@ -234,13 +272,16 @@ def _isect_tiles(
 def _isect_offset_encode(
     isect_ids: Tensor, C: int, tile_width: int, tile_height: int
 ) -> Tensor:
-    """Pytorch implementation"""
-    tile_n_bits = (tile_width * tile_height).bit_length()
+    """Pytorch implementation of `gsplat.cuda._wrapper.isect_offset_encode()`.
 
-    n_isects = len(isect_ids)
-    device = isect_ids.device
+    .. note::
+
+        This is a minimal implementation of the fully fused version, which has more
+        arguments. Not all arguments are supported.
+    """
+    tile_n_bits = (tile_width * tile_height).bit_length()
     tile_counts = torch.zeros(
-        (C, tile_height, tile_width), dtype=torch.int64, device=device
+        (C, tile_height, tile_width), dtype=torch.int64, device=isect_ids.device
     )
 
     isect_ids_uq, counts = torch.unique_consecutive(isect_ids >> 32, return_counts=True)
@@ -267,15 +308,50 @@ def accumulate(
     camera_ids: Tensor,  # [M]
     image_width: int,
     image_height: int,
-    prefix_trans: Tensor = None,  # [C, image_height, image_width]
-    errmaps: Tensor = None,  # [C, image_height, image_width]
-):
+) -> Tuple[Tensor, Tensor]:
+    """Alpah compositing of 2D Gaussians in Pure Pytorch.
+
+    This function performs alpha compositing for Gaussians based on the pair of indices
+    {gauss_ids, pixel_ids, camera_ids}, which annotates the intersection between all
+    pixels and Gaussians. These intersections can be accquired from
+    `gsplat.rasterize_to_indices_iter`.
+
+    .. note::
+
+        This function exposes the alpha compositing process into pure Pytorch.
+        So it relies on Pytorch's autograd for the backpropagation. It is much slower
+        than our fully fused rasterization implementation and comsumes much more GPU memory.
+        But it could serve as a playground for new ideas or debugging, as no backward
+        implementation is needed.
+
+    .. warning::
+
+        This function requires the `nerfacc` package to be installed. Please install it
+        using the following command `pip install nerfacc`.
+
+    Args:
+        means2d: Gaussian means in 2D. [C, N, 2]
+        conics: Inverse of the 2D Gaussian covariance, Only upper triangle values. [C, N, 3]
+        opacities: Per-view Gaussian opacities (for example, when antialiasing is
+            enabled, Gaussian in each view would efficiently have different opacity). [C, N]
+        colors: Per-view Gaussian colors. Supports N-D features. [C, N, channels]
+        gauss_ids: Collection of Gaussian indices to be rasterized. A flattened list of shape [M].
+        pixel_ids: Collection of pixel indices (row-major) to be rasterized. A flattened list of shape [M].
+        camera_ids: Collection of camera indices to be rasterized. A flattened list of shape [M].
+        image_width: Image width.
+        image_height: Image height.
+
+    Returns:
+        A tuple:
+
+        - **renders**: Accumulated colors. [C, image_height, image_width, channels]
+        - **alphas**: Accumulated opacities. [C, image_height, image_width, 1]
+    """
+
     try:
         from nerfacc import accumulate_along_rays, render_weight_from_alpha
     except ImportError:
-        raise ImportError(
-            "Please install nerfacc package: git+https://github.com/nerfstudio-project/nerfacc"
-        )
+        raise ImportError("Please install nerfacc package: pip install nerfacc")
 
     C, N = means2d.shape[:2]
     channels = colors.shape[-1]
@@ -293,31 +369,20 @@ def accumulate(
         opacities[camera_ids, gauss_ids] * torch.exp(-sigmas), 0.999
     )
 
-    if prefix_trans is not None:
-        prefix_trans = prefix_trans[camera_ids, pixel_ids_y, pixel_ids_x]
     indices = (camera_ids * image_height * image_width + pixel_ids).long()
     total_pixels = C * image_height * image_width
 
     weights, trans = render_weight_from_alpha(
-        alphas, ray_indices=indices, n_rays=total_pixels, prefix_trans=prefix_trans
+        alphas, ray_indices=indices, n_rays=total_pixels
     )
     renders = accumulate_along_rays(
         weights, colors[camera_ids, gauss_ids], ray_indices=indices, n_rays=total_pixels
     ).reshape(C, image_height, image_width, channels)
-    accs = accumulate_along_rays(
+    alphas = accumulate_along_rays(
         weights, None, ray_indices=indices, n_rays=total_pixels
     ).reshape(C, image_height, image_width, 1)
 
-    if errmaps is not None:
-        errs_fl = errmaps[camera_ids, pixel_ids_y, pixel_ids_x]  # [M]
-        errs = accumulate_along_rays(
-            weights, errs_fl[:, None], ray_indices=gauss_ids, n_rays=N
-        )
-        ids = torch.where(gauss_ids == 1)[0]
-        errs = errs.squeeze(-1)
-        return renders, accs, errs
-    else:
-        return renders, accs, None
+    return renders, alphas
 
 
 def _rasterize_to_pixels(
@@ -333,6 +398,28 @@ def _rasterize_to_pixels(
     backgrounds: Optional[Tensor] = None,  # [C, channels]
     batch_per_iter: int = 100,
 ):
+    """Pytorch implementation of `gsplat.cuda._wrapper.rasterize_to_pixels()`.
+
+    This function rasterizes 2D Gaussians to pixels in a Pytorch-friendly way. It
+    iteratively accumulates the renderings within each batch of Gaussians. The
+    interations are controlled by `batch_per_iter`.
+
+    .. note::
+        This is a minimal implementation of the fully fused version, which has more
+        arguments. Not all arguments are supported.
+
+    .. note::
+
+        This function relies on Pytorch's autograd for the backpropagation. It is much slower
+        than our fully fused rasterization implementation and comsumes much more GPU memory.
+        But it could serve as a playground for new ideas or debugging, as no backward
+        implementation is needed.
+
+    .. warning::
+
+        This function requires the `nerfacc` package to be installed. Please install it
+        using the following command `pip install nerfacc`.
+    """
     from ._wrapper import rasterize_to_indices_iter
 
     C, N = means2d.shape[:2]
@@ -371,7 +458,7 @@ def _rasterize_to_pixels(
             break
 
         # Accumulate the renderings within this batch of Gaussians.
-        renders_step, accs_step, errs_step = accumulate(
+        renders_step, accs_step = accumulate(
             means2d,
             conics,
             opacities,
@@ -381,10 +468,9 @@ def _rasterize_to_pixels(
             camera_ids,
             image_width,
             image_height,
-            prefix_trans=transmittances,
         )
-        render_colors = render_colors + renders_step
-        render_alphas = render_alphas + accs_step
+        render_colors = render_colors + renders_step * transmittances[..., None]
+        render_alphas = render_alphas + accs_step * transmittances[..., None]
 
     render_alphas = render_alphas
     if backgrounds is not None:
@@ -395,7 +481,7 @@ def _rasterize_to_pixels(
     return render_colors, render_alphas
 
 
-def _eval_sh_bases_fast(basis_dim: int, dirs: torch.Tensor):
+def _eval_sh_bases_fast(basis_dim: int, dirs: Tensor):
     """
     Evaluate spherical harmonics bases at unit direction for high orders
     using approach described by
@@ -484,6 +570,7 @@ def _spherical_harmonics(
     dirs: torch.Tensor,  # [..., 3]
     coeffs: torch.Tensor,  # [..., K, 3]
 ):
+    """Pytorch implementation of `gsplat.cuda._wrapper.spherical_harmonics()`."""
     dirs = F.normalize(dirs, p=2, dim=-1)
     num_bases = (degree + 1) ** 2
     bases = torch.zeros_like(coeffs[..., 0])

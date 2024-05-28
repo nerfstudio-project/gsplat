@@ -1,11 +1,13 @@
 import warnings
 
+from .cuda._torch_impl import accumulate
 from .cuda._wrapper import (
     isect_offset_encode,
     isect_tiles,
     persp_proj,
     projection,
     quat_scale_to_covar_preci,
+    rasterize_to_indices_iter,
     rasterize_to_pixels,
     world_to_cam,
 )
@@ -120,6 +122,8 @@ all = [
     "quat_scale_to_covar_preci",
     "rasterize_to_pixels",
     "world_to_cam",
+    "accumulate",
+    "rasterize_to_indices_iter",
     "__version__",
     # deprecated
     "rasterize_gaussians",

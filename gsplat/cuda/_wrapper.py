@@ -298,20 +298,6 @@ def isect_tiles(
         cindices = cindices.contiguous()
         C = n_cameras
 
-        # tiles_per_gauss, isect_ids, gauss_ids = _make_lazy_cuda_func(
-        #     "isect_tiles_packed"
-        # )(
-        #     n_cameras,
-        #     rindices.contiguous(),
-        #     cindices.contiguous(),
-        #     means2d.contiguous(),
-        #     radii.contiguous(),
-        #     depths.contiguous(),
-        #     tile_size,
-        #     tile_width,
-        #     tile_height,
-        #     sort,
-        # )
     else:
         C, N, _ = means2d.shape
         assert means2d.shape == (C, N, 2), means2d.size()
