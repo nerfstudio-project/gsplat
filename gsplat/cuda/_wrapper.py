@@ -22,9 +22,6 @@ def spherical_harmonics(
 ) -> Tensor:
     """Computes spherical harmonics.
 
-    .. warning::
-        This function is not differentiable w.r.t `dirs`.
-
     Args:
         degrees_to_use: The degree to be used.
         dirs: Directions. [..., 3]
@@ -180,7 +177,7 @@ def projection(
 
     Returns:
         A tuple:
-        
+
         If `packed` is True:
 
         - **Rindices**. The row indices of the projected Gaussians. Int32 tensor of shape [nnz].
@@ -300,7 +297,7 @@ def isect_tiles(
         rindices = rindices.contiguous()
         cindices = cindices.contiguous()
         C = n_cameras
-        
+
         # tiles_per_gauss, isect_ids, gauss_ids = _make_lazy_cuda_func(
         #     "isect_tiles_packed"
         # )(
@@ -320,7 +317,7 @@ def isect_tiles(
         assert means2d.shape == (C, N, 2), means2d.size()
         assert radii.shape == (C, N), radii.size()
         assert depths.shape == (C, N), depths.size()
-    
+
     tiles_per_gauss, isect_ids, gauss_ids = _make_lazy_cuda_func("isect_tiles")(
         means2d.contiguous(),
         radii.contiguous(),
@@ -1156,17 +1153,26 @@ class _SphericalHarmonics(torch.autograd.Function):
         ctx, sh_degree: int, dirs: Tensor, coeffs: Tensor, masks: Tensor
     ) -> Tensor:
         colors = _make_lazy_cuda_func("compute_sh_fwd")(sh_degree, dirs, coeffs, masks)
-        ctx.save_for_backward(dirs, masks)
+        ctx.save_for_backward(dirs, coeffs, masks)
         ctx.sh_degree = sh_degree
         ctx.num_bases = coeffs.shape[-2]
         return colors
 
     @staticmethod
     def backward(ctx, v_colors: Tensor):
-        dirs, masks = ctx.saved_tensors
+        dirs, coeffs, masks = ctx.saved_tensors
         sh_degree = ctx.sh_degree
         num_bases = ctx.num_bases
-        v_coeffs = _make_lazy_cuda_func("compute_sh_bwd")(
-            num_bases, sh_degree, dirs, masks, v_colors.contiguous()
+        compute_v_dirs = ctx.needs_input_grad[1]
+        v_coeffs, v_dirs = _make_lazy_cuda_func("compute_sh_bwd")(
+            num_bases,
+            sh_degree,
+            dirs,
+            coeffs,
+            masks,
+            v_colors.contiguous(),
+            compute_v_dirs,
         )
-        return None, None, v_coeffs, None
+        if not compute_v_dirs:
+            v_dirs = None
+        return None, v_dirs, v_coeffs, None

@@ -517,7 +517,7 @@ def test_rasterize_to_pixels(test_data):
     torch.testing.assert_close(v_backgrounds, _v_backgrounds, rtol=1e-5, atol=1e-5)
 
 
-@pytest.mark.parametrize("sh_degree", [0, 1, 2, 3])
+@pytest.mark.parametrize("sh_degree", [0, 1, 2, 3, 4])
 def test_sh(test_data, sh_degree: int):
     from gsplat.cuda._torch_impl import _spherical_harmonics
     from gsplat.cuda._wrapper import spherical_harmonics
@@ -525,9 +525,10 @@ def test_sh(test_data, sh_degree: int):
     torch.manual_seed(42)
 
     N = 1000
-    coeffs = torch.randn(N, (3 + 1) ** 2, 3, device=device)
-    dirs = F.normalize(torch.randn(N, 3, device=device), dim=-1)
+    coeffs = torch.randn(N, (4 + 1) ** 2, 3, device=device)
+    dirs = torch.randn(N, 3, device=device)
     coeffs.requires_grad = True
+    dirs.requires_grad = True
 
     colors = spherical_harmonics(sh_degree, dirs, coeffs)
     _colors = _spherical_harmonics(sh_degree, dirs, coeffs)
@@ -535,13 +536,15 @@ def test_sh(test_data, sh_degree: int):
 
     v_colors = torch.randn_like(colors)
 
-    v_coeffs = torch.autograd.grad(
-        (colors * v_colors).sum(), coeffs, retain_graph=True
-    )[0]
-    _v_coeffs = torch.autograd.grad(
-        (_colors * v_colors).sum(), coeffs, retain_graph=True
-    )[0]
+    v_coeffs, v_dirs = torch.autograd.grad(
+        (colors * v_colors).sum(), (coeffs, dirs), retain_graph=True, allow_unused=True
+    )
+    _v_coeffs, _v_dirs = torch.autograd.grad(
+        (_colors * v_colors).sum(), (coeffs, dirs), retain_graph=True, allow_unused=True
+    )
     torch.testing.assert_close(v_coeffs, _v_coeffs, rtol=1e-4, atol=1e-4)
+    if sh_degree > 0:
+        torch.testing.assert_close(v_dirs, _v_dirs, rtol=1e-4, atol=1e-4)
 
 
 #     # print("Mean Grad Diff: CUDA2 v.s. PyTorch")

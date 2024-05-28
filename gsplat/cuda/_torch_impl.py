@@ -2,8 +2,8 @@ import struct
 from typing import Optional, Tuple
 
 import torch
-from torch import Tensor
 import torch.nn.functional as F
+from torch import Tensor
 
 
 def _quat_scale_to_covar_preci(
@@ -465,9 +465,9 @@ def _eval_sh_bases_fast(basis_dim: int, dirs: torch.Tensor):
     fTmpA = 0.6258357354491763
     fC3 = x * fC2 - y * fS2
     fS3 = x * fS2 + y * fC2
-    result[..., 20] = (
-        1.984313483298443 * z * result[..., 12] + -1.006230589874905 * result[..., 6]
-    )
+    result[..., 20] = 1.984313483298443 * z2 * (
+        1.865881662950577 * z2 - 1.119528997770346
+    ) + -1.006230589874905 * (0.9461746957575601 * z2 - 0.3153915652525201)
     result[..., 21] = fTmpD * x
     result[..., 19] = fTmpD * y
     result[..., 22] = fTmpC * fC1
@@ -484,6 +484,7 @@ def _spherical_harmonics(
     dirs: torch.Tensor,  # [..., 3]
     coeffs: torch.Tensor,  # [..., K, 3]
 ):
+    dirs = F.normalize(dirs, p=2, dim=-1)
     num_bases = (degree + 1) ** 2
     bases = torch.zeros_like(coeffs[..., 0])
     bases[..., :num_bases] = _eval_sh_bases_fast(num_bases, dirs)

@@ -260,8 +260,10 @@ torch::Tensor compute_sh_fwd_tensor(const unsigned degrees_to_use,
                                     torch::Tensor &coeffs,            // [..., K, 3]
                                     at::optional<torch::Tensor> masks // [...]
 );
-torch::Tensor compute_sh_bwd_tensor(const unsigned K, const unsigned degrees_to_use,
-                                    torch::Tensor &dirs,               // [..., 3]
-                                    at::optional<torch::Tensor> masks, // [...]
-                                    torch::Tensor &v_colors            // [..., 3]
-);
+std::tuple<torch::Tensor, torch::Tensor>
+compute_sh_bwd_tensor(const unsigned K, const unsigned degrees_to_use,
+                      torch::Tensor &dirs,               // [..., 3]
+                      torch::Tensor &coeffs,             // [..., K, 3]
+                      at::optional<torch::Tensor> masks, // [...]
+                      torch::Tensor &v_colors,           // [..., 3]
+                      bool compute_v_dirs);
