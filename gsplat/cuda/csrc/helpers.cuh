@@ -6,11 +6,13 @@
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 
+#define PRAGMA_UNROLL _Pragma("unroll")
+
 namespace cg = cooperative_groups;
 
 template <uint32_t DIM, class T, class WarpT>
 inline __device__ void warpSum(T *val, WarpT &warp) {
-#pragma unroll DIM
+    PRAGMA_UNROLL
     for (uint32_t i = 0; i < DIM; i++) {
         val[i] = cg::reduce(warp, val[i], cg::plus<T>());
     }

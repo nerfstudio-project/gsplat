@@ -30,9 +30,4 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("projection_packed_fwd", &projection_packed_fwd_tensor);
     m.def("projection_packed_bwd", &projection_packed_bwd_tensor);
-
-    // m.def("isect_tiles_packed", &isect_tiles_packed_tensor);
-
-    // m.def("rasterize_to_pixels_packed_fwd", &rasterize_to_pixels_packed_fwd_tensor);
-    // m.def("rasterize_to_pixels_packed_bwd", &rasterize_to_pixels_packed_bwd_tensor);
 }

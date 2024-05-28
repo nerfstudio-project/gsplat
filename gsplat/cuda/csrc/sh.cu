@@ -1,8 +1,3 @@
-/*
-Modified from
-https://github.com/nerfstudio-project/gsplat/blob/main/gsplat/cuda/csrc/sh.cuh
-*/
-
 #include "bindings.h"
 #include "third_party/glm/glm/glm.hpp"
 #include "third_party/glm/glm/gtc/type_ptr.hpp"

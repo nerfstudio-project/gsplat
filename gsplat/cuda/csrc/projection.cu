@@ -51,9 +51,9 @@ quat_scale_to_covar_preci_fwd_kernel(const int N,
             covars[5] = covar[2][2];
         } else {
             covars += idx * 9;
-#pragma unroll 3
+            PRAGMA_UNROLL
             for (int i = 0; i < 3; i++) { // rows
-#pragma unroll 3
+                PRAGMA_UNROLL
                 for (int j = 0; j < 3; j++) { // cols
                     covars[i * 3 + j] = covar[j][i];
                 }
@@ -71,9 +71,9 @@ quat_scale_to_covar_preci_fwd_kernel(const int N,
             precis[5] = preci[2][2];
         } else {
             precis += idx * 9;
-#pragma unroll 3
+            PRAGMA_UNROLL
             for (int i = 0; i < 3; i++) { // rows
-#pragma unroll 3
+                PRAGMA_UNROLL
                 for (int j = 0; j < 3; j++) { // cols
                     precis[i * 3 + j] = preci[j][i];
                 }
@@ -141,11 +141,11 @@ __global__ void quat_scale_to_covar_preci_bwd_kernel(
     }
 
     // write out results
-#pragma unroll 3
+    PRAGMA_UNROLL
     for (int k = 0; k < 3; ++k) {
         v_scales[k] = v_scale[k];
     }
-#pragma unroll 4
+    PRAGMA_UNROLL
     for (int k = 0; k < 4; ++k) {
         v_quats[k] = v_quat[k];
     }
@@ -255,15 +255,15 @@ __global__ void persp_proj_fwd_kernel(const int C, const int N,
     persp_proj(glm::make_vec3(means), glm::make_mat3(covars), fx, fy, cx, cy, width,
                height, covar2d, mean2d);
 
-// write to outputs: glm is column-major but we want row-major
-#pragma unroll 2
+    // write to outputs: glm is column-major but we want row-major
+    PRAGMA_UNROLL
     for (int i = 0; i < 2; i++) { // rows
-#pragma unroll 2
+        PRAGMA_UNROLL
         for (int j = 0; j < 2; j++) { // cols
             covars2d[i * 2 + j] = covar2d[j][i];
         }
     }
-#pragma unroll 2
+    PRAGMA_UNROLL
     for (int i = 0; i < 2; i++) {
         means2d[i] = mean2d[i];
     }
@@ -304,16 +304,16 @@ persp_proj_bwd_kernel(const int C, const int N,
                    height, glm::transpose(glm::make_mat2(v_covars2d)),
                    glm::make_vec2(v_means2d), v_mean, v_covar);
 
-// write to outputs: glm is column-major but we want row-major
-#pragma unroll 3
+    // write to outputs: glm is column-major but we want row-major
+    PRAGMA_UNROLL
     for (int i = 0; i < 3; i++) { // rows
-#pragma unroll 3
+        PRAGMA_UNROLL
         for (int j = 0; j < 3; j++) { // cols
             v_covars[i * 3 + j] = v_covar[j][i];
         }
     }
 
-#pragma unroll 3
+    PRAGMA_UNROLL
     for (int i = 0; i < 3; i++) {
         v_means[i] = v_mean[i];
     }
@@ -413,7 +413,7 @@ __global__ void world_to_cam_fwd_kernel(const int C, const int N,
         glm::vec3 mean_c;
         pos_world_to_cam(R, t, glm::make_vec3(means), mean_c);
         means_c += idx * 3;
-#pragma unroll 3
+        PRAGMA_UNROLL
         for (int i = 0; i < 3; i++) { // rows
             means_c[i] = mean_c[i];
         }
@@ -424,9 +424,9 @@ __global__ void world_to_cam_fwd_kernel(const int C, const int N,
         glm::mat3 covar_c;
         covar_world_to_cam(R, glm::make_mat3(covars), covar_c);
         covars_c += idx * 9;
-#pragma unroll 3
+        PRAGMA_UNROLL
         for (int i = 0; i < 3; i++) { // rows
-#pragma unroll 3
+            PRAGMA_UNROLL
             for (int j = 0; j < 3; j++) { // cols
                 covars_c[i * 3 + j] = covar_c[j][i];
             }
@@ -487,7 +487,7 @@ world_to_cam_bwd_kernel(const int C, const int N,
         warpSum(v_mean, warp_group_g);
         if (warp_group_g.thread_rank() == 0) {
             v_means += gid * 3;
-#pragma unroll 3
+            PRAGMA_UNROLL
             for (int i = 0; i < 3; i++) {
                 atomicAdd(v_means + i, v_mean[i]);
             }
@@ -497,9 +497,9 @@ world_to_cam_bwd_kernel(const int C, const int N,
         warpSum(v_covar, warp_group_g);
         if (warp_group_g.thread_rank() == 0) {
             v_covars += gid * 9;
-#pragma unroll 3
+            PRAGMA_UNROLL
             for (int i = 0; i < 3; i++) { // rows
-#pragma unroll 3
+                PRAGMA_UNROLL
                 for (int j = 0; j < 3; j++) { // cols
                     atomicAdd(v_covars + i * 3 + j, v_covar[j][i]);
                 }
@@ -512,9 +512,9 @@ world_to_cam_bwd_kernel(const int C, const int N,
         warpSum(v_t, warp_group_c);
         if (warp_group_c.thread_rank() == 0) {
             v_viewmats += cid * 16;
-#pragma unroll 3
+            PRAGMA_UNROLL
             for (int i = 0; i < 3; i++) { // rows
-#pragma unroll 3
+                PRAGMA_UNROLL
                 for (int j = 0; j < 3; j++) { // cols
                     atomicAdd(v_viewmats + i * 4 + j, v_R[j][i]);
                 }
@@ -827,7 +827,7 @@ __global__ void projection_bwd_kernel(
         warpSum(v_mean, warp_group_g);
         if (warp_group_g.thread_rank() == 0) {
             v_means += gid * 3;
-#pragma unroll 3
+            PRAGMA_UNROLL
             for (int i = 0; i < 3; i++) {
                 atomicAdd(v_means + i, v_mean[i]);
             }
@@ -871,9 +871,9 @@ __global__ void projection_bwd_kernel(
         warpSum(v_t, warp_group_c);
         if (warp_group_c.thread_rank() == 0) {
             v_viewmats += cid * 16;
-#pragma unroll 3
+            PRAGMA_UNROLL
             for (int i = 0; i < 3; i++) { // rows
-#pragma unroll 3
+                PRAGMA_UNROLL
                 for (int j = 0; j < 3; j++) { // cols
                     atomicAdd(v_viewmats + i * 4 + j, v_R[j][i]);
                 }
@@ -1482,7 +1482,7 @@ __global__ void projection_packed_bwd_kernel(
         // write out results with sparse layout
         if (v_means != nullptr) {
             v_means += idx * 3;
-#pragma unroll 3
+            PRAGMA_UNROLL
             for (int i = 0; i < 3; i++) {
                 v_means[i] = v_mean[i];
             }
@@ -1519,7 +1519,7 @@ __global__ void projection_packed_bwd_kernel(
             warpSum(v_mean, warp_group_g);
             if (warp_group_g.thread_rank() == 0) {
                 v_means += gid * 3;
-#pragma unroll 3
+                PRAGMA_UNROLL
                 for (int i = 0; i < 3; i++) {
                     atomicAdd(v_means + i, v_mean[i]);
                 }
@@ -1565,9 +1565,9 @@ __global__ void projection_packed_bwd_kernel(
         warpSum(v_t, warp_group_c);
         if (warp_group_c.thread_rank() == 0) {
             v_viewmats += cid * 16;
-#pragma unroll 3
+            PRAGMA_UNROLL
             for (int i = 0; i < 3; i++) { // rows
-#pragma unroll 3
+                PRAGMA_UNROLL
                 for (int j = 0; j < 3; j++) { // cols
                     atomicAdd(v_viewmats + i * 4 + j, v_R[j][i]);
                 }
