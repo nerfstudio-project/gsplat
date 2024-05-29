@@ -44,7 +44,9 @@ class Parser:
         # Extract extrinsic matrices in world-to-camera format.
         imdata = manager.images
         w2c_mats = []
-        Ks_mats = []
+        camera_ids = []
+        Ks_dict = dict()
+        params_dict = dict()
         bottom = np.array([0, 0, 0, 1]).reshape(1, 4)
         for k in imdata:
             im = imdata[k]
@@ -55,13 +57,44 @@ class Parser:
 
             # support different camera intrinsics
             camera_id = im.camera_id
+            camera_ids.append(camera_id)
+
+            # camera intrinsics
             cam = manager.cameras[camera_id]
             fx, fy, cx, cy = cam.fx, cam.fy, cam.cx, cam.cy
             K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
             K[:2, :] /= factor
-            Ks_mats.append(K)
+            Ks_dict[camera_id] = K
+
+            # Get distortion parameters.
+            type_ = cam.camera_type
+            if type_ == 0 or type_ == "SIMPLE_PINHOLE":
+                params = np.empty(0, dtype=np.float32)
+                camtype = "perspective"
+            elif type_ == 1 or type_ == "PINHOLE":
+                params = np.empty(0, dtype=np.float32)
+                camtype = "perspective"
+            if type_ == 2 or type_ == "SIMPLE_RADIAL":
+                params = np.array([cam.k1], dtype=np.float32)
+                camtype = "perspective"
+            elif type_ == 3 or type_ == "RADIAL":
+                params = np.array([cam.k1, cam.k2], dtype=np.float32)
+                camtype = "perspective"
+            elif type_ == 4 or type_ == "OPENCV":
+                params = np.array([cam.k1, cam.k2, cam.p1, cam.p2], dtype=np.float32)
+                camtype = "perspective"
+            elif type_ == 5 or type_ == "OPENCV_FISHEYE":
+                params = np.array([cam.k1, cam.k2, cam.k3, cam.k4], dtype=np.float32)
+                camtype = "fisheye"
+            assert (
+                camtype == "perspective"
+            ), f"Only support perspective camera model, got {type_}"
+
+            if not (type_ == 0 or type_ == 1):
+                print(f"Warning: COLMAP Camera is not PINHOLE. Images have distortion.")
+            params_dict[camera_id] = params
+
         w2c_mats = np.stack(w2c_mats, axis=0)
-        Ks_mats = np.stack(Ks_mats, axis=0)
 
         # Convert extrinsics to camera-to-world.
         camtoworlds = np.linalg.inv(w2c_mats)
@@ -69,40 +102,6 @@ class Parser:
         # Image names from COLMAP. No need for permuting the poses according to
         # image names anymore.
         image_names = [imdata[k].name for k in imdata]
-
-        # Get distortion parameters.
-        type_ = cam.camera_type
-
-        if type_ == 0 or type_ == "SIMPLE_PINHOLE":
-            params = np.empty(0, dtype=np.float32)
-            camtype = "perspective"
-
-        elif type_ == 1 or type_ == "PINHOLE":
-            params = np.empty(0, dtype=np.float32)
-            camtype = "perspective"
-
-        if type_ == 2 or type_ == "SIMPLE_RADIAL":
-            params = np.array([cam.k1], dtype=np.float32)
-            camtype = "perspective"
-
-        elif type_ == 3 or type_ == "RADIAL":
-            params = np.array([cam.k1, cam.k2], dtype=np.float32)
-            camtype = "perspective"
-
-        elif type_ == 4 or type_ == "OPENCV":
-            params = np.array([cam.k1, cam.k2, cam.p1, cam.p2], dtype=np.float32)
-            camtype = "perspective"
-
-        elif type_ == 5 or type_ == "OPENCV_FISHEYE":
-            params = np.array([cam.k1, cam.k2, cam.k3, cam.k4], dtype=np.float32)
-            camtype = "fisheye"
-
-        assert (
-            camtype == "perspective"
-        ), f"Only support perspective camera model, got {type_}"
-
-        if not (type_ == 0 or type_ == 1):
-            print(f"Warning: COLMAP Camera is not PINHOLE. Images have distortion.")
 
         # Previous Nerf results were generated with images sorted by filename,
         # ensure metrics are reported on the same test set.
@@ -164,8 +163,9 @@ class Parser:
         self.image_names = image_names  # List[str], (num_images,)
         self.image_paths = image_paths  # List[str], (num_images,)
         self.camtoworlds = camtoworlds  # np.ndarray, (num_images, 4, 4)
-        self.Ks = Ks_mats  # np.ndarray, (num_images, 3, 3)
-        self.params = params  # np.ndarray, (K,)
+        self.camera_ids = camera_ids  # List[int], (num_images,)
+        self.Ks_dict = Ks_dict  # Dict of camera_id -> K
+        self.params_dict = params_dict  # Dict of camera_id -> params
         self.points = points  # np.ndarray, (num_points, 3)
         self.points_err = points_err  # np.ndarray, (num_points,)
         self.points_rgb = points_rgb  # np.ndarray, (num_points, 3)
@@ -174,15 +174,30 @@ class Parser:
         self.height = height
         self.width = width
 
-        if len(self.params) > 0:
-            # Images are distorted. Undistort them.
-            K_undist, self.roi_undist = cv2.getOptimalNewCameraMatrix(
-                self.K, self.params, (width, height), 0
+        # undistortion
+        self.mapx_dict = dict()
+        self.mapy_dict = dict()
+        self.roi_undist_dict = dict()
+        for camera_id in self.camera_ids:
+            params = self.params_dict[camera_id]
+            if len(params) == 0:
+                continue  # no distortion
+            assert camera_id in self.Ks_dict, f"Missing K for camera {camera_id}"
+            assert (
+                camera_id in self.params_dict
+            ), f"Missing params for camera {camera_id}"
+            K = self.Ks_dict[camera_id]
+            params = self.params_dict[camera_id]
+            K_undist, roi_undist = cv2.getOptimalNewCameraMatrix(
+                K, params, (width, height), 0
             )
-            self.mapx, self.mapy = cv2.initUndistortRectifyMap(
-                self.K, self.params, None, K_undist, (width, height), cv2.CV_32FC1
+            mapx, mapy = cv2.initUndistortRectifyMap(
+                K, params, None, K_undist, (width, height), cv2.CV_32FC1
             )
-            self.K = K_undist
+            self.Ks_dict[camera_id] = K_undist
+            self.mapx_dict[camera_id] = mapx
+            self.mapy_dict[camera_id] = mapy
+            self.roi_undist_dict[camera_id] = roi_undist
 
         # size of the scene measured by cameras
         camera_locations = camtoworlds[:, :3, 3]
@@ -209,13 +224,17 @@ class Dataset(Parser):
     def __getitem__(self, item: int) -> Dict[str, Any]:
         index = self.indices[item % len(self.indices)]
         image = imageio.imread(self.image_paths[index])[..., :3]
-        if len(self.params) > 0:
+        camera_id = self.camera_ids[index]
+        K = self.Ks_dict[camera_id]
+        params = self.params_dict[camera_id]
+        if len(params) > 0:
             # Images are distorted. Undistort them.
-            image = cv2.remap(image, self.mapx, self.mapy, cv2.INTER_LINEAR)
-            x, y, w, h = self.roi_undist
+            mapx, mapy = self.mapx_dict[camera_id], self.mapy_dict[camera_id]
+            image = cv2.remap(image, mapx, mapy, cv2.INTER_LINEAR)
+            x, y, w, h = self.roi_undist_dict[camera_id]
             image = image[y : y + h, x : x + w]
         return {
-            "K": torch.from_numpy(self.Ks[index].copy()).float(),
+            "K": torch.from_numpy(K.copy()).float(),
             "camtoworld": torch.from_numpy(self.camtoworlds[index]).float(),
             "image": torch.from_numpy(image).float(),
         }
