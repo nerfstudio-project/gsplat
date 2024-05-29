@@ -663,7 +663,7 @@ class Runner:
         )  # [N, 4, 4]
 
         camtoworlds = torch.from_numpy(camtoworlds).float().to(device)
-        K = torch.from_numpy(self.trainset.Ks_dict.values()[0]).float().to(device)
+        K = torch.from_numpy(list(self.trainset.Ks_dict.values())[0]).float().to(device)
         width = self.trainset.width
         height = self.trainset.height
 
