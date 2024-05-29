@@ -268,9 +268,8 @@ def rasterization(
         colors = spherical_harmonics(
             sh_degree, dirs, colors, masks=radii > 0
         )  # [nnz, D] or [C, N, 3]
-
-        # Enable this line to make it apple-to-apple with Inria's CUDA Backend.
-        # colors = torch.clamp_min(colors + 0.5, 0.0)
+        # make it apple-to-apple with Inria's CUDA Backend.
+        colors = torch.clamp_min(colors + 0.5, 0.0)
 
     # Rasterize to pixels
     if render_mode in ["RGB+D", "RGB+ED"]:
@@ -435,9 +434,7 @@ def rasterization_inria_wrapper(
 
     .. warning::
         This function exists for comparision purpose only. Only rendered image is
-        returned. Also, Inria's implementation will apply a
-        `torch.clamp(colors + 0.5, min=0.0)` after spherical harmonics calculation, which is
-        different from the behavior of gsplat. Use with caution!
+        returned.
 
     .. warning::
         Inria's CUDA backend has its own LICENSE, so this function should be used with
@@ -518,9 +515,6 @@ def rasterization_inria_wrapper(
 
         means2D = torch.zeros_like(means, requires_grad=True, device=device)
 
-        # Note: This implementation will apply a
-        # torch.clamp(colors + 0.5, min=0.0) after spherical_harmonics, which is
-        # different from the behavior of gsplat. Use with caution!
         render_colors_ = []
         for i in range(0, channels, 3):
             _colors = colors[..., i : i + 3]
@@ -544,8 +538,6 @@ def rasterization_inria_wrapper(
             render_colors_.append(_render_colors_)
         render_colors_ = torch.cat(render_colors_, dim=-1)
 
-        # -0.5 roughly brings the color back but not exactly!
-        render_colors_ = render_colors_ - 0.5
         render_colors_ = render_colors_.permute(1, 2, 0)  # [H, W, 3]
 
         render_colors.append(render_colors_)
