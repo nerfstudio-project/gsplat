@@ -96,7 +96,7 @@ class Parser:
             params_dict[camera_id] = params
 
             # image size
-            imsize_dict[camera_id] = (cam.width, cam.height)
+            imsize_dict[camera_id] = (cam.width // factor, cam.height // factor)
 
         w2c_mats = np.stack(w2c_mats, axis=0)
 
