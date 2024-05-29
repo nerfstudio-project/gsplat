@@ -11,13 +11,17 @@ With `gsplat` as CUDA Backend:
 
 .. raw:: html
 
-    <iframe width="784" height="441" src="https://www.youtube.com/embed/rXyJwL7uJFQ?si=kQ10HcASlvhztTUA" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+    <div style="position:relative; padding-bottom:56.25%; height:0; width:100%">
+        <iframe style="position:absolute; top:0; left:0; width:100%; height:100%" src="https://www.youtube.com/embed/rXyJwL7uJFQ?si=kQ10HcASlvhztTUA" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+    </div>
 
 With `diff-gaussian-rasterization` as CUDA Backend:
 
 .. raw:: html
 
-    <iframe width="784" height="441" src="https://www.youtube.com/embed/kk3G3P68rkc?si=JJplV2ZY3PxE_5k7" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+    <div style="position:relative; padding-bottom:56.25%; height:0; width:100%">
+        <iframe style="position:absolute; top:0; left:0; width:100%; height:100%" src="https://www.youtube.com/embed/kk3G3P68rkc?si=JJplV2ZY3PxE_5k7" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+    </div>
 
 Note: Similar to the `nerfstudio <https://docs.nerf.studio/>`_ viewer, our viewer automatically 
 switch to low resolution if the rendering is slow.

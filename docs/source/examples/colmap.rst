@@ -25,7 +25,7 @@ It also supports a browser based viewer for real-time rendering, powered by
 
 .. raw:: html
 
-    <video class="video" autoplay="" loop="" muted="" playsinline="">
+    <video class="video" autoplay="" loop="" muted="" playsinline="", width="100%", height="auto">
         <source src="../_static/viewer_garden_480p.mp4" type="video/mp4">
         Your browser does not support the video tag.
     </video>
