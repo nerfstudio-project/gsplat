@@ -53,12 +53,12 @@ to feedback, bug-reports, and improvements to help expand the capabilities of th
 
 This project is developed by the following wonderful contributors:
 
-- `Angjoo Kanazawa <https://people.eecs.berkeley.edu/~kanazawa/>`_ (UC Berkely): Mentor of the project.
-- `Vickie Ye <https://people.eecs.berkeley.edu/~vye/>`_ (UC Berkely): Project lead.
+- `Angjoo Kanazawa <https://people.eecs.berkeley.edu/~kanazawa/>`_ (UC Berkeley): Mentor of the project.
+- `Vickie Ye <https://people.eecs.berkeley.edu/~vye/>`_ (UC Berkeley): Project lead.
 - `Matias Turkulainen <https://maturk.github.io/>`_ (Aalto University): Core developer.
-- `Ruilong Li <https://www.liruilong.cn/>`_ (UC Berkely): Core developer. v1.0 lead.
-- `Justin Kerr <https://kerrj.github.io/>`_ (UC Berkely): Core developer.
-- `Brent Yi <https://github.com/brentyi>`_ (UC Berkely): Core developer.
+- `Ruilong Li <https://www.liruilong.cn/>`_ (UC Berkeley): Core developer. v1.0 lead.
+- `Justin Kerr <https://kerrj.github.io/>`_ (UC Berkeley): Core developer.
+- `Brent Yi <https://github.com/brentyi>`_ (UC Berkeley): Core developer.
 - `Jianbo Ye <http://www.jianboye.org/>`_ (Amazon): Core developer.
 
 
