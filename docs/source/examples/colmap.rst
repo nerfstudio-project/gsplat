@@ -20,7 +20,8 @@ Simply run the script under `examples/`:
         --result_dir ./results/garden
 
 It also supports a browser based viewer for real-time rendering, powered by 
-`Viser <https://github.com/nerfstudio-project/viser>`_.
+`Viser <https://github.com/nerfstudio-project/viser>`_ and 
+`nerfview <https://github.com/hangg7/nerfview>`_.
 
 .. raw:: html
 
