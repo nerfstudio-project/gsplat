@@ -51,9 +51,15 @@ This repository was born from the curiosity of people on the Nerfstudio team try
 understand a new rendering technique. We welcome contributions of any kind and are open 
 to feedback, bug-reports, and improvements to help expand the capabilities of this software.
 
+This project is developed by the following wonderful contributors:
 
-
-
+- `Angjoo Kanazawa <https://people.eecs.berkeley.edu/~kanazawa/>`_ (UC Berkely): Mentor of the project.
+- `Vickie Ye <https://people.eecs.berkeley.edu/~vye/>`_ (UC Berkely): Project lead.
+- `Matias Turkulainen <https://maturk.github.io/>`_ (Aalto University): Core developer.
+- `Ruilong Li <https://www.liruilong.cn/>`_ (UC Berkely): Core developer. v1.0 lead.
+- `Justin Kerr <https://kerrj.github.io/>`_ (UC Berkely): Core developer.
+- `Brent Yi <https://brentyi.github.io/>`_ (UC Berkely): Core developer.
+- `Jianbo Ye <http://www.jianboye.org/>`_ (Amazon): Core developer.
 
 
 Links
