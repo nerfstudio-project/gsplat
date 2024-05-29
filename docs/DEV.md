@@ -36,18 +36,17 @@ The current tests that will be triggered by PR:
 Because we check for black formatting, it is recommend to run black before commit in the code:
 
 ```bash
-black . gsplat/ tests/ examples/
+black . gsplat/ tests/ examples/ profiling/
 ```
 
 Since there is no GPU supported on github workflow container, we don't test against those cuda unit tests under `tests/` in PR. So it is recommended to check test pass locally before committing:
 
 ```bash
 pytest tests/  # check for all tests
-pytest tests/test_cov2d_bounds.py  # check for a single test file.
+pytest tests/test_basic.py  # check for a single test file.
 ```
 
-Note that `pytest` recognizes and runs all functions named as `test_*`, so you should name the
-test functions in this pattern. See `test_cov2d_bounds.py` as an example.
+Note that `pytest` recognizes and runs all functions named as `test_*`, so you should name the test functions in this pattern. See `test_basic.py` as an example.
 
 ## Build the Doc Locally
 
