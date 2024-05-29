@@ -1,4 +1,4 @@
-Migratite from gsplat v0.1.11
+Migrate from gsplat v0.1.11
 ===================================
 
 .. currentmodule:: gsplat

@@ -23,7 +23,7 @@ memory usage, including **packed** and **sparse_grad**:
   This could further reduce the memory usage when training a large scene as the gradients of
   the Gaussian attributes are usually sparse. Note that in most cases, sparse gradients should be used together
   with a sparse optimizer, such as `torch.optim.SparseAdam <https://pytorch.org/docs/stable/generated/torch.optim.SparseAdam.html>`_. And currently we only supports 
-  sparse gradients for partial of the Gaussian attributes. See :func:`rasterization` 
+  sparse gradients for part of the Gaussian attributes. See :func:`rasterization` 
   for more details.
 
 Here we provide careful profiling of the performance with the different rasterization backends, along with 

@@ -75,7 +75,7 @@ def rasterization(
     .. note::
         **Sparse Gradients**: If `sparse_grad` is True, the gradients for {means, quats, scales}
         will be stored in a `COO sparse layout <https://pytorch.org/docs/stable/generated/torch.sparse_coo_tensor.html>`_.
-        This can be helpful on saving memory
+        This can be helpful for saving memory
         for training when the scene is large and each iteration only activates a small portion
         of the Gaussians. Usually a sparse optimizer is required to work with sparse gradients,
         such as `torch.optim.SparseAdam <https://pytorch.org/docs/stable/generated/torch.optim.SparseAdam.html#sparseadam>`_.
@@ -138,7 +138,7 @@ def rasterization(
             and "RGB+ED". "RGB" renders the colored image, "D" renders the accumulated depth, and
             "ED" renders the expected depth. Default is "RGB".
         sparse_grad: If true, the gradients for {means, quats, scales} will be stored in
-            a COO sparse layout. This can be helpful on saving memory. Default is False.
+            a COO sparse layout. This can be helpful for saving memory. Default is False.
         compute_means2d_absgrad: If true, the absolute gradients of the projected 2D means
             will be computed during the backward pass, which could be accessed by
             `meta["means2d"].absgrad`. Default is False.

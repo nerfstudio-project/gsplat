@@ -1,4 +1,4 @@
-Migratite from `diff-gaussian-rasterization <https://github.com/graphdeco-inria/diff-gaussian-rasterization>`_
+Migrate from `diff-gaussian-rasterization <https://github.com/graphdeco-inria/diff-gaussian-rasterization>`_
 ==================================================================================================================================================================
 
 .. currentmodule:: gsplat
