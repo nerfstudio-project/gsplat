@@ -24,10 +24,10 @@ __global__ void project_gaussians_backward_kernel(
     // const float* __restrict__ dL_dnormal3Ds,
 
     // grad output
-    float3* __restrict__ dL_dmean3Ds,
-    float2* __restrict__ dL_dscales,
-    float4* __restrict__ dL_drots,
-    float3* __restrict__ dL_dmean2Ds
+    float3* __restrict__ v_mean3Ds,
+    float2* __restrict__ v_scales,
+    float4* __restrict__ v_quats,
+    float3* __restrict__ v_mean2Ds
 );
 
 __global__ void rasterize_backward_kernel(
@@ -48,7 +48,7 @@ __global__ void rasterize_backward_kernel(
     const float* __restrict__ dL_doutput_alpha,
 
     // grad_output
-    float2* __restrict__ dL_dmean2D,
+    float2* __restrict__ v_mean2D,
     float* __restrict__ dL_dtransMat,
     float3* __restrict__ dL_drgb,
     float* __restrict__ dL_dopacity
@@ -69,9 +69,9 @@ __device__ void build_H(
     // const float* dL_dnormal3D,
 
     // grad output
-    glm::vec3 & dL_dmean3D,
-    glm::vec2 & dL_dscale,
-    glm::vec4 & dL_drot
+    glm::vec3 & v_mean3D,
+    glm::vec2 & v_scale,
+    glm::vec4 & v_quat
 );
 
 __device__ void build_AABB(
@@ -82,6 +82,6 @@ __device__ void build_AABB(
     const float * transMats,
 
     // grad output
-    float3 * dL_dmean2Ds,
+    float3 * v_mean2Ds,
     float *dL_transMats
 );

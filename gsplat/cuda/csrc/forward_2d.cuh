@@ -88,10 +88,6 @@ __device__ bool build_H(
     const float3 __restrict__ scale,
     const float4 __restrict__ quat,
     const float* __restrict__ viewmat,
-    const float fx,
-    const float fy,
-    const float tan_fovx,
-    const float tan_fovy,
     float* transMat,
     float3 &normal
 );

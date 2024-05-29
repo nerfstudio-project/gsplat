@@ -39,13 +39,12 @@ __global__ void project_gaussians_backward_kernel(
     // const float* __restrict__ dL_dnormal3Ds,
 
     // grad output
-    float3* __restrict__ dL_dmean3Ds,
-    float2* __restrict__ dL_dscales,
-    float4* __restrict__ dL_drots,
-    float3* __restrict__ dL_dmean2Ds
+    float3* __restrict__ v_mean3Ds,
+    float2* __restrict__ v_scales,
+    float4* __restrict__ v_quats,
+    float3* __restrict__ v_mean2Ds
 
 ) {
-    // printf("Here! \n");
     unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
     if (idx >= num_points || radii[idx] <= 0) return;
 
@@ -60,9 +59,9 @@ __global__ void project_gaussians_backward_kernel(
     float tan_fovx = intrins.z / fx;
     float tan_fovy = intrins.w / fy;
     
-    glm::vec3 dL_dmean3D;
-    glm::vec2 dL_dscale;
-    glm::vec4 dL_drot;
+    glm::vec3 v_mean3D;
+    glm::vec2 v_scale;
+    glm::vec4 v_quat;
 
     build_AABB(
         num_points,
@@ -71,7 +70,7 @@ __global__ void project_gaussians_backward_kernel(
         img_size.y,
         transMats,
 
-        dL_dmean2Ds,
+        v_mean2Ds,
         dL_dtransMats
     );
     
@@ -90,24 +89,19 @@ __global__ void project_gaussians_backward_kernel(
         // dL_dnormal3D,
 
         // grad output
-        dL_dmean3D,
-        dL_dscale,
-        dL_drot
+        v_mean3D,
+        v_scale,
+        v_quat
     );
 
     // Update 
-    float3 dL_dmean3D_float = {dL_dmean3D.x, dL_dmean3D.y, dL_dmean3D.z};
-    float2 dL_dscale_float = {dL_dscale.x, dL_dscale.y};
-    float4 dL_drot_float = {dL_drot.x, dL_drot.y, dL_drot.z, dL_drot.w};
+    float3 v_mean3D_float = {v_mean3D.x, v_mean3D.y, v_mean3D.z};
+    float2 v_scale_float = {v_scale.x, v_scale.y};
+    float4 v_quat_float = {v_quat.x, v_quat.y, v_quat.z, v_quat.w};
     
-    dL_dmean3Ds[idx] = dL_dmean3D_float;
-    dL_dscales[idx] = dL_dscale_float;
-    dL_drots[idx] = dL_drot_float;
-   
-    // v_mean3ds[idx] = v_dmean3D;
-    // v_scales[idx] = v_scale;
-    // v_quats[idx] = v_quat;
-
+    v_mean3Ds[idx] = v_mean3D_float;
+    v_scales[idx] = v_scale_float;
+    v_quats[idx] = v_quat_float;
 }
 
 
@@ -130,12 +124,12 @@ __global__ void rasterize_backward_kernel(
     const float* __restrict__ dL_doutput_alpha,
 
     // grad_output
-    float2* __restrict__ dL_dmean2D,
+    float2* __restrict__ v_mean2D,
     float* __restrict__ dL_dtransMat,
     float3* __restrict__ dL_drgb,
     float* __restrict__ dL_dopacity
 ) {
-    printf("It is real :) \n");
+    // printf("It is real :) \n");
     auto block = cg::this_thread_block();
     int32_t tile_id = 
         block.group_index().y * tile_bounds.x + block.group_index().x;
@@ -220,8 +214,6 @@ __global__ void rasterize_backward_kernel(
             }
             float alpha;
             float opac;
-            // float2 delta;
-            // float3 conic;
             float vis;
             float rho3d;
             float rho2d;
@@ -233,8 +225,6 @@ __global__ void rasterize_backward_kernel(
             float3 p;
             float3 Tw;
             if (valid) {
-                // conic = conic_batch[t];
-
                 // Here we compute gaussian weights in forward pass again
                 float3 xy_opac = xy_opacity_batch[t];
                 opac = xy_opac.z;
@@ -249,7 +239,6 @@ __global__ void rasterize_backward_kernel(
                 
                 p = cross_product(k, l);
                 
-                // printf("backward p.z: %.2d \n", p.z);
                 if (p.z == 0.0) {
                    continue;
                 } else {
@@ -275,15 +264,12 @@ __global__ void rasterize_backward_kernel(
             if (!warp.any(valid)) continue;
 
             float3 dL_drgb_local = {0.f, 0.f, 0.f};
-            // float3 v_conic_local = {0.f, 0.f, 0.f};
-            // float2 v_xy_local = {0.f, 0.f};
             float dL_dopacity_local = 0.f;
-            float2 dL_dmean2D_local = {0.f, 0.f};
+            float2 v_mean2D_local = {0.f, 0.f};
             float3 dL_dTu_local = {0.f, 0.f, 0.f};
             float3 dL_dTv_local = {0.f, 0.f, 0.f};
             float3 dL_dTw_local = {0.f, 0.f, 0.f};
             // initialize everything to 0, only set if the lane is valid
-            // TODO (WZ) what is the lane?
             if (valid) {
                 // compute the current T for this gaussian
                 float ra = 1.f / (1.f - alpha);
@@ -311,16 +297,12 @@ __global__ void rasterize_backward_kernel(
 
                 // Helpful reusable temporary variable
                 const float dL_dG = opac * v_alpha;
-                // printf("dL_dG: %.2f, opac: %.2f, v_alpha: %.2f \n", dL_dG, opac, v_alpha);
-
                 float dL_dz = 0.0f;
 
                 int32_t g = id_batch[t];
 
                 // ====== 2D Splatting ====== //
                 if (rho3d <= rho2d) {
-                    // printf("ever here? \n");
-                    // printf("rho3d <= rho2d \n");
                     // Update gradients w.r.t. covariance of Gaussian 3x3 (T)
                     const float2 dL_ds = {
                         dL_dG * -vis * s.x + dL_dz * Tw.x,
@@ -329,8 +311,6 @@ __global__ void rasterize_backward_kernel(
                     const float3 dz_dTw = {s.x, s.y, 1.0};
                     const float dsx_pz = dL_ds.x / p.z;
                     const float dsy_pz = dL_ds.y / p.z;
-                    // printf("dsx_pz: %.2f \n", dsx_pz);
-                    // printf("dsy_pz: %.2f \n", dsy_pz);
                     const float3 dL_dp = {dsx_pz, dsy_pz, -(dsx_pz * s.x + dsy_pz * s.y)};
                     const float3 dL_dk = cross_product(l, dL_dp);
                     const float3 dL_dl = cross_product(dL_dp, k);
@@ -342,52 +322,22 @@ __global__ void rasterize_backward_kernel(
                         px * dL_dk.y + py * dL_dl.y + dL_dz * dz_dTw.y,
                         px * dL_dk.z + py * dL_dl.z + dL_dz * dz_dTw.z
                     };
-                    // printf("dL_dTu: %.2f, %.2f, %.2f", dL_dTu.x, dL_dTu.y, dL_dTu.z);
-                    // printf("dL_dTv: %.2f, %.2f, %.2f \n", dL_dTv.x, dL_dTv.y, dL_dTv.z);
                     dL_dTu_local = {dL_dTu.x, dL_dTu.y, dL_dTu.z};
                     dL_dTv_local = {dL_dTv.x, dL_dTv.y, dL_dTv.z};
                     dL_dTw_local = {dL_dTw.x, dL_dTw.y, dL_dTw.z};
 
-                    // atomicAdd(&dL_dtransMat[g * 9 + 0], dL_dTu.x);
-                    // atomicAdd(&dL_dtransMat[g * 9 + 1], dL_dTu.y);
-                    // atomicAdd(&dL_dtransMat[g * 9 + 2], dL_dTu.z);
-                    // atomicAdd(&dL_dtransMat[g * 9 + 3], dL_dTv.x);
-                    // atomicAdd(&dL_dtransMat[g * 9 + 4], dL_dTv.y);
-                    // atomicAdd(&dL_dtransMat[g * 9 + 5], dL_dTv.z);
-                    // atomicAdd(&dL_dtransMat[g * 9 + 6], dL_dTw.x);
-                    // atomicAdd(&dL_dtransMat[g * 9 + 7], dL_dTw.y);
-                    // atomicAdd(&dL_dtransMat[g * 9 + 8], dL_dTw.z);
                 } else {
-                    // printf("rho3d > rho2d \n");
                     // Update gradient w.r.t center of Gaussian 2D mean position
                     const float dG_ddelx = -vis * FilterInvSquare * d.x;
                     const float dG_ddely = -vis * FilterInvSquare * d.y;
-                    // printf("dL_dG: %.2f \n", dL_dG);
-                    // printf("vis: %.2f \n", vis);
-                    // printf("dG_ddelx: %.2f, dG_ddely: %.2f \n", dG_ddelx, dG_ddely);
-                    // printf("dL_dG: %.2f \n", dL_dG);
-                    // printf("d.x: %.2f, d.y: %.2f \n", d.x, d.y);
-                    // printf("dL_dmean2D.x update: %.2f \n", dL_dG * dG_ddelx);
-                    // printf("dL_dmean2D.y update: %.2f \n", dL_dG * dG_ddely);
-                    dL_dmean2D_local = {dL_dG * dG_ddelx, dL_dG * dG_ddely};
-                    // atomicAdd(&dL_dmean2D[2 * g + 0].x, dL_dG * dG_ddelx); // not scaled
-                    // atomicAdd(&dL_dmean2D[2 * g + 1].y, dL_dG * dG_ddely); // not scaled
-                    // atomicAdd(&dL_dttransMat[global_id * 9 + 8], dL_dz); // propagate depth loss, disable for now
+                    v_mean2D_local = {dL_dG * dG_ddelx, dL_dG * dG_ddely};
 
                 }
-                // const float v_sigma = -opac * vis * v_alpha;
-                // v_conic_local = {0.5f * v_sigma * delta.x * delta.x,
-                //                 v_sigma * delta.x * delta.y,
-                //                 0.5f * v_sigma * delta.y * delta.y};
-                // v_xy_local = {v_sigma * (conic.x * delta.x + conic.y * delta.y),
-                //                 v_sigma * (conic.y * delta.x + conic.z * delta.y)};
                 dL_dopacity_local = vis * v_alpha;
             }
             warpSum3(dL_drgb_local, warp);
-            // warpSum3(v_conic_local, warp);
-            // warpSum2(v_xy_local, warp);
             warpSum(dL_dopacity_local, warp);
-            warpSum2(dL_dmean2D_local, warp);
+            warpSum2(v_mean2D_local, warp);
             warpSum3(dL_dTu_local, warp);
             warpSum3(dL_dTv_local, warp);
             warpSum3(dL_dTw_local, warp);
@@ -398,18 +348,7 @@ __global__ void rasterize_backward_kernel(
                 atomicAdd(dL_drgb_ptr + 3 * g + 0, dL_drgb_local.x);
                 atomicAdd(dL_drgb_ptr + 3 * g + 1, dL_drgb_local.y);
                 atomicAdd(dL_drgb_ptr + 3 * g + 2, dL_drgb_local.z);
-
-                // float* v_conic_ptr = (float*)(v_conic);
-                // atomicAdd(v_conic_ptr + 3 * g + 0, v_conic_local.x);
-                // atomicAdd(v_conic_ptr + 3 * g + 1, v_conic_local.y);
-                // atomicAdd(v_conic_ptr + 3 * g + 1, v_conic_local.z);
-
-                // float* v_xy_ptr = (float*)(v_xy);
-                // atomicAdd(v_xy_ptr + 2 * g + 0, v_xy_local.x);
-                // atmoicAdd(v_xy_ptr + 2 * g + 1, v_xy_local.y);
                 if (rho3d <= rho2d) {
-                    
-                    // printf("Here \n");
                     float* dL_dtransMat_ptr = (float*)(dL_dtransMat);
                     atomicAdd(dL_dtransMat_ptr + 9 * g + 0, dL_dTu_local.x);
                     atomicAdd(dL_dtransMat_ptr + 9 * g + 1, dL_dTu_local.y);
@@ -421,19 +360,10 @@ __global__ void rasterize_backward_kernel(
                     atomicAdd(dL_dtransMat_ptr + 9 * g + 7, dL_dTw_local.y);
                     atomicAdd(dL_dtransMat_ptr + 9 * g + 8, dL_dTw_local.z);
 
-                    // atomicAdd(&dL_dtransMat[g * 9 + 0], dL_dTu.x);
-                    // atomicAdd(&dL_dtransMat[g * 9 + 1], dL_dTu.y);
-                    // atomicAdd(&dL_dtransMat[g * 9 + 2], dL_dTu.z);
-                    // atomicAdd(&dL_dtransMat[g * 9 + 3], dL_dTv.x);
-                    // atomicAdd(&dL_dtransMat[g * 9 + 4], dL_dTv.y);
-                    // atomicAdd(&dL_dtransMat[g * 9 + 5], dL_dTv.z);
-                    // atomicAdd(&dL_dtransMat[g * 9 + 6], dL_dTw.x);
-                    // atomicAdd(&dL_dtransMat[g * 9 + 7], dL_dTw.y);
-                    // atomicAdd(&dL_dtransMat[g * 9 + 8], dL_dTw.z);
                 } else {
-                    float* dL_dmean2D_ptr = (float*)(dL_dmean2D);
-                    atomicAdd(dL_dmean2D_ptr + 2 * g + 0, dL_dmean2D_local.x);
-                    atomicAdd(dL_dmean2D_ptr + 2 * g + 1, dL_dmean2D_local.y);
+                    float* v_mean2D_ptr = (float*)(v_mean2D);
+                    atomicAdd(v_mean2D_ptr + 2 * g + 0, v_mean2D_local.x);
+                    atomicAdd(v_mean2D_ptr + 2 * g + 1, v_mean2D_local.y);
                 }
                 atomicAdd(dL_dopacity + g, dL_dopacity_local);
             }
@@ -457,9 +387,9 @@ __device__ void build_H(
     // const float* dL_dnormal3D,
 
     // grad output
-    glm::vec3 & dL_dmean3D,
-    glm::vec2 & dL_dscale,
-    glm::vec4 & dL_drot
+    glm::vec3 & v_mean3D,
+    glm::vec2 & v_scale,
+    glm::vec4 & v_quat
 ) {
 
     // camera information
@@ -470,7 +400,7 @@ __device__ void build_H(
     ); // viewmat
 
     const glm::vec3 cam_pos = glm::vec3(viewmat[3], viewmat[7], viewmat[11]); // camera center
-    const glm::mat4 P = glm::mat4(
+    glm::mat4 P = glm::mat4(
         intrins.x, 0.0, 0.0, 0.0,
         0.0, intrins.y, 0.0, 0.0,
         intrins.z, intrins.w, 1.0, 1.0,
@@ -512,13 +442,13 @@ __device__ void build_H(
         dL_dtn
     );
 
-    dL_drot = quat_to_rotmat_vjp(quat, dL_dR);
-    dL_dscale = glm::vec2(
+    v_quat = quat_to_rotmat_vjp(quat, dL_dR);
+    v_scale = glm::vec2(
         (float)glm::dot(dL_dRS0, R[0]),
         (float)glm::dot(dL_dRS1, R[1])
     );
 
-    dL_dmean3D = dL_dpw;
+    v_mean3D = dL_dpw;
 }
 
 
@@ -530,12 +460,12 @@ __device__ void build_AABB(
     const float * transMats,
 
     // grad output
-    float3 * dL_dmean2Ds,
+    float3 * v_mean2Ds,
     float * dL_dtransMats
 ) {
     const float* transMat = transMats + 9 * idx;
 
-    const float3 dL_dmean2D = dL_dmean2Ds[idx];
+    const float3 v_mean2D = v_mean2Ds[idx];
     glm::mat4x3 T = glm::mat4x3(
         transMat[0], transMat[1], transMat[2],
         transMat[3], transMat[4], transMat[5],
@@ -552,10 +482,10 @@ __device__ void build_AABB(
         glm::dot(f, T[2] * T[3])
     );
 
-    glm::vec3 dL_dT0 = dL_dmean2D.x * f * T[3];
-    glm::vec3 dL_dT1 = dL_dmean2D.y * f * T[3];
-    glm::vec3 dL_dT3 = dL_dmean2D.x * f * T[0] + dL_dmean2D.y * f * T[1];
-    glm::vec3 dL_df = (dL_dmean2D.x * T[0] * T[3]) + (dL_dmean2D.y * T[1] * T[3]);
+    glm::vec3 dL_dT0 = v_mean2D.x * f * T[3];
+    glm::vec3 dL_dT1 = v_mean2D.y * f * T[3];
+    glm::vec3 dL_dT3 = v_mean2D.x * f * T[0] + v_mean2D.y * f * T[1];
+    glm::vec3 dL_df = (v_mean2D.x * T[0] * T[3]) + (v_mean2D.y * T[1] * T[3]);
     float dL_dd = glm::dot(dL_df, f) * (-1.0 / d);
     glm::vec3 dd_dT3 = glm::vec3(1.0, 1.0, -1.0) * T[3] * 2.0f;
     dL_dT3 += dL_dd * dd_dT3;
@@ -571,6 +501,6 @@ __device__ void build_AABB(
 
     // just use to hack the projected 2D gradient here.
     float z = transMat[8];
-    dL_dmean2Ds[idx].x = dL_dtransMats[9 * idx + 2] * z * W; // to ndc
-    dL_dmean2Ds[idx].y = dL_dtransMats[9 * idx + 5] * z * H; // to ndc
+    v_mean2Ds[idx].x = dL_dtransMats[9 * idx + 2] * z * W; // to ndc
+    v_mean2Ds[idx].y = dL_dtransMats[9 * idx + 5] * z * H; // to ndc
 }

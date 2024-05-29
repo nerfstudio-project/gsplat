@@ -58,13 +58,11 @@ __global__ void project_gaussians_forward_kernel(
     float tan_fovx = 0.5 * img_size.x / fx;
     float tan_fovy = 0.5 * img_size.y / fy;
 
-    // printf("img_size.x: %.3f \n", img_size.x);
-    // printf("img_size.y: %.3f \n", img_size.y);
-    // printf("fx: %.2f, fy: %.2f, tan_fovx: %.2f, tan_fovy: %.2f \n", fx, fy, tan_fovx, tan_fovy);
+
     // In 3DGS we build 3D covariance matrix and project 
     // Here we build transformation matrix H in 2DGS
     //====== 2DGS Specific ======//
-    float* cur_transMats = &(transMats[9 * idx]); //TODO: indexing may have bug
+    float* cur_transMats = &(transMats[9 * idx]);
     bool ok;
     float3 normal;
 
@@ -74,10 +72,6 @@ __global__ void project_gaussians_forward_kernel(
         scale,
         quat,
         viewmat,
-        fx,
-        fy, 
-        tan_fovx,
-        tan_fovy,
         cur_transMats,
         normal
     );
@@ -85,30 +79,21 @@ __global__ void project_gaussians_forward_kernel(
     
 
     if (!ok) return;
-    // transMat = transMats + idx * 9;
 
     int start_index = 0;
-    // for (int i = 0; i < 9; ++i) {
-    //     printf("cur_transMats[%d] = %f\n", start_index + i, cur_transMats[start_index + i]);
-    // }
 
-    // printf("%.2f, %.2f, %.2f \n %.2f, %.2f, %.2f \n %.2f, %.2f, %.2f \n", \
-    //     cur_transMats[start_index], cur_transMats[start_index + 1], cur_transMats[start_index + 2], \
-    //     cur_transMats[start_index + 3], cur_transMats[start_index + 4], cur_transMats[start_index + 5], \
-    //     cur_transMats[start_index + 6], cur_transMats[start_index + 7], cur_transMats[start_index + 8]);
 
     float2 center;
     float2 extent;
     ok = build_AABB(cur_transMats, center, extent);
     if (!ok) return;
-    // printf("%d \n", ok);
 
     float truncated_R = 3.f;
 
     float radius = ceil(truncated_R * max(max(extent.x, extent.y), FilterSize));
 
     // compte the projected mean
-    center = project_pix({fx, fy}, p_view, {cx, cy});
+    // center = project_pix({fx, fy}, p_view, {cx, cy});
     uint2 tile_min, tile_max;
     get_tile_bbox(center, radius, tile_bounds, tile_min, tile_max, block_width);
     int32_t tile_area = (tile_max.x - tile_min.x) * (tile_max.y - tile_min.y);
@@ -119,13 +104,11 @@ __global__ void project_gaussians_forward_kernel(
     depths[idx] = p_view.z;
     radii[idx] = (int)radius;
     xys[idx] = center;
-    // compoensation[idx] = comp; // Used in project 3D covariance to 2D; not used in 2DGS
 }
 
 
 // Kernel to map each intersection from tile ID and depth to a gaussian
 // writes output to isect_ids and gaussian_ids
-// TODO: Hmm what does this function do?
 __global__ void map_gaussian_to_intersects(
     const int num_points,
     const float2* __restrict__ xys,
@@ -339,57 +322,26 @@ __global__ void rasterize_forward(
             const float3 xy_opac = xy_opacity_batch[t];
             const float opac = xy_opac.z;
 
-            // ================================== place where 2D Gaussian changes take place ========== //
+            // ======================= place where 2D Gaussian changes take place ========== //
             float3 Tu = Tu_batch[t];
             float3 Tv = Tv_batch[t];
             float3 Tw = Tw_batch[t];
 
             float3 k = {-Tu.x + px * Tw.x, -Tu.y + px * Tw.y, -Tu.z + px * Tw.z};
             float3 l = {-Tv.x + py * Tw.x, -Tv.y + py * Tw.y, -Tv.z + py * Tw.z};
-
-            // printf("px: %.2f, py: %.2f \n", px, py);
-
-            // printf("Tv: %.2f, %.2f, %.2f \n", Tv.x, Tv.y, Tv.z);
-            // printf("Tw: %.2f, %.2f, %.2f \n", Tw.x, Tw.y, Tw.z);
+             
             // cross product of two planes is a line
             float3 p = cross_product(k, l);
 
-            // printf("k: %.2f, %.2f, %.2f \n l: %.2f, %.2f, %.2f \n", k.x, k.y, k.z, l.x, l.y, l.z);
-            // printf("l: %.2f, %.2f, %.2f \n", l.x, l.y, l.z);
-            // printf("p is: %.2f, %.2f, %.2f \n", p.x, p.y, p.z);
-
             // There is no intersection
-            // printf("forward p.z: %.2d \n", p.z);
-            // printf("p: %.2f, %.2f, %.2f \n", p.x, p.y, p.z);
-            // printf("Tu: %.2f, %.2f, %.2f \n \
-            //         Tv: %.2f, %.2f, %.2f \n \
-            //         Tw: %.2f, %.2f, %.2f \n \
-            //         px: %.2f, py: %.2f \n \
-            //         k: %.2f, %.2f, %.2f \n \
-            //         l: %.2f, %.2f, %.2f \n \
-            //         p: %.2f, %.2f, %.2f \n", 
-            //         Tu.x, Tu.y, Tu.z, 
-            //         Tv.x, Tv.y, Tv.z, 
-            //         Tw.x, Tw.y, Tw.z, 
-            //         px, py,
-            //         k.x, k.y, k.z,
-            //         l.x, l.y, l.z,
-            //         p.x, p.y, p.z);
             float2 s;
             if (p.z == 0.0) { 
-                // s = {px, py};
-                // printf("Here \n");
                 continue;
             } else {
-                // printf("Here \n");
                 // 3D homogeneous point to 2d point on the splat
                 s = {p.x / p.z, p.y / p.z};
-                // printf("p.z is not zero \n");
-                // printf("s: %.2f, %.2f \n", s.x, s.y);
             }
-            // printf("p.z: %.2f \n", p.z);
             
-            // printf("s: %.2f, %.2f \n", s.x, s.y);
             // 3D distance. Compute Mahalanobis distance in the canonical splat space
             float rho_3d = (s.x * s.x + s.y * s.y);
 
@@ -400,19 +352,13 @@ __global__ void rasterize_forward(
             // 2d screen distance
             float rho_2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
             float rho = min(rho_3d, rho_2d);
-            // if (rho_3d < rho_2d) {
-            //     printf("rho_3d < rho_2d \n");
-            // }
-            // float rho = rho_3d;
 
             //====== Depth, Normal calculation ======//
 
             const float sigma = 0.5f * rho;
             const float alpha = min(0.999f, opac * __expf(-sigma));
-            // printf("alpha: %.2f \n", alpha);
 
             if (sigma < 0.f || alpha < 1.f / 255.f) {
-                // printf("Here! \n");
                 continue;
             }
 
@@ -421,7 +367,6 @@ __global__ void rasterize_forward(
                 // this pixel is done
                 // we want to render the last gaussian that contributes and note
                 // that here idx > range.x so we don't underflow
-
                 done = true;
                 break;
             }
@@ -460,82 +405,112 @@ __global__ void rasterize_forward(
 }
 
 
-
-// Device helper to build the per gaussian transformation matrix
 __device__ bool build_H(
     const float3& __restrict__ mean3d,
     const float4 __restrict__ intrins,
     const float3 __restrict__ scale,
     const float4 __restrict__ quat,
     const float* __restrict__ viewmat,
-    const float fx,
-    const float fy,
-    const float tan_fovx,
-    const float tan_fovy,
     float* transMat,
-    float3 &normal
+    float3& normal
 ) {
-    const glm::mat3 W = glm::mat3(
+    // transform gaussians from world space to camera space
+    glm::mat3 R = glm::mat3{
         viewmat[0], viewmat[1], viewmat[2],
         viewmat[4], viewmat[5], viewmat[6],
         viewmat[8], viewmat[9], viewmat[10]
-    );
+    };
+    glm::vec3 T = glm::vec3(viewmat[3], viewmat[7], viewmat[11]);
+    glm::vec3 p_world = glm::vec3{mean3d.x, mean3d.y, mean3d.z};
+    glm::vec3 p_camera = R * p_world + T;
 
-    const glm::vec3 cam_pos = glm::vec3(viewmat[3], viewmat[7], viewmat[11]); // TODO: the viewmat format is a source of bug, transpose or not?
-    const glm::mat4 P = glm::mat4(
-        intrins.x, 0.0, 0.0, 0.0,
-        0.0, intrins.y, 0.0, 0.0,
-        intrins.z, intrins.w, 1.0, 1.0,
-        0.0, 0.0, 0.0, 0.0
-    );
+    // build H and transform from world space to camera space
+    glm::mat3 RS = quat_to_rotmat(quat) * scale_to_mat(scale, 1.0f);
+    glm::mat3 RS_camera = R * RS;
+    glm::mat3 WH = glm::mat3{RS_camera[0], RS_camera[1], p_camera};
 
-    // printf("intrins: %.2f, %.2f, %.2f, %.2f \n", intrins.x, intrins.y, intrins.z, intrins.w);
-    const glm::vec3 p_world = glm::vec3(mean3d.x, mean3d.y, mean3d.z);
+    glm::mat3 projection_matrix = glm::mat3{
+        intrins.x, 0.0, intrins.z,
+        0.0, intrins.y, intrins.w,
+        0.0, 0.0, 1.0
+    };
 
+    glm::mat3 M = glm::transpose(WH) * projection_matrix;
 
-    // printf("p_world: %.2f, %.2f, %.2f \n", p_world.x, p_world.y, p_world.z);
-    // printf("cam_pos: %.2f, %.2f, %.2f \n", cam_pos.x, cam_pos.y, cam_pos.z);
-    // printf("viewmat: %.2f, %.2f, %.2f, %.2f \n \
-    //                 %.2f, %.2f, %.2f, %.2f \n \
-    //                 %.2f, %.2f, %.2f, %.2f \n \
-    //                 %.2f, %.2f, %.2f, %.2f \n", \
-    //                 viewmat[0], viewmat[1], viewmat[2], viewmat[3], \
-    //                 viewmat[4], viewmat[5], viewmat[6], viewmat[7], \
-    //                 viewmat[8], viewmat[9], viewmat[10], viewmat[11], \
-    //                 viewmat[12], viewmat[13], viewmat[14], viewmat[15]);
-    glm::vec3 p_view = W * p_world + cam_pos;
-    // printf("p_world: %.2f, %.2f, %.2f \n p_view: %.2f, %.2f, %.2f \n", \
-    //         p_world.x, p_world.y, p_world.z, \
-    //         p_view.x, p_view.y, p_view.z);
-    glm::mat3 R = quat_to_rotmat(quat) * scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
-    glm::mat3 M = glm::mat3(W * R[0], W * R[1], p_view);
-    glm::vec3 tn = W * R[2];
-    // printf("tn: %.2f, %.2f, %.2f \n", tn.x, tn.y, tn.z);
-    float cos = glm::dot(-tn, p_view);
-
-    glm::mat4x3 T = glm::transpose(P * glm::mat3x4(
-        glm::vec4(M[0], 0.0),
-        glm::vec4(M[1], 0.0),
-        glm::vec4(M[2], 1.0)
-    ));
-
-    transMat[0] = T[0].x;
-	transMat[1] = T[0].y;
-	transMat[2] = T[0].z;
-	transMat[3] = T[1].x;
-	transMat[4] = T[1].y;
-	transMat[5] = T[1].z;
-	transMat[6] = T[2].x;
-	transMat[7] = T[2].y;
-	transMat[8] = T[2].z;
-
-    // printf("transMat: %.2f, %.2f, %.2f \n %.2f, %.2f, %.2f \n %.2f, %.2f, %.2f\n", \
-    //         transMat[0], transMat[1], transMat[2], \
-    //         transMat[3], transMat[4], transMat[5], \
-    //         transMat[6], transMat[7], transMat[8]);
-	normal = {tn.x, tn.y, tn.z};
-	return true;
+    transMat[0] = M[0].x;
+	transMat[1] = M[0].y;
+	transMat[2] = M[0].z;
+	transMat[3] = M[1].x;
+	transMat[4] = M[1].y;
+	transMat[5] = M[1].z;
+	transMat[6] = M[2].x;
+	transMat[7] = M[2].y;
+	transMat[8] = M[2].z;
+    
+    return true;
 }
+
+
+// Device helper to build the per gaussian transformation matrix
+// __device__ bool build_H(
+//     const float3& __restrict__ mean3d,
+//     const float4 __restrict__ intrins,
+//     const float3 __restrict__ scale,
+//     const float4 __restrict__ quat,
+//     const float* __restrict__ viewmat,
+//     float* transMat,
+//     float3& normal
+// ) {
+
+//     const glm::mat3 R = glm::mat3(
+//         viewmat[0], viewmat[1], viewmat[2],
+//         viewmat[4], viewmat[5], viewmat[6],
+//         viewmat[8], viewmat[9], viewmat[10]
+//     );
+//     const glm::vec3 T = glm::vec3(viewmat[3], viewmat[7], viewmat[11]);
+//     const glm::vec3 p_world = glm::vec3(mean3d.x, mean3d.y, mean3d.z);
+
+//     // Transform center into camera space
+//     glm::vec3 p_view = R * p_world + T;
+//     glm::mat3 rotation = quat_to_rotmat(quat) * scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
+//     glm::mat3 WH = glm::mat3(R * rotation[0], R * rotation[1], p_view);
+
+
+//     const glm::mat4 P = glm::mat4(
+//         intrins.x, 0.0, 0.0, 0.0,
+//         0.0, intrins.y, 0.0, 0.0,
+//         intrins.z, intrins.w, 1.0, 1.0,
+//         0.0, 0.0, 0.0, 0.0
+//     );
+
+//     // const glm::vec3 p_world = glm::vec3(mean3d.x, mean3d.y, mean3d.z);
+
+
+//     // glm::vec3 p_view = W * p_world + cam_pos;
+//     // glm::mat3 R = quat_to_rotmat(quat) * scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
+//     // glm::mat3 M = glm::mat3(W * R[0], W * R[1], p_view);
+//     glm::vec3 tn = R * rotation[2];
+//     // float cos = glm::dot(-tn, p_view);
+
+//     glm::mat4x3 M = glm::transpose(P * glm::mat3x4(
+//         glm::vec4(WH[0], 0.0),
+//         glm::vec4(WH[1], 0.0),
+//         glm::vec4(WH[2], 1.0)
+//     ));
+
+//     transMat[0] = M[0].x;
+// 	transMat[1] = M[0].y;
+// 	transMat[2] = M[0].z;
+// 	transMat[3] = M[1].x;
+// 	transMat[4] = M[1].y;
+// 	transMat[5] = M[1].z;
+// 	transMat[6] = M[2].x;
+// 	transMat[7] = M[2].y;
+// 	transMat[8] = M[2].z;
+
+// 	normal = {tn.x, tn.y, tn.z};
+// 	return true;
+// }
 
 
 // Compute the bounding box of the 2D Gaussian and its center,
@@ -556,9 +531,7 @@ __device__ bool build_AABB(
 
     float d = glm::dot(glm::vec3(1.0, 1.0, -1.0), T[3] * T[3]);
 
-    // printf("%d \n", d);
     if (d == 0.0f) {
-        // printf("Here \n");
         return false;
     }
 
