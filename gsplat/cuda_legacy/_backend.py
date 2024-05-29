@@ -33,16 +33,7 @@ def cuda_toolkit_version():
     return cuda_version
 
 
-name = "gsplat_cuda_legacy"
-build_dir = _get_build_directory(name, verbose=False)
-extra_include_paths = [os.path.join(PATH, "..", "cuda/", "csrc/")]
-extra_cflags = ["-O3"]
-extra_cuda_cflags = ["-O3"]
-
 _C = None
-sources = list(glob.glob(os.path.join(PATH, "csrc/*.cu"))) + list(
-    glob.glob(os.path.join(PATH, "csrc/*.cpp"))
-)
 
 try:
     # try to import the compiled module (via setup.py)
@@ -50,6 +41,15 @@ try:
 except ImportError:
     # if failed, try with JIT compilation
     if cuda_toolkit_available():
+        name = "gsplat_cuda_legacy"
+        build_dir = _get_build_directory(name, verbose=False)
+        extra_include_paths = [os.path.join(PATH, "..", "cuda/", "csrc/")]
+        extra_cflags = ["-O3"]
+        extra_cuda_cflags = ["-O3"]
+        sources = list(glob.glob(os.path.join(PATH, "csrc/*.cu"))) + list(
+            glob.glob(os.path.join(PATH, "csrc/*.cpp"))
+        )
+
         # If JIT is interrupted it might leave a lock in the build directory.
         # We dont want it to exist in any case.
         try:
