@@ -5,7 +5,11 @@ Render a Large Scene
 
 `gsplat` is designed with efficiency in mind so it's very suitable to render a large scene.
 For example here we mimic a large scene by replicating the Garden scene into a 9x9 grid, 
-which results 30M Gaussians in total while `gsplat` still allows real-time rendering for it.
+which results 30M Gaussians in total while `gsplat` still allows real-time rendering for it. 
+
+The main magic that allows this is a very simple trick: we disregard the Gaussians that are
+far away from the camera, by applying a small threshold (e.g., 3 pixel) to the projected 
+Gaussian radius which is configurable in our :func:`rasterization` API as :code:`radius_clip`.
 
 With `gsplat` as CUDA Backend:
 

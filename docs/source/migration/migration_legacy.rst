@@ -10,9 +10,9 @@ you can still call the old APIs in `v1.0.0` but they are deprecated and will be 
 the future.
 
 Below we demonstrate the API changes on a couple of use cases. If you want to take a closer
-look on the detailed API changes, we provide a wrapper function :func:`gsplat.rasterization_legacy_wrapper` 
+look on the detailed API changes, we provide a wrapper function :func:`rasterization_legacy_wrapper` 
 on top of the old API from `v0.1.11`, that 
-aligns with the new API :func:`gsplat.rasterization` in `v1.0.0`.
+aligns with the new API :func:`rasterization` in `v1.0.0`.
 
 Basic Usage
 ------------------
