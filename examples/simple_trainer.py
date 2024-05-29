@@ -664,8 +664,7 @@ class Runner:
 
         camtoworlds = torch.from_numpy(camtoworlds).float().to(device)
         K = torch.from_numpy(list(self.trainset.Ks_dict.values())[0]).float().to(device)
-        width = self.trainset.width
-        height = self.trainset.height
+        width, height = list(self.trainset.imsize_dict.values())[0]
 
         canvas_all = []
         for i in tqdm.trange(len(camtoworlds), desc="Rendering trajectory"):
