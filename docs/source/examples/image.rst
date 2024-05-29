@@ -3,7 +3,7 @@ Fit a Single Image
 
 .. currentmodule:: gsplat
 
-The `examples/image_fitting.py` script allows you to test the basic rasterization process
+The :code:`examples/image_fitting.py` script allows you to test the basic rasterization process
 on a set of random gaussians and their differentiability on a single training image. 
 
 Simply run the script under `examples/`:
