@@ -6,7 +6,7 @@ Profiling
 .. currentmodule:: gsplat
 
 `gsplat` is developed with efficiency in mind, while also supports trade-offs between 
-memory consumption and speed. The :func:`gsplat.rasterization` function has a few arguments
+memory consumption and speed. The :func:`rasterization` function has a few arguments
 that would not affect the numerical results but could significantly impact the runtime and 
 memory usage, including **packed** and **sparse_grad**:
 
@@ -14,16 +14,16 @@ memory usage, including **packed** and **sparse_grad**:
   in which the intermidate tensors are packed into the sparse tensor layout. This could
   greatly reduce the memory usage when the scene is large and each camera only sees a 
   small portion of the scene. But this also introduces a small runtime overhead. It is recommended
-  to set `packed=True` when the scene is large and set `packed=False` when the scene is small
+  to set :code:`packed=True` when the scene is large and set :code:`packed=False` when the scene is small
   (relative to the camera frustum).
 
-- **sparse_grad**: This argument is only effective when `packed=True`. If True, in addition to  
+- **sparse_grad**: This argument is only effective when :code:`packed=True`. If True, in addition to  
   the intermidate tensors, the gradients will also be packed into a 
   `coo sparse tensor <https://pytorch.org/docs/stable/generated/torch.sparse_coo_tensor.html>`_ layout.
   This could further reduce the memory usage when training a large scene as the gradients of
   the Gaussian attributes are usually sparse. Note that in most cases, sparse gradients should be used together
   with a sparse optimizer, such as `torch.optim.SparseAdam <https://pytorch.org/docs/stable/generated/torch.optim.SparseAdam.html>`_. And currently we only supports 
-  sparse gradients for partial of the Gaussian attributes. See :func:`gsplat.rasterization` 
+  sparse gradients for partial of the Gaussian attributes. See :func:`rasterization` 
   for more details.
 
 Here we provide careful profiling of the performance with the different rasterization backends, along with 
