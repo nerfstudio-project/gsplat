@@ -17,6 +17,7 @@ from gsplat._helper import load_test_data
 device = torch.device("cuda:0")
 
 
+@pytest.mark.skipif(not torch.cuda.is_available, reason="No CUDA device")
 @pytest.fixture
 def test_data():
     (
@@ -44,6 +45,7 @@ def test_data():
     }
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("triu", [False, True])
 def test_quat_scale_to_covar_preci(test_data, triu: bool):
     from gsplat.cuda._torch_impl import _quat_scale_to_covar_preci
@@ -82,6 +84,7 @@ def test_quat_scale_to_covar_preci(test_data, triu: bool):
     torch.testing.assert_close(v_scales, _v_scales, rtol=1e-1, atol=1e-1)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_world_to_cam(test_data):
     from gsplat.cuda._torch_impl import _world_to_cam
     from gsplat.cuda._wrapper import quat_scale_to_covar_preci, world_to_cam
@@ -119,6 +122,7 @@ def test_world_to_cam(test_data):
     torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=1e-3)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_persp_proj(test_data):
     from gsplat.cuda._torch_impl import _persp_proj
     from gsplat.cuda._wrapper import persp_proj, quat_scale_to_covar_preci, world_to_cam
@@ -155,6 +159,7 @@ def test_persp_proj(test_data):
     torch.testing.assert_close(v_covars, _v_covars, rtol=1e-1, atol=1e-1)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("fused", [False, True])
 @pytest.mark.parametrize("calc_compensations", [False, True])
 def test_projection(test_data, fused: bool, calc_compensations: bool):
@@ -250,6 +255,7 @@ def test_projection(test_data, fused: bool, calc_compensations: bool):
     torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=6e-2)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("fused", [False, True])
 @pytest.mark.parametrize("sparse_grad", [False, True])
 @pytest.mark.parametrize("calc_compensations", [False, True])
@@ -383,6 +389,7 @@ def test_projection_packed(
     torch.testing.assert_close(v_means, _v_means, rtol=1e-3, atol=1e-3)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_isect(test_data):
     from gsplat.cuda._torch_impl import _isect_offset_encode, _isect_tiles
     from gsplat.cuda._wrapper import isect_offset_encode, isect_tiles
@@ -415,6 +422,7 @@ def test_isect(test_data):
     torch.testing.assert_close(isect_offsets, _isect_offsets)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_rasterize_to_pixels(test_data):
     from gsplat.cuda._torch_impl import _rasterize_to_pixels
     from gsplat.cuda._wrapper import (
@@ -518,6 +526,7 @@ def test_rasterize_to_pixels(test_data):
     torch.testing.assert_close(v_backgrounds, _v_backgrounds, rtol=1e-5, atol=1e-5)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("sh_degree", [0, 1, 2, 3, 4])
 def test_sh(test_data, sh_degree: int):
     from gsplat.cuda._torch_impl import _spherical_harmonics
@@ -546,26 +555,3 @@ def test_sh(test_data, sh_degree: int):
     torch.testing.assert_close(v_coeffs, _v_coeffs, rtol=1e-4, atol=1e-4)
     if sh_degree > 0:
         torch.testing.assert_close(v_dirs, _v_dirs, rtol=1e-4, atol=1e-4)
-
-
-#     # print("Mean Grad Diff: CUDA2 v.s. PyTorch")
-#     # print("v_viewmats", torch.abs(v_viewmats - _v_viewmats).abs().mean())  # 0.0037
-#     # print("v_quats", torch.abs(v_quats - _v_quats).abs().mean())  # 2e-7
-#     # print("v_scales", torch.abs(v_scales - _v_scales).abs().mean())  # 5e-6
-#     # print("v_means", torch.abs(v_means - _v_means).abs().mean())  # 3e-6
-
-#     # __render_colors, __render_alphas = _rendering_gsplat(
-#     #     means, quats, scales, opacities, colors, viewmats, Ks, width, height
-#     # )
-#     # __v_viewmats, __v_quats, __v_scales, __v_means = torch.autograd.grad(
-#     #     (__render_colors * v_render_colors).sum()
-#     #     + (__render_alphas * v_render_alphas).sum(),
-#     #     (viewmats, quats, scales, means),
-#     #     retain_graph=True,
-#     # )
-
-#     # print("Mean Grad Diff: Gsplat v.s. PyTorch")
-#     # print("v_viewmats", torch.abs(__v_viewmats - _v_viewmats).abs().mean())  # 42.8834
-#     # print("v_quats", torch.abs(__v_quats - _v_quats).abs().mean())  # 0.0002
-#     # print("v_scales", torch.abs(__v_scales - _v_scales).abs().mean())  # 0.0054
-#     # print("v_means", torch.abs(__v_means - _v_means).abs().mean())  # 0.0041
