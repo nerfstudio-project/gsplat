@@ -59,6 +59,7 @@ This project is developed by the following wonderful contributors:
 - `Ruilong Li <https://www.liruilong.cn/>`_ (UC Berkeley): Core developer. v1.0 lead.
 - `Justin Kerr <https://kerrj.github.io/>`_ (UC Berkeley): Core developer.
 - `Brent Yi <https://github.com/brentyi>`_ (UC Berkeley): Core developer.
+- `Zhuoyang Pan <https://panzhy.com/>`_ (ShanghaiTech University): Core developer.
 - `Jianbo Ye <http://www.jianboye.org/>`_ (Amazon): Core developer.
 
 
