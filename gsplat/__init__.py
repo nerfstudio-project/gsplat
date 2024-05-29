@@ -9,6 +9,7 @@ from .cuda._wrapper import (
     quat_scale_to_covar_preci,
     rasterize_to_indices_iter,
     rasterize_to_pixels,
+    spherical_harmonics,
     world_to_cam,
 )
 from .rendering import (
@@ -17,20 +18,6 @@ from .rendering import (
     rasterization_legacy_wrapper,
 )
 from .version import __version__
-
-
-def spherical_harmonics(*args, **kwargs):
-    # Always use new version which is compatible with the old one.
-    from .cuda._wrapper import spherical_harmonics
-
-    if ("method" in kwargs) or (len(args) == 4 and isinstance(args[-1], str)):
-        warnings.warn(
-            "The 'method' argument is deprecated and will be removed in a future release. ",
-            DeprecationWarning,
-        )
-        args = args[:3]
-        kwargs.pop("method", None)
-    return spherical_harmonics(*args, **kwargs)
 
 
 def rasterize_gaussians(*args, **kwargs):

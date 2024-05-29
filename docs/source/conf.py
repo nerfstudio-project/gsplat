@@ -51,7 +51,11 @@ copybutton_prompt_is_regexp = True
 epub_show_urls = "footnote"
 
 # typehints
-autodoc_typehints = "description"
+# autodoc_typehints = "description"
 
 # citations
 bibtex_bibfiles = ["references.bib"]
+
+# If true, the current module name will be prepended to all description
+# unit titles (such as .. function::).
+add_module_names = False

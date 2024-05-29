@@ -49,11 +49,11 @@ def quat_scale_to_covar_preci(
     compute_covar: bool = True,
     compute_preci: bool = True,
     triu: bool = False,
-) -> Tuple[Tensor, Tensor]:
+) -> Tuple[Optional[Tensor], Optional[Tensor]]:
     """Converts quaternions and scales to covariance and precision matrices.
 
     Args:
-        quats: Normalized quaternions. [N, 4]
+        quats: Quaternions (No need to be normalized). [N, 4]
         scales: Scales. [N, 3]
         compute_covar: Whether to compute covariance matrices. Default: True. If False,
             the returned covariance matrices will be None.
@@ -114,18 +114,18 @@ def world_to_cam(
     covars: Tensor,  # [N, 3, 3]
     viewmats: Tensor,  # [C, 4, 4]
 ) -> Tuple[Tensor, Tensor]:
-    """Transforms Gaussians from world to camera space.
+    """Transforms Gaussians from world to camera coordinate system.
 
     Args:
         means: Gaussian means. [N, 3]
         covars: Gaussian covariances. [N, 3, 3]
-        viewmats: Camera-to-world matrices. [C, 4, 4]
+        viewmats: World-to-camera transformation matrices. [C, 4, 4]
 
     Returns:
         A tuple:
 
-        - **Gaussian means in camera space**. [C, N, 3]
-        - **Gaussian covariances in camera space**. [C, N, 3, 3]
+        - **Gaussian means in camera coordinate system**. [C, N, 3]
+        - **Gaussian covariances in camera coordinate system**. [C, N, 3, 3]
     """
     C = viewmats.size(0)
     N = means.size(0)
@@ -157,42 +157,62 @@ def projection(
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Projects Gaussians to 2D.
 
-    Note:
+    .. note::
+
         During projection, we ignore the Gaussians that are outside of the camera frustum.
-        So not all the elements in the output tensors are valid. `Radii` could serve as
+        So not all the elements in the output tensors are valid. The output `radii` could serve as
         an indicator, in which zero radii means the corresponding elements are invalid in
-        the output tensors and will be ignored in the next rasterization process.
+        the output tensors and will be ignored in the next rasterization process. If `packed=True`,
+        the output tensors will be packed into a flattened tensor, in which all elements are valid.
+        In this case, a `rindices` tensor and `cindices` tensor will be returned to indicate the
+        row (camera) and column (Gaussian) indices of the packed flattened tensor, which is essentially
+        following the COO sparse tensor format.
+
+    .. note::
+
+        This functions supports projecting Gaussians with either covariances or {quaternions, scales},
+        which will be converted to covariances internally in a fused CUDA kernel. Either `covars` or
+        {`quats`, `scales`} should be provided.
 
     Args:
         means: Gaussian means. [N, 3]
-        covars: Gaussian covariances (flattened upper triangle). [N, 6]
+        covars: Gaussian covariances (flattened upper triangle). [N, 6] Optional.
+        quats: Quaternions (No need to be normalized). [N, 4] Optional.
+        scales: Scales. [N, 3] Optional.
         viewmats: Camera-to-world matrices. [C, 4, 4]
         Ks: Camera intrinsics. [C, 3, 3]
         width: Image width.
         height: Image height.
-        eps2d: A epsilon added to the projected covariance for numerical stability. Default: 0.3.
+        eps2d: A epsilon added to the 2D covariance for numerical stability. Default: 0.3.
         near_plane: Near plane distance. Default: 0.01.
         far_plane: Far plane distance. Default: 1e10.
-        radius_clip: The minimum radius of the projected Gaussians in pixel unit. Default: 1e10.
+        radius_clip: Gaussians with projected radii smaller than this value will be ignored. Default: 0.0.
+        packed: If True, the output tensors will be packed into a flattened tensor. Default: False.
+        sparse_grad: This is only effective when `packed` is True. If True, during backward the gradients
+          of {`means`, `covars`, `quats`, `scales`} will be a sparse Tensor in COO layout. Default: False.
+        calc_compensations: If True, a view-dependent opacity compensation factor will be computed, which
+          is useful for anti-aliasing. Default: False.
 
     Returns:
         A tuple:
 
         If `packed` is True:
 
-        - **Rindices**. The row indices of the projected Gaussians. Int32 tensor of shape [nnz].
-        - **Cindices**. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].
-        - **Radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz].
-        - **Projected means**. [nnz, 2]
-        - **Depths**. The z-depth of the projected Gaussians. [nnz]
-        - **Conics**. Inverse of the projected covariances. Return the flattend upper triangle with [nnz, 3]
+        - **rindices**. The row indices of the projected Gaussians. Int32 tensor of shape [nnz].
+        - **cindices**. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].
+        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz].
+        - **means**. Projected Gaussian means in 2D. [nnz, 2]
+        - **depths**. The z-depth of the projected Gaussians. [nnz]
+        - **conics**. Inverse of the projected covariances. Return the flattend upper triangle with [nnz, 3]
+        - **compensations**. The view-dependent opacity compensation factor. [nnz]
 
         If `packed` is False:
 
-        - **Radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N].
-        - **Projected means**. [C, N, 2]
-        - **Depths**. The z-depth of the projected Gaussians. [C, N]
-        - **Conics**. Inverse of the projected covariances. Return the flattend upper triangle with [C, N, 3]
+        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N].
+        - **means**. Projected Gaussian means in 2D. [C, N, 2]
+        - **depths**. The z-depth of the projected Gaussians. [C, N]
+        - **conics**. Inverse of the projected covariances. Return the flattend upper triangle with [C, N, 3]
+        - **compensations**. The view-dependent opacity compensation factor. [C, N]
     """
     C = viewmats.size(0)
     N = means.size(0)
@@ -282,9 +302,13 @@ def isect_tiles(
     Returns:
         A tuple:
 
-        - **Tiles per Gaussian**. The number of tiles intersected by each Gaussian. Int32 [C, N] if packed is False, Int32 [nnz] if packed is True.
-        - **Intersection ids**. Each id is an 64-bit integer with the following information: camera_id (Xc bits) | tile_id (Xt bits) | depth (32 bits). Xc and Xt are the maximum number of bits required to represent the camera and tile ids, respectively. Int64 [n_isects]
-        - If pack, this is the indices in the nnz tensor. Else, this is the Gaussian ids. Int32 [n_isects]
+        - **Tiles per Gaussian**. The number of tiles intersected by each Gaussian.
+          Int32 [C, N] if packed is False, Int32 [nnz] if packed is True.
+        - **Intersection ids**. Each id is an 64-bit integer with the following
+          information: camera_id (Xc bits) | tile_id (Xt bits) | depth (32 bits).
+          Xc and Xt are the maximum number of bits required to represent the camera and
+          tile ids, respectively. Int64 [n_isects]
+        - If packed, this is the indices in the nnz tensor. Else, this is the Gaussian ids. Int32 [n_isects]
     """
     if packed:
         nnz = means2d.size(0)
@@ -353,6 +377,29 @@ def rasterize_to_pixels(
     packed: bool = False,
     compute_means2d_absgrad: bool = False,
 ) -> Tuple[Tensor, Tensor]:
+    """Rasterizes Gaussians to pixels.
+
+    Args:
+        means2d: Projected Gaussian means. [C, N, 2] if packed is False, [nnz, 2] if packed is True.
+        conics: Inverse of the projected covariances with only upper triangle values. [C, N, 3] if packed is False, [nnz, 3] if packed is True.
+        colors: Gaussian colors or ND features. [C, N, channels] if packed is False, [nnz, channels] if packed is True.
+        opacities: Gaussian opacities that support per-view values. [C, N] if packed is False, [nnz] if packed is True.
+        image_width: Image width.
+        image_height: Image height.
+        tile_size: Tile size.
+        isect_offsets: Intersection offsets outputs from `isect_offset_encode()`. [C, tile_height, tile_width]
+        gauss_ids: Gaussian ids outputs from `isect_tiles()`. [n_isects]
+        backgrounds: Background colors. [C, channels]. Default: None.
+        packed: If True, the input tensors are expected to be packed with shape [nnz, ...]. Default: False.
+        compute_means2d_absgrad: If True, the backward pass will compute a `.absgrad` attribute for `means2d`. Default: False.
+
+    Returns:
+        A tuple:
+
+        - **Rendered colors**. [C, image_height, image_width, channels]
+        - **Rendered alphas**. [C, image_height, image_width, 1]
+    """
+
     C = isect_offsets.size(0)
     device = means2d.device
     if packed:
@@ -438,7 +485,37 @@ def rasterize_to_indices_iter(
     tile_size: int,
     isect_offsets: Tensor,  # [C, tile_height, tile_width]
     gauss_ids: Tensor,  # [n_isects]
-) -> Tuple[Tensor, Tensor]:
+) -> Tuple[Tensor, Tensor, Tensor]:
+    """Rasterizes a batch of Gaussians to images but only returns the indices.
+
+    .. note::
+
+        This function supports iterative rasterization, in which each call of this function
+        will rasterize a batch of Gaussians from near to far, defined by `[step0, step1)`.
+        If a one-step full rasterization is desired, set `step0` to 0 and `step1` to a really
+        large number, e.g, 1e10.
+
+    Args:
+        step0: The start batch of Gaussians to be rasterized (inclusive).
+        step1: The end batch of Gaussians to be rasterized (exclusive).
+        transmittances: Currently transmittances. [C, image_height, image_width]
+        means2d: Projected Gaussian means. [C, N, 2]
+        conics: Inverse of the projected covariances with only upper triangle values. [C, N, 3]
+        opacities: Gaussian opacities that support per-view values. [C, N]
+        image_width: Image width.
+        image_height: Image height.
+        tile_size: Tile size.
+        isect_offsets: Intersection offsets outputs from `isect_offset_encode()`. [C, tile_height, tile_width]
+        gauss_ids: Gaussian ids for the tile intersection, outputs from `isect_tiles()`. [n_isects]
+
+    Returns:
+        A tuple:
+
+        - **Gaussian ids**. Gaussian ids for the pixel intersection. A flattened list of shape [M].
+        - **Pixel ids**. pixel indices (row-major). A flattened list of shape [M].
+        - **Camera ids**. Camera indices. A flattened list of shape [M].
+    """
+
     C, N, _ = means2d.shape
     assert conics.shape == (C, N, 3), conics.shape
     assert opacities.shape == (C, N), opacities.shape
@@ -452,7 +529,7 @@ def rasterize_to_indices_iter(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-    out_gauss_ids, out_pixel_ids = _make_lazy_cuda_func("rasterize_to_indices_iter")(
+    out_gauss_ids, out_indices = _make_lazy_cuda_func("rasterize_to_indices_iter")(
         step0,
         step1,
         transmittances.contiguous(),
@@ -465,7 +542,9 @@ def rasterize_to_indices_iter(
         isect_offsets.contiguous(),
         gauss_ids.contiguous(),
     )
-    return out_gauss_ids, out_pixel_ids
+    out_pixel_ids = out_indices % (image_width * image_height)
+    out_camera_ids = out_indices // (image_width * image_height)
+    return out_gauss_ids, out_pixel_ids, out_camera_ids
 
 
 class _QuatScaleToCovarpreci(torch.autograd.Function):
@@ -998,137 +1077,6 @@ class _ProjectionPacked(torch.autograd.Function):
             None,
             None,
         )
-
-
-# class _RasterizeToPixelsPacked(torch.autograd.Function):
-#     """Rasterize gaussians packed"""
-
-#     @staticmethod
-#     def forward(
-#         ctx,
-#         rindices: Tensor,  # [nnz]
-#         cindices: Tensor,  # [nnz]
-#         means2d: Tensor,  # [nnz, 2]
-#         conics: Tensor,  # [nnz, 3]
-#         colors: Tensor,  # [nnz, 3]
-#         opacities: Tensor,  # [nnz]
-#         backgrounds: Tensor,  # [C, 3] Optional
-#         width: int,
-#         height: int,
-#         tile_size: int,
-#         isect_offsets: Tensor,  # [C, tile_height, tile_width]
-#         pack_ids: Tensor,  # [n_isects]
-#         compute_means2d_absgrad: bool,
-#     ) -> Tuple[Tensor, Tensor]:
-#         render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
-#             "rasterize_to_pixels_fwd"
-#         )(
-#             means2d,
-#             conics,
-#             colors,
-#             opacities,
-#             backgrounds,
-#             width,
-#             height,
-#             tile_size,
-#             isect_offsets,
-#             pack_ids,
-#         )
-
-#         ctx.save_for_backward(
-#             rindices,
-#             cindices,
-#             means2d,
-#             conics,
-#             colors,
-#             opacities,
-#             backgrounds,
-#             isect_offsets,
-#             pack_ids,
-#             render_alphas,
-#             last_ids,
-#         )
-#         ctx.width = width
-#         ctx.height = height
-#         ctx.tile_size = tile_size
-#         ctx.compute_means2d_absgrad = compute_means2d_absgrad
-
-#         # double to float
-#         render_alphas = render_alphas.float()
-#         return render_colors, render_alphas
-
-#     @staticmethod
-#     def backward(
-#         ctx,
-#         v_render_colors: Tensor,  # [C, H, W, 3]
-#         v_render_alphas: Tensor,  # [C, H, W, 1]
-#     ):
-#         (
-#             rindices,
-#             cindices,
-#             means2d,
-#             conics,
-#             colors,
-#             opacities,
-#             backgrounds,
-#             isect_offsets,
-#             pack_ids,
-#             render_alphas,
-#             last_ids,
-#         ) = ctx.saved_tensors
-#         width = ctx.width
-#         height = ctx.height
-#         tile_size = ctx.tile_size
-#         compute_means2d_absgrad = ctx.compute_means2d_absgrad
-
-#         (
-#             v_means2d_abs,
-#             v_means2d,
-#             v_conics,
-#             v_colors,
-#             v_opacities,
-#         ) = _make_lazy_cuda_func("rasterize_to_pixels_bwd")(
-#             means2d,
-#             conics,
-#             colors,
-#             opacities,
-#             backgrounds,
-#             width,
-#             height,
-#             tile_size,
-#             isect_offsets,
-#             pack_ids,
-#             render_alphas,
-#             last_ids,
-#             v_render_colors.contiguous(),
-#             v_render_alphas.contiguous(),
-#             compute_means2d_absgrad,
-#         )
-#         if compute_means2d_absgrad:
-#             means2d.absgrad = v_means2d_abs
-
-#         if ctx.needs_input_grad[6]:
-#             v_backgrounds = (v_render_colors * (1.0 - render_alphas).float()).sum(
-#                 dim=(1, 2)
-#             )
-#         else:
-#             v_backgrounds = None
-
-#         return (
-#             None,
-#             None,
-#             v_means2d,
-#             v_conics,
-#             v_colors,
-#             v_opacities,
-#             v_backgrounds,
-#             None,
-#             None,
-#             None,
-#             None,
-#             None,
-#             None,
-#         )
 
 
 class _SphericalHarmonics(torch.autograd.Function):

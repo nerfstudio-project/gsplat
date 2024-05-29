@@ -20,6 +20,8 @@ Below are the basic functions that supports the rasterization.
 
 .. autofunction:: gsplat.rasterize_to_pixels
 
-.. autofunction:: gsplat.rasterization_legacy_wrapper
+.. autofunction:: gsplat.rasterization_legacy_wrapper    
+    :noindex:
 
 .. autofunction:: gsplat.rasterization_inria_wrapper
+    :noindex:

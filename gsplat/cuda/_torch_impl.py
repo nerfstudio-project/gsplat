@@ -142,6 +142,7 @@ def _projection(
     """PyTorch implementation of `gsplat.cuda._wrapper.projection()`
 
     .. note::
+
         This is a minimal implementation of fully fused version, which has more
         arguments. Not all arguments are supported.
     """
@@ -439,7 +440,7 @@ def _rasterize_to_pixels(
 
         # Find the M intersections between pixels and gaussians.
         # Each intersection corresponds to a tuple (gs_id, pixel_id, camera_id)
-        gs_ids, indices = rasterize_to_indices_iter(
+        gs_ids, pixel_ids, camera_ids = rasterize_to_indices_iter(
             step,
             step + batch_per_iter,
             transmittances,
@@ -452,8 +453,6 @@ def _rasterize_to_pixels(
             isect_offsets,
             gauss_ids,
         )  # [M], [M]
-        pixel_ids = indices % (image_width * image_height)
-        camera_ids = indices // (image_width * image_height)
         if len(gs_ids) == 0:
             break
 
