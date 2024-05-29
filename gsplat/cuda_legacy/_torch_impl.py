@@ -346,7 +346,7 @@ def project_pix(fxfy, p_view, center, eps=1e-6):
     fx, fy = fxfy
     cx, cy = center
 
-    rw = 1.0 / (p_view[..., 2] + 1e-6)
+    rw = 1.0 / (p_view[..., 2] + eps)
     p_proj = (p_view[..., 0] * rw, p_view[..., 1] * rw)
     u, v = (p_proj[0] * fx + cx, p_proj[1] * fy + cy)
     return torch.stack([u, v], dim=-1)
