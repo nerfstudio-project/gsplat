@@ -47,6 +47,7 @@ class Parser:
         camera_ids = []
         Ks_dict = dict()
         params_dict = dict()
+        imsize_dict = dict()  # width, height
         bottom = np.array([0, 0, 0, 1]).reshape(1, 4)
         for k in imdata:
             im = imdata[k]
@@ -93,6 +94,9 @@ class Parser:
             if not (type_ == 0 or type_ == 1):
                 print(f"Warning: COLMAP Camera is not PINHOLE. Images have distortion.")
             params_dict[camera_id] = params
+
+            # image size
+            imsize_dict[camera_id] = (cam.width, cam.height)
 
         w2c_mats = np.stack(w2c_mats, axis=0)
 
@@ -157,22 +161,18 @@ class Parser:
         else:
             transform = np.eye(4)
 
-        image = imageio.imread(image_paths[0])
-        height, width = image.shape[:2]
-
         self.image_names = image_names  # List[str], (num_images,)
         self.image_paths = image_paths  # List[str], (num_images,)
         self.camtoworlds = camtoworlds  # np.ndarray, (num_images, 4, 4)
         self.camera_ids = camera_ids  # List[int], (num_images,)
         self.Ks_dict = Ks_dict  # Dict of camera_id -> K
         self.params_dict = params_dict  # Dict of camera_id -> params
+        self.imsize_dict = imsize_dict  # Dict of camera_id -> (width, height)
         self.points = points  # np.ndarray, (num_points, 3)
         self.points_err = points_err  # np.ndarray, (num_points,)
         self.points_rgb = points_rgb  # np.ndarray, (num_points, 3)
         self.point_indices = point_indices  # Dict[str, np.ndarray], image_name -> [M,]
         self.transform = transform  # np.ndarray, (4, 4)
-        self.height = height
-        self.width = width
 
         # undistortion
         self.mapx_dict = dict()
@@ -188,6 +188,7 @@ class Parser:
             ), f"Missing params for camera {camera_id}"
             K = self.Ks_dict[camera_id]
             params = self.params_dict[camera_id]
+            width, height = self.imsize_dict[camera_id]
             K_undist, roi_undist = cv2.getOptimalNewCameraMatrix(
                 K, params, (width, height), 0
             )
