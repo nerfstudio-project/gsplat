@@ -58,7 +58,7 @@ This project is developed by the following wonderful contributors:
 - `Matias Turkulainen <https://maturk.github.io/>`_ (Aalto University): Core developer.
 - `Ruilong Li <https://www.liruilong.cn/>`_ (UC Berkely): Core developer. v1.0 lead.
 - `Justin Kerr <https://kerrj.github.io/>`_ (UC Berkely): Core developer.
-- `Brent Yi <https://brentyi.github.io/>`_ (UC Berkely): Core developer.
+- `Brent Yi <https://github.com/brentyi>`_ (UC Berkely): Core developer.
 - `Jianbo Ye <http://www.jianboye.org/>`_ (Amazon): Core developer.
 
 
