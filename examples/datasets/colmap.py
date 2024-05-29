@@ -207,36 +207,40 @@ class Parser:
         self.scene_scale = np.max(dists)
 
 
-class Dataset(Parser):
+class Dataset:
     """A simple dataset class."""
 
-    def __init__(self, split: str = "train", **kwargs):
+    def __init__(self, parser: Parser, split: str = "train", **kwargs):
         super().__init__(**kwargs)
+        self.parser = parser
         self.split = split
-        indices = np.arange(len(self.image_names))
+        indices = np.arange(len(self.parser.image_names))
         if split == "train":
-            self.indices = indices[indices % self.test_every != 0]
+            self.indices = indices[indices % self.parser.test_every != 0]
         else:
-            self.indices = indices[indices % self.test_every == 0]
+            self.indices = indices[indices % self.parser.test_every == 0]
 
     def __len__(self):
         return len(self.indices)
 
     def __getitem__(self, item: int) -> Dict[str, Any]:
         index = self.indices[item % len(self.indices)]
-        image = imageio.imread(self.image_paths[index])[..., :3]
-        camera_id = self.camera_ids[index]
-        K = self.Ks_dict[camera_id]
-        params = self.params_dict[camera_id]
+        image = imageio.imread(self.parser.image_paths[index])[..., :3]
+        camera_id = self.parser.camera_ids[index]
+        K = self.parser.Ks_dict[camera_id]
+        params = self.parser.params_dict[camera_id]
         if len(params) > 0:
             # Images are distorted. Undistort them.
-            mapx, mapy = self.mapx_dict[camera_id], self.mapy_dict[camera_id]
+            mapx, mapy = (
+                self.parser.mapx_dict[camera_id],
+                self.parser.mapy_dict[camera_id],
+            )
             image = cv2.remap(image, mapx, mapy, cv2.INTER_LINEAR)
-            x, y, w, h = self.roi_undist_dict[camera_id]
+            x, y, w, h = self.parser.roi_undist_dict[camera_id]
             image = image[y : y + h, x : x + w]
         return {
             "K": torch.from_numpy(K.copy()).float(),
-            "camtoworld": torch.from_numpy(self.camtoworlds[index]).float(),
+            "camtoworld": torch.from_numpy(self.parser.camtoworlds[index]).float(),
             "image": torch.from_numpy(image).float(),
         }
 

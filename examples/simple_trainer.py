@@ -10,7 +10,7 @@ import torch
 import torch.nn.functional as F
 import tqdm
 import tyro
-from datasets.colmap import Dataset
+from datasets.colmap import Dataset, Parser
 from datasets.traj import generate_interpolated_path
 from nerfview import CameraState, ViewerServer, view_lock
 from torch import Tensor
@@ -71,6 +71,8 @@ class Config:
     grow_grad2d: float = 0.0002
     # GSs with scale below this value will be duplicated. Above will be split
     grow_scale3d: float = 0.01
+    # GSs with scale above this value will be pruned.
+    prune_scale3d: float = 0.1
 
     # Start refining GSs after this iteration
     refine_start_iter: int = 500
@@ -161,25 +163,18 @@ class Runner:
         os.makedirs(self.render_dir, exist_ok=True)
 
         # Load data: Training data should contain initial points and colors.
-        self.trainset = Dataset(
-            data_dir=cfg.data_dir,
-            factor=cfg.data_factor,
-            normalize=True,
-            split="train",
+        self.parser = Parser(
+            data_dir=cfg.data_dir, factor=cfg.data_factor, normalize=True
         )
-        self.valset = Dataset(
-            data_dir=cfg.data_dir,
-            factor=cfg.data_factor,
-            normalize=True,
-            split="val",
-        )
-        self.scene_scale = self.trainset.scene_scale * 1.1
+        self.trainset = Dataset(self.parser, split="train")
+        self.valset = Dataset(self.parser, split="val")
+        self.scene_scale = self.parser.scene_scale * 1.1
         print("Scene scale:", self.scene_scale)
 
         # Model
         self.splats, self.optimizers = create_splats_with_optimizers(
-            torch.from_numpy(self.trainset.points).float(),
-            torch.from_numpy(self.trainset.points_rgb / 255.0).float(),
+            torch.from_numpy(self.parser.points).float(),
+            torch.from_numpy(self.parser.points_rgb / 255.0).float(),
             sh_degree=cfg.sh_degree,
             init_opacity=cfg.init_opa,
             sparse_grad=cfg.sparse_grad,
@@ -363,7 +358,7 @@ class Runner:
                         # https://github.com/graphdeco-inria/gaussian-splatting/issues/123
                         is_too_big = (
                             torch.exp(self.splats["scales"]).max(dim=-1).values
-                            > 0.1 * self.scene_scale
+                            > cfg.prune_scale3d * self.scene_scale
                         )
                         is_prune = is_prune | is_too_big
                     n_prune = is_prune.sum().item()
@@ -652,7 +647,7 @@ class Runner:
         cfg = self.cfg
         device = self.device
 
-        camtoworlds = self.trainset.camtoworlds[5:-5]
+        camtoworlds = self.parser.camtoworlds[5:-5]
         camtoworlds = generate_interpolated_path(camtoworlds, 1)  # [N, 3, 4]
         camtoworlds = np.concatenate(
             [
@@ -663,8 +658,8 @@ class Runner:
         )  # [N, 4, 4]
 
         camtoworlds = torch.from_numpy(camtoworlds).float().to(device)
-        K = torch.from_numpy(list(self.trainset.Ks_dict.values())[0]).float().to(device)
-        width, height = list(self.trainset.imsize_dict.values())[0]
+        K = torch.from_numpy(list(self.parser.Ks_dict.values())[0]).float().to(device)
+        width, height = list(self.parser.imsize_dict.values())[0]
 
         canvas_all = []
         for i in tqdm.trange(len(camtoworlds), desc="Rendering trajectory"):
