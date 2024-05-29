@@ -41,15 +41,10 @@ class Parser:
         manager.load_images()
         manager.load_points3D()
 
-        # Assume shared intrinsics between all cameras.
-        cam = manager.cameras[1]
-        fx, fy, cx, cy = cam.fx, cam.fy, cam.cx, cam.cy
-        K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
-        K[:2, :] /= factor
-
         # Extract extrinsic matrices in world-to-camera format.
         imdata = manager.images
         w2c_mats = []
+        Ks_mats = []
         bottom = np.array([0, 0, 0, 1]).reshape(1, 4)
         for k in imdata:
             im = imdata[k]
@@ -57,7 +52,16 @@ class Parser:
             trans = im.tvec.reshape(3, 1)
             w2c = np.concatenate([np.concatenate([rot, trans], 1), bottom], axis=0)
             w2c_mats.append(w2c)
+
+            # support different camera intrinsics
+            camera_id = im.camera_id
+            cam = manager.cameras[camera_id]
+            fx, fy, cx, cy = cam.fx, cam.fy, cam.cx, cam.cy
+            K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
+            K[:2, :] /= factor
+            Ks_mats.append(K)
         w2c_mats = np.stack(w2c_mats, axis=0)
+        Ks_mats = np.stack(Ks_mats, axis=0)
 
         # Convert extrinsics to camera-to-world.
         camtoworlds = np.linalg.inv(w2c_mats)
@@ -160,7 +164,7 @@ class Parser:
         self.image_names = image_names  # List[str], (num_images,)
         self.image_paths = image_paths  # List[str], (num_images,)
         self.camtoworlds = camtoworlds  # np.ndarray, (num_images, 4, 4)
-        self.K = K  # np.ndarray, (3, 3)
+        self.Ks = Ks_mats  # np.ndarray, (num_images, 3, 3)
         self.params = params  # np.ndarray, (K,)
         self.points = points  # np.ndarray, (num_points, 3)
         self.points_err = points_err  # np.ndarray, (num_points,)
@@ -211,7 +215,7 @@ class Dataset(Parser):
             x, y, w, h = self.roi_undist
             image = image[y : y + h, x : x + w]
         return {
-            "K": torch.from_numpy(self.K.copy()).float(),
+            "K": torch.from_numpy(self.Ks[index].copy()).float(),
             "camtoworld": torch.from_numpy(self.camtoworlds[index]).float(),
             "image": torch.from_numpy(image).float(),
         }
