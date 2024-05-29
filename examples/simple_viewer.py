@@ -43,9 +43,17 @@ torch.manual_seed(42)
 device = "cuda"
 
 if args.ckpt is None:
-    means, quats, scales, opacities, colors, viewmats, Ks, width, height = (
-        load_test_data(device=device, scene_grid=args.scene_grid)
-    )
+    (
+        means,
+        quats,
+        scales,
+        opacities,
+        colors,
+        viewmats,
+        Ks,
+        width,
+        height,
+    ) = load_test_data(device=device, scene_grid=args.scene_grid)
     sh_degree = None
     C = len(viewmats)
     N = len(means)

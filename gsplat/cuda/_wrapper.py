@@ -714,9 +714,17 @@ class _Projection(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, v_radii, v_means2d, v_depths, v_conics, v_compensations):
-        means, covars, quats, scales, viewmats, Ks, radii, conics, compensations = (
-            ctx.saved_tensors
-        )
+        (
+            means,
+            covars,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            radii,
+            conics,
+            compensations,
+        ) = ctx.saved_tensors
         width = ctx.width
         height = ctx.height
         eps2d = ctx.eps2d

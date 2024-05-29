@@ -46,9 +46,17 @@ def main(
     backend: Literal["gsplat2", "gsplat", "inria"] = "gsplat2",
     repeats: int = 100,
 ):
-    means, quats, scales, opacities, colors, viewmats, Ks, width, height = (
-        load_test_data(device=device, scene_grid=scene_grid)
-    )
+    (
+        means,
+        quats,
+        scales,
+        opacities,
+        colors,
+        viewmats,
+        Ks,
+        width,
+        height,
+    ) = load_test_data(device=device, scene_grid=scene_grid)
 
     # to batch
     viewmats = viewmats[:1].repeat(batch_size, 1, 1)
