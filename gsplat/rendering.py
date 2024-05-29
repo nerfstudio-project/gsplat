@@ -37,14 +37,73 @@ def rasterization(
     compute_means2d_absgrad: bool = False,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
 ) -> Tuple[Tensor, Tensor, Dict]:
-    """Rasterize a set of 3D Gaussians to a batch of image planes.
+    """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
+
+    This function provides a handful features for 3D Gaussian rasterization, which
+    we detail in the following notes. A complete profiling of the these features
+    can be found in the :ref:`profiling` page.
 
     .. note::
-        This function supports rendering N-D features. If `sh_degree` is None,
+        **Batch Rasterization**: This function allows for rasterizing a set of 3D Gaussians
+        to a batch of images in one go, by simplly providing the batched `viewmats` and `Ks`.
+
+    .. note::
+        **Support N-D Features**: If `sh_degree` is None,
         the `colors` is expected to be with shape [N, D], in which D is the channel
-        of the features to be rendered, up to 32 at the moment. On the other hand, if
+        of the features to be rendered, up to 32 at the moment. If
         `sh_degree` is set, the `colors` is expected to be the SH coefficients with
-        shape [N, K, 3], where K is the number of bands.
+        shape [N, K, 3], where K is the number of SH bases. In this case, it is expected
+        that :math:`(\\textit{sh_degree} + 1) ^ 2 \leq K`, where `sh_degree` controls the
+        activated bases in the SH coefficients.
+
+    .. note::
+        **Depth Rendering**: This function supports colors or/and depths via `render_mode`.
+        The supported modes are "RGB", "D", "ED", "RGB+D", and "RGB+ED". "RGB" renders the
+        colored image that respects the `colors` argument. "D" renders the accumulated z-depth
+        :math:`\\sum_i w_i z_i`. "ED" renders the expected z-depth
+        :math:`\\frac{\\sum_i w_i z_i}{\\sum_i w_i}`. "RGB+D" and "RGB+ED" render both
+        the colored image and the depth, in which the depth is the last channel of the output.
+
+    .. note::
+        **Memory-Speed Trade-off**: The `packed` argument provides a trade-off between
+        memory footprint and runtime. If `packed` is True, the intermediate results are
+        packed into sparse tensors, which is more memory efficient but might be slightly
+        slower. This is especially helpful when the scene is large and each camera sees only
+        a small portion of the scene. If `packed` is False, the intermediate results are
+        with shape [C, N, ...], which is faster but might consume more memory.
+
+    .. note::
+        **Sparse Gradients**: If `sparse_grad` is True, the gradients for {means, quats, scales}
+        will be stored in a `COO sparse layout <https://pytorch.org/docs/stable/generated/torch.sparse_coo_tensor.html>`_.
+        This can be helpful on saving memory
+        for training when the scene is large and each iteration only activates a small portion
+        of the Gaussians. Usually a sparse optimizer is required to work with sparse gradients,
+        such as `torch.optim.SparseAdam <https://pytorch.org/docs/stable/generated/torch.optim.SparseAdam.html#sparseadam>`_.
+        This argument is only effective when `packed` is True.
+
+    .. note::
+        **Speed-up for Large Scenes**: The `radius_clip` argument is extremely helpful for
+        speeding up large scale scenes or scenes with large depth of fields. Gaussians with
+        2D radius smaller or equal than this value (in pixel unit) will be skipped during rasterization.
+        This will skip all the far-away Gaussians that are too small to be seen in the image.
+        But be warned that if there are close-up Gaussians that are also below this threshold, they will
+        also get skipped (which is rarely happened in practice). This is by default disabled by setting
+        `radius_clip` to 0.0.
+
+    .. note::
+        **Antialiased Rendering**: If `rasterize_mode` is "antialiased", the function will
+        apply a view-dependent compensation factor
+        :math:`\\rho=\\sqrt{\\frac{Det(\\Sigma)}{Det(\\Sigma+ \\epsilon I)}}` to Gaussian
+        opacities, where :math:`\\Sigma` is the projected 2D covariance matrix and :math:`\\epsilon`
+        is the `eps2d`. This will make the rendered image more antialiased, as proposed in
+        the paper `Mip-Splatting: Alias-free 3D Gaussian Splatting <https://arxiv.org/pdf/2311.16493>`_.
+
+    .. note::
+        **AbsGrad**: If `compute_means2d_absgrad` is True, the absolute gradients of the projected
+        2D means will be computed during the backward pass, which could be accessed by
+        `meta["means2d"].absgrad`. This is an implementation of the paper
+        `AbsGS: Recovering Fine Details for 3D Gaussian Splatting <https://arxiv.org/abs/2404.10484>`_,
+        which is shown to be more effective for splitting Gaussians during training.
 
     .. warning::
         This function is currently not differentiable w.r.t. the camera intrinsics `Ks`.

@@ -38,30 +38,4 @@ projection equation:
 Where :math:`[W | t]` is the world-to-camera transformation matrix, and :math:`f_{x}, f_{y}`
 are the focal lengths of the camera.
 
-.. The discrete rendering equation is given by: 
-
-.. .. math::
-
-..     \sum_{t=n}^{N}c_{n} \alpha_{n} T_{n}
-
-.. Where 
-
-.. .. math::
-
-..     T_{n} = \prod_{t=m}^{M}(1-\alpha_{m})
-
-.. And 
-
-.. .. math::
-
-..     \alpha = o \exp(-\sigma)
-    
-..     \sigma = \frac{1}{2} \Delta^{T} \Sigma'^{-1} \Delta
-
-
-.. Where :math:`\sigma \in \mathbb{R}^2` is the Mahalanobis distance which measures how many 
-.. standard deviations away the center of a gaussian and the rendered pixel center 
-.. is which is denoted by delta :math:`\Delta`.
-
-
-.. autofunction:: gsplat.rasterization
+.. autofunction:: rasterization
