@@ -6,22 +6,26 @@ Below are the basic functions that supports the rasterization.
 
 .. currentmodule:: gsplat
 
-.. autofunction:: gsplat.spherical_harmonics
+.. autofunction:: spherical_harmonics
 
-.. autofunction:: gsplat.quat_scale_to_covar_preci
+.. autofunction:: quat_scale_to_covar_preci
 
-.. autofunction:: gsplat.persp_proj
+.. autofunction:: persp_proj
 
-.. autofunction:: gsplat.projection
+.. autofunction:: projection
 
-.. autofunction:: gsplat.isect_tiles
+.. autofunction:: isect_tiles
 
-.. autofunction:: gsplat.isect_offset_encode
+.. autofunction:: isect_offset_encode
 
-.. autofunction:: gsplat.rasterize_to_pixels
+.. autofunction:: world_to_cam
 
-.. autofunction:: gsplat.rasterization_legacy_wrapper    
-    :noindex:
+.. autofunction:: rasterize_to_pixels
 
-.. autofunction:: gsplat.rasterization_inria_wrapper
-    :noindex:
+.. autofunction:: rasterize_to_indices_iter
+
+.. autofunction:: accumulate
+
+.. autofunction:: rasterization_legacy_wrapper    
+
+.. autofunction:: rasterization_inria_wrapper
