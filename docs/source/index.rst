@@ -55,7 +55,7 @@ This project is developed by the following wonderful contributors (unordered):
 
 - `Angjoo Kanazawa <https://people.eecs.berkeley.edu/~kanazawa/>`_ (UC Berkeley): Mentor of the project.
 - `Matthew Tancik <https://www.matthewtancik.com/about-me>`_ (Luma AI): Mentor of the project.
-- `Vickie Ye <https://people.eecs.berkeley.edu/~vye/>`_ (UC Berkeley): Project lead.
+- `Vickie Ye <https://people.eecs.berkeley.edu/~vye/>`_ (UC Berkeley): Project lead. v0.1 lead.
 - `Matias Turkulainen <https://maturk.github.io/>`_ (Aalto University): Core developer.
 - `Ruilong Li <https://www.liruilong.cn/>`_ (UC Berkeley): Core developer. v1.0 lead.
 - `Justin Kerr <https://kerrj.github.io/>`_ (UC Berkeley): Core developer.
