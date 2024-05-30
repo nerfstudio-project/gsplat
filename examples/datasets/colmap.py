@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import cv2
 import imageio.v2 as imageio
@@ -14,6 +14,15 @@ from .normalize import (
     transform_cameras,
     transform_points,
 )
+
+
+def _get_rel_paths(path_dir: str) -> List[str]:
+    """Recursively get relative paths of files in a directory."""
+    paths = []
+    for dp, dn, fn in os.walk(path_dir):
+        for f in fn:
+            paths.append(os.path.relpath(os.path.join(dp, f), path_dir))
+    return paths
 
 
 class Parser:
@@ -79,7 +88,7 @@ class Parser:
                 params = np.array([cam.k1], dtype=np.float32)
                 camtype = "perspective"
             elif type_ == 3 or type_ == "RADIAL":
-                params = np.array([cam.k1, cam.k2], dtype=np.float32)
+                params = np.array([cam.k1, cam.k2, 0., 0.], dtype=np.float32)
                 camtype = "perspective"
             elif type_ == 4 or type_ == "OPENCV":
                 params = np.array([cam.k1, cam.k2, cam.p1, cam.p2], dtype=np.float32)
@@ -126,8 +135,8 @@ class Parser:
 
         # Downsampled images may have different names vs images used for COLMAP,
         # so we need to map between the two sorted lists of files.
-        colmap_files = sorted(os.listdir(colmap_image_dir))
-        image_files = sorted(os.listdir(image_dir))
+        colmap_files = sorted(_get_rel_paths(colmap_image_dir))
+        image_files = sorted(_get_rel_paths(image_dir))
         colmap_to_image = dict(zip(colmap_files, image_files))
         image_paths = [os.path.join(image_dir, colmap_to_image[f]) for f in image_names]
 
