@@ -82,18 +82,30 @@ __global__ void get_tile_bin_edges(
 );
 
 
-__device__ bool build_H(
+__device__ bool build_transform_and_AABB(
     const float3& __restrict__ mean3d,
     const float4 __restrict__ intrins,
     const float3 __restrict__ scale,
     const float4 __restrict__ quat,
     const float* __restrict__ viewmat,
     float* transMat,
-    float3 &normal
+    float3& normal,
+    float2& center,
+    float& radius
 );
 
-__device__ bool build_AABB(
-    const float *transMat,
-    float2 & center,
-    float2 & extent
-);
+// __device__ bool build_H(
+//     const float3& __restrict__ mean3d,
+//     const float4 __restrict__ intrins,
+//     const float3 __restrict__ scale,
+//     const float4 __restrict__ quat,
+//     const float* __restrict__ viewmat,
+//     float* transMat,
+//     float3 &normal
+// );
+
+// __device__ bool build_AABB(
+//     const float *transMat,
+//     float2 & center,
+//     float2 & extent
+// );

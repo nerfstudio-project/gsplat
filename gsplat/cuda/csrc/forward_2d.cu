@@ -65,32 +65,22 @@ __global__ void project_gaussians_forward_kernel(
     float* cur_transMats = &(transMats[9 * idx]);
     bool ok;
     float3 normal;
+    float2 center;
+    float radius;
 
-    ok = build_H(
+    ok = build_transform_and_AABB(
         p_world,
         intrins,
         scale,
         quat,
         viewmat,
         cur_transMats,
-        normal
+        normal,
+        center,
+        radius
     );
 
-    
-
     if (!ok) return;
-
-    int start_index = 0;
-
-
-    float2 center;
-    float2 extent;
-    ok = build_AABB(cur_transMats, center, extent);
-    if (!ok) return;
-
-    float truncated_R = 3.f;
-
-    float radius = ceil(truncated_R * max(max(extent.x, extent.y), FilterSize));
 
     // compte the projected mean
     // center = project_pix({fx, fy}, p_view, {cx, cy});
@@ -405,35 +395,37 @@ __global__ void rasterize_forward(
 }
 
 
-__device__ bool build_H(
+__device__ bool build_transform_and_AABB(
     const float3& __restrict__ mean3d,
     const float4 __restrict__ intrins,
     const float3 __restrict__ scale,
     const float4 __restrict__ quat,
     const float* __restrict__ viewmat,
     float* transMat,
-    float3& normal
+    float3& normal,
+    float2& center,
+    float& radius
 ) {
     // transform gaussians from world space to camera space
-    glm::mat3 R = glm::mat3{
+    glm::mat3 R = glm::mat3(
         viewmat[0], viewmat[1], viewmat[2],
         viewmat[4], viewmat[5], viewmat[6],
         viewmat[8], viewmat[9], viewmat[10]
-    };
+    );
     glm::vec3 T = glm::vec3(viewmat[3], viewmat[7], viewmat[11]);
-    glm::vec3 p_world = glm::vec3{mean3d.x, mean3d.y, mean3d.z};
+    glm::vec3 p_world = glm::vec3(mean3d.x, mean3d.y, mean3d.z);
     glm::vec3 p_camera = R * p_world + T;
 
     // build H and transform from world space to camera space
     glm::mat3 RS = quat_to_rotmat(quat) * scale_to_mat(scale, 1.0f);
     glm::mat3 RS_camera = R * RS;
-    glm::mat3 WH = glm::mat3{RS_camera[0], RS_camera[1], p_camera};
+    glm::mat3 WH = glm::mat3(RS_camera[0], RS_camera[1], p_camera);
 
-    glm::mat3 projection_matrix = glm::mat3{
+    glm::mat3 projection_matrix = glm::mat3(
         intrins.x, 0.0, intrins.z,
         0.0, intrins.y, intrins.w,
         0.0, 0.0, 1.0
-    };
+    );
 
     glm::mat3 M = glm::transpose(WH) * projection_matrix;
 
@@ -447,6 +439,31 @@ __device__ bool build_H(
 	transMat[7] = M[2].y;
 	transMat[8] = M[2].z;
     
+    // Compute AABB
+    glm::vec3 temp_point = glm::vec3(1.0f, 1.0f, -1.0f);
+    float distance = glm::dot(temp_point, M[2] * M[2]);
+
+    if (distance == 0.0f) return false;
+
+    glm::vec3 f = (1 / distance) * temp_point;
+    glm::vec3 point_image = glm::vec3(
+        glm::dot(f, M[0] * M[2]),
+        glm::dot(f, M[1] * M[2]),
+        glm::dot(f, M[2] * M[2])
+    );
+
+    glm::vec3 half_extend = point_image * point_image - 
+        glm::vec3(
+            glm::dot(f, M[0] * M[0]),
+            glm::dot(f, M[1] * M[1]),
+            glm::dot(f, M[2] * M[2])
+        );
+    half_extend = sqrt(glm::max(half_extend, glm::vec3(0.0))); 
+    float truncated_R = 3.f;
+
+    radius = ceil(truncated_R * max(max(half_extend.x, half_extend.y), FilterSize));
+    center = {point_image.x, point_image.y};
+
     return true;
 }
 
@@ -516,45 +533,45 @@ __device__ bool build_H(
 // Compute the bounding box of the 2D Gaussian and its center,
 // where the center of the bounding box is used to create a low pass filter
 // in the image plane
-__device__ bool build_AABB(
-    const float *transMat,
-    float2 & center,
-    float2 & extent
-) {
-    glm::mat4x3 T = glm::mat4x3(
-        transMat[0], transMat[1], transMat[2],
-        transMat[3], transMat[4], transMat[5],
-        transMat[6], transMat[7], transMat[8],
-        transMat[6], transMat[7], transMat[8]
-    );
+// __device__ bool build_AABB(
+//     const float *transMat,
+//     float2 & center,
+//     float2 & extent
+// ) {
+//     glm::mat4x3 T = glm::mat4x3(
+//         transMat[0], transMat[1], transMat[2],
+//         transMat[3], transMat[4], transMat[5],
+//         transMat[6], transMat[7], transMat[8],
+//         transMat[6], transMat[7], transMat[8]
+//     );
 
 
-    float d = glm::dot(glm::vec3(1.0, 1.0, -1.0), T[3] * T[3]);
+//     float d = glm::dot(glm::vec3(1.0, 1.0, -1.0), T[3] * T[3]);
 
-    if (d == 0.0f) {
-        return false;
-    }
+//     if (d == 0.0f) {
+//         return false;
+//     }
 
-    glm::vec3 f = glm::vec3(1.0, 1.0, -1.0) * (1.0f / d);
+//     glm::vec3 f = glm::vec3(1.0, 1.0, -1.0) * (1.0f / d);
 
-    glm::vec3 p = glm::vec3(
-        glm::dot(f, T[0] * T[3]),
-        glm::dot(f, T[1] * T[3]),
-        glm::dot(f, T[2] * T[3])
-    );
+//     glm::vec3 p = glm::vec3(
+//         glm::dot(f, T[0] * T[3]),
+//         glm::dot(f, T[1] * T[3]),
+//         glm::dot(f, T[2] * T[3])
+//     );
 
-    glm::vec3 h0 = p * p - 
-        glm::vec3(
-            glm::dot(f, T[0] * T[0]),
-            glm::dot(f, T[1] * T[1]),
-            glm::dot(f, T[2] * T[2])
-        );
+//     glm::vec3 h0 = p * p - 
+//         glm::vec3(
+//             glm::dot(f, T[0] * T[0]),
+//             glm::dot(f, T[1] * T[1]),
+//             glm::dot(f, T[2] * T[2])
+//         );
 
-    glm::vec3 h = sqrt(max(glm::vec3(0.0), h0)) + glm::vec3(0.0, 0.0, 1e-2);
-    center = {p.x, p.y};
-    extent = {h.x, h.y};
-    return true;
-}
+//     glm::vec3 h = sqrt(max(glm::vec3(0.0), h0)) + glm::vec3(0.0, 0.0, 1e-2);
+//     center = {p.x, p.y};
+//     extent = {h.x, h.y};
+//     return true;
+// }
 
 
 // Device helper to get 3D covariance from scale and quat parameters
