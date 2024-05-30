@@ -88,7 +88,7 @@ class Parser:
                 params = np.array([cam.k1], dtype=np.float32)
                 camtype = "perspective"
             elif type_ == 3 or type_ == "RADIAL":
-                params = np.array([cam.k1, cam.k2, 0., 0.], dtype=np.float32)
+                params = np.array([cam.k1, cam.k2, 0.0, 0.0], dtype=np.float32)
                 camtype = "perspective"
             elif type_ == 4 or type_ == "OPENCV":
                 params = np.array([cam.k1, cam.k2, cam.p1, cam.p2], dtype=np.float32)
