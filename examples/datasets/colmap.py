@@ -100,12 +100,15 @@ class Parser:
                 camtype == "perspective"
             ), f"Only support perspective camera model, got {type_}"
 
-            if not (type_ == 0 or type_ == 1):
-                print(f"Warning: COLMAP Camera is not PINHOLE. Images have distortion.")
             params_dict[camera_id] = params
 
             # image size
             imsize_dict[camera_id] = (cam.width // factor, cam.height // factor)
+
+        if len(imdata) == 0:
+            raise ValueError("No images found in COLMAP.")
+        if not (type_ == 0 or type_ == 1):
+            print(f"Warning: COLMAP Camera is not PINHOLE. Images have distortion.")
 
         w2c_mats = np.stack(w2c_mats, axis=0)
 
