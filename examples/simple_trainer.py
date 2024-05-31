@@ -40,6 +40,8 @@ class Config:
     data_factor: int = 4
     # Directory to save results
     result_dir: str = "results/garden"
+    # Every N images there is a test image
+    test_every: int = 8
 
     # Port for the viewer server
     port: int = 8080
@@ -164,7 +166,7 @@ class Runner:
 
         # Load data: Training data should contain initial points and colors.
         self.parser = Parser(
-            data_dir=cfg.data_dir, factor=cfg.data_factor, normalize=True
+            data_dir=cfg.data_dir, factor=cfg.data_factor, normalize=True, test_every=cfg.test_every
         )
         self.trainset = Dataset(self.parser, split="train")
         self.valset = Dataset(self.parser, split="val")
