@@ -102,7 +102,7 @@ def create_splats_with_optimizers(
     init_opacity: float = 0.1,
     sparse_grad: bool = False,
     device: str = "cuda",
-) -> torch.nn.ParameterDict:
+) -> Tuple[torch.nn.ParameterDict, torch.optim.Optimizer]:
     N = points.shape[0]
 
     # Initialize the GS size to be the average dist of the 3 nearest neighbors
