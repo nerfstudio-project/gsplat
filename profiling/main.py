@@ -186,9 +186,6 @@ if __name__ == "__main__":
             print("========================================")
             if "gsplat" in args.backends:
                 print("gsplat packed[True] sparse_grad[True]")
-                # [FWD]2.21 GB, [All]2.54 GB Time: [FWD]0.028s, [BWD]0.060s
-                # [FWD]0.17 GB, [All]0.17 GB Time: [FWD]0.004s, [BWD]0.008s
-                # [FWD]0.83 GB, [All]0.83 GB Time: [FWD]0.012s, [BWD]0.020s
                 for scene_grid in args.scene_grid:
                     stats = main(
                         batch_size=batch_size,
@@ -218,9 +215,6 @@ if __name__ == "__main__":
                     torch.cuda.empty_cache()
 
                 print("gsplat packed[True] sparse_grad[False]")
-                # [FWD]0.17 GB, [All]0.17 GB Time: [FWD]0.004s, [BWD]0.006s
-                # [FWD]0.83 GB, [All]1.13 GB Time: [FWD]0.012s, [BWD]0.021s
-                # [FWD]2.21 GB, [All]3.81 GB Time: [FWD]0.028s, [BWD]0.063s
                 for scene_grid in args.scene_grid:
                     stats = main(
                         batch_size=batch_size,
@@ -250,9 +244,6 @@ if __name__ == "__main__":
                     torch.cuda.empty_cache()
 
                 print("gsplat packed[False] sparse_grad[False]")
-                # [FWD]0.17 GB, [All]0.17 GB Time: [FWD]0.003s, [BWD]0.006s
-                # [FWD]1.50 GB, [All]1.66 GB Time: [FWD]0.011s, [BWD]0.017s
-                # [FWD]4.69 GB, [All]5.79 GB Time: [FWD]0.027s, [BWD]0.048s
                 for scene_grid in args.scene_grid:
                     stats = main(
                         batch_size=batch_size,
@@ -282,9 +273,6 @@ if __name__ == "__main__":
                     torch.cuda.empty_cache()
 
             if "gsplat-legacy" in args.backends:
-                # [FWD]0.20 GB, [All]0.20 GB Time: [FWD]0.005s, [BWD]0.009s
-                # [FWD]2.04 GB, [All]2.76 GB Time: [FWD]0.016s, [BWD]0.019s
-                # [FWD]6.53 GB, [All]9.86 GB Time: [FWD]0.042s, [BWD]0.047s
                 print("gsplat-legacy")
                 for scene_grid in args.scene_grid:
                     stats = main(
