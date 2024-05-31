@@ -71,7 +71,7 @@ def quat_scale_to_covar_preci(
     assert scales.dim() == 2 and scales.size(1) == 3, scales.size()
     quats = quats.contiguous()
     scales = scales.contiguous()
-    covars, precis = _QuatScaleToCovarpreci.apply(
+    covars, precis = _QuatScaleToCovarPreci.apply(
         quats, scales, compute_covar, compute_preci, triu
     )
     return covars if compute_covar else None, precis if compute_preci else None
@@ -547,7 +547,7 @@ def rasterize_to_indices_iter(
     return out_gauss_ids, out_pixel_ids, out_camera_ids
 
 
-class _QuatScaleToCovarpreci(torch.autograd.Function):
+class _QuatScaleToCovarPreci(torch.autograd.Function):
     """Converts quaternions and scales to covariance and precision matrices."""
 
     @staticmethod
