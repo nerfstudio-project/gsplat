@@ -1347,7 +1347,8 @@ projection_packed_fwd_tensor(const torch::Tensor &means,                // [N, 3
     torch::Tensor conics = torch::empty({nnz, 3}, means.options());
     torch::Tensor compensations;
     if (calc_compensations) {
-        compensations = torch::empty({nnz}, means.options());
+        // we dont want NaN to appear in this tensor, so we zero intialize it
+        compensations = torch::zeros({nnz}, means.options());
     }
 
     if (nnz) {
