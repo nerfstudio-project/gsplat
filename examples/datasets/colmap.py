@@ -240,7 +240,7 @@ class Dataset:
         return len(self.indices)
 
     def __getitem__(self, item: int) -> Dict[str, Any]:
-        index = self.indices[item % len(self.indices)]
+        index = self.indices[item]
         image = imageio.imread(self.parser.image_paths[index])[..., :3]
         camera_id = self.parser.camera_ids[index]
         K = self.parser.Ks_dict[camera_id]
@@ -258,6 +258,7 @@ class Dataset:
             "K": torch.from_numpy(K.copy()).float(),
             "camtoworld": torch.from_numpy(self.parser.camtoworlds[index]).float(),
             "image": torch.from_numpy(image).float(),
+            "image_ids": item, # the index of the image in the dataset
         }
 
 
