@@ -105,7 +105,9 @@ class Parser:
             # image size
             imsize_dict[camera_id] = (cam.width // factor, cam.height // factor)
 
-        print (f"[Parser] {len(imdata)} images, taken by {len(set(camera_ids))} cameras.")
+        print(
+            f"[Parser] {len(imdata)} images, taken by {len(set(camera_ids))} cameras."
+        )
 
         if len(imdata) == 0:
             raise ValueError("No images found in COLMAP.")
