@@ -8,8 +8,8 @@ gsplat
 Overview
 --------
 
-*gsplat* is an open-source library for CUDA accelerated differentiable rasterization of 
-3D gaussians with python bindings. It is inspired by the SIGGRAPH paper "3D Gaussian Splatting for 
+*gsplat* is an open-source library for CUDA-accelerated differentiable rasterization of 
+3D gaussians with Python bindings. It is inspired by the SIGGRAPH paper "3D Gaussian Splatting for 
 Real-Time Rendering of Radiance Fields" :cite:p:`kerbl3Dgaussians`, but we've made *gsplat* even 
 faster, more memory efficient, and with a growing list of new features!
 
@@ -19,7 +19,7 @@ faster, more memory efficient, and with a growing list of new features!
 
 * *gsplat* offers many extra features, including **batch rasterization**,  **N-D feature rendering**, **depth rendering**, **sparse gradient** etc. See :doc:`apis/rasterization` for details.
 
-* *gsplat* is equipped with the **latest and greatest** 3D Gaussian Splatting techniques, including `absgrad <https://ty424.github.io/AbsGS.github.io/>`_, `anti-aliasing <https://niujinshuchong.github.io/mip-splatting/>`_ etc. And more would come.
+* *gsplat* is equipped with the **latest and greatest** 3D Gaussian Splatting techniques, including `absgrad <https://ty424.github.io/AbsGS.github.io/>`_, `anti-aliasing <https://niujinshuchong.github.io/mip-splatting/>`_ etc. And more to come!
 
 
 .. raw:: html
@@ -32,13 +32,13 @@ faster, more memory efficient, and with a growing list of new features!
 Installation
 ------------
 
-*gsplat* is available on PyPI, and can be installed with pip:
+*gsplat* is available on PyPI and can be installed with pip:
 
 .. code-block:: bash
 
     pip install gsplat
 
-Additionally, it can also be installed from source to get the latest features:
+To get the latest features, it can also be installed from source:
 
 .. code-block:: bash
 
@@ -53,8 +53,8 @@ to feedback, bug-reports, and improvements to help expand the capabilities of th
 
 This project is developed by the following wonderful contributors (unordered):
 
-- `Angjoo Kanazawa <https://people.eecs.berkeley.edu/~kanazawa/>`_ (UC Berkeley): Mentor of the project.
-- `Matthew Tancik <https://www.matthewtancik.com/about-me>`_ (Luma AI): Mentor of the project.
+- `Angjoo Kanazawa <https://people.eecs.berkeley.edu/~kanazawa/>`_ (UC Berkeley): Advisor.
+- `Matthew Tancik <https://www.matthewtancik.com/about-me>`_ (Luma AI): Advisor.
 - `Vickie Ye <https://people.eecs.berkeley.edu/~vye/>`_ (UC Berkeley): Project lead. v0.1 lead.
 - `Matias Turkulainen <https://maturk.github.io/>`_ (Aalto University): Core developer.
 - `Ruilong Li <https://www.liruilong.cn/>`_ (UC Berkeley): Core developer. v1.0 lead.
