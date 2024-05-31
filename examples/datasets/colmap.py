@@ -105,6 +105,8 @@ class Parser:
             # image size
             imsize_dict[camera_id] = (cam.width // factor, cam.height // factor)
 
+        print (f"[Parser] {len(imdata)} images, taken by {len(set(camera_ids))} cameras.")
+
         if len(imdata) == 0:
             raise ValueError("No images found in COLMAP.")
         if not (type_ == 0 or type_ == 1):
@@ -124,6 +126,7 @@ class Parser:
         inds = np.argsort(image_names)
         image_names = [image_names[i] for i in inds]
         camtoworlds = camtoworlds[inds]
+        camera_ids = [camera_ids[i] for i in inds]
 
         # Load images.
         if factor > 1:
@@ -190,7 +193,7 @@ class Parser:
         self.mapx_dict = dict()
         self.mapy_dict = dict()
         self.roi_undist_dict = dict()
-        for camera_id in self.camera_ids:
+        for camera_id in self.params_dict.keys():
             params = self.params_dict[camera_id]
             if len(params) == 0:
                 continue  # no distortion
@@ -199,7 +202,6 @@ class Parser:
                 camera_id in self.params_dict
             ), f"Missing params for camera {camera_id}"
             K = self.Ks_dict[camera_id]
-            params = self.params_dict[camera_id]
             width, height = self.imsize_dict[camera_id]
             K_undist, roi_undist = cv2.getOptimalNewCameraMatrix(
                 K, params, (width, height), 0
