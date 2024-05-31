@@ -140,9 +140,9 @@ def world_to_cam(
 
 def projection(
     means: Tensor,  # [N, 3]
-    covars: Tensor,  # [N, 6] or None
-    quats: Tensor,  # [N, 4] or None
-    scales: Tensor,  # [N, 3] or None
+    covars: Optional[Tensor],  # [N, 6] or None
+    quats: Optional[Tensor],  # [N, 4] or None
+    scales: Optional[Tensor],  # [N, 3] or None
     viewmats: Tensor,  # [C, 4, 4]
     Ks: Tensor,  # [C, 3, 3]
     width: int,
