@@ -419,13 +419,12 @@ __device__ bool build_transform_and_AABB(
     glm::mat3 RS_camera = R * RS;
     glm::mat3 WH = glm::mat3(RS_camera[0], RS_camera[1], p_camera);
 
-    glm::mat3 projection_matrix = glm::mat3(
+    glm::mat3 inverse_intrinsics = glm::mat3(
         intrins.x, 0.0, intrins.z,
         0.0, intrins.y, intrins.w,
         0.0, 0.0, 1.0
     );
-
-    glm::mat3 M = glm::transpose(WH) * projection_matrix;
+    glm::mat3 M = glm::transpose(WH) * inverse_intrinsics;
 
     transMat[0] = M[0].x;
 	transMat[1] = M[0].y;
@@ -457,7 +456,6 @@ __device__ bool build_transform_and_AABB(
             glm::dot(f, M[2] * M[2])
         );
     half_extend = sqrt(glm::max(half_extend, glm::vec3(0.0))); 
-    half_extend = sqrt(half_extend);
     float truncated_R = 3.f;
 
     radius = ceil(truncated_R * max(max(half_extend.x, half_extend.y), FilterSize));
