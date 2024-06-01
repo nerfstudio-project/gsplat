@@ -3,6 +3,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
+import math
 
 import imageio
 import numpy as np
@@ -16,13 +17,7 @@ from nerfview import CameraState, ViewerServer, view_lock
 from torch import Tensor
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
-from utils import (
-    get_expon_lr_func,
-    knn,
-    normalized_quat_to_rotmat,
-    rgb_to_sh,
-    set_random_seed,
-)
+from utils import knn, normalized_quat_to_rotmat, rgb_to_sh, set_random_seed
 
 from gsplat.rendering import rasterization
 
@@ -45,6 +40,11 @@ class Config:
 
     # Port for the viewer server
     port: int = 8080
+
+    # Batch size for training. Learning rates are scaled automatically
+    batch_size: int = 1
+    # Auto scale iteration steps based on batch size
+    auto_adjust_steps: bool = False
 
     # Number of training steps
     max_steps: int = 30_000
@@ -97,13 +97,25 @@ class Config:
     # Use random background for training to discourage transparency
     random_bkgd: bool = False
 
+    def adjust_steps_based_on_batch(self):
+        self.eval_steps = [int(i // self.batch_size) for i in self.eval_steps]
+        self.save_steps = [int(i // self.batch_size) for i in self.save_steps]
+        self.max_steps = int(self.max_steps // self.batch_size)
+        self.sh_degree_interval = int(self.sh_degree_interval // self.batch_size)
+        self.refine_start_iter = int(self.refine_start_iter // self.batch_size)
+        self.refine_stop_iter = int(self.refine_stop_iter // self.batch_size)
+        self.reset_every = int(self.reset_every // self.batch_size)
+        self.refine_every = int(self.refine_every // self.batch_size)
+
 
 def create_splats_with_optimizers(
     points: Tensor,  # [N, 3]
     rgbs: Tensor,  # [N, 3]
+    scene_scale: float = 1.0,
     sh_degree: int = 3,
     init_opacity: float = 0.1,
     sparse_grad: bool = False,
+    batch_size: int = 1,
     device: str = "cuda",
 ) -> Tuple[torch.nn.ParameterDict, torch.optim.Optimizer]:
     N = points.shape[0]
@@ -129,20 +141,25 @@ def create_splats_with_optimizers(
             "shN": torch.nn.Parameter(colors[:, 1:, :]),  # [N, K-1, 3]
         }
     ).to(device)
+    # Scale learning rate based on batch size, reference:
+    # https://www.cs.princeton.edu/~smalladi/blog/2024/01/22/SDEs-ScalingRules/
+    # Note that this would not make the training exactly equivalent, see
+    # https://arxiv.org/pdf/2402.18824v1
+    sqrt_batch_size = math.sqrt(batch_size)
     optimizers = [
-        # These attributes have sparse gradients supported in gsplats
         (torch.optim.SparseAdam if sparse_grad else torch.optim.Adam)(
-            [
-                {"params": splats["means3d"], "name": "means3d"},  # has a lr schedule
-                {"params": splats["scales"], "lr": 5e-3, "name": "scales"},
-                {"params": splats["quats"], "lr": 1e-3, "name": "quats"},
-                {"params": splats["opacities"], "lr": 5e-2, "name": "opacities"},
-                {"params": splats["sh0"], "lr": 2.5e-3, "name": "sh0"},
-                {"params": splats["shN"], "lr": 2.5e-3 / 20, "name": "shN"},
-            ],
-            eps=1e-15,
-            # fused=False,  # TODO: benchmark fused optimizer
-        ),
+            [{"params": splats[name], "lr": lr * sqrt_batch_size, "name": name}],
+            eps=1e-15 / sqrt_batch_size,
+            betas=(1 - batch_size * (1 - 0.9), 1 - batch_size * (1 - 0.999)),
+        )
+        for name, lr in [
+            ("means3d", 1.6e-4 * scene_scale),
+            ("scales", 5e-3),
+            ("quats", 1e-3),
+            ("opacities", 5e-2),
+            ("sh0", 2.5e-3),
+            ("shN", 2.5e-3 / 20),
+        ]
     ]
     return splats, optimizers
 
@@ -183,9 +200,11 @@ class Runner:
         self.splats, self.optimizers = create_splats_with_optimizers(
             torch.from_numpy(self.parser.points).float(),
             torch.from_numpy(self.parser.points_rgb / 255.0).float(),
+            scene_scale=self.scene_scale,
             sh_degree=cfg.sh_degree,
             init_opacity=cfg.init_opa,
             sparse_grad=cfg.sparse_grad,
+            batch_size=cfg.batch_size,
             device=self.device,
         )
         print("Model initialized. Number of GS:", len(self.splats["means3d"]))
@@ -255,16 +274,16 @@ class Runner:
         max_steps = cfg.max_steps
         init_step = 0
 
-        lr_func = get_expon_lr_func(
-            lr_init=0.00016 * self.scene_scale,
-            lr_final=0.0000016 * self.scene_scale,
-            lr_delay_mult=0.01,
-            max_steps=30_000,
-        )
+        scheulers = [
+            # means3d has a learning rate schedule, that end at 0.01 of the initial value
+            torch.optim.lr_scheduler.ExponentialLR(
+                self.optimizers[0], gamma=0.01 ** (1.0 / max_steps)
+            )
+        ]
 
         trainloader = torch.utils.data.DataLoader(
             self.trainset,
-            batch_size=1,
+            batch_size=cfg.batch_size,
             shuffle=True,
             num_workers=4,
             persistent_workers=True,
@@ -281,12 +300,6 @@ class Runner:
                     time.sleep(0.01)
                 view_lock.acquire()
 
-            # Means3d has a learning rate schedule.
-            for optimizer in self.optimizers:
-                for param_group in optimizer.param_groups:
-                    if param_group["name"] == "means3d":
-                        param_group["lr"] = lr_func(step)
-                        break
             try:
                 data = next(trainloader_iter)
             except StopIteration:
@@ -310,7 +323,9 @@ class Runner:
                 sh_degree=sh_degree_to_use,
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
-                backgrounds=torch.rand(1, 3, device=device) if cfg.random_bkgd else None,
+                backgrounds=(
+                    torch.rand(1, 3, device=device) if cfg.random_bkgd else None
+                ),
             )
             info["means2d"].retain_grad()  # used for running stats
 
@@ -403,6 +418,8 @@ class Runner:
             for optimizer in self.optimizers:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
+            for scheduler in scheulers:
+                scheduler.step()
 
             # save checkpoint
             if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
@@ -442,8 +459,8 @@ class Runner:
             grads = info["means2d"].absgrad.clone()
         else:
             grads = info["means2d"].grad.clone()
-        grads[..., 0] *= info["width"] / 2.0
-        grads[..., 1] *= info["height"] / 2.0
+        grads[..., 0] *= info["width"] / 2.0 * cfg.batch_size
+        grads[..., 1] *= info["height"] / 2.0 * cfg.batch_size
         if cfg.packed:
             # grads is [nnz, 2]
             gs_ids = info["cindices"]  # [nnz] or None
@@ -751,4 +768,6 @@ def main(cfg: Config):
 
 if __name__ == "__main__":
     cfg = tyro.cli(Config)
+    if cfg.auto_adjust_steps:
+        cfg.adjust_steps_based_on_batch()
     main(cfg)

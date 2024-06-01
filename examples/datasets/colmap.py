@@ -258,7 +258,7 @@ class Dataset:
             "K": torch.from_numpy(K.copy()).float(),
             "camtoworld": torch.from_numpy(self.parser.camtoworlds[index]).float(),
             "image": torch.from_numpy(image).float(),
-            "image_id": item, # the index of the image in the dataset
+            "image_id": item,  # the index of the image in the dataset
         }
 
 
