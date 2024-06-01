@@ -94,6 +94,9 @@ class Config:
     # Anti-aliasing in rasterization. Might slightly hurt quantitative metrics.
     antialiased: bool = False
 
+    # Use random background for training to discourage transparency
+    random_bkgd: bool = False
+
 
 def create_splats_with_optimizers(
     points: Tensor,  # [N, 3]
@@ -307,6 +310,7 @@ class Runner:
                 sh_degree=sh_degree_to_use,
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
+                backgrounds=torch.rand(1, 3, device=device) if cfg.random_bkgd else None,
             )
             info["means2d"].retain_grad()  # used for running stats
 
