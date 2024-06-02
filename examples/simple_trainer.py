@@ -17,11 +17,20 @@ from nerfview import CameraState, ViewerServer, view_lock
 from torch import Tensor
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
-from utils import knn, normalized_quat_to_rotmat, rgb_to_sh, set_random_seed, rotation_6d_to_matrix
+from utils import (
+    knn,
+    normalized_quat_to_rotmat,
+    rgb_to_sh,
+    set_random_seed,
+    rotation_6d_to_matrix,
+)
 
 from gsplat.rendering import rasterization
 
-def _transform_pose(pose_embed: Tensor, camtoworlds: Tensor, embed_ids: Tensor) -> Tensor:
+
+def _transform_pose(
+    pose_embed: Tensor, camtoworlds: Tensor, embed_ids: Tensor
+) -> Tensor:
     # camtoworlds: (..., 4, 4), embed_ids: (...)
     if embed_ids is None:
         return camtoworlds
@@ -29,17 +38,14 @@ def _transform_pose(pose_embed: Tensor, camtoworlds: Tensor, embed_ids: Tensor) 
     # 3D positions + 6D rotations
     dx, drot = pose_deltas[..., :3], pose_deltas[..., 3:]
     # Identity rotation in 6D representation
-    identity = torch.tensor(
-        [1.0, 0.0, 0.0, 0.0, 1.0, 0.0], device=embed_ids.device
-    )
+    identity = torch.tensor([1.0, 0.0, 0.0, 0.0, 1.0, 0.0], device=embed_ids.device)
     identity = identity.expand(*drot.shape[:-1], -1)
     rot = rotation_6d_to_matrix(drot + identity)  # (..., 3, 3)
-    transform = torch.eye(4, device=embed_ids.device).repeat(
-        (*rot.shape[:-2], 1, 1)
-    )
+    transform = torch.eye(4, device=embed_ids.device).repeat((*rot.shape[:-2], 1, 1))
     transform[..., :3, :3] = rot
     transform[..., :3, 3] = dx
     return torch.matmul(camtoworlds, transform)
+
 
 @dataclass
 class Config:
@@ -246,9 +252,9 @@ class Runner:
             torch.nn.init.zeros_(self.pose_embed.weight)
             self.pose_optimizers = [
                 torch.optim.Adam(
-                    self.pose_embed.parameters(), 
+                    self.pose_embed.parameters(),
                     lr=cfg.pose_opt_lr * math.sqrt(cfg.batch_size),
-                    weight_decay=cfg.pose_opt_reg
+                    weight_decay=cfg.pose_opt_reg,
                 )
             ]
 
