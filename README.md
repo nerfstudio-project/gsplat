@@ -14,7 +14,7 @@ for Real-Time Radiance Field Rendering
 ![Teaser](/docs/source/imgs/training.gif?raw=true)
 
 ## Evaluation
-A full evalaution of Nerfstudio's implementation of Gaussian Splatting against the original Inria method can be found [here](https://docs.gsplat.studio/tests/eval.html).
+A full evalaution of Nerfstudio's implementation of Gaussian Splatting against the original Inria method can be found [here](https://docs.gsplat.studio/latest/tests/eval.html).
 
 
 ## Installation
