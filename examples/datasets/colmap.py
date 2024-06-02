@@ -226,7 +226,13 @@ class Parser:
 class Dataset:
     """A simple dataset class."""
 
-    def __init__(self, parser: Parser, split: str = "train", patch_size: Optional[int] = None, **kwargs):
+    def __init__(
+        self,
+        parser: Parser,
+        split: str = "train",
+        patch_size: Optional[int] = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.parser = parser
         self.split = split
