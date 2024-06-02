@@ -17,10 +17,29 @@ from nerfview import CameraState, ViewerServer, view_lock
 from torch import Tensor
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
-from utils import knn, normalized_quat_to_rotmat, rgb_to_sh, set_random_seed
+from utils import knn, normalized_quat_to_rotmat, rgb_to_sh, set_random_seed, rotation_6d_to_matrix
 
 from gsplat.rendering import rasterization
 
+def _transform_pose(pose_embed: Tensor, camtoworlds: Tensor, embed_ids: Tensor) -> Tensor:
+    # camtoworlds: (..., 4, 4), embed_ids: (...)
+    if embed_ids is None:
+        return camtoworlds
+    pose_deltas = pose_embed(embed_ids)
+    # 3D positions + 6D rotations
+    dx, drot = pose_deltas[..., :3], pose_deltas[..., 3:]
+    # Identity rotation in 6D representation
+    identity = torch.tensor(
+        [1.0, 0.0, 0.0, 0.0, 1.0, 0.0], device=embed_ids.device
+    )
+    identity = identity.expand(*drot.shape[:-1], -1)
+    rot = rotation_6d_to_matrix(drot + identity)  # (..., 3, 3)
+    transform = torch.eye(4, device=embed_ids.device).repeat(
+        (*rot.shape[:-2], 1, 1)
+    )
+    transform[..., :3, :3] = rot
+    transform[..., :3, 3] = dx
+    return torch.matmul(camtoworlds, transform)
 
 @dataclass
 class Config:
@@ -98,6 +117,15 @@ class Config:
 
     # Use random background for training to discourage transparency
     random_bkgd: bool = False
+
+    # Enable camera optimization.
+    pose_opt: bool = False
+    # Learning rate for camera optimization
+    pose_opt_lr: float = 1e-5
+    # Regularization for camera optimization as weight decay
+    pose_opt_reg: float = 1e-6
+    # Add noise to camera extrinsics. This is only to test the camera pose optimization.
+    pose_noise: float = 0.0
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -211,6 +239,23 @@ class Runner:
         )
         print("Model initialized. Number of GS:", len(self.splats["means3d"]))
 
+        self.pose_optimizers = []
+        if cfg.pose_opt:
+            # 3D positions + 6D rotations
+            self.pose_embed = torch.nn.Embedding(len(self.trainset), 9).to(self.device)
+            torch.nn.init.zeros_(self.pose_embed.weight)
+            self.pose_optimizers = [
+                torch.optim.Adam(
+                    self.pose_embed.parameters(), 
+                    lr=cfg.pose_opt_lr * math.sqrt(cfg.batch_size),
+                    weight_decay=cfg.pose_opt_reg
+                )
+            ]
+
+        if cfg.pose_noise > 0.0:
+            self.pose_noise = torch.nn.Embedding(len(self.trainset), 9).to(self.device)
+            torch.nn.init.normal_(self.pose_noise.weight, std=cfg.pose_noise)
+
         # Losses & Metrics.
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
         self.psnr = PeakSignalNoiseRatio(data_range=1.0).to(self.device)
@@ -280,8 +325,15 @@ class Runner:
             # means3d has a learning rate schedule, that end at 0.01 of the initial value
             torch.optim.lr_scheduler.ExponentialLR(
                 self.optimizers[0], gamma=0.01 ** (1.0 / max_steps)
-            )
+            ),
         ]
+        if cfg.pose_opt:
+            # pose optimization has a learning rate schedule
+            scheulers.append(
+                torch.optim.lr_scheduler.ExponentialLR(
+                    self.pose_optimizers[0], gamma=0.01 ** (1.0 / max_steps)
+                )
+            )
 
         trainloader = torch.utils.data.DataLoader(
             self.trainset,
@@ -308,10 +360,17 @@ class Runner:
                 trainloader_iter = iter(trainloader)
                 data = next(trainloader_iter)
 
-            camtoworlds = data["camtoworld"].to(device)  # [1, 4, 4]
+            camtoworlds = camtoworlds_gt = data["camtoworld"].to(device)  # [1, 4, 4]
             Ks = data["K"].to(device)  # [1, 3, 3]
             pixels = data["image"].to(device) / 255.0  # [1, H, W, 3]
+            image_ids = data["image_id"].to(device)
             height, width = pixels.shape[1:3]
+
+            if cfg.pose_noise:
+                camtoworlds = _transform_pose(self.pose_noise, camtoworlds, image_ids)
+
+            if cfg.pose_opt:
+                camtoworlds = _transform_pose(self.pose_embed, camtoworlds, image_ids)
 
             # sh schedule
             sh_degree_to_use = min(step // cfg.sh_degree_interval, cfg.sh_degree)
@@ -338,9 +397,13 @@ class Runner:
             )
             loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
             loss.backward()
-            pbar.set_description(
-                f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}|"
-            )
+
+            desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
+            if cfg.pose_opt and cfg.pose_noise:
+                # monitor the pose error if we inject noise
+                pose_err = F.l1_loss(camtoworlds_gt, camtoworlds)
+                desc += f"pose err={pose_err.item():.6f}| "
+            pbar.set_description(desc)
 
             # # write images
             # if step % 100 == 0:
@@ -427,6 +490,9 @@ class Runner:
 
             # optimize
             for optimizer in self.optimizers:
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+            for optimizer in self.pose_optimizers:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
             for scheduler in scheulers:
