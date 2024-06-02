@@ -315,7 +315,6 @@ class Runner:
         )
         return render_colors, render_alphas, info
 
-    # @line_profiler.profile
     def train(self):
         cfg = self.cfg
         device = self.device
