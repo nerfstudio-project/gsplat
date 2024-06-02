@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import cv2
 import imageio.v2 as imageio
@@ -226,10 +226,11 @@ class Parser:
 class Dataset:
     """A simple dataset class."""
 
-    def __init__(self, parser: Parser, split: str = "train", **kwargs):
+    def __init__(self, parser: Parser, split: str = "train", patch_size: Optional[int] = None, **kwargs):
         super().__init__(**kwargs)
         self.parser = parser
         self.split = split
+        self.patch_size = patch_size
         indices = np.arange(len(self.parser.image_names))
         if split == "train":
             self.indices = indices[indices % self.parser.test_every != 0]
@@ -243,7 +244,7 @@ class Dataset:
         index = self.indices[item]
         image = imageio.imread(self.parser.image_paths[index])[..., :3]
         camera_id = self.parser.camera_ids[index]
-        K = self.parser.Ks_dict[camera_id]
+        K = self.parser.Ks_dict[camera_id].copy()
         params = self.parser.params_dict[camera_id]
         if len(params) > 0:
             # Images are distorted. Undistort them.
@@ -254,8 +255,17 @@ class Dataset:
             image = cv2.remap(image, mapx, mapy, cv2.INTER_LINEAR)
             x, y, w, h = self.parser.roi_undist_dict[camera_id]
             image = image[y : y + h, x : x + w]
+        if self.patch_size is not None:
+            # Random crop.
+            h, w = image.shape[:2]
+            x = np.random.randint(0, max(w - self.patch_size, 1))
+            y = np.random.randint(0, max(h - self.patch_size, 1))
+            image = image[y : y + self.patch_size, x : x + self.patch_size]
+            K[0, 2] -= x
+            K[1, 2] -= y
+
         return {
-            "K": torch.from_numpy(K.copy()).float(),
+            "K": torch.from_numpy(K).float(),
             "camtoworld": torch.from_numpy(self.parser.camtoworlds[index]).float(),
             "image": torch.from_numpy(image).float(),
             "image_id": item,  # the index of the image in the dataset

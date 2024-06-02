@@ -37,14 +37,16 @@ class Config:
     result_dir: str = "results/garden"
     # Every N images there is a test image
     test_every: int = 8
+    # Random crop size for training  (experimental)
+    patch_size: Optional[int] = None
 
     # Port for the viewer server
     port: int = 8080
 
     # Batch size for training. Learning rates are scaled automatically
     batch_size: int = 1
-    # Auto scale iteration steps based on batch size
-    auto_adjust_steps: bool = False
+    # A global factor to scale the number of training steps
+    steps_scaler: float = 1.0
 
     # Number of training steps
     max_steps: int = 30_000
@@ -97,15 +99,15 @@ class Config:
     # Use random background for training to discourage transparency
     random_bkgd: bool = False
 
-    def adjust_steps_based_on_batch(self):
-        self.eval_steps = [int(i // self.batch_size) for i in self.eval_steps]
-        self.save_steps = [int(i // self.batch_size) for i in self.save_steps]
-        self.max_steps = int(self.max_steps // self.batch_size)
-        self.sh_degree_interval = int(self.sh_degree_interval // self.batch_size)
-        self.refine_start_iter = int(self.refine_start_iter // self.batch_size)
-        self.refine_stop_iter = int(self.refine_stop_iter // self.batch_size)
-        self.reset_every = int(self.reset_every // self.batch_size)
-        self.refine_every = int(self.refine_every // self.batch_size)
+    def adjust_steps(self, factor: float):
+        self.eval_steps = [int(i * factor) for i in self.eval_steps]
+        self.save_steps = [int(i * factor) for i in self.save_steps]
+        self.max_steps = int(self.max_steps * factor)
+        self.sh_degree_interval = int(self.sh_degree_interval * factor)
+        self.refine_start_iter = int(self.refine_start_iter * factor)
+        self.refine_stop_iter = int(self.refine_stop_iter * factor)
+        self.reset_every = int(self.reset_every * factor)
+        self.refine_every = int(self.refine_every * factor)
 
 
 def create_splats_with_optimizers(
@@ -191,7 +193,7 @@ class Runner:
             normalize=True,
             test_every=cfg.test_every,
         )
-        self.trainset = Dataset(self.parser, split="train")
+        self.trainset = Dataset(self.parser, split="train", patch_size=cfg.patch_size)
         self.valset = Dataset(self.parser, split="val")
         self.scene_scale = self.parser.scene_scale * 1.1
         print("Scene scale:", self.scene_scale)
@@ -339,6 +341,15 @@ class Runner:
             pbar.set_description(
                 f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}|"
             )
+
+            # # write images
+            # if step % 100 == 0:
+            #     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
+            #     canvas = canvas.reshape(-1, *canvas.shape[2:])
+            #     imageio.imwrite(
+            #         f"{self.render_dir}/train.png",
+            #         (canvas * 255).astype(np.uint8),
+            #     )
 
             # update running stats for prunning & growing
             if step < cfg.refine_stop_iter:
@@ -768,6 +779,5 @@ def main(cfg: Config):
 
 if __name__ == "__main__":
     cfg = tyro.cli(Config)
-    if cfg.auto_adjust_steps:
-        cfg.adjust_steps_based_on_batch()
+    cfg.adjust_steps(cfg.steps_scaler)
     main(cfg)
