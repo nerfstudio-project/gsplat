@@ -46,6 +46,8 @@ class Config:
     test_every: int = 8
     # Random crop size for training  (experimental)
     patch_size: Optional[int] = None
+    # A global scaler that applies to the scene size related parameters
+    global_scale: float = 1.0
 
     # Port for the viewer server
     port: int = 8080
@@ -221,7 +223,7 @@ class Runner:
         )
         self.trainset = Dataset(self.parser, split="train", patch_size=cfg.patch_size)
         self.valset = Dataset(self.parser, split="val")
-        self.scene_scale = self.parser.scene_scale * 1.1
+        self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
         print("Scene scale:", self.scene_scale)
 
         # Model
