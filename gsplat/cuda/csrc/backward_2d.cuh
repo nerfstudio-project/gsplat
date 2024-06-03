@@ -17,10 +17,10 @@ __global__ void project_gaussians_backward_kernel(
     const dim3 img_size,
     const float* __restrict__ cov3d,
     const int* __restrict__ radii,
-    const float* __restrict__ transMats,
+    const float* __restrict__ ray_transformations,
 
     // grad input
-    float* __restrict__ dL_dtransMats,
+    float* __restrict__ dL_dray_transformations,
     // const float* __restrict__ dL_dnormal3Ds,
 
     // grad output
@@ -36,7 +36,7 @@ __global__ void rasterize_backward_kernel(
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
-    const float* __restrict__ transMats,
+    const float* __restrict__ ray_transformations,
     const float3* __restrict__ rgbs,
     const float* __restrict__ opacities,
     const float3& __restrict__ background,
@@ -49,7 +49,7 @@ __global__ void rasterize_backward_kernel(
 
     // grad_output
     float2* __restrict__ v_mean2D,
-    float* __restrict__ dL_dtransMat,
+    float* __restrict__ dL_dray_transformation,
     float3* __restrict__ dL_drgb,
     float* __restrict__ dL_dopacity
 );
@@ -62,10 +62,10 @@ __device__ void build_H(
     const float4 & intrins,
     float tan_fovx,
     float tan_fovy,
-    const float* transMat,
+    const float* ray_transformation,
 
     // grad input
-    const float* dL_dtransMat,
+    const float* dL_dray_transformation,
     // const float* dL_dnormal3D,
 
     // grad output
@@ -79,9 +79,9 @@ __device__ void build_AABB(
     const int * radii,
     const float W,
     const float H,
-    const float * transMats,
+    const float * ray_transformations,
 
     // grad output
     float3 * v_mean2Ds,
-    float *dL_transMats
+    float *dL_ray_transformations
 );

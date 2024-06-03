@@ -32,11 +32,11 @@ __global__ void project_gaussians_backward_kernel(
     const dim3 img_size,
     const float* __restrict__ cov3d,
     const int* __restrict__ radii,
-    const float* __restrict__ transMats,
+    const float* __restrict__ ray_transformations,
 
     // grad input 
-    float* __restrict__ dL_dtransMats,
-    // const float* __restrict__ dL_dnormal3Ds,
+    float* __restrict__ v_ray_transformations,
+    // const float* __restrict__ v_normal3Ds,
 
     // grad output
     float3* __restrict__ v_mean3Ds,
@@ -49,9 +49,9 @@ __global__ void project_gaussians_backward_kernel(
     if (idx >= num_points || radii[idx] <= 0) return;
 
 
-    const float* transMat = &(transMats[9 * idx]);
-    const float* dL_dtransMat = &(dL_dtransMats[9 * idx]);
-    // const float* dL_dnormal3D = &(dL_dnormal3Ds[3 * idx]);
+    const float* ray_transformation = &(ray_transformations[9 * idx]);
+    const float* v_ray_transformation = &(v_ray_transformations[9 * idx]);
+    // const float* v_normal3D = &(v_normal3Ds[3 * idx]);
 
     glm::vec3 p_world = glm::vec3(means3d[idx].x, means3d[idx].y, means3d[idx].z);
     float fx = intrins.x;
@@ -68,10 +68,10 @@ __global__ void project_gaussians_backward_kernel(
         radii,
         img_size.x,
         img_size.y,
-        transMats,
+        ray_transformations,
 
         v_mean2Ds,
-        dL_dtransMats
+        v_ray_transformations
     );
     
     build_H(
@@ -82,11 +82,11 @@ __global__ void project_gaussians_backward_kernel(
         intrins,
         tan_fovx,
         tan_fovy,
-        transMat,
+        ray_transformation,
 
         // grad input
-        dL_dtransMat,
-        // dL_dnormal3D,
+        v_ray_transformation,
+        // v_normal3D,
 
         // grad output
         v_mean3D,
@@ -112,7 +112,7 @@ __global__ void rasterize_backward_kernel(
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
-    const float* __restrict__ transMats,
+    const float* __restrict__ ray_transformations,
     const float3* __restrict__ rgbs,
     const float* __restrict__ opacities,
     const float3& __restrict__ background,
@@ -120,14 +120,14 @@ __global__ void rasterize_backward_kernel(
     const int* __restrict__ final_index,
 
     // grad input
-    const float3* __restrict__ dL_doutput,
-    const float* __restrict__ dL_doutput_alpha,
+    const float3* __restrict__ v_output,
+    const float* __restrict__ v_output_alpha,
 
     // grad_output
     float2* __restrict__ v_mean2D,
-    float* __restrict__ dL_dtransMat,
-    float3* __restrict__ dL_drgb,
-    float* __restrict__ dL_dopacity
+    float* __restrict__ v_ray_transformation,
+    float3* __restrict__ v_rgb,
+    float* __restrict__ v_opacity
 ) {
     // printf("It is real :) \n");
     auto block = cg::this_thread_block();
@@ -170,8 +170,8 @@ __global__ void rasterize_backward_kernel(
     
 
     // df/d_out for this pixel
-    const float3 v_out = dL_doutput[pix_id];
-    const float v_out_alpha = dL_doutput_alpha[pix_id];
+    const float3 v_out = v_output[pix_id];
+    const float v_out_alpha = v_output_alpha[pix_id];
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing
@@ -198,9 +198,9 @@ __global__ void rasterize_backward_kernel(
             rgbs_batch[tr] = rgbs[g_id];
 
             //====== 2D Splatting ======//
-            Tu_batch[tr] = {transMats[9 * g_id + 0], transMats[9 * g_id + 1], transMats[9 * g_id + 2]};
-            Tv_batch[tr] = {transMats[9 * g_id + 3], transMats[9 * g_id + 4], transMats[9 * g_id + 5]};
-            Tw_batch[tr] = {transMats[9 * g_id + 6], transMats[9 * g_id + 7], transMats[9 * g_id + 8]};
+            Tu_batch[tr] = {ray_transformations[9 * g_id + 0], ray_transformations[9 * g_id + 1], ray_transformations[9 * g_id + 2]};
+            Tv_batch[tr] = {ray_transformations[9 * g_id + 3], ray_transformations[9 * g_id + 4], ray_transformations[9 * g_id + 5]};
+            Tw_batch[tr] = {ray_transformations[9 * g_id + 6], ray_transformations[9 * g_id + 7], ray_transformations[9 * g_id + 8]};
 
         }
         // wait for other threads to collext the gaussians in batch
@@ -215,8 +215,8 @@ __global__ void rasterize_backward_kernel(
             float alpha;
             float opac;
             float vis;
-            float rho3d;
-            float rho2d;
+            float gauss_weight_3d;
+            float gauss_weight_2d;
             float rho;
             float2 s;
             float2 d;
@@ -244,12 +244,12 @@ __global__ void rasterize_backward_kernel(
                 } else {
                     s = {p.x / p.z, p.y / p.z};
                 }
-                rho3d = (s.x * s.x + s.y * s.y);
+                gauss_weight_3d = (s.x * s.x + s.y * s.y);
                 d = {xy.x - px, xy.y - py};
-                rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
+                gauss_weight_2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
 
                 // compute intersection
-                rho = min(rho3d, rho2d);
+                rho = min(gauss_weight_3d, gauss_weight_2d);
 
                 // accumulations
                 float sigma = 0.5f * rho;
@@ -263,21 +263,21 @@ __global__ void rasterize_backward_kernel(
             // if all threads are inactive in this warp, skip this loop
             if (!warp.any(valid)) continue;
 
-            float3 dL_drgb_local = {0.f, 0.f, 0.f};
-            float dL_dopacity_local = 0.f;
+            float3 v_rgb_local = {0.f, 0.f, 0.f};
+            float v_opacity_local = 0.f;
             float2 v_mean2D_local = {0.f, 0.f};
-            float3 dL_dTu_local = {0.f, 0.f, 0.f};
-            float3 dL_dTv_local = {0.f, 0.f, 0.f};
-            float3 dL_dTw_local = {0.f, 0.f, 0.f};
+            float3 v_u_transform_local = {0.f, 0.f, 0.f};
+            float3 v_v_transform_local = {0.f, 0.f, 0.f};
+            float3 v_w_transform_local = {0.f, 0.f, 0.f};
             // initialize everything to 0, only set if the lane is valid
             if (valid) {
                 // compute the current T for this gaussian
                 float ra = 1.f / (1.f - alpha);
                 T *= ra;
-                // update dL_drgb for this gaussian
+                // update v_rgb for this gaussian
                 const float fac = alpha * T;
                 float v_alpha = 0.f;
-                dL_drgb_local = {fac * v_out.x, fac * v_out.y, fac * v_out.z};
+                v_rgb_local = {fac * v_out.x, fac * v_out.y, fac * v_out.z};
 
                 const float3 rgb = rgbs_batch[t];
                 // contribution from this pixel
@@ -296,76 +296,77 @@ __global__ void rasterize_backward_kernel(
                 buffer.z += rgb.z * fac;
 
                 // Helpful reusable temporary variable
-                const float dL_dG = opac * v_alpha;
-                float dL_dz = 0.0f;
+                // Need to change this gradient variable name to be readable
+                const float v_G = opac * v_alpha;
+                float v_depth = 0.0f;
 
                 int32_t g = id_batch[t];
 
                 // ====== 2D Splatting ====== //
-                if (rho3d <= rho2d) {
+                if (gauss_weight_3d <= gauss_weight_2d) {
                     // Update gradients w.r.t. covariance of Gaussian 3x3 (T)
-                    const float2 dL_ds = {
-                        dL_dG * -vis * s.x + dL_dz * Tw.x,
-                        dL_dG * -vis * s.y + dL_dz * Tw.y
+                    const float2 v_s = {
+                        v_G * -vis * s.x + v_depth * Tw.x,
+                        v_G * -vis * s.y + v_depth * Tw.y
                     };
-                    const float3 dz_dTw = {s.x, s.y, 1.0};
-                    const float dsx_pz = dL_ds.x / p.z;
-                    const float dsy_pz = dL_ds.y / p.z;
-                    const float3 dL_dp = {dsx_pz, dsy_pz, -(dsx_pz * s.x + dsy_pz * s.y)};
-                    const float3 dL_dk = cross_product(l, dL_dp);
-                    const float3 dL_dl = cross_product(dL_dp, k);
+                    const float3 v_z_w_transform = {s.x, s.y, 1.0};
+                    const float v_sz_pz = v_s.x / p.z;
+                    const float v_sy_pz = v_s.y / p.z;
+                    const float3 v_intersect = {v_sz_pz, v_sy_pz, -(v_sz_pz * s.x + v_sy_pz * s.y)};
+                    const float3 v_h_u = cross_product(l, v_intersect);
+                    const float3 v_h_v = cross_product(v_intersect, k);
 
-                    const float3 dL_dTu = {-dL_dk.x, -dL_dk.y, -dL_dk.z};
-                    const float3 dL_dTv = {-dL_dl.x, -dL_dl.y, -dL_dl.z};
-                    const float3 dL_dTw = {
-                        px * dL_dk.x + py * dL_dl.x + dL_dz * dz_dTw.x,
-                        px * dL_dk.y + py * dL_dl.y + dL_dz * dz_dTw.y,
-                        px * dL_dk.z + py * dL_dl.z + dL_dz * dz_dTw.z
+                    const float3 v_u_transform = {-v_h_u.x, -v_h_u.y, -v_h_u.z};
+                    const float3 v_v_transform = {-v_h_v.x, -v_h_v.y, -v_h_v.z};
+                    const float3 v_w_transform = {
+                        px * v_h_u.x + py * v_h_v.x + v_depth * v_z_w_transform.x,
+                        px * v_h_u.y + py * v_h_v.y + v_depth * v_z_w_transform.y,
+                        px * v_h_u.z + py * v_h_v.z + v_depth * v_z_w_transform.z
                     };
-                    dL_dTu_local = {dL_dTu.x, dL_dTu.y, dL_dTu.z};
-                    dL_dTv_local = {dL_dTv.x, dL_dTv.y, dL_dTv.z};
-                    dL_dTw_local = {dL_dTw.x, dL_dTw.y, dL_dTw.z};
+                    v_u_transform_local = {v_u_transform.x, v_u_transform.y, v_u_transform.z};
+                    v_v_transform_local = {v_v_transform.x, v_v_transform.y, v_v_transform.z};
+                    v_w_transform_local = {v_w_transform.x, v_w_transform.y, v_w_transform.z};
 
                 } else {
                     // Update gradient w.r.t center of Gaussian 2D mean position
-                    const float dG_ddelx = -vis * FilterInvSquare * d.x;
-                    const float dG_ddely = -vis * FilterInvSquare * d.y;
-                    v_mean2D_local = {dL_dG * dG_ddelx, dL_dG * dG_ddely};
+                    const float v_G_ddelx = -vis * FilterInvSquare * d.x;
+                    const float v_G_ddely = -vis * FilterInvSquare * d.y;
+                    v_mean2D_local = {v_G * v_G_ddelx, v_G * v_G_ddely};
 
                 }
-                dL_dopacity_local = vis * v_alpha;
+                v_opacity_local = vis * v_alpha;
             }
-            warpSum3(dL_drgb_local, warp);
-            warpSum(dL_dopacity_local, warp);
+            warpSum3(v_rgb_local, warp);
+            warpSum(v_opacity_local, warp);
             warpSum2(v_mean2D_local, warp);
-            warpSum3(dL_dTu_local, warp);
-            warpSum3(dL_dTv_local, warp);
-            warpSum3(dL_dTw_local, warp);
+            warpSum3(v_u_transform_local, warp);
+            warpSum3(v_v_transform_local, warp);
+            warpSum3(v_w_transform_local, warp);
             if (warp.thread_rank() == 0) {
                 // printf("Here!!! \n");
                 int32_t g = id_batch[t];
-                float* dL_drgb_ptr = (float*)(dL_drgb);
-                atomicAdd(dL_drgb_ptr + 3 * g + 0, dL_drgb_local.x);
-                atomicAdd(dL_drgb_ptr + 3 * g + 1, dL_drgb_local.y);
-                atomicAdd(dL_drgb_ptr + 3 * g + 2, dL_drgb_local.z);
-                if (rho3d <= rho2d) {
-                    float* dL_dtransMat_ptr = (float*)(dL_dtransMat);
-                    atomicAdd(dL_dtransMat_ptr + 9 * g + 0, dL_dTu_local.x);
-                    atomicAdd(dL_dtransMat_ptr + 9 * g + 1, dL_dTu_local.y);
-                    atomicAdd(dL_dtransMat_ptr + 9 * g + 2, dL_dTu_local.z);
-                    atomicAdd(dL_dtransMat_ptr + 9 * g + 3, dL_dTv_local.x);
-                    atomicAdd(dL_dtransMat_ptr + 9 * g + 4, dL_dTv_local.y);
-                    atomicAdd(dL_dtransMat_ptr + 9 * g + 5, dL_dTv_local.z);
-                    atomicAdd(dL_dtransMat_ptr + 9 * g + 6, dL_dTw_local.x);
-                    atomicAdd(dL_dtransMat_ptr + 9 * g + 7, dL_dTw_local.y);
-                    atomicAdd(dL_dtransMat_ptr + 9 * g + 8, dL_dTw_local.z);
+                float* v_rgb_ptr = (float*)(v_rgb);
+                atomicAdd(v_rgb_ptr + 3 * g + 0, v_rgb_local.x);
+                atomicAdd(v_rgb_ptr + 3 * g + 1, v_rgb_local.y);
+                atomicAdd(v_rgb_ptr + 3 * g + 2, v_rgb_local.z);
+                if (gauss_weight_3d <= gauss_weight_2d) {
+                    float* v_ray_transformation_ptr = (float*)(v_ray_transformation);
+                    atomicAdd(v_ray_transformation_ptr + 9 * g + 0, v_u_transform_local.x);
+                    atomicAdd(v_ray_transformation_ptr + 9 * g + 1, v_u_transform_local.y);
+                    atomicAdd(v_ray_transformation_ptr + 9 * g + 2, v_u_transform_local.z);
+                    atomicAdd(v_ray_transformation_ptr + 9 * g + 3, v_v_transform_local.x);
+                    atomicAdd(v_ray_transformation_ptr + 9 * g + 4, v_v_transform_local.y);
+                    atomicAdd(v_ray_transformation_ptr + 9 * g + 5, v_v_transform_local.z);
+                    atomicAdd(v_ray_transformation_ptr + 9 * g + 6, v_w_transform_local.x);
+                    atomicAdd(v_ray_transformation_ptr + 9 * g + 7, v_w_transform_local.y);
+                    atomicAdd(v_ray_transformation_ptr + 9 * g + 8, v_w_transform_local.z);
 
                 } else {
                     float* v_mean2D_ptr = (float*)(v_mean2D);
                     atomicAdd(v_mean2D_ptr + 2 * g + 0, v_mean2D_local.x);
                     atomicAdd(v_mean2D_ptr + 2 * g + 1, v_mean2D_local.y);
                 }
-                atomicAdd(dL_dopacity + g, dL_dopacity_local);
+                atomicAdd(v_opacity + g, v_opacity_local);
             }
         }
     }
@@ -380,11 +381,11 @@ __device__ void build_H(
     const float4 & intrins,
     float tan_fovx,
     float tan_fovy,
-    const float* transMat,
+    const float* ray_transformation,
 
     // grad input
-    const float* dL_dtransMat,
-    // const float* dL_dnormal3D,
+    const float* v_ray_transformation,
+    // const float* v_normal3D,
 
     // grad output
     glm::vec3 & v_mean3D,
@@ -413,42 +414,42 @@ __device__ void build_H(
     glm::vec3 p_view = W * p_world + cam_pos;
     glm::mat3 M = glm::mat3(W * RS[0], W * RS[1], p_view);
 
-    glm::mat4x3 dL_dT = glm::mat4x3(
-        dL_dtransMat[0], dL_dtransMat[1], dL_dtransMat[2],
-        dL_dtransMat[3], dL_dtransMat[4], dL_dtransMat[5],
-        dL_dtransMat[6], dL_dtransMat[7], dL_dtransMat[8],
+    glm::mat4x3 v_T = glm::mat4x3(
+        v_ray_transformation[0], v_ray_transformation[1], v_ray_transformation[2],
+        v_ray_transformation[3], v_ray_transformation[4], v_ray_transformation[5],
+        v_ray_transformation[6], v_ray_transformation[7], v_ray_transformation[8],
         0.0, 0.0, 0.0
     );
 
-    glm::mat3x4 dL_dM_aug = glm::transpose(P) * glm::transpose(dL_dT);
-    glm::mat3 dL_dM = glm::mat3(
-        glm::vec3(dL_dM_aug[0]),
-        glm::vec3(dL_dM_aug[1]),
-        glm::vec3(dL_dM_aug[2])
+    glm::mat3x4 v_M_aug = glm::transpose(P) * glm::transpose(v_T);
+    glm::mat3 v_M = glm::mat3(
+        glm::vec3(v_M_aug[0]),
+        glm::vec3(v_M_aug[1]),
+        glm::vec3(v_M_aug[2])
     );
 
     glm::mat3 W_t = glm::transpose(W);
-    glm::mat3 dL_dRS= W_t * dL_dM;
-    glm::vec3 dL_dRS0 = dL_dRS[0];
-    glm::vec3 dL_dRS1 = dL_dRS[1];
-    glm::vec3 dL_dpw = dL_dRS[2];
-    // glm::vec3 dL_dtn = W_t * glm::vec3(dL_dnormal3D[0], dL_dnormal3D[1], dL_dnormal3D[2]);
-    glm::vec3 dL_dtn = W_t * glm::vec3(0.0, 0.0, 0.0);
+    glm::mat3 v_RS= W_t * v_M;
+    glm::vec3 v_RS0 = v_RS[0];
+    glm::vec3 v_RS1 = v_RS[1];
+    glm::vec3 v_intersectw = v_RS[2];
+    // glm::vec3 v_tn = W_t * glm::vec3(v_normal3D[0], v_normal3D[1], v_normal3D[2]);
+    glm::vec3 v_tn = W_t * glm::vec3(0.0, 0.0, 0.0);
 
     
-    glm::mat3 dL_dR = glm::mat3(
-        dL_dRS0 * glm::vec3(scale.x),
-        dL_dRS1 * glm::vec3(scale.y),
-        dL_dtn
+    glm::mat3 v_R = glm::mat3(
+        v_RS0 * glm::vec3(scale.x),
+        v_RS1 * glm::vec3(scale.y),
+        v_tn
     );
 
-    v_quat = quat_to_rotmat_vjp(quat, dL_dR);
+    v_quat = quat_to_rotmat_vjp(quat, v_R);
     v_scale = glm::vec2(
-        (float)glm::dot(dL_dRS0, R[0]),
-        (float)glm::dot(dL_dRS1, R[1])
+        (float)glm::dot(v_RS0, R[0]),
+        (float)glm::dot(v_RS1, R[1])
     );
 
-    v_mean3D = dL_dpw;
+    v_mean3D = v_intersectw;
 }
 
 
@@ -457,50 +458,54 @@ __device__ void build_AABB(
     const int * radii,
     const float W, 
     const float H,
-    const float * transMats,
+    const float * ray_transformations,
 
     // grad output
     float3 * v_mean2Ds,
-    float * dL_dtransMats
+    float * v_ray_transformations
 ) {
-    const float* transMat = transMats + 9 * idx;
+    const float* ray_transformation = ray_transformations + 9 * idx;
 
     const float3 v_mean2D = v_mean2Ds[idx];
     glm::mat4x3 T = glm::mat4x3(
-        transMat[0], transMat[1], transMat[2],
-        transMat[3], transMat[4], transMat[5],
-        transMat[6], transMat[7], transMat[8],
-        transMat[6], transMat[7], transMat[8]
+        ray_transformation[0], ray_transformation[1], ray_transformation[2],
+        ray_transformation[3], ray_transformation[4], ray_transformation[5],
+        ray_transformation[6], ray_transformation[7], ray_transformation[8],
+        ray_transformation[6], ray_transformation[7], ray_transformation[8]
     );
 
     float d = glm::dot(glm::vec3(1.0, 1.0, -1.0), T[3] * T[3]);
     glm::vec3 f = glm::vec3(1.0, 1.0, -1.0) * (1.0f / d);
 
+    // hello
+    // This is a test
+    // ok seems like vpn works?
+    // test test
     glm::vec3 p = glm::vec3(
         glm::dot(f, T[0] * T[3]),
         glm::dot(f, T[1] * T[3]),
         glm::dot(f, T[2] * T[3])
     );
 
-    glm::vec3 dL_dT0 = v_mean2D.x * f * T[3];
-    glm::vec3 dL_dT1 = v_mean2D.y * f * T[3];
-    glm::vec3 dL_dT3 = v_mean2D.x * f * T[0] + v_mean2D.y * f * T[1];
-    glm::vec3 dL_df = (v_mean2D.x * T[0] * T[3]) + (v_mean2D.y * T[1] * T[3]);
-    float dL_dd = glm::dot(dL_df, f) * (-1.0 / d);
+    glm::vec3 v_T0 = v_mean2D.x * f * T[3];
+    glm::vec3 v_T1 = v_mean2D.y * f * T[3];
+    glm::vec3 v_T3 = v_mean2D.x * f * T[0] + v_mean2D.y * f * T[1];
+    glm::vec3 v_f = (v_mean2D.x * T[0] * T[3]) + (v_mean2D.y * T[1] * T[3]);
+    float v_d = glm::dot(v_f, f) * (-1.0 / d);
     glm::vec3 dd_dT3 = glm::vec3(1.0, 1.0, -1.0) * T[3] * 2.0f;
-    dL_dT3 += dL_dd * dd_dT3;
-    dL_dtransMats[9 * idx + 0] += dL_dT0.x;
-    dL_dtransMats[9 * idx + 1] += dL_dT0.y;
-    dL_dtransMats[9 * idx + 2] += dL_dT0.z;
-    dL_dtransMats[9 * idx + 3] += dL_dT1.x;
-    dL_dtransMats[9 * idx + 4] += dL_dT1.y;
-    dL_dtransMats[9 * idx + 5] += dL_dT1.z;
-    dL_dtransMats[9 * idx + 6] += dL_dT3.x;
-    dL_dtransMats[9 * idx + 7] += dL_dT3.y;
-    dL_dtransMats[9 * idx + 8] += dL_dT3.z;
+    v_T3 += v_d * dd_dT3;
+    v_ray_transformations[9 * idx + 0] += v_T0.x;
+    v_ray_transformations[9 * idx + 1] += v_T0.y;
+    v_ray_transformations[9 * idx + 2] += v_T0.z;
+    v_ray_transformations[9 * idx + 3] += v_T1.x;
+    v_ray_transformations[9 * idx + 4] += v_T1.y;
+    v_ray_transformations[9 * idx + 5] += v_T1.z;
+    v_ray_transformations[9 * idx + 6] += v_T3.x;
+    v_ray_transformations[9 * idx + 7] += v_T3.y;
+    v_ray_transformations[9 * idx + 8] += v_T3.z;
 
     // just use to hack the projected 2D gradient here.
-    float z = transMat[8];
-    v_mean2Ds[idx].x = dL_dtransMats[9 * idx + 2] * z * W; // to ndc
-    v_mean2Ds[idx].y = dL_dtransMats[9 * idx + 5] * z * H; // to ndc
+    float z = ray_transformation[8];
+    v_mean2Ds[idx].x = v_ray_transformations[9 * idx + 2] * z * W; // to ndc
+    v_mean2Ds[idx].y = v_ray_transformations[9 * idx + 5] * z * H; // to ndc
 }

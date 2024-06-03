@@ -29,7 +29,7 @@ __global__ void project_gaussians_forward_kernel(
     float* __restrict__ depths,
     int* __restrict__ radii,
     int32_t* __restrict__ num_tiles_hit,
-    float* __restrict__ transMats
+    float* __restrict__ ray_transformations
 ) {
     // printf("Here\n");
     unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
@@ -62,7 +62,7 @@ __global__ void project_gaussians_forward_kernel(
     // In 3DGS we build 3D covariance matrix and project 
     // Here we build transformation matrix M in 2DGS
     //====== 2DGS Specific ======//
-    float* cur_transMats = &(transMats[9 * idx]);
+    float* cur_ray_transformations = &(ray_transformations[9 * idx]);
     bool ok;
     float3 normal;
     float2 center;
@@ -74,7 +74,7 @@ __global__ void project_gaussians_forward_kernel(
         scale,
         quat,
         viewmat,
-        cur_transMats,
+        cur_ray_transformations,
         normal,
         center,
         radius
@@ -222,7 +222,7 @@ __global__ void rasterize_forward(
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
-    const float* __restrict__ transMats,
+    const float* __restrict__ ray_transformations,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
     float* __restrict__ final_Ts,
@@ -262,9 +262,9 @@ __global__ void rasterize_forward(
     __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
 
     //====== 2D Splatting ======//
-    __shared__ float3 Tu_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 Tv_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 Tw_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 u_transforma_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 v_transforma_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 w_transforma_batch[MAX_BLOCK_SIZE];
 
     // current visibility left to render
     float T = 1.f;
@@ -298,9 +298,9 @@ __global__ void rasterize_forward(
             const float2 xy = xys[g_id];
             const float opac = opacities[g_id];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
-            Tu_batch[tr] = {transMats[9 * g_id + 0], transMats[9 * g_id + 1], transMats[9 * g_id + 2]};
-            Tv_batch[tr] = {transMats[9 * g_id + 3], transMats[9 * g_id + 4], transMats[9 * g_id + 5]};
-            Tw_batch[tr] = {transMats[9 * g_id + 6], transMats[9 * g_id + 7], transMats[9 * g_id + 8]};
+            u_transforma_batch[tr] = {ray_transformations[9 * g_id + 0], ray_transformations[9 * g_id + 1], ray_transformations[9 * g_id + 2]};
+            v_transforma_batch[tr] = {ray_transformations[9 * g_id + 3], ray_transformations[9 * g_id + 4], ray_transformations[9 * g_id + 5]};
+            w_transforma_batch[tr] = {ray_transformations[9 * g_id + 6], ray_transformations[9 * g_id + 7], ray_transformations[9 * g_id + 8]};
         }
 
         // Wait for other threads to collect the gaussians in batch
@@ -313,37 +313,37 @@ __global__ void rasterize_forward(
             const float opac = xy_opac.z;
 
             // ======================= place where 2D Gaussian changes take place ========== //
-            float3 Tu = Tu_batch[t];
-            float3 Tv = Tv_batch[t];
-            float3 Tw = Tw_batch[t];
+            float3 u_transforma = u_transforma_batch[t];
+            float3 v_transforma = v_transforma_batch[t];
+            float3 w_transforma = w_transforma_batch[t];
 
-            float3 k = {-Tu.x + px * Tw.x, -Tu.y + px * Tw.y, -Tu.z + px * Tw.z};
-            float3 l = {-Tv.x + py * Tw.x, -Tv.y + py * Tw.y, -Tv.z + py * Tw.z};
+            float3 h_u = {-u_transforma.x + px * w_transforma.x, -u_transforma.y + px * w_transforma.y, -u_transforma.z + px * w_transforma.z};
+            float3 h_v = {-v_transforma.x + py * w_transforma.x, -v_transforma.y + py * w_transforma.y, -v_transforma.z + py * w_transforma.z};
              
             // cross product of two planes is a line
-            float3 p = cross_product(k, l);
+            float3 intersect = cross_product(h_u, h_v);
 
             // There is no intersection
             float2 s;
-            if (p.z == 0.0) { 
+            if (intersect.z == 0.0) { 
                 continue;
             } else {
                 // 3D homogeneous point to 2d point on the splat
-                s = {p.x / p.z, p.y / p.z};
+                s = {intersect.x / intersect.z, intersect.y / intersect.z};
             }
             
             // 3D distance. Compute Mahalanobis distance in the canonical splat space
-            float rho_3d = (s.x * s.x + s.y * s.y);
+            float gauss_weight_3d = (s.x * s.x + s.y * s.y);
 
             // Low pass filter Botsch et al. [2005]. Eq. (11) from 2DGS paper
             float x = xy_opac.x;
             float y = xy_opac.y;
             float2 d = {x - px, y - py};
             // 2d screen distance
-            float rho_2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
-            float rho = min(rho_3d, rho_2d);
+            float gauss_weight_2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
+            float gauss_weight = min(gauss_weight_3d, gauss_weight_2d);
 
-            const float sigma = 0.5f * rho;
+            const float sigma = 0.5f * gauss_weight;
             const float alpha = min(0.999f, opac * __expf(-sigma));
 
             if (sigma < 0.f || alpha < 1.f / 255.f) {
@@ -399,7 +399,7 @@ __device__ bool build_transform_and_AABB(
     const float3 __restrict__ scale,
     const float4 __restrict__ quat,
     const float* __restrict__ viewmat,
-    float* transMat,
+    float* ray_transformation,
     float3& normal,
     float2& center,
     float& radius
@@ -426,15 +426,15 @@ __device__ bool build_transform_and_AABB(
     );
     glm::mat3 M = glm::transpose(WH) * inverse_intrinsics;
 
-    transMat[0] = M[0].x;
-	transMat[1] = M[0].y;
-	transMat[2] = M[0].z;
-	transMat[3] = M[1].x;
-	transMat[4] = M[1].y;
-	transMat[5] = M[1].z;
-	transMat[6] = M[2].x;
-	transMat[7] = M[2].y;
-	transMat[8] = M[2].z;
+    ray_transformation[0] = M[0].x;
+	ray_transformation[1] = M[0].y;
+	ray_transformation[2] = M[0].z;
+	ray_transformation[3] = M[1].x;
+	ray_transformation[4] = M[1].y;
+	ray_transformation[5] = M[1].z;
+	ray_transformation[6] = M[2].x;
+	ray_transformation[7] = M[2].y;
+	ray_transformation[8] = M[2].z;
     
     // Compute AABB
     glm::vec3 temp_point = glm::vec3(1.0f, 1.0f, -1.0f);

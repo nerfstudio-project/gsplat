@@ -239,7 +239,7 @@ class SimpleTrainer:
                 radii,
                 num_tiles_hit,
                 cov3d,
-                transMats
+                ray_transformations
             )  = project_gaussians(
                 self.means,
                 self.scales,
@@ -266,7 +266,7 @@ class SimpleTrainer:
                 depths,
                 radii,
                 num_tiles_hit,
-                transMats,
+                ray_transformations,
                 # self.rgbs,
                 # self.opacities,
                 torch.sigmoid(self.rgbs),

@@ -19,7 +19,7 @@ def rasterize_gaussians(
     depths: Float[Tensor, "*batch 1"],
     radii: Float[Tensor, "*batch 1"],
     num_tiles_hit: Int[Tensor, "*batch 1"],
-    transMats: Float[Tensor, "*batch 3 3"],
+    ray_transformations: Float[Tensor, "*batch 3 3"],
     colors: Float[Tensor, "*batch channels"],
     opacity: Float[Tensor, "*batch 1"],
     img_height: int,
@@ -78,7 +78,7 @@ def rasterize_gaussians(
         depths.contiguous(),
         radii.contiguous(),
         # conics.contiguous(),
-        transMats.contiguous(),
+        ray_transformations.contiguous(),
         num_tiles_hit.contiguous(),
         colors.contiguous(),
         opacity.contiguous(),
@@ -100,7 +100,7 @@ class _RasterizeGaussians(Function):
         depths: Float[Tensor, "*batch 1"],
         radii: Float[Tensor, "*batch 1"],
         # conics: Float[Tensor, "*batch 3"],
-        transMats: Float[Tensor, "*batch 3 3"],
+        ray_transformations: Float[Tensor, "*batch 3 3"],
         num_tiles_hit: Int[Tensor, "*batch 1"],
         colors: Float[Tensor, "*batch channels"],
         opacity: Float[Tensor, "*batch 1"],
@@ -166,7 +166,7 @@ class _RasterizeGaussians(Function):
                 tile_bins,
                 xys,
                 # conics,
-                transMats,
+                ray_transformations,
                 colors,
                 opacity,
                 background,
@@ -181,7 +181,7 @@ class _RasterizeGaussians(Function):
             gaussian_ids_sorted,
             tile_bins,
             xys,
-            transMats,
+            ray_transformations,
             colors,
             opacity,
             background,
@@ -212,7 +212,7 @@ class _RasterizeGaussians(Function):
             tile_bins,
             xys,
             # conics,
-            transMats,
+            ray_transformations,
             colors,
             opacity,
             background,
@@ -224,7 +224,7 @@ class _RasterizeGaussians(Function):
             v_xy = torch.zeros_like(xys)
             v_xy_abs = torch.zeros_like(xys)
             # v_conic = torch.zeros_like(conics)
-            v_transMats = torch.zeros_like(transMats)
+            v_ray_transformations = torch.zeros_like(ray_transformations)
             v_colors = torch.zeros_like(colors)
             v_opacity = torch.zeros_like(opacity)
 
@@ -235,14 +235,14 @@ class _RasterizeGaussians(Function):
                 # rasterize_fn = _C.nd_rasterize_backward
                 rasterize_fn = _C.rasterize_backward
 
-            v_xy, v_xy_abs, v_transMats, v_colors, v_opacity = rasterize_fn(
+            v_xy, v_xy_abs, v_ray_transformations, v_colors, v_opacity = rasterize_fn(
                 img_height,
                 img_width,
                 ctx.block_width,
                 gaussian_ids_sorted,
                 tile_bins,
                 xys,
-                transMats,
+                ray_transformations,
                 colors,
                 opacity,
                 background,
@@ -261,7 +261,7 @@ class _RasterizeGaussians(Function):
 
         # print("Here")
         # print(v_xy)
-        # print(v_transMats)
+        # print(v_ray_transformations)
         # print(v_colors)
         # print(v_opacity)
 
@@ -270,7 +270,7 @@ class _RasterizeGaussians(Function):
             None,  # depths
             None,  # radii
             # v_conic,  # conics
-            v_transMats, # transMats
+            v_ray_transformations, # ray_transformations
             None,  # num_tiles_hit
             v_colors,  # colors
             v_opacity,  # opacity

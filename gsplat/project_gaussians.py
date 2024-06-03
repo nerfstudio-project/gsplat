@@ -106,7 +106,7 @@ class _ProjectGaussians(Function):
             depths,
             radii,
             num_tiles_hit,
-            transMats
+            ray_transformations
         ) = _C.project_gaussians_forward(
             num_points,
             means3d,
@@ -142,10 +142,10 @@ class _ProjectGaussians(Function):
             viewmat,
             cov3d,
             radii,
-            transMats
+            ray_transformations
         )
         # pdb.set_trace()
-        return (xys, depths, radii, num_tiles_hit, cov3d, transMats)
+        return (xys, depths, radii, num_tiles_hit, cov3d, ray_transformations)
 
     @staticmethod
     def backward(
@@ -155,7 +155,7 @@ class _ProjectGaussians(Function):
         dL_dradii,
         dL_dnum_tile_hit,
         dL_dcov3d,
-        dL_dtransMats
+        dL_dray_transformations
         # v_xys,
         # v_depths,
         # v_radii,
@@ -173,7 +173,7 @@ class _ProjectGaussians(Function):
             viewmat,
             cov3d,
             radii,
-            transMats
+            ray_transformations
         ) = ctx.saved_tensors
 
         # pdb.set_trace()
@@ -184,7 +184,7 @@ class _ProjectGaussians(Function):
             ctx.glob_scale,
             quats,
             viewmat,
-            transMats,
+            ray_transformations,
             ctx.fx,
             ctx.fy,
             ctx.cx,
@@ -193,7 +193,7 @@ class _ProjectGaussians(Function):
             ctx.img_width,
             cov3d,
             radii,
-            dL_dtransMats,
+            dL_dray_transformations,
             # dL_dnormal3Ds
             # conics,
             # compensation,

@@ -19,7 +19,7 @@ __global__ void project_gaussians_forward_kernel(
     float* __restrict__ depths,
     int* __restrict__ radii,
     int32_t* __restrict__ num_tiles_hit,
-    float* __restrict__ transMats
+    float* __restrict__ ray_transformations
 );
 
 // compute output color image from binned and sorted gaussians
@@ -29,7 +29,7 @@ __global__ void rasterize_forward(
     const int32_t* __restrict__ gaussian_ids_sorted,
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
-    const float* __restrict__ transMats,
+    const float* __restrict__ ray_transformations,
     const float3* __restrict__ colors,
     const float* __restrict__ opacities,
     float* __restrict__ final_Ts,
@@ -88,7 +88,7 @@ __device__ bool build_transform_and_AABB(
     const float3 __restrict__ scale,
     const float4 __restrict__ quat,
     const float* __restrict__ viewmat,
-    float* transMat,
+    float* ray_transformation,
     float3& normal,
     float2& center,
     float& radius
@@ -100,12 +100,12 @@ __device__ bool build_transform_and_AABB(
 //     const float3 __restrict__ scale,
 //     const float4 __restrict__ quat,
 //     const float* __restrict__ viewmat,
-//     float* transMat,
+//     float* ray_transformation,
 //     float3 &normal
 // );
 
 // __device__ bool build_AABB(
-//     const float *transMat,
+//     const float *ray_transformation,
 //     float2 & center,
 //     float2 & extent
 // );

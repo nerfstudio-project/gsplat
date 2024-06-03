@@ -76,7 +76,7 @@ project_gaussians_backward_tensor(
     const float glob_scale,
     torch::Tensor &quats,
     torch::Tensor &viewmat,
-    torch::Tensor &transMats,
+    torch::Tensor &ray_transformations,
     const float fx,
     const float fy,
     const float cx,
@@ -85,7 +85,7 @@ project_gaussians_backward_tensor(
     const unsigned img_width,
     torch::Tensor &cov3d,
     torch::Tensor &radii,
-    torch::Tensor &dL_dtransMats
+    torch::Tensor &dL_dray_transformations
     // torch::Tensor &dL_dnormal3Ds
     // torch::Tensor &conics,
     // torch::Tensor &compensation,
@@ -178,7 +178,7 @@ std::
     tuple<
         torch::Tensor, // dL_dxy
         torch::Tensor, // dL_dxy_abs
-        torch::Tensor, // dL_dtransMats
+        torch::Tensor, // dL_dray_transformations
         torch::Tensor, // dL_dcolors
         torch::Tensor  // dL_dopacity
         >
@@ -190,7 +190,7 @@ std::
         const torch::Tensor &tile_bins,
         const torch::Tensor &xys,
         // const torch::Tensor &conics,
-        const torch::Tensor &transMats,
+        const torch::Tensor &ray_transformations,
         const torch::Tensor &colors,
         const torch::Tensor &opacities,
         const torch::Tensor &background,
