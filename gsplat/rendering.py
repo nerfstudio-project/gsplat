@@ -265,6 +265,9 @@ def rasterization(
         colors = (
             colors[cindices.long()] if packed else colors.expand(C, *([-1] * colors.dim()))
         )  # [nnz, D] or [C, N, 3]
+    else:
+        if packed:
+            colors = colors[rindices.long(), cindices.long(), :]
     if sh_degree is not None:  # SH coefficients
         camtoworlds = torch.inverse(viewmats)
         if packed:
