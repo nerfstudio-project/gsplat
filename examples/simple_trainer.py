@@ -22,29 +22,11 @@ from utils import (
     normalized_quat_to_rotmat,
     rgb_to_sh,
     set_random_seed,
-    rotation_6d_to_matrix,
+    CameraOptModule,
+    AppearanceOptModule,
 )
 
 from gsplat.rendering import rasterization
-
-
-def _transform_pose(
-    pose_embed: Tensor, camtoworlds: Tensor, embed_ids: Tensor
-) -> Tensor:
-    # camtoworlds: (..., 4, 4), embed_ids: (...)
-    if embed_ids is None:
-        return camtoworlds
-    pose_deltas = pose_embed(embed_ids)
-    # 3D positions + 6D rotations
-    dx, drot = pose_deltas[..., :3], pose_deltas[..., 3:]
-    # Identity rotation in 6D representation
-    identity = torch.tensor([1.0, 0.0, 0.0, 0.0, 1.0, 0.0], device=embed_ids.device)
-    identity = identity.expand(*drot.shape[:-1], -1)
-    rot = rotation_6d_to_matrix(drot + identity)  # (..., 3, 3)
-    transform = torch.eye(4, device=embed_ids.device).repeat((*rot.shape[:-2], 1, 1))
-    transform[..., :3, :3] = rot
-    transform[..., :3, 3] = dx
-    return torch.matmul(camtoworlds, transform)
 
 
 @dataclass
@@ -133,6 +115,15 @@ class Config:
     # Add noise to camera extrinsics. This is only to test the camera pose optimization.
     pose_noise: float = 0.0
 
+    # Enable appearance optimization. (experimental)
+    app_opt: bool = False
+    # Appearance embedding dimension
+    app_embed_dim: int = 16
+    # Learning rate for appearance optimization
+    app_opt_lr: float = 1e-3
+    # Regularization for appearance optimization as weight decay
+    app_opt_reg: float = 1e-6
+
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
         self.save_steps = [int(i * factor) for i in self.save_steps]
@@ -152,6 +143,7 @@ def create_splats_with_optimizers(
     init_opacity: float = 0.1,
     sparse_grad: bool = False,
     batch_size: int = 1,
+    feature_dim: Optional[int] = None,
     device: str = "cuda",
 ) -> Tuple[torch.nn.ParameterDict, torch.optim.Optimizer]:
     N = points.shape[0]
@@ -163,39 +155,39 @@ def create_splats_with_optimizers(
     quats = torch.rand((N, 4))  # [N, 4]
     opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
 
-    # Initialize the GS color
-    colors = torch.zeros((N, (sh_degree + 1) ** 2, 3))  # [N, K, 3]
-    colors[:, 0, :] = rgb_to_sh(rgbs)
+    params = [
+        # name, value, lr
+        ("means3d", torch.nn.Parameter(points), 1.6e-4 * scene_scale),
+        ("scales", torch.nn.Parameter(scales), 5e-3),
+        ("quats", torch.nn.Parameter(quats), 1e-3),
+        ("opacities", torch.nn.Parameter(opacities), 5e-2),
+    ]
 
-    splats = torch.nn.ParameterDict(
-        {
-            "means3d": torch.nn.Parameter(points),  # [N, 3]
-            "scales": torch.nn.Parameter(scales),  # [N, 3]
-            "quats": torch.nn.Parameter(quats),  # [N, 4]
-            "opacities": torch.nn.Parameter(opacities),  # [N,]
-            "sh0": torch.nn.Parameter(colors[:, :1, :]),  # [N, 1, 3]
-            "shN": torch.nn.Parameter(colors[:, 1:, :]),  # [N, K-1, 3]
-        }
-    ).to(device)
+    if feature_dim is None:
+        # color is SH coefficients. 
+        colors = torch.zeros((N, (sh_degree + 1) ** 2, 3))  # [N, K, 3]
+        colors[:, 0, :] = rgb_to_sh(rgbs)
+        params.append(("sh0", torch.nn.Parameter(colors[:, :1, :]), 2.5e-3))
+        params.append(("shN", torch.nn.Parameter(colors[:, 1:, :]), 2.5e-3 / 20))
+    else:
+        # features will be used for appearance and view-dependent shading
+        features = torch.rand(N, feature_dim) # [N, feature_dim]
+        params.append(("features", torch.nn.Parameter(features), 2.5e-3))
+        colors = torch.logit(rgbs)  # [N, 3]
+        params.append(("colors", torch.nn.Parameter(colors), 2.5e-3))
+
+    splats = torch.nn.ParameterDict({n: v for n, v, _ in params}).to(device)
     # Scale learning rate based on batch size, reference:
     # https://www.cs.princeton.edu/~smalladi/blog/2024/01/22/SDEs-ScalingRules/
     # Note that this would not make the training exactly equivalent, see
     # https://arxiv.org/pdf/2402.18824v1
-    sqrt_batch_size = math.sqrt(batch_size)
     optimizers = [
         (torch.optim.SparseAdam if sparse_grad else torch.optim.Adam)(
-            [{"params": splats[name], "lr": lr * sqrt_batch_size, "name": name}],
-            eps=1e-15 / sqrt_batch_size,
+            [{"params": splats[name], "lr": lr * math.sqrt(batch_size), "name": name}],
+            eps=1e-15 / math.sqrt(batch_size),
             betas=(1 - batch_size * (1 - 0.9), 1 - batch_size * (1 - 0.999)),
         )
-        for name, lr in [
-            ("means3d", 1.6e-4 * scene_scale),
-            ("scales", 5e-3),
-            ("quats", 1e-3),
-            ("opacities", 5e-2),
-            ("sh0", 2.5e-3),
-            ("shN", 2.5e-3 / 20),
-        ]
+        for name, _, lr in params
     ]
     return splats, optimizers
 
@@ -233,6 +225,7 @@ class Runner:
         print("Scene scale:", self.scene_scale)
 
         # Model
+        feature_dim = 32 if cfg.app_opt else None
         self.splats, self.optimizers = create_splats_with_optimizers(
             torch.from_numpy(self.parser.points).float(),
             torch.from_numpy(self.parser.points_rgb / 255.0).float(),
@@ -241,26 +234,46 @@ class Runner:
             init_opacity=cfg.init_opa,
             sparse_grad=cfg.sparse_grad,
             batch_size=cfg.batch_size,
+            feature_dim=feature_dim,
             device=self.device,
         )
         print("Model initialized. Number of GS:", len(self.splats["means3d"]))
 
         self.pose_optimizers = []
         if cfg.pose_opt:
-            # 3D positions + 6D rotations
-            self.pose_embed = torch.nn.Embedding(len(self.trainset), 9).to(self.device)
-            torch.nn.init.zeros_(self.pose_embed.weight)
+            self.pose_adjust = CameraOptModule(len(self.trainset)).to(self.device)
+            self.pose_adjust.zero_init()
             self.pose_optimizers = [
                 torch.optim.Adam(
-                    self.pose_embed.parameters(),
+                    self.pose_adjust.parameters(),
                     lr=cfg.pose_opt_lr * math.sqrt(cfg.batch_size),
                     weight_decay=cfg.pose_opt_reg,
                 )
             ]
 
         if cfg.pose_noise > 0.0:
-            self.pose_noise = torch.nn.Embedding(len(self.trainset), 9).to(self.device)
-            torch.nn.init.normal_(self.pose_noise.weight, std=cfg.pose_noise)
+            self.pose_perturb = CameraOptModule(len(self.trainset)).to(self.device)
+            self.pose_perturb.random_init(cfg.pose_noise)
+
+        self.app_optimizers = []
+        if cfg.app_opt:
+            self.app_module = AppearanceOptModule(
+                len(self.trainset), feature_dim, cfg.app_embed_dim, cfg.sh_degree
+            ).to(self.device)
+            # initialize the last layer to be zero so that the initial output is zero.
+            torch.nn.init.zeros_(self.app_module.color_head[-1].weight)
+            torch.nn.init.zeros_(self.app_module.color_head[-1].bias)
+            self.app_optimizers = [
+                torch.optim.Adam(
+                    self.app_module.embeds.parameters(),
+                    lr=cfg.app_opt_lr * math.sqrt(cfg.batch_size) * 10.0,
+                    weight_decay=cfg.app_opt_reg,
+                ),
+                torch.optim.Adam(
+                    self.app_module.color_head.parameters(),
+                    lr=cfg.app_opt_lr * math.sqrt(cfg.batch_size),
+                )
+            ]
 
         # Losses & Metrics.
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
@@ -294,7 +307,22 @@ class Runner:
         quats = self.splats["quats"]  # [N, 4]
         scales = torch.exp(self.splats["scales"])  # [N, 3]
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
-        colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
+
+        C = len(camtoworlds)
+        N = len(means)
+
+        image_ids = kwargs.pop("image_ids", None)
+        if self.cfg.app_opt:
+            colors = self.app_module(
+                features=self.splats["features"],
+                embed_ids=image_ids,
+                dirs=means[None, :, :] - camtoworlds[:, None, :3, 3],
+                sh_degree=kwargs.pop("sh_degree", self.cfg.sh_degree)
+            )
+            colors = colors + self.splats["colors"]
+            colors = torch.sigmoid(colors)
+        else:
+            colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
         render_colors, render_alphas, info = rasterization(
@@ -372,10 +400,10 @@ class Runner:
             height, width = pixels.shape[1:3]
 
             if cfg.pose_noise:
-                camtoworlds = _transform_pose(self.pose_noise, camtoworlds, image_ids)
+                camtoworlds = self.pose_perturb(camtoworlds, image_ids)
 
             if cfg.pose_opt:
-                camtoworlds = _transform_pose(self.pose_embed, camtoworlds, image_ids)
+                camtoworlds = self.pose_adjust(camtoworlds, image_ids)
 
             # sh schedule
             sh_degree_to_use = min(step // cfg.sh_degree_interval, cfg.sh_degree)
@@ -389,6 +417,7 @@ class Runner:
                 sh_degree=sh_degree_to_use,
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
+                image_ids=image_ids,
                 backgrounds=(
                     torch.rand(1, 3, device=device) if cfg.random_bkgd else None
                 ),
@@ -410,7 +439,7 @@ class Runner:
                 desc += f"pose err={pose_err.item():.6f}| "
             pbar.set_description(desc)
 
-            # # write images
+            # # write images (gt and render)
             # if step % 100 == 0:
             #     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
             #     canvas = canvas.reshape(-1, *canvas.shape[2:])
@@ -418,6 +447,30 @@ class Runner:
             #         f"{self.render_dir}/train.png",
             #         (canvas * 255).astype(np.uint8),
             #     )
+
+            # # write images (multiple renders with different appearance)
+            # if step % 400 == 0:
+            #     with torch.no_grad():
+            #         colors_list = []
+            #         for i in range(4):
+            #             colors, _, _ = self.rasterize_splats(
+            #                 camtoworlds=camtoworlds,
+            #                 Ks=Ks,
+            #                 width=width,
+            #                 height=height,
+            #                 sh_degree=sh_degree_to_use,
+            #                 near_plane=cfg.near_plane,
+            #                 far_plane=cfg.far_plane,
+            #                 image_ids=torch.randint(len(self.trainset), (1,), device=device),
+            #             )
+            #             colors_list.append(colors)
+            #         colors = torch.cat(colors_list, dim=0)
+            #         canvas = colors.detach().cpu().numpy()
+            #         canvas = canvas.reshape(-1, *canvas.shape[2:])
+            #         imageio.imwrite(
+            #             f"{self.render_dir}/train.png",
+            #             (canvas * 255).astype(np.uint8),
+            #         )
 
             # update running stats for prunning & growing
             if step < cfg.refine_stop_iter:
@@ -476,7 +529,7 @@ class Runner:
                     self.running_stats["count"].zero_()
 
                 if step % cfg.reset_every == 0:
-                    self.reset_opa()
+                    self.reset_opa(cfg.prune_opa * 2.0)
 
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:
@@ -498,6 +551,9 @@ class Runner:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
             for optimizer in self.pose_optimizers:
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+            for optimizer in self.app_optimizers:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
             for scheduler in scheulers:

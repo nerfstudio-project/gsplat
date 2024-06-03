@@ -66,7 +66,6 @@ class AppearanceOptModule(torch.nn.Module):
             layers.append(torch.nn.Linear(mlp_width, mlp_width))
             layers.append(torch.nn.ReLU(inplace=True))
         layers.append(torch.nn.Linear(mlp_width, 3))
-        layers.append(torch.nn.Sigmoid())
         self.color_head = torch.nn.Sequential(*layers)
     
     def forward(self, features: Tensor, embed_ids: Tensor, dirs: Tensor, sh_degree: int) -> Tensor:
@@ -97,7 +96,10 @@ class AppearanceOptModule(torch.nn.Module):
         sh_bases = torch.zeros(C, N, num_bases, device=features.device) # [C, N, K]
         sh_bases[:, :, :num_bases_to_use] = _eval_sh_bases_fast(num_bases_to_use, dirs)
         # Get colors
-        h = torch.cat([embeds, features, sh_bases], dim=-1) # [C, N, D1 + D2 + K]
+        if self.embed_dim > 0:
+            h = torch.cat([embeds, features, sh_bases], dim=-1) # [C, N, D1 + D2 + K]
+        else:
+            h = torch.cat([features, sh_bases], dim=-1)
         colors = self.color_head(h)
         return colors
 
