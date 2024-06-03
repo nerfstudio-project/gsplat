@@ -197,7 +197,12 @@ def rasterization(
 
     if sh_degree is None:
         # treat colors as post-activation values
-        assert colors.dim() == 2 and colors.shape[0] == N, colors.shape
+        # colors should be in shape [N, D] or (C, N, D) (silently support)
+        assert (
+            colors.dim() == 2 and colors.shape[0] == N
+        ) or (
+            colors.dim() == 3 and colors.shape[:2] == (C, N)
+        ), colors.shape
     else:
         # treat colors as SH coefficients. Allowing for activating partial SH bands
         assert (
@@ -256,9 +261,10 @@ def rasterization(
 
     # TODO: SH also suport N-D.
     # Compute the per-view colors
-    colors = (
-        colors[cindices.long()] if packed else colors.expand(C, *([-1] * colors.dim()))
-    )  # [nnz, D] or [C, N, 3]
+    if not (colors.dim() == 3 and sh_degree is None): # silently support [C, N, D] color.
+        colors = (
+            colors[cindices.long()] if packed else colors.expand(C, *([-1] * colors.dim()))
+        )  # [nnz, D] or [C, N, 3]
     if sh_degree is not None:  # SH coefficients
         camtoworlds = torch.inverse(viewmats)
         if packed:
