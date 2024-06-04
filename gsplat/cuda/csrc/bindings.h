@@ -7,6 +7,7 @@
 #include <torch/extension.h>
 #include <tuple>
 #include <c10/cuda/CUDAGuard.h>
+//
 
 #define CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x)                                                    \

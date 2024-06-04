@@ -295,7 +295,7 @@ class SimpleTrainer:
                 frames.append((out_img.detach().cpu().numpy() * 255).astype(np.uint8))
 
             # break
-
+        #Test
         if save_imgs:
             # save them as a gif with PIL
             frames = [Image.fromarray(frame) for frame in frames]
