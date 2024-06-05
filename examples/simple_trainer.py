@@ -1,9 +1,9 @@
 import json
+import math
 import os
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
-import math
 
 import imageio
 import numpy as np
@@ -18,12 +18,12 @@ from torch import Tensor
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from utils import (
+    AppearanceOptModule,
+    CameraOptModule,
     knn,
     normalized_quat_to_rotmat,
     rgb_to_sh,
     set_random_seed,
-    CameraOptModule,
-    AppearanceOptModule,
 )
 
 from gsplat.rendering import rasterization
@@ -536,14 +536,14 @@ class Runner:
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:
                 assert cfg.packed, "Sparse gradients only work with packed mode."
-                cindices = info["cindices"]
+                gaussian_ids = info["gaussian_ids"]
                 for k in self.splats.keys():
                     grad = self.splats[k].grad
                     if grad is None or grad.is_sparse:
                         continue
                     self.splats[k].grad = torch.sparse_coo_tensor(
-                        indices=cindices[None],  # [1, nnz]
-                        values=grad[cindices],  # [nnz, ...]
+                        indices=gaussian_ids[None],  # [1, nnz]
+                        values=grad[gaussian_ids],  # [nnz, ...]
                         size=self.splats[k].size(),  # [N, ...]
                         is_coalesced=len(Ks) == 1,
                     )
@@ -603,7 +603,7 @@ class Runner:
         grads[..., 1] *= info["height"] / 2.0 * cfg.batch_size
         if cfg.packed:
             # grads is [nnz, 2]
-            gs_ids = info["cindices"]  # [nnz] or None
+            gs_ids = info["gaussian_ids"]  # [nnz] or None
             self.running_stats["grad2d"].index_add_(0, gs_ids, grads.norm(dim=-1))
             self.running_stats["count"].index_add_(0, gs_ids, torch.ones_like(gs_ids))
         else:

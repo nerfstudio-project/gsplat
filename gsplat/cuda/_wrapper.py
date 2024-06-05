@@ -164,7 +164,7 @@ def projection(
         an indicator, in which zero radii means the corresponding elements are invalid in
         the output tensors and will be ignored in the next rasterization process. If `packed=True`,
         the output tensors will be packed into a flattened tensor, in which all elements are valid.
-        In this case, a `rindices` tensor and `cindices` tensor will be returned to indicate the
+        In this case, a `camera_ids` tensor and `gaussian_ids` tensor will be returned to indicate the
         row (camera) and column (Gaussian) indices of the packed flattened tensor, which is essentially
         following the COO sparse tensor format.
 
@@ -198,8 +198,8 @@ def projection(
 
         If `packed` is True:
 
-        - **rindices**. The row indices of the projected Gaussians. Int32 tensor of shape [nnz].
-        - **cindices**. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].
+        - **camera_ids**. The row indices of the projected Gaussians. Int32 tensor of shape [nnz].
+        - **gaussian_ids**. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].
         - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz].
         - **means**. Projected Gaussian means in 2D. [nnz, 2]
         - **depths**. The z-depth of the projected Gaussians. [nnz]
@@ -281,8 +281,8 @@ def isect_tiles(
     sort: bool = True,
     packed: bool = False,
     n_cameras: Optional[int] = None,
-    rindices: Optional[Tensor] = None,
-    cindices: Optional[Tensor] = None,
+    camera_ids: Optional[Tensor] = None,
+    gaussian_ids: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """Maps projected Gaussians to intersecting tiles.
 
@@ -296,8 +296,8 @@ def isect_tiles(
         sort: If True, the returned intersections will be sorted by the intersection ids. Default: True.
         packed: If True, the input tensors are packed. Default: False.
         n_cameras: Number of cameras. Required if packed is True.
-        rindices: The row indices of the projected Gaussians. Required if packed is True.
-        cindices: The column indices of the projected Gaussians. Required if packed is True.
+        camera_ids: The row indices of the projected Gaussians. Required if packed is True.
+        gaussian_ids: The column indices of the projected Gaussians. Required if packed is True.
 
     Returns:
         A tuple:
@@ -315,11 +315,11 @@ def isect_tiles(
         assert means2d.shape == (nnz, 2), means2d.size()
         assert radii.shape == (nnz,), radii.size()
         assert depths.shape == (nnz,), depths.size()
-        assert rindices is not None, "rindices is required if packed is True"
-        assert cindices is not None, "cindices is required if packed is True"
+        assert camera_ids is not None, "camera_ids is required if packed is True"
+        assert gaussian_ids is not None, "gaussian_ids is required if packed is True"
         assert n_cameras is not None, "n_cameras is required if packed is True"
-        rindices = rindices.contiguous()
-        cindices = cindices.contiguous()
+        camera_ids = camera_ids.contiguous()
+        gaussian_ids = gaussian_ids.contiguous()
         C = n_cameras
 
     else:
@@ -332,8 +332,8 @@ def isect_tiles(
         means2d.contiguous(),
         radii.contiguous(),
         depths.contiguous(),
-        rindices,
-        cindices,
+        camera_ids,
+        gaussian_ids,
         C,
         tile_size,
         tile_width,
@@ -925,8 +925,8 @@ class _ProjectionPacked(torch.autograd.Function):
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         (
             indptr,
-            rindices,
-            cindices,
+            camera_ids,
+            gaussian_ids,
             radii,
             means2d,
             depths,
@@ -950,8 +950,8 @@ class _ProjectionPacked(torch.autograd.Function):
         if not calc_compensations:
             compensations = None
         ctx.save_for_backward(
-            rindices,
-            cindices,
+            camera_ids,
+            gaussian_ids,
             means,
             covars,
             quats,
@@ -966,7 +966,7 @@ class _ProjectionPacked(torch.autograd.Function):
         ctx.eps2d = eps2d
         ctx.sparse_grad = sparse_grad
 
-        return rindices, cindices, radii, means2d, depths, conics, compensations
+        return camera_ids, gaussian_ids, radii, means2d, depths, conics, compensations
 
     @staticmethod
     def backward(
@@ -980,8 +980,8 @@ class _ProjectionPacked(torch.autograd.Function):
         v_compensations,
     ):
         (
-            rindices,
-            cindices,
+            camera_ids,
+            gaussian_ids,
             means,
             covars,
             quats,
@@ -1010,8 +1010,8 @@ class _ProjectionPacked(torch.autograd.Function):
             width,
             height,
             eps2d,
-            rindices,
-            cindices,
+            camera_ids,
+            gaussian_ids,
             conics,
             compensations,
             v_means2d.contiguous(),
@@ -1026,12 +1026,12 @@ class _ProjectionPacked(torch.autograd.Function):
             v_means = None
         else:
             if sparse_grad:
-                # TODO: cindices is duplicated so not ideal.
+                # TODO: gaussian_ids is duplicated so not ideal.
                 # An idea is to directly set the attribute (e.g., .sparse_grad) of
                 # the tensor but this requires the tensor to be leaf node only. And
                 # a customized optimizer would be needed in this case.
                 v_means = torch.sparse_coo_tensor(
-                    indices=cindices[None],  # [1, nnz]
+                    indices=gaussian_ids[None],  # [1, nnz]
                     values=v_means,  # [nnz, 3]
                     size=means.size(),  # [N, 3]
                     is_coalesced=len(viewmats) == 1,
@@ -1041,7 +1041,7 @@ class _ProjectionPacked(torch.autograd.Function):
         else:
             if sparse_grad:
                 v_covars = torch.sparse_coo_tensor(
-                    indices=cindices[None],  # [1, nnz]
+                    indices=gaussian_ids[None],  # [1, nnz]
                     values=v_covars,  # [nnz, 6]
                     size=covars.size(),  # [N, 6]
                     is_coalesced=len(viewmats) == 1,
@@ -1051,7 +1051,7 @@ class _ProjectionPacked(torch.autograd.Function):
         else:
             if sparse_grad:
                 v_quats = torch.sparse_coo_tensor(
-                    indices=cindices[None],  # [1, nnz]
+                    indices=gaussian_ids[None],  # [1, nnz]
                     values=v_quats,  # [nnz, 4]
                     size=quats.size(),  # [N, 4]
                     is_coalesced=len(viewmats) == 1,
@@ -1061,7 +1061,7 @@ class _ProjectionPacked(torch.autograd.Function):
         else:
             if sparse_grad:
                 v_scales = torch.sparse_coo_tensor(
-                    indices=cindices[None],  # [1, nnz]
+                    indices=gaussian_ids[None],  # [1, nnz]
                     values=v_scales,  # [nnz, 3]
                     size=scales.size(),  # [N, 3]
                     is_coalesced=len(viewmats) == 1,

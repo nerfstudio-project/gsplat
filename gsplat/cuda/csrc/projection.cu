@@ -1021,8 +1021,8 @@ projection_bwd_tensor(
 /****************************************************************************
  * Projection of Gaussians (Packed into COO sparse format)
  * indptr: [nrows + 1] binning of the indices array
- * rindices: [nnz] row indices for each item
- * cindices: [nnz] colume indices for each item
+ * camera_ids: [nnz] row indices for each item
+ * gaussian_ids: [nnz] colume indices for each item
  ****************************************************************************/
 
 // A simple kernel for demonstrating the sparse tensor packing
@@ -1032,8 +1032,8 @@ nonzero_kernel(const uint32_t nrows, const uint32_t ncols,
                const int32_t *__restrict__ block_accum, // [nrows * blocks_per_row]
                int32_t *__restrict__ block_cnts,        // [nrows * blocks_per_row]
                int32_t *__restrict__ indptr,            // [nrows + 1]
-               int32_t *__restrict__ rindices,          // [nnz] row indices
-               int32_t *__restrict__ cindices)          // [nnz] col indices
+               int32_t *__restrict__ camera_ids,          // [nnz] row indices
+               int32_t *__restrict__ gaussian_ids)          // [nnz] col indices
 {
     int32_t blocks_per_row = gridDim.x;
 
@@ -1064,8 +1064,8 @@ nonzero_kernel(const uint32_t nrows, const uint32_t ncols,
                 int32_t offset = block_accum[block_idx - 1];
                 thread_data += offset;
             }
-            cindices[thread_data] = input_col_idx;
-            rindices[thread_data] = row_idx;
+            gaussian_ids[thread_data] = input_col_idx;
+            camera_ids[thread_data] = row_idx;
         }
         // lane 0 of the first block in each row writes the indptr
         if (threadIdx.x == 0 && block_col_idx == 0) {
@@ -1103,15 +1103,15 @@ nonzero_tensor(const torch::Tensor &inputs) {
 
     // second pass
     int32_t nnz = block_accum[-1].item<int32_t>();
-    torch::Tensor rindices = torch::empty({nnz}, opt);
-    torch::Tensor cindices = torch::empty({nnz}, opt);
+    torch::Tensor camera_ids = torch::empty({nnz}, opt);
+    torch::Tensor gaussian_ids = torch::empty({nnz}, opt);
     torch::Tensor indptr = torch::empty({nrows + 1}, opt);
     nonzero_kernel<<<blocks, threads, 0, stream>>>(
         nrows, ncols, inputs.data_ptr<bool>(), block_accum.data_ptr<int32_t>(), nullptr,
-        indptr.data_ptr<int32_t>(), rindices.data_ptr<int32_t>(),
-        cindices.data_ptr<int32_t>());
+        indptr.data_ptr<int32_t>(), camera_ids.data_ptr<int32_t>(),
+        gaussian_ids.data_ptr<int32_t>());
 
-    return std::make_tuple(indptr, rindices, cindices);
+    return std::make_tuple(indptr, camera_ids, gaussian_ids);
 }
 
 __global__ void projection_packed_fwd_kernel(
@@ -1128,8 +1128,8 @@ __global__ void projection_packed_fwd_kernel(
     int32_t *__restrict__ block_cnts,        // [C * blocks_per_row] packing helper
     // outputs
     int32_t *__restrict__ indptr,     // [C + 1]
-    int32_t *__restrict__ rindices,   // [nnz]
-    int32_t *__restrict__ cindices,   // [nnz]
+    int32_t *__restrict__ camera_ids,   // [nnz]
+    int32_t *__restrict__ gaussian_ids,   // [nnz]
     int32_t *__restrict__ radii,      // [nnz]
     float *__restrict__ means2d,      // [nnz, 2]
     float *__restrict__ depths,       // [nnz]
@@ -1255,8 +1255,8 @@ __global__ void projection_packed_fwd_kernel(
                 thread_data += offset;
             }
             // write to outputs
-            rindices[thread_data] = row_idx; // cid
-            cindices[thread_data] = col_idx; // gid
+            camera_ids[thread_data] = row_idx; // cid
+            gaussian_ids[thread_data] = col_idx; // gid
             radii[thread_data] = (int32_t)radius;
             means2d[thread_data * 2] = mean2d.x;
             means2d[thread_data * 2 + 1] = mean2d.y;
@@ -1339,8 +1339,8 @@ projection_packed_fwd_tensor(const torch::Tensor &means,                // [N, 3
 
     // second pass
     torch::Tensor indptr = torch::empty({C + 1}, opt);
-    torch::Tensor rindices = torch::empty({nnz}, opt);
-    torch::Tensor cindices = torch::empty({nnz}, opt);
+    torch::Tensor camera_ids = torch::empty({nnz}, opt);
+    torch::Tensor gaussian_ids = torch::empty({nnz}, opt);
     torch::Tensor radii = torch::empty({nnz}, means.options().dtype(torch::kInt32));
     torch::Tensor means2d = torch::empty({nnz, 2}, means.options());
     torch::Tensor depths = torch::empty({nnz}, means.options());
@@ -1359,8 +1359,8 @@ projection_packed_fwd_tensor(const torch::Tensor &means,                // [N, 3
             scales.has_value() ? scales.value().data_ptr<float>() : nullptr,
             viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
             eps2d, near_plane, far_plane, radius_clip, block_accum.data_ptr<int32_t>(),
-            nullptr, indptr.data_ptr<int32_t>(), rindices.data_ptr<int32_t>(),
-            cindices.data_ptr<int32_t>(), radii.data_ptr<int32_t>(),
+            nullptr, indptr.data_ptr<int32_t>(), camera_ids.data_ptr<int32_t>(),
+            gaussian_ids.data_ptr<int32_t>(), radii.data_ptr<int32_t>(),
             means2d.data_ptr<float>(), depths.data_ptr<float>(),
             conics.data_ptr<float>(),
             calc_compensations ? compensations.data_ptr<float>() : nullptr);
@@ -1368,7 +1368,7 @@ projection_packed_fwd_tensor(const torch::Tensor &means,                // [N, 3
         indptr.fill_(0);
     }
 
-    return std::make_tuple(indptr, rindices, cindices, radii, means2d, depths, conics,
+    return std::make_tuple(indptr, camera_ids, gaussian_ids, radii, means2d, depths, conics,
                            compensations);
 }
 
@@ -1383,8 +1383,8 @@ __global__ void projection_packed_bwd_kernel(
     const float *__restrict__ Ks,       // [C, 3, 3]
     const int32_t image_width, const int32_t image_height, const float eps2d,
     // fwd outputs
-    const int32_t *__restrict__ rindices,    // [nnz]
-    const int32_t *__restrict__ cindices,    // [nnz]
+    const int32_t *__restrict__ camera_ids,    // [nnz]
+    const int32_t *__restrict__ gaussian_ids,    // [nnz]
     const float *__restrict__ conics,        // [nnz, 3]
     const float *__restrict__ compensations, // [nnz] optional
     // grad outputs
@@ -1405,8 +1405,8 @@ __global__ void projection_packed_bwd_kernel(
     if (idx >= nnz) {
         return;
     }
-    const int cid = rindices[idx]; // camera id
-    const int gid = cindices[idx]; // gaussian id
+    const int cid = camera_ids[idx]; // camera id
+    const int gid = gaussian_ids[idx]; // gaussian id
 
     // shift pointers to the current camera and gaussian
     means += gid * 3;
@@ -1589,8 +1589,8 @@ projection_packed_bwd_tensor(
     const torch::Tensor &Ks,                   // [C, 3, 3]
     const int image_width, const int image_height, const float eps2d,
     // fwd outputs
-    const torch::Tensor &rindices,                    // [nnz]
-    const torch::Tensor &cindices,                    // [nnz]
+    const torch::Tensor &camera_ids,                    // [nnz]
+    const torch::Tensor &gaussian_ids,                    // [nnz]
     const torch::Tensor &conics,                      // [nnz, 3]
     const at::optional<torch::Tensor> &compensations, // [nnz] optional
     // grad outputs
@@ -1610,8 +1610,8 @@ projection_packed_bwd_tensor(
     }
     CHECK_INPUT(viewmats);
     CHECK_INPUT(Ks);
-    CHECK_INPUT(rindices);
-    CHECK_INPUT(cindices);
+    CHECK_INPUT(camera_ids);
+    CHECK_INPUT(gaussian_ids);
     CHECK_INPUT(conics);
     CHECK_INPUT(v_means2d);
     CHECK_INPUT(v_depths);
@@ -1626,7 +1626,7 @@ projection_packed_bwd_tensor(
 
     int N = means.size(0);    // number of gaussians
     int C = viewmats.size(0); // number of cameras
-    int nnz = rindices.size(0);
+    int nnz = camera_ids.size(0);
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
     torch::Tensor v_means, v_covars, v_quats, v_scales, v_viewmats;
@@ -1661,7 +1661,7 @@ projection_packed_bwd_tensor(
             covars.has_value() ? nullptr : quats.value().data_ptr<float>(),
             covars.has_value() ? nullptr : scales.value().data_ptr<float>(),
             viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
-            eps2d, rindices.data_ptr<int32_t>(), cindices.data_ptr<int32_t>(),
+            eps2d, camera_ids.data_ptr<int32_t>(), gaussian_ids.data_ptr<int32_t>(),
             conics.data_ptr<float>(),
             compensations.has_value() ? compensations.value().data_ptr<float>()
                                       : nullptr,

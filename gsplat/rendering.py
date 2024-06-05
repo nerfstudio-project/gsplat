@@ -179,7 +179,7 @@ def rasterization(
         >>> print (colors.shape, alphas.shape)
         torch.Size([1, 200, 200, 3]) torch.Size([1, 200, 200, 1])
         >>> print (meta.keys())
-        dict_keys(['rindices', 'cindices', 'radii', 'means2d', 'depths', 'conics',
+        dict_keys(['camera_ids', 'gaussian_ids', 'radii', 'means2d', 'depths', 'conics',
         'opacities', 'tile_width', 'tile_height', 'tiles_per_gauss', 'isect_ids',
         'gauss_ids', 'isect_offsets', 'width', 'height', 'tile_size'])
 
@@ -229,13 +229,15 @@ def rasterization(
 
     if packed:
         # The results are packed into shape [nnz, ...]. All elements are valid.
-        rindices, cindices, radii, means2d, depths, conics, compensations = proj_results
-        opacities = opacities[cindices.long()]  # [nnz]
+        camera_ids, gaussian_ids, radii, means2d, depths, conics, compensations = (
+            proj_results
+        )
+        opacities = opacities[gaussian_ids.long()]  # [nnz]
     else:
         # The results are with shape [C, N, ...]. Only the elements with radii > 0 are valid.
         radii, means2d, depths, conics, compensations = proj_results
         opacities = opacities.repeat(C, 1)  # [C, N]
-        rindices, cindices = None, None
+        camera_ids, gaussian_ids = None, None
 
     if compensations is not None:
         opacities = opacities * compensations
@@ -252,8 +254,8 @@ def rasterization(
         tile_height,
         packed=packed,
         n_cameras=C,
-        rindices=rindices,
-        cindices=cindices,
+        camera_ids=camera_ids,
+        gaussian_ids=gaussian_ids,
     )
     isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
 
@@ -263,17 +265,17 @@ def rasterization(
         colors.dim() == 3 and sh_degree is None
     ):  # silently support [C, N, D] color.
         colors = (
-            colors[cindices.long()]
+            colors[gaussian_ids.long()]
             if packed
             else colors.expand(C, *([-1] * colors.dim()))
         )  # [nnz, D] or [C, N, 3]
     else:
         if packed:
-            colors = colors[rindices.long(), cindices.long(), :]
+            colors = colors[camera_ids.long(), gaussian_ids.long(), :]
     if sh_degree is not None:  # SH coefficients
         camtoworlds = torch.inverse(viewmats)
         if packed:
-            dirs = means[cindices.long(), :] - camtoworlds[rindices.long(), :3, 3]
+            dirs = means[gaussian_ids.long(), :] - camtoworlds[camera_ids.long(), :3, 3]
         else:
             dirs = means[None, :, :] - camtoworlds[:, None, :3, 3]
         colors = spherical_harmonics(
@@ -314,8 +316,8 @@ def rasterization(
         )
 
     meta = {
-        "rindices": rindices,
-        "cindices": cindices,
+        "camera_ids": camera_ids,
+        "gaussian_ids": gaussian_ids,
         "radii": radii,
         "means2d": means2d,
         "depths": depths,

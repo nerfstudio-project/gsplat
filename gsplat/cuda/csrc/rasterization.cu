@@ -16,8 +16,8 @@ __global__ void isect_tiles(
     const int C, const int N,
     // parallelize over nnz, only used if packed is True
     const int nnz,
-    const int32_t *__restrict__ rindices, // [nnz] optional
-    const int32_t *__restrict__ cindices, // [nnz] optional
+    const int32_t *__restrict__ camera_ids, // [nnz] optional
+    const int32_t *__restrict__ gaussian_ids, // [nnz] optional
     // data
     const float2 *__restrict__ means2d,              // [C, N, 2] or [nnz, 2]
     const int32_t *__restrict__ radii,               // [C, N] or [nnz]
@@ -61,8 +61,8 @@ __global__ void isect_tiles(
     int32_t gid; // gaussian id
     if (packed) {
         // parallelize over nnz
-        cid = rindices[idx];
-        gid = cindices[idx];
+        cid = camera_ids[idx];
+        gid = gaussian_ids[idx];
     } else {
         // parallelize over C * N
         cid = idx / N;
@@ -88,19 +88,19 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 isect_tiles_tensor(const torch::Tensor &means2d,                // [C, N, 2] or [nnz, 2]
                    const torch::Tensor &radii,                  // [C, N] or [nnz]
                    const torch::Tensor &depths,                 // [C, N] or [nnz]
-                   const at::optional<torch::Tensor> &rindices, // [nnz]
-                   const at::optional<torch::Tensor> &cindices, // [nnz]
+                   const at::optional<torch::Tensor> &camera_ids, // [nnz]
+                   const at::optional<torch::Tensor> &gaussian_ids, // [nnz]
                    const int C, const int tile_size, const int tile_width,
                    const int tile_height, const bool sort) {
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
     CHECK_INPUT(radii);
     CHECK_INPUT(depths);
-    if (rindices.has_value()) {
-        CHECK_INPUT(rindices.value());
+    if (camera_ids.has_value()) {
+        CHECK_INPUT(camera_ids.value());
     }
-    if (cindices.has_value()) {
-        CHECK_INPUT(cindices.value());
+    if (gaussian_ids.has_value()) {
+        CHECK_INPUT(gaussian_ids.value());
     }
     bool packed = means2d.dim() == 2;
 
@@ -110,9 +110,9 @@ isect_tiles_tensor(const torch::Tensor &means2d,                // [C, N, 2] or 
     if (packed) {
         nnz = means2d.size(0);
         total_elems = nnz;
-        assert(rindices.has_value() && cindices.has_value());
-        rindices_ptr = rindices.value().data_ptr<int32_t>();
-        cindices_ptr = cindices.value().data_ptr<int32_t>();
+        assert(camera_ids.has_value() && gaussian_ids.has_value());
+        rindices_ptr = camera_ids.value().data_ptr<int32_t>();
+        cindices_ptr = gaussian_ids.value().data_ptr<int32_t>();
     } else {
         N = means2d.size(1); // number of gaussians
         total_elems = C * N;

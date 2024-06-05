@@ -104,8 +104,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 isect_tiles_tensor(const torch::Tensor &means2d,                // [C, N, 2] or [nnz, 2]
                    const torch::Tensor &radii,                  // [C, N] or [nnz]
                    const torch::Tensor &depths,                 // [C, N] or [nnz]
-                   const at::optional<torch::Tensor> &rindices, // [nnz]
-                   const at::optional<torch::Tensor> &cindices, // [nnz]
+                   const at::optional<torch::Tensor> &camera_ids, // [nnz]
+                   const at::optional<torch::Tensor> &gaussian_ids, // [nnz]
                    const int C, const int tile_size, const int tile_width,
                    const int tile_height, const bool sort);
 
@@ -206,8 +206,8 @@ projection_packed_bwd_tensor(
     const torch::Tensor &Ks,                   // [C, 3, 3]
     const int image_width, const int image_height, const float eps2d,
     // fwd outputs
-    const torch::Tensor &rindices,                    // [nnz]
-    const torch::Tensor &cindices,                    // [nnz]
+    const torch::Tensor &camera_ids,                    // [nnz]
+    const torch::Tensor &gaussian_ids,                    // [nnz]
     const torch::Tensor &conics,                      // [nnz, 3]
     const at::optional<torch::Tensor> &compensations, // [nnz] optional
     // grad outputs
