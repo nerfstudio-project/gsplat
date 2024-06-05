@@ -851,7 +851,7 @@ class Runner:
             canvas_all.append(canvas)
 
         # save to video
-        video_dir = f"{cfg.result_dir}/videos/"
+        video_dir = f"{cfg.result_dir}/videos"
         os.makedirs(video_dir, exist_ok=True)
         writer = imageio.get_writer(f"{video_dir}/traj_{step}.mp4", fps=30)
         for canvas in canvas_all:
