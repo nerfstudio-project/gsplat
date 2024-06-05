@@ -337,7 +337,7 @@ def main(
 ) -> None:
     # height = 512
     # width = 512
-    # iterations=5000
+    iterations=5000
     if img_path:
         gt_image = image_path_to_tensor(img_path)
     else:
