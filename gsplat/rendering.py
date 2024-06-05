@@ -198,9 +198,7 @@ def rasterization(
     if sh_degree is None:
         # treat colors as post-activation values
         # colors should be in shape [N, D] or (C, N, D) (silently support)
-        assert (
-            colors.dim() == 2 and colors.shape[0] == N
-        ) or (
+        assert (colors.dim() == 2 and colors.shape[0] == N) or (
             colors.dim() == 3 and colors.shape[:2] == (C, N)
         ), colors.shape
     else:
@@ -261,9 +259,13 @@ def rasterization(
 
     # TODO: SH also suport N-D.
     # Compute the per-view colors
-    if not (colors.dim() == 3 and sh_degree is None): # silently support [C, N, D] color.
+    if not (
+        colors.dim() == 3 and sh_degree is None
+    ):  # silently support [C, N, D] color.
         colors = (
-            colors[cindices.long()] if packed else colors.expand(C, *([-1] * colors.dim()))
+            colors[cindices.long()]
+            if packed
+            else colors.expand(C, *([-1] * colors.dim()))
         )  # [nnz, D] or [C, N, 3]
     else:
         if packed:

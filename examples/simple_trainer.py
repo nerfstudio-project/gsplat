@@ -166,14 +166,14 @@ def create_splats_with_optimizers(
     ]
 
     if feature_dim is None:
-        # color is SH coefficients. 
+        # color is SH coefficients.
         colors = torch.zeros((N, (sh_degree + 1) ** 2, 3))  # [N, K, 3]
         colors[:, 0, :] = rgb_to_sh(rgbs)
         params.append(("sh0", torch.nn.Parameter(colors[:, :1, :]), 2.5e-3))
         params.append(("shN", torch.nn.Parameter(colors[:, 1:, :]), 2.5e-3 / 20))
     else:
         # features will be used for appearance and view-dependent shading
-        features = torch.rand(N, feature_dim) # [N, feature_dim]
+        features = torch.rand(N, feature_dim)  # [N, feature_dim]
         params.append(("features", torch.nn.Parameter(features), 2.5e-3))
         colors = torch.logit(rgbs)  # [N, 3]
         params.append(("colors", torch.nn.Parameter(colors), 2.5e-3))
@@ -274,7 +274,7 @@ class Runner:
                 torch.optim.Adam(
                     self.app_module.color_head.parameters(),
                     lr=cfg.app_opt_lr * math.sqrt(cfg.batch_size),
-                )
+                ),
             ]
 
         # Losses & Metrics.
@@ -319,7 +319,7 @@ class Runner:
                 features=self.splats["features"],
                 embed_ids=image_ids,
                 dirs=means[None, :, :] - camtoworlds[:, None, :3, 3],
-                sh_degree=kwargs.pop("sh_degree", self.cfg.sh_degree)
+                sh_degree=kwargs.pop("sh_degree", self.cfg.sh_degree),
             )
             colors = colors + self.splats["colors"]
             colors = torch.sigmoid(colors)
