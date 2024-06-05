@@ -16,8 +16,8 @@ __global__ void isect_tiles(
     const uint32_t C, const uint32_t N,
     // parallelize over nnz, only used if packed is True
     const uint32_t nnz,
-    const int32_t *__restrict__ camera_ids, // [nnz] optional
-    const int32_t *__restrict__ gaussian_ids, // [nnz] optional
+    const int64_t *__restrict__ camera_ids, // [nnz] optional
+    const int64_t *__restrict__ gaussian_ids, // [nnz] optional
     // data
     const float2 *__restrict__ means2d,              // [C, N, 2] or [nnz, 2]
     const int32_t *__restrict__ radii,               // [C, N] or [nnz]
@@ -105,14 +105,14 @@ isect_tiles_tensor(const torch::Tensor &means2d,                // [C, N, 2] or 
     bool packed = means2d.dim() == 2;
 
     uint32_t N, nnz, total_elems;
-    int32_t *camera_ids_ptr;
-    int32_t *gaussian_ids_ptr;
+    int64_t *camera_ids_ptr;
+    int64_t *gaussian_ids_ptr;
     if (packed) {
         nnz = means2d.size(0);
         total_elems = nnz;
         assert(camera_ids.has_value() && gaussian_ids.has_value());
-        camera_ids_ptr = camera_ids.value().data_ptr<int32_t>();
-        gaussian_ids_ptr = gaussian_ids.value().data_ptr<int32_t>();
+        camera_ids_ptr = camera_ids.value().data_ptr<int64_t>();
+        gaussian_ids_ptr = gaussian_ids.value().data_ptr<int64_t>();
     } else {
         N = means2d.size(1); // number of gaussians
         total_elems = C * N;
@@ -263,8 +263,8 @@ __global__ void rasterize_to_indices_in_range_kernel(
     const float *__restrict__ transmittances, // [C, image_height, image_width]
     const int32_t *__restrict__ chunk_starts, // [C, image_height, image_width]
     int32_t *__restrict__ chunk_cnts,         // [C, image_height, image_width]
-    int32_t *__restrict__ gaussian_ids,      // [n_elems]
-    int32_t *__restrict__ pixel_ids       // [n_elems]
+    int64_t *__restrict__ gaussian_ids,      // [n_elems]
+    int64_t *__restrict__ pixel_ids       // [n_elems]
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
@@ -454,9 +454,9 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
 
     // Second pass: allocate memory and write out the gaussian and pixel ids.
     torch::Tensor gaussian_ids =
-        torch::empty({n_elems}, means2d.options().dtype(torch::kInt32));
+        torch::empty({n_elems}, means2d.options().dtype(torch::kInt64));
     torch::Tensor pixel_ids =
-        torch::empty({n_elems}, means2d.options().dtype(torch::kInt32));
+        torch::empty({n_elems}, means2d.options().dtype(torch::kInt64));
     if (n_elems) {
         rasterize_to_indices_in_range_kernel<<<blocks, threads>>>(
             range_start, range_end, C, N, n_isects, (float2 *)means2d.data_ptr<float>(),
@@ -464,7 +464,7 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
             image_width, image_height, tile_size, tile_width, tile_height,
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             transmittances.data_ptr<float>(), chunk_starts.data_ptr<int32_t>(), nullptr,
-            gaussian_ids.data_ptr<int32_t>(), pixel_ids.data_ptr<int32_t>());
+            gaussian_ids.data_ptr<int64_t>(), pixel_ids.data_ptr<int64_t>());
     }
     return std::make_tuple(gaussian_ids, pixel_ids);
 }

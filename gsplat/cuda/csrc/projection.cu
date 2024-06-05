@@ -1018,102 +1018,6 @@ fully_fused_projection_bwd_tensor(
     return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats);
 }
 
-/****************************************************************************
- * Projection of Gaussians (Packed into COO sparse format)
- * indptr: [nrows + 1] binning of the indices array
- * camera_ids: [nnz] row indices for each item
- * gaussian_ids: [nnz] colume indices for each item
- ****************************************************************************/
-
-// A simple kernel for demonstrating the sparse tensor packing
-__global__ void
-nonzero_kernel(const uint32_t nrows, const uint32_t ncols,
-               const bool *__restrict__ inputs,         // [nrows, ncols]
-               const int32_t *__restrict__ block_accum, // [nrows * blocks_per_row]
-               int32_t *__restrict__ block_cnts,        // [nrows * blocks_per_row]
-               int32_t *__restrict__ indptr,            // [nrows + 1]
-               int32_t *__restrict__ camera_ids,          // [nnz] row indices
-               int32_t *__restrict__ gaussian_ids)          // [nnz] col indices
-{
-    int32_t blocks_per_row = gridDim.x;
-
-    int32_t row_idx = blockIdx.y;
-    int32_t block_col_idx = blockIdx.x;
-    int32_t block_idx = row_idx * blocks_per_row + block_col_idx;
-
-    int32_t input_col_idx = block_col_idx * blockDim.x + threadIdx.x;
-    int32_t input_idx = row_idx * ncols + input_col_idx;
-
-    bool valid = (row_idx < nrows) && (input_col_idx < ncols) && inputs[input_idx];
-    int32_t thread_data = static_cast<int32_t>(valid);
-    if (block_cnts != nullptr) {
-        // First pass: compute the block-wide sum
-        typedef cub::BlockReduce<int32_t, N_THREADS> BlockReduce;
-        __shared__ typename BlockReduce::TempStorage temp_storage;
-        int32_t aggregate = BlockReduce(temp_storage).Sum(thread_data);
-        if (threadIdx.x == 0) {
-            block_cnts[block_idx] = aggregate;
-        }
-    } else {
-        // Second pass: write out the indices of the non zero elements
-        typedef cub::BlockScan<int32_t, N_THREADS> BlockScan;
-        __shared__ typename BlockScan::TempStorage temp_storage;
-        BlockScan(temp_storage).ExclusiveSum(thread_data, thread_data);
-        if (valid) {
-            if (block_idx > 0) {
-                int32_t offset = block_accum[block_idx - 1];
-                thread_data += offset;
-            }
-            gaussian_ids[thread_data] = input_col_idx;
-            camera_ids[thread_data] = row_idx;
-        }
-        // lane 0 of the first block in each row writes the indptr
-        if (threadIdx.x == 0 && block_col_idx == 0) {
-            if (row_idx == 0) {
-                indptr[0] = 0;
-                indptr[nrows] = block_accum[nrows * blocks_per_row - 1];
-            } else {
-                indptr[row_idx] = block_accum[block_idx - 1];
-            }
-        }
-    }
-}
-
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-nonzero_tensor(const torch::Tensor &inputs) {
-    DEVICE_GUARD(inputs);
-    CHECK_INPUT(inputs);
-
-    uint32_t nrows = inputs.size(0);
-    uint32_t ncols = inputs.size(1);
-    uint32_t blocks_per_row = (ncols + N_THREADS - 1) / N_THREADS;
-
-    dim3 threads = {N_THREADS, 1, 1};
-    dim3 blocks = {blocks_per_row, nrows, 1};
-    auto opt = inputs.options().dtype(torch::kInt32);
-
-    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
-
-    // first pass
-    torch::Tensor block_cnts = torch::empty({nrows * blocks_per_row}, opt);
-    nonzero_kernel<<<blocks, threads, 0, stream>>>(
-        nrows, ncols, inputs.data_ptr<bool>(), nullptr, block_cnts.data_ptr<int32_t>(),
-        nullptr, nullptr, nullptr);
-    torch::Tensor block_accum = torch::cumsum(block_cnts, 0, torch::kInt32);
-
-    // second pass
-    int32_t nnz = block_accum[-1].item<int32_t>();
-    torch::Tensor camera_ids = torch::empty({nnz}, opt);
-    torch::Tensor gaussian_ids = torch::empty({nnz}, opt);
-    torch::Tensor indptr = torch::empty({nrows + 1}, opt);
-    nonzero_kernel<<<blocks, threads, 0, stream>>>(
-        nrows, ncols, inputs.data_ptr<bool>(), block_accum.data_ptr<int32_t>(), nullptr,
-        indptr.data_ptr<int32_t>(), camera_ids.data_ptr<int32_t>(),
-        gaussian_ids.data_ptr<int32_t>());
-
-    return std::make_tuple(indptr, camera_ids, gaussian_ids);
-}
-
 __global__ void fully_fused_projection_packed_fwd_kernel(
     const uint32_t C, const uint32_t N,
     const float *__restrict__ means,    // [N, 3]
@@ -1128,8 +1032,8 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
     int32_t *__restrict__ block_cnts,        // [C * blocks_per_row] packing helper
     // outputs
     int32_t *__restrict__ indptr,     // [C + 1]
-    int32_t *__restrict__ camera_ids,   // [nnz]
-    int32_t *__restrict__ gaussian_ids,   // [nnz]
+    int64_t *__restrict__ camera_ids,   // [nnz]
+    int64_t *__restrict__ gaussian_ids,   // [nnz]
     int32_t *__restrict__ radii,      // [nnz]
     float *__restrict__ means2d,      // [nnz, 2]
     float *__restrict__ depths,       // [nnz]
@@ -1339,8 +1243,8 @@ fully_fused_projection_packed_fwd_tensor(const torch::Tensor &means,            
 
     // second pass
     torch::Tensor indptr = torch::empty({C + 1}, opt);
-    torch::Tensor camera_ids = torch::empty({nnz}, opt);
-    torch::Tensor gaussian_ids = torch::empty({nnz}, opt);
+    torch::Tensor camera_ids = torch::empty({nnz}, opt.dtype(torch::kInt64));
+    torch::Tensor gaussian_ids = torch::empty({nnz}, opt.dtype(torch::kInt64));
     torch::Tensor radii = torch::empty({nnz}, means.options().dtype(torch::kInt32));
     torch::Tensor means2d = torch::empty({nnz, 2}, means.options());
     torch::Tensor depths = torch::empty({nnz}, means.options());
@@ -1359,8 +1263,8 @@ fully_fused_projection_packed_fwd_tensor(const torch::Tensor &means,            
             scales.has_value() ? scales.value().data_ptr<float>() : nullptr,
             viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
             eps2d, near_plane, far_plane, radius_clip, block_accum.data_ptr<int32_t>(),
-            nullptr, indptr.data_ptr<int32_t>(), camera_ids.data_ptr<int32_t>(),
-            gaussian_ids.data_ptr<int32_t>(), radii.data_ptr<int32_t>(),
+            nullptr, indptr.data_ptr<int32_t>(), camera_ids.data_ptr<int64_t>(),
+            gaussian_ids.data_ptr<int64_t>(), radii.data_ptr<int32_t>(),
             means2d.data_ptr<float>(), depths.data_ptr<float>(),
             conics.data_ptr<float>(),
             calc_compensations ? compensations.data_ptr<float>() : nullptr);
@@ -1383,8 +1287,8 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     const float *__restrict__ Ks,       // [C, 3, 3]
     const int32_t image_width, const int32_t image_height, const float eps2d,
     // fwd outputs
-    const int32_t *__restrict__ camera_ids,    // [nnz]
-    const int32_t *__restrict__ gaussian_ids,    // [nnz]
+    const int64_t *__restrict__ camera_ids,    // [nnz]
+    const int64_t *__restrict__ gaussian_ids,    // [nnz]
     const float *__restrict__ conics,        // [nnz, 3]
     const float *__restrict__ compensations, // [nnz] optional
     // grad outputs
@@ -1405,8 +1309,8 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     if (idx >= nnz) {
         return;
     }
-    const uint32_t cid = camera_ids[idx]; // camera id
-    const uint32_t gid = gaussian_ids[idx]; // gaussian id
+    const int64_t cid = camera_ids[idx]; // camera id
+    const int64_t gid = gaussian_ids[idx]; // gaussian id
 
     // shift pointers to the current camera and gaussian
     means += gid * 3;
@@ -1661,7 +1565,7 @@ fully_fused_projection_packed_bwd_tensor(
             covars.has_value() ? nullptr : quats.value().data_ptr<float>(),
             covars.has_value() ? nullptr : scales.value().data_ptr<float>(),
             viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
-            eps2d, camera_ids.data_ptr<int32_t>(), gaussian_ids.data_ptr<int32_t>(),
+            eps2d, camera_ids.data_ptr<int64_t>(), gaussian_ids.data_ptr<int64_t>(),
             conics.data_ptr<float>(),
             compensations.has_value() ? compensations.value().data_ptr<float>()
                                       : nullptr,

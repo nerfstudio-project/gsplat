@@ -179,9 +179,6 @@ compute_sh_bwd_tensor(const uint32_t K, const uint32_t degrees_to_use,
 /****************************************************************************************
  * Packed Version
  ****************************************************************************************/
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-nonzero_tensor(const torch::Tensor &inputs);
-
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
            torch::Tensor, torch::Tensor, torch::Tensor>
 fully_fused_projection_packed_fwd_tensor(const torch::Tensor &means,                // [N, 3]

@@ -370,7 +370,7 @@ def accumulate(
         opacities[camera_ids, gaussian_ids] * torch.exp(-sigmas), 0.999
     )
 
-    indices = (camera_ids * image_height * image_width + pixel_ids).long()
+    indices = camera_ids * image_height * image_width + pixel_ids
     total_pixels = C * image_height * image_width
 
     weights, trans = render_weight_from_alpha(

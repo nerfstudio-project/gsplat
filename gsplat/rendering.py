@@ -53,7 +53,7 @@ def rasterization(
         of the features to be rendered, up to 32 at the moment. If
         `sh_degree` is set, the `colors` is expected to be the SH coefficients with
         shape [N, K, 3], where K is the number of SH bases. In this case, it is expected
-        that :math:`(\\textit{sh_degree} + 1) ^ 2 \leq K`, where `sh_degree` controls the
+        that :math:`(\\textit{sh_degree} + 1) ^ 2 \\leq K`, where `sh_degree` controls the
         activated bases in the SH coefficients.
 
     .. note::
@@ -232,7 +232,7 @@ def rasterization(
         camera_ids, gaussian_ids, radii, means2d, depths, conics, compensations = (
             proj_results
         )
-        opacities = opacities[gaussian_ids.long()]  # [nnz]
+        opacities = opacities[gaussian_ids]  # [nnz]
     else:
         # The results are with shape [C, N, ...]. Only the elements with radii > 0 are valid.
         radii, means2d, depths, conics, compensations = proj_results
@@ -265,17 +265,15 @@ def rasterization(
         colors.dim() == 3 and sh_degree is None
     ):  # silently support [C, N, D] color.
         colors = (
-            colors[gaussian_ids.long()]
-            if packed
-            else colors.expand(C, *([-1] * colors.dim()))
+            colors[gaussian_ids] if packed else colors.expand(C, *([-1] * colors.dim()))
         )  # [nnz, D] or [C, N, 3]
     else:
         if packed:
-            colors = colors[camera_ids.long(), gaussian_ids.long(), :]
+            colors = colors[camera_ids, gaussian_ids, :]
     if sh_degree is not None:  # SH coefficients
         camtoworlds = torch.inverse(viewmats)
         if packed:
-            dirs = means[gaussian_ids.long(), :] - camtoworlds[camera_ids.long(), :3, 3]
+            dirs = means[gaussian_ids, :] - camtoworlds[camera_ids, :3, 3]
         else:
             dirs = means[None, :, :] - camtoworlds[:, None, :3, 3]
         colors = spherical_harmonics(
