@@ -163,8 +163,8 @@ def test_persp_proj(test_data):
 @pytest.mark.parametrize("fused", [False, True])
 @pytest.mark.parametrize("calc_compensations", [False, True])
 def test_projection(test_data, fused: bool, calc_compensations: bool):
-    from gsplat.cuda._torch_impl import _projection
-    from gsplat.cuda._wrapper import projection, quat_scale_to_covar_preci
+    from gsplat.cuda._torch_impl import _fully_fused_projection
+    from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci
 
     torch.manual_seed(42)
 
@@ -182,7 +182,7 @@ def test_projection(test_data, fused: bool, calc_compensations: bool):
 
     # forward
     if fused:
-        radii, means2d, depths, conics, compensations = projection(
+        radii, means2d, depths, conics, compensations = fully_fused_projection(
             means,
             None,
             quats,
@@ -195,7 +195,7 @@ def test_projection(test_data, fused: bool, calc_compensations: bool):
         )
     else:
         covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [N, 6]
-        radii, means2d, depths, conics, compensations = projection(
+        radii, means2d, depths, conics, compensations = fully_fused_projection(
             means,
             covars,
             None,
@@ -207,7 +207,7 @@ def test_projection(test_data, fused: bool, calc_compensations: bool):
             calc_compensations=calc_compensations,
         )
     _covars, _ = quat_scale_to_covar_preci(quats, scales, triu=False)  # [N, 3, 3]
-    _radii, _means2d, _depths, _conics, _compensations = _projection(
+    _radii, _means2d, _depths, _conics, _compensations = _fully_fused_projection(
         means,
         _covars,
         viewmats,
@@ -259,10 +259,10 @@ def test_projection(test_data, fused: bool, calc_compensations: bool):
 @pytest.mark.parametrize("fused", [False, True])
 @pytest.mark.parametrize("sparse_grad", [False, True])
 @pytest.mark.parametrize("calc_compensations", [False, True])
-def test_projection_packed(
+def test_fully_fused_projection_packed(
     test_data, fused: bool, sparse_grad: bool, calc_compensations: bool
 ):
-    from gsplat.cuda._wrapper import projection, quat_scale_to_covar_preci
+    from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci
 
     torch.manual_seed(42)
 
@@ -281,7 +281,7 @@ def test_projection_packed(
     # forward
     if fused:
         camera_ids, gaussian_ids, radii, means2d, depths, conics, compensations = (
-            projection(
+            fully_fused_projection(
                 means,
                 None,
                 quats,
@@ -295,7 +295,7 @@ def test_projection_packed(
                 calc_compensations=calc_compensations,
             )
         )
-        _radii, _means2d, _depths, _conics, _compensations = projection(
+        _radii, _means2d, _depths, _conics, _compensations = fully_fused_projection(
             means,
             None,
             quats,
@@ -310,7 +310,7 @@ def test_projection_packed(
     else:
         covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [N, 6]
         camera_ids, gaussian_ids, radii, means2d, depths, conics, compensations = (
-            projection(
+            fully_fused_projection(
                 means,
                 covars,
                 None,
@@ -324,7 +324,7 @@ def test_projection_packed(
                 calc_compensations=calc_compensations,
             )
         )
-        _radii, _means2d, _depths, _conics, _compensations = projection(
+        _radii, _means2d, _depths, _conics, _compensations = fully_fused_projection(
             means,
             covars,
             None,
@@ -430,10 +430,10 @@ def test_isect(test_data):
 def test_rasterize_to_pixels(test_data):
     from gsplat.cuda._torch_impl import _rasterize_to_pixels
     from gsplat.cuda._wrapper import (
+        fully_fused_projection,
         isect_offset_encode,
         isect_tiles,
         persp_proj,
-        projection,
         quat_scale_to_covar_preci,
         rasterize_to_pixels,
     )
@@ -455,7 +455,7 @@ def test_rasterize_to_pixels(test_data):
     covars, _ = quat_scale_to_covar_preci(quats, scales, compute_preci=False, triu=True)
 
     # Project Gaussians to 2D
-    radii, means2d, depths, conics, compensations = projection(
+    radii, means2d, depths, conics, compensations = fully_fused_projection(
         means, covars, None, None, viewmats, Ks, width, height
     )
     opacities = opacities.repeat(C, 1)

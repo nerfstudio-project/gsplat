@@ -69,7 +69,7 @@ world_to_cam_bwd_tensor(const torch::Tensor &means,                    // [N, 3]
                         const bool viewmats_requires_grad);
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-projection_fwd_tensor(const torch::Tensor &means,                // [N, 3]
+fully_fused_projection_fwd_tensor(const torch::Tensor &means,                // [N, 3]
                       const at::optional<torch::Tensor> &covars, // [N, 6] optional
                       const at::optional<torch::Tensor> &quats,  // [N, 4] optional
                       const at::optional<torch::Tensor> &scales, // [N, 3] optional
@@ -80,7 +80,7 @@ projection_fwd_tensor(const torch::Tensor &means,                // [N, 3]
                       const float radius_clip, const bool calc_compensations);
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-projection_bwd_tensor(
+fully_fused_projection_bwd_tensor(
     // fwd inputs
     const torch::Tensor &means,                // [N, 3]
     const at::optional<torch::Tensor> &covars, // [N, 6] optional
@@ -184,7 +184,7 @@ nonzero_tensor(const torch::Tensor &inputs);
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
            torch::Tensor, torch::Tensor, torch::Tensor>
-projection_packed_fwd_tensor(const torch::Tensor &means,                // [N, 3]
+fully_fused_projection_packed_fwd_tensor(const torch::Tensor &means,                // [N, 3]
                              const at::optional<torch::Tensor> &covars, // [N, 6]
                              const at::optional<torch::Tensor> &quats,  // [N, 3]
                              const at::optional<torch::Tensor> &scales, // [N, 3]
@@ -196,7 +196,7 @@ projection_packed_fwd_tensor(const torch::Tensor &means,                // [N, 3
                              const bool calc_compensations);
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-projection_packed_bwd_tensor(
+fully_fused_projection_packed_bwd_tensor(
     // fwd inputs
     const torch::Tensor &means,                // [N, 3]
     const at::optional<torch::Tensor> &covars, // [N, 6]

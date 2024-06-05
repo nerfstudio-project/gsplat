@@ -603,7 +603,7 @@ world_to_cam_bwd_tensor(const torch::Tensor &means,                    // [N, 3]
  ****************************************************************************/
 
 __global__ void
-projection_fwd_kernel(const int C, const int N,
+fully_fused_projection_fwd_kernel(const int C, const int N,
                       const float *__restrict__ means,    // [N, 3]
                       const float *__restrict__ covars,   // [N, 6] optional
                       const float *__restrict__ quats,    // [N, 4] optional
@@ -715,7 +715,7 @@ projection_fwd_kernel(const int C, const int N,
     }
 }
 
-__global__ void projection_bwd_kernel(
+__global__ void fully_fused_projection_bwd_kernel(
     // fwd inputs
     const int C, const int N,
     const float *__restrict__ means,    // [N, 3]
@@ -884,7 +884,7 @@ __global__ void projection_bwd_kernel(
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-projection_fwd_tensor(const torch::Tensor &means,                // [N, 3]
+fully_fused_projection_fwd_tensor(const torch::Tensor &means,                // [N, 3]
                       const at::optional<torch::Tensor> &covars, // [N, 6] optional
                       const at::optional<torch::Tensor> &quats,  // [N, 4] optional
                       const at::optional<torch::Tensor> &scales, // [N, 3] optional
@@ -919,7 +919,7 @@ projection_fwd_tensor(const torch::Tensor &means,                // [N, 3]
         compensations = torch::zeros({C, N}, means.options());
     }
     if (C && N) {
-        projection_fwd_kernel<<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
+        fully_fused_projection_fwd_kernel<<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
                                 stream>>>(
             C, N, means.data_ptr<float>(),
             covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
@@ -935,7 +935,7 @@ projection_fwd_tensor(const torch::Tensor &means,                // [N, 3]
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-projection_bwd_tensor(
+fully_fused_projection_bwd_tensor(
     // fwd inputs
     const torch::Tensor &means,                // [N, 3]
     const at::optional<torch::Tensor> &covars, // [N, 6] optional
@@ -995,7 +995,7 @@ projection_bwd_tensor(
         v_viewmats = torch::zeros_like(viewmats);
     }
     if (C && N) {
-        projection_bwd_kernel<<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
+        fully_fused_projection_bwd_kernel<<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
                                 stream>>>(
             C, N, means.data_ptr<float>(),
             covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
@@ -1114,7 +1114,7 @@ nonzero_tensor(const torch::Tensor &inputs) {
     return std::make_tuple(indptr, camera_ids, gaussian_ids);
 }
 
-__global__ void projection_packed_fwd_kernel(
+__global__ void fully_fused_projection_packed_fwd_kernel(
     const int C, const int N,
     const float *__restrict__ means,    // [N, 3]
     const float *__restrict__ covars,   // [N, 6] Optional
@@ -1282,7 +1282,7 @@ __global__ void projection_packed_fwd_kernel(
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
            torch::Tensor, torch::Tensor, torch::Tensor>
-projection_packed_fwd_tensor(const torch::Tensor &means,                // [N, 3]
+fully_fused_projection_packed_fwd_tensor(const torch::Tensor &means,                // [N, 3]
                              const at::optional<torch::Tensor> &covars, // [N, 6]
                              const at::optional<torch::Tensor> &quats,  // [N, 3]
                              const at::optional<torch::Tensor> &scales, // [N, 3]
@@ -1322,7 +1322,7 @@ projection_packed_fwd_tensor(const torch::Tensor &means,                // [N, 3
     torch::Tensor block_accum;
     if (C && N) {
         torch::Tensor block_cnts = torch::empty({nrows * blocks_per_row}, opt);
-        projection_packed_fwd_kernel<<<blocks, threads, 0, stream>>>(
+        fully_fused_projection_packed_fwd_kernel<<<blocks, threads, 0, stream>>>(
             C, N, means.data_ptr<float>(),
             covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
             quats.has_value() ? quats.value().data_ptr<float>() : nullptr,
@@ -1352,7 +1352,7 @@ projection_packed_fwd_tensor(const torch::Tensor &means,                // [N, 3
     }
 
     if (nnz) {
-        projection_packed_fwd_kernel<<<blocks, threads, 0, stream>>>(
+        fully_fused_projection_packed_fwd_kernel<<<blocks, threads, 0, stream>>>(
             C, N, means.data_ptr<float>(),
             covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
             quats.has_value() ? quats.value().data_ptr<float>() : nullptr,
@@ -1372,7 +1372,7 @@ projection_packed_fwd_tensor(const torch::Tensor &means,                // [N, 3
                            compensations);
 }
 
-__global__ void projection_packed_bwd_kernel(
+__global__ void fully_fused_projection_packed_bwd_kernel(
     // fwd inputs
     const int C, const int N, const int nnz,
     const float *__restrict__ means,    // [N, 3]
@@ -1579,7 +1579,7 @@ __global__ void projection_packed_bwd_kernel(
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-projection_packed_bwd_tensor(
+fully_fused_projection_packed_bwd_tensor(
     // fwd inputs
     const torch::Tensor &means,                // [N, 3]
     const at::optional<torch::Tensor> &covars, // [N, 6]
@@ -1654,7 +1654,7 @@ projection_packed_bwd_tensor(
         }
     }
     if (nnz) {
-        projection_packed_bwd_kernel<<<(nnz + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
+        fully_fused_projection_packed_bwd_kernel<<<(nnz + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
                                        stream>>>(
             C, N, nnz, means.data_ptr<float>(),
             covars.has_value() ? covars.value().data_ptr<float>() : nullptr,

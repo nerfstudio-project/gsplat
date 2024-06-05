@@ -138,7 +138,7 @@ def world_to_cam(
     return _WorldToCam.apply(means, covars, viewmats)
 
 
-def projection(
+def fully_fused_projection(
     means: Tensor,  # [N, 3]
     covars: Optional[Tensor],  # [N, 6] or None
     quats: Optional[Tensor],  # [N, 4] or None
@@ -156,6 +156,10 @@ def projection(
     calc_compensations: bool = False,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Projects Gaussians to 2D.
+
+    This function fuse the process of computing covariances
+    (:func:`quat_scale_to_covar_preci()`), transforming to camera space (:func:`world_to_cam()`),
+    and perspective projection (:func:`persp_proj()`).
 
     .. note::
 
@@ -589,7 +593,7 @@ class _QuatScaleToCovarPreci(torch.autograd.Function):
 
 
 class _PerspProj(torch.autograd.Function):
-    """Perspective projection on Gaussians."""
+    """Perspective fully_fused_projection on Gaussians."""
 
     @staticmethod
     def forward(
@@ -685,7 +689,7 @@ class _Projection(torch.autograd.Function):
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         # "covars" and {"quats", "scales"} are mutually exclusive
         radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
-            "projection_fwd"
+            "fully_fused_projection_fwd"
         )(
             means,
             covars,
@@ -731,7 +735,7 @@ class _Projection(torch.autograd.Function):
         if v_compensations is not None:
             v_compensations = v_compensations.contiguous()
         v_means, v_covars, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
-            "projection_bwd"
+            "fully_fused_projection_bwd"
         )(
             means,
             covars,
@@ -932,7 +936,7 @@ class _ProjectionPacked(torch.autograd.Function):
             depths,
             conics,
             compensations,
-        ) = _make_lazy_cuda_func("projection_packed_fwd")(
+        ) = _make_lazy_cuda_func("fully_fused_projection_packed_fwd")(
             means,
             covars,  # optional
             quats,  # optional
@@ -999,7 +1003,7 @@ class _ProjectionPacked(torch.autograd.Function):
         if v_compensations is not None:
             v_compensations = v_compensations.contiguous()
         v_means, v_covars, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
-            "projection_packed_bwd"
+            "fully_fused_projection_packed_bwd"
         )(
             means,
             covars,

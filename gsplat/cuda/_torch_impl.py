@@ -127,7 +127,7 @@ def _world_to_cam(
     return means_c, covars_c
 
 
-def _projection(
+def _fully_fused_projection(
     means: Tensor,  # [N, 3]
     covars: Tensor,  # [N, 3, 3]
     viewmats: Tensor,  # [C, 4, 4]
@@ -139,7 +139,7 @@ def _projection(
     far_plane: float = 1e10,
     calc_compensations: bool = False,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Optional[Tensor]]:
-    """PyTorch implementation of `gsplat.cuda._wrapper.projection()`
+    """PyTorch implementation of `gsplat.cuda._wrapper.fully_fused_projection()`
 
     .. note::
 

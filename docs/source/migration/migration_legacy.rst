@@ -75,7 +75,7 @@ In `v1.0.0`, the equivalent code is:
     renders = renders[0]  # [height, width, 3]
     alphas = alphas[0]  # [height, width]
 
-    # The intermediate results from projection can be accessed via meta, e.g.,
+    # The intermediate results from fully_fused_projection can be accessed via meta, e.g.,
     means2d = meta['means2d'][0]  # [N, 2]
 
 Color as Spherical Harmonics

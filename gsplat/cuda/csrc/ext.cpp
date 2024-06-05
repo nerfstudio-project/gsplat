@@ -14,8 +14,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("world_to_cam_fwd", &world_to_cam_fwd_tensor);
     m.def("world_to_cam_bwd", &world_to_cam_bwd_tensor);
 
-    m.def("projection_fwd", &projection_fwd_tensor);
-    m.def("projection_bwd", &projection_bwd_tensor);
+    m.def("fully_fused_projection_fwd", &fully_fused_projection_fwd_tensor);
+    m.def("fully_fused_projection_bwd", &fully_fused_projection_bwd_tensor);
 
     m.def("isect_tiles", &isect_tiles_tensor);
     m.def("isect_offset_encode", &isect_offset_encode_tensor);
@@ -28,6 +28,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // packed version
     m.def("nonzero", &nonzero_tensor); // a unit test function for packing.
 
-    m.def("projection_packed_fwd", &projection_packed_fwd_tensor);
-    m.def("projection_packed_bwd", &projection_packed_bwd_tensor);
+    m.def("fully_fused_projection_packed_fwd", &fully_fused_projection_packed_fwd_tensor);
+    m.def("fully_fused_projection_packed_bwd", &fully_fused_projection_packed_bwd_tensor);
 }

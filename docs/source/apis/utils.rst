@@ -12,7 +12,7 @@ Below are the basic functions that supports the rasterization.
 
 .. autofunction:: persp_proj
 
-.. autofunction:: projection
+.. autofunction:: fully_fused_projection
 
 .. autofunction:: isect_tiles
 

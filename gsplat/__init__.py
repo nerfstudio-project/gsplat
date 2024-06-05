@@ -2,10 +2,10 @@ import warnings
 
 from .cuda._torch_impl import accumulate
 from .cuda._wrapper import (
+    fully_fused_projection,
     isect_offset_encode,
     isect_tiles,
     persp_proj,
-    projection,
     quat_scale_to_covar_preci,
     rasterize_to_indices_iter,
     rasterize_to_pixels,
@@ -105,7 +105,7 @@ all = [
     "isect_offset_encode",
     "isect_tiles",
     "persp_proj",
-    "projection",
+    "fully_fused_projection",
     "quat_scale_to_covar_preci",
     "rasterize_to_pixels",
     "world_to_cam",
