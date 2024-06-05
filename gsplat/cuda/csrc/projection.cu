@@ -192,8 +192,8 @@ quat_scale_to_covar_preci_fwd_tensor(const torch::Tensor &quats,  // [N, 4]
 std::tuple<torch::Tensor, torch::Tensor> quat_scale_to_covar_preci_bwd_tensor(
     const torch::Tensor &quats,                  // [N, 4]
     const torch::Tensor &scales,                 // [N, 3]
-    const at::optional<torch::Tensor> &v_covars, // [N, 3, 3]
-    const at::optional<torch::Tensor> &v_precis, // [N, 3, 3]
+    const at::optional<torch::Tensor> &v_covars, // [N, 3, 3] or [N, 6]
+    const at::optional<torch::Tensor> &v_precis, // [N, 3, 3] or [N, 6]
     const bool triu) {
     DEVICE_GUARD(quats);
     CHECK_INPUT(quats);
@@ -207,8 +207,8 @@ std::tuple<torch::Tensor, torch::Tensor> quat_scale_to_covar_preci_bwd_tensor(
 
     uint32_t N = quats.size(0);
 
-    torch::Tensor v_scales = torch::empty({N, 3}, scales.options());
-    torch::Tensor v_quats = torch::empty({N, 4}, quats.options());
+    torch::Tensor v_scales = torch::empty_like(scales);
+    torch::Tensor v_quats = torch::empty_like(quats);
 
     if (N) {
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
