@@ -240,7 +240,7 @@ __global__ void persp_proj_fwd_kernel(const uint32_t C, const uint32_t N,
         return;
     }
     const uint32_t cid = idx / N; // camera id
-    const uint32_t gid = idx % N; // gaussian id
+    // const uint32_t gid = idx % N; // gaussian id
 
     // shift pointers to the current camera and gaussian
     means += idx * 3;
@@ -286,7 +286,7 @@ persp_proj_bwd_kernel(const uint32_t C, const uint32_t N,
         return;
     }
     const uint32_t cid = idx / N; // camera id
-    const uint32_t gid = idx % N; // gaussian id
+    // const uint32_t gid = idx % N; // gaussian id
 
     // shift pointers to the current camera and gaussian
     means += idx * 3;
