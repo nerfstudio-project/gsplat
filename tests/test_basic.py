@@ -410,7 +410,7 @@ def test_isect(test_data):
     tile_width = math.ceil(width / tile_size)
     tile_height = math.ceil(height / tile_size)
 
-    tiles_per_gauss, isect_ids, gauss_ids = isect_tiles(
+    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
         means2d, radii, depths, tile_size, tile_width, tile_height
     )
     isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
@@ -422,7 +422,7 @@ def test_isect(test_data):
 
     torch.testing.assert_close(tiles_per_gauss, _tiles_per_gauss)
     torch.testing.assert_close(isect_ids, _isect_ids)
-    torch.testing.assert_close(gauss_ids, _gauss_ids)
+    torch.testing.assert_close(flatten_ids, _gauss_ids)
     torch.testing.assert_close(isect_offsets, _isect_offsets)
 
 
@@ -464,7 +464,7 @@ def test_rasterize_to_pixels(test_data):
     tile_size = 16
     tile_width = math.ceil(width / float(tile_size))
     tile_height = math.ceil(height / float(tile_size))
-    tiles_per_gauss, isect_ids, gauss_ids = isect_tiles(
+    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
         means2d, radii, depths, tile_size, tile_width, tile_height
     )
     isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
@@ -485,7 +485,7 @@ def test_rasterize_to_pixels(test_data):
         height,
         tile_size,
         isect_offsets,
-        gauss_ids,
+        flatten_ids,
         backgrounds=backgrounds,
     )
     _render_colors, _render_alphas = _rasterize_to_pixels(
@@ -497,7 +497,7 @@ def test_rasterize_to_pixels(test_data):
         height,
         tile_size,
         isect_offsets,
-        gauss_ids,
+        flatten_ids,
         backgrounds=backgrounds,
     )
     assert torch.allclose(render_colors, _render_colors)

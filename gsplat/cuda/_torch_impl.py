@@ -231,7 +231,7 @@ def _isect_tiles(
 
     n_isects = tiles_per_gauss.sum().item()
     isect_ids = torch.empty(n_isects, dtype=torch.int64, device=device)
-    gauss_ids = torch.empty(n_isects, dtype=torch.int32, device=device)
+    flatten_ids = torch.empty(n_isects, dtype=torch.int32, device=device)
 
     cum_tiles_per_gauss = torch.cumsum(tiles_per_gauss.flatten(), dim=0)
     tile_n_bits = (tile_width * tile_height).bit_length()
@@ -255,7 +255,7 @@ def _isect_tiles(
                 isect_ids[curr_idx] = (
                     (cam_id << 32 << tile_n_bits) | (tile_id << 32) | depth_id
                 )
-                gauss_ids[curr_idx] = gauss_id
+                flatten_ids[curr_idx] = index  # flattened index
                 curr_idx += 1
 
     for cam_id in range(C):
@@ -264,9 +264,9 @@ def _isect_tiles(
 
     if sort:
         isect_ids, sort_indices = torch.sort(isect_ids)
-        gauss_ids = gauss_ids[sort_indices]
+        flatten_ids = flatten_ids[sort_indices]
 
-    return tiles_per_gauss.int(), isect_ids, gauss_ids
+    return tiles_per_gauss.int(), isect_ids, flatten_ids
 
 
 @torch.no_grad()
@@ -304,7 +304,7 @@ def accumulate(
     conics: Tensor,  # [C, N, 3]
     opacities: Tensor,  # [C, N]
     colors: Tensor,  # [C, N, channels]
-    gauss_ids: Tensor,  # [M]
+    gaussian_ids: Tensor,  # [M]
     pixel_ids: Tensor,  # [M]
     camera_ids: Tensor,  # [M]
     image_width: int,
@@ -313,7 +313,7 @@ def accumulate(
     """Alpah compositing of 2D Gaussians in Pure Pytorch.
 
     This function performs alpha compositing for Gaussians based on the pair of indices
-    {gauss_ids, pixel_ids, camera_ids}, which annotates the intersection between all
+    {gaussian_ids, pixel_ids, camera_ids}, which annotates the intersection between all
     pixels and Gaussians. These intersections can be accquired from
     `gsplat.rasterize_to_indices_iter`.
 
@@ -336,7 +336,7 @@ def accumulate(
         opacities: Per-view Gaussian opacities (for example, when antialiasing is
             enabled, Gaussian in each view would efficiently have different opacity). [C, N]
         colors: Per-view Gaussian colors. Supports N-D features. [C, N, channels]
-        gauss_ids: Collection of Gaussian indices to be rasterized. A flattened list of shape [M].
+        gaussian_ids: Collection of Gaussian indices to be rasterized. A flattened list of shape [M].
         pixel_ids: Collection of pixel indices (row-major) to be rasterized. A flattened list of shape [M].
         camera_ids: Collection of camera indices to be rasterized. A flattened list of shape [M].
         image_width: Image width.
@@ -360,14 +360,14 @@ def accumulate(
     pixel_ids_x = pixel_ids % image_width
     pixel_ids_y = pixel_ids // image_width
     pixel_coords = torch.stack([pixel_ids_x, pixel_ids_y], dim=-1) + 0.5  # [M, 2]
-    deltas = pixel_coords - means2d[camera_ids, gauss_ids]  # [M, 2]
-    c = conics[camera_ids, gauss_ids]  # [M, 3]
+    deltas = pixel_coords - means2d[camera_ids, gaussian_ids]  # [M, 2]
+    c = conics[camera_ids, gaussian_ids]  # [M, 3]
     sigmas = (
         0.5 * (c[:, 0] * deltas[:, 0] ** 2 + c[:, 2] * deltas[:, 1] ** 2)
         + c[:, 1] * deltas[:, 0] * deltas[:, 1]
     )  # [M]
     alphas = torch.clamp_max(
-        opacities[camera_ids, gauss_ids] * torch.exp(-sigmas), 0.999
+        opacities[camera_ids, gaussian_ids] * torch.exp(-sigmas), 0.999
     )
 
     indices = (camera_ids * image_height * image_width + pixel_ids).long()
@@ -377,7 +377,10 @@ def accumulate(
         alphas, ray_indices=indices, n_rays=total_pixels
     )
     renders = accumulate_along_rays(
-        weights, colors[camera_ids, gauss_ids], ray_indices=indices, n_rays=total_pixels
+        weights,
+        colors[camera_ids, gaussian_ids],
+        ray_indices=indices,
+        n_rays=total_pixels,
     ).reshape(C, image_height, image_width, channels)
     alphas = accumulate_along_rays(
         weights, None, ray_indices=indices, n_rays=total_pixels
@@ -395,7 +398,7 @@ def _rasterize_to_pixels(
     image_height: int,
     tile_size: int,
     isect_offsets: Tensor,  # [C, tile_height, tile_width]
-    gauss_ids: Tensor,  # [n_isects]
+    flatten_ids: Tensor,  # [n_isects]
     backgrounds: Optional[Tensor] = None,  # [C, channels]
     batch_per_iter: int = 100,
 ):
@@ -451,7 +454,7 @@ def _rasterize_to_pixels(
             image_height,
             tile_size,
             isect_offsets,
-            gauss_ids,
+            flatten_ids,
         )  # [M], [M]
         if len(gs_ids) == 0:
             break

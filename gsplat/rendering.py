@@ -181,7 +181,7 @@ def rasterization(
         >>> print (meta.keys())
         dict_keys(['camera_ids', 'gaussian_ids', 'radii', 'means2d', 'depths', 'conics',
         'opacities', 'tile_width', 'tile_height', 'tiles_per_gauss', 'isect_ids',
-        'gauss_ids', 'isect_offsets', 'width', 'height', 'tile_size'])
+        'flatten_ids', 'isect_offsets', 'width', 'height', 'tile_size'])
 
     """
 
@@ -245,7 +245,7 @@ def rasterization(
     # Identify intersecting tiles
     tile_width = math.ceil(width / float(tile_size))
     tile_height = math.ceil(height / float(tile_size))
-    tiles_per_gauss, isect_ids, gauss_ids = isect_tiles(
+    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
         means2d,
         radii,
         depths,
@@ -300,7 +300,7 @@ def rasterization(
         height,
         tile_size,
         isect_offsets,
-        gauss_ids,
+        flatten_ids,
         backgrounds=backgrounds,
         packed=packed,
         compute_means2d_absgrad=compute_means2d_absgrad,
@@ -327,7 +327,7 @@ def rasterization(
         "tile_height": tile_height,
         "tiles_per_gauss": tiles_per_gauss,
         "isect_ids": isect_ids,
-        "gauss_ids": gauss_ids,
+        "flatten_ids": flatten_ids,
         "isect_offsets": isect_offsets,
         "width": width,
         "height": height,

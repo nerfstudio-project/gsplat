@@ -308,7 +308,7 @@ def isect_tiles(
           information: camera_id (Xc bits) | tile_id (Xt bits) | depth (32 bits).
           Xc and Xt are the maximum number of bits required to represent the camera and
           tile ids, respectively. Int64 [n_isects]
-        - If packed, this is the indices in the nnz tensor. Else, this is the Gaussian ids. Int32 [n_isects]
+        - **Flatten ids**. The global flatten indices in [C * N] or [nnz] (packed). [n_isects]
     """
     if packed:
         nnz = means2d.size(0)
@@ -328,7 +328,7 @@ def isect_tiles(
         assert radii.shape == (C, N), radii.size()
         assert depths.shape == (C, N), depths.size()
 
-    tiles_per_gauss, isect_ids, gauss_ids = _make_lazy_cuda_func("isect_tiles")(
+    tiles_per_gauss, isect_ids, flatten_ids = _make_lazy_cuda_func("isect_tiles")(
         means2d.contiguous(),
         radii.contiguous(),
         depths.contiguous(),
@@ -340,7 +340,7 @@ def isect_tiles(
         tile_height,
         sort,
     )
-    return tiles_per_gauss, isect_ids, gauss_ids
+    return tiles_per_gauss, isect_ids, flatten_ids
 
 
 @torch.no_grad()
@@ -372,7 +372,7 @@ def rasterize_to_pixels(
     image_height: int,
     tile_size: int,
     isect_offsets: Tensor,  # [C, tile_height, tile_width]
-    gauss_ids: Tensor,  # [n_isects]
+    flatten_ids: Tensor,  # [n_isects]
     backgrounds: Optional[Tensor] = None,  # [C, channels]
     packed: bool = False,
     compute_means2d_absgrad: bool = False,
@@ -388,7 +388,7 @@ def rasterize_to_pixels(
         image_height: Image height.
         tile_size: Tile size.
         isect_offsets: Intersection offsets outputs from `isect_offset_encode()`. [C, tile_height, tile_width]
-        gauss_ids: Gaussian ids outputs from `isect_tiles()`. [n_isects]
+        flatten_ids: The global flatten indices in [C * N] or [nnz] from  `isect_tiles()`. [n_isects]
         backgrounds: Background colors. [C, channels]. Default: None.
         packed: If True, the input tensors are expected to be packed with shape [nnz, ...]. Default: False.
         compute_means2d_absgrad: If True, the backward pass will compute a `.absgrad` attribute for `means2d`. Default: False.
@@ -463,7 +463,7 @@ def rasterize_to_pixels(
         image_height,
         tile_size,
         isect_offsets.contiguous(),
-        gauss_ids.contiguous(),
+        flatten_ids.contiguous(),
         compute_means2d_absgrad,
     )
 
@@ -484,7 +484,7 @@ def rasterize_to_indices_iter(
     image_height: int,
     tile_size: int,
     isect_offsets: Tensor,  # [C, tile_height, tile_width]
-    gauss_ids: Tensor,  # [n_isects]
+    flatten_ids: Tensor,  # [n_isects]
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """Rasterizes a batch of Gaussians to images but only returns the indices.
 
@@ -506,7 +506,7 @@ def rasterize_to_indices_iter(
         image_height: Image height.
         tile_size: Tile size.
         isect_offsets: Intersection offsets outputs from `isect_offset_encode()`. [C, tile_height, tile_width]
-        gauss_ids: Gaussian ids for the tile intersection, outputs from `isect_tiles()`. [n_isects]
+        flatten_ids: The global flatten indices in [C * N] from  `isect_tiles()`. [n_isects]
 
     Returns:
         A tuple:
@@ -540,7 +540,7 @@ def rasterize_to_indices_iter(
         image_height,
         tile_size,
         isect_offsets.contiguous(),
-        gauss_ids.contiguous(),
+        flatten_ids.contiguous(),
     )
     out_pixel_ids = out_indices % (image_width * image_height)
     out_camera_ids = out_indices // (image_width * image_height)
@@ -793,7 +793,7 @@ class _RasterizeToPixels(torch.autograd.Function):
         height: int,
         tile_size: int,
         isect_offsets: Tensor,  # [C, tile_height, tile_width]
-        gauss_ids: Tensor,  # [n_isects]
+        flatten_ids: Tensor,  # [n_isects]
         compute_means2d_absgrad: bool,
     ) -> Tuple[Tensor, Tensor]:
         render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
@@ -808,7 +808,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             height,
             tile_size,
             isect_offsets,
-            gauss_ids,
+            flatten_ids,
         )
 
         ctx.save_for_backward(
@@ -818,7 +818,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             opacities,
             backgrounds,
             isect_offsets,
-            gauss_ids,
+            flatten_ids,
             render_alphas,
             last_ids,
         )
@@ -844,7 +844,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             opacities,
             backgrounds,
             isect_offsets,
-            gauss_ids,
+            flatten_ids,
             render_alphas,
             last_ids,
         ) = ctx.saved_tensors
@@ -869,7 +869,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             height,
             tile_size,
             isect_offsets,
-            gauss_ids,
+            flatten_ids,
             render_alphas,
             last_ids,
             v_render_colors.contiguous(),

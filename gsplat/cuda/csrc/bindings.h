@@ -124,7 +124,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
     const int image_width, const int image_height, const int tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
-    const torch::Tensor &gauss_ids     // [n_isects]
+    const torch::Tensor &flatten_ids     // [n_isects]
 );
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
@@ -139,7 +139,7 @@ rasterize_to_pixels_bwd_tensor(
     const int image_width, const int image_height, const int tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
-    const torch::Tensor &gauss_ids,    // [n_isects]
+    const torch::Tensor &flatten_ids,    // [n_isects]
     // forward outputs
     const torch::Tensor &render_alphas, // [C, image_height, image_width, 1]
     const torch::Tensor &last_ids,      // [C, image_height, image_width]
@@ -160,7 +160,7 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_iter_tensor(
     const int image_width, const int image_height, const int tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
-    const torch::Tensor &gauss_ids     // [n_isects]
+    const torch::Tensor &flatten_ids     // [n_isects]
 );
 
 torch::Tensor compute_sh_fwd_tensor(const unsigned degrees_to_use,
