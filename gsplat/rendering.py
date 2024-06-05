@@ -34,7 +34,7 @@ def rasterization(
     backgrounds: Optional[Tensor] = None,
     render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
     sparse_grad: bool = False,
-    compute_means2d_absgrad: bool = False,
+    absgrad: bool = False,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
@@ -99,7 +99,7 @@ def rasterization(
         the paper `Mip-Splatting: Alias-free 3D Gaussian Splatting <https://arxiv.org/pdf/2311.16493>`_.
 
     .. note::
-        **AbsGrad**: If `compute_means2d_absgrad` is True, the absolute gradients of the projected
+        **AbsGrad**: If `absgrad` is True, the absolute gradients of the projected
         2D means will be computed during the backward pass, which could be accessed by
         `meta["means2d"].absgrad`. This is an implementation of the paper
         `AbsGS: Recovering Fine Details for 3D Gaussian Splatting <https://arxiv.org/abs/2404.10484>`_,
@@ -139,7 +139,7 @@ def rasterization(
             "ED" renders the expected depth. Default is "RGB".
         sparse_grad: If true, the gradients for {means, quats, scales} will be stored in
             a COO sparse layout. This can be helpful for saving memory. Default is False.
-        compute_means2d_absgrad: If true, the absolute gradients of the projected 2D means
+        absgrad: If true, the absolute gradients of the projected 2D means
             will be computed during the backward pass, which could be accessed by
             `meta["means2d"].absgrad`. Default is False.
         rasterize_mode: The rasterization mode. Supported modes are "classic" and
@@ -301,7 +301,7 @@ def rasterization(
         flatten_ids,
         backgrounds=backgrounds,
         packed=packed,
-        compute_means2d_absgrad=compute_means2d_absgrad,
+        absgrad=absgrad,
     )
     if render_mode in ["ED", "RGB+ED"]:
         # normalize the accumulated depth to get the expected depth

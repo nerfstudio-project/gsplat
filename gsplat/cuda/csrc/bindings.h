@@ -147,7 +147,7 @@ rasterize_to_pixels_bwd_tensor(
     const torch::Tensor &v_render_colors, // [C, image_height, image_width, 3]
     const torch::Tensor &v_render_alphas, // [C, image_height, image_width, 1]
     // options
-    bool compute_means2d_absgrad);
+    bool absgrad);
 
 std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
     const uint32_t range_start, const uint32_t range_end,   // iteration steps

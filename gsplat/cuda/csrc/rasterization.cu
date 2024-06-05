@@ -1044,7 +1044,7 @@ rasterize_to_pixels_bwd_tensor(
     const torch::Tensor &v_render_colors, // [C, image_height, image_width, 3]
     const torch::Tensor &v_render_alphas, // [C, image_height, image_width, 1]
     // options
-    bool compute_means2d_absgrad) {
+    bool absgrad) {
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
     CHECK_INPUT(conics);
@@ -1079,7 +1079,7 @@ rasterize_to_pixels_bwd_tensor(
     torch::Tensor v_colors = torch::zeros_like(colors);
     torch::Tensor v_opacities = torch::zeros_like(opacities);
     torch::Tensor v_means2d_abs;
-    if (compute_means2d_absgrad) {
+    if (absgrad) {
         v_means2d_abs = torch::zeros_like(means2d);
     }
 
@@ -1097,7 +1097,7 @@ rasterize_to_pixels_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                compute_means2d_absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
                                         : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
@@ -1114,7 +1114,7 @@ rasterize_to_pixels_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                compute_means2d_absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
                                         : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
@@ -1131,7 +1131,7 @@ rasterize_to_pixels_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                compute_means2d_absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
                                         : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
@@ -1148,7 +1148,7 @@ rasterize_to_pixels_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                compute_means2d_absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
                                         : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
@@ -1165,7 +1165,7 @@ rasterize_to_pixels_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                compute_means2d_absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
                                         : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
@@ -1182,7 +1182,7 @@ rasterize_to_pixels_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                compute_means2d_absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
                                         : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
@@ -1199,7 +1199,7 @@ rasterize_to_pixels_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                compute_means2d_absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
                                         : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),

@@ -338,7 +338,7 @@ class Runner:
             width=width,
             height=height,
             packed=self.cfg.packed,
-            compute_means2d_absgrad=self.cfg.absgrad,
+            absgrad=self.cfg.absgrad,
             sparse_grad=self.cfg.sparse_grad,
             rasterize_mode=rasterize_mode,
             **kwargs,
