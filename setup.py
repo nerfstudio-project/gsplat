@@ -116,6 +116,7 @@ setup(
     download_url=f"{URL}/archive/gsplat-{__version__}.tar.gz",
     python_requires=">=3.7",
     install_requires=[
+        "ninja",
         "numpy",
         "jaxtyping",
         "rich>=12",
@@ -134,7 +135,6 @@ setup(
             "pyyaml==6.0",
             "build",
             "twine",
-            "ninja",
         ],
     },
     ext_modules=get_extensions() if not BUILD_NO_CUDA else [],
