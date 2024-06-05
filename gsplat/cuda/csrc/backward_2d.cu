@@ -50,7 +50,7 @@ __global__ void project_gaussians_backward_kernel(
 
 
     const float* ray_transformation = &(ray_transformations[9 * idx]);
-    const float* v_ray_transformation = &(v_ray_transformations[9 * idx]);
+    float* v_ray_transformation = &(v_ray_transformations[9 * idx]);
     // const float* v_normal3D = &(v_normal3Ds[3 * idx]);
 
     glm::vec3 p_world = glm::vec3(means3d[idx].x, means3d[idx].y, means3d[idx].z);
@@ -63,36 +63,54 @@ __global__ void project_gaussians_backward_kernel(
     glm::vec2 v_scale;
     glm::vec4 v_quat;
 
-    build_AABB(
-        num_points,
-        radii,
-        img_size.x,
-        img_size.y,
-        ray_transformations,
-
-        v_mean2Ds,
-        v_ray_transformations
-    );
-    
-    build_H(
+    build_transform_and_AABB(
         p_world,
         quats[idx],
         scales[idx],
         viewmat,
         intrins,
+        radii,
         tan_fovx,
         tan_fovy,
         ray_transformation,
 
-        // grad input
         v_ray_transformation,
-        // v_normal3D,
-
-        // grad output
         v_mean3D,
         v_scale,
-        v_quat
+        v_quat,
+        v_mean2Ds[idx]
     );
+
+    // build_AABB(
+    //     idx,
+    //     radii,
+    //     img_size.x,
+    //     img_size.y,
+    //     ray_transformations,
+
+    //     v_mean2Ds,
+    //     v_ray_transformations
+    // );
+    
+    // build_H(
+    //     p_world,
+    //     quats[idx],
+    //     scales[idx],
+    //     viewmat,
+    //     intrins,
+    //     tan_fovx,
+    //     tan_fovy,
+    //     ray_transformation,
+
+    //     // grad input
+    //     v_ray_transformation,
+    //     // v_normal3D,
+
+    //     // grad output
+    //     v_mean3D,
+    //     v_scale,
+    //     v_quat
+    // );
 
     // Update 
     float3 v_mean3D_float = {v_mean3D.x, v_mean3D.y, v_mean3D.z};
@@ -477,10 +495,7 @@ __device__ void build_AABB(
     float d = glm::dot(glm::vec3(1.0, 1.0, -1.0), T[3] * T[3]);
     glm::vec3 f = glm::vec3(1.0, 1.0, -1.0) * (1.0f / d);
 
-    // hello
-    // This is a test
-    // ok seems like vpn works?
-    // test test
+
     glm::vec3 p = glm::vec3(
         glm::dot(f, T[0] * T[3]),
         glm::dot(f, T[1] * T[3]),
@@ -504,8 +519,114 @@ __device__ void build_AABB(
     v_ray_transformations[9 * idx + 7] += v_T3.y;
     v_ray_transformations[9 * idx + 8] += v_T3.z;
 
-    // just use to hack the projected 2D gradient here.
-    float z = ray_transformation[8];
-    v_mean2Ds[idx].x = v_ray_transformations[9 * idx + 2] * z * W; // to ndc
-    v_mean2Ds[idx].y = v_ray_transformations[9 * idx + 5] * z * H; // to ndc
+}
+
+__device__ void build_transform_and_AABB(
+    const glm::vec3& p_world, 
+    const float4& quat,
+    const float2& scale,
+    const float* viewmat,
+    const float4& intrins,
+    const int* radii,
+    float tan_fovx,
+    float tan_fovy,
+    const float* ray_transformation,
+
+    // grad 
+    float* v_ray_transformation,
+    glm::vec3& v_mean3D,
+    glm::vec2& v_scale,
+    glm::vec4& v_quat,
+    float3& v_mean2D
+) {
+
+    glm::mat3 M = glm::mat3(
+        ray_transformation[0], ray_transformation[1], ray_transformation[2],
+        ray_transformation[3], ray_transformation[4], ray_transformation[5],
+        ray_transformation[6], ray_transformation[7], ray_transformation[8]
+    );
+
+    float distance = glm::dot(glm::vec3(1.0, 1.0, -1.0), M[2] * M[2]);
+    glm::vec3 temp_point = glm::vec3(1.0f, 1.0f, -1.0f);
+    glm::vec3 f = (1.0f / distance) * temp_point; 
+
+    glm::vec3 p = glm::vec3(
+        glm::dot(f, M[0] * M[2]),
+        glm::dot(f, M[1] * M[2]),
+        glm::dot(f, M[2] * M[2])
+    );
+
+    glm::vec3 v_T0 = v_mean2D.x * f * M[2];
+    glm::vec3 v_T1 = v_mean2D.y * f * M[2];
+    glm::vec3 v_T3 = v_mean2D.x * f * M[0] + v_mean2D.y * f * M[1];
+    glm::vec3 v_f = (v_mean2D.x * M[0] * M[2]) + (v_mean2D.y * M[1] * M[2]);
+    float v_distance = glm::dot(v_f, f) * (-1.0 / distance);
+    glm::vec3 dd_dT3 = glm::vec3(1.0, 1.0, -1.0) * M[2] * 2.0f;
+    v_T3 += v_distance * dd_dT3;
+    v_ray_transformation[0] += v_T0.x;
+    v_ray_transformation[1] += v_T0.y;
+    v_ray_transformation[2] += v_T0.z;
+    v_ray_transformation[3] += v_T1.x;
+    v_ray_transformation[4] += v_T1.y;
+    v_ray_transformation[5] += v_T1.z;
+    v_ray_transformation[6] += v_T3.x;
+    v_ray_transformation[7] += v_T3.y;
+    v_ray_transformation[8] += v_T3.z;
+
+    //====== ray transformation gradient ======//
+    // camera information
+    const glm::mat3 W = glm::mat3(
+        viewmat[0], viewmat[1], viewmat[2],
+        viewmat[4], viewmat[5], viewmat[6],
+        viewmat[8], viewmat[9], viewmat[10]
+    ); // viewmat
+
+    const glm::vec3 cam_pos = glm::vec3(viewmat[3], viewmat[7], viewmat[11]); // camera center
+    glm::mat3 P = glm::mat3(
+        intrins.x, 0.0, 0.0,
+        0.0, intrins.y, 0.0,
+        intrins.z, intrins.w, 1.0
+    );
+
+    glm::mat3 S = scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
+    glm::mat3 R = quat_to_rotmat(quat);
+    glm::mat3 RS = R * S;
+    glm::vec3 p_view = W * p_world + cam_pos;
+    // glm::mat3 M = glm::mat3(W * RS[0], W * RS[1], p_view);
+
+    glm::mat3 v_T = glm::mat3(
+        v_ray_transformation[0], v_ray_transformation[1], v_ray_transformation[2],
+        v_ray_transformation[3], v_ray_transformation[4], v_ray_transformation[5],
+        v_ray_transformation[6], v_ray_transformation[7], v_ray_transformation[8]
+    );
+
+    glm::mat3 v_M_aug = glm::transpose(P) * glm::transpose(v_T);
+    glm::mat3 v_M = glm::mat3(
+        glm::vec3(v_M_aug[0]),
+        glm::vec3(v_M_aug[1]),
+        glm::vec3(v_M_aug[2])
+    );
+
+    glm::mat3 W_t = glm::transpose(W);
+    glm::mat3 v_RS = W_t * v_M;
+    glm::vec3 v_RS0 = v_RS[0];
+    glm::vec3 v_RS1 = v_RS[1];
+    glm::vec3 v_intersectw = v_RS[2];
+    // glm::vec3 v_tn = W_t * glm::vec3(v_normal3D[0], v_normal3D[1], v_normal3D[2]);
+    glm::vec3 v_tn = W_t * glm::vec3(0.0, 0.0, 0.0);
+
+    
+    glm::mat3 v_R = glm::mat3(
+        v_RS0 * glm::vec3(scale.x),
+        v_RS1 * glm::vec3(scale.y),
+        v_tn
+    );
+
+    v_quat = quat_to_rotmat_vjp(quat, v_R);
+    v_scale = glm::vec2(
+        (float)glm::dot(v_RS0, R[0]),
+        (float)glm::dot(v_RS1, R[1])
+    );
+
+    v_mean3D = v_intersectw;
 }

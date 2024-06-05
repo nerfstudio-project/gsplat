@@ -83,5 +83,24 @@ __device__ void build_AABB(
 
     // grad output
     float3 * v_mean2Ds,
-    float *dL_ray_transformations
+    float *v_ray_transformations
+);
+
+__device__ void build_transform_and_AABB(
+    const glm::vec3& p_world,
+    const float4& quat,
+    const float2& scale,
+    const float* viewmat,
+    const float4& intrins,
+    const int* radii,
+    float tan_fovx,
+    float tan_fovy,
+    const float* ray_transformation,
+
+    // grad
+    float* v_ray_transformations,
+    glm::vec3& v_mean3D,
+    glm::vec2& v_scale,
+    glm::vec4& v_quat,
+    float3& v_mean2D
 );
