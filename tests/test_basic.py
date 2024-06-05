@@ -10,14 +10,13 @@ import math
 
 import pytest
 import torch
-import torch.nn.functional as F
 
 from gsplat._helper import load_test_data
 
 device = torch.device("cuda:0")
 
 
-@pytest.mark.skipif(not torch.cuda.is_available, reason="No CUDA device")
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.fixture
 def test_data():
     (
