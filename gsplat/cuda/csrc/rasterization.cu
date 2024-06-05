@@ -13,9 +13,9 @@ __global__ void isect_tiles(
     // if the data is [C, N, ...] or [nnz, ...] (packed)
     const bool packed,
     // parallelize over C * N, only used if packed is False
-    const int C, const int N,
+    const uint32_t C, const uint32_t N,
     // parallelize over nnz, only used if packed is True
-    const int nnz,
+    const uint32_t nnz,
     const int32_t *__restrict__ camera_ids, // [nnz] optional
     const int32_t *__restrict__ gaussian_ids, // [nnz] optional
     // data
@@ -23,14 +23,14 @@ __global__ void isect_tiles(
     const int32_t *__restrict__ radii,               // [C, N] or [nnz]
     const float *__restrict__ depths,                // [C, N] or [nnz]
     const int64_t *__restrict__ cum_tiles_per_gauss, // [C, N] or [nnz]
-    const int tile_size, const int tile_width, const int tile_height,
-    const int tile_n_bits,
+    const uint32_t tile_size, const uint32_t tile_width, const uint32_t tile_height,
+    const uint32_t tile_n_bits,
     int32_t *__restrict__ tiles_per_gauss, // [C, N] or [nnz]
     int64_t *__restrict__ isect_ids,       // [n_isects]
     int32_t *__restrict__ flatten_ids        // [n_isects]
 ) {
     // parallelize over C * N.
-    unsigned idx = cg::this_grid().thread_rank();
+    uint32_t idx = cg::this_grid().thread_rank();
     bool first_pass = cum_tiles_per_gauss == nullptr;
     if (idx >= (packed ? nnz : C * N))
         return;
@@ -46,39 +46,39 @@ __global__ void isect_tiles(
 
     // tile_min is inclusive, tile_max is exclusive
     uint2 tile_min, tile_max;
-    tile_min.x = min(max(0, (int)floor(tile_x - tile_radius)), tile_width);
-    tile_min.y = min(max(0, (int)floor(tile_y - tile_radius)), tile_height);
-    tile_max.x = min(max(0, (int)ceil(tile_x + tile_radius)), tile_width);
-    tile_max.y = min(max(0, (int)ceil(tile_y + tile_radius)), tile_height);
+    tile_min.x = min(max(0, (uint32_t)floor(tile_x - tile_radius)), tile_width);
+    tile_min.y = min(max(0, (uint32_t)floor(tile_y - tile_radius)), tile_height);
+    tile_max.x = min(max(0, (uint32_t)ceil(tile_x + tile_radius)), tile_width);
+    tile_max.y = min(max(0, (uint32_t)ceil(tile_y + tile_radius)), tile_height);
 
     if (first_pass) {
         // first pass only writes out tiles_per_gauss
-        tiles_per_gauss[idx] = (tile_max.y - tile_min.y) * (tile_max.x - tile_min.x);
+        tiles_per_gauss[idx] = static_cast<int32_t>((tile_max.y - tile_min.y) * (tile_max.x - tile_min.x));
         return;
     }
 
     int64_t cid; // camera id
-    int32_t gid; // gaussian id
     if (packed) {
         // parallelize over nnz
         cid = camera_ids[idx];
-        gid = gaussian_ids[idx];
+        // gid = gaussian_ids[idx];
     } else {
         // parallelize over C * N
         cid = idx / N;
-        gid = idx % N;
+        // gid = idx % N;
     }
     const int64_t cid_enc = cid << (32 + tile_n_bits);
 
     int64_t depth_id_enc = (int64_t) * (int32_t *)&(depths[idx]);
     int64_t cur_idx = (idx == 0) ? 0 : cum_tiles_per_gauss[idx - 1];
-    for (int i = tile_min.y; i < tile_max.y; ++i) {
-        for (int j = tile_min.x; j < tile_max.x; ++j) {
+    for (int32_t i = tile_min.y; i < tile_max.y; ++i) {
+        for (int32_t j = tile_min.x; j < tile_max.x; ++j) {
             int64_t tile_id = i * tile_width + j;
             // e.g. tile_n_bits = 22:
             // camera id (10 bits) | tile id (22 bits) | depth (32 bits)
             isect_ids[cur_idx] = cid_enc | (tile_id << 32) | depth_id_enc;
-            flatten_ids[cur_idx] = idx; // the flatten index in [C * N] or [nnz]
+            // the flatten index in [C * N] or [nnz]
+            flatten_ids[cur_idx] = static_cast<int32_t>(idx);
             ++cur_idx;
         }
     }
@@ -90,8 +90,8 @@ isect_tiles_tensor(const torch::Tensor &means2d,                // [C, N, 2] or 
                    const torch::Tensor &depths,                 // [C, N] or [nnz]
                    const at::optional<torch::Tensor> &camera_ids, // [nnz]
                    const at::optional<torch::Tensor> &gaussian_ids, // [nnz]
-                   const int C, const int tile_size, const int tile_width,
-                   const int tile_height, const bool sort) {
+                   const uint32_t C, const uint32_t tile_size, const uint32_t tile_width,
+                   const uint32_t tile_height, const bool sort) {
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
     CHECK_INPUT(radii);
@@ -104,7 +104,7 @@ isect_tiles_tensor(const torch::Tensor &means2d,                // [C, N, 2] or 
     }
     bool packed = means2d.dim() == 2;
 
-    int N, nnz, total_elems;
+    uint32_t N, nnz, total_elems;
     int32_t *rindices_ptr;
     int32_t *cindices_ptr;
     if (packed) {
@@ -118,15 +118,15 @@ isect_tiles_tensor(const torch::Tensor &means2d,                // [C, N, 2] or 
         total_elems = C * N;
     }
 
-    int n_tiles = tile_width * tile_height;
+    uint32_t n_tiles = tile_width * tile_height;
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
     // the number of bits needed to encode the camera id and tile id
     // Note: std::bit_width requires C++20
-    // int tile_n_bits = std::bit_width(n_tiles);
-    // int cam_n_bits = std::bit_width(C);
-    int tile_n_bits = (int)floor(log2(n_tiles)) + 1;
-    int cam_n_bits = (int)floor(log2(C)) + 1;
+    // uint32_t tile_n_bits = std::bit_width(n_tiles);
+    // uint32_t cam_n_bits = std::bit_width(C);
+    uint32_t tile_n_bits = (uint32_t)floor(log2(n_tiles)) + 1;
+    uint32_t cam_n_bits = (uint32_t)floor(log2(C)) + 1;
     // the first 32 bits are used for the camera id and tile id altogether, so check if
     // we have enough bits for them.
     assert(tile_n_bits + cam_n_bits <= 32);
@@ -179,16 +179,16 @@ isect_tiles_tensor(const torch::Tensor &means2d,                // [C, N, 2] or 
     }
 }
 
-__global__ void isect_offset_encode(const int n_isects,
-                                    const int64_t *__restrict__ isect_ids, const int C,
-                                    const int n_tiles, const int tile_n_bits,
+__global__ void isect_offset_encode(const uint32_t n_isects,
+                                    const int64_t *__restrict__ isect_ids, const uint32_t C,
+                                    const uint32_t n_tiles, const uint32_t tile_n_bits,
                                     int32_t *__restrict__ offsets // [C, n_tiles]
 ) {
     // e.g., ids: [1, 1, 1, 3, 3], n_tiles = 6
     // counts: [0, 3, 0, 2, 0, 0]
     // cumsum: [0, 3, 3, 5, 5, 5]
     // offsets: [0, 0, 3, 3, 5, 5]
-    unsigned idx = cg::this_grid().thread_rank();
+    uint32_t idx = cg::this_grid().thread_rank();
     if (idx >= n_isects)
         return;
 
@@ -199,13 +199,13 @@ __global__ void isect_offset_encode(const int n_isects,
 
     if (idx == 0) {
         // write out the offsets until the first valid tile (inclusive)
-        for (int i = 0; i < id_curr + 1; ++i)
-            offsets[i] = idx;
+        for (uint32_t i = 0; i < id_curr + 1; ++i)
+            offsets[i] = static_cast<int32_t>(idx);
     }
     if (idx == n_isects - 1) {
         // write out the rest of the offsets
-        for (int i = id_curr + 1; i < C * n_tiles; ++i)
-            offsets[i] = n_isects;
+        for (uint32_t i = id_curr + 1; i < C * n_tiles; ++i)
+            offsets[i] = static_cast<int32_t>(n_isects);
     }
 
     if (idx > 0) {
@@ -219,23 +219,23 @@ __global__ void isect_offset_encode(const int n_isects,
         int64_t cid_prev = isect_id_prev >> tile_n_bits;
         int64_t tid_prev = isect_id_prev & ((1 << tile_n_bits) - 1);
         int64_t id_prev = cid_prev * n_tiles + tid_prev;
-        for (int i = id_prev + 1; i < id_curr + 1; ++i)
-            offsets[i] = idx;
+        for (uint32_t i = id_prev + 1; i < id_curr + 1; ++i)
+            offsets[i] = static_cast<int32_t>(idx);
     }
 }
 
 torch::Tensor isect_offset_encode_tensor(const torch::Tensor &isect_ids, // [n_isects]
-                                         const int C, const int tile_width,
-                                         const int tile_height) {
+                                         const uint32_t C, const uint32_t tile_width,
+                                         const uint32_t tile_height) {
     DEVICE_GUARD(isect_ids);
     CHECK_INPUT(isect_ids);
 
-    int n_isects = isect_ids.size(0);
+    uint32_t n_isects = isect_ids.size(0);
     torch::Tensor offsets = torch::empty({C, tile_height, tile_width},
                                          isect_ids.options().dtype(torch::kInt32));
     if (n_isects) {
-        int n_tiles = tile_width * tile_height;
-        int tile_n_bits = (int)floor(log2(n_tiles)) + 1;
+        uint32_t n_tiles = tile_width * tile_height;
+        uint32_t tile_n_bits = (uint32_t)floor(log2(n_tiles)) + 1;
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
         isect_offset_encode<<<(n_isects + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
                               stream>>>(n_isects, isect_ids.data_ptr<int64_t>(), C,
@@ -252,12 +252,12 @@ torch::Tensor isect_offset_encode_tensor(const torch::Tensor &isect_ids, // [n_i
  ****************************************************************************/
 
 __global__ void rasterize_to_indices_in_range_kernel(
-    const int range_start, const int range_end, const int C, const int N, const int n_isects,
+    const uint32_t range_start, const uint32_t range_end, const uint32_t C, const uint32_t N, const uint32_t n_isects,
     const float2 *__restrict__ means2d,  // [C, N, 2]
     const float3 *__restrict__ conics,   // [C, N, 3]
     const float *__restrict__ opacities, // [C, N]
-    const int image_width, const int image_height, const int tile_size,
-    const int tile_width, const int tile_height,
+    const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
+    const uint32_t tile_width, const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,    // [n_isects]
     const float *__restrict__ transmittances, // [C, image_height, image_width]
@@ -270,10 +270,10 @@ __global__ void rasterize_to_indices_in_range_kernel(
     // shared tile
 
     auto block = cg::this_thread_block();
-    int32_t camera_id = block.group_index().x;
-    int32_t tile_id = block.group_index().y * tile_width + block.group_index().z;
-    unsigned i = block.group_index().y * tile_size + block.thread_index().y;
-    unsigned j = block.group_index().z * tile_size + block.thread_index().x;
+    uint32_t camera_id = block.group_index().x;
+    uint32_t tile_id = block.group_index().y * tile_width + block.group_index().z;
+    uint32_t i = block.group_index().y * tile_size + block.thread_index().y;
+    uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
 
     // move pointers to the current camera
     tile_offsets += camera_id * tile_height * tile_width;
@@ -289,7 +289,7 @@ __global__ void rasterize_to_indices_in_range_kernel(
     bool done = !inside;
 
     bool first_pass = chunk_starts == nullptr;
-    int base;
+    int32_t base;
     if (!first_pass && inside) {
         chunk_starts += camera_id * image_height * image_width;
         base = chunk_starts[pix_id];
@@ -303,8 +303,8 @@ __global__ void rasterize_to_indices_in_range_kernel(
         (camera_id == C - 1) && (tile_id == tile_width * tile_height - 1)
             ? n_isects
             : tile_offsets[tile_id + 1];
-    const int block_size = block.size();
-    int num_batches = (isect_range_end - isect_range_start + block_size - 1) / block_size;
+    const uint32_t block_size = block.size();
+    uint32_t num_batches = (isect_range_end - isect_range_start + block_size - 1) / block_size;
 
     if (range_start >= num_batches) {
         // this entire tile has been processed in the previous iterations
@@ -325,16 +325,14 @@ __global__ void rasterize_to_indices_in_range_kernel(
         T = transmittances[pix_id];
         next_T = T;
     }
-    // index of most recent gaussian to write to this thread's pixel
-    int cur_idx = 0;
-
+    
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing its
     // designated pixel
-    int tr = block.thread_rank();
+    uint32_t tr = block.thread_rank();
 
-    int cnt = 0;
-    for (int b = range_start; b < min(range_end, num_batches); ++b) {
+    int32_t cnt = 0;
+    for (uint32_t b = range_start; b < min(range_end, num_batches); ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
         if (__syncthreads_count(done) >= block_size) {
@@ -343,8 +341,8 @@ __global__ void rasterize_to_indices_in_range_kernel(
 
         // each thread fetch 1 gaussian from front to back
         // index of gaussian to load
-        int batch_start = isect_range_start + block_size * b;
-        int idx = batch_start + tr;
+        uint32_t batch_start = isect_range_start + block_size * b;
+        uint32_t idx = batch_start + tr;
         if (idx < isect_range_end) {
             int32_t g = flatten_ids[idx];
             id_batch[tr] = g;
@@ -358,8 +356,8 @@ __global__ void rasterize_to_indices_in_range_kernel(
         block.sync();
 
         // process gaussians in the current batch for this pixel
-        int batch_size = min(block_size, isect_range_end - batch_start);
-        for (int t = 0; (t < batch_size) && !done; ++t) {
+        uint32_t batch_size = min(block_size, isect_range_end - batch_start);
+        for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
             const float3 conic = conic_batch[t];
             const float3 xy_opac = xy_opacity_batch[t];
             const float opac = xy_opac.z;
@@ -403,14 +401,14 @@ __global__ void rasterize_to_indices_in_range_kernel(
 }
 
 std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
-    const int range_start, const int range_end,   // iteration steps
+    const uint32_t range_start, const uint32_t range_end,   // iteration steps
     const torch::Tensor transmittances, // [C, image_height, image_width]
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2]
     const torch::Tensor &conics,    // [C, N, 3]
     const torch::Tensor &opacities, // [C, N]
     // image size
-    const int image_width, const int image_height, const int tile_size,
+    const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
     const torch::Tensor &flatten_ids     // [n_isects]
@@ -422,11 +420,11 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
     CHECK_INPUT(tile_offsets);
     CHECK_INPUT(flatten_ids);
 
-    int C = means2d.size(0); // number of cameras
-    int N = means2d.size(1); // number of gaussians
-    int tile_height = tile_offsets.size(1);
-    int tile_width = tile_offsets.size(2);
-    int n_isects = flatten_ids.size(0);
+    uint32_t C = means2d.size(0); // number of cameras
+    uint32_t N = means2d.size(1); // number of gaussians
+    uint32_t tile_height = tile_offsets.size(1);
+    uint32_t tile_width = tile_offsets.size(2);
+    uint32_t n_isects = flatten_ids.size(0);
 
     // Each block covers a tile on the image. In total there are
     // C * tile_height * tile_width blocks.
@@ -473,14 +471,14 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
 
 template <uint32_t COLOR_DIM>
 __global__ void rasterize_to_pixels_fwd_kernel(
-    const int C, const int N, const int n_isects, const bool packed,
+    const uint32_t C, const uint32_t N, const uint32_t n_isects, const bool packed,
     const float2 *__restrict__ means2d,    // [C, N, 2] or [nnz, 2]
     const float3 *__restrict__ conics,     // [C, N, 3] or [nnz, 3]
     const float *__restrict__ colors,      // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
     const float *__restrict__ opacities,   // [C, N] or [nnz]
     const float *__restrict__ backgrounds, // [C, COLOR_DIM]
-    const int image_width, const int image_height, const int tile_size,
-    const int tile_width, const int tile_height,
+    const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
+    const uint32_t tile_width, const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,    // [n_isects]
     float *__restrict__ render_colors, // [C, image_height, image_width, COLOR_DIM]
@@ -493,8 +491,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     auto block = cg::this_thread_block();
     int32_t camera_id = block.group_index().x;
     int32_t tile_id = block.group_index().y * tile_width + block.group_index().z;
-    unsigned i = block.group_index().y * tile_size + block.thread_index().y;
-    unsigned j = block.group_index().z * tile_size + block.thread_index().x;
+    uint32_t i = block.group_index().y * tile_size + block.thread_index().y;
+    uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
 
     tile_offsets += camera_id * tile_height * tile_width;
     render_colors += camera_id * image_height * image_width * COLOR_DIM;
@@ -521,8 +519,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         (camera_id == C - 1) && (tile_id == tile_width * tile_height - 1)
             ? n_isects
             : tile_offsets[tile_id + 1];
-    const int block_size = block.size();
-    int num_batches = (range_end - range_start + block_size - 1) / block_size;
+    const uint32_t block_size = block.size();
+    uint32_t num_batches = (range_end - range_start + block_size - 1) / block_size;
 
     __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
     __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
@@ -534,15 +532,15 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     // so we stick with float for now.
     float T = 1.0f;
     // index of most recent gaussian to write to this thread's pixel
-    int cur_idx = 0;
+    uint32_t cur_idx = 0;
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing its
     // designated pixel
-    int tr = block.thread_rank();
+    uint32_t tr = block.thread_rank();
 
     float pix_out[COLOR_DIM] = {0.f};
-    for (int b = 0; b < num_batches; ++b) {
+    for (uint32_t b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
         if (__syncthreads_count(done) >= block_size) {
@@ -551,8 +549,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
 
         // each thread fetch 1 gaussian from front to back
         // index of gaussian to load
-        int batch_start = range_start + block_size * b;
-        int idx = batch_start + tr;
+        uint32_t batch_start = range_start + block_size * b;
+        uint32_t idx = batch_start + tr;
         if (idx < range_end) {
             int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
             id_batch[tr] = g;
@@ -566,8 +564,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         block.sync();
 
         // process gaussians in the current batch for this pixel
-        int batch_size = min(block_size, range_end - batch_start);
-        for (int t = 0; (t < batch_size) && !done; ++t) {
+        uint32_t batch_size = min(block_size, range_end - batch_start);
+        for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
             const float3 conic = conic_batch[t];
             const float3 xy_opac = xy_opacity_batch[t];
             const float opac = xy_opac.z;
@@ -590,7 +588,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
             const float vis = alpha * T;
             const float *c_ptr = colors + g * COLOR_DIM;
             PRAGMA_UNROLL
-            for (int k = 0; k < COLOR_DIM; ++k) {
+            for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                 pix_out[k] += c_ptr[k] * vis;
             }
             cur_idx = batch_start + t;
@@ -607,12 +605,12 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         // with float for now.
         render_alphas[pix_id] = 1.0f - T;
         PRAGMA_UNROLL
-        for (int k = 0; k < COLOR_DIM; ++k) {
+        for (uint32_t k = 0; k < COLOR_DIM; ++k) {
             render_colors[pix_id * COLOR_DIM + k] =
                 backgrounds == nullptr ? pix_out[k] : (pix_out[k] + T * backgrounds[k]);
         }
         // index in bin of last gaussian in this pixel
-        last_ids[pix_id] = cur_idx;
+        last_ids[pix_id] = static_cast<int32_t>(cur_idx);
     }
 }
 
@@ -624,7 +622,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
     const torch::Tensor &opacities, // [C, N]  or [nnz]
     const at::optional<torch::Tensor> &backgrounds, // [C, channels]
     // image size
-    const int image_width, const int image_height, const int tile_size,
+    const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
     const torch::Tensor &flatten_ids     // [n_isects]
@@ -641,12 +639,12 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
     }
     bool packed = means2d.dim() == 2;
 
-    int C = tile_offsets.size(0);          // number of cameras
-    int N = packed ? -1 : means2d.size(1); // number of gaussians
-    int channels = colors.size(-1);
-    int tile_height = tile_offsets.size(1);
-    int tile_width = tile_offsets.size(2);
-    int n_isects = flatten_ids.size(0);
+    uint32_t C = tile_offsets.size(0);          // number of cameras
+    uint32_t N = packed ? 0 : means2d.size(1);  // number of gaussians
+    uint32_t channels = colors.size(-1);
+    uint32_t tile_height = tile_offsets.size(1);
+    uint32_t tile_width = tile_offsets.size(2);
+    uint32_t n_isects = flatten_ids.size(0);
 
     // Each block covers a tile on the image. In total there are
     // C * tile_height * tile_width blocks.
@@ -795,15 +793,15 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
 
 template <uint32_t COLOR_DIM>
 __global__ void rasterize_to_pixels_bwd_kernel(
-    const int C, const int N, const int n_isects, const bool packed,
+    const uint32_t C, const uint32_t N, const uint32_t n_isects, const bool packed,
     // fwd inputs
     const float2 *__restrict__ means2d,    // [C, N, 2] or [nnz, 2]
     const float3 *__restrict__ conics,     // [C, N, 3] or [nnz, 3]
     const float *__restrict__ colors,      // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
     const float *__restrict__ opacities,   // [C, N] or [nnz]
     const float *__restrict__ backgrounds, // [C, COLOR_DIM] or [nnz, COLOR_DIM]
-    const int image_width, const int image_height, const int tile_size,
-    const int tile_width, const int tile_height,
+    const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
+    const uint32_t tile_width, const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,    // [n_isects]
     // fwd outputs
@@ -821,10 +819,10 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     float *__restrict__ v_opacities     // [C, N] or [nnz]
 ) {
     auto block = cg::this_thread_block();
-    int32_t camera_id = block.group_index().x;
-    int32_t tile_id = block.group_index().y * tile_width + block.group_index().z;
-    unsigned i = block.group_index().y * tile_size + block.thread_index().y;
-    unsigned j = block.group_index().z * tile_size + block.thread_index().x;
+    uint32_t camera_id = block.group_index().x;
+    uint32_t tile_id = block.group_index().y * tile_width + block.group_index().z;
+    uint32_t i = block.group_index().y * tile_size + block.thread_index().y;
+    uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
 
     tile_offsets += camera_id * tile_height * tile_width;
     render_alphas += camera_id * image_height * image_width;
@@ -851,8 +849,8 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         (camera_id == C - 1) && (tile_id == tile_width * tile_height - 1)
             ? n_isects
             : tile_offsets[tile_id + 1];
-    const int block_size = block.size();
-    const int num_batches = (range_end - range_start + block_size - 1) / block_size;
+    const uint32_t block_size = block.size();
+    const uint32_t num_batches = (range_end - range_start + block_size - 1) / block_size;
 
     __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
     __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
@@ -865,22 +863,22 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     // the contribution from gaussians behind the current one
     float buffer[COLOR_DIM] = {0.f};
     // index of last gaussian to contribute to this pixel
-    const int bin_final = inside ? last_ids[pix_id] : 0;
+    const int32_t bin_final = inside ? last_ids[pix_id] : 0;
 
     // df/d_out for this pixel
     float v_render_c[COLOR_DIM];
     PRAGMA_UNROLL
-    for (int k = 0; k < COLOR_DIM; ++k) {
+    for (uint32_t k = 0; k < COLOR_DIM; ++k) {
         v_render_c[k] = v_render_colors[pix_id * COLOR_DIM + k];
     }
     const float v_render_a = v_render_alphas[pix_id];
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing
-    const int tr = block.thread_rank();
+    const uint32_t tr = block.thread_rank();
     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
-    const int warp_bin_final = cg::reduce(warp, bin_final, cg::greater<int>());
-    for (int b = 0; b < num_batches; ++b) {
+    const int32_t warp_bin_final = cg::reduce(warp, bin_final, cg::greater<int>());
+    for (uint32_t b = 0; b < num_batches; ++b) {
         // resync all threads before writing next batch of shared mem
         block.sync();
 
@@ -888,9 +886,10 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         // 0 index will be furthest back in batch
         // index of gaussian to load
         // batch end is the index of the last gaussian in the batch
-        const int batch_end = range_end - 1 - block_size * b;
-        int batch_size = min(block_size, batch_end + 1 - range_start);
-        const int idx = batch_end - tr;
+        // These values can be negative so must be int32 instead of uint32
+        const int32_t batch_end = range_end - 1 - block_size * b;
+        const int32_t batch_size = min(block_size, batch_end + 1 - range_start);
+        const int32_t idx = batch_end - tr;
         if (idx >= range_start) {
             int32_t g = flatten_ids[idx];  // flatten index in [C * N] or [nnz]
             id_batch[tr] = g;
@@ -899,7 +898,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             conic_batch[tr] = conics[g];
             PRAGMA_UNROLL
-            for (int k = 0; k < COLOR_DIM; ++k) {
+            for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                 rgbs_batch[tr * COLOR_DIM + k] = colors[g * COLOR_DIM + k];
             }
         }
@@ -907,8 +906,8 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         block.sync();
         // process gaussians in the current batch for this pixel
         // 0 index is the furthest back gaussian in the batch
-        for (int t = max(0, batch_end - warp_bin_final); t < batch_size; ++t) {
-            int valid = inside;
+        for (uint32_t t = max(0, batch_end - warp_bin_final); t < batch_size; ++t) {
+            bool valid = inside;
             if (batch_end - t > bin_final) {
                 valid = 0;
             }
@@ -929,7 +928,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 vis = __expf(-sigma);
                 alpha = min(0.999f, opac * vis);
                 if (sigma < 0.f || alpha < 1.f / 255.f) {
-                    valid = 0;
+                    valid = false;
                 }
             }
 
@@ -950,12 +949,12 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 // update v_rgb for this gaussian
                 const float fac = alpha * T;
                 PRAGMA_UNROLL
-                for (int k = 0; k < COLOR_DIM; ++k) {
+                for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                     v_rgb_local[k] = fac * v_render_c[k];
                 }
                 // contribution from this pixel
                 float v_alpha = 0.f;
-                for (int k = 0; k < COLOR_DIM; ++k) {
+                for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                     v_alpha += (rgbs_batch[t * COLOR_DIM + k] * T - buffer[k] * ra) *
                                v_render_c[k];
                 }
@@ -965,7 +964,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 if (backgrounds != nullptr) {
                     float accum = 0.f;
                     PRAGMA_UNROLL
-                    for (int k = 0; k < COLOR_DIM; ++k) {
+                    for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                         accum += backgrounds[k] * v_render_c[k];
                     }
                     v_alpha += -T_final * ra * accum;
@@ -985,7 +984,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 }
 
                 PRAGMA_UNROLL
-                for (int k = 0; k < COLOR_DIM; ++k) {
+                for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                     buffer[k] += rgbs_batch[t * COLOR_DIM + k] * fac;
                 }
             }
@@ -1000,7 +999,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 int32_t g = id_batch[t]; // flatten index in [C * N] or [nnz]
                 float *v_rgb_ptr = (float *)(v_colors) + COLOR_DIM * g;
                 PRAGMA_UNROLL
-                for (int k = 0; k < COLOR_DIM; ++k) {
+                for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                     atomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
                 }
 
@@ -1034,7 +1033,7 @@ rasterize_to_pixels_bwd_tensor(
     const torch::Tensor &opacities,                 // [C, N] or [nnz]
     const at::optional<torch::Tensor> &backgrounds, // [C, 3]
     // image size
-    const int image_width, const int image_height, const int tile_size,
+    const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
     const torch::Tensor &flatten_ids,    // [n_isects]
@@ -1063,12 +1062,12 @@ rasterize_to_pixels_bwd_tensor(
 
     bool packed = means2d.dim() == 2;
 
-    int C = tile_offsets.size(0);          // number of cameras
-    int N = packed ? -1 : means2d.size(1); // number of gaussians
-    int n_isects = flatten_ids.size(0);
-    int COLOR_DIM = colors.size(-1);
-    int tile_height = tile_offsets.size(1);
-    int tile_width = tile_offsets.size(2);
+    uint32_t C = tile_offsets.size(0);          // number of cameras
+    uint32_t N = packed ? 0 : means2d.size(1);  // number of gaussians
+    uint32_t n_isects = flatten_ids.size(0);
+    uint32_t COLOR_DIM = colors.size(-1);
+    uint32_t tile_height = tile_offsets.size(1);
+    uint32_t tile_width = tile_offsets.size(2);
 
     // Each block covers a tile on the image. In total there are
     // C * tile_height * tile_width blocks.

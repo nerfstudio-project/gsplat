@@ -16,7 +16,7 @@ namespace cg = cooperative_groups;
  ****************************************************************************/
 
 __global__ void
-quat_scale_to_covar_preci_fwd_kernel(const int N,
+quat_scale_to_covar_preci_fwd_kernel(const uint32_t N,
                                      const float *__restrict__ quats,  // [N, 4]
                                      const float *__restrict__ scales, // [N, 3]
                                      const bool triu,
@@ -25,7 +25,7 @@ quat_scale_to_covar_preci_fwd_kernel(const int N,
                                      float *__restrict__ precis  // [N, 3, 3] or [N, 6]
 ) {
     // parallelize over N.
-    unsigned idx = cg::this_grid().thread_rank();
+    uint32_t idx = cg::this_grid().thread_rank();
     if (idx >= N) {
         return;
     }
@@ -52,9 +52,9 @@ quat_scale_to_covar_preci_fwd_kernel(const int N,
         } else {
             covars += idx * 9;
             PRAGMA_UNROLL
-            for (int i = 0; i < 3; i++) { // rows
+            for (uint32_t i = 0; i < 3; i++) { // rows
                 PRAGMA_UNROLL
-                for (int j = 0; j < 3; j++) { // cols
+                for (uint32_t j = 0; j < 3; j++) { // cols
                     covars[i * 3 + j] = covar[j][i];
                 }
             }
@@ -72,9 +72,9 @@ quat_scale_to_covar_preci_fwd_kernel(const int N,
         } else {
             precis += idx * 9;
             PRAGMA_UNROLL
-            for (int i = 0; i < 3; i++) { // rows
+            for (uint32_t i = 0; i < 3; i++) { // rows
                 PRAGMA_UNROLL
-                for (int j = 0; j < 3; j++) { // cols
+                for (uint32_t j = 0; j < 3; j++) { // cols
                     precis[i * 3 + j] = preci[j][i];
                 }
             }
@@ -83,7 +83,7 @@ quat_scale_to_covar_preci_fwd_kernel(const int N,
 }
 
 __global__ void quat_scale_to_covar_preci_bwd_kernel(
-    const int N,
+    const uint32_t N,
     // fwd inputs
     const float *__restrict__ quats,  // [N, 4]
     const float *__restrict__ scales, // [N, 3]
@@ -96,7 +96,7 @@ __global__ void quat_scale_to_covar_preci_bwd_kernel(
     float *__restrict__ v_quats   // [N, 4]
 ) {
     // parallelize over N.
-    unsigned idx = cg::this_grid().thread_rank();
+    uint32_t idx = cg::this_grid().thread_rank();
     if (idx >= N) {
         return;
     }
@@ -142,11 +142,11 @@ __global__ void quat_scale_to_covar_preci_bwd_kernel(
 
     // write out results
     PRAGMA_UNROLL
-    for (int k = 0; k < 3; ++k) {
+    for (uint32_t k = 0; k < 3; ++k) {
         v_scales[k] = v_scale[k];
     }
     PRAGMA_UNROLL
-    for (int k = 0; k < 4; ++k) {
+    for (uint32_t k = 0; k < 4; ++k) {
         v_quats[k] = v_quat[k];
     }
 }
@@ -160,7 +160,7 @@ quat_scale_to_covar_preci_fwd_tensor(const torch::Tensor &quats,  // [N, 4]
     CHECK_INPUT(quats);
     CHECK_INPUT(scales);
 
-    int N = quats.size(0);
+    uint32_t N = quats.size(0);
 
     torch::Tensor covars, precis;
     if (compute_covar) {
@@ -205,7 +205,7 @@ std::tuple<torch::Tensor, torch::Tensor> quat_scale_to_covar_preci_bwd_tensor(
         CHECK_INPUT(v_precis.value());
     }
 
-    int N = quats.size(0);
+    uint32_t N = quats.size(0);
 
     torch::Tensor v_scales = torch::empty({N, 3}, scales.options());
     torch::Tensor v_quats = torch::empty({N, 4}, quats.options());
@@ -227,20 +227,20 @@ std::tuple<torch::Tensor, torch::Tensor> quat_scale_to_covar_preci_bwd_tensor(
  * Perspective Projection
  ****************************************************************************/
 
-__global__ void persp_proj_fwd_kernel(const int C, const int N,
+__global__ void persp_proj_fwd_kernel(const uint32_t C, const uint32_t N,
                                       const float *__restrict__ means,  // [C, N, 3]
                                       const float *__restrict__ covars, // [C, N, 3, 3]
                                       const float *__restrict__ Ks,     // [C, 3, 3]
-                                      const int width, const int height,
+                                      const uint32_t width, const uint32_t height,
                                       float *__restrict__ means2d, // [C, N, 2]
                                       float *__restrict__ covars2d // [C, N, 2, 2]
 ) { // parallelize over C * N.
-    unsigned idx = cg::this_grid().thread_rank();
+    uint32_t idx = cg::this_grid().thread_rank();
     if (idx >= C * N) {
         return;
     }
-    const int cid = idx / N; // camera id
-    const int gid = idx % N; // gaussian id
+    const uint32_t cid = idx / N; // camera id
+    const uint32_t gid = idx % N; // gaussian id
 
     // shift pointers to the current camera and gaussian
     means += idx * 3;
@@ -257,36 +257,36 @@ __global__ void persp_proj_fwd_kernel(const int C, const int N,
 
     // write to outputs: glm is column-major but we want row-major
     PRAGMA_UNROLL
-    for (int i = 0; i < 2; i++) { // rows
+    for (uint32_t i = 0; i < 2; i++) { // rows
         PRAGMA_UNROLL
-        for (int j = 0; j < 2; j++) { // cols
+        for (uint32_t j = 0; j < 2; j++) { // cols
             covars2d[i * 2 + j] = covar2d[j][i];
         }
     }
     PRAGMA_UNROLL
-    for (int i = 0; i < 2; i++) {
+    for (uint32_t i = 0; i < 2; i++) {
         means2d[i] = mean2d[i];
     }
 }
 
 __global__ void
-persp_proj_bwd_kernel(const int C, const int N,
+persp_proj_bwd_kernel(const uint32_t C, const uint32_t N,
                       const float *__restrict__ means,  // [C, N, 3]
                       const float *__restrict__ covars, // [C, N, 3, 3]
                       const float *__restrict__ Ks,     // [C, 3, 3]
-                      const int width, const int height,
+                      const uint32_t width, const uint32_t height,
                       const float *__restrict__ v_means2d,  // [C, N, 2]
                       const float *__restrict__ v_covars2d, // [C, N, 2, 2]
                       float *__restrict__ v_means,          // [C, N, 3]
                       float *__restrict__ v_covars          // [C, N, 3, 3]
 ) {
     // parallelize over C * N.
-    unsigned idx = cg::this_grid().thread_rank();
+    uint32_t idx = cg::this_grid().thread_rank();
     if (idx >= C * N) {
         return;
     }
-    const int cid = idx / N; // camera id
-    const int gid = idx % N; // gaussian id
+    const uint32_t cid = idx / N; // camera id
+    const uint32_t gid = idx % N; // gaussian id
 
     // shift pointers to the current camera and gaussian
     means += idx * 3;
@@ -306,15 +306,15 @@ persp_proj_bwd_kernel(const int C, const int N,
 
     // write to outputs: glm is column-major but we want row-major
     PRAGMA_UNROLL
-    for (int i = 0; i < 3; i++) { // rows
+    for (uint32_t i = 0; i < 3; i++) { // rows
         PRAGMA_UNROLL
-        for (int j = 0; j < 3; j++) { // cols
+        for (uint32_t j = 0; j < 3; j++) { // cols
             v_covars[i * 3 + j] = v_covar[j][i];
         }
     }
 
     PRAGMA_UNROLL
-    for (int i = 0; i < 3; i++) {
+    for (uint32_t i = 0; i < 3; i++) {
         v_means[i] = v_mean[i];
     }
 }
@@ -323,14 +323,14 @@ std::tuple<torch::Tensor, torch::Tensor>
 persp_proj_fwd_tensor(const torch::Tensor &means,  // [C, N, 3]
                       const torch::Tensor &covars, // [C, N, 3, 3]
                       const torch::Tensor &Ks,     // [C, 3, 3]
-                      const int width, const int height) {
+                      const uint32_t width, const uint32_t height) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
     CHECK_INPUT(covars);
     CHECK_INPUT(Ks);
 
-    int C = means.size(0);
-    int N = means.size(1);
+    uint32_t C = means.size(0);
+    uint32_t N = means.size(1);
 
     torch::Tensor means2d = torch::empty({C, N, 2}, means.options());
     torch::Tensor covars2d = torch::empty({C, N, 2, 2}, covars.options());
@@ -350,7 +350,7 @@ std::tuple<torch::Tensor, torch::Tensor>
 persp_proj_bwd_tensor(const torch::Tensor &means,  // [C, N, 3]
                       const torch::Tensor &covars, // [C, N, 3, 3]
                       const torch::Tensor &Ks,     // [C, 3, 3]
-                      const int width, const int height,
+                      const uint32_t width, const uint32_t height,
                       const torch::Tensor &v_means2d, // [C, N, 2]
                       const torch::Tensor &v_covars2d // [C, N, 2, 2]
 ) {
@@ -361,8 +361,8 @@ persp_proj_bwd_tensor(const torch::Tensor &means,  // [C, N, 3]
     CHECK_INPUT(v_means2d);
     CHECK_INPUT(v_covars2d);
 
-    int C = means.size(0);
-    int N = means.size(1);
+    uint32_t C = means.size(0);
+    uint32_t N = means.size(1);
 
     torch::Tensor v_means = torch::empty({C, N, 3}, means.options());
     torch::Tensor v_covars = torch::empty({C, N, 3, 3}, means.options());
@@ -383,19 +383,19 @@ persp_proj_bwd_tensor(const torch::Tensor &means,  // [C, N, 3]
  * World to Camera Transformation
  ****************************************************************************/
 
-__global__ void world_to_cam_fwd_kernel(const int C, const int N,
+__global__ void world_to_cam_fwd_kernel(const uint32_t C, const uint32_t N,
                                         const float *__restrict__ means,    // [N, 3]
                                         const float *__restrict__ covars,   // [N, 3, 3]
                                         const float *__restrict__ viewmats, // [C, 4, 4]
                                         float *__restrict__ means_c,        // [C, N, 3]
                                         float *__restrict__ covars_c // [C, N, 3, 3]
 ) { // parallelize over C * N.
-    unsigned idx = cg::this_grid().thread_rank();
+    uint32_t idx = cg::this_grid().thread_rank();
     if (idx >= C * N) {
         return;
     }
-    const int cid = idx / N; // camera id
-    const int gid = idx % N; // gaussian id
+    const uint32_t cid = idx / N; // camera id
+    const uint32_t gid = idx % N; // gaussian id
 
     // shift pointers to the current camera and gaussian
     means += gid * 3;
@@ -414,7 +414,7 @@ __global__ void world_to_cam_fwd_kernel(const int C, const int N,
         pos_world_to_cam(R, t, glm::make_vec3(means), mean_c);
         means_c += idx * 3;
         PRAGMA_UNROLL
-        for (int i = 0; i < 3; i++) { // rows
+        for (uint32_t i = 0; i < 3; i++) { // rows
             means_c[i] = mean_c[i];
         }
     }
@@ -425,9 +425,9 @@ __global__ void world_to_cam_fwd_kernel(const int C, const int N,
         covar_world_to_cam(R, glm::make_mat3(covars), covar_c);
         covars_c += idx * 9;
         PRAGMA_UNROLL
-        for (int i = 0; i < 3; i++) { // rows
+        for (uint32_t i = 0; i < 3; i++) { // rows
             PRAGMA_UNROLL
-            for (int j = 0; j < 3; j++) { // cols
+            for (uint32_t j = 0; j < 3; j++) { // cols
                 covars_c[i * 3 + j] = covar_c[j][i];
             }
         }
@@ -435,7 +435,7 @@ __global__ void world_to_cam_fwd_kernel(const int C, const int N,
 }
 
 __global__ void
-world_to_cam_bwd_kernel(const int C, const int N,
+world_to_cam_bwd_kernel(const uint32_t C, const uint32_t N,
                         const float *__restrict__ means,      // [N, 3]
                         const float *__restrict__ covars,     // [N, 3, 3]
                         const float *__restrict__ viewmats,   // [C, 4, 4]
@@ -446,12 +446,12 @@ world_to_cam_bwd_kernel(const int C, const int N,
                         float *__restrict__ v_viewmats        // [C, 4, 4]
 ) {
     // parallelize over C * N.
-    unsigned idx = cg::this_grid().thread_rank();
+    uint32_t idx = cg::this_grid().thread_rank();
     if (idx >= C * N) {
         return;
     }
-    const int cid = idx / N; // camera id
-    const int gid = idx % N; // gaussian id
+    const uint32_t cid = idx / N; // camera id
+    const uint32_t gid = idx % N; // gaussian id
 
     // shift pointers to the current camera and gaussian
     means += gid * 3;
@@ -488,7 +488,7 @@ world_to_cam_bwd_kernel(const int C, const int N,
         if (warp_group_g.thread_rank() == 0) {
             v_means += gid * 3;
             PRAGMA_UNROLL
-            for (int i = 0; i < 3; i++) {
+            for (uint32_t i = 0; i < 3; i++) {
                 atomicAdd(v_means + i, v_mean[i]);
             }
         }
@@ -498,9 +498,9 @@ world_to_cam_bwd_kernel(const int C, const int N,
         if (warp_group_g.thread_rank() == 0) {
             v_covars += gid * 9;
             PRAGMA_UNROLL
-            for (int i = 0; i < 3; i++) { // rows
+            for (uint32_t i = 0; i < 3; i++) { // rows
                 PRAGMA_UNROLL
-                for (int j = 0; j < 3; j++) { // cols
+                for (uint32_t j = 0; j < 3; j++) { // cols
                     atomicAdd(v_covars + i * 3 + j, v_covar[j][i]);
                 }
             }
@@ -513,9 +513,9 @@ world_to_cam_bwd_kernel(const int C, const int N,
         if (warp_group_c.thread_rank() == 0) {
             v_viewmats += cid * 16;
             PRAGMA_UNROLL
-            for (int i = 0; i < 3; i++) { // rows
+            for (uint32_t i = 0; i < 3; i++) { // rows
                 PRAGMA_UNROLL
-                for (int j = 0; j < 3; j++) { // cols
+                for (uint32_t j = 0; j < 3; j++) { // cols
                     atomicAdd(v_viewmats + i * 4 + j, v_R[j][i]);
                 }
                 atomicAdd(v_viewmats + i * 4 + 3, v_t[i]);
@@ -534,8 +534,8 @@ world_to_cam_fwd_tensor(const torch::Tensor &means,   // [N, 3]
     CHECK_INPUT(covars);
     CHECK_INPUT(viewmats);
 
-    int N = means.size(0);
-    int C = viewmats.size(0);
+    uint32_t N = means.size(0);
+    uint32_t C = viewmats.size(0);
 
     torch::Tensor means_c = torch::empty({C, N, 3}, means.options());
     torch::Tensor covars_c = torch::empty({C, N, 3, 3}, means.options());
@@ -569,8 +569,8 @@ world_to_cam_bwd_tensor(const torch::Tensor &means,                    // [N, 3]
     if (v_covars_c.has_value()) {
         CHECK_INPUT(v_covars_c.value());
     }
-    int N = means.size(0);
-    int C = viewmats.size(0);
+    uint32_t N = means.size(0);
+    uint32_t C = viewmats.size(0);
 
     torch::Tensor v_means, v_covars, v_viewmats;
     if (means_requires_grad) {
@@ -603,7 +603,7 @@ world_to_cam_bwd_tensor(const torch::Tensor &means,                    // [N, 3]
  ****************************************************************************/
 
 __global__ void
-fully_fused_projection_fwd_kernel(const int C, const int N,
+fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
                       const float *__restrict__ means,    // [N, 3]
                       const float *__restrict__ covars,   // [N, 6] optional
                       const float *__restrict__ quats,    // [N, 4] optional
@@ -621,12 +621,12 @@ fully_fused_projection_fwd_kernel(const int C, const int N,
                       float *__restrict__ compensations // [C, N] optional
 ) {
     // parallelize over C * N.
-    unsigned idx = cg::this_grid().thread_rank();
+    uint32_t idx = cg::this_grid().thread_rank();
     if (idx >= C * N) {
         return;
     }
-    const int cid = idx / N; // camera id
-    const int gid = idx % N; // gaussian id
+    const uint32_t cid = idx / N; // camera id
+    const uint32_t gid = idx % N; // gaussian id
 
     // shift pointers to the current camera and gaussian
     means += gid * 3;
@@ -717,7 +717,7 @@ fully_fused_projection_fwd_kernel(const int C, const int N,
 
 __global__ void fully_fused_projection_bwd_kernel(
     // fwd inputs
-    const int C, const int N,
+    const uint32_t C, const uint32_t N,
     const float *__restrict__ means,    // [N, 3]
     const float *__restrict__ covars,   // [N, 6] optional
     const float *__restrict__ quats,    // [N, 4] optional
@@ -742,12 +742,12 @@ __global__ void fully_fused_projection_bwd_kernel(
     float *__restrict__ v_viewmats // [C, 4, 4] optional
 ) {
     // parallelize over C * N.
-    unsigned idx = cg::this_grid().thread_rank();
+    uint32_t idx = cg::this_grid().thread_rank();
     if (idx >= C * N || radii[idx] <= 0) {
         return;
     }
-    const int cid = idx / N; // camera id
-    const int gid = idx % N; // gaussian id
+    const uint32_t cid = idx / N; // camera id
+    const uint32_t gid = idx % N; // gaussian id
 
     // shift pointers to the current camera and gaussian
     means += gid * 3;
@@ -828,7 +828,7 @@ __global__ void fully_fused_projection_bwd_kernel(
         if (warp_group_g.thread_rank() == 0) {
             v_means += gid * 3;
             PRAGMA_UNROLL
-            for (int i = 0; i < 3; i++) {
+            for (uint32_t i = 0; i < 3; i++) {
                 atomicAdd(v_means + i, v_mean[i]);
             }
         }
@@ -872,9 +872,9 @@ __global__ void fully_fused_projection_bwd_kernel(
         if (warp_group_c.thread_rank() == 0) {
             v_viewmats += cid * 16;
             PRAGMA_UNROLL
-            for (int i = 0; i < 3; i++) { // rows
+            for (uint32_t i = 0; i < 3; i++) { // rows
                 PRAGMA_UNROLL
-                for (int j = 0; j < 3; j++) { // cols
+                for (uint32_t j = 0; j < 3; j++) { // cols
                     atomicAdd(v_viewmats + i * 4 + j, v_R[j][i]);
                 }
                 atomicAdd(v_viewmats + i * 4 + 3, v_t[i]);
@@ -890,7 +890,7 @@ fully_fused_projection_fwd_tensor(const torch::Tensor &means,                // 
                       const at::optional<torch::Tensor> &scales, // [N, 3] optional
                       const torch::Tensor &viewmats,             // [C, 4, 4]
                       const torch::Tensor &Ks,                   // [C, 3, 3]
-                      const int image_width, const int image_height, const float eps2d,
+                      const uint32_t image_width, const uint32_t image_height, const float eps2d,
                       const float near_plane, const float far_plane,
                       const float radius_clip, const bool calc_compensations) {
     DEVICE_GUARD(means);
@@ -905,8 +905,8 @@ fully_fused_projection_fwd_tensor(const torch::Tensor &means,                // 
     CHECK_INPUT(viewmats);
     CHECK_INPUT(Ks);
 
-    int N = means.size(0);    // number of gaussians
-    int C = viewmats.size(0); // number of cameras
+    uint32_t N = means.size(0);    // number of gaussians
+    uint32_t C = viewmats.size(0); // number of cameras
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
     torch::Tensor radii = torch::empty({C, N}, means.options().dtype(torch::kInt32));
@@ -943,7 +943,7 @@ fully_fused_projection_bwd_tensor(
     const at::optional<torch::Tensor> &scales, // [N, 3] optional
     const torch::Tensor &viewmats,             // [C, 4, 4]
     const torch::Tensor &Ks,                   // [C, 3, 3]
-    const int image_width, const int image_height, const float eps2d,
+    const uint32_t image_width, const uint32_t image_height, const float eps2d,
     // fwd outputs
     const torch::Tensor &radii,                       // [C, N]
     const torch::Tensor &conics,                      // [C, N, 3]
@@ -978,8 +978,8 @@ fully_fused_projection_bwd_tensor(
         assert(compensations.has_value());
     }
 
-    int N = means.size(0);    // number of gaussians
-    int C = viewmats.size(0); // number of cameras
+    uint32_t N = means.size(0);    // number of gaussians
+    uint32_t C = viewmats.size(0); // number of cameras
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
     torch::Tensor v_means = torch::zeros_like(means);
@@ -1115,7 +1115,7 @@ nonzero_tensor(const torch::Tensor &inputs) {
 }
 
 __global__ void fully_fused_projection_packed_fwd_kernel(
-    const int C, const int N,
+    const uint32_t C, const uint32_t N,
     const float *__restrict__ means,    // [N, 3]
     const float *__restrict__ covars,   // [N, 6] Optional
     const float *__restrict__ quats,    // [N, 4] Optional
@@ -1288,7 +1288,7 @@ fully_fused_projection_packed_fwd_tensor(const torch::Tensor &means,            
                              const at::optional<torch::Tensor> &scales, // [N, 3]
                              const torch::Tensor &viewmats,             // [C, 4, 4]
                              const torch::Tensor &Ks,                   // [C, 3, 3]
-                             const int image_width, const int image_height,
+                             const uint32_t image_width, const uint32_t image_height,
                              const float eps2d, const float near_plane,
                              const float far_plane, const float radius_clip,
                              const bool calc_compensations) {
@@ -1304,8 +1304,8 @@ fully_fused_projection_packed_fwd_tensor(const torch::Tensor &means,            
     CHECK_INPUT(viewmats);
     CHECK_INPUT(Ks);
 
-    int N = means.size(0);    // number of gaussians
-    int C = viewmats.size(0); // number of cameras
+    uint32_t N = means.size(0);    // number of gaussians
+    uint32_t C = viewmats.size(0); // number of cameras
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
     auto opt = means.options().dtype(torch::kInt32);
 
@@ -1374,7 +1374,7 @@ fully_fused_projection_packed_fwd_tensor(const torch::Tensor &means,            
 
 __global__ void fully_fused_projection_packed_bwd_kernel(
     // fwd inputs
-    const int C, const int N, const int nnz,
+    const uint32_t C, const uint32_t N, const uint32_t nnz,
     const float *__restrict__ means,    // [N, 3]
     const float *__restrict__ covars,   // [N, 6] Optional
     const float *__restrict__ quats,    // [N, 4] Optional
@@ -1401,12 +1401,12 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     float *__restrict__ v_viewmats // [C, 4, 4] Optional
 ) {
     // parallelize over nnz.
-    unsigned idx = cg::this_grid().thread_rank();
+    uint32_t idx = cg::this_grid().thread_rank();
     if (idx >= nnz) {
         return;
     }
-    const int cid = camera_ids[idx]; // camera id
-    const int gid = gaussian_ids[idx]; // gaussian id
+    const uint32_t cid = camera_ids[idx]; // camera id
+    const uint32_t gid = gaussian_ids[idx]; // gaussian id
 
     // shift pointers to the current camera and gaussian
     means += gid * 3;
@@ -1484,7 +1484,7 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
         if (v_means != nullptr) {
             v_means += idx * 3;
             PRAGMA_UNROLL
-            for (int i = 0; i < 3; i++) {
+            for (uint32_t i = 0; i < 3; i++) {
                 v_means[i] = v_mean[i];
             }
         }
@@ -1521,7 +1521,7 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
             if (warp_group_g.thread_rank() == 0) {
                 v_means += gid * 3;
                 PRAGMA_UNROLL
-                for (int i = 0; i < 3; i++) {
+                for (uint32_t i = 0; i < 3; i++) {
                     atomicAdd(v_means + i, v_mean[i]);
                 }
             }
@@ -1567,9 +1567,9 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
         if (warp_group_c.thread_rank() == 0) {
             v_viewmats += cid * 16;
             PRAGMA_UNROLL
-            for (int i = 0; i < 3; i++) { // rows
+            for (uint32_t i = 0; i < 3; i++) { // rows
                 PRAGMA_UNROLL
-                for (int j = 0; j < 3; j++) { // cols
+                for (uint32_t j = 0; j < 3; j++) { // cols
                     atomicAdd(v_viewmats + i * 4 + j, v_R[j][i]);
                 }
                 atomicAdd(v_viewmats + i * 4 + 3, v_t[i]);
@@ -1587,7 +1587,7 @@ fully_fused_projection_packed_bwd_tensor(
     const at::optional<torch::Tensor> &scales, // [N, 3]
     const torch::Tensor &viewmats,             // [C, 4, 4]
     const torch::Tensor &Ks,                   // [C, 3, 3]
-    const int image_width, const int image_height, const float eps2d,
+    const uint32_t image_width, const uint32_t image_height, const float eps2d,
     // fwd outputs
     const torch::Tensor &camera_ids,                    // [nnz]
     const torch::Tensor &gaussian_ids,                    // [nnz]
@@ -1624,9 +1624,9 @@ fully_fused_projection_packed_bwd_tensor(
         assert(compensations.has_value());
     }
 
-    int N = means.size(0);    // number of gaussians
-    int C = viewmats.size(0); // number of cameras
-    int nnz = camera_ids.size(0);
+    uint32_t N = means.size(0);    // number of gaussians
+    uint32_t C = viewmats.size(0); // number of cameras
+    uint32_t nnz = camera_ids.size(0);
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
     torch::Tensor v_means, v_covars, v_quats, v_scales, v_viewmats;

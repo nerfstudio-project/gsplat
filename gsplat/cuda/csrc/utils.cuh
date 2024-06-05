@@ -143,7 +143,7 @@ inline __device__ void quat_scale_to_preci_vjp(
 inline __device__ void persp_proj(
     // inputs
     const glm::vec3 mean3d, const glm::mat3 cov3d, const float fx, const float fy,
-    const float cx, const float cy, const int width, const int height,
+    const float cx, const float cy, const uint32_t width, const uint32_t height,
     // outputs
     glm::mat2 &cov2d, glm::vec2 &mean2d) {
     float x = mean3d[0], y = mean3d[1], z = mean3d[2];
@@ -170,7 +170,7 @@ inline __device__ void persp_proj(
 inline __device__ void persp_proj_vjp(
     // fwd inputs
     const glm::vec3 mean3d, const glm::mat3 cov3d, const float fx, const float fy,
-    const float cx, const float cy, const int width, const int height,
+    const float cx, const float cy, const uint32_t width, const uint32_t height,
     // grad outputs
     const glm::mat2 v_cov2d, const glm::vec2 v_mean2d,
     // grad inputs

@@ -42,13 +42,13 @@ std::tuple<torch::Tensor, torch::Tensor>
 persp_proj_fwd_tensor(const torch::Tensor &means,  // [C, N, 3]
                       const torch::Tensor &covars, // [C, N, 3, 3]
                       const torch::Tensor &Ks,     // [C, 3, 3]
-                      const int width, const int height);
+                      const uint32_t width, const uint32_t height);
 
 std::tuple<torch::Tensor, torch::Tensor>
 persp_proj_bwd_tensor(const torch::Tensor &means,  // [C, N, 3]
                       const torch::Tensor &covars, // [C, N, 3, 3]
                       const torch::Tensor &Ks,     // [C, 3, 3]
-                      const int width, const int height,
+                      const uint32_t width, const uint32_t height,
                       const torch::Tensor &v_means2d, // [C, N, 2]
                       const torch::Tensor &v_covars2d // [C, N, 2, 2]
 );
@@ -75,7 +75,7 @@ fully_fused_projection_fwd_tensor(const torch::Tensor &means,                // 
                       const at::optional<torch::Tensor> &scales, // [N, 3] optional
                       const torch::Tensor &viewmats,             // [C, 4, 4]
                       const torch::Tensor &Ks,                   // [C, 3, 3]
-                      const int image_width, const int image_height, const float eps2d,
+                      const uint32_t image_width, const uint32_t image_height, const float eps2d,
                       const float near_plane, const float far_plane,
                       const float radius_clip, const bool calc_compensations);
 
@@ -88,7 +88,7 @@ fully_fused_projection_bwd_tensor(
     const at::optional<torch::Tensor> &scales, // [N, 3] optional
     const torch::Tensor &viewmats,             // [C, 4, 4]
     const torch::Tensor &Ks,                   // [C, 3, 3]
-    const int image_width, const int image_height, const float eps2d,
+    const uint32_t image_width, const uint32_t image_height, const float eps2d,
     // fwd outputs
     const torch::Tensor &radii,                       // [C, N]
     const torch::Tensor &conics,                      // [C, N, 3]
@@ -106,12 +106,12 @@ isect_tiles_tensor(const torch::Tensor &means2d,                // [C, N, 2] or 
                    const torch::Tensor &depths,                 // [C, N] or [nnz]
                    const at::optional<torch::Tensor> &camera_ids, // [nnz]
                    const at::optional<torch::Tensor> &gaussian_ids, // [nnz]
-                   const int C, const int tile_size, const int tile_width,
-                   const int tile_height, const bool sort);
+                   const uint32_t C, const uint32_t tile_size, const uint32_t tile_width,
+                   const uint32_t tile_height, const bool sort);
 
 torch::Tensor isect_offset_encode_tensor(const torch::Tensor &isect_ids, // [n_isects]
-                                         const int C, const int tile_width,
-                                         const int tile_height);
+                                         const uint32_t C, const uint32_t tile_width,
+                                         const uint32_t tile_height);
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_tensor(
     // Gaussian parameters
@@ -121,7 +121,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
     const torch::Tensor &opacities,                 // [N]
     const at::optional<torch::Tensor> &backgrounds, // [C, D]
     // image size
-    const int image_width, const int image_height, const int tile_size,
+    const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
     const torch::Tensor &flatten_ids     // [n_isects]
@@ -136,7 +136,7 @@ rasterize_to_pixels_bwd_tensor(
     const torch::Tensor &opacities,                 // [N]
     const at::optional<torch::Tensor> &backgrounds, // [C, 3]
     // image size
-    const int image_width, const int image_height, const int tile_size,
+    const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
     const torch::Tensor &flatten_ids,    // [n_isects]
@@ -150,26 +150,26 @@ rasterize_to_pixels_bwd_tensor(
     bool compute_means2d_absgrad);
 
 std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
-    const int range_start, const int range_end,   // iteration steps
+    const uint32_t range_start, const uint32_t range_end,   // iteration steps
     const torch::Tensor transmittances, // [C, image_height, image_width]
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2]
     const torch::Tensor &conics,    // [C, N, 3]
     const torch::Tensor &opacities, // [N]
     // image size
-    const int image_width, const int image_height, const int tile_size,
+    const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
     const torch::Tensor &flatten_ids     // [n_isects]
 );
 
-torch::Tensor compute_sh_fwd_tensor(const unsigned degrees_to_use,
+torch::Tensor compute_sh_fwd_tensor(const uint32_t degrees_to_use,
                                     torch::Tensor &dirs,              // [..., 3]
                                     torch::Tensor &coeffs,            // [..., K, 3]
                                     at::optional<torch::Tensor> masks // [...]
 );
 std::tuple<torch::Tensor, torch::Tensor>
-compute_sh_bwd_tensor(const unsigned K, const unsigned degrees_to_use,
+compute_sh_bwd_tensor(const uint32_t K, const uint32_t degrees_to_use,
                       torch::Tensor &dirs,               // [..., 3]
                       torch::Tensor &coeffs,             // [..., K, 3]
                       at::optional<torch::Tensor> masks, // [...]
@@ -190,7 +190,7 @@ fully_fused_projection_packed_fwd_tensor(const torch::Tensor &means,            
                              const at::optional<torch::Tensor> &scales, // [N, 3]
                              const torch::Tensor &viewmats,             // [C, 4, 4]
                              const torch::Tensor &Ks,                   // [C, 3, 3]
-                             const int image_width, const int image_height,
+                             const uint32_t image_width, const uint32_t image_height,
                              const float eps2d, const float near_plane,
                              const float far_plane, const float radius_clip,
                              const bool calc_compensations);
@@ -204,7 +204,7 @@ fully_fused_projection_packed_bwd_tensor(
     const at::optional<torch::Tensor> &scales, // [N, 3]
     const torch::Tensor &viewmats,             // [C, 4, 4]
     const torch::Tensor &Ks,                   // [C, 3, 3]
-    const int image_width, const int image_height, const float eps2d,
+    const uint32_t image_width, const uint32_t image_height, const float eps2d,
     // fwd outputs
     const torch::Tensor &camera_ids,                    // [nnz]
     const torch::Tensor &gaussian_ids,                    // [nnz]

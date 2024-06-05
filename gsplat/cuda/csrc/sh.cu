@@ -10,8 +10,8 @@ namespace cg = cooperative_groups;
 // described by Efficient Spherical Harmonic Evaluation, Peter-Pike Sloan, JCGT 2013 See
 // https://jcgt.org/published/0002/02/06/ for reference implementation
 __device__ void
-sh_coeffs_to_color_fast(const unsigned degree, // degree of SH to be evaluated
-                        const unsigned c,      // color channel
+sh_coeffs_to_color_fast(const uint32_t degree, // degree of SH to be evaluated
+                        const uint32_t c,      // color channel
                         const float3 &dir,     // [3]
                         const float *coeffs,   // [K, 3]
                         // output
@@ -92,8 +92,8 @@ sh_coeffs_to_color_fast(const unsigned degree, // degree of SH to be evaluated
 }
 
 __device__ void
-sh_coeffs_to_color_fast_vjp(const unsigned degree, // degree of SH to be evaluated
-                            const unsigned c,      // color channel
+sh_coeffs_to_color_fast_vjp(const uint32_t degree, // degree of SH to be evaluated
+                            const uint32_t c,      // color channel
                             const float3 &dir,     // [3]
                             const float *coeffs,   // [K, 3]
                             const float *v_colors, // [3]
@@ -351,20 +351,20 @@ sh_coeffs_to_color_fast_vjp(const unsigned degree, // degree of SH to be evaluat
     }
 }
 
-__global__ void compute_sh_fwd_kernel(const unsigned N, const unsigned K,
-                                      const unsigned degrees_to_use,
+__global__ void compute_sh_fwd_kernel(const uint32_t N, const uint32_t K,
+                                      const uint32_t degrees_to_use,
                                       const float3 *__restrict__ dirs,  // [N, 3]
                                       const float *__restrict__ coeffs, // [N, K, 3]
                                       const bool *__restrict__ masks,   // [N]
                                       float *__restrict__ colors        // [N, 3]
 ) {
     // parallelize over N * 3
-    unsigned idx = cg::this_grid().thread_rank();
+    uint32_t idx = cg::this_grid().thread_rank();
     if (idx >= N * 3) {
         return;
     }
-    unsigned elem_id = idx / 3;
-    unsigned c = idx % 3; // color channel
+    uint32_t elem_id = idx / 3;
+    uint32_t c = idx % 3; // color channel
     if (masks != nullptr && !masks[elem_id]) {
         return;
     }
@@ -372,8 +372,8 @@ __global__ void compute_sh_fwd_kernel(const unsigned N, const unsigned K,
                             colors + elem_id * 3);
 }
 
-__global__ void compute_sh_bwd_kernel(const unsigned N, const unsigned K,
-                                      const unsigned degrees_to_use,
+__global__ void compute_sh_bwd_kernel(const uint32_t N, const uint32_t K,
+                                      const uint32_t degrees_to_use,
                                       const float3 *__restrict__ dirs,    // [N, 3]
                                       const float *__restrict__ coeffs,   // [N, K, 3]
                                       const bool *__restrict__ masks,     // [N]
@@ -382,12 +382,12 @@ __global__ void compute_sh_bwd_kernel(const unsigned N, const unsigned K,
                                       float *__restrict__ v_dirs // [N, 3] optional
 ) {
     // parallelize over N * 3
-    unsigned idx = cg::this_grid().thread_rank();
+    uint32_t idx = cg::this_grid().thread_rank();
     if (idx >= N * 3) {
         return;
     }
-    unsigned elem_id = idx / 3;
-    unsigned c = idx % 3; // color channel
+    uint32_t elem_id = idx / 3;
+    uint32_t c = idx % 3; // color channel
     if (masks != nullptr && !masks[elem_id]) {
         return;
     }
@@ -404,7 +404,7 @@ __global__ void compute_sh_bwd_kernel(const unsigned N, const unsigned K,
     }
 }
 
-torch::Tensor compute_sh_fwd_tensor(const unsigned degrees_to_use,
+torch::Tensor compute_sh_fwd_tensor(const uint32_t degrees_to_use,
                                     torch::Tensor &dirs,              // [..., 3]
                                     torch::Tensor &coeffs,            // [..., K, 3]
                                     at::optional<torch::Tensor> masks // [...]
@@ -417,8 +417,8 @@ torch::Tensor compute_sh_fwd_tensor(const unsigned degrees_to_use,
     }
     TORCH_CHECK(coeffs.size(-1) == 3, "coeffs must have last dimension 3");
     TORCH_CHECK(dirs.size(-1) == 3, "dirs must have last dimension 3");
-    const unsigned K = coeffs.size(-2);
-    const unsigned N = dirs.numel() / 3;
+    const uint32_t K = coeffs.size(-2);
+    const uint32_t N = dirs.numel() / 3;
     torch::Tensor colors = torch::empty_like(dirs); // [..., 3]
     // parallelize over N * 3
     if (N) {
@@ -432,7 +432,7 @@ torch::Tensor compute_sh_fwd_tensor(const unsigned degrees_to_use,
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
-compute_sh_bwd_tensor(const unsigned K, const unsigned degrees_to_use,
+compute_sh_bwd_tensor(const uint32_t K, const uint32_t degrees_to_use,
                       torch::Tensor &dirs,               // [..., 3]
                       torch::Tensor &coeffs,             // [..., K, 3]
                       at::optional<torch::Tensor> masks, // [...]
@@ -448,7 +448,7 @@ compute_sh_bwd_tensor(const unsigned K, const unsigned degrees_to_use,
     TORCH_CHECK(v_colors.size(-1) == 3, "v_colors must have last dimension 3");
     TORCH_CHECK(coeffs.size(-1) == 3, "coeffs must have last dimension 3");
     TORCH_CHECK(dirs.size(-1) == 3, "dirs must have last dimension 3");
-    const unsigned N = dirs.numel() / 3;
+    const uint32_t N = dirs.numel() / 3;
 
     torch::Tensor v_coeffs = torch::zeros_like(coeffs);
     torch::Tensor v_dirs;
