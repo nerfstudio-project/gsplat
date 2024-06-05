@@ -229,9 +229,15 @@ def rasterization(
 
     if packed:
         # The results are packed into shape [nnz, ...]. All elements are valid.
-        camera_ids, gaussian_ids, radii, means2d, depths, conics, compensations = (
-            proj_results
-        )
+        (
+            camera_ids,
+            gaussian_ids,
+            radii,
+            means2d,
+            depths,
+            conics,
+            compensations,
+        ) = proj_results
         opacities = opacities[gaussian_ids]  # [nnz]
     else:
         # The results are with shape [C, N, ...]. Only the elements with radii > 0 are valid.

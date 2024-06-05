@@ -280,20 +280,26 @@ def test_fully_fused_projection_packed(
 
     # forward
     if fused:
-        camera_ids, gaussian_ids, radii, means2d, depths, conics, compensations = (
-            fully_fused_projection(
-                means,
-                None,
-                quats,
-                scales,
-                viewmats,
-                Ks,
-                width,
-                height,
-                packed=True,
-                sparse_grad=sparse_grad,
-                calc_compensations=calc_compensations,
-            )
+        (
+            camera_ids,
+            gaussian_ids,
+            radii,
+            means2d,
+            depths,
+            conics,
+            compensations,
+        ) = fully_fused_projection(
+            means,
+            None,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            width,
+            height,
+            packed=True,
+            sparse_grad=sparse_grad,
+            calc_compensations=calc_compensations,
         )
         _radii, _means2d, _depths, _conics, _compensations = fully_fused_projection(
             means,
@@ -309,20 +315,26 @@ def test_fully_fused_projection_packed(
         )
     else:
         covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [N, 6]
-        camera_ids, gaussian_ids, radii, means2d, depths, conics, compensations = (
-            fully_fused_projection(
-                means,
-                covars,
-                None,
-                None,
-                viewmats,
-                Ks,
-                width,
-                height,
-                packed=True,
-                sparse_grad=sparse_grad,
-                calc_compensations=calc_compensations,
-            )
+        (
+            camera_ids,
+            gaussian_ids,
+            radii,
+            means2d,
+            depths,
+            conics,
+            compensations,
+        ) = fully_fused_projection(
+            means,
+            covars,
+            None,
+            None,
+            viewmats,
+            Ks,
+            width,
+            height,
+            packed=True,
+            sparse_grad=sparse_grad,
+            calc_compensations=calc_compensations,
         )
         _radii, _means2d, _depths, _conics, _compensations = fully_fused_projection(
             means,
