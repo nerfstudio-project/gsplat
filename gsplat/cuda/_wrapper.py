@@ -975,8 +975,8 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
     @staticmethod
     def backward(
         ctx,
-        v_rindices,
-        v_cindices,
+        v_camera_ids,
+        v_gaussian_ids,
         v_radii,
         v_means2d,
         v_depths,

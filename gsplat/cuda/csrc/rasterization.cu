@@ -105,14 +105,14 @@ isect_tiles_tensor(const torch::Tensor &means2d,                // [C, N, 2] or 
     bool packed = means2d.dim() == 2;
 
     uint32_t N, nnz, total_elems;
-    int32_t *rindices_ptr;
-    int32_t *cindices_ptr;
+    int32_t *camera_ids_ptr;
+    int32_t *gaussian_ids_ptr;
     if (packed) {
         nnz = means2d.size(0);
         total_elems = nnz;
         assert(camera_ids.has_value() && gaussian_ids.has_value());
-        rindices_ptr = camera_ids.value().data_ptr<int32_t>();
-        cindices_ptr = gaussian_ids.value().data_ptr<int32_t>();
+        camera_ids_ptr = camera_ids.value().data_ptr<int32_t>();
+        gaussian_ids_ptr = gaussian_ids.value().data_ptr<int32_t>();
     } else {
         N = means2d.size(1); // number of gaussians
         total_elems = C * N;
@@ -140,7 +140,7 @@ isect_tiles_tensor(const torch::Tensor &means2d,                // [C, N, 2] or 
     if (total_elems) {
         isect_tiles<<<(total_elems + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
                       stream>>>(
-            packed, C, N, nnz, rindices_ptr, cindices_ptr,
+            packed, C, N, nnz, camera_ids_ptr, gaussian_ids_ptr,
             (float2 *)means2d.data_ptr<float>(), radii.data_ptr<int32_t>(),
             depths.data_ptr<float>(), nullptr, tile_size, tile_width, tile_height,
             tile_n_bits, tiles_per_gauss.data_ptr<int32_t>(), nullptr, nullptr);
@@ -158,7 +158,7 @@ isect_tiles_tensor(const torch::Tensor &means2d,                // [C, N, 2] or 
     if (n_isects) {
         isect_tiles<<<(total_elems + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
                       stream>>>(
-            packed, C, N, nnz, rindices_ptr, cindices_ptr,
+            packed, C, N, nnz, camera_ids_ptr, gaussian_ids_ptr,
             (float2 *)means2d.data_ptr<float>(), radii.data_ptr<int32_t>(),
             depths.data_ptr<float>(), cum_tiles_per_gauss.data_ptr<int64_t>(),
             tile_size, tile_width, tile_height, tile_n_bits, nullptr,
