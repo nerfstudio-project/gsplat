@@ -45,6 +45,7 @@ def main(
     sparse_grad: bool = False,
     backend: Literal["gsplat2", "gsplat", "inria"] = "gsplat2",
     repeats: int = 100,
+    memory_history: bool = False,
 ):
     (
         means,
@@ -77,6 +78,9 @@ def main(
 
     torch.cuda.reset_peak_memory_stats()
     mem_tic = torch.cuda.max_memory_allocated() / 1024**3
+
+    if memory_history:
+        torch.cuda.memory._record_memory_history()
 
     if backend == "gsplat2":
         rasterization_fn = rasterization
@@ -118,6 +122,11 @@ def main(
         loss.backward(retain_graph=True)
         for v in [means, quats, scales, opacities, colors]:
             v.grad = None
+
+    if memory_history:
+        torch.cuda.memory._dump_snapshot(
+            f"snapshot_{backend}_{reso}_{scene_grid}_{batch_size}_{channels}.pickle"
+        )
 
     ellipse_time_bwd, _ = timeit(repeats, backward)
     mem_toc_all = torch.cuda.max_memory_allocated() / 1024**3 - mem_tic
@@ -174,7 +183,14 @@ if __name__ == "__main__":
         default=[3],
         help="Number of color channels for profiling",
     )
+    parser.add_argument(
+        "--memory_history",
+        action="store_true",
+        help="Record memory history and dump a snapshot. Use https://pytorch.org/memory_viz to visualize.",
+    )
     args = parser.parse_args()
+    if args.memory_history:
+        args.repeats = 1  # only run once for memory history
 
     # Tested on a NVIDIA TITAN RTX with (24 GB).
 
@@ -195,6 +211,8 @@ if __name__ == "__main__":
                         packed=True,
                         sparse_grad=True,
                         repeats=args.repeats,
+                        # only care about memory for the packed version implementation
+                        memory_history=args.memory_history,
                     )
                     collection.append(
                         [
