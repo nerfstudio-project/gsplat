@@ -251,8 +251,8 @@ torch::Tensor isect_offset_encode_tensor(const torch::Tensor &isect_ids, // [n_i
  * Rasterization
  ****************************************************************************/
 
-__global__ void rasterize_to_indices_iter_kernel(
-    const int step0, const int step1, const int C, const int N, const int n_isects,
+__global__ void rasterize_to_indices_in_range_kernel(
+    const int range_start, const int range_end, const int C, const int N, const int n_isects,
     const float2 *__restrict__ means2d,  // [C, N, 2]
     const float3 *__restrict__ conics,   // [C, N, 3]
     const float *__restrict__ opacities, // [C, N]
@@ -298,15 +298,15 @@ __global__ void rasterize_to_indices_iter_kernel(
     // have all threads in tile process the same gaussians in batches
     // first collect gaussians between range.x and range.y in batches
     // which gaussians to look through in this tile
-    int32_t range_start = tile_offsets[tile_id];
-    int32_t range_end =
+    int32_t isect_range_start = tile_offsets[tile_id];
+    int32_t isect_range_end =
         (camera_id == C - 1) && (tile_id == tile_width * tile_height - 1)
             ? n_isects
             : tile_offsets[tile_id + 1];
     const int block_size = block.size();
-    int num_batches = (range_end - range_start + block_size - 1) / block_size;
+    int num_batches = (isect_range_end - isect_range_start + block_size - 1) / block_size;
 
-    if (step0 >= num_batches) {
+    if (range_start >= num_batches) {
         // this entire tile has been processed in the previous iterations
         // so we don't need to do anything.
         return;
@@ -334,7 +334,7 @@ __global__ void rasterize_to_indices_iter_kernel(
     int tr = block.thread_rank();
 
     int cnt = 0;
-    for (int b = step0; b < min(step1, num_batches); ++b) {
+    for (int b = range_start; b < min(range_end, num_batches); ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
         if (__syncthreads_count(done) >= block_size) {
@@ -343,9 +343,9 @@ __global__ void rasterize_to_indices_iter_kernel(
 
         // each thread fetch 1 gaussian from front to back
         // index of gaussian to load
-        int batch_start = range_start + block_size * b;
+        int batch_start = isect_range_start + block_size * b;
         int idx = batch_start + tr;
-        if (idx < range_end) {
+        if (idx < isect_range_end) {
             int32_t g = flatten_ids[idx];
             id_batch[tr] = g;
             const float2 xy = means2d[g];
@@ -358,7 +358,7 @@ __global__ void rasterize_to_indices_iter_kernel(
         block.sync();
 
         // process gaussians in the current batch for this pixel
-        int batch_size = min(block_size, range_end - batch_start);
+        int batch_size = min(block_size, isect_range_end - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
             const float3 conic = conic_batch[t];
             const float3 xy_opac = xy_opacity_batch[t];
@@ -402,8 +402,8 @@ __global__ void rasterize_to_indices_iter_kernel(
     }
 }
 
-std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_iter_tensor(
-    const int step0, const int step1,   // iteration steps
+std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
+    const int range_start, const int range_end,   // iteration steps
     const torch::Tensor transmittances, // [C, image_height, image_width]
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2]
@@ -439,8 +439,8 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_iter_tensor(
     if (n_isects) {
         torch::Tensor chunk_cnts = torch::zeros({C * image_height * image_width},
                                                 means2d.options().dtype(torch::kInt32));
-        rasterize_to_indices_iter_kernel<<<blocks, threads>>>(
-            step0, step1, C, N, n_isects, (float2 *)means2d.data_ptr<float>(),
+        rasterize_to_indices_in_range_kernel<<<blocks, threads>>>(
+            range_start, range_end, C, N, n_isects, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), opacities.data_ptr<float>(),
             image_width, image_height, tile_size, tile_width, tile_height,
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
@@ -460,8 +460,8 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_iter_tensor(
     torch::Tensor pixel_ids =
         torch::empty({n_elems}, means2d.options().dtype(torch::kInt32));
     if (n_elems) {
-        rasterize_to_indices_iter_kernel<<<blocks, threads>>>(
-            step0, step1, C, N, n_isects, (float2 *)means2d.data_ptr<float>(),
+        rasterize_to_indices_in_range_kernel<<<blocks, threads>>>(
+            range_start, range_end, C, N, n_isects, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), opacities.data_ptr<float>(),
             image_width, image_height, tile_size, tile_width, tile_height,
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),

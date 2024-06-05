@@ -477,9 +477,9 @@ def rasterize_to_pixels(
 
 
 @torch.no_grad()
-def rasterize_to_indices_iter(
-    step0: int,
-    step1: int,
+def rasterize_to_indices_in_range(
+    range_start: int,
+    range_end: int,
     transmittances: Tensor,  # [C, image_height, image_width]
     means2d: Tensor,  # [C, N, 2]
     conics: Tensor,  # [C, N, 3]
@@ -495,13 +495,13 @@ def rasterize_to_indices_iter(
     .. note::
 
         This function supports iterative rasterization, in which each call of this function
-        will rasterize a batch of Gaussians from near to far, defined by `[step0, step1)`.
-        If a one-step full rasterization is desired, set `step0` to 0 and `step1` to a really
+        will rasterize a batch of Gaussians from near to far, defined by `[range_start, range_end)`.
+        If a one-step full rasterization is desired, set `range_start` to 0 and `range_end` to a really
         large number, e.g, 1e10.
 
     Args:
-        step0: The start batch of Gaussians to be rasterized (inclusive).
-        step1: The end batch of Gaussians to be rasterized (exclusive).
+        range_start: The start batch of Gaussians to be rasterized (inclusive).
+        range_end: The end batch of Gaussians to be rasterized (exclusive).
         transmittances: Currently transmittances. [C, image_height, image_width]
         means2d: Projected Gaussian means. [C, N, 2]
         conics: Inverse of the projected covariances with only upper triangle values. [C, N, 3]
@@ -533,9 +533,9 @@ def rasterize_to_indices_iter(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-    out_gauss_ids, out_indices = _make_lazy_cuda_func("rasterize_to_indices_iter")(
-        step0,
-        step1,
+    out_gauss_ids, out_indices = _make_lazy_cuda_func("rasterize_to_indices_in_range")(
+        range_start,
+        range_end,
         transmittances.contiguous(),
         means2d.contiguous(),
         conics.contiguous(),

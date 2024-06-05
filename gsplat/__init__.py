@@ -7,7 +7,7 @@ from .cuda._wrapper import (
     isect_tiles,
     persp_proj,
     quat_scale_to_covar_preci,
-    rasterize_to_indices_iter,
+    rasterize_to_indices_in_range,
     rasterize_to_pixels,
     spherical_harmonics,
     world_to_cam,
@@ -110,7 +110,7 @@ all = [
     "rasterize_to_pixels",
     "world_to_cam",
     "accumulate",
-    "rasterize_to_indices_iter",
+    "rasterize_to_indices_in_range",
     "__version__",
     # deprecated
     "rasterize_gaussians",

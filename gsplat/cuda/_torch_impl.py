@@ -315,7 +315,7 @@ def accumulate(
     This function performs alpha compositing for Gaussians based on the pair of indices
     {gaussian_ids, pixel_ids, camera_ids}, which annotates the intersection between all
     pixels and Gaussians. These intersections can be accquired from
-    `gsplat.rasterize_to_indices_iter`.
+    `gsplat.rasterize_to_indices_in_range`.
 
     .. note::
 
@@ -424,7 +424,7 @@ def _rasterize_to_pixels(
         This function requires the `nerfacc` package to be installed. Please install it
         using the following command `pip install nerfacc`.
     """
-    from ._wrapper import rasterize_to_indices_iter
+    from ._wrapper import rasterize_to_indices_in_range
 
     C, N = means2d.shape[:2]
     device = means2d.device
@@ -443,7 +443,7 @@ def _rasterize_to_pixels(
 
         # Find the M intersections between pixels and gaussians.
         # Each intersection corresponds to a tuple (gs_id, pixel_id, camera_id)
-        gs_ids, pixel_ids, camera_ids = rasterize_to_indices_iter(
+        gs_ids, pixel_ids, camera_ids = rasterize_to_indices_in_range(
             step,
             step + batch_per_iter,
             transmittances,

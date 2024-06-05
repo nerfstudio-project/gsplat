@@ -500,8 +500,8 @@ def test_rasterize_to_pixels(test_data):
         flatten_ids,
         backgrounds=backgrounds,
     )
-    assert torch.allclose(render_colors, _render_colors)
-    assert torch.allclose(render_alphas, _render_alphas)
+    torch.testing.assert_close(render_colors, _render_colors)
+    torch.testing.assert_close(render_alphas, _render_alphas)
 
     # backward
     v_render_colors = torch.randn_like(render_colors)

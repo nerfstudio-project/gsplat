@@ -149,8 +149,8 @@ rasterize_to_pixels_bwd_tensor(
     // options
     bool compute_means2d_absgrad);
 
-std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_iter_tensor(
-    const int step0, const int step1,   // iteration steps
+std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
+    const int range_start, const int range_end,   // iteration steps
     const torch::Tensor transmittances, // [C, image_height, image_width]
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2]
