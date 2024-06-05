@@ -343,6 +343,7 @@ def isect_tiles(
         tile_width,
         tile_height,
         sort,
+        True,  # DoubleBuffer: memory efficient radixsort
     )
     return tiles_per_gauss, isect_ids, flatten_ids
 

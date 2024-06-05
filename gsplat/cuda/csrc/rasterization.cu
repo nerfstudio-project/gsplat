@@ -91,7 +91,7 @@ isect_tiles_tensor(const torch::Tensor &means2d,                // [C, N, 2] or 
                    const at::optional<torch::Tensor> &camera_ids, // [nnz]
                    const at::optional<torch::Tensor> &gaussian_ids, // [nnz]
                    const uint32_t C, const uint32_t tile_size, const uint32_t tile_width,
-                   const uint32_t tile_height, const bool sort) {
+                   const uint32_t tile_height, const bool sort, const bool double_buffer) {
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
     CHECK_INPUT(radii);
@@ -169,10 +169,39 @@ isect_tiles_tensor(const torch::Tensor &means2d,                // [C, N, 2] or 
     if (n_isects && sort) {
         torch::Tensor isect_ids_sorted = torch::empty_like(isect_ids);
         torch::Tensor flatten_ids_sorted = torch::empty_like(flatten_ids);
-        CUB_WRAPPER(cub::DeviceRadixSort::SortPairs, isect_ids.data_ptr<int64_t>(),
-                    isect_ids_sorted.data_ptr<int64_t>(), flatten_ids.data_ptr<int32_t>(),
-                    flatten_ids_sorted.data_ptr<int32_t>(), n_isects, 0,
-                    32 + tile_n_bits + cam_n_bits, stream);
+
+        // https://nvidia.github.io/cccl/cub/api/structcub_1_1DeviceRadixSort.html
+        // DoubleBuffer reduce the auxiliary memory usage from O(N+P) to O(P)
+        if (double_buffer) {
+            // Create a set of DoubleBuffers to wrap pairs of device pointers
+            cub::DoubleBuffer<int64_t> d_keys(
+                isect_ids.data_ptr<int64_t>(), isect_ids_sorted.data_ptr<int64_t>());
+            cub::DoubleBuffer<int32_t> d_values(
+                flatten_ids.data_ptr<int32_t>(), flatten_ids_sorted.data_ptr<int32_t>());
+            CUB_WRAPPER(cub::DeviceRadixSort::SortPairs, d_keys, d_values, n_isects, 0,
+                        32 + tile_n_bits + cam_n_bits, stream);
+            switch (d_keys.selector) {
+                case 0: // sorted items are stored in isect_ids
+                    isect_ids_sorted = isect_ids;
+                    break;
+                case 1: // sorted items are stored in isect_ids_sorted
+                    break;
+            }
+            switch (d_values.selector) {
+                case 0: // sorted items are stored in flatten_ids
+                    flatten_ids_sorted = flatten_ids;
+                    break;
+                case 1: // sorted items are stored in flatten_ids_sorted
+                    break;
+            }        
+            // printf("DoubleBuffer d_keys selector: %d\n", d_keys.selector);
+            // printf("DoubleBuffer d_values selector: %d\n", d_values.selector);
+        } else {
+            CUB_WRAPPER(cub::DeviceRadixSort::SortPairs, isect_ids.data_ptr<int64_t>(), 
+                        isect_ids_sorted.data_ptr<int64_t>(), flatten_ids.data_ptr<int32_t>(),
+                        flatten_ids_sorted.data_ptr<int32_t>(), n_isects, 0,
+                        32 + tile_n_bits + cam_n_bits, stream);
+        }
         return std::make_tuple(tiles_per_gauss, isect_ids_sorted, flatten_ids_sorted);
     } else {
         return std::make_tuple(tiles_per_gauss, isect_ids, flatten_ids);

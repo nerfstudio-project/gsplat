@@ -107,7 +107,7 @@ isect_tiles_tensor(const torch::Tensor &means2d,                // [C, N, 2] or 
                    const at::optional<torch::Tensor> &camera_ids, // [nnz]
                    const at::optional<torch::Tensor> &gaussian_ids, // [nnz]
                    const uint32_t C, const uint32_t tile_size, const uint32_t tile_width,
-                   const uint32_t tile_height, const bool sort);
+                   const uint32_t tile_height, const bool sort, const bool double_buffer);
 
 torch::Tensor isect_offset_encode_tensor(const torch::Tensor &isect_ids, // [n_isects]
                                          const uint32_t C, const uint32_t tile_width,
