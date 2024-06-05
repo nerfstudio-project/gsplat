@@ -15,6 +15,7 @@ from datasets.colmap import Dataset, Parser
 from datasets.traj import generate_interpolated_path
 from nerfview import CameraState, ViewerServer, view_lock
 from torch import Tensor
+from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from utils import (
@@ -126,6 +127,11 @@ class Config:
     # Regularization for appearance optimization as weight decay
     app_opt_reg: float = 1e-6
 
+    # Dump information to tensorboard every this steps
+    tb_every: int = 100
+    # Save training images to tensorboard
+    tb_save_image: bool = False
+
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
         self.save_steps = [int(i * factor) for i in self.save_steps]
@@ -213,6 +219,9 @@ class Runner:
         os.makedirs(self.stats_dir, exist_ok=True)
         self.render_dir = f"{cfg.result_dir}/renders"
         os.makedirs(self.render_dir, exist_ok=True)
+
+        # Tensorboard
+        self.writer = SummaryWriter(log_dir=f"{cfg.result_dir}/tb")
 
         # Load data: Training data should contain initial points and colors.
         self.parser = Parser(
@@ -309,9 +318,6 @@ class Runner:
         quats = self.splats["quats"]  # [N, 4]
         scales = torch.exp(self.splats["scales"])  # [N, 3]
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
-
-        C = len(camtoworlds)
-        N = len(means)
 
         image_ids = kwargs.pop("image_ids", None)
         if self.cfg.app_opt:
@@ -441,38 +447,20 @@ class Runner:
                 desc += f"pose err={pose_err.item():.6f}| "
             pbar.set_description(desc)
 
-            # # write images (gt and render)
-            # if step % 100 == 0:
-            #     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
-            #     canvas = canvas.reshape(-1, *canvas.shape[2:])
-            #     imageio.imwrite(
-            #         f"{self.render_dir}/train.png",
-            #         (canvas * 255).astype(np.uint8),
-            #     )
-
-            # # write images (multiple renders with different appearance)
-            # if step % 400 == 0:
-            #     with torch.no_grad():
-            #         colors_list = []
-            #         for i in range(4):
-            #             colors, _, _ = self.rasterize_splats(
-            #                 camtoworlds=camtoworlds,
-            #                 Ks=Ks,
-            #                 width=width,
-            #                 height=height,
-            #                 sh_degree=sh_degree_to_use,
-            #                 near_plane=cfg.near_plane,
-            #                 far_plane=cfg.far_plane,
-            #                 image_ids=torch.randint(len(self.trainset), (1,), device=device),
-            #             )
-            #             colors_list.append(colors)
-            #         colors = torch.cat(colors_list, dim=0)
-            #         canvas = colors.detach().cpu().numpy()
-            #         canvas = canvas.reshape(-1, *canvas.shape[2:])
-            #         imageio.imwrite(
-            #             f"{self.render_dir}/train.png",
-            #             (canvas * 255).astype(np.uint8),
-            #         )
+            if cfg.tb_every > 0 and step % cfg.tb_every == 0:
+                mem = torch.cuda.max_memory_allocated() / 1024**3
+                self.writer.add_scalar("train/loss", loss.item(), step)
+                self.writer.add_scalar("train/l1loss", l1loss.item(), step)
+                self.writer.add_scalar("train/ssimloss", ssimloss.item(), step)
+                self.writer.add_scalar(
+                    "train/num_GS", len(self.splats["means3d"]), step
+                )
+                self.writer.add_scalar("train/mem", mem, step)
+                if cfg.tb_save_image:
+                    canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
+                    canvas = canvas.reshape(-1, *canvas.shape[2:])
+                    self.writer.add_image("train/render", canvas, step)
+                self.writer.flush()
 
             # update running stats for prunning & growing
             if step < cfg.refine_stop_iter:
@@ -795,7 +783,7 @@ class Runner:
             f"Time: {ellipse_time:.3f}s/image "
             f"Number of GS: {len(self.splats['means3d'])}"
         )
-        # save to stats as json
+        # save stats as json
         stats = {
             "psnr": psnr.item(),
             "ssim": ssim.item(),
@@ -805,6 +793,10 @@ class Runner:
         }
         with open(f"{self.stats_dir}/val_step{step:04d}.json", "w") as f:
             json.dump(stats, f)
+        # save stats to tensorboard
+        for k, v in stats.items():
+            self.writer.add_scalar(f"val/{k}", v, step)
+        self.writer.flush()
 
     @torch.no_grad()
     def render_traj(self, step: int):
