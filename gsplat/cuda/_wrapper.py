@@ -240,7 +240,7 @@ def fully_fused_projection(
     viewmats = viewmats.contiguous()
     Ks = Ks.contiguous()
     if packed:
-        return _ProjectionPacked.apply(
+        return _FullyFusedProjectionPacked.apply(
             means,
             covars,
             quats,
@@ -257,7 +257,7 @@ def fully_fused_projection(
             calc_compensations,
         )
     else:
-        return _Projection.apply(
+        return _FullyFusedProjection.apply(
             means,
             covars,
             quats,
@@ -667,7 +667,7 @@ class _WorldToCam(torch.autograd.Function):
         return v_means, v_covars, v_viewmats
 
 
-class _Projection(torch.autograd.Function):
+class _FullyFusedProjection(torch.autograd.Function):
     """Projects Gaussians to 2D."""
 
     @staticmethod
@@ -906,7 +906,7 @@ class _RasterizeToPixels(torch.autograd.Function):
         )
 
 
-class _ProjectionPacked(torch.autograd.Function):
+class _FullyFusedProjectionPacked(torch.autograd.Function):
     """Projects Gaussians to 2D. Return packed tensors."""
 
     @staticmethod
