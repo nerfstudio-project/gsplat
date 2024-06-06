@@ -5,6 +5,7 @@ import gsplat.cuda as _C
 from jaxtyping import Float
 from torch import Tensor
 from torch.autograd import Function
+
 try:
     from typing import Literal
 except ImportError:
