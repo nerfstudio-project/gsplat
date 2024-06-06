@@ -604,21 +604,21 @@ world_to_cam_bwd_tensor(const torch::Tensor &means,                    // [N, 3]
 
 __global__ void
 fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
-                      const float *__restrict__ means,    // [N, 3]
-                      const float *__restrict__ covars,   // [N, 6] optional
-                      const float *__restrict__ quats,    // [N, 4] optional
-                      const float *__restrict__ scales,   // [N, 3] optional
-                      const float *__restrict__ viewmats, // [C, 4, 4]
-                      const float *__restrict__ Ks,       // [C, 3, 3]
-                      const int32_t image_width, const int32_t image_height,
-                      const float eps2d, const float near_plane, const float far_plane,
-                      const float radius_clip,
-                      // outputs
-                      int32_t *__restrict__ radii,      // [C, N]
-                      float *__restrict__ means2d,      // [C, N, 2]
-                      float *__restrict__ depths,       // [C, N]
-                      float *__restrict__ conics,       // [C, N, 3]
-                      float *__restrict__ compensations // [C, N] optional
+                                  const float *__restrict__ means,    // [N, 3]
+                                  const float *__restrict__ covars,   // [N, 6] optional
+                                  const float *__restrict__ quats,    // [N, 4] optional
+                                  const float *__restrict__ scales,   // [N, 3] optional
+                                  const float *__restrict__ viewmats, // [C, 4, 4]
+                                  const float *__restrict__ Ks,       // [C, 3, 3]
+                                  const int32_t image_width, const int32_t image_height,
+                                  const float eps2d, const float near_plane,
+                                  const float far_plane, const float radius_clip,
+                                  // outputs
+                                  int32_t *__restrict__ radii,      // [C, N]
+                                  float *__restrict__ means2d,      // [C, N, 2]
+                                  float *__restrict__ depths,       // [C, N]
+                                  float *__restrict__ conics,       // [C, N, 3]
+                                  float *__restrict__ compensations // [C, N] optional
 ) {
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -884,15 +884,16 @@ __global__ void fully_fused_projection_bwd_kernel(
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-fully_fused_projection_fwd_tensor(const torch::Tensor &means,                // [N, 3]
-                      const at::optional<torch::Tensor> &covars, // [N, 6] optional
-                      const at::optional<torch::Tensor> &quats,  // [N, 4] optional
-                      const at::optional<torch::Tensor> &scales, // [N, 3] optional
-                      const torch::Tensor &viewmats,             // [C, 4, 4]
-                      const torch::Tensor &Ks,                   // [C, 3, 3]
-                      const uint32_t image_width, const uint32_t image_height, const float eps2d,
-                      const float near_plane, const float far_plane,
-                      const float radius_clip, const bool calc_compensations) {
+fully_fused_projection_fwd_tensor(
+    const torch::Tensor &means,                // [N, 3]
+    const at::optional<torch::Tensor> &covars, // [N, 6] optional
+    const at::optional<torch::Tensor> &quats,  // [N, 4] optional
+    const at::optional<torch::Tensor> &scales, // [N, 3] optional
+    const torch::Tensor &viewmats,             // [C, 4, 4]
+    const torch::Tensor &Ks,                   // [C, 3, 3]
+    const uint32_t image_width, const uint32_t image_height, const float eps2d,
+    const float near_plane, const float far_plane, const float radius_clip,
+    const bool calc_compensations) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
     if (covars.has_value()) {
@@ -919,8 +920,8 @@ fully_fused_projection_fwd_tensor(const torch::Tensor &means,                // 
         compensations = torch::zeros({C, N}, means.options());
     }
     if (C && N) {
-        fully_fused_projection_fwd_kernel<<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
-                                stream>>>(
+        fully_fused_projection_fwd_kernel<<<(C * N + N_THREADS - 1) / N_THREADS,
+                                            N_THREADS, 0, stream>>>(
             C, N, means.data_ptr<float>(),
             covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
             quats.has_value() ? quats.value().data_ptr<float>() : nullptr,
@@ -995,8 +996,8 @@ fully_fused_projection_bwd_tensor(
         v_viewmats = torch::zeros_like(viewmats);
     }
     if (C && N) {
-        fully_fused_projection_bwd_kernel<<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
-                                stream>>>(
+        fully_fused_projection_bwd_kernel<<<(C * N + N_THREADS - 1) / N_THREADS,
+                                            N_THREADS, 0, stream>>>(
             C, N, means.data_ptr<float>(),
             covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
             covars.has_value() ? nullptr : quats.value().data_ptr<float>(),
@@ -1031,14 +1032,14 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
     const int32_t *__restrict__ block_accum, // [C * blocks_per_row] packing helper
     int32_t *__restrict__ block_cnts,        // [C * blocks_per_row] packing helper
     // outputs
-    int32_t *__restrict__ indptr,     // [C + 1]
+    int32_t *__restrict__ indptr,       // [C + 1]
     int64_t *__restrict__ camera_ids,   // [nnz]
-    int64_t *__restrict__ gaussian_ids,   // [nnz]
-    int32_t *__restrict__ radii,      // [nnz]
-    float *__restrict__ means2d,      // [nnz, 2]
-    float *__restrict__ depths,       // [nnz]
-    float *__restrict__ conics,       // [nnz, 3]
-    float *__restrict__ compensations // [nnz] optional
+    int64_t *__restrict__ gaussian_ids, // [nnz]
+    int32_t *__restrict__ radii,        // [nnz]
+    float *__restrict__ means2d,        // [nnz, 2]
+    float *__restrict__ depths,         // [nnz]
+    float *__restrict__ conics,         // [nnz, 3]
+    float *__restrict__ compensations   // [nnz] optional
 ) {
     int32_t blocks_per_row = gridDim.x;
 
@@ -1159,7 +1160,7 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
                 thread_data += offset;
             }
             // write to outputs
-            camera_ids[thread_data] = row_idx; // cid
+            camera_ids[thread_data] = row_idx;   // cid
             gaussian_ids[thread_data] = col_idx; // gid
             radii[thread_data] = (int32_t)radius;
             means2d[thread_data * 2] = mean2d.x;
@@ -1186,16 +1187,16 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
            torch::Tensor, torch::Tensor, torch::Tensor>
-fully_fused_projection_packed_fwd_tensor(const torch::Tensor &means,                // [N, 3]
-                             const at::optional<torch::Tensor> &covars, // [N, 6]
-                             const at::optional<torch::Tensor> &quats,  // [N, 3]
-                             const at::optional<torch::Tensor> &scales, // [N, 3]
-                             const torch::Tensor &viewmats,             // [C, 4, 4]
-                             const torch::Tensor &Ks,                   // [C, 3, 3]
-                             const uint32_t image_width, const uint32_t image_height,
-                             const float eps2d, const float near_plane,
-                             const float far_plane, const float radius_clip,
-                             const bool calc_compensations) {
+fully_fused_projection_packed_fwd_tensor(
+    const torch::Tensor &means,                // [N, 3]
+    const at::optional<torch::Tensor> &covars, // [N, 6]
+    const at::optional<torch::Tensor> &quats,  // [N, 3]
+    const at::optional<torch::Tensor> &scales, // [N, 3]
+    const torch::Tensor &viewmats,             // [C, 4, 4]
+    const torch::Tensor &Ks,                   // [C, 3, 3]
+    const uint32_t image_width, const uint32_t image_height, const float eps2d,
+    const float near_plane, const float far_plane, const float radius_clip,
+    const bool calc_compensations) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
     if (covars.has_value()) {
@@ -1272,8 +1273,8 @@ fully_fused_projection_packed_fwd_tensor(const torch::Tensor &means,            
         indptr.fill_(0);
     }
 
-    return std::make_tuple(indptr, camera_ids, gaussian_ids, radii, means2d, depths, conics,
-                           compensations);
+    return std::make_tuple(indptr, camera_ids, gaussian_ids, radii, means2d, depths,
+                           conics, compensations);
 }
 
 __global__ void fully_fused_projection_packed_bwd_kernel(
@@ -1287,10 +1288,10 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     const float *__restrict__ Ks,       // [C, 3, 3]
     const int32_t image_width, const int32_t image_height, const float eps2d,
     // fwd outputs
-    const int64_t *__restrict__ camera_ids,    // [nnz]
-    const int64_t *__restrict__ gaussian_ids,    // [nnz]
-    const float *__restrict__ conics,        // [nnz, 3]
-    const float *__restrict__ compensations, // [nnz] optional
+    const int64_t *__restrict__ camera_ids,   // [nnz]
+    const int64_t *__restrict__ gaussian_ids, // [nnz]
+    const float *__restrict__ conics,         // [nnz, 3]
+    const float *__restrict__ compensations,  // [nnz] optional
     // grad outputs
     const float *__restrict__ v_means2d,       // [nnz, 2]
     const float *__restrict__ v_depths,        // [nnz]
@@ -1309,7 +1310,7 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     if (idx >= nnz) {
         return;
     }
-    const int64_t cid = camera_ids[idx]; // camera id
+    const int64_t cid = camera_ids[idx];   // camera id
     const int64_t gid = gaussian_ids[idx]; // gaussian id
 
     // shift pointers to the current camera and gaussian
@@ -1493,8 +1494,8 @@ fully_fused_projection_packed_bwd_tensor(
     const torch::Tensor &Ks,                   // [C, 3, 3]
     const uint32_t image_width, const uint32_t image_height, const float eps2d,
     // fwd outputs
-    const torch::Tensor &camera_ids,                    // [nnz]
-    const torch::Tensor &gaussian_ids,                    // [nnz]
+    const torch::Tensor &camera_ids,                  // [nnz]
+    const torch::Tensor &gaussian_ids,                // [nnz]
     const torch::Tensor &conics,                      // [nnz, 3]
     const at::optional<torch::Tensor> &compensations, // [nnz] optional
     // grad outputs
@@ -1558,8 +1559,8 @@ fully_fused_projection_packed_bwd_tensor(
         }
     }
     if (nnz) {
-        fully_fused_projection_packed_bwd_kernel<<<(nnz + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
-                                       stream>>>(
+        fully_fused_projection_packed_bwd_kernel<<<(nnz + N_THREADS - 1) / N_THREADS,
+                                                   N_THREADS, 0, stream>>>(
             C, N, nnz, means.data_ptr<float>(),
             covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
             covars.has_value() ? nullptr : quats.value().data_ptr<float>(),

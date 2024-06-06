@@ -16,7 +16,7 @@ __global__ void isect_tiles(
     const uint32_t C, const uint32_t N,
     // parallelize over nnz, only used if packed is True
     const uint32_t nnz,
-    const int64_t *__restrict__ camera_ids, // [nnz] optional
+    const int64_t *__restrict__ camera_ids,   // [nnz] optional
     const int64_t *__restrict__ gaussian_ids, // [nnz] optional
     // data
     const float2 *__restrict__ means2d,              // [C, N, 2] or [nnz, 2]
@@ -27,7 +27,7 @@ __global__ void isect_tiles(
     const uint32_t tile_n_bits,
     int32_t *__restrict__ tiles_per_gauss, // [C, N] or [nnz]
     int64_t *__restrict__ isect_ids,       // [n_isects]
-    int32_t *__restrict__ flatten_ids        // [n_isects]
+    int32_t *__restrict__ flatten_ids      // [n_isects]
 ) {
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -53,7 +53,8 @@ __global__ void isect_tiles(
 
     if (first_pass) {
         // first pass only writes out tiles_per_gauss
-        tiles_per_gauss[idx] = static_cast<int32_t>((tile_max.y - tile_min.y) * (tile_max.x - tile_min.x));
+        tiles_per_gauss[idx] =
+            static_cast<int32_t>((tile_max.y - tile_min.y) * (tile_max.x - tile_min.x));
         return;
     }
 
@@ -85,13 +86,14 @@ __global__ void isect_tiles(
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-isect_tiles_tensor(const torch::Tensor &means2d,                // [C, N, 2] or [nnz, 2]
-                   const torch::Tensor &radii,                  // [C, N] or [nnz]
-                   const torch::Tensor &depths,                 // [C, N] or [nnz]
-                   const at::optional<torch::Tensor> &camera_ids, // [nnz]
+isect_tiles_tensor(const torch::Tensor &means2d, // [C, N, 2] or [nnz, 2]
+                   const torch::Tensor &radii,   // [C, N] or [nnz]
+                   const torch::Tensor &depths,  // [C, N] or [nnz]
+                   const at::optional<torch::Tensor> &camera_ids,   // [nnz]
                    const at::optional<torch::Tensor> &gaussian_ids, // [nnz]
-                   const uint32_t C, const uint32_t tile_size, const uint32_t tile_width,
-                   const uint32_t tile_height, const bool sort, const bool double_buffer) {
+                   const uint32_t C, const uint32_t tile_size,
+                   const uint32_t tile_width, const uint32_t tile_height,
+                   const bool sort, const bool double_buffer) {
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
     CHECK_INPUT(radii);
@@ -174,31 +176,32 @@ isect_tiles_tensor(const torch::Tensor &means2d,                // [C, N, 2] or 
         // DoubleBuffer reduce the auxiliary memory usage from O(N+P) to O(P)
         if (double_buffer) {
             // Create a set of DoubleBuffers to wrap pairs of device pointers
-            cub::DoubleBuffer<int64_t> d_keys(
-                isect_ids.data_ptr<int64_t>(), isect_ids_sorted.data_ptr<int64_t>());
-            cub::DoubleBuffer<int32_t> d_values(
-                flatten_ids.data_ptr<int32_t>(), flatten_ids_sorted.data_ptr<int32_t>());
+            cub::DoubleBuffer<int64_t> d_keys(isect_ids.data_ptr<int64_t>(),
+                                              isect_ids_sorted.data_ptr<int64_t>());
+            cub::DoubleBuffer<int32_t> d_values(flatten_ids.data_ptr<int32_t>(),
+                                                flatten_ids_sorted.data_ptr<int32_t>());
             CUB_WRAPPER(cub::DeviceRadixSort::SortPairs, d_keys, d_values, n_isects, 0,
                         32 + tile_n_bits + cam_n_bits, stream);
             switch (d_keys.selector) {
-                case 0: // sorted items are stored in isect_ids
-                    isect_ids_sorted = isect_ids;
-                    break;
-                case 1: // sorted items are stored in isect_ids_sorted
-                    break;
+            case 0: // sorted items are stored in isect_ids
+                isect_ids_sorted = isect_ids;
+                break;
+            case 1: // sorted items are stored in isect_ids_sorted
+                break;
             }
             switch (d_values.selector) {
-                case 0: // sorted items are stored in flatten_ids
-                    flatten_ids_sorted = flatten_ids;
-                    break;
-                case 1: // sorted items are stored in flatten_ids_sorted
-                    break;
-            }        
+            case 0: // sorted items are stored in flatten_ids
+                flatten_ids_sorted = flatten_ids;
+                break;
+            case 1: // sorted items are stored in flatten_ids_sorted
+                break;
+            }
             // printf("DoubleBuffer d_keys selector: %d\n", d_keys.selector);
             // printf("DoubleBuffer d_values selector: %d\n", d_values.selector);
         } else {
-            CUB_WRAPPER(cub::DeviceRadixSort::SortPairs, isect_ids.data_ptr<int64_t>(), 
-                        isect_ids_sorted.data_ptr<int64_t>(), flatten_ids.data_ptr<int32_t>(),
+            CUB_WRAPPER(cub::DeviceRadixSort::SortPairs, isect_ids.data_ptr<int64_t>(),
+                        isect_ids_sorted.data_ptr<int64_t>(),
+                        flatten_ids.data_ptr<int32_t>(),
                         flatten_ids_sorted.data_ptr<int32_t>(), n_isects, 0,
                         32 + tile_n_bits + cam_n_bits, stream);
         }
@@ -209,8 +212,9 @@ isect_tiles_tensor(const torch::Tensor &means2d,                // [C, N, 2] or 
 }
 
 __global__ void isect_offset_encode(const uint32_t n_isects,
-                                    const int64_t *__restrict__ isect_ids, const uint32_t C,
-                                    const uint32_t n_tiles, const uint32_t tile_n_bits,
+                                    const int64_t *__restrict__ isect_ids,
+                                    const uint32_t C, const uint32_t n_tiles,
+                                    const uint32_t tile_n_bits,
                                     int32_t *__restrict__ offsets // [C, n_tiles]
 ) {
     // e.g., ids: [1, 1, 1, 3, 3], n_tiles = 6
@@ -281,19 +285,20 @@ torch::Tensor isect_offset_encode_tensor(const torch::Tensor &isect_ids, // [n_i
  ****************************************************************************/
 
 __global__ void rasterize_to_indices_in_range_kernel(
-    const uint32_t range_start, const uint32_t range_end, const uint32_t C, const uint32_t N, const uint32_t n_isects,
+    const uint32_t range_start, const uint32_t range_end, const uint32_t C,
+    const uint32_t N, const uint32_t n_isects,
     const float2 *__restrict__ means2d,  // [C, N, 2]
     const float3 *__restrict__ conics,   // [C, N, 3]
     const float *__restrict__ opacities, // [C, N]
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     const uint32_t tile_width, const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
-    const int32_t *__restrict__ flatten_ids,    // [n_isects]
+    const int32_t *__restrict__ flatten_ids,  // [n_isects]
     const float *__restrict__ transmittances, // [C, image_height, image_width]
     const int32_t *__restrict__ chunk_starts, // [C, image_height, image_width]
     int32_t *__restrict__ chunk_cnts,         // [C, image_height, image_width]
-    int64_t *__restrict__ gaussian_ids,      // [n_elems]
-    int64_t *__restrict__ pixel_ids       // [n_elems]
+    int64_t *__restrict__ gaussian_ids,       // [n_elems]
+    int64_t *__restrict__ pixel_ids           // [n_elems]
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
@@ -333,7 +338,8 @@ __global__ void rasterize_to_indices_in_range_kernel(
             ? n_isects
             : tile_offsets[tile_id + 1];
     const uint32_t block_size = block.size();
-    uint32_t num_batches = (isect_range_end - isect_range_start + block_size - 1) / block_size;
+    uint32_t num_batches =
+        (isect_range_end - isect_range_start + block_size - 1) / block_size;
 
     if (range_start >= num_batches) {
         // this entire tile has been processed in the previous iterations
@@ -354,7 +360,7 @@ __global__ void rasterize_to_indices_in_range_kernel(
         T = transmittances[pix_id];
         next_T = T;
     }
-    
+
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing its
     // designated pixel
@@ -414,8 +420,7 @@ __global__ void rasterize_to_indices_in_range_kernel(
                 // Second pass we write out the gaussian ids and pixel ids
                 int32_t g = id_batch[t]; // flatten index in [C * N]
                 gaussian_ids[base + cnt] = g % N;
-                pixel_ids[base + cnt] =
-                    pix_id + camera_id * image_height * image_width;
+                pixel_ids[base + cnt] = pix_id + camera_id * image_height * image_width;
                 cnt += 1;
             }
 
@@ -430,7 +435,7 @@ __global__ void rasterize_to_indices_in_range_kernel(
 }
 
 std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
-    const uint32_t range_start, const uint32_t range_end,   // iteration steps
+    const uint32_t range_start, const uint32_t range_end, // iteration steps
     const torch::Tensor transmittances, // [C, image_height, image_width]
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2]
@@ -440,7 +445,7 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
-    const torch::Tensor &flatten_ids     // [n_isects]
+    const torch::Tensor &flatten_ids   // [n_isects]
 ) {
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
@@ -509,7 +514,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     const uint32_t tile_width, const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
-    const int32_t *__restrict__ flatten_ids,    // [n_isects]
+    const int32_t *__restrict__ flatten_ids,  // [n_isects]
     float *__restrict__ render_colors, // [C, image_height, image_width, COLOR_DIM]
     float *__restrict__ render_alphas, // [C, image_height, image_width, 1]
     int32_t *__restrict__ last_ids     // [C, image_height, image_width]
@@ -654,7 +659,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
-    const torch::Tensor &flatten_ids     // [n_isects]
+    const torch::Tensor &flatten_ids   // [n_isects]
 ) {
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
@@ -668,8 +673,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
     }
     bool packed = means2d.dim() == 2;
 
-    uint32_t C = tile_offsets.size(0);          // number of cameras
-    uint32_t N = packed ? 0 : means2d.size(1);  // number of gaussians
+    uint32_t C = tile_offsets.size(0);         // number of cameras
+    uint32_t N = packed ? 0 : means2d.size(1); // number of gaussians
     uint32_t channels = colors.size(-1);
     uint32_t tile_height = tile_offsets.size(1);
     uint32_t tile_width = tile_offsets.size(2);
@@ -832,7 +837,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     const uint32_t tile_width, const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
-    const int32_t *__restrict__ flatten_ids,    // [n_isects]
+    const int32_t *__restrict__ flatten_ids,  // [n_isects]
     // fwd outputs
     const float *__restrict__ render_alphas, // [C, image_height, image_width, 1]
     const int32_t *__restrict__ last_ids,    // [C, image_height, image_width]
@@ -879,7 +884,8 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             ? n_isects
             : tile_offsets[tile_id + 1];
     const uint32_t block_size = block.size();
-    const uint32_t num_batches = (range_end - range_start + block_size - 1) / block_size;
+    const uint32_t num_batches =
+        (range_end - range_start + block_size - 1) / block_size;
 
     __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
     __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
@@ -920,7 +926,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         const int32_t batch_size = min(block_size, batch_end + 1 - range_start);
         const int32_t idx = batch_end - tr;
         if (idx >= range_start) {
-            int32_t g = flatten_ids[idx];  // flatten index in [C * N] or [nnz]
+            int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
             id_batch[tr] = g;
             const float2 xy = means2d[g];
             const float opac = opacities[g];
@@ -1065,7 +1071,7 @@ rasterize_to_pixels_bwd_tensor(
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
-    const torch::Tensor &flatten_ids,    // [n_isects]
+    const torch::Tensor &flatten_ids,  // [n_isects]
     // forward outputs
     const torch::Tensor &render_alphas, // [C, image_height, image_width, 1]
     const torch::Tensor &last_ids,      // [C, image_height, image_width]
@@ -1091,8 +1097,8 @@ rasterize_to_pixels_bwd_tensor(
 
     bool packed = means2d.dim() == 2;
 
-    uint32_t C = tile_offsets.size(0);          // number of cameras
-    uint32_t N = packed ? 0 : means2d.size(1);  // number of gaussians
+    uint32_t C = tile_offsets.size(0);         // number of cameras
+    uint32_t N = packed ? 0 : means2d.size(1); // number of gaussians
     uint32_t n_isects = flatten_ids.size(0);
     uint32_t COLOR_DIM = colors.size(-1);
     uint32_t tile_height = tile_offsets.size(1);
@@ -1126,8 +1132,7 @@ rasterize_to_pixels_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
-                                        : nullptr,
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
@@ -1143,8 +1148,7 @@ rasterize_to_pixels_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
-                                        : nullptr,
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
@@ -1160,8 +1164,7 @@ rasterize_to_pixels_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
-                                        : nullptr,
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
@@ -1177,8 +1180,7 @@ rasterize_to_pixels_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
-                                        : nullptr,
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
@@ -1194,8 +1196,7 @@ rasterize_to_pixels_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
-                                        : nullptr,
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
@@ -1211,8 +1212,7 @@ rasterize_to_pixels_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
-                                        : nullptr,
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
@@ -1228,8 +1228,7 @@ rasterize_to_pixels_bwd_tensor(
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>()
-                                        : nullptr,
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
