@@ -5,7 +5,11 @@ import gsplat.cuda as _C
 from jaxtyping import Float
 from torch import Tensor
 from torch.autograd import Function
-from typing import Literal
+
+try:
+    from typing import Literal
+except ImportError:
+    from typing_extensions import Literal
 
 
 def num_sh_bases(degree: int):
