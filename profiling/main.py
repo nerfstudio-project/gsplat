@@ -123,11 +123,6 @@ def main(
         for v in [means, quats, scales, opacities, colors]:
             v.grad = None
 
-    if memory_history:
-        torch.cuda.memory._dump_snapshot(
-            f"snapshot_{backend}_{reso}_{scene_grid}_{batch_size}_{channels}.pickle"
-        )
-
     ellipse_time_bwd, _ = timeit(repeats, backward)
     mem_toc_all = torch.cuda.max_memory_allocated() / 1024**3 - mem_tic
     print(
@@ -135,6 +130,12 @@ def main(
         f"Time: [FWD]{ellipse_time_fwd:.3f}s, [BWD]{ellipse_time_bwd:.3f}s "
         f"N Gaussians: {means.shape[0]}"
     )
+
+    if memory_history:
+        torch.cuda.memory._dump_snapshot(
+            f"snapshot_{backend}_{reso}_{scene_grid}_{batch_size}_{channels}.pickle"
+        )
+
     return {
         "mem_fwd": mem_toc_fwd,
         "mem_all": mem_toc_all,
