@@ -15,14 +15,10 @@ import imageio
 import numpy as np
 import torch
 import torch.nn.functional as F
+from nerfview import CameraState, ViewerServer
 
 from gsplat._helper import load_test_data
 from gsplat.rendering import rasterization
-
-try:
-    from nerfview import CameraState, ViewerServer
-except ImportError:
-    print("Please install nerfview: pip install git+https://github.com/hangg7/nerfview")
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -188,6 +184,6 @@ def viewer_render_fn(camera_state: CameraState, img_wh: Tuple[int, int]):
     return render_rgbs
 
 
-server = ViewerServer(port=args.port, render_fn=viewer_render_fn)
+server = ViewerServer(port=args.port, render_fn=viewer_render_fn, mode="rendering")
 print("Viewer running... Ctrl+C to exit.")
 time.sleep(100000)
