@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 from typing import Tuple, Literal, Optional
+import math
 
 
 def compute_sh_color(
@@ -17,16 +18,31 @@ def compute_sh_color(
     """
     :param viewdirs (*, C)
     :param sh_coeffs (*, D, C) sh coefficients for each color channel
+    :param method specifies different methods for computing SH
     return colors (*, C)
     """
     *dims, dim_sh, C = sh_coeffs.shape
     if method == "poly":
         bases = eval_sh_bases(dim_sh, viewdirs)  # (*, dim_sh)
     elif method == "fast":
-        bases = eval_sh_bases_fast(dim_sh, viewdirs)  # (*, dim_sh)
+        bases = eval_sh_bases_fast(dim_sh, viewdirs, False)  # (*, dim_sh)
     else:
         raise RuntimeError(f"Unknown mode: {method} for compute sh color.")
+
     return (bases[..., None] * sh_coeffs).sum(dim=-2)
+
+def compute_sh_color_and_derivatives(
+    viewdirs: Float[Tensor, "*batch 3"],
+    sh_coeffs: Float[Tensor, "*batch D C"],
+):
+    """
+    :param viewdirs (*, C)
+    :param sh_coeffs (*, D, C) sh coefficients for each color channel
+    return colors (*, C) and its derivative w.r.t. varphi and theta
+    """
+    *dims, dim_sh, C = sh_coeffs.shape
+    bases, derivatives = eval_sh_bases_fast(dim_sh, viewdirs, True)  # (*, dim_sh)
+    return (bases[..., None] * sh_coeffs).sum(dim=-2), (derivatives[..., None, :] * sh_coeffs[..., None]).sum(dim=-3)
 
 
 """
@@ -120,7 +136,7 @@ def eval_sh_bases(basis_dim: int, dirs: torch.Tensor):
     return result
 
 
-def eval_sh_bases_fast(basis_dim: int, dirs: torch.Tensor):
+def eval_sh_bases_fast(basis_dim: int, dirs: torch.Tensor, return_derivatives: bool = False):
     """
     Evaluate spherical harmonics bases at unit direction for high orders
     using approach described by
@@ -130,6 +146,7 @@ def eval_sh_bases_fast(basis_dim: int, dirs: torch.Tensor):
 
     :param basis_dim: int SH basis dim. Currently, only 1-25 square numbers supported
     :param dirs: torch.Tensor (..., 3) unit directions
+    :param return_derivatives: bool whether to return derivatives w.r.t. varphi and theta
 
     :return: torch.Tensor (..., basis_dim)
 
@@ -139,10 +156,21 @@ def eval_sh_bases_fast(basis_dim: int, dirs: torch.Tensor):
         (*dirs.shape[:-1], basis_dim), dtype=dirs.dtype, device=dirs.device
     )
 
+    if return_derivatives:
+        d_varphi_and_theta = torch.zeros(
+            (*dirs.shape[:-1], basis_dim, 2), dtype=dirs.dtype, device=dirs.device
+        )
+
+    def _all():
+        if return_derivatives:
+            return result, d_varphi_and_theta
+        else:
+            return result
+
     result[..., 0] = 0.2820947917738781
 
     if basis_dim <= 1:
-        return result
+        return _all()
 
     x, y, z = dirs.unbind(-1)
 
@@ -151,8 +179,23 @@ def eval_sh_bases_fast(basis_dim: int, dirs: torch.Tensor):
     result[..., 3] = fTmpA * x
     result[..., 1] = fTmpA * y
 
+    if return_derivatives:
+        # w.r.t. varphi
+        # d_varphi_and_theta[..., 2, 0] = 0
+        d_varphi_and_theta[..., 3, 0] = - result[..., 1]
+        d_varphi_and_theta[..., 1, 0] = result[..., 3]
+
+        # w.r.t. theta
+        fN0 = torch.sqrt(x * x + y * y)  # sin(theta)
+        fC0n = x / torch.clamp(fN0, min=1e-6)
+        fS0n = y / torch.clamp(fN0, min=1e-6)
+        dP11 = - result[..., 2]
+        d_varphi_and_theta[..., 2, 1] = fTmpA * fN0
+        d_varphi_and_theta[..., 3, 1] = dP11 * fC0n
+        d_varphi_and_theta[..., 1, 1] = dP11 * fS0n
+
     if basis_dim <= 4:
-        return result
+        return _all()
 
     z2 = z * z
     fTmpB = -1.092548430592079 * z
@@ -165,8 +208,29 @@ def eval_sh_bases_fast(basis_dim: int, dirs: torch.Tensor):
     result[..., 8] = fTmpA * fC1
     result[..., 4] = fTmpA * fS1
 
+    if return_derivatives:
+        # w.r.t. varphi
+        # d_varphi_and_theta[..., 6, 0] = 0
+        d_varphi_and_theta[..., 7, 0] = - result[..., 5]
+        d_varphi_and_theta[..., 5, 0] = result[..., 7]
+        d_varphi_and_theta[..., 8, 0] = - 2 * result[..., 4]
+        d_varphi_and_theta[..., 4, 0] = 2 * result[..., 8]
+
+        # w.r.t. theta
+        fN1 = fN0 * fN0
+        fC1n = fC1 / torch.clamp(fN0, min=1e-6)
+        fS1n = fS1 / torch.clamp(fN0, min=1e-6)
+        dP20 = math.sqrt(3) * fTmpB * fN0
+        dP21 = 2 * fTmpA * fN1 + fTmpB * z
+        dP22 = - fTmpB
+        d_varphi_and_theta[..., 6, 1] = dP20
+        d_varphi_and_theta[..., 7, 1] = dP21 * fC0n
+        d_varphi_and_theta[..., 5, 1] = dP21 * fS0n
+        d_varphi_and_theta[..., 8, 1] = dP22 * fC1n
+        d_varphi_and_theta[..., 4, 1] = dP22 * fS1n
+
     if basis_dim <= 9:
-        return result
+        return _all()
 
     fTmpC = -2.285228997322329 * z2 + 0.4570457994644658
     fTmpB = 1.445305721320277 * z
@@ -181,8 +245,34 @@ def eval_sh_bases_fast(basis_dim: int, dirs: torch.Tensor):
     result[..., 15] = fTmpA * fC2
     result[..., 9] = fTmpA * fS2
 
+    if return_derivatives:
+        # w.r.t. varphi
+        # d_varphi_and_theta[..., 12, 0] = 0
+        d_varphi_and_theta[..., 13, 0] = - result[..., 11]
+        d_varphi_and_theta[..., 11, 0] = result[..., 13]
+        d_varphi_and_theta[..., 14, 0] = - 2 * result[..., 10]
+        d_varphi_and_theta[..., 10, 0] = 2 * result[..., 14]
+        d_varphi_and_theta[..., 15, 0] = - 3 * result[..., 9]
+        d_varphi_and_theta[..., 9, 0] = 3 * result[..., 15]
+
+        # w.r.t. theta
+        fC2n = fC2 / torch.clamp(fN0, min=1e-6)
+        fS2n = fS2 / torch.clamp(fN0, min=1e-6)
+        dP30 = math.sqrt(6) * fTmpC * fN0
+        dP31 = math.sqrt(10) * fTmpB * fN1 + fTmpC * z
+        dP32 = math.sqrt(6) * fTmpA * fN1 + 2 * fTmpB * z
+        dP33 = - math.sqrt(3 / 2) * fTmpB
+        d_varphi_and_theta[..., 12, 1] = dP30
+        d_varphi_and_theta[..., 13, 1] = dP31 * fC0n
+        d_varphi_and_theta[..., 11, 1] = dP31 * fS0n
+        d_varphi_and_theta[..., 14, 1] = dP32 * fC1n
+        d_varphi_and_theta[..., 10, 1] = dP32 * fS1n
+        d_varphi_and_theta[..., 15, 1] = dP33 * fC2n
+        d_varphi_and_theta[..., 9, 1] = dP33 * fS2n
+
+
     if basis_dim <= 16:
-        return result
+        return _all()
 
     fTmpD = z * (-4.683325804901025 * z2 + 2.007139630671868)
     fTmpC = 3.31161143515146 * z2 - 0.47308734787878
@@ -201,7 +291,38 @@ def eval_sh_bases_fast(basis_dim: int, dirs: torch.Tensor):
     result[..., 17] = fTmpB * fS2
     result[..., 24] = fTmpA * fC3
     result[..., 16] = fTmpA * fS3
-    return result
+
+    if return_derivatives:
+        # w.r.t. varphi
+        # d_varphi_and_theta[..., 20, 0] = 0
+        d_varphi_and_theta[..., 21, 0] = - result[..., 19]
+        d_varphi_and_theta[..., 19, 0] = result[..., 21]
+        d_varphi_and_theta[..., 22, 0] = - 2 * result[..., 18]
+        d_varphi_and_theta[..., 18, 0] = 2 * result[..., 22]
+        d_varphi_and_theta[..., 23, 0] = - 3 * result[..., 17]
+        d_varphi_and_theta[..., 17, 0] = 3 * result[..., 23]
+        d_varphi_and_theta[..., 24, 0] = - 4 * result[..., 16]
+        d_varphi_and_theta[..., 16, 0] = 4 * result[..., 24]
+
+        # w.r.t. theta
+        fC3n = fC3 / torch.clamp(fN0, min=1e-6)
+        fS3n = fS3 / torch.clamp(fN0, min=1e-6)
+        dP40 = math.sqrt(10) * fTmpD * fN0
+        dP41 = math.sqrt(18) * fTmpC * fN1 + fTmpD * z
+        dP42 = math.sqrt(14) * fTmpB * fN1 + 2 * fTmpC * z
+        dP43 = math.sqrt(8) * fTmpA * fN1 + 3 * fTmpB * z
+        dP44 = - math.sqrt(2) * fTmpB
+        d_varphi_and_theta[..., 20, 1] = dP40
+        d_varphi_and_theta[..., 21, 1] = dP41 * fC0n
+        d_varphi_and_theta[..., 19, 1] = dP41 * fS0n
+        d_varphi_and_theta[..., 22, 1] = dP42 * fC1n
+        d_varphi_and_theta[..., 18, 1] = dP42 * fS1n
+        d_varphi_and_theta[..., 23, 1] = dP43 * fC2n
+        d_varphi_and_theta[..., 17, 1] = dP43 * fS2n
+        d_varphi_and_theta[..., 24, 1] = dP44 * fC3n
+        d_varphi_and_theta[..., 16, 1] = dP44 * fS3n
+
+    return _all()
 
 
 def normalized_quat_to_rotmat(quat: Tensor) -> Tensor:

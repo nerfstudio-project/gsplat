@@ -86,8 +86,42 @@ def profile_sh(
     ellipsed = (toc - tic) / n_iters_bwd * 1000  # ms
     print(f"[Bwd] Method: {method}, ellipsed: {ellipsed:.2f} ms")
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def check_derivative(num_points: int = 1, degree: int = 4):
+    from gsplat import _torch_impl
+    from gsplat import sh
+
+    varphi = 2 * torch.pi * torch.rand(num_points, 1, device=device)
+    theta = torch.pi * torch.rand(num_points, 1, device=device)
+    def get_viewdir(varphi, theta):
+        cos_varphi = torch.cos(varphi)
+        sin_varphi = torch.sin(varphi)
+        cos_theta = torch.cos(theta)
+        sin_theta = torch.sin(theta)
+        return torch.cat([sin_theta * cos_varphi, sin_theta * sin_varphi, cos_theta], dim=-1)
+
+
+    eps = 1e-3
+    viewdirs = get_viewdir(varphi, theta)
+    sh_coeffs = torch.rand(
+        num_points, sh.num_sh_bases(degree), 3, device=device)
+
+    colors, derivative = _torch_impl.compute_sh_color_and_derivatives(viewdirs, sh_coeffs)
+    v0 = get_viewdir(varphi - eps / 2, theta)
+    v1 = get_viewdir(varphi + eps / 2, theta)
+    f0 = _torch_impl.compute_sh_color(v0, sh_coeffs)
+    f1 = _torch_impl.compute_sh_color(v1, sh_coeffs)
+    torch.testing.assert_close((f1 - f0) / eps, derivative[..., 0], rtol=0.01, atol=0.001)
+
+    v0 = get_viewdir(varphi, theta - eps / 2)
+    v1 = get_viewdir(varphi, theta + eps / 2)
+    f0 = _torch_impl.compute_sh_color(v0, sh_coeffs)
+    f1 = _torch_impl.compute_sh_color(v1, sh_coeffs)
+    torch.testing.assert_close((f1 - f0) / eps, derivative[..., 1], rtol=0.01, atol=0.001)
+
 
 if __name__ == "__main__":
+    check_derivative()
     test_sh("poly")
     test_sh("fast")
     profile_sh("poly")
