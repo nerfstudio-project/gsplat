@@ -233,9 +233,7 @@ class Dataset:
         split: str = "train",
         patch_size: Optional[int] = None,
         load_depths: bool = False,
-        **kwargs,
     ):
-        super().__init__(**kwargs)
         self.parser = parser
         self.split = split
         self.patch_size = patch_size
