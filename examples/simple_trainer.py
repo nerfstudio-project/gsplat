@@ -13,7 +13,7 @@ import tqdm
 import tyro
 from datasets.colmap import Dataset, Parser
 from datasets.traj import generate_interpolated_path
-from nerfview import CameraState, ViewerServer, view_lock
+from nerfview import VIEWER_LOCK, CameraState, ViewerServer
 from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
@@ -401,9 +401,10 @@ class Runner:
         pbar = tqdm.tqdm(range(init_step, max_steps))
         for step in pbar:
             if not cfg.disable_viewer:
-                while self.server.training_state == "paused":
+                while self.server.state.status == "paused":
                     time.sleep(0.01)
-                view_lock.acquire()
+                VIEWER_LOCK.acquire()
+                tic = time.time()
 
             try:
                 data = next(trainloader_iter)
@@ -414,6 +415,9 @@ class Runner:
             camtoworlds = camtoworlds_gt = data["camtoworld"].to(device)  # [1, 4, 4]
             Ks = data["K"].to(device)  # [1, 3, 3]
             pixels = data["image"].to(device) / 255.0  # [1, H, W, 3]
+            num_train_rays_per_step = (
+                pixels.shape[0] * pixels.shape[1] * pixels.shape[2]
+            )
             image_ids = data["image_id"].to(device)
             if cfg.depth_loss:
                 points = data["points"].to(device)  # [1, M, 2]
@@ -620,7 +624,15 @@ class Runner:
                 self.render_traj(step)
 
             if not cfg.disable_viewer:
-                view_lock.release()
+                VIEWER_LOCK.release()
+                num_train_steps_per_sec = 1.0 / (time.time() - tic)
+                num_train_rays_per_sec = (
+                    num_train_rays_per_step * num_train_steps_per_sec
+                )
+                # Update the viewer state.
+                self.server.state.num_train_rays_per_sec = num_train_rays_per_sec
+                # Update the scene.
+                self.server.update(step, num_train_rays_per_step)
 
     @torch.no_grad()
     def update_running_stats(self, info: Dict):
