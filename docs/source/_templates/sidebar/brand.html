@@ -38,7 +38,7 @@
         const versions = (await getVersionList()).trim().split("\n").reverse();
         console.log(versions);
         let htmlString = "<ul style='margin: 0.5rem 0 0 0'>";
-        htmlString += `<li><a href="https://docs.gsplat.studio/latest">latest</a></li>`;
+        htmlString += `<li><a href="https://docs.gsplat.studio/main">main</a></li>`;
         for (let version of versions) {
           htmlString += `<li><a href="https://docs.gsplat.studio/versions/${version}">${version}</a></li>`;
         }

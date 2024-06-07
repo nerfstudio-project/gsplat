@@ -37,15 +37,15 @@ jobs:
           echo "DOCS_SUBDIR=versions/$VERSION" >> $GITHUB_ENV
 
       # Hack to overwrite version.
-      - name: Set version to 'latest' for pushes (this will appear in the doc banner)
+      - name: Set version to 'main' for pushes (this will appear in the doc banner)
         run: |
-          sed -i 's/__version__ = ".*"/__version__ = "latest"/' gsplat/version.py
+          sed -i 's/__version__ = ".*"/__version__ = "main"/' gsplat/version.py
         if: github.event_name == 'push'
 
       # Get version.
-      - name: Override subdirectory to `latest/` for pushes
+      - name: Override subdirectory to `main/` for pushes
         run: |
-          echo "DOCS_SUBDIR=latest" >> $GITHUB_ENV
+          echo "DOCS_SUBDIR=main" >> $GITHUB_ENV
         if: github.event_name == 'push'
 
       - name: Sphinx build

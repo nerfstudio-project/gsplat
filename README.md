@@ -5,17 +5,7 @@
 
 [http://www.gsplat.studio/](http://www.gsplat.studio/)
 
-gsplat is an open-source library for CUDA accelerated rasterization of gaussians with python bindings. It is inspired by the SIGGRAPH paper [3D Gaussian Splatting for Real-Time Rendering of Radiance Fields](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/). This library contains the neccessary components for efficient 3D to 2D projection, sorting, and alpha compositing of gaussians and their associated backward passes for inverse rendering.
-
-This project was greatly inspired by original paper [3D Gaussian Splatting
-for Real-Time Radiance Field Rendering
-](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/) by Kerbl* and Kopanas* et al. While building this library, we prioritized having a developer friendly Python API. 
-
-![Teaser](/docs/source/imgs/training.gif?raw=true)
-
-## Evaluation
-A full evalaution of Nerfstudio's implementation of Gaussian Splatting against the original Inria method can be found [here](https://docs.gsplat.studio/latest/tests/eval.html).
-
+gsplat is an open-source library for CUDA accelerated rasterization of gaussians with python bindings. It is inspired by the SIGGRAPH paper [3D Gaussian Splatting for Real-Time Rendering of Radiance Fields](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/), but we’ve made gsplat even faster, more memory efficient, and with a growing list of new features! Check our [webpage](https://docs.gsplat.studio/latest/) for more details
 
 ## Installation
 
@@ -33,27 +23,44 @@ Or install from source. In this way it will build the CUDA code during installat
 pip install git+https://github.com/nerfstudio-project/gsplat.git
 ```
 
-## Examples
+## Evaluation
 
-Fit a 2D image with 3D Gaussians.
+This repo comes with a standalone script that reproduces the official Gaussian Splatting with exactly the same performance on PSNR, SSIM, LPIPS, and converged number of Gaussians. Powered by gsplat’s efficient CUDA implementation, the training takes up to **4x less GPU memory** with up to **2x less time** to finish than the official implementation. Full report can be found [here](https://docs.gsplat.studio/latest/tests/eval.html).
 
 ```bash
-pip install -r examples/requirements.txt
-python examples/simple_trainer.py
+# under examples/
+pip install -r requirements.txt
+bash benchmark.sh
 ```
+
+## Examples
+
+We provide a set of examples to get you started! Below you can find the details about
+the examples (requires to install some exta dependences via `pip install -r examples/requirements.txt`)
+
+- [Train a 3D Gaussian splatting model on a COLMAP capture.](https://docs.gsplat.studio/latest/examples/colmap.html)
+- [Fit a 2D image with 3D Gaussians.](https://docs.gsplat.studio/latest/examples/image.html)
+- [Render a large scene in real-time.](https://docs.gsplat.studio/latest/examples/large_scale.html)
+
 
 ## Development and Contribution
 
-This repository was born from the curiosity of people on the Nerfstudio team trying to understand a new rendering technique. This effort was led by Vickie Ye, who wrote the CUDA backend library, and Matias Turkulainen, who wrote the python bindings, library, and documentation. Thank you to Zhuoyang Pan for extensive testing and help on the Python bindings, Ruilong Li for packaging and deployment, and Matt Tancik and Justin Kerr for inspiring Vickie to do this. This library was developed under the guidance of Angjoo Kanazawa at Berkeley. If you find this library useful in your projects or papers, please consider citing this repository:
-```
-@software{Ye_gsplat,
-author = {Ye, Vickie and Turkulainen, Matias, and the Nerfstudio team},
-title = {{gsplat}},
-url = {https://github.com/nerfstudio-project/gsplat}
-}
-```
+This repository was born from the curiosity of people on the Nerfstudio team trying to understand a new rendering technique. We welcome contributions of any kind and are open to feedback, bug-reports, and improvements to help expand the capabilities of this software.
 
-We also have made the mathematical supplement, with conventions and derivations, available [here](https://arxiv.org/abs/2312.02121). If you find the supplement useful, please consider citing:
+This project is developed by the following wonderful contributors (unordered):
+
+- [Angjoo Kanazawa](https://people.eecs.berkeley.edu/~kanazawa/) (UC Berkeley): Mentor of the project.
+- [Matthew Tancik](https://www.matthewtancik.com/about-me) (Luma AI): Mentor of the project.
+- [Vickie Ye](https://people.eecs.berkeley.edu/~vye/) (UC Berkeley): Project lead. v0.1 lead.
+- [Matias Turkulainen](https://maturk.github.io/) (Aalto University): Core developer.
+- [Ruilong Li](https://www.liruilong.cn/) (UC Berkeley): Core developer. v1.0 lead.
+- [Justin Kerr](https://kerrj.github.io/) (UC Berkeley): Core developer.
+- [Brent Yi](https://github.com/brentyi) (UC Berkeley): Core developer.
+- [Zhuoyang Pan](https://panzhy.com/) (ShanghaiTech University): Core developer.
+- [Jianbo Ye](http://www.jianboye.org/) (Amazon): Core developer.
+
+We also have made the mathematical supplement, with conventions and derivations, available [here](https://arxiv.org/abs/2312.02121). If you find this library useful in your projects or papers, please consider citing:
+
 ```
 @misc{ye2023mathematical,
     title={Mathematical Supplement for the $\texttt{gsplat}$ Library}, 

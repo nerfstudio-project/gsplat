@@ -120,3 +120,6 @@ venv.bak/
 *build
 compile_commands.json
 *.dump
+
+data
+results

@@ -28,6 +28,7 @@ extensions = [
     "sphinx.ext.autosummary",
     "sphinx.ext.intersphinx",
     "sphinxcontrib.bibtex",
+    "sphinxcontrib.video",
 ]
 
 intersphinx_mapping = {
@@ -40,6 +41,7 @@ templates_path = ["_templates"]
 
 # -- Options for HTML output
 html_theme = "furo"
+html_static_path = ["assets/"]
 
 # Ignore >>> when copying code
 copybutton_prompt_text = r">>> |\.\.\. "
@@ -49,7 +51,11 @@ copybutton_prompt_is_regexp = True
 epub_show_urls = "footnote"
 
 # typehints
-autodoc_typehints = "description"
+# autodoc_typehints = "description"
 
 # citations
 bibtex_bibfiles = ["references.bib"]
+
+# If true, the current module name will be prepended to all description
+# unit titles (such as .. function::).
+add_module_names = False

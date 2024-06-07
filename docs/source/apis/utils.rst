@@ -1,18 +1,31 @@
+
 Utils
 ===================================
-In addition to the main projection and rasterization functions, a few CUDA kernel and helper functions are exposed to python with the following bindings:
 
+Below are the basic functions that supports the rasterization.
 
 .. currentmodule:: gsplat
 
-.. autofunction:: bin_and_sort_gaussians
-
-.. autofunction:: compute_cov2d_bounds
-
-.. autofunction:: get_tile_bin_edges
-
 .. autofunction:: spherical_harmonics
 
-.. autofunction:: map_gaussian_to_intersects
+.. autofunction:: quat_scale_to_covar_preci
 
-.. autofunction:: compute_cumulative_intersects
+.. autofunction:: persp_proj
+
+.. autofunction:: fully_fused_projection
+
+.. autofunction:: isect_tiles
+
+.. autofunction:: isect_offset_encode
+
+.. autofunction:: world_to_cam
+
+.. autofunction:: rasterize_to_pixels
+
+.. autofunction:: rasterize_to_indices_in_range
+
+.. autofunction:: accumulate
+
+.. autofunction:: rasterization_legacy_wrapper    
+
+.. autofunction:: rasterization_inria_wrapper

@@ -9,7 +9,7 @@ from setuptools import find_packages, setup
 __version__ = None
 exec(open("gsplat/version.py", "r").read())
 
-URL = "https://github.com/nerfstudio-project/gsplat"  # TODO
+URL = "https://github.com/nerfstudio-project/gsplat"
 
 BUILD_NO_CUDA = os.getenv("BUILD_NO_CUDA", "0") == "1"
 WITH_SYMBOLS = os.getenv("WITH_SYMBOLS", "0") == "1"
@@ -27,19 +27,17 @@ def get_extensions():
     from torch.__config__ import parallel_info
     from torch.utils.cpp_extension import CUDAExtension
 
-    extensions_dir = osp.join("gsplat", "cuda", "csrc")
-    sources = glob.glob(osp.join(extensions_dir, "*.cu")) + glob.glob(
-        osp.join(extensions_dir, "*.cpp")
+    extensions_dir_v1 = osp.join("gsplat", "cuda_legacy", "csrc")
+    sources_v1 = glob.glob(osp.join(extensions_dir_v1, "*.cu")) + glob.glob(
+        osp.join(extensions_dir_v1, "*.cpp")
     )
-    # sources = [
-    #     osp.join(extensions_dir, "ext.cpp"),
-    #     osp.join(extensions_dir, "rasterize.cu"),
-    #     osp.join(extensions_dir, "bindings.cu"),
-    #     osp.join(extensions_dir, "forward.cu"),
-    #     osp.join(extensions_dir, "backward.cu"),
-    # ]
-    # remove generated 'hip' files, in case of rebuilds
-    sources = [path for path in sources if "hip" not in path]
+    sources_v1 = [path for path in sources_v1 if "hip" not in path]
+
+    extensions_dir_v2 = osp.join("gsplat", "cuda", "csrc")
+    sources_v2 = glob.glob(osp.join(extensions_dir_v2, "*.cu")) + glob.glob(
+        osp.join(extensions_dir_v2, "*.cpp")
+    )
+    sources_v2 = [path for path in sources_v2 if "hip" not in path]
 
     undef_macros = []
     define_macros = []
@@ -87,17 +85,26 @@ def get_extensions():
     if sys.platform == "win32":
         extra_compile_args["nvcc"] += ["-DWIN32_LEAN_AND_MEAN"]
 
-    extension = CUDAExtension(
+    extension_v1 = CUDAExtension(
+        f"gsplat.csrc_legacy",
+        sources_v1,
+        include_dirs=[extensions_dir_v2],  # glm lives in v2.
+        define_macros=define_macros,
+        undef_macros=undef_macros,
+        extra_compile_args=extra_compile_args,
+        extra_link_args=extra_link_args,
+    )
+    extension_v2 = CUDAExtension(
         f"gsplat.csrc",
-        sources,
-        include_dirs=[osp.join(extensions_dir, "third_party", "glm")],
+        sources_v2,
+        include_dirs=[extensions_dir_v2],  # glm lives in v2.
         define_macros=define_macros,
         undef_macros=undef_macros,
         extra_compile_args=extra_compile_args,
         extra_link_args=extra_link_args,
     )
 
-    return [extension]
+    return [extension_v1, extension_v2]
 
 
 setup(
@@ -109,6 +116,7 @@ setup(
     download_url=f"{URL}/archive/gsplat-{__version__}.tar.gz",
     python_requires=">=3.7",
     install_requires=[
+        "ninja",
         "numpy",
         "jaxtyping",
         "rich>=12",
@@ -127,7 +135,6 @@ setup(
             "pyyaml==6.0",
             "build",
             "twine",
-            "ninja",
         ],
     },
     ext_modules=get_extensions() if not BUILD_NO_CUDA else [],
