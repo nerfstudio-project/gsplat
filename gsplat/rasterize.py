@@ -153,10 +153,10 @@ class _RasterizeGaussians(Function):
             # pdb.set_trace()
             
             if colors.shape[-1] == 3:
-                rasterize_fn = _C.rasterize_forward
+                rasterize_fn = _C.rasterize_forward_2dgs
             else:
                 # rasterize_fn = _C.nd_rasterize_forward
-                rasterize_fn = _C.rasterize_forward
+                rasterize_fn = _C.rasterize_forward_2dgs
 
             out_img, final_Ts, final_idx = rasterize_fn(
                 tile_bounds,
@@ -230,10 +230,10 @@ class _RasterizeGaussians(Function):
 
         else:
             if colors.shape[-1] == 3:
-                rasterize_fn = _C.rasterize_backward
+                rasterize_fn = _C.rasterize_backward_2dgs
             else:
                 # rasterize_fn = _C.nd_rasterize_backward
-                rasterize_fn = _C.rasterize_backward
+                rasterize_fn = _C.rasterize_backward_2dgs
 
             v_xy, v_xy_abs, v_ray_transformations, v_colors, v_opacity = rasterize_fn(
                 img_height,

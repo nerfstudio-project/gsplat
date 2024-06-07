@@ -3,10 +3,63 @@
 #include <cstdint>
 #include <glm/glm.hpp>
 
+
+// __device__ void build_H(
+//     const glm::vec3 & p_world,
+//     const float4 & quat,
+//     const float2 & scale,
+//     const float* viewmat,
+//     const float4 & intrins,
+//     float tan_fovx,
+//     float tan_fovy,
+//     const float* ray_transformation,
+
+//     // grad input
+//     const float* dL_dray_transformation,
+//     // const float* dL_dnormal3D,
+
+//     // grad output
+//     glm::vec3 & v_mean3D,
+//     glm::vec2 & v_scale,
+//     glm::vec4 & v_quat
+// );
+
+// __device__ void build_AABB(
+//     int idx,
+//     const int * radii,
+//     const float W,
+//     const float H,
+//     const float * ray_transformations,
+
+//     // grad output
+//     float3 * v_mean2Ds,
+//     float *v_ray_transformations
+// );
+
+__device__ void build_transform_and_AABB(
+    const glm::vec3& p_world,
+    const float4& quat,
+    const float2& scale,
+    const float* viewmat,
+    const float4& intrins,
+    const int* radii,
+    float tan_fovx,
+    float tan_fovy,
+    const float* ray_transformation,
+
+    // grad
+    float* v_ray_transformations,
+    glm::vec3& v_mean3D,
+    glm::vec2& v_scale,
+    glm::vec4& v_quat,
+    float3& v_mean2D
+);
+
+//====== 2DGS ======//
 // for f : R(n) -> R(m), J in R(m, n),
 // v is cotangent in R(m), e.g. dL/df in R(m),
 // compute vjp i.e. VT J -> R(n)
-__global__ void project_gaussians_backward_kernel(
+__global__ void project_gaussians_backward_kernel_2dgs(
     const int num_points,
     const float3* __restrict__ means3d,
     const float2* __restrict__ scales,
@@ -30,7 +83,7 @@ __global__ void project_gaussians_backward_kernel(
     float3* __restrict__ v_mean2Ds
 );
 
-__global__ void rasterize_backward_kernel(
+__global__ void rasterize_backward_kernel_2dgs(
     const dim3 tile_bounds,
     const dim3 img_size,
     const int32_t* __restrict__ gaussian_ids_sorted,
@@ -52,38 +105,6 @@ __global__ void rasterize_backward_kernel(
     float* __restrict__ dL_dray_transformation,
     float3* __restrict__ dL_drgb,
     float* __restrict__ dL_dopacity
-);
-
-__device__ void build_H(
-    const glm::vec3 & p_world,
-    const float4 & quat,
-    const float2 & scale,
-    const float* viewmat,
-    const float4 & intrins,
-    float tan_fovx,
-    float tan_fovy,
-    const float* ray_transformation,
-
-    // grad input
-    const float* dL_dray_transformation,
-    // const float* dL_dnormal3D,
-
-    // grad output
-    glm::vec3 & v_mean3D,
-    glm::vec2 & v_scale,
-    glm::vec4 & v_quat
-);
-
-__device__ void build_AABB(
-    int idx,
-    const int * radii,
-    const float W,
-    const float H,
-    const float * ray_transformations,
-
-    // grad output
-    float3 * v_mean2Ds,
-    float *v_ray_transformations
 );
 
 __device__ void build_transform_and_AABB(

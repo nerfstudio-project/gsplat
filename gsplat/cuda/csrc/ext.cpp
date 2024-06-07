@@ -5,10 +5,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // auto diff functions
     // m.def("nd_rasterize_forward", &nd_rasterize_forward_tensor);
     // m.def("nd_rasterize_backward", &nd_rasterize_backward_tensor);
-    m.def("rasterize_forward", &rasterize_forward_tensor);
-    m.def("rasterize_backward", &rasterize_backward_tensor);
-    m.def("project_gaussians_forward", &project_gaussians_forward_tensor);
-    m.def("project_gaussians_backward", &project_gaussians_backward_tensor);
+    //====== 2DGS ======//
+    m.def("rasterize_forward_2dgs", &rasterize_forward_tensor_2dgs);
+    m.def("rasterize_backward_2dgs", &rasterize_backward_tensor_2dgs);
+    m.def("project_gaussians_forward_2dgs", &project_gaussians_forward_tensor_2dgs);
+    m.def("project_gaussians_backward_2dgs", &project_gaussians_backward_tensor_2dgs);
+
+
     m.def("compute_sh_forward", &compute_sh_forward_tensor);
     m.def("compute_sh_backward", &compute_sh_backward_tensor);
     // utils

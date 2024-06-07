@@ -21,7 +21,10 @@ inline __device__ void warpSum(float& val, cg::thread_block_tile<32>& tile) {
 }
 
 
-__global__ void project_gaussians_backward_kernel(
+
+
+//====== 2DGS ======//
+__global__ void project_gaussians_backward_kernel_2dgs(
     const int num_points,
     const float3* __restrict__ means3d,
     const float2* __restrict__ scales,
@@ -81,37 +84,6 @@ __global__ void project_gaussians_backward_kernel(
         v_mean2Ds[idx]
     );
 
-    // build_AABB(
-    //     idx,
-    //     radii,
-    //     img_size.x,
-    //     img_size.y,
-    //     ray_transformations,
-
-    //     v_mean2Ds,
-    //     v_ray_transformations
-    // );
-    
-    // build_H(
-    //     p_world,
-    //     quats[idx],
-    //     scales[idx],
-    //     viewmat,
-    //     intrins,
-    //     tan_fovx,
-    //     tan_fovy,
-    //     ray_transformation,
-
-    //     // grad input
-    //     v_ray_transformation,
-    //     // v_normal3D,
-
-    //     // grad output
-    //     v_mean3D,
-    //     v_scale,
-    //     v_quat
-    // );
-
     // Update 
     float3 v_mean3D_float = {v_mean3D.x, v_mean3D.y, v_mean3D.z};
     float2 v_scale_float = {v_scale.x, v_scale.y};
@@ -122,9 +94,8 @@ __global__ void project_gaussians_backward_kernel(
     v_quats[idx] = v_quat_float;
 }
 
-
 // For simplest 2DGS normal constraint is not used, therefore exclude it for now
-__global__ void rasterize_backward_kernel(
+__global__ void rasterize_backward_kernel_2dgs(
     const dim3 tile_bounds,
     const dim3 img_size,
     const int32_t* __restrict__ gaussian_ids_sorted,
@@ -387,7 +358,6 @@ __global__ void rasterize_backward_kernel(
         }
     }
 }
-
 
 __device__ void build_transform_and_AABB(
     const glm::vec3& p_world, 

@@ -151,195 +151,6 @@ torch::Tensor compute_sh_backward_tensor(
 }
 
 
-std::tuple<
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor>
-project_gaussians_forward_tensor(
-    const int num_points,
-    torch::Tensor &means3d,
-    torch::Tensor &scales,
-    const float glob_scale,
-    torch::Tensor &quats,
-    torch::Tensor &viewmat,
-    const float fx,
-    const float fy,
-    const float cx,
-    const float cy,
-    const unsigned img_height,
-    const unsigned img_width,
-    const unsigned block_width,
-    const float clip_thresh
-) {
-    DEVICE_GUARD(means3d);
-    dim3 img_size_dim3;
-    img_size_dim3.x = img_width;
-    img_size_dim3.y = img_height; 
-    // printf("fx: %.2f \n", fx);
-    // printf("fy: %.2f \n", fy);
-    // printf("cx: %.2f \n", cx);
-    // printf("cy: %.2f \n", cy);
-    // printf("img_size.x: %.2f, img_size.y: %.2f \n", int(img_width), int(img_height));
-    // printf("block_width: %.2f \n", int(block_width));
-
-    dim3 tile_bounds_dim3;
-    tile_bounds_dim3.x = int((img_width + block_width - 1) / block_width);
-    tile_bounds_dim3.y = int((img_height + block_width - 1) / block_width);
-    tile_bounds_dim3.z = 1;
-
-    // printf("tile bound x: %.2f", tile_bounds_dim3.x);
-    // printf("tile bound y: %.2f", tile_bounds_dim3.y);
-
-    float4 intrins = {fx, fy, cx, cy};
-
-    // Triangular covariance.
-    torch::Tensor cov3d_d =
-        torch::zeros({num_points, 6}, means3d.options().dtype(torch::kFloat32));
-    torch::Tensor xys_d =
-        torch::zeros({num_points, 2}, means3d.options().dtype(torch::kFloat32));
-    torch::Tensor depths_d =
-        torch::zeros({num_points}, means3d.options().dtype(torch::kFloat32));
-    torch::Tensor radii_d =
-        torch::zeros({num_points}, means3d.options().dtype(torch::kInt32));
-    torch::Tensor conics_d =
-        torch::zeros({num_points, 3}, means3d.options().dtype(torch::kFloat32));
-    torch::Tensor compensation_d =
-        torch::zeros({num_points}, means3d.options().dtype(torch::kFloat32));
-    torch::Tensor num_tiles_hit_d =
-        torch::zeros({num_points}, means3d.options().dtype(torch::kInt32));
-    torch::Tensor ray_transformations = 
-        torch::zeros({num_points, 3, 3}, means3d.options().dtype(torch::kFloat32));
-
-    project_gaussians_forward_kernel<<<
-        (num_points + N_THREADS - 1) / N_THREADS,
-        N_THREADS>>>(
-        num_points,
-        (float3 *)means3d.contiguous().data_ptr<float>(),
-        (float3 *)scales.contiguous().data_ptr<float>(),
-        glob_scale,
-        (float4 *)quats.contiguous().data_ptr<float>(),
-        viewmat.contiguous().data_ptr<float>(),
-        intrins,
-        img_size_dim3,
-        tile_bounds_dim3,
-        block_width,
-        clip_thresh,
-        // Outputs.
-        cov3d_d.contiguous().data_ptr<float>(),
-        (float2 *)xys_d.contiguous().data_ptr<float>(),
-        depths_d.contiguous().data_ptr<float>(),
-        radii_d.contiguous().data_ptr<int>(),
-        // (float3 *)conics_d.contiguous().data_ptr<float>(),
-        // compensation_d.contiguous().data_ptr<float>(),
-        num_tiles_hit_d.contiguous().data_ptr<int32_t>(),
-        ray_transformations.contiguous().data_ptr<float>()
-    );
-
-    // printf("ray_transformations[0]: %.2f \n", ray_transformations[0]);
-
-    return std::make_tuple(
-        cov3d_d, xys_d, depths_d, radii_d, num_tiles_hit_d, ray_transformations
-    );
-}
-
-std::tuple<
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor>
-project_gaussians_backward_tensor(
-    const int num_points,
-    torch::Tensor &means3d,
-    torch::Tensor &scales,
-    const float glob_scale,
-    torch::Tensor &quats,
-    torch::Tensor &viewmat,
-    torch::Tensor &ray_transformations,
-    const float fx,
-    const float fy,
-    const float cx,
-    const float cy,
-    const unsigned img_height,
-    const unsigned img_width,
-    torch::Tensor &cov3d,
-    torch::Tensor &radii,
-    torch::Tensor &dL_dray_transformations
-    // torch::Tensor &dL_dnormal3Ds
-    // torch::Tensor &conics,
-    // torch::Tensor &compensation,
-    // torch::Tensor &v_xy,
-    // torch::Tensor &v_depth,
-    // torch::Tensor &v_conic,
-    // torch::Tensor &v_compensation
-){
-    DEVICE_GUARD(means3d);
-    dim3 img_size_dim3;
-    img_size_dim3.x = img_width;
-    img_size_dim3.y = img_height;
-
-    float4 intrins = {fx, fy, cx, cy};
-
-    const auto num_cov3d = num_points * 6;
-
-    // Triangular covariance.
-    // torch::Tensor v_cov2d =
-    //     torch::zeros({num_points, 3}, means3d.options().dtype(torch::kFloat32));
-    // torch::Tensor v_cov3d =
-    //     torch::zeros({num_points, 6}, means3d.options().dtype(torch::kFloat32));
-    torch::Tensor v_mean3d =
-        torch::zeros({num_points, 3}, means3d.options().dtype(torch::kFloat32));
-    torch::Tensor v_scale =
-        torch::zeros({num_points, 2}, means3d.options().dtype(torch::kFloat32));
-    torch::Tensor v_quat =
-        torch::zeros({num_points, 4}, means3d.options().dtype(torch::kFloat32));
-    torch::Tensor dL_dmean2d = 
-        torch::zeros({num_points, 3}, means3d.options().dtype(torch::kFloat32));
-
-    // printf("num_points: %.2f \n", num_points);
-    // printf("glob_scale: %.2f \n", glob_scale);
-    // printf("intrins: %.2f, %.2f, %.2f, %.2f \n", intrins.x, intrins.y, intrins.z, intrins.w);
-    // printf("img_size_dim3: %.2f, %.2f, %.2f \n", img_size_dim3.x, img_size_dim3.y, img_size_dim3.z);
-
-    project_gaussians_backward_kernel<<<
-        (num_points + N_THREADS - 1) / N_THREADS,
-        N_THREADS>>>(
-        num_points,
-        (float3 *)means3d.contiguous().data_ptr<float>(),
-        (float2 *)scales.contiguous().data_ptr<float>(),
-        glob_scale,
-        (float4 *)quats.contiguous().data_ptr<float>(),
-        viewmat.contiguous().data_ptr<float>(),
-        intrins,
-        img_size_dim3,
-        cov3d.contiguous().data_ptr<float>(),
-        radii.contiguous().data_ptr<int>(),
-        (float *)ray_transformations.contiguous().data_ptr<float>(),
-        // (float3 *)conics.contiguous().data_ptr<float>(),
-        // (float *)compensation.contiguous().data_ptr<float>(),
-        // (float2 *)v_xy.contiguous().data_ptr<float>(),
-        // v_depth.contiguous().data_ptr<float>(),
-        // (float3 *)v_conic.contiguous().data_ptr<float>(),
-        // (float *)v_compensation.contiguous().data_ptr<float>(),
-
-        // grad input
-        (float *)dL_dray_transformations.contiguous().data_ptr<float>(),
-        // (float*) dL_dnormal3Ds.contiguous().data_ptr<float>(),
-
-        // Outputs.
-        // (float3 *)v_cov2d.contiguous().data_ptr<float>(),
-        // v_cov3d.contiguous().data_ptr<float>(),
-        (float3 *)v_mean3d.contiguous().data_ptr<float>(),
-        (float2 *)v_scale.contiguous().data_ptr<float>(),
-        (float4 *)v_quat.contiguous().data_ptr<float>(),
-        (float3 *)dL_dmean2d.contiguous().data_ptr<float>()
-    );
-
-    return std::make_tuple(v_mean3d, v_scale, v_quat, dL_dmean2d);
-}
-
 std::tuple<torch::Tensor, torch::Tensor> map_gaussian_to_intersects_tensor(
     const int num_points,
     const int num_intersects,
@@ -404,77 +215,6 @@ torch::Tensor get_tile_bin_edges_tensor(
     return tile_bins;
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-rasterize_forward_tensor(
-    const std::tuple<int, int, int> tile_bounds,
-    const std::tuple<int, int, int> block,
-    const std::tuple<int, int, int> img_size,
-    const torch::Tensor &gaussian_ids_sorted,
-    const torch::Tensor &tile_bins,
-    const torch::Tensor &xys,
-    // const torch::Tensor &conics,
-    const torch::Tensor &ray_transformations,
-    const torch::Tensor &colors,
-    const torch::Tensor &opacities,
-    const torch::Tensor &background
-) {
-    DEVICE_GUARD(xys);
-    CHECK_INPUT(gaussian_ids_sorted);
-    CHECK_INPUT(tile_bins);
-    CHECK_INPUT(xys);
-    CHECK_INPUT(ray_transformations);
-    // CHECK_INPUT(conics);
-    CHECK_INPUT(colors);
-    CHECK_INPUT(opacities);
-    CHECK_INPUT(background);
-
-    dim3 tile_bounds_dim3;
-    tile_bounds_dim3.x = std::get<0>(tile_bounds);
-    tile_bounds_dim3.y = std::get<1>(tile_bounds);
-    tile_bounds_dim3.z = std::get<2>(tile_bounds);
-
-    dim3 block_dim3;
-    block_dim3.x = std::get<0>(block);
-    block_dim3.y = std::get<1>(block);
-    block_dim3.z = std::get<2>(block);
-
-    dim3 img_size_dim3;
-    img_size_dim3.x = std::get<0>(img_size);
-    img_size_dim3.y = std::get<1>(img_size);
-    img_size_dim3.z = std::get<2>(img_size);
-
-    const int channels = colors.size(1);
-    const int img_width = img_size_dim3.x;
-    const int img_height = img_size_dim3.y;
-
-    torch::Tensor out_img = torch::zeros(
-        {img_height, img_width, channels}, xys.options().dtype(torch::kFloat32)
-    );
-    torch::Tensor final_Ts = torch::zeros(
-        {img_height, img_width}, xys.options().dtype(torch::kFloat32)
-    );
-    torch::Tensor final_idx = torch::zeros(
-        {img_height, img_width}, xys.options().dtype(torch::kInt32)
-    );
-
-    rasterize_forward<<<tile_bounds_dim3, block_dim3>>>(
-        tile_bounds_dim3,
-        img_size_dim3,
-        gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
-        (int2 *)tile_bins.contiguous().data_ptr<int>(),
-        (float2 *)xys.contiguous().data_ptr<float>(),
-        // (float3 *)conics.contiguous().data_ptr<float>(),
-        ray_transformations.contiguous().data_ptr<float>(),
-        (float3 *)colors.contiguous().data_ptr<float>(),
-        opacities.contiguous().data_ptr<float>(),
-        final_Ts.contiguous().data_ptr<float>(),
-        final_idx.contiguous().data_ptr<int>(),
-        (float3 *)out_img.contiguous().data_ptr<float>(),
-        *(float3 *)background.contiguous().data_ptr<float>()
-    );
-
-    return std::make_tuple(out_img, final_Ts, final_idx);
-}
 
 
 // std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
@@ -638,31 +378,292 @@ rasterize_forward_tensor(
 //     return std::make_tuple(v_xy, v_xy_abs, v_conic, v_colors, v_opacity);
 // }
 
-std::
-    tuple<
-        torch::Tensor, // dL_dxy
-        torch::Tensor, // dL_dxy_abs
-        torch::Tensor, // dL_dconic
-        torch::Tensor, // dL_dcolors
-        torch::Tensor  // dL_dopacity
-        >
-    rasterize_backward_tensor(
-        const unsigned img_height,
-        const unsigned img_width,
-        const unsigned block_width,
-        const torch::Tensor &gaussians_ids_sorted,
-        const torch::Tensor &tile_bins,
-        const torch::Tensor &xys,
-        // const torch::Tensor &conics,
-        const torch::Tensor &ray_transformations,
-        const torch::Tensor &colors,
-        const torch::Tensor &opacities,
-        const torch::Tensor &background,
-        const torch::Tensor &final_Ts,
-        const torch::Tensor &final_idx,
-        const torch::Tensor &v_output, // dL_dout_color
-        const torch::Tensor &v_output_alpha // dL_dout_alpha
-    ) {
+
+//====== 2DGS ======//
+std::tuple<
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor>
+project_gaussians_forward_tensor_2dgs(
+    const int num_points,
+    torch::Tensor &means3d,
+    torch::Tensor &scales,
+    const float glob_scale,
+    torch::Tensor &quats,
+    torch::Tensor &viewmat,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
+    const unsigned img_height,
+    const unsigned img_width,
+    const unsigned block_width,
+    const float clip_thresh
+) {
+    DEVICE_GUARD(means3d);
+    dim3 img_size_dim3;
+    img_size_dim3.x = img_width;
+    img_size_dim3.y = img_height; 
+    // printf("fx: %.2f \n", fx);
+    // printf("fy: %.2f \n", fy);
+    // printf("cx: %.2f \n", cx);
+    // printf("cy: %.2f \n", cy);
+    // printf("img_size.x: %.2f, img_size.y: %.2f \n", int(img_width), int(img_height));
+    // printf("block_width: %.2f \n", int(block_width));
+
+    dim3 tile_bounds_dim3;
+    tile_bounds_dim3.x = int((img_width + block_width - 1) / block_width);
+    tile_bounds_dim3.y = int((img_height + block_width - 1) / block_width);
+    tile_bounds_dim3.z = 1;
+
+    // printf("tile bound x: %.2f", tile_bounds_dim3.x);
+    // printf("tile bound y: %.2f", tile_bounds_dim3.y);
+
+    float4 intrins = {fx, fy, cx, cy};
+
+    // Triangular covariance.
+    torch::Tensor cov3d_d =
+        torch::zeros({num_points, 6}, means3d.options().dtype(torch::kFloat32));
+    torch::Tensor xys_d =
+        torch::zeros({num_points, 2}, means3d.options().dtype(torch::kFloat32));
+    torch::Tensor depths_d =
+        torch::zeros({num_points}, means3d.options().dtype(torch::kFloat32));
+    torch::Tensor radii_d =
+        torch::zeros({num_points}, means3d.options().dtype(torch::kInt32));
+    torch::Tensor conics_d =
+        torch::zeros({num_points, 3}, means3d.options().dtype(torch::kFloat32));
+    torch::Tensor compensation_d =
+        torch::zeros({num_points}, means3d.options().dtype(torch::kFloat32));
+    torch::Tensor num_tiles_hit_d =
+        torch::zeros({num_points}, means3d.options().dtype(torch::kInt32));
+    torch::Tensor ray_transformations = 
+        torch::zeros({num_points, 3, 3}, means3d.options().dtype(torch::kFloat32));
+
+    project_gaussians_forward_kernel_2dgs<<<
+        (num_points + N_THREADS - 1) / N_THREADS,
+        N_THREADS>>>(
+        num_points,
+        (float3 *)means3d.contiguous().data_ptr<float>(),
+        (float3 *)scales.contiguous().data_ptr<float>(),
+        glob_scale,
+        (float4 *)quats.contiguous().data_ptr<float>(),
+        viewmat.contiguous().data_ptr<float>(),
+        intrins,
+        img_size_dim3,
+        tile_bounds_dim3,
+        block_width,
+        clip_thresh,
+        // Outputs.
+        cov3d_d.contiguous().data_ptr<float>(),
+        (float2 *)xys_d.contiguous().data_ptr<float>(),
+        depths_d.contiguous().data_ptr<float>(),
+        radii_d.contiguous().data_ptr<int>(),
+        // (float3 *)conics_d.contiguous().data_ptr<float>(),
+        // compensation_d.contiguous().data_ptr<float>(),
+        num_tiles_hit_d.contiguous().data_ptr<int32_t>(),
+        ray_transformations.contiguous().data_ptr<float>()
+    );
+
+    // printf("ray_transformations[0]: %.2f \n", ray_transformations[0]);
+
+    return std::make_tuple(
+        cov3d_d, xys_d, depths_d, radii_d, num_tiles_hit_d, ray_transformations
+    );
+}
+
+std::tuple<
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor>
+project_gaussians_backward_tensor_2dgs(
+    const int num_points,
+    torch::Tensor &means3d,
+    torch::Tensor &scales,
+    const float glob_scale,
+    torch::Tensor &quats,
+    torch::Tensor &viewmat,
+    torch::Tensor &ray_transformations,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
+    const unsigned img_height,
+    const unsigned img_width,
+    torch::Tensor &cov3d,
+    torch::Tensor &radii,
+    torch::Tensor &dL_dray_transformations
+    // torch::Tensor &dL_dnormal3Ds
+    // torch::Tensor &conics,
+    // torch::Tensor &compensation,
+    // torch::Tensor &v_xy,
+    // torch::Tensor &v_depth,
+    // torch::Tensor &v_conic,
+    // torch::Tensor &v_compensation
+){
+    DEVICE_GUARD(means3d);
+    dim3 img_size_dim3;
+    img_size_dim3.x = img_width;
+    img_size_dim3.y = img_height;
+
+    float4 intrins = {fx, fy, cx, cy};
+
+    const auto num_cov3d = num_points * 6;
+
+    // Triangular covariance.
+    // torch::Tensor v_cov2d =
+    //     torch::zeros({num_points, 3}, means3d.options().dtype(torch::kFloat32));
+    // torch::Tensor v_cov3d =
+    //     torch::zeros({num_points, 6}, means3d.options().dtype(torch::kFloat32));
+    torch::Tensor v_mean3d =
+        torch::zeros({num_points, 3}, means3d.options().dtype(torch::kFloat32));
+    torch::Tensor v_scale =
+        torch::zeros({num_points, 2}, means3d.options().dtype(torch::kFloat32));
+    torch::Tensor v_quat =
+        torch::zeros({num_points, 4}, means3d.options().dtype(torch::kFloat32));
+    torch::Tensor dL_dmean2d = 
+        torch::zeros({num_points, 3}, means3d.options().dtype(torch::kFloat32));
+
+    // printf("num_points: %.2f \n", num_points);
+    // printf("glob_scale: %.2f \n", glob_scale);
+    // printf("intrins: %.2f, %.2f, %.2f, %.2f \n", intrins.x, intrins.y, intrins.z, intrins.w);
+    // printf("img_size_dim3: %.2f, %.2f, %.2f \n", img_size_dim3.x, img_size_dim3.y, img_size_dim3.z);
+
+    project_gaussians_backward_kernel_2dgs<<<
+        (num_points + N_THREADS - 1) / N_THREADS,
+        N_THREADS>>>(
+        num_points,
+        (float3 *)means3d.contiguous().data_ptr<float>(),
+        (float2 *)scales.contiguous().data_ptr<float>(),
+        glob_scale,
+        (float4 *)quats.contiguous().data_ptr<float>(),
+        viewmat.contiguous().data_ptr<float>(),
+        intrins,
+        img_size_dim3,
+        cov3d.contiguous().data_ptr<float>(),
+        radii.contiguous().data_ptr<int>(),
+        (float *)ray_transformations.contiguous().data_ptr<float>(),
+        // (float3 *)conics.contiguous().data_ptr<float>(),
+        // (float *)compensation.contiguous().data_ptr<float>(),
+        // (float2 *)v_xy.contiguous().data_ptr<float>(),
+        // v_depth.contiguous().data_ptr<float>(),
+        // (float3 *)v_conic.contiguous().data_ptr<float>(),
+        // (float *)v_compensation.contiguous().data_ptr<float>(),
+
+        // grad input
+        (float *)dL_dray_transformations.contiguous().data_ptr<float>(),
+        // (float*) dL_dnormal3Ds.contiguous().data_ptr<float>(),
+
+        // Outputs.
+        // (float3 *)v_cov2d.contiguous().data_ptr<float>(),
+        // v_cov3d.contiguous().data_ptr<float>(),
+        (float3 *)v_mean3d.contiguous().data_ptr<float>(),
+        (float2 *)v_scale.contiguous().data_ptr<float>(),
+        (float4 *)v_quat.contiguous().data_ptr<float>(),
+        (float3 *)dL_dmean2d.contiguous().data_ptr<float>()
+    );
+
+    return std::make_tuple(v_mean3d, v_scale, v_quat, dL_dmean2d);
+}
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+rasterize_forward_tensor_2dgs(
+    const std::tuple<int, int, int> tile_bounds,
+    const std::tuple<int, int, int> block,
+    const std::tuple<int, int, int> img_size,
+    const torch::Tensor &gaussian_ids_sorted,
+    const torch::Tensor &tile_bins,
+    const torch::Tensor &xys,
+    // const torch::Tensor &conics,
+    const torch::Tensor &ray_transformations,
+    const torch::Tensor &colors,
+    const torch::Tensor &opacities,
+    const torch::Tensor &background
+) {
+    DEVICE_GUARD(xys);
+    CHECK_INPUT(gaussian_ids_sorted);
+    CHECK_INPUT(tile_bins);
+    CHECK_INPUT(xys);
+    CHECK_INPUT(ray_transformations);
+    // CHECK_INPUT(conics);
+    CHECK_INPUT(colors);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(background);
+
+    dim3 tile_bounds_dim3;
+    tile_bounds_dim3.x = std::get<0>(tile_bounds);
+    tile_bounds_dim3.y = std::get<1>(tile_bounds);
+    tile_bounds_dim3.z = std::get<2>(tile_bounds);
+
+    dim3 block_dim3;
+    block_dim3.x = std::get<0>(block);
+    block_dim3.y = std::get<1>(block);
+    block_dim3.z = std::get<2>(block);
+
+    dim3 img_size_dim3;
+    img_size_dim3.x = std::get<0>(img_size);
+    img_size_dim3.y = std::get<1>(img_size);
+    img_size_dim3.z = std::get<2>(img_size);
+
+    const int channels = colors.size(1);
+    const int img_width = img_size_dim3.x;
+    const int img_height = img_size_dim3.y;
+
+    torch::Tensor out_img = torch::zeros(
+        {img_height, img_width, channels}, xys.options().dtype(torch::kFloat32)
+    );
+    torch::Tensor final_Ts = torch::zeros(
+        {img_height, img_width}, xys.options().dtype(torch::kFloat32)
+    );
+    torch::Tensor final_idx = torch::zeros(
+        {img_height, img_width}, xys.options().dtype(torch::kInt32)
+    );
+
+    rasterize_forward_2dgs<<<tile_bounds_dim3, block_dim3>>>(
+        tile_bounds_dim3,
+        img_size_dim3,
+        gaussian_ids_sorted.contiguous().data_ptr<int32_t>(),
+        (int2 *)tile_bins.contiguous().data_ptr<int>(),
+        (float2 *)xys.contiguous().data_ptr<float>(),
+        // (float3 *)conics.contiguous().data_ptr<float>(),
+        ray_transformations.contiguous().data_ptr<float>(),
+        (float3 *)colors.contiguous().data_ptr<float>(),
+        opacities.contiguous().data_ptr<float>(),
+        final_Ts.contiguous().data_ptr<float>(),
+        final_idx.contiguous().data_ptr<int>(),
+        (float3 *)out_img.contiguous().data_ptr<float>(),
+        *(float3 *)background.contiguous().data_ptr<float>()
+    );
+
+    return std::make_tuple(out_img, final_Ts, final_idx);
+}
+
+std::tuple<
+    torch::Tensor, // dL_dxy
+    torch::Tensor, // dL_dxy_abs
+    torch::Tensor, // dL_dconic
+    torch::Tensor, // dL_dcolors
+    torch::Tensor  // dL_dopacity
+    >
+rasterize_backward_tensor_2dgs(
+    const unsigned img_height,
+    const unsigned img_width,
+    const unsigned block_width,
+    const torch::Tensor &gaussians_ids_sorted,
+    const torch::Tensor &tile_bins,
+    const torch::Tensor &xys,
+    const torch::Tensor &ray_transformations,
+    const torch::Tensor &colors,
+    const torch::Tensor &opacities,
+    const torch::Tensor &background,
+    const torch::Tensor &final_Ts,
+    const torch::Tensor &final_idx,
+    const torch::Tensor &v_output, // dL_dout_color
+    const torch::Tensor &v_output_alpha // dL_dout_alpha
+) {
     DEVICE_GUARD(xys);
     CHECK_INPUT(xys);
     CHECK_INPUT(colors);
@@ -694,7 +695,7 @@ std::
     torch::Tensor v_opacity = torch::zeros({num_points, 1}, xys.options());
     torch::Tensor v_normal = torch::zeros({num_points, 3}, xys.options());
 
-    rasterize_backward_kernel<<<tile_bounds, block>>>(
+    rasterize_backward_kernel_2dgs<<<tile_bounds, block>>>(
         tile_bounds,
         img_size,
         gaussians_ids_sorted.contiguous().data_ptr<int>(),

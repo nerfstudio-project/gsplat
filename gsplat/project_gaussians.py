@@ -107,7 +107,7 @@ class _ProjectGaussians(Function):
             radii,
             num_tiles_hit,
             ray_transformations
-        ) = _C.project_gaussians_forward(
+        ) = _C.project_gaussians_forward_2dgs(
             num_points,
             means3d,
             scales,
@@ -177,7 +177,7 @@ class _ProjectGaussians(Function):
         ) = ctx.saved_tensors
 
         # pdb.set_trace()
-        (v_mean3d, v_scale, v_quat, v_normal2d) = _C.project_gaussians_backward(
+        (v_mean3d, v_scale, v_quat, v_normal2d) = _C.project_gaussians_backward_2dgs(
             ctx.num_points,
             means3d,
             scales,

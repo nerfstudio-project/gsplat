@@ -2,42 +2,6 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
-__global__ void project_gaussians_forward_kernel(
-    const int num_points,
-    const float3* __restrict__ means3d,
-    const float3* __restrict__ scales,
-    const float glob_scale,
-    const float4* __restrict__ quats,
-    const float* __restrict__ viewmat,
-    const float4 intrins,
-    const dim3 img_size,
-    const dim3 tile_bounds,
-    const unsigned block_width,
-    const float clip_thresh,
-    float* __restrict__ conv3d,
-    float2* __restrict__ xys,
-    float* __restrict__ depths,
-    int* __restrict__ radii,
-    int32_t* __restrict__ num_tiles_hit,
-    float* __restrict__ ray_transformations
-);
-
-// compute output color image from binned and sorted gaussians
-__global__ void rasterize_forward(
-    const dim3 tile_bounds,
-    const dim3 img_size,
-    const int32_t* __restrict__ gaussian_ids_sorted,
-    const int2* __restrict__ tile_bins,
-    const float2* __restrict__ xys,
-    const float* __restrict__ ray_transformations,
-    const float3* __restrict__ colors,
-    const float* __restrict__ opacities,
-    float* __restrict__ final_Ts,
-    int* __restrict__ final_index,
-    float3* __restrict__ out_img,
-    const float3& __restrict__ background
-);
-
 // compute output color image from binned and sorted gaussians
 // __global__ void nd_rasterize_forward(
 //     const dim3 tile_bounds,
@@ -82,6 +46,43 @@ __global__ void get_tile_bin_edges(
 );
 
 
+//====== 2DGS ======//
+__global__ void project_gaussians_forward_kernel_2dgs(
+    const int num_points,
+    const float3* __restrict__ means3d,
+    const float3* __restrict__ scales,
+    const float glob_scale,
+    const float4* __restrict__ quats,
+    const float* __restrict__ viewmat,
+    const float4 intrins,
+    const dim3 img_size,
+    const dim3 tile_bounds,
+    const unsigned block_width,
+    const float clip_thresh,
+    float* __restrict__ conv3d,
+    float2* __restrict__ xys,
+    float* __restrict__ depths,
+    int* __restrict__ radii,
+    int32_t* __restrict__ num_tiles_hit,
+    float* __restrict__ ray_transformations
+);
+
+// compute output color image from binned and sorted gaussians
+__global__ void rasterize_forward_2dgs(
+    const dim3 tile_bounds,
+    const dim3 img_size,
+    const int32_t* __restrict__ gaussian_ids_sorted,
+    const int2* __restrict__ tile_bins,
+    const float2* __restrict__ xys,
+    const float* __restrict__ ray_transformations,
+    const float3* __restrict__ colors,
+    const float* __restrict__ opacities,
+    float* __restrict__ final_Ts,
+    int* __restrict__ final_index,
+    float3* __restrict__ out_img,
+    const float3& __restrict__ background
+);
+
 __device__ bool build_transform_and_AABB(
     const float3& __restrict__ mean3d,
     const float4 __restrict__ intrins,
@@ -93,19 +94,3 @@ __device__ bool build_transform_and_AABB(
     float2& center,
     float& radius
 );
-
-// __device__ bool build_H(
-//     const float3& __restrict__ mean3d,
-//     const float4 __restrict__ intrins,
-//     const float3 __restrict__ scale,
-//     const float4 __restrict__ quat,
-//     const float* __restrict__ viewmat,
-//     float* ray_transformation,
-//     float3 &normal
-// );
-
-// __device__ bool build_AABB(
-//     const float *ray_transformation,
-//     float2 & center,
-//     float2 & extent
-// );

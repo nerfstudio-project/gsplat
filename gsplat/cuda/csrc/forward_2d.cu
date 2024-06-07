@@ -8,95 +8,6 @@
 
 namespace cg = cooperative_groups;
 
-// kernel function for projecting each gaussian on device
-// each thread processes one gaussian
-// WZ: So the only difference between 2DGS and 3DGS here is that 
-// we compute the transformation matrix H with 2DGS and no covariance projection for 2DGS
-__global__ void project_gaussians_forward_kernel(
-    const int num_points,
-    const float3* __restrict__ means3d,
-    const float3* __restrict__ scales,
-    const float glob_scale,
-    const float4* __restrict__ quats,
-    const float* __restrict__ viewmat,
-    const float4 intrins,
-    const dim3 img_size,
-    const dim3 tile_bounds,
-    const unsigned block_width,
-    const float clip_thresh,
-    float* __restrict__ conv3d,
-    float2* __restrict__ xys,
-    float* __restrict__ depths,
-    int* __restrict__ radii,
-    int32_t* __restrict__ num_tiles_hit,
-    float* __restrict__ ray_transformations
-) {
-    // printf("Here\n");
-    unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
-    if (idx >= num_points) {
-        return;
-    } 
-    radii[idx] = 0;
-    num_tiles_hit[idx] = 0;
-
-    float3 p_world = means3d[idx];
-    float3 p_view;
-
-    bool not_ok = clip_near_plane(p_world, viewmat, p_view, clip_thresh);
-    // printf("not_ok: %.2f \n", not_ok);
-    if (not_ok) return;
-
-
-    float3 scale = scales[idx];
-    float4 quat = quats[idx];
-
-
-    float fx = intrins.x;
-    float fy = intrins.y;
-    float cx = intrins.z;
-    float cy = intrins.w;
-    float tan_fovx = 0.5 * img_size.x / fx;
-    float tan_fovy = 0.5 * img_size.y / fy;
-
-
-    // In 3DGS we build 3D covariance matrix and project 
-    // Here we build transformation matrix M in 2DGS
-    //====== 2DGS Specific ======//
-    float* cur_ray_transformations = &(ray_transformations[9 * idx]);
-    bool ok;
-    float3 normal;
-    float2 center;
-    float radius;
-
-    ok = build_transform_and_AABB(
-        p_world,
-        intrins,
-        scale,
-        quat,
-        viewmat,
-        cur_ray_transformations,
-        normal,
-        center,
-        radius
-    );
-
-    if (!ok) return;
-
-    // compte the projected mean
-    // center = project_pix({fx, fy}, p_view, {cx, cy});
-    uint2 tile_min, tile_max;
-    get_tile_bbox(center, radius, tile_bounds, tile_min, tile_max, block_width);
-    int32_t tile_area = (tile_max.x - tile_min.x) * (tile_max.y - tile_min.y);
-    if (tile_area <= 0) return;
-
-
-    num_tiles_hit[idx] = tile_area;
-    depths[idx] = p_view.z;
-    radii[idx] = (int)radius;
-    xys[idx] = center;
-}
-
-
 // Kernel to map each intersection from tile ID and depth to a gaussian
 // writes output to isect_ids and gaussian_ids
 __global__ void map_gaussian_to_intersects(
@@ -216,7 +127,120 @@ __global__ void get_tile_bin_edges(
 // //     }
 // }
 
-__global__ void rasterize_forward(
+
+
+// Device helper to get 3D covariance from scale and quat parameters
+__device__ void scale_rot_to_cov3d(
+    const float3 scale,
+    const float glob_scale,
+    const float4 quat,
+    float *cov3d
+) {
+    glm::mat3 R = quat_to_rotmat(quat);
+    glm::mat3 S = scale_to_mat(scale, glob_scale);
+    
+    glm::mat3 M = R * S;
+    glm::mat3 tmp = M * glm::transpose(M);
+
+    cov3d[0] = tmp[0][0];
+    cov3d[1] = tmp[0][1];
+    cov3d[2] = tmp[0][2];
+    cov3d[3] = tmp[1][1];
+    cov3d[4] = tmp[1][2];
+    cov3d[5] = tmp[2][2];
+
+}
+
+//====== 2DGS ======//
+// kernel function for projecting each gaussian on device
+// each thread processes one gaussian
+// WZ: So the only difference between 2DGS and 3DGS here is that 
+// we compute the transformation matrix H with 2DGS and no covariance projection for 2DGS
+__global__ void project_gaussians_forward_kernel_2dgs(
+    const int num_points,
+    const float3* __restrict__ means3d,
+    const float3* __restrict__ scales,
+    const float glob_scale,
+    const float4* __restrict__ quats,
+    const float* __restrict__ viewmat,
+    const float4 intrins,
+    const dim3 img_size,
+    const dim3 tile_bounds,
+    const unsigned block_width,
+    const float clip_thresh,
+    float* __restrict__ conv3d,
+    float2* __restrict__ xys,
+    float* __restrict__ depths,
+    int* __restrict__ radii,
+    int32_t* __restrict__ num_tiles_hit,
+    float* __restrict__ ray_transformations
+) {
+    // printf("Here\n");
+    unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
+    if (idx >= num_points) {
+        return;
+    } 
+    radii[idx] = 0;
+    num_tiles_hit[idx] = 0;
+
+    float3 p_world = means3d[idx];
+    float3 p_view;
+
+    bool not_ok = clip_near_plane(p_world, viewmat, p_view, clip_thresh);
+    // printf("not_ok: %.2f \n", not_ok);
+    if (not_ok) return;
+
+
+    float3 scale = scales[idx];
+    float4 quat = quats[idx];
+
+
+    float fx = intrins.x;
+    float fy = intrins.y;
+    float cx = intrins.z;
+    float cy = intrins.w;
+    float tan_fovx = 0.5 * img_size.x / fx;
+    float tan_fovy = 0.5 * img_size.y / fy;
+
+
+    // In 3DGS we build 3D covariance matrix and project 
+    // Here we build transformation matrix M in 2DGS
+    //====== 2DGS Specific ======//
+    float* cur_ray_transformations = &(ray_transformations[9 * idx]);
+    bool ok;
+    float3 normal;
+    float2 center;
+    float radius;
+
+    ok = build_transform_and_AABB(
+        p_world,
+        intrins,
+        scale,
+        quat,
+        viewmat,
+        cur_ray_transformations,
+        normal,
+        center,
+        radius
+    );
+
+    if (!ok) return;
+
+    // compte the projected mean
+    // center = project_pix({fx, fy}, p_view, {cx, cy});
+    uint2 tile_min, tile_max;
+    get_tile_bbox(center, radius, tile_bounds, tile_min, tile_max, block_width);
+    int32_t tile_area = (tile_max.x - tile_min.x) * (tile_max.y - tile_min.y);
+    if (tile_area <= 0) return;
+
+
+    num_tiles_hit[idx] = tile_area;
+    depths[idx] = p_view.z;
+    radii[idx] = (int)radius;
+    xys[idx] = center;
+}
+
+__global__ void rasterize_forward_2dgs(
     const dim3 tile_bounds,
     const dim3 img_size,
     const int32_t* __restrict__ gaussian_ids_sorted,
@@ -310,8 +334,8 @@ __global__ void rasterize_forward(
         int batch_size = min(block_size, range.y - batch_start);
         for (int t = 0; (t < batch_size) && !done; ++t) {
             const float3 xy_opac = xy_opacity_batch[t];
-            const float opac = xy_opac.z;
-
+            const float opac = xy_opac.z; 
+ 
             // ======================= place where 2D Gaussian changes take place ========== //
             float3 u_transforma = u_transforma_batch[t];
             float3 v_transforma = v_transforma_batch[t];
@@ -392,7 +416,6 @@ __global__ void rasterize_forward(
     } 
 }
 
-
 __device__ bool build_transform_and_AABB(
     const float3& __restrict__ mean3d,
     const float4 __restrict__ intrins,
@@ -464,25 +487,3 @@ __device__ bool build_transform_and_AABB(
     return true;
 }
 
-
-// Device helper to get 3D covariance from scale and quat parameters
-__device__ void scale_rot_to_cov3d(
-    const float3 scale,
-    const float glob_scale,
-    const float4 quat,
-    float *cov3d
-) {
-    glm::mat3 R = quat_to_rotmat(quat);
-    glm::mat3 S = scale_to_mat(scale, glob_scale);
-    
-    glm::mat3 M = R * S;
-    glm::mat3 tmp = M * glm::transpose(M);
-
-    cov3d[0] = tmp[0][0];
-    cov3d[1] = tmp[0][1];
-    cov3d[2] = tmp[0][2];
-    cov3d[3] = tmp[1][1];
-    cov3d[4] = tmp[1][2];
-    cov3d[5] = tmp[2][2];
-
-}
