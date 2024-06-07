@@ -129,6 +129,7 @@ __global__ void get_tile_bin_edges(
 
 
 
+
 // Device helper to get 3D covariance from scale and quat parameters
 __device__ void scale_rot_to_cov3d(
     const float3 scale,

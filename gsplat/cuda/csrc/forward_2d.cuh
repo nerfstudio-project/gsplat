@@ -46,6 +46,8 @@ __global__ void get_tile_bin_edges(
 );
 
 
+
+
 //====== 2DGS ======//
 __global__ void project_gaussians_forward_kernel_2dgs(
     const int num_points,
