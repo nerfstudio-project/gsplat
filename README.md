@@ -15,7 +15,7 @@ gsplat is an open-source library for CUDA accelerated rasterization of gaussians
 
 **Dependence**: Please install [Pytorch](https://pytorch.org/get-started/locally/) first.
 
-The easist way is to install from PyPI. In this way it will build the CUDA code **on the first run** (JIT).
+The easiest way is to install from PyPI. In this way it will build the CUDA code **on the first run** (JIT).
 
 ```bash
 pip install gsplat
