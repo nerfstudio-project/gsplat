@@ -121,5 +121,7 @@ venv.bak/
 compile_commands.json
 *.dump
 
-data
-results
+/data
+/result
+/results
+/renders

@@ -213,3 +213,30 @@ fully_fused_projection_packed_bwd_tensor(
     const torch::Tensor &v_conics,                      // [nnz, 3]
     const at::optional<torch::Tensor> &v_compensations, // [nnz] optional
     const bool viewmats_requires_grad, const bool sparse_grad);
+
+//====== 2DGS ======//
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+fully_fused_projection_fwd_2dgs_tensor(
+    const int num_points,
+    const torch::Tensor &means,     // [N, 3]
+    const torch::Tensor &quats,     // [N, 4]
+    const torch::Tensor &scales,    // [N, 3]
+    const torch::Tensor &viewmat,   // [C, 4, 4]
+    const torch::Tensor &Ks,        // [C, 3, 3]      
+    const uint32_t image_width, const uint32_t image_height, const float eps2d,
+    const float near_plane, const float far_plane,
+    const float radius_clip, const bool calc_compensations
+);
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, 
+            torch::Tensor, torch::Tensor>
+fully_fused_projection_packed_fwd_tensor(
+    const torch::Tensor &means,
+    const torch::Tensor &quats,
+    const torch::Tensor &scales,
+    const torch::Tensor &viewmats,
+    const torch::Tensor &Ks,
+    const uint32_t image_width, const uint32_t image_height, const float eps2d,
+    const float near_plane, const float far_plane, const float radius_clip,
+    const bool calc_compensations
+);

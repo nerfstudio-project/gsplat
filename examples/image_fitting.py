@@ -2,7 +2,7 @@ import math
 import os
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Literal
 
 import numpy as np
 import torch
@@ -79,6 +79,7 @@ class SimpleTrainer:
         iterations: int = 1000,
         lr: float = 0.01,
         save_imgs: bool = False,
+        model_type: Literal["3dgs", "2dgs"] = "3dgs",
     ):
         optimizer = optim.Adam(
             [self.rgbs, self.means, self.scales, self.opacities, self.quats], lr

@@ -1582,3 +1582,331 @@ fully_fused_projection_packed_bwd_tensor(
     }
     return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats);
 }
+
+//====== 2DGS ======//
+__global__ void
+fully_fused_projection_fwd_2dgs_kernel(const uint32_t C, const uint32_t N,
+                                    const float *__restrict__ means,    // [N, 3]
+                                    const float *__restrict__ quats,    // [N, 4]
+                                    const float *__restrict__ scales,   // [N, 3]
+                                    const float *__restrict__ viewmats, // [C, 4, 4]
+                                    const float *__restrict__ Ks,       // [C, 3, 3]
+                                    const int32_t image_width, const int32_t image_height,
+                                    const float eps2d, const float near_plane,
+                                    const float far_plane, const float radius_clip,
+                                    // outputs
+                                    int32_t *__restrict__ radii,            // [C, N]
+                                    float *__restrict__ means2d,            // [C, N, 2]
+                                    float *__restrict__ depths,             // [C, N]
+                                    float *__restrict__ ray_transformations // [C, N, 3, 3]
+) {
+    // parallelize over C * N
+    uint32_t idx = cg::this_grid().thread_rank();
+    if (idx >= C * N) {
+        return;
+    }
+    const uint32_t cid = idx / N; // camera id
+    const uint32_t gid = idx % N; // gaussian id
+    
+    // shift points to the current camera and gaussian
+    means += gid * 3;
+    viewmats += cid * 16;
+    Ks += cid * 9;
+
+    // glm is column-major but input is row-major
+    glm::mat3 R = glm::mat3(viewmats[0], viewmats[4], viewmats[8], // 1st column
+                            viewmats[1], viewmats[5], viewmats[9], // 2nd column
+                            viewmats[2], viewmats[6], viewmats[10] // 3rd column
+    );
+    glm::vec3 t = glm::vec3(viewmats[3], viewmats[7], viewmats[11]);
+
+    // transform Gaussian center to camera space
+    glm::vec3 mean_c;
+    pos_world_to_cam(R, t, glm::make_vec3(means), mean_c);
+    if (mean_c.z < near_plane || man_c.z > far_plane) {
+        radii[idx] = 0;
+        return;
+    }
+
+    // build H and transform from world space to camera space
+    glm::mat3 RS = quat_to_rotmat(quat) * scale_to_mat(scale, 1.0f);
+    glm::mat3 RS_camera = R * RS;
+    glm::mat3 WH = glm::mat3(RS_camera[0], RS_camera[1], mean_c);
+
+    glm::mat3 inverse_intrinsic = glm::mat3(
+        intrins.x, 0.0, intrins.z,
+        0.0, intrins.y, intrins.w,
+        0.0, 0.0, 1.0
+    );
+
+    glm::mat3 M = glm::transpose(M) * inverse_intrinsic;
+
+    // compute AABB
+    glm::vec3 temp_point = glm::vec3(1.0f, 1.0f, -1.0f);
+    float distance = glm::dot(temp_point, M[2] * M[2]);
+
+    if (distance == 0.0f) return;
+
+    glm::vec3 f = (1 / distance) * temp_point;
+    glm::vec3 mean2d = glm::vec3(
+        glm::dot(f, M[0] * M[2]),
+        glm::dot(f, M[1] * M[2]),
+        glm::dot(f, M[2] * M[2])
+    );
+
+    // take 3 sigma as the radius (non differentiable)
+    glm::vec3 half_extend = mean2d * mean2d - 
+        glm::vec3(
+            glm::dot(f, M[0] * M[0]),
+            glm::dot(f, M[1] * M[1]),
+            glm::dot(f, M[2] * M[2])
+        );
+    half_extend = sqrt(glm::max(half_extend, glm::vec3(0.0)));
+    float radius = ceil(3.f * max(max(half_extend.x, half_extend.y), FilterSize));
+
+
+    if (radius <= radius_clip) {
+        radii[idx] = 0;
+        return;
+    }
+
+    // mask out gaussians outside the image region
+    if (mean2d.x + radius <= 0 || mean2d.x - radius >= image_width ||
+        mean2d.y + radius <= 0 || mean2d.y - radius >= image_height) {
+        radii[idx] = 0;
+        return;
+    }
+
+    // write to outputs 
+    radii[idx] = (int32_t)radius;
+    means2d[idx * 2] = mean2d.x;
+    means2d[idx * 2 + 1] = mean2d.y;
+    depths[idx] = mean_c.z;
+    ray_transformations[idx * 9 + 0] = M[0].x;
+    ray_transformations[idx * 9 + 1] = M[0].y;
+    ray_transformations[idx * 9 + 2] = M[0].z;
+    ray_transformations[idx * 9 + 3] = M[1].x;
+    ray_transformations[idx * 9 + 4] = M[1].y;
+    ray_transformations[idx * 9 + 5] = M[1].z;
+    ray_transformations[idx * 9 + 6] = M[2].x;
+    ray_transformations[idx * 9 + 7] = M[2].y;
+    ray_transformations[idx * 9 + 8] = M[2].z;
+
+}
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+fully_fused_projection_fwd_2dgs_tensor(
+    const int num_points,
+    const torch::Tensor &means,     // [N, 3]
+    const torch::Tensor &quats,     // [N, 4]
+    const torch::Tensor &scales,    // [N, 3]
+    const torch::Tensor &viewmat,   // [C, 4, 4]
+    const torch::Tensor &Ks,        // [C, 3, 3]      
+    const uint32_t image_width, const uint32_t image_height, const float eps2d,
+    const float near_plane, const float far_plane,
+    const float radius_clip, const bool calc_compensations
+) {
+    DEVICE_GUARD(means);
+    CHECK_INPUT(means);
+    CHECK_INPUT(quats.value());
+    CHECK_INPUT(scales.value());
+    CHECK_INPUT(viewmats);
+    CHECK_INPUT(Ks);
+
+    uint32_t N = means.size(0);     // number of gaussians
+    uint32_t C = viewmats.size(0);  // number of cameras
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+
+    torch::Tensor radii = torch::empty({C, N}, means.options().dtype(torch::kInt32));
+    torch::Tensor means2d = torch::empty({C, N, 2}, means.options());
+    torch::Tensor depths = torch::empty({C, N}, means.options());
+    torch::Tensor ray_transformations = torch::empty({C, N, 3, 3}, means.options());
+
+    if (C && N) {
+        fully_fused_projection_fwd_2dgs_kernel<<<(C * N + N_THREADS - 1) / N_THREADS,
+                                                    N_THREADS, 0, stream>>>(
+            C, N, means.data_ptr<float>(),
+            quats.value().data_ptr<float>(),
+            scales.value().data_ptr<float>(),
+            viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
+            eps2d, near_plane, far_plane, radius_clip, radii.data_ptr<int32_t>(),
+            means2d.data_ptr<float>(), depths.data_ptr<float>(),
+            ray_transformations.data_ptr<float>());
+    }
+    return std::make_tuple(radii, means2d, depths, ray_transformations);
+}
+
+__global__ void fully_fused_projection_packed_fwd_kernel(
+    const uint32_t C, const uint32_t N,
+    const float *__restrict__ means,
+    const float *__restrict__ quats,
+    const float *__restrict__ scales,
+    const float *__restrict__ viewmats,
+    const float *__restrict__ Ks,
+    const int32_t image_width, const int32_t image_height, const float eps2d,
+    const float near_plane, const float far_plane, const float radius_clip,
+    const int32_t *__restrict__ block_accum,
+    const int32_t *__restrict__ block_cnts,
+    // outputs
+    int32_t *__restrict__ indptr,
+    int64_t *__restrict__ camera_ids,
+    int64_t *__restrict__ gaussian_ids,
+    int32_t *__restrict__ radii,
+    float *__restrict__ means2d,
+    float *__restrict__ depths,
+    float *__restrict__ ray_transformations,
+) {
+    int32_t blocks_per_row = gridDim.x;
+
+    int32_t row_idx = blockIdx.y; // cid
+    int32_t block_col_idx = blockIdx.x;
+    int32_t block_idx = row_idx * blocks_per_row + block_col_idx;
+
+    int32_t col_idx = block_col_idx * blockDim.x + threadIdx.x; // gid
+
+    bool valid = (row_idx < C) && (col_idx < N);
+
+    // check if points are with camera near and far plane
+    glm::vec3 mean_c;
+    glm::mat3 R;
+    if (valid) {
+        // shift pointers to the current camera and gaussian
+        means += col_idx * 3;
+        viewmats += row_idx * 16;
+
+        // glm is column-major but input is row-major
+        R = glm::mat3(viewmats[0], viewmats[4], viewmats[8], // 1st column
+                      viewmats[1], viewmats[5], viewmats[9], // 2nd column
+                      viewmats[2], viewmats[6], viewmats[10] // 3rd column
+        );
+        glm::vec3 t = glm::vec3(viewmats[3], viewmats[7], viewmats[11]);
+
+        // transform Gaussian center to camera space
+        pos_world_to_cam(R, t, glm::make_vec3(means), mean_c);
+        if (mean_c.z < near_plane || mean_c.z > far_plane) {
+            valid = false;
+        }
+    }
+
+    glm::mat3 M;
+    glm::vec2 mean2d;
+    if (valid) {
+        glm::mat3 RS = quat_to_rotmat(quat) * scale_to_mat(scale, 1.0f);
+        glm::mat3 RS_camera = R * RS;
+        glm::mat3 WH = glm::mat3(RS_camera[0], RS_camera[1], mean_c);
+
+        glm::mat3 inverse_intrinsic = glm::mat3(
+            intrins.x, 0.0, intrins.z,
+            0.0, intrins.y, intrins.w,
+            0.0, 0.0, 1.0
+        );
+
+        glm::mat3 M = glm::transpose(M) * inverse_intrinsic;
+    }
+
+    // check if the points are in the image region
+    float radius;
+    if (valid) {
+        // compute AABB
+        glm::vec3 temp_point = glm::vec3(1.0f, 1.0f, -1.0f);
+        float distance = glm::dot(temp_point, M[2] * M[2]);
+
+        if (distance == 0.0f) {
+            valid = false;
+        };
+
+        glm::vec3 f = (1 / distance) * temp_point;
+        glm::vec3 mean2d = glm::vec3(
+            glm::dot(f, M[0] * M[2]),
+            glm::dot(f, M[1] * M[2]),
+            glm::dot(f, M[2] * M[2])
+        );
+
+        // take 3 sigma as the radius (non differentiable)
+        glm::vec3 half_extend = mean2d * mean2d -
+            glm::vec3(
+                glm::dot(f, M[0] * M[0]),
+                glm::dot(f, M[1] * M[1]),
+                glm::dot(f, M[2] * M[2])
+            );
+        half_extend = sqrt(glm::max(half_extend, glm::vec3(0.0f)));
+        radius = ceil(3.f * max(max(half_extend.x, half_extend.y), FilterSize));
+
+        if (radius <= radius_clip) {
+            valid = false;
+        }
+
+        // mask out gaussians outside the image region
+        if (mean2d.x + radius <= 0 || mean2d.x - radius >= image_width ||
+            mean2d.y + radius <= 0 || mean2d.y - radius >= image_height) {
+            valid = false;
+        }
+    }
+
+    int32_t thread_data = static_cast<int32_t>(valid);
+    if (block_cnts != nullptr) {
+        // First pass: compute the block-wide sum
+        int32_t aggregate;
+        if (__syncthreads_or(thread_data)) {
+            typedef cub::BlockReduce<int32_t, N_THREADS> BlockReduce;
+            __shared__ typename BlockReduce::TempStorage temp_storage;
+            aggregate = BlockReduce(temp_storage).Sum(thread_data);
+        } else {
+            aggregate = 0;
+        }
+        if (threadIdx.x == 0) {
+            block_cnts[block_idx] = aggregate;
+        }
+    } else {
+        // Second pass: write out the indices of the non zero elements
+        if (__syncthreads_or(thread_data)) {
+            typedef cub::BlockScan<int32_t, N_THREADS> BlockScan;
+            __shared__ typename BlockScan::TempStorage temp_storage;
+            BlockScan(temp_storage).ExclusiveSum(thread_data, thread_data);
+        }
+        if (valid) {
+            if (block_idx > 0) {
+                int32_t offset = block_accum[block_idx - 1];
+                thread_data += offset;
+            }
+            // write to outputs
+            camera_ids[thread_data] = row_idx;   // cid
+            gaussian_ids[thread_data] = col_idx; // gid
+            radii[thread_data] = (int32_t)radius;
+            means2d[thread_data * 2] = mean2d.x;
+            means2d[thread_data * 2 + 1] = mean2d.y;
+            depths[thread_data] = mean_c.z;
+            ray_transformations[thread_data * 9 + 0] = M[0].x;
+            ray_transformations[thread_data * 9 + 1] = M[0].y;
+            ray_transformations[thread_data * 9 + 2] = M[0].z;
+            ray_transformations[thread_data * 9 + 3] = M[1].x;
+            ray_transformations[thread_data * 9 + 4] = M[1].y;
+            ray_transformations[thread_data * 9 + 5] = M[1].z;
+            ray_transformations[thread_data * 9 + 6] = M[2].x;
+            ray_transformations[thread_data * 9 + 7] = M[2].y;
+            ray_transformations[thread_data * 9 + 8] = M[2].z;
+        }
+        // lane 0 of the first block in each row writes the indptr
+        if (threadIdx.x == 0 && block_col_idx == 0) {
+            if (row_idx == 0) {
+                indptr[0] = 0;
+                indptr[C] = block_accum[C * blocks_per_row - 1];
+            } else {
+                indptr[row_idx] = block_accum[block_idx - 1];
+            }
+        }
+    }
+}
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, 
+            torch::Tensor, torch::Tensor>
+fully_fused_projection_packed_fwd_tensor(
+    const torch::Tensor &means,
+    const torch::Tensor &quats,
+    const torch::Tensor &scales,
+    const torch::Tensor &viewmats,
+    const torch::Tensor &Ks,
+    const uint32_t image_width, const uint32_t image_height, const float eps2d,
+    const float near_plane, const float far_plane, const float radius_clip,
+    const bool calc_compensations
+) {}
