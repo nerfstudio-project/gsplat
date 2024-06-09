@@ -1,166 +1,32 @@
-from typing import Any
-import torch
-from .project_gaussians import project_gaussians
-from .rasterize import rasterize_gaussians
-from .utils import (
-    map_gaussian_to_intersects,
-    bin_and_sort_gaussians,
-    compute_cumulative_intersects,
-    compute_cov2d_bounds,
-    get_tile_bin_edges,
-)
-from .sh import spherical_harmonics
-from .version import __version__
-import warnings
+from typing import Callable
 
 
-__all__ = [
-    "__version__",
-    "project_gaussians",
-    "rasterize_gaussians",
-    "spherical_harmonics",
-    # utils
-    "bin_and_sort_gaussians",
-    "compute_cumulative_intersects",
-    "compute_cov2d_bounds",
-    "get_tile_bin_edges",
-    "map_gaussian_to_intersects",
-    # Function.apply() will be deprecated
-    "ProjectGaussians",
-    "RasterizeGaussians",
-    "BinAndSortGaussians",
-    "ComputeCumulativeIntersects",
-    "ComputeCov2dBounds",
-    "GetTileBinEdges",
-    "MapGaussiansToIntersects",
-    "SphericalHarmonics",
-    "NDRasterizeGaussians",
-]
+def _make_lazy_cuda_func(name: str) -> Callable:
+    def call_cuda(*args, **kwargs):
+        # pylint: disable=import-outside-toplevel
+        from ._backend import _C
 
-# Define these for backwards compatibility
+        return getattr(_C, name)(*args, **kwargs)
+
+    return call_cuda
 
 
-class MapGaussiansToIntersects(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, *args, **kwargs):
-        warnings.warn(
-            "MapGaussiansToIntersects is deprecated, use map_gaussian_to_intersects instead",
-            DeprecationWarning,
-        )
-        return map_gaussian_to_intersects(*args, **kwargs)
+nd_rasterize_forward_3dgs = _make_lazy_cuda_func("nd_rasterize_forward_3dgs")
+nd_rasterize_backward_3dgs = _make_lazy_cuda_func("nd_rasterize_backward_3dgs")
+rasterize_forward_3dgs = _make_lazy_cuda_func("rasterize_forward_3dgs")
+rasterize_backward_3dgs = _make_lazy_cuda_func("rasterize_backward_3dgs")
+compute_cov2d_bounds = _make_lazy_cuda_func("compute_cov2d_bounds")
+project_gaussians_forward_3dgs = _make_lazy_cuda_func("project_gaussians_forward_3dgs")
+project_gaussians_backward_3dgs = _make_lazy_cuda_func("project_gaussians_backward_3dgs")
+compute_sh_forward = _make_lazy_cuda_func("compute_sh_forward")
+compute_sh_backward = _make_lazy_cuda_func("compute_sh_backward")
+map_gaussian_to_intersects = _make_lazy_cuda_func("map_gaussian_to_intersects")
+get_tile_bin_edges = _make_lazy_cuda_func("get_tile_bin_edges")
+rasterize_forward_3dgs = _make_lazy_cuda_func("rasterize_forward_3dgs")
+nd_rasterize_forward_3dgs = _make_lazy_cuda_func("nd_rasterize_forward_3dgs")
 
-    @staticmethod
-    def backward(ctx: Any, *grad_outputs: Any) -> Any:
-        raise NotImplementedError
-
-
-class ComputeCumulativeIntersects(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, *args, **kwargs):
-        warnings.warn(
-            "ComputeCumulativeIntersects is deprecated, use compute_cumulative_intersects instead",
-            DeprecationWarning,
-        )
-        return compute_cumulative_intersects(*args, **kwargs)
-
-    @staticmethod
-    def backward(ctx: Any, *grad_outputs: Any) -> Any:
-        raise NotImplementedError
-
-
-class ComputeCov2dBounds(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, *args, **kwargs):
-        warnings.warn(
-            "ComputeCov2dBounds is deprecated, use compute_cov2d_bounds instead",
-            DeprecationWarning,
-        )
-        return compute_cov2d_bounds(*args, **kwargs)
-
-    @staticmethod
-    def backward(ctx: Any, *grad_outputs: Any) -> Any:
-        raise NotImplementedError
-
-
-class GetTileBinEdges(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, *args, **kwargs):
-        warnings.warn(
-            "GetTileBinEdges is deprecated, use get_tile_bin_edges instead",
-            DeprecationWarning,
-        )
-        return get_tile_bin_edges(*args, **kwargs)
-
-    @staticmethod
-    def backward(ctx: Any, *grad_outputs: Any) -> Any:
-        raise NotImplementedError
-
-
-class BinAndSortGaussians(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, *args, **kwargs):
-        warnings.warn(
-            "BinAndSortGaussians is deprecated, use bin_and_sort_gaussians instead",
-            DeprecationWarning,
-        )
-        return bin_and_sort_gaussians(*args, **kwargs)
-
-    @staticmethod
-    def backward(ctx: Any, *grad_outputs: Any) -> Any:
-        raise NotImplementedError
-
-
-class ProjectGaussians(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, *args, **kwargs):
-        warnings.warn(
-            "ProjectGaussians is deprecated, use project_gaussians instead",
-            DeprecationWarning,
-        )
-        return project_gaussians(*args, **kwargs)
-
-    @staticmethod
-    def backward(ctx: Any, *grad_outputs: Any) -> Any:
-        raise NotImplementedError
-
-
-class RasterizeGaussians(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, *args, **kwargs):
-        warnings.warn(
-            "RasterizeGaussians is deprecated, use rasterize_gaussians instead",
-            DeprecationWarning,
-        )
-        return rasterize_gaussians(*args, **kwargs)
-
-    @staticmethod
-    def backward(ctx: Any, *grad_outputs: Any) -> Any:
-        raise NotImplementedError
-
-
-class NDRasterizeGaussians(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, *args, **kwargs):
-        warnings.warn(
-            "NDRasterizeGaussians is deprecated, use rasterize_gaussians instead",
-            DeprecationWarning,
-        )
-        return rasterize_gaussians(*args, **kwargs)
-
-    @staticmethod
-    def backward(ctx: Any, *grad_outputs: Any) -> Any:
-        raise NotImplementedError
-
-
-class SphericalHarmonics(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, *args, **kwargs):
-        warnings.warn(
-            "SphericalHarmonics is deprecated, use spherical_harmonics instead",
-            DeprecationWarning,
-        )
-        return spherical_harmonics(*args, **kwargs)
-
-    @staticmethod
-    def backward(ctx: Any, *grad_outputs: Any) -> Any:
-        raise NotImplementedError
+###### 2DGS ######
+rasterize_forward_2dgs = _make_lazy_cuda_func("rasterize_forward_2dgs")
+rasterize_backward_2dgs = _make_lazy_cuda_func("rasterize_backward_2dgs")
+project_gaussians_forward_2dgs = _make_lazy_cuda_func("project_gaussians_forward_2dgs")
+project_gaussians_backward_2dgs = _make_lazy_cuda_func("project_gaussians_backward_2dgs")
