@@ -79,5 +79,3 @@ We also have made the mathematical supplement, with conventions and derivations,
 ```
 
 We welcome contributions of any kind and are open to feedback, bug-reports, and improvements to help expand the capabilities of this software. Please check [docs/DEV.md](docs/DEV.md) for more info about development.
-
-
