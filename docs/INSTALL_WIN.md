@@ -12,7 +12,7 @@ Follow these steps to install `gsplat` on Windows.
     ```
     Replace `<your_conda_environment>` with the name of your conda environment. For example:
     ```bash
-    conda activate nerfstudio
+    conda activate gsplat
     ```
 
 3. Activate your Visual C++ environment:
