@@ -27,7 +27,7 @@ Or install from source. In this way it will build the CUDA code during installat
 pip install git+https://github.com/nerfstudio-project/gsplat.git
 ```
 
-To install gsplat on Windows, please check [Installing `gsplat` on Windows](./docs/INSTALL_WIN.md).
+To install gsplat on Windows, please check [this instruction](docs/INSTALL_WIN.md).
 
 ## Evaluation
 
