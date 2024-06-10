@@ -1240,3 +1240,357 @@ rasterize_to_pixels_bwd_tensor(
 
     return std::make_tuple(v_means2d_abs, v_means2d, v_conics, v_colors, v_opacities);
 }
+
+//====== 2DGS ======//
+template <int32_t COLOR_DIM>
+__global__ void rasterize_to_pixels_fwd_2dgs_kernel(
+    const uint32_t C, const uint32_t N, const uint32_t n_isects, const bool packed,
+    const float *__restrict__ means2d,
+    const float *__restrict__ ray_transformations, 
+    const float *__restrict__ colors, 
+    const float *__restrict__ opacities,
+    const float *__restrict__ backgrounds,
+    const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
+    const uint32_t tile_width, const uint32_t tile_height,
+    const int32_t *__restrict__ tile_offsets,
+    const int32_t *__restrict__ flatten_ids,
+    float *__restrict__ render_colors,
+    float *__restrict__ render_alphas,
+    int32_t *__restrict__ last_ids
+) {
+    // each thread draws one pixel, but also timeshares caching gaussians in a 
+    // shared tile
+
+    auto block = cg::this_thread_block();
+    int32_t camera_id = block.group_index().x;
+    int32_t tile_id = block.group_index().y * tile_width + block.group_index().z;
+    uint32_t i = block.group_index().y * tile_size + block.thread_index().y;
+    uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
+
+    tile_offsets += camera_id * tile_height * tile_width;
+    render_colors += camera_id * image_height * image_width * COLOR_DIM;
+    render_alphas += camera_id * image_height * image_width;
+    last_ids += camera_id * image_height * image_width;
+    if (backgrounds != nullptr) {
+        backgrounds += camera_id * COLOR_DIM;
+    }
+
+    float px = (float)j + 0.5f;
+    float py = (float)i + 0.5f;
+    int32_t pix_id = i * image_width + j;
+
+    // return if out of bounds
+    // keep not rasterizing threads around for reading data
+    bool inside = (i < image_height && j < image_width);
+    bool done = !inside;
+
+    // have all threads in tile process the same gaussians in batches
+    // first collect gaussians between range.x and range.y in batches
+    // which gaussians to look through in this tile
+    int32_t range_start = tile_offsets[tile_id];
+    int32_t range_end = 
+        (camera_id == C - 1) && (tile_id == tile_width * tile_height - 1)
+            ? n_isects
+            : tile_offsets[tile_id + 1];
+    const uint32_t block_size = block.size();
+    uint32_t num_batches = (range_end - range_start + block_size - 1) / block_size;
+
+    __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 u_transform_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 v_transform_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 w_transform_batch[MAX_BLOCK_SIZE];
+
+    // current visibility left to render
+    // transmittance is gonna be used in the bacward pass which requires a high
+    // numerical precision so we use double for it. However double make bwd 1.5x slower
+    // so we stick with float for now.
+    float T = 1.0f;
+    // index of most recent gaussian to write to this thread's pixel
+    uint32_t cur_idx = 0;
+
+    // collect and process batches of gaussians
+    // each thread loads one gaussian at a time before rasterizing its
+    // designated pixel
+    uint32_t tr = block.thread_rank();
+
+    float pix_out[COLOR_DIM] = {0.f};
+    for (uint32_t b = 0; b < num_batches; ++b) {
+        // resync all threads before beginning next batch
+        // end early if entire tile is done
+        if (__syncthreads_count(done) >= block_size) {
+            break;
+        }
+
+        // each thread fetch 1 gaussian from front to back 
+        // index of gaussian to load
+        uint32_t batch_start = range_start + block_size * b;
+        uint32_t idx = batch_start + tr;
+        if (idx < range_end) {
+            int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
+            id_batch[tr] = g;
+            const float2 xy = means2d[g];
+            const float opac = opacities[g];
+            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
+            u_transform_batch[tr] = {ray_transformations[g * 9 + 0], ray_transformations[g * 9 + 1], ray_transformations[g * 9 + 2]};
+            v_transform_batch[tr] = {ray_transformations[g * 9 + 3], ray_transformations[g * 9 + 4], ray_transformations[g * 9 + 5]};
+            w_transform_batch[tr] = {ray_transformations[g * 9 + 6], ray_transformations[g * 9 + 7], ray_transformations[g * 9 + 8]};
+        }
+
+        // wait for other threads to collect the gaussians in batch
+        block.sync();
+
+        // process gaussians in the current batch for this pixel
+        uint32_t batch_size = min(block_size, range_end - batch_start);
+        for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
+            const float3 xy_opac = xy_opacity_batch[t];
+            const float opac = xy_opac.z;
+
+            float3 u_transform = u_transform_batch[t];
+            float3 v_transform = v_transform_batch[t];
+            float3 w_transform = w_transform_batch[t];
+
+            float h_u = {-u_transform.x + px * w_transform.x, -u_transform.y + px * w_transform.y, -u_transform.z + px * w_transform.z};
+            float h_v = {-v_transform.x + py * w_transform.x, -v_transform.y + py * w_transform.y, -v_transform.z + py * w_transform.z};
+
+            // cross product of two planes is a line
+            float3 intersect_line = cross_product(h_u, h_v);
+
+            // No intersection
+            float2 s;
+            if (intersect_line.z == 0.0) {
+                continue;
+            } else {
+                // 3D homogeneous point to 2D point on the splat
+                s = {intersect.x / intersect.z, intersect.y / intersect.z};
+            }
+
+            // 3D distance. Compute Mahalanobis distance in the canonoical splat space.
+            float gauss_weight_3d = (s.x * s.x + s.y * s.y);
+
+            // Low pass filter 
+            float x = xy_opac.x;
+            float y = xy_opac.y;
+            float2 d = {x - px, y - py};
+            // 2D screen distance
+            float gauss_weight_2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
+            float gauss_weight = min(gauss_weight_3d, gauss_weight_2d);
+
+            const float sigma = 0.5f * gauss_weight;
+            const float alpha = min(0.999f, opac * __expf(-sigma));
+
+            if (sigma < 0.f || alpha < 1.f / 255.f) {
+                continue;
+            }
+
+            const float next_T = T * (1.0f - alpha);
+            if (next_T <= 1e-4) { //this pixel is done: exclusive
+                done = true;
+                break;
+            }
+
+            int32_t g = id_batch[t];
+            const float vis = alpha * T;
+            const float *c_ptr = colors + g * COLOR_DIM;
+            PRAGMA_UNROLL
+            for (uint32_t k = 0; k < COLOR_DIM; ++k) {
+                pix_out[k] += c_ptr[k] * vis;
+            }
+            cur_idx = batch_start + t;
+
+            T = next_T;
+        }
+    }
+
+    if (inside) {
+        // Here T is the transmittance AFTER the last gaussian in this pixel.
+        // We (should) store double precision as T would be used in backward pass and
+        // it can be very small and causing large diff in gradients with float32.
+        // However, double precision makes the backward pass 1.5x slower so we stick 
+        // with float for now.
+        render_alphas[pix_id] = 1.0f - T;
+        PRAGMA_UNROLL
+        for (uint32_t k = 0; k < COLOR_DIM; ++k) {
+            render_colors[pix_id * COLOR_DIM + k] = 
+                backgrounds == nullptr ? pix_out[k] : (pix_out[k] + T * backgrounds[k]);
+        }
+        // index in bin of last gaussian in this pixel
+        last_ids[pix_id] = static_cast<int32_t>(cur_idx);
+    }
+}
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_2dgs_tensor(
+    // Gaussian parameters
+    const torch::Tensor &means2d,
+    const torch::Tensor &colors,
+    const torch::Tensor &ray_transformations,
+    const torch::Tensor &opacities,
+    const at::optional<torch::Tensor> &backgrounds,
+    // image size
+    const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
+    // intersections
+    const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
+    const torch::Tensor &flatten_ids   // [n_isects]
+) {
+    DEVICE_GUARD(means2d);
+    CHECK_INPUT(means2d);
+    CHECK_INPUT(ray_transformations);
+    CHECK_INPUT(colors);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(tile_offsets);
+    CHECK_INPUT(flatten_ids);
+    if (backgrouds.has_value()) {
+        CHECK_INPUT(backgrounds.value());
+    }
+    bool packed = means2d.dim() == 2;
+
+    uint32_t C = tile_offsets.size(0);         // number of cameras
+    uint32_t N = packed ? 0 : means2d.size(1); // number of gaussians
+    uint32_t channels = colors.size(-1);
+    uint32_t tile_height = tile_offsets.size(1);
+    uint32_t tile_width = tile_offsets.size(2);
+    uint32_t n_isects = flatten_ids.size(0);
+
+    // Each block covers a tile on the image. In total there are
+    // C * tile_height * tile_width blocks.
+    dim3 threads = {tile_size, tile_size, 1};
+    dim3 blocks = {C, tile_height, tile_width};
+
+    torch::Tensor renders = torch::empty({C, image_height, image_width, channels}, 
+                                            means2d.options().dtype(torch::kFloat32));
+    torch::Tensor alphas = torch::empty({C, image_height, image_width, 1},
+                                            means2d.options().dtype(torch::kFloat32));
+    torch::Tensor last_ids = torch::empty({C, image_height, image_width}, 
+                                            means2d.options().dtype(torch::kInt32));
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+
+    // TODO: an optimization can be done by passing the actual number of channels into
+    // the kernel functions and avoid necessary global memory writes. This requires  
+    // moving the channel padding from python to C side.
+    switch (channels) {
+    case 1:
+        rasterize_to_pixels_fwd_kernel<1><<<blocks, threads, 0, stream>>>(
+            C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+            (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+            opacities.data_ptr<float>(),
+            backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
+            image_width, image_height, tile_size, tile_width, tile_height,
+            tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+            renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            last_ids.data_ptr<float>());
+        break;
+    case 2:
+        rasterize_to_pixels_fwd_kernel<2><<<blocks, threads, 0, stream>>>(
+            C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+            (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+            opacities.data_ptr<float>(),
+            backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
+            image_width, image_height, tile_size, tile_width, tile_height,
+            tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+            renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            last_ids.data_ptr<float>());
+        break;
+    case 3:
+        rasterize_to_pixels_fwd_kernel<3><<<blocks, threads, 0, stream>>>(
+            C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+            (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+            opacities.data_ptr<float>(),
+            backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
+            image_width, image_height, tile_size, tile_width, tile_height,
+            tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+            renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            last_ids.data_ptr<float>());
+        break;
+    case 4:
+        rasterize_to_pixels_fwd_kernel<4><<<blocks, threads, 0, stream>>>(
+            C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+            (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+            opacities.data_ptr<float>(),
+            backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
+            image_width, image_height, tile_size, tile_width, tile_height,
+            tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+            renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            last_ids.data_ptr<float>());
+        break;
+    case 8:
+        rasterize_to_pixels_fwd_kernel<8><<<blocks, threads, 0, stream>>>(
+            C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+            (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+            opacities.data_ptr<float>(),
+            backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
+            image_width, image_height, tile_size, tile_width, tile_height,
+            tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+            renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            last_ids.data_ptr<float>());
+        break;
+    case 16:
+        rasterize_to_pixels_fwd_kernel<16><<<blocks, threads, 0, stream>>>(
+            C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+            (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+            opacities.data_ptr<float>(),
+            backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
+            image_width, image_height, tile_size, tile_width, tile_height,
+            tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+            renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            last_ids.data_ptr<float>());
+        break;
+    case 32:
+        rasterize_to_pixels_fwd_kernel<32><<<blocks, threads, 0, stream>>>(
+            C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+            (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+            opacities.data_ptr<float>(),
+            backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
+            image_width, image_height, tile_size, tile_width, tile_height,
+            tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+            renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            last_ids.data_ptr<float>());
+        break;
+    case 64:
+        rasterize_to_pixels_fwd_kernel<64><<<blocks, threads, 0, stream>>>(
+            C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+            (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+            opacities.data_ptr<float>(),
+            backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
+            image_width, image_height, tile_size, tile_width, tile_height,
+            tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+            renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            last_ids.data_ptr<float>());
+        break;
+    case 128:
+        rasterize_to_pixels_fwd_kernel<128><<<blocks, threads, 0, stream>>>(
+            C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+            (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+            opacities.data_ptr<float>(),
+            backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
+            image_width, image_height, tile_size, tile_width, tile_height,
+            tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+            renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            last_ids.data_ptr<float>());
+        break;
+    case 256:
+        rasterize_to_pixels_fwd_kernel<256><<<blocks, threads, 0, stream>>>(
+            C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+            (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+            opacities.data_ptr<float>(),
+            backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
+            image_width, image_height, tile_size, tile_width, tile_height,
+            tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+            renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            last_ids.data_ptr<float>());
+        break;
+    case 512:
+        rasterize_to_pixels_fwd_kernel<512><<<blocks, threads, 0, stream>>>(
+            C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+            (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+            opacities.data_ptr<float>(),
+            backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
+            image_width, image_height, tile_size, tile_width, tile_height,
+            tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+            renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            last_ids.data_ptr<float>());
+        break;
+    default:
+        AT_ERROR("Unsupported number of channels: ", channels);
+    }
+    return std::make_tuple(renders, alphas, last_ids);
+}

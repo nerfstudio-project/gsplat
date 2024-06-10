@@ -1736,7 +1736,7 @@ fully_fused_projection_fwd_2dgs_tensor(
     return std::make_tuple(radii, means2d, depths, ray_transformations);
 }
 
-__global__ void fully_fused_projection_packed_fwd_kernel(
+__global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
     const uint32_t C, const uint32_t N,
     const float *__restrict__ means,
     const float *__restrict__ quats,
@@ -1900,7 +1900,7 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, 
             torch::Tensor, torch::Tensor>
-fully_fused_projection_packed_fwd_tensor(
+fully_fused_projection_packed_fwd_2dgs_tensor(
     const torch::Tensor &means,
     const torch::Tensor &quats,
     const torch::Tensor &scales,
@@ -1909,4 +1909,70 @@ fully_fused_projection_packed_fwd_tensor(
     const uint32_t image_width, const uint32_t image_height, const float eps2d,
     const float near_plane, const float far_plane, const float radius_clip,
     const bool calc_compensations
-) {}
+) {
+    DEVICE_GUARD(means);
+    CHECK_INPUT(means);
+    CHECK_INPUT(quats.value());
+    CHECK_INPUT(scales.value());
+    CHECK_INPUT(viewmats);
+    CHECK_INPUT(Ks);
+
+    uint32_t N = means.size(0);     // number of gaussians
+    uint32_t C = viewmats.size(0);  // number of cameras
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+    auto opt = means.options().dtype(torch::kInt32);
+
+    uint32_t nrows = C;
+    uint32_t ncols = N;
+    uint32_t blocks_per_row = (ncols + N_THREADS - 1) / N_THREADS;
+
+    dim3 threads = {N_THREADS, 1, 1};
+    // limit on the number of blocks: [2**31 - 1, 65535, 65535]
+    dim3 blocks = {blocks_per_row, nrows, 1};
+
+    // first pass
+    int32_t nnz;
+    torch::Tensor block_accum;
+    if (C && N) {
+        torch::Tensor block_cnts = torch::empty({nrows * blocks_per_row}, opt);
+        fully_fused_projection_packed_fwd_kernel<<<blocks, threads, 0, stream>>(
+            C, N, means.data_ptr<float>(),
+            quats.value().data_ptr<float>(),
+            scales.value().data_ptr<float>(),
+            viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
+            eps2d, near_plane, far_plane, radius_clip, nullptr,
+            block_cnts.data_ptr<int32_t>(), nullptr, nullptr, nullptr, nullptr, nullptr,
+            nullptr, nullptr, nullptr);
+        block_accum = torch::cumsum(block_cnts, 0, torch::kInt32);
+        nnz = block_accum[-1].item<int32_t>();
+    } else {
+        nnz = 0;
+    }
+
+    // second pass
+    torch::Tensor indptr = torch::empty({C + 1}, opt);
+    torch::Tensor camera_ids = torch::empty({nnz}, opt.dtype(torch::kInt64));
+    torch::Tensor gaussian_ids = torch::empty({nnz}, opt.dtype(torch::kInt64));
+    torch::Tensor radii = torch::empty({nnz}, means.options().dtype(torch::kInt32));
+    torch::Tensor means2d = torch::empty({nnz, 2}, means.options());
+    torch::Tensor depths = torch::empty({nnz}, means.options());
+    torch::Tensor ray_transformations = torch::empyt({nnz, 3, 3}, means.options());
+
+    if (nnz) {
+        fully_fused_projections_packed_fwd_kernel<<<blocks, threads, 0, stream>>>(
+            C, N, means.data_ptr<float>(),
+            quats.value().data_ptr<float>(),
+            scales.value().data_ptr<float>(),
+            viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
+            eps2d, near_plane, far_plane, radius_clip, block_accum.data_ptr<int32_t>(),
+            nullptr, indptr.data_ptr<int32_t>(), camera_ids.data_ptr<int64_t>(),
+            gaussian_ids.data_ptr<int64_t>(), radii.data_ptr<int32_t>(),
+            means2d.data_ptr<float>(), depths.data_ptr<float>(),
+            ray_transformations.data_ptr<float>());
+    } else {
+        indptr.fill_(0);
+    }
+    return std::make_tuple(indptr, camera_ids, gaussian_ids, radii, means2d, depths,
+                            ray_transformations);
+}
+

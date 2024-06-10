@@ -230,7 +230,7 @@ fully_fused_projection_fwd_2dgs_tensor(
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, 
             torch::Tensor, torch::Tensor>
-fully_fused_projection_packed_fwd_tensor(
+fully_fused_projection_packed_fwd_2dgs_tensor(
     const torch::Tensor &means,
     const torch::Tensor &quats,
     const torch::Tensor &scales,
@@ -239,4 +239,32 @@ fully_fused_projection_packed_fwd_tensor(
     const uint32_t image_width, const uint32_t image_height, const float eps2d,
     const float near_plane, const float far_plane, const float radius_clip,
     const bool calc_compensations
+);
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_2dgs_tensor(
+    // Gaussian parameters
+    const torch::Tensor &means2d,
+    const torch::Tensor &colors,
+    const torch::Tensor &ray_transformations,
+    const torch::Tensor &opacities,
+    const at::optional<torch::Tensor> &backgrounds,
+    // image size
+    const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
+    // intersections
+    const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
+    const torch::Tensor &flatten_ids   // [n_isects]
+);
+
+std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_2dgs_tensor(
+    const uint32_t range_start, const uint32_t range_end,   // iteration steps
+    const torch::Tensor transmittances, // [C, image_height, image_width]
+    // Gaussian parameters
+    const torch::Tensor &means2d,   // [C, N, 2]
+    const torch::Tensor &ray_transformations, // [C, N, 3, 3]
+    const torch::Tensor &opacities, // [N]
+    // image size
+    const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size, 
+    // intersections
+    const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
+    const torch::Tensor &flatten_ids    // [n_isects]
 );
