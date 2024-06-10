@@ -12,10 +12,11 @@ import time
 from typing import Tuple
 
 import imageio
+import nerfview
 import numpy as np
 import torch
 import torch.nn.functional as F
-from nerfview import CameraState, ViewerServer
+import viser
 
 from gsplat._helper import load_test_data
 from gsplat.rendering import rasterization
@@ -135,19 +136,10 @@ else:
 
 # register and open viewer
 @torch.no_grad()
-def viewer_render_fn(camera_state: CameraState, img_wh: Tuple[int, int]):
-    fov = camera_state.fov
-    c2w = camera_state.c2w
+def viewer_render_fn(camera_state: nerfview.CameraState, img_wh: Tuple[int, int]):
     width, height = img_wh
-
-    focal_length = height / 2.0 / np.tan(fov / 2.0)
-    K = np.array(
-        [
-            [focal_length, 0.0, width / 2.0],
-            [0.0, focal_length, height / 2.0],
-            [0.0, 0.0, 1.0],
-        ]
-    )
+    c2w = camera_state.c2w
+    K = camera_state.get_K(img_wh)
     c2w = torch.from_numpy(c2w).float().to(device)
     K = torch.from_numpy(K).float().to(device)
     viewmat = c2w.inverse()
@@ -184,6 +176,11 @@ def viewer_render_fn(camera_state: CameraState, img_wh: Tuple[int, int]):
     return render_rgbs
 
 
-server = ViewerServer(port=args.port, render_fn=viewer_render_fn, mode="rendering")
+server = viser.ViserServer(port=args.port, verbose=False)
+_ = nerfview.Viewer(
+    server=server,
+    render_fn=viewer_render_fn,
+    mode="rendering",
+)
 print("Viewer running... Ctrl+C to exit.")
 time.sleep(100000)

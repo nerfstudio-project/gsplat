@@ -382,7 +382,7 @@ def rasterize_to_pixels(
     packed: bool = False,
     absgrad: bool = False,
     compute_distorts: bool = False,
-) -> Tuple[Tensor, Tensor]:
+) -> Tuple[Tensor, Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
     Args:

@@ -68,7 +68,8 @@ world_to_cam_bwd_tensor(const torch::Tensor &means,                    // [N, 3]
                         const bool means_requires_grad, const bool covars_requires_grad,
                         const bool viewmats_requires_grad);
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
+           torch::Tensor>
 fully_fused_projection_fwd_tensor(
     const torch::Tensor &means,                // [N, 3]
     const at::optional<torch::Tensor> &covars, // [N, 6] optional
@@ -157,7 +158,8 @@ rasterize_to_pixels_bwd_tensor(
     bool absgrad);
 
 std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
-    const uint32_t range_start, const uint32_t range_end, // iteration steps
+    const uint32_t range_start,
+    const uint32_t range_end,           // iteration steps
     const torch::Tensor transmittances, // [C, image_height, image_width]
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2]
@@ -187,7 +189,8 @@ compute_sh_bwd_tensor(const uint32_t K, const uint32_t degrees_to_use,
  * Packed Version
  ****************************************************************************************/
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
-           torch::Tensor, torch::Tensor, torch::Tensor>
+           torch::Tensor, torch::Tensor,
+           torch::Tensor>
 fully_fused_projection_packed_fwd_tensor(
     const torch::Tensor &means,                // [N, 3]
     const at::optional<torch::Tensor> &covars, // [N, 6]

@@ -129,8 +129,8 @@ isect_tiles_tensor(const torch::Tensor &means2d, // [C, N, 2] or [nnz, 2]
     // uint32_t cam_n_bits = std::bit_width(C);
     uint32_t tile_n_bits = (uint32_t)floor(log2(n_tiles)) + 1;
     uint32_t cam_n_bits = (uint32_t)floor(log2(C)) + 1;
-    // the first 32 bits are used for the camera id and tile id altogether, so check if
-    // we have enough bits for them.
+    // the first 32 bits are used for the camera id and tile id altogether, so
+    // check if we have enough bits for them.
     assert(tile_n_bits + cam_n_bits <= 32);
 
     // first pass: compute number of tiles per gaussian
@@ -197,7 +197,8 @@ isect_tiles_tensor(const torch::Tensor &means2d, // [C, N, 2] or [nnz, 2]
                 break;
             }
             // printf("DoubleBuffer d_keys selector: %d\n", d_keys.selector);
-            // printf("DoubleBuffer d_values selector: %d\n", d_values.selector);
+            // printf("DoubleBuffer d_values selector: %d\n",
+            // d_values.selector);
         } else {
             CUB_WRAPPER(cub::DeviceRadixSort::SortPairs, isect_ids.data_ptr<int64_t>(),
                         isect_ids_sorted.data_ptr<int64_t>(),
@@ -242,8 +243,8 @@ __global__ void isect_offset_encode(const uint32_t n_isects,
     }
 
     if (idx > 0) {
-        // visit the current and previous isect_id and check if the (cid, tile_id)
-        // pair changes.
+        // visit the current and previous isect_id and check if the (cid,
+        // tile_id) pair changes.
         int64_t isect_id_prev = isect_ids[idx - 1] >> 32; // shift out the depth
         if (isect_id_prev == isect_id_curr)
             return;
@@ -353,8 +354,8 @@ __global__ void rasterize_to_indices_in_range_kernel(
 
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
-    // numerical precision so we (should) use double for it. However double make bwd
-    // 1.5x slower so we stick with float for now.
+    // numerical precision so we (should) use double for it. However double make
+    // bwd 1.5x slower so we stick with float for now.
     float T, next_T;
     if (inside) {
         T = transmittances[pix_id];
@@ -435,7 +436,8 @@ __global__ void rasterize_to_indices_in_range_kernel(
 }
 
 std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
-    const uint32_t range_start, const uint32_t range_end, // iteration steps
+    const uint32_t range_start,
+    const uint32_t range_end,           // iteration steps
     const torch::Tensor transmittances, // [C, image_height, image_width]
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2]
@@ -515,10 +517,13 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     const uint32_t tile_width, const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
-    float *__restrict__ render_colors, // [C, image_height, image_width, COLOR_DIM]
-    float *__restrict__ render_alphas, // [C, image_height, image_width, 1]
-    // if render distort maps, the colors should be RGBD, so the COLOR_DIM should be 4.
-    float *__restrict__ render_distorts, // [C, image_height, image_width, 1] optional
+    float *__restrict__ render_colors,        // [C, image_height, image_width,
+                                              // COLOR_DIM]
+    float *__restrict__ render_alphas,        // [C, image_height, image_width, 1]
+    // if render distort maps, the colors should be RGBD, so the COLOR_DIM
+    // should be 4.
+    float *__restrict__ render_distorts, // [C, image_height, image_width, 1]
+                                         // optional
     int32_t *__restrict__ last_ids       // [C, image_height, image_width]
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
@@ -567,8 +572,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
 
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
-    // numerical precision so we use double for it. However double make bwd 1.5x slower
-    // so we stick with float for now.
+    // numerical precision so we use double for it. However double make bwd 1.5x
+    // slower so we stick with float for now.
     float T = 1.0f;
     // index of most recent gaussian to write to this thread's pixel
     uint32_t cur_idx = 0;
@@ -639,9 +644,11 @@ __global__ void rasterize_to_pixels_fwd_kernel(
             if (render_distorts != nullptr) {
                 // we assume the `colors` is [R, G, B, D] with 4 channels.
                 const float depth = c_ptr[COLOR_DIM - 1];
-                // in nerfacc, loss_bi_0 = weights * t_mids * exclusive_sum(weights)
+                // in nerfacc, loss_bi_0 = weights * t_mids *
+                // exclusive_sum(weights)
                 const float distort_bi_0 = vis * depth * (1.0f - T);
-                // in nerfacc, loss_bi_1 = weights * exclusive_sum(weights * t_mids)
+                // in nerfacc, loss_bi_1 = weights * exclusive_sum(weights *
+                // t_mids)
                 const float distort_bi_1 = vis * accum_vis_depth;
                 distort += 2.0f * (distort_bi_0 - distort_bi_1);
                 accum_vis_depth += vis * depth;
@@ -655,10 +662,10 @@ __global__ void rasterize_to_pixels_fwd_kernel(
 
     if (inside) {
         // Here T is the transmittance AFTER the last gaussian in this pixel.
-        // We (should) store double precision as T would be used in backward pass and
-        // it can be very small and causing large diff in gradients with float32.
-        // However, double precision makes the backward pass 1.5x slower so we stick
-        // with float for now.
+        // We (should) store double precision as T would be used in backward
+        // pass and it can be very small and causing large diff in gradients
+        // with float32. However, double precision makes the backward pass 1.5x
+        // slower so we stick with float for now.
         render_alphas[pix_id] = 1.0f - T;
         PRAGMA_UNROLL
         for (uint32_t k = 0; k < COLOR_DIM; ++k) {
@@ -730,9 +737,9 @@ rasterize_to_pixels_fwd_tensor(
 
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
-    // TODO: an optimization can be done by passing the actual number of channels into
-    // the kernel functions and avoid necessary global memory writes. This requires
-    // moving the channel padding from python to C side.
+    // TODO: an optimization can be done by passing the actual number of
+    // channels into the kernel functions and avoid necessary global memory
+    // writes. This requires moving the channel padding from python to C side.
     switch (channels) {
     case 1:
         rasterize_to_pixels_fwd_kernel<1><<<blocks, threads, 0, stream>>>(
@@ -886,16 +893,16 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
     // fwd outputs
-    const float
-        *__restrict__ render_colors, // [C, image_height, image_width, COLOR_DIM]
+    const float *__restrict__ render_colors, // [C, image_height, image_width,
+                                             // COLOR_DIM]
     const float *__restrict__ render_alphas, // [C, image_height, image_width, 1]
     const int32_t *__restrict__ last_ids,    // [C, image_height, image_width]
     // grad outputs
-    const float
-        *__restrict__ v_render_colors, // [C, image_height, image_width, COLOR_DIM]
-    const float *__restrict__ v_render_alphas, // [C, image_height, image_width, 1]
-    const float
-        *__restrict__ v_render_distorts, // [C, image_height, image_width, 1] optional
+    const float *__restrict__ v_render_colors,   // [C, image_height, image_width,
+                                                 // COLOR_DIM]
+    const float *__restrict__ v_render_alphas,   // [C, image_height, image_width, 1]
+    const float *__restrict__ v_render_distorts, // [C, image_height,
+                                                 // image_width, 1] optional
     // grad inputs
     float2 *__restrict__ v_means2d_abs, // [C, N, 2] or [nnz, 2]
     float2 *__restrict__ v_means2d,     // [C, N, 2] or [nnz, 2]

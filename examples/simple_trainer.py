@@ -6,14 +6,15 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import imageio
+import nerfview
 import numpy as np
 import torch
 import torch.nn.functional as F
 import tqdm
 import tyro
+import viser
 from datasets.colmap import Dataset, Parser
 from datasets.traj import generate_interpolated_path
-from nerfview import VIEWER_LOCK, CameraState, ViewerServer
 from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
@@ -305,7 +306,12 @@ class Runner:
 
         # Viewer
         if not self.cfg.disable_viewer:
-            self.server = ViewerServer(port=cfg.port, render_fn=self._viewer_render_fn)
+            self.server = viser.ViserServer(port=cfg.port, verbose=False)
+            self.viewer = nerfview.Viewer(
+                server=self.server,
+                render_fn=self._viewer_render_fn,
+                mode="training",
+            )
 
         # Running stats for prunning & growing.
         n_gauss = len(self.splats["means3d"])
@@ -401,9 +407,9 @@ class Runner:
         pbar = tqdm.tqdm(range(init_step, max_steps))
         for step in pbar:
             if not cfg.disable_viewer:
-                while self.server.state.status == "paused":
+                while self.viewer.state.status == "paused":
                     time.sleep(0.01)
-                VIEWER_LOCK.acquire()
+                self.viewer.lock.acquire()
                 tic = time.time()
 
             try:
@@ -624,15 +630,15 @@ class Runner:
                 self.render_traj(step)
 
             if not cfg.disable_viewer:
-                VIEWER_LOCK.release()
+                self.viewer.lock.release()
                 num_train_steps_per_sec = 1.0 / (time.time() - tic)
                 num_train_rays_per_sec = (
                     num_train_rays_per_step * num_train_steps_per_sec
                 )
                 # Update the viewer state.
-                self.server.state.num_train_rays_per_sec = num_train_rays_per_sec
+                self.viewer.state.num_train_rays_per_sec = num_train_rays_per_sec
                 # Update the scene.
-                self.server.update(step, num_train_rays_per_step)
+                self.viewer.update(step, num_train_rays_per_step)
 
     @torch.no_grad()
     def update_running_stats(self, info: Dict):
@@ -909,20 +915,13 @@ class Runner:
         print(f"Video saved to {video_dir}/traj_{step}.mp4")
 
     @torch.no_grad()
-    def _viewer_render_fn(self, camera_state: CameraState, img_wh: Tuple[int, int]):
+    def _viewer_render_fn(
+        self, camera_state: nerfview.CameraState, img_wh: Tuple[int, int]
+    ):
         """Callable function for the viewer."""
-        fov = camera_state.fov
-        c2w = camera_state.c2w
         W, H = img_wh
-
-        focal_length = H / 2.0 / np.tan(fov / 2.0)
-        K = np.array(
-            [
-                [focal_length, 0.0, W / 2.0],
-                [0.0, focal_length, H / 2.0],
-                [0.0, 0.0, 1.0],
-            ]
-        )
+        c2w = camera_state.c2w
+        K = camera_state.get_K(img_wh)
         c2w = torch.from_numpy(c2w).float().to(self.device)
         K = torch.from_numpy(K).float().to(self.device)
 

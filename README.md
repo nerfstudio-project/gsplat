@@ -5,13 +5,17 @@
 
 [http://www.gsplat.studio/](http://www.gsplat.studio/)
 
-gsplat is an open-source library for CUDA accelerated rasterization of gaussians with python bindings. It is inspired by the SIGGRAPH paper [3D Gaussian Splatting for Real-Time Rendering of Radiance Fields](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/), but we’ve made gsplat even faster, more memory efficient, and with a growing list of new features! Check our [webpage](https://docs.gsplat.studio/latest/) for more details
+gsplat is an open-source library for CUDA accelerated rasterization of gaussians with python bindings. It is inspired by the SIGGRAPH paper [3D Gaussian Splatting for Real-Time Rendering of Radiance Fields](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/), but we’ve made gsplat even faster, more memory efficient, and with a growing list of new features! 
+
+<div align="center">
+  <video src="https://github.com/nerfstudio-project/gsplat/assets/10151885/e60f7603-3c8a-4d05-a3ae-e382507eb043" width="100%" />
+</div>
 
 ## Installation
 
 **Dependence**: Please install [Pytorch](https://pytorch.org/get-started/locally/) first.
 
-The easist way is to install from PyPI. In this way it will build the CUDA code **on the first run** (JIT).
+The easiest way is to install from PyPI. In this way it will build the CUDA code **on the first run** (JIT).
 
 ```bash
 pip install gsplat
@@ -25,7 +29,7 @@ pip install git+https://github.com/nerfstudio-project/gsplat.git
 
 ## Evaluation
 
-This repo comes with a standalone script that reproduces the official Gaussian Splatting with exactly the same performance on PSNR, SSIM, LPIPS, and converged number of Gaussians. Powered by gsplat’s efficient CUDA implementation, the training takes up to **4x less GPU memory** with up to **2x less time** to finish than the official implementation. Full report can be found [here](https://docs.gsplat.studio/latest/tests/eval.html).
+This repo comes with a standalone script that reproduces the official Gaussian Splatting with exactly the same performance on PSNR, SSIM, LPIPS, and converged number of Gaussians. Powered by gsplat’s efficient CUDA implementation, the training takes up to **4x less GPU memory** with up to **2x less time** to finish than the official implementation. Full report can be found [here](https://docs.gsplat.studio/main/tests/eval.html).
 
 ```bash
 # under examples/
@@ -38,9 +42,9 @@ bash benchmark.sh
 We provide a set of examples to get you started! Below you can find the details about
 the examples (requires to install some exta dependences via `pip install -r examples/requirements.txt`)
 
-- [Train a 3D Gaussian splatting model on a COLMAP capture.](https://docs.gsplat.studio/latest/examples/colmap.html)
-- [Fit a 2D image with 3D Gaussians.](https://docs.gsplat.studio/latest/examples/image.html)
-- [Render a large scene in real-time.](https://docs.gsplat.studio/latest/examples/large_scale.html)
+- [Train a 3D Gaussian splatting model on a COLMAP capture.](https://docs.gsplat.studio/main/examples/colmap.html)
+- [Fit a 2D image with 3D Gaussians.](https://docs.gsplat.studio/main/examples/image.html)
+- [Render a large scene in real-time.](https://docs.gsplat.studio/main/examples/large_scale.html)
 
 
 ## Development and Contribution
