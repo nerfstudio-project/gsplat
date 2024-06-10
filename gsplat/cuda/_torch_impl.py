@@ -309,7 +309,8 @@ def accumulate(
     camera_ids: Tensor,  # [M]
     image_width: int,
     image_height: int,
-) -> Tuple[Tensor, Tensor]:
+    compute_distorts: bool = False,
+) -> Tuple[Tensor, Tensor, Tensor]:
     """Alpah compositing of 2D Gaussians in Pure Pytorch.
 
     This function performs alpha compositing for Gaussians based on the pair of indices
@@ -350,7 +351,11 @@ def accumulate(
     """
 
     try:
-        from nerfacc import accumulate_along_rays, render_weight_from_alpha
+        from nerfacc import (
+            accumulate_along_rays,
+            exclusive_sum,
+            render_weight_from_alpha,
+        )
     except ImportError:
         raise ImportError("Please install nerfacc package: pip install nerfacc")
 
@@ -386,7 +391,19 @@ def accumulate(
         weights, None, ray_indices=indices, n_rays=total_pixels
     ).reshape(C, image_height, image_width, 1)
 
-    return renders, alphas
+    if compute_distorts:
+        assert colors.shape[-1] == 4, colors.shape
+        depths = colors[camera_ids, gaussian_ids, -1]
+        loss_bi_0 = weights * depths * exclusive_sum(weights, indices=indices)
+        loss_bi_1 = weights * exclusive_sum(weights * depths, indices=indices)
+        dists = 2 * (loss_bi_0 - loss_bi_1)
+        dists = accumulate_along_rays(dists, None, indices, total_pixels).reshape(
+            C, image_height, image_width, 1
+        )
+    else:
+        dists = None
+
+    return renders, alphas, dists
 
 
 def _rasterize_to_pixels(
@@ -400,6 +417,7 @@ def _rasterize_to_pixels(
     isect_offsets: Tensor,  # [C, tile_height, tile_width]
     flatten_ids: Tensor,  # [n_isects]
     backgrounds: Optional[Tensor] = None,  # [C, channels]
+    compute_distorts: bool = False,
     batch_per_iter: int = 100,
 ):
     """Pytorch implementation of `gsplat.cuda._wrapper.rasterize_to_pixels()`.
@@ -433,6 +451,10 @@ def _rasterize_to_pixels(
         (C, image_height, image_width, colors.shape[-1]), device=device
     )
     render_alphas = torch.zeros((C, image_height, image_width, 1), device=device)
+    if compute_distorts:
+        render_distorts = torch.zeros((C, image_height, image_width, 1), device=device)
+    else:
+        render_distorts = None
 
     # Split Gaussians into batches and iteratively accumulate the renderings
     block_size = tile_size * tile_size
@@ -460,7 +482,7 @@ def _rasterize_to_pixels(
             break
 
         # Accumulate the renderings within this batch of Gaussians.
-        renders_step, accs_step = accumulate(
+        renders_step, accs_step, dists_step = accumulate(
             means2d,
             conics,
             opacities,
@@ -470,17 +492,21 @@ def _rasterize_to_pixels(
             camera_ids,
             image_width,
             image_height,
+            compute_distorts=compute_distorts,
         )
         render_colors = render_colors + renders_step * transmittances[..., None]
         render_alphas = render_alphas + accs_step * transmittances[..., None]
+        if compute_distorts:
+            render_distorts = render_distorts + dists_step * (
+                transmittances[..., None] ** 2
+            )
 
-    render_alphas = render_alphas
     if backgrounds is not None:
         render_colors = render_colors + backgrounds[:, None, None, :] * (
             1.0 - render_alphas
         )
 
-    return render_colors, render_alphas
+    return render_colors, render_alphas, render_distorts
 
 
 def _eval_sh_bases_fast(basis_dim: int, dirs: Tensor):

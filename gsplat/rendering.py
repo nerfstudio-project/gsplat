@@ -35,6 +35,7 @@ def rasterization(
     render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
     sparse_grad: bool = False,
     absgrad: bool = False,
+    compute_distorts: bool = False,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
@@ -295,7 +296,7 @@ def rasterization(
         colors = depths[..., None]
     else:  # RGB
         pass
-    render_colors, render_alphas = rasterize_to_pixels(
+    render_colors, render_alphas, render_distorts = rasterize_to_pixels(
         means2d,
         conics,
         colors,
@@ -308,6 +309,7 @@ def rasterization(
         backgrounds=backgrounds,
         packed=packed,
         absgrad=absgrad,
+        compute_distorts=compute_distorts,
     )
     if render_mode in ["ED", "RGB+ED"]:
         # normalize the accumulated depth to get the expected depth
@@ -336,6 +338,7 @@ def rasterization(
         "width": width,
         "height": height,
         "tile_size": tile_size,
+        "render_distorts": render_distorts,
     }
     return render_colors, render_alphas, meta
 

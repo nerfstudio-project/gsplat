@@ -517,7 +517,9 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
     float *__restrict__ render_colors, // [C, image_height, image_width, COLOR_DIM]
     float *__restrict__ render_alphas, // [C, image_height, image_width, 1]
-    int32_t *__restrict__ last_ids     // [C, image_height, image_width]
+    // if render distort maps, the colors should be RGBD, so the COLOR_DIM should be 4.
+    float *__restrict__ render_distorts, // [C, image_height, image_width, 1] optional
+    int32_t *__restrict__ last_ids       // [C, image_height, image_width]
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
@@ -534,6 +536,9 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     last_ids += camera_id * image_height * image_width;
     if (backgrounds != nullptr) {
         backgrounds += camera_id * COLOR_DIM;
+    }
+    if (render_distorts != nullptr) {
+        render_distorts += camera_id * image_height * image_width;
     }
 
     float px = (float)j + 0.5f;
@@ -572,6 +577,12 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     // each thread loads one gaussian at a time before rasterizing its
     // designated pixel
     uint32_t tr = block.thread_rank();
+
+    // Per-pixel distortion error proposed in Mip-NeRF 360.
+    // Implemented reference:
+    // https://github.com/nerfstudio-project/nerfacc/blob/master/nerfacc/losses.py#L7
+    float distort = 0.f;
+    float accum_vis_depth = 0.f; // accumulated vis * depth
 
     float pix_out[COLOR_DIM] = {0.f};
     for (uint32_t b = 0; b < num_batches; ++b) {
@@ -625,6 +636,17 @@ __global__ void rasterize_to_pixels_fwd_kernel(
             for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                 pix_out[k] += c_ptr[k] * vis;
             }
+            if (render_distorts != nullptr) {
+                // we assume the `colors` is [R, G, B, D] with 4 channels.
+                const float depth = c_ptr[COLOR_DIM - 1];
+                // in nerfacc, loss_bi_0 = weights * t_mids * exclusive_sum(weights)
+                const float distort_bi_0 = vis * depth * (1.0f - T);
+                // in nerfacc, loss_bi_1 = weights * exclusive_sum(weights * t_mids)
+                const float distort_bi_1 = vis * accum_vis_depth;
+                distort += 2.0f * (distort_bi_0 - distort_bi_1);
+                accum_vis_depth += vis * depth;
+            }
+
             cur_idx = batch_start + t;
 
             T = next_T;
@@ -645,10 +667,14 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         }
         // index in bin of last gaussian in this pixel
         last_ids[pix_id] = static_cast<int32_t>(cur_idx);
+        if (render_distorts != nullptr) {
+            render_distorts[pix_id] = distort;
+        }
     }
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_tensor(
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+rasterize_to_pixels_fwd_tensor(
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2] or [nnz, 2]
     const torch::Tensor &conics,    // [C, N, 3] or [nnz, 3]
@@ -659,8 +685,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
-    const torch::Tensor &flatten_ids   // [n_isects]
-) {
+    const torch::Tensor &flatten_ids,  // [n_isects]
+    // options
+    const bool compute_distorts) {
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
     CHECK_INPUT(conics);
@@ -670,6 +697,10 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
     CHECK_INPUT(flatten_ids);
     if (backgrounds.has_value()) {
         CHECK_INPUT(backgrounds.value());
+    }
+    if (compute_distorts) {
+        // TODO: make it work with N-D
+        TORCH_CHECK(colors.size(-1) == 4, "Distortion map requires 4 channel colors");
     }
     bool packed = means2d.dim() == 2;
 
@@ -689,6 +720,11 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
                                          means2d.options().dtype(torch::kFloat32));
     torch::Tensor alphas = torch::empty({C, image_height, image_width, 1},
                                         means2d.options().dtype(torch::kFloat32));
+    torch::Tensor distortions;
+    if (compute_distorts) {
+        distortions = torch::empty({C, image_height, image_width, 1},
+                                   means2d.options().dtype(torch::kFloat32));
+    }
     torch::Tensor last_ids = torch::empty({C, image_height, image_width},
                                           means2d.options().dtype(torch::kInt32));
 
@@ -707,6 +743,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             image_width, image_height, tile_size, tile_width, tile_height,
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            compute_distorts ? distortions.data_ptr<float>() : nullptr,
             last_ids.data_ptr<int32_t>());
         break;
     case 2:
@@ -718,6 +755,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             image_width, image_height, tile_size, tile_width, tile_height,
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            compute_distorts ? distortions.data_ptr<float>() : nullptr,
             last_ids.data_ptr<int32_t>());
         break;
     case 3:
@@ -729,6 +767,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             image_width, image_height, tile_size, tile_width, tile_height,
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            compute_distorts ? distortions.data_ptr<float>() : nullptr,
             last_ids.data_ptr<int32_t>());
         break;
     case 4:
@@ -740,6 +779,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             image_width, image_height, tile_size, tile_width, tile_height,
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            compute_distorts ? distortions.data_ptr<float>() : nullptr,
             last_ids.data_ptr<int32_t>());
         break;
     case 8:
@@ -751,6 +791,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             image_width, image_height, tile_size, tile_width, tile_height,
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            compute_distorts ? distortions.data_ptr<float>() : nullptr,
             last_ids.data_ptr<int32_t>());
         break;
     case 16:
@@ -762,6 +803,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             image_width, image_height, tile_size, tile_width, tile_height,
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            compute_distorts ? distortions.data_ptr<float>() : nullptr,
             last_ids.data_ptr<int32_t>());
         break;
     case 32:
@@ -773,6 +815,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             image_width, image_height, tile_size, tile_width, tile_height,
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            compute_distorts ? distortions.data_ptr<float>() : nullptr,
             last_ids.data_ptr<int32_t>());
         break;
     case 64:
@@ -784,6 +827,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             image_width, image_height, tile_size, tile_width, tile_height,
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            compute_distorts ? distortions.data_ptr<float>() : nullptr,
             last_ids.data_ptr<int32_t>());
         break;
     case 128:
@@ -795,6 +839,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             image_width, image_height, tile_size, tile_width, tile_height,
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            compute_distorts ? distortions.data_ptr<float>() : nullptr,
             last_ids.data_ptr<int32_t>());
         break;
     case 256:
@@ -806,6 +851,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             image_width, image_height, tile_size, tile_width, tile_height,
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            compute_distorts ? distortions.data_ptr<float>() : nullptr,
             last_ids.data_ptr<int32_t>());
         break;
     case 512:
@@ -817,12 +863,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             image_width, image_height, tile_size, tile_width, tile_height,
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            compute_distorts ? distortions.data_ptr<float>() : nullptr,
             last_ids.data_ptr<int32_t>());
         break;
     default:
         AT_ERROR("Unsupported number of channels: ", channels);
     }
-    return std::make_tuple(renders, alphas, last_ids);
+    return std::make_tuple(renders, alphas, distortions, last_ids);
 }
 
 template <uint32_t COLOR_DIM>
@@ -839,12 +886,16 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
     // fwd outputs
+    const float
+        *__restrict__ render_colors, // [C, image_height, image_width, COLOR_DIM]
     const float *__restrict__ render_alphas, // [C, image_height, image_width, 1]
     const int32_t *__restrict__ last_ids,    // [C, image_height, image_width]
     // grad outputs
     const float
         *__restrict__ v_render_colors, // [C, image_height, image_width, COLOR_DIM]
     const float *__restrict__ v_render_alphas, // [C, image_height, image_width, 1]
+    const float
+        *__restrict__ v_render_distorts, // [C, image_height, image_width, 1] optional
     // grad inputs
     float2 *__restrict__ v_means2d_abs, // [C, N, 2] or [nnz, 2]
     float2 *__restrict__ v_means2d,     // [C, N, 2] or [nnz, 2]
@@ -859,12 +910,16 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
 
     tile_offsets += camera_id * tile_height * tile_width;
+    render_colors += camera_id * image_height * image_width * COLOR_DIM;
     render_alphas += camera_id * image_height * image_width;
     last_ids += camera_id * image_height * image_width;
     v_render_colors += camera_id * image_height * image_width * COLOR_DIM;
     v_render_alphas += camera_id * image_height * image_width;
     if (backgrounds != nullptr) {
         backgrounds += camera_id * COLOR_DIM;
+    }
+    if (v_render_distorts != nullptr) {
+        v_render_distorts += camera_id * image_height * image_width;
     }
 
     const float px = (float)j + 0.5f;
@@ -907,6 +962,18 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         v_render_c[k] = v_render_colors[pix_id * COLOR_DIM + k];
     }
     const float v_render_a = v_render_alphas[pix_id];
+
+    float v_distort = 0.f;
+    float accum_d, accum_w;
+    float accum_d_buffer, accum_w_buffer, distort_buffer;
+    if (v_render_distorts != nullptr) {
+        v_distort = v_render_distorts[pix_id];
+        accum_d_buffer = render_colors[pix_id * COLOR_DIM + COLOR_DIM - 1];
+        accum_d = accum_d_buffer;
+        accum_w_buffer = render_alphas[pix_id];
+        accum_w = accum_w_buffer;
+        distort_buffer = 0.f;
+    }
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing
@@ -1005,6 +1072,22 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                     v_alpha += -T_final * ra * accum;
                 }
 
+                // contribution from distortion
+                if (v_render_distorts != nullptr) {
+                    float depth = rgbs_batch[t * COLOR_DIM + COLOR_DIM - 1];
+                    float dl_dw =
+                        2.0f * (2.0f * (depth * accum_w_buffer - accum_d_buffer) +
+                                (accum_d - depth * accum_w));
+                    // df / d(alpha)
+                    v_alpha += (dl_dw * T - distort_buffer * ra) * v_distort;
+                    accum_d_buffer -= fac * depth;
+                    accum_w_buffer -= fac;
+                    distort_buffer += dl_dw * fac;
+                    // df / d(depth)
+                    v_rgb_local[COLOR_DIM - 1] +=
+                        2.0f * fac * (2.0f - 2.0f * T - accum_w + fac) * v_distort;
+                }
+
                 if (opac * vis <= 0.999f) {
                     const float v_sigma = -opac * vis * v_alpha;
                     v_conic_local = {0.5f * v_sigma * delta.x * delta.x,
@@ -1073,11 +1156,14 @@ rasterize_to_pixels_bwd_tensor(
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
     const torch::Tensor &flatten_ids,  // [n_isects]
     // forward outputs
+    const torch::Tensor &render_colors, // [C, image_height, image_width, COLOR_DIM]
     const torch::Tensor &render_alphas, // [C, image_height, image_width, 1]
     const torch::Tensor &last_ids,      // [C, image_height, image_width]
     // gradients of outputs
     const torch::Tensor &v_render_colors, // [C, image_height, image_width, 3]
     const torch::Tensor &v_render_alphas, // [C, image_height, image_width, 1]
+    const at::optional<torch::Tensor>
+        &v_render_distorts, // [C, image_height, image_width, 1]
     // options
     bool absgrad) {
     DEVICE_GUARD(means2d);
@@ -1093,6 +1179,10 @@ rasterize_to_pixels_bwd_tensor(
     CHECK_INPUT(v_render_alphas);
     if (backgrounds.has_value()) {
         CHECK_INPUT(backgrounds.value());
+    }
+    if (v_render_distorts.has_value()) {
+        CHECK_INPUT(v_render_distorts.value());
+        TORCH_CHECK(colors.size(-1) == 4, "Distortion map requires 4 channel colors");
     }
 
     bool packed = means2d.dim() == 2;
@@ -1130,8 +1220,12 @@ rasterize_to_pixels_bwd_tensor(
                                         : nullptr,
                 image_width, image_height, tile_size, tile_width, tile_height,
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                render_colors.data_ptr<float>(), render_alphas.data_ptr<float>(),
+                last_ids.data_ptr<int32_t>(), v_render_colors.data_ptr<float>(),
+                v_render_alphas.data_ptr<float>(),
+                v_render_distorts.has_value()
+                    ? v_render_distorts.value().data_ptr<float>()
+                    : nullptr,
                 absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
@@ -1146,8 +1240,12 @@ rasterize_to_pixels_bwd_tensor(
                                         : nullptr,
                 image_width, image_height, tile_size, tile_width, tile_height,
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                render_colors.data_ptr<float>(), render_alphas.data_ptr<float>(),
+                last_ids.data_ptr<int32_t>(), v_render_colors.data_ptr<float>(),
+                v_render_alphas.data_ptr<float>(),
+                v_render_distorts.has_value()
+                    ? v_render_distorts.value().data_ptr<float>()
+                    : nullptr,
                 absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
@@ -1162,8 +1260,12 @@ rasterize_to_pixels_bwd_tensor(
                                         : nullptr,
                 image_width, image_height, tile_size, tile_width, tile_height,
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                render_colors.data_ptr<float>(), render_alphas.data_ptr<float>(),
+                last_ids.data_ptr<int32_t>(), v_render_colors.data_ptr<float>(),
+                v_render_alphas.data_ptr<float>(),
+                v_render_distorts.has_value()
+                    ? v_render_distorts.value().data_ptr<float>()
+                    : nullptr,
                 absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
@@ -1178,8 +1280,12 @@ rasterize_to_pixels_bwd_tensor(
                                         : nullptr,
                 image_width, image_height, tile_size, tile_width, tile_height,
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                render_colors.data_ptr<float>(), render_alphas.data_ptr<float>(),
+                last_ids.data_ptr<int32_t>(), v_render_colors.data_ptr<float>(),
+                v_render_alphas.data_ptr<float>(),
+                v_render_distorts.has_value()
+                    ? v_render_distorts.value().data_ptr<float>()
+                    : nullptr,
                 absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
@@ -1194,8 +1300,12 @@ rasterize_to_pixels_bwd_tensor(
                                         : nullptr,
                 image_width, image_height, tile_size, tile_width, tile_height,
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                render_colors.data_ptr<float>(), render_alphas.data_ptr<float>(),
+                last_ids.data_ptr<int32_t>(), v_render_colors.data_ptr<float>(),
+                v_render_alphas.data_ptr<float>(),
+                v_render_distorts.has_value()
+                    ? v_render_distorts.value().data_ptr<float>()
+                    : nullptr,
                 absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
@@ -1210,8 +1320,12 @@ rasterize_to_pixels_bwd_tensor(
                                         : nullptr,
                 image_width, image_height, tile_size, tile_width, tile_height,
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                render_colors.data_ptr<float>(), render_alphas.data_ptr<float>(),
+                last_ids.data_ptr<int32_t>(), v_render_colors.data_ptr<float>(),
+                v_render_alphas.data_ptr<float>(),
+                v_render_distorts.has_value()
+                    ? v_render_distorts.value().data_ptr<float>()
+                    : nullptr,
                 absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
@@ -1226,8 +1340,12 @@ rasterize_to_pixels_bwd_tensor(
                                         : nullptr,
                 image_width, image_height, tile_size, tile_width, tile_height,
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                render_colors.data_ptr<float>(), render_alphas.data_ptr<float>(),
+                last_ids.data_ptr<int32_t>(), v_render_colors.data_ptr<float>(),
+                v_render_alphas.data_ptr<float>(),
+                v_render_distorts.has_value()
+                    ? v_render_distorts.value().data_ptr<float>()
+                    : nullptr,
                 absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),

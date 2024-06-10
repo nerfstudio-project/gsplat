@@ -381,6 +381,7 @@ def rasterize_to_pixels(
     backgrounds: Optional[Tensor] = None,  # [C, channels]
     packed: bool = False,
     absgrad: bool = False,
+    compute_distorts: bool = False,
 ) -> Tuple[Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
@@ -403,6 +404,7 @@ def rasterize_to_pixels(
 
         - **Rendered colors**. [C, image_height, image_width, channels]
         - **Rendered alphas**. [C, image_height, image_width, 1]
+        - **Rendered distorts**. [C, image_height, image_width, 1] if `compute_distorts` is True, otherwise None.
     """
 
     C = isect_offsets.size(0)
@@ -422,6 +424,8 @@ def rasterize_to_pixels(
     if backgrounds is not None:
         assert backgrounds.shape == (C, colors.shape[-1]), backgrounds.shape
         backgrounds = backgrounds.contiguous()
+    if compute_distorts:
+        assert colors.shape[-1] == 4, colors.shape
 
     # Pad the channels to the nearest supported number if necessary
     channels = colors.shape[-1]
@@ -458,7 +462,7 @@ def rasterize_to_pixels(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-    render_colors, render_alphas = _RasterizeToPixels.apply(
+    render_colors, render_alphas, render_distorts = _RasterizeToPixels.apply(
         means2d.contiguous(),
         conics.contiguous(),
         colors.contiguous(),
@@ -470,11 +474,12 @@ def rasterize_to_pixels(
         isect_offsets.contiguous(),
         flatten_ids.contiguous(),
         absgrad,
+        compute_distorts,
     )
 
     if padded_channels > 0:
         render_colors = render_colors[..., :-padded_channels]
-    return render_colors, render_alphas
+    return render_colors, render_alphas, render_distorts
 
 
 @torch.no_grad()
@@ -800,8 +805,9 @@ class _RasterizeToPixels(torch.autograd.Function):
         isect_offsets: Tensor,  # [C, tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
         absgrad: bool,
-    ) -> Tuple[Tensor, Tensor]:
-        render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
+        compute_distorts: bool,
+    ) -> Tuple[Tensor, Tensor, Tensor]:
+        render_colors, render_alphas, render_distorts, last_ids = _make_lazy_cuda_func(
             "rasterize_to_pixels_fwd"
         )(
             means2d,
@@ -814,6 +820,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             tile_size,
             isect_offsets,
             flatten_ids,
+            compute_distorts,
         )
 
         ctx.save_for_backward(
@@ -824,6 +831,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             backgrounds,
             isect_offsets,
             flatten_ids,
+            render_colors,
             render_alphas,
             last_ids,
         )
@@ -831,16 +839,18 @@ class _RasterizeToPixels(torch.autograd.Function):
         ctx.height = height
         ctx.tile_size = tile_size
         ctx.absgrad = absgrad
+        ctx.compute_distorts = compute_distorts
 
         # double to float
         render_alphas = render_alphas.float()
-        return render_colors, render_alphas
+        return render_colors, render_alphas, render_distorts
 
     @staticmethod
     def backward(
         ctx,
         v_render_colors: Tensor,  # [C, H, W, 3]
         v_render_alphas: Tensor,  # [C, H, W, 1]
+        v_render_distorts: Optional[Tensor],  # [C, H, W, 1]
     ):
         (
             means2d,
@@ -850,6 +860,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             backgrounds,
             isect_offsets,
             flatten_ids,
+            render_colors,
             render_alphas,
             last_ids,
         ) = ctx.saved_tensors
@@ -857,6 +868,12 @@ class _RasterizeToPixels(torch.autograd.Function):
         height = ctx.height
         tile_size = ctx.tile_size
         absgrad = ctx.absgrad
+        compute_distorts = ctx.compute_distorts
+        if not compute_distorts:
+            assert v_render_distorts is None, "v_render_distorts should be None"
+        else:
+            assert v_render_distorts is not None, "v_render_distorts should not be None"
+            v_render_distorts = v_render_distorts.contiguous()
 
         (
             v_means2d_abs,
@@ -875,10 +892,12 @@ class _RasterizeToPixels(torch.autograd.Function):
             tile_size,
             isect_offsets,
             flatten_ids,
+            render_colors,
             render_alphas,
             last_ids,
             v_render_colors.contiguous(),
             v_render_alphas.contiguous(),
+            v_render_distorts,
             absgrad,
         )
 
@@ -898,6 +917,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             v_colors,
             v_opacities,
             v_backgrounds,
+            None,
             None,
             None,
             None,
