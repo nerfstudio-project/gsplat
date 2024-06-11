@@ -1841,3 +1841,190 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_2dgs_tens
     }
     return std::make_tuple(gaussian_ids, pixel_ids);
 }
+
+template <uint32 COLOR_DIM>
+__global__ void rasterize_to_pixels_bwd_2dgs_kernel(
+    const uint32_t C, const uint32_t N, const uint32_t n_isects, const bool packed,
+    // fwd inputs
+    const float2 *__restrict__ means2d,
+    const float3 *__restrict__ ray_transformations,
+    const float *__restrict__ colors,
+    const float *__restrict__ opacities,
+    const float *__restrict__ backgrounds,
+    const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
+    const uint32_t tile_width, const uint32_t tile_height,
+    const int32_t *__restrict__ tile_offsets,
+    const int32_t *__restrict__ flatten_ids,
+    // fwd outputs
+    const float *__restrict__ render_alphas,
+    const int32_t *__restrict__ last_ids,
+    // grad outputs
+    const float *__restrict__ v_render_colors,
+    const float *__restrict__ v_render_alphas,
+    // grad inputs
+    float2 *__restrict__ v_means2d_abs,
+    float2 *__restrict__ v_means2d,
+    float *__restrict__ v_ray_transformations,
+    float *__restrict__ v_colors,
+    float *__restrict__ v_opacities
+) {
+    auto block = cg::this_thread_block();
+    uint32_t camera_id = block.group_index().x;
+    uint32_t tile_id = block.group_index().y * tile_width + block.group_index().z;
+    uint32_t i = block.group_index().y * tile_size + block.thread_index().y;
+    uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
+
+    tile_offsets += camera_id * tile_height * tile_width;
+    render_alphas += camera_id * image_height * image_width;
+    last_ids += camera_id * image_height * image_width;
+    v_render_colors += camera_id * image_height * image_width * COLOR_DIM;
+    v_render_alphas += camera_id * image_height * image_width;
+    if (backgrounds != nullptr) {
+        backgrounds += camera_id * COLOR_DIM;
+    }
+
+    const float px = (float)j + 0.5f;
+    const float py = (float)i + 0.5f;
+    // clamp this value to the last pixel
+    const int32_t pix_id = min(i * image_width + j, image_width * image_height - 1);
+
+    // keep not rasterizing threads around for reading data
+    bool inside = (i < image_height && j < image_width);
+
+    // have all threads in tile process the same gaussians in batches
+    // first collect gaussians between range.x and range.y in batches
+    // which gaussians to look through in this tile
+    int32_t range_start = tile_offsets[tile_id];
+    int32_t range_end = 
+        (camera_id == C - 1) && (tile_id == tile_width * tile_height - 1)
+            ? n_isects
+            : tile_offsets[tile_id + 1];
+    const uint32_t block_size = block.size();
+    const uint32_t num_batches = 
+        (range_end - range_start + block_size - 1) / block_size;
+    
+    __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 u_transform_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 v_transform_batch[MAX_BLOCK_SIZE];
+    __shared__ float3 w_transform_batch[MAX_BLOCK_SIZE];
+    __shared__ float rgbs_batch[MAX_BLOCK_SIZE * COLOR_DIM];
+
+    // this is the T AFTER the last gaussian in this pixel
+    float T_final = 1.0f - render_alphas[pix_id];
+    float T = T_final;
+    // the contribution from gaussians behind the current one
+    float buffer[COLOR_DIM] = {0.f};
+    // index of last gaussian to contribute to this pixel
+    const int32_t bin_final = inside ? last_ids[pix_id] : 0;
+
+    // df/d_out for this pixel
+    float v_render_c[COLOR_DIM];
+    PRAGMA_UNROLL
+    for (uint32_t k = 0; k < COLOR_DIM; k++) {
+        v_render_c[k] = v_render_colors[pix_id * COLOR_DIM + k];
+    }
+    const float v_render_a = v_render_alphas[pix_id];
+
+    // collect and process batches of gaussians
+    // each thread loads one gaussian at a time before rasterizing
+    const uint32_t tr = block.thread_rank();
+    cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
+    const int32_t warp_bin_final = cg::reduce(warp, bin_final, cg::greater<int>());
+    for (uint32_t b = 0; b < num_batches; ++b) {
+        // resync all threads before writing next batch of shared mem
+        block.sync();
+
+        // each thread fetch 1 gaussian from back to front 
+        // 0 index will be furthest back in batch
+        // index of gaussian to load
+        // batch end is the index of the last gaussian in the batch
+        // These values can be negative so must be int32 instead of uint32
+        const int32_t batch_end = range_end - 1 - block_size * b;
+        const int32_t batch_size = min(block_size, batch_end + 1 - range_start);
+        cosnt int32_t idx = batch_end - tr;
+        if (idx >= range_start) {
+            int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
+            id_batch[tr] = g;
+            const float2 xy = means2d[g];
+            const float opac = opacities[g];
+            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
+            u_transform_batch[tr] = {ray_transformations[g * 9 + 0], ray_transformations[g * 9 + 1], ray_transformations[g * 9 + 2]};
+            v_transform_batch[tr] = {ray_transformations[g * 9 + 3], ray_transformations[g * g + 4], ray_transformations[g * 9 + 5]};
+            w_transform_batch[tr] = {ray_transformations[g * 9 + 6], ray_transformations[g * 9 + 7], ray_transformations[g * 9 + 8]};
+            for (uint32_t k = 0; k < COLOR_DIM; ++k) {
+                rgbs_batch[tr * COLOR_DIM + k] = colors[g * COLOR_DIM + k];
+            }
+        }
+
+        // wait for other threads to collect the gaussians in batch
+        block.sync();
+
+        // process gaussians in the current batch for this pixel
+        // 0 index is the furthest back gaussian in the batch
+        for (uint32_t t = max(0, batch_end - warp_bin_final); t < batch_size; ++t) {
+            bool valid = inside;
+            if (batch_end - t > bin_final) {
+                valid = 0;
+            }
+            float alpha;
+            float opac;
+            float vis;
+            float gauss_weight_3d;
+            float gauss_weight_2d;
+            float gauss_weight;
+            float2 s;
+            float2 d;
+            float3 h_u;
+            float3 h_v;
+            float3 intersect;
+            float3 w_transform;
+            if (valid) { 
+
+
+                const float3 u_transform = u_transform_batch[t];
+                const float3 v_transform = v_transform_batch[t];
+                w_transform = w_transform_batch[t];
+                const float3 xy_opac = xy_opacity_batch[t];
+                const float opac = xy_opac.z;
+
+                h_u = {-u_transform.x + px * w_transform.x, -u_transform.y + px * w_transform.y, -u_transform.z + px * w_transform.z};
+                h_v = {-v_transform.x + py * w_transform.x, -v_transform.y + py * w_transform.y, -v_transform.z + py * w_transform.z};
+
+                // cross product of two planes is a line
+                intersect = cross_product(h_u, h_v);
+
+                // No intersection
+                if (intersect.z == 0.0) {
+                    continue;
+                } else {
+                    // 3D homogeneous point to 2D point on the splat
+                    s = {intersect.x / intersect.z, intersect.y / intersect.z};
+                }
+
+                // 3D distance. Compute Mahalanobis distance in the canonical splat space.
+                gauss_weight_3d = (s.x * s.x + s.y * s.y);
+
+                // Low pass filter
+                float x = xy_opac.x;
+                float y = xy_opac.y;
+                d = {x - px, y - py};
+                // 2D screen distance
+                gauss_weight_2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
+                gauss_weight = min(gauss_weight_3d, gauss_weight_2d);
+
+                const float sigma = 0.5f * gauss_weight;
+                vis = __expf(-sigma);
+                alpha = min(0.999f, opac * vis);
+                if (sigma < 0.f || alpha < 1.f / 255.f) {
+                    valid = false;
+                }
+            }
+
+            // if all threads are inactive in this warp, skip this loop
+            if (!warp.any(valid)) {
+                continue;
+            }
+        }
+    }
+}

@@ -1976,3 +1976,47 @@ fully_fused_projection_packed_fwd_2dgs_tensor(
                             ray_transformations);
 }
 
+__global__ void fully_fused_projection_bwd_kernel(
+    // fwd inputs
+    const uint32_t C, const uint32_t N,
+    const float *__restrict__ means,
+    const float *__restrict__ quats,
+    const float *__restrict__ scales,
+    const float *__restrict__ viewmats,
+    const float *__restrict__ Ks,
+    const int32_t image_width, const int32_t image_height, const float eps2d,
+    // fwd outputs
+    const int32_t *__restrict__ radii,
+    const float *__restrict__ ray_transformations,
+    // grad inputs
+    const float *__restrict__ v_means2d,
+    const float *__restrict__ v_depths,
+    const float *__restrict__ v_ray_transformations,
+    // grad outputs
+    float *__restrict__ v_means,
+    float *__restrict__ v_quats,
+    float *__restrict__ v_scales,
+    float *__restrict__ v_viewmats
+) {
+    // parallelize over C * N
+    uint32_t idx = cg::this_grid().thread_rank();
+    if (idx >= C * N || radii[idx] <= 0) {
+        return;
+    }
+    const uint32_t cid = idx / N;
+    const uint32_t gid = idx % N;
+
+    // shift pointers to the current camera and gaussian
+    means += gid * 3;
+    viewmats += cid * 16;
+    Ks += cid * 9;
+
+    ray_transformations += idx * 9;
+
+    v_means2d += idx * 2;
+    v_depths += idx;
+    v_ray_transformations += idx * 9;
+
+    
+
+}
