@@ -742,8 +742,30 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>());
         break;
+    case 5:
+        rasterize_to_pixels_fwd_kernel<5><<<blocks, threads, 0, stream>>>(
+            C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+            (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+            opacities.data_ptr<float>(),
+            backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
+            image_width, image_height, tile_size, tile_width, tile_height,
+            tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+            renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            last_ids.data_ptr<int32_t>());
+        break;
     case 8:
         rasterize_to_pixels_fwd_kernel<8><<<blocks, threads, 0, stream>>>(
+            C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+            (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+            opacities.data_ptr<float>(),
+            backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
+            image_width, image_height, tile_size, tile_width, tile_height,
+            tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+            renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            last_ids.data_ptr<int32_t>());
+        break;
+    case 9:
+        rasterize_to_pixels_fwd_kernel<9><<<blocks, threads, 0, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
@@ -764,8 +786,30 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>());
         break;
+    case 17:
+        rasterize_to_pixels_fwd_kernel<17><<<blocks, threads, 0, stream>>>(
+            C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+            (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+            opacities.data_ptr<float>(),
+            backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
+            image_width, image_height, tile_size, tile_width, tile_height,
+            tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+            renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            last_ids.data_ptr<int32_t>());
+        break;
     case 32:
         rasterize_to_pixels_fwd_kernel<32><<<blocks, threads, 0, stream>>>(
+            C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+            (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+            opacities.data_ptr<float>(),
+            backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
+            image_width, image_height, tile_size, tile_width, tile_height,
+            tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+            renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            last_ids.data_ptr<int32_t>());
+        break;
+    case 33:
+        rasterize_to_pixels_fwd_kernel<33><<<blocks, threads, 0, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
@@ -786,8 +830,30 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>());
         break;
+    case 65:
+        rasterize_to_pixels_fwd_kernel<65><<<blocks, threads, 0, stream>>>(
+            C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+            (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+            opacities.data_ptr<float>(),
+            backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
+            image_width, image_height, tile_size, tile_width, tile_height,
+            tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+            renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            last_ids.data_ptr<int32_t>());
+        break;
     case 128:
         rasterize_to_pixels_fwd_kernel<128><<<blocks, threads, 0, stream>>>(
+            C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+            (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+            opacities.data_ptr<float>(),
+            backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
+            image_width, image_height, tile_size, tile_width, tile_height,
+            tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+            renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            last_ids.data_ptr<int32_t>());
+        break;
+    case 129:
+        rasterize_to_pixels_fwd_kernel<129><<<blocks, threads, 0, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
@@ -808,8 +874,30 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>());
         break;
+    case 257:
+        rasterize_to_pixels_fwd_kernel<257><<<blocks, threads, 0, stream>>>(
+            C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+            (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+            opacities.data_ptr<float>(),
+            backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
+            image_width, image_height, tile_size, tile_width, tile_height,
+            tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+            renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            last_ids.data_ptr<int32_t>());
+        break;
     case 512:
         rasterize_to_pixels_fwd_kernel<512><<<blocks, threads, 0, stream>>>(
+            C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+            (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+            opacities.data_ptr<float>(),
+            backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
+            image_width, image_height, tile_size, tile_width, tile_height,
+            tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+            renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            last_ids.data_ptr<int32_t>());
+        break;
+    case 513:
+        rasterize_to_pixels_fwd_kernel<513><<<blocks, threads, 0, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
@@ -1185,8 +1273,40 @@ rasterize_to_pixels_bwd_tensor(
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
             break;
+        case 5:
+            rasterize_to_pixels_bwd_kernel<5><<<blocks, threads, 0, stream>>>(
+                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+                opacities.data_ptr<float>(),
+                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+                                        : nullptr,
+                image_width, image_height, tile_size, tile_width, tile_height,
+                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+                (float2 *)v_means2d.data_ptr<float>(),
+                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
+                v_opacities.data_ptr<float>());
+            break;
         case 8:
             rasterize_to_pixels_bwd_kernel<8><<<blocks, threads, 0, stream>>>(
+                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+                opacities.data_ptr<float>(),
+                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+                                        : nullptr,
+                image_width, image_height, tile_size, tile_width, tile_height,
+                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+                (float2 *)v_means2d.data_ptr<float>(),
+                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
+                v_opacities.data_ptr<float>());
+            break;
+        case 9:
+            rasterize_to_pixels_bwd_kernel<9><<<blocks, threads, 0, stream>>>(
                 C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
                 (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
                 opacities.data_ptr<float>(),
@@ -1217,8 +1337,40 @@ rasterize_to_pixels_bwd_tensor(
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
             break;
+        case 17:
+            rasterize_to_pixels_bwd_kernel<17><<<blocks, threads, 0, stream>>>(
+                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+                opacities.data_ptr<float>(),
+                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+                                        : nullptr,
+                image_width, image_height, tile_size, tile_width, tile_height,
+                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+                (float2 *)v_means2d.data_ptr<float>(),
+                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
+                v_opacities.data_ptr<float>());
+            break;
         case 32:
             rasterize_to_pixels_bwd_kernel<32><<<blocks, threads, 0, stream>>>(
+                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+                opacities.data_ptr<float>(),
+                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+                                        : nullptr,
+                image_width, image_height, tile_size, tile_width, tile_height,
+                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+                (float2 *)v_means2d.data_ptr<float>(),
+                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
+                v_opacities.data_ptr<float>());
+            break;
+        case 33:
+            rasterize_to_pixels_bwd_kernel<33><<<blocks, threads, 0, stream>>>(
                 C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
                 (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
                 opacities.data_ptr<float>(),
