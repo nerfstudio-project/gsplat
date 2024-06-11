@@ -482,11 +482,11 @@ will be computed during the backward pass, which could be accessed by
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p><p><strong>render_colors</strong>: The rendered colors. [C, width, height, X].
+<dd class="field-even"><p><p><strong>render_colors</strong>: The rendered colors. [C, height, width, X].
 X depends on the <cite>render_mode</cite> and input <cite>colors</cite>. If <cite>render_mode</cite> is “RGB”,
 X is D; if <cite>render_mode</cite> is “D” or “ED”, X is 1; if <cite>render_mode</cite> is “RGB+D” or
 “RGB+ED”, X is D+1.</p>
-<p><strong>render_alphas</strong>: The rendered alphas. [C, width, height, 1].</p>
+<p><strong>render_alphas</strong>: The rendered alphas. [C, height, width, 1].</p>
 <p><strong>meta</strong>: A dictionary of intermediate results of the rasterization.</p>
 </p>
 </dd>
@@ -504,14 +504,14 @@ X is D; if <cite>render_mode</cite> is “D” or “ED”, X is 1; if <cite>ren
 <span class="gp">&gt;&gt;&gt; </span><span class="c1"># define cameras</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">viewmats</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">eye</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:,</span> <span class="p">:]</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">Ks</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span>
-<span class="gp">&gt;&gt;&gt; </span>   <span class="p">[</span><span class="mf">300.</span><span class="p">,</span> <span class="mf">0.</span><span class="p">,</span> <span class="mf">100.</span><span class="p">],</span> <span class="p">[</span><span class="mf">0.</span><span class="p">,</span> <span class="mf">300.</span><span class="p">,</span> <span class="mf">100.</span><span class="p">],</span> <span class="p">[</span><span class="mf">0.</span><span class="p">,</span> <span class="mf">0.</span><span class="p">,</span> <span class="mf">1.</span><span class="p">]],</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:,</span> <span class="p">:]</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">width</span><span class="p">,</span> <span class="n">height</span> <span class="o">=</span> <span class="mi">200</span><span class="p">,</span> <span class="mi">200</span>
+<span class="gp">&gt;&gt;&gt; </span>   <span class="p">[</span><span class="mf">300.</span><span class="p">,</span> <span class="mf">0.</span><span class="p">,</span> <span class="mf">150.</span><span class="p">],</span> <span class="p">[</span><span class="mf">0.</span><span class="p">,</span> <span class="mf">300.</span><span class="p">,</span> <span class="mf">100.</span><span class="p">],</span> <span class="p">[</span><span class="mf">0.</span><span class="p">,</span> <span class="mf">0.</span><span class="p">,</span> <span class="mf">1.</span><span class="p">]],</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:,</span> <span class="p">:]</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">width</span><span class="p">,</span> <span class="n">height</span> <span class="o">=</span> <span class="mi">300</span><span class="p">,</span> <span class="mi">200</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="c1"># render</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">colors</span><span class="p">,</span> <span class="n">alphas</span><span class="p">,</span> <span class="n">meta</span> <span class="o">=</span> <span class="n">rasterization</span><span class="p">(</span>
 <span class="gp">&gt;&gt;&gt; </span>   <span class="n">means</span><span class="p">,</span> <span class="n">quats</span><span class="p">,</span> <span class="n">scales</span><span class="p">,</span> <span class="n">opacities</span><span class="p">,</span> <span class="n">colors</span><span class="p">,</span> <span class="n">viewmats</span><span class="p">,</span> <span class="n">Ks</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">height</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="p">)</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span> <span class="p">(</span><span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">alphas</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
-<span class="go">torch.Size([1, 200, 200, 3]) torch.Size([1, 200, 200, 1])</span>
+<span class="go">torch.Size([1, 200, 300, 3]) torch.Size([1, 200, 300, 1])</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span> <span class="p">(</span><span class="n">meta</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
 <span class="go">dict_keys([&#39;camera_ids&#39;, &#39;gaussian_ids&#39;, &#39;radii&#39;, &#39;means2d&#39;, &#39;depths&#39;, &#39;conics&#39;,</span>
 <span class="go">&#39;opacities&#39;, &#39;tile_width&#39;, &#39;tile_height&#39;, &#39;tiles_per_gauss&#39;, &#39;isect_ids&#39;,</span>
