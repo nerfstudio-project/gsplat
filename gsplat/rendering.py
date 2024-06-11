@@ -148,12 +148,12 @@ def rasterization(
     Returns:
         A tuple:
 
-        **render_colors**: The rendered colors. [C, width, height, X].
+        **render_colors**: The rendered colors. [C, height, width, X].
         X depends on the `render_mode` and input `colors`. If `render_mode` is "RGB",
         X is D; if `render_mode` is "D" or "ED", X is 1; if `render_mode` is "RGB+D" or
         "RGB+ED", X is D+1.
 
-        **render_alphas**: The rendered alphas. [C, width, height, 1].
+        **render_alphas**: The rendered alphas. [C, height, width, 1].
 
         **meta**: A dictionary of intermediate results of the rasterization.
 
@@ -170,14 +170,14 @@ def rasterization(
         >>> # define cameras
         >>> viewmats = torch.eye(4, device=device)[None, :, :]
         >>> Ks = torch.tensor([
-        >>>    [300., 0., 100.], [0., 300., 100.], [0., 0., 1.]], device=device)[None, :, :]
-        >>> width, height = 200, 200
+        >>>    [300., 0., 150.], [0., 300., 100.], [0., 0., 1.]], device=device)[None, :, :]
+        >>> width, height = 300, 200
         >>> # render
         >>> colors, alphas, meta = rasterization(
         >>>    means, quats, scales, opacities, colors, viewmats, Ks, width, height
         >>> )
         >>> print (colors.shape, alphas.shape)
-        torch.Size([1, 200, 200, 3]) torch.Size([1, 200, 200, 1])
+        torch.Size([1, 200, 300, 3]) torch.Size([1, 200, 300, 1])
         >>> print (meta.keys())
         dict_keys(['camera_ids', 'gaussian_ids', 'radii', 'means2d', 'depths', 'conics',
         'opacities', 'tile_width', 'tile_height', 'tiles_per_gauss', 'isect_ids',
