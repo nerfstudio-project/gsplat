@@ -56,7 +56,7 @@ if args.ckpt is None:
     N = len(means)
     print("Number of Gaussians:", N)
 
-    # batched render
+    # batched render on 2 scenes, each scene has C cameras.
     render_colors, render_alphas, meta = rasterization(
         means.expand(2, -1, -1),  # [B, N, 3]
         quats.expand(2, -1, -1),  # [B, N, 4]
@@ -69,6 +69,7 @@ if args.ckpt is None:
         height,
         render_mode="RGB+D",
     )
+    # [B, C, H, W, D]
     assert render_colors.shape == (2, C, height, width, 4)
     assert render_alphas.shape == (2, C, height, width, 1)
 
