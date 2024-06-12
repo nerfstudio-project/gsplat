@@ -6,12 +6,11 @@ import torch.nn.functional as F
 from torch import Tensor
 
 
-def _quat_scale_to_covar_preci(
+def _quat_scale_to_RS_preci(
     quats: Tensor,  # [N, 4],
     scales: Tensor,  # [N, 3],
     compute_covar: bool = True,
     compute_preci: bool = True,
-    triu: bool = False,
 ) -> Tuple[Optional[Tensor], Optional[Tensor]]:
     """PyTorch implementation of `gsplat.cuda._wrapper.quat_scale_to_covar_preci()`."""
     quats = F.normalize(quats, p=2, dim=-1)
@@ -34,24 +33,35 @@ def _quat_scale_to_covar_preci(
     R = R.reshape(quats.shape[:-1] + (3, 3))  # (..., 3, 3)
     # R.register_hook(lambda grad: print("grad R", grad))
 
+    M = None
     if compute_covar:
         M = R * scales[..., None, :]  # (..., 3, 3)
+    P = None
+    if compute_preci:
+        P = R * (1 / scales[..., None, :])  # (..., 3, 3)
+    return M, P
+
+
+def _quat_scale_to_covar_preci(
+    quats: Tensor,  # [N, 4],
+    scales: Tensor,  # [N, 3],
+    compute_covar: bool = True,
+    compute_preci: bool = True,
+    triu: bool = False,
+) -> Tuple[Optional[Tensor], Optional[Tensor]]:
+    def convert_to_covar(M):
+        if M is None:
+            return None
         covars = torch.bmm(M, M.transpose(-1, -2))  # (..., 3, 3)
         if triu:
             covars = covars.reshape(covars.shape[:-2] + (9,))  # (..., 9)
             covars = (
                 covars[..., [0, 1, 2, 4, 5, 8]] + covars[..., [0, 3, 6, 4, 7, 8]]
             ) / 2.0  # (..., 6)
-    if compute_preci:
-        P = R * (1 / scales[..., None, :])  # (..., 3, 3)
-        precis = torch.bmm(P, P.transpose(-1, -2))  # (..., 3, 3)
-        if triu:
-            precis = precis.reshape(precis.shape[:-2] + (9,))
-            precis = (
-                precis[..., [0, 1, 2, 4, 5, 8]] + precis[..., [0, 3, 6, 4, 7, 8]]
-            ) / 2.0
+        return covars
 
-    return covars if compute_covar else None, precis if compute_preci else None
+    M, P = _quat_scale_to_RS_preci(quats, scales, compute_covar, compute_preci)
+    return (convert_to_covar(M), convert_to_covar(P))
 
 
 def _persp_proj(
@@ -195,6 +205,63 @@ def _fully_fused_projection(
 
     radii = radius.int()
     return radii, means2d, depths, conics, compensations
+
+
+def _fully_fused_projection_2dgs(
+    means: Tensor,  # [N, 3]
+    quats: Tensor,  # [N, 4]
+    scales: Tensor,  # [N, 3]
+    viewmats: Tensor,  # [C, 4, 4]
+    Ks: Tensor,  # [C, 3, 3]
+    width: int,
+    height: int,
+    near_plane: float = 0.01,
+    far_plane: float = 1e10,
+    eps: float = 1e-6,
+) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    """PyTorch implementation of `gsplat.cuda._wrapper.fully_fused_projection()`
+
+    .. note::
+
+        This is a minimal implementation of fully fused version, which has more
+        arguments. Not all arguments are supported.
+    """
+    R_cw = viewmats[:, :3, :3]  # [C, 3, 3]
+    t_cw = viewmats[:, :3, 3]  # [C, 3]
+    means_c = torch.einsum("cij,nj->cni", R_cw, means) + t_cw[:, None, :]  # (C, N, 3)
+    RS_wl, _ = _quat_scale_to_RS_preci(
+        quats, scales, compute_covar=True, compute_preci=False
+    )
+    RS_cl = torch.einsum("cij,njk->cnik", R_cw, RS_wl)  # [C, N, 3, 3]
+
+    # ray transform matrix
+    T_cl = torch.cat([RS_cl[..., :2], means_c[..., None]], dim=-1)  # [C, N, 3, 3]
+    T_sl = torch.einsum("cij,cnjk->cnik", Ks[:, :3, :3], T_cl)  # [C, N, 3, 3]
+    M = torch.transpose(T_sl, -1, -2)  # [C, N, 3, 3]
+
+    # compute the AABB of gaussian
+    test = torch.tensor([1., 1., -1.], device=means.device).reshape(1, 1, 3)
+    d = (M[..., 2, :] * M[..., 2, :] * test).sum(dim=-1, keepdim=True)  # [C, N, 1]
+    valid = torch.abs(d) > eps
+    f = torch.where(valid, test / d, torch.zeros_like(test)).unsqueeze(-2)  # (C, N, 1, 3)
+    means2d = (M[..., :2, :] * M[..., 2:3, :] * f).sum(dim=-1)  # [C, N, 2]
+    extents = torch.sqrt(means2d ** 2 - (M[..., :2, :] * M[..., :2, :] * f).sum(dim=-1))  # [C, N, 2]
+
+    depths = means_c[..., 2]  # [C, N]
+    radius = torch.ceil(3.0 * torch.max(extents, dim=-1).values)  # (C, N)
+
+    valid = valid.squeeze(-1) & (depths > near_plane) & (depths < far_plane)
+    radius[~valid] = 0.0
+
+    inside = (
+        (means2d[..., 0] + radius > 0)
+        & (means2d[..., 0] - radius < width)
+        & (means2d[..., 1] + radius > 0)
+        & (means2d[..., 1] - radius < height)
+    )
+    radius[~inside] = 0.0
+    radii = radius.int()
+    return radii, means2d, depths, M
 
 
 @torch.no_grad()
