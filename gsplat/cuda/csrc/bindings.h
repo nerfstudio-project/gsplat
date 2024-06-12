@@ -69,15 +69,16 @@ world_to_cam_bwd_tensor(const torch::Tensor &means,                    // [N, 3]
                         const bool viewmats_requires_grad);
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-fully_fused_projection_fwd_tensor(const torch::Tensor &means,                // [N, 3]
-                      const at::optional<torch::Tensor> &covars, // [N, 6] optional
-                      const at::optional<torch::Tensor> &quats,  // [N, 4] optional
-                      const at::optional<torch::Tensor> &scales, // [N, 3] optional
-                      const torch::Tensor &viewmats,             // [C, 4, 4]
-                      const torch::Tensor &Ks,                   // [C, 3, 3]
-                      const uint32_t image_width, const uint32_t image_height, const float eps2d,
-                      const float near_plane, const float far_plane,
-                      const float radius_clip, const bool calc_compensations);
+fully_fused_projection_fwd_tensor(
+    const torch::Tensor &means,                // [N, 3]
+    const at::optional<torch::Tensor> &covars, // [N, 6] optional
+    const at::optional<torch::Tensor> &quats,  // [N, 4] optional
+    const at::optional<torch::Tensor> &scales, // [N, 3] optional
+    const torch::Tensor &viewmats,             // [C, 4, 4]
+    const torch::Tensor &Ks,                   // [C, 3, 3]
+    const uint32_t image_width, const uint32_t image_height, const float eps2d,
+    const float near_plane, const float far_plane, const float radius_clip,
+    const bool calc_compensations);
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fully_fused_projection_bwd_tensor(
@@ -101,13 +102,14 @@ fully_fused_projection_bwd_tensor(
     const bool viewmats_requires_grad);
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-isect_tiles_tensor(const torch::Tensor &means2d,                // [C, N, 2] or [nnz, 2]
-                   const torch::Tensor &radii,                  // [C, N] or [nnz]
-                   const torch::Tensor &depths,                 // [C, N] or [nnz]
-                   const at::optional<torch::Tensor> &camera_ids, // [nnz]
+isect_tiles_tensor(const torch::Tensor &means2d, // [C, N, 2] or [nnz, 2]
+                   const torch::Tensor &radii,   // [C, N] or [nnz]
+                   const torch::Tensor &depths,  // [C, N] or [nnz]
+                   const at::optional<torch::Tensor> &camera_ids,   // [nnz]
                    const at::optional<torch::Tensor> &gaussian_ids, // [nnz]
-                   const uint32_t C, const uint32_t tile_size, const uint32_t tile_width,
-                   const uint32_t tile_height, const bool sort, const bool double_buffer);
+                   const uint32_t C, const uint32_t tile_size,
+                   const uint32_t tile_width, const uint32_t tile_height,
+                   const bool sort, const bool double_buffer);
 
 torch::Tensor isect_offset_encode_tensor(const torch::Tensor &isect_ids, // [n_isects]
                                          const uint32_t C, const uint32_t tile_width,
@@ -124,7 +126,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
-    const torch::Tensor &flatten_ids     // [n_isects]
+    const torch::Tensor &flatten_ids   // [n_isects]
 );
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
@@ -139,7 +141,7 @@ rasterize_to_pixels_bwd_tensor(
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
-    const torch::Tensor &flatten_ids,    // [n_isects]
+    const torch::Tensor &flatten_ids,  // [n_isects]
     // forward outputs
     const torch::Tensor &render_alphas, // [C, image_height, image_width, 1]
     const torch::Tensor &last_ids,      // [C, image_height, image_width]
@@ -150,7 +152,7 @@ rasterize_to_pixels_bwd_tensor(
     bool absgrad);
 
 std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
-    const uint32_t range_start, const uint32_t range_end,   // iteration steps
+    const uint32_t range_start, const uint32_t range_end, // iteration steps
     const torch::Tensor transmittances, // [C, image_height, image_width]
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2]
@@ -160,7 +162,7 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
-    const torch::Tensor &flatten_ids     // [n_isects]
+    const torch::Tensor &flatten_ids   // [n_isects]
 );
 
 torch::Tensor compute_sh_fwd_tensor(const uint32_t degrees_to_use,
@@ -181,30 +183,31 @@ compute_sh_bwd_tensor(const uint32_t K, const uint32_t degrees_to_use,
  ****************************************************************************************/
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
            torch::Tensor, torch::Tensor, torch::Tensor>
-fully_fused_projection_packed_fwd_tensor(const torch::Tensor &means,                // [N, 3]
-                             const at::optional<torch::Tensor> &covars, // [N, 6]
-                             const at::optional<torch::Tensor> &quats,  // [N, 3]
-                             const at::optional<torch::Tensor> &scales, // [N, 3]
-                             const torch::Tensor &viewmats,             // [C, 4, 4]
-                             const torch::Tensor &Ks,                   // [C, 3, 3]
-                             const uint32_t image_width, const uint32_t image_height,
-                             const float eps2d, const float near_plane,
-                             const float far_plane, const float radius_clip,
-                             const bool calc_compensations);
+fully_fused_projection_packed_fwd_tensor(
+    const torch::Tensor &means,                // [B, N, 3]
+    const at::optional<torch::Tensor> &covars, // [B, N, 6]
+    const at::optional<torch::Tensor> &quats,  // [B, N, 3]
+    const at::optional<torch::Tensor> &scales, // [B, N, 3]
+    const torch::Tensor &viewmats,             // [B, C, 4, 4]
+    const torch::Tensor &Ks,                   // [B, C, 3, 3]
+    const uint32_t image_width, const uint32_t image_height, const float eps2d,
+    const float near_plane, const float far_plane, const float radius_clip,
+    const bool calc_compensations);
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fully_fused_projection_packed_bwd_tensor(
     // fwd inputs
-    const torch::Tensor &means,                // [N, 3]
-    const at::optional<torch::Tensor> &covars, // [N, 6]
-    const at::optional<torch::Tensor> &quats,  // [N, 4]
-    const at::optional<torch::Tensor> &scales, // [N, 3]
-    const torch::Tensor &viewmats,             // [C, 4, 4]
-    const torch::Tensor &Ks,                   // [C, 3, 3]
+    const torch::Tensor &means,                // [B, N, 3]
+    const at::optional<torch::Tensor> &covars, // [B, N, 6]
+    const at::optional<torch::Tensor> &quats,  // [B, N, 4]
+    const at::optional<torch::Tensor> &scales, // [B, N, 3]
+    const torch::Tensor &viewmats,             // [B, C, 4, 4]
+    const torch::Tensor &Ks,                   // [B, C, 3, 3]
     const uint32_t image_width, const uint32_t image_height, const float eps2d,
     // fwd outputs
-    const torch::Tensor &camera_ids,                    // [nnz]
-    const torch::Tensor &gaussian_ids,                    // [nnz]
+    const torch::Tensor &batch_ids,                   // [nnz]
+    const torch::Tensor &camera_ids,                  // [nnz]
+    const torch::Tensor &gaussian_ids,                // [nnz]
     const torch::Tensor &conics,                      // [nnz, 3]
     const at::optional<torch::Tensor> &compensations, // [nnz] optional
     // grad outputs

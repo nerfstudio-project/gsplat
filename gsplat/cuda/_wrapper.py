@@ -244,12 +244,12 @@ def fully_fused_projection(
     Ks = Ks.contiguous()
     if packed:
         return _FullyFusedProjectionPacked.apply(
-            means[0],
-            covars[0],
-            quats[0],
-            scales[0],
-            viewmats[0],
-            Ks[0],
+            means,
+            covars,
+            quats,
+            scales,
+            viewmats,
+            Ks,
             width,
             height,
             eps2d,
@@ -916,12 +916,12 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        means: Tensor,  # [N, 3]
-        covars: Tensor,  # [N, 6] or None
-        quats: Tensor,  # [N, 4] or None
-        scales: Tensor,  # [N, 3] or None
-        viewmats: Tensor,  # [C, 4, 4]
-        Ks: Tensor,  # [C, 3, 3]
+        means: Tensor,  # [B, N, 3]
+        covars: Tensor,  # [B, N, 6] or None
+        quats: Tensor,  # [B, N, 4] or None
+        scales: Tensor,  # [B, N, 3] or None
+        viewmats: Tensor,  # [B, C, 4, 4]
+        Ks: Tensor,  # [B, C, 3, 3]
         width: int,
         height: int,
         eps2d: float,
@@ -930,9 +930,9 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         radius_clip: float,
         sparse_grad: bool,
         calc_compensations: bool,
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    ):
         (
-            indptr,
+            batch_ids,
             camera_ids,
             gaussian_ids,
             radii,
@@ -958,6 +958,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         if not calc_compensations:
             compensations = None
         ctx.save_for_backward(
+            batch_ids,
             camera_ids,
             gaussian_ids,
             means,
@@ -974,11 +975,21 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         ctx.eps2d = eps2d
         ctx.sparse_grad = sparse_grad
 
-        return camera_ids, gaussian_ids, radii, means2d, depths, conics, compensations
+        return (
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            radii,
+            means2d,
+            depths,
+            conics,
+            compensations,
+        )
 
     @staticmethod
     def backward(
         ctx,
+        v_batch_ids,
         v_camera_ids,
         v_gaussian_ids,
         v_radii,
@@ -988,6 +999,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         v_compensations,
     ):
         (
+            batch_ids,
             camera_ids,
             gaussian_ids,
             means,
@@ -1018,6 +1030,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             width,
             height,
             eps2d,
+            batch_ids,
             camera_ids,
             gaussian_ids,
             conics,
@@ -1039,40 +1052,40 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
                 # the tensor but this requires the tensor to be leaf node only. And
                 # a customized optimizer would be needed in this case.
                 v_means = torch.sparse_coo_tensor(
-                    indices=gaussian_ids[None],  # [1, nnz]
+                    indices=torch.stack([batch_ids, gaussian_ids]),
                     values=v_means,  # [nnz, 3]
                     size=means.size(),  # [N, 3]
-                    is_coalesced=len(viewmats) == 1,
+                    is_coalesced=viewmats.shape[1] == 1,
                 )
         if not ctx.needs_input_grad[1]:
             v_covars = None
         else:
             if sparse_grad:
                 v_covars = torch.sparse_coo_tensor(
-                    indices=gaussian_ids[None],  # [1, nnz]
+                    indices=torch.stack([batch_ids, gaussian_ids]),
                     values=v_covars,  # [nnz, 6]
                     size=covars.size(),  # [N, 6]
-                    is_coalesced=len(viewmats) == 1,
+                    is_coalesced=viewmats.shape[1] == 1,
                 )
         if not ctx.needs_input_grad[2]:
             v_quats = None
         else:
             if sparse_grad:
                 v_quats = torch.sparse_coo_tensor(
-                    indices=gaussian_ids[None],  # [1, nnz]
+                    indices=torch.stack([batch_ids, gaussian_ids]),
                     values=v_quats,  # [nnz, 4]
                     size=quats.size(),  # [N, 4]
-                    is_coalesced=len(viewmats) == 1,
+                    is_coalesced=viewmats.shape[1] == 1,
                 )
         if not ctx.needs_input_grad[3]:
             v_scales = None
         else:
             if sparse_grad:
                 v_scales = torch.sparse_coo_tensor(
-                    indices=gaussian_ids[None],  # [1, nnz]
+                    indices=torch.stack([batch_ids, gaussian_ids]),
                     values=v_scales,  # [nnz, 3]
                     size=scales.size(),  # [N, 3]
-                    is_coalesced=len(viewmats) == 1,
+                    is_coalesced=viewmats.shape[1] == 1,
                 )
         if not ctx.needs_input_grad[4]:
             v_viewmats = None

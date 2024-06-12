@@ -163,7 +163,7 @@ def test_persp_proj(test_data):
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("fused", [False, True])
 @pytest.mark.parametrize("calc_compensations", [False, True])
-def test_projection(test_data, fused: bool, calc_compensations: bool):
+def test_fully_fused_projection(test_data, fused: bool, calc_compensations: bool):
     from gsplat.cuda._torch_impl import _fully_fused_projection
     from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci
 
@@ -268,13 +268,14 @@ def test_fully_fused_projection_packed(
 
     torch.manual_seed(42)
 
-    Ks = test_data["Ks"]
-    viewmats = test_data["viewmats"]
+    # batch size of 2
+    Ks = test_data["Ks"].expand(2, -1, -1, -1)
+    viewmats = test_data["viewmats"].expand(2, -1, -1, -1)
     height = test_data["height"]
     width = test_data["width"]
-    quats = test_data["quats"]
-    scales = test_data["scales"]
-    means = test_data["means"]
+    quats = test_data["quats"].expand(2, -1, -1)
+    scales = test_data["scales"].expand(2, -1, -1)
+    means = test_data["means"].expand(2, -1, -1)
     viewmats.requires_grad = True
     quats.requires_grad = True
     scales.requires_grad = True
@@ -283,6 +284,7 @@ def test_fully_fused_projection_packed(
     # forward
     if fused:
         (
+            batch_ids,
             camera_ids,
             gaussian_ids,
             radii,
@@ -316,8 +318,9 @@ def test_fully_fused_projection_packed(
             calc_compensations=calc_compensations,
         )
     else:
-        covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [N, 6]
+        covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [B, N, 6]
         (
+            batch_ids,
             camera_ids,
             gaussian_ids,
             radii,
@@ -352,21 +355,14 @@ def test_fully_fused_projection_packed(
         )
 
     # recover packed tensors to full matrices for testing
-    __radii = torch.sparse_coo_tensor(
-        torch.stack([camera_ids, gaussian_ids]), radii, _radii.shape
-    ).to_dense()
-    __means2d = torch.sparse_coo_tensor(
-        torch.stack([camera_ids, gaussian_ids]), means2d, _means2d.shape
-    ).to_dense()
-    __depths = torch.sparse_coo_tensor(
-        torch.stack([camera_ids, gaussian_ids]), depths, _depths.shape
-    ).to_dense()
-    __conics = torch.sparse_coo_tensor(
-        torch.stack([camera_ids, gaussian_ids]), conics, _conics.shape
-    ).to_dense()
+    indices = torch.stack([batch_ids, camera_ids, gaussian_ids])
+    __radii = torch.sparse_coo_tensor(indices, radii, _radii.shape).to_dense()
+    __means2d = torch.sparse_coo_tensor(indices, means2d, _means2d.shape).to_dense()
+    __depths = torch.sparse_coo_tensor(indices, depths, _depths.shape).to_dense()
+    __conics = torch.sparse_coo_tensor(indices, conics, _conics.shape).to_dense()
     if calc_compensations:
         __compensations = torch.sparse_coo_tensor(
-            torch.stack([camera_ids, gaussian_ids]), compensations, _compensations.shape
+            indices, compensations, _compensations.shape
         ).to_dense()
     sel = (__radii > 0) & (_radii > 0)
     torch.testing.assert_close(__radii[sel], _radii[sel], rtol=0, atol=1)
