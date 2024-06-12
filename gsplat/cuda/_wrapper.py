@@ -44,8 +44,8 @@ def spherical_harmonics(
 
 
 def quat_scale_to_covar_preci(
-    quats: Tensor,  # [N, 4],
-    scales: Tensor,  # [N, 3],
+    quats: Tensor,  # [..., 4],
+    scales: Tensor,  # [..., 3],
     compute_covar: bool = True,
     compute_preci: bool = True,
     triu: bool = False,
@@ -53,8 +53,8 @@ def quat_scale_to_covar_preci(
     """Converts quaternions and scales to covariance and precision matrices.
 
     Args:
-        quats: Quaternions (No need to be normalized). [N, 4]
-        scales: Scales. [N, 3]
+        quats: Quaternions (No need to be normalized). [..., 4]
+        scales: Scales. [..., 3]
         compute_covar: Whether to compute covariance matrices. Default: True. If False,
             the returned covariance matrices will be None.
         compute_preci: Whether to compute precision matrices. Default: True. If False,
@@ -64,11 +64,12 @@ def quat_scale_to_covar_preci(
     Returns:
         A tuple:
 
-        - **Covariance matrices**. If `triu` is True the returned shape is [N, 6], otherwise [N, 3, 3].
-        - **Precision matrices**. If `triu` is True the returned shape is [N, 6], otherwise [N, 3, 3].
+        - **Covariance matrices**. If `triu` is True the returned shape is [..., 6], otherwise [..., 3, 3].
+        - **Precision matrices**. If `triu` is True the returned shape is [..., 6], otherwise [..., 3, 3].
     """
-    assert quats.dim() == 2 and quats.size(1) == 4, quats.size()
-    assert scales.dim() == 2 and scales.size(1) == 3, scales.size()
+    assert quats.shape[:-1] == scales.shape[:-1], (quats.shape, scales.shape)
+    assert quats.shape[-1] == 4, quats.shape
+    assert scales.shape[-1] == 3, scales.shape
     quats = quats.contiguous()
     scales = scales.contiguous()
     covars, precis = _QuatScaleToCovarPreci.apply(

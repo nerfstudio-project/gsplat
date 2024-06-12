@@ -52,8 +52,9 @@ def test_quat_scale_to_covar_preci(test_data, triu: bool):
 
     torch.manual_seed(42)
 
-    quats = test_data["quats"]
-    scales = test_data["scales"]
+    # batch size of 2
+    quats = test_data["quats"].expand(2, -1, -1)
+    scales = test_data["scales"].expand(2, -1, -1)
     quats.requires_grad = True
     scales.requires_grad = True
 

@@ -152,29 +152,42 @@ __global__ void quat_scale_to_covar_preci_bwd_kernel(
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
-quat_scale_to_covar_preci_fwd_tensor(const torch::Tensor &quats,  // [N, 4]
-                                     const torch::Tensor &scales, // [N, 3]
+quat_scale_to_covar_preci_fwd_tensor(const torch::Tensor &quats,  // [..., 4]
+                                     const torch::Tensor &scales, // [..., 3]
                                      const bool compute_covar, const bool compute_preci,
                                      const bool triu) {
     DEVICE_GUARD(quats);
     CHECK_INPUT(quats);
     CHECK_INPUT(scales);
 
-    uint32_t N = quats.size(0);
+    uint32_t N = quats.numel() / 4;
+
+    auto batch_shape = quats.sizes().vec();
+    batch_shape.pop_back();
 
     torch::Tensor covars, precis;
     if (compute_covar) {
         if (triu) {
-            covars = torch::empty({N, 6}, quats.options());
+            auto shape = batch_shape;
+            shape.push_back(6); // [..., 6]
+            covars = torch::empty(shape, quats.options());
         } else {
-            covars = torch::empty({N, 3, 3}, quats.options());
+            auto shape = batch_shape;
+            shape.push_back(3);
+            shape.push_back(3); // [..., 3, 3]
+            covars = torch::empty(shape, quats.options());
         }
     }
     if (compute_preci) {
         if (triu) {
-            precis = torch::empty({N, 6}, quats.options());
+            auto shape = batch_shape;
+            shape.push_back(6); // [..., 6]
+            precis = torch::empty(shape, quats.options());
         } else {
-            precis = torch::empty({N, 3, 3}, quats.options());
+            auto shape = batch_shape;
+            shape.push_back(3);
+            shape.push_back(3); // [..., 3, 3]
+            precis = torch::empty(shape, quats.options());
         }
     }
 
@@ -190,10 +203,10 @@ quat_scale_to_covar_preci_fwd_tensor(const torch::Tensor &quats,  // [N, 4]
 }
 
 std::tuple<torch::Tensor, torch::Tensor> quat_scale_to_covar_preci_bwd_tensor(
-    const torch::Tensor &quats,                  // [N, 4]
-    const torch::Tensor &scales,                 // [N, 3]
-    const at::optional<torch::Tensor> &v_covars, // [N, 3, 3] or [N, 6]
-    const at::optional<torch::Tensor> &v_precis, // [N, 3, 3] or [N, 6]
+    const torch::Tensor &quats,                  // [..., 4]
+    const torch::Tensor &scales,                 // [..., 3]
+    const at::optional<torch::Tensor> &v_covars, // [..., 3, 3] or [..., 6]
+    const at::optional<torch::Tensor> &v_precis, // [..., 3, 3] or [..., 6]
     const bool triu) {
     DEVICE_GUARD(quats);
     CHECK_INPUT(quats);
@@ -205,7 +218,7 @@ std::tuple<torch::Tensor, torch::Tensor> quat_scale_to_covar_preci_bwd_tensor(
         CHECK_INPUT(v_precis.value());
     }
 
-    uint32_t N = quats.size(0);
+    uint32_t N = quats.numel() / 4;
 
     torch::Tensor v_scales = torch::empty_like(scales);
     torch::Tensor v_quats = torch::empty_like(quats);
