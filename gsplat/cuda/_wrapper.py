@@ -111,28 +111,29 @@ def persp_proj(
 
 
 def world_to_cam(
-    means: Tensor,  # [N, 3]
-    covars: Tensor,  # [N, 3, 3]
-    viewmats: Tensor,  # [C, 4, 4]
+    means: Tensor,  # [B, N, 3]
+    covars: Tensor,  # [B, N, 3, 3]
+    viewmats: Tensor,  # [B, C, 4, 4]
 ) -> Tuple[Tensor, Tensor]:
     """Transforms Gaussians from world to camera coordinate system.
 
     Args:
-        means: Gaussian means. [N, 3]
-        covars: Gaussian covariances. [N, 3, 3]
-        viewmats: World-to-camera transformation matrices. [C, 4, 4]
+        means: Gaussian means. [B, N, 3]
+        covars: Gaussian covariances. [B, N, 3, 3]
+        viewmats: World-to-camera transformation matrices. [B, C, 4, 4]
 
     Returns:
         A tuple:
 
-        - **Gaussian means in camera coordinate system**. [C, N, 3]
-        - **Gaussian covariances in camera coordinate system**. [C, N, 3, 3]
+        - **Gaussian means in camera coordinate system**. [B, C, N, 3]
+        - **Gaussian covariances in camera coordinate system**. [B, C, N, 3, 3]
     """
-    C = viewmats.size(0)
-    N = means.size(0)
-    assert means.size() == (N, 3), means.size()
-    assert covars.size() == (N, 3, 3), covars.size()
-    assert viewmats.size() == (C, 4, 4), viewmats.size()
+    B = means.size(0)
+    C = viewmats.size(1)
+    N = means.size(1)
+    assert means.size() == (B, N, 3), means.size()
+    assert covars.size() == (B, N, 3, 3), covars.size()
+    assert viewmats.size() == (B, C, 4, 4), viewmats.size()
     means = means.contiguous()
     covars = covars.contiguous()
     viewmats = viewmats.contiguous()
@@ -637,9 +638,9 @@ class _WorldToCam(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        means: Tensor,  # [N, 3]
-        covars: Tensor,  # [N, 3, 3]
-        viewmats: Tensor,  # [C, 4, 4]
+        means: Tensor,  # [B, N, 3]
+        covars: Tensor,  # [B, N, 3, 3]
+        viewmats: Tensor,  # [B, C, 4, 4]
     ) -> Tuple[Tensor, Tensor]:
         means_c, covars_c = _make_lazy_cuda_func("world_to_cam_fwd")(
             means, covars, viewmats

@@ -91,10 +91,11 @@ def test_world_to_cam(test_data):
 
     torch.manual_seed(42)
 
-    viewmats = test_data["viewmats"]
-    means = test_data["means"]
-    scales = test_data["scales"]
-    quats = test_data["quats"]
+    # batch size of 2
+    viewmats = test_data["viewmats"].expand(2, -1, -1, -1)
+    means = test_data["means"].expand(2, -1, -1)
+    scales = test_data["scales"].expand(2, -1, -1)
+    quats = test_data["quats"].expand(2, -1, -1)
     covars, _ = quat_scale_to_covar_preci(quats, scales)
     means.requires_grad = True
     covars.requires_grad = True

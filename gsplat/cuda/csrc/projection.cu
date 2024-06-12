@@ -396,24 +396,27 @@ persp_proj_bwd_tensor(const torch::Tensor &means,  // [C, N, 3]
  * World to Camera Transformation
  ****************************************************************************/
 
-__global__ void world_to_cam_fwd_kernel(const uint32_t C, const uint32_t N,
-                                        const float *__restrict__ means,    // [N, 3]
-                                        const float *__restrict__ covars,   // [N, 3, 3]
-                                        const float *__restrict__ viewmats, // [C, 4, 4]
-                                        float *__restrict__ means_c,        // [C, N, 3]
-                                        float *__restrict__ covars_c // [C, N, 3, 3]
-) { // parallelize over C * N.
+__global__ void
+world_to_cam_fwd_kernel(const uint32_t B, const uint32_t C, const uint32_t N,
+                        const float *__restrict__ means,    // [B, N, 3]
+                        const float *__restrict__ covars,   // [B, N, 3, 3]
+                        const float *__restrict__ viewmats, // [B, C, 4, 4]
+                        float *__restrict__ means_c,        // [B, C, N, 3]
+                        float *__restrict__ covars_c        // [B, C, N, 3, 3]
+) {
+    // parallelize over B * C * N.
     uint32_t idx = cg::this_grid().thread_rank();
-    if (idx >= C * N) {
+    if (idx >= B * C * N) {
         return;
     }
-    const uint32_t cid = idx / N; // camera id
-    const uint32_t gid = idx % N; // gaussian id
+    const uint32_t bid = idx / (C * N); // batch id
+    const uint32_t cid = idx / N % C;   // camera id
+    const uint32_t gid = idx % N;       // gaussian id
 
     // shift pointers to the current camera and gaussian
-    means += gid * 3;
-    covars += gid * 9;
-    viewmats += cid * 16;
+    means += gid * 3 + bid * N * 3;
+    covars += gid * 9 + bid * N * 9;
+    viewmats += cid * 16 + bid * C * 16;
 
     // glm is column-major but input is row-major
     glm::mat3 R = glm::mat3(viewmats[0], viewmats[4], viewmats[8], // 1st column
@@ -448,28 +451,29 @@ __global__ void world_to_cam_fwd_kernel(const uint32_t C, const uint32_t N,
 }
 
 __global__ void
-world_to_cam_bwd_kernel(const uint32_t C, const uint32_t N,
-                        const float *__restrict__ means,      // [N, 3]
-                        const float *__restrict__ covars,     // [N, 3, 3]
-                        const float *__restrict__ viewmats,   // [C, 4, 4]
-                        const float *__restrict__ v_means_c,  // [C, N, 3]
-                        const float *__restrict__ v_covars_c, // [C, N, 3, 3]
-                        float *__restrict__ v_means,          // [N, 3]
-                        float *__restrict__ v_covars,         // [N, 3, 3]
-                        float *__restrict__ v_viewmats        // [C, 4, 4]
+world_to_cam_bwd_kernel(const uint32_t B, const uint32_t C, const uint32_t N,
+                        const float *__restrict__ means,      // [B, N, 3]
+                        const float *__restrict__ covars,     // [B, N, 3, 3]
+                        const float *__restrict__ viewmats,   // [B, C, 4, 4]
+                        const float *__restrict__ v_means_c,  // [B, C, N, 3]
+                        const float *__restrict__ v_covars_c, // [B, C, N, 3, 3]
+                        float *__restrict__ v_means,          // [B, N, 3]
+                        float *__restrict__ v_covars,         // [B, N, 3, 3]
+                        float *__restrict__ v_viewmats        // [B, C, 4, 4]
 ) {
-    // parallelize over C * N.
+    // parallelize over B * C * N.
     uint32_t idx = cg::this_grid().thread_rank();
-    if (idx >= C * N) {
+    if (idx >= B * C * N) {
         return;
     }
-    const uint32_t cid = idx / N; // camera id
-    const uint32_t gid = idx % N; // gaussian id
+    const uint32_t bid = idx / (C * N); // batch id
+    const uint32_t cid = idx / N % C;   // camera id
+    const uint32_t gid = idx % N;       // gaussian id
 
     // shift pointers to the current camera and gaussian
-    means += gid * 3;
-    covars += gid * 9;
-    viewmats += cid * 16;
+    means += gid * 3 + bid * N * 3;
+    covars += gid * 9 + bid * N * 9;
+    viewmats += cid * 16 + bid * C * 16;
 
     // glm is column-major but input is row-major
     glm::mat3 R = glm::mat3(viewmats[0], viewmats[4], viewmats[8], // 1st column
@@ -494,12 +498,13 @@ world_to_cam_bwd_kernel(const uint32_t C, const uint32_t N,
 
     // #if __CUDA_ARCH__ >= 700
     // write out results with warp-level reduction
+    // TODO: this is problematic when N < 32!! should fix it on main?
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
     auto warp_group_g = cg::labeled_partition(warp, gid);
     if (v_means != nullptr) {
         warpSum(v_mean, warp_group_g);
         if (warp_group_g.thread_rank() == 0) {
-            v_means += gid * 3;
+            v_means += gid * 3 + bid * N * 3;
             PRAGMA_UNROLL
             for (uint32_t i = 0; i < 3; i++) {
                 atomicAdd(v_means + i, v_mean[i]);
@@ -509,7 +514,7 @@ world_to_cam_bwd_kernel(const uint32_t C, const uint32_t N,
     if (v_covars != nullptr) {
         warpSum(v_covar, warp_group_g);
         if (warp_group_g.thread_rank() == 0) {
-            v_covars += gid * 9;
+            v_covars += gid * 9 + bid * N * 9;
             PRAGMA_UNROLL
             for (uint32_t i = 0; i < 3; i++) { // rows
                 PRAGMA_UNROLL
@@ -524,7 +529,7 @@ world_to_cam_bwd_kernel(const uint32_t C, const uint32_t N,
         warpSum(v_R, warp_group_c);
         warpSum(v_t, warp_group_c);
         if (warp_group_c.thread_rank() == 0) {
-            v_viewmats += cid * 16;
+            v_viewmats += cid * 16 + bid * C * 16;
             PRAGMA_UNROLL
             for (uint32_t i = 0; i < 3; i++) { // rows
                 PRAGMA_UNROLL
@@ -538,40 +543,41 @@ world_to_cam_bwd_kernel(const uint32_t C, const uint32_t N,
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
-world_to_cam_fwd_tensor(const torch::Tensor &means,   // [N, 3]
-                        const torch::Tensor &covars,  // [N, 3, 3]
-                        const torch::Tensor &viewmats // [C, 4, 4]
+world_to_cam_fwd_tensor(const torch::Tensor &means,   // [B, N, 3]
+                        const torch::Tensor &covars,  // [B, N, 3, 3]
+                        const torch::Tensor &viewmats // [B, C, 4, 4]
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
     CHECK_INPUT(covars);
     CHECK_INPUT(viewmats);
 
-    uint32_t N = means.size(0);
-    uint32_t C = viewmats.size(0);
+    uint32_t B = means.size(0);
+    uint32_t N = means.size(1);
+    uint32_t C = viewmats.size(1);
 
-    torch::Tensor means_c = torch::empty({C, N, 3}, means.options());
-    torch::Tensor covars_c = torch::empty({C, N, 3, 3}, means.options());
+    torch::Tensor means_c = torch::empty({B, C, N, 3}, means.options());
+    torch::Tensor covars_c = torch::empty({B, C, N, 3, 3}, means.options());
 
     if (C && N) {
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
-        world_to_cam_fwd_kernel<<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
+        world_to_cam_fwd_kernel<<<(B * C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
                                   stream>>>(
-            C, N, means.data_ptr<float>(), covars.data_ptr<float>(),
+            B, C, N, means.data_ptr<float>(), covars.data_ptr<float>(),
             viewmats.data_ptr<float>(), means_c.data_ptr<float>(),
             covars_c.data_ptr<float>());
     }
     return std::make_tuple(means_c, covars_c);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-world_to_cam_bwd_tensor(const torch::Tensor &means,                    // [N, 3]
-                        const torch::Tensor &covars,                   // [N, 3, 3]
-                        const torch::Tensor &viewmats,                 // [C, 4, 4]
-                        const at::optional<torch::Tensor> &v_means_c,  // [C, N, 3]
-                        const at::optional<torch::Tensor> &v_covars_c, // [C, N, 3, 3]
-                        const bool means_requires_grad, const bool covars_requires_grad,
-                        const bool viewmats_requires_grad) {
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> world_to_cam_bwd_tensor(
+    const torch::Tensor &means,                    // [B, N, 3]
+    const torch::Tensor &covars,                   // [B, N, 3, 3]
+    const torch::Tensor &viewmats,                 // [B, C, 4, 4]
+    const at::optional<torch::Tensor> &v_means_c,  // [B, C, N, 3]
+    const at::optional<torch::Tensor> &v_covars_c, // [B, C, N, 3, 3]
+    const bool means_requires_grad, const bool covars_requires_grad,
+    const bool viewmats_requires_grad) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
     CHECK_INPUT(covars);
@@ -582,25 +588,27 @@ world_to_cam_bwd_tensor(const torch::Tensor &means,                    // [N, 3]
     if (v_covars_c.has_value()) {
         CHECK_INPUT(v_covars_c.value());
     }
-    uint32_t N = means.size(0);
-    uint32_t C = viewmats.size(0);
+
+    uint32_t B = means.size(0);
+    uint32_t N = means.size(1);
+    uint32_t C = viewmats.size(1);
 
     torch::Tensor v_means, v_covars, v_viewmats;
     if (means_requires_grad) {
-        v_means = torch::zeros({N, 3}, means.options());
+        v_means = torch::zeros_like(means);
     }
     if (covars_requires_grad) {
-        v_covars = torch::zeros({N, 3, 3}, means.options());
+        v_covars = torch::zeros_like(covars);
     }
     if (viewmats_requires_grad) {
-        v_viewmats = torch::zeros({C, 4, 4}, means.options());
+        v_viewmats = torch::zeros_like(viewmats);
     }
 
-    if (C && N) {
+    if (B && C && N) {
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
-        world_to_cam_bwd_kernel<<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
+        world_to_cam_bwd_kernel<<<(B * C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
                                   stream>>>(
-            C, N, means.data_ptr<float>(), covars.data_ptr<float>(),
+            B, C, N, means.data_ptr<float>(), covars.data_ptr<float>(),
             viewmats.data_ptr<float>(),
             v_means_c.has_value() ? v_means_c.value().data_ptr<float>() : nullptr,
             v_covars_c.has_value() ? v_covars_c.value().data_ptr<float>() : nullptr,

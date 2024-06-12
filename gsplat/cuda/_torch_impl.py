@@ -103,27 +103,27 @@ def _persp_proj(
 
 
 def _world_to_cam(
-    means: Tensor,  # [N, 3]
-    covars: Tensor,  # [N, 3, 3]
-    viewmats: Tensor,  # [C, 4, 4]
+    means: Tensor,  # [B, N, 3]
+    covars: Tensor,  # [B, N, 3, 3]
+    viewmats: Tensor,  # [B, C, 4, 4]
 ) -> Tuple[Tensor, Tensor]:
     """PyTorch implementation of world to camera transformation on Gaussians.
 
     Args:
-        means: Gaussian means in world coordinate system. [C, N, 3].
-        covars: Gaussian covariances in world coordinate system. [C, N, 3, 3].
-        viewmats: world to camera transformation matrices. [C, 4, 4].
+        means: Gaussian means in world coordinate system. [B, C, N, 3].
+        covars: Gaussian covariances in world coordinate system. [B, C, N, 3, 3].
+        viewmats: world to camera transformation matrices. [B, C, 4, 4].
 
     Returns:
         A tuple:
 
-        - **means_c**: Gaussian means in camera coordinate system. [C, N, 3].
-        - **covars_c**: Gaussian covariances in camera coordinate system. [C, N, 3, 3].
+        - **means_c**: Gaussian means in camera coordinate system. [B, C, N, 3].
+        - **covars_c**: Gaussian covariances in camera coordinate system. [B, C, N, 3, 3].
     """
-    R = viewmats[:, :3, :3]  # [C, 3, 3]
-    t = viewmats[:, :3, 3]  # [C, 3]
-    means_c = torch.einsum("cij,nj->cni", R, means) + t[:, None, :]  # (C, N, 3)
-    covars_c = torch.einsum("cij,njk,clk->cnil", R, covars, R)  # [C, N, 3, 3]
+    R = viewmats[:, :, :3, :3]  # [B, C, 3, 3]
+    t = viewmats[:, :, :3, 3]  # [B, C, 3]
+    means_c = torch.einsum("bcij,bnj->bcni", R, means) + t[:, :, None, :]  # [B, C, N, 3]
+    covars_c = torch.einsum("bcij,bnjk,bclk->bcnil", R, covars, R)  # [B, C, N, 3, 3]
     return means_c, covars_c
 
 
