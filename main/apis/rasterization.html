@@ -375,9 +375,9 @@ to a batch of images in one go, by simplly providing the batched <cite>viewmats<
 <div class="admonition note">
 <p class="admonition-title">Note</p>
 <p><strong>Support N-D Features</strong>: If <cite>sh_degree</cite> is None,
-the <cite>colors</cite> is expected to be with shape [N, D], in which D is the channel
-of the features to be rendered, up to 32 at the moment. If
-<cite>sh_degree</cite> is set, the <cite>colors</cite> is expected to be the SH coefficients with
+the <cite>colors</cite> is expected to be with shape [N, D], in which D is the channel of
+the features to be rendered. The computation is slow when D &gt; 32 at the moment.
+If <cite>sh_degree</cite> is set, the <cite>colors</cite> is expected to be the SH coefficients with
 shape [N, K, 3], where K is the number of SH bases. In this case, it is expected
 that <span class="math notranslate nohighlight">\((\textit{sh_degree} + 1) ^ 2 \leq K\)</span>, where <cite>sh_degree</cite> controls the
 activated bases in the SH coefficients.</p>
