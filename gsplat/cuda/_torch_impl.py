@@ -55,51 +55,49 @@ def _quat_scale_to_covar_preci(
 
 
 def _persp_proj(
-    means: Tensor,  # [C, N, 3]
-    covars: Tensor,  # [C, N, 3, 3]
-    Ks: Tensor,  # [C, 3, 3]
+    means: Tensor,  # [..., N, 3]
+    covars: Tensor,  # [..., N, 3, 3]
+    Ks: Tensor,  # [..., 3, 3]
     width: int,
     height: int,
 ) -> Tuple[Tensor, Tensor]:
     """PyTorch implementation of prespective projection for 3D Gaussians.
 
     Args:
-        means: Gaussian means in camera coordinate system. [C, N, 3].
-        covars: Gaussian covariances in camera coordinate system. [C, N, 3, 3].
-        Ks: Camera intrinsics. [C, 3, 3].
+        means: Gaussian means in camera coordinate system. [..., N, 3].
+        covars: Gaussian covariances in camera coordinate system. [..., N, 3, 3].
+        Ks: Camera intrinsics. [..., 3, 3].
         width: Image width.
         height: Image height.
 
     Returns:
         A tuple:
 
-        - **means2d**: Projected means. [C, N, 2].
-        - **cov2d**: Projected covariances. [C, N, 2, 2].
+        - **means2d**: Projected means. [..., N, 2].
+        - **cov2d**: Projected covariances. [..., N, 2, 2].
     """
-    C, N, _ = means.shape
+    tx, ty, tz = torch.unbind(means, dim=-1)  # [..., N]
+    tz2 = tz**2  # [..., N]
 
-    tx, ty, tz = torch.unbind(means, dim=-1)  # [C, N]
-    tz2 = tz**2  # [C, N]
-
-    fx = Ks[..., 0, 0, None]  # [C, 1]
-    fy = Ks[..., 1, 1, None]  # [C, 1]
-    tan_fovx = 0.5 * width / fx  # [C, 1]
-    tan_fovy = 0.5 * height / fy  # [C, 1]
+    fx = Ks[..., 0, 0, None]  # [..., 1]
+    fy = Ks[..., 1, 1, None]  # [..., 1]
+    tan_fovx = 0.5 * width / fx  # [..., 1]
+    tan_fovy = 0.5 * height / fy  # [..., 1]
 
     lim_x = 1.3 * tan_fovx
     lim_y = 1.3 * tan_fovy
     tx = tz * torch.clamp(tx / tz, min=-lim_x, max=lim_x)
     ty = tz * torch.clamp(ty / tz, min=-lim_y, max=lim_y)
 
-    O = torch.zeros((C, N), device=means.device, dtype=means.dtype)
+    O = torch.zeros(*means.shape[:-1], device=means.device, dtype=means.dtype)
     J = torch.stack(
         [fx / tz, O, -fx * tx / tz2, O, fy / tz, -fy * ty / tz2], dim=-1
-    ).reshape(C, N, 2, 3)
+    ).reshape(*means.shape[:-1], 2, 3)
 
     cov2d = torch.einsum("...ij,...jk,...kl->...il", J, covars, J.transpose(-1, -2))
-    means2d = torch.einsum("cij,cnj->cni", Ks[:, :2, :3], means)  # [C, N, 2]
-    means2d = means2d / tz[..., None]  # [C, N, 2]
-    return means2d, cov2d  # [C, N, 2], [C, N, 2, 2]
+    means2d = torch.einsum("...ij,...nj->...ni", Ks[..., :2, :3], means)  # [..., N, 2]
+    means2d = means2d / tz[..., None]  # [..., N, 2]
+    return means2d, cov2d  # [..., N, 2], [..., N, 2, 2]
 
 
 def _world_to_cam(
@@ -122,16 +120,18 @@ def _world_to_cam(
     """
     R = viewmats[:, :, :3, :3]  # [B, C, 3, 3]
     t = viewmats[:, :, :3, 3]  # [B, C, 3]
-    means_c = torch.einsum("bcij,bnj->bcni", R, means) + t[:, :, None, :]  # [B, C, N, 3]
+    means_c = (
+        torch.einsum("bcij,bnj->bcni", R, means) + t[:, :, None, :]
+    )  # [B, C, N, 3]
     covars_c = torch.einsum("bcij,bnjk,bclk->bcnil", R, covars, R)  # [B, C, N, 3, 3]
     return means_c, covars_c
 
 
 def _fully_fused_projection(
-    means: Tensor,  # [N, 3]
-    covars: Tensor,  # [N, 3, 3]
-    viewmats: Tensor,  # [C, 4, 4]
-    Ks: Tensor,  # [C, 3, 3]
+    means: Tensor,  # [B, N, 3]
+    covars: Tensor,  # [B, N, 3, 3]
+    viewmats: Tensor,  # [B, C, 4, 4]
+    Ks: Tensor,  # [B, C, 3, 3]
     width: int,
     height: int,
     eps2d: float = 0.3,
@@ -174,7 +174,7 @@ def _fully_fused_projection(
         dim=-1,
     )  # [C, N, 3]
 
-    depths = means_c[..., 2]  # [C, N]
+    depths = means_c[..., 2]  # (...,)
 
     b = (covars2d[..., 0, 0] + covars2d[..., 1, 1]) / 2  # (...,)
     v1 = b + torch.sqrt(torch.clamp(b**2 - det, min=0.01))  # (...,)

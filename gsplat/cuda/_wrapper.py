@@ -141,12 +141,12 @@ def world_to_cam(
 
 
 def fully_fused_projection(
-    means: Tensor,  # [N, 3]
-    covars: Optional[Tensor],  # [N, 6] or None
-    quats: Optional[Tensor],  # [N, 4] or None
-    scales: Optional[Tensor],  # [N, 3] or None
-    viewmats: Tensor,  # [C, 4, 4]
-    Ks: Tensor,  # [C, 3, 3]
+    means: Tensor,  # [B, N, 3]
+    covars: Optional[Tensor],  # [B, N, 6] or None
+    quats: Optional[Tensor],  # [B, N, 4] or None
+    scales: Optional[Tensor],  # [B, N, 3] or None
+    viewmats: Tensor,  # [B, C, 4, 4]
+    Ks: Tensor,  # [B, C, 3, 3]
     width: int,
     height: int,
     eps2d: float = 0.3,
@@ -181,12 +181,12 @@ def fully_fused_projection(
         {`quats`, `scales`} should be provided.
 
     Args:
-        means: Gaussian means. [N, 3]
-        covars: Gaussian covariances (flattened upper triangle). [N, 6] Optional.
-        quats: Quaternions (No need to be normalized). [N, 4] Optional.
-        scales: Scales. [N, 3] Optional.
-        viewmats: Camera-to-world matrices. [C, 4, 4]
-        Ks: Camera intrinsics. [C, 3, 3]
+        means: Gaussian means. [B, N, 3]
+        covars: Gaussian covariances (flattened upper triangle). [B, N, 6] Optional.
+        quats: Quaternions (No need to be normalized). [B, N, 4] Optional.
+        scales: Scales. [B, N, 3] Optional.
+        viewmats: Camera-to-world matrices. [B, C, 4, 4]
+        Ks: Camera intrinsics. [B, C, 3, 3]
         width: Image width.
         height: Image height.
         eps2d: A epsilon added to the 2D covariance for numerical stability. Default: 0.3.
@@ -214,26 +214,27 @@ def fully_fused_projection(
 
         If `packed` is False:
 
-        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N].
-        - **means**. Projected Gaussian means in 2D. [C, N, 2]
-        - **depths**. The z-depth of the projected Gaussians. [C, N]
-        - **conics**. Inverse of the projected covariances. Return the flattend upper triangle with [C, N, 3]
-        - **compensations**. The view-dependent opacity compensation factor. [C, N]
+        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [B, C, N].
+        - **means**. Projected Gaussian means in 2D. [B, C, N, 2]
+        - **depths**. The z-depth of the projected Gaussians. [B, C, N]
+        - **conics**. Inverse of the projected covariances. Return the flattend upper triangle with [B, C, N, 3]
+        - **compensations**. The view-dependent opacity compensation factor. [B, C, N]
     """
-    C = viewmats.size(0)
-    N = means.size(0)
-    assert means.size() == (N, 3), means.size()
-    assert viewmats.size() == (C, 4, 4), viewmats.size()
-    assert Ks.size() == (C, 3, 3), Ks.size()
+    B = means.size(0)
+    C = viewmats.size(1)
+    N = means.size(1)
+    assert means.size() == (B, N, 3), means.size()
+    assert viewmats.size() == (B, C, 4, 4), viewmats.size()
+    assert Ks.size() == (B, C, 3, 3), Ks.size()
     means = means.contiguous()
     if covars is not None:
-        assert covars.size() == (N, 6), covars.size()
+        assert covars.size() == (B, N, 6), covars.size()
         covars = covars.contiguous()
     else:
         assert quats is not None, "covars or quats is required"
         assert scales is not None, "covars or scales is required"
-        assert quats.size() == (N, 4), quats.size()
-        assert scales.size() == (N, 3), scales.size()
+        assert quats.size() == (B, N, 4), quats.size()
+        assert scales.size() == (B, N, 3), scales.size()
         quats = quats.contiguous()
         scales = scales.contiguous()
     if sparse_grad:
@@ -243,12 +244,12 @@ def fully_fused_projection(
     Ks = Ks.contiguous()
     if packed:
         return _FullyFusedProjectionPacked.apply(
-            means,
-            covars,
-            quats,
-            scales,
-            viewmats,
-            Ks,
+            means[0],
+            covars[0],
+            quats[0],
+            scales[0],
+            viewmats[0],
+            Ks[0],
             width,
             height,
             eps2d,
@@ -676,12 +677,12 @@ class _FullyFusedProjection(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        means: Tensor,  # [N, 3]
-        covars: Tensor,  # [N, 6] or None
-        quats: Tensor,  # [N, 4] or None
-        scales: Tensor,  # [N, 3] or None
-        viewmats: Tensor,  # [C, 4, 4]
-        Ks: Tensor,  # [C, 3, 3]
+        means: Tensor,  # [B, N, 3]
+        covars: Tensor,  # [B, N, 6] or None
+        quats: Tensor,  # [B, N, 4] or None
+        scales: Tensor,  # [B, N, 3] or None
+        viewmats: Tensor,  # [B, C, 4, 4]
+        Ks: Tensor,  # [B, C, 3, 3]
         width: int,
         height: int,
         eps2d: float,

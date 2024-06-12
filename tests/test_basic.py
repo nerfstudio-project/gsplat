@@ -169,13 +169,14 @@ def test_projection(test_data, fused: bool, calc_compensations: bool):
 
     torch.manual_seed(42)
 
-    Ks = test_data["Ks"]
-    viewmats = test_data["viewmats"]
+    # batch size of 2
+    Ks = test_data["Ks"].expand(2, -1, -1, -1)
+    viewmats = test_data["viewmats"].expand(2, -1, -1, -1)
     height = test_data["height"]
     width = test_data["width"]
-    quats = test_data["quats"]
-    scales = test_data["scales"]
-    means = test_data["means"]
+    quats = test_data["quats"].expand(2, -1, -1)
+    scales = test_data["scales"].expand(2, -1, -1)
+    means = test_data["means"].expand(2, -1, -1)
     viewmats.requires_grad = True
     quats.requires_grad = True
     scales.requires_grad = True
