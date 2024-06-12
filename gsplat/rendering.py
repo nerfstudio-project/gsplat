@@ -49,8 +49,8 @@ def rasterization(
 
     .. note::
         **Support N-D Features**: If `sh_degree` is None,
-        the `colors` is expected to be with shape [N, D], in which D is the channel of 
-        the features to be rendered. The computation is slow when D > 32 at the moment. 
+        the `colors` is expected to be with shape [N, D], in which D is the channel of
+        the features to be rendered. The computation is slow when D > 32 at the moment.
         If `sh_degree` is set, the `colors` is expected to be the SH coefficients with
         shape [N, K, 3], where K is the number of SH bases. In this case, it is expected
         that :math:`(\\textit{sh_degree} + 1) ^ 2 \\leq K`, where `sh_degree` controls the
