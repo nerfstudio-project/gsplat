@@ -2025,6 +2025,122 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
             if (!warp.any(valid)) {
                 continue;
             }
+            float v_rgb_local[COLOR_DIM] = {0.f};
+            float3 v_u_transform_local = {0.f, 0.f, 0.f};
+            float3 v_v_transform_local = {0.f, 0.f, 0.f};
+            float3 v_w_transform_local = {0.f, 0.f, 0.f};
+            float2 v_xy_local = {0.f, 0.f};
+            float2 v_xy_abs_local = {0.f, 0.f};
+            float v_opacity_local = 0.f;
+            // initialize everything to 0, only set if the lane is valid
+            if (valid) {
+                // compute the current T for this gaussian
+                float ra = 1.0f / (1.0f - alpha);
+                T *= ra;
+                // update v_rgb for this gaussian
+                const float fac = alpha * T;
+                PRAGMA_UNROLL
+                for (uint32_t k = 0; k < COLOR_DIM; ++k) {
+                    v_alpha += (rgbs_batch[t * COLOR_DIM + k] * T - buffer[k] * ra) *
+                                v_render_c[k];
+                }
+
+                v_alpha += T_final * ra * v_render_a;
+                // contribution from background pixel
+                if (backgrounds != nullptr) {
+                    float accum = 0.f;
+                    PRAGMA_UNROLL
+                    for (uint32_t k = 0; k < COLOR_DIM; ++k) {
+                        accum += backgrounds[k] * v_render_c[k];
+                    }
+                    v_alpha += -T_final * ra * accum;
+                }
+
+                //====== 2DGS ======//
+                const float v_G = opac * v_alpha;
+                float v_depth = 0.f;
+                if (gauss_weight_3d <= gauss_weight_2d) {
+                    const float2 v_s = {
+                        v_G * -vis * s.x + v_depth * w_transform.x,
+                        v_G * -vis * s.y + v_depth * w_transform.y
+                    };
+                    const float3 v_z_w_transform = {s.x, s.y, 1.0};
+                    const float v_sx_pz = v_s.x / intersect.z;
+                    const float v_sy_pz = v_s.y / intersect.z;
+                    const float3 v_intersect = {v_sx_pz, v_sy_pz, -(v_sx_pz * s.x + v_sy_pz * s.y)};
+                    const float3 v_h_u = cross_product(h_v, v_intersect);
+                    const float3 v_h_v = cross_product(v_intersect, h_u);
+
+                    const float3 v_u_transform = {-v_h_u.x, -v_h_u.y, -v_h_u.z};
+                    const float3 v_v_transform = {-v_h_v.x, -v_h_v.y, -v_h_v.z};
+                    const float3 v_w_transform = {
+                        px * v_h_u.x + py * v_h_v.x + v_depth * v_z_w_transform.x,
+                        px * v_h_u.y + py * v_h_v.y + v_depth * v_z_w_transform.y,
+                        px * v_h_u.z + py * v_h_v.z + v_depth * v_z_w_transform.z
+                    };
+                    v_u_transform_local = {v_u_transform.x, v_u_transform.y, v_u_transform.z};
+                    v_v_transform_local = {v_v_transform.x, v_v_transform.y, v_v_transform.z};
+                    v_w_transform_local = {v_w_transform.x, v_w_transform.y, v_w_transform.z};
+                } else {
+                    const float v_G_ddelx = -vis * FilterInvSquare * d.x;
+                    const float v_G_ddely = -vis * FilterInvSquare * d.y;
+                    v_xy_local = {v_G * v_G_ddelx, v_G * v_G_ddely};
+                }
+
+                if (opac * vis <= 0.999f) {
+                    const float v_sigma = -opac * vis * v_alpha;
+                    v_opacity_local = vis * v_alpha;
+                }
+
+                PRAGMA_UNROLL
+                for (uint32_t k = 0; k < COLOR_DIM; ++k) {
+                    buffer[k] += rgbs_batch[t * COLOR_DIM + k] * fac;
+                }
+
+
+            }
+            warpSum<COLOR_DIM, float>(v_rgb_local, warp);
+            warpSum(v_xy_local, warp);
+            if (v_means2d_abs != nullptr) {
+                warpSum(v_xy_abs_local, warp);
+            }
+            warpSum(v_opacity_local, warp);
+            warpSum(v_u_transform_local, warp);
+            warpSum(v_v_transform_local, warp);
+            warpSum(v_w_transform_local, warp);
+            if (warp.thread_rank() == 0) {
+                int32_t g = id_batch[t]; // flatten index in [C * N] or [nnz]
+                float *v_rgb_ptr = (float *)(v_colors) + COLOR_DIM * g;
+                PRAGMA_UNROLL
+                for (uint32_t k = 0; k < COLOR_DIM; ++k) {
+                    atomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
+                }
+
+                //====== 2DGS ======//
+                if (gauss_weight_3d <= gauss_weight_2d) {
+                    float *v_ray_transformation_ptr = (float *)(v_ray_transformation) + 9 * g;
+                    atomicAdd(v_ray_transformation_ptr + 0, v_u_transform_local.x);
+                    atomicAdd(v_ray_transformation_ptr + 1, v_u_transform_local.y);
+                    atomicAdd(v_ray_transformation_ptr + 2, v_u_transform_local.z);
+                    atomicAdd(v_ray_transformation_ptr + 3, v_v_transform_local.x);
+                    atomicAdd(v_ray_transformation_ptr + 4, v_v_transform_local.y);
+                    atomicAdd(v_ray_transformation_ptr + 5, v_v_transform_local.z);
+                    atomicAdd(v_ray_transformation_ptr + 6, v_w_transform_local.x);
+                    atomicAdd(v_ray_transformation_ptr + 7, v_w_transform_local.y);
+                    atomicAdd(v_ray_transformation_ptr + 8, v_w_transform_local.z);
+                } else {
+                    float *v_xy_ptr = (float *)(v_means2d) + 2 * g;
+                    atomicAdd(v_xy_ptr, v_xy_local.x);
+                    atomicAdd(v_xy_ptr + 1, v_xy_local.y);
+
+                    if (v_means2d_abs != nullptr) {
+                        float *v_xy_abs_ptr = (float *)(v_means2d_abs) + 2 * g;
+                        atomicAdd(v_xy_abs_ptr, v_xy_abs_local.x);
+                        atomicAdd(v_xy_abs_ptr + 1, v_xy_abs_local.y);
+                    }
+                }
+                atomicAdd(v_opacities + g, v_opacity_local);
+            }
         }
     }
 }
