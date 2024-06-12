@@ -17,6 +17,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import viser
+
 from gsplat._helper import load_test_data
 from gsplat.rendering import rasterization
 
@@ -57,19 +58,19 @@ if args.ckpt is None:
 
     # batched render
     render_colors, render_alphas, meta = rasterization(
-        means,  # [N, 3]
-        quats,  # [N, 4]
-        scales,  # [N, 3]
-        opacities,  # [N]
-        colors,  # [N, 3]
-        viewmats,  # [C, 4, 4]
-        Ks,  # [C, 3, 3]
+        means.expand(2, -1, -1),  # [B, N, 3]
+        quats.expand(2, -1, -1),  # [B, N, 4]
+        scales.expand(2, -1, -1),  # [B, N, 3]
+        opacities.expand(2, -1),  # [B, N]
+        colors.expand(2, -1, -1),  # [B, N, 3]
+        viewmats.expand(2, -1, -1, -1),  # [B, C, 4, 4]
+        Ks.expand(2, -1, -1, -1),  # [B, C, 3, 3]
         width,
         height,
         render_mode="RGB+D",
     )
-    assert render_colors.shape == (C, height, width, 4)
-    assert render_alphas.shape == (C, height, width, 1)
+    assert render_colors.shape == (2, C, height, width, 4)
+    assert render_alphas.shape == (2, C, height, width, 1)
 
     render_rgbs = render_colors[..., 0:3]
     render_depths = render_colors[..., 3:4]
@@ -80,9 +81,9 @@ if args.ckpt is None:
     canvas = (
         torch.cat(
             [
-                render_rgbs.reshape(C * height, width, 3),
-                render_depths.reshape(C * height, width, 1).expand(-1, -1, 3),
-                render_alphas.reshape(C * height, width, 1).expand(-1, -1, 3),
+                render_rgbs.reshape(-1, width, 3),
+                render_depths.reshape(-1, width, 1).expand(-1, -1, 3),
+                render_alphas.reshape(-1, width, 1).expand(-1, -1, 3),
             ],
             dim=1,
         )

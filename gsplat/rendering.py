@@ -15,13 +15,13 @@ from .cuda._wrapper import (
 
 
 def rasterization(
-    means: Tensor,  # [N, 3]
-    quats: Tensor,  # [N, 4]
-    scales: Tensor,  # [N, 3]
-    opacities: Tensor,  # [N]
-    colors: Tensor,  # [N, D] or [N, K, 3]
-    viewmats: Tensor,  # [C, 4, 4]
-    Ks: Tensor,  # [C, 3, 3]
+    means: Tensor,  # [B, N, 3]
+    quats: Tensor,  # [B, N, 4]
+    scales: Tensor,  # [B, N, 3]
+    opacities: Tensor,  # [B, N]
+    colors: Tensor,  # [B, N, D] or [B, N, K, 3]
+    viewmats: Tensor,  # [B, C, 4, 4]
+    Ks: Tensor,  # [B, C, 3, 3]
     width: int,
     height: int,
     near_plane: float = 0.01,
@@ -184,29 +184,44 @@ def rasterization(
         'flatten_ids', 'isect_offsets', 'width', 'height', 'tile_size'])
 
     """
+    if means.dim() == 2 and viewmats.dim() == 3:
+        # add a batch dimension
+        means = means[None, ...]
+        quats = quats[None, ...]
+        scales = scales[None, ...]
+        opacities = opacities[None, ...]
+        colors = colors[None, ...]
+        viewmats = viewmats[None, ...]
+        Ks = Ks[None, ...]
+        if backgrounds is not None:
+            backgrounds = backgrounds[None, ...]
+        batchify = True
+    else:
+        batchify = False
 
-    N = means.shape[0]
-    C = viewmats.shape[0]
-    assert means.shape == (N, 3), means.shape
-    assert quats.shape == (N, 4), quats.shape
-    assert scales.shape == (N, 3), scales.shape
-    assert opacities.shape == (N,), opacities.shape
-    assert viewmats.shape == (C, 4, 4), viewmats.shape
-    assert Ks.shape == (C, 3, 3), Ks.shape
+    B = means.shape[0]
+    N = means.shape[1]
+    C = viewmats.shape[1]
+    assert means.shape == (B, N, 3), means.shape
+    assert quats.shape == (B, N, 4), quats.shape
+    assert scales.shape == (B, N, 3), scales.shape
+    assert opacities.shape == (B, N), opacities.shape
+    assert viewmats.shape == (B, C, 4, 4), viewmats.shape
+    assert Ks.shape == (B, C, 3, 3), Ks.shape
     assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
 
     if sh_degree is None:
         # treat colors as post-activation values
-        # colors should be in shape [N, D] or (C, N, D) (silently support)
-        assert (colors.dim() == 2 and colors.shape[0] == N) or (
-            colors.dim() == 3 and colors.shape[:2] == (C, N)
+        # colors should be in shape [B, N, D] or (B, C, N, D) (silently support)
+        assert (colors.dim() == 3 and colors.shape[1] == N) or (
+            colors.dim() == 4 and colors.shape[:3] == (B, C, N)
         ), colors.shape
     else:
         # treat colors as SH coefficients. Allowing for activating partial SH bands
         assert (
-            colors.dim() == 3 and colors.shape[0] == N and colors.shape[2] == 3
+            colors.dim() == 4 and colors.shape[1] == N and colors.shape[3] == 3
         ), colors.shape
-        assert (sh_degree + 1) ** 2 <= colors.shape[1], colors.shape
+        assert (sh_degree + 1) ** 2 <= colors.shape[2], colors.shape
 
     # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
     proj_results = fully_fused_projection(
@@ -230,6 +245,7 @@ def rasterization(
     if packed:
         # The results are packed into shape [nnz, ...]. All elements are valid.
         (
+            batch_ids,
             camera_ids,
             gaussian_ids,
             radii,
@@ -238,15 +254,67 @@ def rasterization(
             conics,
             compensations,
         ) = proj_results
-        opacities = opacities[gaussian_ids]  # [nnz]
+        opacities = opacities[batch_ids, gaussian_ids]  # [nnz]
     else:
-        # The results are with shape [C, N, ...]. Only the elements with radii > 0 are valid.
+        # The results are with shape [B, C, N, ...]. Only the elements with radii > 0 are valid.
         radii, means2d, depths, conics, compensations = proj_results
-        opacities = opacities.repeat(C, 1)  # [C, N]
-        camera_ids, gaussian_ids = None, None
+        opacities = opacities[:, None, :].repeat(1, C, 1)  # [B, C, N]
+        batch_ids, camera_ids, gaussian_ids = None, None, None
 
     if compensations is not None:
         opacities = opacities * compensations
+
+    # TODO: these logics are so convoluted. We should refactor them.
+    # TODO: SH also suport N-D.
+    # Compute the per-view colors
+    if not (colors.dim() == 4 and sh_degree is None):
+        # colors is [B, N, D] or [B, N, K, 3]
+        colors = (
+            colors[batch_ids, gaussian_ids]
+            if packed
+            else colors[:, None, ...].expand(B, C, *([-1] * (colors.dim() - 1)))
+        )  # [nnz, D] or [B, C, N, ...]
+    else:
+        # silently support [B, C, N, D] color.
+        if packed:
+            colors = colors[batch_ids, camera_ids, gaussian_ids, :]
+    if sh_degree is not None:  # SH coefficients
+        camtoworlds = torch.inverse(viewmats)
+        if packed:
+            dirs = (
+                means[batch_ids, gaussian_ids, :]
+                - camtoworlds[batch_ids, camera_ids, :3, 3]
+            )
+        else:
+            dirs = means[:, None, :, :] - camtoworlds[:, :, None, :3, 3]
+        colors = spherical_harmonics(
+            sh_degree, dirs, colors, masks=radii > 0
+        )  # [nnz, D] or [B, C, N, 3]
+        # make it apple-to-apple with Inria's CUDA Backend.
+        colors = torch.clamp_min(colors + 0.5, 0.0)
+
+    # Rasterize to pixels
+    if render_mode in ["RGB+D", "RGB+ED"]:
+        colors = torch.cat((colors, depths[..., None]), dim=-1)
+    elif render_mode in ["D", "ED"]:
+        colors = depths[..., None]
+    else:  # RGB
+        pass
+
+    # After projection, everything is with shape [B, C, N, ...]. As we will render out
+    # images with shape [B, C, ...], we can safely flatten the batch dimension [B, C]
+    # into [B * C] for the following rasterization.
+    if packed:
+        camera_ids = camera_ids + batch_ids * C
+    else:
+        radii = radii.view(B * C, *radii.shape[2:])
+        means2d = means2d.view(B * C, *means2d.shape[2:])
+        depths = depths.view(B * C, *depths.shape[2:])
+        conics = conics.view(B * C, *conics.shape[2:])
+        opacities = opacities.view(B * C, *opacities.shape[2:])
+        colors = colors.view(B * C, *colors.shape[2:])
+        if backgrounds is not None:
+            backgrounds = backgrounds.view(B * C, *backgrounds.shape[2:])
 
     # Identify intersecting tiles
     tile_width = math.ceil(width / float(tile_size))
@@ -259,42 +327,12 @@ def rasterization(
         tile_width,
         tile_height,
         packed=packed,
-        n_cameras=C,
+        n_cameras=B * C,
         camera_ids=camera_ids,
         gaussian_ids=gaussian_ids,
     )
-    isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
+    isect_offsets = isect_offset_encode(isect_ids, B * C, tile_width, tile_height)
 
-    # TODO: SH also suport N-D.
-    # Compute the per-view colors
-    if not (
-        colors.dim() == 3 and sh_degree is None
-    ):  # silently support [C, N, D] color.
-        colors = (
-            colors[gaussian_ids] if packed else colors.expand(C, *([-1] * colors.dim()))
-        )  # [nnz, D] or [C, N, 3]
-    else:
-        if packed:
-            colors = colors[camera_ids, gaussian_ids, :]
-    if sh_degree is not None:  # SH coefficients
-        camtoworlds = torch.inverse(viewmats)
-        if packed:
-            dirs = means[gaussian_ids, :] - camtoworlds[camera_ids, :3, 3]
-        else:
-            dirs = means[None, :, :] - camtoworlds[:, None, :3, 3]
-        colors = spherical_harmonics(
-            sh_degree, dirs, colors, masks=radii > 0
-        )  # [nnz, D] or [C, N, 3]
-        # make it apple-to-apple with Inria's CUDA Backend.
-        colors = torch.clamp_min(colors + 0.5, 0.0)
-
-    # Rasterize to pixels
-    if render_mode in ["RGB+D", "RGB+ED"]:
-        colors = torch.cat((colors, depths[..., None]), dim=-1)
-    elif render_mode in ["D", "ED"]:
-        colors = depths[..., None]
-    else:  # RGB
-        pass
     render_colors, render_alphas = rasterize_to_pixels(
         means2d,
         conics,
@@ -319,7 +357,9 @@ def rasterization(
             dim=-1,
         )
 
+    # TODO: restore batch shape for these
     meta = {
+        "batch_ids": batch_ids,
         "camera_ids": camera_ids,
         "gaussian_ids": gaussian_ids,
         "radii": radii,
@@ -337,6 +377,9 @@ def rasterization(
         "height": height,
         "tile_size": tile_size,
     }
+    if not batchify:
+        render_colors = render_colors.view(B, C, height, width, render_colors.shape[-1])
+        render_alphas = render_alphas.view(B, C, height, width, 1)
     return render_colors, render_alphas, meta
 
 
