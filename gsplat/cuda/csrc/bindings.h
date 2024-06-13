@@ -280,12 +280,32 @@ fully_fused_projection_bwd_2dgs_tensor(
     const uint32_t image_width, const uint32_t image_height, const float eps2d,
     // fwd outputs
     const torch::Tensor &radii,                       // [C, N]
-    const torch::Tensor &ray_transformations   // [C, 3, 3]
+    const torch::Tensor &ray_transformations,   // [C, 3, 3]
     // grad outputs
     const torch::Tensor &v_means2d,                     // [C, N, 2]
     const torch::Tensor &v_depths,                      // [C, N]
-    const torch::Tensor &v_ray_transformations
+    const torch::Tensor &v_ray_transformations,
     const bool viewmats_requires_grad
+);
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+full_fused_projection_packed_bwd_tensor(
+    // fwd inputs
+    const torch::Tensor &means,
+    const torch::Tensor &quats,
+    const torch::Tensor &scales,
+    const torch::Tensor &viewmats,
+    const torch::Tensor &Ks,
+    const uint32_t image_width, const uint32_t image_height, const float eps2d,
+    // fwd outputs
+    const torch::Tensor &camera_ids,
+    const torch::Tensor &gaussian_ids,
+    const torch::Tensor &ray_transformations,
+    // grad outputs
+    const torch::Tensor &v_means2d,
+    const torch::Tensor &v_depths,
+    const torch::Tensor &v_ray_transformations,
+    const bool viewmats_requires_grad, const bool sparse_grad
 );
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>

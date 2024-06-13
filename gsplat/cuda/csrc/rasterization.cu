@@ -2144,3 +2144,193 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
         }
     }
 }
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+rasterize_to_pixel_bwd_2dgs_tensor(
+    // Gaussian parameters
+    const torch::Tensor &means2d,
+    const torch::Tensor &ray_transformations,
+    const torch::Tensor &colors,
+    const torch::Tensor &opacities,
+    const at::optional<torch::Tensor> &backgrounds,
+    // image size
+    const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
+    // intersection
+    const torch::Tensor &tile_offsets,
+    const torch::Tensor &flatten_ids,
+    // forward outputs
+    const torch::Tensor &render_alphas,
+    const torch::Tensor &last_ids,
+    // gradients of outputs
+    const torch::Tensor &v_render_colors,
+    const torch::Tensor &v_render_alphas,
+    // options
+    bool absgrad
+) {
+    DEVICE_GUARD(means2d);
+    CHECK_INPUT(means2d);
+    CHECK_INPUT(ray_transformations);
+    CHECK_INPUT(colors);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(tile_offsets);
+    CHECK_INPUT(flatten_ids);
+    CHECK_INPUT(render_alphas);
+    CHECK_INPUT(last_ids);
+    CHECK_INPUT(v_render_colors);
+    CHECK_INPUT(v_render_alphas);
+    if (backgrounds.has_value()) {
+        CHECK_INPUT(backgrounds.value());
+    }
+
+    bool packed = means2d.dim() == 2;
+
+    uint32_t C = tile_offsets.size(0);         // number of cameras
+    uint32_t N = packed ? 0 : means2d.size(1); // number of gaussians
+    uint32_t n_isects = flatten_ids.size(0);
+    uint32_t COLOR_DIM = colors.size(-1);
+    uint32_t tile_height = tile_offsets.size(1);
+    uint32_t tile_width = tile_offsets.size(2);
+
+    // Each block covers a tile on the image. In total there are
+    // C * tile_height * tile_width blocks.
+    dim3 threads = {tile_size, tile_size, 1};
+    dim3 blocks = {C, tile_height, tile_width};
+
+    torch::Tensor v_means2d = torch::zeros_like(means2d);
+    torch::Tensor v_ray_transformations = torch::zeros_like(ray_transformations);
+    torch::Tensor v_colors = torch::zeros_like(colors);
+    torch::Tensor v_opacities = torch::zeros_lke(opacities);
+    torch::Tensor v_means2d_abs;
+    if (absgrad) {
+        v_means2d_abs = torch::zeros_like(means2d);
+    }
+
+    if (n_isects) {
+        at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+        switch (COLOR_DIM) {
+        case 1:
+            rasterize_to_pixels_bwd_2dgs_kernel<1><<<blocks, threads, 0, stream>>>(
+                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+                (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+                opacities.data_ptr<float>(),
+                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+                                        : nullptr,
+                image_width, image_height, tile_size, tile_width, tile_height,
+                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+                (float2 *)v_means2d.data_ptr<float>(),
+                (float3 *)v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
+                v_opacities.data_ptr<float>()
+            );
+            break;
+        case 2:
+            rasterize_to_pixels_bwd_2dgs_kernel<2><<<blocks, threads, 0, stream>>>(
+                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+                (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+                opacities.data_ptr<float>(),
+                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+                                        : nullptr,
+                image_width, image_height, tile_size, tile_width, tile_height,
+                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+                (float2 *)v_means2d.data_ptr<float>(),
+                (float3 *)v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
+                v_opacities.data_ptr<float>()
+            );
+            break;
+        case 3:
+            rasterize_to_pixels_bwd_2dgs_kernel<3><<<blocks, threads, 0, stream>>>(
+                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+                (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+                opacities.data_ptr<float>(),
+                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+                                        : nullptr,
+                image_width, image_height, tile_size, tile_width, tile_height,
+                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+                (float2 *)v_means2d.data_ptr<float>(),
+                (float3 *)v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
+                v_opacities.data_ptr<float>()
+            );
+            break;     
+        case 4:
+            rasterize_to_pixels_bwd_2dgs_kernel<4><<<blocks, threads, 0, stream>>>(
+                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+                (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+                opacities.data_ptr<float>(),
+                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+                                        : nullptr,
+                image_width, image_height, tile_size, tile_width, tile_height,
+                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+                (float2 *)v_means2d.data_ptr<float>(),
+                (float3 *)v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
+                v_opacities.data_ptr<float>()
+            );
+            break;
+        case 8:
+            rasterize_to_pixels_bwd_2dgs_kernel<8><<<blocks, threads, 0, stream>>>(
+                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+                (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+                opacities.data_ptr<float>(),
+                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+                                        : nullptr,
+                image_width, image_height, tile_size, tile_width, tile_height,
+                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+                (float2 *)v_means2d.data_ptr<float>(),
+                (float3 *)v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
+                v_opacities.data_ptr<float>()
+            );
+            break;
+        case 16:
+            rasterize_to_pixels_bwd_2dgs_kernel<16><<<blocks, threads, 0, stream>>>(
+                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+                (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+                opacities.data_ptr<float>(),
+                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+                                        : nullptr,
+                image_width, image_height, tile_size, tile_width, tile_height,
+                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+                (float2 *)v_means2d.data_ptr<float>(),
+                (float3 *)v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
+                v_opacities.data_ptr<float>()
+            );
+            break;
+        case 32:
+            rasterize_to_pixels_bwd_2dgs_kernel<32><<<blocks, threads, 0, stream>>>(
+                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+                (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+                opacities.data_ptr<float>(),
+                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+                                        : nullptr,
+                image_width, image_height, tile_size, tile_width, tile_height,
+                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+                (float2 *)v_means2d.data_ptr<float>(),
+                (float3 *)v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
+                v_opacities.data_ptr<float>()
+            );
+            break;
+        default:
+            AT_ERROR("Unsupported number of channels: ", COLOR_DIM);
+        }
+    }
+
+    return std::make_tuple(v_means2d_abs, v_means2d, v_ray_transformations, v_colors, v_opacities);
+}
