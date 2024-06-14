@@ -289,7 +289,7 @@ fully_fused_projection_bwd_2dgs_tensor(
 );
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-full_fused_projection_packed_bwd_tensor(
+fully_fused_projection_packed_bwd_2dgs_tensor(
     // fwd inputs
     const torch::Tensor &means,
     const torch::Tensor &quats,
