@@ -312,14 +312,14 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 rasterize_to_pixel_bwd_2dgs_tensor(
     // Gaussian parameters
     const torch::Tensor &means2d,
-    const torch::Tensor &ray_transformations
+    const torch::Tensor &ray_transformations,
     const torch::Tensor &colors,
     const torch::Tensor &opacities,
     const at::optional<torch::Tensor> &backgrounds,
     // image size
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     // intersections
-    const torch::Tensor &tile_offsets
+    const torch::Tensor &tile_offsets,
     const torch::Tensor &flatten_ids,
     // forward outputs
     const torch::Tensor &render_alphas,

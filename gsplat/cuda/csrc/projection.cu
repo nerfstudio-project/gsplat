@@ -1623,19 +1623,21 @@ fully_fused_projection_fwd_2dgs_kernel(const uint32_t C, const uint32_t N,
     // transform Gaussian center to camera space
     glm::vec3 mean_c;
     pos_world_to_cam(R, t, glm::make_vec3(means), mean_c);
-    if (mean_c.z < near_plane || man_c.z > far_plane) {
+    if (mean_c.z < near_plane || mean_c.z > far_plane) {
         radii[idx] = 0;
         return;
     }
 
     // build H and transform from world space to camera space
+    glm::vec4 quat = glm::make_vec4(quats + gid * 4);
+    glm::vec3 scale = glm::make_vec3(scales + gid * 3);
     glm::mat3 RS = quat_to_rotmat(quat) * scale_to_mat(scale, 1.0f);
     glm::mat3 RS_camera = R * RS;
     glm::mat3 WH = glm::mat3(RS_camera[0], RS_camera[1], mean_c);
 
     glm::mat3 inverse_intrinsic = glm::mat3(
-        intrins.x, 0.0, intrins.z,
-        0.0, intrins.y, intrins.w,
+        Ks[0], 0.0, Ks[2],
+        0.0, Ks[4], Ks[5],
         0.0, 0.0, 1.0
     );
 
@@ -1700,7 +1702,7 @@ fully_fused_projection_fwd_2dgs_tensor(
     const torch::Tensor &means,     // [N, 3]
     const torch::Tensor &quats,     // [N, 4]
     const torch::Tensor &scales,    // [N, 3]
-    const torch::Tensor &viewmat,   // [C, 4, 4]
+    const torch::Tensor &viewmats,   // [C, 4, 4]
     const torch::Tensor &Ks,        // [C, 3, 3]      
     const uint32_t image_width, const uint32_t image_height, const float eps2d,
     const float near_plane, const float far_plane,
@@ -1708,8 +1710,8 @@ fully_fused_projection_fwd_2dgs_tensor(
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
-    CHECK_INPUT(quats.value());
-    CHECK_INPUT(scales.value());
+    CHECK_INPUT(quats);
+    CHECK_INPUT(scales);
     CHECK_INPUT(viewmats);
     CHECK_INPUT(Ks);
 
@@ -1726,8 +1728,8 @@ fully_fused_projection_fwd_2dgs_tensor(
         fully_fused_projection_fwd_2dgs_kernel<<<(C * N + N_THREADS - 1) / N_THREADS,
                                                     N_THREADS, 0, stream>>>(
             C, N, means.data_ptr<float>(),
-            quats.value().data_ptr<float>(),
-            scales.value().data_ptr<float>(),
+            quats.data_ptr<float>(),
+            scales.data_ptr<float>(),
             viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
             eps2d, near_plane, far_plane, radius_clip, radii.data_ptr<int32_t>(),
             means2d.data_ptr<float>(), depths.data_ptr<float>(),
@@ -1754,7 +1756,7 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
     int32_t *__restrict__ radii,
     float *__restrict__ means2d,
     float *__restrict__ depths,
-    float *__restrict__ ray_transformations,
+    float *__restrict__ ray_transformations
 ) {
     int32_t blocks_per_row = gridDim.x;
 
@@ -1791,6 +1793,8 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
     glm::mat3 M;
     glm::vec2 mean2d;
     if (valid) {
+        glm::vec4 quat = glm::make_vec4(quats + gid * 4);
+        glm::vec3 scale = glm::make_vec3(scales + gid * 3);
         glm::mat3 RS = quat_to_rotmat(quat) * scale_to_mat(scale, 1.0f);
         glm::mat3 RS_camera = R * RS;
         glm::mat3 WH = glm::mat3(RS_camera[0], RS_camera[1], mean_c);

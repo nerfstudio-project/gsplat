@@ -1139,7 +1139,7 @@ def fully_fused_projection_2dgs(
     radius_clip: float = 0.0,
     packed: bool = False,
     sparse_grad: bool = False,
-) -> Tuple[Tensor, Tensor, Tensor, Tenosr]:
+) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
     """Calculate ray transformations
     Returns:
             - **radii**

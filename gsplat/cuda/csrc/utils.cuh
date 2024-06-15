@@ -7,6 +7,9 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
+#define FilterSize 0.7071067811865476
+#define FilterInvSquare 1/(FilterSize*FilterSize)
+
 inline __device__ glm::mat3 quat_to_rotmat(const glm::vec4 quat) {
     float w = quat[0], x = quat[1], y = quat[2], z = quat[3];
     // normalize
@@ -25,6 +28,15 @@ inline __device__ glm::mat3 quat_to_rotmat(const glm::vec4 quat) {
                      (2.f * (xz + wy)), (2.f * (yz - wx)),
                      (1.f - 2.f * (x2 + y2)) // 3rd col
     );
+}
+
+inline __device__ glm::mat3 scale_to_mat(const glm::vec3 scale, 
+                                    const float glob_scale) {
+    glm::mat3 S = glm::mat3(1.f);
+    S[0][0] = glob_scale * scale.x;
+    S[1][1] = glob_scale * scale.y;
+    S[2][2] = glob_scale * scale.z;
+    return S;
 }
 
 inline __device__ void quat_to_rotmat_vjp(const glm::vec4 quat, const glm::mat3 v_R,

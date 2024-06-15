@@ -16,6 +16,7 @@ from .rendering import (
     rasterization,
     rasterization_inria_wrapper,
     rasterization_legacy_wrapper,
+    rasterization_2dgs,
 )
 from .version import __version__
 
@@ -99,6 +100,7 @@ def get_tile_bin_edges(*args, **kwargs):
 
 all = [
     "rasterization",
+    "rasterization_2dgs"
     "rasterization_legacy_wrapper",
     "rasterization_inria_wrapper",
     "spherical_harmonics",

@@ -10,7 +10,7 @@ import tyro
 from PIL import Image
 from torch import Tensor, optim
 
-from gsplat import rasterization
+from gsplat import rasterization, rasterization_2dgs
 
 
 class SimpleTrainer:

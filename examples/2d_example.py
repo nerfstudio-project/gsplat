@@ -1,3 +1,16 @@
+import math
+import os
+from pathlib import Path
+from typing import Optional, Literal
+
+import torch
+import numpy as np
+import tyro
+import matplotlib
+from PIL import Image
+
+from gsplat import rasterization, rasterization_2dgs
+
 class SimpleTrainer:
     
     def __init__(
@@ -26,7 +39,7 @@ class SimpleTrainer:
         scales = torch.zeros(1, 3).repeat(len(means3D), 1).fill_(scale).cuda()
         colors = matplotlib.colormaps['Accent'](np.random.randint(1, 64, 64) / 64)[..., :3]
         colors = torch.from_numpy(colors).cuda()
-        opacity = torch.ones_like(means3D[:, :1])
+        opacity = torch.ones_like(means3D[:, 0])
         
         self.viewmat = torch.tensor(
             [
@@ -44,7 +57,7 @@ class SimpleTrainer:
         self.opacities = opacity.float()
         self.quats = quats.float()
     
-    den render(
+    def render(
         self,
         model_type: Literal["3dgs", "2dgs"] = "3dgs",
     ):
@@ -94,3 +107,18 @@ class SimpleTrainer:
         out_dir = os.path.join(os.getcwd(), "renders")
         os.makedirs(out_dir, exist_ok=True)
         frame_img.save(f"{out_dir}/{model_type}.png")
+
+def main(
+    height: int = 256,
+    width: int = 256,
+    num_points: int = 8,
+    save_imgs: bool = True,
+    img_path: Optional[Path] = None,
+) -> None:
+    trainer = SimpleTrainer(num_points=num_points)
+    trainer.render(
+        model_type="3dgs",
+    )
+    
+if __name__ == "__main__":
+    tyro.cli(main)
