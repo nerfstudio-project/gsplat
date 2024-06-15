@@ -10,6 +10,16 @@
 #define FilterSize 0.7071067811865476
 #define FilterInvSquare 1/(FilterSize*FilterSize)
 
+inline __device__ float3 cross_product(
+    float3 a, float3 b 
+) {
+    float3 result;
+    result.x = a.y * b.z - a.z * b.y;
+    result.y = a.z * b.x - a.x * b.z;
+    result.z = a.x * b.y - a.y * b.x;
+    return result;
+}
+
 inline __device__ glm::mat3 quat_to_rotmat(const glm::vec4 quat) {
     float w = quat[0], x = quat[1], y = quat[2], z = quat[3];
     // normalize

@@ -1748,7 +1748,7 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
     const int32_t image_width, const int32_t image_height, const float eps2d,
     const float near_plane, const float far_plane, const float radius_clip,
     const int32_t *__restrict__ block_accum,
-    const int32_t *__restrict__ block_cnts,
+    int32_t *__restrict__ block_cnts,
     // outputs
     int32_t *__restrict__ indptr,
     int64_t *__restrict__ camera_ids,
@@ -1793,15 +1793,15 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
     glm::mat3 M;
     glm::vec2 mean2d;
     if (valid) {
-        glm::vec4 quat = glm::make_vec4(quats + gid * 4);
-        glm::vec3 scale = glm::make_vec3(scales + gid * 3);
+        glm::vec4 quat = glm::make_vec4(quats + col_idx * 4);
+        glm::vec3 scale = glm::make_vec3(scales + col_idx * 3);
         glm::mat3 RS = quat_to_rotmat(quat) * scale_to_mat(scale, 1.0f);
         glm::mat3 RS_camera = R * RS;
         glm::mat3 WH = glm::mat3(RS_camera[0], RS_camera[1], mean_c);
 
         glm::mat3 inverse_intrinsic = glm::mat3(
-            intrins.x, 0.0, intrins.z,
-            0.0, intrins.y, intrins.w,
+            Ks[0], 0.0, Ks[2],
+            0.0, Ks[4], Ks[5],
             0.0, 0.0, 1.0
         );
 
@@ -1916,8 +1916,8 @@ fully_fused_projection_packed_fwd_2dgs_tensor(
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
-    CHECK_INPUT(quats.value());
-    CHECK_INPUT(scales.value());
+    CHECK_INPUT(quats);
+    CHECK_INPUT(scales);
     CHECK_INPUT(viewmats);
     CHECK_INPUT(Ks);
 
@@ -1939,14 +1939,14 @@ fully_fused_projection_packed_fwd_2dgs_tensor(
     torch::Tensor block_accum;
     if (C && N) {
         torch::Tensor block_cnts = torch::empty({nrows * blocks_per_row}, opt);
-        fully_fused_projection_packed_fwd_kernel<<<blocks, threads, 0, stream>>(
+        fully_fused_projection_packed_fwd_2dgs_kernel<<<blocks, threads, 0, stream>>>(
             C, N, means.data_ptr<float>(),
-            quats.value().data_ptr<float>(),
-            scales.value().data_ptr<float>(),
+            quats.data_ptr<float>(),
+            scales.data_ptr<float>(),
             viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
             eps2d, near_plane, far_plane, radius_clip, nullptr,
             block_cnts.data_ptr<int32_t>(), nullptr, nullptr, nullptr, nullptr, nullptr,
-            nullptr, nullptr, nullptr);
+            nullptr, nullptr);
         block_accum = torch::cumsum(block_cnts, 0, torch::kInt32);
         nnz = block_accum[-1].item<int32_t>();
     } else {
@@ -1960,13 +1960,13 @@ fully_fused_projection_packed_fwd_2dgs_tensor(
     torch::Tensor radii = torch::empty({nnz}, means.options().dtype(torch::kInt32));
     torch::Tensor means2d = torch::empty({nnz, 2}, means.options());
     torch::Tensor depths = torch::empty({nnz}, means.options());
-    torch::Tensor ray_transformations = torch::empyt({nnz, 3, 3}, means.options());
+    torch::Tensor ray_transformations = torch::empty({nnz, 3, 3}, means.options());
 
     if (nnz) {
-        fully_fused_projections_packed_fwd_kernel<<<blocks, threads, 0, stream>>>(
+        fully_fused_projection_packed_fwd_2dgs_kernel<<<blocks, threads, 0, stream>>>(
             C, N, means.data_ptr<float>(),
-            quats.value().data_ptr<float>(),
-            scales.value().data_ptr<float>(),
+            quats.data_ptr<float>(),
+            scales.data_ptr<float>(),
             viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
             eps2d, near_plane, far_plane, radius_clip, block_accum.data_ptr<int32_t>(),
             nullptr, indptr.data_ptr<int32_t>(), camera_ids.data_ptr<int64_t>(),
@@ -1987,7 +1987,6 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     const float *__restrict__ quats,
     const float *__restrict__ scales,
     const float *__restrict__ viewmats,
-    const float *__restrict__ viewmats,
     const float *__restrict__ Ks,
     const int32_t image_width, const int32_t image_height, const float eps2d,
     // fwd outputs
@@ -1996,121 +1995,121 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     // grad outputs
     const float *__restrict__ v_means2d,
     const float *__restrict__ v_depths,
-    const float *__restrict__ v_ray_transformations,
     // grad inputs
+    float *__restrict__ v_ray_transformations,
     float *__restrict__ v_means,
     float *__restrict__ v_quats,
     float *__restrict__ v_scales,
     float *__restrict__ v_viewmats
 ) {
-    // parallelize over C * N.
-    uint32_t idx = cg::this_grid().thread_rank();
-    if (idx >= C * N || radii[idx] <= 0) {
-        return;
-    }
-    const uint32_t cid = idx / N;
-    const uint32_t gid = idx % N;
+    // // parallelize over C * N.
+    // uint32_t idx = cg::this_grid().thread_rank();
+    // if (idx >= C * N || radii[idx] <= 0) {
+    //     return;
+    // }
+    // const uint32_t cid = idx / N;
+    // const uint32_t gid = idx % N;
 
-    // shift pointers to the current camera and gaussian
-    means += gid * 3;
-    viewmats += cid * 16;
-    Ks += cid * 9;
+    // // shift pointers to the current camera and gaussian
+    // means += gid * 3;
+    // viewmats += cid * 16;
+    // Ks += cid * 9;
 
-    ray_transformations += idx * 9;
+    // ray_transformations += idx * 9;
 
-    v_means2d += idx * 2;
-    v_depths += idx;
-    v_ray_transformations += idx * 9;
+    // v_means2d += idx * 2;
+    // v_depths += idx;
+    // v_ray_transformations += idx * 9;
 
-    glm::mat3 M = glm::mat3(
-        ray_transformations[0], ray_transformations[1], ray_transformations[2],
-        ray_transformations[3], ray_transformations[4], ray_transformations[5],
-        ray_transformations[6], ray_transformations[7], ray_transformations[8]
-    );
+    // glm::mat3 M = glm::mat3(
+    //     ray_transformations[0], ray_transformations[1], ray_transformations[2],
+    //     ray_transformations[3], ray_transformations[4], ray_transformations[5],
+    //     ray_transformations[6], ray_transformations[7], ray_transformations[8]
+    // );
 
-    float distance = glm::dot(glm::vec3(1.0, 1.0, -1.0), M[2] * M[2]);
-    glm::vec3 temp_point = glm::vec3(1.0f, 1.0f, -1.0f);
-    glm::vec3 f = (1.0f / distance) * temp_point;
+    // float distance = glm::dot(glm::vec3(1.0, 1.0, -1.0), M[2] * M[2]);
+    // glm::vec3 temp_point = glm::vec3(1.0f, 1.0f, -1.0f);
+    // glm::vec3 f = (1.0f / distance) * temp_point;
 
-    glm::vec3 p = glm::vec3(
-        glm::dot(f, M[0] * M[2]),
-        glm::dot(f, M[1] * M[2]),
-        glm::dot(f, M[2] * M[2])
-    );
+    // glm::vec3 p = glm::vec3(
+    //     glm::dot(f, M[0] * M[2]),
+    //     glm::dot(f, M[1] * M[2]),
+    //     glm::dot(f, M[2] * M[2])
+    // );
 
-    // temp variable
-    glm::vec3 v_mean2D = glm::vec3(v_means2d[0], v_means2d[1], v_means2d[2]);
-    glm::vec3 v_T0 = v_mean2D.x * f * M[2];
-    glm::vec3 v_T1 = v_mean2D.y * f * M[2];
-    glm::vec3 v_T3 = v_mean2D.x * f * M[0] + v_mean2D.y * f * M[1];
-    glm::vec3 v_f = (v_mean2D.x * M[0] * M[2]) + (v_mean2D.y * M[1] * M[2]);
-    float v_distance = glm::dot(v_f, f) * (-1.0 / distance);
-    glm::vec3 v_d_dT3 = glm::vec3(1.0, 1.0, -1.0) * M[2] * 2.0f;
-    v_T3 += v_distance * v_d_dT3;
-    v_ray_transformations[0] += v_T0.x;
-    v_ray_transformations[1] += v_T0.y;
-    v_ray_transformations[2] += v_T0.z;
-    v_ray_transformations[3] += v_T1.x;
-    v_ray_transformations[4] += v_T1.y;
-    v_ray_transformations[5] += v_T1.z;
-    v_ray_transformations[6] += v_T3.x;
-    v_ray_transformations[7] += v_T3.y;
-    v_ray_transformations[8] += v_T3.z;
+    // // temp variable
+    // glm::vec3 v_mean2D = glm::vec3(v_means2d[0], v_means2d[1], v_means2d[2]);
+    // glm::vec3 v_T0 = v_mean2D.x * f * M[2];
+    // glm::vec3 v_T1 = v_mean2D.y * f * M[2];
+    // glm::vec3 v_T3 = v_mean2D.x * f * M[0] + v_mean2D.y * f * M[1];
+    // glm::vec3 v_f = (v_mean2D.x * M[0] * M[2]) + (v_mean2D.y * M[1] * M[2]);
+    // float v_distance = glm::dot(v_f, f) * (-1.0 / distance);
+    // glm::vec3 v_d_dT3 = glm::vec3(1.0, 1.0, -1.0) * M[2] * 2.0f;
+    // v_T3 += v_distance * v_d_dT3;
+    // v_ray_transformations[0] += v_T0.x;
+    // v_ray_transformations[1] += v_T0.y;
+    // v_ray_transformations[2] += v_T0.z;
+    // v_ray_transformations[3] += v_T1.x;
+    // v_ray_transformations[4] += v_T1.y;
+    // v_ray_transformations[5] += v_T1.z;
+    // v_ray_transformations[6] += v_T3.x;
+    // v_ray_transformations[7] += v_T3.y;
+    // v_ray_transformations[8] += v_T3.z;
 
-    //====== ray transformation gradient ======//
-    // camera information
-    const glm::mat3 W = glm::mat3(
-        viewmats[0], viewmats[1], viewmats[2],
-        viewmats[4], viewmats[5], viewmats[6],
-        viewmats[8], viewmats[9], viewmats[10]
-    ); // viewmat
+    // //====== ray transformation gradient ======//
+    // // camera information
+    // const glm::mat3 W = glm::mat3(
+    //     viewmats[0], viewmats[1], viewmats[2],
+    //     viewmats[4], viewmats[5], viewmats[6],
+    //     viewmats[8], viewmats[9], viewmats[10]
+    // ); // viewmat
 
-    const glm::vec3 cam_pos = glm::vec3(viewmat[3], viewmat[7], viewmat[11]); // camera center
-    glm::mat3 P = glm::mat3(
-        intrins.x, 0.0, 0.0,
-        0.0, intrins.y, 0.0,
-        intrins.z, intrins.w, 1.0
-    );
+    // const glm::vec3 cam_pos = glm::vec3(viewmat[3], viewmat[7], viewmat[11]); // camera center
+    // glm::mat3 P = glm::mat3(
+    //     intrins.x, 0.0, 0.0,
+    //     0.0, intrins.y, 0.0,
+    //     intrins.z, intrins.w, 1.0
+    // );
 
-    glm::mat3 S = scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
-    glm::mat3 R = quat_to_rotmat(quat);
-    glm::mat3 RS = R * S;
-    glm::vec3 p_view = W * p_world + cam_pos;
+    // glm::mat3 S = scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
+    // glm::mat3 R = quat_to_rotmat(quat);
+    // glm::mat3 RS = R * S;
+    // glm::vec3 p_view = W * p_world + cam_pos;
 
-    glm::matt3 v_T = glm::mat3(
-        v_ray_transformations[0], v_ray_transformations[1], v_ray_transformations[2],
-        v_ray_transformations[3], v_ray_transformations[4], v_ray_transformations[5],
-        v_ray_transformations[6], v_ray_transformations[7], v_ray_transformations[8]
-    );
+    // glm::matt3 v_T = glm::mat3(
+    //     v_ray_transformations[0], v_ray_transformations[1], v_ray_transformations[2],
+    //     v_ray_transformations[3], v_ray_transformations[4], v_ray_transformations[5],
+    //     v_ray_transformations[6], v_ray_transformations[7], v_ray_transformations[8]
+    // );
 
-    glm::mat3 v_M_aug = glm::transpose(P) * glm::transpose(v_T);
-    glm::mat3 v_M = glm::mat3(
-        glm::vec3(v_M_aug[0]),
-        glm::vec3(v_M_aug[1]),
-        glm::vec3(v_M_aug[2])
-    );
+    // glm::mat3 v_M_aug = glm::transpose(P) * glm::transpose(v_T);
+    // glm::mat3 v_M = glm::mat3(
+    //     glm::vec3(v_M_aug[0]),
+    //     glm::vec3(v_M_aug[1]),
+    //     glm::vec3(v_M_aug[2])
+    // );
 
-    glm::mat3 W_t = glm::transpose(W);
-    glm::mat v_RS = W_t * v_M;
-    glm::vec3 v_RS0 = v_RS[0];
-    glm::vec3 v_RS1 = v_RS[1];
-    glm::vec3 v_intersect_w = v_RS[2];
-    glm::vec3 v_tn = W_t * glm::vec3(0.f, 0.f, 0.f);
+    // glm::mat3 W_t = glm::transpose(W);
+    // glm::mat v_RS = W_t * v_M;
+    // glm::vec3 v_RS0 = v_RS[0];
+    // glm::vec3 v_RS1 = v_RS[1];
+    // glm::vec3 v_intersect_w = v_RS[2];
+    // glm::vec3 v_tn = W_t * glm::vec3(0.f, 0.f, 0.f);
 
-    glm::mat3 v_R = glm::mat3(
-        v_RS0 * glm::vec3(scale.x),
-        v_RS1 * glm::vec3(scale.y),
-        v_tn
-    );
+    // glm::mat3 v_R = glm::mat3(
+    //     v_RS0 * glm::vec3(scale.x),
+    //     v_RS1 * glm::vec3(scale.y),
+    //     v_tn
+    // );
 
-    float4 _v_quat = quat_to_rotmat_vjp(quat, v_R);
-    v_quat = glm::vec4(_v_quat.x, _v_quat.y, _v_quat.z, _v_quat.w);
-    v_scale = glm::vec2(
-        (float)glm::dot(v_RS0, R[0]),
-        (float)glm::dot(v_RS1, R[1])
-    );
+    // float4 _v_quat = quat_to_rotmat_vjp(quat, v_R);
+    // v_quat = glm::vec4(_v_quat.x, _v_quat.y, _v_quat.z, _v_quat.w);
+    // v_scale = glm::vec2(
+    //     (float)glm::dot(v_RS0, R[0]),
+    //     (float)glm::dot(v_RS1, R[1])
+    // );
 
-    v_mean3D = v_intersect_w;
+    // v_mean3D = v_intersect_w;
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
@@ -2131,48 +2130,48 @@ fully_fused_projection_bwd_2dgs_tensor(
     const torch::Tensor &v_ray_transformations,
     const bool viewmats_requires_grad
 ) {
-    DEVICE_GUARD(means);
-    CHECK_INPUT(means);
-    CHECK_INPUT(quats.value());
-    CHECK_INPUT(scales.value());
-    CHECK_INPUT(viewmats);
-    CHECK_INPUT(Ks);
-    CHECK_INPUT(radii);
-    CHECK_INPUT(ray_transformations);
-    CHECK_INPUT(v_means2d);
-    CHECK_INPUT(v_depths);
-    CHECK_INPUTS(v_ray_transformations);
+    // DEVICE_GUARD(means);
+    // CHECK_INPUT(means);
+    // CHECK_INPUT(quats.value());
+    // CHECK_INPUT(scales.value());
+    // CHECK_INPUT(viewmats);
+    // CHECK_INPUT(Ks);
+    // CHECK_INPUT(radii);
+    // CHECK_INPUT(ray_transformations);
+    // CHECK_INPUT(v_means2d);
+    // CHECK_INPUT(v_depths);
+    // CHECK_INPUTS(v_ray_transformations);
     
-    uint32_t N = means.size(0);     // number of gaussians
-    uint32_t C = viewmats.size(0);  // number of cameras
-    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+    // uint32_t N = means.size(0);     // number of gaussians
+    // uint32_t C = viewmats.size(0);  // number of cameras
+    // at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
-    torch::Tensor v_means = torch::zeros_like(means);
-    torch::Tensor v_quats, v_scales;
-    v_quats = torch::zeros_like(quats.value());
-    v_scales = torch::zeros_like(scales.value());
-    torch::Tensor v_viewmats;
-    if (viewmats_requires_grad) {
-        v_viewmats = torch::zeros_like(viewmats);
-    }
-    if (C && N) {
-        fully_fused_projection_bwd_kernel<<<(C * N + N_THREADS - 1) / N_THREADS,
-                                            N_THREADS, 0, stream>>>(
-            C, N, means.data_ptr<float>(),
-            quats.value().data_ptr<float>(),
-            scales.value().data_ptr<float>(),
-            viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
-            eps2d, radii.data_ptr<int32_t>(), ray_transformations.data_ptr<float>(),
-            v_means2d.data_ptr<float>(), v_depths.data_ptr<float>(),
-            v_ray_transformations.data_ptr<float>(),
-            v_means.data_ptr<float>(),
-            v_quats.data_ptr<float>(),
-            v_scales.data_ptr<float>(),
-            viewmats_requires_grad ? viewmats.data_ptr<float>() : nullptr                                 
-        );
-    }
+    // torch::Tensor v_means = torch::zeros_like(means);
+    // torch::Tensor v_quats, v_scales;
+    // v_quats = torch::zeros_like(quats.value());
+    // v_scales = torch::zeros_like(scales.value());
+    // torch::Tensor v_viewmats;
+    // if (viewmats_requires_grad) {
+    //     v_viewmats = torch::zeros_like(viewmats);
+    // }
+    // if (C && N) {
+    //     fully_fused_projection_bwd_kernel<<<(C * N + N_THREADS - 1) / N_THREADS,
+    //                                         N_THREADS, 0, stream>>>(
+    //         C, N, means.data_ptr<float>(),
+    //         quats.value().data_ptr<float>(),
+    //         scales.value().data_ptr<float>(),
+    //         viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
+    //         eps2d, radii.data_ptr<int32_t>(), ray_transformations.data_ptr<float>(),
+    //         v_means2d.data_ptr<float>(), v_depths.data_ptr<float>(),
+    //         v_ray_transformations.data_ptr<float>(),
+    //         v_means.data_ptr<float>(),
+    //         v_quats.data_ptr<float>(),
+    //         v_scales.data_ptr<float>(),
+    //         viewmats_requires_grad ? viewmats.data_ptr<float>() : nullptr                                 
+    //     );
+    // }
 
-    return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
+    // return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
 }
 
 __global__ void fully_fused_projection_packed_bwd_2dgs_kernel(
@@ -2197,174 +2196,174 @@ __global__ void fully_fused_projection_packed_bwd_2dgs_kernel(
     float *__restrict__ v_means,
     float *__restrict__ v_quats,
     float *__restrict__ v_scales,
-    float *__restrict__ v_viewmats,
+    float *__restrict__ v_viewmats
 ) {
-    // parallelize over nnz
-    uint32_t idx = cg::this_grid().thread_rank();
-    if (idx >= nnz) {
-        return;
-    }
-    const int64_t cid = camera_ids[idx];
-    const int64_t gid = gaussian_ids[idx];
+    // // parallelize over nnz
+    // uint32_t idx = cg::this_grid().thread_rank();
+    // if (idx >= nnz) {
+    //     return;
+    // }
+    // const int64_t cid = camera_ids[idx];
+    // const int64_t gid = gaussian_ids[idx];
 
-    // shift pointers to the current camera and gaussian
-    means += gid * 3;
-    viewmats += cid * 16;
-    Ks += cid * 9;
+    // // shift pointers to the current camera and gaussian
+    // means += gid * 3;
+    // viewmats += cid * 16;
+    // Ks += cid * 9;
 
-    ray_transformations += idx * 9;
+    // ray_transformations += idx * 9;
 
-    v_means2d += idx * 2;
-    v_depths += idx;
-    v_ray_transformations += idx * 9;
+    // v_means2d += idx * 2;
+    // v_depths += idx;
+    // v_ray_transformations += idx * 9;
 
-    glm::mat3 M = glm::mat3(
-        ray_transformations[0], ray_transformations[1], ray_transformations[2],
-        ray_transformations[3], ray_transformations[4], ray_transformations[5],
-        ray_transformations[6], ray_transformations[7], ray_transformations[8]
-    );
+    // glm::mat3 M = glm::mat3(
+    //     ray_transformations[0], ray_transformations[1], ray_transformations[2],
+    //     ray_transformations[3], ray_transformations[4], ray_transformations[5],
+    //     ray_transformations[6], ray_transformations[7], ray_transformations[8]
+    // );
 
-    float distance = glm::dot(glm::vec3(1.0, 1.0, -1.0), M[2] * M[2]);
-    glm::vec3 temp_point = glm::vec3(1.0f, 1.0f, -1.0f);
-    glm::vec3 f = (1.0f / distance) * temp_point;
+    // float distance = glm::dot(glm::vec3(1.0, 1.0, -1.0), M[2] * M[2]);
+    // glm::vec3 temp_point = glm::vec3(1.0f, 1.0f, -1.0f);
+    // glm::vec3 f = (1.0f / distance) * temp_point;
 
-    glm::vec3 p = glm::vec3(
-        glm::dot(f, M[0] * M[2]),
-        glm::dot(f, M[1] * M[2]),
-        glm::dot(f, M[2] * M[2])
-    );
+    // glm::vec3 p = glm::vec3(
+    //     glm::dot(f, M[0] * M[2]),
+    //     glm::dot(f, M[1] * M[2]),
+    //     glm::dot(f, M[2] * M[2])
+    // );
 
-    // temp variable
-    glm::vec3 v_mean2D = glm::vec3(v_means2d[0], v_means2d[1], v_means2d[2]);
-    glm::vec3 v_T0 = v_mean2D.x * f * M[2];
-    glm::vec3 v_T1 = v_mean2D.y * f * M[2];
-    glm::vec3 v_T3 = v_mean2D.x * f * M[0] + v_mean2D.y * f * M[1];
-    glm::vec3 v_f = (v_mean2D.x * M[0] * M[2]) + (v_mean2D.y * M[1] * M[2]);
-    float v_distance = glm::dot(v_f, f) * (-1.0 / distance);
-    glm::vec3 v_d_dT3 = glm::vec3(1.0, 1.0, -1.0) * M[2] * 2.0f;
-    v_T3 += v_distance * v_d_dT3;
-    v_ray_transformations[0] += v_T0.x;
-    v_ray_transformations[1] += v_T0.y;
-    v_ray_transformations[2] += v_T0.z;
-    v_ray_transformations[3] += v_T1.x;
-    v_ray_transformations[4] += v_T1.y;
-    v_ray_transformations[5] += v_T1.z;
-    v_ray_transformations[6] += v_T3.x;
-    v_ray_transformations[7] += v_T3.y;
-    v_ray_transformations[8] += v_T3.z;
+    // // temp variable
+    // glm::vec3 v_mean2D = glm::vec3(v_means2d[0], v_means2d[1], v_means2d[2]);
+    // glm::vec3 v_T0 = v_mean2D.x * f * M[2];
+    // glm::vec3 v_T1 = v_mean2D.y * f * M[2];
+    // glm::vec3 v_T3 = v_mean2D.x * f * M[0] + v_mean2D.y * f * M[1];
+    // glm::vec3 v_f = (v_mean2D.x * M[0] * M[2]) + (v_mean2D.y * M[1] * M[2]);
+    // float v_distance = glm::dot(v_f, f) * (-1.0 / distance);
+    // glm::vec3 v_d_dT3 = glm::vec3(1.0, 1.0, -1.0) * M[2] * 2.0f;
+    // v_T3 += v_distance * v_d_dT3;
+    // v_ray_transformations[0] += v_T0.x;
+    // v_ray_transformations[1] += v_T0.y;
+    // v_ray_transformations[2] += v_T0.z;
+    // v_ray_transformations[3] += v_T1.x;
+    // v_ray_transformations[4] += v_T1.y;
+    // v_ray_transformations[5] += v_T1.z;
+    // v_ray_transformations[6] += v_T3.x;
+    // v_ray_transformations[7] += v_T3.y;
+    // v_ray_transformations[8] += v_T3.z;
 
-    //====== ray transformation gradient ======//
-    // camera information
-    const glm::mat3 W = glm::mat3(
-        viewmats[0], viewmats[1], viewmats[2],
-        viewmats[4], viewmats[5], viewmats[6],
-        viewmats[8], viewmats[9], viewmats[10]
-    ); // viewmat
+    // //====== ray transformation gradient ======//
+    // // camera information
+    // const glm::mat3 W = glm::mat3(
+    //     viewmats[0], viewmats[1], viewmats[2],
+    //     viewmats[4], viewmats[5], viewmats[6],
+    //     viewmats[8], viewmats[9], viewmats[10]
+    // ); // viewmat
 
-    const glm::vec3 cam_pos = glm::vec3(viewmat[3], viewmat[7], viewmat[11]); // camera center
-    glm::mat3 P = glm::mat3(
-        intrins.x, 0.0, 0.0,
-        0.0, intrins.y, 0.0,
-        intrins.z, intrins.w, 1.0
-    );
+    // const glm::vec3 cam_pos = glm::vec3(viewmat[3], viewmat[7], viewmat[11]); // camera center
+    // glm::mat3 P = glm::mat3(
+    //     intrins.x, 0.0, 0.0,
+    //     0.0, intrins.y, 0.0,
+    //     intrins.z, intrins.w, 1.0
+    // );
 
-    glm::mat3 S = scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
-    glm::mat3 R = quat_to_rotmat(quat);
-    glm::mat3 RS = R * S;
-    glm::vec3 p_view = W * p_world + cam_pos;
+    // glm::mat3 S = scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
+    // glm::mat3 R = quat_to_rotmat(quat);
+    // glm::mat3 RS = R * S;
+    // glm::vec3 p_view = W * p_world + cam_pos;
 
-    glm::matt3 v_T = glm::mat3(
-        v_ray_transformations[0], v_ray_transformations[1], v_ray_transformations[2],
-        v_ray_transformations[3], v_ray_transformations[4], v_ray_transformations[5],
-        v_ray_transformations[6], v_ray_transformations[7], v_ray_transformations[8]
-    );
+    // glm::matt3 v_T = glm::mat3(
+    //     v_ray_transformations[0], v_ray_transformations[1], v_ray_transformations[2],
+    //     v_ray_transformations[3], v_ray_transformations[4], v_ray_transformations[5],
+    //     v_ray_transformations[6], v_ray_transformations[7], v_ray_transformations[8]
+    // );
 
-    glm::mat3 v_M_aug = glm::transpose(P) * glm::transpose(v_T);
-    glm::mat3 v_M = glm::mat3(
-        glm::vec3(v_M_aug[0]),
-        glm::vec3(v_M_aug[1]),
-        glm::vec3(v_M_aug[2])
-    );
+    // glm::mat3 v_M_aug = glm::transpose(P) * glm::transpose(v_T);
+    // glm::mat3 v_M = glm::mat3(
+    //     glm::vec3(v_M_aug[0]),
+    //     glm::vec3(v_M_aug[1]),
+    //     glm::vec3(v_M_aug[2])
+    // );
 
-    glm::mat3 W_t = glm::transpose(W);
-    glm::mat v_RS = W_t * v_M;
-    glm::vec3 v_RS0 = v_RS[0];
-    glm::vec3 v_RS1 = v_RS[1];
-    glm::vec3 v_intersect_w = v_RS[2];
-    glm::vec3 v_tn = W_t * glm::vec3(0.f, 0.f, 0.f);
+    // glm::mat3 W_t = glm::transpose(W);
+    // glm::mat v_RS = W_t * v_M;
+    // glm::vec3 v_RS0 = v_RS[0];
+    // glm::vec3 v_RS1 = v_RS[1];
+    // glm::vec3 v_intersect_w = v_RS[2];
+    // glm::vec3 v_tn = W_t * glm::vec3(0.f, 0.f, 0.f);
 
-    glm::mat3 v_R = glm::mat3(
-        v_RS0 * glm::vec3(scale.x),
-        v_RS1 * glm::vec3(scale.y),
-        v_tn
-    );
+    // glm::mat3 v_R = glm::mat3(
+    //     v_RS0 * glm::vec3(scale.x),
+    //     v_RS1 * glm::vec3(scale.y),
+    //     v_tn
+    // );
 
-    float4 _v_quat = quat_to_rotmat_vjp(quat, v_R);
-    v_quat = glm::vec4(_v_quat.x, _v_quat.y, _v_quat.z, _v_quat.w);
-    v_scale = glm::vec2(
-        (float)glm::dot(v_RS0, R[0]),
-        (float)glm::dot(v_RS1, R[1])
-    );
+    // float4 _v_quat = quat_to_rotmat_vjp(quat, v_R);
+    // v_quat = glm::vec4(_v_quat.x, _v_quat.y, _v_quat.z, _v_quat.w);
+    // v_scale = glm::vec2(
+    //     (float)glm::dot(v_RS0, R[0]),
+    //     (float)glm::dot(v_RS1, R[1])
+    // );
 
-    v_mean3D = v_intersect_w;
+    // v_mean3D = v_intersect_w;
 
-    auto warp = cg::tiled_partition<32>(cg::this_thread_block());
-    if (sparse_grad) {
-        // write out results with sparse layout
-        if (v_means != nullptr) {
-            v_means += idx * 3
-            PRAGMA_UNROLL
-            for (uint32_t i = 0; i < 3; i++) {
-                v_means[i] = vmean[i];
-            }
-        }
-        // TODO: Add v_covars options
-        glm::mat3 rotmat = quat_to_rotmat(quat);
-        glm::vec4 v_quat(0.f);
-        glm::vec3 v_scale(0.f);
-        ...;
-        v_quats += idx * 4;
-        v_quats += idx * 3;
-        ...
-    } else {
-        // write out results with dense layout
-        // &if __CUDA__ARCH__ >= 700
-        // write out results with warp-level reduction
-        auto warp_group_g = cg::labeled_partition(warp, gid);
-        if (v_means != nullptr) {
-            warpSum(v_mean, warp_group_g);
-            if (warp_group_g.thread_rank() == 0) {
-                v_means += gid * 3;
-                PRAGMA_UNROLL
-                for (uint32_t i = 0; i < 3; i++) {
-                    atomicAdd(v_means + i, v_mean[i]);
-                }
-            }
-        }
-        // TODO: add v_covar options
-        // Directly output gradients w.r.t. the quaternion and scale
-        glm::mat3 rotmat = quat_to_rotmat(quat);
-        glm::vec4 v_quat(0.f);
-        glm::vec3 v_scale(0.f);
-        ...
-    }
-    // v_viewmats is always in dense layout
-    if (v_viewmats != nullptr) {
-        auto warp_group_c = cg::labeled_partition(warp, gid);
-        warpSum(v_R, warp_group_c);
-        warpSum(v_t, warp_group_c);
-        if (warp_group_c.thread_rank() == 0) {
-            v_viewmats += cid * 16;
-            PRAGMA_UNROLL
-            for (uint32_t i = 0; i < 3; i++) {
-                PRAGMA_UNROLL
-                for (uint32_t j = 0; j < 3; j++) {
-                    atomicAdd(v_viewmats + i * 4 + j, v_R[j][i]);
-                }
-                atomicAdd(v_viewmats + i * 4 + 3, v_t[i]);
-            }
-        }
-    }
+    // auto warp = cg::tiled_partition<32>(cg::this_thread_block());
+    // if (sparse_grad) {
+    //     // write out results with sparse layout
+    //     if (v_means != nullptr) {
+    //         v_means += idx * 3
+    //         PRAGMA_UNROLL
+    //         for (uint32_t i = 0; i < 3; i++) {
+    //             v_means[i] = vmean[i];
+    //         }
+    //     }
+    //     // TODO: Add v_covars options
+    //     glm::mat3 rotmat = quat_to_rotmat(quat);
+    //     glm::vec4 v_quat(0.f);
+    //     glm::vec3 v_scale(0.f);
+    //     ...;
+    //     v_quats += idx * 4;
+    //     v_quats += idx * 3;
+    //     ...
+    // } else {
+    //     // write out results with dense layout
+    //     // &if __CUDA__ARCH__ >= 700
+    //     // write out results with warp-level reduction
+    //     auto warp_group_g = cg::labeled_partition(warp, gid);
+    //     if (v_means != nullptr) {
+    //         warpSum(v_mean, warp_group_g);
+    //         if (warp_group_g.thread_rank() == 0) {
+    //             v_means += gid * 3;
+    //             PRAGMA_UNROLL
+    //             for (uint32_t i = 0; i < 3; i++) {
+    //                 atomicAdd(v_means + i, v_mean[i]);
+    //             }
+    //         }
+    //     }
+    //     // TODO: add v_covar options
+    //     // Directly output gradients w.r.t. the quaternion and scale
+    //     glm::mat3 rotmat = quat_to_rotmat(quat);
+    //     glm::vec4 v_quat(0.f);
+    //     glm::vec3 v_scale(0.f);
+    //     ...
+    // }
+    // // v_viewmats is always in dense layout
+    // if (v_viewmats != nullptr) {
+    //     auto warp_group_c = cg::labeled_partition(warp, gid);
+    //     warpSum(v_R, warp_group_c);
+    //     warpSum(v_t, warp_group_c);
+    //     if (warp_group_c.thread_rank() == 0) {
+    //         v_viewmats += cid * 16;
+    //         PRAGMA_UNROLL
+    //         for (uint32_t i = 0; i < 3; i++) {
+    //             PRAGMA_UNROLL
+    //             for (uint32_t j = 0; j < 3; j++) {
+    //                 atomicAdd(v_viewmats + i * 4 + j, v_R[j][i]);
+    //             }
+    //             atomicAdd(v_viewmats + i * 4 + 3, v_t[i]);
+    //         }
+    //     }
+    // }
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
@@ -2386,53 +2385,53 @@ fully_fused_projection_packed_bwd_2dgs_tensor(
     const torch::Tensor &v_ray_transformations,
     const bool viewmats_requires_grad, const bool sparse_grad
 ) {
-    DEVICE_GUARD(means);
-    CHECK_INPUT(means);
-    CHECK_INPUT(quats.value());
-    CHECK_INPUT(scales.value());
-    CHECK_INPUT(viewmats);
-    CHECK_INPUT(Ks);
-    CHECK_INPUT(camera_ids);
-    CHECK_INPUT(gaussian_ids);
-    CHECK_INPUT(ray_transformations);
+    // DEVICE_GUARD(means);
+    // CHECK_INPUT(means);
+    // CHECK_INPUT(quats.value());
+    // CHECK_INPUT(scales.value());
+    // CHECK_INPUT(viewmats);
+    // CHECK_INPUT(Ks);
+    // CHECK_INPUT(camera_ids);
+    // CHECK_INPUT(gaussian_ids);
+    // CHECK_INPUT(ray_transformations);
 
-    uint32_t N = means.size(0);
-    uint32_t C = viewmats.size(0);
-    uint32_t nnz = camera_ids.size(0);
-    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+    // uint32_t N = means.size(0);
+    // uint32_t C = viewmats.size(0);
+    // uint32_t nnz = camera_ids.size(0);
+    // at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
-    torch::Tensor v_means, v_quats, v_scales, v_viewmats;
-    if (sparse_grad) {
-        v_means = torch::zeros({nnz, 3}, means.options());
-        v_quats = torch::zeros({nnz, 4}, quats.value().options());
-        v_scales = torch::zeros({nnz, 3}, scales.value().options());
-        if (viewmats_requires_grad) {
-            v_viewmats = torch::zeros({C, 4, 4}, viewmats.options());
-        }
-    } else {
-        v_means = torch::zeros_like(means);
-        v_quats = torch::zeros_like(quats.value());
-        v_scales = torch::zeros_like(scales.value());
-        if (viewmats_requires_grad) {
-            v_viewmats = torch::zeros_like(viewmats);
-        }
-    }
-    if (nnz) {
-        fully_fused_projection_packed_bwd_2dgs_kernel<<<(nnz + N_THREADS - 1) / N_THREADS, 
-                                                        N_THREADS, 0, stream>>>(
-            C, N, nnz, means.data_ptr<float>(),
-            quats.value().data_ptr<float>(),
-            scales.value().data_ptr<float>(),
-            viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
-            eps2d, camera_ids.data_ptr<int64_t>(), gaussian_ids.data_ptr<int64_t>(),
-            ray_transformations.data_ptr<float>(),
-            v_means2d.data_ptr<float>(), v_depths.data_ptr<float>(),
-            v_ray_transformations.data_ptr<float>(),
-            sparse_grad, v_means.data_ptr<float>(),
-            v_quats.data_ptr<float>(),
-            v_scales.data_ptr<float>(),
-            viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr
-        );
-    }
-    return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
+    // torch::Tensor v_means, v_quats, v_scales, v_viewmats;
+    // if (sparse_grad) {
+    //     v_means = torch::zeros({nnz, 3}, means.options());
+    //     v_quats = torch::zeros({nnz, 4}, quats.value().options());
+    //     v_scales = torch::zeros({nnz, 3}, scales.value().options());
+    //     if (viewmats_requires_grad) {
+    //         v_viewmats = torch::zeros({C, 4, 4}, viewmats.options());
+    //     }
+    // } else {
+    //     v_means = torch::zeros_like(means);
+    //     v_quats = torch::zeros_like(quats.value());
+    //     v_scales = torch::zeros_like(scales.value());
+    //     if (viewmats_requires_grad) {
+    //         v_viewmats = torch::zeros_like(viewmats);
+    //     }
+    // }
+    // if (nnz) {
+    //     fully_fused_projection_packed_bwd_2dgs_kernel<<<(nnz + N_THREADS - 1) / N_THREADS, 
+    //                                                     N_THREADS, 0, stream>>>(
+    //         C, N, nnz, means.data_ptr<float>(),
+    //         quats.value().data_ptr<float>(),
+    //         scales.value().data_ptr<float>(),
+    //         viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
+    //         eps2d, camera_ids.data_ptr<int64_t>(), gaussian_ids.data_ptr<int64_t>(),
+    //         ray_transformations.data_ptr<float>(),
+    //         v_means2d.data_ptr<float>(), v_depths.data_ptr<float>(),
+    //         v_ray_transformations.data_ptr<float>(),
+    //         sparse_grad, v_means.data_ptr<float>(),
+    //         v_quats.data_ptr<float>(),
+    //         v_scales.data_ptr<float>(),
+    //         viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr
+    //     );
+    // }
+    // return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
 }
