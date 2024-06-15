@@ -45,7 +45,7 @@ class SimpleTrainer:
             [
                 [1.0, 0.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0, 0.5],
                 [0.0, 0.0, 0.0, 1.0],
             ],
             device=self.device,
@@ -114,10 +114,11 @@ def main(
     num_points: int = 8,
     save_imgs: bool = True,
     img_path: Optional[Path] = None,
+    model_type: Literal["3dgs", "2dgs"] = "3dgs",
 ) -> None:
     trainer = SimpleTrainer(num_points=num_points)
     trainer.render(
-        model_type="3dgs",
+        model_type=model_type,
     )
     
 if __name__ == "__main__":

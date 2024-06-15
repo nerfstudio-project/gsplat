@@ -3,6 +3,8 @@ from typing import Callable, Optional, Tuple
 import torch
 from torch import Tensor
 
+import pdb
+
 
 def _make_lazy_cuda_func(name: str) -> Callable:
     def call_cuda(*args, **kwargs):
@@ -1149,7 +1151,7 @@ def fully_fused_projection_2dgs(
     """
     C = viewmats.size(0)
     N = means.size(0)
-    assert mean.size() == (N, 3), means.size()
+    assert means.size() == (N, 3), means.size()
     assert viewmats.size() == (C, 4, 4), viewmats.size()
     assert Ks.size() == (C, 3, 3), Ks.size()
     means = means.contiguous()
@@ -1411,13 +1413,13 @@ def rasterize_to_pixels_2dgs(
     if packed: 
         nnz = means2d.size(0)
         assert means2d.shape == (nnz, 2), means2d.shape
-        assert ray_transformations.shape == (nnz, 3, 3), ray_transformatins.shape
+        assert ray_transformations.shape == (nnz, 3, 3), ray_transformations.shape
         assert colors.shape == nnz, colors.shape
         assert opacities.shape == (nnz,), opacities.shape
     else:
         N = means2d.size(1)
         assert means2d.shape == (C, N, 2), means2d.shape
-        assert ray_transformations.shape == (C, N, 3), ray_transformations.shape
+        assert ray_transformations.shape == (C, N, 3, 3), ray_transformations.shape
         assert colors.shape[:2] == (C, N), colors.shape
         assert opacities.shape == (C, N), opacities.shape
     if backgrounds is not None:
@@ -1448,33 +1450,36 @@ def rasterize_to_pixels_2dgs(
                 ],
                 dim=-1,
             )
-        else:
-            padded_channels = 0
-        tile_height, tile_width = isect_offsets.shape[1:3]
-        assert(
-            tile_height * tile_size >= image_height
-        ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
-        assert (
-            tile_width * tile_size >= image_width
-        ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
-        
-        render_colors, render_alphas = _RasterizeToPixels2DGS.apply(
-            means2d.contiguous(),
-            ray_transformations.contiguous(),
-            colors.contiguous(),
-            opacities.contiguous(),
-            backgrounds,
-            image_width,
-            image_height,
-            tile_size,
-            isect_offsets.contiguous(),
-            flatten_ids.contiguous(),
-            absgrad,
-        )
-        
-        if padded_channels > 0:
-            render_colors = render_colors[..., :-padded_channels]
-        return render_colors, render_alphas
+    else:
+        padded_channels = 0
+    tile_height, tile_width = isect_offsets.shape[1:3]
+    assert(
+        tile_height * tile_size >= image_height
+    ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
+    assert (
+        tile_width * tile_size >= image_width
+    ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
+    
+    # pdb.set_trace()
+    render_colors, render_alphas = _RasterizeToPixels2DGS.apply(
+        means2d.contiguous(),
+        ray_transformations.contiguous(),
+        colors.contiguous(),
+        opacities.contiguous(),
+        backgrounds,
+        image_width,
+        image_height,
+        tile_size,
+        isect_offsets.contiguous(),
+        flatten_ids.contiguous(),
+        absgrad,
+    )
+    
+    if padded_channels > 0:
+        render_colors = render_colors[..., :-padded_channels]
+    
+    # pdb.set_trace()
+    return render_colors, render_alphas
     
 @torch.no_grad()
 def rasterize_to_indices_in_range(
@@ -1542,8 +1547,8 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             "rasterize_to_pixels_fwd_2dgs"
         )(
             means2d,
-            ray_transformations,
             colors,
+            ray_transformations,
             opacities,
             backgrounds,
             width,

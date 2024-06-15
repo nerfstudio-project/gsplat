@@ -15,6 +15,7 @@ from .cuda._wrapper import (
     fully_fused_projection_2dgs,
     rasterize_to_pixels_2dgs,
 )
+import pdb
 
 
 def rasterization(
@@ -645,8 +646,9 @@ def rasterization_2dgs(
         opacities = opacities.repeat(C, 1)
         camera_ids, gaussian_ids = None, None
     
+    # pdb.set_trace()
     # Identify intersecting tiles
-    tild_width = math.ceil(width / float(tile_size))
+    tile_width = math.ceil(width / float(tile_size))
     tile_height = math.ceil(height / float(tile_size))
     tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
         means2d,
@@ -692,11 +694,12 @@ def rasterization_2dgs(
         colors = depths[..., None]
     else: # RGB
         pass
+    # pdb.set_trace()
     render_colors, render_alphas = rasterize_to_pixels_2dgs(
         means2d,
         ray_transformations,
         colors,
-        opaities,
+        opacities,
         width,
         height,
         tile_size,

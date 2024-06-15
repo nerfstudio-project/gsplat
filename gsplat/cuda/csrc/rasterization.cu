@@ -1336,8 +1336,12 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
             u_transform_batch[tr] = {ray_transformations[g * 9 + 0], ray_transformations[g * 9 + 1], ray_transformations[g * 9 + 2]};
             v_transform_batch[tr] = {ray_transformations[g * 9 + 3], ray_transformations[g * 9 + 4], ray_transformations[g * 9 + 5]};
             w_transform_batch[tr] = {ray_transformations[g * 9 + 6], ray_transformations[g * 9 + 7], ray_transformations[g * 9 + 8]};
+            // printf("transformation: %.2f, %.2f, %.2f \n, %.2f, %.2f ,%.2f \n, %.2f, %.2f, %.2f \n", 
+            //     ray_transformations[g + 0], ray_transformations[g + 1], ray_transformations[g + 2],
+            //     ray_transformations[g * 9 + 3], ray_transformations[g * 9 + 4], ray_transformations[g * 9 + 5],
+            //     ray_transformations[g * 9 + 6], ray_transformations[g * 9 + 7], ray_transformations[g * 9 + 8]
+            // );
         }
-
         // wait for other threads to collect the gaussians in batch
         block.sync();
 
@@ -1351,12 +1355,13 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
             float3 v_transform = v_transform_batch[t];
             float3 w_transform = w_transform_batch[t];
 
-            float h_u = {-u_transform.x + px * w_transform.x, -u_transform.y + px * w_transform.y, -u_transform.z + px * w_transform.z};
-            float h_v = {-v_transform.x + py * w_transform.x, -v_transform.y + py * w_transform.y, -v_transform.z + py * w_transform.z};
-
+            float3 h_u = {-u_transform.x + px * w_transform.x, -u_transform.y + px * w_transform.y, -u_transform.z + px * w_transform.z};
+            float3 h_v = {-v_transform.x + py * w_transform.x, -v_transform.y + py * w_transform.y, -v_transform.z + py * w_transform.z};
+            
+            // printf("%.2f, %.2f, %.2f\n", u_transform.x, u_transform.y, u_transform.z);            
             // cross product of two planes is a line
             float3 intersect = cross_product(h_u, h_v);
-
+            // printf("%.2f, %.2f, %.2f \n", intersect.x, intersect.y, intersect.z);
             // No intersection
             float2 s;
             if (intersect.z == 0.0) {
@@ -1384,7 +1389,7 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
                 continue;
             }
 
-            const float next_T = T * (1.0f - alpha);
+            const float next_T = T * (1.f - alpha);
             if (next_T <= 1e-4) { //this pixel is done: exclusive
                 done = true;
                 break;
@@ -1464,6 +1469,10 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
     torch::Tensor last_ids = torch::empty({C, image_height, image_width}, 
                                             means2d.options().dtype(torch::kInt32));
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+
+    // printf("%.2f, %.2f, %.2f \n, %.2f, %.2f, %.2f\n", 
+    //         ray_transformations[0], ray_transformations[1], ray_transformations[2],
+    //         ray_transformations[3], ray_transformations[4], ray_transformations[5]);
 
     // TODO: an optimization can be done by passing the actual number of channels into
     // the kernel functions and avoid necessary global memory writes. This requires  
@@ -1838,13 +1847,13 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_2dgs_tens
             (float *)ray_transformations.data_ptr<float>(), opacities.data_ptr<float>(),
             image_width, image_height, tile_size, tile_width, tile_height,
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-            transmittance.data_ptr<float>(), chunk_starts.data_ptr<int32_t>(), nullptr,
+            transmittances.data_ptr<float>(), chunk_starts.data_ptr<int32_t>(), nullptr,
             gaussian_ids.data_ptr<int64_t>(), pixel_ids.data_ptr<int64_t>());
     }
     return std::make_tuple(gaussian_ids, pixel_ids);
 }
 
-template <uint32 COLOR_DIM>
+template <uint32_t COLOR_DIM>
 __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
     const uint32_t C, const uint32_t N, const uint32_t n_isects, const bool packed,
     // fwd inputs
@@ -1870,285 +1879,285 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
     float *__restrict__ v_colors,
     float *__restrict__ v_opacities
 ) {
-    auto block = cg::this_thread_block();
-    uint32_t camera_id = block.group_index().x;
-    uint32_t tile_id = block.group_index().y * tile_width + block.group_index().z;
-    uint32_t i = block.group_index().y * tile_size + block.thread_index().y;
-    uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
+    // auto block = cg::this_thread_block();
+    // uint32_t camera_id = block.group_index().x;
+    // uint32_t tile_id = block.group_index().y * tile_width + block.group_index().z;
+    // uint32_t i = block.group_index().y * tile_size + block.thread_index().y;
+    // uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
 
-    tile_offsets += camera_id * tile_height * tile_width;
-    render_alphas += camera_id * image_height * image_width;
-    last_ids += camera_id * image_height * image_width;
-    v_render_colors += camera_id * image_height * image_width * COLOR_DIM;
-    v_render_alphas += camera_id * image_height * image_width;
-    if (backgrounds != nullptr) {
-        backgrounds += camera_id * COLOR_DIM;
-    }
+    // tile_offsets += camera_id * tile_height * tile_width;
+    // render_alphas += camera_id * image_height * image_width;
+    // last_ids += camera_id * image_height * image_width;
+    // v_render_colors += camera_id * image_height * image_width * COLOR_DIM;
+    // v_render_alphas += camera_id * image_height * image_width;
+    // if (backgrounds != nullptr) {
+    //     backgrounds += camera_id * COLOR_DIM;
+    // }
 
-    const float px = (float)j + 0.5f;
-    const float py = (float)i + 0.5f;
-    // clamp this value to the last pixel
-    const int32_t pix_id = min(i * image_width + j, image_width * image_height - 1);
+    // const float px = (float)j + 0.5f;
+    // const float py = (float)i + 0.5f;
+    // // clamp this value to the last pixel
+    // const int32_t pix_id = min(i * image_width + j, image_width * image_height - 1);
 
-    // keep not rasterizing threads around for reading data
-    bool inside = (i < image_height && j < image_width);
+    // // keep not rasterizing threads around for reading data
+    // bool inside = (i < image_height && j < image_width);
 
-    // have all threads in tile process the same gaussians in batches
-    // first collect gaussians between range.x and range.y in batches
-    // which gaussians to look through in this tile
-    int32_t range_start = tile_offsets[tile_id];
-    int32_t range_end = 
-        (camera_id == C - 1) && (tile_id == tile_width * tile_height - 1)
-            ? n_isects
-            : tile_offsets[tile_id + 1];
-    const uint32_t block_size = block.size();
-    const uint32_t num_batches = 
-        (range_end - range_start + block_size - 1) / block_size;
+    // // have all threads in tile process the same gaussians in batches
+    // // first collect gaussians between range.x and range.y in batches
+    // // which gaussians to look through in this tile
+    // int32_t range_start = tile_offsets[tile_id];
+    // int32_t range_end = 
+    //     (camera_id == C - 1) && (tile_id == tile_width * tile_height - 1)
+    //         ? n_isects
+    //         : tile_offsets[tile_id + 1];
+    // const uint32_t block_size = block.size();
+    // const uint32_t num_batches = 
+    //     (range_end - range_start + block_size - 1) / block_size;
     
-    __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 u_transform_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 v_transform_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 w_transform_batch[MAX_BLOCK_SIZE];
-    __shared__ float rgbs_batch[MAX_BLOCK_SIZE * COLOR_DIM];
+    // __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
+    // __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
+    // __shared__ float3 u_transform_batch[MAX_BLOCK_SIZE];
+    // __shared__ float3 v_transform_batch[MAX_BLOCK_SIZE];
+    // __shared__ float3 w_transform_batch[MAX_BLOCK_SIZE];
+    // __shared__ float rgbs_batch[MAX_BLOCK_SIZE * COLOR_DIM];
 
-    // this is the T AFTER the last gaussian in this pixel
-    float T_final = 1.0f - render_alphas[pix_id];
-    float T = T_final;
-    // the contribution from gaussians behind the current one
-    float buffer[COLOR_DIM] = {0.f};
-    // index of last gaussian to contribute to this pixel
-    const int32_t bin_final = inside ? last_ids[pix_id] : 0;
+    // // this is the T AFTER the last gaussian in this pixel
+    // float T_final = 1.0f - render_alphas[pix_id];
+    // float T = T_final;
+    // // the contribution from gaussians behind the current one
+    // float buffer[COLOR_DIM] = {0.f};
+    // // index of last gaussian to contribute to this pixel
+    // const int32_t bin_final = inside ? last_ids[pix_id] : 0;
 
-    // df/d_out for this pixel
-    float v_render_c[COLOR_DIM];
-    PRAGMA_UNROLL
-    for (uint32_t k = 0; k < COLOR_DIM; k++) {
-        v_render_c[k] = v_render_colors[pix_id * COLOR_DIM + k];
-    }
-    const float v_render_a = v_render_alphas[pix_id];
+    // // df/d_out for this pixel
+    // float v_render_c[COLOR_DIM];
+    // PRAGMA_UNROLL
+    // for (uint32_t k = 0; k < COLOR_DIM; k++) {
+    //     v_render_c[k] = v_render_colors[pix_id * COLOR_DIM + k];
+    // }
+    // const float v_render_a = v_render_alphas[pix_id];
 
-    // collect and process batches of gaussians
-    // each thread loads one gaussian at a time before rasterizing
-    const uint32_t tr = block.thread_rank();
-    cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
-    const int32_t warp_bin_final = cg::reduce(warp, bin_final, cg::greater<int>());
-    for (uint32_t b = 0; b < num_batches; ++b) {
-        // resync all threads before writing next batch of shared mem
-        block.sync();
+    // // collect and process batches of gaussians
+    // // each thread loads one gaussian at a time before rasterizing
+    // const uint32_t tr = block.thread_rank();
+    // cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
+    // const int32_t warp_bin_final = cg::reduce(warp, bin_final, cg::greater<int>());
+    // for (uint32_t b = 0; b < num_batches; ++b) {
+    //     // resync all threads before writing next batch of shared mem
+    //     block.sync();
 
-        // each thread fetch 1 gaussian from back to front 
-        // 0 index will be furthest back in batch
-        // index of gaussian to load
-        // batch end is the index of the last gaussian in the batch
-        // These values can be negative so must be int32 instead of uint32
-        const int32_t batch_end = range_end - 1 - block_size * b;
-        const int32_t batch_size = min(block_size, batch_end + 1 - range_start);
-        cosnt int32_t idx = batch_end - tr;
-        if (idx >= range_start) {
-            int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
-            id_batch[tr] = g;
-            const float2 xy = means2d[g];
-            const float opac = opacities[g];
-            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
-            u_transform_batch[tr] = {ray_transformations[g * 9 + 0], ray_transformations[g * 9 + 1], ray_transformations[g * 9 + 2]};
-            v_transform_batch[tr] = {ray_transformations[g * 9 + 3], ray_transformations[g * g + 4], ray_transformations[g * 9 + 5]};
-            w_transform_batch[tr] = {ray_transformations[g * 9 + 6], ray_transformations[g * 9 + 7], ray_transformations[g * 9 + 8]};
-            for (uint32_t k = 0; k < COLOR_DIM; ++k) {
-                rgbs_batch[tr * COLOR_DIM + k] = colors[g * COLOR_DIM + k];
-            }
-        }
+    //     // each thread fetch 1 gaussian from back to front 
+    //     // 0 index will be furthest back in batch
+    //     // index of gaussian to load
+    //     // batch end is the index of the last gaussian in the batch
+    //     // These values can be negative so must be int32 instead of uint32
+    //     const int32_t batch_end = range_end - 1 - block_size * b;
+    //     const int32_t batch_size = min(block_size, batch_end + 1 - range_start);
+    //     const int32_t idx = batch_end - tr;
+    //     if (idx >= range_start) {
+    //         int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
+    //         id_batch[tr] = g;
+    //         const float2 xy = means2d[g];
+    //         const float opac = opacities[g];
+    //         xy_opacity_batch[tr] = {xy.x, xy.y, opac};
+    //         u_transform_batch[tr] = {ray_transformations[g * 9 + 0], ray_transformations[g * 9 + 1], ray_transformations[g * 9 + 2]};
+    //         v_transform_batch[tr] = {ray_transformations[g * 9 + 3], ray_transformations[g * g + 4], ray_transformations[g * 9 + 5]};
+    //         w_transform_batch[tr] = {ray_transformations[g * 9 + 6], ray_transformations[g * 9 + 7], ray_transformations[g * 9 + 8]};
+    //         for (uint32_t k = 0; k < COLOR_DIM; ++k) {
+    //             rgbs_batch[tr * COLOR_DIM + k] = colors[g * COLOR_DIM + k];
+    //         }
+    //     }
 
-        // wait for other threads to collect the gaussians in batch
-        block.sync();
+    //     // wait for other threads to collect the gaussians in batch
+    //     block.sync();
 
-        // process gaussians in the current batch for this pixel
-        // 0 index is the furthest back gaussian in the batch
-        for (uint32_t t = max(0, batch_end - warp_bin_final); t < batch_size; ++t) {
-            bool valid = inside;
-            if (batch_end - t > bin_final) {
-                valid = 0;
-            }
-            float alpha;
-            float opac;
-            float vis;
-            float gauss_weight_3d;
-            float gauss_weight_2d;
-            float gauss_weight;
-            float2 s;
-            float2 d;
-            float3 h_u;
-            float3 h_v;
-            float3 intersect;
-            float3 w_transform;
-            if (valid) { 
-
-
-                const float3 u_transform = u_transform_batch[t];
-                const float3 v_transform = v_transform_batch[t];
-                w_transform = w_transform_batch[t];
-                const float3 xy_opac = xy_opacity_batch[t];
-                const float opac = xy_opac.z;
-
-                h_u = {-u_transform.x + px * w_transform.x, -u_transform.y + px * w_transform.y, -u_transform.z + px * w_transform.z};
-                h_v = {-v_transform.x + py * w_transform.x, -v_transform.y + py * w_transform.y, -v_transform.z + py * w_transform.z};
-
-                // cross product of two planes is a line
-                intersect = cross_product(h_u, h_v);
-
-                // No intersection
-                if (intersect.z == 0.0) {
-                    continue;
-                } else {
-                    // 3D homogeneous point to 2D point on the splat
-                    s = {intersect.x / intersect.z, intersect.y / intersect.z};
-                }
-
-                // 3D distance. Compute Mahalanobis distance in the canonical splat space.
-                gauss_weight_3d = (s.x * s.x + s.y * s.y);
-
-                // Low pass filter
-                float x = xy_opac.x;
-                float y = xy_opac.y;
-                d = {x - px, y - py};
-                // 2D screen distance
-                gauss_weight_2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
-                gauss_weight = min(gauss_weight_3d, gauss_weight_2d);
-
-                const float sigma = 0.5f * gauss_weight;
-                vis = __expf(-sigma);
-                alpha = min(0.999f, opac * vis);
-                if (sigma < 0.f || alpha < 1.f / 255.f) {
-                    valid = false;
-                }
-            }
-
-            // if all threads are inactive in this warp, skip this loop
-            if (!warp.any(valid)) {
-                continue;
-            }
-            float v_rgb_local[COLOR_DIM] = {0.f};
-            float3 v_u_transform_local = {0.f, 0.f, 0.f};
-            float3 v_v_transform_local = {0.f, 0.f, 0.f};
-            float3 v_w_transform_local = {0.f, 0.f, 0.f};
-            float2 v_xy_local = {0.f, 0.f};
-            float2 v_xy_abs_local = {0.f, 0.f};
-            float v_opacity_local = 0.f;
-            // initialize everything to 0, only set if the lane is valid
-            if (valid) {
-                // compute the current T for this gaussian
-                float ra = 1.0f / (1.0f - alpha);
-                T *= ra;
-                // update v_rgb for this gaussian
-                const float fac = alpha * T;
-                PRAGMA_UNROLL
-                for (uint32_t k = 0; k < COLOR_DIM; ++k) {
-                    v_alpha += (rgbs_batch[t * COLOR_DIM + k] * T - buffer[k] * ra) *
-                                v_render_c[k];
-                }
-
-                v_alpha += T_final * ra * v_render_a;
-                // contribution from background pixel
-                if (backgrounds != nullptr) {
-                    float accum = 0.f;
-                    PRAGMA_UNROLL
-                    for (uint32_t k = 0; k < COLOR_DIM; ++k) {
-                        accum += backgrounds[k] * v_render_c[k];
-                    }
-                    v_alpha += -T_final * ra * accum;
-                }
-
-                //====== 2DGS ======//
-                const float v_G = opac * v_alpha;
-                float v_depth = 0.f;
-                if (gauss_weight_3d <= gauss_weight_2d) {
-                    const float2 v_s = {
-                        v_G * -vis * s.x + v_depth * w_transform.x,
-                        v_G * -vis * s.y + v_depth * w_transform.y
-                    };
-                    const float3 v_z_w_transform = {s.x, s.y, 1.0};
-                    const float v_sx_pz = v_s.x / intersect.z;
-                    const float v_sy_pz = v_s.y / intersect.z;
-                    const float3 v_intersect = {v_sx_pz, v_sy_pz, -(v_sx_pz * s.x + v_sy_pz * s.y)};
-                    const float3 v_h_u = cross_product(h_v, v_intersect);
-                    const float3 v_h_v = cross_product(v_intersect, h_u);
-
-                    const float3 v_u_transform = {-v_h_u.x, -v_h_u.y, -v_h_u.z};
-                    const float3 v_v_transform = {-v_h_v.x, -v_h_v.y, -v_h_v.z};
-                    const float3 v_w_transform = {
-                        px * v_h_u.x + py * v_h_v.x + v_depth * v_z_w_transform.x,
-                        px * v_h_u.y + py * v_h_v.y + v_depth * v_z_w_transform.y,
-                        px * v_h_u.z + py * v_h_v.z + v_depth * v_z_w_transform.z
-                    };
-                    v_u_transform_local = {v_u_transform.x, v_u_transform.y, v_u_transform.z};
-                    v_v_transform_local = {v_v_transform.x, v_v_transform.y, v_v_transform.z};
-                    v_w_transform_local = {v_w_transform.x, v_w_transform.y, v_w_transform.z};
-                } else {
-                    const float v_G_ddelx = -vis * FilterInvSquare * d.x;
-                    const float v_G_ddely = -vis * FilterInvSquare * d.y;
-                    v_xy_local = {v_G * v_G_ddelx, v_G * v_G_ddely};
-                }
-
-                if (opac * vis <= 0.999f) {
-                    const float v_sigma = -opac * vis * v_alpha;
-                    v_opacity_local = vis * v_alpha;
-                }
-
-                PRAGMA_UNROLL
-                for (uint32_t k = 0; k < COLOR_DIM; ++k) {
-                    buffer[k] += rgbs_batch[t * COLOR_DIM + k] * fac;
-                }
+    //     // process gaussians in the current batch for this pixel
+    //     // 0 index is the furthest back gaussian in the batch
+    //     for (uint32_t t = max(0, batch_end - warp_bin_final); t < batch_size; ++t) {
+    //         bool valid = inside;
+    //         if (batch_end - t > bin_final) {
+    //             valid = 0;
+    //         }
+    //         float alpha;
+    //         float opac;
+    //         float vis;
+    //         float gauss_weight_3d;
+    //         float gauss_weight_2d;
+    //         float gauss_weight;
+    //         float2 s;
+    //         float2 d;
+    //         float3 h_u;
+    //         float3 h_v;
+    //         float3 intersect;
+    //         float3 w_transform;
+    //         if (valid) { 
 
 
-            }
-            warpSum<COLOR_DIM, float>(v_rgb_local, warp);
-            warpSum(v_xy_local, warp);
-            if (v_means2d_abs != nullptr) {
-                warpSum(v_xy_abs_local, warp);
-            }
-            warpSum(v_opacity_local, warp);
-            warpSum(v_u_transform_local, warp);
-            warpSum(v_v_transform_local, warp);
-            warpSum(v_w_transform_local, warp);
-            if (warp.thread_rank() == 0) {
-                int32_t g = id_batch[t]; // flatten index in [C * N] or [nnz]
-                float *v_rgb_ptr = (float *)(v_colors) + COLOR_DIM * g;
-                PRAGMA_UNROLL
-                for (uint32_t k = 0; k < COLOR_DIM; ++k) {
-                    atomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
-                }
+    //             const float3 u_transform = u_transform_batch[t];
+    //             const float3 v_transform = v_transform_batch[t];
+    //             w_transform = w_transform_batch[t];
+    //             const float3 xy_opac = xy_opacity_batch[t];
+    //             const float opac = xy_opac.z;
 
-                //====== 2DGS ======//
-                if (gauss_weight_3d <= gauss_weight_2d) {
-                    float *v_ray_transformation_ptr = (float *)(v_ray_transformation) + 9 * g;
-                    atomicAdd(v_ray_transformation_ptr + 0, v_u_transform_local.x);
-                    atomicAdd(v_ray_transformation_ptr + 1, v_u_transform_local.y);
-                    atomicAdd(v_ray_transformation_ptr + 2, v_u_transform_local.z);
-                    atomicAdd(v_ray_transformation_ptr + 3, v_v_transform_local.x);
-                    atomicAdd(v_ray_transformation_ptr + 4, v_v_transform_local.y);
-                    atomicAdd(v_ray_transformation_ptr + 5, v_v_transform_local.z);
-                    atomicAdd(v_ray_transformation_ptr + 6, v_w_transform_local.x);
-                    atomicAdd(v_ray_transformation_ptr + 7, v_w_transform_local.y);
-                    atomicAdd(v_ray_transformation_ptr + 8, v_w_transform_local.z);
-                } else {
-                    float *v_xy_ptr = (float *)(v_means2d) + 2 * g;
-                    atomicAdd(v_xy_ptr, v_xy_local.x);
-                    atomicAdd(v_xy_ptr + 1, v_xy_local.y);
+    //             h_u = {-u_transform.x + px * w_transform.x, -u_transform.y + px * w_transform.y, -u_transform.z + px * w_transform.z};
+    //             h_v = {-v_transform.x + py * w_transform.x, -v_transform.y + py * w_transform.y, -v_transform.z + py * w_transform.z};
 
-                    if (v_means2d_abs != nullptr) {
-                        float *v_xy_abs_ptr = (float *)(v_means2d_abs) + 2 * g;
-                        atomicAdd(v_xy_abs_ptr, v_xy_abs_local.x);
-                        atomicAdd(v_xy_abs_ptr + 1, v_xy_abs_local.y);
-                    }
-                }
-                atomicAdd(v_opacities + g, v_opacity_local);
-            }
-        }
-    }
+    //             // cross product of two planes is a line
+    //             intersect = cross_product(h_u, h_v);
+
+    //             // No intersection
+    //             if (intersect.z == 0.0) {
+    //                 continue;
+    //             } else {
+    //                 // 3D homogeneous point to 2D point on the splat
+    //                 s = {intersect.x / intersect.z, intersect.y / intersect.z};
+    //             }
+
+    //             // 3D distance. Compute Mahalanobis distance in the canonical splat space.
+    //             gauss_weight_3d = (s.x * s.x + s.y * s.y);
+
+    //             // Low pass filter
+    //             float x = xy_opac.x;
+    //             float y = xy_opac.y;
+    //             d = {x - px, y - py};
+    //             // 2D screen distance
+    //             gauss_weight_2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
+    //             gauss_weight = min(gauss_weight_3d, gauss_weight_2d);
+
+    //             const float sigma = 0.5f * gauss_weight;
+    //             vis = __expf(-sigma);
+    //             alpha = min(0.999f, opac * vis);
+    //             if (sigma < 0.f || alpha < 1.f / 255.f) {
+    //                 valid = false;
+    //             }
+    //         }
+
+    //         // if all threads are inactive in this warp, skip this loop
+    //         if (!warp.any(valid)) {
+    //             continue;
+    //         }
+    //         float v_rgb_local[COLOR_DIM] = {0.f};
+    //         float3 v_u_transform_local = {0.f, 0.f, 0.f};
+    //         float3 v_v_transform_local = {0.f, 0.f, 0.f};
+    //         float3 v_w_transform_local = {0.f, 0.f, 0.f};
+    //         float2 v_xy_local = {0.f, 0.f};
+    //         float2 v_xy_abs_local = {0.f, 0.f};
+    //         float v_opacity_local = 0.f;
+    //         // initialize everything to 0, only set if the lane is valid
+    //         if (valid) {
+    //             // compute the current T for this gaussian
+    //             float ra = 1.0f / (1.0f - alpha);
+    //             T *= ra;
+    //             // update v_rgb for this gaussian
+    //             const float fac = alpha * T;
+    //             PRAGMA_UNROLL
+    //             for (uint32_t k = 0; k < COLOR_DIM; ++k) {
+    //                 v_alpha += (rgbs_batch[t * COLOR_DIM + k] * T - buffer[k] * ra) *
+    //                             v_render_c[k];
+    //             }
+
+    //             v_alpha += T_final * ra * v_render_a;
+    //             // contribution from background pixel
+    //             if (backgrounds != nullptr) {
+    //                 float accum = 0.f;
+    //                 PRAGMA_UNROLL
+    //                 for (uint32_t k = 0; k < COLOR_DIM; ++k) {
+    //                     accum += backgrounds[k] * v_render_c[k];
+    //                 }
+    //                 v_alpha += -T_final * ra * accum;
+    //             }
+
+    //             //====== 2DGS ======//
+    //             const float v_G = opac * v_alpha;
+    //             float v_depth = 0.f;
+    //             if (gauss_weight_3d <= gauss_weight_2d) {
+    //                 const float2 v_s = {
+    //                     v_G * -vis * s.x + v_depth * w_transform.x,
+    //                     v_G * -vis * s.y + v_depth * w_transform.y
+    //                 };
+    //                 const float3 v_z_w_transform = {s.x, s.y, 1.0};
+    //                 const float v_sx_pz = v_s.x / intersect.z;
+    //                 const float v_sy_pz = v_s.y / intersect.z;
+    //                 const float3 v_intersect = {v_sx_pz, v_sy_pz, -(v_sx_pz * s.x + v_sy_pz * s.y)};
+    //                 const float3 v_h_u = cross_product(h_v, v_intersect);
+    //                 const float3 v_h_v = cross_product(v_intersect, h_u);
+
+    //                 const float3 v_u_transform = {-v_h_u.x, -v_h_u.y, -v_h_u.z};
+    //                 const float3 v_v_transform = {-v_h_v.x, -v_h_v.y, -v_h_v.z};
+    //                 const float3 v_w_transform = {
+    //                     px * v_h_u.x + py * v_h_v.x + v_depth * v_z_w_transform.x,
+    //                     px * v_h_u.y + py * v_h_v.y + v_depth * v_z_w_transform.y,
+    //                     px * v_h_u.z + py * v_h_v.z + v_depth * v_z_w_transform.z
+    //                 };
+    //                 v_u_transform_local = {v_u_transform.x, v_u_transform.y, v_u_transform.z};
+    //                 v_v_transform_local = {v_v_transform.x, v_v_transform.y, v_v_transform.z};
+    //                 v_w_transform_local = {v_w_transform.x, v_w_transform.y, v_w_transform.z};
+    //             } else {
+    //                 const float v_G_ddelx = -vis * FilterInvSquare * d.x;
+    //                 const float v_G_ddely = -vis * FilterInvSquare * d.y;
+    //                 v_xy_local = {v_G * v_G_ddelx, v_G * v_G_ddely};
+    //             }
+
+    //             if (opac * vis <= 0.999f) {
+    //                 const float v_sigma = -opac * vis * v_alpha;
+    //                 v_opacity_local = vis * v_alpha;
+    //             }
+
+    //             PRAGMA_UNROLL
+    //             for (uint32_t k = 0; k < COLOR_DIM; ++k) {
+    //                 buffer[k] += rgbs_batch[t * COLOR_DIM + k] * fac;
+    //             }
+
+
+    //         }
+    //         warpSum<COLOR_DIM, float>(v_rgb_local, warp);
+    //         warpSum(v_xy_local, warp);
+    //         if (v_means2d_abs != nullptr) {
+    //             warpSum(v_xy_abs_local, warp);
+    //         }
+    //         warpSum(v_opacity_local, warp);
+    //         warpSum(v_u_transform_local, warp);
+    //         warpSum(v_v_transform_local, warp);
+    //         warpSum(v_w_transform_local, warp);
+    //         if (warp.thread_rank() == 0) {
+    //             int32_t g = id_batch[t]; // flatten index in [C * N] or [nnz]
+    //             float *v_rgb_ptr = (float *)(v_colors) + COLOR_DIM * g;
+    //             PRAGMA_UNROLL
+    //             for (uint32_t k = 0; k < COLOR_DIM; ++k) {
+    //                 atomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
+    //             }
+
+    //             //====== 2DGS ======//
+    //             if (gauss_weight_3d <= gauss_weight_2d) {
+    //                 float *v_ray_transformation_ptr = (float *)(v_ray_transformation) + 9 * g;
+    //                 atomicAdd(v_ray_transformation_ptr + 0, v_u_transform_local.x);
+    //                 atomicAdd(v_ray_transformation_ptr + 1, v_u_transform_local.y);
+    //                 atomicAdd(v_ray_transformation_ptr + 2, v_u_transform_local.z);
+    //                 atomicAdd(v_ray_transformation_ptr + 3, v_v_transform_local.x);
+    //                 atomicAdd(v_ray_transformation_ptr + 4, v_v_transform_local.y);
+    //                 atomicAdd(v_ray_transformation_ptr + 5, v_v_transform_local.z);
+    //                 atomicAdd(v_ray_transformation_ptr + 6, v_w_transform_local.x);
+    //                 atomicAdd(v_ray_transformation_ptr + 7, v_w_transform_local.y);
+    //                 atomicAdd(v_ray_transformation_ptr + 8, v_w_transform_local.z);
+    //             } else {
+    //                 float *v_xy_ptr = (float *)(v_means2d) + 2 * g;
+    //                 atomicAdd(v_xy_ptr, v_xy_local.x);
+    //                 atomicAdd(v_xy_ptr + 1, v_xy_local.y);
+
+    //                 if (v_means2d_abs != nullptr) {
+    //                     float *v_xy_abs_ptr = (float *)(v_means2d_abs) + 2 * g;
+    //                     atomicAdd(v_xy_abs_ptr, v_xy_abs_local.x);
+    //                     atomicAdd(v_xy_abs_ptr + 1, v_xy_abs_local.y);
+    //                 }
+    //             }
+    //             atomicAdd(v_opacities + g, v_opacity_local);
+    //         }
+    //     }
+    // }
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-rasterize_to_pixel_bwd_2dgs_tensor(
+rasterize_to_pixels_bwd_2dgs_tensor(
     // Gaussian parameters
     const torch::Tensor &means2d,
     const torch::Tensor &ray_transformations,
@@ -2169,170 +2178,170 @@ rasterize_to_pixel_bwd_2dgs_tensor(
     // options
     bool absgrad
 ) {
-    DEVICE_GUARD(means2d);
-    CHECK_INPUT(means2d);
-    CHECK_INPUT(ray_transformations);
-    CHECK_INPUT(colors);
-    CHECK_INPUT(opacities);
-    CHECK_INPUT(tile_offsets);
-    CHECK_INPUT(flatten_ids);
-    CHECK_INPUT(render_alphas);
-    CHECK_INPUT(last_ids);
-    CHECK_INPUT(v_render_colors);
-    CHECK_INPUT(v_render_alphas);
-    if (backgrounds.has_value()) {
-        CHECK_INPUT(backgrounds.value());
-    }
+    // DEVICE_GUARD(means2d);
+    // CHECK_INPUT(means2d);
+    // CHECK_INPUT(ray_transformations);
+    // CHECK_INPUT(colors);
+    // CHECK_INPUT(opacities);
+    // CHECK_INPUT(tile_offsets);
+    // CHECK_INPUT(flatten_ids);
+    // CHECK_INPUT(render_alphas);
+    // CHECK_INPUT(last_ids);
+    // CHECK_INPUT(v_render_colors);
+    // CHECK_INPUT(v_render_alphas);
+    // if (backgrounds.has_value()) {
+    //     CHECK_INPUT(backgrounds.value());
+    // }
 
-    bool packed = means2d.dim() == 2;
+    // bool packed = means2d.dim() == 2;
 
-    uint32_t C = tile_offsets.size(0);         // number of cameras
-    uint32_t N = packed ? 0 : means2d.size(1); // number of gaussians
-    uint32_t n_isects = flatten_ids.size(0);
-    uint32_t COLOR_DIM = colors.size(-1);
-    uint32_t tile_height = tile_offsets.size(1);
-    uint32_t tile_width = tile_offsets.size(2);
+    // uint32_t C = tile_offsets.size(0);         // number of cameras
+    // uint32_t N = packed ? 0 : means2d.size(1); // number of gaussians
+    // uint32_t n_isects = flatten_ids.size(0);
+    // uint32_t COLOR_DIM = colors.size(-1);
+    // uint32_t tile_height = tile_offsets.size(1);
+    // uint32_t tile_width = tile_offsets.size(2);
 
-    // Each block covers a tile on the image. In total there are
-    // C * tile_height * tile_width blocks.
-    dim3 threads = {tile_size, tile_size, 1};
-    dim3 blocks = {C, tile_height, tile_width};
+    // // Each block covers a tile on the image. In total there are
+    // // C * tile_height * tile_width blocks.
+    // dim3 threads = {tile_size, tile_size, 1};
+    // dim3 blocks = {C, tile_height, tile_width};
 
     torch::Tensor v_means2d = torch::zeros_like(means2d);
     torch::Tensor v_ray_transformations = torch::zeros_like(ray_transformations);
     torch::Tensor v_colors = torch::zeros_like(colors);
-    torch::Tensor v_opacities = torch::zeros_lke(opacities);
+    torch::Tensor v_opacities = torch::zeros_like(opacities);
     torch::Tensor v_means2d_abs;
     if (absgrad) {
         v_means2d_abs = torch::zeros_like(means2d);
     }
 
-    if (n_isects) {
-        at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
-        switch (COLOR_DIM) {
-        case 1:
-            rasterize_to_pixels_bwd_2dgs_kernel<1><<<blocks, threads, 0, stream>>>(
-                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
-                opacities.data_ptr<float>(),
-                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                        : nullptr,
-                image_width, image_height, tile_size, tile_width, tile_height,
-                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                (float2 *)v_means2d.data_ptr<float>(),
-                (float3 *)v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>()
-            );
-            break;
-        case 2:
-            rasterize_to_pixels_bwd_2dgs_kernel<2><<<blocks, threads, 0, stream>>>(
-                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
-                opacities.data_ptr<float>(),
-                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                        : nullptr,
-                image_width, image_height, tile_size, tile_width, tile_height,
-                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                (float2 *)v_means2d.data_ptr<float>(),
-                (float3 *)v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>()
-            );
-            break;
-        case 3:
-            rasterize_to_pixels_bwd_2dgs_kernel<3><<<blocks, threads, 0, stream>>>(
-                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
-                opacities.data_ptr<float>(),
-                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                        : nullptr,
-                image_width, image_height, tile_size, tile_width, tile_height,
-                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                (float2 *)v_means2d.data_ptr<float>(),
-                (float3 *)v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>()
-            );
-            break;     
-        case 4:
-            rasterize_to_pixels_bwd_2dgs_kernel<4><<<blocks, threads, 0, stream>>>(
-                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
-                opacities.data_ptr<float>(),
-                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                        : nullptr,
-                image_width, image_height, tile_size, tile_width, tile_height,
-                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                (float2 *)v_means2d.data_ptr<float>(),
-                (float3 *)v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>()
-            );
-            break;
-        case 8:
-            rasterize_to_pixels_bwd_2dgs_kernel<8><<<blocks, threads, 0, stream>>>(
-                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
-                opacities.data_ptr<float>(),
-                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                        : nullptr,
-                image_width, image_height, tile_size, tile_width, tile_height,
-                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                (float2 *)v_means2d.data_ptr<float>(),
-                (float3 *)v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>()
-            );
-            break;
-        case 16:
-            rasterize_to_pixels_bwd_2dgs_kernel<16><<<blocks, threads, 0, stream>>>(
-                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
-                opacities.data_ptr<float>(),
-                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                        : nullptr,
-                image_width, image_height, tile_size, tile_width, tile_height,
-                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                (float2 *)v_means2d.data_ptr<float>(),
-                (float3 *)v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>()
-            );
-            break;
-        case 32:
-            rasterize_to_pixels_bwd_2dgs_kernel<32><<<blocks, threads, 0, stream>>>(
-                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
-                opacities.data_ptr<float>(),
-                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                        : nullptr,
-                image_width, image_height, tile_size, tile_width, tile_height,
-                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                (float2 *)v_means2d.data_ptr<float>(),
-                (float3 *)v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>()
-            );
-            break;
-        default:
-            AT_ERROR("Unsupported number of channels: ", COLOR_DIM);
-        }
-    }
+    // if (n_isects) {
+    //     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+    //     switch (COLOR_DIM) {
+    //     case 1:
+    //         rasterize_to_pixels_bwd_2dgs_kernel<1><<<blocks, threads, 0, stream>>>(
+    //             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+    //             (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+    //             opacities.data_ptr<float>(),
+    //             backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+    //                                     : nullptr,
+    //             image_width, image_height, tile_size, tile_width, tile_height,
+    //             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+    //             render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+    //             v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+    //             absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+    //             (float2 *)v_means2d.data_ptr<float>(),
+    //             (float3 *)v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
+    //             v_opacities.data_ptr<float>()
+    //         );
+    //         break;
+    //     case 2:
+    //         rasterize_to_pixels_bwd_2dgs_kernel<2><<<blocks, threads, 0, stream>>>(
+    //             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+    //             (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+    //             opacities.data_ptr<float>(),
+    //             backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+    //                                     : nullptr,
+    //             image_width, image_height, tile_size, tile_width, tile_height,
+    //             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+    //             render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+    //             v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+    //             absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+    //             (float2 *)v_means2d.data_ptr<float>(),
+    //             (float3 *)v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
+    //             v_opacities.data_ptr<float>()
+    //         );
+    //         break;
+    //     case 3:
+    //         rasterize_to_pixels_bwd_2dgs_kernel<3><<<blocks, threads, 0, stream>>>(
+    //             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+    //             (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+    //             opacities.data_ptr<float>(),
+    //             backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+    //                                     : nullptr,
+    //             image_width, image_height, tile_size, tile_width, tile_height,
+    //             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+    //             render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+    //             v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+    //             absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+    //             (float2 *)v_means2d.data_ptr<float>(),
+    //             (float3 *)v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
+    //             v_opacities.data_ptr<float>()
+    //         );
+    //         break;     
+    //     case 4:
+    //         rasterize_to_pixels_bwd_2dgs_kernel<4><<<blocks, threads, 0, stream>>>(
+    //             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+    //             (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+    //             opacities.data_ptr<float>(),
+    //             backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+    //                                     : nullptr,
+    //             image_width, image_height, tile_size, tile_width, tile_height,
+    //             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+    //             render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+    //             v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+    //             absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+    //             (float2 *)v_means2d.data_ptr<float>(),
+    //             (float3 *)v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
+    //             v_opacities.data_ptr<float>()
+    //         );
+    //         break;
+    //     case 8:
+    //         rasterize_to_pixels_bwd_2dgs_kernel<8><<<blocks, threads, 0, stream>>>(
+    //             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+    //             (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+    //             opacities.data_ptr<float>(),
+    //             backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+    //                                     : nullptr,
+    //             image_width, image_height, tile_size, tile_width, tile_height,
+    //             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+    //             render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+    //             v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+    //             absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+    //             (float2 *)v_means2d.data_ptr<float>(),
+    //             (float3 *)v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
+    //             v_opacities.data_ptr<float>()
+    //         );
+    //         break;
+    //     case 16:
+    //         rasterize_to_pixels_bwd_2dgs_kernel<16><<<blocks, threads, 0, stream>>>(
+    //             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+    //             (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+    //             opacities.data_ptr<float>(),
+    //             backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+    //                                     : nullptr,
+    //             image_width, image_height, tile_size, tile_width, tile_height,
+    //             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+    //             render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+    //             v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+    //             absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+    //             (float2 *)v_means2d.data_ptr<float>(),
+    //             (float3 *)v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
+    //             v_opacities.data_ptr<float>()
+    //         );
+    //         break;
+    //     case 32:
+    //         rasterize_to_pixels_bwd_2dgs_kernel<32><<<blocks, threads, 0, stream>>>(
+    //             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+    //             (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+    //             opacities.data_ptr<float>(),
+    //             backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+    //                                     : nullptr,
+    //             image_width, image_height, tile_size, tile_width, tile_height,
+    //             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+    //             render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+    //             v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+    //             absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+    //             (float2 *)v_means2d.data_ptr<float>(),
+    //             (float3 *)v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
+    //             v_opacities.data_ptr<float>()
+    //         );
+    //         break;
+    //     default:
+    //         AT_ERROR("Unsupported number of channels: ", COLOR_DIM);
+    //     }
+    // }
 
-    return std::make_tuple(v_means2d_abs, v_means2d, v_ray_transformations, v_colors, v_opacities);
+    // return std::make_tuple(v_means2d_abs, v_means2d, v_ray_transformations, v_colors, v_opacities);
 }

@@ -1640,8 +1640,7 @@ fully_fused_projection_fwd_2dgs_kernel(const uint32_t C, const uint32_t N,
         0.0, Ks[4], Ks[5],
         0.0, 0.0, 1.0
     );
-
-    glm::mat3 M = glm::transpose(M) * inverse_intrinsic;
+    glm::mat3 M = glm::transpose(WH) * inverse_intrinsic;
 
     // compute AABB
     glm::vec3 temp_point = glm::vec3(1.0f, 1.0f, -1.0f);
@@ -1650,12 +1649,14 @@ fully_fused_projection_fwd_2dgs_kernel(const uint32_t C, const uint32_t N,
     if (distance == 0.0f) return;
 
     glm::vec3 f = (1 / distance) * temp_point;
+    // printf("f: %.2f, %.2f, %.2f\n", f.x, f.y, f.z);
     glm::vec3 mean2d = glm::vec3(
         glm::dot(f, M[0] * M[2]),
         glm::dot(f, M[1] * M[2]),
         glm::dot(f, M[2] * M[2])
     );
 
+    // printf("mean2d: %.2f, %.2f, %.2f\n", mean2d.x, mean2d.y, mean2d.z);
     // take 3 sigma as the radius (non differentiable)
     glm::vec3 half_extend = mean2d * mean2d - 
         glm::vec3(
@@ -1663,9 +1664,11 @@ fully_fused_projection_fwd_2dgs_kernel(const uint32_t C, const uint32_t N,
             glm::dot(f, M[1] * M[1]),
             glm::dot(f, M[2] * M[2])
         );
-    half_extend = sqrt(glm::max(half_extend, glm::vec3(0.0)));
+    float eps = 1e-4;
+    half_extend = sqrt(glm::vec3(max(eps, half_extend.x), max(eps, half_extend.y), max(eps, half_extend.z)));
+    // printf("half_extend: %.2f\n", half_extend);
     float radius = ceil(3.f * max(max(half_extend.x, half_extend.y), FilterSize));
-
+    // printf("radius: %.2f \n", radius);
 
     if (radius <= radius_clip) {
         radii[idx] = 0;
@@ -1698,7 +1701,6 @@ fully_fused_projection_fwd_2dgs_kernel(const uint32_t C, const uint32_t N,
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fully_fused_projection_fwd_2dgs_tensor(
-    const int num_points,
     const torch::Tensor &means,     // [N, 3]
     const torch::Tensor &quats,     // [N, 4]
     const torch::Tensor &scales,    // [N, 3]
@@ -1706,7 +1708,7 @@ fully_fused_projection_fwd_2dgs_tensor(
     const torch::Tensor &Ks,        // [C, 3, 3]      
     const uint32_t image_width, const uint32_t image_height, const float eps2d,
     const float near_plane, const float far_plane,
-    const float radius_clip, const bool calc_compensations
+    const float radius_clip
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -1911,8 +1913,7 @@ fully_fused_projection_packed_fwd_2dgs_tensor(
     const torch::Tensor &viewmats,
     const torch::Tensor &Ks,
     const uint32_t image_width, const uint32_t image_height, const float eps2d,
-    const float near_plane, const float far_plane, const float radius_clip,
-    const bool calc_compensations
+    const float near_plane, const float far_plane, const float radius_clip
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);

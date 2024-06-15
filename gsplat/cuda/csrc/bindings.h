@@ -217,7 +217,6 @@ fully_fused_projection_packed_bwd_tensor(
 //====== 2DGS ======//
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fully_fused_projection_fwd_2dgs_tensor(
-    const int num_points,
     const torch::Tensor &means,     // [N, 3]
     const torch::Tensor &quats,     // [N, 4]
     const torch::Tensor &scales,    // [N, 3]
@@ -225,7 +224,7 @@ fully_fused_projection_fwd_2dgs_tensor(
     const torch::Tensor &Ks,        // [C, 3, 3]      
     const uint32_t image_width, const uint32_t image_height, const float eps2d,
     const float near_plane, const float far_plane,
-    const float radius_clip, const bool calc_compensations
+    const float radius_clip
 );
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, 
@@ -237,8 +236,7 @@ fully_fused_projection_packed_fwd_2dgs_tensor(
     const torch::Tensor &viewmats,
     const torch::Tensor &Ks,
     const uint32_t image_width, const uint32_t image_height, const float eps2d,
-    const float near_plane, const float far_plane, const float radius_clip,
-    const bool calc_compensations
+    const float near_plane, const float far_plane, const float radius_clip
 );
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_2dgs_tensor(
@@ -273,8 +271,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fully_fused_projection_bwd_2dgs_tensor(
     // fwd inputs
     const torch::Tensor &means,                // [N, 3]
-    const at::optional<torch::Tensor> &quats,  // [N, 4] optional
-    const at::optional<torch::Tensor> &scales, // [N, 3] optional
+    const torch::Tensor &quats,                // [N, 4] optional
+    const torch::Tensor &scales,               // [N, 3] optional
     const torch::Tensor &viewmats,             // [C, 4, 4]
     const torch::Tensor &Ks,                   // [C, 3, 3]
     const uint32_t image_width, const uint32_t image_height, const float eps2d,
@@ -309,7 +307,7 @@ fully_fused_projection_packed_bwd_2dgs_tensor(
 );
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-rasterize_to_pixel_bwd_2dgs_tensor(
+rasterize_to_pixels_bwd_2dgs_tensor(
     // Gaussian parameters
     const torch::Tensor &means2d,
     const torch::Tensor &ray_transformations,
