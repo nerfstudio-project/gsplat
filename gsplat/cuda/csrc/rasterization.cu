@@ -2207,7 +2207,6 @@ rasterize_to_pixels_bwd_2dgs_tensor(
     if (absgrad) {
         v_means2d_abs = torch::zeros_like(means2d);
     }
-
     if (n_isects) {
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
         switch (COLOR_DIM) {

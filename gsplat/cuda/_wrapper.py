@@ -1572,7 +1572,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         ctx.width = width
         ctx.height = height
         ctx.tile_size = tile_size
-        ctx.background = absgrad
+        ctx.absgrad = absgrad
         
         # doubel to float
         render_alphas = render_alphas.float()

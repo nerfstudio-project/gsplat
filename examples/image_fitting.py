@@ -95,6 +95,12 @@ class SimpleTrainer:
             ],
             device=self.device,
         )
+        
+        if model_type == "3dgs":
+            rasterize_fnc = rasterization
+        elif model_type == "2dgs":
+            rasterize_fnc = rasterization_2dgs
+            
         for iter in range(iterations):
             start = time.time()
             renders, _, _ = rasterization(
@@ -109,6 +115,20 @@ class SimpleTrainer:
                 self.H,
                 packed=False,
             )
+            renders, _, _ = rasterize_fnc(
+                self.means,
+                self.quats / self.quats.norm(dim=-1, keepdim=True),
+                self.scales,
+                torch.sigmoid(self.opacities),
+                torch.sigmoid(self.rgbs),
+                self.viewmat[None],
+                K[None],
+                self.W,
+                self.H,
+                packed=False,
+            )
+            import pdb
+            # pdb.set_trace()
             out_img = renders[0]
             torch.cuda.synchronize()
             times[0] += time.time() - start
@@ -116,6 +136,7 @@ class SimpleTrainer:
             optimizer.zero_grad()
             start = time.time()
             loss.backward()
+            pdb.set_trace()
             torch.cuda.synchronize()
             times[1] += time.time() - start
             optimizer.step()
@@ -159,6 +180,7 @@ def main(
     img_path: Optional[Path] = None,
     iterations: int = 1000,
     lr: float = 0.01,
+    model_type: Literal["3dgs", "2dgs"] = "3dgs",
 ) -> None:
     if img_path:
         gt_image = image_path_to_tensor(img_path)
@@ -173,6 +195,7 @@ def main(
         iterations=iterations,
         lr=lr,
         save_imgs=save_imgs,
+        model_type=model_type,
     )
 
 
