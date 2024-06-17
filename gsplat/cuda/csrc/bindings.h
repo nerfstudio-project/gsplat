@@ -286,7 +286,7 @@ fully_fused_projection_bwd_2dgs_tensor(
     const bool viewmats_requires_grad
 );
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fully_fused_projection_packed_bwd_2dgs_tensor(
     // fwd inputs
     const torch::Tensor &means,
