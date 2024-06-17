@@ -354,4 +354,76 @@ inline __device__ void add_blur_vjp(const float eps2d, const glm::mat2 conic_blu
         v_sqr_comp * (one_minus_sqr_comp * conic_blur[1][1] - eps2d * det_conic_blur);
 }
 
+inline __device__ void compute_aabb_vjp(const glm::mat3 M, const glm::vec3 v_mean2D,
+                                        glm::mat3 &v_ray_transformation) {
+    // glm::mat3 M = glm::mat3(
+    //     ray_transformation[0], ray_transformation[1], ray_transformation[2],
+    //     ray_transformation[3], ray_transformation[4], ray_transformation[5],
+    //     ray_transformation[6], ray_transformation[7], ray_transformation[8]
+    // );
+
+    float distance = glm::dot(glm::vec3(1.f, 1.f, -1.f), M[2] * M[2]);
+    glm::vec3 temp_point = glm::vec3(1.f, 1.f, -1.f);
+    glm::vec3 f = (1.f / distance) * temp_point;
+
+    glm::vec3 p = glm::vec3(
+        glm::dot(f, M[0] * M[2]),
+        glm::dot(f, M[1] * M[2]),
+        glm::dot(f, M[2] * M[2])
+    );
+
+    glm::vec3 v_T0 = v_mean2D.x * f * M[2];
+    glm::vec3 v_T1 = v_mean2D.y * f * M[2];
+    glm::vec3 v_T3 = v_mean2D.x * f * M[0] + v_mean2D.y * f * M[1];
+    glm::vec3 v_f = (v_mean2D.x * M[0] * M[2]) + (v_mean2D.y * M[1] * M[2]);
+    float v_distance = glm::dot(v_f, f) * (-1.0 / distance);
+    glm::vec3 v_d_dT3 = glm::vec3(1.0, 1.0, -1.0) * M[2] * 2.0f;
+    v_T3 += v_distance * v_d_dT3;
+
+    v_ray_transformation[0][0] += v_T0.x;
+    v_ray_transformation[0][1] += v_T0.y;
+    v_ray_transformation[0][2] += v_T0.z;
+    v_ray_transformation[1][0] += v_T1.x;
+    v_ray_transformation[1][1] += v_T1.y;
+    v_ray_transformation[1][2] += v_T1.z;
+    v_ray_transformation[2][0] += v_T3.x;
+    v_ray_transformation[2][1] += v_T3.y;
+    v_ray_transformation[2][2] += v_T3.z;
+}
+
+inline __device__ void compute_ray_transformation_vjp(const glm::mat3x4 W, const glm::mat3 P,
+                                                        const glm::vec3 cam_pos, const glm::vec4 quat, 
+                                                        const glm::vec3 scale, const glm::mat3 v_ray_transformation, 
+                                                        glm::mat3& v_R, glm::vec2& v_scale, 
+                                                        glm::vec3& v_mean3D) {
+    glm::mat3 S = scale_to_mat(scale, 1.f);
+    glm::mat3 R = quat_to_rotmat(quat);
+    glm::mat3 RS = R * S;
+
+    glm::mat3 v_M_aug = glm::transpose(P) * glm::transpose(v_ray_transformation);
+    glm::mat3 v_M = glm::mat3(
+        glm::vec3(v_M_aug[0]),
+        glm::vec3(v_M_aug[1]),
+        glm::vec3(v_M_aug[2])
+    );
+
+    glm::mat3 W_t = glm::transpose(W);
+    glm::mat v_RS = W_t * v_M;
+    glm::vec3 v_RS0 = v_RS[0];
+    glm::vec3 v_RS1 = v_RS[1];
+    glm::vec3 v_tn = W_t * glm::vec3(0.f, 0.f, 0.f);
+
+    v_R = glm::mat3(
+        v_RS0 * glm::vec3(scale[0]),
+        v_RS1 * glm::vec3(scale[1]),
+        v_tn
+    );
+
+    v_scale = glm::vec2(
+        (float)glm::dot(v_RS0, R[0]),
+        (float)glm::dot(v_RS1, R[1])
+    );
+    v_mean3D = v_RS[2];
+}
+
 #endif // GSPLAT_CUDA_UTILS_H

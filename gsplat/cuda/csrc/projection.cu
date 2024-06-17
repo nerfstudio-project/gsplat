@@ -2021,43 +2021,44 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     v_means2d += idx * 2;
     v_depths += idx;
     v_ray_transformations += idx * 9;
-    v_quats += idx * 4;
-    v_scales += idx * 2; 
 
+    //====== AABB Gradients======//
     glm::mat3 M = glm::mat3(
         ray_transformations[0], ray_transformations[1], ray_transformations[2],
         ray_transformations[3], ray_transformations[4], ray_transformations[5],
         ray_transformations[6], ray_transformations[7], ray_transformations[8]
     );
-
-    float distance = glm::dot(glm::vec3(1.0, 1.0, -1.0), M[2] * M[2]);
-    glm::vec3 temp_point = glm::vec3(1.0f, 1.0f, -1.0f);
-    glm::vec3 f = (1.0f / distance) * temp_point;
-
-    glm::vec3 p = glm::vec3(
-        glm::dot(f, M[0] * M[2]),
-        glm::dot(f, M[1] * M[2]),
-        glm::dot(f, M[2] * M[2])
-    );
-
-    // temp variable
     glm::vec3 v_mean2D = glm::vec3(v_means2d[0], v_means2d[1], v_means2d[2]);
-    glm::vec3 v_T0 = v_mean2D.x * f * M[2];
-    glm::vec3 v_T1 = v_mean2D.y * f * M[2];
-    glm::vec3 v_T3 = v_mean2D.x * f * M[0] + v_mean2D.y * f * M[1];
-    glm::vec3 v_f = (v_mean2D.x * M[0] * M[2]) + (v_mean2D.y * M[1] * M[2]);
-    float v_distance = glm::dot(v_f, f) * (-1.0 / distance);
-    glm::vec3 v_d_dT3 = glm::vec3(1.0, 1.0, -1.0) * M[2] * 2.0f;
-    v_T3 += v_distance * v_d_dT3;
-    v_ray_transformations[0] += v_T0.x;
-    v_ray_transformations[1] += v_T0.y;
-    v_ray_transformations[2] += v_T0.z;
-    v_ray_transformations[3] += v_T1.x;
-    v_ray_transformations[4] += v_T1.y;
-    v_ray_transformations[5] += v_T1.z;
-    v_ray_transformations[6] += v_T3.x;
-    v_ray_transformations[7] += v_T3.y;
-    v_ray_transformations[8] += v_T3.z;
+    glm::mat3 v_ray_transformation(0.f);
+    compute_aabb_vjp(M, v_mean2D, v_ray_transformation);
+
+    // float distance = glm::dot(glm::vec3(1.0, 1.0, -1.0), M[2] * M[2]);
+    // glm::vec3 temp_point = glm::vec3(1.0f, 1.0f, -1.0f);
+    // glm::vec3 f = (1.0f / distance) * temp_point;
+
+    // glm::vec3 p = glm::vec3(
+    //     glm::dot(f, M[0] * M[2]),
+    //     glm::dot(f, M[1] * M[2]),
+    //     glm::dot(f, M[2] * M[2])
+    // );
+
+    // // temp variable
+    // glm::vec3 v_T0 = v_mean2D.x * f * M[2];
+    // glm::vec3 v_T1 = v_mean2D.y * f * M[2];
+    // glm::vec3 v_T3 = v_mean2D.x * f * M[0] + v_mean2D.y * f * M[1];
+    // glm::vec3 v_f = (v_mean2D.x * M[0] * M[2]) + (v_mean2D.y * M[1] * M[2]);
+    // float v_distance = glm::dot(v_f, f) * (-1.0 / distance);
+    // glm::vec3 v_d_dT3 = glm::vec3(1.0, 1.0, -1.0) * M[2] * 2.0f;
+    // v_T3 += v_distance * v_d_dT3;
+    // v_ray_transformations[0] += v_T0.x;
+    // v_ray_transformations[1] += v_T0.y;
+    // v_ray_transformations[2] += v_T0.z;
+    // v_ray_transformations[3] += v_T1.x;
+    // v_ray_transformations[4] += v_T1.y;
+    // v_ray_transformations[5] += v_T1.z;
+    // v_ray_transformations[6] += v_T3.x;
+    // v_ray_transformations[7] += v_T3.y;
+    // v_ray_transformations[8] += v_T3.z;
 
     //====== ray transformation gradient ======//
     // camera information
@@ -2066,56 +2067,86 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
         viewmats[4], viewmats[5], viewmats[6],
         viewmats[8], viewmats[9], viewmats[10]
     ); // viewmat
-
     const glm::vec3 cam_pos = glm::vec3(viewmats[3], viewmats[7], viewmats[11]); // camera center
     glm::mat3 P = glm::mat3(
         Ks[0], 0.0, 0.0,
         0.0, Ks[4], 0.0,
         Ks[2], Ks[5], 1.0
     );
-
     glm::vec4 quat = glm::make_vec4(quats + gid * 4);
     glm::vec3 scale = glm::make_vec3(scales + gid * 3);
-    glm::mat3 S = scale_to_mat(scale, 1.0f);
-    glm::mat3 R = quat_to_rotmat(quat);
-    glm::mat3 RS = R * S;
+    
+    glm::mat3 v_R(0.f);
+    glm::vec2 v_scale(0.f);
+    glm::vec3 v_mean3D(0.f);
+    compute_ray_transformation_vjp(W, P, cam_pos, 
+                                    quat, scale, v_ray_transformation, 
+                                    v_R, v_scale, v_mean3D);
 
-    glm::mat3 v_T = glm::mat3(
-        v_ray_transformations[0], v_ray_transformations[1], v_ray_transformations[2],
-        v_ray_transformations[3], v_ray_transformations[4], v_ray_transformations[5],
-        v_ray_transformations[6], v_ray_transformations[7], v_ray_transformations[8]
-    );
+    // glm::mat3 S = scale_to_mat(scale, 1.0f);
+    // glm::mat3 R = quat_to_rotmat(quat);
+    // glm::mat3 RS = R * S;
 
-    glm::mat3 v_M_aug = glm::transpose(P) * glm::transpose(v_T);
-    glm::mat3 v_M = glm::mat3(
-        glm::vec3(v_M_aug[0]),
-        glm::vec3(v_M_aug[1]),
-        glm::vec3(v_M_aug[2])
-    );
+    // glm::mat3 v_T = glm::mat3(
+    //     v_ray_transformations[0], v_ray_transformations[1], v_ray_transformations[2],
+    //     v_ray_transformations[3], v_ray_transformations[4], v_ray_transformations[5],
+    //     v_ray_transformations[6], v_ray_transformations[7], v_ray_transformations[8]
+    // );
 
-    glm::mat3 W_t = glm::transpose(W);
-    glm::mat v_RS = W_t * v_M;
-    glm::vec3 v_RS0 = v_RS[0];
-    glm::vec3 v_RS1 = v_RS[1];
-    glm::vec3 v_intersect_w = v_RS[2];
-    glm::vec3 v_tn = W_t * glm::vec3(0.f, 0.f, 0.f);
+    // glm::mat3 v_M_aug = glm::transpose(P) * glm::transpose(v_T);
+    // glm::mat3 v_M = glm::mat3(
+    //     glm::vec3(v_M_aug[0]),
+    //     glm::vec3(v_M_aug[1]),
+    //     glm::vec3(v_M_aug[2])
+    // );
 
-    glm::mat3 v_R = glm::mat3(
-        v_RS0 * glm::vec3(scale.x),
-        v_RS1 * glm::vec3(scale.y),
-        v_tn
-    );
+    // glm::mat3 W_t = glm::transpose(W);
+    // glm::mat v_RS = W_t * v_M;
+    // glm::vec3 v_RS0 = v_RS[0];
+    // glm::vec3 v_RS1 = v_RS[1];
+    // glm::vec3 v_intersect_w = v_RS[2];
+    // glm::vec3 v_tn = W_t * glm::vec3(0.f, 0.f, 0.f);
 
-    glm::vec4 _v_quat;
+    // glm::mat3 v_R = glm::mat3(
+    //     v_RS0 * glm::vec3(scale.x),
+    //     v_RS1 * glm::vec3(scale.y),
+    //     v_tn
+    // );
 
-    quat_to_rotmat_vjp(quat, v_R, _v_quat);
-    glm::vec4 v_quat = glm::vec4(_v_quat.x, _v_quat.y, _v_quat.z, _v_quat.w);
-    glm::vec2 v_scale = glm::vec2(
-        (float)glm::dot(v_RS0, R[0]),
-        (float)glm::dot(v_RS1, R[1])
-    );
+    glm::vec4 v_quat;
+    quat_to_rotmat_vjp(quat, v_R, v_quat);
+    // glm::vec4 v_quat = glm::vec4(_v_quat.x, _v_quat.y, _v_quat.z, _v_quat.w);
+    // glm::vec2 v_scale = glm::vec2(
+        // (float)glm::dot(v_RS0, R[0]),
+        // (float)glm::dot(v_RS1, R[1])
+    // );
 
-    glm::vec3 v_mean3D = v_intersect_w;
+    // glm::vec3 v_mean3D = v_intersect_w;
+    
+    // write out results with warp-level reduction
+    auto warp = cg::tiled_partition<32>(cg::this_thread_rank());
+    auto warp_group_g = cg::labeled_partition(warp, gid);
+    if (v_means != nullptr) {
+        warpSum(v_mean, warp_group_g);
+        if (warp_group_g.thread_rank() == 0) {
+            v_means += gid * 3;
+            PRAGMA_UNROLL
+            for (uint32_t i = 0; i < 3; i++) {
+                atomicAdd(v_means + i, v_mean[i]);
+            }
+        }
+    }
+    // TODO WZ: Currently only support quat, scale/
+    // Directly output gradients w.r.t. the quaternion and scale
+    glm::mat3 rotmat = quat_to_rotmat(quat);
+    warpSum(v_quat, warp_group_g);
+    warpSum(v_scale, warp_group_g);
+    if (warp_group_g.thread_rank() == 0) {
+        v_quats += gid * 4;
+        v_scales += gid * 3;
+        
+    }
+
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
