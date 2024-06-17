@@ -2078,10 +2078,10 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     
     glm::mat3 v_R(0.f);
     glm::vec2 v_scale(0.f);
-    glm::vec3 v_mean3D(0.f);
+    glm::vec3 v_mean(0.f);
     compute_ray_transformation_vjp(W, P, cam_pos, 
                                     quat, scale, v_ray_transformation, 
-                                    v_R, v_scale, v_mean3D);
+                                    v_R, v_scale, v_mean);
 
     // glm::mat3 S = scale_to_mat(scale, 1.0f);
     // glm::mat3 R = quat_to_rotmat(quat);
@@ -2124,7 +2124,7 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     // glm::vec3 v_mean3D = v_intersect_w;
     
     // write out results with warp-level reduction
-    auto warp = cg::tiled_partition<32>(cg::this_thread_rank());
+    auto warp = cg::tiled_partition<32>(cg::this_thread_block());
     auto warp_group_g = cg::labeled_partition(warp, gid);
     if (v_means != nullptr) {
         warpSum(v_mean, warp_group_g);
@@ -2144,9 +2144,16 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     if (warp_group_g.thread_rank() == 0) {
         v_quats += gid * 4;
         v_scales += gid * 3;
-        
+        atomicAdd(v_quats, v_quat[0]);
+        atomicAdd(v_quats + 1, v_quat[1]);
+        atomicAdd(v_quats + 2, v_quat[2]);
+        atomicAdd(v_quats + 3, v_quat[3]);
+        atomicAdd(v_scales, v_scale[0]);
+        atomicAdd(v_scales + 1, v_scale[1]);
+        atomicAdd(v_scales + 2, v_scale[2]);
     }
 
+    // TODO WZ: viewmat gradients
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
