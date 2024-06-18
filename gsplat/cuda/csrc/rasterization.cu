@@ -1939,14 +1939,18 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
         const int32_t batch_end = range_end - 1 - block_size * b;
         const int32_t batch_size = min(block_size, batch_end + 1 - range_start);
         const int32_t idx = batch_end - tr;
+
         if (idx >= range_start) {
+
             int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
             id_batch[tr] = g;
             const float2 xy = means2d[g];
             const float opac = opacities[g];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
+            const float3 tmp = {ray_transformations[g * 9 + 6], ray_transformations[g * 9 + 7], ray_transformations[g * 9 + 8]};
+            // printf("%.2f, %.2f, %.2f \n", tmp.x, tmp.y, tmp.z);
             u_transform_batch[tr] = {ray_transformations[g * 9 + 0], ray_transformations[g * 9 + 1], ray_transformations[g * 9 + 2]};
-            v_transform_batch[tr] = {ray_transformations[g * 9 + 3], ray_transformations[g * g + 4], ray_transformations[g * 9 + 5]};
+            v_transform_batch[tr] = {ray_transformations[g * 9 + 3], ray_transformations[g * 9 + 4], ray_transformations[g * 9 + 5]};
             w_transform_batch[tr] = {ray_transformations[g * 9 + 6], ray_transformations[g * 9 + 7], ray_transformations[g * 9 + 8]};
             for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                 rgbs_batch[tr * COLOR_DIM + k] = colors[g * COLOR_DIM + k];
@@ -1955,7 +1959,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
 
         // wait for other threads to collect the gaussians in batch
         block.sync();
-
+        
         // process gaussians in the current batch for this pixel
         // 0 index is the furthest back gaussian in the batch
         for (uint32_t t = max(0, batch_end - warp_bin_final); t < batch_size; ++t) {
@@ -1976,8 +1980,6 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
             float3 intersect;
             float3 w_transform;
             if (valid) { 
-
-
                 const float3 u_transform = u_transform_batch[t];
                 const float3 v_transform = v_transform_batch[t];
                 w_transform = w_transform_batch[t];
@@ -2016,6 +2018,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                     valid = false;
                 }
             }
+
 
             // if all threads are inactive in this warp, skip this loop
             if (!warp.any(valid)) {
@@ -2247,7 +2250,7 @@ rasterize_to_pixels_bwd_2dgs_tensor(
         case 3:
             rasterize_to_pixels_bwd_2dgs_kernel<3><<<blocks, threads, 0, stream>>>(
                 C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
+                (float *)ray_transformations.data_ptr<float>(), colors.data_ptr<float>(),
                 opacities.data_ptr<float>(),
                 backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
                                         : nullptr,

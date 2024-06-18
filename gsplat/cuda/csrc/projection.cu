@@ -2031,7 +2031,6 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     glm::vec3 v_mean2D = glm::vec3(v_means2d[0], v_means2d[1], v_means2d[2]);
     glm::mat3 v_ray_transformation(0.f);
     compute_aabb_vjp(M, v_mean2D, v_ray_transformation);
-
     // float distance = glm::dot(glm::vec3(1.0, 1.0, -1.0), M[2] * M[2]);
     // glm::vec3 temp_point = glm::vec3(1.0f, 1.0f, -1.0f);
     // glm::vec3 f = (1.0f / distance) * temp_point;
@@ -2115,6 +2114,7 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
 
     glm::vec4 v_quat;
     quat_to_rotmat_vjp(quat, v_R, v_quat);
+    // printf("rotmat\n");
     // glm::vec4 v_quat = glm::vec4(_v_quat.x, _v_quat.y, _v_quat.z, _v_quat.w);
     // glm::vec2 v_scale = glm::vec2(
         // (float)glm::dot(v_RS0, R[0]),
@@ -2142,6 +2142,7 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     warpSum(v_quat, warp_group_g);
     warpSum(v_scale, warp_group_g);
     if (warp_group_g.thread_rank() == 0) {
+        // printf("inside\n");
         v_quats += gid * 4;
         v_scales += gid * 3;
         atomicAdd(v_quats, v_quat[0]);
@@ -2150,9 +2151,9 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
         atomicAdd(v_quats + 3, v_quat[3]);
         atomicAdd(v_scales, v_scale[0]);
         atomicAdd(v_scales + 1, v_scale[1]);
-        atomicAdd(v_scales + 2, v_scale[2]);
+        // atomicAdd(v_scales + 2, v_scale[2]);
     }
-
+    // printf("done\n");
     // TODO WZ: viewmat gradients
 }
 
