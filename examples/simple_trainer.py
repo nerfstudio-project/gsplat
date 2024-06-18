@@ -403,7 +403,7 @@ class Runner:
         trainloader_iter = iter(trainloader)
 
         # Training loop.
-        tic = time.time()
+        global_tic = time.time()
         pbar = tqdm.tqdm(range(init_step, max_steps))
         for step in pbar:
             if not cfg.disable_viewer:
@@ -607,10 +607,9 @@ class Runner:
             # save checkpoint
             if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
-                toc = time.time()
                 stats = {
                     "mem": mem,
-                    "ellipse_time": toc - tic,
+                    "ellipse_time": time.time() - global_tic,
                     "num_GS": len(self.splats["means3d"]),
                 }
                 print("Step: ", step, stats)
