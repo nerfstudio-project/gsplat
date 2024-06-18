@@ -1482,7 +1482,7 @@ def rasterize_to_pixels_2dgs(
     return render_colors, render_alphas
     
 @torch.no_grad()
-def rasterize_to_indices_in_range(
+def rasterize_to_indices_in_range_2dgs(
     range_start: int,
     range_end: int,
     transmittances: Tensor,

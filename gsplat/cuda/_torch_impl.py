@@ -240,12 +240,16 @@ def _fully_fused_projection_2dgs(
     M = torch.transpose(T_sl, -1, -2)  # [C, N, 3, 3]
 
     # compute the AABB of gaussian
-    test = torch.tensor([1., 1., -1.], device=means.device).reshape(1, 1, 3)
-    d = (M[..., 2, :] * M[..., 2, :] * test).sum(dim=-1, keepdim=True)  # [C, N, 1]
+    test = torch.tensor([1.0, 1.0, -1.0], device=means.device).reshape(1, 1, 3)
+    d = (M[..., 2] * M[..., 2] * test).sum(dim=-1, keepdim=True)  # [C, N, 1]
     valid = torch.abs(d) > eps
-    f = torch.where(valid, test / d, torch.zeros_like(test)).unsqueeze(-2)  # (C, N, 1, 3)
-    means2d = (M[..., :2, :] * M[..., 2:3, :] * f).sum(dim=-1)  # [C, N, 2]
-    extents = torch.sqrt(means2d ** 2 - (M[..., :2, :] * M[..., :2, :] * f).sum(dim=-1))  # [C, N, 2]
+    f = torch.where(valid, test / d, torch.zeros_like(test)).unsqueeze(
+        -1
+    )  # (C, N, 3, 1)
+    means2d = (M[..., :2] * M[..., 2:3] * f).sum(dim=-2)  # [C, N, 2]
+    extents = torch.sqrt(
+        means2d**2 - (M[..., :2] * M[..., :2] * f).sum(dim=-2)
+    )  # [C, N, 2]
 
     depths = means_c[..., 2]  # [C, N]
     radius = torch.ceil(3.0 * torch.max(extents, dim=-1).values)  # (C, N)
@@ -530,6 +534,114 @@ def _rasterize_to_pixels(
         renders_step, accs_step = accumulate(
             means2d,
             conics,
+            opacities,
+            colors,
+            gs_ids,
+            pixel_ids,
+            camera_ids,
+            image_width,
+            image_height,
+        )
+        render_colors = render_colors + renders_step * transmittances[..., None]
+        render_alphas = render_alphas + accs_step * transmittances[..., None]
+
+    render_alphas = render_alphas
+    if backgrounds is not None:
+        render_colors = render_colors + backgrounds[:, None, None, :] * (
+            1.0 - render_alphas
+        )
+
+    return render_colors, render_alphas
+
+
+def accumulate_2dgs(
+    means2d: Tensor,  # [C, N, 2]
+    ray_transforms: Tensor,  # [C, N, 3, 3]
+    opacities: Tensor,  # [C, N]
+    colors: Tensor,  # [C, N, channels]
+    gaussian_ids: Tensor,  # [M]
+    pixel_ids: Tensor,  # [M]
+    camera_ids: Tensor,  # [M]
+    image_width: int,
+    image_height: int,
+) -> Tuple[Tensor, Tensor]:
+    pass
+
+
+def _rasterize_to_pixels_2dgs(
+    means2d: Tensor,  # [C, N, 2]
+    ray_transforms: Tensor,  # [C, N, 3, 3]
+    colors: Tensor,  # [C, N, channels]
+    opacities: Tensor,  # [C, N]
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    isect_offsets: Tensor,  # [C, tile_height, tile_width]
+    flatten_ids: Tensor,  # [n_isects]
+    backgrounds: Optional[Tensor] = None,  # [C, channels]
+    batch_per_iter: int = 100,
+):
+    """Pytorch implementation of `gsplat.cuda._wrapper.rasterize_to_pixels()`.
+
+    This function rasterizes 2D Gaussians to pixels in a Pytorch-friendly way. It
+    iteratively accumulates the renderings within each batch of Gaussians. The
+    interations are controlled by `batch_per_iter`.
+
+    .. note::
+        This is a minimal implementation of the fully fused version, which has more
+        arguments. Not all arguments are supported.
+
+    .. note::
+
+        This function relies on Pytorch's autograd for the backpropagation. It is much slower
+        than our fully fused rasterization implementation and comsumes much more GPU memory.
+        But it could serve as a playground for new ideas or debugging, as no backward
+        implementation is needed.
+
+    .. warning::
+
+        This function requires the `nerfacc` package to be installed. Please install it
+        using the following command `pip install nerfacc`.
+    """
+    from ._wrapper import rasterize_to_indices_in_range_2dgs
+
+    C, N = means2d.shape[:2]
+    device = means2d.device
+
+    render_colors = torch.zeros(
+        (C, image_height, image_width, colors.shape[-1]), device=device
+    )
+    render_alphas = torch.zeros((C, image_height, image_width, 1), device=device)
+
+    # Split Gaussians into batches and iteratively accumulate the renderings
+    block_size = tile_size * tile_size
+    max_range = (isect_offsets[1:] - isect_offsets[:-1]).max().item()
+    num_batches = int((max_range + block_size - 1) // block_size)
+    for step in range(0, num_batches, batch_per_iter):
+        transmittances = 1.0 - render_alphas[..., 0]
+
+        # Find the M intersections between pixels and gaussians.
+        # Each intersection corresponds to a tuple (gs_id, pixel_id, camera_id)
+        gs_ids, pixel_ids, camera_ids = rasterize_to_indices_in_range_2dgs(
+            step,
+            step + batch_per_iter,
+            transmittances,
+            means2d,
+            ray_transforms,
+            opacities,
+            image_width,
+            image_height,
+            tile_size,
+            isect_offsets,
+            flatten_ids,
+        )  # [M], [M]
+        if len(gs_ids) == 0:
+            break
+
+        # Accumulate the renderings within this batch of Gaussians.
+        renders_step, accs_step = accumulate_2dgs(
+            means2d,
+            ray_transforms,
             opacities,
             colors,
             gs_ids,
