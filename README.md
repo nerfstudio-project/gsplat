@@ -8,12 +8,15 @@
 gsplat is an open-source library for CUDA accelerated rasterization of gaussians with python bindings. It is inspired by the SIGGRAPH paper [3D Gaussian Splatting for Real-Time Rendering of Radiance Fields](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/), but we’ve made gsplat even faster, more memory efficient, and with a growing list of new features! 
 
 <div align="center">
-  <video src="https://github.com/nerfstudio-project/gsplat/assets/10151885/e60f7603-3c8a-4d05-a3ae-e382507eb043" width="100%" />
+  <video src="https://github.com/nerfstudio-project/gsplat/assets/10151885/64c2e9ca-a9a6-4c7e-8d6f-47eeacd15159" width="100%" />
 </div>
 
 ## Installation
 
 **Dependence**: Please install [Pytorch](https://pytorch.org/get-started/locally/) first.
+
+
+
 
 The easiest way is to install from PyPI. In this way it will build the CUDA code **on the first run** (JIT).
 
