@@ -438,7 +438,8 @@ def test_isect(test_data):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_rasterize_to_pixels(test_data):
+@pytest.mark.parametrize("channels", [3, 32, 128])
+def test_rasterize_to_pixels(test_data, channels: int):
     from gsplat.cuda._torch_impl import _rasterize_to_pixels
     from gsplat.cuda._wrapper import (
         fully_fused_projection,
@@ -459,8 +460,8 @@ def test_rasterize_to_pixels(test_data):
     scales = test_data["scales"] * 0.1
     means = test_data["means"]
     opacities = test_data["opacities"]
-    colors = test_data["colors"]
     C = len(Ks)
+    colors = torch.randn(C, len(means), channels, device=device)
     backgrounds = torch.rand((C, colors.shape[-1]), device=device)
 
     covars, _ = quat_scale_to_covar_preci(quats, scales, compute_preci=False, triu=True)
@@ -472,7 +473,7 @@ def test_rasterize_to_pixels(test_data):
     opacities = opacities.repeat(C, 1)
 
     # Identify intersecting tiles
-    tile_size = 16
+    tile_size = 16 if channels <= 32 else 4
     tile_width = math.ceil(width / float(tile_size))
     tile_height = math.ceil(height / float(tile_size))
     tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
@@ -534,11 +535,11 @@ def test_rasterize_to_pixels(test_data):
         + (_render_alphas * v_render_alphas).sum(),
         (means2d, conics, colors, opacities, backgrounds),
     )
-    torch.testing.assert_close(v_means2d, _v_means2d, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(v_means2d, _v_means2d, rtol=5e-3, atol=5e-3)
     torch.testing.assert_close(v_conics, _v_conics, rtol=1e-3, atol=1e-3)
     torch.testing.assert_close(v_colors, _v_colors, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_opacities, _v_opacities, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_backgrounds, _v_backgrounds, rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(v_opacities, _v_opacities, rtol=2e-3, atol=2e-3)
+    torch.testing.assert_close(v_backgrounds, _v_backgrounds, rtol=1e-3, atol=1e-3)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")

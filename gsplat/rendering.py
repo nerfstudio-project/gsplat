@@ -36,6 +36,7 @@ def rasterization(
     sparse_grad: bool = False,
     absgrad: bool = False,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
+    channel_chunk: int = 32,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -144,6 +145,9 @@ def rasterization(
             `meta["means2d"].absgrad`. Default is False.
         rasterize_mode: The rasterization mode. Supported modes are "classic" and
             "antialiased". Default is "classic".
+        channel_chunk: The number of channels to render in one go. Default is 32.
+            If the required rendering channels are larger than this value, the rendering
+            will be done looply in chunks.
 
     Returns:
         A tuple:
@@ -295,16 +299,14 @@ def rasterization(
         colors = depths[..., None]
     else:  # RGB
         pass
-    if colors.shape[-1] > 32:
-        # slice into 32-channel chunks
-        n_chunks = (colors.shape[-1] + 31) // 32
-        render_colors = []
-        render_alphas = []
-
+    if colors.shape[-1] > channel_chunk:
+        # slice into chunks
+        n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk
+        render_colors, render_alphas = [], []
         for i in range(n_chunks):
-            colors_chunk = colors[..., i * 32 : (i + 1) * 32]
+            colors_chunk = colors[..., i * channel_chunk : (i + 1) * channel_chunk]
             backgrounds_chunk = (
-                backgrounds[:, i * 32 : (i + 1) * 32]
+                backgrounds[..., i * channel_chunk : (i + 1) * channel_chunk]
                 if backgrounds is not None
                 else None
             )
