@@ -377,7 +377,7 @@
 the <a class="reference external" href="https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/">Gaussian Splatting</a> with
 exactly the same performance on PSNR, SSIM, LPIPS, and converged number of Gaussians.
 Powered by <cite>gsplat</cite>’s efficient CUDA implementation, the training takes up to
-<strong>4x less GPU memory</strong> with up to <strong>2x less time</strong> to finish than the official implementation.</p>
+<strong>4x less GPU memory</strong> with up to <strong>15% less time</strong> to finish than the official implementation.</p>
 <section id="trains-faster-with-less-gpu-memory">
 <h2>Trains Faster with Less GPU Memory<a class="headerlink" href="#trains-faster-with-less-gpu-memory" title="Link to this heading">¶</a></h2>
 <div class="table-wrapper docutils container">
@@ -448,13 +448,13 @@ Powered by <cite>gsplat</cite>’s efficient CUDA implementation, the training t
 </thead>
 <tbody>
 <tr class="row-even"><td><p>inria-7k</p></td>
-<td><p>409</p></td>
-<td><p>514</p></td>
-<td><p>602</p></td>
-<td><p>507</p></td>
-<td><p>666</p></td>
-<td><p>544</p></td>
-<td><p>384</p></td>
+<td><p>336</p></td>
+<td><p>340</p></td>
+<td><p>364</p></td>
+<td><p>427</p></td>
+<td><p>436</p></td>
+<td><p>336</p></td>
+<td><p>321</p></td>
 </tr>
 <tr class="row-odd"><td><p>gsplat-7k</p></td>
 <td><p><strong>319</strong></p></td>
@@ -466,13 +466,13 @@ Powered by <cite>gsplat</cite>’s efficient CUDA implementation, the training t
 <td><p><strong>304</strong></p></td>
 </tr>
 <tr class="row-even"><td><p>inria-30k</p></td>
-<td><p>3398</p></td>
-<td><p>2237</p></td>
-<td><p>2750</p></td>
-<td><p>3461</p></td>
-<td><p>3085</p></td>
-<td><p>2753</p></td>
-<td><p>2680</p></td>
+<td><p>2980</p></td>
+<td><p>1552</p></td>
+<td><p>1725</p></td>
+<td><p>3092</p></td>
+<td><p>2144</p></td>
+<td><p>1773</p></td>
+<td><p>2366</p></td>
 </tr>
 <tr class="row-odd"><td><p>gsplat-30k</p></td>
 <td><p><strong>2964</strong></p></td>
@@ -707,7 +707,7 @@ is different from what’s reported in the original paper that uses
 <code class="code docutils literal notranslate"><span class="pre">from</span> <span class="pre">lpipsPyTorch</span> <span class="pre">import</span> <span class="pre">lpips</span></code>.</p>
 <p>The evaluation of <cite>gsplat-X</cite> can be reproduced with the command
 <code class="code docutils literal notranslate"><span class="pre">cd</span> <span class="pre">examples;</span> <span class="pre">bash</span> <span class="pre">benchmark.sh</span></code>
-within the gsplat repo (commit 012c620).</p>
+within the gsplat repo (commit 6acdce4).</p>
 <p>The evaluation of <cite>inria-X</cite> can be
 reproduced with our forked wersion of the official implementation at
 <a class="reference external" href="https://github.com/liruilong940607/gaussian-splatting/tree/benchmark">here</a>,

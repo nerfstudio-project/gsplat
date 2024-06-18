@@ -19,7 +19,7 @@ This repo comes with a standalone script (:code:`examples/simple_trainer.py`) th
 the `Gaussian Splatting <https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/>`_ with
 exactly the same performance on PSNR, SSIM, LPIPS, and converged number of Gaussians. 
 Powered by `gsplat`'s efficient CUDA implementation, the training takes up to 
-**4x less GPU memory** with up to **2x less time** to finish than the official implementation.
+**4x less GPU memory** with up to **15% less time** to finish than the official implementation.
 
 Trains Faster with Less GPU Memory
 ----------------------------------------------
@@ -39,11 +39,11 @@ Trains Faster with Less GPU Memory
 +-----------------+---------+--------+---------+--------+---------+--------+--------+
 | Train Time (s)  | Bicycle | Bonsai | Counter | Garden | Kitchen |  Room  | Stump  |
 +=================+=========+========+=========+========+=========+========+========+
-| inria-7k        |    409  |   514  |    602  |    507 |    666  |  544   |  384   |
+| inria-7k        |    336  |   340  |    364  |    427 |    436  |  336   |  321   |
 +-----------------+---------+--------+---------+--------+---------+--------+--------+
 | gsplat-7k       |  **319**| **299**|  **318**| **415**|  **389**|**301** |**304** |
 +-----------------+---------+--------+---------+--------+---------+--------+--------+
-| inria-30k       |   3398  |   2237 |    2750 |   3461 |    3085 |  2753  |  2680  |
+| inria-30k       |   2980  |   1552 |    1725 |   3092 |    2144 |  1773  |  2366  |
 +-----------------+---------+--------+---------+--------+---------+--------+--------+
 | gsplat-30k      | **2964**|**1422**| **1621**|**3013**|**2020** |**1708**|**2299**|
 +-----------------+---------+--------+---------+--------+---------+--------+--------+
@@ -106,7 +106,7 @@ is different from what's reported in the original paper that uses
 
 The evaluation of `gsplat-X` can be reproduced with the command 
 :code:`cd examples; bash benchmark.sh` 
-within the gsplat repo (commit 012c620). 
+within the gsplat repo (commit 6acdce4). 
 
 The evaluation of `inria-X` can be 
 reproduced with our forked wersion of the official implementation at 
