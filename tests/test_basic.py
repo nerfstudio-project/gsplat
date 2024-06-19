@@ -124,7 +124,12 @@ def test_world_to_cam(test_data):
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_persp_proj(test_data):
     from gsplat.cuda._torch_impl import _persp_proj
-    from gsplat.cuda._wrapper import persp_proj, quat_scale_to_covar_preci, world_to_cam
+    from gsplat.cuda._wrapper import (
+        persp_proj,
+        persp_proj_jagged,
+        quat_scale_to_covar_preci,
+        world_to_cam,
+    )
 
     torch.manual_seed(42)
 
@@ -143,6 +148,20 @@ def test_persp_proj(test_data):
     torch.testing.assert_close(means2d, _means2d, rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(covars2d, _covars2d, rtol=1e-1, atol=3e-2)
 
+    __means2d, __covars2d = persp_proj_jagged(
+        torch.tensor([means.shape[1]] * means.shape[0], device=device),
+        means.reshape(-1, 3),
+        covars.reshape(-1, 3, 3),
+        torch.tensor([1] * means.shape[0], device=device),
+        Ks,
+        width,
+        height,
+    )
+    __means2d = __means2d.reshape_as(means2d)
+    __covars2d = __covars2d.reshape_as(covars2d)
+    torch.testing.assert_close(means2d, __means2d)
+    torch.testing.assert_close(covars2d, __covars2d)
+
     # backward
     v_means2d = torch.randn_like(means2d)
     v_covars2d = torch.randn_like(covars2d)
@@ -154,8 +173,14 @@ def test_persp_proj(test_data):
         (_means2d * v_means2d).sum() + (_covars2d * v_covars2d).sum(),
         (means, covars),
     )
+    __v_means, __v_covars = torch.autograd.grad(
+        (__means2d * v_means2d).sum() + (__covars2d * v_covars2d).sum(),
+        (means, covars),
+    )
     torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=1e-2)
     torch.testing.assert_close(v_covars, _v_covars, rtol=1e-1, atol=1e-1)
+    torch.testing.assert_close(v_means, __v_means, rtol=1e-2, atol=1e-2)
+    torch.testing.assert_close(v_covars, __v_covars, rtol=1e-1, atol=1e-1)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")

@@ -109,6 +109,29 @@ def persp_proj(
     return _PerspProj.apply(means, covars, Ks, width, height)
 
 
+def persp_proj_jagged(
+    g_sizes: Tensor,  # [B]
+    means: Tensor,  # [ggz, 3]
+    covars: Tensor,  # [ggz, 3, 3]
+    c_sizes: Tensor,  # [B]
+    Ks: Tensor,  # [ccz, 3, 3]
+    width: int,
+    height: int,
+) -> Tuple[Tensor, Tensor]:
+    """Perspective projection on Gaussians."""
+    ggz, _ = means.shape
+    ccz, _, _ = Ks.shape
+    assert means.shape == (ggz, 3), means.size()
+    assert covars.shape == (ggz, 3, 3), covars.size()
+    assert Ks.shape == (ccz, 3, 3), Ks.size()
+    g_sizes = g_sizes.contiguous()
+    means = means.contiguous()
+    covars = covars.contiguous()
+    c_sizes = c_sizes.contiguous()
+    Ks = Ks.contiguous()
+    return _PerspProjJagged.apply(g_sizes, means, covars, c_sizes, Ks, width, height)
+
+
 def world_to_cam(
     means: Tensor,  # [N, 3]
     covars: Tensor,  # [N, 3, 3]
@@ -648,6 +671,47 @@ class _PerspProj(torch.autograd.Function):
             v_covars2d.contiguous(),
         )
         return v_means, v_covars, None, None, None
+
+
+class _PerspProjJagged(torch.autograd.Function):
+    """Perspective fully_fused_projection on Gaussians."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        g_sizes: Tensor,  # [B]
+        means: Tensor,  # [ggz, 3]
+        covars: Tensor,  # [ggz, 3, 3]
+        c_sizes: Tensor,  # [B]
+        Ks: Tensor,  # [ccz, 3, 3]
+        width: int,
+        height: int,
+    ) -> Tuple[Tensor, Tensor]:
+        means2d, covars2d = _make_lazy_cuda_func("persp_proj_jagged_fwd")(
+            g_sizes, means, covars, c_sizes, Ks, width, height
+        )
+        ctx.save_for_backward(g_sizes, means, covars, c_sizes, Ks)
+        ctx.width = width
+        ctx.height = height
+        return means2d, covars2d
+
+    @staticmethod
+    def backward(ctx, v_means2d: Tensor, v_covars2d: Tensor):
+        g_sizes, means, covars, c_sizes, Ks = ctx.saved_tensors
+        width = ctx.width
+        height = ctx.height
+        v_means, v_covars = _make_lazy_cuda_func("persp_proj_jagged_bwd")(
+            g_sizes,
+            means,
+            covars,
+            c_sizes,
+            Ks,
+            width,
+            height,
+            v_means2d.contiguous(),
+            v_covars2d.contiguous(),
+        )
+        return None, v_means, v_covars, None, None, None, None
 
 
 class _WorldToCam(torch.autograd.Function):

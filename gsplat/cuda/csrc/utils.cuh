@@ -332,4 +332,18 @@ inline __device__ void add_blur_vjp(const float eps2d, const glm::mat2 conic_blu
         v_sqr_comp * (one_minus_sqr_comp * conic_blur[1][1] - eps2d * det_conic_blur);
 }
 
+template <class T>
+inline __device__ uint32_t bin_search(const T *arr, const uint32_t len, const T val) {
+    uint32_t low = 0, high = len - 1;
+    while (low <= high) {
+        uint32_t mid = (low + high) / 2;
+        if (arr[mid] <= val) {
+            low = mid + 1;
+        } else {
+            high = mid - 1;
+        }
+    }
+    return low - 1;
+}
+
 #endif // GSPLAT_CUDA_UTILS_H

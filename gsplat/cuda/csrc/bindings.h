@@ -214,3 +214,24 @@ fully_fused_projection_packed_bwd_tensor(
     const torch::Tensor &v_conics,                      // [nnz, 3]
     const at::optional<torch::Tensor> &v_compensations, // [nnz] optional
     const bool viewmats_requires_grad, const bool sparse_grad);
+
+/****************************************************************************************
+ * Jagged Version
+ ****************************************************************************************/
+std::tuple<torch::Tensor, torch::Tensor>
+persp_proj_jagged_fwd_tensor(const torch::Tensor &g_sizes, // [B] gaussian sizes
+                             const torch::Tensor &means,   // [ggz, 3]
+                             const torch::Tensor &covars,  // [ggz, N, 3, 3]
+                             const torch::Tensor &c_sizes, // [B] camera sizes
+                             const torch::Tensor &Ks,      // [ccz, 3, 3]
+                             const uint32_t width, const uint32_t height);
+std::tuple<torch::Tensor, torch::Tensor>
+persp_proj_jagged_bwd_tensor(const torch::Tensor &g_sizes, // [B] gaussian sizes
+                             const torch::Tensor &means,   // [ggz, 3]
+                             const torch::Tensor &covars,  // [ggz, 3, 3]
+                             const torch::Tensor &c_sizes, // [B] camera sizes
+                             const torch::Tensor &Ks,      // [ccz, 3, 3]
+                             const uint32_t width, const uint32_t height,
+                             const torch::Tensor &v_means2d, // [nnz, 2]
+                             const torch::Tensor &v_covars2d // [nnz, 2, 2]
+);

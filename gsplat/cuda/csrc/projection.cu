@@ -1582,3 +1582,213 @@ fully_fused_projection_packed_bwd_tensor(
     }
     return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats);
 }
+
+/****************************************************************************
+ * Jagged version
+ ****************************************************************************/
+
+/****************************************************************************
+ * Perspective Projection (Jagged over B scenes)
+ * Jagged over Gaussians are: [N1, N2, N3, ...], total GSs: ggz.
+ * Jagged over Cameras are: [C1, C2, C3, ...], total Cameras: ccz.
+ * Parallelize over C1 * N1 + C2 * N2 + C3 * N3 + ..., total threads: nnz.
+ * Given thread id, what are the gaussian id and camera id?
+ ****************************************************************************/
+
+__global__ void
+persp_proj_jagged_fwd_kernel(const uint32_t B, const int64_t nnz,
+                             const int64_t *__restrict__ g_sizes,  // [B]
+                             const int64_t *__restrict__ c_sizes,  // [B]
+                             const int64_t *__restrict__ g_indptr, // [B] start indices
+                             const int64_t *__restrict__ c_indptr, // [B] start indices
+                             const int64_t *__restrict__ n_indptr, // [B] start indices
+                             const float *__restrict__ means,      // [ggz, 3]
+                             const float *__restrict__ covars,     // [ggz, 3, 3]
+                             const float *__restrict__ Ks,         // [ccz, 3, 3]
+                             const uint32_t width, const uint32_t height,
+                             float *__restrict__ means2d, // [nnz, 2]
+                             float *__restrict__ covars2d // [nnz, 2, 2]
+) {
+    // parallelize over nnz.
+    uint32_t idx = cg::this_grid().thread_rank();
+    if (idx >= nnz) {
+        return;
+    }
+
+    // TODO: too many global memory accesses.
+    int64_t bid = bin_search(n_indptr, B, static_cast<int64_t>(idx)); // batch id
+    int64_t idx_local = idx - n_indptr[bid];      // local elem idx within Ci * Ni
+    int64_t cid_local = idx_local / g_sizes[bid]; // local camera id within Ci
+    int64_t gid_local = idx_local % g_sizes[bid]; // local gaussian id within Ni
+    int64_t cid = cid_local + c_indptr[bid];      // camera id
+    int64_t gid = gid_local + g_indptr[bid];      // gaussian id
+
+    // shift pointers to the current camera and gaussian
+    means += gid * 3;
+    covars += gid * 9;
+    Ks += cid * 9;
+    means2d += idx * 2;
+    covars2d += idx * 4;
+
+    float fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
+    glm::mat2 covar2d;
+    glm::vec2 mean2d;
+    persp_proj(glm::make_vec3(means), glm::make_mat3(covars), fx, fy, cx, cy, width,
+               height, covar2d, mean2d);
+
+    // write to outputs: glm is column-major but we want row-major
+    PRAGMA_UNROLL
+    for (uint32_t i = 0; i < 2; i++) { // rows
+        PRAGMA_UNROLL
+        for (uint32_t j = 0; j < 2; j++) { // cols
+            covars2d[i * 2 + j] = covar2d[j][i];
+        }
+    }
+    PRAGMA_UNROLL
+    for (uint32_t i = 0; i < 2; i++) {
+        means2d[i] = mean2d[i];
+    }
+}
+
+std::tuple<torch::Tensor, torch::Tensor>
+persp_proj_jagged_fwd_tensor(const torch::Tensor &g_sizes, // [B] gaussian sizes
+                             const torch::Tensor &means,   // [ggz, 3]
+                             const torch::Tensor &covars,  // [ggz, N, 3, 3]
+                             const torch::Tensor &c_sizes, // [B] camera sizes
+                             const torch::Tensor &Ks,      // [ccz, 3, 3]
+                             const uint32_t width, const uint32_t height) {
+    DEVICE_GUARD(means);
+    CHECK_INPUT(g_sizes);
+    CHECK_INPUT(means);
+    CHECK_INPUT(covars);
+    CHECK_INPUT(c_sizes);
+    CHECK_INPUT(Ks);
+
+    // TODO: use inclusive sum
+    uint32_t B = g_sizes.size(0);
+    torch::Tensor c_indptr = torch::cumsum(c_sizes, 0, torch::kInt64) - c_sizes;
+    torch::Tensor g_indptr = torch::cumsum(g_sizes, 0, torch::kInt64) - g_sizes;
+    torch::Tensor n_sizes = c_sizes * g_sizes; // element size = Ci * Ni
+    torch::Tensor n_indptr = torch::cumsum(n_sizes, 0, torch::kInt64);
+    int64_t nnz = n_indptr[-1].item<int64_t>(); // total number of elements
+    n_indptr = n_indptr - n_sizes;
+
+    torch::Tensor means2d = torch::empty({nnz, 2}, means.options());
+    torch::Tensor covars2d = torch::empty({nnz, 2, 2}, covars.options());
+
+    if (nnz) {
+        at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+        persp_proj_jagged_fwd_kernel<<<(nnz + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
+                                       stream>>>(
+            B, nnz, g_sizes.data_ptr<int64_t>(), c_sizes.data_ptr<int64_t>(),
+            g_indptr.data_ptr<int64_t>(), c_indptr.data_ptr<int64_t>(),
+            n_indptr.data_ptr<int64_t>(), means.data_ptr<float>(),
+            covars.data_ptr<float>(), Ks.data_ptr<float>(), width, height,
+            means2d.data_ptr<float>(), covars2d.data_ptr<float>());
+    }
+    return std::make_tuple(means2d, covars2d);
+}
+
+__global__ void
+persp_proj_jagged_bwd_kernel(const uint32_t B, const int64_t nnz,
+                             const int64_t *__restrict__ g_sizes,  // [B]
+                             const int64_t *__restrict__ c_sizes,  // [B]
+                             const int64_t *__restrict__ g_indptr, // [B] start indices
+                             const int64_t *__restrict__ c_indptr, // [B] start indices
+                             const int64_t *__restrict__ n_indptr, // [B] start indices
+                             const float *__restrict__ means,      // [ggz, 3]
+                             const float *__restrict__ covars,     // [ggz, 3, 3]
+                             const float *__restrict__ Ks,         // [ccz, 3, 3]
+                             const uint32_t width, const uint32_t height,
+                             const float *__restrict__ v_means2d,  // [nnz, 2]
+                             const float *__restrict__ v_covars2d, // [nnz, 2, 2]
+                             float *__restrict__ v_means,          // [ggz, 3]
+                             float *__restrict__ v_covars          // [ggz, 3, 3]
+) {
+    uint32_t idx = cg::this_grid().thread_rank();
+    if (idx >= nnz) {
+        return;
+    }
+
+    // TODO: too many global memory accesses.
+    int64_t bid = bin_search(n_indptr, B, static_cast<int64_t>(idx)); // batch id
+    int64_t idx_local = idx - n_indptr[bid];      // local elem idx within Ci * Ni
+    int64_t cid_local = idx_local / g_sizes[bid]; // local camera id within Ci
+    int64_t gid_local = idx_local % g_sizes[bid]; // local gaussian id within Ni
+    int64_t cid = cid_local + c_indptr[bid];      // camera id
+    int64_t gid = gid_local + g_indptr[bid];      // gaussian id
+
+    // shift pointers to the current camera and gaussian
+    means += gid * 3;
+    covars += gid * 9;
+    v_means += gid * 3;
+    v_covars += gid * 9;
+    Ks += cid * 9;
+    v_means2d += idx * 2;
+    v_covars2d += idx * 4;
+
+    float fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
+    glm::mat3 v_covar(0.f);
+    glm::vec3 v_mean(0.f);
+    persp_proj_vjp(glm::make_vec3(means), glm::make_mat3(covars), fx, fy, cx, cy, width,
+                   height, glm::transpose(glm::make_mat2(v_covars2d)),
+                   glm::make_vec2(v_means2d), v_mean, v_covar);
+
+    // write to outputs: glm is column-major but we want row-major
+    PRAGMA_UNROLL
+    for (uint32_t i = 0; i < 3; i++) { // rows
+        PRAGMA_UNROLL
+        for (uint32_t j = 0; j < 3; j++) { // cols
+            atomicAdd(v_covars + i * 3 + j, v_covar[j][i]);
+        }
+    }
+
+    PRAGMA_UNROLL
+    for (uint32_t i = 0; i < 3; i++) {
+        atomicAdd(v_means + i, v_mean[i]);
+    }
+}
+
+std::tuple<torch::Tensor, torch::Tensor>
+persp_proj_jagged_bwd_tensor(const torch::Tensor &g_sizes, // [B] gaussian sizes
+                             const torch::Tensor &means,   // [ggz, 3]
+                             const torch::Tensor &covars,  // [ggz, 3, 3]
+                             const torch::Tensor &c_sizes, // [B] camera sizes
+                             const torch::Tensor &Ks,      // [ccz, 3, 3]
+                             const uint32_t width, const uint32_t height,
+                             const torch::Tensor &v_means2d, // [nnz, 2]
+                             const torch::Tensor &v_covars2d // [nnz, 2, 2]
+) {
+    DEVICE_GUARD(means);
+    CHECK_INPUT(g_sizes);
+    CHECK_INPUT(means);
+    CHECK_INPUT(covars);
+    CHECK_INPUT(c_sizes);
+    CHECK_INPUT(Ks);
+    CHECK_INPUT(v_means2d);
+    CHECK_INPUT(v_covars2d);
+
+    // TODO: use inclusive sum
+    uint32_t B = g_sizes.size(0);
+    int64_t nnz = v_means2d.size(0);
+    torch::Tensor c_indptr = torch::cumsum(c_sizes, 0, torch::kInt64) - c_sizes;
+    torch::Tensor g_indptr = torch::cumsum(g_sizes, 0, torch::kInt64) - g_sizes;
+    torch::Tensor n_sizes = c_sizes * g_sizes; // element size = Ci * Ni
+    torch::Tensor n_indptr = torch::cumsum(n_sizes, 0, torch::kInt64) - n_sizes;
+
+    torch::Tensor v_means = torch::zeros_like(means);
+    torch::Tensor v_covars = torch::zeros_like(covars);
+
+    if (nnz) {
+        at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+        persp_proj_jagged_bwd_kernel<<<(nnz + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
+                                       stream>>>(
+            B, nnz, g_sizes.data_ptr<int64_t>(), c_sizes.data_ptr<int64_t>(),
+            g_indptr.data_ptr<int64_t>(), c_indptr.data_ptr<int64_t>(),
+            n_indptr.data_ptr<int64_t>(), means.data_ptr<float>(),
+            covars.data_ptr<float>(), Ks.data_ptr<float>(), width, height,
+            v_means2d.data_ptr<float>(), v_covars2d.data_ptr<float>(),
+            v_means.data_ptr<float>(), v_covars.data_ptr<float>());
+    }
+    return std::make_tuple(v_means, v_covars);
+}
