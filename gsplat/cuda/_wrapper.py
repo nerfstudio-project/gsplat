@@ -433,7 +433,7 @@ def rasterize_to_pixels(
         colors = torch.cat(
             [
                 colors,
-                torch.empty(*colors.shape[:-1], padded_channels, device=device),
+                torch.zeros(*colors.shape[:-1], padded_channels, device=device),
             ],
             dim=-1,
         )
@@ -441,7 +441,7 @@ def rasterize_to_pixels(
             backgrounds = torch.cat(
                 [
                     backgrounds,
-                    torch.empty(
+                    torch.zeros(
                         *backgrounds.shape[:-1], padded_channels, device=device
                     ),
                 ],
