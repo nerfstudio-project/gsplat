@@ -174,7 +174,7 @@ def create_splats_with_optimizers(
         ("means3d", torch.nn.Parameter(points), 1.6e-4 * scene_scale),
         ("scales", torch.nn.Parameter(scales), 5e-3),
         ("quats", torch.nn.Parameter(quats), 1e-3),
-        ("densities", torch.nn.Parameter(densities), 5e-3),
+        ("densities", torch.nn.Parameter(densities), 5e-2),
     ]
 
     if feature_dim is None:
@@ -333,7 +333,7 @@ class Runner:
         # rasterization does normalization internally
         quats = self.splats["quats"]  # [N, 4]
         scales = torch.exp(self.splats["scales"])  # [N, 3]
-        densities = F.relu(self.splats["densities"])  # [N,]
+        densities = torch.exp(self.splats["densities"])  # [N,]
 
         image_ids = kwargs.pop("image_ids", None)
         if self.cfg.app_opt:
