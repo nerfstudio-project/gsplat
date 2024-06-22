@@ -1947,8 +1947,6 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
             const float2 xy = means2d[g];
             const float opac = opacities[g];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
-            const float3 tmp = {ray_transformations[g * 9 + 6], ray_transformations[g * 9 + 7], ray_transformations[g * 9 + 8]};
-            // printf("%.2f, %.2f, %.2f \n", tmp.x, tmp.y, tmp.z);
             u_transform_batch[tr] = {ray_transformations[g * 9 + 0], ray_transformations[g * 9 + 1], ray_transformations[g * 9 + 2]};
             v_transform_batch[tr] = {ray_transformations[g * 9 + 3], ray_transformations[g * 9 + 4], ray_transformations[g * 9 + 5]};
             w_transform_batch[tr] = {ray_transformations[g * 9 + 6], ray_transformations[g * 9 + 7], ray_transformations[g * 9 + 8]};
@@ -1984,7 +1982,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 const float3 v_transform = v_transform_batch[t];
                 w_transform = w_transform_batch[t];
                 const float3 xy_opac = xy_opacity_batch[t];
-                const float opac = xy_opac.z;
+                opac = xy_opac.z;
 
                 h_u = {-u_transform.x + px * w_transform.x, -u_transform.y + px * w_transform.y, -u_transform.z + px * w_transform.z};
                 h_v = {-v_transform.x + py * w_transform.x, -v_transform.y + py * w_transform.y, -v_transform.z + py * w_transform.z};
@@ -2064,6 +2062,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
 
                 //====== 2DGS ======//
                 const float v_G = opac * v_alpha;
+                // printf("v_G: %.2f \n", v_G);
                 float v_depth = 0.f;
                 if (gauss_weight_3d <= gauss_weight_2d) {
                     const float2 v_s = {
@@ -2074,9 +2073,10 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                     const float v_sx_pz = v_s.x / intersect.z;
                     const float v_sy_pz = v_s.y / intersect.z;
                     const float3 v_intersect = {v_sx_pz, v_sy_pz, -(v_sx_pz * s.x + v_sy_pz * s.y)};
+                    // printf("h_v: %.2f, %.2f, %.2f \n", h_v.x, h_v.y, h_v.z);
+                    // printf("v_intersect: %.2f, %.2f, %.2f\n", v_intersect.x, v_intersect.y, v_intersect.z);
                     const float3 v_h_u = cross_product(h_v, v_intersect);
                     const float3 v_h_v = cross_product(v_intersect, h_u);
-
                     const float3 v_u_transform = {-v_h_u.x, -v_h_u.y, -v_h_u.z};
                     const float3 v_v_transform = {-v_h_v.x, -v_h_v.y, -v_h_v.z};
                     const float3 v_w_transform = {

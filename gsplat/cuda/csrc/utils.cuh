@@ -69,7 +69,9 @@ inline __device__ void quat_to_rotmat_vjp(const glm::vec4 quat, const glm::mat3 
                2.f * z * (v_R[0][0] + v_R[1][1]) + w * (v_R[0][1] - v_R[1][0])));
 
     glm::vec4 quat_n = glm::vec4(w, x, y, z);
+    glm::vec4 temp = (v_quat_n - glm::dot(v_quat_n, quat_n) * quat_n) * inv_norm;
     v_quat += (v_quat_n - glm::dot(v_quat_n, quat_n) * quat_n) * inv_norm;
+
 }
 
 inline __device__ void quat_scale_to_covar_preci(const glm::vec4 quat,
@@ -379,7 +381,7 @@ inline __device__ void compute_aabb_vjp(const glm::mat3 M, const glm::vec3 v_mea
     float v_distance = glm::dot(v_f, f) * (-1.0 / distance);
     glm::vec3 v_d_dT3 = glm::vec3(1.0, 1.0, -1.0) * M[2] * 2.0f;
     v_T3 += v_distance * v_d_dT3;
-
+    // printf("not print: %.2f, %.2f, %.2f\n", v_T0.x, v_T0.y, v_T0.z);
     v_ray_transformation[0][0] += v_T0.x;
     v_ray_transformation[0][1] += v_T0.y;
     v_ray_transformation[0][2] += v_T0.z;
@@ -408,22 +410,35 @@ inline __device__ void compute_ray_transformation_vjp(const glm::mat3x4 W, const
     );
 
     glm::mat3 W_t = glm::transpose(W);
-    glm::mat v_RS = W_t * v_M;
+    glm::mat3 v_RS = W_t * v_M;
     glm::vec3 v_RS0 = v_RS[0];
     glm::vec3 v_RS1 = v_RS[1];
     glm::vec3 v_tn = W_t * glm::vec3(0.f, 0.f, 0.f);
 
-    v_R = glm::mat3(
-        v_RS0 * glm::vec3(scale[0]),
-        v_RS1 * glm::vec3(scale[1]),
-        v_tn
-    );
+    // v_R = glm::mat3(
+    //     v_RS0 * glm::vec3(scale[0]),
+    //     v_RS1 * glm::vec3(scale[1]),
+    //     v_tn
+    // );
+    v_R[0] += v_RS0 * glm::vec3(scale[0]);
+    v_R[1] += v_RS1 * glm::vec3(scale[1]);
+    v_R[2] += v_tn;
 
-    v_scale = glm::vec2(
-        (float)glm::dot(v_RS0, R[0]),
-        (float)glm::dot(v_RS1, R[1])
-    );
-    v_mean3D = v_RS[2];
+    // printf("%.9f \n", v_RS1);
+    // printf("v_R[0]: %.2f \n", v_RS0 * glm::vec3(scale[0]));
+    // printf("v_R: %.2f, %.2f, %.2f \n, %.2f, %.2f, %.2f \n, %.2f, %.2f, %.2f\n", 
+    //         v_R[0][0], v_R[0][1], v_R[0][2],
+    //         v_R[1][0], v_R[1][1], v_R[1][2],
+    //         v_R[2][0], v_R[2][1], v_R[2][2]);
+
+    // v_scale = glm::vec2(
+    //     (float)glm::dot(v_RS0, R[0]),
+    //     (float)glm::dot(v_RS1, R[1])
+    // );
+
+    v_scale[0] += (float)glm::dot(v_RS0, R[0]);
+    v_scale[1] += (float)glm::dot(v_RS1, R[1]);
+    v_mean3D += v_RS[2];
 }
 
 #endif // GSPLAT_CUDA_UTILS_H
