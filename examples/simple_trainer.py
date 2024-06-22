@@ -6,13 +6,13 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import imageio
+import nerfview
 import numpy as np
 import torch
 import torch.nn.functional as F
 import tqdm
 import tyro
 import viser
-import nerfview
 from datasets.colmap import Dataset, Parser
 from datasets.traj import generate_interpolated_path
 from torch import Tensor
@@ -70,8 +70,8 @@ class Config:
     sh_degree: int = 3
     # Turn on another SH degree every this steps
     sh_degree_interval: int = 1000
-    # Initial opacity of GS
-    init_opa: float = 0.1
+    # Initial density of GS
+    init_density: float = 2.0
     # Weight for SSIM loss
     ssim_lambda: float = 0.2
 
@@ -80,8 +80,8 @@ class Config:
     # Far plane clipping distance
     far_plane: float = 1e10
 
-    # GSs with opacity below this value will be pruned
-    prune_opa: float = 0.005
+    # GSs with density below this value will be pruned
+    prune_density: float = 0.1
     # GSs with image plane gradient above this value will be split/duplicated
     grow_grad2d: float = 0.0002
     # GSs with scale below this value will be duplicated. Above will be split
@@ -93,7 +93,7 @@ class Config:
     refine_start_iter: int = 500
     # Stop refining GSs after this iteration
     refine_stop_iter: int = 15_000
-    # Reset opacities every this steps
+    # Reset densities every this steps
     reset_every: int = 3000
     # Refine GSs every this steps
     refine_every: int = 100
@@ -154,7 +154,7 @@ def create_splats_with_optimizers(
     rgbs: Tensor,  # [N, 3]
     scene_scale: float = 1.0,
     sh_degree: int = 3,
-    init_opacity: float = 0.1,
+    init_density: float = 2.0,
     sparse_grad: bool = False,
     batch_size: int = 1,
     feature_dim: Optional[int] = None,
@@ -167,14 +167,14 @@ def create_splats_with_optimizers(
     dist_avg = torch.sqrt(dist2_avg)
     scales = torch.log(dist_avg).unsqueeze(-1).repeat(1, 3)  # [N, 3]
     quats = torch.rand((N, 4))  # [N, 4]
-    opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
+    densities = torch.full((N,), init_density)  # [N,]
 
     params = [
         # name, value, lr
         ("means3d", torch.nn.Parameter(points), 1.6e-4 * scene_scale),
         ("scales", torch.nn.Parameter(scales), 5e-3),
         ("quats", torch.nn.Parameter(quats), 1e-3),
-        ("opacities", torch.nn.Parameter(opacities), 5e-2),
+        ("densities", torch.nn.Parameter(densities), 5e-3),
     ]
 
     if feature_dim is None:
@@ -253,7 +253,7 @@ class Runner:
             torch.from_numpy(self.parser.points_rgb / 255.0).float(),
             scene_scale=self.scene_scale,
             sh_degree=cfg.sh_degree,
-            init_opacity=cfg.init_opa,
+            init_density=cfg.init_density,
             sparse_grad=cfg.sparse_grad,
             batch_size=cfg.batch_size,
             feature_dim=feature_dim,
@@ -333,7 +333,7 @@ class Runner:
         # rasterization does normalization internally
         quats = self.splats["quats"]  # [N, 4]
         scales = torch.exp(self.splats["scales"])  # [N, 3]
-        opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
+        densities = F.relu(self.splats["densities"])  # [N,]
 
         image_ids = kwargs.pop("image_ids", None)
         if self.cfg.app_opt:
@@ -353,7 +353,8 @@ class Runner:
             means=means,
             quats=quats,
             scales=scales,
-            opacities=opacities,
+            opacities=None,
+            densities=densities,
             colors=colors,
             viewmats=torch.linalg.inv(camtoworlds),  # [C, 4, 4]
             Ks=Ks,  # [C, 3, 3]
@@ -552,7 +553,7 @@ class Runner:
                     )
 
                     # prune GSs
-                    is_prune = torch.sigmoid(self.splats["opacities"]) < cfg.prune_opa
+                    is_prune = self.splats["densities"] < cfg.prune_density
                     if step > cfg.reset_every:
                         # The official code also implements sreen-size pruning but
                         # it's actually not being used due to a bug:
@@ -574,7 +575,7 @@ class Runner:
                     self.running_stats["count"].zero_()
 
                 if step % cfg.reset_every == 0:
-                    self.reset_opa(cfg.prune_opa * 2.0)
+                    self.reset_density(cfg.prune_density * 2.0)
 
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:
@@ -666,14 +667,12 @@ class Runner:
             )
 
     @torch.no_grad()
-    def reset_opa(self, value: float = 0.01):
-        """Utility function to reset opacities."""
-        opacities = torch.clamp(
-            self.splats["opacities"], max=torch.logit(torch.tensor(value)).item()
-        )
+    def reset_density(self, value: float = 0.01):
+        """Utility function to reset densities."""
+        densities = torch.clamp(self.splats["densities"], max=value)
         for optimizer in self.optimizers:
             for i, param_group in enumerate(optimizer.param_groups):
-                if param_group["name"] != "opacities":
+                if param_group["name"] != "densities":
                     continue
                 p = param_group["params"][0]
                 p_state = optimizer.state[p]
@@ -681,7 +680,7 @@ class Runner:
                 for key in p_state.keys():
                     if key != "step":
                         p_state[key] = torch.zeros_like(p_state[key])
-                p_new = torch.nn.Parameter(opacities)
+                p_new = torch.nn.Parameter(densities)
                 optimizer.param_groups[i]["params"] = [p_new]
                 optimizer.state[p_new] = p_state
                 self.splats[param_group["name"]] = p_new

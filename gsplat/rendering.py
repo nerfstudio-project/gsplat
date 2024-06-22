@@ -2,6 +2,7 @@ import math
 from typing import Dict, Optional, Tuple
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 from typing_extensions import Literal
 
@@ -9,9 +10,26 @@ from .cuda._wrapper import (
     fully_fused_projection,
     isect_offset_encode,
     isect_tiles,
+    quat_scale_to_covar_preci,
     rasterize_to_pixels,
     spherical_harmonics,
 )
+
+PI = 3.14159265358979323846
+
+
+def density_to_opacity(
+    means: Tensor,  # [N, 3]
+    densities: Tensor,  # [N]
+    percis: Tensor,  # [N, 3, 3]
+    camtoworlds: Tensor,  # [C, 4, 4]
+):
+    assert camtoworlds.shape[0] == 1
+    rays_o = camtoworlds[0, :3, 3]  # [3]
+    rays_d = F.normalize(means - rays_o, dim=-1)  # [N, 3]
+    a = torch.einsum("ni,nij,nj->n", rays_d, percis, rays_d)  # [N]
+    integral = torch.sqrt(2 * PI / a)  # [N]
+    return 1.0 - torch.exp(-integral * densities)
 
 
 def rasterization(
@@ -37,6 +55,7 @@ def rasterization(
     absgrad: bool = False,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
     channel_chunk: int = 32,
+    densities: Optional[Tensor] = None,  # [N]
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -194,7 +213,10 @@ def rasterization(
     assert means.shape == (N, 3), means.shape
     assert quats.shape == (N, 4), quats.shape
     assert scales.shape == (N, 3), scales.shape
-    assert opacities.shape == (N,), opacities.shape
+    if densities is not None:
+        assert densities.shape == (N,), densities.shape
+    else:
+        assert opacities.shape == (N,), opacities.shape
     assert viewmats.shape == (C, 4, 4), viewmats.shape
     assert Ks.shape == (C, 3, 3), Ks.shape
     assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
@@ -212,12 +234,25 @@ def rasterization(
         ), colors.shape
         assert (sh_degree + 1) ** 2 <= colors.shape[1], colors.shape
 
+    covars, percis = quat_scale_to_covar_preci(quats, scales, triu=False)
+
+    if densities is not None:
+        opacities = density_to_opacity(
+            means, densities, percis, torch.inverse(viewmats)
+        )  # [N]
+
+    # full matrix to triu matrix for fully_fused_projection()
+    covars = covars.reshape(covars.shape[:-2] + (9,))  # (..., 9)
+    covars = (
+        covars[..., [0, 1, 2, 4, 5, 8]] + covars[..., [0, 3, 6, 4, 7, 8]]
+    ) / 2.0  # (..., 6)
+
     # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
     proj_results = fully_fused_projection(
         means,
-        None,  # covars,
-        quats,
-        scales,
+        covars,
+        None,
+        None,
         viewmats,
         Ks,
         width,
