@@ -375,10 +375,10 @@ to a batch of images in one go, by simplly providing the batched <cite>viewmats<
 <div class="admonition note">
 <p class="admonition-title">Note</p>
 <p><strong>Support N-D Features</strong>: If <cite>sh_degree</cite> is None,
-the <cite>colors</cite> is expected to be with shape [N, D], in which D is the channel of
+the <cite>colors</cite> is expected to be with shape [N, D] or [C, N, D], in which D is the channel of
 the features to be rendered. The computation is slow when D &gt; 32 at the moment.
 If <cite>sh_degree</cite> is set, the <cite>colors</cite> is expected to be the SH coefficients with
-shape [N, K, 3], where K is the number of SH bases. In this case, it is expected
+shape [N, K, 3] or [C, N, K, 3], where K is the number of SH bases. In this case, it is expected
 that <span class="math notranslate nohighlight">\((\textit{sh_degree} + 1) ^ 2 \leq K\)</span>, where <cite>sh_degree</cite> controls the
 activated bases in the SH coefficients.</p>
 </div>
@@ -448,7 +448,7 @@ which is shown to be more effective for splitting Gaussians during training.</p>
 <li><p><strong>quats</strong> – The quaternions of the Gaussians. It’s not required to be normalized. [N, 4]</p></li>
 <li><p><strong>scales</strong> – The scales of the Gaussians. [N, 3]</p></li>
 <li><p><strong>opacities</strong> – The opacities of the Gaussians. [N]</p></li>
-<li><p><strong>colors</strong> – The colors of the Gaussians. [N, D] or [N, K, 3] for SH coefficients.</p></li>
+<li><p><strong>colors</strong> – The colors of the Gaussians. [(C,) N, D] or [(C,) N, K, 3] for SH coefficients.</p></li>
 <li><p><strong>viewmats</strong> – The world-to-cam transformation of the cameras. [C, 4, 4]</p></li>
 <li><p><strong>Ks</strong> – The camera intrinsics. [C, 3, 3]</p></li>
 <li><p><strong>width</strong> – The width of the image.</p></li>
@@ -462,8 +462,8 @@ Default is 0.0.</p></li>
 This will prevents the projected GS to be too small. For example eps2d=0.3
 leads to minimal 3 pixel unit. Default is 0.3.</p></li>
 <li><p><strong>sh_degree</strong> – The SH degree to use, which can be smaller than the total
-number of bands. If set, the <cite>colors</cite> should be [N, K, 3] SH coefficients,
-else the <cite>colors</cite> should [N, D] per-Gaussian color values. Default is None.</p></li>
+number of bands. If set, the <cite>colors</cite> should be [(C,) N, K, 3] SH coefficients,
+else the <cite>colors</cite> should [(C,) N, D] post-activation color values. Default is None.</p></li>
 <li><p><strong>packed</strong> – Whether to use packed mode which is more memory efficient but might or
 might not be as fast. Default is True.</p></li>
 <li><p><strong>tile_size</strong> – The size of the tiles for rasterization. Default is 16.
