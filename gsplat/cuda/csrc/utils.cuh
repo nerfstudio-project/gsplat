@@ -398,7 +398,8 @@ inline __device__ void compute_ray_transformation_vjp(const glm::mat3x4 W, const
                                                         const glm::vec3 scale, const glm::mat3 v_ray_transformation, 
                                                         glm::mat3& v_R, glm::vec2& v_scale, 
                                                         glm::vec3& v_mean3D) {
-    glm::mat3 S = scale_to_mat(scale, 1.f);
+    glm::vec3 scale_2dgs = glm::vec3(scale.x, scale.y, 1.f);
+    glm::mat3 S = scale_to_mat(scale_2dgs, 1.f);
     glm::mat3 R = quat_to_rotmat(quat);
     glm::mat3 RS = R * S;
 
@@ -420,8 +421,8 @@ inline __device__ void compute_ray_transformation_vjp(const glm::mat3x4 W, const
     //     v_RS1 * glm::vec3(scale[1]),
     //     v_tn
     // );
-    v_R[0] += v_RS0 * glm::vec3(scale[0]);
-    v_R[1] += v_RS1 * glm::vec3(scale[1]);
+    v_R[0] += v_RS0 * glm::vec3(scale_2dgs[0]);
+    v_R[1] += v_RS1 * glm::vec3(scale_2dgs[1]);
     v_R[2] += v_tn;
 
     // printf("%.9f \n", v_RS1);

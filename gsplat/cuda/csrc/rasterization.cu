@@ -1978,11 +1978,11 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
             float3 intersect;
             float3 w_transform;
             if (valid) { 
+                float3 xy_opac = xy_opacity_batch[t];
+                opac = xy_opac.z;
                 const float3 u_transform = u_transform_batch[t];
                 const float3 v_transform = v_transform_batch[t];
                 w_transform = w_transform_batch[t];
-                const float3 xy_opac = xy_opacity_batch[t];
-                opac = xy_opac.z;
 
                 h_u = {-u_transform.x + px * w_transform.x, -u_transform.y + px * w_transform.y, -u_transform.z + px * w_transform.z};
                 h_v = {-v_transform.x + py * w_transform.x, -v_transform.y + py * w_transform.y, -v_transform.z + py * w_transform.z};
@@ -1994,19 +1994,15 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 if (intersect.z == 0.0) {
                     continue;
                 } else {
-                    // 3D homogeneous point to 2D point on the splat
                     s = {intersect.x / intersect.z, intersect.y / intersect.z};
                 }
 
-                // 3D distance. Compute Mahalanobis distance in the canonical splat space.
                 gauss_weight_3d = (s.x * s.x + s.y * s.y);
-
-                // Low pass filter
                 float x = xy_opac.x;
                 float y = xy_opac.y;
                 d = {x - px, y - py};
-                // 2D screen distance
                 gauss_weight_2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
+
                 gauss_weight = min(gauss_weight_3d, gauss_weight_2d);
 
                 const float sigma = 0.5f * gauss_weight;
@@ -2077,6 +2073,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                     // printf("v_intersect: %.2f, %.2f, %.2f\n", v_intersect.x, v_intersect.y, v_intersect.z);
                     const float3 v_h_u = cross_product(h_v, v_intersect);
                     const float3 v_h_v = cross_product(v_intersect, h_u);
+                    
                     const float3 v_u_transform = {-v_h_u.x, -v_h_u.y, -v_h_u.z};
                     const float3 v_v_transform = {-v_h_v.x, -v_h_v.y, -v_h_v.z};
                     const float3 v_w_transform = {
