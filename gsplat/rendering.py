@@ -19,7 +19,7 @@ def rasterization(
     quats: Tensor,  # [N, 4]
     scales: Tensor,  # [N, 3]
     opacities: Tensor,  # [N]
-    colors: Tensor,  # [N, D] or [N, K, 3]
+    colors: Tensor,  # [(C,) N, D] or [(C,) N, K, 3]
     viewmats: Tensor,  # [C, 4, 4]
     Ks: Tensor,  # [C, 3, 3]
     width: int,
@@ -49,10 +49,10 @@ def rasterization(
 
     .. note::
         **Support N-D Features**: If `sh_degree` is None,
-        the `colors` is expected to be with shape [N, D], in which D is the channel of
+        the `colors` is expected to be with shape [N, D] or [C, N, D], in which D is the channel of
         the features to be rendered. The computation is slow when D > 32 at the moment.
         If `sh_degree` is set, the `colors` is expected to be the SH coefficients with
-        shape [N, K, 3], where K is the number of SH bases. In this case, it is expected
+        shape [N, K, 3] or [C, N, K, 3], where K is the number of SH bases. In this case, it is expected
         that :math:`(\\textit{sh_degree} + 1) ^ 2 \\leq K`, where `sh_degree` controls the
         activated bases in the SH coefficients.
 
@@ -113,7 +113,7 @@ def rasterization(
         quats: The quaternions of the Gaussians. It's not required to be normalized. [N, 4]
         scales: The scales of the Gaussians. [N, 3]
         opacities: The opacities of the Gaussians. [N]
-        colors: The colors of the Gaussians. [N, D] or [N, K, 3] for SH coefficients.
+        colors: The colors of the Gaussians. [(C,) N, D] or [(C,) N, K, 3] for SH coefficients.
         viewmats: The world-to-cam transformation of the cameras. [C, 4, 4]
         Ks: The camera intrinsics. [C, 3, 3]
         width: The width of the image.
@@ -127,8 +127,8 @@ def rasterization(
             This will prevents the projected GS to be too small. For example eps2d=0.3
             leads to minimal 3 pixel unit. Default is 0.3.
         sh_degree: The SH degree to use, which can be smaller than the total
-            number of bands. If set, the `colors` should be [N, K, 3] SH coefficients,
-            else the `colors` should [N, D] per-Gaussian color values. Default is None.
+            number of bands. If set, the `colors` should be [(C,) N, K, 3] SH coefficients,
+            else the `colors` should [(C,) N, D] post-activation color values. Default is None.
         packed: Whether to use packed mode which is more memory efficient but might or
             might not be as fast. Default is True.
         tile_size: The size of the tiles for rasterization. Default is 16.
@@ -196,17 +196,19 @@ def rasterization(
     assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
 
     if sh_degree is None:
-        # treat colors as post-activation values
-        # colors should be in shape [N, D] or (C, N, D) (silently support)
+        # treat colors as post-activation values, should be in shape [N, D] or [C, N, D]
         assert (colors.dim() == 2 and colors.shape[0] == N) or (
             colors.dim() == 3 and colors.shape[:2] == (C, N)
         ), colors.shape
     else:
-        # treat colors as SH coefficients. Allowing for activating partial SH bands
+        # treat colors as SH coefficients, should be in shape [N, K, 3] or [C, N, K, 3]
+        # Allowing for activating partial SH bands
         assert (
             colors.dim() == 3 and colors.shape[0] == N and colors.shape[2] == 3
+        ) or (
+            colors.dim() == 4 and colors.shape[:2] == (C, N) and colors.shape[3] == 3
         ), colors.shape
-        assert (sh_degree + 1) ** 2 <= colors.shape[1], colors.shape
+        assert (sh_degree + 1) ** 2 <= colors.shape[-2], colors.shape
 
     # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
     proj_results = fully_fused_projection(
@@ -265,26 +267,46 @@ def rasterization(
     )
     isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
 
-    # TODO: SH also suport N-D.
-    # Compute the per-view colors
-    if not (
-        colors.dim() == 3 and sh_degree is None
-    ):  # silently support [C, N, D] color.
-        colors = (
-            colors[gaussian_ids] if packed else colors.expand(C, *([-1] * colors.dim()))
-        )  # [nnz, D] or [C, N, 3]
-    else:
+    # Turn colors into [C, N, D] or [nnz, D] to pass into rasterize_to_pixels()
+    if sh_degree is None:
+        # Colors are post-activation values, with shape [N, D] or [C, N, D]
         if packed:
-            colors = colors[camera_ids, gaussian_ids, :]
-    if sh_degree is not None:  # SH coefficients
-        camtoworlds = torch.inverse(viewmats)
-        if packed:
-            dirs = means[gaussian_ids, :] - camtoworlds[camera_ids, :3, 3]
+            if colors.dim() == 2:
+                # Turn [N, D] into [nnz, D]
+                colors = colors[gaussian_ids]
+            else:
+                # Turn [C, N, D] into [nnz, D]
+                colors = colors[camera_ids, gaussian_ids]
         else:
-            dirs = means[None, :, :] - camtoworlds[:, None, :3, 3]
-        colors = spherical_harmonics(
-            sh_degree, dirs, colors, masks=radii > 0
-        )  # [nnz, D] or [C, N, 3]
+            if colors.dim() == 2:
+                # Turn [N, D] into [C, N, D]
+                colors = colors.expand(C, -1, -1)
+            else:
+                # colors is already [C, N, D]
+                pass
+    else:
+        # Colors are SH coefficients, with shape [N, K, 3] or [C, N, K, 3]
+        camtoworlds = torch.inverse(viewmats)  # [C, 4, 4]
+        if packed:
+            dirs = means[gaussian_ids, :] - camtoworlds[camera_ids, :3, 3]  # [nnz, 3]
+            masks = radii > 0  # [nnz]
+            if colors.dim() == 3:
+                # Turn [N, K, 3] into [nnz, 3]
+                shs = colors[gaussian_ids, :, :]  # [nnz, K, 3]
+            else:
+                # Turn [C, N, K, 3] into [nnz, 3]
+                shs = colors[camera_ids, gaussian_ids, :, :]  # [nnz, K, 3]
+            colors = spherical_harmonics(sh_degree, dirs, shs, masks=masks)  # [nnz, 3]
+        else:
+            dirs = means[None, :, :] - camtoworlds[:, None, :3, 3]  # [C, N, 3]
+            masks = radii > 0  # [C, N]
+            if colors.dim() == 3:
+                # Turn [N, K, 3] into [C, N, 3]
+                shs = colors.expand(C, -1, -1, -1)  # [C, N, K, 3]
+            else:
+                # colors is already [C, N, K, 3]
+                shs = colors
+            colors = spherical_harmonics(sh_degree, dirs, shs, masks=masks)  # [C, N, 3]
         # make it apple-to-apple with Inria's CUDA Backend.
         colors = torch.clamp_min(colors + 0.5, 0.0)
 
