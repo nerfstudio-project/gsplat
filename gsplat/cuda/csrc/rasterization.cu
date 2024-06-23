@@ -2,6 +2,7 @@
 #include "helpers.cuh"
 #include <cooperative_groups.h>
 #include <cub/cub.cuh>
+#include <cuda_runtime.h>
 
 namespace cg = cooperative_groups;
 
@@ -347,9 +348,10 @@ __global__ void rasterize_to_indices_in_range_kernel(
         return;
     }
 
-    __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 conic_batch[MAX_BLOCK_SIZE];
+    extern __shared__ int s[];
+    int32_t *id_batch = (int32_t *)s;                              // [block_size]
+    float3 *xy_opacity_batch = (float3 *)&id_batch[block_size];    // [block_size]
+    float3 *conic_batch = (float3 *)&xy_opacity_batch[block_size]; // [block_size]
 
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
@@ -465,13 +467,23 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
     dim3 threads = {tile_size, tile_size, 1};
     dim3 blocks = {C, tile_height, tile_width};
 
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+    const uint32_t shared_mem =
+        tile_size * tile_size * (sizeof(int32_t) + sizeof(float3) + sizeof(float3));
+    if (cudaFuncSetAttribute(rasterize_to_indices_in_range_kernel,
+                             cudaFuncAttributeMaxDynamicSharedMemorySize,
+                             shared_mem) != cudaSuccess) {
+        AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem,
+                 " bytes), try lowering tile_size.");
+    }
+
     // First pass: count the number of gaussians that contribute to each pixel
     int64_t n_elems;
     torch::Tensor chunk_starts;
     if (n_isects) {
         torch::Tensor chunk_cnts = torch::zeros({C * image_height * image_width},
                                                 means2d.options().dtype(torch::kInt32));
-        rasterize_to_indices_in_range_kernel<<<blocks, threads>>>(
+        rasterize_to_indices_in_range_kernel<<<blocks, threads, shared_mem, stream>>>(
             range_start, range_end, C, N, n_isects, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), opacities.data_ptr<float>(),
             image_width, image_height, tile_size, tile_width, tile_height,
@@ -492,7 +504,7 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
     torch::Tensor pixel_ids =
         torch::empty({n_elems}, means2d.options().dtype(torch::kInt64));
     if (n_elems) {
-        rasterize_to_indices_in_range_kernel<<<blocks, threads>>>(
+        rasterize_to_indices_in_range_kernel<<<blocks, threads, shared_mem, stream>>>(
             range_start, range_end, C, N, n_isects, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), opacities.data_ptr<float>(),
             image_width, image_height, tile_size, tile_width, tile_height,
@@ -556,9 +568,10 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     const uint32_t block_size = block.size();
     uint32_t num_batches = (range_end - range_start + block_size - 1) / block_size;
 
-    __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 conic_batch[MAX_BLOCK_SIZE];
+    extern __shared__ int s[];
+    int32_t *id_batch = (int32_t *)s;                              // [block_size]
+    float3 *xy_opacity_batch = (float3 *)&id_batch[block_size];    // [block_size]
+    float3 *conic_batch = (float3 *)&xy_opacity_batch[block_size]; // [block_size]
 
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
@@ -693,13 +706,21 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
                                           means2d.options().dtype(torch::kInt32));
 
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+    const uint32_t shared_mem =
+        tile_size * tile_size * (sizeof(int32_t) + sizeof(float3) + sizeof(float3));
 
     // TODO: an optimization can be done by passing the actual number of channels into
     // the kernel functions and avoid necessary global memory writes. This requires
     // moving the channel padding from python to C side.
     switch (channels) {
     case 1:
-        rasterize_to_pixels_fwd_kernel<1><<<blocks, threads, 0, stream>>>(
+        if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<1>,
+                                 cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                 shared_mem) != cudaSuccess) {
+            AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem,
+                     " bytes), try lowering tile_size.");
+        }
+        rasterize_to_pixels_fwd_kernel<1><<<blocks, threads, shared_mem, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
@@ -710,7 +731,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             last_ids.data_ptr<int32_t>());
         break;
     case 2:
-        rasterize_to_pixels_fwd_kernel<2><<<blocks, threads, 0, stream>>>(
+        if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<2>,
+                                 cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                 shared_mem) != cudaSuccess) {
+            AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem,
+                     " bytes), try lowering tile_size.");
+        }
+        rasterize_to_pixels_fwd_kernel<2><<<blocks, threads, shared_mem, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
@@ -721,7 +748,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             last_ids.data_ptr<int32_t>());
         break;
     case 3:
-        rasterize_to_pixels_fwd_kernel<3><<<blocks, threads, 0, stream>>>(
+        if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<3>,
+                                 cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                 shared_mem) != cudaSuccess) {
+            AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem,
+                     " bytes), try lowering tile_size.");
+        }
+        rasterize_to_pixels_fwd_kernel<3><<<blocks, threads, shared_mem, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
@@ -732,7 +765,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             last_ids.data_ptr<int32_t>());
         break;
     case 4:
-        rasterize_to_pixels_fwd_kernel<4><<<blocks, threads, 0, stream>>>(
+        if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<4>,
+                                 cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                 shared_mem) != cudaSuccess) {
+            AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem,
+                     " bytes), try lowering tile_size.");
+        }
+        rasterize_to_pixels_fwd_kernel<4><<<blocks, threads, shared_mem, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
@@ -743,7 +782,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             last_ids.data_ptr<int32_t>());
         break;
     case 5:
-        rasterize_to_pixels_fwd_kernel<5><<<blocks, threads, 0, stream>>>(
+        if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<5>,
+                                 cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                 shared_mem) != cudaSuccess) {
+            AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem,
+                     " bytes), try lowering tile_size.");
+        }
+        rasterize_to_pixels_fwd_kernel<5><<<blocks, threads, shared_mem, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
@@ -754,7 +799,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             last_ids.data_ptr<int32_t>());
         break;
     case 8:
-        rasterize_to_pixels_fwd_kernel<8><<<blocks, threads, 0, stream>>>(
+        if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<8>,
+                                 cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                 shared_mem) != cudaSuccess) {
+            AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem,
+                     " bytes), try lowering tile_size.");
+        }
+        rasterize_to_pixels_fwd_kernel<8><<<blocks, threads, shared_mem, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
@@ -765,7 +816,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             last_ids.data_ptr<int32_t>());
         break;
     case 9:
-        rasterize_to_pixels_fwd_kernel<9><<<blocks, threads, 0, stream>>>(
+        if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<9>,
+                                 cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                 shared_mem) != cudaSuccess) {
+            AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem,
+                     " bytes), try lowering tile_size.");
+        }
+        rasterize_to_pixels_fwd_kernel<9><<<blocks, threads, shared_mem, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
@@ -776,7 +833,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             last_ids.data_ptr<int32_t>());
         break;
     case 16:
-        rasterize_to_pixels_fwd_kernel<16><<<blocks, threads, 0, stream>>>(
+        if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<16>,
+                                 cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                 shared_mem) != cudaSuccess) {
+            AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem,
+                     " bytes), try lowering tile_size.");
+        }
+        rasterize_to_pixels_fwd_kernel<16><<<blocks, threads, shared_mem, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
@@ -787,7 +850,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             last_ids.data_ptr<int32_t>());
         break;
     case 17:
-        rasterize_to_pixels_fwd_kernel<17><<<blocks, threads, 0, stream>>>(
+        if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<17>,
+                                 cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                 shared_mem) != cudaSuccess) {
+            AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem,
+                     " bytes), try lowering tile_size.");
+        }
+        rasterize_to_pixels_fwd_kernel<17><<<blocks, threads, shared_mem, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
@@ -798,7 +867,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             last_ids.data_ptr<int32_t>());
         break;
     case 32:
-        rasterize_to_pixels_fwd_kernel<32><<<blocks, threads, 0, stream>>>(
+        if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<32>,
+                                 cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                 shared_mem) != cudaSuccess) {
+            AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem,
+                     " bytes), try lowering tile_size.");
+        }
+        rasterize_to_pixels_fwd_kernel<32><<<blocks, threads, shared_mem, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
@@ -809,7 +884,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             last_ids.data_ptr<int32_t>());
         break;
     case 33:
-        rasterize_to_pixels_fwd_kernel<33><<<blocks, threads, 0, stream>>>(
+        if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<33>,
+                                 cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                 shared_mem) != cudaSuccess) {
+            AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem,
+                     " bytes), try lowering tile_size.");
+        }
+        rasterize_to_pixels_fwd_kernel<33><<<blocks, threads, shared_mem, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
@@ -820,7 +901,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             last_ids.data_ptr<int32_t>());
         break;
     case 64:
-        rasterize_to_pixels_fwd_kernel<64><<<blocks, threads, 0, stream>>>(
+        if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<64>,
+                                 cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                 shared_mem) != cudaSuccess) {
+            AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem,
+                     " bytes), try lowering tile_size.");
+        }
+        rasterize_to_pixels_fwd_kernel<64><<<blocks, threads, shared_mem, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
@@ -831,7 +918,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             last_ids.data_ptr<int32_t>());
         break;
     case 65:
-        rasterize_to_pixels_fwd_kernel<65><<<blocks, threads, 0, stream>>>(
+        if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<65>,
+                                 cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                 shared_mem) != cudaSuccess) {
+            AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem,
+                     " bytes), try lowering tile_size.");
+        }
+        rasterize_to_pixels_fwd_kernel<65><<<blocks, threads, shared_mem, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
@@ -842,7 +935,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             last_ids.data_ptr<int32_t>());
         break;
     case 128:
-        rasterize_to_pixels_fwd_kernel<128><<<blocks, threads, 0, stream>>>(
+        if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<128>,
+                                 cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                 shared_mem) != cudaSuccess) {
+            AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem,
+                     " bytes), try lowering tile_size.");
+        }
+        rasterize_to_pixels_fwd_kernel<128><<<blocks, threads, shared_mem, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
@@ -853,7 +952,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             last_ids.data_ptr<int32_t>());
         break;
     case 129:
-        rasterize_to_pixels_fwd_kernel<129><<<blocks, threads, 0, stream>>>(
+        if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<129>,
+                                 cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                 shared_mem) != cudaSuccess) {
+            AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem,
+                     " bytes), try lowering tile_size.");
+        }
+        rasterize_to_pixels_fwd_kernel<129><<<blocks, threads, shared_mem, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
@@ -864,7 +969,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             last_ids.data_ptr<int32_t>());
         break;
     case 256:
-        rasterize_to_pixels_fwd_kernel<256><<<blocks, threads, 0, stream>>>(
+        if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<256>,
+                                 cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                 shared_mem) != cudaSuccess) {
+            AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem,
+                     " bytes), try lowering tile_size.");
+        }
+        rasterize_to_pixels_fwd_kernel<256><<<blocks, threads, shared_mem, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
@@ -875,7 +986,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             last_ids.data_ptr<int32_t>());
         break;
     case 257:
-        rasterize_to_pixels_fwd_kernel<257><<<blocks, threads, 0, stream>>>(
+        if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<257>,
+                                 cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                 shared_mem) != cudaSuccess) {
+            AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem,
+                     " bytes), try lowering tile_size.");
+        }
+        rasterize_to_pixels_fwd_kernel<257><<<blocks, threads, shared_mem, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
@@ -886,7 +1003,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             last_ids.data_ptr<int32_t>());
         break;
     case 512:
-        rasterize_to_pixels_fwd_kernel<512><<<blocks, threads, 0, stream>>>(
+        if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<512>,
+                                 cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                 shared_mem) != cudaSuccess) {
+            AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem,
+                     " bytes), try lowering tile_size.");
+        }
+        rasterize_to_pixels_fwd_kernel<512><<<blocks, threads, shared_mem, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
@@ -897,7 +1020,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
             last_ids.data_ptr<int32_t>());
         break;
     case 513:
-        rasterize_to_pixels_fwd_kernel<513><<<blocks, threads, 0, stream>>>(
+        if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<513>,
+                                 cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                 shared_mem) != cudaSuccess) {
+            AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem,
+                     " bytes), try lowering tile_size.");
+        }
+        rasterize_to_pixels_fwd_kernel<513><<<blocks, threads, shared_mem, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
@@ -975,10 +1104,11 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     const uint32_t num_batches =
         (range_end - range_start + block_size - 1) / block_size;
 
-    __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
-    __shared__ float3 conic_batch[MAX_BLOCK_SIZE];
-    __shared__ float rgbs_batch[MAX_BLOCK_SIZE * COLOR_DIM];
+    extern __shared__ int s[];
+    int32_t *id_batch = (int32_t *)s;                              // [block_size]
+    float3 *xy_opacity_batch = (float3 *)&id_batch[block_size];    // [block_size]
+    float3 *conic_batch = (float3 *)&xy_opacity_batch[block_size]; // [block_size]
+    float *rgbs_batch = (float *)&conic_batch[block_size]; // [block_size * COLOR_DIM]
 
     // this is the T AFTER the last gaussian in this pixel
     float T_final = 1.0f - render_alphas[pix_id];
@@ -1207,10 +1337,19 @@ rasterize_to_pixels_bwd_tensor(
     }
 
     if (n_isects) {
+        const uint32_t shared_mem = tile_size * tile_size *
+                                    (sizeof(int32_t) + sizeof(float3) + sizeof(float3) +
+                                     sizeof(float) * COLOR_DIM);
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
         switch (COLOR_DIM) {
         case 1:
-            rasterize_to_pixels_bwd_kernel<1><<<blocks, threads, 0, stream>>>(
+            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<1>,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                     shared_mem) != cudaSuccess) {
+                AT_ERROR("Failed to set maximum shared memory size (requested ",
+                         shared_mem, " bytes), try lowering tile_size.");
+            }
+            rasterize_to_pixels_bwd_kernel<1><<<blocks, threads, shared_mem, stream>>>(
                 C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
                 (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
                 opacities.data_ptr<float>(),
@@ -1226,7 +1365,13 @@ rasterize_to_pixels_bwd_tensor(
                 v_opacities.data_ptr<float>());
             break;
         case 2:
-            rasterize_to_pixels_bwd_kernel<2><<<blocks, threads, 0, stream>>>(
+            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<2>,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                     shared_mem) != cudaSuccess) {
+                AT_ERROR("Failed to set maximum shared memory size (requested ",
+                         shared_mem, " bytes), try lowering tile_size.");
+            }
+            rasterize_to_pixels_bwd_kernel<2><<<blocks, threads, shared_mem, stream>>>(
                 C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
                 (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
                 opacities.data_ptr<float>(),
@@ -1242,7 +1387,13 @@ rasterize_to_pixels_bwd_tensor(
                 v_opacities.data_ptr<float>());
             break;
         case 3:
-            rasterize_to_pixels_bwd_kernel<3><<<blocks, threads, 0, stream>>>(
+            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<3>,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                     shared_mem) != cudaSuccess) {
+                AT_ERROR("Failed to set maximum shared memory size (requested ",
+                         shared_mem, " bytes), try lowering tile_size.");
+            }
+            rasterize_to_pixels_bwd_kernel<3><<<blocks, threads, shared_mem, stream>>>(
                 C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
                 (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
                 opacities.data_ptr<float>(),
@@ -1258,7 +1409,13 @@ rasterize_to_pixels_bwd_tensor(
                 v_opacities.data_ptr<float>());
             break;
         case 4:
-            rasterize_to_pixels_bwd_kernel<4><<<blocks, threads, 0, stream>>>(
+            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<4>,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                     shared_mem) != cudaSuccess) {
+                AT_ERROR("Failed to set maximum shared memory size (requested ",
+                         shared_mem, " bytes), try lowering tile_size.");
+            }
+            rasterize_to_pixels_bwd_kernel<4><<<blocks, threads, shared_mem, stream>>>(
                 C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
                 (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
                 opacities.data_ptr<float>(),
@@ -1274,7 +1431,13 @@ rasterize_to_pixels_bwd_tensor(
                 v_opacities.data_ptr<float>());
             break;
         case 5:
-            rasterize_to_pixels_bwd_kernel<5><<<blocks, threads, 0, stream>>>(
+            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<5>,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                     shared_mem) != cudaSuccess) {
+                AT_ERROR("Failed to set maximum shared memory size (requested ",
+                         shared_mem, " bytes), try lowering tile_size.");
+            }
+            rasterize_to_pixels_bwd_kernel<5><<<blocks, threads, shared_mem, stream>>>(
                 C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
                 (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
                 opacities.data_ptr<float>(),
@@ -1290,7 +1453,13 @@ rasterize_to_pixels_bwd_tensor(
                 v_opacities.data_ptr<float>());
             break;
         case 8:
-            rasterize_to_pixels_bwd_kernel<8><<<blocks, threads, 0, stream>>>(
+            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<8>,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                     shared_mem) != cudaSuccess) {
+                AT_ERROR("Failed to set maximum shared memory size (requested ",
+                         shared_mem, " bytes), try lowering tile_size.");
+            }
+            rasterize_to_pixels_bwd_kernel<8><<<blocks, threads, shared_mem, stream>>>(
                 C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
                 (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
                 opacities.data_ptr<float>(),
@@ -1306,7 +1475,13 @@ rasterize_to_pixels_bwd_tensor(
                 v_opacities.data_ptr<float>());
             break;
         case 9:
-            rasterize_to_pixels_bwd_kernel<9><<<blocks, threads, 0, stream>>>(
+            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<9>,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                     shared_mem) != cudaSuccess) {
+                AT_ERROR("Failed to set maximum shared memory size (requested ",
+                         shared_mem, " bytes), try lowering tile_size.");
+            }
+            rasterize_to_pixels_bwd_kernel<9><<<blocks, threads, shared_mem, stream>>>(
                 C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
                 (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
                 opacities.data_ptr<float>(),
@@ -1322,7 +1497,13 @@ rasterize_to_pixels_bwd_tensor(
                 v_opacities.data_ptr<float>());
             break;
         case 16:
-            rasterize_to_pixels_bwd_kernel<16><<<blocks, threads, 0, stream>>>(
+            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<16>,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                     shared_mem) != cudaSuccess) {
+                AT_ERROR("Failed to set maximum shared memory size (requested ",
+                         shared_mem, " bytes), try lowering tile_size.");
+            }
+            rasterize_to_pixels_bwd_kernel<16><<<blocks, threads, shared_mem, stream>>>(
                 C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
                 (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
                 opacities.data_ptr<float>(),
@@ -1338,7 +1519,13 @@ rasterize_to_pixels_bwd_tensor(
                 v_opacities.data_ptr<float>());
             break;
         case 17:
-            rasterize_to_pixels_bwd_kernel<17><<<blocks, threads, 0, stream>>>(
+            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<17>,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                     shared_mem) != cudaSuccess) {
+                AT_ERROR("Failed to set maximum shared memory size (requested ",
+                         shared_mem, " bytes), try lowering tile_size.");
+            }
+            rasterize_to_pixels_bwd_kernel<17><<<blocks, threads, shared_mem, stream>>>(
                 C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
                 (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
                 opacities.data_ptr<float>(),
@@ -1354,7 +1541,13 @@ rasterize_to_pixels_bwd_tensor(
                 v_opacities.data_ptr<float>());
             break;
         case 32:
-            rasterize_to_pixels_bwd_kernel<32><<<blocks, threads, 0, stream>>>(
+            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<32>,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                     shared_mem) != cudaSuccess) {
+                AT_ERROR("Failed to set maximum shared memory size (requested ",
+                         shared_mem, " bytes), try lowering tile_size.");
+            }
+            rasterize_to_pixels_bwd_kernel<32><<<blocks, threads, shared_mem, stream>>>(
                 C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
                 (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
                 opacities.data_ptr<float>(),
@@ -1370,7 +1563,13 @@ rasterize_to_pixels_bwd_tensor(
                 v_opacities.data_ptr<float>());
             break;
         case 33:
-            rasterize_to_pixels_bwd_kernel<33><<<blocks, threads, 0, stream>>>(
+            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<33>,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                     shared_mem) != cudaSuccess) {
+                AT_ERROR("Failed to set maximum shared memory size (requested ",
+                         shared_mem, " bytes), try lowering tile_size.");
+            }
+            rasterize_to_pixels_bwd_kernel<33><<<blocks, threads, shared_mem, stream>>>(
                 C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
                 (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
                 opacities.data_ptr<float>(),
@@ -1384,6 +1583,194 @@ rasterize_to_pixels_bwd_tensor(
                 (float2 *)v_means2d.data_ptr<float>(),
                 (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>());
+            break;
+        case 64:
+            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<64>,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                     shared_mem) != cudaSuccess) {
+                AT_ERROR("Failed to set maximum shared memory size (requested ",
+                         shared_mem, " bytes), try lowering tile_size.");
+            }
+            rasterize_to_pixels_bwd_kernel<64><<<blocks, threads, shared_mem, stream>>>(
+                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+                opacities.data_ptr<float>(),
+                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+                                        : nullptr,
+                image_width, image_height, tile_size, tile_width, tile_height,
+                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+                (float2 *)v_means2d.data_ptr<float>(),
+                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
+                v_opacities.data_ptr<float>());
+            break;
+        case 65:
+            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<65>,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                     shared_mem) != cudaSuccess) {
+                AT_ERROR("Failed to set maximum shared memory size (requested ",
+                         shared_mem, " bytes), try lowering tile_size.");
+            }
+            rasterize_to_pixels_bwd_kernel<65><<<blocks, threads, shared_mem, stream>>>(
+                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+                opacities.data_ptr<float>(),
+                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+                                        : nullptr,
+                image_width, image_height, tile_size, tile_width, tile_height,
+                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+                (float2 *)v_means2d.data_ptr<float>(),
+                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
+                v_opacities.data_ptr<float>());
+            break;
+        case 128:
+            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<128>,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                     shared_mem) != cudaSuccess) {
+                AT_ERROR("Failed to set maximum shared memory size (requested ",
+                         shared_mem, " bytes), try lowering tile_size.");
+            }
+            rasterize_to_pixels_bwd_kernel<128>
+                <<<blocks, threads, shared_mem, stream>>>(
+                    C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+                    (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+                    opacities.data_ptr<float>(),
+                    backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+                                            : nullptr,
+                    image_width, image_height, tile_size, tile_width, tile_height,
+                    tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+                    render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                    v_render_colors.data_ptr<float>(),
+                    v_render_alphas.data_ptr<float>(),
+                    absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+                    (float2 *)v_means2d.data_ptr<float>(),
+                    (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
+                    v_opacities.data_ptr<float>());
+            break;
+        case 129:
+            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<129>,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                     shared_mem) != cudaSuccess) {
+                AT_ERROR("Failed to set maximum shared memory size (requested ",
+                         shared_mem, " bytes), try lowering tile_size.");
+            }
+            rasterize_to_pixels_bwd_kernel<129>
+                <<<blocks, threads, shared_mem, stream>>>(
+                    C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+                    (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+                    opacities.data_ptr<float>(),
+                    backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+                                            : nullptr,
+                    image_width, image_height, tile_size, tile_width, tile_height,
+                    tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+                    render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                    v_render_colors.data_ptr<float>(),
+                    v_render_alphas.data_ptr<float>(),
+                    absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+                    (float2 *)v_means2d.data_ptr<float>(),
+                    (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
+                    v_opacities.data_ptr<float>());
+            break;
+        case 256:
+            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<256>,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                     shared_mem) != cudaSuccess) {
+                AT_ERROR("Failed to set maximum shared memory size (requested ",
+                         shared_mem, " bytes), try lowering tile_size.");
+            }
+            rasterize_to_pixels_bwd_kernel<256>
+                <<<blocks, threads, shared_mem, stream>>>(
+                    C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+                    (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+                    opacities.data_ptr<float>(),
+                    backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+                                            : nullptr,
+                    image_width, image_height, tile_size, tile_width, tile_height,
+                    tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+                    render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                    v_render_colors.data_ptr<float>(),
+                    v_render_alphas.data_ptr<float>(),
+                    absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+                    (float2 *)v_means2d.data_ptr<float>(),
+                    (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
+                    v_opacities.data_ptr<float>());
+            break;
+        case 257:
+            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<257>,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                     shared_mem) != cudaSuccess) {
+                AT_ERROR("Failed to set maximum shared memory size (requested ",
+                         shared_mem, " bytes), try lowering tile_size.");
+            }
+            rasterize_to_pixels_bwd_kernel<257>
+                <<<blocks, threads, shared_mem, stream>>>(
+                    C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+                    (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+                    opacities.data_ptr<float>(),
+                    backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+                                            : nullptr,
+                    image_width, image_height, tile_size, tile_width, tile_height,
+                    tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+                    render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                    v_render_colors.data_ptr<float>(),
+                    v_render_alphas.data_ptr<float>(),
+                    absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+                    (float2 *)v_means2d.data_ptr<float>(),
+                    (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
+                    v_opacities.data_ptr<float>());
+            break;
+        case 512:
+            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<512>,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                     shared_mem) != cudaSuccess) {
+                AT_ERROR("Failed to set maximum shared memory size (requested ",
+                         shared_mem, " bytes), try lowering tile_size.");
+            }
+            rasterize_to_pixels_bwd_kernel<512>
+                <<<blocks, threads, shared_mem, stream>>>(
+                    C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+                    (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+                    opacities.data_ptr<float>(),
+                    backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+                                            : nullptr,
+                    image_width, image_height, tile_size, tile_width, tile_height,
+                    tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+                    render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                    v_render_colors.data_ptr<float>(),
+                    v_render_alphas.data_ptr<float>(),
+                    absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+                    (float2 *)v_means2d.data_ptr<float>(),
+                    (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
+                    v_opacities.data_ptr<float>());
+            break;
+        case 513:
+            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<513>,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                     shared_mem) != cudaSuccess) {
+                AT_ERROR("Failed to set maximum shared memory size (requested ",
+                         shared_mem, " bytes), try lowering tile_size.");
+            }
+            rasterize_to_pixels_bwd_kernel<513>
+                <<<blocks, threads, shared_mem, stream>>>(
+                    C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+                    (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+                    opacities.data_ptr<float>(),
+                    backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+                                            : nullptr,
+                    image_width, image_height, tile_size, tile_width, tile_height,
+                    tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+                    render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                    v_render_colors.data_ptr<float>(),
+                    v_render_alphas.data_ptr<float>(),
+                    absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+                    (float2 *)v_means2d.data_ptr<float>(),
+                    (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
+                    v_opacities.data_ptr<float>());
             break;
         default:
             AT_ERROR("Unsupported number of channels: ", COLOR_DIM);
