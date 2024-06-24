@@ -625,6 +625,10 @@ def test_projection_jagged(test_data):
         [len(means) // 3, len(means) - len(means) // 3], device=device
     )
     c_sizes = torch.tensor([2, 1], device=device)
+    # # nnz is [C1*N1, C2*N2, ...]
+    # tt = g_sizes.repeat_interleave(c_sizes)
+    # n_cameras_total = len(Ks)
+    # camera_ids = torch.arange(n_cameras_total, device=device).repeat_interleave(tt)
 
     viewmats.requires_grad = True
     quats.requires_grad = True
