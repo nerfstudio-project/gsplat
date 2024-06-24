@@ -695,8 +695,10 @@ def rasterization_2dgs(
     else: # RGB
         pass
     # pdb.set_trace()
+    densifications = torch.zeros_like(means2d, dtype=means2d.dtype, requires_grad=True, device="cuda") + 0
     render_colors, render_alphas = rasterize_to_pixels_2dgs(
         means2d,
+        densifications,
         ray_transformations,
         colors,
         opacities,
@@ -723,7 +725,7 @@ def rasterization_2dgs(
         "camera_ids": camera_ids,
         "gaussian_ids": gaussian_ids,
         "radii": radii,
-        "means2d": means2d,
+        "means2d": densifications,
         "depths": depths,
         "ray_transformations": ray_transformations,
         "opacities": opacities,

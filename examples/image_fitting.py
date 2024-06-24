@@ -103,18 +103,18 @@ class SimpleTrainer:
             
         for iter in range(iterations):
             start = time.time()
-            renders, _, _ = rasterization(
-                self.means,
-                self.quats / self.quats.norm(dim=-1, keepdim=True),
-                self.scales,
-                torch.sigmoid(self.opacities),
-                torch.sigmoid(self.rgbs),
-                self.viewmat[None],
-                K[None],
-                self.W,
-                self.H,
-                packed=False,
-            )
+            # renders, _, _ = rasterization(
+            #     self.means,
+            #     self.quats / self.quats.norm(dim=-1, keepdim=True),
+            #     self.scales,
+            #     torch.sigmoid(self.opacities),
+            #     torch.sigmoid(self.rgbs),
+            #     self.viewmat[None],
+            #     K[None],
+            #     self.W,
+            #     self.H,
+            #     packed=False,
+            # )
             renders, _, _ = rasterize_fnc(
                 self.means,
                 self.quats / self.quats.norm(dim=-1, keepdim=True),

@@ -1396,6 +1396,7 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
 #         )
 def rasterize_to_pixels_2dgs(
     means2d: Tensor,
+    densifications: Tensor,
     ray_transformations: Tensor,
     colors: Tensor,
     opacities: Tensor,
@@ -1460,6 +1461,7 @@ def rasterize_to_pixels_2dgs(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
     
+    # densifications = torch.zeros_like(means2d)
     # pdb.set_trace()
     render_colors, render_alphas = _RasterizeToPixels2DGS.apply(
         means2d.contiguous(),
@@ -1467,6 +1469,7 @@ def rasterize_to_pixels_2dgs(
         colors.contiguous(),
         opacities.contiguous(),
         backgrounds,
+        densifications,
         image_width,
         image_height,
         tile_size,
@@ -1536,6 +1539,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         colors: Tensor,
         opacities: Tensor,
         backgrounds: Tensor,
+        densifications: Tensor,
         width: int,
         height: int,
         tile_size: int,
@@ -1564,6 +1568,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             colors,
             opacities,
             backgrounds,
+            densifications,
             isect_offsets,
             flatten_ids,
             render_alphas,
@@ -1590,6 +1595,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             colors,
             opacities,
             backgrounds,
+            densifications,
             isect_offsets,
             flatten_ids,
             render_alphas,
@@ -1606,12 +1612,14 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             v_ray_transformations,
             v_colors,
             v_opacities,
+            v_densifications,
         ) = _make_lazy_cuda_func("rasterize_to_pixels_bwd_2dgs")(
             means2d,
             ray_transformations,
             colors,
             opacities,
             backgrounds,
+            densifications,
             width,
             height,
             tile_size,
@@ -1640,6 +1648,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             v_colors,
             v_opacities,
             v_backgrounds,
+            v_densifications,
             None,
             None,
             None,

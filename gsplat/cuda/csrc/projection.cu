@@ -2107,6 +2107,10 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
         atomicAdd(v_scales, v_scale[0]);
         atomicAdd(v_scales + 1, v_scale[1]);
     }
+
+    // float depth = ray_transformations[8];
+    // v_densification[0] = ray_transformations[2] * depth * 0.5 * float(image_width);
+    // v_densification[1] = ray_transformations[5] * depth * 0.5 * float(image_height);
     // TODO WZ: viewmat gradients
 }
 
@@ -2152,6 +2156,7 @@ fully_fused_projection_bwd_2dgs_tensor(
     if (viewmats_requires_grad) {
         v_viewmats = torch::zeros_like(viewmats);
     }
+    // torch::Tensor v_densification = torch::zeros_like(v_means2d);
     if (C && N) {
         fully_fused_projection_bwd_2dgs_kernel<<<(C * N + N_THREADS - 1) / N_THREADS,
                                             N_THREADS, 0, stream>>>(
@@ -2165,7 +2170,7 @@ fully_fused_projection_bwd_2dgs_tensor(
             v_means.data_ptr<float>(),
             v_quats.data_ptr<float>(),
             v_scales.data_ptr<float>(),
-            viewmats_requires_grad ? viewmats.data_ptr<float>() : nullptr                                 
+            viewmats_requires_grad ? viewmats.data_ptr<float>() : nullptr
         );
     }
 

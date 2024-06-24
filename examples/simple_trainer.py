@@ -3,7 +3,7 @@ import math
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Literal
 
 import imageio
 import numpy as np
@@ -28,7 +28,7 @@ from utils import (
     set_random_seed,
 )
 
-from gsplat.rendering import rasterization
+from gsplat.rendering import rasterization, rasterization_2dgs
 
 
 @dataclass
@@ -106,6 +106,8 @@ class Config:
     absgrad: bool = False
     # Anti-aliasing in rasterization. Might slightly hurt quantitative metrics.
     antialiased: bool = False
+    # Model for splatting. Currently support 3DGS and 2DGS
+    model_type: Literal["3dgs", "2dgs"] = "3dgs"
 
     # Use random background for training to discourage transparency
     random_bkgd: bool = False
@@ -247,6 +249,7 @@ class Runner:
         print("Scene scale:", self.scene_scale)
 
         # Model
+        self.model_type = cfg.model_type
         feature_dim = 32 if cfg.app_opt else None
         self.splats, self.optimizers = create_splats_with_optimizers(
             torch.from_numpy(self.parser.points).float(),
@@ -349,7 +352,29 @@ class Runner:
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
-        render_colors, render_alphas, info = rasterization(
+        
+        if self.model_type == "3dgs":
+            rasterize_fnc = rasterization
+        elif self.model_type == "2dgs":
+            rasterize_fnc = rasterization_2dgs
+            
+        # render_colors, render_alphas, info = rasterization(
+        #     means=means,
+        #     quats=quats,
+        #     scales=scales,
+        #     opacities=opacities,
+        #     colors=colors,
+        #     viewmats=torch.linalg.inv(camtoworlds),  # [C, 4, 4]
+        #     Ks=Ks,  # [C, 3, 3]
+        #     width=width,
+        #     height=height,
+        #     packed=self.cfg.packed,
+        #     absgrad=self.cfg.absgrad,
+        #     sparse_grad=self.cfg.sparse_grad,
+        #     rasterize_mode=rasterize_mode,
+        #     **kwargs,
+        # )
+        render_colors, render_alphas, info = rasterize_fnc(
             means=means,
             quats=quats,
             scales=scales,
@@ -528,10 +553,13 @@ class Runner:
 
                     # grow GSs
                     is_grad_high = grads >= cfg.grow_grad2d
+                    print(f"unique grads: {torch.unique(grads)}")
+                    print(f"is_grad_high: {sum(is_grad_high)}")
                     is_small = (
                         torch.exp(self.splats["scales"]).max(dim=-1).values
                         <= cfg.grow_scale3d * self.scene_scale
                     )
+                    print(f"is_small: {sum(is_small)}")
                     is_dupli = is_grad_high & is_small
                     n_dupli = is_dupli.sum().item()
                     self.refine_duplicate(is_dupli)
@@ -644,7 +672,6 @@ class Runner:
     def update_running_stats(self, info: Dict):
         """Update running stats."""
         cfg = self.cfg
-
         # normalize grads to [-1, 1] screen space
         if cfg.absgrad:
             grads = info["means2d"].absgrad.clone()
