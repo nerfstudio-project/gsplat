@@ -1792,3 +1792,466 @@ persp_proj_jagged_bwd_tensor(const torch::Tensor &g_sizes, // [B] gaussian sizes
     }
     return std::make_tuple(v_means, v_covars);
 }
+
+__global__ void fully_fused_projection_jagged_fwd_kernel(
+    const uint32_t B, const int64_t nnz,
+    const int64_t *__restrict__ g_sizes,  // [B]
+    const int64_t *__restrict__ c_sizes,  // [B]
+    const int64_t *__restrict__ g_indptr, // [B] start indices
+    const int64_t *__restrict__ c_indptr, // [B] start indices
+    const int64_t *__restrict__ n_indptr, // [B] start indices
+    const float *__restrict__ means,      // [ggz, 3]
+    const float *__restrict__ covars,     // [ggz, 6] optional
+    const float *__restrict__ quats,      // [ggz, 4] optional
+    const float *__restrict__ scales,     // [ggz, 3] optional
+    const float *__restrict__ viewmats,   // [ccz, 4, 4]
+    const float *__restrict__ Ks,         // [ccz, 3, 3]
+    const int32_t image_width, const int32_t image_height, const float eps2d,
+    const float near_plane, const float far_plane, const float radius_clip,
+    // outputs
+    int32_t *__restrict__ radii,      // [nnz]
+    float *__restrict__ means2d,      // [nnz, 2]
+    float *__restrict__ depths,       // [nnz]
+    float *__restrict__ conics,       // [nnz, 3]
+    float *__restrict__ compensations // [nnz] optional
+) {
+    // parallelize over nnz.
+    uint32_t idx = cg::this_grid().thread_rank();
+    if (idx >= nnz) {
+        return;
+    }
+
+    // TODO: too many global memory accesses.
+    int64_t bid = bin_search(n_indptr, B, static_cast<int64_t>(idx)); // batch id
+    int64_t idx_local = idx - n_indptr[bid];      // local elem idx within Ci * Ni
+    int64_t cid_local = idx_local / g_sizes[bid]; // local camera id within Ci
+    int64_t gid_local = idx_local % g_sizes[bid]; // local gaussian id within Ni
+    int64_t cid = cid_local + c_indptr[bid];      // camera id
+    int64_t gid = gid_local + g_indptr[bid];      // gaussian id
+
+    // shift pointers to the current camera and gaussian
+    means += gid * 3;
+    viewmats += cid * 16;
+    Ks += cid * 9;
+
+    // glm is column-major but input is row-major
+    glm::mat3 R = glm::mat3(viewmats[0], viewmats[4], viewmats[8], // 1st column
+                            viewmats[1], viewmats[5], viewmats[9], // 2nd column
+                            viewmats[2], viewmats[6], viewmats[10] // 3rd column
+    );
+    glm::vec3 t = glm::vec3(viewmats[3], viewmats[7], viewmats[11]);
+
+    // transform Gaussian center to camera space
+    glm::vec3 mean_c;
+    pos_world_to_cam(R, t, glm::make_vec3(means), mean_c);
+    if (mean_c.z < near_plane || mean_c.z > far_plane) {
+        radii[idx] = 0;
+        return;
+    }
+
+    // transform Gaussian covariance to camera space
+    glm::mat3 covar;
+    if (covars != nullptr) {
+        covars += gid * 6;
+        covar = glm::mat3(covars[0], covars[1], covars[2], // 1st column
+                          covars[1], covars[3], covars[4], // 2nd column
+                          covars[2], covars[4], covars[5]  // 3rd column
+        );
+    } else {
+        // compute from quaternions and scales
+        quats += gid * 4;
+        scales += gid * 3;
+        quat_scale_to_covar_preci(glm::make_vec4(quats), glm::make_vec3(scales), &covar,
+                                  nullptr);
+    }
+    glm::mat3 covar_c;
+    covar_world_to_cam(R, covar, covar_c);
+
+    // perspective projection
+    glm::mat2 covar2d;
+    glm::vec2 mean2d;
+    persp_proj(mean_c, covar_c, Ks[0], Ks[4], Ks[2], Ks[5], image_width, image_height,
+               covar2d, mean2d);
+
+    float compensation;
+    float det = add_blur(eps2d, covar2d, compensation);
+    if (det <= 0.f) {
+        radii[idx] = 0;
+        return;
+    }
+
+    // compute the inverse of the 2d covariance
+    glm::mat2 covar2d_inv;
+    inverse(covar2d, covar2d_inv);
+
+    // take 3 sigma as the radius (non differentiable)
+    float b = 0.5f * (covar2d[0][0] + covar2d[1][1]);
+    float v1 = b + sqrt(max(0.01f, b * b - det));
+    float radius = ceil(3.f * sqrt(v1));
+    // float v2 = b - sqrt(max(0.1f, b * b - det));
+    // float radius = ceil(3.f * sqrt(max(v1, v2)));
+
+    if (radius <= radius_clip) {
+        radii[idx] = 0;
+        return;
+    }
+
+    // mask out gaussians outside the image region
+    if (mean2d.x + radius <= 0 || mean2d.x - radius >= image_width ||
+        mean2d.y + radius <= 0 || mean2d.y - radius >= image_height) {
+        radii[idx] = 0;
+        return;
+    }
+
+    // write to outputs
+    radii[idx] = (int32_t)radius;
+    means2d[idx * 2] = mean2d.x;
+    means2d[idx * 2 + 1] = mean2d.y;
+    depths[idx] = mean_c.z;
+    conics[idx * 3] = covar2d_inv[0][0];
+    conics[idx * 3 + 1] = covar2d_inv[0][1];
+    conics[idx * 3 + 2] = covar2d_inv[1][1];
+    if (compensations != nullptr) {
+        compensations[idx] = compensation;
+    }
+}
+
+__global__ void fully_fused_projection_jagged_bwd_kernel(
+    // fwd inputs
+    const uint32_t B, const int64_t nnz,
+    const int64_t *__restrict__ g_sizes,  // [B]
+    const int64_t *__restrict__ c_sizes,  // [B]
+    const int64_t *__restrict__ g_indptr, // [B] start indices
+    const int64_t *__restrict__ c_indptr, // [B] start indices
+    const int64_t *__restrict__ n_indptr, // [B] start indices
+    const float *__restrict__ means,      // [ggz, 3]
+    const float *__restrict__ covars,     // [ggz, 6] optional
+    const float *__restrict__ quats,      // [ggz, 4] optional
+    const float *__restrict__ scales,     // [ggz, 3] optional
+    const float *__restrict__ viewmats,   // [ccz, 4, 4]
+    const float *__restrict__ Ks,         // [ccz, 3, 3]
+    const int32_t image_width, const int32_t image_height, const float eps2d,
+    // fwd outputs
+    const int32_t *__restrict__ radii,       // [nnz]
+    const float *__restrict__ conics,        // [nnz, 3]
+    const float *__restrict__ compensations, // [nnz] optional
+    // grad outputs
+    const float *__restrict__ v_means2d,       // [nnz, 2]
+    const float *__restrict__ v_depths,        // [nnz]
+    const float *__restrict__ v_conics,        // [nnz, 3]
+    const float *__restrict__ v_compensations, // [nnz] optional
+    // grad inputs
+    float *__restrict__ v_means,   // [ggz, 3]
+    float *__restrict__ v_covars,  // [ggz, 6] optional
+    float *__restrict__ v_quats,   // [ggz, 4] optional
+    float *__restrict__ v_scales,  // [ggz, 3] optional
+    float *__restrict__ v_viewmats // [ccz, 4, 4] optional
+) {
+    // parallelize over nnz.
+    uint32_t idx = cg::this_grid().thread_rank();
+    if (idx >= nnz || radii[idx] <= 0) {
+        return;
+    }
+
+    // TODO: too many global memory accesses.
+    int64_t bid = bin_search(n_indptr, B, static_cast<int64_t>(idx)); // batch id
+    int64_t idx_local = idx - n_indptr[bid];      // local elem idx within Ci * Ni
+    int64_t cid_local = idx_local / g_sizes[bid]; // local camera id within Ci
+    int64_t gid_local = idx_local % g_sizes[bid]; // local gaussian id within Ni
+    int64_t cid = cid_local + c_indptr[bid];      // camera id
+    int64_t gid = gid_local + g_indptr[bid];      // gaussian id
+
+    // shift pointers to the current camera and gaussian
+    means += gid * 3;
+    viewmats += cid * 16;
+    Ks += cid * 9;
+
+    conics += idx * 3;
+
+    v_means2d += idx * 2;
+    v_depths += idx;
+    v_conics += idx * 3;
+
+    // vjp: compute the inverse of the 2d covariance
+    glm::mat2 covar2d_inv = glm::mat2(conics[0], conics[1], conics[1], conics[2]);
+    glm::mat2 v_covar2d_inv =
+        glm::mat2(v_conics[0], v_conics[1] * .5f, v_conics[1] * .5f, v_conics[2]);
+    glm::mat2 v_covar2d(0.f);
+    inverse_vjp(covar2d_inv, v_covar2d_inv, v_covar2d);
+
+    if (v_compensations != nullptr) {
+        // vjp: compensation term
+        const float compensation = compensations[idx];
+        const float v_compensation = v_compensations[idx];
+        add_blur_vjp(eps2d, covar2d_inv, compensation, v_compensation, v_covar2d);
+    }
+
+    // transform Gaussian to camera space
+    glm::mat3 R = glm::mat3(viewmats[0], viewmats[4], viewmats[8], // 1st column
+                            viewmats[1], viewmats[5], viewmats[9], // 2nd column
+                            viewmats[2], viewmats[6], viewmats[10] // 3rd column
+    );
+    glm::vec3 t = glm::vec3(viewmats[3], viewmats[7], viewmats[11]);
+
+    glm::mat3 covar;
+    glm::vec4 quat;
+    glm::vec3 scale;
+    if (covars != nullptr) {
+        covars += gid * 6;
+        covar = glm::mat3(covars[0], covars[1], covars[2], // 1st column
+                          covars[1], covars[3], covars[4], // 2nd column
+                          covars[2], covars[4], covars[5]  // 3rd column
+        );
+    } else {
+        // compute from quaternions and scales
+        quat = glm::make_vec4(quats + gid * 4);
+        scale = glm::make_vec3(scales + gid * 3);
+        quat_scale_to_covar_preci(quat, scale, &covar, nullptr);
+    }
+    glm::vec3 mean_c;
+    pos_world_to_cam(R, t, glm::make_vec3(means), mean_c);
+    glm::mat3 covar_c;
+    covar_world_to_cam(R, covar, covar_c);
+
+    // vjp: perspective projection
+    float fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
+    glm::mat3 v_covar_c(0.f);
+    glm::vec3 v_mean_c(0.f);
+    persp_proj_vjp(mean_c, covar_c, fx, fy, cx, cy, image_width, image_height,
+                   v_covar2d, glm::make_vec2(v_means2d), v_mean_c, v_covar_c);
+
+    // add contribution from v_depths
+    v_mean_c.z += v_depths[0];
+
+    // vjp: transform Gaussian covariance to camera space
+    glm::vec3 v_mean(0.f);
+    glm::mat3 v_covar(0.f);
+    glm::mat3 v_R(0.f);
+    glm::vec3 v_t(0.f);
+    pos_world_to_cam_vjp(R, t, glm::make_vec3(means), v_mean_c, v_R, v_t, v_mean);
+    covar_world_to_cam_vjp(R, covar, v_covar_c, v_R, v_covar);
+
+    // #if __CUDA_ARCH__ >= 700
+    // write out results with warp-level reduction
+    auto warp = cg::tiled_partition<32>(cg::this_thread_block());
+    auto warp_group_g = cg::labeled_partition(warp, gid);
+    if (v_means != nullptr) {
+        warpSum(v_mean, warp_group_g);
+        if (warp_group_g.thread_rank() == 0) {
+            v_means += gid * 3;
+            PRAGMA_UNROLL
+            for (uint32_t i = 0; i < 3; i++) {
+                atomicAdd(v_means + i, v_mean[i]);
+            }
+        }
+    }
+    if (v_covars != nullptr) {
+        // Output gradients w.r.t. the covariance matrix
+        warpSum(v_covar, warp_group_g);
+        if (warp_group_g.thread_rank() == 0) {
+            v_covars += gid * 6;
+            atomicAdd(v_covars, v_covar[0][0]);
+            atomicAdd(v_covars + 1, v_covar[0][1] + v_covar[1][0]);
+            atomicAdd(v_covars + 2, v_covar[0][2] + v_covar[2][0]);
+            atomicAdd(v_covars + 3, v_covar[1][1]);
+            atomicAdd(v_covars + 4, v_covar[1][2] + v_covar[2][1]);
+            atomicAdd(v_covars + 5, v_covar[2][2]);
+        }
+    } else {
+        // Directly output gradients w.r.t. the quaternion and scale
+        glm::mat3 rotmat = quat_to_rotmat(quat);
+        glm::vec4 v_quat(0.f);
+        glm::vec3 v_scale(0.f);
+        quat_scale_to_covar_vjp(quat, scale, rotmat, v_covar, v_quat, v_scale);
+        warpSum(v_quat, warp_group_g);
+        warpSum(v_scale, warp_group_g);
+        if (warp_group_g.thread_rank() == 0) {
+            v_quats += gid * 4;
+            v_scales += gid * 3;
+            atomicAdd(v_quats, v_quat[0]);
+            atomicAdd(v_quats + 1, v_quat[1]);
+            atomicAdd(v_quats + 2, v_quat[2]);
+            atomicAdd(v_quats + 3, v_quat[3]);
+            atomicAdd(v_scales, v_scale[0]);
+            atomicAdd(v_scales + 1, v_scale[1]);
+            atomicAdd(v_scales + 2, v_scale[2]);
+        }
+    }
+    if (v_viewmats != nullptr) {
+        auto warp_group_c = cg::labeled_partition(warp, cid);
+        warpSum(v_R, warp_group_c);
+        warpSum(v_t, warp_group_c);
+        if (warp_group_c.thread_rank() == 0) {
+            v_viewmats += cid * 16;
+            PRAGMA_UNROLL
+            for (uint32_t i = 0; i < 3; i++) { // rows
+                PRAGMA_UNROLL
+                for (uint32_t j = 0; j < 3; j++) { // cols
+                    atomicAdd(v_viewmats + i * 4 + j, v_R[j][i]);
+                }
+                atomicAdd(v_viewmats + i * 4 + 3, v_t[i]);
+            }
+        }
+    }
+}
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+fully_fused_projection_jagged_fwd_tensor(
+    const torch::Tensor &g_sizes,              // [B] gaussian sizes
+    const torch::Tensor &means,                // [ggz, 3]
+    const at::optional<torch::Tensor> &covars, // [ggz, 6] optional
+    const at::optional<torch::Tensor> &quats,  // [ggz, 4] optional
+    const at::optional<torch::Tensor> &scales, // [ggz, 3] optional
+    const torch::Tensor &c_sizes,              // [B] camera sizes
+    const torch::Tensor &viewmats,             // [ccz, 4, 4]
+    const torch::Tensor &Ks,                   // [ccz, 3, 3]
+    const uint32_t image_width, const uint32_t image_height, const float eps2d,
+    const float near_plane, const float far_plane, const float radius_clip,
+    const bool calc_compensations) {
+    DEVICE_GUARD(means);
+    CHECK_INPUT(g_sizes);
+    CHECK_INPUT(means);
+    if (covars.has_value()) {
+        CHECK_INPUT(covars.value());
+    } else {
+        assert(quats.has_value() && scales.has_value());
+        CHECK_INPUT(quats.value());
+        CHECK_INPUT(scales.value());
+    }
+    CHECK_INPUT(c_sizes);
+    CHECK_INPUT(viewmats);
+    CHECK_INPUT(Ks);
+
+    // TODO: use inclusive sum
+    uint32_t B = g_sizes.size(0);
+    torch::Tensor c_indptr = torch::cumsum(c_sizes, 0, torch::kInt64) - c_sizes;
+    torch::Tensor g_indptr = torch::cumsum(g_sizes, 0, torch::kInt64) - g_sizes;
+    torch::Tensor n_sizes = c_sizes * g_sizes; // element size = Ci * Ni
+    torch::Tensor n_indptr = torch::cumsum(n_sizes, 0, torch::kInt64);
+    int64_t nnz = n_indptr[-1].item<int64_t>(); // total number of elements
+    n_indptr = n_indptr - n_sizes;
+
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+
+    torch::Tensor radii = torch::empty({nnz}, means.options().dtype(torch::kInt32));
+    torch::Tensor means2d = torch::empty({nnz, 2}, means.options());
+    torch::Tensor depths = torch::empty({nnz}, means.options());
+    torch::Tensor conics = torch::empty({nnz, 3}, means.options());
+    torch::Tensor compensations;
+    if (calc_compensations) {
+        // we dont want NaN to appear in this tensor, so we zero intialize it
+        compensations = torch::zeros({nnz}, means.options());
+    }
+    if (nnz) {
+        fully_fused_projection_jagged_fwd_kernel<<<(nnz + N_THREADS - 1) / N_THREADS,
+                                                   N_THREADS, 0, stream>>>(
+            B, nnz, g_sizes.data_ptr<int64_t>(), c_sizes.data_ptr<int64_t>(),
+            g_indptr.data_ptr<int64_t>(), c_indptr.data_ptr<int64_t>(),
+            n_indptr.data_ptr<int64_t>(), means.data_ptr<float>(),
+            covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
+            quats.has_value() ? quats.value().data_ptr<float>() : nullptr,
+            scales.has_value() ? scales.value().data_ptr<float>() : nullptr,
+            viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
+            eps2d, near_plane, far_plane, radius_clip, radii.data_ptr<int32_t>(),
+            means2d.data_ptr<float>(), depths.data_ptr<float>(),
+            conics.data_ptr<float>(),
+            calc_compensations ? compensations.data_ptr<float>() : nullptr);
+    }
+    return std::make_tuple(radii, means2d, depths, conics, compensations);
+}
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+fully_fused_projection_jagged_bwd_tensor(
+    // fwd inputs
+    const torch::Tensor &g_sizes,              // [B] gaussian sizes
+    const torch::Tensor &means,                // [ggz, 3]
+    const at::optional<torch::Tensor> &covars, // [ggz, 6] optional
+    const at::optional<torch::Tensor> &quats,  // [ggz, 4] optional
+    const at::optional<torch::Tensor> &scales, // [ggz, 3] optional
+    const torch::Tensor &c_sizes,              // [B] camera sizes
+    const torch::Tensor &viewmats,             // [ccz, 4, 4]
+    const torch::Tensor &Ks,                   // [ccz, 3, 3]
+    const uint32_t image_width, const uint32_t image_height, const float eps2d,
+    // fwd outputs
+    const torch::Tensor &radii,                       // [nnz]
+    const torch::Tensor &conics,                      // [nnz, 3]
+    const at::optional<torch::Tensor> &compensations, // [nnz] optional
+    // grad outputs
+    const torch::Tensor &v_means2d,                     // [nnz, 2]
+    const torch::Tensor &v_depths,                      // [nnz]
+    const torch::Tensor &v_conics,                      // [nnz, 3]
+    const at::optional<torch::Tensor> &v_compensations, // [nnz] optional
+    const bool viewmats_requires_grad) {
+    DEVICE_GUARD(means);
+    CHECK_INPUT(g_sizes);
+    CHECK_INPUT(means);
+    if (covars.has_value()) {
+        CHECK_INPUT(covars.value());
+    } else {
+        assert(quats.has_value() && scales.has_value());
+        CHECK_INPUT(quats.value());
+        CHECK_INPUT(scales.value());
+    }
+    CHECK_INPUT(c_sizes);
+    CHECK_INPUT(viewmats);
+    CHECK_INPUT(Ks);
+    CHECK_INPUT(radii);
+    CHECK_INPUT(conics);
+    CHECK_INPUT(v_means2d);
+    CHECK_INPUT(v_depths);
+    CHECK_INPUT(v_conics);
+    if (compensations.has_value()) {
+        CHECK_INPUT(compensations.value());
+    }
+    if (v_compensations.has_value()) {
+        CHECK_INPUT(v_compensations.value());
+        assert(compensations.has_value());
+    }
+
+    // TODO: use inclusive sum
+    uint32_t B = g_sizes.size(0);
+    int64_t nnz = v_means2d.size(0);
+    torch::Tensor c_indptr = torch::cumsum(c_sizes, 0, torch::kInt64) - c_sizes;
+    torch::Tensor g_indptr = torch::cumsum(g_sizes, 0, torch::kInt64) - g_sizes;
+    torch::Tensor n_sizes = c_sizes * g_sizes; // element size = Ci * Ni
+    torch::Tensor n_indptr = torch::cumsum(n_sizes, 0, torch::kInt64) - n_sizes;
+
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+
+    torch::Tensor v_means = torch::zeros_like(means);
+    torch::Tensor v_covars, v_quats, v_scales; // optional
+    if (covars.has_value()) {
+        v_covars = torch::zeros_like(covars.value());
+    } else {
+        v_quats = torch::zeros_like(quats.value());
+        v_scales = torch::zeros_like(scales.value());
+    }
+    torch::Tensor v_viewmats;
+    if (viewmats_requires_grad) {
+        v_viewmats = torch::zeros_like(viewmats);
+    }
+    if (nnz) {
+        fully_fused_projection_jagged_bwd_kernel<<<(nnz + N_THREADS - 1) / N_THREADS,
+                                                   N_THREADS, 0, stream>>>(
+            B, nnz, g_sizes.data_ptr<int64_t>(), c_sizes.data_ptr<int64_t>(),
+            g_indptr.data_ptr<int64_t>(), c_indptr.data_ptr<int64_t>(),
+            n_indptr.data_ptr<int64_t>(), means.data_ptr<float>(),
+            covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
+            covars.has_value() ? nullptr : quats.value().data_ptr<float>(),
+            covars.has_value() ? nullptr : scales.value().data_ptr<float>(),
+            viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
+            eps2d, radii.data_ptr<int32_t>(), conics.data_ptr<float>(),
+            compensations.has_value() ? compensations.value().data_ptr<float>()
+                                      : nullptr,
+            v_means2d.data_ptr<float>(), v_depths.data_ptr<float>(),
+            v_conics.data_ptr<float>(),
+            v_compensations.has_value() ? v_compensations.value().data_ptr<float>()
+                                        : nullptr,
+            v_means.data_ptr<float>(),
+            covars.has_value() ? v_covars.data_ptr<float>() : nullptr,
+            covars.has_value() ? nullptr : v_quats.data_ptr<float>(),
+            covars.has_value() ? nullptr : v_scales.data_ptr<float>(),
+            viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr);
+    }
+    return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats);
+}

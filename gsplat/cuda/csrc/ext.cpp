@@ -34,4 +34,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // jagged version
     m.def("persp_proj_jagged_fwd", &persp_proj_jagged_fwd_tensor);
     m.def("persp_proj_jagged_bwd", &persp_proj_jagged_bwd_tensor);
+    m.def("fully_fused_projection_jagged_fwd",
+          &fully_fused_projection_jagged_fwd_tensor);
+    m.def("fully_fused_projection_jagged_bwd",
+          &fully_fused_projection_jagged_bwd_tensor);
 }

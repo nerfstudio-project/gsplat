@@ -1207,3 +1207,202 @@ class _SphericalHarmonics(torch.autograd.Function):
         if not compute_v_dirs:
             v_dirs = None
         return None, v_dirs, v_coeffs, None
+
+
+class _FullyFusedProjectionJagged(torch.autograd.Function):
+    """Projects Gaussians to 2D."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        g_sizes: Tensor,  # [B]
+        means: Tensor,  # [ggz, 3]
+        covars: Tensor,  # [ggz, 6] or None
+        quats: Tensor,  # [ggz, 4] or None
+        scales: Tensor,  # [ggz, 3] or None
+        c_sizes: Tensor,  # [B]
+        viewmats: Tensor,  # [ccz, 4, 4]
+        Ks: Tensor,  # [ccz, 3, 3]
+        width: int,
+        height: int,
+        eps2d: float,
+        near_plane: float,
+        far_plane: float,
+        radius_clip: float,
+        calc_compensations: bool,
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        # "covars" and {"quats", "scales"} are mutually exclusive
+        radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
+            "fully_fused_projection_jagged_fwd"
+        )(
+            g_sizes,
+            means,
+            covars,
+            quats,
+            scales,
+            c_sizes,
+            viewmats,
+            Ks,
+            width,
+            height,
+            eps2d,
+            near_plane,
+            far_plane,
+            radius_clip,
+            calc_compensations,
+        )
+        if not calc_compensations:
+            compensations = None
+        ctx.save_for_backward(
+            g_sizes,
+            means,
+            covars,
+            quats,
+            scales,
+            c_sizes,
+            viewmats,
+            Ks,
+            radii,
+            conics,
+            compensations,
+        )
+        ctx.width = width
+        ctx.height = height
+        ctx.eps2d = eps2d
+
+        return radii, means2d, depths, conics, compensations
+
+    @staticmethod
+    def backward(ctx, v_radii, v_means2d, v_depths, v_conics, v_compensations):
+        (
+            g_sizes,
+            means,
+            covars,
+            quats,
+            scales,
+            c_sizes,
+            viewmats,
+            Ks,
+            radii,
+            conics,
+            compensations,
+        ) = ctx.saved_tensors
+        width = ctx.width
+        height = ctx.height
+        eps2d = ctx.eps2d
+        if v_compensations is not None:
+            v_compensations = v_compensations.contiguous()
+        v_means, v_covars, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
+            "fully_fused_projection_jagged_bwd"
+        )(
+            g_sizes,
+            means,
+            covars,
+            quats,
+            scales,
+            c_sizes,
+            viewmats,
+            Ks,
+            width,
+            height,
+            eps2d,
+            radii,
+            conics,
+            compensations,
+            v_means2d.contiguous(),
+            v_depths.contiguous(),
+            v_conics.contiguous(),
+            v_compensations,
+            ctx.needs_input_grad[6],  # viewmats_requires_grad
+        )
+        if not ctx.needs_input_grad[1]:
+            v_means = None
+        if not ctx.needs_input_grad[2]:
+            v_covars = None
+        if not ctx.needs_input_grad[3]:
+            v_quats = None
+        if not ctx.needs_input_grad[4]:
+            v_scales = None
+        if not ctx.needs_input_grad[6]:
+            v_viewmats = None
+        return (
+            None,
+            v_means,
+            v_covars,
+            v_quats,
+            v_scales,
+            None,
+            v_viewmats,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+
+def fully_fused_projection_jagged(
+    g_sizes: Tensor,  # [B]
+    means: Tensor,  # [ggz, 3]
+    covars: Optional[Tensor],  # [ggz, 6] or None
+    quats: Optional[Tensor],  # [ggz, 4] or None
+    scales: Optional[Tensor],  # [ggz, 3] or None
+    c_sizes: Tensor,  # [B]
+    viewmats: Tensor,  # [ccz, 4, 4]
+    Ks: Tensor,  # [ccz, 3, 3]
+    width: int,
+    height: int,
+    eps2d: float = 0.3,
+    near_plane: float = 0.01,
+    far_plane: float = 1e10,
+    radius_clip: float = 0.0,
+    packed: bool = False,
+    sparse_grad: bool = False,
+    calc_compensations: bool = False,
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """Projects Gaussians to 2D (Jagged Version)."""
+    assert g_sizes.shape == c_sizes.shape, (g_sizes.shape, c_sizes.shape)
+    ggz = means.size(0)
+    ccz = viewmats.size(0)
+    assert means.size() == (ggz, 3), means.size()
+    assert viewmats.size() == (ccz, 4, 4), viewmats.size()
+    assert Ks.size() == (ccz, 3, 3), Ks.size()
+    means = means.contiguous()
+    if covars is not None:
+        assert covars.size() == (ggz, 6), covars.size()
+        covars = covars.contiguous()
+    else:
+        assert quats is not None, "covars or quats is required"
+        assert scales is not None, "covars or scales is required"
+        assert quats.size() == (ggz, 4), quats.size()
+        assert scales.size() == (ggz, 3), scales.size()
+        quats = quats.contiguous()
+        scales = scales.contiguous()
+    if sparse_grad:
+        assert packed, "sparse_grad is only supported when packed is True"
+
+    viewmats = viewmats.contiguous()
+    Ks = Ks.contiguous()
+    if packed:
+        raise NotImplementedError("Packed mode is not supported yet.")
+    else:
+        return _FullyFusedProjectionJagged.apply(
+            g_sizes,
+            means,
+            covars,
+            quats,
+            scales,
+            c_sizes,
+            viewmats,
+            Ks,
+            width,
+            height,
+            eps2d,
+            near_plane,
+            far_plane,
+            radius_clip,
+            calc_compensations,
+        )

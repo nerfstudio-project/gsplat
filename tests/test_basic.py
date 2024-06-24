@@ -188,7 +188,11 @@ def test_persp_proj(test_data):
 @pytest.mark.parametrize("calc_compensations", [False, True])
 def test_projection(test_data, fused: bool, calc_compensations: bool):
     from gsplat.cuda._torch_impl import _fully_fused_projection
-    from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci
+    from gsplat.cuda._wrapper import (
+        fully_fused_projection,
+        fully_fused_projection_jagged,
+        quat_scale_to_covar_preci,
+    )
 
     torch.manual_seed(42)
 
@@ -596,3 +600,100 @@ def test_sh(test_data, sh_degree: int):
     torch.testing.assert_close(v_coeffs, _v_coeffs, rtol=1e-4, atol=1e-4)
     if sh_degree > 0:
         torch.testing.assert_close(v_dirs, _v_dirs, rtol=1e-4, atol=1e-4)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def test_projection_jagged(test_data):
+    from gsplat.cuda._wrapper import (
+        fully_fused_projection,
+        fully_fused_projection_jagged,
+    )
+
+    torch.manual_seed(42)
+
+    Ks = test_data["Ks"]
+    viewmats = test_data["viewmats"]
+    height = test_data["height"]
+    width = test_data["width"]
+    quats = test_data["quats"]
+    scales = test_data["scales"]
+    means = test_data["means"]
+
+    # split GSs into two scenes. The first scene has two cameras and the second scene has one camera.
+    assert len(Ks) == len(viewmats) == 3
+    g_sizes = torch.tensor(
+        [len(means) // 3, len(means) - len(means) // 3], device=device
+    )
+    c_sizes = torch.tensor([2, 1], device=device)
+
+    viewmats.requires_grad = True
+    quats.requires_grad = True
+    scales.requires_grad = True
+    means.requires_grad = True
+
+    # forward
+    g_index, c_index = 0, 0
+    radii, means2d, depths, conics = [], [], [], []
+    for g_size, c_size in zip(g_sizes, c_sizes):
+        radii_, means2d_, depths_, conics_, _ = fully_fused_projection(
+            means[g_index : g_index + g_size],
+            None,
+            quats[g_index : g_index + g_size],
+            scales[g_index : g_index + g_size],
+            viewmats[c_index : c_index + c_size],
+            Ks[c_index : c_index + c_size],
+            width,
+            height,
+        )
+        radii.append(radii_.reshape(-1))
+        means2d.append(means2d_.reshape(-1, 2))
+        depths.append(depths_.reshape(-1))
+        conics.append(conics_.reshape(-1, 3))
+        g_index += g_size
+        c_index += c_size
+    radii = torch.cat(radii)
+    means2d = torch.cat(means2d)
+    depths = torch.cat(depths)
+    conics = torch.cat(conics)
+
+    _radii, _means2d, _depths, _conics, _ = fully_fused_projection_jagged(
+        g_sizes,
+        means,
+        None,
+        quats,
+        scales,
+        c_sizes,
+        viewmats,
+        Ks,
+        width,
+        height,
+    )
+
+    # radii is integer so we allow for 1 unit difference
+    valid = (radii > 0) & (_radii > 0)
+    torch.testing.assert_close(radii, _radii, rtol=0, atol=1)
+    torch.testing.assert_close(means2d[valid], _means2d[valid], rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(depths[valid], _depths[valid], rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(conics[valid], _conics[valid], rtol=1e-4, atol=1e-4)
+
+    # backward
+    v_means2d = torch.randn_like(means2d) * radii[..., None]
+    v_depths = torch.randn_like(depths) * radii
+    v_conics = torch.randn_like(conics) * radii[..., None]
+    v_viewmats, v_quats, v_scales, v_means = torch.autograd.grad(
+        (means2d * v_means2d).sum()
+        + (depths * v_depths).sum()
+        + (conics * v_conics).sum(),
+        (viewmats, quats, scales, means),
+    )
+    _v_viewmats, _v_quats, _v_scales, _v_means = torch.autograd.grad(
+        (_means2d * v_means2d).sum()
+        + (_depths * v_depths).sum()
+        + (_conics * v_conics).sum(),
+        (viewmats, quats, scales, means),
+    )
+
+    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(v_quats, _v_quats, rtol=2e-1, atol=1e-2)
+    torch.testing.assert_close(v_scales, _v_scales, rtol=1e-1, atol=2e-1)
+    torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=6e-2)
