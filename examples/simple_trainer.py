@@ -67,6 +67,10 @@ class Config:
     # Steps to save the model
     save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
 
+    # Initialization type
+    init_type: str = "random"
+    # Initialization number of GSs
+    init_num_pts: int = 100000
     # Degree of spherical harmonics
     sh_degree: int = 3
     # Turn on another SH degree every this steps
@@ -166,9 +170,9 @@ def _sample_alives(probs, num, alive_indices=None):
     return sampled_idxs, ratio
 
 def create_splats_with_optimizers(
-    points: Tensor,  # [N, 3]
-    rgbs: Tensor,  # [N, 3]
-    scene_scale: float = 1.0,
+    parser: Parser,
+    init_type: str,
+    init_num_pts: int,
     sh_degree: int = 3,
     init_opacity: float = 0.1,
     sparse_grad: bool = False,
@@ -176,8 +180,19 @@ def create_splats_with_optimizers(
     feature_dim: Optional[int] = None,
     device: str = "cuda",
 ) -> Tuple[torch.nn.ParameterDict, torch.optim.Optimizer]:
-    N = points.shape[0]
+    scene_scale = parser.scene_scale
+    scene_center = torch.from_numpy(parser.scene_center).float()
+    
+    if init_type == "sfm":
+        points = torch.from_numpy(parser.points).float()
+        rgbs = torch.from_numpy(parser.points_rgb / 255.0).float()
+    elif init_type == "random":
+        points = torch.rand((init_num_pts, 3)) * 3 * 2 * scene_scale - (3 * scene_scale) + scene_center
+        rgbs = torch.rand((init_num_pts, 3))
+    else:
+        raise ValueError("Please specify a correct init_type: random or sfm")
 
+    N = points.shape[0]
     # Initialize the GS size to be the average dist of the 3 nearest neighbors
     dist2_avg = (knn(points, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
     dist_avg = torch.sqrt(dist2_avg)
@@ -265,9 +280,9 @@ class Runner:
         # Model
         feature_dim = 32 if cfg.app_opt else None
         self.splats, self.optimizers = create_splats_with_optimizers(
-            torch.from_numpy(self.parser.points).float(),
-            torch.from_numpy(self.parser.points_rgb / 255.0).float(),
-            scene_scale=self.scene_scale,
+            self.parser,
+            init_type=cfg.init_type,
+            init_num_pts=cfg.init_num_pts,
             sh_degree=cfg.sh_degree,
             init_opacity=cfg.init_opa,
             sparse_grad=cfg.sparse_grad,

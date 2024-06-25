@@ -219,8 +219,8 @@ class Parser:
 
         # size of the scene measured by cameras
         camera_locations = camtoworlds[:, :3, 3]
-        scene_center = np.mean(camera_locations, axis=0)
-        dists = np.linalg.norm(camera_locations - scene_center, axis=1)
+        self.scene_center = np.mean(camera_locations, axis=0)
+        dists = np.linalg.norm(camera_locations - self.scene_center, axis=1)
         self.scene_scale = np.max(dists)
 
 
