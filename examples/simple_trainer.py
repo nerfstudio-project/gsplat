@@ -68,9 +68,9 @@ class Config:
     save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
 
     # Initialization type
-    init_type: str = "random"
+    init_type: str = "sfm"
     # Initialization number of GSs
-    init_num_pts: int = 100000
+    init_num_pts: int = 100_000
     # Degree of spherical harmonics
     sh_degree: int = 3
     # Turn on another SH degree every this steps
@@ -402,7 +402,7 @@ class Runner:
         max_steps = cfg.max_steps
         init_step = 0
 
-        scheulers = [
+        schedulers = [
             # means3d has a learning rate schedule, that end at 0.01 of the initial value
             torch.optim.lr_scheduler.ExponentialLR(
                 self.optimizers[0], gamma=0.01 ** (1.0 / max_steps)
@@ -410,7 +410,7 @@ class Runner:
         ]
         if cfg.pose_opt:
             # pose optimization has a learning rate schedule
-            scheulers.append(
+            schedulers.append(
                 torch.optim.lr_scheduler.ExponentialLR(
                     self.pose_optimizers[0], gamma=0.01 ** (1.0 / max_steps)
                 )
@@ -590,18 +590,18 @@ class Runner:
             for optimizer in self.app_optimizers:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
-            for scheduler in scheulers:
+            for scheduler in schedulers:
                 scheduler.step()
             
             # Add noise
             with torch.no_grad():
-                xyz_lr = scheulers[0].get_last_lr()[0]
                 L = build_scaling_rotation(torch.exp(self.splats["scales"]), self.splats["quats"])
                 actual_covariance = L @ L.transpose(1, 2)
 
                 def op_sigmoid(x, k=100, x0=0.995):
                     return 1 / (1 + torch.exp(-k * (x - x0)))
 
+                xyz_lr = schedulers[0].get_last_lr()[0]
                 noise = torch.randn_like(self.splats["means3d"]) * (op_sigmoid(1 - torch.sigmoid(self.splats["opacities"]))).unsqueeze(-1) * cfg.noise_lr * xyz_lr
                 noise = torch.bmm(actual_covariance, noise.unsqueeze(-1)).squeeze(-1)
                 self.splats["means3d"].add_(noise)
@@ -650,38 +650,19 @@ class Runner:
         new_opacity = torch.clamp(new_opacity, max=1.0 - torch.finfo(torch.float32).eps, min=0.005)
         new_opacity = torch.logit(new_opacity)
         new_scaling = torch.log(new_scaling.reshape(-1, 3))
-        return self.splats["means3d"][idxs], self.splats["sh0"][idxs], self.splats["shN"][idxs], new_opacity, new_scaling, self.splats["quats"][idxs]
+        return new_opacity, new_scaling
     
     @torch.no_grad()
     def relocate_gs(self, dead_indices: Tensor, alive_indices: Tensor):
         probs = torch.sigmoid(self.splats["opacities"])[alive_indices]
         reinit_idx, ratio = _sample_alives(alive_indices=alive_indices, probs=probs, num=dead_indices.shape[0])
-        (
-            new_xyz, 
-            new_features_dc,
-            new_features_rest,
-            new_opacity,
-            new_scaling,
-            new_rotation 
-        ) = self._update_params(reinit_idx, ratio=ratio)
+        new_opacity, new_scaling = self._update_params(reinit_idx, ratio=ratio)
         
-        new_splats = {
-            "means3d": self.splats["means3d"],
-            "sh0": self.splats["sh0"],
-            "shN": self.splats["shN"],
-            "opacities": self.splats["opacities"],
-            "scales": self.splats["scales"],
-            "quats": self.splats["quats"],
-        }
-        new_splats["means3d"][dead_indices] = new_xyz
-        new_splats["sh0"][dead_indices] = new_features_dc
-        new_splats["shN"][dead_indices] = new_features_rest
-        new_splats["opacities"][dead_indices] = new_opacity
-        new_splats["scales"][dead_indices] = new_scaling
-        new_splats["quats"][dead_indices] = new_rotation
+        self.splats["opacities"][reinit_idx] = new_opacity
+        self.splats["scales"][reinit_idx] = new_scaling
+        for k in self.splats.keys():
+            self.splats[k][dead_indices] = self.splats[k][reinit_idx]
         
-        new_splats["opacities"][reinit_idx] = new_splats["opacities"][dead_indices]
-        new_splats["scales"][reinit_idx] = new_splats["scales"][dead_indices]
         for optimizer in self.optimizers:
             for i, param_group in enumerate(optimizer.param_groups):
                 p = param_group["params"][0]
@@ -691,7 +672,7 @@ class Runner:
                 for key in p_state.keys():
                     if key != "step":
                         p_state[key][reinit_idx] = 0
-                p_new = torch.nn.Parameter(new_splats[name])
+                p_new = torch.nn.Parameter(self.splats[name])
                 optimizer.param_groups[i]["params"] = [p_new]
                 optimizer.state[p_new] = p_state
                 self.splats[name] = p_new
@@ -706,26 +687,13 @@ class Runner:
             return
         probs = torch.sigmoid(self.splats["opacities"])
         add_idx, ratio = _sample_alives(probs=probs, num=num_gs)
-        (
-            new_xyz, 
-            new_features_dc,
-            new_features_rest,
-            new_opacity,
-            new_scaling,
-            new_rotation 
-        ) = self._update_params(add_idx, ratio=ratio)
+        new_opacity, new_scaling = self._update_params(add_idx, ratio=ratio)
+        
         self.splats["opacities"][add_idx] = new_opacity
         self.splats["scales"][add_idx] = new_scaling
+        for k in self.splats.keys():
+            self.splats[k] = torch.cat([self.splats[k], self.splats[k][add_idx]])
         
-        # Update splats and optimizers
-        new_splats = {
-            "means3d": torch.cat([self.splats["means3d"], new_xyz]),
-            "sh0": torch.cat([self.splats["sh0"], new_features_dc]),
-            "shN": torch.cat([self.splats["shN"], new_features_rest]),
-            "opacities": torch.cat([self.splats["opacities"], new_opacity]),
-            "scales": torch.cat([self.splats["scales"], new_scaling]),
-            "quats": torch.cat([self.splats["quats"], new_rotation]),
-        }
         for optimizer in self.optimizers:
             for i, param_group in enumerate(optimizer.param_groups):
                 p = param_group["params"][0]
@@ -739,7 +707,7 @@ class Runner:
                             (len(add_idx), *v.shape[1:]), device=self.device
                         )
                         p_state[key] = torch.cat([v, v_new])
-                p_new = torch.nn.Parameter(new_splats[name])
+                p_new = torch.nn.Parameter(self.splats[name])
                 optimizer.param_groups[i]["params"] = [p_new]
                 optimizer.state[p_new] = p_state
                 self.splats[name] = p_new
