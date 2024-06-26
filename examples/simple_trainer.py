@@ -396,7 +396,7 @@ class Runner:
         max_steps = cfg.max_steps
         init_step = 0
 
-        scheulers = [
+        schedulers = [
             # means3d has a learning rate schedule, that end at 0.01 of the initial value
             torch.optim.lr_scheduler.ExponentialLR(
                 self.optimizers[0], gamma=0.01 ** (1.0 / max_steps)
@@ -404,7 +404,7 @@ class Runner:
         ]
         if cfg.pose_opt:
             # pose optimization has a learning rate schedule
-            scheulers.append(
+            schedulers.append(
                 torch.optim.lr_scheduler.ExponentialLR(
                     self.pose_optimizers[0], gamma=0.01 ** (1.0 / max_steps)
                 )
@@ -619,7 +619,7 @@ class Runner:
             for optimizer in self.app_optimizers:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
-            for scheduler in scheulers:
+            for scheduler in schedulers:
                 scheduler.step()
 
             # save checkpoint
