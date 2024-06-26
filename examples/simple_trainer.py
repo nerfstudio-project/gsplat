@@ -161,6 +161,7 @@ class Config:
         self.reset_every = int(self.reset_every * factor)
         self.refine_every = int(self.refine_every * factor)
 
+
 def _sample_alives(probs, num, alive_indices=None):
     probs = probs / (probs.sum() + torch.finfo(torch.float32).eps)
     sampled_idxs = torch.multinomial(probs, num, replacement=True)
@@ -168,6 +169,7 @@ def _sample_alives(probs, num, alive_indices=None):
         sampled_idxs = alive_indices[sampled_idxs]
     ratio = torch.bincount(sampled_idxs).unsqueeze(-1)
     return sampled_idxs, ratio
+
 
 def create_splats_with_optimizers(
     parser: Parser,
@@ -182,12 +184,16 @@ def create_splats_with_optimizers(
 ) -> Tuple[torch.nn.ParameterDict, torch.optim.Optimizer]:
     scene_scale = parser.scene_scale
     scene_center = torch.from_numpy(parser.scene_center).float()
-    
+
     if init_type == "sfm":
         points = torch.from_numpy(parser.points).float()
         rgbs = torch.from_numpy(parser.points_rgb / 255.0).float()
     elif init_type == "random":
-        points = torch.rand((init_num_pts, 3)) * 3 * 2 * scene_scale - (3 * scene_scale) + scene_center
+        points = (
+            torch.rand((init_num_pts, 3)) * 3 * 2 * scene_scale
+            - (3 * scene_scale)
+            + scene_center
+        )
         rgbs = torch.rand((init_num_pts, 3))
     else:
         raise ValueError("Please specify a correct init_type: random or sfm")
@@ -513,9 +519,16 @@ class Runner:
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
 
-            loss = loss + cfg.opacity_reg * torch.abs(torch.sigmoid(self.splats["opacities"])).mean()
-            loss = loss + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
-        
+            loss = (
+                loss
+                + cfg.opacity_reg
+                * torch.abs(torch.sigmoid(self.splats["opacities"])).mean()
+            )
+            loss = (
+                loss
+                + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
+            )
+
             loss.backward()
 
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
@@ -548,15 +561,15 @@ class Runner:
             if step < cfg.refine_stop_iter:
                 if step > cfg.refine_start_iter and step % cfg.refine_every == 0:
                     # relocate GSs
-                    dead_mask = (torch.sigmoid(self.splats["opacities"]) <= 0.005).squeeze(-1)
-                    alive_mask = ~dead_mask 
+                    dead_mask = (
+                        torch.sigmoid(self.splats["opacities"]) <= 0.005
+                    ).squeeze(-1)
+                    alive_mask = ~dead_mask
                     dead_indices = dead_mask.nonzero(as_tuple=True)[0]
                     alive_indices = alive_mask.nonzero(as_tuple=True)[0]
                     self.relocate_gs(dead_indices, alive_indices)
-                    print(
-                        f"Step {step}: Relocated {len(dead_indices)} GSs."
-                    )
-                    
+                    print(f"Step {step}: Relocated {len(dead_indices)} GSs.")
+
                     # add new GSs
                     before_num_splats = len(self.splats["means3d"])
                     self.add_new_gs(cfg.cap_max)
@@ -592,17 +605,26 @@ class Runner:
                 optimizer.zero_grad(set_to_none=True)
             for scheduler in schedulers:
                 scheduler.step()
-            
+
             # Add noise
             with torch.no_grad():
-                L = build_scaling_rotation(torch.exp(self.splats["scales"]), self.splats["quats"])
+                L = build_scaling_rotation(
+                    torch.exp(self.splats["scales"]), self.splats["quats"]
+                )
                 actual_covariance = L @ L.transpose(1, 2)
 
                 def op_sigmoid(x, k=100, x0=0.995):
                     return 1 / (1 + torch.exp(-k * (x - x0)))
 
                 xyz_lr = schedulers[0].get_last_lr()[0]
-                noise = torch.randn_like(self.splats["means3d"]) * (op_sigmoid(1 - torch.sigmoid(self.splats["opacities"]))).unsqueeze(-1) * cfg.noise_lr * xyz_lr
+                noise = (
+                    torch.randn_like(self.splats["means3d"])
+                    * (
+                        op_sigmoid(1 - torch.sigmoid(self.splats["opacities"]))
+                    ).unsqueeze(-1)
+                    * cfg.noise_lr
+                    * xyz_lr
+                )
                 noise = torch.bmm(actual_covariance, noise.unsqueeze(-1)).squeeze(-1)
                 self.splats["means3d"].add_(noise)
 
@@ -645,24 +667,28 @@ class Runner:
         new_opacity, new_scaling = compute_relocation_cuda(
             opacity_old=torch.sigmoid(self.splats["opacities"])[idxs],
             scale_old=torch.exp(self.splats["scales"])[idxs],
-            N=ratio[idxs, 0] + 1
+            N=ratio[idxs, 0] + 1,
         )
-        new_opacity = torch.clamp(new_opacity, max=1.0 - torch.finfo(torch.float32).eps, min=0.005)
+        new_opacity = torch.clamp(
+            new_opacity, max=1.0 - torch.finfo(torch.float32).eps, min=0.005
+        )
         new_opacity = torch.logit(new_opacity)
         new_scaling = torch.log(new_scaling.reshape(-1, 3))
         return new_opacity, new_scaling
-    
+
     @torch.no_grad()
     def relocate_gs(self, dead_indices: Tensor, alive_indices: Tensor):
         probs = torch.sigmoid(self.splats["opacities"])[alive_indices]
-        reinit_idx, ratio = _sample_alives(alive_indices=alive_indices, probs=probs, num=dead_indices.shape[0])
+        reinit_idx, ratio = _sample_alives(
+            alive_indices=alive_indices, probs=probs, num=dead_indices.shape[0]
+        )
         new_opacity, new_scaling = self._update_params(reinit_idx, ratio=ratio)
-        
+
         self.splats["opacities"][reinit_idx] = new_opacity
         self.splats["scales"][reinit_idx] = new_scaling
         for k in self.splats.keys():
             self.splats[k][dead_indices] = self.splats[k][reinit_idx]
-        
+
         for optimizer in self.optimizers:
             for i, param_group in enumerate(optimizer.param_groups):
                 p = param_group["params"][0]
@@ -677,7 +703,7 @@ class Runner:
                 optimizer.state[p_new] = p_state
                 self.splats[name] = p_new
         torch.cuda.empty_cache()
-    
+
     @torch.no_grad()
     def add_new_gs(self, cap_max):
         current_num_points = len(self.splats["means3d"])
@@ -688,12 +714,12 @@ class Runner:
         probs = torch.sigmoid(self.splats["opacities"])
         add_idx, ratio = _sample_alives(probs=probs, num=num_gs)
         new_opacity, new_scaling = self._update_params(add_idx, ratio=ratio)
-        
+
         self.splats["opacities"][add_idx] = new_opacity
         self.splats["scales"][add_idx] = new_scaling
         for k in self.splats.keys():
             self.splats[k] = torch.cat([self.splats[k], self.splats[k][add_idx]])
-        
+
         for optimizer in self.optimizers:
             for i, param_group in enumerate(optimizer.param_groups):
                 p = param_group["params"][0]
