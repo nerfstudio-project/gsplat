@@ -23,12 +23,17 @@ from utils import (
     AppearanceOptModule,
     CameraOptModule,
     knn,
-    normalized_quat_to_rotmat,
     rgb_to_sh,
     set_random_seed,
 )
 
 from gsplat.rendering import rasterization
+from gsplat.relocation import (
+    compute_relocation_cuda,
+    sample_alives,
+    build_scaling_rotation,
+)
+from simple_trainer import create_splats_with_optimizers
 
 
 @dataclass
@@ -67,7 +72,7 @@ class Config:
     save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
 
     # Initialization type
-    init_type: str = "random"
+    init_type: str = "sfm"
     # Initialization number of GSs if random
     init_num_pts: int = 100_000
     # Degree of spherical harmonics
@@ -75,9 +80,9 @@ class Config:
     # Turn on another SH degree every this steps
     sh_degree_interval: int = 1000
     # Initial opacity of GS
-    init_opa: float = 0.1
+    init_opa: float = 0.5
     # Initial scale of GS
-    init_scale: float = 1.0
+    init_scale: float = 0.1
     # Weight for SSIM loss
     ssim_lambda: float = 0.2
 
@@ -86,21 +91,19 @@ class Config:
     # Far plane clipping distance
     far_plane: float = 1e10
 
-    # GSs with opacity below this value will be pruned
-    prune_opa: float = 0.005
-    # GSs with image plane gradient above this value will be split/duplicated
-    grow_grad2d: float = 0.0002
-    # GSs with scale below this value will be duplicated. Above will be split
-    grow_scale3d: float = 0.01
-    # GSs with scale above this value will be pruned.
-    prune_scale3d: float = 0.1
+    # Maximum number of GSs.
+    cap_max: int = 1_000_000
+    # MCMC samping noise learning rate
+    noise_lr = 5e5
+    # Opacity regularization
+    opacity_reg = 0.01
+    # Scale regularization
+    scale_reg = 0.01
 
     # Start refining GSs after this iteration
     refine_start_iter: int = 500
     # Stop refining GSs after this iteration
-    refine_stop_iter: int = 15_000
-    # Reset opacities every this steps
-    reset_every: int = 3000
+    refine_stop_iter: int = 25_000
     # Refine GSs every this steps
     refine_every: int = 100
 
@@ -151,75 +154,7 @@ class Config:
         self.sh_degree_interval = int(self.sh_degree_interval * factor)
         self.refine_start_iter = int(self.refine_start_iter * factor)
         self.refine_stop_iter = int(self.refine_stop_iter * factor)
-        self.reset_every = int(self.reset_every * factor)
         self.refine_every = int(self.refine_every * factor)
-
-
-def create_splats_with_optimizers(
-    parser: Parser,
-    init_type: str = "sfm",
-    init_num_pts: int = 100_000,
-    init_opacity: float = 0.1,
-    init_scale: float = 1.0,
-    scene_scale: float = 1.0,
-    sh_degree: int = 3,
-    sparse_grad: bool = False,
-    batch_size: int = 1,
-    feature_dim: Optional[int] = None,
-    device: str = "cuda",
-) -> Tuple[torch.nn.ParameterDict, torch.optim.Optimizer]:
-    if init_type == "sfm":
-        points = torch.from_numpy(parser.points).float()
-        rgbs = torch.from_numpy(parser.points_rgb / 255.0).float()
-    elif init_type == "random":
-        points = scene_scale * (torch.rand((init_num_pts, 3)) * 3 * 2 - 3)
-        rgbs = torch.rand((init_num_pts, 3))
-    else:
-        raise ValueError("Please specify a correct init_type: random or sfm")
-
-    N = points.shape[0]
-    # Initialize the GS size to be the average dist of the 3 nearest neighbors
-    dist2_avg = (knn(points, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
-    dist_avg = torch.sqrt(dist2_avg)
-    scales = torch.log(dist_avg * init_scale).unsqueeze(-1).repeat(1, 3)  # [N, 3]
-    quats = torch.rand((N, 4))  # [N, 4]
-    opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
-
-    params = [
-        # name, value, lr
-        ("means3d", torch.nn.Parameter(points), 1.6e-4 * scene_scale),
-        ("scales", torch.nn.Parameter(scales), 5e-3),
-        ("quats", torch.nn.Parameter(quats), 1e-3),
-        ("opacities", torch.nn.Parameter(opacities), 5e-2),
-    ]
-
-    if feature_dim is None:
-        # color is SH coefficients.
-        colors = torch.zeros((N, (sh_degree + 1) ** 2, 3))  # [N, K, 3]
-        colors[:, 0, :] = rgb_to_sh(rgbs)
-        params.append(("sh0", torch.nn.Parameter(colors[:, :1, :]), 2.5e-3))
-        params.append(("shN", torch.nn.Parameter(colors[:, 1:, :]), 2.5e-3 / 20))
-    else:
-        # features will be used for appearance and view-dependent shading
-        features = torch.rand(N, feature_dim)  # [N, feature_dim]
-        params.append(("features", torch.nn.Parameter(features), 2.5e-3))
-        colors = torch.logit(rgbs)  # [N, 3]
-        params.append(("colors", torch.nn.Parameter(colors), 2.5e-3))
-
-    splats = torch.nn.ParameterDict({n: v for n, v, _ in params}).to(device)
-    # Scale learning rate based on batch size, reference:
-    # https://www.cs.princeton.edu/~smalladi/blog/2024/01/22/SDEs-ScalingRules/
-    # Note that this would not make the training exactly equivalent, see
-    # https://arxiv.org/pdf/2402.18824v1
-    optimizers = [
-        (torch.optim.SparseAdam if sparse_grad else torch.optim.Adam)(
-            [{"params": splats[name], "lr": lr * math.sqrt(batch_size), "name": name}],
-            eps=1e-15 / math.sqrt(batch_size),
-            betas=(1 - batch_size * (1 - 0.9), 1 - batch_size * (1 - 0.999)),
-        )
-        for name, _, lr in params
-    ]
-    return splats, optimizers
 
 
 class Runner:
@@ -270,7 +205,6 @@ class Runner:
             init_num_pts=cfg.init_num_pts,
             init_opacity=cfg.init_opa,
             init_scale=cfg.init_scale,
-            scene_scale=self.scene_scale,
             sh_degree=cfg.sh_degree,
             sparse_grad=cfg.sparse_grad,
             batch_size=cfg.batch_size,
@@ -331,13 +265,6 @@ class Runner:
                 mode="training",
             )
 
-        # Running stats for prunning & growing.
-        n_gauss = len(self.splats["means3d"])
-        self.running_stats = {
-            "grad2d": torch.zeros(n_gauss, device=self.device),  # norm of the gradient
-            "count": torch.zeros(n_gauss, device=self.device, dtype=torch.int),
-        }
-
     def rasterize_splats(
         self,
         camtoworlds: Tensor,
@@ -396,7 +323,7 @@ class Runner:
         max_steps = cfg.max_steps
         init_step = 0
 
-        scheulers = [
+        schedulers = [
             # means3d has a learning rate schedule, that end at 0.01 of the initial value
             torch.optim.lr_scheduler.ExponentialLR(
                 self.optimizers[0], gamma=0.01 ** (1.0 / max_steps)
@@ -404,7 +331,7 @@ class Runner:
         ]
         if cfg.pose_opt:
             # pose optimization has a learning rate schedule
-            scheulers.append(
+            schedulers.append(
                 torch.optim.lr_scheduler.ExponentialLR(
                     self.pose_optimizers[0], gamma=0.01 ** (1.0 / max_steps)
                 )
@@ -507,6 +434,16 @@ class Runner:
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
 
+            loss = (
+                loss
+                + cfg.opacity_reg
+                * torch.abs(torch.sigmoid(self.splats["opacities"])).mean()
+            )
+            loss = (
+                loss
+                + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
+            )
+
             loss.backward()
 
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
@@ -535,64 +472,26 @@ class Runner:
                     self.writer.add_image("train/render", canvas, step)
                 self.writer.flush()
 
-            # update running stats for prunning & growing
+            # edit GSs
             if step < cfg.refine_stop_iter:
-                self.update_running_stats(info)
-
                 if step > cfg.refine_start_iter and step % cfg.refine_every == 0:
-                    grads = self.running_stats["grad2d"] / self.running_stats[
-                        "count"
-                    ].clamp_min(1)
+                    # relocate GSs
+                    dead_mask = (
+                        torch.sigmoid(self.splats["opacities"]) <= 0.005
+                    ).squeeze(-1)
+                    alive_mask = ~dead_mask
+                    dead_indices = dead_mask.nonzero(as_tuple=True)[0]
+                    alive_indices = alive_mask.nonzero(as_tuple=True)[0]
+                    self.relocate_gs(dead_indices, alive_indices)
+                    print(f"Step {step}: Relocated {len(dead_indices)} GSs.")
 
-                    # grow GSs
-                    is_grad_high = grads >= cfg.grow_grad2d
-                    is_small = (
-                        torch.exp(self.splats["scales"]).max(dim=-1).values
-                        <= cfg.grow_scale3d * self.scene_scale
-                    )
-                    is_dupli = is_grad_high & is_small
-                    n_dupli = is_dupli.sum().item()
-                    self.refine_duplicate(is_dupli)
-
-                    is_split = is_grad_high & ~is_small
-                    is_split = torch.cat(
-                        [
-                            is_split,
-                            # new GSs added by duplication will not be split
-                            torch.zeros(n_dupli, device=device, dtype=torch.bool),
-                        ]
-                    )
-                    n_split = is_split.sum().item()
-                    self.refine_split(is_split)
+                    # add new GSs
+                    before_num_splats = len(self.splats["means3d"])
+                    self.add_new_gs(cfg.cap_max)
+                    after_num_splats = len(self.splats["means3d"])
                     print(
-                        f"Step {step}: {n_dupli} GSs duplicated, {n_split} GSs split. "
-                        f"Now having {len(self.splats['means3d'])} GSs."
+                        f"Step {step}: Added {after_num_splats - before_num_splats} GSs. Now having {after_num_splats} GSs."
                     )
-
-                    # prune GSs
-                    is_prune = torch.sigmoid(self.splats["opacities"]) < cfg.prune_opa
-                    if step > cfg.reset_every:
-                        # The official code also implements sreen-size pruning but
-                        # it's actually not being used due to a bug:
-                        # https://github.com/graphdeco-inria/gaussian-splatting/issues/123
-                        is_too_big = (
-                            torch.exp(self.splats["scales"]).max(dim=-1).values
-                            > cfg.prune_scale3d * self.scene_scale
-                        )
-                        is_prune = is_prune | is_too_big
-                    n_prune = is_prune.sum().item()
-                    self.refine_keep(~is_prune)
-                    print(
-                        f"Step {step}: {n_prune} GSs pruned. "
-                        f"Now having {len(self.splats['means3d'])} GSs."
-                    )
-
-                    # reset running stats
-                    self.running_stats["grad2d"].zero_()
-                    self.running_stats["count"].zero_()
-
-                if step % cfg.reset_every == 0:
-                    self.reset_opa(cfg.prune_opa * 2.0)
 
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:
@@ -619,8 +518,30 @@ class Runner:
             for optimizer in self.app_optimizers:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
-            for scheduler in scheulers:
+            for scheduler in schedulers:
                 scheduler.step()
+
+            # Add noise
+            with torch.no_grad():
+                L = build_scaling_rotation(
+                    torch.exp(self.splats["scales"]), self.splats["quats"]
+                )
+                actual_covariance = L @ L.transpose(1, 2)
+
+                def op_sigmoid(x, k=100, x0=0.995):
+                    return 1 / (1 + torch.exp(-k * (x - x0)))
+
+                xyz_lr = schedulers[0].get_last_lr()[0]
+                noise = (
+                    torch.randn_like(self.splats["means3d"])
+                    * (
+                        op_sigmoid(1 - torch.sigmoid(self.splats["opacities"]))
+                    ).unsqueeze(-1)
+                    * cfg.noise_lr
+                    * xyz_lr
+                )
+                noise = torch.bmm(actual_covariance, noise.unsqueeze(-1)).squeeze(-1)
+                self.splats["means3d"].add_(noise)
 
             # save checkpoint
             if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
@@ -657,112 +578,63 @@ class Runner:
                 # Update the scene.
                 self.viewer.update(step, num_train_rays_per_step)
 
-    @torch.no_grad()
-    def update_running_stats(self, info: Dict):
-        """Update running stats."""
-        cfg = self.cfg
-
-        # normalize grads to [-1, 1] screen space
-        if cfg.absgrad:
-            grads = info["means2d"].absgrad.clone()
-        else:
-            grads = info["means2d"].grad.clone()
-        grads[..., 0] *= info["width"] / 2.0 * cfg.batch_size
-        grads[..., 1] *= info["height"] / 2.0 * cfg.batch_size
-        if cfg.packed:
-            # grads is [nnz, 2]
-            gs_ids = info["gaussian_ids"]  # [nnz] or None
-            self.running_stats["grad2d"].index_add_(0, gs_ids, grads.norm(dim=-1))
-            self.running_stats["count"].index_add_(0, gs_ids, torch.ones_like(gs_ids))
-        else:
-            # grads is [C, N, 2]
-            sel = info["radii"] > 0.0  # [C, N]
-            gs_ids = torch.where(sel)[1]  # [nnz]
-            self.running_stats["grad2d"].index_add_(0, gs_ids, grads[sel].norm(dim=-1))
-            self.running_stats["count"].index_add_(
-                0, gs_ids, torch.ones_like(gs_ids).int()
-            )
-
-    @torch.no_grad()
-    def reset_opa(self, value: float = 0.01):
-        """Utility function to reset opacities."""
-        opacities = torch.clamp(
-            self.splats["opacities"], max=torch.logit(torch.tensor(value)).item()
+    def _update_params(self, idxs, ratio):
+        new_opacity, new_scaling = compute_relocation_cuda(
+            opacity_old=torch.sigmoid(self.splats["opacities"])[idxs],
+            scale_old=torch.exp(self.splats["scales"])[idxs],
+            N=ratio[idxs, 0] + 1,
         )
-        for optimizer in self.optimizers:
-            for i, param_group in enumerate(optimizer.param_groups):
-                if param_group["name"] != "opacities":
-                    continue
-                p = param_group["params"][0]
-                p_state = optimizer.state[p]
-                del optimizer.state[p]
-                for key in p_state.keys():
-                    if key != "step":
-                        p_state[key] = torch.zeros_like(p_state[key])
-                p_new = torch.nn.Parameter(opacities)
-                optimizer.param_groups[i]["params"] = [p_new]
-                optimizer.state[p_new] = p_state
-                self.splats[param_group["name"]] = p_new
-        torch.cuda.empty_cache()
+        new_opacity = torch.clamp(
+            new_opacity, max=1.0 - torch.finfo(torch.float32).eps, min=0.005
+        )
+        new_opacity = torch.logit(new_opacity)
+        new_scaling = torch.log(new_scaling.reshape(-1, 3))
+        return new_opacity, new_scaling
 
     @torch.no_grad()
-    def refine_split(self, mask: Tensor):
-        """Utility function to grow GSs."""
-        device = self.device
+    def relocate_gs(self, dead_indices: Tensor, alive_indices: Tensor):
+        probs = torch.sigmoid(self.splats["opacities"])[alive_indices]
+        reinit_idx, ratio = sample_alives(
+            alive_indices=alive_indices, probs=probs, num=dead_indices.shape[0]
+        )
+        new_opacity, new_scaling = self._update_params(reinit_idx, ratio=ratio)
 
-        sel = torch.where(mask)[0]
-        rest = torch.where(~mask)[0]
-
-        scales = torch.exp(self.splats["scales"][sel])  # [N, 3]
-        quats = F.normalize(self.splats["quats"][sel], dim=-1)  # [N, 4]
-        rotmats = normalized_quat_to_rotmat(quats)  # [N, 3, 3]
-        samples = torch.einsum(
-            "nij,nj,bnj->bni",
-            rotmats,
-            scales,
-            torch.randn(2, len(scales), 3, device=device),
-        )  # [2, N, 3]
+        self.splats["opacities"][reinit_idx] = new_opacity
+        self.splats["scales"][reinit_idx] = new_scaling
+        for k in self.splats.keys():
+            self.splats[k][dead_indices] = self.splats[k][reinit_idx]
 
         for optimizer in self.optimizers:
             for i, param_group in enumerate(optimizer.param_groups):
                 p = param_group["params"][0]
                 name = param_group["name"]
-                # create new params
-                if name == "means3d":
-                    p_split = (p[sel] + samples).reshape(-1, 3)  # [2N, 3]
-                elif name == "scales":
-                    p_split = torch.log(scales / 1.6).repeat(2, 1)  # [2N, 3]
-                else:
-                    repeats = [2] + [1] * (p.dim() - 1)
-                    p_split = p[sel].repeat(repeats)
-                p_new = torch.cat([p[rest], p_split])
-                p_new = torch.nn.Parameter(p_new)
-                # update optimizer
                 p_state = optimizer.state[p]
                 del optimizer.state[p]
                 for key in p_state.keys():
-                    if key == "step":
-                        continue
-                    v = p_state[key]
-                    # new params are assigned with zero optimizer states
-                    # (worth investigating it)
-                    v_split = torch.zeros((2 * len(sel), *v.shape[1:]), device=device)
-                    p_state[key] = torch.cat([v[rest], v_split])
+                    if key != "step":
+                        p_state[key][reinit_idx] = 0
+                p_new = torch.nn.Parameter(self.splats[name])
                 optimizer.param_groups[i]["params"] = [p_new]
                 optimizer.state[p_new] = p_state
                 self.splats[name] = p_new
-        for k, v in self.running_stats.items():
-            if v is None:
-                continue
-            repeats = [2] + [1] * (v.dim() - 1)
-            v_new = v[sel].repeat(repeats)
-            self.running_stats[k] = torch.cat((v[rest], v_new))
         torch.cuda.empty_cache()
 
     @torch.no_grad()
-    def refine_duplicate(self, mask: Tensor):
-        """Unility function to duplicate GSs."""
-        sel = torch.where(mask)[0]
+    def add_new_gs(self, cap_max):
+        current_num_points = len(self.splats["means3d"])
+        target_num = min(cap_max, int(1.05 * current_num_points))
+        num_gs = max(0, target_num - current_num_points)
+        if num_gs <= 0:
+            return
+        probs = torch.sigmoid(self.splats["opacities"])
+        add_idx, ratio = sample_alives(probs=probs, num=num_gs)
+        new_opacity, new_scaling = self._update_params(add_idx, ratio=ratio)
+
+        self.splats["opacities"][add_idx] = new_opacity
+        self.splats["scales"][add_idx] = new_scaling
+        for k in self.splats.keys():
+            self.splats[k] = torch.cat([self.splats[k], self.splats[k][add_idx]])
+
         for optimizer in self.optimizers:
             for i, param_group in enumerate(optimizer.param_groups):
                 p = param_group["params"][0]
@@ -771,41 +643,15 @@ class Runner:
                 del optimizer.state[p]
                 for key in p_state.keys():
                     if key != "step":
-                        # new params are assigned with zero optimizer states
-                        # (worth investigating it as it will lead to a lot more GS.)
                         v = p_state[key]
                         v_new = torch.zeros(
-                            (len(sel), *v.shape[1:]), device=self.device
+                            (len(add_idx), *v.shape[1:]), device=self.device
                         )
-                        # v_new = v[sel]
                         p_state[key] = torch.cat([v, v_new])
-                p_new = torch.nn.Parameter(torch.cat([p, p[sel]]))
+                p_new = torch.nn.Parameter(self.splats[name])
                 optimizer.param_groups[i]["params"] = [p_new]
                 optimizer.state[p_new] = p_state
                 self.splats[name] = p_new
-        for k, v in self.running_stats.items():
-            self.running_stats[k] = torch.cat((v, v[sel]))
-        torch.cuda.empty_cache()
-
-    @torch.no_grad()
-    def refine_keep(self, mask: Tensor):
-        """Unility function to prune GSs."""
-        sel = torch.where(mask)[0]
-        for optimizer in self.optimizers:
-            for i, param_group in enumerate(optimizer.param_groups):
-                p = param_group["params"][0]
-                name = param_group["name"]
-                p_state = optimizer.state[p]
-                del optimizer.state[p]
-                for key in p_state.keys():
-                    if key != "step":
-                        p_state[key] = p_state[key][sel]
-                p_new = torch.nn.Parameter(p[sel])
-                optimizer.param_groups[i]["params"] = [p_new]
-                optimizer.state[p_new] = p_state
-                self.splats[name] = p_new
-        for k, v in self.running_stats.items():
-            self.running_stats[k] = v[sel]
         torch.cuda.empty_cache()
 
     @torch.no_grad()
