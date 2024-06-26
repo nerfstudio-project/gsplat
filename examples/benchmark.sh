@@ -16,7 +16,7 @@ do
         --result_dir $RESULT_DIR/$SCENE/
 
     # run eval and render
-    for CKPT in results/benchmark/$SCENE/ckpts/*;
+    for CKPT in $RESULT_DIR/$SCENE/ckpts/*;
     do
         python simple_trainer.py --disable_viewer --data_factor $DATA_FACTOR \
             --data_dir data/360_v2/$SCENE/ \

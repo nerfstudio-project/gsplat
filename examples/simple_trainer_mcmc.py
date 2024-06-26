@@ -205,6 +205,7 @@ class Runner:
             init_num_pts=cfg.init_num_pts,
             init_opacity=cfg.init_opa,
             init_scale=cfg.init_scale,
+            scene_scale=self.scene_scale,
             sh_degree=cfg.sh_degree,
             sparse_grad=cfg.sparse_grad,
             batch_size=cfg.batch_size,
