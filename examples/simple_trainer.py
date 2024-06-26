@@ -67,8 +67,8 @@ class Config:
     save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
 
     # Initialization type
-    init_type: str = "random"
-    # Initialization number of GSs if random
+    init_type: str = "sfm"
+    # Initialization number of GSs. Ignored if initializing from sfm
     init_num_pts: int = 100_000
     # Degree of spherical harmonics
     sh_degree: int = 3
@@ -175,7 +175,7 @@ def create_splats_with_optimizers(
         points = scene_scale * (torch.rand((init_num_pts, 3)) * 3 * 2 - 3)
         rgbs = torch.rand((init_num_pts, 3))
     else:
-        raise ValueError("Please specify a correct init_type: random or sfm")
+        raise ValueError("Please specify a correct init_type: sfm or random")
 
     N = points.shape[0]
     # Initialize the GS size to be the average dist of the 3 nearest neighbors
