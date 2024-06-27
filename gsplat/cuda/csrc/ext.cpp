@@ -26,6 +26,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("rasterize_to_indices_in_range", &rasterize_to_indices_in_range_tensor);
 
     // packed version
-    m.def("fully_fused_projection_packed_fwd", &fully_fused_projection_packed_fwd_tensor);
-    m.def("fully_fused_projection_packed_bwd", &fully_fused_projection_packed_bwd_tensor);
+    m.def("fully_fused_projection_packed_fwd",
+          &fully_fused_projection_packed_fwd_tensor);
+    m.def("fully_fused_projection_packed_bwd",
+          &fully_fused_projection_packed_bwd_tensor);
+
+    m.def("tree_cut", &tree_cut_tensor);
 }

@@ -214,3 +214,8 @@ fully_fused_projection_packed_bwd_tensor(
     const torch::Tensor &v_conics,                      // [nnz, 3]
     const at::optional<torch::Tensor> &v_compensations, // [nnz] optional
     const bool viewmats_requires_grad, const bool sparse_grad);
+
+std::tuple<torch::Tensor, torch::Tensor> tree_cut_tensor(const torch::Tensor &leaf_data,
+                                                         const torch::Tensor &leaf_mask,
+                                                         const int32_t branch_factor,
+                                                         const float cut);
