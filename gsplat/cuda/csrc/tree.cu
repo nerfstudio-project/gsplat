@@ -115,7 +115,7 @@ tree_cut_kernel(const uint32_t N,      // 2^N is the branching factor of the tre
             parent_data[i] += v;
         }
     }
-    printf("thread %d: parent_data[0] %f\n", idx, parent_data[0]); // <-- not correct
+    printf("thread %d: parent_data[0] %f\n", idx, parent_data[0]);
 
     // Step 3
 
