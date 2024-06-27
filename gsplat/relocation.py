@@ -1,28 +1,43 @@
 import math
 import torch
+from torch import Tensor
 from .cuda._wrapper import _make_lazy_cuda_func
 
-N_max = 51
-binoms = torch.zeros((N_max, N_max)).float().cuda()
-for n in range(N_max):
+N_MAX = 51
+BINOMS = torch.zeros((N_MAX, N_MAX)).float().cuda()
+for n in range(N_MAX):
     for k in range(n + 1):
-        binoms[n, k] = math.comb(n, k)
+        BINOMS[n, k] = math.comb(n, k)
 
 
-def compute_relocation_cuda(opacity_old, scale_old, N):
-    new_opacity, new_scale = _make_lazy_cuda_func("compute_relocation")(
-        opacity_old, scale_old, N.int(), binoms, N_max
+def compute_relocation(
+    old_opacities: Tensor,  # [N]
+    old_scales: Tensor,  # [N, 3]
+    N: Tensor,  # [N]
+) -> tuple[Tensor, Tensor]:
+    """Compute new Gaussians from a set of old Gaussians.
+
+    This function interprets the Gaussians as samples from a likelihood distribution.
+    It uses the old opacities, scales, and weights to compute the new opacities and scales.
+    This is an implementation of the paper
+    `3D Gaussian Splatting as Markov Chain Monte Carlo <https://arxiv.org/pdf/2404.09591>`_,
+
+    Args:
+        old_opacities: The opacities of the Gaussians. [N]
+        old_scales: The scales of the Gaussians. [N, 3]
+        N: Weights for each of the Gaussians. [N]
+
+    Returns:
+        A tuple:
+
+        **new_opacities**: The opacities of the new Gaussians. [N]
+
+        **new_scales**: The scales of the Gaussians. [N, 3]
+    """
+    new_opacities, new_scales = _make_lazy_cuda_func("compute_relocation")(
+        old_opacities, old_scales, N.int(), BINOMS, N_MAX
     )
-    return new_opacity, new_scale
-
-
-def sample_alives(probs, num, alive_indices=None):
-    probs = probs / (probs.sum() + torch.finfo(torch.float32).eps)
-    sampled_idxs = torch.multinomial(probs, num, replacement=True)
-    if alive_indices is not None:
-        sampled_idxs = alive_indices[sampled_idxs]
-    ratio = torch.bincount(sampled_idxs).unsqueeze(-1)
-    return sampled_idxs, ratio
+    return new_opacities, new_scales
 
 
 def build_rotation(r):

@@ -22,15 +22,12 @@ from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from utils import (
     AppearanceOptModule,
     CameraOptModule,
-    knn,
-    rgb_to_sh,
     set_random_seed,
 )
 
 from gsplat.rendering import rasterization
 from gsplat.relocation import (
-    compute_relocation_cuda,
-    sample_alives,
+    compute_relocation,
     build_scaling_rotation,
 )
 from simple_trainer import create_splats_with_optimizers
@@ -71,10 +68,12 @@ class Config:
     # Steps to save the model
     save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
 
-    # Initialization type
+    # Initialization strategy
     init_type: str = "sfm"
-    # Initialization number of GSs if random
+    # Initial number of GSs. Ignored if using sfm
     init_num_pts: int = 100_000
+    # Initial extent of GSs as a multiple of the camera extent. Ignored if using sfm
+    init_extent: float = 3.0
     # Degree of spherical harmonics
     sh_degree: int = 3
     # Turn on another SH degree every this steps
@@ -203,6 +202,7 @@ class Runner:
             self.parser,
             init_type=cfg.init_type,
             init_num_pts=cfg.init_num_pts,
+            init_extent=cfg.init_extent,
             init_opacity=cfg.init_opa,
             init_scale=cfg.init_scale,
             scene_scale=self.scene_scale,
@@ -476,22 +476,12 @@ class Runner:
             # edit GSs
             if step < cfg.refine_stop_iter:
                 if step > cfg.refine_start_iter and step % cfg.refine_every == 0:
-                    # relocate GSs
-                    dead_mask = (
-                        torch.sigmoid(self.splats["opacities"]) <= 0.005
-                    ).squeeze(-1)
-                    alive_mask = ~dead_mask
-                    dead_indices = dead_mask.nonzero(as_tuple=True)[0]
-                    alive_indices = alive_mask.nonzero(as_tuple=True)[0]
-                    self.relocate_gs(dead_indices, alive_indices)
-                    print(f"Step {step}: Relocated {len(dead_indices)} GSs.")
+                    num_relocated_gs = self.relocate_gs()
+                    print(f"Step {step}: Relocated {num_relocated_gs} GSs.")
 
-                    # add new GSs
-                    before_num_splats = len(self.splats["means3d"])
-                    self.add_new_gs(cfg.cap_max)
-                    after_num_splats = len(self.splats["means3d"])
+                    num_new_gs = self.add_new_gs(cfg.cap_max)
                     print(
-                        f"Step {step}: Added {after_num_splats - before_num_splats} GSs. Now having {after_num_splats} GSs."
+                        f"Step {step}: Added {num_new_gs} GSs. Now having {len(self.splats['means3d'])} GSs."
                     )
 
             # Turn Gradients into Sparse Tensor before running optimizer
@@ -522,27 +512,9 @@ class Runner:
             for scheduler in schedulers:
                 scheduler.step()
 
-            # Add noise
-            with torch.no_grad():
-                L = build_scaling_rotation(
-                    torch.exp(self.splats["scales"]), self.splats["quats"]
-                )
-                actual_covariance = L @ L.transpose(1, 2)
-
-                def op_sigmoid(x, k=100, x0=0.995):
-                    return 1 / (1 + torch.exp(-k * (x - x0)))
-
-                xyz_lr = schedulers[0].get_last_lr()[0]
-                noise = (
-                    torch.randn_like(self.splats["means3d"])
-                    * (
-                        op_sigmoid(1 - torch.sigmoid(self.splats["opacities"]))
-                    ).unsqueeze(-1)
-                    * cfg.noise_lr
-                    * xyz_lr
-                )
-                noise = torch.bmm(actual_covariance, noise.unsqueeze(-1)).squeeze(-1)
-                self.splats["means3d"].add_(noise)
+            # add noise to GSs
+            last_lr = schedulers[0].get_last_lr()[0]
+            self.add_noise_to_gs(last_lr)
 
             # save checkpoint
             if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
@@ -579,32 +551,40 @@ class Runner:
                 # Update the scene.
                 self.viewer.update(step, num_train_rays_per_step)
 
-    def _update_params(self, idxs, ratio):
-        new_opacity, new_scaling = compute_relocation_cuda(
-            opacity_old=torch.sigmoid(self.splats["opacities"])[idxs],
-            scale_old=torch.exp(self.splats["scales"])[idxs],
-            N=ratio[idxs, 0] + 1,
+    def _sample_new_gaussians(self, idxs: Tensor) -> tuple[Tensor, Tensor]:
+        new_opacities, new_scales = compute_relocation(
+            old_opacities=torch.sigmoid(self.splats["opacities"])[idxs],
+            old_scales=torch.exp(self.splats["scales"])[idxs],
+            N=torch.bincount(idxs)[idxs] + 1,
         )
-        new_opacity = torch.clamp(
-            new_opacity, max=1.0 - torch.finfo(torch.float32).eps, min=0.005
+        new_opacities = torch.clamp(
+            new_opacities, max=1.0 - torch.finfo(torch.float32).eps, min=0.005
         )
-        new_opacity = torch.logit(new_opacity)
-        new_scaling = torch.log(new_scaling.reshape(-1, 3))
-        return new_opacity, new_scaling
+        new_opacities = torch.logit(new_opacities)
+        new_scales = torch.log(new_scales.reshape(-1, 3))
+        return new_opacities, new_scales
 
     @torch.no_grad()
-    def relocate_gs(self, dead_indices: Tensor, alive_indices: Tensor):
+    def relocate_gs(self) -> int:
+        dead_mask = (torch.sigmoid(self.splats["opacities"]) <= 0.005).squeeze(-1)
+        dead_indices = dead_mask.nonzero(as_tuple=True)[0]
+        alive_indices = (~dead_mask).nonzero(as_tuple=True)[0]
+        num_gs = len(dead_indices)
+
+        # Sample for new GSs
         probs = torch.sigmoid(self.splats["opacities"])[alive_indices]
-        reinit_idx, ratio = sample_alives(
-            alive_indices=alive_indices, probs=probs, num=dead_indices.shape[0]
-        )
-        new_opacity, new_scaling = self._update_params(reinit_idx, ratio=ratio)
+        probs = probs / (probs.sum() + torch.finfo(torch.float32).eps)
+        sampled_idxs = torch.multinomial(probs, num_gs, replacement=True)
+        sampled_idxs = alive_indices[sampled_idxs]
+        new_opacities, new_scales = self._sample_new_gaussians(sampled_idxs)
 
-        self.splats["opacities"][reinit_idx] = new_opacity
-        self.splats["scales"][reinit_idx] = new_scaling
+        # Update splats
+        self.splats["opacities"][sampled_idxs] = new_opacities
+        self.splats["scales"][sampled_idxs] = new_scales
         for k in self.splats.keys():
-            self.splats[k][dead_indices] = self.splats[k][reinit_idx]
+            self.splats[k][dead_indices] = self.splats[k][sampled_idxs]
 
+        # Update optimizers
         for optimizer in self.optimizers:
             for i, param_group in enumerate(optimizer.param_groups):
                 p = param_group["params"][0]
@@ -613,12 +593,13 @@ class Runner:
                 del optimizer.state[p]
                 for key in p_state.keys():
                     if key != "step":
-                        p_state[key][reinit_idx] = 0
+                        p_state[key][sampled_idxs] = 0
                 p_new = torch.nn.Parameter(self.splats[name])
                 optimizer.param_groups[i]["params"] = [p_new]
                 optimizer.state[p_new] = p_state
                 self.splats[name] = p_new
         torch.cuda.empty_cache()
+        return num_gs
 
     @torch.no_grad()
     def add_new_gs(self, cap_max):
@@ -626,16 +607,21 @@ class Runner:
         target_num = min(cap_max, int(1.05 * current_num_points))
         num_gs = max(0, target_num - current_num_points)
         if num_gs <= 0:
-            return
+            return num_gs
+
+        # Sample for new GSs
         probs = torch.sigmoid(self.splats["opacities"])
-        add_idx, ratio = sample_alives(probs=probs, num=num_gs)
-        new_opacity, new_scaling = self._update_params(add_idx, ratio=ratio)
+        probs = probs / (probs.sum() + torch.finfo(torch.float32).eps)
+        sampled_idxs = torch.multinomial(probs, num_gs, replacement=True)
+        new_opacities, new_scales = self._sample_new_gaussians(sampled_idxs)
 
-        self.splats["opacities"][add_idx] = new_opacity
-        self.splats["scales"][add_idx] = new_scaling
+        # Update splats
+        self.splats["opacities"][sampled_idxs] = new_opacities
+        self.splats["scales"][sampled_idxs] = new_scales
         for k in self.splats.keys():
-            self.splats[k] = torch.cat([self.splats[k], self.splats[k][add_idx]])
+            self.splats[k] = torch.cat([self.splats[k], self.splats[k][sampled_idxs]])
 
+        # Update optimizers
         for optimizer in self.optimizers:
             for i, param_group in enumerate(optimizer.param_groups):
                 p = param_group["params"][0]
@@ -646,7 +632,7 @@ class Runner:
                     if key != "step":
                         v = p_state[key]
                         v_new = torch.zeros(
-                            (len(add_idx), *v.shape[1:]), device=self.device
+                            (len(sampled_idxs), *v.shape[1:]), device=self.device
                         )
                         p_state[key] = torch.cat([v, v_new])
                 p_new = torch.nn.Parameter(self.splats[name])
@@ -654,6 +640,26 @@ class Runner:
                 optimizer.state[p_new] = p_state
                 self.splats[name] = p_new
         torch.cuda.empty_cache()
+        return num_gs
+
+    @torch.no_grad()
+    def add_noise_to_gs(self, last_lr):
+        L = build_scaling_rotation(
+            torch.exp(self.splats["scales"]), self.splats["quats"]
+        )
+        actual_covariance = L @ L.transpose(1, 2)
+
+        def op_sigmoid(x, k=100, x0=0.995):
+            return 1 / (1 + torch.exp(-k * (x - x0)))
+
+        noise = (
+            torch.randn_like(self.splats["means3d"])
+            * (op_sigmoid(1 - torch.sigmoid(self.splats["opacities"]))).unsqueeze(-1)
+            * cfg.noise_lr
+            * last_lr
+        )
+        noise = torch.bmm(actual_covariance, noise.unsqueeze(-1)).squeeze(-1)
+        self.splats["means3d"].add_(noise)
 
     @torch.no_grad()
     def eval(self, step: int):
