@@ -24,11 +24,9 @@ from utils import (
     CameraOptModule,
     set_random_seed,
 )
-
+from gsplat import quat_scale_to_covar_preci
 from gsplat.rendering import rasterization
-from gsplat.relocation import (
-    compute_relocation,
-)
+from gsplat.relocation import compute_relocation
 from gsplat.cuda_legacy._torch_impl import scale_rot_to_cov3d
 from simple_trainer import create_splats_with_optimizers
 
@@ -646,8 +644,13 @@ class Runner:
     def add_noise_to_gs(self, last_lr):
         opacities = torch.sigmoid(self.splats["opacities"])
         scales = torch.exp(self.splats["scales"])
-        quats_normalized = F.normalize(self.splats["quats"], dim=-1)
-        actual_covariance = scale_rot_to_cov3d(scales, 1.0, quats_normalized)
+        actual_covariance, _ = quat_scale_to_covar_preci(
+            self.splats["quats"],
+            scales,
+            compute_covar=True,
+            compute_preci=False,
+            triu=False,
+        )
 
         def op_sigmoid(x, k=100, x0=0.995):
             return 1 / (1 + torch.exp(-k * (x - x0)))
