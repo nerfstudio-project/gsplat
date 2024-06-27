@@ -655,7 +655,9 @@ class Runner:
             # grads is [nnz, 2]
             gs_ids = info["gaussian_ids"]  # [nnz] or None
             self.running_stats["grad2d"].index_add_(0, gs_ids, grads.norm(dim=-1))
-            self.running_stats["count"].index_add_(0, gs_ids, torch.ones_like(gs_ids).int())
+            self.running_stats["count"].index_add_(
+                0, gs_ids, torch.ones_like(gs_ids).int()
+            )
         else:
             # grads is [C, N, 2]
             sel = info["radii"] > 0.0  # [C, N]
