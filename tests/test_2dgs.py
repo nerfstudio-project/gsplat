@@ -1,11 +1,14 @@
 import math
+
+import pytest
 import torch
 
 from gsplat._helper import load_test_data
 
 device = torch.device("cuda:0")
 
-
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.fixture
 def test_data_2():
     (
         means,
@@ -61,7 +64,7 @@ def test_data():
         "height": H,
     }
 
-
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_projection(test_data):
     from gsplat.cuda._torch_impl import _fully_fused_projection_2dgs
     from gsplat.cuda._wrapper import fully_fused_projection_2dgs
@@ -79,13 +82,30 @@ def test_projection(test_data):
     quats.requires_grad = True
     scales.requires_grad = True
     means.requires_grad = True
+    
     _radii, _means2d, _depths, _ray_Ms = _fully_fused_projection_2dgs(
         means, quats, scales, viewmats, Ks, width, height
     )
-    print(f"{_radii.shape=} {_means2d.shape=} {_depths.shape=} {_ray_Ms.shape=}")
-    import ipdb
+    
+    radii, means2d, depths, ray_transformations = fully_fused_projection_2dgs(
+        
+    )
+    # print(f"{_radii.shape=} {_means2d.shape=} {_depths.shape=} {_ray_Ms.shape=}")
+    # import ipdb
 
-    ipdb.set_trace()
+    # ipdb.set_trace()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def test_fully_fused_projection_packed(test_data):
+    pass
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.parametrize("channels", [3, 32, 128])
+def test_rasterize_to_pixels(test_data, channels: int):
+    pass
+
+
 
 
 if __name__ == "__main__":

@@ -1631,7 +1631,8 @@ fully_fused_projection_fwd_2dgs_kernel(const uint32_t C, const uint32_t N,
     // build H and transform from world space to camera space
     glm::vec4 quat = glm::make_vec4(quats + gid * 4);
     glm::vec3 scale = glm::make_vec3(scales + gid * 3);
-    glm::mat3 RS = quat_to_rotmat(quat) * scale_to_mat(scale, 1.0f);
+    glm::vec3 scale_2dgs = glm::vec3(scale.x, scale.y, 1.f);
+    glm::mat3 RS = quat_to_rotmat(quat) * scale_to_mat(scale_2dgs, 1.0f);
     glm::mat3 RS_camera = R * RS;
     glm::mat3 WH = glm::mat3(RS_camera[0], RS_camera[1], mean_c);
 
@@ -2043,12 +2044,22 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
         ray_transformations[6], ray_transformations[7], ray_transformations[8]
     );
     glm::vec3 v_mean2D = glm::vec3(v_means2d[0], v_means2d[1], v_means2d[2]);
-    glm::mat3 v_ray_transformation = glm::mat3(
-        v_ray_transformations[0], v_ray_transformations[1], v_ray_transformations[2],
-        v_ray_transformations[3], v_ray_transformations[4], v_ray_transformations[5],
-        v_ray_transformations[6], v_ray_transformations[7], v_ray_transformations[8]
-    );
-    compute_aabb_vjp(M, v_mean2D, v_ray_transformation);
+    // glm::mat3 v_ray_transformation = glm::mat3(
+    //     v_ray_transformations[0], v_ray_transformations[1], v_ray_transformations[2],
+    //     v_ray_transformations[3], v_ray_transformations[4], v_ray_transformations[5],
+    //     v_ray_transformations[6], v_ray_transformations[7], v_ray_transformations[8]
+    // );
+    glm::mat3 _v_ray_transformation = glm::mat3(0.f);
+    compute_aabb_vjp(M, v_mean2D, _v_ray_transformation);
+    v_ray_transformations[0] += _v_ray_transformation[0][0];
+    v_ray_transformations[1] += _v_ray_transformation[0][1];
+    v_ray_transformations[2] += _v_ray_transformation[0][2];
+    v_ray_transformations[3] += _v_ray_transformation[1][0];
+    v_ray_transformations[4] += _v_ray_transformation[1][1];
+    v_ray_transformations[5] += _v_ray_transformation[1][2];
+    v_ray_transformations[6] += _v_ray_transformation[2][0];
+    v_ray_transformations[7] += _v_ray_transformation[2][1];
+    v_ray_transformations[8] += _v_ray_transformation[2][2];
 
     //====== ray transformation gradient ======//
     // camera information
@@ -2070,8 +2081,14 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     glm::mat3 v_R(0.f);
     glm::vec2 v_scale(0.f);
     glm::vec3 v_mean(0.f);
+    _v_ray_transformation = glm::mat3(
+        v_ray_transformations[0], v_ray_transformations[1], v_ray_transformations[2],
+        v_ray_transformations[3], v_ray_transformations[4], v_ray_transformations[5],
+        v_ray_transformations[6], v_ray_transformations[7], v_ray_transformations[8]
+    );
+
     compute_ray_transformation_vjp(W, P, cam_pos, 
-                                    quat, scale, v_ray_transformation, 
+                                    quat, scale, _v_ray_transformation, 
                                     v_R, v_scale, v_mean);
 
     glm::vec4 v_quat(0.f);
@@ -2272,7 +2289,8 @@ __global__ void fully_fused_projection_packed_bwd_2dgs_kernel(
 
     glm::vec4 quat = glm::make_vec4(quats + gid * 4);
     glm::vec3 scale = glm::make_vec3(scales + gid * 3);
-    glm::mat3 S = scale_to_mat(scale, 1.0f);
+    glm::vec3 scale_2dgs = {scale.x, scale.y, 1.f};
+    glm::mat3 S = scale_to_mat(scale_2dgs, 1.0f);
     glm::mat3 R = quat_to_rotmat(quat);
     glm::mat3 RS = R * S;
 
