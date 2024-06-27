@@ -318,7 +318,9 @@ def rasterization(
     if render_mode in ["RGB+D", "RGB+ED"]:
         colors = torch.cat((colors, depths[..., None]), dim=-1)
         if backgrounds is not None:
-            backgrounds = torch.cat([backgrounds, torch.zeros(C, 1, device=backgrounds.device)], dim=-1)
+            backgrounds = torch.cat(
+                [backgrounds, torch.zeros(C, 1, device=backgrounds.device)], dim=-1
+            )
     elif render_mode in ["D", "ED"]:
         colors = depths[..., None]
         if backgrounds is not None:
