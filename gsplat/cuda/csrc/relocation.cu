@@ -55,13 +55,13 @@ std::tuple<torch::Tensor, torch::Tensor> compute_relocation_tensor(
         dim3 grid(num_blocks, 1, 1);
         compute_relocation_kernel<<<grid, block>>>(
             P,
-            old_opacities.data<float>(),
-            old_scales.data<float>(),
-            ratios.data<int>(),
-            binoms.data<float>(),
+            old_opacities.data_ptr<float>(),
+            old_scales.data_ptr<float>(),
+            ratios.data_ptr<int>(),
+            binoms.data_ptr<float>(),
             n_max,
-            final_opacities.data<float>(),
-            final_scales.data<float>()
+            final_opacities.data_ptr<float>(),
+            final_scales.data_ptr<float>()
         );
     }
     return std::make_tuple(final_opacities, final_scales);
