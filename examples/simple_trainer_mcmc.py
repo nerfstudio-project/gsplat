@@ -28,8 +28,8 @@ from utils import (
 from gsplat.rendering import rasterization
 from gsplat.relocation import (
     compute_relocation,
-    build_scaling_rotation,
 )
+from gsplat.cuda_legacy._torch_impl import scale_rot_to_cov3d
 from simple_trainer import create_splats_with_optimizers
 
 
@@ -644,17 +644,17 @@ class Runner:
 
     @torch.no_grad()
     def add_noise_to_gs(self, last_lr):
-        L = build_scaling_rotation(
-            torch.exp(self.splats["scales"]), self.splats["quats"]
-        )
-        actual_covariance = L @ L.transpose(1, 2)
+        opacities = torch.sigmoid(self.splats["opacities"])
+        scales = torch.exp(self.splats["scales"])
+        quats_normalized = F.normalize(self.splats["quats"], dim=-1)
+        actual_covariance = scale_rot_to_cov3d(scales, 1.0, quats_normalized)
 
         def op_sigmoid(x, k=100, x0=0.995):
             return 1 / (1 + torch.exp(-k * (x - x0)))
 
         noise = (
             torch.randn_like(self.splats["means3d"])
-            * (op_sigmoid(1 - torch.sigmoid(self.splats["opacities"]))).unsqueeze(-1)
+            * (op_sigmoid(1 - opacities)).unsqueeze(-1)
             * cfg.noise_lr
             * last_lr
         )
