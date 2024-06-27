@@ -215,9 +215,11 @@ fully_fused_projection_packed_bwd_tensor(
     const at::optional<torch::Tensor> &v_compensations, // [nnz] optional
     const bool viewmats_requires_grad, const bool sparse_grad);
 
-std::tuple<torch::Tensor, torch::Tensor> ComputeRelocationCUDA(
-		torch::Tensor& opacity_old,
-		torch::Tensor& scale_old,
-		torch::Tensor& N,
-		torch::Tensor& binoms,
-		const int n_max);
+std::tuple<torch::Tensor, torch::Tensor>
+compute_relocation_tensor(
+    torch::Tensor& old_opacities,
+    torch::Tensor& old_scales,
+    torch::Tensor& ratios,
+    torch::Tensor& binoms,
+    const int n_max
+);

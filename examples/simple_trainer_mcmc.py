@@ -555,7 +555,7 @@ class Runner:
         new_opacities, new_scales = compute_relocation(
             old_opacities=torch.sigmoid(self.splats["opacities"])[idxs],
             old_scales=torch.exp(self.splats["scales"])[idxs],
-            N=torch.bincount(idxs)[idxs] + 1,
+            ratios=torch.bincount(idxs)[idxs].int() + 1,
         )
         new_opacities = torch.clamp(
             new_opacities, max=1.0 - torch.finfo(torch.float32).eps, min=0.005

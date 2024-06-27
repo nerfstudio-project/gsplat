@@ -29,5 +29,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fully_fused_projection_packed_fwd", &fully_fused_projection_packed_fwd_tensor);
     m.def("fully_fused_projection_packed_bwd", &fully_fused_projection_packed_bwd_tensor);
     
-    m.def("compute_relocation", &ComputeRelocationCUDA);
+    m.def("compute_relocation", &compute_relocation_tensor);
 }
