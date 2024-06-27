@@ -2116,7 +2116,7 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     warpSum(v_scale, warp_group_g);
     if (warp_group_g.thread_rank() == 0) {
         v_quats += gid * 4;
-        v_scales += gid * 2;
+        v_scales += gid * 3;
         atomicAdd(v_quats, v_quat[0]);
         atomicAdd(v_quats + 1, v_quat[1]);
         atomicAdd(v_quats + 2, v_quat[2]);
