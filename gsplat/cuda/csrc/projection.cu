@@ -1816,7 +1816,7 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
     float radius;
     if (valid) {
         // compute AABB
-        glm::vec3 temp_point = glm::vec3(1.0f, 1.0f, -1.0f);
+        glm::vec3 temp_point = glm::vec3(3.0f, 3.0f, -1.0f);
         float distance = glm::dot(temp_point, M[2] * M[2]);
 
         if (distance == 0.0f) {
@@ -1838,7 +1838,7 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
                 glm::dot(f, M[2] * M[2])
             );
         half_extend = sqrt(glm::max(half_extend, glm::vec3(0.0f)));
-        radius = ceil(3.f * max(max(half_extend.x, half_extend.y), FilterSize));
+        radius = ceil(max(max(half_extend.x, half_extend.y), FilterSize));
 
         if (radius <= radius_clip) {
             valid = false;

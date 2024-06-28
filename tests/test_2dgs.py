@@ -168,7 +168,6 @@ def test_rasterize_to_pixels_2dgs(test_data):
     radii, means2d, depths, ray_Ms = fully_fused_projection_2dgs(
         means, quats, scales, viewmats, Ks, width, height
     )
-    print(colors.shape)
     colors = colors.repeat(C, 1, 1)
     opacities = opacities.repeat(C, 1)
 
@@ -214,9 +213,14 @@ def test_rasterize_to_pixels_2dgs(test_data):
 
     cuda_render = render_colors[0].detach().cpu()
     torch_render = _render_colors[0].detach().cpu()
-    imageio.imwrite("renders/test2.png", (255 * cuda_render).byte())
-    imageio.imwrite("renders/_test2.png", (255 * torch_render).byte())
-    imageio.imwrite("renders/diff.png", (255 * (cuda_render - torch_render)).byte())
+    # import pdb
+    # pdb.set_trace()
+    torch.testing.assert_close(render_colors, _render_colors)
+    torch.testing.assert_close(render_alphas, _render_alphas)
+
+    # imageio.imwrite("renders/test2.png", (255 * cuda_render).byte())
+    # imageio.imwrite("renders/_test2.png", (255 * torch_render).byte())
+    # imageio.imwrite("renders/diff.png", (255 * (cuda_render - torch_render)).byte())
 
 if __name__ == "__main__":
     test_projection_2dgs(test_data())

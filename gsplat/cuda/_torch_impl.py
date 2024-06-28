@@ -580,14 +580,19 @@ def accumulate_2dgs(
     C, N = means2d.shape[:2]
     channels = colors.shape[-1]
 
-    pixel_ids_x = pixel_ids % image_width
-    pixel_ids_y = pixel_ids // image_width
-    pixel_coords = torch.stack([pixel_ids_x, pixel_ids_y], dim=-1) + 0.5  # [M, 2]
+    pixel_ids_x = pixel_ids % image_width + 0.5
+    pixel_ids_y = pixel_ids // image_width + 0.5
+    pixel_coords = torch.stack([pixel_ids_x, pixel_ids_y], dim=-1)  # [M, 2]
     deltas = pixel_coords - means2d[camera_ids, gaussian_ids]  # [M, 2]
+
+    # import pdb
+    # pdb.set_trace()
 
     M = ray_transforms[camera_ids, gaussian_ids]  # [M, 3, 3]
     h_u = -M[..., :3, 0] + M[..., :3, 2] * pixel_ids_x[..., None]  # [M, 3]
     h_v = -M[..., :3, 1] + M[..., :3, 2] * pixel_ids_y[..., None]  # [M, 3]
+    # print(f"h_u: {h_u}")
+    print(f"h_v: {torch.unique(h_v[..., 2])}")
     tmp = torch.cross(h_u, h_v, dim=-1)
     us = tmp[..., 0] / tmp[..., 2]
     vs = tmp[..., 1] / tmp[..., 2]

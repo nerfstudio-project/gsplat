@@ -1354,6 +1354,8 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
             float3 h_u = {-u_transform.x + px * w_transform.x, -u_transform.y + px * w_transform.y, -u_transform.z + px * w_transform.z};
             float3 h_v = {-v_transform.x + py * w_transform.x, -v_transform.y + py * w_transform.y, -v_transform.z + py * w_transform.z};
             
+            // printf("%.2f, %.2f \n", px, py);
+            // printf("h_u: %.2f, %.2f, %.2f \n h_v: %.2f, %.2f ,%.2f \n", h_u.x, h_u.y, h_u.z, h_v.x, h_v.y, h_v.z);
             float3 intersect = cross_product(h_u, h_v);
             float2 s;
             if (intersect.z == 0.0) {
