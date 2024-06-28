@@ -32,7 +32,6 @@ def compute_relocation(
         A tuple:
 
         **new_opacities**: The opacities of the new Gaussians. [N]
-
         **new_scales**: The scales of the Gaussians. [N, 3]
     """
     N = old_opacities.shape[0]
@@ -40,9 +39,14 @@ def compute_relocation(
     assert ratios.shape == (N,), ratios.shape
     old_opacities = old_opacities.contiguous()
     old_scales = old_scales.contiguous()
-    ratios = ratios.contiguous()
+    ratios = ratios.int().contiguous()
 
     new_opacities, new_scales = _make_lazy_cuda_func("compute_relocation")(
         old_opacities, old_scales, ratios, BINOMS, N_MAX
     )
+    new_opacities = torch.clamp(
+        new_opacities, max=1.0 - torch.finfo(torch.float32).eps, min=0.005
+    )
+    new_opacities = torch.logit(new_opacities)
+    new_scales = torch.log(new_scales.reshape(-1, 3))
     return new_opacities, new_scales

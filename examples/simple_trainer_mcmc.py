@@ -549,40 +549,31 @@ class Runner:
                 # Update the scene.
                 self.viewer.update(step, num_train_rays_per_step)
 
-    def _sample_new_gaussians(self, idxs: Tensor) -> tuple[Tensor, Tensor]:
-        new_opacities, new_scales = compute_relocation(
-            old_opacities=torch.sigmoid(self.splats["opacities"])[idxs],
-            old_scales=torch.exp(self.splats["scales"])[idxs],
-            ratios=torch.bincount(idxs)[idxs].int() + 1,
-        )
-        new_opacities = torch.clamp(
-            new_opacities, max=1.0 - torch.finfo(torch.float32).eps, min=0.005
-        )
-        new_opacities = torch.logit(new_opacities)
-        new_scales = torch.log(new_scales.reshape(-1, 3))
-        return new_opacities, new_scales
-
     @torch.no_grad()
     def relocate_gs(self) -> int:
         dead_mask = (torch.sigmoid(self.splats["opacities"]) <= 0.005).squeeze(-1)
         dead_indices = dead_mask.nonzero(as_tuple=True)[0]
         alive_indices = (~dead_mask).nonzero(as_tuple=True)[0]
         num_gs = len(dead_indices)
+        if num_gs <= 0:
+            return num_gs
 
         # Sample for new GSs
         probs = torch.sigmoid(self.splats["opacities"])[alive_indices]
         probs = probs / (probs.sum() + torch.finfo(torch.float32).eps)
         sampled_idxs = torch.multinomial(probs, num_gs, replacement=True)
         sampled_idxs = alive_indices[sampled_idxs]
-        new_opacities, new_scales = self._sample_new_gaussians(sampled_idxs)
-
-        # Update splats
+        new_opacities, new_scales = compute_relocation(
+            old_opacities=torch.sigmoid(self.splats["opacities"])[sampled_idxs],
+            old_scales=torch.exp(self.splats["scales"])[sampled_idxs],
+            ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
+        )
         self.splats["opacities"][sampled_idxs] = new_opacities
         self.splats["scales"][sampled_idxs] = new_scales
+
+        # Update splats and optimizers
         for k in self.splats.keys():
             self.splats[k][dead_indices] = self.splats[k][sampled_idxs]
-
-        # Update optimizers
         for optimizer in self.optimizers:
             for i, param_group in enumerate(optimizer.param_groups):
                 p = param_group["params"][0]
@@ -600,7 +591,7 @@ class Runner:
         return num_gs
 
     @torch.no_grad()
-    def add_new_gs(self, cap_max):
+    def add_new_gs(self, cap_max: int) -> int:
         current_num_points = len(self.splats["means3d"])
         target_num = min(cap_max, int(1.05 * current_num_points))
         num_gs = max(0, target_num - current_num_points)
@@ -611,15 +602,17 @@ class Runner:
         probs = torch.sigmoid(self.splats["opacities"])
         probs = probs / (probs.sum() + torch.finfo(torch.float32).eps)
         sampled_idxs = torch.multinomial(probs, num_gs, replacement=True)
-        new_opacities, new_scales = self._sample_new_gaussians(sampled_idxs)
-
-        # Update splats
+        new_opacities, new_scales = compute_relocation(
+            old_opacities=torch.sigmoid(self.splats["opacities"])[sampled_idxs],
+            old_scales=torch.exp(self.splats["scales"])[sampled_idxs],
+            ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
+        )
         self.splats["opacities"][sampled_idxs] = new_opacities
         self.splats["scales"][sampled_idxs] = new_scales
+
+        # Update splats and optimizers
         for k in self.splats.keys():
             self.splats[k] = torch.cat([self.splats[k], self.splats[k][sampled_idxs]])
-
-        # Update optimizers
         for optimizer in self.optimizers:
             for i, param_group in enumerate(optimizer.param_groups):
                 p = param_group["params"][0]
