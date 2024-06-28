@@ -214,3 +214,12 @@ fully_fused_projection_packed_bwd_tensor(
     const torch::Tensor &v_conics,                      // [nnz, 3]
     const at::optional<torch::Tensor> &v_compensations, // [nnz] optional
     const bool viewmats_requires_grad, const bool sparse_grad);
+
+std::tuple<torch::Tensor, torch::Tensor>
+compute_relocation_tensor(
+    torch::Tensor& opacities,
+    torch::Tensor& scales,
+    torch::Tensor& ratios,
+    torch::Tensor& binoms,
+    const int n_max
+);
