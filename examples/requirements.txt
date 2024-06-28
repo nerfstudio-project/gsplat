@@ -16,3 +16,4 @@ opencv-python
 tyro
 Pillow
 tensorboard
+matplotlib

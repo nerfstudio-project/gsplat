@@ -6,12 +6,11 @@ import torch.nn.functional as F
 from torch import Tensor
 
 
-def _quat_scale_to_covar_preci(
+def _quat_scale_to_RS_preci(
     quats: Tensor,  # [N, 4],
     scales: Tensor,  # [N, 3],
     compute_covar: bool = True,
     compute_preci: bool = True,
-    triu: bool = False,
 ) -> Tuple[Optional[Tensor], Optional[Tensor]]:
     """PyTorch implementation of `gsplat.cuda._wrapper.quat_scale_to_covar_preci()`."""
     quats = F.normalize(quats, p=2, dim=-1)
@@ -34,24 +33,35 @@ def _quat_scale_to_covar_preci(
     R = R.reshape(quats.shape[:-1] + (3, 3))  # (..., 3, 3)
     # R.register_hook(lambda grad: print("grad R", grad))
 
+    M = None
     if compute_covar:
         M = R * scales[..., None, :]  # (..., 3, 3)
+    P = None
+    if compute_preci:
+        P = R * (1 / scales[..., None, :])  # (..., 3, 3)
+    return M, P
+
+
+def _quat_scale_to_covar_preci(
+    quats: Tensor,  # [N, 4],
+    scales: Tensor,  # [N, 3],
+    compute_covar: bool = True,
+    compute_preci: bool = True,
+    triu: bool = False,
+) -> Tuple[Optional[Tensor], Optional[Tensor]]:
+    def convert_to_covar(M):
+        if M is None:
+            return None
         covars = torch.bmm(M, M.transpose(-1, -2))  # (..., 3, 3)
         if triu:
             covars = covars.reshape(covars.shape[:-2] + (9,))  # (..., 9)
             covars = (
                 covars[..., [0, 1, 2, 4, 5, 8]] + covars[..., [0, 3, 6, 4, 7, 8]]
             ) / 2.0  # (..., 6)
-    if compute_preci:
-        P = R * (1 / scales[..., None, :])  # (..., 3, 3)
-        precis = torch.bmm(P, P.transpose(-1, -2))  # (..., 3, 3)
-        if triu:
-            precis = precis.reshape(precis.shape[:-2] + (9,))
-            precis = (
-                precis[..., [0, 1, 2, 4, 5, 8]] + precis[..., [0, 3, 6, 4, 7, 8]]
-            ) / 2.0
+        return covars
 
-    return covars if compute_covar else None, precis if compute_preci else None
+    M, P = _quat_scale_to_RS_preci(quats, scales, compute_covar, compute_preci)
+    return (convert_to_covar(M), convert_to_covar(P))
 
 
 def _persp_proj(
@@ -229,7 +239,7 @@ def _isect_tiles(
     tiles_per_gauss = (tile_maxs - tile_mins).prod(dim=-1)  # [C, N]
     tiles_per_gauss *= radii > 0.0
 
-    n_isects = tiles_per_gauss.sum().item()
+    n_isects = int(tiles_per_gauss.sum().item())
     isect_ids = torch.empty(n_isects, dtype=torch.int64, device=device)
     flatten_ids = torch.empty(n_isects, dtype=torch.int32, device=device)
 
@@ -436,8 +446,10 @@ def _rasterize_to_pixels(
 
     # Split Gaussians into batches and iteratively accumulate the renderings
     block_size = tile_size * tile_size
-    max_range = (isect_offsets[1:] - isect_offsets[:-1]).max().item()
-    num_batches = (max_range + block_size - 1) // block_size
+    n_isects = flatten_ids.shape[0]
+    isect_offsets_fl = torch.cat([isect_offsets.flatten(), torch.tensor([n_isects], device=device)])
+    max_range = (isect_offsets_fl[1:] - isect_offsets_fl[:-1]).max().item()
+    num_batches = int((max_range + block_size - 1) // block_size)
     for step in range(0, num_batches, batch_per_iter):
         transmittances = 1.0 - render_alphas[..., 0]
 
@@ -463,6 +475,222 @@ def _rasterize_to_pixels(
         renders_step, accs_step = accumulate(
             means2d,
             conics,
+            opacities,
+            colors,
+            gs_ids,
+            pixel_ids,
+            camera_ids,
+            image_width,
+            image_height,
+        )
+        render_colors = render_colors + renders_step * transmittances[..., None]
+        render_alphas = render_alphas + accs_step * transmittances[..., None]
+
+    render_alphas = render_alphas
+    if backgrounds is not None:
+        render_colors = render_colors + backgrounds[:, None, None, :] * (
+            1.0 - render_alphas
+        )
+
+    return render_colors, render_alphas
+
+
+def _fully_fused_projection_2dgs(
+    means: Tensor,  # [N, 3]
+    quats: Tensor,  # [N, 4]
+    scales: Tensor,  # [N, 3]
+    viewmats: Tensor,  # [C, 4, 4]
+    Ks: Tensor,  # [C, 3, 3]
+    width: int,
+    height: int,
+    near_plane: float = 0.01,
+    far_plane: float = 1e10,
+    eps: float = 1e-6,
+) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    """PyTorch implementation of `gsplat.cuda._wrapper.fully_fused_projection()`
+
+    .. note::
+
+        This is a minimal implementation of fully fused version, which has more
+        arguments. Not all arguments are supported.
+    """
+    R_cw = viewmats[:, :3, :3]  # [C, 3, 3]
+    t_cw = viewmats[:, :3, 3]  # [C, 3]
+    means_c = torch.einsum("cij,nj->cni", R_cw, means) + t_cw[:, None, :]  # (C, N, 3)
+    RS_wl, _ = _quat_scale_to_RS_preci(
+        quats, scales, compute_covar=True, compute_preci=False
+    )
+    RS_cl = torch.einsum("cij,njk->cnik", R_cw, RS_wl)  # [C, N, 3, 3]
+
+    # ray transform matrix, omitting the z rotation
+    T_cl = torch.cat([RS_cl[..., :2], means_c[..., None]], dim=-1)  # [C, N, 3, 3]
+    T_sl = torch.einsum("cij,cnjk->cnik", Ks[:, :3, :3], T_cl)  # [C, N, 3, 3]
+    # in paper notation M = (WH)^T
+    # later h_u = M @ h_x, h_v = M @ h_y
+    M = torch.transpose(T_sl, -1, -2)  # [C, N, 3, 3]
+
+    # compute the AABB of gaussian
+    test = torch.tensor([1.0, 1.0, -1.0], device=means.device).reshape(1, 1, 3)
+    d = (M[..., 2] * M[..., 2] * test).sum(dim=-1, keepdim=True)  # [C, N, 1]
+    valid = torch.abs(d) > eps
+    f = torch.where(valid, test / d, torch.zeros_like(test)).unsqueeze(
+        -1
+    )  # (C, N, 3, 1)
+    means2d = (M[..., :2] * M[..., 2:3] * f).sum(dim=-2)  # [C, N, 2]
+    extents = torch.sqrt(
+        means2d**2 - (M[..., :2] * M[..., :2] * f).sum(dim=-2)
+    )  # [C, N, 2]
+
+    depths = means_c[..., 2]  # [C, N]
+    radius = torch.ceil(3.0 * torch.max(extents, dim=-1).values)  # (C, N)
+
+    valid = valid.squeeze(-1) & (depths > near_plane) & (depths < far_plane)
+    radius[~valid] = 0.0
+
+    inside = (
+        (means2d[..., 0] + radius > 0)
+        & (means2d[..., 0] - radius < width)
+        & (means2d[..., 1] + radius > 0)
+        & (means2d[..., 1] - radius < height)
+    )
+    radius[~inside] = 0.0
+    radii = radius.int()
+    return radii, means2d, depths, M
+
+
+def accumulate_2dgs(
+    means2d: Tensor,  # [C, N, 2]
+    ray_transforms: Tensor,  # [C, N, 3, 3]
+    opacities: Tensor,  # [C, N]
+    colors: Tensor,  # [C, N, channels]
+    gaussian_ids: Tensor,  # [M]
+    pixel_ids: Tensor,  # [M]
+    camera_ids: Tensor,  # [M]
+    image_width: int,
+    image_height: int,
+) -> Tuple[Tensor, Tensor]:
+    """ """
+    try:
+        from nerfacc import accumulate_along_rays, render_weight_from_alpha
+    except ImportError:
+        raise ImportError("Please install nerfacc package: pip install nerfacc")
+
+    C, N = means2d.shape[:2]
+    channels = colors.shape[-1]
+
+    pixel_ids_x = pixel_ids % image_width
+    pixel_ids_y = pixel_ids // image_width
+    pixel_coords = torch.stack([pixel_ids_x, pixel_ids_y], dim=-1) + 0.5  # [M, 2]
+    deltas = pixel_coords - means2d[camera_ids, gaussian_ids]  # [M, 2]
+
+    M = ray_transforms[camera_ids, gaussian_ids]  # [M, 3, 3]
+    h_u = -M[..., :3, 0] + M[..., :3, 2] * pixel_ids_x[..., None]  # [M, 3]
+    h_v = -M[..., :3, 1] + M[..., :3, 2] * pixel_ids_y[..., None]  # [M, 3]
+    tmp = torch.cross(h_u, h_v, dim=-1)
+    us = tmp[..., 0] / tmp[..., 2]
+    vs = tmp[..., 1] / tmp[..., 2]
+    sigmas_3d = us**2 + vs**2  # [M]
+    sigmas_2d = 2 * (deltas[..., 0] ** 2 + deltas[..., 1] ** 2)
+    sigmas = 0.5 * torch.minimum(sigmas_3d, sigmas_2d)  # [M]
+    alphas = torch.clamp_max(
+        opacities[camera_ids, gaussian_ids] * torch.exp(-sigmas), 0.999
+    )
+
+    indices = camera_ids * image_height * image_width + pixel_ids
+    total_pixels = C * image_height * image_width
+
+    weights, trans = render_weight_from_alpha(
+        alphas, ray_indices=indices, n_rays=total_pixels
+    )
+    renders = accumulate_along_rays(
+        weights,
+        colors[camera_ids, gaussian_ids],
+        ray_indices=indices,
+        n_rays=total_pixels,
+    ).reshape(C, image_height, image_width, channels)
+    alphas = accumulate_along_rays(
+        weights, None, ray_indices=indices, n_rays=total_pixels
+    ).reshape(C, image_height, image_width, 1)
+    return renders, alphas
+
+
+def _rasterize_to_pixels_2dgs(
+    means2d: Tensor,  # [C, N, 2]
+    ray_transforms: Tensor,  # [C, N, 3, 3]
+    colors: Tensor,  # [C, N, channels]
+    opacities: Tensor,  # [C, N]
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    isect_offsets: Tensor,  # [C, tile_height, tile_width]
+    flatten_ids: Tensor,  # [n_isects]
+    backgrounds: Optional[Tensor] = None,  # [C, channels]
+    batch_per_iter: int = 100,
+):
+    """Pytorch implementation of `gsplat.cuda._wrapper.rasterize_to_pixels()`.
+
+    This function rasterizes 2D Gaussians to pixels in a Pytorch-friendly way. It
+    iteratively accumulates the renderings within each batch of Gaussians. The
+    interations are controlled by `batch_per_iter`.
+
+    .. note::
+        This is a minimal implementation of the fully fused version, which has more
+        arguments. Not all arguments are supported.
+
+    .. note::
+
+        This function relies on Pytorch's autograd for the backpropagation. It is much slower
+        than our fully fused rasterization implementation and comsumes much more GPU memory.
+        But it could serve as a playground for new ideas or debugging, as no backward
+        implementation is needed.
+
+    .. warning::
+
+        This function requires the `nerfacc` package to be installed. Please install it
+        using the following command `pip install nerfacc`.
+    """
+    from ._wrapper import rasterize_to_indices_in_range_2dgs
+
+    C, N = means2d.shape[:2]
+    device = means2d.device
+
+    render_colors = torch.zeros(
+        (C, image_height, image_width, colors.shape[-1]), device=device
+    )
+    render_alphas = torch.zeros((C, image_height, image_width, 1), device=device)
+
+    # Split Gaussians into batches and iteratively accumulate the renderings
+    block_size = tile_size * tile_size
+    n_isects = flatten_ids.shape[0]
+    isect_offsets_fl = torch.cat([isect_offsets.flatten(), torch.tensor([n_isects], device=device)])
+    max_range = (isect_offsets_fl[1:] - isect_offsets_fl[:-1]).max().item()
+    num_batches = int((max_range + block_size - 1) // block_size)
+    print(f"{flatten_ids.shape=} {max_range=}, {num_batches=}")
+    for step in range(0, num_batches, batch_per_iter):
+        transmittances = 1.0 - render_alphas[..., 0]
+
+        # Find the M intersections between pixels and gaussians.
+        # Each intersection corresponds to a tuple (gs_id, pixel_id, camera_id)
+        gs_ids, pixel_ids, camera_ids = rasterize_to_indices_in_range_2dgs(
+            step,
+            step + batch_per_iter,
+            transmittances,
+            means2d,
+            ray_transforms,
+            opacities,
+            image_width,
+            image_height,
+            tile_size,
+            isect_offsets,
+            flatten_ids,
+        )  # [M], [M]
+        if len(gs_ids) == 0:
+            break
+
+        # Accumulate the renderings within this batch of Gaussians.
+        renders_step, accs_step = accumulate_2dgs(
+            means2d,
+            ray_transforms,
             opacities,
             colors,
             gs_ids,

@@ -7,6 +7,19 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
+#define FilterSize 0.7071067811865476
+#define FilterInvSquare 1/(FilterSize*FilterSize)
+
+inline __device__ float3 cross_product(
+    float3 a, float3 b 
+) {
+    float3 result;
+    result.x = a.y * b.z - a.z * b.y;
+    result.y = a.z * b.x - a.x * b.z;
+    result.z = a.x * b.y - a.y * b.x;
+    return result;
+}
+
 inline __device__ glm::mat3 quat_to_rotmat(const glm::vec4 quat) {
     float w = quat[0], x = quat[1], y = quat[2], z = quat[3];
     // normalize
@@ -25,6 +38,15 @@ inline __device__ glm::mat3 quat_to_rotmat(const glm::vec4 quat) {
                      (2.f * (xz + wy)), (2.f * (yz - wx)),
                      (1.f - 2.f * (x2 + y2)) // 3rd col
     );
+}
+
+inline __device__ glm::mat3 scale_to_mat(const glm::vec3 scale, 
+                                    const float glob_scale) {
+    glm::mat3 S = glm::mat3(1.f);
+    S[0][0] = glob_scale * scale.x;
+    S[1][1] = glob_scale * scale.y;
+    S[2][2] = glob_scale * scale.z;
+    return S;
 }
 
 inline __device__ void quat_to_rotmat_vjp(const glm::vec4 quat, const glm::mat3 v_R,
@@ -47,7 +69,9 @@ inline __device__ void quat_to_rotmat_vjp(const glm::vec4 quat, const glm::mat3 
                2.f * z * (v_R[0][0] + v_R[1][1]) + w * (v_R[0][1] - v_R[1][0])));
 
     glm::vec4 quat_n = glm::vec4(w, x, y, z);
+    glm::vec4 temp = (v_quat_n - glm::dot(v_quat_n, quat_n) * quat_n) * inv_norm;
     v_quat += (v_quat_n - glm::dot(v_quat_n, quat_n) * quat_n) * inv_norm;
+
 }
 
 inline __device__ void quat_scale_to_covar_preci(const glm::vec4 quat,
@@ -330,6 +354,92 @@ inline __device__ void add_blur_vjp(const float eps2d, const glm::mat2 conic_blu
     v_covar[1][0] += v_sqr_comp * (one_minus_sqr_comp * conic_blur[1][0]);
     v_covar[1][1] +=
         v_sqr_comp * (one_minus_sqr_comp * conic_blur[1][1] - eps2d * det_conic_blur);
+}
+
+inline __device__ void compute_aabb_vjp(const glm::mat3 M, const glm::vec3 v_mean2D,
+                                        glm::mat3 &v_ray_transformation) {
+    // glm::mat3 M = glm::mat3(
+    //     ray_transformation[0], ray_transformation[1], ray_transformation[2],
+    //     ray_transformation[3], ray_transformation[4], ray_transformation[5],
+    //     ray_transformation[6], ray_transformation[7], ray_transformation[8]
+    // );
+
+    float distance = glm::dot(glm::vec3(1.f, 1.f, -1.f), M[2] * M[2]);
+    glm::vec3 temp_point = glm::vec3(1.f, 1.f, -1.f);
+    glm::vec3 f = (1.f / distance) * temp_point;
+
+    glm::vec3 p = glm::vec3(
+        glm::dot(f, M[0] * M[2]),
+        glm::dot(f, M[1] * M[2]),
+        glm::dot(f, M[2] * M[2])
+    );
+
+    glm::vec3 v_T0 = v_mean2D.x * f * M[2];
+    glm::vec3 v_T1 = v_mean2D.y * f * M[2];
+    glm::vec3 v_T3 = v_mean2D.x * f * M[0] + v_mean2D.y * f * M[1];
+    glm::vec3 v_f = (v_mean2D.x * M[0] * M[2]) + (v_mean2D.y * M[1] * M[2]);
+    float v_distance = glm::dot(v_f, f) * (-1.0 / distance);
+    glm::vec3 v_d_dT3 = glm::vec3(1.0, 1.0, -1.0) * M[2] * 2.0f;
+    v_T3 += v_distance * v_d_dT3;
+    // printf("not print: %.2f, %.2f, %.2f\n", v_T0.x, v_T0.y, v_T0.z);
+    v_ray_transformation[0][0] += v_T0.x;
+    v_ray_transformation[0][1] += v_T0.y;
+    v_ray_transformation[0][2] += v_T0.z;
+    v_ray_transformation[1][0] += v_T1.x;
+    v_ray_transformation[1][1] += v_T1.y;
+    v_ray_transformation[1][2] += v_T1.z;
+    v_ray_transformation[2][0] += v_T3.x;
+    v_ray_transformation[2][1] += v_T3.y;
+    v_ray_transformation[2][2] += v_T3.z;
+}
+
+inline __device__ void compute_ray_transformation_vjp(const glm::mat3x4 W, const glm::mat3 P,
+                                                        const glm::vec3 cam_pos, const glm::vec4 quat, 
+                                                        const glm::vec3 scale, const glm::mat3 v_ray_transformation, 
+                                                        glm::mat3& v_R, glm::vec2& v_scale, 
+                                                        glm::vec3& v_mean3D) {
+    glm::vec3 scale_2dgs = glm::vec3(scale.x, scale.y, 1.f);
+    glm::mat3 S = scale_to_mat(scale_2dgs, 1.f);
+    glm::mat3 R = quat_to_rotmat(quat);
+    glm::mat3 RS = R * S;
+
+    glm::mat3 v_M_aug = glm::transpose(P) * glm::transpose(v_ray_transformation);
+    glm::mat3 v_M = glm::mat3(
+        glm::vec3(v_M_aug[0]),
+        glm::vec3(v_M_aug[1]),
+        glm::vec3(v_M_aug[2])
+    );
+
+    glm::mat3 W_t = glm::transpose(W);
+    glm::mat3 v_RS = W_t * v_M;
+    glm::vec3 v_RS0 = v_RS[0];
+    glm::vec3 v_RS1 = v_RS[1];
+    glm::vec3 v_tn = W_t * glm::vec3(0.f, 0.f, 0.f);
+
+    // v_R = glm::mat3(
+    //     v_RS0 * glm::vec3(scale[0]),
+    //     v_RS1 * glm::vec3(scale[1]),
+    //     v_tn
+    // );
+    v_R[0] += v_RS0 * glm::vec3(scale_2dgs[0]);
+    v_R[1] += v_RS1 * glm::vec3(scale_2dgs[1]);
+    v_R[2] += v_tn;
+
+    // printf("%.9f \n", v_RS1);
+    // printf("v_R[0]: %.2f \n", v_RS0 * glm::vec3(scale[0]));
+    // printf("v_R: %.2f, %.2f, %.2f \n, %.2f, %.2f, %.2f \n, %.2f, %.2f, %.2f\n", 
+    //         v_R[0][0], v_R[0][1], v_R[0][2],
+    //         v_R[1][0], v_R[1][1], v_R[1][2],
+    //         v_R[2][0], v_R[2][1], v_R[2][2]);
+
+    // v_scale = glm::vec2(
+    //     (float)glm::dot(v_RS0, R[0]),
+    //     (float)glm::dot(v_RS1, R[1])
+    // );
+
+    v_scale[0] += (float)glm::dot(v_RS0, R[0]);
+    v_scale[1] += (float)glm::dot(v_RS1, R[1]);
+    v_mean3D += v_RS[2];
 }
 
 #endif // GSPLAT_CUDA_UTILS_H
