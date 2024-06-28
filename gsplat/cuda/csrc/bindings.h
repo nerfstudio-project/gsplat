@@ -217,8 +217,8 @@ fully_fused_projection_packed_bwd_tensor(
 
 std::tuple<torch::Tensor, torch::Tensor>
 compute_relocation_tensor(
-    torch::Tensor& old_opacities,
-    torch::Tensor& old_scales,
+    torch::Tensor& opacities,
+    torch::Tensor& scales,
     torch::Tensor& ratios,
     torch::Tensor& binoms,
     const int n_max

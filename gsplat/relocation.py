@@ -12,8 +12,8 @@ BINOMS = BINOMS.contiguous()
 
 
 def compute_relocation(
-    old_opacities: Tensor,  # [N]
-    old_scales: Tensor,  # [N, 3]
+    opacities: Tensor,  # [N]
+    scales: Tensor,  # [N, 3]
     ratios: Tensor,  # [N]
 ) -> tuple[Tensor, Tensor]:
     """Compute new Gaussians from a set of old Gaussians.
@@ -24,8 +24,8 @@ def compute_relocation(
     `3D Gaussian Splatting as Markov Chain Monte Carlo <https://arxiv.org/pdf/2404.09591>`_,
 
     Args:
-        old_opacities: The opacities of the Gaussians. [N]
-        old_scales: The scales of the Gaussians. [N, 3]
+        opacities: The opacities of the Gaussians. [N]
+        scales: The scales of the Gaussians. [N, 3]
         ratios: The relative frequencies for each of the Gaussians. [N]
 
     Returns:
@@ -34,15 +34,15 @@ def compute_relocation(
         **new_opacities**: The opacities of the new Gaussians. [N]
         **new_scales**: The scales of the Gaussians. [N, 3]
     """
-    N = old_opacities.shape[0]
-    assert old_scales.shape == (N, 3), old_scales.shape
+    N = opacities.shape[0]
+    assert scales.shape == (N, 3), scales.shape
     assert ratios.shape == (N,), ratios.shape
-    old_opacities = old_opacities.contiguous()
-    old_scales = old_scales.contiguous()
+    opacities = opacities.contiguous()
+    scales = scales.contiguous()
     ratios = ratios.int().contiguous()
 
     new_opacities, new_scales = _make_lazy_cuda_func("compute_relocation")(
-        old_opacities, old_scales, ratios, BINOMS, N_MAX
+        opacities, scales, ratios, BINOMS, N_MAX
     )
     new_opacities = torch.clamp(
         new_opacities, max=1.0 - torch.finfo(torch.float32).eps, min=0.005
