@@ -212,9 +212,11 @@ def test_rasterize_to_pixels_2dgs(test_data):
     )
     import imageio
 
-    imageio.imwrite("test2.png", (255 * render_colors[0].detach().cpu()).byte())
-    imageio.imwrite("_test2.png", (255 * _render_colors[0].detach().cpu()).byte())
-
+    cuda_render = render_colors[0].detach().cpu()
+    torch_render = _render_colors[0].detach().cpu()
+    imageio.imwrite("renders/test2.png", (255 * cuda_render).byte())
+    imageio.imwrite("renders/_test2.png", (255 * torch_render).byte())
+    imageio.imwrite("renders/diff.png", (255 * (cuda_render - torch_render)).byte())
 
 if __name__ == "__main__":
     test_projection_2dgs(test_data())
