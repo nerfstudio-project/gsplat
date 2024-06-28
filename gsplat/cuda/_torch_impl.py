@@ -427,6 +427,7 @@ def _rasterize_to_pixels(
     from ._wrapper import rasterize_to_indices_in_range
 
     C, N = means2d.shape[:2]
+    n_isects = len(flatten_ids)
     device = means2d.device
 
     render_colors = torch.zeros(
@@ -436,7 +437,10 @@ def _rasterize_to_pixels(
 
     # Split Gaussians into batches and iteratively accumulate the renderings
     block_size = tile_size * tile_size
-    max_range = (isect_offsets[1:] - isect_offsets[:-1]).max().item()
+    isect_offsets_fl = torch.cat(
+        [isect_offsets.flatten(), torch.tensor([n_isects], device=device)]
+    )
+    max_range = (isect_offsets_fl[1:] - isect_offsets_fl[:-1]).max().item()
     num_batches = (max_range + block_size - 1) // block_size
     for step in range(0, num_batches, batch_per_iter):
         transmittances = 1.0 - render_alphas[..., 0]
