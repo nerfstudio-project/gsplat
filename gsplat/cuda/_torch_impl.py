@@ -450,6 +450,7 @@ def _rasterize_to_pixels(
     isect_offsets_fl = torch.cat([isect_offsets.flatten(), torch.tensor([n_isects], device=device)])
     max_range = (isect_offsets_fl[1:] - isect_offsets_fl[:-1]).max().item()
     num_batches = int((max_range + block_size - 1) // block_size)
+    print(f"{flatten_ids.shape=} {max_range=}, {num_batches=}")
     for step in range(0, num_batches, batch_per_iter):
         transmittances = 1.0 - render_alphas[..., 0]
 
@@ -468,6 +469,7 @@ def _rasterize_to_pixels(
             isect_offsets,
             flatten_ids,
         )  # [M], [M]
+        print(f"{step=} {gs_ids.shape=} {pixel_ids.shape=} {camera_ids.shape=}")
         if len(gs_ids) == 0:
             break
 
@@ -616,6 +618,7 @@ def accumulate_2dgs(
 
 def _rasterize_to_pixels_2dgs(
     means2d: Tensor,  # [C, N, 2]
+    conics: Tensor,  # [C, N, 3]
     ray_transforms: Tensor,  # [C, N, 3, 3]
     colors: Tensor,  # [C, N, channels]
     opacities: Tensor,  # [C, N]
@@ -649,7 +652,7 @@ def _rasterize_to_pixels_2dgs(
         This function requires the `nerfacc` package to be installed. Please install it
         using the following command `pip install nerfacc`.
     """
-    from ._wrapper import rasterize_to_indices_in_range_2dgs
+    from ._wrapper import rasterize_to_indices_in_range
 
     C, N = means2d.shape[:2]
     device = means2d.device
@@ -671,12 +674,13 @@ def _rasterize_to_pixels_2dgs(
 
         # Find the M intersections between pixels and gaussians.
         # Each intersection corresponds to a tuple (gs_id, pixel_id, camera_id)
-        gs_ids, pixel_ids, camera_ids = rasterize_to_indices_in_range_2dgs(
+        # XXX: rasterize_to_indices_in_range_2dgs is buggy so using the old one here
+        gs_ids, pixel_ids, camera_ids = rasterize_to_indices_in_range(
             step,
             step + batch_per_iter,
             transmittances,
             means2d,
-            ray_transforms,
+            conics,
             opacities,
             image_width,
             image_height,
@@ -684,6 +688,7 @@ def _rasterize_to_pixels_2dgs(
             isect_offsets,
             flatten_ids,
         )  # [M], [M]
+        print(f"{step=} {gs_ids.shape=} {pixel_ids.shape=} {camera_ids.shape=}")
         if len(gs_ids) == 0:
             break
 
