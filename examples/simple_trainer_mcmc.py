@@ -550,8 +550,8 @@ class Runner:
                 self.viewer.update(step, num_train_rays_per_step)
 
     @torch.no_grad()
-    def relocate_gs(self) -> int:
-        dead_mask = torch.sigmoid(self.splats["opacities"]) <= 0.005
+    def relocate_gs(self, min_opacity: float = 0.005) -> int:
+        dead_mask = torch.sigmoid(self.splats["opacities"]) <= min_opacity
         dead_indices = dead_mask.nonzero(as_tuple=True)[0]
         alive_indices = (~dead_mask).nonzero(as_tuple=True)[0]
         num_gs = len(dead_indices)
@@ -569,7 +569,7 @@ class Runner:
             scales=torch.exp(self.splats["scales"])[sampled_idxs],
             ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
         )
-        new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=0.005)
+        new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
         self.splats["opacities"][sampled_idxs] = torch.logit(new_opacities)
         self.splats["scales"][sampled_idxs] = torch.log(new_scales)
 
@@ -593,7 +593,7 @@ class Runner:
         return num_gs
 
     @torch.no_grad()
-    def add_new_gs(self, cap_max: int) -> int:
+    def add_new_gs(self, cap_max: int, min_opacity: float = 0.005) -> int:
         current_num_points = len(self.splats["means3d"])
         target_num = min(cap_max, int(1.05 * current_num_points))
         num_gs = max(0, target_num - current_num_points)
@@ -610,7 +610,7 @@ class Runner:
             scales=torch.exp(self.splats["scales"])[sampled_idxs],
             ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
         )
-        new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=0.005)
+        new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
         self.splats["opacities"][sampled_idxs] = torch.logit(new_opacities)
         self.splats["scales"][sampled_idxs] = torch.log(new_scales)
 
