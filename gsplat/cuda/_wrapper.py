@@ -1511,7 +1511,7 @@ def rasterize_to_indices_in_range_2dgs(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
     
-    out_gauss_ids, out_indices = _make_lazy_cuda_func("rasterize_to_indices_in_range")(
+    out_gauss_ids, out_indices = _make_lazy_cuda_func("rasterize_to_indices_in_range_2dgs")(
         range_start,
         range_end,
         transmittances.contiguous(),
@@ -1546,7 +1546,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         isect_offsets: Tensor,
         flatten_ids: Tensor,
         absgrad: bool,
-    ) -> Tuple[Tensor, Tensor]:
+    ) -> Tuple[Tensor, Tensor]:        
         render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
             "rasterize_to_pixels_fwd_2dgs"
         )(

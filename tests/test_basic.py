@@ -511,6 +511,8 @@ def test_rasterize_to_pixels(test_data):
         flatten_ids,
         backgrounds=backgrounds,
     )
+    import pdb
+    pdb.set_trace()
     torch.testing.assert_close(render_colors, _render_colors)
     torch.testing.assert_close(render_alphas, _render_alphas)
 

@@ -35,8 +35,8 @@ device = torch.device("cuda:0")
 #     }
 
 
-# @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-# @pytest.fixture
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.fixture
 def test_data():
     N = 2
     xs = torch.linspace(-1, 1, N, device=device)
@@ -58,16 +58,15 @@ def test_data():
         "means": means,
         "quats": quats,
         "scales": scales,
-        "opacities": opacities[None],
-        "colors": colors[None],
+        "opacities": opacities,
+        "colors": colors,
         "viewmats": viewmats,
         "Ks": Ks,
         "width": W,
         "height": H,
     }
 
-
-# @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_projection_2dgs(test_data):
     from gsplat.cuda._torch_impl import _fully_fused_projection_2dgs
     from gsplat.cuda._wrapper import fully_fused_projection_2dgs
@@ -137,22 +136,19 @@ def test_projection_2dgs(test_data):
     # ipdb.set_trace()
 
 
-# @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_fully_fused_projection_packed(test_data):
-    pass
+# # @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+# def test_fully_fused_projection_packed(test_data):
+#     pass
 
 
-# @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 # @pytest.mark.parametrize("channels", [3, 32, 128])
 def test_rasterize_to_pixels_2dgs(test_data):
-    import imageio
-    from gsplat.cuda._torch_impl import _rasterize_to_pixels_2dgs, _rasterize_to_pixels
+    from gsplat.cuda._torch_impl import _rasterize_to_pixels_2dgs
     from gsplat.cuda._wrapper import (
-        fully_fused_projection,
         fully_fused_projection_2dgs,
         isect_offset_encode,
         isect_tiles,
-        rasterize_to_pixels,
         rasterize_to_pixels_2dgs,
     )
 
@@ -163,8 +159,8 @@ def test_rasterize_to_pixels_2dgs(test_data):
     quats = test_data["quats"]
     scales = test_data["scales"]
     means = test_data["means"]
-    colors = test_data["colors"]
-    opacities = test_data["opacities"]
+    colors = test_data["colors"][None]
+    opacities = test_data["opacities"][None]
 
     N = means.shape[0]
     C = viewmats.shape[0]
@@ -172,12 +168,7 @@ def test_rasterize_to_pixels_2dgs(test_data):
     radii, means2d, depths, ray_Ms = fully_fused_projection_2dgs(
         means, quats, scales, viewmats, Ks, width, height
     )
-    print(f"{radii.shape=} {means2d.shape=} {depths.shape=} {ray_Ms.shape=}")
-    radii_, means2d_, depths_, conics_, _ = fully_fused_projection(
-        means, None, quats, scales, viewmats, Ks, width, height
-    )
-    print(f"{radii_.shape=} {means2d_.shape=} {depths_.shape=} {conics_.shape=}")
-    print(f"{(means2d_ - means2d).abs().max()=}")
+    print(colors.shape)
     colors = colors.repeat(C, 1, 1)
     opacities = opacities.repeat(C, 1)
 
@@ -186,43 +177,18 @@ def test_rasterize_to_pixels_2dgs(test_data):
     tile_width = math.ceil(width / float(tile_size))
     tile_height = math.ceil(height / float(tile_size))
     tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
-        means2d_, radii_, depths_, tile_size, tile_width, tile_height
+        means2d, radii, depths, tile_size, tile_width, tile_height
     )
     isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
 
-    means2d_.requires_grad = True
+    means2d.requires_grad = True
     ray_Ms.requires_grad = True
     colors.requires_grad = True
     opacities.requires_grad = True
 
-    render_colors_, render_alphas_= rasterize_to_pixels(
-        means2d_,
-        conics_,
-        colors,
-        opacities,
-        width,
-        height,
-        tile_size,
-        isect_offsets,
-        flatten_ids,
-    )
-    _render_colors_, _render_alphas_= _rasterize_to_pixels(
-        means2d_,
-        conics_,
-        colors,
-        opacities,
-        width,
-        height,
-        tile_size,
-        isect_offsets,
-        flatten_ids,
-    )
-    imageio.imwrite("test_3dgs.png", (255 * render_colors_[0].detach().cpu()).byte())
-    imageio.imwrite("_test_3dgs.png", (255 * _render_colors_[0].detach().cpu()).byte())
-
-    densifications = torch.zeros_like(means2d_)
-    render_colors_2dgs, render_alphas_2dgs = rasterize_to_pixels_2dgs(
-        means2d_,
+    densifications = torch.zeros_like(means2d)
+    render_colors, render_alphas = rasterize_to_pixels_2dgs(
+        means2d,
         densifications,
         ray_Ms,
         colors,
@@ -233,9 +199,8 @@ def test_rasterize_to_pixels_2dgs(test_data):
         isect_offsets,
         flatten_ids,
     )
-    _render_colors_2dgs, _render_alphas_2dgs = _rasterize_to_pixels_2dgs(
-        means2d_,
-        conics_,
+    _render_colors, _render_alphas = _rasterize_to_pixels_2dgs(
+        means2d,
         ray_Ms.transpose(-1, -2),
         colors,
         opacities,
@@ -245,9 +210,10 @@ def test_rasterize_to_pixels_2dgs(test_data):
         isect_offsets,
         flatten_ids,
     )
+    import imageio
 
-    imageio.imwrite("test_2dgs.png", (255 * render_colors_2dgs[0].detach().cpu()).byte())
-    imageio.imwrite("_test_2dgs.png", (255 * _render_colors_2dgs[0].detach().cpu()).byte())
+    imageio.imwrite("test2.png", (255 * render_colors[0].detach().cpu()).byte())
+    imageio.imwrite("_test2.png", (255 * _render_colors[0].detach().cpu()).byte())
 
 
 if __name__ == "__main__":
