@@ -42,14 +42,16 @@ std::tuple<torch::Tensor, torch::Tensor> compute_relocation_tensor(
     torch::Tensor &binoms,
     const int n_max
 ) {
+    DEVICE_GUARD(opacities);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(scales);
+    CHECK_INPUT(ratios);
+    CHECK_INPUT(binoms);
+    torch::Tensor new_opacities = torch::zeros_like(opacities);
+    torch::Tensor new_scales = torch::zeros_like(scales);
+
     const int P = opacities.size(0);
     assert(P != 0);
-
-    torch::Tensor new_opacities =
-        torch::full({P}, 0, opacities.options().dtype(torch::kFloat32));
-    torch::Tensor new_scales =
-        torch::full({3 * P}, 0, scales.options().dtype(torch::kFloat32));
-
     int num_blocks = (P + 255) / 256;
     dim3 block(256, 1, 1);
     dim3 grid(num_blocks, 1, 1);

@@ -564,8 +564,8 @@ class Runner:
         sampled_idxs = torch.multinomial(probs, num_gs, replacement=True)
         sampled_idxs = alive_indices[sampled_idxs]
         new_opacities, new_scales = compute_relocation(
-            old_opacities=torch.sigmoid(self.splats["opacities"])[sampled_idxs],
-            old_scales=torch.exp(self.splats["scales"])[sampled_idxs],
+            opacities=torch.sigmoid(self.splats["opacities"])[sampled_idxs],
+            scales=torch.exp(self.splats["scales"])[sampled_idxs],
             ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
         )
         self.splats["opacities"][sampled_idxs] = new_opacities
@@ -603,8 +603,8 @@ class Runner:
         probs = probs / (probs.sum() + torch.finfo(torch.float32).eps)
         sampled_idxs = torch.multinomial(probs, num_gs, replacement=True)
         new_opacities, new_scales = compute_relocation(
-            old_opacities=torch.sigmoid(self.splats["opacities"])[sampled_idxs],
-            old_scales=torch.exp(self.splats["scales"])[sampled_idxs],
+            opacities=torch.sigmoid(self.splats["opacities"])[sampled_idxs],
+            scales=torch.exp(self.splats["scales"])[sampled_idxs],
             ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
         )
         self.splats["opacities"][sampled_idxs] = new_opacities

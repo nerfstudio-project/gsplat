@@ -8,7 +8,6 @@ BINOMS = torch.zeros((N_MAX, N_MAX)).float().cuda()
 for n in range(N_MAX):
     for k in range(n + 1):
         BINOMS[n, k] = math.comb(n, k)
-BINOMS = BINOMS.contiguous()
 
 
 def compute_relocation(
@@ -48,5 +47,5 @@ def compute_relocation(
         new_opacities, max=1.0 - torch.finfo(torch.float32).eps, min=0.005
     )
     new_opacities = torch.logit(new_opacities)
-    new_scales = torch.log(new_scales.reshape(-1, 3))
+    new_scales = torch.log(new_scales)
     return new_opacities, new_scales
