@@ -1,7 +1,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <cstdint>
-#include <glm/glm.hpp>
+#include "third_party/glm/glm/glm.hpp"
 
 
 // for f : R(n) -> R(m), J in R(m, n),

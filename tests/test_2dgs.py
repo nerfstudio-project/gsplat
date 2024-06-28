@@ -36,7 +36,7 @@ device = torch.device("cuda:0")
 
 
 # @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-@pytest.fixture
+# @pytest.fixture
 def test_data():
     N = 2
     xs = torch.linspace(-1, 1, N, device=device)
@@ -66,8 +66,9 @@ def test_data():
         "height": H,
     }
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_projection(test_data):
+
+# @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def test_projection_2dgs(test_data):
     from gsplat.cuda._torch_impl import _fully_fused_projection_2dgs
     from gsplat.cuda._wrapper import fully_fused_projection_2dgs
 
@@ -84,17 +85,19 @@ def test_projection(test_data):
     quats.requires_grad = True
     scales.requires_grad = True
     means.requires_grad = True
-    
+
     # forward
     _radii, _means2d, _depths, _ray_Ms = _fully_fused_projection_2dgs(
         means, quats, scales, viewmats, Ks, width, height
     )
-    _ray_Ms = _ray_Ms.permute((0, 1, 3, 2)) # TODO(WZ): Figure out why do we need to permute here
-    
+    _ray_Ms = _ray_Ms.permute(
+        (0, 1, 3, 2)
+    )  # TODO(WZ): Figure out why do we need to permute here
+
     radii, means2d, depths, ray_Ms = fully_fused_projection_2dgs(
         means, quats, scales, viewmats, Ks, width, height
     )
-    
+
     # TODO (WZ): is the following true for 2dgs as while?
     # radii is integer so we allow for 1 unit difference
     valid = (radii > 0) & (_radii > 0)
@@ -102,18 +105,18 @@ def test_projection(test_data):
     torch.testing.assert_close(means2d[valid], _means2d[valid], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(depths[valid], _depths[valid], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(ray_Ms[valid], _ray_Ms[valid], rtol=1e-4, atol=1e-4)
-    
-    # backward    
+
+    # backward
     v_means2d = torch.randn_like(means2d) * radii[..., None]
     v_depths = torch.randn_like(depths) * radii
     v_ray_Ms = torch.randn_like(ray_Ms) * radii[..., None, None]
-    
+
     v_quats, v_scales, v_means = torch.autograd.grad(
         (means2d * v_means2d).sum()
         + (depths * v_depths).sum()
         + (ray_Ms * v_ray_Ms).sum()
         + 0,
-        (quats, scales, means)
+        (quats, scales, means),
     )
     _v_quats, _v_scales, _v_means = torch.autograd.grad(
         (_means2d * v_means2d).sum()
@@ -122,30 +125,101 @@ def test_projection(test_data):
         + 0,
         (quats, scales, means),
     )
-    
+
     # torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=1e-3)
     torch.testing.assert_close(v_quats, _v_quats, rtol=2e-1, atol=1e-2)
     torch.testing.assert_close(v_scales, _v_scales, rtol=1e-1, atol=2e-1)
     torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=6e-2)
-    
+
     # print(f"{_radii.shape=} {_means2d.shape=} {_depths.shape=} {_ray_Ms.shape=}")
     # import ipdb
 
     # ipdb.set_trace()
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+# @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_fully_fused_projection_packed(test_data):
     pass
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-@pytest.mark.parametrize("channels", [3, 32, 128])
-def test_rasterize_to_pixels(test_data, channels: int):
-    pass
 
+# @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+# @pytest.mark.parametrize("channels", [3, 32, 128])
+def test_rasterize_to_pixels_2dgs(test_data):
+    from gsplat.cuda._torch_impl import _rasterize_to_pixels_2dgs
+    from gsplat.cuda._wrapper import (
+        fully_fused_projection_2dgs,
+        isect_offset_encode,
+        isect_tiles,
+        rasterize_to_pixels_2dgs,
+    )
 
+    Ks = test_data["Ks"]
+    viewmats = test_data["viewmats"]
+    height = test_data["height"]
+    width = test_data["width"]
+    quats = test_data["quats"]
+    scales = test_data["scales"]
+    means = test_data["means"]
+    colors = test_data["colors"][None]
+    opacities = test_data["opacities"][None]
+
+    N = means.shape[0]
+    C = viewmats.shape[0]
+
+    radii, means2d, depths, ray_Ms = fully_fused_projection_2dgs(
+        means, quats, scales, viewmats, Ks, width, height
+    )
+    colors = colors.repeat(C, 1, 1)
+    opacities = opacities.repeat(C, 1)
+
+    # Identify intersecting tiles
+    tile_size = 16
+    tile_width = math.ceil(width / float(tile_size))
+    tile_height = math.ceil(height / float(tile_size))
+    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
+
+    means2d.requires_grad = True
+    ray_Ms.requires_grad = True
+    colors.requires_grad = True
+    opacities.requires_grad = True
+
+    densifications = torch.zeros_like(means2d)
+    render_colors, render_alphas = rasterize_to_pixels_2dgs(
+        means2d,
+        densifications,
+        ray_Ms,
+        colors,
+        opacities,
+        width,
+        height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+    )
+    _render_colors, _render_alphas = _rasterize_to_pixels_2dgs(
+        means2d,
+        ray_Ms.transpose(-1, -2),
+        colors,
+        opacities,
+        width,
+        height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+    )
+    import imageio
+
+    imageio.imwrite("test2.png", (255 * render_colors[0].detach().cpu()).byte())
+    imageio.imwrite("_test2.png", (255 * _render_colors[0].detach().cpu()).byte())
 
 
 if __name__ == "__main__":
-    test_projection(test_data())
+    test_projection_2dgs(test_data())
+    test_rasterize_to_pixels_2dgs(test_data())
+    from test_basic import test_rasterize_to_pixels
+
+    test_rasterize_to_pixels(test_data())
     print("All tests passed.")

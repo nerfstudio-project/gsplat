@@ -11,7 +11,6 @@ from .cuda._wrapper import (
     isect_tiles,
     rasterize_to_pixels,
     spherical_harmonics,
-    
     fully_fused_projection_2dgs,
     rasterize_to_pixels_2dgs,
 )
@@ -565,6 +564,7 @@ def rasterization_inria_wrapper(
     render_colors = torch.stack(render_colors, dim=0)
     return render_colors, None, {}
 
+
 ###### 2DGS ######
 def rasterization_2dgs(
     means: Tensor,
@@ -579,7 +579,7 @@ def rasterization_2dgs(
     near_plane: float = 0.01,
     far_plane: float = 1e10,
     radius_clip: float = 0.0,
-    eps2d: float = 0.3, 
+    eps2d: float = 0.3,
     sh_degree: Optional[int] = None,
     packed: bool = True,
     tile_size: int = 16,
@@ -599,7 +599,7 @@ def rasterization_2dgs(
     assert viewmats.shape == (C, 4, 4), viewmats.shape
     assert Ks.shape == (C, 3, 3), Ks.shape
     assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
-    
+
     if sh_degree is None:
         # treat colors as post-activation values
         # colors should be in shape [N, D] or (C, N, D) (silently support)
@@ -612,8 +612,7 @@ def rasterization_2dgs(
             colors.dim() == 3 and colors.shape[0] == N and colors.shape[2] == 3
         ), colors.shape
         assert (sh_degree + 1) ** 2 <= colors.shape[1], colors.shape
-        
-        
+
     # Compute Ray-Splat intersection transformation.
     proj_results = fully_fused_projection_2dgs(
         means,
@@ -630,7 +629,7 @@ def rasterization_2dgs(
         packed,
         sparse_grad,
     )
-    
+
     if packed:
         (
             camera_ids,
@@ -639,13 +638,13 @@ def rasterization_2dgs(
             means2d,
             depths,
             ray_transformations,
-        ) = proj_resutls
-        opacities = opacities[gausisan_ids]
+        ) = proj_results
+        opacities = opacities[gaussian_ids]
     else:
         radii, means2d, depths, ray_transformations = proj_results
         opacities = opacities.repeat(C, 1)
         camera_ids, gaussian_ids = None, None
-    
+
     # pdb.set_trace()
     # Identify intersecting tiles
     tile_width = math.ceil(width / float(tile_size))
@@ -663,7 +662,7 @@ def rasterization_2dgs(
         gaussian_ids=gaussian_ids,
     )
     isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
-    
+
     # TODO: SH also suport N-D.
     # Compute the per-view colors
     if not (
@@ -686,16 +685,21 @@ def rasterization_2dgs(
         )  # [nnz, D] or [C, N, 3]
         # make it apple-to-apple with Inria's CUDA Backend.
         colors = torch.clamp_min(colors + 0.5, 0.0)
-    
+
     # Rasterize to pixels
     if render_mode in ["RGB+D", "RGB+ED"]:
         colors = torch.cat((colors, depths[..., None]), dim=-1)
     elif render_mode in ["D", "ED"]:
         colors = depths[..., None]
-    else: # RGB
+    else:  # RGB
         pass
     # pdb.set_trace()
-    densifications = torch.zeros_like(means2d, dtype=means2d.dtype, requires_grad=True, device="cuda") + 0
+    densifications = (
+        torch.zeros_like(
+            means2d, dtype=means2d.dtype, requires_grad=True, device="cuda"
+        )
+        + 0
+    )
     render_colors, render_alphas = rasterize_to_pixels_2dgs(
         means2d,
         densifications,
@@ -720,7 +724,7 @@ def rasterization_2dgs(
             ],
             dim=-1,
         )
-        
+
     meta = {
         "camera_ids": camera_ids,
         "gaussian_ids": gaussian_ids,
@@ -740,4 +744,3 @@ def rasterization_2dgs(
         "tile_size": tile_size,
     }
     return render_colors, render_alphas, meta
-    

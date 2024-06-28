@@ -1521,7 +1521,7 @@ def rasterize_to_indices_in_range_2dgs(
         image_width,
         image_height,
         tile_size,
-        isect_offsets.contigous(),
+        isect_offsets.contiguous(),
         flatten_ids.contiguous(),
     )
     out_pixel_ids = out_indices % (image_width * image_height)
