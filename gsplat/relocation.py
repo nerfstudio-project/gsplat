@@ -43,9 +43,4 @@ def compute_relocation(
     new_opacities, new_scales = _make_lazy_cuda_func("compute_relocation")(
         opacities, scales, ratios, BINOMS, N_MAX
     )
-    new_opacities = torch.clamp(
-        new_opacities, max=1.0 - torch.finfo(torch.float32).eps, min=0.005
-    )
-    new_opacities = torch.logit(new_opacities)
-    new_scales = torch.log(new_scales)
     return new_opacities, new_scales

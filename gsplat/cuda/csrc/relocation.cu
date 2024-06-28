@@ -47,8 +47,8 @@ std::tuple<torch::Tensor, torch::Tensor> compute_relocation_tensor(
     CHECK_INPUT(scales);
     CHECK_INPUT(ratios);
     CHECK_INPUT(binoms);
-    torch::Tensor new_opacities = torch::zeros_like(opacities);
-    torch::Tensor new_scales = torch::zeros_like(scales);
+    torch::Tensor new_opacities = torch::empty_like(opacities);
+    torch::Tensor new_scales = torch::empty_like(scales);
 
     const int P = opacities.size(0);
     assert(P != 0);

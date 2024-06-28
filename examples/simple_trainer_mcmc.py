@@ -551,7 +551,7 @@ class Runner:
 
     @torch.no_grad()
     def relocate_gs(self) -> int:
-        dead_mask = (torch.sigmoid(self.splats["opacities"]) <= 0.005).squeeze(-1)
+        dead_mask = torch.sigmoid(self.splats["opacities"]) <= 0.005
         dead_indices = dead_mask.nonzero(as_tuple=True)[0]
         alive_indices = (~dead_mask).nonzero(as_tuple=True)[0]
         num_gs = len(dead_indices)
@@ -559,8 +559,9 @@ class Runner:
             return num_gs
 
         # Sample for new GSs
+        eps = torch.finfo(torch.float32).eps
         probs = torch.sigmoid(self.splats["opacities"])[alive_indices]
-        probs = probs / (probs.sum() + torch.finfo(torch.float32).eps)
+        probs = probs / (probs.sum() + eps)
         sampled_idxs = torch.multinomial(probs, num_gs, replacement=True)
         sampled_idxs = alive_indices[sampled_idxs]
         new_opacities, new_scales = compute_relocation(
@@ -568,8 +569,9 @@ class Runner:
             scales=torch.exp(self.splats["scales"])[sampled_idxs],
             ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
         )
-        self.splats["opacities"][sampled_idxs] = new_opacities
-        self.splats["scales"][sampled_idxs] = new_scales
+        new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=0.005)
+        self.splats["opacities"][sampled_idxs] = torch.logit(new_opacities)
+        self.splats["scales"][sampled_idxs] = torch.log(new_scales)
 
         # Update splats and optimizers
         for k in self.splats.keys():
@@ -599,16 +601,18 @@ class Runner:
             return num_gs
 
         # Sample for new GSs
+        eps = torch.finfo(torch.float32).eps
         probs = torch.sigmoid(self.splats["opacities"])
-        probs = probs / (probs.sum() + torch.finfo(torch.float32).eps)
+        probs = probs / (probs.sum() + eps)
         sampled_idxs = torch.multinomial(probs, num_gs, replacement=True)
         new_opacities, new_scales = compute_relocation(
             opacities=torch.sigmoid(self.splats["opacities"])[sampled_idxs],
             scales=torch.exp(self.splats["scales"])[sampled_idxs],
             ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
         )
-        self.splats["opacities"][sampled_idxs] = new_opacities
-        self.splats["scales"][sampled_idxs] = new_scales
+        new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=0.005)
+        self.splats["opacities"][sampled_idxs] = torch.logit(new_opacities)
+        self.splats["scales"][sampled_idxs] = torch.log(new_scales)
 
         # Update splats and optimizers
         for k in self.splats.keys():
