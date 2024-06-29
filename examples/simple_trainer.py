@@ -517,7 +517,7 @@ class Runner:
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
             if cfg.dist_loss:
-                distloss = info["render_distorts"].mean()
+                distloss = info["render_distloss"].mean()
                 loss += distloss * cfg.dist_lambda
 
             loss.backward()
