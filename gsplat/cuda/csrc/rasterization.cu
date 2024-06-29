@@ -483,6 +483,21 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
         torch::Tensor cumsum = torch::cumsum(chunk_cnts, 0, chunk_cnts.scalar_type());
         n_elems = cumsum[-1].item<int64_t>();
         chunk_starts = cumsum - chunk_cnts;
+
+        // printf("n_elems: %d\n", n_elems);
+        // printf("chunk_cnts min, max: %d %d\n",
+        //     chunk_cnts.amin().item<int32_t>(),
+        //     chunk_cnts.amax().item<int32_t>()
+        // );
+        // printf("cumsum min max",
+        //     cumsum.amin().item<int64_t>(),
+        //     cumsum.amax().item<int64_t>()
+        // );
+        // printf("chunk_starts min, max: %d %d\n",
+        //     chunk_starts.amin().item<int32_t>(),
+        //     chunk_starts.amax().item<int32_t>()
+        // );
+
     } else {
         n_elems = 0;
     }
@@ -1703,7 +1718,7 @@ __global__ void rasterize_to_indices_in_range_2dgs_kernel(
         block.sync();
 
         // process gaussians in the current batch for this pixel
-        uint32_t batch_size = min(block_size, range_end - batch_start);
+        uint32_t batch_size = min(block_size, isect_range_end - batch_start);
         for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
             const float3 u_transform = u_transform_batch[t];
             const float3 v_transform = v_transform_batch[t];
@@ -1744,7 +1759,7 @@ __global__ void rasterize_to_indices_in_range_2dgs_kernel(
                 continue;
             }
 
-            const float next_T = T * (1.0f - alpha);
+            next_T = T * (1.0f - alpha);
             if (next_T <= 1e-4) { //this pixel is done: exclusive
                 done = true;
                 break;
@@ -1819,6 +1834,21 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_2dgs_tens
         torch::Tensor cumsum = torch::cumsum(chunk_cnts, 0, chunk_cnts.scalar_type());
         n_elems = cumsum[-1].item<int64_t>();
         chunk_starts = cumsum - chunk_cnts;
+
+        // printf("n_elems: %d\n", n_elems);
+        // printf("chunk_cnts min, max: %d %d\n",
+        //     chunk_cnts.amin().item<int32_t>(),
+        //     chunk_cnts.amax().item<int32_t>()
+        // );
+        // printf("cumsum min max",
+        //     cumsum.amin().item<int64_t>(),
+        //     cumsum.amax().item<int64_t>()
+        // );
+        // printf("chunk_starts min, max: %d %d\n",
+        //     chunk_starts.amin().item<int32_t>(),
+        //     chunk_starts.amax().item<int32_t>()
+        // );
+
     } else {
         n_elems = 0;
     }
