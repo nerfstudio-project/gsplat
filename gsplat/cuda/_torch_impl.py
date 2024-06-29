@@ -447,7 +447,9 @@ def _rasterize_to_pixels(
     # Split Gaussians into batches and iteratively accumulate the renderings
     block_size = tile_size * tile_size
     n_isects = flatten_ids.shape[0]
-    isect_offsets_fl = torch.cat([isect_offsets.flatten(), torch.tensor([n_isects], device=device)])
+    isect_offsets_fl = torch.cat(
+        [isect_offsets.flatten(), torch.tensor([n_isects], device=device)]
+    )
     max_range = (isect_offsets_fl[1:] - isect_offsets_fl[:-1]).max().item()
     num_batches = int((max_range + block_size - 1) // block_size)
     print(f"{flatten_ids.shape=} {max_range=}, {num_batches=}")
@@ -585,14 +587,9 @@ def accumulate_2dgs(
     pixel_coords = torch.stack([pixel_ids_x, pixel_ids_y], dim=-1)  # [M, 2]
     deltas = pixel_coords - means2d[camera_ids, gaussian_ids]  # [M, 2]
 
-    # import pdb
-    # pdb.set_trace()
-
     M = ray_transforms[camera_ids, gaussian_ids]  # [M, 3, 3]
     h_u = -M[..., :3, 0] + M[..., :3, 2] * pixel_ids_x[..., None]  # [M, 3]
     h_v = -M[..., :3, 1] + M[..., :3, 2] * pixel_ids_y[..., None]  # [M, 3]
-    # print(f"h_u: {h_u}")
-    print(f"h_v: {torch.unique(h_v[..., 2])}")
     tmp = torch.cross(h_u, h_v, dim=-1)
     us = tmp[..., 0] / tmp[..., 2]
     vs = tmp[..., 1] / tmp[..., 2]
@@ -669,16 +666,16 @@ def _rasterize_to_pixels_2dgs(
     # Split Gaussians into batches and iteratively accumulate the renderings
     block_size = tile_size * tile_size
     n_isects = flatten_ids.shape[0]
-    isect_offsets_fl = torch.cat([isect_offsets.flatten(), torch.tensor([n_isects], device=device)])
+    isect_offsets_fl = torch.cat(
+        [isect_offsets.flatten(), torch.tensor([n_isects], device=device)]
+    )
     max_range = (isect_offsets_fl[1:] - isect_offsets_fl[:-1]).max().item()
     num_batches = int((max_range + block_size - 1) // block_size)
-    print(f"{flatten_ids.shape=} {max_range=}, {num_batches=}")
     for step in range(0, num_batches, batch_per_iter):
         transmittances = 1.0 - render_alphas[..., 0]
 
         # Find the M intersections between pixels and gaussians.
         # Each intersection corresponds to a tuple (gs_id, pixel_id, camera_id)
-        # XXX: rasterize_to_indices_in_range_2dgs is buggy so using the old one here
         gs_ids, pixel_ids, camera_ids = rasterize_to_indices_in_range_2dgs(
             step,
             step + batch_per_iter,
@@ -692,7 +689,7 @@ def _rasterize_to_pixels_2dgs(
             isect_offsets,
             flatten_ids,
         )  # [M], [M]
-        print(f"{step=} {gs_ids.shape=} {pixel_ids.shape=} {camera_ids.shape=}")
+
         if len(gs_ids) == 0:
             break
 

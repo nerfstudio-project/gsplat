@@ -35,8 +35,8 @@ device = torch.device("cuda:0")
 #     }
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.fixture
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_data():
     N = 2
     xs = torch.linspace(-1, 1, N, device=device)
@@ -46,8 +46,8 @@ def test_data():
     means = torch.cat([xys, zs], dim=-1)
     quats = torch.tensor([[1.0, 0.0, 0.0, 0]], device=device).repeat(len(means), 1)
     scales = torch.ones_like(means) * 0.1
-    opacities = torch.ones(len(means), device=device) * 0.5
-    colors = torch.rand(len(means), 3, device=device)
+    opacities = torch.ones(1, len(means), device=device) * 0.5
+    colors = torch.rand(1, len(means), 3, device=device)
     viewmats = torch.eye(4, device=device).reshape(1, 4, 4)
     W, H = 640, 480
     fx, fy, cx, cy = W, W, W // 2, H // 2
@@ -65,6 +65,7 @@ def test_data():
         "width": W,
         "height": H,
     }
+
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_projection_2dgs(test_data):
@@ -159,8 +160,8 @@ def test_rasterize_to_pixels_2dgs(test_data):
     quats = test_data["quats"]
     scales = test_data["scales"]
     means = test_data["means"]
-    colors = test_data["colors"][None]
-    opacities = test_data["opacities"][None]
+    colors = test_data["colors"]
+    opacities = test_data["opacities"]
 
     N = means.shape[0]
     C = viewmats.shape[0]
@@ -168,8 +169,6 @@ def test_rasterize_to_pixels_2dgs(test_data):
     radii, means2d, depths, ray_Ms = fully_fused_projection_2dgs(
         means, quats, scales, viewmats, Ks, width, height
     )
-    colors = colors.repeat(C, 1, 1)
-    opacities = opacities.repeat(C, 1)
 
     # Identify intersecting tiles
     tile_size = 16
@@ -179,6 +178,9 @@ def test_rasterize_to_pixels_2dgs(test_data):
         means2d, radii, depths, tile_size, tile_width, tile_height
     )
     isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
+
+    colors = colors.repeat(C, 1, 1)
+    opacities = opacities.repeat(C, 1)
 
     means2d.requires_grad = True
     ray_Ms.requires_grad = True
@@ -209,18 +211,23 @@ def test_rasterize_to_pixels_2dgs(test_data):
         isect_offsets,
         flatten_ids,
     )
-    import imageio
 
     cuda_render = render_colors[0].detach().cpu()
     torch_render = _render_colors[0].detach().cpu()
-    # import pdb
-    # pdb.set_trace()
+    diff = (cuda_render - torch_render).abs()
+    if diff.max() > 1e-5:
+        print(f"DIFF > 1e-5, {diff.max()=} {diff.mean()=}")
+        import os
+        import imageio
+
+        os.makedirs("renders", exist_ok=True)
+        imageio.imwrite("renders/cuda_render.png", (255 * cuda_render).byte())
+        imageio.imwrite("renders/torch_render.png", (255 * torch_render).byte())
+        imageio.imwrite("renders/diff.png", (255 * diff).byte())
+
     torch.testing.assert_close(render_colors, _render_colors)
     torch.testing.assert_close(render_alphas, _render_alphas)
 
-    # imageio.imwrite("renders/test2.png", (255 * cuda_render).byte())
-    # imageio.imwrite("renders/_test2.png", (255 * torch_render).byte())
-    # imageio.imwrite("renders/diff.png", (255 * (cuda_render - torch_render)).byte())
 
 if __name__ == "__main__":
     test_projection_2dgs(test_data())
