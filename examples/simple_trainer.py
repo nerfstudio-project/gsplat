@@ -6,13 +6,13 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import imageio
+import nerfview
 import numpy as np
 import torch
 import torch.nn.functional as F
 import tqdm
 import tyro
 import viser
-import nerfview
 from datasets.colmap import Dataset, Parser
 from datasets.traj import generate_interpolated_path
 from torch import Tensor
@@ -478,7 +478,7 @@ class Runner:
                 far_plane=cfg.far_plane,
                 image_ids=image_ids,
                 render_mode="RGB+ED" if (cfg.depth_loss or cfg.dist_loss) else "RGB",
-                compute_distorts=self.cfg.dist_loss,
+                distloss=self.cfg.dist_loss,
             )
             if renders.shape[-1] == 4:
                 colors, depths = renders[..., 0:3], renders[..., 3:4]
