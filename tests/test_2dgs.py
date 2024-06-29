@@ -2,6 +2,7 @@ import math
 
 import pytest
 import torch
+import pdb
 
 from gsplat._helper import load_test_data
 
@@ -50,6 +51,7 @@ def test_data():
     colors = torch.rand(1, len(means), 3, device=device)
     viewmats = torch.eye(4, device=device).reshape(1, 4, 4)
     W, H = 640, 480
+    # W, H = 640, 640
     fx, fy, cx, cy = W, W, W // 2, H // 2
     Ks = torch.tensor(
         [[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], device=device
@@ -189,6 +191,8 @@ def test_rasterize_to_pixels_2dgs(test_data):
     opacities.requires_grad = True
     backgrounds.requires_grad = True
 
+    # import pdb
+    # pdb.set_trace()
     densifications = torch.zeros_like(means2d)
     render_colors, render_alphas = rasterize_to_pixels_2dgs(
         means2d,

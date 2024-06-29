@@ -555,8 +555,7 @@ class Runner:
                     is_grad_high = grads >= cfg.grow_grad2d
                     print(f"unique grads: {torch.unique(grads)}")
                     print(f"is_grad_high: {sum(is_grad_high)}")
-                    import pdb
-                    pdb.set_trace()
+
                     is_small = (
                         torch.exp(self.splats["scales"][..., :2]).max(dim=-1).values
                         <= cfg.grow_scale3d * self.scene_scale

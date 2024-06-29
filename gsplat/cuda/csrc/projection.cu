@@ -2044,29 +2044,30 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
         ray_transformations[6], ray_transformations[7], ray_transformations[8]
     );
     glm::vec3 v_mean2D = glm::vec3(v_means2d[0], v_means2d[1], v_means2d[2]);
-    // glm::mat3 v_ray_transformation = glm::mat3(
-    //     v_ray_transformations[0], v_ray_transformations[1], v_ray_transformations[2],
-    //     v_ray_transformations[3], v_ray_transformations[4], v_ray_transformations[5],
-    //     v_ray_transformations[6], v_ray_transformations[7], v_ray_transformations[8]
-    // );
-    glm::mat3 _v_ray_transformation = glm::mat3(0.f);
+    glm::mat3 _v_ray_transformation = glm::mat3(
+        v_ray_transformations[0], v_ray_transformations[1], v_ray_transformations[2],
+        v_ray_transformations[3], v_ray_transformations[4], v_ray_transformations[5],
+        v_ray_transformations[6], v_ray_transformations[7], v_ray_transformations[8]
+    );
+    // glm::mat3 _v_ray_transformation = glm::mat3(0.f);
     compute_aabb_vjp(M, v_mean2D, _v_ray_transformation);
-    v_ray_transformations[0] += _v_ray_transformation[0][0];
-    v_ray_transformations[1] += _v_ray_transformation[0][1];
-    v_ray_transformations[2] += _v_ray_transformation[0][2];
-    v_ray_transformations[3] += _v_ray_transformation[1][0];
-    v_ray_transformations[4] += _v_ray_transformation[1][1];
-    v_ray_transformations[5] += _v_ray_transformation[1][2];
-    v_ray_transformations[6] += _v_ray_transformation[2][0];
-    v_ray_transformations[7] += _v_ray_transformation[2][1];
-    v_ray_transformations[8] += _v_ray_transformation[2][2];
+    // v_ray_transformations[0] += _v_ray_transformation[0][0];
+    // v_ray_transformations[1] += _v_ray_transformation[0][1];
+    // v_ray_transformations[2] += _v_ray_transformation[0][2];
+    // v_ray_transformations[3] += _v_ray_transformation[1][0];
+    // v_ray_transformations[4] += _v_ray_transformation[1][1];
+    // v_ray_transformations[5] += _v_ray_transformation[1][2];
+    // v_ray_transformations[6] += _v_ray_transformation[2][0];
+    // v_ray_transformations[7] += _v_ray_transformation[2][1];
+    // v_ray_transformations[8] += _v_ray_transformation[2][2];
 
     //====== ray transformation gradient ======//
     // camera information
+
     const glm::mat3 W = glm::mat3(
-        viewmats[0], viewmats[1], viewmats[2],
-        viewmats[4], viewmats[5], viewmats[6],
-        viewmats[8], viewmats[9], viewmats[10]
+        viewmats[0], viewmats[4], viewmats[8],
+        viewmats[1], viewmats[5], viewmats[9],
+        viewmats[2], viewmats[6], viewmats[10]
     ); // viewmat
     const glm::vec3 cam_pos = glm::vec3(viewmats[3], viewmats[7], viewmats[11]); // camera center
     glm::mat3 P = glm::mat3(
@@ -2081,15 +2082,17 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     glm::mat3 v_R(0.f);
     glm::vec2 v_scale(0.f);
     glm::vec3 v_mean(0.f);
-    _v_ray_transformation = glm::mat3(
-        v_ray_transformations[0], v_ray_transformations[1], v_ray_transformations[2],
-        v_ray_transformations[3], v_ray_transformations[4], v_ray_transformations[5],
-        v_ray_transformations[6], v_ray_transformations[7], v_ray_transformations[8]
-    );
+    // _v_ray_transformation = glm::mat3(
+    //     v_ray_transformations[0], v_ray_transformations[1], v_ray_transformations[2],
+    //     v_ray_transformations[3], v_ray_transformations[4], v_ray_transformations[5],
+    //     v_ray_transformations[6], v_ray_transformations[7], v_ray_transformations[8]
+    // );
 
     compute_ray_transformation_vjp(W, P, cam_pos, 
                                     quat, scale, _v_ray_transformation, 
                                     v_R, v_scale, v_mean);
+
+    // printf("v_mean: %.2f, %.2f, %.2f \n", v_mean.x, v_mean.y, v_mean.z);
 
     glm::vec4 v_quat(0.f);
     quat_to_rotmat_vjp(quat, v_R, v_quat);
@@ -2275,9 +2278,9 @@ __global__ void fully_fused_projection_packed_bwd_2dgs_kernel(
     //====== ray transformation gradient ======//
     // camera information
     const glm::mat3 W = glm::mat3(
-        viewmats[0], viewmats[1], viewmats[2],
-        viewmats[4], viewmats[5], viewmats[6],
-        viewmats[8], viewmats[9], viewmats[10]
+        viewmats[0], viewmats[4], viewmats[8],
+        viewmats[1], viewmats[5], viewmats[9],
+        viewmats[2], viewmats[6], viewmats[10]
     ); // viewmat
 
     const glm::vec3 cam_pos = glm::vec3(viewmats[3], viewmats[7], viewmats[11]); // camera center

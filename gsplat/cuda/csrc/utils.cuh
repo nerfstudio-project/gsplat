@@ -439,6 +439,7 @@ inline __device__ void compute_ray_transformation_vjp(const glm::mat3x4 W, const
 
     v_scale[0] += (float)glm::dot(v_RS0, R[0]);
     v_scale[1] += (float)glm::dot(v_RS1, R[1]);
+    
     v_mean3D += v_RS[2];
 }
 
