@@ -439,7 +439,8 @@ def test_isect(test_data):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("channels", [3, 32, 128])
-def test_rasterize_to_pixels(test_data, channels: int):
+@pytest.mark.parametrize("distloss", [False, True])
+def test_rasterize_to_pixels(test_data, channels: int, distloss: bool):
     from gsplat.cuda._torch_impl import _rasterize_to_pixels
     from gsplat.cuda._wrapper import (
         fully_fused_projection,
@@ -487,8 +488,14 @@ def test_rasterize_to_pixels(test_data, channels: int):
     opacities.requires_grad = True
     backgrounds.requires_grad = True
 
+    if distloss:
+        colors = torch.cat([colors, depths[..., None]], dim=-1)
+        backgrounds = torch.cat(
+            [backgrounds, torch.zeros_like(backgrounds[..., :1])], dim=-1
+        )
+
     # forward
-    render_colors, render_alphas = rasterize_to_pixels(
+    render_colors, render_alphas, render_distloss = rasterize_to_pixels(
         means2d,
         conics,
         colors,
@@ -499,8 +506,9 @@ def test_rasterize_to_pixels(test_data, channels: int):
         isect_offsets,
         flatten_ids,
         backgrounds=backgrounds,
+        distloss=distloss,
     )
-    _render_colors, _render_alphas = _rasterize_to_pixels(
+    _render_colors, _render_alphas, _render_distloss = _rasterize_to_pixels(
         means2d,
         conics,
         colors,
@@ -511,18 +519,26 @@ def test_rasterize_to_pixels(test_data, channels: int):
         isect_offsets,
         flatten_ids,
         backgrounds=backgrounds,
+        distloss=distloss,
     )
     torch.testing.assert_close(render_colors, _render_colors)
     torch.testing.assert_close(render_alphas, _render_alphas)
+    torch.testing.assert_close(render_distloss, _render_distloss)
 
     # backward
     v_render_colors = torch.randn_like(render_colors)
     v_render_alphas = torch.randn_like(render_alphas)
+    if distloss:
+        v_render_distloss = torch.randn_like(render_distloss)
 
     v_means2d, v_conics, v_colors, v_opacities, v_backgrounds = torch.autograd.grad(
-        (render_colors * v_render_colors).sum()
-        + (render_alphas * v_render_alphas).sum(),
+        (
+            (render_colors * v_render_colors).sum()
+            + (render_alphas * v_render_alphas).sum()
+            + ((render_distloss * v_render_distloss).sum() if distloss else 0)
+        ),
         (means2d, conics, colors, opacities, backgrounds),
+        retain_graph=True,
     )
     (
         _v_means2d,
@@ -531,9 +547,13 @@ def test_rasterize_to_pixels(test_data, channels: int):
         _v_opacities,
         _v_backgrounds,
     ) = torch.autograd.grad(
-        (_render_colors * v_render_colors).sum()
-        + (_render_alphas * v_render_alphas).sum(),
+        (
+            (_render_colors * v_render_colors).sum()
+            + (_render_alphas * v_render_alphas).sum()
+            + ((render_distloss * v_render_distloss).sum() if distloss else 0)
+        ),
         (means2d, conics, colors, opacities, backgrounds),
+        retain_graph=True,
     )
     torch.testing.assert_close(v_means2d, _v_means2d, rtol=5e-3, atol=5e-3)
     torch.testing.assert_close(v_conics, _v_conics, rtol=1e-3, atol=1e-3)

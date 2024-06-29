@@ -381,6 +381,7 @@ def rasterize_to_pixels(
     backgrounds: Optional[Tensor] = None,  # [C, channels]
     packed: bool = False,
     absgrad: bool = False,
+    distloss: bool = False,
 ) -> Tuple[Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
@@ -397,12 +398,15 @@ def rasterize_to_pixels(
         backgrounds: Background colors. [C, channels]. Default: None.
         packed: If True, the input tensors are expected to be packed with shape [nnz, ...]. Default: False.
         absgrad: If True, the backward pass will compute a `.absgrad` attribute for `means2d`. Default: False.
+        distloss: If True, the per-pixel distortion loss will be rendered. We expect
+          the depths are concatenated into the last channel of the colors. Default: False.
 
     Returns:
         A tuple:
 
         - **Rendered colors**. [C, image_height, image_width, channels]
         - **Rendered alphas**. [C, image_height, image_width, 1]
+        - **Rendered distloss**. [C, image_height, image_width, 1] if `distloss` is True, otherwise None.
     """
 
     C = isect_offsets.size(0)
@@ -478,7 +482,7 @@ def rasterize_to_pixels(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-    render_colors, render_alphas = _RasterizeToPixels.apply(
+    render_colors, render_alphas, render_distloss = _RasterizeToPixels.apply(
         means2d.contiguous(),
         conics.contiguous(),
         colors.contiguous(),
@@ -490,11 +494,12 @@ def rasterize_to_pixels(
         isect_offsets.contiguous(),
         flatten_ids.contiguous(),
         absgrad,
+        distloss,
     )
 
     if padded_channels > 0:
         render_colors = render_colors[..., :-padded_channels]
-    return render_colors, render_alphas
+    return render_colors, render_alphas, render_distloss
 
 
 @torch.no_grad()
@@ -820,8 +825,9 @@ class _RasterizeToPixels(torch.autograd.Function):
         isect_offsets: Tensor,  # [C, tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
         absgrad: bool,
-    ) -> Tuple[Tensor, Tensor]:
-        render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
+        distloss: bool,
+    ) -> Tuple[Tensor, Tensor, Tensor]:
+        render_colors, render_alphas, render_distloss, last_ids = _make_lazy_cuda_func(
             "rasterize_to_pixels_fwd"
         )(
             means2d,
@@ -834,6 +840,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             tile_size,
             isect_offsets,
             flatten_ids,
+            distloss,
         )
 
         ctx.save_for_backward(
@@ -844,6 +851,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             backgrounds,
             isect_offsets,
             flatten_ids,
+            render_colors,
             render_alphas,
             last_ids,
         )
@@ -851,16 +859,18 @@ class _RasterizeToPixels(torch.autograd.Function):
         ctx.height = height
         ctx.tile_size = tile_size
         ctx.absgrad = absgrad
+        ctx.distloss = distloss
 
         # double to float
         render_alphas = render_alphas.float()
-        return render_colors, render_alphas
+        return render_colors, render_alphas, render_distloss
 
     @staticmethod
     def backward(
         ctx,
         v_render_colors: Tensor,  # [C, H, W, 3]
         v_render_alphas: Tensor,  # [C, H, W, 1]
+        v_render_distloss: Optional[Tensor],  # [C, H, W, 1]
     ):
         (
             means2d,
@@ -870,6 +880,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             backgrounds,
             isect_offsets,
             flatten_ids,
+            render_colors,
             render_alphas,
             last_ids,
         ) = ctx.saved_tensors
@@ -877,6 +888,12 @@ class _RasterizeToPixels(torch.autograd.Function):
         height = ctx.height
         tile_size = ctx.tile_size
         absgrad = ctx.absgrad
+        distloss = ctx.distloss
+        if distloss:
+            assert v_render_distloss is not None, "v_render_distloss should not be None"
+            v_render_distloss = v_render_distloss.contiguous()
+        else:
+            assert v_render_distloss is None, "v_render_distloss should be None"
 
         (
             v_means2d_abs,
@@ -895,10 +912,12 @@ class _RasterizeToPixels(torch.autograd.Function):
             tile_size,
             isect_offsets,
             flatten_ids,
+            render_colors,
             render_alphas,
             last_ids,
             v_render_colors.contiguous(),
             v_render_alphas.contiguous(),
+            v_render_distloss,
             absgrad,
         )
 
@@ -918,6 +937,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             v_colors,
             v_opacities,
             v_backgrounds,
+            None,
             None,
             None,
             None,
