@@ -482,17 +482,17 @@ def test_rasterize_to_pixels(test_data, channels: int, distloss: bool):
     )
     isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
 
-    means2d.requires_grad = True
-    conics.requires_grad = True
-    colors.requires_grad = True
-    opacities.requires_grad = True
-    backgrounds.requires_grad = True
-
     if distloss:
         colors = torch.cat([colors, depths[..., None]], dim=-1)
         backgrounds = torch.cat(
             [backgrounds, torch.zeros_like(backgrounds[..., :1])], dim=-1
         )
+
+    means2d.requires_grad = True
+    conics.requires_grad = True
+    colors.requires_grad = True
+    opacities.requires_grad = True
+    backgrounds.requires_grad = True
 
     # forward
     render_colors, render_alphas, render_distloss = rasterize_to_pixels(
