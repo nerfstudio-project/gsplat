@@ -6,29 +6,25 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import imageio
+import nerfview
 import numpy as np
 import torch
 import torch.nn.functional as F
 import tqdm
 import tyro
 import viser
-import nerfview
 from datasets.colmap import Dataset, Parser
 from datasets.traj import generate_interpolated_path
+from simple_trainer import create_splats_with_optimizers
 from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
-from utils import (
-    AppearanceOptModule,
-    CameraOptModule,
-    set_random_seed,
-)
+from utils import AppearanceOptModule, CameraOptModule, set_random_seed
+
 from gsplat import quat_scale_to_covar_preci
-from gsplat.rendering import rasterization
 from gsplat.relocation import compute_relocation
-from gsplat.cuda_legacy._torch_impl import scale_rot_to_cov3d
-from simple_trainer import create_splats_with_optimizers
+from gsplat.rendering import rasterization
 
 
 @dataclass
@@ -138,6 +134,11 @@ class Config:
     depth_loss: bool = False
     # Weight for depth loss
     depth_lambda: float = 1e-2
+
+    # Distoration loss. (experimental)
+    dist_loss: bool = False
+    # Weight for distortion loss
+    dist_lambda: float = 1e-3
 
     # Dump information to tensorboard every this steps
     tb_every: int = 100
@@ -394,7 +395,8 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 image_ids=image_ids,
-                render_mode="RGB+ED" if cfg.depth_loss else "RGB",
+                render_mode="RGB+ED" if (cfg.depth_loss or cfg.dist_loss) else "RGB",
+                distloss=self.cfg.dist_loss,
             )
             if renders.shape[-1] == 4:
                 colors, depths = renders[..., 0:3], renders[..., 3:4]
@@ -432,6 +434,9 @@ class Runner:
                 disp_gt = 1.0 / depths_gt  # [1, M]
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
+            if cfg.dist_loss:
+                distloss = info["render_distloss"].mean()
+                loss += distloss * cfg.dist_lambda
 
             loss = (
                 loss
@@ -448,6 +453,8 @@ class Runner:
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
             if cfg.depth_loss:
                 desc += f"depth loss={depthloss.item():.6f}| "
+            if cfg.dist_loss:
+                desc += f"dist loss={distloss.item():.6f}| "
             if cfg.pose_opt and cfg.pose_noise:
                 # monitor the pose error if we inject noise
                 pose_err = F.l1_loss(camtoworlds_gt, camtoworlds)

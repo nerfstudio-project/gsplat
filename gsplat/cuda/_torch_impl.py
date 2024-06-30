@@ -309,7 +309,8 @@ def accumulate(
     camera_ids: Tensor,  # [M]
     image_width: int,
     image_height: int,
-) -> Tuple[Tensor, Tensor]:
+    distloss: bool = False,
+) -> Tuple[Tensor, Tensor, Tensor]:
     """Alpah compositing of 2D Gaussians in Pure Pytorch.
 
     This function performs alpha compositing for Gaussians based on the pair of indices
@@ -334,23 +335,30 @@ def accumulate(
         means2d: Gaussian means in 2D. [C, N, 2]
         conics: Inverse of the 2D Gaussian covariance, Only upper triangle values. [C, N, 3]
         opacities: Per-view Gaussian opacities (for example, when antialiasing is
-            enabled, Gaussian in each view would efficiently have different opacity). [C, N]
+          enabled, Gaussian in each view would efficiently have different opacity). [C, N]
         colors: Per-view Gaussian colors. Supports N-D features. [C, N, channels]
         gaussian_ids: Collection of Gaussian indices to be rasterized. A flattened list of shape [M].
         pixel_ids: Collection of pixel indices (row-major) to be rasterized. A flattened list of shape [M].
         camera_ids: Collection of camera indices to be rasterized. A flattened list of shape [M].
         image_width: Image width.
         image_height: Image height.
+        distloss: If True, render the per-pixel distortion loss map. This requires the depth
+          information in the last channel of `colors`. Default is False.
 
     Returns:
         A tuple:
 
         - **renders**: Accumulated colors. [C, image_height, image_width, channels]
         - **alphas**: Accumulated opacities. [C, image_height, image_width, 1]
+        - **dists**: Distortion loss if `distloss=True` else None. [C, image_height, image_width, 1]
     """
 
     try:
-        from nerfacc import accumulate_along_rays, render_weight_from_alpha
+        from nerfacc import (
+            accumulate_along_rays,
+            exclusive_sum,
+            render_weight_from_alpha,
+        )
     except ImportError:
         raise ImportError("Please install nerfacc package: pip install nerfacc")
 
@@ -386,7 +394,18 @@ def accumulate(
         weights, None, ray_indices=indices, n_rays=total_pixels
     ).reshape(C, image_height, image_width, 1)
 
-    return renders, alphas
+    if distloss:
+        depths = colors[camera_ids, gaussian_ids, -1]
+        loss_bi_0 = weights * depths * exclusive_sum(weights, indices=indices)
+        loss_bi_1 = weights * exclusive_sum(weights * depths, indices=indices)
+        dists = 2 * (loss_bi_0 - loss_bi_1)
+        dists = accumulate_along_rays(dists, None, indices, total_pixels).reshape(
+            C, image_height, image_width, 1
+        )
+    else:
+        dists = None
+
+    return renders, alphas, dists
 
 
 def _rasterize_to_pixels(
@@ -400,6 +419,7 @@ def _rasterize_to_pixels(
     isect_offsets: Tensor,  # [C, tile_height, tile_width]
     flatten_ids: Tensor,  # [n_isects]
     backgrounds: Optional[Tensor] = None,  # [C, channels]
+    distloss: bool = False,
     batch_per_iter: int = 100,
 ):
     """Pytorch implementation of `gsplat.cuda._wrapper.rasterize_to_pixels()`.
@@ -434,6 +454,10 @@ def _rasterize_to_pixels(
         (C, image_height, image_width, colors.shape[-1]), device=device
     )
     render_alphas = torch.zeros((C, image_height, image_width, 1), device=device)
+    if distloss:
+        render_distloss = torch.zeros((C, image_height, image_width, 1), device=device)
+    else:
+        render_distloss = None
 
     # Split Gaussians into batches and iteratively accumulate the renderings
     block_size = tile_size * tile_size
@@ -464,7 +488,7 @@ def _rasterize_to_pixels(
             break
 
         # Accumulate the renderings within this batch of Gaussians.
-        renders_step, accs_step = accumulate(
+        renders_step, accs_step, dists_step = accumulate(
             means2d,
             conics,
             opacities,
@@ -474,17 +498,21 @@ def _rasterize_to_pixels(
             camera_ids,
             image_width,
             image_height,
+            distloss=distloss,
         )
         render_colors = render_colors + renders_step * transmittances[..., None]
         render_alphas = render_alphas + accs_step * transmittances[..., None]
+        if distloss:
+            render_distloss = render_distloss + dists_step * (
+                transmittances[..., None] ** 2
+            )
 
-    render_alphas = render_alphas
     if backgrounds is not None:
         render_colors = render_colors + backgrounds[:, None, None, :] * (
             1.0 - render_alphas
         )
 
-    return render_colors, render_alphas
+    return render_colors, render_alphas, render_distloss
 
 
 def _eval_sh_bases_fast(basis_dim: int, dirs: Tensor):
