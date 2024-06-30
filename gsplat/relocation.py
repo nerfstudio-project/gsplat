@@ -38,6 +38,7 @@ def compute_relocation(
     assert ratios.shape == (N,), ratios.shape
     opacities = opacities.contiguous()
     scales = scales.contiguous()
+    ratios.clamp_(min=1, max=N_MAX)
     ratios = ratios.int().contiguous()
 
     new_opacities, new_scales = _make_lazy_cuda_func("compute_relocation")(
