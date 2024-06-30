@@ -2078,7 +2078,6 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     glm::vec4 quat = glm::make_vec4(quats + gid * 4);
     glm::vec3 scale = glm::make_vec3(scales + gid * 3);
     
-    
     glm::mat3 v_R(0.f);
     glm::vec2 v_scale(0.f);
     glm::vec3 v_mean(0.f);

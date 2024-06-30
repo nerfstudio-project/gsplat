@@ -2136,8 +2136,8 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 }
 
                 float depth = w_transform.z;
-                v_densification_local.x = v_u_transform_local.z;
-                v_densification_local.y = v_v_transform_local.z;
+                v_densification_local.x = v_u_transform_local.z * depth;
+                v_densification_local.y = v_v_transform_local.z * depth;
 
 
             }
@@ -2185,8 +2185,8 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 atomicAdd(v_opacities + g, v_opacity_local);
                 // TODO (WZ): hack gradient for densification
                 float *v_densification_ptr = (float *)(v_densifications) + 2 * g;
-                // atomicAdd(v_densification_ptr, v_densification_local.x);
-                // atomicAdd(v_densification_ptr + 1, v_densification_local.y);
+                atomicAdd(v_densification_ptr, v_densification_local.x);
+                atomicAdd(v_densification_ptr + 1, v_densification_local.y);
             }
         }
     }

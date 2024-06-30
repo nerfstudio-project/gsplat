@@ -553,14 +553,14 @@ class Runner:
 
                     # grow GSs
                     is_grad_high = grads >= cfg.grow_grad2d
-                    print(f"unique grads: {torch.unique(grads)}")
-                    print(f"is_grad_high: {sum(is_grad_high)}")
+                    # print(f"unique grads: {torch.unique(grads)}")
+                    # print(f"is_grad_high: {sum(is_grad_high)}")
 
                     is_small = (
                         torch.exp(self.splats["scales"][..., :2]).max(dim=-1).values
                         <= cfg.grow_scale3d * self.scene_scale
                     )
-                    print(f"is_small: {sum(is_small)}")
+                    # print(f"is_small: {sum(is_small)}")
                     is_dupli = is_grad_high & is_small
                     n_dupli = is_dupli.sum().item()
                     self.refine_duplicate(is_dupli)
