@@ -7,8 +7,9 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
-#define FilterSize 0.7071067811865476
-#define FilterInvSquare 1/(FilterSize*FilterSize)
+// #define FilterSize 0.7071067811865476
+// #define FilterInvSquare 1/(FilterSize*FilterSize)
+#define FilterInvSquare 2.f
 
 inline __device__ float3 cross_product(
     float3 a, float3 b 

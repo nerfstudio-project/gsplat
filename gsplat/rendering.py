@@ -647,7 +647,7 @@ def rasterization_2dgs(
         ) = proj_results
         opacities = opacities[gaussian_ids]
     else:
-        radii, means2d, depths, ray_transformations = proj_results
+        radii, means2d, depths, ray_transformations, normals = proj_results
         opacities = opacities.repeat(C, 1)
         camera_ids, gaussian_ids = None, None
 
@@ -699,19 +699,19 @@ def rasterization_2dgs(
         colors = depths[..., None]
     else:  # RGB
         pass
-    # pdb.set_trace()
     densifications = (
         torch.zeros_like(
             means2d, dtype=means2d.dtype, requires_grad=True, device="cuda"
         )
         + 0
     )
-    render_colors, render_alphas = rasterize_to_pixels_2dgs(
+    render_colors, render_alphas, render_normals = rasterize_to_pixels_2dgs(
         means2d,
         densifications,
         ray_transformations,
         colors,
         opacities,
+        normals,
         width,
         height,
         tile_size,
@@ -739,6 +739,7 @@ def rasterization_2dgs(
         "depths": depths,
         "ray_transformations": ray_transformations,
         "opacities": opacities,
+        "normals": normals,
         "tile_width": tile_width,
         "tile_height": tile_height,
         "tiles_per_gauss": tiles_per_gauss,
@@ -749,4 +750,4 @@ def rasterization_2dgs(
         "height": height,
         "tile_size": tile_size,
     }
-    return render_colors, render_alphas, meta
+    return render_colors, render_alphas, render_normals, meta

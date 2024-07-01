@@ -1598,7 +1598,8 @@ fully_fused_projection_fwd_2dgs_kernel(const uint32_t C, const uint32_t N,
                                     int32_t *__restrict__ radii,            // [C, N]
                                     float *__restrict__ means2d,            // [C, N, 2]
                                     float *__restrict__ depths,             // [C, N]
-                                    float *__restrict__ ray_transformations // [C, N, 3, 3]
+                                    float *__restrict__ ray_transformations, // [C, N, 3, 3]
+                                    float *__restrict__ normals
 ) {
     // parallelize over C * N
     uint32_t idx = cg::this_grid().thread_rank();
@@ -1651,25 +1652,23 @@ fully_fused_projection_fwd_2dgs_kernel(const uint32_t C, const uint32_t N,
 
     glm::vec3 f = (1 / distance) * temp_point;
     // printf("f: %.2f, %.2f, %.2f\n", f.x, f.y, f.z);
-    glm::vec3 mean2d = glm::vec3(
+    glm::vec2 mean2d = glm::vec2(
         glm::dot(f, M[0] * M[2]),
-        glm::dot(f, M[1] * M[2]),
-        glm::dot(f, M[2] * M[2])
+        glm::dot(f, M[1] * M[2])
     );
     // printf("");
 
     // printf("mean2d: %.2f, %.2f, %.2f\n", mean2d.x, mean2d.y, mean2d.z);
     // take 3 sigma as the radius (non differentiable)
-    glm::vec3 half_extend = mean2d * mean2d - 
-        glm::vec3(
+    glm::vec2 half_extend = mean2d * mean2d - 
+        glm::vec2(
             glm::dot(f, M[0] * M[0]),
-            glm::dot(f, M[1] * M[1]),
-            glm::dot(f, M[2] * M[2])
+            glm::dot(f, M[1] * M[1])
         );
     float eps = 1e-4;
-    half_extend = sqrt(glm::vec3(max(eps, half_extend.x), max(eps, half_extend.y), max(eps, half_extend.z)));
+    half_extend = sqrt(glm::vec2(max(eps, half_extend.x), max(eps, half_extend.y)));
     // printf("half_extend: %.2f\n", half_extend);
-    float radius = ceil(3.f * max(max(half_extend.x, half_extend.y), FilterSize));
+    float radius = ceil(3.f * max(half_extend.x, half_extend.y));
     // printf("radius: %.2f \n", radius);
 
     if (radius <= radius_clip) {
@@ -1698,10 +1697,13 @@ fully_fused_projection_fwd_2dgs_kernel(const uint32_t C, const uint32_t N,
     ray_transformations[idx * 9 + 6] = M[2].x;
     ray_transformations[idx * 9 + 7] = M[2].y;
     ray_transformations[idx * 9 + 8] = M[2].z;
+    normals[idx * 3] = RS_camera[2][0];
+    normals[idx * 3 + 1] = RS_camera[2][1];
+    normals[idx * 3 + 2] = RS_camera[2][2];
 
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fully_fused_projection_fwd_2dgs_tensor(
     const torch::Tensor &means,     // [N, 3]
     const torch::Tensor &quats,     // [N, 4]
@@ -1727,6 +1729,7 @@ fully_fused_projection_fwd_2dgs_tensor(
     torch::Tensor means2d = torch::empty({C, N, 2}, means.options());
     torch::Tensor depths = torch::empty({C, N}, means.options());
     torch::Tensor ray_transformations = torch::empty({C, N, 3, 3}, means.options());
+    torch::Tensor normals = torch::empty({C, N, 3}, means.options());
 
     if (C && N) {
         fully_fused_projection_fwd_2dgs_kernel<<<(C * N + N_THREADS - 1) / N_THREADS,
@@ -1737,9 +1740,10 @@ fully_fused_projection_fwd_2dgs_tensor(
             viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
             eps2d, near_plane, far_plane, radius_clip, radii.data_ptr<int32_t>(),
             means2d.data_ptr<float>(), depths.data_ptr<float>(),
-            ray_transformations.data_ptr<float>());
+            ray_transformations.data_ptr<float>(),
+            normals.data_ptr<float>());
     }
-    return std::make_tuple(radii, means2d, depths, ray_transformations);
+    return std::make_tuple(radii, means2d, depths, ray_transformations, normals);
 }
 
 __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
@@ -1809,7 +1813,7 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
             0.0, 0.0, 1.0
         );
 
-        glm::mat3 M = glm::transpose(M) * inverse_intrinsic;
+        glm::mat3 M = glm::transpose(WH) * inverse_intrinsic;
     }
 
     // check if the points are in the image region
@@ -1824,21 +1828,19 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
         };
 
         glm::vec3 f = (1 / distance) * temp_point;
-        glm::vec3 mean2d = glm::vec3(
+        glm::vec2 mean2d = glm::vec2(
             glm::dot(f, M[0] * M[2]),
-            glm::dot(f, M[1] * M[2]),
-            glm::dot(f, M[2] * M[2])
+            glm::dot(f, M[1] * M[2])
         );
 
         // take 3 sigma as the radius (non differentiable)
-        glm::vec3 half_extend = mean2d * mean2d -
-            glm::vec3(
+        glm::vec2 half_extend = mean2d * mean2d -
+            glm::vec2(
                 glm::dot(f, M[0] * M[0]),
-                glm::dot(f, M[1] * M[1]),
-                glm::dot(f, M[2] * M[2])
+                glm::dot(f, M[1] * M[1])
             );
-        half_extend = sqrt(glm::max(half_extend, glm::vec3(0.0f)));
-        radius = ceil(max(max(half_extend.x, half_extend.y), FilterSize));
+        half_extend = sqrt(glm::max(half_extend, glm::vec2(0.0f)));
+        radius = ceil(max(half_extend.x, half_extend.y));
 
         if (radius <= radius_clip) {
             valid = false;

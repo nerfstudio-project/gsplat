@@ -96,7 +96,7 @@ def test_projection_2dgs(test_data):
         (0, 1, 3, 2)
     )  # TODO(WZ): Figure out why do we need to permute here
 
-    radii, means2d, depths, ray_Ms = fully_fused_projection_2dgs(
+    radii, means2d, depths, ray_Ms, _ = fully_fused_projection_2dgs(
         means, quats, scales, viewmats, Ks, width, height
     )
 
@@ -169,7 +169,7 @@ def test_rasterize_to_pixels_2dgs(test_data):
     C = viewmats.shape[0]
     backgrounds = torch.zeros((C, colors.shape[-1]), device=device)
 
-    radii, means2d, depths, ray_Ms = fully_fused_projection_2dgs(
+    radii, means2d, depths, ray_Ms, normals = fully_fused_projection_2dgs(
         means, quats, scales, viewmats, Ks, width, height
     )
 
@@ -194,12 +194,13 @@ def test_rasterize_to_pixels_2dgs(test_data):
     # import pdb
     # pdb.set_trace()
     densifications = torch.zeros_like(means2d)
-    render_colors, render_alphas = rasterize_to_pixels_2dgs(
+    render_colors, render_alphas, _ = rasterize_to_pixels_2dgs(
         means2d,
         densifications,
         ray_Ms,
         colors,
         opacities,
+        normals,
         width,
         height,
         tile_size,

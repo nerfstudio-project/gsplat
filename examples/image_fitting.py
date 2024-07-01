@@ -115,7 +115,7 @@ class SimpleTrainer:
             #     self.H,
             #     packed=False,
             # )
-            renders, _, _ = rasterize_fnc(
+            renders, _, _, _ = rasterize_fnc(
                 self.means,
                 self.quats / self.quats.norm(dim=-1, keepdim=True),
                 self.scales,

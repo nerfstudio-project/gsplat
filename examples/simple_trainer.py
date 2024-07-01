@@ -374,7 +374,7 @@ class Runner:
         #     rasterize_mode=rasterize_mode,
         #     **kwargs,
         # )
-        render_colors, render_alphas, info = rasterize_fnc(
+        render_colors, render_alphas, render_normals, info = rasterize_fnc(
             means=means,
             quats=quats,
             scales=scales,
@@ -390,7 +390,7 @@ class Runner:
             rasterize_mode=rasterize_mode,
             **kwargs,
         )
-        return render_colors, render_alphas, info
+        return render_colors, render_alphas, render_normals, info
 
     def train(self):
         cfg = self.cfg
@@ -466,7 +466,7 @@ class Runner:
             sh_degree_to_use = min(step // cfg.sh_degree_interval, cfg.sh_degree)
 
             # forward
-            renders, alphas, info = self.rasterize_splats(
+            renders, alphas, render_normals, info = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -839,7 +839,7 @@ class Runner:
 
             torch.cuda.synchronize()
             tic = time.time()
-            colors, _, _ = self.rasterize_splats(
+            colors, _, render_normals, _ = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -856,6 +856,13 @@ class Runner:
             canvas = torch.cat([pixels, colors], dim=2).squeeze(0).cpu().numpy()
             imageio.imwrite(
                 f"{self.render_dir}/val_{i:04d}.png", (canvas * 255).astype(np.uint8)
+            )
+            
+            # write normals
+            render_normals = (render_normals * 0.5 + 0.5).squeeze(0).cpu().numpy()
+            normals_output = (render_normals * 255).astype(np.uint8)
+            imageio.imwrite(
+                f"{self.render_dir}/val_{i:04d}_normal_{step}.png", normals_output
             )
 
             pixels = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
@@ -912,7 +919,7 @@ class Runner:
 
         canvas_all = []
         for i in tqdm.trange(len(camtoworlds), desc="Rendering trajectory"):
-            renders, _, _ = self.rasterize_splats(
+            renders, _, _, _ = self.rasterize_splats(
                 camtoworlds=camtoworlds[i : i + 1],
                 Ks=K[None],
                 width=width,
@@ -953,7 +960,7 @@ class Runner:
         c2w = torch.from_numpy(c2w).float().to(self.device)
         K = torch.from_numpy(K).float().to(self.device)
 
-        render_colors, _, _ = self.rasterize_splats(
+        render_colors, _, _, _ = self.rasterize_splats(
             camtoworlds=c2w[None],
             Ks=K[None],
             width=W,

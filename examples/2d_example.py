@@ -84,7 +84,7 @@ class SimpleTrainer:
             )
 
         elif model_type == "2dgs":
-            renders, _, _ = rasterization_2dgs(
+            renders, _, _, _ = rasterization_2dgs(
                 self.means,
                 self.quats / self.quats.norm(dim=-1, keepdim=True),
                 self.scales,

@@ -215,7 +215,7 @@ fully_fused_projection_packed_bwd_tensor(
     const bool viewmats_requires_grad, const bool sparse_grad);
 
 //====== 2DGS ======//
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fully_fused_projection_fwd_2dgs_tensor(
     const torch::Tensor &means,     // [N, 3]
     const torch::Tensor &quats,     // [N, 4]
@@ -239,12 +239,13 @@ fully_fused_projection_packed_fwd_2dgs_tensor(
     const float near_plane, const float far_plane, const float radius_clip
 );
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_2dgs_tensor(
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_2dgs_tensor(
     // Gaussian parameters
     const torch::Tensor &means2d,
     const torch::Tensor &colors,
     const torch::Tensor &ray_transformations,
     const torch::Tensor &opacities,
+    const torch::Tensor &normals,
     const at::optional<torch::Tensor> &backgrounds,
     // image size
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
@@ -306,13 +307,14 @@ fully_fused_projection_packed_bwd_2dgs_tensor(
     const bool viewmats_requires_grad, const bool sparse_grad
 );
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 rasterize_to_pixels_bwd_2dgs_tensor(
     // Gaussian parameters
     const torch::Tensor &means2d,
     const torch::Tensor &ray_transformations,
     const torch::Tensor &colors,
     const torch::Tensor &opacities,
+    const torch::Tensor &normals,
     const at::optional<torch::Tensor> &backgrounds,
     const torch::Tensor densifications,
     // image size
