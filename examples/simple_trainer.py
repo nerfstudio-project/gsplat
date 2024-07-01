@@ -6,13 +6,13 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import imageio
+import nerfview
 import numpy as np
 import torch
 import torch.nn.functional as F
 import tqdm
 import tyro
 import viser
-import nerfview
 from datasets.colmap import Dataset, Parser
 from datasets.traj import generate_interpolated_path
 from torch import Tensor
@@ -28,6 +28,7 @@ from utils import (
     set_random_seed,
 )
 
+from gsplat.core import cli
 from gsplat.rendering import rasterization
 
 
@@ -228,11 +229,16 @@ def create_splats_with_optimizers(
 class Runner:
     """Engine for training and testing."""
 
-    def __init__(self, cfg: Config) -> None:
+    def __init__(
+        self, local_rank: int, world_rank, world_size: int, cfg: Config
+    ) -> None:
         set_random_seed(42)
 
         self.cfg = cfg
-        self.device = "cuda"
+        self.world_rank = world_rank
+        self.local_rank = local_rank
+        self.world_size = world_size
+        self.device = f"cuda:{local_rank}"
 
         # Where to dump results.
         os.makedirs(cfg.result_dir, exist_ok=True)
@@ -394,8 +400,9 @@ class Runner:
         device = self.device
 
         # Dump cfg.
-        with open(f"{cfg.result_dir}/cfg.json", "w") as f:
-            json.dump(vars(cfg), f)
+        if self.world_rank == 0:
+            with open(f"{cfg.result_dir}/cfg.json", "w") as f:
+                json.dump(vars(cfg), f)
 
         max_steps = cfg.max_steps
         init_step = 0
@@ -522,6 +529,15 @@ class Runner:
                 desc += f"pose err={pose_err.item():.6f}| "
             pbar.set_description(desc)
 
+            # write images (gt and render)
+            if self.world_rank == 0 and step % 800 == 0:
+                canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
+                canvas = canvas.reshape(-1, *canvas.shape[2:])
+                imageio.imwrite(
+                    f"{self.render_dir}/train.png",
+                    (canvas * 255).astype(np.uint8),
+                )
+
             if cfg.tb_every > 0 and step % cfg.tb_every == 0:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
                 self.writer.add_scalar("train/loss", loss.item(), step)
@@ -538,6 +554,27 @@ class Runner:
                     canvas = canvas.reshape(-1, *canvas.shape[2:])
                     self.writer.add_image("train/render", canvas, step)
                 self.writer.flush()
+
+            # save checkpoint before updating the model
+            if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
+                mem = torch.cuda.max_memory_allocated() / 1024**3
+                toc = time.time()
+                stats = {
+                    "mem": mem,
+                    "ellipse_time": toc - tic,
+                    "num_GS": len(self.splats["means3d"]),
+                }
+                print("Step: ", step, stats)
+                with open(f"{self.stats_dir}/train_step{step:04d}.json", "w") as f:
+                    json.dump(stats, f)
+                data = {"step": step, "splats": self.splats.state_dict()}
+                if cfg.pose_opt:
+                    data["pose_adjust"] = self.pose_adjust.state_dict()
+                if cfg.app_opt:
+                    data["app_module"] = self.app_module.state_dict()
+                torch.save(
+                    data, f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt"
+                )
 
             # update running stats for prunning & growing
             if step < cfg.refine_stop_iter:
@@ -625,25 +662,6 @@ class Runner:
                 optimizer.zero_grad(set_to_none=True)
             for scheduler in schedulers:
                 scheduler.step()
-
-            # save checkpoint
-            if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
-                mem = torch.cuda.max_memory_allocated() / 1024**3
-                stats = {
-                    "mem": mem,
-                    "ellipse_time": time.time() - global_tic,
-                    "num_GS": len(self.splats["means3d"]),
-                }
-                print("Step: ", step, stats)
-                with open(f"{self.stats_dir}/train_step{step:04d}.json", "w") as f:
-                    json.dump(stats, f)
-                torch.save(
-                    {
-                        "step": step,
-                        "splats": self.splats.state_dict(),
-                    },
-                    f"{self.ckpt_dir}/ckpt_{step}.pt",
-                )
 
             # eval the full set
             if step in [i - 1 for i in cfg.eval_steps] or step == max_steps - 1:
@@ -959,8 +977,8 @@ class Runner:
         return render_colors[0].cpu().numpy()
 
 
-def main(cfg: Config):
-    runner = Runner(cfg)
+def main(local_rank: int, world_rank, world_size: int, cfg: Config):
+    runner = Runner(local_rank, world_rank, world_size, cfg)
 
     if cfg.ckpt is not None:
         # run eval only
@@ -980,4 +998,4 @@ def main(cfg: Config):
 if __name__ == "__main__":
     cfg = tyro.cli(Config)
     cfg.adjust_steps(cfg.steps_scaler)
-    main(cfg)
+    cli(main, cfg, verbose=True)

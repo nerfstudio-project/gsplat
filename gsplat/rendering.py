@@ -2,6 +2,7 @@ import math
 from typing import Dict, Optional, Tuple
 
 import torch
+import torch.distributed.nn.functional as DistF
 from torch import Tensor
 from typing_extensions import Literal
 
@@ -254,23 +255,6 @@ def rasterization(
     if compensations is not None:
         opacities = opacities * compensations
 
-    # Identify intersecting tiles
-    tile_width = math.ceil(width / float(tile_size))
-    tile_height = math.ceil(height / float(tile_size))
-    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
-        means2d,
-        radii,
-        depths,
-        tile_size,
-        tile_width,
-        tile_height,
-        packed=packed,
-        n_cameras=C,
-        camera_ids=camera_ids,
-        gaussian_ids=gaussian_ids,
-    )
-    isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
-
     # Turn colors into [C, N, D] or [nnz, D] to pass into rasterize_to_pixels()
     if sh_degree is None:
         # Colors are post-activation values, with shape [N, D] or [C, N, D]
@@ -313,6 +297,87 @@ def rasterization(
             colors = spherical_harmonics(sh_degree, dirs, shs, masks=masks)  # [C, N, 3]
         # make it apple-to-apple with Inria's CUDA Backend.
         colors = torch.clamp_min(colors + 0.5, 0.0)
+
+    # Distribute GSs to all ranks
+    if packed:
+        raise NotImplementedError
+    else:
+        try:
+            world_rank = torch.distributed.get_rank()
+            world_size = torch.distributed.get_world_size()
+        except ValueError:
+            world_rank = 0
+            world_size = 1
+
+        if world_size > 1:
+            assert C % world_size == 0, "C must be divisible by world_size"
+            C_local = C // world_size
+            data = torch.cat(
+                [
+                    radii[..., None].float(),
+                    means2d,
+                    depths[..., None],
+                    conics,
+                    opacities[..., None],
+                    colors,
+                ],
+                dim=-1,
+            )  # [C, N, :]
+            # In data, first C/world_size elements should go to rank 0, and so on.
+            # note N might be different across ranks. so we need to first gather N.
+            N_list = [None] * world_size
+            torch.distributed.all_gather_object(N_list, N)
+
+            # All to all gather.
+            data_flat = data.flatten(0, 1)  # [C * N, :]
+            data_splits = [C_local * N for _ in range(world_size)]
+
+            collected_splits = [C_local * N_list[i] for i in range(world_size)]
+            collected_flat = list(
+                torch.empty(
+                    (sum(collected_splits), data_flat.shape[1]),
+                    device=data_flat.device,
+                    dtype=data_flat.dtype,
+                ).chunk(world_size)
+            )
+
+            # DistF.all_to_all_single(
+            #     collected_flat, data_flat, collected_splits, data_splits
+            # )
+            DistF.all_to_all(collected_flat, list(data_flat.chunk(world_size)))
+            collected_flat = torch.cat(collected_flat, dim=0)
+
+            # collected_flat contains:
+            # [C_local * N1, C_local * N2, ...], reshape to [C_local, N', :]
+            collected = collected_flat.view(C_local, -1, collected_flat.shape[-1])
+            N = collected.shape[1]
+            radii = collected[..., 0].int()
+            means2d = collected[..., 1:3]
+            depths = collected[..., 3]
+            conics = collected[..., 4:7]
+            opacities = collected[..., 7]
+            colors = collected[..., 8:]
+
+            # From now on, we only care C_local cameras. We dont need to update
+            # viewmats and Ks tho as we have done with them.
+            C = C_local
+
+    # Identify intersecting tiles
+    tile_width = math.ceil(width / float(tile_size))
+    tile_height = math.ceil(height / float(tile_size))
+    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
+        means2d,
+        radii,
+        depths,
+        tile_size,
+        tile_width,
+        tile_height,
+        packed=packed,
+        n_cameras=C,
+        camera_ids=camera_ids,
+        gaussian_ids=gaussian_ids,
+    )
+    isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
 
     # Rasterize to pixels
     if render_mode in ["RGB+D", "RGB+ED"]:
