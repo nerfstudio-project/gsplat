@@ -1,0 +1,29 @@
+name: gsplat
+channels:
+  - nvidia
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - cuda=12.1
+  - gcc_linux-64=11.4.0
+  - gxx_linux-64=11.4.0
+  - pytorch
+  - pytorch-cuda=12.1
+  - torchvision
+  - numpy
+  - Pillow
+  - pip
+  - ninja
+  - pip:
+    - tyro
+    - black[jupyter]
+    - isort
+    - pylint
+    - pytest
+    - pytest-xdist
+    - typeguard
+    - pyyaml
+    - build
+    - twine
