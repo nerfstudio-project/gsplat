@@ -1683,6 +1683,12 @@ fully_fused_projection_fwd_2dgs_kernel(const uint32_t C, const uint32_t N,
         return;
     }
 
+    // normals dual visiable
+    glm::vec3 normal = RS_camera[2];
+    float cos = glm::dot(-normal, mean_c);
+    float multiplier = cos > 0 ? 1 : -1;
+    normal *= multiplier;
+
     // write to outputs 
     radii[idx] = (int32_t)radius;
     means2d[idx * 2] = mean2d.x;
@@ -1697,9 +1703,9 @@ fully_fused_projection_fwd_2dgs_kernel(const uint32_t C, const uint32_t N,
     ray_transformations[idx * 9 + 6] = M[2].x;
     ray_transformations[idx * 9 + 7] = M[2].y;
     ray_transformations[idx * 9 + 8] = M[2].z;
-    normals[idx * 3] = RS_camera[2][0];
-    normals[idx * 3 + 1] = RS_camera[2][1];
-    normals[idx * 3 + 2] = RS_camera[2][2];
+    normals[idx * 3] = normal.x;
+    normals[idx * 3 + 1] = normal.y;
+    normals[idx * 3 + 2] = normal.z;
 
 }
 
