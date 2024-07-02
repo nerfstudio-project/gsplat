@@ -11,7 +11,6 @@ import tyro
 # dataset names
 dataset_names = Literal[
     "mipnerf",
-    "all",
 ]
 
 # dataset urls
@@ -28,12 +27,7 @@ class DownloadData:
 
     def main(self):
         self.save_dir.mkdir(parents=True, exist_ok=True)
-
-        if self.dataset == "all":
-            for ds in dataset_names:
-                self.dataset_download(ds)
-        else:
-            self.dataset_download(self.dataset)
+        self.dataset_download(self.dataset)
 
     def dataset_download(self, dataset: dataset_names):
         (self.save_dir / dataset_rename_map[dataset]).mkdir(parents=True, exist_ok=True)
