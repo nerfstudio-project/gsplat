@@ -36,6 +36,7 @@ def rasterization(
     sparse_grad: bool = False,
     absgrad: bool = False,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
+    distloss: bool = False,
     channel_chunk: int = 32,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
@@ -106,6 +107,13 @@ def rasterization(
         `AbsGS: Recovering Fine Details for 3D Gaussian Splatting <https://arxiv.org/abs/2404.10484>`_,
         which is shown to be more effective for splitting Gaussians during training.
 
+    .. note::
+        **Distortion Map**: If `distloss` is True, the function will render out the per-pixel
+        distortion loss, following the formulation in the paper `Mip-NeRF 360: Unbounded
+        Anti-Aliased Neural Radiance Fields <https://arxiv.org/abs/2111.12077>`_. This requires
+        depth rendering, so the `render_mode` should be "D", "ED", "RGB+D", or "RGB+ED". The
+        distortion map will be stored in the meta as `meta["render_distloss"]`.
+
     .. warning::
         This function is currently not differentiable w.r.t. the camera intrinsics `Ks`.
 
@@ -145,6 +153,9 @@ def rasterization(
             `meta["means2d"].absgrad`. Default is False.
         rasterize_mode: The rasterization mode. Supported modes are "classic" and
             "antialiased". Default is "classic".
+        distloss: If true, the function will render out the distortions map as well
+            and store it in the meta. This requires depth rendering, so the render_mode
+            should be "D", "ED", "RGB+D", or "RGB+ED". Default is False.
         channel_chunk: The number of channels to render in one go. Default is 32.
             If the required rendering channels are larger than this value, the rendering
             will be done looply in chunks.
@@ -198,6 +209,13 @@ def rasterization(
     assert viewmats.shape == (C, 4, 4), viewmats.shape
     assert Ks.shape == (C, 3, 3), Ks.shape
     assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
+    if distloss:
+        assert render_mode in [
+            "D",
+            "ED",
+            "RGB+D",
+            "RGB+ED",
+        ], f"distloss requires depth rendering, render_mode should be D, ED, RGB+D, or RGB+ED, but got {render_mode}"
 
     if sh_degree is None:
         # treat colors as post-activation values, should be in shape [N, D] or [C, N, D]
@@ -330,7 +348,7 @@ def rasterization(
     if colors.shape[-1] > channel_chunk:
         # slice into chunks
         n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk
-        render_colors, render_alphas = [], []
+        render_colors = []
         for i in range(n_chunks):
             colors_chunk = colors[..., i * channel_chunk : (i + 1) * channel_chunk]
             backgrounds_chunk = (
@@ -338,7 +356,10 @@ def rasterization(
                 if backgrounds is not None
                 else None
             )
-            render_colors_, render_alphas_ = rasterize_to_pixels(
+            # If distloss=True, we expect the last channel of colors is depths,
+            # from which we compute the distortions. So the only last chunk here produces
+            # a valid render_distloss output.
+            render_colors_, render_alphas, render_distloss = rasterize_to_pixels(
                 means2d,
                 conics,
                 colors_chunk,
@@ -351,13 +372,12 @@ def rasterization(
                 backgrounds=backgrounds_chunk,
                 packed=packed,
                 absgrad=absgrad,
+                distloss=distloss,
             )
             render_colors.append(render_colors_)
-            render_alphas.append(render_alphas_)
         render_colors = torch.cat(render_colors, dim=-1)
-        render_alphas = render_alphas[0]  # discard the rest
     else:
-        render_colors, render_alphas = rasterize_to_pixels(
+        render_colors, render_alphas, render_distloss = rasterize_to_pixels(
             means2d,
             conics,
             colors,
@@ -370,6 +390,7 @@ def rasterization(
             backgrounds=backgrounds,
             packed=packed,
             absgrad=absgrad,
+            distloss=distloss,
         )
     if render_mode in ["ED", "RGB+ED"]:
         # normalize the accumulated depth to get the expected depth
@@ -398,6 +419,7 @@ def rasterization(
         "width": width,
         "height": height,
         "tile_size": tile_size,
+        "render_distloss": render_distloss,
     }
     return render_colors, render_alphas, meta
 
