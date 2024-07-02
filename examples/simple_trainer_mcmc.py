@@ -692,7 +692,8 @@ class Runner:
             ellipse_time += time.time() - tic
 
             # write images
-            canvas = torch.cat([pixels, colors], dim=2).squeeze(0).cpu().numpy()
+            canvas_list = [pixels, colors]
+            canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()
             canvas = (canvas * 255).astype(np.uint8)
             imageio.imwrite(f"{self.render_dir}/val_step{step:04d}_{i:04d}.png", canvas)
 
@@ -761,11 +762,14 @@ class Runner:
                 render_mode="RGB+ED",
             )  # [1, H, W, 4]
             colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)  # [1, H, W, 3]
-            depths = renders[..., 3:4]  # [1, H, W, 1]
-            depths = (depths - depths.min()) / (depths.max() - depths.min())
+            canvas_list = [colors]
+            if renders.shape[-1] == 4:
+                depths = renders[..., 3:4]  # [1, H, W, 1]
+                depths = (depths - depths.min()) / (depths.max() - depths.min())
+                canvas_list.append(depths.repeat(1, 1, 1, 3))
 
             # write images
-            canvas = torch.cat([colors, depths.repeat(1, 1, 1, 3)], dim=2).squeeze(0).cpu().numpy()
+            canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()
             canvas = (canvas * 255).astype(np.uint8)
             canvas_all.append(canvas)
 
