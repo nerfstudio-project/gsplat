@@ -36,9 +36,19 @@ To install gsplat on Windows, please check [this instruction](docs/INSTALL_WIN.m
 
 This repo comes with a standalone script that reproduces the official Gaussian Splatting with exactly the same performance on PSNR, SSIM, LPIPS, and converged number of Gaussians. Powered by gsplat’s efficient CUDA implementation, the training takes up to **4x less GPU memory** with up to **15% less time** to finish than the official implementation. Full report can be found [here](https://docs.gsplat.studio/main/tests/eval.html).
 
+### set up environment
 ```bash
-# under examples/
+cd examples/
 pip install -r requirements.txt
+```
+or you can use poetry too
+```bash
+poetry install
+```
+
+### download data and run the test
+```bash
+bash download_mipnerf360_data.sh
 bash benchmark.sh
 ```
 
