@@ -1483,27 +1483,61 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     }
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-fully_fused_projection_packed_bwd_tensor(
+
+
+struct FusedProjectionPackedBwdTensorArgs {
     // fwd inputs
-    const torch::Tensor &means,                // [N, 3]
-    const at::optional<torch::Tensor> &covars, // [N, 6]
-    const at::optional<torch::Tensor> &quats,  // [N, 4]
-    const at::optional<torch::Tensor> &scales, // [N, 3]
-    const torch::Tensor &viewmats,             // [C, 4, 4]
-    const torch::Tensor &Ks,                   // [C, 3, 3]
-    const uint32_t image_width, const uint32_t image_height, const float eps2d,
+    const torch::Tensor means;                 // [N, 3]
+    const at::optional<torch::Tensor> covars;  // [N, 6]
+    const at::optional<torch::Tensor> quats;   // [N, 4]
+    const at::optional<torch::Tensor> scales;  // [N, 3]
+    const torch::Tensor viewmats;              // [C, 4, 4]
+    const torch::Tensor Ks;                    // [C, 3, 3]
+    const uint32_t image_width; 
+    const uint32_t image_height; 
+    const float eps2d;
+
     // fwd outputs
-    const torch::Tensor &camera_ids,                  // [nnz]
-    const torch::Tensor &gaussian_ids,                // [nnz]
-    const torch::Tensor &conics,                      // [nnz, 3]
-    const at::optional<torch::Tensor> &compensations, // [nnz] optional
+    const torch::Tensor camera_ids;                    // [nnz]
+    const torch::Tensor gaussian_ids;                  // [nnz]
+    const torch::Tensor conics;                        // [nnz, 3]
+    const at::optional<torch::Tensor> compensations;   // [nnz] optional
     // grad outputs
-    const torch::Tensor &v_means2d,                     // [nnz, 2]
-    const torch::Tensor &v_depths,                      // [nnz]
-    const torch::Tensor &v_conics,                      // [nnz, 3]
-    const at::optional<torch::Tensor> &v_compensations, // [nnz] optional
-    const bool viewmats_requires_grad, const bool sparse_grad) {
+    const torch::Tensor v_means2d;                       // [nnz, 2]
+    const torch::Tensor v_depths;                        // [nnz]
+    const torch::Tensor v_conics;                        // [nnz, 3]
+    const at::optional<torch::Tensor> v_compensations;   // [nnz] optional
+    const bool viewmats_requires_grad; 
+    const bool sparse_grad;
+
+    // If you want extra args, put them here. Don't break this strut ever.
+};
+
+std::vector<torch::Tensor>
+fully_fused_projection_packed_bwd_tensor_internal(FusedProjectionPackedBwdTensorArgs args) {
+
+    torch::Tensor means = args.means;
+    at::optional<torch::Tensor> covars = args.covars;
+    at::optional<torch::Tensor> quats = args.quats;
+    at::optional<torch::Tensor> scales = args.scales;
+    torch::Tensor viewmats = args.viewmats;
+    torch::Tensor Ks = args.Ks;
+    uint32_t image_width = args.image_width;
+    uint32_t image_height = args.image_height;
+    float eps2d = args.eps2d;
+    
+    torch::Tensor camera_ids = args.camera_ids;
+    torch::Tensor gaussian_ids = args.gaussian_ids;
+    torch::Tensor conics = args.conics;
+    at::optional<torch::Tensor> compensations = args.compensations;
+
+    torch::Tensor v_means2d = args.v_means2d;
+    torch::Tensor v_depths = args.v_depths;
+    torch::Tensor v_conics = args.v_conics;
+    at::optional<torch::Tensor> v_compensations = args.v_compensations;
+    bool viewmats_requires_grad = args.viewmats_requires_grad;
+    bool sparse_grad = args.sparse_grad;
+
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
     if (covars.has_value()) {
@@ -1580,5 +1614,36 @@ fully_fused_projection_packed_bwd_tensor(
             covars.has_value() ? nullptr : v_scales.data_ptr<float>(),
             viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr);
     }
-    return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats);
+    return {v_means, v_covars, v_quats, v_scales, v_viewmats};
+}
+
+
+std::vector<torch::Tensor>
+fully_fused_projection_packed_bwd_tensor(
+    // fwd inputs
+    const torch::Tensor &means,                // [N, 3]
+    const at::optional<torch::Tensor> &covars, // [N, 6]
+    const at::optional<torch::Tensor> &quats,  // [N, 4]
+    const at::optional<torch::Tensor> &scales, // [N, 3]
+    const torch::Tensor &viewmats,             // [C, 4, 4]
+    const torch::Tensor &Ks,                   // [C, 3, 3]
+    const uint32_t image_width, const uint32_t image_height, const float eps2d,
+    // fwd outputs
+    const torch::Tensor &camera_ids,                  // [nnz]
+    const torch::Tensor &gaussian_ids,                // [nnz]
+    const torch::Tensor &conics,                      // [nnz, 3]
+    const at::optional<torch::Tensor> &compensations, // [nnz] optional
+    // grad outputs
+    const torch::Tensor &v_means2d,                     // [nnz, 2]
+    const torch::Tensor &v_depths,                      // [nnz]
+    const torch::Tensor &v_conics,                      // [nnz, 3]
+    const at::optional<torch::Tensor> &v_compensations, // [nnz] optional
+    const bool viewmats_requires_grad, const bool sparse_grad) {
+    
+    FusedProjectionPackedBwdTensorArgs args = {
+        means, covars, quats, scales, viewmats, Ks, image_width, image_height, eps2d,
+        camera_ids, gaussian_ids, conics, compensations,
+        v_means2d, v_depths, v_conics, v_compensations, viewmats_requires_grad, sparse_grad
+    };
+    return fully_fused_projection_packed_bwd_tensor_internal(args);
 }

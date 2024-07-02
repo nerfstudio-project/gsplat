@@ -193,7 +193,7 @@ fully_fused_projection_packed_fwd_tensor(
     const float near_plane, const float far_plane, const float radius_clip,
     const bool calc_compensations);
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::vector<torch::Tensor>
 fully_fused_projection_packed_bwd_tensor(
     // fwd inputs
     const torch::Tensor &means,                // [N, 3]
