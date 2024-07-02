@@ -374,7 +374,7 @@ class Runner:
         #     rasterize_mode=rasterize_mode,
         #     **kwargs,
         # )
-        render_colors, render_alphas, render_normals, info = rasterize_fnc(
+        results, info = rasterize_fnc(
             means=means,
             quats=quats,
             scales=scales,
@@ -390,7 +390,15 @@ class Runner:
             rasterize_mode=rasterize_mode,
             **kwargs,
         )
-        return render_colors, render_alphas, render_normals, info
+        
+        if len(results) == 4:
+            render_colors, render_alphas, render_normals, render_normals_from_depth = results
+        else: 
+            render_colors, render_alphas = results
+            render_normals = None
+            render_normals_from_depth = None
+         
+        return render_colors, render_alphas, render_normals, render_normals_from_depth, info
 
     def train(self):
         cfg = self.cfg
@@ -466,7 +474,7 @@ class Runner:
             sh_degree_to_use = min(step // cfg.sh_degree_interval, cfg.sh_degree)
 
             # forward
-            renders, alphas, render_normals, info = self.rasterize_splats(
+            renders, alphas, render_normals, render_normals_from_depth, info = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -832,6 +840,8 @@ class Runner:
         ellipse_time = 0
         metrics = {"psnr": [], "ssim": [], "lpips": []}
         for i, data in enumerate(valloader):
+            if i != 14:
+                continue
             camtoworlds = data["camtoworld"].to(device)
             Ks = data["K"].to(device)
             pixels = data["image"].to(device) / 255.0
@@ -839,7 +849,7 @@ class Runner:
 
             torch.cuda.synchronize()
             tic = time.time()
-            colors, _, render_normals, _ = self.rasterize_splats(
+            colors, _, render_normals, render_normals_from_depth, _ = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -847,12 +857,16 @@ class Runner:
                 sh_degree=cfg.sh_degree,
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
+                render_mode="RGB+D",
             )  # [1, H, W, 3]
             colors = torch.clamp(colors, 0.0, 1.0)
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
 
             # write images
+            # import pdb
+            # pdb.set_trace()
+            colors = colors[..., :3]
             canvas = torch.cat([pixels, colors], dim=2).squeeze(0).cpu().numpy()
             imageio.imwrite(
                 f"{self.render_dir}/val_{i:04d}.png", (canvas * 255).astype(np.uint8)
@@ -863,6 +877,13 @@ class Runner:
             normals_output = (render_normals * 255).astype(np.uint8)
             imageio.imwrite(
                 f"{self.render_dir}/val_{i:04d}_normal_{step}.png", normals_output
+            )
+            
+            # write normals from depth
+            render_normals_from_depth = (render_normals_from_depth * 0.5 + 0.5).squeeze(0).cpu().numpy()
+            normals_from_depth_output = (render_normals_from_depth * 255).astype(np.uint8)
+            imageio.imwrite(
+                f"{self.render_dir}/val_{i:04d}_normals_from_depth_{step}.png", normals_from_depth_output
             )
 
             pixels = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
@@ -919,7 +940,7 @@ class Runner:
 
         canvas_all = []
         for i in tqdm.trange(len(camtoworlds), desc="Rendering trajectory"):
-            renders, _, _, _ = self.rasterize_splats(
+            renders, _, _, _, _ = self.rasterize_splats(
                 camtoworlds=camtoworlds[i : i + 1],
                 Ks=K[None],
                 width=width,
@@ -960,7 +981,7 @@ class Runner:
         c2w = torch.from_numpy(c2w).float().to(self.device)
         K = torch.from_numpy(K).float().to(self.device)
 
-        render_colors, _, _, _ = self.rasterize_splats(
+        render_colors, _, _, _, _ = self.rasterize_splats(
             camtoworlds=c2w[None],
             Ks=K[None],
             width=W,

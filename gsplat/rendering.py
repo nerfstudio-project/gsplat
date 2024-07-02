@@ -16,6 +16,8 @@ from .cuda._wrapper import (
 )
 import pdb
 
+from .utils import depth_to_normal
+
 
 def rasterization(
     means: Tensor,  # [N, 3]
@@ -327,7 +329,7 @@ def rasterization(
             ],
             dim=-1,
         )
-
+    
     meta = {
         "camera_ids": camera_ids,
         "gaussian_ids": gaussian_ids,
@@ -346,7 +348,7 @@ def rasterization(
         "height": height,
         "tile_size": tile_size,
     }
-    return render_colors, render_alphas, meta
+    return (render_colors, render_alphas), meta
 
 
 def rasterization_legacy_wrapper(
@@ -721,6 +723,7 @@ def rasterization_2dgs(
         packed=packed,
         absgrad=absgrad,
     )
+    render_normals_from_depth = None
     if render_mode in ["ED", "RGB+ED"]:
         # normalize the accumulated depth to get the expected depth
         render_colors = torch.cat(
@@ -729,8 +732,12 @@ def rasterization_2dgs(
                 render_colors[..., -1:] / render_alphas.clamp(min=1e-10),
             ],
             dim=-1,
-        )
+        )  
+    if render_mode in ["RGB+ED", "RGB+D"]:
+        render_depths = render_colors[..., -1:]
+        render_normals_from_depth = depth_to_normal(viewmats[0], Ks[0], width, height, render_depths)
 
+    
     meta = {
         "camera_ids": camera_ids,
         "gaussian_ids": gaussian_ids,
@@ -750,4 +757,4 @@ def rasterization_2dgs(
         "height": height,
         "tile_size": tile_size,
     }
-    return render_colors, render_alphas, render_normals, meta
+    return (render_colors, render_alphas, render_normals, render_normals_from_depth), meta
