@@ -43,19 +43,19 @@ def main(local_rank: int, world_rank, world_size: int, args):
         ) = load_test_data(device=device, scene_grid=args.scene_grid)
 
         assert world_size <= 2
-        means = means[world_rank::world_size]
+        means = means[world_rank::world_size].contiguous()
         means.requires_grad = True
-        quats = quats[world_rank::world_size]
+        quats = quats[world_rank::world_size].contiguous()
         quats.requires_grad = True
-        scales = scales[world_rank::world_size]
+        scales = scales[world_rank::world_size].contiguous()
         scales.requires_grad = True
-        opacities = opacities[world_rank::world_size]
+        opacities = opacities[world_rank::world_size].contiguous()
         opacities.requires_grad = True
-        colors = colors[world_rank::world_size]
+        colors = colors[world_rank::world_size].contiguous()
         colors.requires_grad = True
 
-        viewmats = viewmats[:2]
-        Ks = Ks[:2]
+        viewmats = viewmats[world_rank::world_size].contiguous()
+        Ks = Ks[world_rank::world_size].contiguous()
 
         sh_degree = None
         C = len(viewmats)
@@ -63,7 +63,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
         print("rank", world_rank, "Number of Gaussians:", N, "Number of Cameras:", C)
 
         # batched render
-        for _ in tqdm.trange(1000):
+        for _ in tqdm.trange(1):
             render_colors, render_alphas, meta = rasterization(
                 means,  # [N, 3]
                 quats,  # [N, 4]
@@ -77,10 +77,10 @@ def main(local_rank: int, world_rank, world_size: int, args):
                 render_mode="RGB+D",
                 packed=False,
             )
-            C = render_colors.shape[0]
-            assert render_colors.shape == (C, height, width, 4)
-            assert render_alphas.shape == (C, height, width, 1)
-            render_colors.sum().backward()
+        C = render_colors.shape[0]
+        assert render_colors.shape == (C, height, width, 4)
+        assert render_alphas.shape == (C, height, width, 1)
+        render_colors.sum().backward()
 
         render_rgbs = render_colors[..., 0:3]
         render_depths = render_colors[..., 3:4]

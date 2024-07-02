@@ -38,12 +38,23 @@ def rasterization(
     absgrad: bool = False,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
     channel_chunk: int = 32,
+    distributed: bool = False,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
     This function provides a handful features for 3D Gaussian rasterization, which
     we detail in the following notes. A complete profiling of the these features
     can be found in the :ref:`profiling` page.
+
+    .. note::
+        **Multi-GPU Distributed Rasterization**: This function can be used in a multi-GPU
+        distributed setting by setting `distributed` to True. In the case of there are in
+        total M Gaussians in the scene, S cameras to be rendered, and K ranks (GPUs)
+        participate the job, the Gaussians should be divided into K parts (can be unevenly),
+        with each rank holding :math:`N_i` Gaussians, where :math:`N_1 + N_2 + ... + N_K = M`.
+        Similarly, cameras should also be divided into K parts (can be evenly), with
+        each rank's job is to render for the :math:`C_i` cameras it holds, where
+        :math:`C_1 + C_2 + ... + C_K = S`.
 
     .. note::
         **Batch Rasterization**: This function allows for rasterizing a set of 3D Gaussians
@@ -149,6 +160,9 @@ def rasterization(
         channel_chunk: The number of channels to render in one go. Default is 32.
             If the required rendering channels are larger than this value, the rendering
             will be done looply in chunks.
+        distributed: Whether to use distributed rendering. Default is False. If True,
+            Guassians from all ranks will joint together for the rendering. See the note
+            for more details.
 
     Returns:
         A tuple:
@@ -199,12 +213,23 @@ def rasterization(
     assert viewmats.shape == (C, 4, 4), viewmats.shape
     assert Ks.shape == (C, 3, 3), Ks.shape
     assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
+    if distributed:
+        world_rank = torch.distributed.get_rank()
+        world_size = torch.distributed.get_world_size()
+        N_world = [None] * world_size
+        C_world = [None] * world_size
+        torch.distributed.all_gather_object(N_world, N)
+        torch.distributed.all_gather_object(C_world, C)
 
     if sh_degree is None:
         # treat colors as post-activation values, should be in shape [N, D] or [C, N, D]
         assert (colors.dim() == 2 and colors.shape[0] == N) or (
             colors.dim() == 3 and colors.shape[:2] == (C, N)
         ), colors.shape
+        if distributed:
+            assert (
+                colors.dim() == 2
+            ), "Distributed mode only supports per-Gaussian colors."
     else:
         # treat colors as SH coefficients, should be in shape [N, K, 3] or [C, N, K, 3]
         # Allowing for activating partial SH bands
@@ -214,6 +239,18 @@ def rasterization(
             colors.dim() == 4 and colors.shape[:2] == (C, N) and colors.shape[3] == 3
         ), colors.shape
         assert (sh_degree + 1) ** 2 <= colors.shape[-2], colors.shape
+        if distributed:
+            assert (
+                colors.dim() == 3
+            ), "Distributed mode only supports per-Gaussian colors."
+
+    # If in distributed mode, we distribute the projection computation over Gaussians
+    # and the rasterize computation over cameras. So first we broadcast the cameras
+    # to all ranks for projection.
+    if distributed:
+        viewmats = torch.cat(DistF.all_gather(viewmats))
+        Ks = torch.cat(DistF.all_gather(Ks))
+        C = len(viewmats)  # Silently change C from local #Cameras to global #Cameras.
 
     # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
     proj_results = fully_fused_projection(
@@ -298,20 +335,14 @@ def rasterization(
         # make it apple-to-apple with Inria's CUDA Backend.
         colors = torch.clamp_min(colors + 0.5, 0.0)
 
-    # Distribute GSs to all ranks
-    if packed:
-        raise NotImplementedError
-    else:
-        try:
-            world_rank = torch.distributed.get_rank()
-            world_size = torch.distributed.get_world_size()
-        except ValueError:
-            world_rank = 0
-            world_size = 1
-
-        if world_size > 1:
-            assert C % world_size == 0, "C must be divisible by world_size"
-            C_local = C // world_size
+    # If in distributed mode, we need to scatter the GSs to the destination ranks, based
+    # on which cameras they are visible to, which we already figured out in the projection
+    # stage.
+    if distributed:
+        if packed:
+            raise NotImplementedError
+        else:
+            # package the Gaussian attributes
             data = torch.cat(
                 [
                     radii[..., None].float(),
@@ -322,35 +353,26 @@ def rasterization(
                     colors,
                 ],
                 dim=-1,
-            )  # [C, N, :]
-            # In data, first C/world_size elements should go to rank 0, and so on.
-            # note N might be different across ranks. so we need to first gather N.
-            N_list = [None] * world_size
-            torch.distributed.all_gather_object(N_list, N)
+            )  # [C, N_i, :]
 
-            # All to all gather.
-            data_flat = data.flatten(0, 1)  # [C * N, :]
-            data_splits = [C_local * N for _ in range(world_size)]
-
-            collected_splits = [C_local * N_list[i] for i in range(world_size)]
-            collected_flat = list(
+            # All to all gather. [C, N_i, :] -> [C_i, N, :]
+            data_list = data.split(C_world, dim=0)  # List of [C_i, N_i, :]
+            data_fl_list = [
+                data.flatten(0, 1) for data in data_list
+            ]  # List of [C_i * N_i, :]
+            collected_fl_list = [
                 torch.empty(
-                    (sum(collected_splits), data_flat.shape[1]),
-                    device=data_flat.device,
-                    dtype=data_flat.dtype,
-                ).chunk(world_size)
-            )
+                    (C * N_i, data.shape[-1]), device=data.device, dtype=data.dtype
+                )
+                for N_i in N_world
+            ]
+            DistF.all_to_all(collected_fl_list, data_fl_list)
+            collected_fl = torch.cat(collected_fl_list, dim=0)  # [C_i * N, :]
+            collected = collected_fl.reshape(
+                C, sum(N_world), data.shape[-1]
+            )  # [C_i, N, :]
 
-            # DistF.all_to_all_single(
-            #     collected_flat, data_flat, collected_splits, data_splits
-            # )
-            DistF.all_to_all(collected_flat, list(data_flat.chunk(world_size)))
-            collected_flat = torch.cat(collected_flat, dim=0)
-
-            # collected_flat contains:
-            # [C_local * N1, C_local * N2, ...], reshape to [C_local, N', :]
-            collected = collected_flat.view(C_local, -1, collected_flat.shape[-1])
-            N = collected.shape[1]
+            # collected contains:
             radii = collected[..., 0].int()
             means2d = collected[..., 1:3]
             depths = collected[..., 3]
@@ -358,9 +380,19 @@ def rasterization(
             opacities = collected[..., 7]
             colors = collected[..., 8:]
 
-            # From now on, we only care C_local cameras. We dont need to update
-            # viewmats and Ks tho as we have done with them.
-            C = C_local
+    # Rasterize to pixels
+    if render_mode in ["RGB+D", "RGB+ED"]:
+        colors = torch.cat((colors, depths[..., None]), dim=-1)
+        if backgrounds is not None:
+            backgrounds = torch.cat(
+                [backgrounds, torch.zeros(C, 1, device=backgrounds.device)], dim=-1
+            )
+    elif render_mode in ["D", "ED"]:
+        colors = depths[..., None]
+        if backgrounds is not None:
+            backgrounds = torch.zeros(C, 1, device=backgrounds.device)
+    else:  # RGB
+        pass
 
     # Identify intersecting tiles
     tile_width = math.ceil(width / float(tile_size))
@@ -379,19 +411,6 @@ def rasterization(
     )
     isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
 
-    # Rasterize to pixels
-    if render_mode in ["RGB+D", "RGB+ED"]:
-        colors = torch.cat((colors, depths[..., None]), dim=-1)
-        if backgrounds is not None:
-            backgrounds = torch.cat(
-                [backgrounds, torch.zeros(C, 1, device=backgrounds.device)], dim=-1
-            )
-    elif render_mode in ["D", "ED"]:
-        colors = depths[..., None]
-        if backgrounds is not None:
-            backgrounds = torch.zeros(C, 1, device=backgrounds.device)
-    else:  # RGB
-        pass
     if colors.shape[-1] > channel_chunk:
         # slice into chunks
         n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk
