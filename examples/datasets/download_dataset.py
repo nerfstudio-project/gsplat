@@ -10,19 +10,19 @@ import tyro
 
 # dataset names
 dataset_names = Literal[
-    "mipnerf",
+    "mipnerf360",
 ]
 
 # dataset urls
-urls = {"mipnerf": "http://storage.googleapis.com/gresearch/refraw360/360_v2.zip"}
+urls = {"mipnerf360": "http://storage.googleapis.com/gresearch/refraw360/360_v2.zip"}
 
 # rename maps
-dataset_rename_map = {"mipnerf": "360_v2"}
+dataset_rename_map = {"mipnerf360": "360_v2"}
 
 
 @dataclass
 class DownloadData:
-    dataset: dataset_names = "mipnerf"
+    dataset: dataset_names = "mipnerf360"
     save_dir: Path = Path(os.getcwd() + "/data")
 
     def main(self):
