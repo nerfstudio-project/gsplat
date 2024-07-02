@@ -67,7 +67,7 @@ world_to_cam_bwd_tensor(const torch::Tensor &means,                    // [N, 3]
                         const bool means_requires_grad, const bool covars_requires_grad,
                         const bool viewmats_requires_grad);
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::vector<torch::Tensor>
 fully_fused_projection_fwd_tensor(
     const torch::Tensor &means,                // [N, 3]
     const at::optional<torch::Tensor> &covars, // [N, 6] optional
@@ -79,7 +79,7 @@ fully_fused_projection_fwd_tensor(
     const float near_plane, const float far_plane, const float radius_clip,
     const bool calc_compensations);
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::vector<torch::Tensor>
 fully_fused_projection_bwd_tensor(
     // fwd inputs
     const torch::Tensor &means,                // [N, 3]
@@ -180,8 +180,7 @@ compute_sh_bwd_tensor(const uint32_t K, const uint32_t degrees_to_use,
 /****************************************************************************************
  * Packed Version
  ****************************************************************************************/
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
-           torch::Tensor, torch::Tensor, torch::Tensor>
+std::vector<torch::Tensor>
 fully_fused_projection_packed_fwd_tensor(
     const torch::Tensor &means,                // [N, 3]
     const at::optional<torch::Tensor> &covars, // [N, 6]
