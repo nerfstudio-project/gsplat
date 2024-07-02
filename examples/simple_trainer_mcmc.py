@@ -25,9 +25,8 @@ from utils import (
     set_random_seed,
 )
 from gsplat import quat_scale_to_covar_preci
-from gsplat.rendering import rasterization
+from gsplat.rendering import rasterization, rasterization_inria_wrapper
 from gsplat.relocation import compute_relocation
-from gsplat.cuda_legacy._torch_impl import scale_rot_to_cov3d
 from simple_trainer import create_splats_with_optimizers
 
 
@@ -62,9 +61,9 @@ class Config:
     # Number of training steps
     max_steps: int = 30_000
     # Steps to evaluate the model
-    eval_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    eval_steps: List[int] = field(default_factory=lambda: [1_000, 7_000, 30_000])
     # Steps to save the model
-    save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    save_steps: List[int] = field(default_factory=lambda: [1_000, 7_000, 30_000])
 
     # Initialization strategy
     init_type: str = "sfm"
@@ -273,9 +272,9 @@ class Runner:
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         means = self.splats["means3d"]  # [N, 3]
-        # quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
+        quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
         # rasterization does normalization internally
-        quats = self.splats["quats"]  # [N, 4]
+        # quats = self.splats["quats"]  # [N, 4]
         scales = torch.exp(self.splats["scales"])  # [N, 3]
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
 
@@ -293,7 +292,7 @@ class Runner:
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
-        render_colors, render_alphas, info = rasterization(
+        render_colors, render_alphas, info = rasterization_inria_wrapper(
             means=means,
             quats=quats,
             scales=scales,
@@ -404,8 +403,6 @@ class Runner:
             if cfg.random_bkgd:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
-
-            info["means2d"].retain_grad()  # used for running stats
 
             # loss
             l1loss = F.l1_loss(colors, pixels)
@@ -696,9 +693,8 @@ class Runner:
 
             # write images
             canvas = torch.cat([pixels, colors], dim=2).squeeze(0).cpu().numpy()
-            imageio.imwrite(
-                f"{self.render_dir}/val_{i:04d}.png", (canvas * 255).astype(np.uint8)
-            )
+            canvas = (canvas * 255).astype(np.uint8)
+            imageio.imwrite(f"{self.render_dir}/val_step{step:04d}_{i:04d}.png", canvas)
 
             pixels = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
             colors = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
@@ -764,15 +760,13 @@ class Runner:
                 far_plane=cfg.far_plane,
                 render_mode="RGB+ED",
             )  # [1, H, W, 4]
-            colors = torch.clamp(renders[0, ..., 0:3], 0.0, 1.0)  # [H, W, 3]
-            depths = renders[0, ..., 3:4]  # [H, W, 1]
+            colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)  # [1, H, W, 3]
+            depths = renders[..., 3:4]  # [1, H, W, 1]
             depths = (depths - depths.min()) / (depths.max() - depths.min())
 
             # write images
-            canvas = torch.cat(
-                [colors, depths.repeat(1, 1, 3)], dim=0 if width > height else 1
-            )
-            canvas = (canvas.cpu().numpy() * 255).astype(np.uint8)
+            canvas = torch.cat([colors, depths.repeat(1, 1, 1, 3)], dim=2).squeeze(0).cpu().numpy()
+            canvas = (canvas * 255).astype(np.uint8)
             canvas_all.append(canvas)
 
         # save to video
