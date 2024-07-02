@@ -1,13 +1,15 @@
 import math
+
 import torch
 from torch import Tensor
+
 from .cuda._wrapper import _make_lazy_cuda_func
 
-N_MAX = 51
-BINOMS = torch.zeros((N_MAX, N_MAX)).float().cuda()
-for n in range(N_MAX):
-    for k in range(n + 1):
-        BINOMS[n, k] = math.comb(n, k)
+# N_MAX = 51
+# BINOMS = torch.zeros((N_MAX, N_MAX)).float().cuda()  # TODO
+# for n in range(N_MAX):
+#     for k in range(n + 1):
+#         BINOMS[n, k] = math.comb(n, k)
 
 
 def compute_relocation(
@@ -33,6 +35,13 @@ def compute_relocation(
         **new_opacities**: The opacities of the new Gaussians. [N]
         **new_scales**: The scales of the Gaussians. [N, 3]
     """
+
+    N_MAX = 51
+    BINOMS = torch.zeros((N_MAX, N_MAX), device=opacities.device)
+    for n in range(N_MAX):
+        for k in range(n + 1):
+            BINOMS[n, k] = math.comb(n, k)
+
     N = opacities.shape[0]
     assert scales.shape == (N, 3), scales.shape
     assert ratios.shape == (N,), ratios.shape

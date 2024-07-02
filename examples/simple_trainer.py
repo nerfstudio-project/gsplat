@@ -9,6 +9,7 @@ import imageio
 import nerfview
 import numpy as np
 import torch
+import torch.distributed
 import torch.nn.functional as F
 import tqdm
 import tyro
@@ -16,6 +17,7 @@ import viser
 from datasets.colmap import Dataset, Parser
 from datasets.traj import generate_interpolated_path
 from torch import Tensor
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
@@ -171,6 +173,8 @@ def create_splats_with_optimizers(
     batch_size: int = 1,
     feature_dim: Optional[int] = None,
     device: str = "cuda",
+    world_rank: int = 0,
+    world_size: int = 1,
 ) -> Tuple[torch.nn.ParameterDict, torch.optim.Optimizer]:
     if init_type == "sfm":
         points = torch.from_numpy(parser.points).float()
@@ -181,11 +185,17 @@ def create_splats_with_optimizers(
     else:
         raise ValueError("Please specify a correct init_type: sfm or random")
 
-    N = points.shape[0]
     # Initialize the GS size to be the average dist of the 3 nearest neighbors
     dist2_avg = (knn(points, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
     dist_avg = torch.sqrt(dist2_avg)
     scales = torch.log(dist_avg * init_scale).unsqueeze(-1).repeat(1, 3)  # [N, 3]
+
+    # Distribute the GSs to different ranks (also works for single rank)
+    points = points[world_rank::world_size]
+    rgbs = rgbs[world_rank::world_size]
+    scales = scales[world_rank::world_size]
+
+    N = points.shape[0]
     quats = torch.rand((N, 4))  # [N, 4]
     opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
 
@@ -215,11 +225,12 @@ def create_splats_with_optimizers(
     # https://www.cs.princeton.edu/~smalladi/blog/2024/01/22/SDEs-ScalingRules/
     # Note that this would not make the training exactly equivalent, see
     # https://arxiv.org/pdf/2402.18824v1
+    BS = batch_size * world_size
     optimizers = [
         (torch.optim.SparseAdam if sparse_grad else torch.optim.Adam)(
-            [{"params": splats[name], "lr": lr * math.sqrt(batch_size), "name": name}],
-            eps=1e-15 / math.sqrt(batch_size),
-            betas=(1 - batch_size * (1 - 0.9), 1 - batch_size * (1 - 0.999)),
+            [{"params": splats[name], "lr": lr * math.sqrt(BS), "name": name}],
+            eps=1e-15 / math.sqrt(BS),
+            betas=(1 - BS * (1 - 0.9), 1 - BS * (1 - 0.999)),
         )
         for name, _, lr in params
     ]
@@ -232,7 +243,7 @@ class Runner:
     def __init__(
         self, local_rank: int, world_rank, world_size: int, cfg: Config
     ) -> None:
-        set_random_seed(42)
+        set_random_seed(42 + local_rank)
 
         self.cfg = cfg
         self.world_rank = world_rank
@@ -286,6 +297,8 @@ class Runner:
             batch_size=cfg.batch_size,
             feature_dim=feature_dim,
             device=self.device,
+            world_rank=world_rank,
+            world_size=world_size,
         )
         print("Model initialized. Number of GS:", len(self.splats["means3d"]))
 
@@ -391,6 +404,7 @@ class Runner:
             absgrad=self.cfg.absgrad,
             sparse_grad=self.cfg.sparse_grad,
             rasterize_mode=rasterize_mode,
+            distributed=self.world_size > 1,
             **kwargs,
         )
         return render_colors, render_alphas, info
@@ -481,6 +495,9 @@ class Runner:
                 image_ids=image_ids,
                 render_mode="RGB+ED" if cfg.depth_loss else "RGB",
             )
+            torch.distributed.barrier()
+            print("rank", self.world_rank, "after rasterize_splats")
+
             if renders.shape[-1] == 4:
                 colors, depths = renders[..., 0:3], renders[..., 3:4]
             else:
@@ -490,10 +507,14 @@ class Runner:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
 
-            info["means2d"].retain_grad()  # used for running stats
+            # info["means2d"].retain_grad()  # used for running stats
 
             # loss
+            torch.distributed.barrier()
+            print("rank", self.world_rank, "before loss")
             l1loss = F.l1_loss(colors, pixels)
+            torch.distributed.barrier()
+            print("rank", self.world_rank, "before ssim")
             ssimloss = 1.0 - self.ssim(
                 pixels.permute(0, 3, 1, 2), colors.permute(0, 3, 1, 2)
             )
@@ -518,6 +539,7 @@ class Runner:
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
 
+            print("rank", self.world_rank, "before bwd")
             loss.backward()
 
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
@@ -558,10 +580,9 @@ class Runner:
             # save checkpoint before updating the model
             if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
-                toc = time.time()
                 stats = {
                     "mem": mem,
-                    "ellipse_time": toc - tic,
+                    "ellipse_time": time.time() - global_tic,
                     "num_GS": len(self.splats["means3d"]),
                 }
                 print("Step: ", step, stats)

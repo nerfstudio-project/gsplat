@@ -54,8 +54,8 @@ def main(local_rank: int, world_rank, world_size: int, args):
         colors = colors[world_rank::world_size].contiguous()
         colors.requires_grad = True
 
-        viewmats = viewmats[world_rank::world_size].contiguous()
-        Ks = Ks[world_rank::world_size].contiguous()
+        viewmats = viewmats[world_rank::world_size][:1].contiguous()
+        Ks = Ks[world_rank::world_size][:1].contiguous()
 
         sh_degree = None
         C = len(viewmats)
@@ -76,6 +76,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
                 height,
                 render_mode="RGB+D",
                 packed=False,
+                distributed=world_size > 1,
             )
         C = render_colors.shape[0]
         assert render_colors.shape == (C, height, width, 4)

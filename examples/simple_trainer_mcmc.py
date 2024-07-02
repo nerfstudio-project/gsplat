@@ -6,29 +6,27 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import imageio
+import nerfview
 import numpy as np
 import torch
 import torch.nn.functional as F
 import tqdm
 import tyro
 import viser
-import nerfview
 from datasets.colmap import Dataset, Parser
 from datasets.traj import generate_interpolated_path
+from simple_trainer import create_splats_with_optimizers
 from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
-from utils import (
-    AppearanceOptModule,
-    CameraOptModule,
-    set_random_seed,
-)
+from utils import AppearanceOptModule, CameraOptModule, set_random_seed
+
 from gsplat import quat_scale_to_covar_preci
-from gsplat.rendering import rasterization
-from gsplat.relocation import compute_relocation
+from gsplat.core import cli
 from gsplat.cuda_legacy._torch_impl import scale_rot_to_cov3d
-from simple_trainer import create_splats_with_optimizers
+from gsplat.relocation import compute_relocation
+from gsplat.rendering import rasterization
 
 
 @dataclass
@@ -157,11 +155,16 @@ class Config:
 class Runner:
     """Engine for training and testing."""
 
-    def __init__(self, cfg: Config) -> None:
-        set_random_seed(42)
+    def __init__(
+        self, local_rank: int, world_rank, world_size: int, cfg: Config
+    ) -> None:
+        set_random_seed(42 + local_rank)
 
         self.cfg = cfg
-        self.device = "cuda"
+        self.world_rank = world_rank
+        self.local_rank = local_rank
+        self.world_size = world_size
+        self.device = f"cuda:{local_rank}"
 
         # Where to dump results.
         os.makedirs(cfg.result_dir, exist_ok=True)
@@ -209,6 +212,8 @@ class Runner:
             batch_size=cfg.batch_size,
             feature_dim=feature_dim,
             device=self.device,
+            world_rank=world_rank,
+            world_size=world_size,
         )
         print("Model initialized. Number of GS:", len(self.splats["means3d"]))
 
@@ -307,6 +312,7 @@ class Runner:
             absgrad=self.cfg.absgrad,
             sparse_grad=self.cfg.sparse_grad,
             rasterize_mode=rasterize_mode,
+            distributed=self.world_size > 1,
             **kwargs,
         )
         return render_colors, render_alphas, info
@@ -405,7 +411,7 @@ class Runner:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
 
-            info["means2d"].retain_grad()  # used for running stats
+            # info["means2d"].retain_grad()  # used for running stats
 
             # loss
             l1loss = F.l1_loss(colors, pixels)
@@ -453,6 +459,15 @@ class Runner:
                 pose_err = F.l1_loss(camtoworlds_gt, camtoworlds)
                 desc += f"pose err={pose_err.item():.6f}| "
             pbar.set_description(desc)
+
+            # write images (gt and render)
+            if step % 400 == 0:
+                canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
+                canvas = canvas.reshape(-1, *canvas.shape[2:])
+                imageio.imwrite(
+                    f"{self.render_dir}/train_rank{self.world_rank}.png",
+                    (canvas * 255).astype(np.uint8),
+                )
 
             if cfg.tb_every > 0 and step % cfg.tb_every == 0:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
@@ -655,7 +670,7 @@ class Runner:
         noise = (
             torch.randn_like(self.splats["means3d"])
             * (op_sigmoid(1 - opacities)).unsqueeze(-1)
-            * cfg.noise_lr
+            * self.cfg.noise_lr
             * last_lr
         )
         noise = torch.bmm(actual_covariance, noise.unsqueeze(-1)).squeeze(-1)
@@ -806,8 +821,8 @@ class Runner:
         return render_colors[0].cpu().numpy()
 
 
-def main(cfg: Config):
-    runner = Runner(cfg)
+def main(local_rank: int, world_rank, world_size: int, cfg: Config):
+    runner = Runner(local_rank, world_rank, world_size, cfg)
 
     if cfg.ckpt is not None:
         # run eval only
@@ -825,6 +840,24 @@ def main(cfg: Config):
 
 
 if __name__ == "__main__":
+    """
+    
+    CUDA_VISIBLE_DEVICES=0,2 python simple_trainer_mcmc.py --steps_scaler 0.5 --cap_max 500000
+    7k:
+    Step:  3499 {'mem': 1.2938737869262695, 'ellipse_time': 153.14019989967346, 'num_GS': 500000}
+    Step:  3499 {'mem': 1.3011698722839355, 'ellipse_time': 153.2966911792755, 'num_GS': 500000}
+    PSNR: 25.891, SSIM: 0.8108, LPIPS: 0.157 Time: 0.029s/image Number of GS: 500000
+
+    CUDA_VISIBLE_DEVICES=0 python simple_trainer_mcmc.py
+    7k:
+    Step:  6999 {'mem': 1.7902350425720215, 'ellipse_time': 232.5816080570221, 'num_GS': 1000000}
+    PSNR: 25.993, SSIM: 0.8155, LPIPS: 0.158 Time: 0.007s/image Number of GS: 1000000
+
+    CUDA_VISIBLE_DEVICES=0 python simple_trainer_mcmc.py --batch_size 2 --steps_scaler 0.5
+    7k:
+    Step:  3499 {'mem': 2.462855815887451, 'ellipse_time': 204.48375606536865, 'num_GS': 1000000}
+    PSNR: 25.865, SSIM: 0.8119, LPIPS: 0.159 Time: 0.008s/image Number of GS: 1000000
+    """
     cfg = tyro.cli(Config)
     cfg.adjust_steps(cfg.steps_scaler)
-    main(cfg)
+    cli(main, cfg, verbose=True)

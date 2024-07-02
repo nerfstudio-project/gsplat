@@ -2,6 +2,7 @@ import math
 from typing import Dict, Optional, Tuple
 
 import torch
+import torch.distributed
 import torch.distributed.nn.functional as DistF
 from torch import Tensor
 from typing_extensions import Literal
@@ -206,6 +207,7 @@ def rasterization(
 
     N = means.shape[0]
     C = viewmats.shape[0]
+    device = means.device
     assert means.shape == (N, 3), means.shape
     assert quats.shape == (N, 4), quats.shape
     assert scales.shape == (N, 3), scales.shape
@@ -218,8 +220,16 @@ def rasterization(
         world_size = torch.distributed.get_world_size()
         N_world = [None] * world_size
         C_world = [None] * world_size
+        # print("rank", world_rank, "Number of Gaussians:", N, "Number of Cameras:", C)
         torch.distributed.all_gather_object(N_world, N)
+        # print("rank", world_rank, "After gather 1", N_world)
         torch.distributed.all_gather_object(C_world, C)
+        # print("rank", world_rank, "After gather 2", C_world)
+    else:
+        world_rank = 0
+        world_size = 1
+        N_world = [N]
+        C_world = [C]
 
     if sh_degree is None:
         # treat colors as post-activation values, should be in shape [N, D] or [C, N, D]
@@ -248,8 +258,17 @@ def rasterization(
     # and the rasterize computation over cameras. So first we broadcast the cameras
     # to all ranks for projection.
     if distributed:
-        viewmats = torch.cat(DistF.all_gather(viewmats))
-        Ks = torch.cat(DistF.all_gather(Ks))
+        # TODO: not differentiable w.r.t. viewmats and Ks
+        out_tensor_list = [torch.empty((C_i, 4, 4), device=device) for C_i in C_world]
+        torch.distributed.all_gather(out_tensor_list, viewmats.contiguous())
+        # print("rank", world_rank, "After all_gather", out_tensor_list)
+        viewmats = torch.cat(out_tensor_list, dim=0)
+
+        out_tensor_list = [torch.empty((C_i, 3, 3), device=device) for C_i in C_world]
+        torch.distributed.all_gather(out_tensor_list, Ks.contiguous())
+        # print("rank", world_rank, "After all_gather", out_tensor_list)
+        Ks = torch.cat(out_tensor_list, dim=0)
+
         C = len(viewmats)  # Silently change C from local #Cameras to global #Cameras.
 
     # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
@@ -335,13 +354,20 @@ def rasterization(
         # make it apple-to-apple with Inria's CUDA Backend.
         colors = torch.clamp_min(colors + 0.5, 0.0)
 
+    # print("rank", world_rank, "Before retain_grad")
+    # means2d.retain_grad()
+    # print("rank", world_rank, "After retain_grad")
+
     # If in distributed mode, we need to scatter the GSs to the destination ranks, based
     # on which cameras they are visible to, which we already figured out in the projection
     # stage.
     if distributed:
         if packed:
-            raise NotImplementedError
+            raise NotImplementedError("Distributed mode does not support packed mode.")
         else:
+            # Silently change C from global #Cameras to local #Cameras.
+            C = C_world[world_rank]
+
             # package the Gaussian attributes
             data = torch.cat(
                 [
@@ -366,19 +392,42 @@ def rasterization(
                 )
                 for N_i in N_world
             ]
+            # print([d.shape for d in data_fl_list], [d.shape for d in collected_fl_list])
             DistF.all_to_all(collected_fl_list, data_fl_list)
+            # print("rank", world_rank, "After all_to_all")
             collected_fl = torch.cat(collected_fl_list, dim=0)  # [C_i * N, :]
             collected = collected_fl.reshape(
                 C, sum(N_world), data.shape[-1]
             )  # [C_i, N, :]
 
             # collected contains:
-            radii = collected[..., 0].int()
-            means2d = collected[..., 1:3]
+            radii__ = collected[..., 0].int()
+            means2d__ = collected[..., 1:3]
             depths = collected[..., 3]
             conics = collected[..., 4:7]
             opacities = collected[..., 7]
             colors = collected[..., 8:]
+    else:
+        means2d__ = means2d  # TODO: ugly naming
+        radii__ = radii
+
+    # print(
+    #     "rank",
+    #     world_rank,
+    #     "After data transfer",
+    #     means2d__.shape,
+    #     means2d__.mean(),
+    #     radii.shape,
+    #     radii.sum(),
+    #     depths.shape,
+    #     depths.mean(),
+    #     conics.shape,
+    #     conics.mean(),
+    #     opacities.shape,
+    #     opacities.mean(),
+    #     colors.shape,
+    #     colors.mean(),
+    # )
 
     # Rasterize to pixels
     if render_mode in ["RGB+D", "RGB+ED"]:
@@ -394,12 +443,13 @@ def rasterization(
     else:  # RGB
         pass
 
+    # print("rank", world_rank, "Before isect_tiles")
     # Identify intersecting tiles
     tile_width = math.ceil(width / float(tile_size))
     tile_height = math.ceil(height / float(tile_size))
     tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
-        means2d,
-        radii,
+        means2d__,
+        radii__,
         depths,
         tile_size,
         tile_width,
@@ -409,8 +459,10 @@ def rasterization(
         camera_ids=camera_ids,
         gaussian_ids=gaussian_ids,
     )
+    # print("rank", world_rank, "Before isect_offset_encode")
     isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
 
+    # print("rank", world_rank, "Before rasterize_to_pixels")
     if colors.shape[-1] > channel_chunk:
         # slice into chunks
         n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk
@@ -423,7 +475,7 @@ def rasterization(
                 else None
             )
             render_colors_, render_alphas_ = rasterize_to_pixels(
-                means2d,
+                means2d__,
                 conics,
                 colors_chunk,
                 opacities,
@@ -442,7 +494,7 @@ def rasterization(
         render_alphas = render_alphas[0]  # discard the rest
     else:
         render_colors, render_alphas = rasterize_to_pixels(
-            means2d,
+            means2d__,
             conics,
             colors,
             opacities,
@@ -464,6 +516,7 @@ def rasterization(
             ],
             dim=-1,
         )
+    # print("rank", world_rank, "After rasterize_to_pixels")
 
     meta = {
         "camera_ids": camera_ids,
