@@ -139,7 +139,7 @@ class Config:
     depth_loss: bool = False
     # Weight for depth loss
     depth_lambda: float = 1e-2
-    
+
     # Enable normal loss. (experimental)
     normal_loss: bool = True
     # Weight for normal loss
@@ -306,7 +306,7 @@ class Runner:
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
-        
+
         render_colors, render_alphas, info = self.rasterization_fn(
             means=means,
             quats=quats,
@@ -426,9 +426,12 @@ class Runner:
                 pixels.permute(0, 3, 1, 2), colors.permute(0, 3, 1, 2)
             )
             loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
-            loss += cfg.opacity_reg * torch.abs(torch.sigmoid(self.splats["opacities"])).mean()
+            loss += (
+                cfg.opacity_reg
+                * torch.abs(torch.sigmoid(self.splats["opacities"])).mean()
+            )
             loss += cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
-            
+
             if cfg.depth_loss:
                 # query depths from depth map
                 points = torch.stack(
@@ -448,13 +451,13 @@ class Runner:
                 disp_gt = 1.0 / depths_gt  # [1, M]
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
-            
+
             if cfg.normal_loss:
                 normal_lambda = cfg.normal_lambda if step > 7000 else 0.0
                 dist_lambda = cfg.dist_lambda if step > 3000 else 0.0
 
-                rend_normal  = info['rend_normal']
-                surf_normal = info['surf_normal']
+                rend_normal = info["rend_normal"]
+                surf_normal = info["surf_normal"]
                 normalloss = (1 - (rend_normal * surf_normal).sum(dim=-1)).mean()
                 distloss = (info["rend_dist"]).mean()
                 loss += normal_lambda * normalloss + dist_lambda * distloss
@@ -711,7 +714,7 @@ class Runner:
             )  # [1, H, W, 3]
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
-            
+
             colors = torch.clamp(colors, 0.0, 1.0)
             canvas_list = [pixels, colors]
             if self.cfg.normal_loss:
@@ -788,7 +791,7 @@ class Runner:
                 far_plane=cfg.far_plane,
                 render_mode="RGB+ED",
             )  # [1, H, W, 4]
-            
+
             colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)  # [1, H, W, 3]
             canvas_list = [colors]
             if renders.shape[-1] == 4:

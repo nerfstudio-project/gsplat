@@ -624,7 +624,8 @@ def rasterization_inria_wrapper(
         render_colors.append(render_colors_)
     render_colors = torch.stack(render_colors, dim=0)
     return render_colors, None, {}
-    
+
+
 def rasterization_2dgs_inria_wrapper(
     means: Tensor,  # [N, 3]
     quats: Tensor,  # [N, 4]
@@ -685,7 +686,7 @@ def rasterization_2dgs_inria_wrapper(
     C = len(viewmats)
     device = means.device
     channels = colors.shape[-1]
-    
+
     scales = scales[:, :2]  # [N, 2]
     quats = quats = F.normalize(quats, dim=-1)  # [N, 4]
 
@@ -756,7 +757,7 @@ def rasterization_2dgs_inria_wrapper(
         render_colors_ = render_colors_.permute(1, 2, 0)  # [H, W, 3]
         render_colors.append(render_colors_)
     render_colors = torch.stack(render_colors, dim=0)
-    
+
     # additional maps
     allmaps = allmaps.permute(1, 2, 0)  # [H, W, C]
     render_alphas = allmap[..., 1:2]
@@ -764,37 +765,39 @@ def rasterization_2dgs_inria_wrapper(
     # get normal map
     # transform normal from view space to world space
     render_normal = allmap[..., 2:5]
-    render_normal = render_normal @ (world_view_transform[:3,:3].T)
-    
+    render_normal = render_normal @ (world_view_transform[:3, :3].T)
+
     # get median depth map
     render_depth_median = allmap[..., 5:6]
     render_depth_median = torch.nan_to_num(render_depth_median, 0, 0)
 
     # get expected depth map
     render_depth_expected = allmap[..., 0:1]
-    render_depth_expected = (render_depth_expected / render_alphas)
+    render_depth_expected = render_depth_expected / render_alphas
     render_depth_expected = torch.nan_to_num(render_depth_expected, 0, 0)
-    
+
     # get depth distortion map
     render_dist = allmap[..., 6:7]
 
     # psedo surface attributes
     # surf depth is either median or expected by setting depth_ratio to 1 or 0
-    # for bounded scene, use median depth, i.e., depth_ratio = 1; 
+    # for bounded scene, use median depth, i.e., depth_ratio = 1;
     # for unbounded scene, use expected depth, i.e., depth_ration = 0, to reduce disk anliasing.
     depth_ratio = 0
-    surf_depth = render_depth_expected * (1-depth_ratio) + (depth_ratio) * render_depth_median
-    
+    surf_depth = (
+        render_depth_expected * (1 - depth_ratio) + (depth_ratio) * render_depth_median
+    )
+
     # assume the depth points form the 'surface' and generate psudo surface normal for regularizations.
     surf_normal = depth_to_normal(surf_depth, world_view_transform, full_proj_transform)
     # remember to multiply with accum_alpha since render_normal is unnormalized.
     surf_normal = surf_normal * (render_alphas).detach()
-    
+
     render_alphas = render_alphas.unsqueeze(0)
     meta = {
-            'rend_normal': render_normal.unsqueeze(0),
-            'rend_dist': render_dist.unsqueeze(0),
-            'surf_depth': surf_depth.unsqueeze(0),
-            'surf_normal': surf_normal.unsqueeze(0),
+        "rend_normal": render_normal.unsqueeze(0),
+        "rend_dist": render_dist.unsqueeze(0),
+        "surf_depth": surf_depth.unsqueeze(0),
+        "surf_normal": surf_normal.unsqueeze(0),
     }
     return render_colors, render_alphas, meta
