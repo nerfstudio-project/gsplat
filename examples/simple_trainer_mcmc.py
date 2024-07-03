@@ -81,6 +81,8 @@ class Config:
     init_scale: float = 0.1
     # Weight for SSIM loss
     ssim_lambda: float = 0.2
+    lambda_normal: float = 0.05
+    lambda_dist: float = 0.0
 
     # Near plane clipping distance
     near_plane: float = 0.01
@@ -306,6 +308,7 @@ class Runner:
             absgrad=self.cfg.absgrad,
             sparse_grad=self.cfg.sparse_grad,
             rasterize_mode=rasterize_mode,
+            mode="2dgs",
             **kwargs,
         )
         return render_colors, render_alphas, info
@@ -410,6 +413,19 @@ class Runner:
                 pixels.permute(0, 3, 1, 2), colors.permute(0, 3, 1, 2)
             )
             loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
+            
+            # regularization
+            lambda_normal = cfg.lambda_normal if step > 7000 else 0.0
+            lambda_dist = cfg.lambda_dist if step > 3000 else 0.0
+
+            rend_dist = info["rend_dist"]
+            rend_normal  = info['rend_normal']
+            surf_normal = info['surf_normal']
+            normal_error = (1 - (rend_normal * surf_normal).sum(dim=0))[None]
+            normal_loss = (normal_error).mean()
+            dist_loss = (rend_dist).mean()
+            loss += lambda_normal * normal_loss + lambda_dist * dist_loss
+            
             if cfg.depth_loss:
                 # query depths from depth map
                 points = torch.stack(
@@ -456,6 +472,8 @@ class Runner:
                 self.writer.add_scalar("train/loss", loss.item(), step)
                 self.writer.add_scalar("train/l1loss", l1loss.item(), step)
                 self.writer.add_scalar("train/ssimloss", ssimloss.item(), step)
+                self.writer.add_scalar("train/normal_loss", normal_loss.item(), step)
+                self.writer.add_scalar("train/dist_loss", dist_loss.item(), step)
                 self.writer.add_scalar(
                     "train/num_GS", len(self.splats["means3d"]), step
                 )
@@ -678,7 +696,7 @@ class Runner:
 
             torch.cuda.synchronize()
             tic = time.time()
-            colors, _, _ = self.rasterize_splats(
+            colors, _, info = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -688,11 +706,15 @@ class Runner:
                 far_plane=cfg.far_plane,
             )  # [1, H, W, 3]
             colors = torch.clamp(colors, 0.0, 1.0)
+            rend_normals = info["rend_normal"].permute(1,2,0).unsqueeze(0)
+            surf_normals = info["surf_normal"].permute(1,2,0).unsqueeze(0)
+            rend_normals = rend_normals * -0.5 + 0.5
+            surf_normals = surf_normals * -0.5 + 0.5
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
 
             # write images
-            canvas_list = [pixels, colors]
+            canvas_list = [pixels, colors, rend_normals, surf_normals]
             canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()
             canvas = (canvas * 255).astype(np.uint8)
             imageio.imwrite(f"{self.render_dir}/val_step{step:04d}_{i:04d}.png", canvas)
@@ -751,7 +773,7 @@ class Runner:
 
         canvas_all = []
         for i in tqdm.trange(len(camtoworlds), desc="Rendering trajectory"):
-            renders, _, _ = self.rasterize_splats(
+            renders, _, info = self.rasterize_splats(
                 camtoworlds=camtoworlds[i : i + 1],
                 Ks=K[None],
                 width=width,
@@ -762,7 +784,12 @@ class Runner:
                 render_mode="RGB+ED",
             )  # [1, H, W, 4]
             colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)  # [1, H, W, 3]
-            canvas_list = [colors]
+            rend_normals = info["rend_normal"].permute(1,2,0).unsqueeze(0)
+            surf_normals = info["surf_normal"].permute(1,2,0).unsqueeze(0)
+            rend_normals = rend_normals * -0.5 + 0.5
+            surf_normals = surf_normals * -0.5 + 0.5
+            
+            canvas_list = [colors, rend_normals, surf_normals]
             if renders.shape[-1] == 4:
                 depths = renders[..., 3:4]  # [1, H, W, 1]
                 depths = (depths - depths.min()) / (depths.max() - depths.min())

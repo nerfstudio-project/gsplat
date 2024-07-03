@@ -12,6 +12,7 @@ from .cuda._wrapper import (
     rasterize_to_pixels,
     spherical_harmonics,
 )
+from .point_utils import depth_to_normal
 
 
 def rasterization(
@@ -507,6 +508,7 @@ def rasterization_inria_wrapper(
     eps2d: float = 0.3,
     sh_degree: Optional[int] = None,
     backgrounds: Optional[Tensor] = None,
+    mode: str = "3dgs",
     **kwargs,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Wrapper for Inria's rasterization backend.
@@ -521,10 +523,17 @@ def rasterization_inria_wrapper(
         https://github.com/graphdeco-inria/diff-gaussian-rasterization
 
     """
-    from diff_gaussian_rasterization import (
-        GaussianRasterizationSettings,
-        GaussianRasterizer,
-    )
+    if mode == "3dgs":
+        from diff_gaussian_rasterization import (
+            GaussianRasterizationSettings,
+            GaussianRasterizer,
+        )
+    elif mode == "2dgs":
+        from diff_surfel_rasterization import (
+            GaussianRasterizationSettings,
+            GaussianRasterizer,
+        )
+        scales = scales[:, :2]
 
     def _getProjectionMatrix(znear, zfar, fovX, fovY, device="cuda"):
         tanHalfFovY = math.tan((fovY / 2))
@@ -602,7 +611,7 @@ def rasterization_inria_wrapper(
                     _colors.shape[0], 3 - _colors.shape[-1], device=device
                 )
                 _colors = torch.cat([_colors, pad], dim=-1)
-            _render_colors_, radii = rasterizer(
+            _render_colors_, _, allmap = rasterizer(
                 means3D=means,
                 means2D=means2D,
                 shs=_colors if colors.dim() == 3 else None,
@@ -621,4 +630,45 @@ def rasterization_inria_wrapper(
 
         render_colors.append(render_colors_)
     render_colors = torch.stack(render_colors, dim=0)
-    return render_colors, None, {}
+    
+    # additional regularizations
+    render_alpha = allmap[1:2]
+
+    # get normal map
+    # transform normal from view space to world space
+    render_normal = allmap[2:5]
+    render_normal = (render_normal.permute(1,2,0) @ (world_view_transform[:3,:3].T)).permute(2,0,1)
+    
+    # get median depth map
+    render_depth_median = allmap[5:6]
+    render_depth_median = torch.nan_to_num(render_depth_median, 0, 0)
+
+    # get expected depth map
+    render_depth_expected = allmap[0:1]
+    render_depth_expected = (render_depth_expected / render_alpha)
+    render_depth_expected = torch.nan_to_num(render_depth_expected, 0, 0)
+    
+    # get depth distortion map
+    render_dist = allmap[6:7]
+
+    # psedo surface attributes
+    # surf depth is either median or expected by setting depth_ratio to 1 or 0
+    # for bounded scene, use median depth, i.e., depth_ratio = 1; 
+    # for unbounded scene, use expected depth, i.e., depth_ration = 0, to reduce disk anliasing.
+    depth_ratio = 0
+    surf_depth = render_depth_expected * (1-depth_ratio) + (depth_ratio) * render_depth_median
+    
+    # assume the depth points form the 'surface' and generate psudo surface normal for regularizations.
+    surf_normal = depth_to_normal(surf_depth, world_view_transform, full_proj_transform)
+    surf_normal = surf_normal.permute(2,0,1)
+    # remember to multiply with accum_alpha since render_normal is unnormalized.
+    surf_normal = surf_normal * (render_alpha).detach()
+    
+    info = {
+            'rend_alpha': render_alpha,
+            'rend_normal': render_normal,
+            'rend_dist': render_dist,
+            'surf_depth': surf_depth,
+            'surf_normal': surf_normal,
+    }
+    return render_colors, None, info

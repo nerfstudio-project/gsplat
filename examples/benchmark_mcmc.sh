@@ -1,7 +1,7 @@
-RESULT_DIR=results/mcmc_sfm_inria
+RESULT_DIR=results/mcmc_sfm_inria_2dgs
 
 # for SCENE in bicycle bonsai counter garden kitchen room stump;
-for SCENE in bonsai counter kitchen room bicycle garden stump;
+for SCENE in garden treehill bonsai counter kitchen room bicycle stump;
 do
     if [ "$SCENE" = "bicycle" ] || [ "$SCENE" = "stump" ] || [ "$SCENE" = "garden" ]; then
         DATA_FACTOR=4
