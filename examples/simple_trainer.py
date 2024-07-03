@@ -230,6 +230,7 @@ def create_splats_with_optimizers(
         (torch.optim.SparseAdam if sparse_grad else torch.optim.Adam)(
             [{"params": splats[name], "lr": lr * math.sqrt(BS), "name": name}],
             eps=1e-15 / math.sqrt(BS),
+            # TODO: check betas logic when BS is larger than 10 betas[0] will be zero.
             betas=(1 - BS * (1 - 0.9), 1 - BS * (1 - 0.999)),
         )
         for name, _, lr in params
@@ -495,8 +496,6 @@ class Runner:
                 image_ids=image_ids,
                 render_mode="RGB+ED" if cfg.depth_loss else "RGB",
             )
-            torch.distributed.barrier()
-            print("rank", self.world_rank, "after rasterize_splats")
 
             if renders.shape[-1] == 4:
                 colors, depths = renders[..., 0:3], renders[..., 3:4]
@@ -507,14 +506,10 @@ class Runner:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
 
-            # info["means2d"].retain_grad()  # used for running stats
+            info["means2d"].retain_grad()  # used for running stats
 
             # loss
-            torch.distributed.barrier()
-            print("rank", self.world_rank, "before loss")
             l1loss = F.l1_loss(colors, pixels)
-            torch.distributed.barrier()
-            print("rank", self.world_rank, "before ssim")
             ssimloss = 1.0 - self.ssim(
                 pixels.permute(0, 3, 1, 2), colors.permute(0, 3, 1, 2)
             )
@@ -539,7 +534,6 @@ class Runner:
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
 
-            print("rank", self.world_rank, "before bwd")
             loss.backward()
 
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
@@ -1017,6 +1011,30 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
 
 
 if __name__ == "__main__":
+    """
+    CUDA_VISIBLE_DEVICES=0,2 python simple_trainer.py --steps_scaler 0.5
+    Step:  3499 {'mem': 5.072880268096924, 'ellipse_time': 317.50284695625305, 'num_GS': 2244441}
+    Step:  3499 {'mem': 4.873777866363525, 'ellipse_time': 318.75603342056274, 'num_GS': 2135991}
+    PSNR: 26.171, SSIM: 0.8280, LPIPS: 0.126 Time: 0.076s/image Number of GS: 2135991
+    
+    CUDA_VISIBLE_DEVICES=0 python simple_trainer.py --batch_size 2 --steps_scaler 0.5
+    Step:  3499 {'mem': 8.903686046600342, 'ellipse_time': 349.8184747695923, 'num_GS': 4434950}
+    PSNR: 26.175, SSIM: 0.8296, LPIPS: 0.126 Time: 0.021s/image Number of GS: 4434950
+
+    CUDA_VISIBLE_DEVICES=5,6,7,8 python simple_trainer.py --steps_scaler 0.25 --disable_viewer
+    Step:  1749 {'mem': 3.5573081970214844, 'ellipse_time': 228.86491537094116, 'num_GS': 1090741}
+    Step:  1749 {'mem': 3.479849338531494, 'ellipse_time': 228.7728567123413, 'num_GS': 1061422}
+    Step:  1749 {'mem': 3.6650757789611816, 'ellipse_time': 228.6867446899414, 'num_GS': 1134071}
+    Step:  1749 {'mem': 3.5960493087768555, 'ellipse_time': 228.25761008262634, 'num_GS': 1109247}
+    PSNR: 26.259, SSIM: 0.8314, LPIPS: 0.124 Time: 0.112s/image Number of GS: 1109247  
+
+    CUDA_VISIBLE_DEVICES=5,6 python simple_trainer.py --batch_size 2 --steps_scaler 0.25 --disable_viewer
+    <OOM>
+    
+    CUDA_VISIBLE_DEVICES=7 python simple_trainer.py --batch_size 4 --steps_scaler 0.25 --disable_viewer
+    <OOM>
+    """
+
     cfg = tyro.cli(Config)
     cfg.adjust_steps(cfg.steps_scaler)
     cli(main, cfg, verbose=True)
