@@ -49,13 +49,10 @@ def rasterization(
 
     .. note::
         **Multi-GPU Distributed Rasterization**: This function can be used in a multi-GPU
-        distributed setting by setting `distributed` to True. In the case of there are in
-        total M Gaussians in the scene, S cameras to be rendered, and K ranks (GPUs)
-        participate the job, the Gaussians should be divided into K parts (can be unevenly),
-        with each rank holding :math:`N_i` Gaussians, where :math:`N_1 + N_2 + ... + N_K = M`.
-        Similarly, cameras should also be divided into K parts (can be evenly), with
-        each rank's job is to render for the :math:`C_i` cameras it holds, where
-        :math:`C_1 + C_2 + ... + C_K = S`.
+        distributed setting by setting `distributed` to True. When `distributed` is True,
+        a subset of total Gaussians could be passed in this function from each rank, and
+        the function will collaboratively render the images for all ranks. For the distributed
+        algorith, please refer to the paper `On Scaling Up 3D Gaussian Splatting Training <https://arxiv.org/abs/2406.18533>`_.
 
     .. note::
         **Batch Rasterization**: This function allows for rasterizing a set of 3D Gaussians
@@ -162,8 +159,8 @@ def rasterization(
             If the required rendering channels are larger than this value, the rendering
             will be done looply in chunks.
         distributed: Whether to use distributed rendering. Default is False. If True,
-            Guassians from all ranks will joint together for the rendering. See the note
-            for more details.
+            The input Gaussians are expected to be a subset of scene in each rank, and
+            the function will collaboratively render the images for all ranks.
 
     Returns:
         A tuple:
