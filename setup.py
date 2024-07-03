@@ -81,6 +81,9 @@ def get_extensions():
         undef_macros += ["__HIP_NO_HALF_CONVERSIONS__"]
     else:
         nvcc_flags += ["--expt-relaxed-constexpr"]
+
+    # GLM has spammy and very annoyingly verbose warnings that this suppresses
+    nvcc_flags += ["-diag-suppress", "20012"]
     extra_compile_args["nvcc"] = nvcc_flags
     if sys.platform == "win32":
         extra_compile_args["nvcc"] += ["-DWIN32_LEAN_AND_MEAN"]
