@@ -1,3 +1,4 @@
+# Under construction... to be released soon!
 # gsplat
 
 [![Core Tests.](https://github.com/nerfstudio-project/gsplat/actions/workflows/core_tests.yml/badge.svg?branch=main)](https://github.com/nerfstudio-project/gsplat/actions/workflows/core_tests.yml)
