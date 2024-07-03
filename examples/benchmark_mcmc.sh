@@ -1,12 +1,14 @@
-RESULT_DIR=results/mcmc_sfm_inria_2dgs
+RESULT_DIR=results/mcmc_sfm_2dgs
 
 # for SCENE in bicycle bonsai counter garden kitchen room stump;
 for SCENE in treehill garden flowers bonsai counter kitchen room bicycle stump;
 do
     if [ "$SCENE" = "bicycle" ] || [ "$SCENE" = "stump" ] || [ "$SCENE" = "garden" ] || [ "$SCENE" = "treehill" ] || [ "$SCENE" = "flowers" ]; then
         DATA_FACTOR=4
+        DIST_LAMBDA=100
     else
         DATA_FACTOR=2
+        DIST_LAMBDA=1000
     fi
     
     if [ "$SCENE" = "bonsai" ]; then
@@ -25,6 +27,8 @@ do
 
     # train without eval
     python simple_trainer_mcmc.py --disable_viewer --data_factor $DATA_FACTOR \
+        --model_type 2dgs \
+        --dist_lambda $DIST_LAMBDA \
         --init_type sfm \
         --cap_max $CAP_MAX \
         --data_dir data/360_v2/$SCENE/ \

@@ -25,13 +25,15 @@ from utils import (
     set_random_seed,
 )
 from gsplat import quat_scale_to_covar_preci
-from gsplat.rendering import rasterization, rasterization_inria_wrapper
+from gsplat.rendering import rasterization, rasterization_2dgs_inria_wrapper
 from gsplat.relocation import compute_relocation
 from simple_trainer import create_splats_with_optimizers
 
 
 @dataclass
 class Config:
+    # Model type can be 3dgs or 2dgs
+    model_type: str = "3dgs"
     # Disable viewer
     disable_viewer: bool = False
     # Path to the .pt file. If provide, it will skip training and render a video
@@ -81,8 +83,6 @@ class Config:
     init_scale: float = 0.1
     # Weight for SSIM loss
     ssim_lambda: float = 0.2
-    lambda_normal: float = 0.05
-    lambda_dist: float = 100 # 1000 for bounded scenes, 100 for unbounded scenes
 
     # Near plane clipping distance
     near_plane: float = 0.01
@@ -139,6 +139,13 @@ class Config:
     depth_loss: bool = False
     # Weight for depth loss
     depth_lambda: float = 1e-2
+    
+    # Enable normal loss. (experimental)
+    normal_loss: bool = True
+    # Weight for normal loss
+    normal_lambda: float = 0.05
+    # Weight for distortion loss. Use 100 for unbounded scenes and 1000 for bounded scenes
+    dist_lambda: float = 100
 
     # Dump information to tensorboard every this steps
     tb_every: int = 100
@@ -163,6 +170,12 @@ class Runner:
 
         self.cfg = cfg
         self.device = "cuda"
+        if cfg.model_type == "3dgs":
+            self.rasterization_fn = rasterization
+        elif cfg.model_type == "2dgs":
+            self.rasterization_fn = rasterization_2dgs_inria_wrapper
+        else:
+            raise ValueError(f"Unsupported model type: {cfg.model_type}")
 
         # Where to dump results.
         os.makedirs(cfg.result_dir, exist_ok=True)
@@ -274,9 +287,8 @@ class Runner:
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         means = self.splats["means3d"]  # [N, 3]
-        quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
         # rasterization does normalization internally
-        # quats = self.splats["quats"]  # [N, 4]
+        quats = self.splats["quats"]  # [N, 4]
         scales = torch.exp(self.splats["scales"])  # [N, 3]
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
 
@@ -294,7 +306,8 @@ class Runner:
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
-        render_colors, render_alphas, info = rasterization_inria_wrapper(
+        
+        render_colors, render_alphas, info = self.rasterization_fn(
             means=means,
             quats=quats,
             scales=scales,
@@ -413,18 +426,8 @@ class Runner:
                 pixels.permute(0, 3, 1, 2), colors.permute(0, 3, 1, 2)
             )
             loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
-            
-            # regularization
-            lambda_normal = cfg.lambda_normal if step > 7000 else 0.0
-            lambda_dist = cfg.lambda_dist if step > 3000 else 0.0
-
-            rend_dist = info["rend_dist"]
-            rend_normal  = info['rend_normal']
-            surf_normal = info['surf_normal']
-            normal_error = (1 - (rend_normal * surf_normal).sum(dim=0))[None]
-            normal_loss = (normal_error).mean()
-            dist_loss = (rend_dist).mean()
-            loss += lambda_normal * normal_loss + lambda_dist * dist_loss
+            loss += cfg.opacity_reg * torch.abs(torch.sigmoid(self.splats["opacities"])).mean()
+            loss += cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
             
             if cfg.depth_loss:
                 # query depths from depth map
@@ -445,16 +448,16 @@ class Runner:
                 disp_gt = 1.0 / depths_gt  # [1, M]
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
+            
+            if cfg.normal_loss:
+                normal_lambda = cfg.normal_lambda if step > 7000 else 0.0
+                dist_lambda = cfg.dist_lambda if step > 3000 else 0.0
 
-            loss = (
-                loss
-                + cfg.opacity_reg
-                * torch.abs(torch.sigmoid(self.splats["opacities"])).mean()
-            )
-            loss = (
-                loss
-                + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
-            )
+                rend_normal  = info['rend_normal']
+                surf_normal = info['surf_normal']
+                normalloss = (1 - (rend_normal * surf_normal).sum(dim=-1)).mean()
+                distloss = (info["rend_dist"]).mean()
+                loss += normal_lambda * normalloss + dist_lambda * distloss
 
             loss.backward()
 
@@ -472,14 +475,15 @@ class Runner:
                 self.writer.add_scalar("train/loss", loss.item(), step)
                 self.writer.add_scalar("train/l1loss", l1loss.item(), step)
                 self.writer.add_scalar("train/ssimloss", ssimloss.item(), step)
-                self.writer.add_scalar("train/normal_loss", normal_loss.item(), step)
-                self.writer.add_scalar("train/dist_loss", dist_loss.item(), step)
                 self.writer.add_scalar(
                     "train/num_GS", len(self.splats["means3d"]), step
                 )
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
+                if cfg.normal_loss:
+                    self.writer.add_scalar("train/normalloss", normalloss.item(), step)
+                    self.writer.add_scalar("train/distloss", distloss.item(), step)
                 if cfg.tb_save_image:
                     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
                     canvas = canvas.reshape(-1, *canvas.shape[2:])
@@ -705,16 +709,17 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
             )  # [1, H, W, 3]
-            colors = torch.clamp(colors, 0.0, 1.0)
-            rend_normals = info["rend_normal"].permute(1,2,0).unsqueeze(0)
-            surf_normals = info["surf_normal"].permute(1,2,0).unsqueeze(0)
-            rend_normals = rend_normals * -0.5 + 0.5
-            surf_normals = surf_normals * -0.5 + 0.5
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
+            
+            colors = torch.clamp(colors, 0.0, 1.0)
+            canvas_list = [pixels, colors]
+            if self.cfg.normal_loss:
+                rend_normals = info["rend_normal"] * 0.5 + 0.5
+                surf_normals = info["surf_normal"] * 0.5 + 0.5
+                canvas_list.extend([rend_normals, surf_normals])
 
             # write images
-            canvas_list = [pixels, colors, rend_normals, surf_normals]
             canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()
             canvas = (canvas * 255).astype(np.uint8)
             imageio.imwrite(f"{self.render_dir}/val_step{step:04d}_{i:04d}.png", canvas)
@@ -783,17 +788,17 @@ class Runner:
                 far_plane=cfg.far_plane,
                 render_mode="RGB+ED",
             )  # [1, H, W, 4]
-            colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)  # [1, H, W, 3]
-            rend_normals = info["rend_normal"].permute(1,2,0).unsqueeze(0)
-            surf_normals = info["surf_normal"].permute(1,2,0).unsqueeze(0)
-            rend_normals = rend_normals * -0.5 + 0.5
-            surf_normals = surf_normals * -0.5 + 0.5
             
-            canvas_list = [colors, rend_normals, surf_normals]
+            colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)  # [1, H, W, 3]
+            canvas_list = [colors]
             if renders.shape[-1] == 4:
                 depths = renders[..., 3:4]  # [1, H, W, 1]
                 depths = (depths - depths.min()) / (depths.max() - depths.min())
                 canvas_list.append(depths.repeat(1, 1, 1, 3))
+            if self.cfg.normal_loss:
+                rend_normals = info["rend_normal"] * 0.5 + 0.5
+                surf_normals = info["surf_normal"] * 0.5 + 0.5
+                canvas_list.extend([rend_normals, surf_normals])
 
             # write images
             canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()

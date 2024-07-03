@@ -5,7 +5,7 @@ import numpy as np
 
 def depths_to_points(depthmap, world_view_transform, full_proj_transform):
     c2w = (world_view_transform.T).inverse()
-    H, W = depthmap.shape[-2:]
+    H, W = depthmap.shape[:2]
     ndc2pix = torch.tensor([
         [W / 2, 0, 0, (W) / 2],
         [0, H / 2, 0, (H) / 2],
@@ -21,7 +21,7 @@ def depths_to_points(depthmap, world_view_transform, full_proj_transform):
     return points
 
 def depth_to_normal(depth, world_view_transform, full_proj_transform):
-    points = depths_to_points(depth, world_view_transform, full_proj_transform).reshape(*depth.shape[1:], 3)
+    points = depths_to_points(depth, world_view_transform, full_proj_transform).reshape(*depth.shape[:2], 3)
     output = torch.zeros_like(points)
     dx = torch.cat([points[2:, 1:-1] - points[:-2, 1:-1]], dim=0)
     dy = torch.cat([points[1:-1, 2:] - points[1:-1, :-2]], dim=1)

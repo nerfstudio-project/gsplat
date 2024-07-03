@@ -3,6 +3,7 @@ from typing import Dict, Optional, Tuple
 
 import torch
 from torch import Tensor
+import torch.nn.functional as F
 from typing_extensions import Literal
 
 from .cuda._wrapper import (
@@ -508,7 +509,6 @@ def rasterization_inria_wrapper(
     eps2d: float = 0.3,
     sh_degree: Optional[int] = None,
     backgrounds: Optional[Tensor] = None,
-    mode: str = "3dgs",
     **kwargs,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Wrapper for Inria's rasterization backend.
@@ -523,17 +523,10 @@ def rasterization_inria_wrapper(
         https://github.com/graphdeco-inria/diff-gaussian-rasterization
 
     """
-    if mode == "3dgs":
-        from diff_gaussian_rasterization import (
-            GaussianRasterizationSettings,
-            GaussianRasterizer,
-        )
-    elif mode == "2dgs":
-        from diff_surfel_rasterization import (
-            GaussianRasterizationSettings,
-            GaussianRasterizer,
-        )
-        scales = scales[:, :2]
+    from diff_gaussian_rasterization import (
+        GaussianRasterizationSettings,
+        GaussianRasterizer,
+    )
 
     def _getProjectionMatrix(znear, zfar, fovX, fovY, device="cuda"):
         tanHalfFovY = math.tan((fovY / 2))
@@ -611,7 +604,7 @@ def rasterization_inria_wrapper(
                     _colors.shape[0], 3 - _colors.shape[-1], device=device
                 )
                 _colors = torch.cat([_colors, pad], dim=-1)
-            _render_colors_, _, allmap = rasterizer(
+            _render_colors_, _ = rasterizer(
                 means3D=means,
                 means2D=means2D,
                 shs=_colors if colors.dim() == 3 else None,
@@ -630,26 +623,160 @@ def rasterization_inria_wrapper(
 
         render_colors.append(render_colors_)
     render_colors = torch.stack(render_colors, dim=0)
+    return render_colors, None, {}
     
-    # additional regularizations
-    render_alpha = allmap[1:2]
+def rasterization_2dgs_inria_wrapper(
+    means: Tensor,  # [N, 3]
+    quats: Tensor,  # [N, 4]
+    scales: Tensor,  # [N, 3]
+    opacities: Tensor,  # [N]
+    colors: Tensor,  # [N, D] or [N, K, 3]
+    viewmats: Tensor,  # [C, 4, 4]
+    Ks: Tensor,  # [C, 3, 3]
+    width: int,
+    height: int,
+    near_plane: float = 0.01,
+    far_plane: float = 100.0,
+    eps2d: float = 0.3,
+    sh_degree: Optional[int] = None,
+    backgrounds: Optional[Tensor] = None,
+    **kwargs,
+) -> Tuple[Tensor, Tensor, Dict]:
+    """Wrapper for Inria's rasterization backend.
+
+    .. warning::
+        This function exists for comparision purpose only. Only rendered image is
+        returned.
+
+    .. warning::
+        Inria's CUDA backend has its own LICENSE, so this function should be used with
+        the respect to the original LICENSE at:
+        https://github.com/graphdeco-inria/diff-gaussian-rasterization
+
+    """
+    from diff_surfel_rasterization import (
+        GaussianRasterizationSettings,
+        GaussianRasterizer,
+    )
+
+    def _getProjectionMatrix(znear, zfar, fovX, fovY, device="cuda"):
+        tanHalfFovY = math.tan((fovY / 2))
+        tanHalfFovX = math.tan((fovX / 2))
+
+        top = tanHalfFovY * znear
+        bottom = -top
+        right = tanHalfFovX * znear
+        left = -right
+
+        P = torch.zeros(4, 4, device=device)
+
+        z_sign = 1.0
+
+        P[0, 0] = 2.0 * znear / (right - left)
+        P[1, 1] = 2.0 * znear / (top - bottom)
+        P[0, 2] = (right + left) / (right - left)
+        P[1, 2] = (top + bottom) / (top - bottom)
+        P[3, 2] = z_sign
+        P[2, 2] = z_sign * zfar / (zfar - znear)
+        P[2, 3] = -(zfar * znear) / (zfar - znear)
+        return P
+
+    assert eps2d == 0.3, "This is hard-coded in CUDA to be 0.3"
+    C = len(viewmats)
+    device = means.device
+    channels = colors.shape[-1]
+    
+    scales = scales[:, :2]  # [N, 2]
+    quats = quats = F.normalize(quats, dim=-1)  # [N, 4]
+
+    render_colors = []
+    for cid in range(C):
+        FoVx = 2 * math.atan(width / (2 * Ks[cid, 0, 0].item()))
+        FoVy = 2 * math.atan(height / (2 * Ks[cid, 1, 1].item()))
+        tanfovx = math.tan(FoVx * 0.5)
+        tanfovy = math.tan(FoVy * 0.5)
+
+        world_view_transform = viewmats[cid].transpose(0, 1)
+        projection_matrix = _getProjectionMatrix(
+            znear=near_plane, zfar=far_plane, fovX=FoVx, fovY=FoVy, device=device
+        ).transpose(0, 1)
+        full_proj_transform = (
+            world_view_transform.unsqueeze(0).bmm(projection_matrix.unsqueeze(0))
+        ).squeeze(0)
+        camera_center = world_view_transform.inverse()[3, :3]
+
+        background = (
+            backgrounds[cid]
+            if backgrounds is not None
+            else torch.zeros(3, device=device)
+        )
+
+        raster_settings = GaussianRasterizationSettings(
+            image_height=height,
+            image_width=width,
+            tanfovx=tanfovx,
+            tanfovy=tanfovy,
+            bg=background,
+            scale_modifier=1.0,
+            viewmatrix=world_view_transform,
+            projmatrix=full_proj_transform,
+            sh_degree=0 if sh_degree is None else sh_degree,
+            campos=camera_center,
+            prefiltered=False,
+            debug=False,
+        )
+
+        rasterizer = GaussianRasterizer(raster_settings=raster_settings)
+
+        means2D = torch.zeros_like(means, requires_grad=True, device=device)
+
+        render_colors_ = []
+        for i in range(0, channels, 3):
+            _colors = colors[..., i : i + 3]
+            if _colors.shape[-1] < 3:
+                pad = torch.zeros(
+                    _colors.shape[0], 3 - _colors.shape[-1], device=device
+                )
+                _colors = torch.cat([_colors, pad], dim=-1)
+            _render_colors_, _, allmap = rasterizer(
+                means3D=means,
+                means2D=means2D,
+                shs=_colors if colors.dim() == 3 else None,
+                colors_precomp=_colors if colors.dim() == 2 else None,
+                opacities=opacities[:, None],
+                scales=scales,
+                rotations=quats,
+                cov3D_precomp=None,
+            )
+            if _colors.shape[-1] < 3:
+                _render_colors_ = _render_colors_[:, :, : _colors.shape[-1]]
+            render_colors_.append(_render_colors_)
+        render_colors_ = torch.cat(render_colors_, dim=-1)
+
+        render_colors_ = render_colors_.permute(1, 2, 0)  # [H, W, 3]
+        render_colors.append(render_colors_)
+    render_colors = torch.stack(render_colors, dim=0)
+    
+    # additional maps
+    allmaps = allmaps.permute(1, 2, 0)  # [H, W, C]
+    render_alphas = allmap[..., 1:2]
 
     # get normal map
     # transform normal from view space to world space
-    render_normal = allmap[2:5]
-    render_normal = (render_normal.permute(1,2,0) @ (world_view_transform[:3,:3].T)).permute(2,0,1)
+    render_normal = allmap[..., 2:5]
+    render_normal = render_normal @ (world_view_transform[:3,:3].T)
     
     # get median depth map
-    render_depth_median = allmap[5:6]
+    render_depth_median = allmap[..., 5:6]
     render_depth_median = torch.nan_to_num(render_depth_median, 0, 0)
 
     # get expected depth map
-    render_depth_expected = allmap[0:1]
-    render_depth_expected = (render_depth_expected / render_alpha)
+    render_depth_expected = allmap[..., 0:1]
+    render_depth_expected = (render_depth_expected / render_alphas)
     render_depth_expected = torch.nan_to_num(render_depth_expected, 0, 0)
     
     # get depth distortion map
-    render_dist = allmap[6:7]
+    render_dist = allmap[..., 6:7]
 
     # psedo surface attributes
     # surf depth is either median or expected by setting depth_ratio to 1 or 0
@@ -660,15 +787,14 @@ def rasterization_inria_wrapper(
     
     # assume the depth points form the 'surface' and generate psudo surface normal for regularizations.
     surf_normal = depth_to_normal(surf_depth, world_view_transform, full_proj_transform)
-    surf_normal = surf_normal.permute(2,0,1)
     # remember to multiply with accum_alpha since render_normal is unnormalized.
-    surf_normal = surf_normal * (render_alpha).detach()
+    surf_normal = surf_normal * (render_alphas).detach()
     
-    info = {
-            'rend_alpha': render_alpha,
-            'rend_normal': render_normal,
-            'rend_dist': render_dist,
-            'surf_depth': surf_depth,
-            'surf_normal': surf_normal,
+    render_alphas = render_alphas.unsqueeze(0)
+    meta = {
+            'rend_normal': render_normal.unsqueeze(0),
+            'rend_dist': render_dist.unsqueeze(0),
+            'surf_depth': surf_depth.unsqueeze(0),
+            'surf_normal': surf_normal.unsqueeze(0),
     }
-    return render_colors, None, info
+    return render_colors, render_alphas, meta
