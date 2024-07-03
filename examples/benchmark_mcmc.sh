@@ -1,7 +1,7 @@
 RESULT_DIR=results/mcmc_sfm_2dgs
 
 # for SCENE in bicycle bonsai counter garden kitchen room stump;
-for SCENE in treehill garden flowers bonsai counter kitchen room bicycle stump;
+for SCENE in garden treehill bonsai counter kitchen room bicycle stump flowers;
 do
     if [ "$SCENE" = "bicycle" ] || [ "$SCENE" = "stump" ] || [ "$SCENE" = "garden" ] || [ "$SCENE" = "treehill" ] || [ "$SCENE" = "flowers" ]; then
         DATA_FACTOR=4
@@ -20,7 +20,7 @@ do
     elif [ "$SCENE" = "room" ]; then
         CAP_MAX=1500000
     else
-        CAP_MAX=2000000
+        CAP_MAX=3000000
     fi
 
     echo "Running $SCENE"

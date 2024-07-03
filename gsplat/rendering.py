@@ -643,17 +643,10 @@ def rasterization_2dgs_inria_wrapper(
     backgrounds: Optional[Tensor] = None,
     **kwargs,
 ) -> Tuple[Tensor, Tensor, Dict]:
-    """Wrapper for Inria's rasterization backend.
-
-    .. warning::
-        This function exists for comparision purpose only. Only rendered image is
-        returned.
-
-    .. warning::
-        Inria's CUDA backend has its own LICENSE, so this function should be used with
-        the respect to the original LICENSE at:
-        https://github.com/graphdeco-inria/diff-gaussian-rasterization
-
+    """Wrapper for 2DGS's rasterization backend which is based on Inria's backend.
+    
+    Install the rasterization backend from
+        https://github.com/hbb1/diff-surfel-rasterization
     """
     from diff_surfel_rasterization import (
         GaussianRasterizationSettings,
@@ -759,7 +752,7 @@ def rasterization_2dgs_inria_wrapper(
     render_colors = torch.stack(render_colors, dim=0)
 
     # additional maps
-    allmaps = allmaps.permute(1, 2, 0)  # [H, W, C]
+    allmap = allmap.permute(1, 2, 0)  # [H, W, C]
     render_alphas = allmap[..., 1:2]
 
     # get normal map
@@ -795,9 +788,9 @@ def rasterization_2dgs_inria_wrapper(
 
     render_alphas = render_alphas.unsqueeze(0)
     meta = {
+        # "surf_depth": surf_depth.unsqueeze(0),
+        "surf_normal": surf_normal.unsqueeze(0),
         "rend_normal": render_normal.unsqueeze(0),
         "rend_dist": render_dist.unsqueeze(0),
-        "surf_depth": surf_depth.unsqueeze(0),
-        "surf_normal": surf_normal.unsqueeze(0),
     }
     return render_colors, render_alphas, meta

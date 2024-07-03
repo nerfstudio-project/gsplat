@@ -63,9 +63,9 @@ class Config:
     # Number of training steps
     max_steps: int = 30_000
     # Steps to evaluate the model
-    eval_steps: List[int] = field(default_factory=lambda: [1_000, 7_000, 30_000])
+    eval_steps: List[int] = field(default_factory=lambda: [1_000, 7_000, 15_000, 30_000])
     # Steps to save the model
-    save_steps: List[int] = field(default_factory=lambda: [1_000, 7_000, 30_000])
+    save_steps: List[int] = field(default_factory=lambda: [1_000, 7_000, 15_000, 30_000])
 
     # Initialization strategy
     init_type: str = "sfm"
@@ -718,9 +718,9 @@ class Runner:
             colors = torch.clamp(colors, 0.0, 1.0)
             canvas_list = [pixels, colors]
             if self.cfg.normal_loss:
-                rend_normals = info["rend_normal"] * 0.5 + 0.5
                 surf_normals = info["surf_normal"] * 0.5 + 0.5
-                canvas_list.extend([rend_normals, surf_normals])
+                rend_normals = info["rend_normal"] * 0.5 + 0.5
+                canvas_list.extend([surf_normals, rend_normals])
 
             # write images
             canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()
@@ -799,9 +799,9 @@ class Runner:
                 depths = (depths - depths.min()) / (depths.max() - depths.min())
                 canvas_list.append(depths.repeat(1, 1, 1, 3))
             if self.cfg.normal_loss:
-                rend_normals = info["rend_normal"] * 0.5 + 0.5
                 surf_normals = info["surf_normal"] * 0.5 + 0.5
-                canvas_list.extend([rend_normals, surf_normals])
+                rend_normals = info["rend_normal"] * 0.5 + 0.5
+                canvas_list.extend([surf_normals, rend_normals])
 
             # write images
             canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()
