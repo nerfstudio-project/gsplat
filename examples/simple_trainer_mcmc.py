@@ -82,7 +82,7 @@ class Config:
     # Weight for SSIM loss
     ssim_lambda: float = 0.2
     lambda_normal: float = 0.05
-    lambda_dist: float = 0.0
+    lambda_dist: float = 100 # 1000 for bounded scenes, 100 for unbounded scenes
 
     # Near plane clipping distance
     near_plane: float = 0.01
