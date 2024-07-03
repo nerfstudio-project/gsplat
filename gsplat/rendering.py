@@ -735,7 +735,13 @@ def rasterization_2dgs(
         )  
     if render_mode in ["RGB+ED", "RGB+D"]:
         render_depths = render_colors[..., -1:]
-        render_normals_from_depth = depth_to_normal(viewmats[0], Ks[0], width, height, render_depths)
+        render_normals_from_depth = depth_to_normal(
+            torch.linalg.inv(viewmats.squeeze(0)), # c2w 
+            Ks.squeeze(0), 
+            width, 
+            height, 
+            render_depths
+        )
 
     
     meta = {

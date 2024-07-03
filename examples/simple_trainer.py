@@ -134,6 +134,11 @@ class Config:
     depth_loss: bool = False
     # Weight for depth loss
     depth_lambda: float = 1e-2
+    
+    # Enable normal consistency loss. (Currently for 2DGS only)
+    normal_loss: bool = False
+    # Weight for normal loss
+    normal_lambda: float = 1e-2
 
     # Dump information to tensorboard every this steps
     tb_every: int = 100
@@ -521,6 +526,12 @@ class Runner:
                 disp_gt = 1.0 / depths_gt  # [1, M]
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
+            
+            if cfg.normal_loss:
+                # normal consistency loss
+                normal_error = (1 - (render_normals * render_normals_from_depth).sum(dim=0))[None]
+                normal_loss = cfg.normal_lambda * normal_loss
+                loss += normal_loss
 
             loss.backward()
 
@@ -840,8 +851,6 @@ class Runner:
         ellipse_time = 0
         metrics = {"psnr": [], "ssim": [], "lpips": []}
         for i, data in enumerate(valloader):
-            if i != 14:
-                continue
             camtoworlds = data["camtoworld"].to(device)
             Ks = data["K"].to(device)
             pixels = data["image"].to(device) / 255.0
@@ -864,8 +873,6 @@ class Runner:
             ellipse_time += time.time() - tic
 
             # write images
-            # import pdb
-            # pdb.set_trace()
             colors = colors[..., :3]
             canvas = torch.cat([pixels, colors], dim=2).squeeze(0).cpu().numpy()
             imageio.imwrite(
