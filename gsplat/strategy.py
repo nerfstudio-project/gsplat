@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import List, Optional, Any, DefaultDict
 from config import Config
 import torch
+from torch import Tensor
 import gsplat
 
 from examples.utils import (
@@ -20,23 +21,30 @@ class Strategy:
 		gaussians: gsplat.Gaussians, 
 		optimizers: List[torch.optim.Optimizer], 
 		schedulers: Optional[List[torch.optim.LRScheduler]] = None,
-        device: torch.device,
-        cfg: Config,
+        device: torch.device = torch.device("cuda"),
+        cfg: Config = Config(),
 		last_epoch: int = -1,
 	):
 		self.gaussians = gaussians
 		self.optimizers = optimizers
 		self.schedulers = schedulers
-        self.device = device
-        self.cfg = cfg
+		self.device = device
+		self.cfg = cfg
 		self.last_epoch = last_epoch
 		
 		# Similar to `torch.optim.Optimizer`, A Strategy may also need to maintain some running states of the model
 		# https://pytorch.org/docs/stable/_modules/torch/optim/optimizer.html#Optimizer
-		self.state: DefaultDict[torch.Tensor, Any] = defaultdict(dict)
-        self.state["step"] = 0
-	
-	@abstractmethod
+		self.state: DefaultDict[Tensor, Any] = defaultdict(dict)
+
+    @abstractmethod
+    def grow_GSs(self):
+        raise NotImplementedError
+    
+    @abstractmethod
+    def prune_GSs(self):
+        raise NotImplementedError
+    
+    @abstractmethod
 	def step_pre_backward(self, *args, **kwargs):
 		# Inplace modify whatever needs to be modified in {gaussians, optimizers, schedulers}
 		raise NotImplementedError
@@ -64,7 +72,7 @@ class DefaultStategy(Strategy):
 		gaussians: gsplat.Gaussians, 
 		optimizers: List[torch.optim.Optimizer], 
 		schedulers: Optional[List[torch.optim.LRScheduler]] = None,
-        device: torch.device,
+        device: torch.device = torch.device("cuda"),
         prune_opa: float = 0.005,
         grow_grad2d: float = 0.0002,
         grow_scale3d: float = 0.01,
@@ -74,17 +82,17 @@ class DefaultStategy(Strategy):
         reset_every: int = 3000,
         refine_every: int = 100,
         scene_scale: float = 1.0,
+		last_epoch: int = -1,
 	):
-        super().__init__(gaussians, optimizers, schedulers, device, last_epoch)
-        self.prune_opa = prune_opa
-        self.grow_grad2d = grow_grad2d
-        self.grow_scale3d = grow_scale3d
+		super().__init__(gaussians, optimizers, schedulers, device, last_epoch)
+		self.prune_opa = prune_opa
+		self.grow_grad2d = grow_grad2d
+		self.grow_scale3d = grow_scale3d
         self.prune_scale3d = prune_scale3d
         self.refine_start_iter = refine_start_iter
         self.refine_stop_iter = refine_stop_iter
         self.reset_every = reset_every
         self.refine_every = refine_every
-
         self.state["grads2d"] = torch.zeros(len(self.gaussians["means3d"]), device=self.device)
         self.state["count"] = torch.zeros(len(self.gaussians["means3d"]), device=self.device)
 
@@ -196,6 +204,27 @@ class DefaultStategy(Strategy):
             self.state[k] = torch.cat((v, v[sel]))
         torch.cuda.empty_cache()
 
+    @torch.no_grad()
+    def refine_keep(self, mask: Tensor):
+        """Unility function to prune GSs."""
+        sel = torch.where(mask)[0]
+        for optimizer in self.optimizers:
+            for i, param_group in enumerate(optimizer.param_groups):
+                p = param_group["params"][0]
+                name = param_group["name"]
+                p_state = optimizer.state[p]
+                del optimizer.state[p]
+                for key in p_state.keys():
+                    if key != "step":
+                        p_state[key] = p_state[key][sel]
+                p_new = torch.nn.Parameter(p[sel])
+                optimizer.param_groups[i]["params"] = [p_new]
+                optimizer.state[p_new] = p_state
+                self.splats[name] = p_new
+        for k, v in self.running_stats.items():
+            self.running_stats[k] = v[sel]
+        torch.cuda.empty_cache()
+
     def grow_GSs(self):
         count = len(self.gaussians["points"])
         grads = self.state["grads2d"] / count
@@ -220,14 +249,14 @@ class DefaultStategy(Strategy):
 
     def prune_GSs(self):
         is_prune = torch.sigmoid(self.gaussians["opacities"]) < self.prune_opa
-        if self.state["step"] > self.reset_every:
+        if self.last_epoch > self.reset_every:
             is_too_big = (torch.exp(self.gaussians["scales"]).max(dim=-1).values > self.prune_scale3d * self.scene_scale)
             is_prune = is_prune | is_too_big
         n_prune = is_prune.sum().item()
         
         self.refine_keep(~is_prune)
 
-        if self.state["step"] % self.reset_every == 0:
+        if self.last_epoch % self.reset_every == 0:
             reset_opa(self.gaussians, value=self.prune_opa)
 
 
@@ -235,14 +264,12 @@ class DefaultStategy(Strategy):
     def refine_duplicate(self):
         raise NotImplementedError
 	
-	def step_pre_backward(self):
-        # Inplace modify whatever needs to be modified in {gaussians, optimizers, schedulers}
-
+    def step_pre_backward(self):
 		return
 
 
 	def step_post_backward(self):
-        if self.state["step"] > self.refine_start_iter and self.state["step"] & self.refine_every == 0:
+        if self.last_epoch > self.refine_start_iter and self.last_epoch & self.refine_every == 0:
             
             self.grow_GSs()
             self.prune_GSs()
@@ -252,14 +279,13 @@ class DefaultStategy(Strategy):
             optimizer.zero_grad(set_to_none=True)
         for scheduler in schedulers:
             scheduler.step()
-    
-		return
+        return
 	
 class MCMCStrategy(Strategy):
 	
 	def __init__(
 		self, 
-		model: gsplat.Gaussians, 
+		model: gsplat.Gaussians, e
 		optimizers: List[torch.optim.Optimizer], 
 		schedulers: Optional[List[torch.optim.LRScheduler]] = None,
 		refine_start_iter: int = ...,
