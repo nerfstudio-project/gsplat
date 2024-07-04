@@ -249,7 +249,7 @@ def rasterization(
         opacities = opacities[gaussian_ids]  # [nnz]
     else:
         # The results are with shape [C, N, ...]. Only the elements with radii > 0 are valid.
-        radii, means2d, depths, conics, compensations = proj_results
+        radii, means2d, depths, normals, conics, compensations = proj_results
         opacities = opacities.repeat(C, 1)  # [C, N]
         camera_ids, gaussian_ids = None, None
 
@@ -318,7 +318,7 @@ def rasterization(
 
     # Rasterize to pixels
     if render_mode in ["RGB+D", "RGB+ED"]:
-        colors = torch.cat((colors, depths[..., None]), dim=-1)
+        colors = torch.cat((colors, normals, depths[..., None]), dim=-1)
         if backgrounds is not None:
             backgrounds = torch.cat(
                 [backgrounds, torch.zeros(C, 1, device=backgrounds.device)], dim=-1
@@ -403,10 +403,10 @@ def rasterization(
     }
     
     depths_expected = render_colors[..., -1:] / render_alphas.clamp(min=1e-10)
-    normals_depth = depth_to_normal(depths_expected, camtoworlds, Ks, near_plane, far_plane)
-    normals_depth = normals_depth * (render_alphas).detach()
+    render_normals = render_colors[..., 3:6]
+    render_normals = F.normalize(render_normals, dim=-1)
     meta["rend_depth"] = depths_expected
-    meta["rend_normal"] = normals_depth
+    meta["rend_normal"] = render_normals
     return render_colors, render_alphas, meta
 
 

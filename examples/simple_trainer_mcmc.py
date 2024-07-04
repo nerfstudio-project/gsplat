@@ -144,7 +144,7 @@ class Config:
     # Enable normal loss. (experimental)
     normal_loss: bool = True
     # Weight for normal loss
-    normal_lambda: float = 0.0#5
+    normal_lambda: float = 0.05
     
     # Enable distortion loss. (experimental)
     dist_loss: bool = False
@@ -414,10 +414,11 @@ class Runner:
                 image_ids=image_ids,
                 render_mode="RGB+ED", # if cfg.depth_loss else "RGB",
             )
-            if renders.shape[-1] == 4:
-                colors, depths = renders[..., 0:3], renders[..., 3:4]
-            else:
-                colors, depths = renders, None
+            colors, _, depths = renders[..., 0:3], renders[..., 3:6], renders[..., 6:7]
+            # if renders.shape[-1] == 4:
+            #     colors, depths = renders[..., 0:3], renders[..., 3:4]
+            # else:
+            #     colors, depths = renders, None
 
             if cfg.random_bkgd:
                 bkgd = torch.rand(1, 3, device=device)
@@ -796,7 +797,7 @@ class Runner:
 
         canvas_all = []
         for i in tqdm.trange(len(camtoworlds), desc="Rendering trajectory"):
-            renders, _, info = self.rasterize_splats(
+            renders, alphas, info = self.rasterize_splats(
                 camtoworlds=camtoworlds[i : i + 1],
                 Ks=K[None],
                 width=width,
@@ -816,6 +817,12 @@ class Runner:
             if self.cfg.normal_loss:
                 normals = info["rend_normal"] * 0.5 + 0.5
                 canvas_list.extend([normals])
+                
+                depths = info["rend_depth"]
+                normals_depth = depth_to_normal(depths, camtoworlds, K[None], near_plane=cfg.near_plane, far_plane=cfg.far_plane)
+                normals_depth = normals_depth * (alphas).detach()
+                normals_depth = normals_depth * 0.5 + 0.5
+                canvas_list.extend([normals_depth])
 
             # write images
             canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()

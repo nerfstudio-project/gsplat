@@ -709,7 +709,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         calc_compensations: bool,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         # "covars" and {"quats", "scales"} are mutually exclusive
-        radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
+        radii, means2d, depths, normals, conics, compensations = _make_lazy_cuda_func(
             "fully_fused_projection_fwd"
         )(
             means,
@@ -735,10 +735,10 @@ class _FullyFusedProjection(torch.autograd.Function):
         ctx.height = height
         ctx.eps2d = eps2d
 
-        return radii, means2d, depths, conics, compensations
+        return radii, means2d, depths, normals, conics, compensations
 
     @staticmethod
-    def backward(ctx, v_radii, v_means2d, v_depths, v_conics, v_compensations):
+    def backward(ctx, v_radii, v_means2d, v_depths, v_normals, v_conics, v_compensations):
         (
             means,
             covars,
@@ -772,6 +772,7 @@ class _FullyFusedProjection(torch.autograd.Function):
             compensations,
             v_means2d.contiguous(),
             v_depths.contiguous(),
+            v_normals.contiguous(),
             v_conics.contiguous(),
             v_compensations,
             ctx.needs_input_grad[4],  # viewmats_requires_grad

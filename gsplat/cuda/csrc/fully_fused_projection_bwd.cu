@@ -201,6 +201,7 @@ fully_fused_projection_bwd_tensor(
     // grad outputs
     const torch::Tensor &v_means2d,                     // [C, N, 2]
     const torch::Tensor &v_depths,                      // [C, N]
+    const torch::Tensor &v_normals,                     // [C, N, 3]
     const torch::Tensor &v_conics,                      // [C, N, 3]
     const at::optional<torch::Tensor> &v_compensations, // [C, N] optional
     const bool viewmats_requires_grad) {

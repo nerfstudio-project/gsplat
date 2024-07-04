@@ -31,6 +31,7 @@ fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
                                   int32_t *__restrict__ radii,      // [C, N]
                                   T *__restrict__ means2d,      // [C, N, 2]
                                   T *__restrict__ depths,       // [C, N]
+                                  T *__restrict__ normals,       // [C, N, 3]
                                   T *__restrict__ conics,       // [C, N, 3]
                                   T *__restrict__ compensations // [C, N] optional
 ) {
@@ -46,6 +47,8 @@ fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
     means += gid * 3;
     viewmats += cid * 16;
     Ks += cid * 9;
+    quats += gid * 4;
+    scales += gid * 3;
 
     // glm is column-major but input is row-major
     mat3<T> R = mat3<T>(viewmats[0], viewmats[4], viewmats[8], // 1st column
@@ -72,8 +75,6 @@ fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
         );
     } else {
         // compute from quaternions and scales
-        quats += gid * 4;
-        scales += gid * 3;
         quat_scale_to_covar_preci<T>(glm::make_vec4(quats), glm::make_vec3(scales), &covar, nullptr);
     }
     mat3<T> covar_c;
@@ -115,11 +116,22 @@ fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
         return;
     }
 
+    glm::mat3 rotmat = quat_to_rotmat(glm::make_vec4(quats));
+    glm::mat3 S = scale_to_mat(glm::make_vec3(scales), 1.f);
+    glm::mat3 L = rotmat * S;
+    // float3 normal = transformVec4x3({L[2].x, L[2].y, L[2].z}, viewmats);
+
     // write to outputs
     radii[idx] = (int32_t)radius;
     means2d[idx * 2] = mean2d.x;
     means2d[idx * 2 + 1] = mean2d.y;
     depths[idx] = mean_c.z;
+    // normals[idx * 3] = normal.x;
+    // normals[idx * 3 + 1] = normal.y;
+    // normals[idx * 3 + 2] = normal.z;
+    normals[idx * 3] = L[2].x;
+    normals[idx * 3 + 1] = L[2].y;
+    normals[idx * 3 + 2] = L[2].z;
     conics[idx * 3] = covar2d_inv[0][0];
     conics[idx * 3 + 1] = covar2d_inv[0][1];
     conics[idx * 3 + 2] = covar2d_inv[1][1];
@@ -129,7 +141,7 @@ fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
 }
 
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fully_fused_projection_fwd_tensor(
     const torch::Tensor &means,                // [N, 3]
     const at::optional<torch::Tensor> &covars, // [N, 6] optional
@@ -159,6 +171,7 @@ fully_fused_projection_fwd_tensor(
     torch::Tensor radii = torch::empty({C, N}, means.options().dtype(torch::kInt32));
     torch::Tensor means2d = torch::empty({C, N, 2}, means.options());
     torch::Tensor depths = torch::empty({C, N}, means.options());
+    torch::Tensor normals = torch::empty({C, N, 3}, means.options());
     torch::Tensor conics = torch::empty({C, N, 3}, means.options());
     torch::Tensor compensations;
     if (calc_compensations) {
@@ -173,9 +186,9 @@ fully_fused_projection_fwd_tensor(
             scales.has_value() ? scales.value().data_ptr<float>() : nullptr,
             viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
             eps2d, near_plane, far_plane, radius_clip, radii.data_ptr<int32_t>(),
-            means2d.data_ptr<float>(), depths.data_ptr<float>(),
+            means2d.data_ptr<float>(), depths.data_ptr<float>(), normals.data_ptr<float>(),
             conics.data_ptr<float>(),
             calc_compensations ? compensations.data_ptr<float>() : nullptr);
     }
-    return std::make_tuple(radii, means2d, depths, conics, compensations);
+    return std::make_tuple(radii, means2d, depths, normals, conics, compensations);
 }
