@@ -1,9 +1,6 @@
 #include "bindings.h"
 #include "utils.cuh"
 
-#include "third_party/glm/glm/glm.hpp"
-#include "third_party/glm/glm/gtc/type_ptr.hpp"
-
 #include <cuda_runtime.h>
 
 // Evaluate spherical harmonics bases at unit direction for high orders using approach

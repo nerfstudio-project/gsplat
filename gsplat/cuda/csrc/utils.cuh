@@ -2,8 +2,6 @@
 #define GSPLAT_CUDA_UTILS_H
 
 #include "helpers.cuh"
-#include "third_party/glm/glm/glm.hpp"
-#include "third_party/glm/glm/gtc/type_ptr.hpp"
 #include <cuda.h>
 #include <cuda_runtime.h>
 
