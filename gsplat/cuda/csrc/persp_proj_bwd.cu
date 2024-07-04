@@ -15,16 +15,17 @@ namespace cg = cooperative_groups;
  * Perspective Projection Backward Pass
  ****************************************************************************/
 
+template <typename T>
 __global__ void
 persp_proj_bwd_kernel(const uint32_t C, const uint32_t N,
-                      const float *__restrict__ means,  // [C, N, 3]
-                      const float *__restrict__ covars, // [C, N, 3, 3]
-                      const float *__restrict__ Ks,     // [C, 3, 3]
+                      const T *__restrict__ means,  // [C, N, 3]
+                      const T *__restrict__ covars, // [C, N, 3, 3]
+                      const T *__restrict__ Ks,     // [C, 3, 3]
                       const uint32_t width, const uint32_t height,
-                      const float *__restrict__ v_means2d,  // [C, N, 2]
-                      const float *__restrict__ v_covars2d, // [C, N, 2, 2]
-                      float *__restrict__ v_means,          // [C, N, 3]
-                      float *__restrict__ v_covars          // [C, N, 3, 3]
+                      const T *__restrict__ v_means2d,  // [C, N, 2]
+                      const T *__restrict__ v_covars2d, // [C, N, 2, 2]
+                      T *__restrict__ v_means,          // [C, N, 3]
+                      T *__restrict__ v_covars          // [C, N, 3, 3]
 ) {
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -43,12 +44,12 @@ persp_proj_bwd_kernel(const uint32_t C, const uint32_t N,
     v_means2d += idx * 2;
     v_covars2d += idx * 4;
 
-    float fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
-    glm::mat3 v_covar(0.f);
-    glm::vec3 v_mean(0.f);
-    persp_proj_vjp<float>(glm::make_vec3(means), glm::make_mat3(covars), fx, fy, cx, cy, width,
-                          height, glm::transpose(glm::make_mat2(v_covars2d)),
-                          glm::make_vec2(v_means2d), v_mean, v_covar);
+    T fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
+    mat3<T> v_covar(0.f);
+    vec3<T> v_mean(0.f);
+    persp_proj_vjp<T>(glm::make_vec3(means), glm::make_mat3(covars), fx, fy, cx, cy, width,
+                      height, glm::transpose(glm::make_mat2(v_covars2d)),
+                      glm::make_vec2(v_means2d), v_mean, v_covar);
 
     // write to outputs: glm is column-major but we want row-major
     PRAGMA_UNROLL
@@ -88,8 +89,7 @@ persp_proj_bwd_tensor(const torch::Tensor &means,  // [C, N, 3]
 
     if (C && N) {
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
-        persp_proj_bwd_kernel<<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
-                                stream>>>(
+        persp_proj_bwd_kernel<float><<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
             C, N, means.data_ptr<float>(), covars.data_ptr<float>(),
             Ks.data_ptr<float>(), width, height, v_means2d.data_ptr<float>(),
             v_covars2d.data_ptr<float>(), v_means.data_ptr<float>(),
