@@ -395,8 +395,9 @@ inline __device__ void compute_aabb_vjp(const glm::mat3 M, const glm::vec3 v_mea
 }
 
 inline __device__ void compute_ray_transformation_vjp(const glm::mat3x4 W, const glm::mat3 P,
-                                                        const glm::vec3 cam_pos, const glm::vec4 quat, 
-                                                        const glm::vec3 scale, const glm::mat3 v_ray_transformation, 
+                                                        const glm::vec3 cam_pos, const glm::vec3 mean_c,
+                                                        const glm::vec4 quat, const glm::vec3 scale, 
+                                                        const glm::mat3 v_ray_transformation, const glm::vec3 v_normal3d,
                                                         glm::mat3& v_R, glm::vec2& v_scale, 
                                                         glm::vec3& v_mean3D) {
     glm::vec3 scale_2dgs = glm::vec3(scale.x, scale.y, 1.f);
@@ -415,8 +416,13 @@ inline __device__ void compute_ray_transformation_vjp(const glm::mat3x4 W, const
     glm::mat3 v_RS = W_t * v_M;
     glm::vec3 v_RS0 = v_RS[0];
     glm::vec3 v_RS1 = v_RS[1];
-    glm::vec3 v_tn = W_t * glm::vec3(0.f, 0.f, 0.f);
+    glm::vec3 v_tn = W_t * v_normal3d;
 
+    // dual visible
+    glm::vec3 tn = W * R[2];
+    float cos = glm::dot(-tn, mean_c);
+    float multiplier = cos > 0 ? 1 : -1;
+    v_tn += multiplier;
     // v_R = glm::mat3(
     //     v_RS0 * glm::vec3(scale[0]),
     //     v_RS1 * glm::vec3(scale[1]),

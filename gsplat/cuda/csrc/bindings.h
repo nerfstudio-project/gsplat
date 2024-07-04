@@ -328,6 +328,7 @@ rasterize_to_pixels_bwd_2dgs_tensor(
     // gradients of outptus
     const torch::Tensor &v_render_colors,
     const torch::Tensor &v_render_alphas,
+    const torch::Tensor &v_render_normals,
     // options
     bool absgrad
 );

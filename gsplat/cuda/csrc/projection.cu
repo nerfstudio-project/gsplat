@@ -2006,6 +2006,7 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     // grad outputs
     const float *__restrict__ v_means2d,
     const float *__restrict__ v_depths,
+    const float *__restrict__ v_normals,
     // grad inputs
     float *__restrict__ v_ray_transformations,
     float *__restrict__ v_means,
@@ -2030,6 +2031,7 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
 
     v_means2d += idx * 2;
     v_depths += idx;
+    v_normals += idx * 3;
     v_ray_transformations += idx * 9;
 
     // quats += gid * 4;
@@ -2078,6 +2080,10 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
         viewmats[2], viewmats[6], viewmats[10]
     ); // viewmat
     const glm::vec3 cam_pos = glm::vec3(viewmats[3], viewmats[7], viewmats[11]); // camera center
+
+    glm::vec3 mean_c;
+    pos_world_to_cam(W, cam_pos, glm::make_vec3(means), mean_c);
+
     glm::mat3 P = glm::mat3(
         Ks[0], 0.0, 0.0,
         0.0, Ks[4], 0.0,
@@ -2085,7 +2091,8 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     );
     glm::vec4 quat = glm::make_vec4(quats + gid * 4);
     glm::vec3 scale = glm::make_vec3(scales + gid * 3);
-    
+    glm::vec3 v_normal3d = glm::vec3(v_normals[0], v_normals[1], v_normals[2]);
+
     glm::mat3 v_R(0.f);
     glm::vec2 v_scale(0.f);
     glm::vec3 v_mean(0.f);
@@ -2095,8 +2102,10 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     //     v_ray_transformations[6], v_ray_transformations[7], v_ray_transformations[8]
     // );
 
-    compute_ray_transformation_vjp(W, P, cam_pos, 
-                                    quat, scale, _v_ray_transformation, 
+    compute_ray_transformation_vjp(W, P, 
+                                    cam_pos, mean_c, 
+                                    quat, scale, 
+                                    _v_ray_transformation, v_normal3d,
                                     v_R, v_scale, v_mean);
 
     // printf("v_mean: %.2f, %.2f, %.2f \n", v_mean.x, v_mean.y, v_mean.z);

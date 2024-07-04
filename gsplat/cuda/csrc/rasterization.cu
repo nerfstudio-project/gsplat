@@ -1894,12 +1894,14 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
     // grad outputs
     const float *__restrict__ v_render_colors,
     const float *__restrict__ v_render_alphas,
+    const float *__restrict__ v_render_normals,
     // grad inputs
     float2 *__restrict__ v_means2d_abs,
     float2 *__restrict__ v_means2d,
     float *__restrict__ v_ray_transformations,
     float *__restrict__ v_colors,
     float *__restrict__ v_opacities,
+    float *__restrict__ v_normal3d,
     float2 *__restrict__ v_densifications
 ) {
     auto block = cg::this_thread_block();
@@ -1913,6 +1915,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
     last_ids += camera_id * image_height * image_width;
     v_render_colors += camera_id * image_height * image_width * COLOR_DIM;
     v_render_alphas += camera_id * image_height * image_width;
+    v_render_normals += camera_id * image_height * image_width * 3;
     if (backgrounds != nullptr) {
         backgrounds += camera_id * COLOR_DIM;
     }
@@ -1959,6 +1962,11 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
         v_render_c[k] = v_render_colors[pix_id * COLOR_DIM + k];
     }
     const float v_render_a = v_render_alphas[pix_id];
+    float v_render_n[3];
+    PRAGMA_UNROLL
+    for (uint32_t k = 0; k < 3; k++) {
+        v_render_n[k] = v_render_normals[pix_id * 3 + k];
+    }
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing
@@ -2060,6 +2068,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
             float2 v_xy_abs_local = {0.f, 0.f};
             float v_opacity_local = 0.f;
             float2 v_densification_local = {0.f, 0.f};
+            float3 v_normal_local[3] = {0.f};
             // initialize everything to 0, only set if the lane is valid
             if (valid) {
                 // compute the current T for this gaussian
@@ -2069,8 +2078,6 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 const float fac = alpha * T;
                 PRAGMA_UNROLL
                 for (uint32_t k = 0; k < COLOR_DIM; ++k) {
-                    // v_alpha += (rgbs_batch[t * COLOR_DIM + k] * T - buffer[k] * ra) *
-                    //             v_render_c[k];
                     v_rgb_local[k] = fac * v_render_c[k];
                 }
                 // contribution from this pixel
@@ -2080,7 +2087,20 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                                 v_render_c[k];
                 }
 
+                // update v_normal for this gaussian
+                // TODO (WZ): derive the computational graph to see if the gradient flow
+                // is correct or not.
+                PRAGMA_UNROLL
+                for (uint32_t k = 0; k < 3; ++k) {
+                    v_normal_local[k] = fac * v_render_n[k];
+                }
+                for (uint32_t = 0; k < 3; ++k) {
+                    v_alpha += (normals_batch[t * 3 + k] * T - buffer_normal[k] * ra) *
+                                v_render_n[k];
+                }
+
                 v_alpha += T_final * ra * v_render_a;
+
                 // contribution from background pixel
                 if (backgrounds != nullptr) {
                     float accum = 0.f;
@@ -2178,6 +2198,14 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                         atomicAdd(v_xy_abs_ptr + 1, v_xy_abs_local.y);
                     }
                 }
+
+
+                float *v_normal_ptr = (float *)(v_normal3d) + 3 * g;
+                PRAGMA_UNROLL
+                for (uint32_t k = 0; k < 3; ++k) {
+                    atomicAdd(v_normal_ptr + k, v_normal_local[k]);
+                }
+                
                 atomicAdd(v_opacities + g, v_opacity_local);
                 // TODO (WZ): hack gradient for densification
                 float *v_densification_ptr = (float *)(v_densifications) + 2 * g;
@@ -2209,6 +2237,7 @@ rasterize_to_pixels_bwd_2dgs_tensor(
     // gradients of outputs
     const torch::Tensor &v_render_colors,
     const torch::Tensor &v_render_alphas,
+    const torch::Tensor &v_render_normals,
     // options
     bool absgrad
 ) {
@@ -2252,7 +2281,7 @@ rasterize_to_pixels_bwd_2dgs_tensor(
         v_means2d_abs = torch::zeros_like(means2d);
     }
     torch::Tensor v_densifications = torch::zeros_like(densifications);
-    torch::Tensor v_normals = torch::zeros_like(normals);
+    torch::Tensor v_normal3d = torch::zeros_like(normals);
     if (n_isects) {
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
         switch (COLOR_DIM) {
@@ -2271,7 +2300,7 @@ rasterize_to_pixels_bwd_2dgs_tensor(
                 absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>(),
+                v_opacities.data_ptr<float>(), v_normal3d.data_ptr<float>(),
                 (float2 *)v_densifications.data_ptr<float>()
             );
             break;
@@ -2290,7 +2319,7 @@ rasterize_to_pixels_bwd_2dgs_tensor(
                 absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>(),
+                v_opacities.data_ptr<float>(), v_normal3d.data_ptr<float>(),
                 (float2 *)v_densifications.data_ptr<float>()
             );
             break;
@@ -2309,7 +2338,7 @@ rasterize_to_pixels_bwd_2dgs_tensor(
                 absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>(),
+                v_opacities.data_ptr<float>(), v_normal3d.data_ptr<float>(),
                 (float2 *)v_densifications.data_ptr<float>()
             );
             break;     
@@ -2328,7 +2357,7 @@ rasterize_to_pixels_bwd_2dgs_tensor(
                 absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>(),
+                v_opacities.data_ptr<float>(), v_normal3d.data_ptr<float>(),
                 (float2 *)v_densifications.data_ptr<float>()
             );
             break;
@@ -2347,7 +2376,7 @@ rasterize_to_pixels_bwd_2dgs_tensor(
                 absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>(),
+                v_opacities.data_ptr<float>(), v_normal3d.data_ptr<float>(),
                 (float2 *)v_densifications.data_ptr<float>()
             );
             break;
@@ -2366,7 +2395,7 @@ rasterize_to_pixels_bwd_2dgs_tensor(
                 absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>(),
+                v_opacities.data_ptr<float>(), v_normal3d.data_ptr<float>(),
                 (float2 *)v_densifications.data_ptr<float>()
             );
             break;
@@ -2385,7 +2414,7 @@ rasterize_to_pixels_bwd_2dgs_tensor(
                 absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>(),
+                v_opacities.data_ptr<float>(), v_normal3d.data_ptr<float>(),
                 (float2 *)v_densifications.data_ptr<float>()
             );
             break;

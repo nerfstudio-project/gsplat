@@ -127,8 +127,6 @@ class SimpleTrainer:
                 self.H,
                 packed=False,
             )
-            import pdb
-            # pdb.set_trace()
             out_img = renders[0]
             torch.cuda.synchronize()
             times[0] += time.time() - start
@@ -136,7 +134,6 @@ class SimpleTrainer:
             optimizer.zero_grad()
             start = time.time()
             loss.backward()
-            # pdb.set_trace()
             torch.cuda.synchronize()
             times[1] += time.time() - start
             optimizer.step()
