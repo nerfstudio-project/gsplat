@@ -2,6 +2,7 @@ import glob
 import os
 import os.path as osp
 import platform
+import pathlib
 import sys
 
 from setuptools import find_packages, setup
@@ -19,7 +20,7 @@ LINE_INFO = os.getenv("LINE_INFO", "0") == "1"
 def get_ext():
     from torch.utils.cpp_extension import BuildExtension
 
-    return BuildExtension.with_options(no_python_abi_suffix=True, use_ninja=False)
+    return BuildExtension.with_options(no_python_abi_suffix=True, use_ninja=True)
 
 
 def get_extensions():
@@ -88,10 +89,13 @@ def get_extensions():
     if sys.platform == "win32":
         extra_compile_args["nvcc"] += ["-DWIN32_LEAN_AND_MEAN"]
 
+
+    current_dir = pathlib.Path(__file__).parent.resolve()
+    glm_path = os.path.join(current_dir, "gsplat", "cuda", "csrc", "third_party", "glm")
     extension_v1 = CUDAExtension(
         f"gsplat.csrc_legacy",
         sources_v1,
-        include_dirs=[extensions_dir_v2],  # glm lives in v2.
+        include_dirs=[extensions_dir_v2, glm_path],  # glm lives in v2.
         define_macros=define_macros,
         undef_macros=undef_macros,
         extra_compile_args=extra_compile_args,
@@ -100,7 +104,7 @@ def get_extensions():
     extension_v2 = CUDAExtension(
         f"gsplat.csrc",
         sources_v2,
-        include_dirs=[extensions_dir_v2],  # glm lives in v2.
+        include_dirs=[extensions_dir_v2, glm_path],  # glm lives in v2.
         define_macros=define_macros,
         undef_macros=undef_macros,
         extra_compile_args=extra_compile_args,

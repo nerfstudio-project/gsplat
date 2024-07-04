@@ -1,8 +1,6 @@
 #include "bindings.h"
 #include "spherical_harmonics.cuh"
 
-#include "third_party/glm/glm/glm.hpp"
-#include "third_party/glm/glm/gtc/type_ptr.hpp"
 
 #include <cooperative_groups.h>
 #include <cuda_runtime.h>
