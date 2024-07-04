@@ -1,4 +1,4 @@
-RESULT_DIR=results/mcmc_sfm_2dgs
+RESULT_DIR=results/2dgs_mcmc_sfm
 
 # for SCENE in bicycle bonsai counter garden kitchen room stump;
 for SCENE in garden treehill bonsai counter kitchen room bicycle stump flowers;

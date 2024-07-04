@@ -321,7 +321,6 @@ class Runner:
             absgrad=self.cfg.absgrad,
             sparse_grad=self.cfg.sparse_grad,
             rasterize_mode=rasterize_mode,
-            mode="2dgs",
             **kwargs,
         )
         return render_colors, render_alphas, info
