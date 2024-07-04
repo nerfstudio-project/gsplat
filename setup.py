@@ -15,6 +15,12 @@ URL = "https://github.com/nerfstudio-project/gsplat"
 BUILD_NO_CUDA = os.getenv("BUILD_NO_CUDA", "0") == "1"
 WITH_SYMBOLS = os.getenv("WITH_SYMBOLS", "0") == "1"
 LINE_INFO = os.getenv("LINE_INFO", "0") == "1"
+MAX_JOBS = os.getenv("MAX_JOBS")
+need_to_unset_max_jobs = False
+if not MAX_JOBS:
+    need_to_unset_max_jobs = True
+    os.environ["MAX_JOBS"] = "10"
+    print(f"Setting MAX_JOBS to {os.environ['MAX_JOBS']}")
 
 
 def get_ext():
@@ -149,3 +155,7 @@ setup(
     # https://github.com/pypa/setuptools/issues/1461#issuecomment-954725244
     include_package_data=True,
 )
+
+if need_to_unset_max_jobs:
+    print("Unsetting MAX_JOBS")
+    os.environ.pop("MAX_JOBS")
