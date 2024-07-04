@@ -6,17 +6,17 @@
 
 namespace cg = cooperative_groups;
 
-
-
 template <typename T>
-__global__ void compute_sh_bwd_kernel(const uint32_t N, const uint32_t K,
-                                      const uint32_t degrees_to_use,
-                                      const typename Float3<T>::type *__restrict__ dirs,    // [N, 3]
-                                      const T *__restrict__ coeffs,   // [N, K, 3]
-                                      const bool *__restrict__ masks,     // [N]
-                                      const T *__restrict__ v_colors, // [N, 3
-                                      T *__restrict__ v_coeffs,       // [N, K, 3]
-                                      T *__restrict__ v_dirs // [N, 3] optional
+__global__ void compute_sh_bwd_kernel(
+    const uint32_t N,
+    const uint32_t K,
+    const uint32_t degrees_to_use,
+    const typename Float3<T>::type *__restrict__ dirs, // [N, 3]
+    const T *__restrict__ coeffs,                      // [N, K, 3]
+    const bool *__restrict__ masks,                    // [N]
+    const T *__restrict__ v_colors,                    // [N, 3
+    T *__restrict__ v_coeffs,                          // [N, K, 3]
+    T *__restrict__ v_dirs                             // [N, 3] optional
 ) {
     // parallelize over N * 3
     uint32_t idx = cg::this_grid().thread_rank();
@@ -30,10 +30,15 @@ __global__ void compute_sh_bwd_kernel(const uint32_t N, const uint32_t K,
     }
 
     typename Float3<T>::type v_dir = {0.f, 0.f, 0.f};
-    sh_coeffs_to_color_fast_vjp(degrees_to_use, c, dirs[elem_id],
-                                coeffs + elem_id * K * 3, v_colors + elem_id * 3,
-                                v_coeffs + elem_id * K * 3,
-                                v_dirs == nullptr ? nullptr : &v_dir);
+    sh_coeffs_to_color_fast_vjp(
+        degrees_to_use,
+        c,
+        dirs[elem_id],
+        coeffs + elem_id * K * 3,
+        v_colors + elem_id * 3,
+        v_coeffs + elem_id * K * 3,
+        v_dirs == nullptr ? nullptr : &v_dir
+    );
     if (v_dirs != nullptr) {
         atomicAdd(v_dirs + elem_id * 3, v_dir.x);
         atomicAdd(v_dirs + elem_id * 3 + 1, v_dir.y);
@@ -41,13 +46,15 @@ __global__ void compute_sh_bwd_kernel(const uint32_t N, const uint32_t K,
     }
 }
 
-std::tuple<torch::Tensor, torch::Tensor>
-compute_sh_bwd_tensor(const uint32_t K, const uint32_t degrees_to_use,
-                      torch::Tensor &dirs,               // [..., 3]
-                      torch::Tensor &coeffs,             // [..., K, 3]
-                      at::optional<torch::Tensor> masks, // [...]
-                      torch::Tensor &v_colors,           // [..., 3]
-                      bool compute_v_dirs) {
+std::tuple<torch::Tensor, torch::Tensor> compute_sh_bwd_tensor(
+    const uint32_t K,
+    const uint32_t degrees_to_use,
+    torch::Tensor &dirs,               // [..., 3]
+    torch::Tensor &coeffs,             // [..., K, 3]
+    at::optional<torch::Tensor> masks, // [...]
+    torch::Tensor &v_colors,           // [..., 3]
+    bool compute_v_dirs
+) {
     DEVICE_GUARD(dirs);
     CHECK_INPUT(dirs);
     CHECK_INPUT(coeffs);
@@ -66,12 +73,18 @@ compute_sh_bwd_tensor(const uint32_t K, const uint32_t degrees_to_use,
         v_dirs = torch::zeros_like(dirs);
     }
     if (N) {
-        compute_sh_bwd_kernel<float><<<(N * 3 + N_THREADS - 1) / N_THREADS, N_THREADS>>>(
-            N, K, degrees_to_use, (float3 *)dirs.data_ptr<float>(),
-            coeffs.data_ptr<float>(),
-            masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
-            v_colors.data_ptr<float>(), v_coeffs.data_ptr<float>(),
-            compute_v_dirs ? v_dirs.data_ptr<float>() : nullptr);
+        compute_sh_bwd_kernel<float>
+            <<<(N * 3 + N_THREADS - 1) / N_THREADS, N_THREADS>>>(
+                N,
+                K,
+                degrees_to_use,
+                (float3 *)dirs.data_ptr<float>(),
+                coeffs.data_ptr<float>(),
+                masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
+                v_colors.data_ptr<float>(),
+                v_coeffs.data_ptr<float>(),
+                compute_v_dirs ? v_dirs.data_ptr<float>() : nullptr
+            );
     }
     return std::make_tuple(v_coeffs, v_dirs); // [..., K, 3], [..., 3]
 }

@@ -6,23 +6,28 @@
 
 namespace cg = cooperative_groups;
 
-
 /****************************************************************************
  * Rasterization to Indices in Range
  ****************************************************************************/
 
 template <typename T>
 __global__ void rasterize_to_indices_in_range_kernel(
-    const uint32_t range_start, const uint32_t range_end, const uint32_t C,
-    const uint32_t N, const uint32_t n_isects,
-    const typename Float2<T>::type *__restrict__ means2d,  // [C, N, 2]
-    const typename Float3<T>::type *__restrict__ conics,   // [C, N, 3]
-    const T *__restrict__ opacities, // [C, N]
-    const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
-    const uint32_t tile_width, const uint32_t tile_height,
+    const uint32_t range_start,
+    const uint32_t range_end,
+    const uint32_t C,
+    const uint32_t N,
+    const uint32_t n_isects,
+    const typename Float2<T>::type *__restrict__ means2d, // [C, N, 2]
+    const typename Float3<T>::type *__restrict__ conics,  // [C, N, 3]
+    const T *__restrict__ opacities,                      // [C, N]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
-    const T *__restrict__ transmittances, // [C, image_height, image_width]
+    const T *__restrict__ transmittances,     // [C, image_height, image_width]
     const int32_t *__restrict__ chunk_starts, // [C, image_height, image_width]
     int32_t *__restrict__ chunk_cnts,         // [C, image_height, image_width]
     int64_t *__restrict__ gaussian_ids,       // [n_elems]
@@ -33,7 +38,8 @@ __global__ void rasterize_to_indices_in_range_kernel(
 
     auto block = cg::this_thread_block();
     uint32_t camera_id = block.group_index().x;
-    uint32_t tile_id = block.group_index().y * tile_width + block.group_index().z;
+    uint32_t tile_id =
+        block.group_index().y * tile_width + block.group_index().z;
     uint32_t i = block.group_index().y * tile_size + block.thread_index().y;
     uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
 
@@ -76,14 +82,17 @@ __global__ void rasterize_to_indices_in_range_kernel(
     }
 
     extern __shared__ int s[];
-    int32_t *id_batch = (int32_t *)s;                              // [block_size]
-    typename Float3<T>::type *xy_opacity_batch = (typename Float3<T>::type *)&id_batch[block_size];    // [block_size]
-    typename Float3<T>::type *conic_batch = (typename Float3<T>::type *)&xy_opacity_batch[block_size]; // [block_size]
+    int32_t *id_batch = (int32_t *)s; // [block_size]
+    typename Float3<T>::type *xy_opacity_batch =
+        (typename Float3<T>::type *)&id_batch[block_size]; // [block_size]
+    typename Float3<T>::type *conic_batch =
+        (typename Float3<T>::type
+             *)&xy_opacity_batch[block_size]; // [block_size]
 
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
-    // numerical precision so we (should) use double for it. However double make bwd
-    // 1.5x slower so we stick with float for now.
+    // numerical precision so we (should) use double for it. However double make
+    // bwd 1.5x slower so we stick with float for now.
     T trans, next_trans;
     if (inside) {
         trans = transmittances[pix_id];
@@ -125,10 +134,12 @@ __global__ void rasterize_to_indices_in_range_kernel(
             const typename Float3<T>::type conic = conic_batch[t];
             const typename Float3<T>::type xy_opac = xy_opacity_batch[t];
             const T opac = xy_opac.z;
-            const typename Float2<T>::type delta = {xy_opac.x - px, xy_opac.y - py};
-            const T sigma =
-                0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
-                conic.y * delta.x * delta.y;
+            const typename Float2<T>::type delta = {
+                xy_opac.x - px, xy_opac.y - py
+            };
+            const T sigma = 0.5f * (conic.x * delta.x * delta.x +
+                                    conic.z * delta.y * delta.y) +
+                            conic.y * delta.x * delta.y;
             T alpha = min(0.999f, opac * __expf(-sigma));
 
             if (sigma < 0.f || alpha < 1.f / 255.f) {
@@ -149,7 +160,8 @@ __global__ void rasterize_to_indices_in_range_kernel(
                 // Second pass we write out the gaussian ids and pixel ids
                 int32_t g = id_batch[t]; // flatten index in [C * N]
                 gaussian_ids[base + cnt] = g % N;
-                pixel_ids[base + cnt] = pix_id + camera_id * image_height * image_width;
+                pixel_ids[base + cnt] =
+                    pix_id + camera_id * image_height * image_width;
                 cnt += 1;
             }
 
@@ -164,14 +176,17 @@ __global__ void rasterize_to_indices_in_range_kernel(
 }
 
 std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
-    const uint32_t range_start, const uint32_t range_end, // iteration steps
+    const uint32_t range_start,
+    const uint32_t range_end,           // iteration steps
     const torch::Tensor transmittances, // [C, image_height, image_width]
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2]
     const torch::Tensor &conics,    // [C, N, 3]
     const torch::Tensor &opacities, // [C, N]
     // image size
-    const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
     const torch::Tensor &flatten_ids   // [n_isects]
@@ -196,29 +211,54 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
 
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
     const uint32_t shared_mem =
-        tile_size * tile_size * (sizeof(int32_t) + sizeof(float3) + sizeof(float3));
-    if (cudaFuncSetAttribute(rasterize_to_indices_in_range_kernel<float>,
-                             cudaFuncAttributeMaxDynamicSharedMemorySize,
-                             shared_mem) != cudaSuccess) {
-        AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem,
-                 " bytes), try lowering tile_size.");
+        tile_size * tile_size *
+        (sizeof(int32_t) + sizeof(float3) + sizeof(float3));
+    if (cudaFuncSetAttribute(
+            rasterize_to_indices_in_range_kernel<float>,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            shared_mem
+        ) != cudaSuccess) {
+        AT_ERROR(
+            "Failed to set maximum shared memory size (requested ",
+            shared_mem,
+            " bytes), try lowering tile_size."
+        );
     }
 
     // First pass: count the number of gaussians that contribute to each pixel
     int64_t n_elems;
     torch::Tensor chunk_starts;
     if (n_isects) {
-        torch::Tensor chunk_cnts = torch::zeros({C * image_height * image_width},
-                                                means2d.options().dtype(torch::kInt32));
-        rasterize_to_indices_in_range_kernel<float><<<blocks, threads, shared_mem, stream>>>(
-            range_start, range_end, C, N, n_isects, (float2 *)means2d.data_ptr<float>(),
-            (float3 *)conics.data_ptr<float>(), opacities.data_ptr<float>(),
-            image_width, image_height, tile_size, tile_width, tile_height,
-            tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-            transmittances.data_ptr<float>(), nullptr, chunk_cnts.data_ptr<int32_t>(),
-            nullptr, nullptr);
+        torch::Tensor chunk_cnts = torch::zeros(
+            {C * image_height * image_width},
+            means2d.options().dtype(torch::kInt32)
+        );
+        rasterize_to_indices_in_range_kernel<float>
+            <<<blocks, threads, shared_mem, stream>>>(
+                range_start,
+                range_end,
+                C,
+                N,
+                n_isects,
+                (float2 *)means2d.data_ptr<float>(),
+                (float3 *)conics.data_ptr<float>(),
+                opacities.data_ptr<float>(),
+                image_width,
+                image_height,
+                tile_size,
+                tile_width,
+                tile_height,
+                tile_offsets.data_ptr<int32_t>(),
+                flatten_ids.data_ptr<int32_t>(),
+                transmittances.data_ptr<float>(),
+                nullptr,
+                chunk_cnts.data_ptr<int32_t>(),
+                nullptr,
+                nullptr
+            );
 
-        torch::Tensor cumsum = torch::cumsum(chunk_cnts, 0, chunk_cnts.scalar_type());
+        torch::Tensor cumsum =
+            torch::cumsum(chunk_cnts, 0, chunk_cnts.scalar_type());
         n_elems = cumsum[-1].item<int64_t>();
         chunk_starts = cumsum - chunk_cnts;
     } else {
@@ -231,13 +271,29 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
     torch::Tensor pixel_ids =
         torch::empty({n_elems}, means2d.options().dtype(torch::kInt64));
     if (n_elems) {
-        rasterize_to_indices_in_range_kernel<float><<<blocks, threads, shared_mem, stream>>>(
-            range_start, range_end, C, N, n_isects, (float2 *)means2d.data_ptr<float>(),
-            (float3 *)conics.data_ptr<float>(), opacities.data_ptr<float>(),
-            image_width, image_height, tile_size, tile_width, tile_height,
-            tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-            transmittances.data_ptr<float>(), chunk_starts.data_ptr<int32_t>(), nullptr,
-            gaussian_ids.data_ptr<int64_t>(), pixel_ids.data_ptr<int64_t>());
+        rasterize_to_indices_in_range_kernel<float>
+            <<<blocks, threads, shared_mem, stream>>>(
+                range_start,
+                range_end,
+                C,
+                N,
+                n_isects,
+                (float2 *)means2d.data_ptr<float>(),
+                (float3 *)conics.data_ptr<float>(),
+                opacities.data_ptr<float>(),
+                image_width,
+                image_height,
+                tile_size,
+                tile_width,
+                tile_height,
+                tile_offsets.data_ptr<int32_t>(),
+                flatten_ids.data_ptr<int32_t>(),
+                transmittances.data_ptr<float>(),
+                chunk_starts.data_ptr<int32_t>(),
+                nullptr,
+                gaussian_ids.data_ptr<int64_t>(),
+                pixel_ids.data_ptr<int64_t>()
+            );
     }
     return std::make_tuple(gaussian_ids, pixel_ids);
 }
