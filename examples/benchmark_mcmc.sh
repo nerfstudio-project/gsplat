@@ -1,4 +1,4 @@
-RESULT_DIR=results/2dgs_mcmc_sfm
+RESULT_DIR=results/3dgs_mcmc_sfm
 
 # for SCENE in bicycle bonsai counter garden kitchen room stump;
 for SCENE in garden treehill bonsai counter kitchen room bicycle stump flowers;
@@ -27,7 +27,7 @@ do
 
     # train without eval
     python simple_trainer_mcmc.py --disable_viewer --data_factor $DATA_FACTOR \
-        --model_type 2dgs \
+        --model_type 3dgs \
         --dist_lambda $DIST_LAMBDA \
         --init_type sfm \
         --cap_max $CAP_MAX \

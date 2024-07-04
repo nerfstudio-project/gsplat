@@ -27,6 +27,7 @@ from utils import (
 from gsplat import quat_scale_to_covar_preci
 from gsplat.rendering import rasterization, rasterization_2dgs_inria_wrapper
 from gsplat.relocation import compute_relocation
+from gsplat.point_utils import depth_to_normal
 from simple_trainer import create_splats_with_optimizers
 
 
@@ -143,7 +144,10 @@ class Config:
     # Enable normal loss. (experimental)
     normal_loss: bool = True
     # Weight for normal loss
-    normal_lambda: float = 0.05
+    normal_lambda: float = 0.0#5
+    
+    # Enable distortion loss. (experimental)
+    dist_loss: bool = False
     # Weight for distortion loss. Use 100 for unbounded scenes and 1000 for bounded scenes
     dist_lambda: float = 100
 
@@ -408,7 +412,7 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 image_ids=image_ids,
-                render_mode="RGB+ED" if cfg.depth_loss else "RGB",
+                render_mode="RGB+ED", # if cfg.depth_loss else "RGB",
             )
             if renders.shape[-1] == 4:
                 colors, depths = renders[..., 0:3], renders[..., 3:4]
@@ -453,13 +457,18 @@ class Runner:
 
             if cfg.normal_loss:
                 normal_lambda = cfg.normal_lambda if step > 7000 else 0.0
+                normals = info["rend_normal"]
+                depths = info["rend_depth"]
+                normals_depth = depth_to_normal(depths, camtoworlds, Ks, near_plane=cfg.near_plane, far_plane=cfg.far_plane)
+                normals_depth = normals_depth * (alphas).detach()
+                
+                normalloss = (1 - (normals * normals_depth).sum(dim=-1)).mean()
+                loss += normal_lambda * normalloss
+            
+            if cfg.dist_loss:
                 dist_lambda = cfg.dist_lambda if step > 3000 else 0.0
-
-                rend_normal = info["rend_normal"]
-                surf_normal = info["surf_normal"]
-                normalloss = (1 - (rend_normal * surf_normal).sum(dim=-1)).mean()
                 distloss = (info["rend_dist"]).mean()
-                loss += normal_lambda * normalloss + dist_lambda * distloss
+                loss +=  dist_lambda * distloss
 
             loss.backward()
 
@@ -485,6 +494,7 @@ class Runner:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
                 if cfg.normal_loss:
                     self.writer.add_scalar("train/normalloss", normalloss.item(), step)
+                if cfg.dist_loss:
                     self.writer.add_scalar("train/distloss", distloss.item(), step)
                 if cfg.tb_save_image:
                     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
@@ -702,7 +712,7 @@ class Runner:
 
             torch.cuda.synchronize()
             tic = time.time()
-            colors, _, info = self.rasterize_splats(
+            renders, alphas, info = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -710,16 +720,22 @@ class Runner:
                 sh_degree=cfg.sh_degree,
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
-            )  # [1, H, W, 3]
+                render_mode="RGB+ED",
+            )  # [1, H, W, 4]
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
-
-            colors = torch.clamp(colors, 0.0, 1.0)
+            
+            colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)  # [1, H, W, 3]
             canvas_list = [pixels, colors]
             if self.cfg.normal_loss:
-                surf_normals = info["surf_normal"] * 0.5 + 0.5
-                rend_normals = info["rend_normal"] * 0.5 + 0.5
-                canvas_list.extend([surf_normals, rend_normals])
+                normals = info["rend_normal"] * 0.5 + 0.5
+                canvas_list.extend([normals])
+                
+                depths = info["rend_depth"]
+                normals_depth = depth_to_normal(depths, camtoworlds, Ks, near_plane=cfg.near_plane, far_plane=cfg.far_plane)
+                normals_depth = normals_depth * (alphas).detach()
+                normals_depth = normals_depth * 0.5 + 0.5
+                canvas_list.extend([normals_depth])
 
             # write images
             canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()
@@ -798,9 +814,8 @@ class Runner:
                 depths = (depths - depths.min()) / (depths.max() - depths.min())
                 canvas_list.append(depths.repeat(1, 1, 1, 3))
             if self.cfg.normal_loss:
-                surf_normals = info["surf_normal"] * 0.5 + 0.5
-                rend_normals = info["rend_normal"] * 0.5 + 0.5
-                canvas_list.extend([surf_normals, rend_normals])
+                normals = info["rend_normal"] * 0.5 + 0.5
+                canvas_list.extend([normals])
 
             # write images
             canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()

@@ -401,6 +401,12 @@ def rasterization(
         "height": height,
         "tile_size": tile_size,
     }
+    
+    depths_expected = render_colors[..., -1:] / render_alphas.clamp(min=1e-10)
+    normals_depth = depth_to_normal(depths_expected, camtoworlds, Ks, near_plane, far_plane)
+    normals_depth = normals_depth * (render_alphas).detach()
+    meta["rend_depth"] = depths_expected
+    meta["rend_normal"] = normals_depth
     return render_colors, render_alphas, meta
 
 
@@ -781,15 +787,9 @@ def rasterization_2dgs_inria_wrapper(
         render_depth_expected * (1 - depth_ratio) + (depth_ratio) * render_depth_median
     )
 
-    # assume the depth points form the 'surface' and generate psudo surface normal for regularizations.
-    surf_normal = depth_to_normal(surf_depth, world_view_transform, full_proj_transform)
-    # remember to multiply with accum_alpha since render_normal is unnormalized.
-    surf_normal = surf_normal * (render_alphas).detach()
-
     render_alphas = render_alphas.unsqueeze(0)
     meta = {
-        # "surf_depth": surf_depth.unsqueeze(0),
-        "surf_normal": surf_normal.unsqueeze(0),
+        "rend_depth": surf_depth.unsqueeze(0),
         "rend_normal": render_normal.unsqueeze(0),
         "rend_dist": render_dist.unsqueeze(0),
     }

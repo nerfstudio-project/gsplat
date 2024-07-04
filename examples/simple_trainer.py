@@ -185,7 +185,7 @@ def create_splats_with_optimizers(
     dist2_avg = (knn(points, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
     dist_avg = torch.sqrt(dist2_avg)
     scales = (dist_avg * init_scale).unsqueeze(-1).repeat(1, 3)  # [N, 3]
-    scales[:, 2] /= 100
+    # scales[:, 2] /= 100
     scales = torch.log(scales)
     quats = torch.rand((N, 4))  # [N, 4]
     opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
