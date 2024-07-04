@@ -15,13 +15,14 @@ namespace cg = cooperative_groups;
  * Perspective Projection Forward Pass
  ****************************************************************************/
 
+template <typename T>
 __global__ void persp_proj_fwd_kernel(const uint32_t C, const uint32_t N,
-                                      const float *__restrict__ means,  // [C, N, 3]
-                                      const float *__restrict__ covars, // [C, N, 3, 3]
-                                      const float *__restrict__ Ks,     // [C, 3, 3]
+                                      const T *__restrict__ means,  // [C, N, 3]
+                                      const T *__restrict__ covars, // [C, N, 3, 3]
+                                      const T *__restrict__ Ks,     // [C, 3, 3]
                                       const uint32_t width, const uint32_t height,
-                                      float *__restrict__ means2d, // [C, N, 2]
-                                      float *__restrict__ covars2d // [C, N, 2, 2]
+                                      T *__restrict__ means2d, // [C, N, 2]
+                                      T *__restrict__ covars2d // [C, N, 2, 2]
 ) { // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
     if (idx >= C * N) {
@@ -37,9 +38,9 @@ __global__ void persp_proj_fwd_kernel(const uint32_t C, const uint32_t N,
     means2d += idx * 2;
     covars2d += idx * 4;
 
-    float fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
-    glm::mat2 covar2d;
-    glm::vec2 mean2d;
+    T fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
+    mat2<T> covar2d;
+    vec2<T> mean2d;
     persp_proj(glm::make_vec3(means), glm::make_mat3(covars), fx, fy, cx, cy, width,
                height, covar2d, mean2d);
 
@@ -76,8 +77,7 @@ persp_proj_fwd_tensor(const torch::Tensor &means,  // [C, N, 3]
 
     if (C && N) {
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
-        persp_proj_fwd_kernel<<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
-                                stream>>>(
+        persp_proj_fwd_kernel<float><<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
             C, N, means.data_ptr<float>(), covars.data_ptr<float>(),
             Ks.data_ptr<float>(), width, height, means2d.data_ptr<float>(),
             covars2d.data_ptr<float>());
