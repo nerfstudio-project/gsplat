@@ -73,8 +73,8 @@ fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
         // compute from quaternions and scales
         quats += gid * 4;
         scales += gid * 3;
-        quat_scale_to_covar_preci<float>(glm::make_vec4(quats), glm::make_vec3(scales), &covar,
-                                         nullptr);
+        quat_scale_to_covar_preci(glm::make_vec4(quats), glm::make_vec3(scales), &covar,
+                                  nullptr);
     }
     glm::mat3 covar_c;
     covar_world_to_cam(R, covar, covar_c);
@@ -82,8 +82,8 @@ fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
     // perspective projection
     glm::mat2 covar2d;
     glm::vec2 mean2d;
-    persp_proj<float>(mean_c, covar_c, Ks[0], Ks[4], Ks[2], Ks[5], image_width, image_height,
-                      covar2d, mean2d);
+    persp_proj(mean_c, covar_c, Ks[0], Ks[4], Ks[2], Ks[5], image_width, image_height,
+               covar2d, mean2d);
 
     float compensation;
     float det = add_blur(eps2d, covar2d, compensation);

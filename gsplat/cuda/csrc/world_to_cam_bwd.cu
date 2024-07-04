@@ -53,11 +53,11 @@ world_to_cam_bwd_kernel(const uint32_t C, const uint32_t N,
 
     if (v_means_c != nullptr) {
         glm::vec3 v_mean_c = glm::make_vec3(v_means_c + idx * 3);
-        pos_world_to_cam_vjp<float>(R, t, glm::make_vec3(means), v_mean_c, v_R, v_t, v_mean);
+        pos_world_to_cam_vjp(R, t, glm::make_vec3(means), v_mean_c, v_R, v_t, v_mean);
     }
     if (v_covars_c != nullptr) {
         glm::mat3 v_covar_c = glm::transpose(glm::make_mat3(v_covars_c + idx * 9));
-        covar_world_to_cam_vjp<float>(R, glm::make_mat3(covars), v_covar_c, v_R, v_covar);
+        covar_world_to_cam_vjp(R, glm::make_mat3(covars), v_covar_c, v_R, v_covar);
     }
 
     // #if __CUDA_ARCH__ >= 700

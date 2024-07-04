@@ -46,9 +46,9 @@ persp_proj_bwd_kernel(const uint32_t C, const uint32_t N,
     float fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
     glm::mat3 v_covar(0.f);
     glm::vec3 v_mean(0.f);
-    persp_proj_vjp<float>(glm::make_vec3(means), glm::make_mat3(covars), fx, fy, cx, cy, width,
-                          height, glm::transpose(glm::make_mat2(v_covars2d)),
-                          glm::make_vec2(v_means2d), v_mean, v_covar);
+    persp_proj_vjp(glm::make_vec3(means), glm::make_mat3(covars), fx, fy, cx, cy, width,
+                   height, glm::transpose(glm::make_mat2(v_covars2d)),
+                   glm::make_vec2(v_means2d), v_mean, v_covar);
 
     // write to outputs: glm is column-major but we want row-major
     PRAGMA_UNROLL

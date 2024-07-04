@@ -91,16 +91,16 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
             // if not then compute it from quaternions and scales
             quats += col_idx * 4;
             scales += col_idx * 3;
-            quat_scale_to_covar_preci<float>(glm::make_vec4(quats), glm::make_vec3(scales),
-                                             &covar, nullptr);
+            quat_scale_to_covar_preci(glm::make_vec4(quats), glm::make_vec3(scales),
+                                      &covar, nullptr);
         }
         glm::mat3 covar_c;
         covar_world_to_cam(R, covar, covar_c);
 
         // perspective projection
         Ks += row_idx * 9;
-        persp_proj<float>(mean_c, covar_c, Ks[0], Ks[4], Ks[2], Ks[5], image_width,
-                          image_height, covar2d, mean2d);
+        persp_proj(mean_c, covar_c, Ks[0], Ks[4], Ks[2], Ks[5], image_width,
+                   image_height, covar2d, mean2d);
 
         det = add_blur(eps2d, covar2d, compensation);
         if (det <= 0.f) {

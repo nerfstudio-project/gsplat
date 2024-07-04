@@ -96,7 +96,7 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
         // if not then compute it from quaternions and scales
         quat = glm::make_vec4(quats + gid * 4);
         scale = glm::make_vec3(scales + gid * 3);
-        quat_scale_to_covar_preci<float>(quat, scale, &covar, nullptr);
+        quat_scale_to_covar_preci(quat, scale, &covar, nullptr);
     }
     glm::vec3 mean_c;
     pos_world_to_cam(R, t, glm::make_vec3(means), mean_c);
@@ -107,8 +107,8 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     float fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
     glm::mat3 v_covar_c(0.f);
     glm::vec3 v_mean_c(0.f);
-    persp_proj_vjp<float>(mean_c, covar_c, fx, fy, cx, cy, image_width, image_height,
-                          v_covar2d, glm::make_vec2(v_means2d), v_mean_c, v_covar_c);
+    persp_proj_vjp(mean_c, covar_c, fx, fy, cx, cy, image_width, image_height,
+                   v_covar2d, glm::make_vec2(v_means2d), v_mean_c, v_covar_c);
 
     // add contribution from v_depths
     v_mean_c.z += v_depths[0];
@@ -140,10 +140,10 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
             v_covars[4] = v_covar[1][2] + v_covar[2][1];
             v_covars[5] = v_covar[2][2];
         } else {
-            glm::mat3 rotmat = quat_to_rotmat<float>(quat);
+            glm::mat3 rotmat = quat_to_rotmat(quat);
             glm::vec4 v_quat(0.f);
             glm::vec3 v_scale(0.f);
-            quat_scale_to_covar_vjp<float>(quat, scale, rotmat, v_covar, v_quat, v_scale);
+            quat_scale_to_covar_vjp(quat, scale, rotmat, v_covar, v_quat, v_scale);
             v_quats += idx * 4;
             v_scales += idx * 3;
             v_quats[0] = v_quat[0];
@@ -183,10 +183,10 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
             }
         } else {
             // Directly output gradients w.r.t. the quaternion and scale
-            glm::mat3 rotmat = quat_to_rotmat<float>(quat);
+            glm::mat3 rotmat = quat_to_rotmat(quat);
             glm::vec4 v_quat(0.f);
             glm::vec3 v_scale(0.f);
-            quat_scale_to_covar_vjp<float>(quat, scale, rotmat, v_covar, v_quat, v_scale);
+            quat_scale_to_covar_vjp(quat, scale, rotmat, v_covar, v_quat, v_scale);
             warpSum(v_quat, warp_group_g);
             warpSum(v_scale, warp_group_g);
             if (warp_group_g.thread_rank() == 0) {
