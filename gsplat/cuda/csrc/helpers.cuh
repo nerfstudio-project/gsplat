@@ -6,6 +6,8 @@
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 
+#include <ATen/cuda/Atomic.cuh>
+
 #define PRAGMA_UNROLL _Pragma("unroll")
 
 namespace cg = cooperative_groups;
@@ -71,17 +73,6 @@ template <class WarpT, class ScalarT> inline __device__ void warpSum(mat2<Scalar
 
 template <class WarpT, class ScalarT> inline __device__ void warpMax(ScalarT &val, WarpT &warp) {
     val = cg::reduce(warp, val, cg::greater<ScalarT>());
-}
-
-__device__ __forceinline__ float atomicMax(float *address, float val) {
-    int *address_as_i = reinterpret_cast<int *>(address);
-    int old = *address_as_i, assumed;
-    do {
-        assumed = old;
-        old = atomicCAS(reinterpret_cast<int *>(address), assumed,
-                        __float_as_int(fmaxf(val, __int_as_float(assumed))));
-    } while (assumed != old);
-    return __int_as_float(old);
 }
 
 #endif // GSPLAT_CUDA_HELPERS_H

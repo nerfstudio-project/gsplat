@@ -35,9 +35,9 @@ __global__ void compute_sh_bwd_kernel(const uint32_t N, const uint32_t K,
                                 v_coeffs + elem_id * K * 3,
                                 v_dirs == nullptr ? nullptr : &v_dir);
     if (v_dirs != nullptr) {
-        atomicAdd(v_dirs + elem_id * 3, v_dir.x);
-        atomicAdd(v_dirs + elem_id * 3 + 1, v_dir.y);
-        atomicAdd(v_dirs + elem_id * 3 + 2, v_dir.z);
+        gpuAtomicAdd(v_dirs + elem_id * 3, v_dir.x);
+        gpuAtomicAdd(v_dirs + elem_id * 3 + 1, v_dir.y);
+        gpuAtomicAdd(v_dirs + elem_id * 3 + 2, v_dir.z);
     }
 }
 

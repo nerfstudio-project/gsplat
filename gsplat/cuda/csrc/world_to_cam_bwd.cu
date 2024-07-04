@@ -71,7 +71,7 @@ world_to_cam_bwd_kernel(const uint32_t C, const uint32_t N,
             v_means += gid * 3;
             PRAGMA_UNROLL
             for (uint32_t i = 0; i < 3; i++) {
-                atomicAdd(v_means + i, v_mean[i]);
+                gpuAtomicAdd(v_means + i, v_mean[i]);
             }
         }
     }
@@ -83,7 +83,7 @@ world_to_cam_bwd_kernel(const uint32_t C, const uint32_t N,
             for (uint32_t i = 0; i < 3; i++) { // rows
                 PRAGMA_UNROLL
                 for (uint32_t j = 0; j < 3; j++) { // cols
-                    atomicAdd(v_covars + i * 3 + j, v_covar[j][i]);
+                    gpuAtomicAdd(v_covars + i * 3 + j, v_covar[j][i]);
                 }
             }
         }
@@ -98,9 +98,9 @@ world_to_cam_bwd_kernel(const uint32_t C, const uint32_t N,
             for (uint32_t i = 0; i < 3; i++) { // rows
                 PRAGMA_UNROLL
                 for (uint32_t j = 0; j < 3; j++) { // cols
-                    atomicAdd(v_viewmats + i * 4 + j, v_R[j][i]);
+                    gpuAtomicAdd(v_viewmats + i * 4 + j, v_R[j][i]);
                 }
-                atomicAdd(v_viewmats + i * 4 + 3, v_t[i]);
+                gpuAtomicAdd(v_viewmats + i * 4 + 3, v_t[i]);
             }
         }
     }
