@@ -8,6 +8,11 @@ from rich.console import Console
 from torch.utils.cpp_extension import _get_build_directory, load
 
 PATH = os.path.dirname(os.path.abspath(__file__))
+MAX_JOBS = os.getenv("MAX_JOBS")
+need_to_unset_max_jobs = False
+if not MAX_JOBS:
+    need_to_unset_max_jobs = True
+    os.environ["MAX_JOBS"] = "10"
 
 
 def cuda_toolkit_available():
@@ -43,7 +48,10 @@ except ImportError:
     if cuda_toolkit_available():
         name = "gsplat_cuda_legacy"
         build_dir = _get_build_directory(name, verbose=False)
-        extra_include_paths = [os.path.join(PATH, "..", "cuda/", "csrc/")]
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        glm_path = os.path.join(current_dir, "csrc", "third_party", "glm")
+
+        extra_include_paths = [os.path.join(PATH, "csrc/"), glm_path]
         extra_cflags = ["-O3"]
         extra_cuda_cflags = ["-O3"]
         sources = list(glob.glob(os.path.join(PATH, "csrc/*.cu"))) + list(
@@ -89,6 +97,9 @@ except ImportError:
         Console().print(
             "[yellow]gsplat (legacy): No CUDA toolkit found. gsplat will be disabled.[/yellow]"
         )
+
+if need_to_unset_max_jobs:
+    os.environ.pop("MAX_JOBS")
 
 
 __all__ = ["_C"]
