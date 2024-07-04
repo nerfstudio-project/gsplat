@@ -211,12 +211,12 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 }
             }
             warpSum<COLOR_DIM, float>(v_rgb_local, warp);
-            warpSum<decltype(warp), float>(v_conic_local, warp);
-            warpSum<decltype(warp), float>(v_xy_local, warp);
+            warpSum(v_conic_local, warp);
+            warpSum(v_xy_local, warp);
             if (v_means2d_abs != nullptr) {
-                warpSum<decltype(warp), float>(v_xy_abs_local, warp);
+                warpSum(v_xy_abs_local, warp);
             }
-            warpSum<decltype(warp), float>(v_opacity_local, warp);
+            warpSum(v_opacity_local, warp);
             if (warp.thread_rank() == 0) {
                 int32_t g = id_batch[t]; // flatten index in [C * N] or [nnz]
                 float *v_rgb_ptr = (float *)(v_colors) + COLOR_DIM * g;
