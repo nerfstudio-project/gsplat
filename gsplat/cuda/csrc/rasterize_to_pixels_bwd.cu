@@ -222,25 +222,25 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 S *v_rgb_ptr = (S *)(v_colors) + COLOR_DIM * g;
                 PRAGMA_UNROLL
                 for (uint32_t k = 0; k < COLOR_DIM; ++k) {
-                    atomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
+                    gpuAtomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
                 }
 
                 S *v_conic_ptr = (S *)(v_conics) + 3 * g;
-                atomicAdd(v_conic_ptr, v_conic_local.x);
-                atomicAdd(v_conic_ptr + 1, v_conic_local.y);
-                atomicAdd(v_conic_ptr + 2, v_conic_local.z);
+                gpuAtomicAdd(v_conic_ptr, v_conic_local.x);
+                gpuAtomicAdd(v_conic_ptr + 1, v_conic_local.y);
+                gpuAtomicAdd(v_conic_ptr + 2, v_conic_local.z);
 
                 S *v_xy_ptr = (S *)(v_means2d) + 2 * g;
-                atomicAdd(v_xy_ptr, v_xy_local.x);
-                atomicAdd(v_xy_ptr + 1, v_xy_local.y);
+                gpuAtomicAdd(v_xy_ptr, v_xy_local.x);
+                gpuAtomicAdd(v_xy_ptr + 1, v_xy_local.y);
 
                 if (v_means2d_abs != nullptr) {
                     S *v_xy_abs_ptr = (S *)(v_means2d_abs) + 2 * g;
-                    atomicAdd(v_xy_abs_ptr, v_xy_abs_local.x);
-                    atomicAdd(v_xy_abs_ptr + 1, v_xy_abs_local.y);
+                    gpuAtomicAdd(v_xy_abs_ptr, v_xy_abs_local.x);
+                    gpuAtomicAdd(v_xy_abs_ptr + 1, v_xy_abs_local.y);
                 }
 
-                atomicAdd(v_opacities + g, v_opacity_local);
+                gpuAtomicAdd(v_opacities + g, v_opacity_local);
             }
         }
     }
