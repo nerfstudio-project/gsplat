@@ -39,7 +39,7 @@ __global__ void quat_scale_to_covar_preci_bwd_kernel(
 
     glm::vec4 quat = glm::make_vec4(quats + idx * 4);
     glm::vec3 scale = glm::make_vec3(scales + idx * 3);
-    glm::mat3 rotmat = quat_to_rotmat(quat);
+    glm::mat3 rotmat = quat_to_rotmat<float>(quat);
 
     glm::vec4 v_quat(0.f);
     glm::vec3 v_scale(0.f);
@@ -55,7 +55,7 @@ __global__ void quat_scale_to_covar_preci_bwd_kernel(
             v_covars += idx * 9;
             v_covar = glm::transpose(glm::make_mat3(v_covars));
         }
-        quat_scale_to_covar_vjp(quat, scale, rotmat, v_covar, v_quat, v_scale);
+        quat_scale_to_covar_vjp<float>(quat, scale, rotmat, v_covar, v_quat, v_scale);
     }
     if (v_precis != nullptr) {
         // glm is column-major, input is row-major
@@ -69,7 +69,7 @@ __global__ void quat_scale_to_covar_preci_bwd_kernel(
             v_precis += idx * 9;
             v_preci = glm::transpose(glm::make_mat3(v_precis));
         }
-        quat_scale_to_preci_vjp(quat, scale, rotmat, v_preci, v_quat, v_scale);
+        quat_scale_to_preci_vjp<float>(quat, scale, rotmat, v_preci, v_quat, v_scale);
     }
 
     // write out results
