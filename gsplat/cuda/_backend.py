@@ -44,7 +44,10 @@ except ImportError:
     if cuda_toolkit_available():
         name = "gsplat_cuda"
         build_dir = _get_build_directory(name, verbose=False)
-        extra_include_paths = [os.path.join(PATH, "csrc/")]
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        glm_path = os.path.join(current_dir, "csrc", "third_party", "glm")
+
+        extra_include_paths = [os.path.join(PATH, "csrc/"), glm_path]
         extra_cflags = ["-O3"]
         if NO_FAST_MATH:
             extra_cuda_cflags = ["-O3"]
