@@ -11,20 +11,20 @@ namespace cg = cooperative_groups;
  * Rasterization to Pixels Forward Pass
  ****************************************************************************/
 
-template <uint32_t COLOR_DIM>
+template <uint32_t COLOR_DIM, typename S>
 __global__ void rasterize_to_pixels_fwd_kernel(
     const uint32_t C, const uint32_t N, const uint32_t n_isects, const bool packed,
-    const float2 *__restrict__ means2d,    // [C, N, 2] or [nnz, 2]
-    const float3 *__restrict__ conics,     // [C, N, 3] or [nnz, 3]
-    const float *__restrict__ colors,      // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
-    const float *__restrict__ opacities,   // [C, N] or [nnz]
-    const float *__restrict__ backgrounds, // [C, COLOR_DIM]
+    const typename Float2<S>::type *__restrict__ means2d,    // [C, N, 2] or [nnz, 2]
+    const typename Float3<S>::type *__restrict__ conics,     // [C, N, 3] or [nnz, 3]
+    const S *__restrict__ colors,      // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
+    const S *__restrict__ opacities,   // [C, N] or [nnz]
+    const S *__restrict__ backgrounds, // [C, COLOR_DIM]
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     const uint32_t tile_width, const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
-    float *__restrict__ render_colors, // [C, image_height, image_width, COLOR_DIM]
-    float *__restrict__ render_alphas, // [C, image_height, image_width, 1]
+    S *__restrict__ render_colors, // [C, image_height, image_width, COLOR_DIM]
+    S *__restrict__ render_alphas, // [C, image_height, image_width, 1]
     int32_t *__restrict__ last_ids     // [C, image_height, image_width]
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
@@ -44,8 +44,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         backgrounds += camera_id * COLOR_DIM;
     }
 
-    float px = (float)j + 0.5f;
-    float py = (float)i + 0.5f;
+    S px = (S)j + 0.5f;
+    S py = (S)i + 0.5f;
     int32_t pix_id = i * image_width + j;
 
     // return if out of bounds
@@ -66,14 +66,14 @@ __global__ void rasterize_to_pixels_fwd_kernel(
 
     extern __shared__ int s[];
     int32_t *id_batch = (int32_t *)s;                              // [block_size]
-    float3 *xy_opacity_batch = (float3 *)&id_batch[block_size];    // [block_size]
-    float3 *conic_batch = (float3 *)&xy_opacity_batch[block_size]; // [block_size]
+    typename Float3<S>::type *xy_opacity_batch = (typename Float3<S>::type *)&id_batch[block_size];    // [block_size]
+    typename Float3<S>::type *conic_batch = (typename Float3<S>::type *)&xy_opacity_batch[block_size]; // [block_size]
 
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
     // numerical precision so we use double for it. However double make bwd 1.5x slower
     // so we stick with float for now.
-    float T = 1.0f;
+    S T = 1.0f;
     // index of most recent gaussian to write to this thread's pixel
     uint32_t cur_idx = 0;
 
@@ -82,7 +82,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     // designated pixel
     uint32_t tr = block.thread_rank();
 
-    float pix_out[COLOR_DIM] = {0.f};
+    S pix_out[COLOR_DIM] = {0.f};
     for (uint32_t b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
@@ -97,8 +97,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         if (idx < range_end) {
             int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
             id_batch[tr] = g;
-            const float2 xy = means2d[g];
-            const float opac = opacities[g];
+            const typename Float2<S>::type xy = means2d[g];
+            const S opac = opacities[g];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             conic_batch[tr] = conics[g];
         }
@@ -109,27 +109,27 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         // process gaussians in the current batch for this pixel
         uint32_t batch_size = min(block_size, range_end - batch_start);
         for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
-            const float3 conic = conic_batch[t];
-            const float3 xy_opac = xy_opacity_batch[t];
-            const float opac = xy_opac.z;
-            const float2 delta = {xy_opac.x - px, xy_opac.y - py};
-            const float sigma =
+            const typename Float3<S>::type conic = conic_batch[t];
+            const typename Float3<S>::type xy_opac = xy_opacity_batch[t];
+            const S opac = xy_opac.z;
+            const typename Float2<S>::type delta = {xy_opac.x - px, xy_opac.y - py};
+            const S sigma =
                 0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
                 conic.y * delta.x * delta.y;
-            float alpha = min(0.999f, opac * __expf(-sigma));
+            S alpha = min(0.999f, opac * __expf(-sigma));
             if (sigma < 0.f || alpha < 1.f / 255.f) {
                 continue;
             }
 
-            const float next_T = T * (1.0f - alpha);
+            const S next_T = T * (1.0f - alpha);
             if (next_T <= 1e-4) { // this pixel is done: exclusive
                 done = true;
                 break;
             }
 
             int32_t g = id_batch[t];
-            const float vis = alpha * T;
-            const float *c_ptr = colors + g * COLOR_DIM;
+            const S vis = alpha * T;
+            const S *c_ptr = colors + g * COLOR_DIM;
             PRAGMA_UNROLL
             for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                 pix_out[k] += c_ptr[k] * vis;
@@ -209,13 +209,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
     // TODO: an optimization can be done by passing the actual number of channels into
     // the kernel functions and avoid necessary global memory writes. This requires
     // moving the channel padding from python to C side.
-    if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<CDIM>,
+    if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<CDIM, float>,
                                 cudaFuncAttributeMaxDynamicSharedMemorySize,
                                 shared_mem) != cudaSuccess) {
         AT_ERROR("Failed to set maximum shared memory size (requested ", shared_mem,
                     " bytes), try lowering tile_size.");
     }
-    rasterize_to_pixels_fwd_kernel<CDIM><<<blocks, threads, shared_mem, stream>>>(
+    rasterize_to_pixels_fwd_kernel<CDIM, float><<<blocks, threads, shared_mem, stream>>>(
         C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
         (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
         opacities.data_ptr<float>(),
