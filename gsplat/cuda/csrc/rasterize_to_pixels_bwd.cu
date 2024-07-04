@@ -11,32 +11,32 @@ namespace cg = cooperative_groups;
  * Rasterization to Pixels Backward Pass
  ****************************************************************************/
 
-template <uint32_t COLOR_DIM>
+template <uint32_t COLOR_DIM, typename S>
 __global__ void rasterize_to_pixels_bwd_kernel(
     const uint32_t C, const uint32_t N, const uint32_t n_isects, const bool packed,
     // fwd inputs
-    const float2 *__restrict__ means2d,    // [C, N, 2] or [nnz, 2]
-    const float3 *__restrict__ conics,     // [C, N, 3] or [nnz, 3]
-    const float *__restrict__ colors,      // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
-    const float *__restrict__ opacities,   // [C, N] or [nnz]
-    const float *__restrict__ backgrounds, // [C, COLOR_DIM] or [nnz, COLOR_DIM]
+    const typename Float2<S>::type *__restrict__ means2d,    // [C, N, 2] or [nnz, 2]
+    const typename Float3<S>::type *__restrict__ conics,     // [C, N, 3] or [nnz, 3]
+    const S *__restrict__ colors,      // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
+    const S *__restrict__ opacities,   // [C, N] or [nnz]
+    const S *__restrict__ backgrounds, // [C, COLOR_DIM] or [nnz, COLOR_DIM]
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     const uint32_t tile_width, const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
     // fwd outputs
-    const float *__restrict__ render_alphas, // [C, image_height, image_width, 1]
+    const S *__restrict__ render_alphas, // [C, image_height, image_width, 1]
     const int32_t *__restrict__ last_ids,    // [C, image_height, image_width]
     // grad outputs
-    const float
+    const S
         *__restrict__ v_render_colors, // [C, image_height, image_width, COLOR_DIM]
-    const float *__restrict__ v_render_alphas, // [C, image_height, image_width, 1]
+    const S *__restrict__ v_render_alphas, // [C, image_height, image_width, 1]
     // grad inputs
-    float2 *__restrict__ v_means2d_abs, // [C, N, 2] or [nnz, 2]
-    float2 *__restrict__ v_means2d,     // [C, N, 2] or [nnz, 2]
-    float3 *__restrict__ v_conics,      // [C, N, 3] or [nnz, 3]
-    float *__restrict__ v_colors,       // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
-    float *__restrict__ v_opacities     // [C, N] or [nnz]
+    typename Float2<S>::type *__restrict__ v_means2d_abs, // [C, N, 2] or [nnz, 2]
+    typename Float2<S>::type *__restrict__ v_means2d,     // [C, N, 2] or [nnz, 2]
+    typename Float3<S>::type *__restrict__ v_conics,      // [C, N, 3] or [nnz, 3]
+    S *__restrict__ v_colors,       // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
+    S *__restrict__ v_opacities     // [C, N] or [nnz]
 ) {
     auto block = cg::this_thread_block();
     uint32_t camera_id = block.group_index().x;
@@ -53,8 +53,8 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         backgrounds += camera_id * COLOR_DIM;
     }
 
-    const float px = (float)j + 0.5f;
-    const float py = (float)i + 0.5f;
+    const S px = (S)j + 0.5f;
+    const S py = (S)i + 0.5f;
     // clamp this value to the last pixel
     const int32_t pix_id = min(i * image_width + j, image_width * image_height - 1);
 
@@ -75,25 +75,25 @@ __global__ void rasterize_to_pixels_bwd_kernel(
 
     extern __shared__ int s[];
     int32_t *id_batch = (int32_t *)s;                              // [block_size]
-    float3 *xy_opacity_batch = (float3 *)&id_batch[block_size];    // [block_size]
-    float3 *conic_batch = (float3 *)&xy_opacity_batch[block_size]; // [block_size]
-    float *rgbs_batch = (float *)&conic_batch[block_size]; // [block_size * COLOR_DIM]
+    typename Float3<S>::type *xy_opacity_batch = (typename Float3<S>::type *)&id_batch[block_size];    // [block_size]
+    typename Float3<S>::type *conic_batch = (typename Float3<S>::type *)&xy_opacity_batch[block_size]; // [block_size]
+    S *rgbs_batch = (S *)&conic_batch[block_size]; // [block_size * COLOR_DIM]
 
     // this is the T AFTER the last gaussian in this pixel
-    float T_final = 1.0f - render_alphas[pix_id];
-    float T = T_final;
+    S T_final = 1.0f - render_alphas[pix_id];
+    S T = T_final;
     // the contribution from gaussians behind the current one
-    float buffer[COLOR_DIM] = {0.f};
+    S buffer[COLOR_DIM] = {0.f};
     // index of last gaussian to contribute to this pixel
     const int32_t bin_final = inside ? last_ids[pix_id] : 0;
 
     // df/d_out for this pixel
-    float v_render_c[COLOR_DIM];
+    S v_render_c[COLOR_DIM];
     PRAGMA_UNROLL
     for (uint32_t k = 0; k < COLOR_DIM; ++k) {
         v_render_c[k] = v_render_colors[pix_id * COLOR_DIM + k];
     }
-    const float v_render_a = v_render_alphas[pix_id];
+    const S v_render_a = v_render_alphas[pix_id];
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing
@@ -115,8 +115,8 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         if (idx >= range_start) {
             int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
             id_batch[tr] = g;
-            const float2 xy = means2d[g];
-            const float opac = opacities[g];
+            const typename Float2<S>::type xy = means2d[g];
+            const S opac = opacities[g];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             conic_batch[tr] = conics[g];
             PRAGMA_UNROLL
@@ -133,18 +133,18 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             if (batch_end - t > bin_final) {
                 valid = 0;
             }
-            float alpha;
-            float opac;
-            float2 delta;
-            float3 conic;
-            float vis;
+            S alpha;
+            S opac;
+            typename Float2<S>::type delta;
+            typename Float3<S>::type conic;
+            S vis;
 
             if (valid) {
                 conic = conic_batch[t];
-                float3 xy_opac = xy_opacity_batch[t];
+                typename Float3<S>::type xy_opac = xy_opacity_batch[t];
                 opac = xy_opac.z;
                 delta = {xy_opac.x - px, xy_opac.y - py};
-                float sigma =
+                S sigma =
                     0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
                     conic.y * delta.x * delta.y;
                 vis = __expf(-sigma);
@@ -158,24 +158,24 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             if (!warp.any(valid)) {
                 continue;
             }
-            float v_rgb_local[COLOR_DIM] = {0.f};
-            float3 v_conic_local = {0.f, 0.f, 0.f};
-            float2 v_xy_local = {0.f, 0.f};
-            float2 v_xy_abs_local = {0.f, 0.f};
-            float v_opacity_local = 0.f;
+            S v_rgb_local[COLOR_DIM] = {0.f};
+            typename Float3<S>::type v_conic_local = {0.f, 0.f, 0.f};
+            typename Float2<S>::type v_xy_local = {0.f, 0.f};
+            typename Float2<S>::type v_xy_abs_local = {0.f, 0.f};
+            S v_opacity_local = 0.f;
             // initialize everything to 0, only set if the lane is valid
             if (valid) {
                 // compute the current T for this gaussian
-                float ra = 1.0f / (1.0f - alpha);
+                S ra = 1.0f / (1.0f - alpha);
                 T *= ra;
                 // update v_rgb for this gaussian
-                const float fac = alpha * T;
+                const S fac = alpha * T;
                 PRAGMA_UNROLL
                 for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                     v_rgb_local[k] = fac * v_render_c[k];
                 }
                 // contribution from this pixel
-                float v_alpha = 0.f;
+                S v_alpha = 0.f;
                 for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                     v_alpha += (rgbs_batch[t * COLOR_DIM + k] * T - buffer[k] * ra) *
                                v_render_c[k];
@@ -184,7 +184,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 v_alpha += T_final * ra * v_render_a;
                 // contribution from background pixel
                 if (backgrounds != nullptr) {
-                    float accum = 0.f;
+                    S accum = 0.f;
                     PRAGMA_UNROLL
                     for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                         accum += backgrounds[k] * v_render_c[k];
@@ -193,7 +193,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 }
 
                 if (opac * vis <= 0.999f) {
-                    const float v_sigma = -opac * vis * v_alpha;
+                    const S v_sigma = -opac * vis * v_alpha;
                     v_conic_local = {0.5f * v_sigma * delta.x * delta.x,
                                      v_sigma * delta.x * delta.y,
                                      0.5f * v_sigma * delta.y * delta.y};
@@ -210,32 +210,32 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                     buffer[k] += rgbs_batch[t * COLOR_DIM + k] * fac;
                 }
             }
-            warpSum<COLOR_DIM, float>(v_rgb_local, warp);
-            warpSum<decltype(warp), float>(v_conic_local, warp);
-            warpSum<decltype(warp), float>(v_xy_local, warp);
+            warpSum<COLOR_DIM, S>(v_rgb_local, warp);
+            warpSum<decltype(warp), S>(v_conic_local, warp);
+            warpSum<decltype(warp), S>(v_xy_local, warp);
             if (v_means2d_abs != nullptr) {
-                warpSum<decltype(warp), float>(v_xy_abs_local, warp);
+                warpSum<decltype(warp), S>(v_xy_abs_local, warp);
             }
-            warpSum<decltype(warp), float>(v_opacity_local, warp);
+            warpSum<decltype(warp), S>(v_opacity_local, warp);
             if (warp.thread_rank() == 0) {
                 int32_t g = id_batch[t]; // flatten index in [C * N] or [nnz]
-                float *v_rgb_ptr = (float *)(v_colors) + COLOR_DIM * g;
+                S *v_rgb_ptr = (S *)(v_colors) + COLOR_DIM * g;
                 PRAGMA_UNROLL
                 for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                     atomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
                 }
 
-                float *v_conic_ptr = (float *)(v_conics) + 3 * g;
+                S *v_conic_ptr = (S *)(v_conics) + 3 * g;
                 atomicAdd(v_conic_ptr, v_conic_local.x);
                 atomicAdd(v_conic_ptr + 1, v_conic_local.y);
                 atomicAdd(v_conic_ptr + 2, v_conic_local.z);
 
-                float *v_xy_ptr = (float *)(v_means2d) + 2 * g;
+                S *v_xy_ptr = (S *)(v_means2d) + 2 * g;
                 atomicAdd(v_xy_ptr, v_xy_local.x);
                 atomicAdd(v_xy_ptr + 1, v_xy_local.y);
 
                 if (v_means2d_abs != nullptr) {
-                    float *v_xy_abs_ptr = (float *)(v_means2d_abs) + 2 * g;
+                    S *v_xy_abs_ptr = (S *)(v_means2d_abs) + 2 * g;
                     atomicAdd(v_xy_abs_ptr, v_xy_abs_local.x);
                     atomicAdd(v_xy_abs_ptr + 1, v_xy_abs_local.y);
                 }
@@ -316,13 +316,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
                                      sizeof(float) * COLOR_DIM);
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
-        if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<CDIM>,
+        if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<CDIM, float>,
                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
                                     shared_mem) != cudaSuccess) {
             AT_ERROR("Failed to set maximum shared memory size (requested ",
                      shared_mem, " bytes), try lowering tile_size.");
         }
-        rasterize_to_pixels_bwd_kernel<CDIM><<<blocks, threads, shared_mem, stream>>>(
+        rasterize_to_pixels_bwd_kernel<CDIM, float><<<blocks, threads, shared_mem, stream>>>(
             C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
             (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
