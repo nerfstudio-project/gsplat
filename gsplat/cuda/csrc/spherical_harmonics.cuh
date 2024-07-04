@@ -1,7 +1,6 @@
 #include "bindings.h"
 #include "utils.cuh"
 
-
 #include <cuda_runtime.h>
 
 // Evaluate spherical harmonics bases at unit direction for high orders using approach
