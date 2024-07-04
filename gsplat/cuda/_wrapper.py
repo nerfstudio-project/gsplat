@@ -1242,6 +1242,8 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, v_radii, v_means2d, v_depths, v_ray_transformations, v_normals):
+        import pdb
+        pdb.set_trace()
         (
             means,
             quats,
@@ -1270,6 +1272,7 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
             ray_transformations,
             v_means2d.contiguous(),
             v_depths.contiguous(),
+            v_normals.contiguous(),
             v_ray_transformations.contiguous(),
             ctx.needs_input_grad[4],  # viewmats_requires_grad
         )
@@ -1646,6 +1649,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             last_ids,
             v_render_colors.contiguous(),
             v_render_alphas.contiguous(),
+            v_render_normals.contiguous(),
             absgrad,
         )
 
@@ -1658,6 +1662,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             )
         else:
             v_backgrounds = None
+
         return (
             v_means2d,
             v_ray_transformations,

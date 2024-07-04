@@ -70,7 +70,7 @@ class SimpleTrainer:
             device=self.device,
         )
         if model_type == "3dgs":
-            renders, _, _ = rasterization(
+            renders, _ = rasterization(
                 self.means,
                 self.quats / self.quats.norm(dim=-1, keepdim=True),
                 self.scales,
@@ -84,7 +84,7 @@ class SimpleTrainer:
             )
 
         elif model_type == "2dgs":
-            renders, _, _, _ = rasterization_2dgs(
+            renders, _ = rasterization_2dgs(
                 self.means,
                 self.quats / self.quats.norm(dim=-1, keepdim=True),
                 self.scales,
@@ -98,7 +98,7 @@ class SimpleTrainer:
             )
         else:
             raise NotImplementedError("Model not implemented")
-        out_img = renders[0]
+        out_img = renders[0].squeeze(0)
         torch.cuda.synchronize()
         
         frame = (out_img.detach().cpu().numpy() * 255).astype(np.uint8)

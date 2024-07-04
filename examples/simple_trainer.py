@@ -488,7 +488,7 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 image_ids=image_ids,
-                render_mode="RGB+ED" if cfg.depth_loss else "RGB",
+                render_mode="RGB+ED" if cfg.depth_loss else "RGB+D",
             )
             if renders.shape[-1] == 4:
                 colors, depths = renders[..., 0:3], renders[..., 3:4]
@@ -529,12 +529,16 @@ class Runner:
             
             if cfg.normal_loss:
                 # normal consistency loss
+                # import pdb
+                # pdb.set_trace()
                 normal_error = (1 - (render_normals * render_normals_from_depth).sum(dim=0))[None]
-                normal_loss = cfg.normal_lambda * normal_loss
+                # import pdb
+                # pdb.set_trace()
+                normal_loss = cfg.normal_lambda * normal_error.mean()
                 loss += normal_loss
 
             loss.backward()
-
+            
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
             if cfg.depth_loss:
                 desc += f"depth loss={depthloss.item():.6f}| "

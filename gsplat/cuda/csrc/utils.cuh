@@ -422,12 +422,13 @@ inline __device__ void compute_ray_transformation_vjp(const glm::mat3x4 W, const
     glm::vec3 tn = W * R[2];
     float cos = glm::dot(-tn, mean_c);
     float multiplier = cos > 0 ? 1 : -1;
-    v_tn += multiplier;
+    v_tn *= multiplier;
     // v_R = glm::mat3(
     //     v_RS0 * glm::vec3(scale[0]),
     //     v_RS1 * glm::vec3(scale[1]),
     //     v_tn
     // );
+    // printf("%.2f, %.2f, %.2f\n", v_tn.x, v_tn.y, v_tn.z);
     v_R[0] += v_RS0 * glm::vec3(scale_2dgs[0]);
     v_R[1] += v_RS1 * glm::vec3(scale_2dgs[1]);
     v_R[2] += v_tn;

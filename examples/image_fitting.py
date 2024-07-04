@@ -12,6 +12,8 @@ from torch import Tensor, optim
 
 from gsplat import rasterization, rasterization_2dgs
 
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+os.environ['TORCH_USE_CUDA_DSA'] = '1'
 
 class SimpleTrainer:
     """Trains random gaussians to fit an image."""
@@ -115,7 +117,7 @@ class SimpleTrainer:
             #     self.H,
             #     packed=False,
             # )
-            renders, _, _, _ = rasterize_fnc(
+            renders, _ = rasterize_fnc(
                 self.means,
                 self.quats / self.quats.norm(dim=-1, keepdim=True),
                 self.scales,
@@ -127,7 +129,7 @@ class SimpleTrainer:
                 self.H,
                 packed=False,
             )
-            out_img = renders[0]
+            out_img = renders[0].squeeze(0)
             torch.cuda.synchronize()
             times[0] += time.time() - start
             loss = mse_loss(out_img, self.gt_image)

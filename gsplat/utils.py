@@ -17,10 +17,10 @@ def depths_to_points(
     height: int,
     depthmap
 ) -> Tensor:    
-    c2w = torch.Tensor([[-8.6745e-01, -2.2594e-01,  4.4326e-01, -1.3165e+00],
-        [ 2.3024e-01,  6.0748e-01,  7.6023e-01, -1.3669e+00],
-        [-4.4104e-01,  7.6152e-01, -4.7494e-01,  2.9974e+00],
-        [-1.5894e-09,  1.7377e-08, -8.6406e-09,  1.0000e+00]]).to("cuda")
+    # c2w = torch.Tensor([[-8.6745e-01, -2.2594e-01,  4.4326e-01, -1.3165e+00],
+    #     [ 2.3024e-01,  6.0748e-01,  7.6023e-01, -1.3669e+00],
+    #     [-4.4104e-01,  7.6152e-01, -4.7494e-01,  2.9974e+00],
+    #     [-1.5894e-09,  1.7377e-08, -8.6406e-09,  1.0000e+00]]).to("cuda")
     grid_x, grid_y = torch.meshgrid(torch.arange(width, device="cuda").float(), torch.arange(height, device="cuda").float(), indexing='xy')
     points = torch.stack([grid_x, grid_y, torch.ones_like(grid_x)], dim=-1).reshape(-1, 3)
     rays_d = points @ intrinsic.inverse().T @ c2w[:3, :3].T
