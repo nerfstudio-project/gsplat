@@ -246,8 +246,11 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     }
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
-rasterize_to_pixels_bwd_tensor(
+
+
+
+template <uint32_t CDIM>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
     // Gaussian parameters
     const torch::Tensor &means2d,                   // [C, N, 2] or [nnz, 2]
     const torch::Tensor &conics,                    // [C, N, 3] or [nnz, 3]
@@ -267,6 +270,8 @@ rasterize_to_pixels_bwd_tensor(
     const torch::Tensor &v_render_alphas, // [C, image_height, image_width, 1]
     // options
     bool absgrad) {
+
+
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
     CHECK_INPUT(conics);
@@ -310,441 +315,87 @@ rasterize_to_pixels_bwd_tensor(
                                     (sizeof(int32_t) + sizeof(float3) + sizeof(float3) +
                                      sizeof(float) * COLOR_DIM);
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
-        switch (COLOR_DIM) {
-        case 1:
-            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<1>,
-                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                     shared_mem) != cudaSuccess) {
-                AT_ERROR("Failed to set maximum shared memory size (requested ",
-                         shared_mem, " bytes), try lowering tile_size.");
-            }
-            rasterize_to_pixels_bwd_kernel<1><<<blocks, threads, shared_mem, stream>>>(
-                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
-                opacities.data_ptr<float>(),
-                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                        : nullptr,
-                image_width, image_height, tile_size, tile_width, tile_height,
-                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                (float2 *)v_means2d.data_ptr<float>(),
-                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>());
-            break;
-        case 2:
-            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<2>,
-                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                     shared_mem) != cudaSuccess) {
-                AT_ERROR("Failed to set maximum shared memory size (requested ",
-                         shared_mem, " bytes), try lowering tile_size.");
-            }
-            rasterize_to_pixels_bwd_kernel<2><<<blocks, threads, shared_mem, stream>>>(
-                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
-                opacities.data_ptr<float>(),
-                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                        : nullptr,
-                image_width, image_height, tile_size, tile_width, tile_height,
-                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                (float2 *)v_means2d.data_ptr<float>(),
-                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>());
-            break;
-        case 3:
-            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<3>,
-                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                     shared_mem) != cudaSuccess) {
-                AT_ERROR("Failed to set maximum shared memory size (requested ",
-                         shared_mem, " bytes), try lowering tile_size.");
-            }
-            rasterize_to_pixels_bwd_kernel<3><<<blocks, threads, shared_mem, stream>>>(
-                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
-                opacities.data_ptr<float>(),
-                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                        : nullptr,
-                image_width, image_height, tile_size, tile_width, tile_height,
-                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                (float2 *)v_means2d.data_ptr<float>(),
-                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>());
-            break;
-        case 4:
-            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<4>,
-                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                     shared_mem) != cudaSuccess) {
-                AT_ERROR("Failed to set maximum shared memory size (requested ",
-                         shared_mem, " bytes), try lowering tile_size.");
-            }
-            rasterize_to_pixels_bwd_kernel<4><<<blocks, threads, shared_mem, stream>>>(
-                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
-                opacities.data_ptr<float>(),
-                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                        : nullptr,
-                image_width, image_height, tile_size, tile_width, tile_height,
-                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                (float2 *)v_means2d.data_ptr<float>(),
-                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>());
-            break;
-        case 5:
-            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<5>,
-                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                     shared_mem) != cudaSuccess) {
-                AT_ERROR("Failed to set maximum shared memory size (requested ",
-                         shared_mem, " bytes), try lowering tile_size.");
-            }
-            rasterize_to_pixels_bwd_kernel<5><<<blocks, threads, shared_mem, stream>>>(
-                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
-                opacities.data_ptr<float>(),
-                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                        : nullptr,
-                image_width, image_height, tile_size, tile_width, tile_height,
-                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                (float2 *)v_means2d.data_ptr<float>(),
-                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>());
-            break;
-        case 8:
-            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<8>,
-                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                     shared_mem) != cudaSuccess) {
-                AT_ERROR("Failed to set maximum shared memory size (requested ",
-                         shared_mem, " bytes), try lowering tile_size.");
-            }
-            rasterize_to_pixels_bwd_kernel<8><<<blocks, threads, shared_mem, stream>>>(
-                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
-                opacities.data_ptr<float>(),
-                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                        : nullptr,
-                image_width, image_height, tile_size, tile_width, tile_height,
-                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                (float2 *)v_means2d.data_ptr<float>(),
-                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>());
-            break;
-        case 9:
-            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<9>,
-                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                     shared_mem) != cudaSuccess) {
-                AT_ERROR("Failed to set maximum shared memory size (requested ",
-                         shared_mem, " bytes), try lowering tile_size.");
-            }
-            rasterize_to_pixels_bwd_kernel<9><<<blocks, threads, shared_mem, stream>>>(
-                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
-                opacities.data_ptr<float>(),
-                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                        : nullptr,
-                image_width, image_height, tile_size, tile_width, tile_height,
-                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                (float2 *)v_means2d.data_ptr<float>(),
-                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>());
-            break;
-        case 16:
-            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<16>,
-                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                     shared_mem) != cudaSuccess) {
-                AT_ERROR("Failed to set maximum shared memory size (requested ",
-                         shared_mem, " bytes), try lowering tile_size.");
-            }
-            rasterize_to_pixels_bwd_kernel<16><<<blocks, threads, shared_mem, stream>>>(
-                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
-                opacities.data_ptr<float>(),
-                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                        : nullptr,
-                image_width, image_height, tile_size, tile_width, tile_height,
-                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                (float2 *)v_means2d.data_ptr<float>(),
-                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>());
-            break;
-        case 17:
-            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<17>,
-                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                     shared_mem) != cudaSuccess) {
-                AT_ERROR("Failed to set maximum shared memory size (requested ",
-                         shared_mem, " bytes), try lowering tile_size.");
-            }
-            rasterize_to_pixels_bwd_kernel<17><<<blocks, threads, shared_mem, stream>>>(
-                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
-                opacities.data_ptr<float>(),
-                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                        : nullptr,
-                image_width, image_height, tile_size, tile_width, tile_height,
-                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                (float2 *)v_means2d.data_ptr<float>(),
-                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>());
-            break;
-        case 32:
-            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<32>,
-                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                     shared_mem) != cudaSuccess) {
-                AT_ERROR("Failed to set maximum shared memory size (requested ",
-                         shared_mem, " bytes), try lowering tile_size.");
-            }
-            rasterize_to_pixels_bwd_kernel<32><<<blocks, threads, shared_mem, stream>>>(
-                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
-                opacities.data_ptr<float>(),
-                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                        : nullptr,
-                image_width, image_height, tile_size, tile_width, tile_height,
-                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                (float2 *)v_means2d.data_ptr<float>(),
-                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>());
-            break;
-        case 33:
-            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<33>,
-                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                     shared_mem) != cudaSuccess) {
-                AT_ERROR("Failed to set maximum shared memory size (requested ",
-                         shared_mem, " bytes), try lowering tile_size.");
-            }
-            rasterize_to_pixels_bwd_kernel<33><<<blocks, threads, shared_mem, stream>>>(
-                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
-                opacities.data_ptr<float>(),
-                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                        : nullptr,
-                image_width, image_height, tile_size, tile_width, tile_height,
-                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                (float2 *)v_means2d.data_ptr<float>(),
-                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>());
-            break;
-        case 64:
-            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<64>,
-                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                     shared_mem) != cudaSuccess) {
-                AT_ERROR("Failed to set maximum shared memory size (requested ",
-                         shared_mem, " bytes), try lowering tile_size.");
-            }
-            rasterize_to_pixels_bwd_kernel<64><<<blocks, threads, shared_mem, stream>>>(
-                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
-                opacities.data_ptr<float>(),
-                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                        : nullptr,
-                image_width, image_height, tile_size, tile_width, tile_height,
-                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                (float2 *)v_means2d.data_ptr<float>(),
-                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>());
-            break;
-        case 65:
-            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<65>,
-                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                     shared_mem) != cudaSuccess) {
-                AT_ERROR("Failed to set maximum shared memory size (requested ",
-                         shared_mem, " bytes), try lowering tile_size.");
-            }
-            rasterize_to_pixels_bwd_kernel<65><<<blocks, threads, shared_mem, stream>>>(
-                C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
-                opacities.data_ptr<float>(),
-                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                        : nullptr,
-                image_width, image_height, tile_size, tile_width, tile_height,
-                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                (float2 *)v_means2d.data_ptr<float>(),
-                (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>());
-            break;
-        case 128:
-            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<128>,
-                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                     shared_mem) != cudaSuccess) {
-                AT_ERROR("Failed to set maximum shared memory size (requested ",
-                         shared_mem, " bytes), try lowering tile_size.");
-            }
-            rasterize_to_pixels_bwd_kernel<128>
-                <<<blocks, threads, shared_mem, stream>>>(
-                    C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                    (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
-                    opacities.data_ptr<float>(),
-                    backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                            : nullptr,
-                    image_width, image_height, tile_size, tile_width, tile_height,
-                    tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                    render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                    v_render_colors.data_ptr<float>(),
-                    v_render_alphas.data_ptr<float>(),
-                    absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                    (float2 *)v_means2d.data_ptr<float>(),
-                    (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
-                    v_opacities.data_ptr<float>());
-            break;
-        case 129:
-            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<129>,
-                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                     shared_mem) != cudaSuccess) {
-                AT_ERROR("Failed to set maximum shared memory size (requested ",
-                         shared_mem, " bytes), try lowering tile_size.");
-            }
-            rasterize_to_pixels_bwd_kernel<129>
-                <<<blocks, threads, shared_mem, stream>>>(
-                    C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                    (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
-                    opacities.data_ptr<float>(),
-                    backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                            : nullptr,
-                    image_width, image_height, tile_size, tile_width, tile_height,
-                    tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                    render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                    v_render_colors.data_ptr<float>(),
-                    v_render_alphas.data_ptr<float>(),
-                    absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                    (float2 *)v_means2d.data_ptr<float>(),
-                    (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
-                    v_opacities.data_ptr<float>());
-            break;
-        case 256:
-            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<256>,
-                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                     shared_mem) != cudaSuccess) {
-                AT_ERROR("Failed to set maximum shared memory size (requested ",
-                         shared_mem, " bytes), try lowering tile_size.");
-            }
-            rasterize_to_pixels_bwd_kernel<256>
-                <<<blocks, threads, shared_mem, stream>>>(
-                    C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                    (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
-                    opacities.data_ptr<float>(),
-                    backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                            : nullptr,
-                    image_width, image_height, tile_size, tile_width, tile_height,
-                    tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                    render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                    v_render_colors.data_ptr<float>(),
-                    v_render_alphas.data_ptr<float>(),
-                    absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                    (float2 *)v_means2d.data_ptr<float>(),
-                    (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
-                    v_opacities.data_ptr<float>());
-            break;
-        case 257:
-            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<257>,
-                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                     shared_mem) != cudaSuccess) {
-                AT_ERROR("Failed to set maximum shared memory size (requested ",
-                         shared_mem, " bytes), try lowering tile_size.");
-            }
-            rasterize_to_pixels_bwd_kernel<257>
-                <<<blocks, threads, shared_mem, stream>>>(
-                    C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                    (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
-                    opacities.data_ptr<float>(),
-                    backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                            : nullptr,
-                    image_width, image_height, tile_size, tile_width, tile_height,
-                    tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                    render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                    v_render_colors.data_ptr<float>(),
-                    v_render_alphas.data_ptr<float>(),
-                    absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                    (float2 *)v_means2d.data_ptr<float>(),
-                    (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
-                    v_opacities.data_ptr<float>());
-            break;
-        case 512:
-            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<512>,
-                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                     shared_mem) != cudaSuccess) {
-                AT_ERROR("Failed to set maximum shared memory size (requested ",
-                         shared_mem, " bytes), try lowering tile_size.");
-            }
-            rasterize_to_pixels_bwd_kernel<512>
-                <<<blocks, threads, shared_mem, stream>>>(
-                    C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                    (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
-                    opacities.data_ptr<float>(),
-                    backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                            : nullptr,
-                    image_width, image_height, tile_size, tile_width, tile_height,
-                    tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                    render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                    v_render_colors.data_ptr<float>(),
-                    v_render_alphas.data_ptr<float>(),
-                    absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                    (float2 *)v_means2d.data_ptr<float>(),
-                    (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
-                    v_opacities.data_ptr<float>());
-            break;
-        case 513:
-            if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<513>,
-                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                     shared_mem) != cudaSuccess) {
-                AT_ERROR("Failed to set maximum shared memory size (requested ",
-                         shared_mem, " bytes), try lowering tile_size.");
-            }
-            rasterize_to_pixels_bwd_kernel<513>
-                <<<blocks, threads, shared_mem, stream>>>(
-                    C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
-                    (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
-                    opacities.data_ptr<float>(),
-                    backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                            : nullptr,
-                    image_width, image_height, tile_size, tile_width, tile_height,
-                    tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                    render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                    v_render_colors.data_ptr<float>(),
-                    v_render_alphas.data_ptr<float>(),
-                    absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
-                    (float2 *)v_means2d.data_ptr<float>(),
-                    (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
-                    v_opacities.data_ptr<float>());
-            break;
-        default:
-            AT_ERROR("Unsupported number of channels: ", COLOR_DIM);
+
+        if (cudaFuncSetAttribute(rasterize_to_pixels_bwd_kernel<CDIM>,
+                                    cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                    shared_mem) != cudaSuccess) {
+            AT_ERROR("Failed to set maximum shared memory size (requested ",
+                     shared_mem, " bytes), try lowering tile_size.");
         }
+        rasterize_to_pixels_bwd_kernel<CDIM><<<blocks, threads, shared_mem, stream>>>(
+            C, N, n_isects, packed, (float2 *)means2d.data_ptr<float>(),
+            (float3 *)conics.data_ptr<float>(), colors.data_ptr<float>(),
+            opacities.data_ptr<float>(),
+            backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+                                    : nullptr,
+            image_width, image_height, tile_size, tile_width, tile_height,
+            tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+            render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+            v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+            absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
+            (float2 *)v_means2d.data_ptr<float>(),
+            (float3 *)v_conics.data_ptr<float>(), v_colors.data_ptr<float>(),
+            v_opacities.data_ptr<float>());
     }
 
     return std::make_tuple(v_means2d_abs, v_means2d, v_conics, v_colors, v_opacities);
+}
+
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+rasterize_to_pixels_bwd_tensor(
+    // Gaussian parameters
+    const torch::Tensor &means2d,                   // [C, N, 2] or [nnz, 2]
+    const torch::Tensor &conics,                    // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &colors,                    // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &opacities,                 // [C, N] or [nnz]
+    const at::optional<torch::Tensor> &backgrounds, // [C, 3]
+    // image size
+    const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
+    // intersections
+    const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
+    const torch::Tensor &flatten_ids,  // [n_isects]
+    // forward outputs
+    const torch::Tensor &render_alphas, // [C, image_height, image_width, 1]
+    const torch::Tensor &last_ids,      // [C, image_height, image_width]
+    // gradients of outputs
+    const torch::Tensor &v_render_colors, // [C, image_height, image_width, 3]
+    const torch::Tensor &v_render_alphas, // [C, image_height, image_width, 1]
+    // options
+    bool absgrad) {
+
+    CHECK_INPUT(colors);
+    uint32_t COLOR_DIM = colors.size(-1);
+
+#define __GS__CALL_(N) case N: \
+    return call_kernel_with_dim<N>( \
+        means2d, conics, colors, opacities, \
+        backgrounds, image_width, image_height, \
+        tile_size, tile_offsets, flatten_ids, \
+        render_alphas, last_ids, v_render_colors, \
+        v_render_alphas, absgrad);
+
+    switch (COLOR_DIM) {
+        __GS__CALL_(1)
+        __GS__CALL_(2)
+        __GS__CALL_(3)
+        __GS__CALL_(4)
+        __GS__CALL_(5)
+        __GS__CALL_(8)
+        __GS__CALL_(9)
+        __GS__CALL_(16)
+        __GS__CALL_(17)
+        __GS__CALL_(32)
+        __GS__CALL_(33)
+        __GS__CALL_(64)
+        __GS__CALL_(65)
+        __GS__CALL_(128)
+        __GS__CALL_(129)
+        __GS__CALL_(256)
+        __GS__CALL_(257)
+        __GS__CALL_(512)
+        __GS__CALL_(513)
+    default:
+        AT_ERROR("Unsupported number of channels: ", COLOR_DIM);
+    }
 }
