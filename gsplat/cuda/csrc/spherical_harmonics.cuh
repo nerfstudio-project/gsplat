@@ -6,52 +6,53 @@
 // Evaluate spherical harmonics bases at unit direction for high orders using approach
 // described by Efficient Spherical Harmonic Evaluation, Peter-Pike Sloan, JCGT 2013 See
 // https://jcgt.org/published/0002/02/06/ for reference implementation
+template <typename T>
 inline __device__ void
 sh_coeffs_to_color_fast(const uint32_t degree, // degree of SH to be evaluated
                         const uint32_t c,      // color channel
-                        const float3 &dir,     // [3]
-                        const float *coeffs,   // [K, 3]
+                        const typename Float3<T>::type &dir,     // [3]
+                        const T *coeffs,   // [K, 3]
                         // output
-                        float *colors // [3]
+                        T *colors // [3]
 ) {
-    float result = 0.2820947917738781f * coeffs[c];
+    T result = 0.2820947917738781f * coeffs[c];
     if (degree >= 1) {
         // Normally rsqrt is faster than sqrt, but --use_fast_math will optimize sqrt
         // on single precision, so we use sqrt here.
-        float inorm = rsqrtf(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
-        float x = dir.x * inorm;
-        float y = dir.y * inorm;
-        float z = dir.z * inorm;
+        T inorm = rsqrtf(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+        T x = dir.x * inorm;
+        T y = dir.y * inorm;
+        T z = dir.z * inorm;
 
         result += 0.48860251190292f * (-y * coeffs[1 * 3 + c] + z * coeffs[2 * 3 + c] -
                                        x * coeffs[3 * 3 + c]);
         if (degree >= 2) {
-            float z2 = z * z;
+            T z2 = z * z;
 
-            float fTmp0B = -1.092548430592079f * z;
-            float fC1 = x * x - y * y;
-            float fS1 = 2.f * x * y;
-            float pSH6 = (0.9461746957575601f * z2 - 0.3153915652525201f);
-            float pSH7 = fTmp0B * x;
-            float pSH5 = fTmp0B * y;
-            float pSH8 = 0.5462742152960395f * fC1;
-            float pSH4 = 0.5462742152960395f * fS1;
+            T fTmp0B = -1.092548430592079f * z;
+            T fC1 = x * x - y * y;
+            T fS1 = 2.f * x * y;
+            T pSH6 = (0.9461746957575601f * z2 - 0.3153915652525201f);
+            T pSH7 = fTmp0B * x;
+            T pSH5 = fTmp0B * y;
+            T pSH8 = 0.5462742152960395f * fC1;
+            T pSH4 = 0.5462742152960395f * fS1;
 
             result += pSH4 * coeffs[4 * 3 + c] + pSH5 * coeffs[5 * 3 + c] +
                       pSH6 * coeffs[6 * 3 + c] + pSH7 * coeffs[7 * 3 + c] +
                       pSH8 * coeffs[8 * 3 + c];
             if (degree >= 3) {
-                float fTmp0C = -2.285228997322329f * z2 + 0.4570457994644658f;
-                float fTmp1B = 1.445305721320277f * z;
-                float fC2 = x * fC1 - y * fS1;
-                float fS2 = x * fS1 + y * fC1;
-                float pSH12 = z * (1.865881662950577f * z2 - 1.119528997770346f);
-                float pSH13 = fTmp0C * x;
-                float pSH11 = fTmp0C * y;
-                float pSH14 = fTmp1B * fC1;
-                float pSH10 = fTmp1B * fS1;
-                float pSH15 = -0.5900435899266435f * fC2;
-                float pSH9 = -0.5900435899266435f * fS2;
+                T fTmp0C = -2.285228997322329f * z2 + 0.4570457994644658f;
+                T fTmp1B = 1.445305721320277f * z;
+                T fC2 = x * fC1 - y * fS1;
+                T fS2 = x * fS1 + y * fC1;
+                T pSH12 = z * (1.865881662950577f * z2 - 1.119528997770346f);
+                T pSH13 = fTmp0C * x;
+                T pSH11 = fTmp0C * y;
+                T pSH14 = fTmp1B * fC1;
+                T pSH10 = fTmp1B * fS1;
+                T pSH15 = -0.5900435899266435f * fC2;
+                T pSH9 = -0.5900435899266435f * fS2;
 
                 result += pSH9 * coeffs[9 * 3 + c] + pSH10 * coeffs[10 * 3 + c] +
                           pSH11 * coeffs[11 * 3 + c] + pSH12 * coeffs[12 * 3 + c] +
@@ -59,21 +60,21 @@ sh_coeffs_to_color_fast(const uint32_t degree, // degree of SH to be evaluated
                           pSH15 * coeffs[15 * 3 + c];
 
                 if (degree >= 4) {
-                    float fTmp0D = z * (-4.683325804901025f * z2 + 2.007139630671868f);
-                    float fTmp1C = 3.31161143515146f * z2 - 0.47308734787878f;
-                    float fTmp2B = -1.770130769779931f * z;
-                    float fC3 = x * fC2 - y * fS2;
-                    float fS3 = x * fS2 + y * fC2;
-                    float pSH20 =
+                    T fTmp0D = z * (-4.683325804901025f * z2 + 2.007139630671868f);
+                    T fTmp1C = 3.31161143515146f * z2 - 0.47308734787878f;
+                    T fTmp2B = -1.770130769779931f * z;
+                    T fC3 = x * fC2 - y * fS2;
+                    T fS3 = x * fS2 + y * fC2;
+                    T pSH20 =
                         (1.984313483298443f * z * pSH12 - 1.006230589874905f * pSH6);
-                    float pSH21 = fTmp0D * x;
-                    float pSH19 = fTmp0D * y;
-                    float pSH22 = fTmp1C * fC1;
-                    float pSH18 = fTmp1C * fS1;
-                    float pSH23 = fTmp2B * fC2;
-                    float pSH17 = fTmp2B * fS2;
-                    float pSH24 = 0.6258357354491763f * fC3;
-                    float pSH16 = 0.6258357354491763f * fS3;
+                    T pSH21 = fTmp0D * x;
+                    T pSH19 = fTmp0D * y;
+                    T pSH22 = fTmp1C * fC1;
+                    T pSH18 = fTmp1C * fS1;
+                    T pSH23 = fTmp2B * fC2;
+                    T pSH17 = fTmp2B * fS2;
+                    T pSH24 = 0.6258357354491763f * fC3;
+                    T pSH16 = 0.6258357354491763f * fS3;
 
                     result += pSH16 * coeffs[16 * 3 + c] + pSH17 * coeffs[17 * 3 + c] +
                               pSH18 * coeffs[18 * 3 + c] + pSH19 * coeffs[19 * 3 + c] +
@@ -88,27 +89,28 @@ sh_coeffs_to_color_fast(const uint32_t degree, // degree of SH to be evaluated
     colors[c] = result;
 }
 
+template <typename T>
 inline __device__ void
 sh_coeffs_to_color_fast_vjp(const uint32_t degree, // degree of SH to be evaluated
                             const uint32_t c,      // color channel
-                            const float3 &dir,     // [3]
-                            const float *coeffs,   // [K, 3]
-                            const float *v_colors, // [3]
+                            const typename Float3<T>::type &dir,     // [3]
+                            const T *coeffs,   // [K, 3]
+                            const T *v_colors, // [3]
                             // output
-                            float *v_coeffs, // [K, 3]
-                            float3 *v_dir    // [3] optional
+                            T *v_coeffs, // [K, 3]
+                            typename Float3<T>::type *v_dir    // [3] optional
 ) {
-    float v_colors_local = v_colors[c];
+    T v_colors_local = v_colors[c];
 
     v_coeffs[c] = 0.2820947917738781f * v_colors_local;
     if (degree < 1) {
         return;
     }
-    float inorm = rsqrtf(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
-    float x = dir.x * inorm;
-    float y = dir.y * inorm;
-    float z = dir.z * inorm;
-    float v_x = 0.f, v_y = 0.f, v_z = 0.f;
+    T inorm = rsqrtf(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+    T x = dir.x * inorm;
+    T y = dir.y * inorm;
+    T z = dir.z * inorm;
+    T v_x = 0.f, v_y = 0.f, v_z = 0.f;
 
     v_coeffs[1 * 3 + c] = -0.48860251190292f * y * v_colors_local;
     v_coeffs[2 * 3 + c] = 0.48860251190292f * z * v_colors_local;
@@ -121,9 +123,9 @@ sh_coeffs_to_color_fast_vjp(const uint32_t degree, // degree of SH to be evaluat
     }
     if (degree < 2) {
         if (v_dir != nullptr) {
-            glm::vec3 dir_n = glm::vec3(x, y, z);
-            glm::vec3 v_dir_n = glm::vec3(v_x, v_y, v_z);
-            glm::vec3 v_d = (v_dir_n - glm::dot(v_dir_n, dir_n) * dir_n) * inorm;
+            vec3<T> dir_n = vec3<T>(x, y, z);
+            vec3<T> v_dir_n = vec3<T>(v_x, v_y, v_z);
+            vec3<T> v_d = (v_dir_n - glm::dot(v_dir_n, dir_n) * dir_n) * inorm;
 
             v_dir->x = v_d.x;
             v_dir->y = v_d.y;
@@ -132,22 +134,22 @@ sh_coeffs_to_color_fast_vjp(const uint32_t degree, // degree of SH to be evaluat
         return;
     }
 
-    float z2 = z * z;
-    float fTmp0B = -1.092548430592079f * z;
-    float fC1 = x * x - y * y;
-    float fS1 = 2.f * x * y;
-    float pSH6 = (0.9461746957575601f * z2 - 0.3153915652525201f);
-    float pSH7 = fTmp0B * x;
-    float pSH5 = fTmp0B * y;
-    float pSH8 = 0.5462742152960395f * fC1;
-    float pSH4 = 0.5462742152960395f * fS1;
+    T z2 = z * z;
+    T fTmp0B = -1.092548430592079f * z;
+    T fC1 = x * x - y * y;
+    T fS1 = 2.f * x * y;
+    T pSH6 = (0.9461746957575601f * z2 - 0.3153915652525201f);
+    T pSH7 = fTmp0B * x;
+    T pSH5 = fTmp0B * y;
+    T pSH8 = 0.5462742152960395f * fC1;
+    T pSH4 = 0.5462742152960395f * fS1;
     v_coeffs[4 * 3 + c] = pSH4 * v_colors_local;
     v_coeffs[5 * 3 + c] = pSH5 * v_colors_local;
     v_coeffs[6 * 3 + c] = pSH6 * v_colors_local;
     v_coeffs[7 * 3 + c] = pSH7 * v_colors_local;
     v_coeffs[8 * 3 + c] = pSH8 * v_colors_local;
 
-    float fTmp0B_z, fC1_x, fC1_y, fS1_x, fS1_y, pSH6_z, pSH7_x, pSH7_z, pSH5_y, pSH5_z,
+    T fTmp0B_z, fC1_x, fC1_y, fS1_x, fS1_y, pSH6_z, pSH7_x, pSH7_z, pSH5_y, pSH5_z,
         pSH8_x, pSH8_y, pSH4_x, pSH4_y;
     if (v_dir != nullptr) {
         fTmp0B_z = -1.092548430592079f;
@@ -178,9 +180,9 @@ sh_coeffs_to_color_fast_vjp(const uint32_t degree, // degree of SH to be evaluat
 
     if (degree < 3) {
         if (v_dir != nullptr) {
-            glm::vec3 dir_n = glm::vec3(x, y, z);
-            glm::vec3 v_dir_n = glm::vec3(v_x, v_y, v_z);
-            glm::vec3 v_d = (v_dir_n - glm::dot(v_dir_n, dir_n) * dir_n) * inorm;
+            vec3<T> dir_n = vec3<T>(x, y, z);
+            vec3<T> v_dir_n = vec3<T>(v_x, v_y, v_z);
+            vec3<T> v_d = (v_dir_n - glm::dot(v_dir_n, dir_n) * dir_n) * inorm;
 
             v_dir->x = v_d.x;
             v_dir->y = v_d.y;
@@ -189,17 +191,17 @@ sh_coeffs_to_color_fast_vjp(const uint32_t degree, // degree of SH to be evaluat
         return;
     }
 
-    float fTmp0C = -2.285228997322329f * z2 + 0.4570457994644658f;
-    float fTmp1B = 1.445305721320277f * z;
-    float fC2 = x * fC1 - y * fS1;
-    float fS2 = x * fS1 + y * fC1;
-    float pSH12 = z * (1.865881662950577f * z2 - 1.119528997770346f);
-    float pSH13 = fTmp0C * x;
-    float pSH11 = fTmp0C * y;
-    float pSH14 = fTmp1B * fC1;
-    float pSH10 = fTmp1B * fS1;
-    float pSH15 = -0.5900435899266435f * fC2;
-    float pSH9 = -0.5900435899266435f * fS2;
+    T fTmp0C = -2.285228997322329f * z2 + 0.4570457994644658f;
+    T fTmp1B = 1.445305721320277f * z;
+    T fC2 = x * fC1 - y * fS1;
+    T fS2 = x * fS1 + y * fC1;
+    T pSH12 = z * (1.865881662950577f * z2 - 1.119528997770346f);
+    T pSH13 = fTmp0C * x;
+    T pSH11 = fTmp0C * y;
+    T pSH14 = fTmp1B * fC1;
+    T pSH10 = fTmp1B * fS1;
+    T pSH15 = -0.5900435899266435f * fC2;
+    T pSH9 = -0.5900435899266435f * fS2;
     v_coeffs[9 * 3 + c] = pSH9 * v_colors_local;
     v_coeffs[10 * 3 + c] = pSH10 * v_colors_local;
     v_coeffs[11 * 3 + c] = pSH11 * v_colors_local;
@@ -208,7 +210,7 @@ sh_coeffs_to_color_fast_vjp(const uint32_t degree, // degree of SH to be evaluat
     v_coeffs[14 * 3 + c] = pSH14 * v_colors_local;
     v_coeffs[15 * 3 + c] = pSH15 * v_colors_local;
 
-    float fTmp0C_z, fTmp1B_z, fC2_x, fC2_y, fS2_x, fS2_y, pSH12_z, pSH13_x, pSH13_z,
+    T fTmp0C_z, fTmp1B_z, fC2_x, fC2_y, fS2_x, fS2_y, pSH12_z, pSH13_x, pSH13_z,
         pSH11_y, pSH11_z, pSH14_x, pSH14_y, pSH14_z, pSH10_x, pSH10_y, pSH10_z, pSH15_x,
         pSH15_y, pSH9_x, pSH9_y;
     if (v_dir != nullptr) {
@@ -252,9 +254,9 @@ sh_coeffs_to_color_fast_vjp(const uint32_t degree, // degree of SH to be evaluat
 
     if (degree < 4) {
         if (v_dir != nullptr) {
-            glm::vec3 dir_n = glm::vec3(x, y, z);
-            glm::vec3 v_dir_n = glm::vec3(v_x, v_y, v_z);
-            glm::vec3 v_d = (v_dir_n - glm::dot(v_dir_n, dir_n) * dir_n) * inorm;
+            vec3<T> dir_n = vec3<T>(x, y, z);
+            vec3<T> v_dir_n = vec3<T>(v_x, v_y, v_z);
+            vec3<T> v_d = (v_dir_n - glm::dot(v_dir_n, dir_n) * dir_n) * inorm;
 
             v_dir->x = v_d.x;
             v_dir->y = v_d.y;
@@ -263,20 +265,20 @@ sh_coeffs_to_color_fast_vjp(const uint32_t degree, // degree of SH to be evaluat
         return;
     }
 
-    float fTmp0D = z * (-4.683325804901025f * z2 + 2.007139630671868f);
-    float fTmp1C = 3.31161143515146f * z2 - 0.47308734787878f;
-    float fTmp2B = -1.770130769779931f * z;
-    float fC3 = x * fC2 - y * fS2;
-    float fS3 = x * fS2 + y * fC2;
-    float pSH20 = (1.984313483298443f * z * pSH12 + -1.006230589874905f * pSH6);
-    float pSH21 = fTmp0D * x;
-    float pSH19 = fTmp0D * y;
-    float pSH22 = fTmp1C * fC1;
-    float pSH18 = fTmp1C * fS1;
-    float pSH23 = fTmp2B * fC2;
-    float pSH17 = fTmp2B * fS2;
-    float pSH24 = 0.6258357354491763f * fC3;
-    float pSH16 = 0.6258357354491763f * fS3;
+    T fTmp0D = z * (-4.683325804901025f * z2 + 2.007139630671868f);
+    T fTmp1C = 3.31161143515146f * z2 - 0.47308734787878f;
+    T fTmp2B = -1.770130769779931f * z;
+    T fC3 = x * fC2 - y * fS2;
+    T fS3 = x * fS2 + y * fC2;
+    T pSH20 = (1.984313483298443f * z * pSH12 + -1.006230589874905f * pSH6);
+    T pSH21 = fTmp0D * x;
+    T pSH19 = fTmp0D * y;
+    T pSH22 = fTmp1C * fC1;
+    T pSH18 = fTmp1C * fS1;
+    T pSH23 = fTmp2B * fC2;
+    T pSH17 = fTmp2B * fS2;
+    T pSH24 = 0.6258357354491763f * fC3;
+    T pSH16 = 0.6258357354491763f * fS3;
     v_coeffs[16 * 3 + c] = pSH16 * v_colors_local;
     v_coeffs[17 * 3 + c] = pSH17 * v_colors_local;
     v_coeffs[18 * 3 + c] = pSH18 * v_colors_local;
@@ -287,7 +289,7 @@ sh_coeffs_to_color_fast_vjp(const uint32_t degree, // degree of SH to be evaluat
     v_coeffs[23 * 3 + c] = pSH23 * v_colors_local;
     v_coeffs[24 * 3 + c] = pSH24 * v_colors_local;
 
-    float fTmp0D_z, fTmp1C_z, fTmp2B_z, fC3_x, fC3_y, fS3_x, fS3_y, pSH20_z, pSH21_x,
+    T fTmp0D_z, fTmp1C_z, fTmp2B_z, fC3_x, fC3_y, fS3_x, fS3_y, pSH20_z, pSH21_x,
         pSH21_z, pSH19_y, pSH19_z, pSH22_x, pSH22_y, pSH22_z, pSH18_x, pSH18_y, pSH18_z,
         pSH23_x, pSH23_y, pSH23_z, pSH17_x, pSH17_y, pSH17_z, pSH24_x, pSH24_y, pSH16_x,
         pSH16_y;
@@ -338,9 +340,9 @@ sh_coeffs_to_color_fast_vjp(const uint32_t degree, // degree of SH to be evaluat
                 pSH18_z * coeffs[18 * 3 + c] + pSH23_z * coeffs[23 * 3 + c] +
                 pSH17_z * coeffs[17 * 3 + c]);
 
-        glm::vec3 dir_n = glm::vec3(x, y, z);
-        glm::vec3 v_dir_n = glm::vec3(v_x, v_y, v_z);
-        glm::vec3 v_d = (v_dir_n - glm::dot(v_dir_n, dir_n) * dir_n) * inorm;
+        vec3<T> dir_n = vec3<T>(x, y, z);
+        vec3<T> v_dir_n = vec3<T>(v_x, v_y, v_z);
+        vec3<T> v_d = (v_dir_n - glm::dot(v_dir_n, dir_n) * dir_n) * inorm;
 
         v_dir->x = v_d.x;
         v_dir->y = v_d.y;
