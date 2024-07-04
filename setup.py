@@ -89,7 +89,6 @@ def get_extensions():
     if sys.platform == "win32":
         extra_compile_args["nvcc"] += ["-DWIN32_LEAN_AND_MEAN"]
 
-
     current_dir = pathlib.Path(__file__).parent.resolve()
     glm_path = os.path.join(current_dir, "gsplat", "cuda", "csrc", "third_party", "glm")
     extension_v1 = CUDAExtension(
