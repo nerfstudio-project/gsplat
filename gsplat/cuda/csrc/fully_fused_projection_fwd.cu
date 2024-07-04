@@ -15,23 +15,24 @@ namespace cg = cooperative_groups;
  * Projection of Gaussians (Single Batch) Forward Pass
  ****************************************************************************/
 
+template <typename T>
 __global__ void
 fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
-                                  const float *__restrict__ means,    // [N, 3]
-                                  const float *__restrict__ covars,   // [N, 6] optional
-                                  const float *__restrict__ quats,    // [N, 4] optional
-                                  const float *__restrict__ scales,   // [N, 3] optional
-                                  const float *__restrict__ viewmats, // [C, 4, 4]
-                                  const float *__restrict__ Ks,       // [C, 3, 3]
+                                  const T *__restrict__ means,    // [N, 3]
+                                  const T *__restrict__ covars,   // [N, 6] optional
+                                  const T *__restrict__ quats,    // [N, 4] optional
+                                  const T *__restrict__ scales,   // [N, 3] optional
+                                  const T *__restrict__ viewmats, // [C, 4, 4]
+                                  const T *__restrict__ Ks,       // [C, 3, 3]
                                   const int32_t image_width, const int32_t image_height,
-                                  const float eps2d, const float near_plane,
-                                  const float far_plane, const float radius_clip,
+                                  const T eps2d, const T near_plane,
+                                  const T far_plane, const T radius_clip,
                                   // outputs
                                   int32_t *__restrict__ radii,      // [C, N]
-                                  float *__restrict__ means2d,      // [C, N, 2]
-                                  float *__restrict__ depths,       // [C, N]
-                                  float *__restrict__ conics,       // [C, N, 3]
-                                  float *__restrict__ compensations // [C, N] optional
+                                  T *__restrict__ means2d,      // [C, N, 2]
+                                  T *__restrict__ depths,       // [C, N]
+                                  T *__restrict__ conics,       // [C, N, 3]
+                                  T *__restrict__ compensations // [C, N] optional
 ) {
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -47,14 +48,14 @@ fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
     Ks += cid * 9;
 
     // glm is column-major but input is row-major
-    glm::mat3 R = glm::mat3(viewmats[0], viewmats[4], viewmats[8], // 1st column
-                            viewmats[1], viewmats[5], viewmats[9], // 2nd column
-                            viewmats[2], viewmats[6], viewmats[10] // 3rd column
+    mat3<T> R = mat3<T>(viewmats[0], viewmats[4], viewmats[8], // 1st column
+                        viewmats[1], viewmats[5], viewmats[9], // 2nd column
+                        viewmats[2], viewmats[6], viewmats[10] // 3rd column
     );
-    glm::vec3 t = glm::vec3(viewmats[3], viewmats[7], viewmats[11]);
+    vec3<T> t = vec3<T>(viewmats[3], viewmats[7], viewmats[11]);
 
     // transform Gaussian center to camera space
-    glm::vec3 mean_c;
+    vec3<T> mean_c;
     pos_world_to_cam(R, t, glm::make_vec3(means), mean_c);
     if (mean_c.z < near_plane || mean_c.z > far_plane) {
         radii[idx] = 0;
@@ -62,46 +63,45 @@ fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
     }
 
     // transform Gaussian covariance to camera space
-    glm::mat3 covar;
+    mat3<T> covar;
     if (covars != nullptr) {
         covars += gid * 6;
-        covar = glm::mat3(covars[0], covars[1], covars[2], // 1st column
-                          covars[1], covars[3], covars[4], // 2nd column
-                          covars[2], covars[4], covars[5]  // 3rd column
+        covar = mat3<T>(covars[0], covars[1], covars[2], // 1st column
+                        covars[1], covars[3], covars[4], // 2nd column
+                        covars[2], covars[4], covars[5]  // 3rd column
         );
     } else {
         // compute from quaternions and scales
         quats += gid * 4;
         scales += gid * 3;
-        quat_scale_to_covar_preci<float>(glm::make_vec4(quats), glm::make_vec3(scales), &covar,
-                                         nullptr);
+        quat_scale_to_covar_preci<T>(glm::make_vec4(quats), glm::make_vec3(scales), &covar, nullptr);
     }
-    glm::mat3 covar_c;
+    mat3<T> covar_c;
     covar_world_to_cam(R, covar, covar_c);
 
     // perspective projection
-    glm::mat2 covar2d;
-    glm::vec2 mean2d;
-    persp_proj<float>(mean_c, covar_c, Ks[0], Ks[4], Ks[2], Ks[5], image_width, image_height,
+    mat2<T> covar2d;
+    vec2<T> mean2d;
+    persp_proj<T>(mean_c, covar_c, Ks[0], Ks[4], Ks[2], Ks[5], image_width, image_height,
                       covar2d, mean2d);
 
-    float compensation;
-    float det = add_blur(eps2d, covar2d, compensation);
+    T compensation;
+    T det = add_blur(eps2d, covar2d, compensation);
     if (det <= 0.f) {
         radii[idx] = 0;
         return;
     }
 
     // compute the inverse of the 2d covariance
-    glm::mat2 covar2d_inv;
+    mat2<T> covar2d_inv;
     inverse(covar2d, covar2d_inv);
 
     // take 3 sigma as the radius (non differentiable)
-    float b = 0.5f * (covar2d[0][0] + covar2d[1][1]);
-    float v1 = b + sqrt(max(0.01f, b * b - det));
-    float radius = ceil(3.f * sqrt(v1));
-    // float v2 = b - sqrt(max(0.1f, b * b - det));
-    // float radius = ceil(3.f * sqrt(max(v1, v2)));
+    T b = 0.5f * (covar2d[0][0] + covar2d[1][1]);
+    T v1 = b + sqrt(max(0.01f, b * b - det));
+    T radius = ceil(3.f * sqrt(v1));
+    // T v2 = b - sqrt(max(0.1f, b * b - det));
+    // T radius = ceil(3.f * sqrt(max(v1, v2)));
 
     if (radius <= radius_clip) {
         radii[idx] = 0;
@@ -166,8 +166,7 @@ fully_fused_projection_fwd_tensor(
         compensations = torch::zeros({C, N}, means.options());
     }
     if (C && N) {
-        fully_fused_projection_fwd_kernel<<<(C * N + N_THREADS - 1) / N_THREADS,
-                                            N_THREADS, 0, stream>>>(
+        fully_fused_projection_fwd_kernel<float><<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
             C, N, means.data_ptr<float>(),
             covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
             quats.has_value() ? quats.value().data_ptr<float>() : nullptr,
