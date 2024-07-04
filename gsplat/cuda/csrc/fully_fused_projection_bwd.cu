@@ -15,31 +15,32 @@ namespace cg = cooperative_groups;
  * Projection of Gaussians (Single Batch) Backward Pass
  ****************************************************************************/
 
+template <typename T>
 __global__ void fully_fused_projection_bwd_kernel(
     // fwd inputs
     const uint32_t C, const uint32_t N,
-    const float *__restrict__ means,    // [N, 3]
-    const float *__restrict__ covars,   // [N, 6] optional
-    const float *__restrict__ quats,    // [N, 4] optional
-    const float *__restrict__ scales,   // [N, 3] optional
-    const float *__restrict__ viewmats, // [C, 4, 4]
-    const float *__restrict__ Ks,       // [C, 3, 3]
-    const int32_t image_width, const int32_t image_height, const float eps2d,
+    const T *__restrict__ means,    // [N, 3]
+    const T *__restrict__ covars,   // [N, 6] optional
+    const T *__restrict__ quats,    // [N, 4] optional
+    const T *__restrict__ scales,   // [N, 3] optional
+    const T *__restrict__ viewmats, // [C, 4, 4]
+    const T *__restrict__ Ks,       // [C, 3, 3]
+    const int32_t image_width, const int32_t image_height, const T eps2d,
     // fwd outputs
     const int32_t *__restrict__ radii,       // [C, N]
-    const float *__restrict__ conics,        // [C, N, 3]
-    const float *__restrict__ compensations, // [C, N] optional
+    const T *__restrict__ conics,        // [C, N, 3]
+    const T *__restrict__ compensations, // [C, N] optional
     // grad outputs
-    const float *__restrict__ v_means2d,       // [C, N, 2]
-    const float *__restrict__ v_depths,        // [C, N]
-    const float *__restrict__ v_conics,        // [C, N, 3]
-    const float *__restrict__ v_compensations, // [C, N] optional
+    const T *__restrict__ v_means2d,       // [C, N, 2]
+    const T *__restrict__ v_depths,        // [C, N]
+    const T *__restrict__ v_conics,        // [C, N, 3]
+    const T *__restrict__ v_compensations, // [C, N] optional
     // grad inputs
-    float *__restrict__ v_means,   // [N, 3]
-    float *__restrict__ v_covars,  // [N, 6] optional
-    float *__restrict__ v_quats,   // [N, 4] optional
-    float *__restrict__ v_scales,  // [N, 3] optional
-    float *__restrict__ v_viewmats // [C, 4, 4] optional
+    T *__restrict__ v_means,   // [N, 3]
+    T *__restrict__ v_covars,  // [N, 6] optional
+    T *__restrict__ v_quats,   // [N, 4] optional
+    T *__restrict__ v_scales,  // [N, 3] optional
+    T *__restrict__ v_viewmats // [C, 4, 4] optional
 ) {
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -61,61 +62,61 @@ __global__ void fully_fused_projection_bwd_kernel(
     v_conics += idx * 3;
 
     // vjp: compute the inverse of the 2d covariance
-    glm::mat2 covar2d_inv = glm::mat2(conics[0], conics[1], conics[1], conics[2]);
-    glm::mat2 v_covar2d_inv =
-        glm::mat2(v_conics[0], v_conics[1] * .5f, v_conics[1] * .5f, v_conics[2]);
-    glm::mat2 v_covar2d(0.f);
+    mat2<T> covar2d_inv = mat2<T>(conics[0], conics[1], conics[1], conics[2]);
+    mat2<T> v_covar2d_inv =
+        mat2<T>(v_conics[0], v_conics[1] * .5f, v_conics[1] * .5f, v_conics[2]);
+    mat2<T> v_covar2d(0.f);
     inverse_vjp(covar2d_inv, v_covar2d_inv, v_covar2d);
 
     if (v_compensations != nullptr) {
         // vjp: compensation term
-        const float compensation = compensations[idx];
-        const float v_compensation = v_compensations[idx];
+        const T compensation = compensations[idx];
+        const T v_compensation = v_compensations[idx];
         add_blur_vjp(eps2d, covar2d_inv, compensation, v_compensation, v_covar2d);
     }
 
     // transform Gaussian to camera space
-    glm::mat3 R = glm::mat3(viewmats[0], viewmats[4], viewmats[8], // 1st column
-                            viewmats[1], viewmats[5], viewmats[9], // 2nd column
-                            viewmats[2], viewmats[6], viewmats[10] // 3rd column
+    mat3<T> R = mat3<T>(viewmats[0], viewmats[4], viewmats[8], // 1st column
+                        viewmats[1], viewmats[5], viewmats[9], // 2nd column
+                        viewmats[2], viewmats[6], viewmats[10] // 3rd column
     );
-    glm::vec3 t = glm::vec3(viewmats[3], viewmats[7], viewmats[11]);
+    vec3<T> t = vec3<T>(viewmats[3], viewmats[7], viewmats[11]);
 
-    glm::mat3 covar;
-    glm::vec4 quat;
-    glm::vec3 scale;
+    mat3<T> covar;
+    vec4<T> quat;
+    vec3<T> scale;
     if (covars != nullptr) {
         covars += gid * 6;
-        covar = glm::mat3(covars[0], covars[1], covars[2], // 1st column
-                          covars[1], covars[3], covars[4], // 2nd column
-                          covars[2], covars[4], covars[5]  // 3rd column
+        covar = mat3<T>(covars[0], covars[1], covars[2], // 1st column
+                        covars[1], covars[3], covars[4], // 2nd column
+                        covars[2], covars[4], covars[5]  // 3rd column
         );
     } else {
         // compute from quaternions and scales
         quat = glm::make_vec4(quats + gid * 4);
         scale = glm::make_vec3(scales + gid * 3);
-        quat_scale_to_covar_preci(quat, scale, &covar, nullptr);
+        quat_scale_to_covar_preci<T>(quat, scale, &covar, nullptr);
     }
-    glm::vec3 mean_c;
+    vec3<T> mean_c;
     pos_world_to_cam(R, t, glm::make_vec3(means), mean_c);
-    glm::mat3 covar_c;
+    mat3<T> covar_c;
     covar_world_to_cam(R, covar, covar_c);
 
     // vjp: perspective projection
-    float fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
-    glm::mat3 v_covar_c(0.f);
-    glm::vec3 v_mean_c(0.f);
-    persp_proj_vjp(mean_c, covar_c, fx, fy, cx, cy, image_width, image_height,
+    T fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
+    mat3<T> v_covar_c(0.f);
+    vec3<T> v_mean_c(0.f);
+    persp_proj_vjp<T>(mean_c, covar_c, fx, fy, cx, cy, image_width, image_height,
                    v_covar2d, glm::make_vec2(v_means2d), v_mean_c, v_covar_c);
 
     // add contribution from v_depths
     v_mean_c.z += v_depths[0];
 
     // vjp: transform Gaussian covariance to camera space
-    glm::vec3 v_mean(0.f);
-    glm::mat3 v_covar(0.f);
-    glm::mat3 v_R(0.f);
-    glm::vec3 v_t(0.f);
+    vec3<T> v_mean(0.f);
+    mat3<T> v_covar(0.f);
+    mat3<T> v_R(0.f);
+    vec3<T> v_t(0.f);
     pos_world_to_cam_vjp(R, t, glm::make_vec3(means), v_mean_c, v_R, v_t, v_mean);
     covar_world_to_cam_vjp(R, covar, v_covar_c, v_R, v_covar);
 
@@ -147,10 +148,10 @@ __global__ void fully_fused_projection_bwd_kernel(
         }
     } else {
         // Directly output gradients w.r.t. the quaternion and scale
-        glm::mat3 rotmat = quat_to_rotmat(quat);
-        glm::vec4 v_quat(0.f);
-        glm::vec3 v_scale(0.f);
-        quat_scale_to_covar_vjp(quat, scale, rotmat, v_covar, v_quat, v_scale);
+        mat3<T> rotmat = quat_to_rotmat<T>(quat);
+        vec4<T> v_quat(0.f);
+        vec3<T> v_scale(0.f);
+        quat_scale_to_covar_vjp<T>(quat, scale, rotmat, v_covar, v_quat, v_scale);
         warpSum(v_quat, warp_group_g);
         warpSum(v_scale, warp_group_g);
         if (warp_group_g.thread_rank() == 0) {
@@ -244,8 +245,7 @@ fully_fused_projection_bwd_tensor(
         v_viewmats = torch::zeros_like(viewmats);
     }
     if (C && N) {
-        fully_fused_projection_bwd_kernel<<<(C * N + N_THREADS - 1) / N_THREADS,
-                                            N_THREADS, 0, stream>>>(
+        fully_fused_projection_bwd_kernel<float><<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
             C, N, means.data_ptr<float>(),
             covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
             covars.has_value() ? nullptr : quats.value().data_ptr<float>(),

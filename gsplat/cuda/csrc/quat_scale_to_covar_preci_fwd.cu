@@ -14,14 +14,15 @@ namespace cg = cooperative_groups;
  * Quat-Scale to Covariance and Precision Forward Pass
  ****************************************************************************/
 
+template <typename T>
 __global__ void
 quat_scale_to_covar_preci_fwd_kernel(const uint32_t N,
-                                     const float *__restrict__ quats,  // [N, 4]
-                                     const float *__restrict__ scales, // [N, 3]
+                                     const T *__restrict__ quats,  // [N, 4]
+                                     const T *__restrict__ scales, // [N, 3]
                                      const bool triu,
                                      // outputs
-                                     float *__restrict__ covars, // [N, 3, 3] or [N, 6]
-                                     float *__restrict__ precis  // [N, 3, 3] or [N, 6]
+                                     T *__restrict__ covars, // [N, 3, 3] or [N, 6]
+                                     T *__restrict__ precis  // [N, 3, 3] or [N, 6]
 ) {
     // parallelize over N.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -34,7 +35,7 @@ quat_scale_to_covar_preci_fwd_kernel(const uint32_t N,
     scales += idx * 3;
 
     // compute the matrices
-    glm::mat3 covar, preci;
+    mat3<T> covar, preci;
     quat_scale_to_covar_preci(glm::make_vec4(quats), glm::make_vec3(scales),
                               covars ? &covar : nullptr, precis ? &preci : nullptr);
 

@@ -10,6 +10,7 @@ namespace cg = cooperative_groups;
  * Gaussian Tile Intersection
  ****************************************************************************/
 
+template <typename T>
 __global__ void isect_tiles(
     // if the data is [C, N, ...] or [nnz, ...] (packed)
     const bool packed,
@@ -20,9 +21,9 @@ __global__ void isect_tiles(
     const int64_t *__restrict__ camera_ids,   // [nnz] optional
     const int64_t *__restrict__ gaussian_ids, // [nnz] optional
     // data
-    const float2 *__restrict__ means2d,              // [C, N, 2] or [nnz, 2]
+    const typename Float2<T>::type *__restrict__ means2d,              // [C, N, 2] or [nnz, 2]
     const int32_t *__restrict__ radii,               // [C, N] or [nnz]
-    const float *__restrict__ depths,                // [C, N] or [nnz]
+    const T *__restrict__ depths,                // [C, N] or [nnz]
     const int64_t *__restrict__ cum_tiles_per_gauss, // [C, N] or [nnz]
     const uint32_t tile_size, const uint32_t tile_width, const uint32_t tile_height,
     const uint32_t tile_n_bits,
@@ -41,9 +42,9 @@ __global__ void isect_tiles(
         return;
     }
 
-    float tile_radius = radii[idx] / static_cast<float>(tile_size);
-    float tile_x = means2d[idx].x / tile_size;
-    float tile_y = means2d[idx].y / tile_size;
+    T tile_radius = radii[idx] / static_cast<T>(tile_size);
+    T tile_x = means2d[idx].x / tile_size;
+    T tile_y = means2d[idx].y / tile_size;
 
     // tile_min is inclusive, tile_max is exclusive
     uint2 tile_min, tile_max;
