@@ -1,8 +1,8 @@
 import glob
 import os
 import os.path as osp
-import platform
 import pathlib
+import platform
 import sys
 
 from setuptools import find_packages, setup
