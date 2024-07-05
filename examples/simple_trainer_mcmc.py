@@ -776,7 +776,9 @@ class Runner:
                 distloss = (distloss - distloss.min()) / (
                     distloss.max() - distloss.min()
                 )
-                canvas_list.append(apply_float_colormap(distloss, colormap="cmo.ice"))
+                canvas_list.append(
+                    apply_float_colormap(distloss, colormap="cmr.voltage")
+                )
 
             # write images
             canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()
@@ -878,7 +880,7 @@ class Runner:
                     distloss.max() - distloss.min()
                 )
                 canvas_list.append(
-                    apply_float_colormap(1 - distloss, colormap="cmo.dense")
+                    apply_float_colormap(distloss, colormap="cmr.voltage")
                 )
 
             # write images

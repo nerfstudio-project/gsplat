@@ -2,7 +2,7 @@ import matplotlib
 from jaxtyping import Float
 import torch
 from torch import Tensor
-import cmocean
+import cmasher
 
 
 def apply_float_colormap(
@@ -29,5 +29,5 @@ def apply_float_colormap(
     assert image_long_min >= 0, f"the min value is {image_long_min}"
     assert image_long_max <= 255, f"the max value is {image_long_max}"
     return torch.tensor(matplotlib.colormaps[colormap].colors, device=image.device)[
-        :, :3
-    ][image_long[..., 0]]
+        image_long[..., 0]
+    ]
