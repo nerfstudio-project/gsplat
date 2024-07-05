@@ -13,7 +13,6 @@ from .cuda._wrapper import (
     rasterize_to_pixels,
     spherical_harmonics,
 )
-from .point_utils import depth_to_normal
 
 
 def rasterization(

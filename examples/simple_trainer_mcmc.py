@@ -27,7 +27,8 @@ from utils import (
 from gsplat import quat_scale_to_covar_preci
 from gsplat.rendering import rasterization, rasterization_2dgs_inria_wrapper
 from gsplat.relocation import compute_relocation
-from gsplat.point_utils import depth_to_normal
+from gsplat.normal_utils import depth_to_normal
+from gsplat.color_utils import apply_float_colormap
 from simple_trainer import create_splats_with_optimizers
 
 
@@ -157,7 +158,7 @@ class Config:
     # Weight for distortion loss
     dist_lambda: float = 100
     # Start applying distortion loss after this iteration
-    dist_start_iter: int = 3000
+    dist_start_iter: int = 0
 
     # Dump information to tensorboard every this steps
     tb_every: int = 100
@@ -746,11 +747,15 @@ class Runner:
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
 
-            colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)  # [1, H, W, 3]
+            colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)
+            depths = renders[..., 3:4] if renders.shape[-1] >= 4 else None
+            normals = renders[..., 4:7] if renders.shape[-1] >= 5 else None
+
             canvas_list = [pixels, colors]
+            if self.cfg.depth_loss:
+                depths = (depths - depths.min()) / (depths.max() - depths.min())
+                canvas_list.append(apply_float_colormap(1 - depths, colormap="turbo"))
             if self.cfg.normal_consistency_loss:
-                depths = renders[..., 3:4]  # [1, H, W, 1]
-                normals = renders[..., 4:7]  # [1, H, W, 3]
                 normals_surf = depth_to_normal(
                     depths,
                     camtoworlds,
@@ -761,6 +766,14 @@ class Runner:
                 normals_surf = normals_surf * (alphas).detach()
                 canvas_list.extend([normals * 0.5 + 0.5])
                 canvas_list.extend([normals_surf * 0.5 + 0.5])
+            if self.cfg.dist_loss:
+                distloss = info["render_distloss"]
+                distloss = (distloss - distloss.min()) / (
+                    distloss.max() - distloss.min()
+                )
+                canvas_list.append(
+                    apply_float_colormap(1 - distloss, colormap="cmo.dense")
+                )
 
             # write images
             canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()
@@ -805,25 +818,30 @@ class Runner:
         cfg = self.cfg
         device = self.device
 
-        camtoworlds = self.parser.camtoworlds[5:-5]
-        camtoworlds = generate_interpolated_path(camtoworlds, 1)  # [N, 3, 4]
-        camtoworlds = np.concatenate(
+        camtoworlds_all = self.parser.camtoworlds[5:-5]
+        camtoworlds_all = generate_interpolated_path(camtoworlds_all, 1)  # [N, 3, 4]
+        camtoworlds_all = np.concatenate(
             [
-                camtoworlds,
-                np.repeat(np.array([[[0.0, 0.0, 0.0, 1.0]]]), len(camtoworlds), axis=0),
+                camtoworlds_all,
+                np.repeat(
+                    np.array([[[0.0, 0.0, 0.0, 1.0]]]), len(camtoworlds_all), axis=0
+                ),
             ],
             axis=1,
         )  # [N, 4, 4]
 
-        camtoworlds = torch.from_numpy(camtoworlds).float().to(device)
+        camtoworlds_all = torch.from_numpy(camtoworlds_all).float().to(device)
         K = torch.from_numpy(list(self.parser.Ks_dict.values())[0]).float().to(device)
         width, height = list(self.parser.imsize_dict.values())[0]
 
         canvas_all = []
-        for i in tqdm.trange(len(camtoworlds), desc="Rendering trajectory"):
+        for i in tqdm.trange(len(camtoworlds_all), desc="Rendering trajectory"):
+            camtoworlds = camtoworlds_all[i : i + 1]
+            Ks = K[None]
+
             renders, alphas, info = self.rasterize_splats(
-                camtoworlds=camtoworlds[i : i + 1],
-                Ks=K[None],
+                camtoworlds=camtoworlds,
+                Ks=Ks,
                 width=width,
                 height=height,
                 sh_degree=cfg.sh_degree,
@@ -832,27 +850,33 @@ class Runner:
                 render_mode=self.render_mode,
             )  # [1, H, W, C]
 
-            colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)  # [1, H, W, 3]
+            colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)
+            depths = renders[..., 3:4] if renders.shape[-1] >= 4 else None
+            normals = renders[..., 4:7] if renders.shape[-1] >= 5 else None
+
             canvas_list = [colors]
-
-            if renders.shape[-1] >= 4:
-                depths = renders[..., 3:4]  # [1, H, W, 1]
+            if self.cfg.depth_loss:
                 depths = (depths - depths.min()) / (depths.max() - depths.min())
-                canvas_list.append(depths.repeat(1, 1, 1, 3))
-
-            if renders.shape[-1] >= 5:
-                depths = renders[..., 3:4]  # [1, H, W, 1]
-                normals = renders[..., 4:7]  # [1, H, W, 3]
+                canvas_list.append(apply_float_colormap(1 - depths, colormap="turbo"))
+            if self.cfg.normal_consistency_loss:
                 normals_surf = depth_to_normal(
                     depths,
-                    camtoworlds[i : i + 1],
-                    K[None],
+                    camtoworlds,
+                    Ks,
                     near_plane=cfg.near_plane,
                     far_plane=cfg.far_plane,
                 )
                 normals_surf = normals_surf * (alphas).detach()
                 canvas_list.extend([normals * 0.5 + 0.5])
                 canvas_list.extend([normals_surf * 0.5 + 0.5])
+            if self.cfg.dist_loss:
+                distloss = info["render_distloss"]
+                distloss = (distloss - distloss.min()) / (
+                    distloss.max() - distloss.min()
+                )
+                canvas_list.append(
+                    apply_float_colormap(1 - distloss, colormap="cmo.dense")
+                )
 
             # write images
             canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()
