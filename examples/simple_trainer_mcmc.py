@@ -141,15 +141,12 @@ class Config:
     # Weight for depth loss
     depth_lambda: float = 1e-2
 
-    # Enable normal loss. (experimental)
-    normal_loss: bool = True
-    # Weight for normal loss
-    normal_lambda: float = 0.05
-    
-    # Enable distortion loss. (experimental)
-    dist_loss: bool = False
-    # Weight for distortion loss. Use 100 for unbounded scenes and 1000 for bounded scenes
-    dist_lambda: float = 100
+    # Enable normal consistency loss. (experimental)
+    normal_consistency_loss: bool = True
+    # Weight for normal consistency loss
+    normal_consistency_lambda: float = 0.05
+    # Start refining GSs after this iteration
+    normal_consistency_start_iter: int = 500
 
     # Dump information to tensorboard every this steps
     tb_every: int = 100
@@ -180,6 +177,10 @@ class Runner:
             self.rasterization_fn = rasterization_2dgs_inria_wrapper
         else:
             raise ValueError(f"Unsupported model type: {cfg.model_type}")
+        
+        self.render_mode = "RGB"
+        if cfg.depth_loss or cfg.normal_consistency_loss:
+            self.render_mode = "RGB+ED"
 
         # Where to dump results.
         os.makedirs(cfg.result_dir, exist_ok=True)
@@ -412,13 +413,11 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 image_ids=image_ids,
-                render_mode="RGB+ED", # if cfg.depth_loss else "RGB",
+                render_mode=self.render_mode,
             )
-            colors, _, depths = renders[..., 0:3], renders[..., 3:6], renders[..., 6:7]
-            # if renders.shape[-1] == 4:
-            #     colors, depths = renders[..., 0:3], renders[..., 3:4]
-            # else:
-            #     colors, depths = renders, None
+            colors = renders[..., 0:3]
+            depths = renders[..., 3:4] if renders.shape[-1] >= 4 else None
+            normals = renders[..., 4:7] if renders.shape[-1] >= 5 else None
 
             if cfg.random_bkgd:
                 bkgd = torch.rand(1, 3, device=device)
@@ -456,20 +455,12 @@ class Runner:
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
 
-            if cfg.normal_loss:
-                normal_lambda = cfg.normal_lambda if step > 7000 else 0.0
-                normals = info["rend_normal"]
-                depths = info["rend_depth"]
-                normals_depth = depth_to_normal(depths, camtoworlds, Ks, near_plane=cfg.near_plane, far_plane=cfg.far_plane)
-                normals_depth = normals_depth * (alphas).detach()
+            if cfg.normal_consistency_loss and step > cfg.normal_consistency_start_iter:
+                normals_surf = depth_to_normal(depths, camtoworlds, Ks, near_plane=cfg.near_plane, far_plane=cfg.far_plane)
+                # normals_surf = normals_surf * (alphas).detach()
                 
-                normalloss = (1 - (normals * normals_depth).sum(dim=-1)).mean()
-                loss += normal_lambda * normalloss
-            
-            if cfg.dist_loss:
-                dist_lambda = cfg.dist_lambda if step > 3000 else 0.0
-                distloss = (info["rend_dist"]).mean()
-                loss +=  dist_lambda * distloss
+                normalconsistencyloss = (1 - (normals * normals_surf).sum(dim=-1)).mean()
+                loss += cfg.normal_consistency_lambda * normalconsistencyloss
 
             loss.backward()
 
@@ -493,10 +484,8 @@ class Runner:
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
-                if cfg.normal_loss:
-                    self.writer.add_scalar("train/normalloss", normalloss.item(), step)
-                if cfg.dist_loss:
-                    self.writer.add_scalar("train/distloss", distloss.item(), step)
+                if cfg.normal_consistency_loss and step > cfg.normal_consistency_start_iter:
+                    self.writer.add_scalar("train/normalconsistencyloss", normalconsistencyloss.item(), step)
                 if cfg.tb_save_image:
                     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
                     canvas = canvas.reshape(-1, *canvas.shape[2:])
@@ -721,22 +710,20 @@ class Runner:
                 sh_degree=cfg.sh_degree,
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
-                render_mode="RGB+ED",
+                render_mode=self.render_mode,
             )  # [1, H, W, 4]
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
             
             colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)  # [1, H, W, 3]
             canvas_list = [pixels, colors]
-            if self.cfg.normal_loss:
-                normals = info["rend_normal"] * 0.5 + 0.5
-                canvas_list.extend([normals])
-                
-                depths = info["rend_depth"]
-                normals_depth = depth_to_normal(depths, camtoworlds, Ks, near_plane=cfg.near_plane, far_plane=cfg.far_plane)
-                normals_depth = normals_depth * (alphas).detach()
-                normals_depth = normals_depth * 0.5 + 0.5
-                canvas_list.extend([normals_depth])
+            if self.cfg.normal_consistency_loss:
+                depths = renders[..., 3:4]
+                normals = renders[..., 4:7]
+                normals_surf = depth_to_normal(depths, camtoworlds, Ks, near_plane=cfg.near_plane, far_plane=cfg.far_plane)
+                # normals_surf = normals_surf * (alphas).detach()
+                canvas_list.extend([normals * 0.5 + 0.5])
+                canvas_list.extend([normals_surf * 0.5 + 0.5])
 
             # write images
             canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()
@@ -805,24 +792,24 @@ class Runner:
                 sh_degree=cfg.sh_degree,
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
-                render_mode="RGB+ED",
-            )  # [1, H, W, 4]
+                render_mode=self.render_mode,
+            )  # [1, H, W, C]
 
             colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)  # [1, H, W, 3]
             canvas_list = [colors]
-            if renders.shape[-1] == 4:
+            
+            if renders.shape[-1] >= 4:
                 depths = renders[..., 3:4]  # [1, H, W, 1]
                 depths = (depths - depths.min()) / (depths.max() - depths.min())
                 canvas_list.append(depths.repeat(1, 1, 1, 3))
-            if self.cfg.normal_loss:
-                normals = info["rend_normal"] * 0.5 + 0.5
-                canvas_list.extend([normals])
-                
-                depths = info["rend_depth"]
-                normals_depth = depth_to_normal(depths, camtoworlds[i : i + 1], K[None], near_plane=cfg.near_plane, far_plane=cfg.far_plane)
-                normals_depth = normals_depth * (alphas).detach()
-                normals_depth = normals_depth * 0.5 + 0.5
-                canvas_list.extend([normals_depth])
+            
+            if renders.shape[-1] >= 5:
+                depths = renders[..., 3:4]
+                normals = renders[..., 4:7]
+                normals_surf = depth_to_normal(depths, camtoworlds[i : i + 1], K[None], near_plane=cfg.near_plane, far_plane=cfg.far_plane)
+                # normals_surf = normals_surf * (alphas).detach()
+                canvas_list.extend([normals * 0.5 + 0.5])
+                canvas_list.extend([normals_surf * 0.5 + 0.5])
 
             # write images
             canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()
