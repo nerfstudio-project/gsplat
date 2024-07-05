@@ -36,7 +36,6 @@ class Strategy:
 		# https://pytorch.org/docs/stable/_modules/torch/optim/optimizer.html#Optimizer
 		self.state: DefaultDict[Tensor, Any] = defaultdict(dict)
 
-    @abstractmethod
     def grow_GSs(self):
         raise NotImplementedError
     
