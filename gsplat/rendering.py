@@ -645,7 +645,7 @@ def rasterization_2dgs_inria_wrapper(
     **kwargs,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Wrapper for 2DGS's rasterization backend which is based on Inria's backend.
-    
+
     Install the rasterization backend from
         https://github.com/hbb1/diff-surfel-rasterization
     """
@@ -753,39 +753,26 @@ def rasterization_2dgs_inria_wrapper(
     render_colors = torch.stack(render_colors, dim=0)
 
     # additional maps
-    allmap = allmap.permute(1, 2, 0)  # [H, W, C]
-    render_alphas = allmap[..., 1:2]
-
-    # get normal map
-    # transform normal from view space to world space
-    render_normal = allmap[..., 2:5]
-    render_normal = render_normal @ (world_view_transform[:3, :3].T)
-
-    # get median depth map
-    render_depth_median = allmap[..., 5:6]
-    render_depth_median = torch.nan_to_num(render_depth_median, 0, 0)
-
-    # get expected depth map
+    allmap = allmap.permute(1, 2, 0).unsqueeze(0)  # [1, H, W, C]
     render_depth_expected = allmap[..., 0:1]
-    render_depth_expected = render_depth_expected / render_alphas
-    render_depth_expected = torch.nan_to_num(render_depth_expected, 0, 0)
-
-    # get depth distortion map
+    render_alphas = allmap[..., 1:2]
+    render_normal = allmap[..., 2:5]
+    render_depth_median = allmap[..., 5:6]
     render_dist = allmap[..., 6:7]
 
-    # psedo surface attributes
-    # surf depth is either median or expected by setting depth_ratio to 1 or 0
+    render_normal = render_normal @ (world_view_transform[:3, :3].T)
+    render_depth_expected = render_depth_expected / render_alphas
+    render_depth_expected = torch.nan_to_num(render_depth_expected, 0, 0)
+    render_depth_median = torch.nan_to_num(render_depth_median, 0, 0)
+
+    # render_depth is either median or expected by setting depth_ratio to 1 or 0
     # for bounded scene, use median depth, i.e., depth_ratio = 1;
-    # for unbounded scene, use expected depth, i.e., depth_ration = 0, to reduce disk anliasing.
+    # for unbounded scene, use expected depth, i.e., depth_ratio = 0, to reduce disk aliasing.
     depth_ratio = 0
-    surf_depth = (
+    render_depth = (
         render_depth_expected * (1 - depth_ratio) + (depth_ratio) * render_depth_median
     )
 
-    render_alphas = render_alphas.unsqueeze(0)
-    meta = {
-        "rend_depth": surf_depth.unsqueeze(0),
-        "rend_normal": render_normal.unsqueeze(0),
-        "rend_dist": render_dist.unsqueeze(0),
-    }
+    meta = {"render_distloss": render_dist}
+    render_colors = torch.cat([render_colors, render_depth, render_normal], dim=-1)
     return render_colors, render_alphas, meta
