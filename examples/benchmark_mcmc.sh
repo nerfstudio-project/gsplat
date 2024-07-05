@@ -1,7 +1,5 @@
-RESULT_DIR=results/2dgs_mcmc_sfm
-
 # for SCENE in bicycle bonsai counter garden kitchen room stump;
-for SCENE in garden treehill bonsai counter kitchen room bicycle stump flowers;
+for SCENE in garden treehill;
 do
     if [ "$SCENE" = "bicycle" ] || [ "$SCENE" = "stump" ] || [ "$SCENE" = "garden" ] || [ "$SCENE" = "treehill" ] || [ "$SCENE" = "flowers" ]; then
         DATA_FACTOR=4
@@ -23,42 +21,12 @@ do
 
     echo "Running $SCENE"
 
-    # train without eval
     python simple_trainer_mcmc.py --disable_viewer --data_factor $DATA_FACTOR \
         --model_type 2dgs \
         --init_type sfm \
+        --eval_steps 1000 7000 15000 30000 \
         --cap_max $CAP_MAX \
         --data_dir data/360_v2/$SCENE/ \
-        --result_dir $RESULT_DIR/$SCENE/
+        --result_dir results/2dgs_mcmc_sfm/$SCENE/
 
-    # # run eval and render
-    # for CKPT in $RESULT_DIR/$SCENE/ckpts/*;
-    # do
-    #     python simple_trainer.py --disable_viewer --data_factor $DATA_FACTOR \
-    #         --data_dir data/360_v2/$SCENE/ \
-    #         --result_dir $RESULT_DIR/$SCENE/ \
-    #         --ckpt $CKPT
-    # done
-done
-
-
-for SCENE in bicycle bonsai counter garden kitchen room stump;
-do
-    echo "=== Eval Stats ==="
-
-    for STATS in $RESULT_DIR/$SCENE/stats/val*;
-    do  
-        echo $STATS
-        cat $STATS; 
-        echo
-    done
-
-    echo "=== Train Stats ==="
-
-    for STATS in $RESULT_DIR/$SCENE/stats/train*;
-    do  
-        echo $STATS
-        cat $STATS; 
-        echo
-    done
 done
