@@ -819,7 +819,7 @@ class Runner:
                 canvas_list.extend([normals])
                 
                 depths = info["rend_depth"]
-                normals_depth = depth_to_normal(depths, camtoworlds, K[None], near_plane=cfg.near_plane, far_plane=cfg.far_plane)
+                normals_depth = depth_to_normal(depths, camtoworlds[i : i + 1], K[None], near_plane=cfg.near_plane, far_plane=cfg.far_plane)
                 normals_depth = normals_depth * (alphas).detach()
                 normals_depth = normals_depth * 0.5 + 0.5
                 canvas_list.extend([normals_depth])

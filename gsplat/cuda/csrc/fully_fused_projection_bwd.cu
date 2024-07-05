@@ -33,6 +33,7 @@ __global__ void fully_fused_projection_bwd_kernel(
     // grad outputs
     const T *__restrict__ v_means2d,       // [C, N, 2]
     const T *__restrict__ v_depths,        // [C, N]
+    const T *__restrict__ v_normals,       // [C, N, 3]
     const T *__restrict__ v_conics,        // [C, N, 3]
     const T *__restrict__ v_compensations, // [C, N] optional
     // grad inputs
@@ -59,6 +60,7 @@ __global__ void fully_fused_projection_bwd_kernel(
 
     v_means2d += idx * 2;
     v_depths += idx;
+    v_normals += idx * 3;
     v_conics += idx * 3;
 
     // vjp: compute the inverse of the 2d covariance
@@ -152,6 +154,11 @@ __global__ void fully_fused_projection_bwd_kernel(
         vec4<T> v_quat(0.f);
         vec3<T> v_scale(0.f);
         quat_scale_to_covar_vjp<T>(quat, scale, rotmat, v_covar, v_quat, v_scale);
+
+        // // add contribution from v_normals
+        // mat3<T> v_R = mat3<T>(0, 0, v_normals[0], 0, 0, v_normals[1], 0, 0, v_normals[2]);
+        // quat_to_rotmat_vjp<T>(quat, v_R, v_quat);
+
         warpSum(v_quat, warp_group_g);
         warpSum(v_scale, warp_group_g);
         if (warp_group_g.thread_rank() == 0) {
@@ -220,6 +227,7 @@ fully_fused_projection_bwd_tensor(
     CHECK_INPUT(conics);
     CHECK_INPUT(v_means2d);
     CHECK_INPUT(v_depths);
+    CHECK_INPUT(v_normals);
     CHECK_INPUT(v_conics);
     if (compensations.has_value()) {
         CHECK_INPUT(compensations.value());
@@ -256,7 +264,7 @@ fully_fused_projection_bwd_tensor(
             compensations.has_value() ? compensations.value().data_ptr<float>()
                                       : nullptr,
             v_means2d.data_ptr<float>(), v_depths.data_ptr<float>(),
-            v_conics.data_ptr<float>(),
+            v_normals.data_ptr<float>(), v_conics.data_ptr<float>(),
             v_compensations.has_value() ? v_compensations.value().data_ptr<float>()
                                         : nullptr,
             v_means.data_ptr<float>(),

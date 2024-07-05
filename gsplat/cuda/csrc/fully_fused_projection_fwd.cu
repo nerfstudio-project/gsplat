@@ -117,21 +117,15 @@ fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
     }
 
     glm::mat3 rotmat = quat_to_rotmat(glm::make_vec4(quats));
-    glm::mat3 S = scale_to_mat(glm::make_vec3(scales), 1.f);
-    glm::mat3 L = rotmat * S;
-    // float3 normal = transformVec4x3({L[2].x, L[2].y, L[2].z}, viewmats);
 
     // write to outputs
     radii[idx] = (int32_t)radius;
     means2d[idx * 2] = mean2d.x;
     means2d[idx * 2 + 1] = mean2d.y;
     depths[idx] = mean_c.z;
-    // normals[idx * 3] = normal.x;
-    // normals[idx * 3 + 1] = normal.y;
-    // normals[idx * 3 + 2] = normal.z;
-    normals[idx * 3] = L[2].x;
-    normals[idx * 3 + 1] = L[2].y;
-    normals[idx * 3 + 2] = L[2].z;
+    normals[idx * 3] = rotmat[2].x;
+    normals[idx * 3 + 1] = rotmat[2].y;
+    normals[idx * 3 + 2] = rotmat[2].z;
     conics[idx * 3] = covar2d_inv[0][0];
     conics[idx * 3 + 1] = covar2d_inv[0][1];
     conics[idx * 3 + 2] = covar2d_inv[1][1];
