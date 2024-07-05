@@ -858,6 +858,15 @@ class Runner:
         metrics = {"psnr": [], "ssim": [], "lpips": []}
         for i, data in enumerate(valloader):
             camtoworlds = data["camtoworld"].to(device)
+            # if i == 14:
+            #     # import pdb
+            #     # pdb.set_trace()
+            #     camtoworlds = torch.Tensor([[-0.71543751,  0.28910808, -0.63605478,  0.63053711],
+            #                                 [ 0.69861815,  0.30780676, -0.64590067,  0.57568061],
+            #                                 [ 0.00904686, -0.90646098, -0.42219266,  0.65942747],
+            #                                 [ 0.        ,  0.        ,  0.        ,  1.        ]]).to("cuda")
+            #     camtoworlds = camtoworlds.unsqueeze(0)
+            # print(camtoworlds)
             Ks = data["K"].to(device)
             pixels = data["image"].to(device) / 255.0
             height, width = pixels.shape[1:3]
