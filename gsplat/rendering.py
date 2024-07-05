@@ -555,7 +555,7 @@ def rasterization_inria_wrapper(
     device = means.device
     channels = colors.shape[-1]
 
-    # rasterization from inria does not normalization internally
+    # rasterization from inria does not do normalization internally
     quats = F.normalize(quats, dim=-1)  # [N, 4]
 
     render_colors = []
@@ -607,7 +607,7 @@ def rasterization_inria_wrapper(
                     _colors.shape[0], 3 - _colors.shape[-1], device=device
                 )
                 _colors = torch.cat([_colors, pad], dim=-1)
-            _render_colors_, _ = rasterizer(
+            _render_colors_, radii = rasterizer(
                 means3D=means,
                 means2D=means2D,
                 shs=_colors if colors.dim() == 3 else None,
@@ -683,7 +683,7 @@ def rasterization_2dgs_inria_wrapper(
     device = means.device
     channels = colors.shape[-1]
 
-    # rasterization from inria does not normalization internally
+    # rasterization from inria does not do normalization internally
     quats = F.normalize(quats, dim=-1)  # [N, 4]
     scales = scales[:, :2]  # [N, 2]
 

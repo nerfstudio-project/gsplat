@@ -38,7 +38,7 @@ from simple_trainer import create_splats_with_optimizers
 
 @dataclass
 class Config:
-    # Model type can be 3dgs or 2dgs
+    # Model type can be 3dgs, 2dgs
     model_type: str = "3dgs"
     # Disable viewer
     disable_viewer: bool = False
@@ -147,14 +147,14 @@ class Config:
     depth_lambda: float = 1e-2
 
     # Enable normal consistency loss. (experimental)
-    normal_consistency_loss: bool = True
+    normal_consistency_loss: bool = False
     # Weight for normal consistency loss
     normal_consistency_lambda: float = 0.05
     # Start applying normal consistency loss after this iteration
     normal_consistency_start_iter: int = 7000
 
     # Distoration loss. (experimental)
-    dist_loss: bool = True
+    dist_loss: bool = False
     # Weight for distortion loss
     dist_lambda: float = 100
     # Start applying distortion loss after this iteration
@@ -180,7 +180,6 @@ class Runner:
 
     def __init__(self, cfg: Config) -> None:
         set_random_seed(42)
-        print(cfg.eval_steps)
 
         self.cfg = cfg
         self.device = "cuda"
@@ -188,12 +187,12 @@ class Runner:
             self.rasterization_fn = rasterization
         elif cfg.model_type == "3dgs_inria":
             self.rasterization_fn = rasterization_inria_wrapper
-        elif cfg.model_type == "2dgs":
+        elif cfg.model_type == "2dgs_inria":
             self.rasterization_fn = rasterization_2dgs_inria_wrapper
         else:
             raise ValueError(f"Unsupported model type: {cfg.model_type}")
 
-        self.render_mode = "RGB"
+        self.render_mode = "RGB+ED"
         if cfg.depth_loss or cfg.normal_consistency_loss:
             self.render_mode = "RGB+ED"
 
@@ -750,14 +749,13 @@ class Runner:
             ellipse_time += time.time() - tic
 
             colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)
-            depths = renders[..., 3:4] if renders.shape[-1] >= 4 else None
-            normals = renders[..., 4:7] if renders.shape[-1] >= 5 else None
-
             canvas_list = [pixels, colors]
-            if self.cfg.depth_loss:
+            if renders.shape[-1] >= 4:
+                depths = renders[..., 3:4]
                 depths = (depths - depths.min()) / (depths.max() - depths.min())
                 canvas_list.append(apply_float_colormap(1 - depths, colormap="turbo"))
-            if self.cfg.normal_consistency_loss:
+            if renders.shape[-1] >= 5:
+                normals = renders[..., 4:7]
                 normals_surf = depth_to_normal(
                     depths,
                     camtoworlds,
@@ -853,14 +851,13 @@ class Runner:
             )  # [1, H, W, C]
 
             colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)
-            depths = renders[..., 3:4] if renders.shape[-1] >= 4 else None
-            normals = renders[..., 4:7] if renders.shape[-1] >= 5 else None
-
             canvas_list = [colors]
-            if self.cfg.depth_loss:
+            if renders.shape[-1] >= 4:
+                depths = renders[..., 3:4]
                 depths = (depths - depths.min()) / (depths.max() - depths.min())
                 canvas_list.append(apply_float_colormap(1 - depths, colormap="turbo"))
-            if self.cfg.normal_consistency_loss:
+            if renders.shape[-1] >= 5:
+                normals = renders[..., 4:7]
                 normals_surf = depth_to_normal(
                     depths,
                     camtoworlds,

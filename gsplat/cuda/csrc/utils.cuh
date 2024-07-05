@@ -134,7 +134,7 @@ inline __device__ void quat_scale_to_covar_vjp_normal(
     mat3<T> v_R = v_M * S;
 
     // add contribution from v_normal
-    // printf("v_normal: %.8f, %.8f, %.8f \n", v_normal.x, v_normal.y, v_normal.z);
+    // someone should double check this. No idea if this is correct
     v_R[2] += v_normal;
 
     // grad for (quat, scale) from covar
@@ -382,6 +382,5 @@ inline __device__ void add_blur_vjp(const T eps2d, const mat2<T> conic_blur,
     v_covar[1][1] +=
         v_sqr_comp * (one_minus_sqr_comp * conic_blur[1][1] - eps2d * det_conic_blur);
 }
-
 
 #endif // GSPLAT_CUDA_UTILS_H
