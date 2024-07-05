@@ -25,7 +25,11 @@ from utils import (
     set_random_seed,
 )
 from gsplat import quat_scale_to_covar_preci
-from gsplat.rendering import rasterization, rasterization_2dgs_inria_wrapper
+from gsplat.rendering import (
+    rasterization,
+    rasterization_2dgs_inria_wrapper,
+    rasterization_inria_wrapper,
+)
 from gsplat.relocation import compute_relocation
 from gsplat.normal_utils import depth_to_normal
 from gsplat.color_utils import apply_float_colormap
@@ -158,7 +162,7 @@ class Config:
     # Weight for distortion loss
     dist_lambda: float = 100
     # Start applying distortion loss after this iteration
-    dist_start_iter: int = 0
+    dist_start_iter: int = 3000
 
     # Dump information to tensorboard every this steps
     tb_every: int = 100
@@ -185,6 +189,8 @@ class Runner:
         self.device = "cuda"
         if cfg.model_type == "3dgs":
             self.rasterization_fn = rasterization
+        elif cfg.model_type == "3dgs_inria":
+            self.rasterization_fn = rasterization_inria_wrapper
         elif cfg.model_type == "2dgs":
             self.rasterization_fn = rasterization_2dgs_inria_wrapper
         else:
@@ -304,7 +310,6 @@ class Runner:
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         means = self.splats["means3d"]  # [N, 3]
-        # rasterization does normalization internally
         quats = self.splats["quats"]  # [N, 4]
         scales = torch.exp(self.splats["scales"])  # [N, 3]
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
@@ -771,9 +776,7 @@ class Runner:
                 distloss = (distloss - distloss.min()) / (
                     distloss.max() - distloss.min()
                 )
-                canvas_list.append(
-                    apply_float_colormap(1 - distloss, colormap="cmo.dense")
-                )
+                canvas_list.append(apply_float_colormap(distloss, colormap="cmo.ice"))
 
             # write images
             canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()

@@ -555,6 +555,9 @@ def rasterization_inria_wrapper(
     device = means.device
     channels = colors.shape[-1]
 
+    # rasterization from inria does not normalization internally
+    quats = F.normalize(quats, dim=-1)  # [N, 4]
+
     render_colors = []
     for cid in range(C):
         FoVx = 2 * math.atan(width / (2 * Ks[cid, 0, 0].item()))
@@ -645,7 +648,7 @@ def rasterization_2dgs_inria_wrapper(
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Wrapper for 2DGS's rasterization backend which is based on Inria's backend.
 
-    Install the rasterization backend from
+    Install the 2DGS rasterization backend from
         https://github.com/hbb1/diff-surfel-rasterization
     """
     from diff_surfel_rasterization import (
@@ -680,8 +683,9 @@ def rasterization_2dgs_inria_wrapper(
     device = means.device
     channels = colors.shape[-1]
 
+    # rasterization from inria does not normalization internally
+    quats = F.normalize(quats, dim=-1)  # [N, 4]
     scales = scales[:, :2]  # [N, 2]
-    quats = quats = F.normalize(quats, dim=-1)  # [N, 4]
 
     render_colors = []
     for cid in range(C):
