@@ -377,8 +377,8 @@ def rasterization(
         render_colors = torch.cat(
             [
                 render_colors[..., :3],
-                render_colors[..., 3:4] / render_alphas.clamp(min=1e-10),
-                F.normalize(render_colors[..., 4:7], dim=-1),
+                F.normalize(render_colors[..., -4:-1], dim=-1),
+                render_colors[..., -1:] / render_alphas.clamp(min=1e-10),
             ],
             dim=-1,
         )

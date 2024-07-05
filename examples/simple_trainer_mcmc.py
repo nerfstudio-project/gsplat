@@ -428,9 +428,7 @@ class Runner:
                 image_ids=image_ids,
                 render_mode=self.render_mode,
             )
-            colors = renders[..., 0:3]
-            depths = renders[..., 3:4] if renders.shape[-1] >= 4 else None
-            normals = renders[..., 4:7] if renders.shape[-1] >= 5 else None
+            colors = renders[..., :3]
 
             if cfg.random_bkgd:
                 bkgd = torch.rand(1, 3, device=device)
@@ -449,6 +447,7 @@ class Runner:
             loss += cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
 
             if cfg.depth_loss:
+                depths = renders[..., -1:]
                 # query depths from depth map
                 points = torch.stack(
                     [
@@ -469,6 +468,8 @@ class Runner:
                 loss += depthloss * cfg.depth_lambda
 
             if cfg.normal_consistency_loss and step > cfg.normal_consistency_start_iter:
+                depths = renders[..., -1:]
+                normals = renders[..., -4:-1]
                 normals_surf = depth_to_normal(
                     depths,
                     camtoworlds,
@@ -751,11 +752,12 @@ class Runner:
             colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)
             canvas_list = [pixels, colors]
             if renders.shape[-1] >= 4:
-                depths = renders[..., 3:4]
+                depths = renders[..., -1:]
                 depths = (depths - depths.min()) / (depths.max() - depths.min())
                 canvas_list.append(apply_float_colormap(1 - depths, colormap="turbo"))
             if renders.shape[-1] >= 5:
-                normals = renders[..., 4:7]
+                depths = renders[..., -1:]
+                normals = renders[..., -4:-1]
                 normals_surf = depth_to_normal(
                     depths,
                     camtoworlds,
@@ -853,11 +855,12 @@ class Runner:
             colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)
             canvas_list = [colors]
             if renders.shape[-1] >= 4:
-                depths = renders[..., 3:4]
+                depths = renders[..., -1:]
                 depths = (depths - depths.min()) / (depths.max() - depths.min())
                 canvas_list.append(apply_float_colormap(1 - depths, colormap="turbo"))
             if renders.shape[-1] >= 5:
-                normals = renders[..., 4:7]
+                depths = renders[..., -1:]
+                normals = renders[..., -4:-1]
                 normals_surf = depth_to_normal(
                     depths,
                     camtoworlds,
