@@ -1242,8 +1242,6 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, v_radii, v_means2d, v_depths, v_ray_transformations, v_normals):
-        import pdb
-        pdb.set_trace()
         (
             means,
             quats,
@@ -1663,6 +1661,8 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         else:
             v_backgrounds = None
 
+        # import pdb
+        # pdb.set_trace()
         return (
             v_means2d,
             v_ray_transformations,

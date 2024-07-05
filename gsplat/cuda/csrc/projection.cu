@@ -2094,7 +2094,7 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     glm::vec3 scale = glm::make_vec3(scales + gid * 3);
     glm::vec3 v_normal3d = glm::vec3(v_normals[0], v_normals[1], v_normals[2]);
 
-    printf("v_normal3d: %.8f, %.8f, %.8f \n", v_normal3d.x, v_normal3d.y, v_normal3d.z);
+    // printf("v_normal3d: %.8f, %.8f, %.8f \n", v_normal3d.x, v_normal3d.y, v_normal3d.z);
     glm::mat3 v_R(0.f);
     glm::vec2 v_scale(0.f);
     glm::vec3 v_mean(0.f);

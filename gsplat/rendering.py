@@ -763,4 +763,9 @@ def rasterization_2dgs(
         "height": height,
         "tile_size": tile_size,
     }
+    
+    # import pdb
+    # pdb.set_trace()
+    render_normals = render_normals @ viewmats[0, :3, :3].T
+    
     return (render_colors, render_alphas, render_normals, render_normals_from_depth), meta

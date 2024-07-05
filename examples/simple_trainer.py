@@ -531,10 +531,12 @@ class Runner:
                 # normal consistency loss
                 # import pdb
                 # pdb.set_trace()
+                render_normals = render_normals.squeeze(0).permute((2, 0, 1))
+                render_normals_from_depth = render_normals_from_depth.permute((2, 0, 1))
                 normal_error = (1 - (render_normals * render_normals_from_depth).sum(dim=0))[None]
+                normal_loss = cfg.normal_lambda * normal_error.mean()
                 # import pdb
                 # pdb.set_trace()
-                normal_loss = cfg.normal_lambda * normal_error.mean()
                 loss += normal_loss
 
             loss.backward()
@@ -891,7 +893,7 @@ class Runner:
             )
             
             # write normals from depth
-            render_normals_from_depth = (render_normals_from_depth * 0.5 + 0.5).squeeze(0).cpu().numpy()
+            render_normals_from_depth = (render_normals_from_depth * 0.5 + 0.5).cpu().numpy()
             normals_from_depth_output = (render_normals_from_depth * 255).astype(np.uint8)
             imageio.imwrite(
                 f"{self.render_dir}/val_{i:04d}_normals_from_depth_{step}.png", normals_from_depth_output
