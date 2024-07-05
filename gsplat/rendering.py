@@ -318,7 +318,7 @@ def rasterization(
 
     # Rasterize to pixels
     if render_mode in ["RGB+D", "RGB+ED"]:
-        colors = torch.cat((colors, normals, depths[..., None]), dim=-1)
+        colors = torch.cat((colors, depths[..., None], normals), dim=-1)
         if backgrounds is not None:
             backgrounds = torch.cat(
                 [backgrounds, torch.zeros(C, 1, device=backgrounds.device)], dim=-1
@@ -377,8 +377,9 @@ def rasterization(
         # normalize the accumulated depth to get the expected depth
         render_colors = torch.cat(
             [
-                render_colors[..., :-1],
-                render_colors[..., -1:] / render_alphas.clamp(min=1e-10),
+                render_colors[..., :3],
+                render_colors[..., 3:4] / render_alphas.clamp(min=1e-10),
+                F.normalize(render_colors[..., 4:7], dim=-1),
             ],
             dim=-1,
         )
@@ -401,12 +402,6 @@ def rasterization(
         "height": height,
         "tile_size": tile_size,
     }
-    
-    depths_expected = render_colors[..., -1:] / render_alphas.clamp(min=1e-10)
-    render_normals = render_colors[..., 3:6]
-    render_normals = F.normalize(render_normals, dim=-1)
-    meta["rend_depth"] = depths_expected
-    meta["rend_normal"] = render_normals
     return render_colors, render_alphas, meta
 
 
