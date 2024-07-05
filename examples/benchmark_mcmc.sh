@@ -1,4 +1,4 @@
-# for SCENE in bicycle bonsai counter garden kitchen room stump;
+# for SCENE in bicycle bonsai counter garden kitchen room stump treehill flowers;
 for SCENE in garden treehill;
 do
     if [ "$SCENE" = "bicycle" ] || [ "$SCENE" = "stump" ] || [ "$SCENE" = "garden" ] || [ "$SCENE" = "treehill" ] || [ "$SCENE" = "flowers" ]; then
@@ -58,7 +58,6 @@ do
         --cap_max $CAP_MAX \
         --data_dir data/360_v2/$SCENE/ \
         --normal_consistency_loss \
-        --dist_loss \
         --result_dir results/3dgs_with_normal/$SCENE/
 
 done
