@@ -751,11 +751,11 @@ class Runner:
 
             colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)
             canvas_list = [pixels, colors]
-            if renders.shape[-1] >= 4:
+            if cfg.depth_loss:
                 depths = renders[..., -1:]
                 depths = (depths - depths.min()) / (depths.max() - depths.min())
                 canvas_list.append(apply_float_colormap(1 - depths, colormap="turbo"))
-            if renders.shape[-1] >= 5:
+            if cfg.normal_consistency_loss:
                 depths = renders[..., -1:]
                 normals = renders[..., -4:-1]
                 normals_surf = depth_to_normal(
@@ -768,7 +768,7 @@ class Runner:
                 normals_surf = normals_surf * (alphas).detach()
                 canvas_list.extend([normals * 0.5 + 0.5])
                 canvas_list.extend([normals_surf * 0.5 + 0.5])
-            if self.cfg.dist_loss:
+            if cfg.dist_loss:
                 distloss = info["render_distloss"]
                 distloss = (distloss - distloss.min()) / (
                     distloss.max() - distloss.min()
@@ -854,11 +854,11 @@ class Runner:
 
             colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)
             canvas_list = [colors]
-            if renders.shape[-1] >= 4:
+            if cfg.depth_loss:
                 depths = renders[..., -1:]
                 depths = (depths - depths.min()) / (depths.max() - depths.min())
                 canvas_list.append(apply_float_colormap(1 - depths, colormap="turbo"))
-            if renders.shape[-1] >= 5:
+            if cfg.normal_consistency_loss:
                 depths = renders[..., -1:]
                 normals = renders[..., -4:-1]
                 normals_surf = depth_to_normal(
@@ -871,7 +871,7 @@ class Runner:
                 normals_surf = normals_surf * (alphas).detach()
                 canvas_list.extend([normals * 0.5 + 0.5])
                 canvas_list.extend([normals_surf * 0.5 + 0.5])
-            if self.cfg.dist_loss:
+            if cfg.dist_loss:
                 distloss = info["render_distloss"]
                 distloss = (distloss - distloss.min()) / (
                     distloss.max() - distloss.min()

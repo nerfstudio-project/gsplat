@@ -317,7 +317,7 @@ def rasterization(
 
     # Rasterize to pixels
     if render_mode in ["RGB+D", "RGB+ED"]:
-        colors = torch.cat((colors, depths[..., None], normals), dim=-1)
+        colors = torch.cat((colors, normals, depths[..., None]), dim=-1)
         if backgrounds is not None:
             backgrounds = torch.cat(
                 [backgrounds, torch.zeros(C, 1, device=backgrounds.device)], dim=-1
@@ -777,5 +777,5 @@ def rasterization_2dgs_inria_wrapper(
     )
 
     meta = {"render_distloss": render_dist}
-    render_colors = torch.cat([render_colors, render_depth, render_normal], dim=-1)
+    render_colors = torch.cat([render_colors, render_normal, render_depth], dim=-1)
     return render_colors, render_alphas, meta
