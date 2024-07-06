@@ -7,11 +7,11 @@ device = torch.device("cuda:0")
 
 def test_tree_cut():
 
-    leaf_data = torch.tensor([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], device=device)[
+    leaf_data = torch.tensor([0.1, 0.2, 0.01, 0.4, 0.5, 0.6, 0.7, 0.8], device=device)[
         :, None
     ]
     leaf_mask = torch.tensor(
-        [True, True, True, True, True, True, True, True], device=device
+        [True, True, True, False, True, True, True, True], device=device
     )
     branch_factor = 2
     cut = 0.35
