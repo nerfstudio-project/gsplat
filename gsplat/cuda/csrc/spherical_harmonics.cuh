@@ -1,4 +1,5 @@
 #include "bindings.h"
+#include "types.cuh"
 #include "utils.cuh"
 
 #include <cuda_runtime.h>
@@ -8,13 +9,13 @@
 // Sloan, JCGT 2013 See https://jcgt.org/published/0002/02/06/ for reference
 // implementation
 template <typename T>
-inline __device__ void sh_coeffs_to_color_fast(
-    const uint32_t degree,               // degree of SH to be evaluated
-    const uint32_t c,                    // color channel
-    const typename Float3<T>::type &dir, // [3]
-    const T *coeffs,                     // [K, 3]
-    // output
-    T *colors // [3]
+inline __device__ void
+sh_coeffs_to_color_fast(const uint32_t degree, // degree of SH to be evaluated
+                        const uint32_t c,      // color channel
+                        const vec3<T> &dir,    // [3]
+                        const T *coeffs,       // [K, 3]
+                        // output
+                        T *colors // [3]
 ) {
     T result = 0.2820947917738781f * coeffs[c];
     if (degree >= 1) {
@@ -25,9 +26,8 @@ inline __device__ void sh_coeffs_to_color_fast(
         T y = dir.y * inorm;
         T z = dir.z * inorm;
 
-        result +=
-            0.48860251190292f * (-y * coeffs[1 * 3 + c] +
-                                 z * coeffs[2 * 3 + c] - x * coeffs[3 * 3 + c]);
+        result += 0.48860251190292f * (-y * coeffs[1 * 3 + c] + z * coeffs[2 * 3 + c] -
+                                       x * coeffs[3 * 3 + c]);
         if (degree >= 2) {
             T z2 = z * z;
 
@@ -56,22 +56,19 @@ inline __device__ void sh_coeffs_to_color_fast(
                 T pSH15 = -0.5900435899266435f * fC2;
                 T pSH9 = -0.5900435899266435f * fS2;
 
-                result +=
-                    pSH9 * coeffs[9 * 3 + c] + pSH10 * coeffs[10 * 3 + c] +
-                    pSH11 * coeffs[11 * 3 + c] + pSH12 * coeffs[12 * 3 + c] +
-                    pSH13 * coeffs[13 * 3 + c] + pSH14 * coeffs[14 * 3 + c] +
-                    pSH15 * coeffs[15 * 3 + c];
+                result += pSH9 * coeffs[9 * 3 + c] + pSH10 * coeffs[10 * 3 + c] +
+                          pSH11 * coeffs[11 * 3 + c] + pSH12 * coeffs[12 * 3 + c] +
+                          pSH13 * coeffs[13 * 3 + c] + pSH14 * coeffs[14 * 3 + c] +
+                          pSH15 * coeffs[15 * 3 + c];
 
                 if (degree >= 4) {
-                    T fTmp0D =
-                        z * (-4.683325804901025f * z2 + 2.007139630671868f);
+                    T fTmp0D = z * (-4.683325804901025f * z2 + 2.007139630671868f);
                     T fTmp1C = 3.31161143515146f * z2 - 0.47308734787878f;
                     T fTmp2B = -1.770130769779931f * z;
                     T fC3 = x * fC2 - y * fS2;
                     T fS3 = x * fS2 + y * fC2;
                     T pSH20 =
-                        (1.984313483298443f * z * pSH12 -
-                         1.006230589874905f * pSH6);
+                        (1.984313483298443f * z * pSH12 - 1.006230589874905f * pSH6);
                     T pSH21 = fTmp0D * x;
                     T pSH19 = fTmp0D * y;
                     T pSH22 = fTmp1C * fC1;
@@ -81,14 +78,10 @@ inline __device__ void sh_coeffs_to_color_fast(
                     T pSH24 = 0.6258357354491763f * fC3;
                     T pSH16 = 0.6258357354491763f * fS3;
 
-                    result += pSH16 * coeffs[16 * 3 + c] +
-                              pSH17 * coeffs[17 * 3 + c] +
-                              pSH18 * coeffs[18 * 3 + c] +
-                              pSH19 * coeffs[19 * 3 + c] +
-                              pSH20 * coeffs[20 * 3 + c] +
-                              pSH21 * coeffs[21 * 3 + c] +
-                              pSH22 * coeffs[22 * 3 + c] +
-                              pSH23 * coeffs[23 * 3 + c] +
+                    result += pSH16 * coeffs[16 * 3 + c] + pSH17 * coeffs[17 * 3 + c] +
+                              pSH18 * coeffs[18 * 3 + c] + pSH19 * coeffs[19 * 3 + c] +
+                              pSH20 * coeffs[20 * 3 + c] + pSH21 * coeffs[21 * 3 + c] +
+                              pSH22 * coeffs[22 * 3 + c] + pSH23 * coeffs[23 * 3 + c] +
                               pSH24 * coeffs[24 * 3 + c];
                 }
             }
@@ -99,15 +92,15 @@ inline __device__ void sh_coeffs_to_color_fast(
 }
 
 template <typename T>
-inline __device__ void sh_coeffs_to_color_fast_vjp(
-    const uint32_t degree,               // degree of SH to be evaluated
-    const uint32_t c,                    // color channel
-    const typename Float3<T>::type &dir, // [3]
-    const T *coeffs,                     // [K, 3]
-    const T *v_colors,                   // [3]
-    // output
-    T *v_coeffs,                    // [K, 3]
-    typename Float3<T>::type *v_dir // [3] optional
+inline __device__ void
+sh_coeffs_to_color_fast_vjp(const uint32_t degree, // degree of SH to be evaluated
+                            const uint32_t c,      // color channel
+                            const vec3<T> &dir,    // [3]
+                            const T *coeffs,       // [K, 3]
+                            const T *v_colors,     // [3]
+                            // output
+                            T *v_coeffs,   // [K, 3]
+                            vec3<T> *v_dir // [3] optional
 ) {
     T v_colors_local = v_colors[c];
 
@@ -158,8 +151,8 @@ inline __device__ void sh_coeffs_to_color_fast_vjp(
     v_coeffs[7 * 3 + c] = pSH7 * v_colors_local;
     v_coeffs[8 * 3 + c] = pSH8 * v_colors_local;
 
-    T fTmp0B_z, fC1_x, fC1_y, fS1_x, fS1_y, pSH6_z, pSH7_x, pSH7_z, pSH5_y,
-        pSH5_z, pSH8_x, pSH8_y, pSH4_x, pSH4_y;
+    T fTmp0B_z, fC1_x, fC1_y, fS1_x, fS1_y, pSH6_z, pSH7_x, pSH7_z, pSH5_y, pSH5_z,
+        pSH8_x, pSH8_y, pSH4_x, pSH4_y;
     if (v_dir != nullptr) {
         fTmp0B_z = -1.092548430592079f;
         fC1_x = 2.f * x;
@@ -176,15 +169,15 @@ inline __device__ void sh_coeffs_to_color_fast_vjp(
         pSH4_x = 0.5462742152960395f * fS1_x;
         pSH4_y = 0.5462742152960395f * fS1_y;
 
-        v_x += v_colors_local *
-               (pSH4_x * coeffs[4 * 3 + c] + pSH8_x * coeffs[8 * 3 + c] +
-                pSH7_x * coeffs[7 * 3 + c]);
-        v_y += v_colors_local *
-               (pSH4_y * coeffs[4 * 3 + c] + pSH8_y * coeffs[8 * 3 + c] +
-                pSH5_y * coeffs[5 * 3 + c]);
-        v_z += v_colors_local *
-               (pSH6_z * coeffs[6 * 3 + c] + pSH7_z * coeffs[7 * 3 + c] +
-                pSH5_z * coeffs[5 * 3 + c]);
+        v_x +=
+            v_colors_local * (pSH4_x * coeffs[4 * 3 + c] + pSH8_x * coeffs[8 * 3 + c] +
+                              pSH7_x * coeffs[7 * 3 + c]);
+        v_y +=
+            v_colors_local * (pSH4_y * coeffs[4 * 3 + c] + pSH8_y * coeffs[8 * 3 + c] +
+                              pSH5_y * coeffs[5 * 3 + c]);
+        v_z +=
+            v_colors_local * (pSH6_z * coeffs[6 * 3 + c] + pSH7_z * coeffs[7 * 3 + c] +
+                              pSH5_z * coeffs[5 * 3 + c]);
     }
 
     if (degree < 3) {
@@ -220,8 +213,8 @@ inline __device__ void sh_coeffs_to_color_fast_vjp(
     v_coeffs[15 * 3 + c] = pSH15 * v_colors_local;
 
     T fTmp0C_z, fTmp1B_z, fC2_x, fC2_y, fS2_x, fS2_y, pSH12_z, pSH13_x, pSH13_z,
-        pSH11_y, pSH11_z, pSH14_x, pSH14_y, pSH14_z, pSH10_x, pSH10_y, pSH10_z,
-        pSH15_x, pSH15_y, pSH9_x, pSH9_y;
+        pSH11_y, pSH11_z, pSH14_x, pSH14_y, pSH14_z, pSH10_x, pSH10_y, pSH10_z, pSH15_x,
+        pSH15_y, pSH9_x, pSH9_y;
     if (v_dir != nullptr) {
         fTmp0C_z = -2.285228997322329f * 2.f * z;
         fTmp1B_z = 1.445305721320277f;
@@ -298,10 +291,10 @@ inline __device__ void sh_coeffs_to_color_fast_vjp(
     v_coeffs[23 * 3 + c] = pSH23 * v_colors_local;
     v_coeffs[24 * 3 + c] = pSH24 * v_colors_local;
 
-    T fTmp0D_z, fTmp1C_z, fTmp2B_z, fC3_x, fC3_y, fS3_x, fS3_y, pSH20_z,
-        pSH21_x, pSH21_z, pSH19_y, pSH19_z, pSH22_x, pSH22_y, pSH22_z, pSH18_x,
-        pSH18_y, pSH18_z, pSH23_x, pSH23_y, pSH23_z, pSH17_x, pSH17_y, pSH17_z,
-        pSH24_x, pSH24_y, pSH16_x, pSH16_y;
+    T fTmp0D_z, fTmp1C_z, fTmp2B_z, fC3_x, fC3_y, fS3_x, fS3_y, pSH20_z, pSH21_x,
+        pSH21_z, pSH19_y, pSH19_z, pSH22_x, pSH22_y, pSH22_z, pSH18_x, pSH18_y, pSH18_z,
+        pSH23_x, pSH23_y, pSH23_z, pSH17_x, pSH17_y, pSH17_z, pSH24_x, pSH24_y, pSH16_x,
+        pSH16_y;
     if (v_dir != nullptr) {
         fTmp0D_z = 3.f * -4.683325804901025f * z2 + 2.007139630671868f;
         fTmp1C_z = 2.f * 3.31161143515146f * z;
@@ -310,8 +303,8 @@ inline __device__ void sh_coeffs_to_color_fast_vjp(
         fC3_y = x * fC2_y - fS2 - y * fS2_y;
         fS3_x = fS2 + y * fC2_x + x * fS2_x;
         fS3_y = x * fS2_y + fC2 + y * fC2_y;
-        pSH20_z = 1.984313483298443f * (pSH12 + z * pSH12_z) +
-                  -1.006230589874905f * pSH6_z;
+        pSH20_z =
+            1.984313483298443f * (pSH12 + z * pSH12_z) + -1.006230589874905f * pSH6_z;
         pSH21_x = fTmp0D;
         pSH21_z = fTmp0D_z * x;
         pSH19_y = fTmp0D;
