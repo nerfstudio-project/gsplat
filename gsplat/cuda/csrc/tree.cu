@@ -368,6 +368,12 @@ tree_cut2_kernel(const uint32_t n_leaf, // number of leaf nodes in the tree
             }
             __syncthreads();
         }
+
+        // This block has finished. Update the total of it for the next block.
+        for (uint32_t i = 0; i < DIM; i++) {
+            block_total_data[i] = sm_data[(BR * N_THREADS - 1) * DIM + i];
+        }
+        __syncthreads();
     }
 }
 
