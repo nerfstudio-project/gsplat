@@ -13,7 +13,7 @@ def test_tree_cut():
     leaf_mask = torch.tensor(
         [True, True, True, True, True, True, True, True], device=device
     )
-    branch_factor = 8
+    branch_factor = 2
     cut = 0.35
 
     selected_data, selected_mask = _make_lazy_cuda_func("tree_cut")(

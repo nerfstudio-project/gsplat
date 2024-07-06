@@ -4,7 +4,7 @@
 #include <torch/extension.h>
 #include <tuple>
 
-#define N_THREADS 256
+#define N_THREADS 512
 
 #define CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x) TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
@@ -215,7 +215,7 @@ fully_fused_projection_packed_bwd_tensor(
     const at::optional<torch::Tensor> &v_compensations, // [nnz] optional
     const bool viewmats_requires_grad, const bool sparse_grad);
 
-std::tuple<torch::Tensor, torch::Tensor> tree_cut_tensor(const torch::Tensor &leaf_data,
-                                                         const torch::Tensor &leaf_mask,
-                                                         const int32_t branch_factor,
-                                                         const float cut);
+std::vector<torch::Tensor> tree_cut_tensor(const torch::Tensor leaf_data,
+                                           const torch::Tensor leaf_mask,
+                                           const uint32_t branch_factor,
+                                           const float cut);
