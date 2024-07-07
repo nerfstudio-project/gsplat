@@ -27,6 +27,10 @@ persp_proj_bwd_kernel(const uint32_t C, const uint32_t N,
                       T *__restrict__ v_means,          // [C, N, 3]
                       T *__restrict__ v_covars          // [C, N, 3, 3]
 ) {
+
+    // For now we'll upcast float16 and bfloat16 to float32
+    using OpT = typename OpType<T>::type;
+
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
     if (idx >= C * N) {
@@ -44,12 +48,16 @@ persp_proj_bwd_kernel(const uint32_t C, const uint32_t N,
     v_means2d += idx * 2;
     v_covars2d += idx * 4;
 
-    T fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
-    mat3<T> v_covar(0.f);
-    vec3<T> v_mean(0.f);
-    persp_proj_vjp<T>(glm::make_vec3(means), glm::make_mat3(covars), fx, fy, cx, cy, width,
-                      height, glm::transpose(glm::make_mat2(v_covars2d)),
-                      glm::make_vec2(v_means2d), v_mean, v_covar);
+    OpT fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
+    mat3<OpT> v_covar(0.f);
+    vec3<OpT> v_mean(0.f);
+    const vec3<OpT> mean = glm::make_vec3(means);
+    const mat3<OpT> covar = glm::make_mat3(covars);
+    const vec2<OpT> v_mean2d = glm::make_vec2(v_means2d);
+    const mat2<OpT> v_covar2d = glm::make_mat2(v_covars2d);
+    persp_proj_vjp<OpT>(mean, covar, fx, fy, cx, cy, width,
+                        height, glm::transpose(v_covar2d),
+                        v_mean2d, v_mean, v_covar);
 
     // write to outputs: glm is column-major but we want row-major
     PRAGMA_UNROLL
@@ -89,11 +97,13 @@ persp_proj_bwd_tensor(const torch::Tensor &means,  // [C, N, 3]
 
     if (C && N) {
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
-        persp_proj_bwd_kernel<float><<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
-            C, N, means.data_ptr<float>(), covars.data_ptr<float>(),
-            Ks.data_ptr<float>(), width, height, v_means2d.data_ptr<float>(),
-            v_covars2d.data_ptr<float>(), v_means.data_ptr<float>(),
-            v_covars.data_ptr<float>());
+        AT_DISPATCH_FLOATING_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16, v_means.scalar_type(), "persp_proj_bwd", [&]() {
+            persp_proj_bwd_kernel<scalar_t><<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
+                C, N, means.data_ptr<scalar_t>(), covars.data_ptr<scalar_t>(),
+                Ks.data_ptr<scalar_t>(), width, height, v_means2d.data_ptr<scalar_t>(),
+                v_covars2d.data_ptr<scalar_t>(), v_means.data_ptr<scalar_t>(),
+                v_covars.data_ptr<scalar_t>());
+        });
     }
     return std::make_tuple(v_means, v_covars);
 }
