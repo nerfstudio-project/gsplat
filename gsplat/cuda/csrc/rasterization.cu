@@ -1422,7 +1422,7 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
                 // in nerfacc, loss_bi_0 = weights * t_mids * exclusive_sum(weights)
                 const float distort_bi_0 = vis * depth * (1.0f - T);
                 // in nerfacc, loss_bi_1 = weights * exclusive_sum(weights * t_mids)
-                const float distort_bi_1 = vis * acuum_vis_depth;
+                const float distort_bi_1 = vis * accum_vis_depth;
                 distort += 2.0f * (distort_bi_0 - distort_bi_1);
                 accum_vis_depth += vis * depth;
             }
@@ -1452,7 +1452,7 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
         // index in bin of last gaussian in this pixel
         last_ids[pix_id] = static_cast<int32_t>(cur_idx);
         if (render_distloss != nullptr) {
-            reder_distloss[pix_id] = distort;
+            render_distloss[pix_id] = distort;
         }
     }
 }
@@ -1924,6 +1924,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
     const int32_t *__restrict__ tile_offsets,
     const int32_t *__restrict__ flatten_ids,
     // fwd outputs
+    const float *__restrict__ render_colors,
     const float *__restrict__ render_alphas,
     const int32_t *__restrict__ last_ids,
     // grad outputs
@@ -2011,7 +2012,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
 
     // prepare for distortion
     float v_distort = 0.f;
-    float accum_d, acuum_w;
+    float accum_d, accum_w;
     float accum_d_buffer, accum_w_buffer, distort_buffer;
     if (v_render_distloss != nullptr) {
         v_distort = v_render_distloss[pix_id];
@@ -2317,6 +2318,7 @@ rasterize_to_pixels_bwd_2dgs_tensor(
     const torch::Tensor &tile_offsets,
     const torch::Tensor &flatten_ids,
     // forward outputs
+    const torch::Tensor &render_colors,
     const torch::Tensor &render_alphas,
     const torch::Tensor &last_ids,
     // gradients of outputs
@@ -2383,7 +2385,8 @@ rasterize_to_pixels_bwd_2dgs_tensor(
                 (float2 *)densifications.data_ptr<float>(),
                 image_width, image_height, tile_size, tile_width, tile_height,
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                render_colors.data_ptr<float>(), render_alphas.data_ptr<float>(), 
+                last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
                 v_render_normals.data_ptr<float>(), v_render_distloss.data_ptr<float>(),
                 absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
@@ -2403,9 +2406,10 @@ rasterize_to_pixels_bwd_2dgs_tensor(
                 (float2 *)densifications.data_ptr<float>(),
                 image_width, image_height, tile_size, tile_width, tile_height,
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                render_colors.data_ptr<float>(), render_alphas.data_ptr<float>(), 
+                last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                v_render_normals.data_ptr<float>(), v_render_distloss.has_value(),
+                v_render_normals.data_ptr<float>(), v_render_distloss.data_ptr<float>(),
                 absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
                 (float2 *)v_means2d.data_ptr<float>(),
                 v_ray_transformations.data_ptr<float>(), v_colors.data_ptr<float>(),
@@ -2423,7 +2427,8 @@ rasterize_to_pixels_bwd_2dgs_tensor(
                 (float2 *)densifications.data_ptr<float>(),
                 image_width, image_height, tile_size, tile_width, tile_height,
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                render_colors.data_ptr<float>(), render_alphas.data_ptr<float>(), 
+                last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
                 v_render_normals.data_ptr<float>(), v_render_distloss.data_ptr<float>(),
                 absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
@@ -2443,7 +2448,8 @@ rasterize_to_pixels_bwd_2dgs_tensor(
                 (float2 *)densifications.data_ptr<float>(),
                 image_width, image_height, tile_size, tile_width, tile_height,
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                render_colors.data_ptr<float>(), render_alphas.data_ptr<float>(), 
+                last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
                 v_render_normals.data_ptr<float>(), v_render_distloss.data_ptr<float>(),
                 absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
@@ -2463,7 +2469,8 @@ rasterize_to_pixels_bwd_2dgs_tensor(
                 (float2 *)densifications.data_ptr<float>(),
                 image_width, image_height, tile_size, tile_width, tile_height,
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                render_colors.data_ptr<float>(), render_alphas.data_ptr<float>(), 
+                last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
                 v_render_normals.data_ptr<float>(), v_render_distloss.data_ptr<float>(),
                 absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
@@ -2483,7 +2490,8 @@ rasterize_to_pixels_bwd_2dgs_tensor(
                 (float2 *)densifications.data_ptr<float>(),
                 image_width, image_height, tile_size, tile_width, tile_height,
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                render_colors.data_ptr<float>(), render_alphas.data_ptr<float>(), 
+                last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
                 v_render_normals.data_ptr<float>(), v_render_distloss.data_ptr<float>(),
                 absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,
@@ -2503,7 +2511,8 @@ rasterize_to_pixels_bwd_2dgs_tensor(
                 (float2 *)densifications.data_ptr<float>(),
                 image_width, image_height, tile_size, tile_width, tile_height,
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+                render_colors.data_ptr<float>(), render_alphas.data_ptr<float>(), 
+                last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
                 v_render_normals.data_ptr<float>(), v_render_distloss.data_ptr<float>(),
                 absgrad ? (float2 *)v_means2d_abs.data_ptr<float>() : nullptr,

@@ -875,7 +875,7 @@ class Runner:
 
             torch.cuda.synchronize()
             tic = time.time()
-            colors, _, render_normals, render_normals_from_depth, _ = self.rasterize_splats(
+            colors, _, render_normals, render_normals_from_depth, info = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -908,6 +908,19 @@ class Runner:
             normals_from_depth_output = (render_normals_from_depth * 255).astype(np.uint8)
             imageio.imwrite(
                 f"{self.render_dir}/val_{i:04d}_normals_from_depth_{step}.png", normals_from_depth_output
+            )
+
+            # write distortions
+            from utils import colormap
+            render_dist = info["render_distloss"]
+            dist_max = torch.max(render_dist)
+            dist_min = torch.min(render_dist)
+            render_dist = (render_dist - dist_min) / (dist_max - dist_min)
+            # import pdb
+            # pdb.set_trace()
+            render_dist = colormap(render_dist.cpu().numpy()[0]).permute((1, 2, 0)).numpy().astype(np.uint8)
+            imageio.imwrite(
+                f"{self.render_dir}/val_{i:04d}_distortions_{step}.png", render_dist
             )
 
             pixels = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]

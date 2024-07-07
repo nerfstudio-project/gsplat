@@ -324,6 +324,7 @@ rasterize_to_pixels_bwd_2dgs_tensor(
     const torch::Tensor &tile_offsets,
     const torch::Tensor &flatten_ids,
     // forward outputs
+    const torch::Tensor &render_colors,
     const torch::Tensor &render_alphas,
     const torch::Tensor &last_ids,
     // gradients of outptus

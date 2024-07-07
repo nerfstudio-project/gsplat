@@ -1574,7 +1574,6 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             tile_size,
             isect_offsets,
             flatten_ids,
-            distloss,
         )
 
         ctx.save_for_backward(
@@ -1587,6 +1586,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             densifications,
             isect_offsets,
             flatten_ids,
+            render_colors,
             render_alphas,
             last_ids,
         )
@@ -1619,6 +1619,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             densifications,
             isect_offsets,
             flatten_ids,
+            render_colors,
             render_alphas,
             last_ids,
         ) = ctx.saved_tensors
@@ -1654,6 +1655,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             tile_size,
             isect_offsets,
             flatten_ids,
+            render_colors,
             render_alphas,
             last_ids,
             v_render_colors.contiguous(),
@@ -1683,6 +1685,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             v_normals,
             v_backgrounds,
             v_densifications,
+            None,
             None,
             None,
             None,
