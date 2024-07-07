@@ -20,58 +20,55 @@ inline __device__ void warpSum(T *val, WarpT &warp) {
     }
 }
 
-template <class WarpT, class ScalarT> inline __device__ void warpSum(typename Float3<ScalarT>::type &val, WarpT &warp) {
-    val.x = cg::reduce(warp, val.x, cg::plus<ScalarT>());
-    val.y = cg::reduce(warp, val.y, cg::plus<ScalarT>());
-    val.z = cg::reduce(warp, val.z, cg::plus<ScalarT>());
-}
-
-template <class WarpT, class ScalarT> inline __device__ void warpSum(typename Float2<ScalarT>::type &val, WarpT &warp) {
-    val.x = cg::reduce(warp, val.x, cg::plus<ScalarT>());
-    val.y = cg::reduce(warp, val.y, cg::plus<ScalarT>());
-}
-
-template <class WarpT, class ScalarT> inline __device__ void warpSum(ScalarT &val, WarpT &warp) {
+template <class WarpT, class ScalarT>
+inline __device__ void warpSum(ScalarT &val, WarpT &warp) {
     val = cg::reduce(warp, val, cg::plus<ScalarT>());
 }
 
-template <class WarpT, class ScalarT> inline __device__ void warpSum(vec4<ScalarT> &val, WarpT &warp) {
+template <class WarpT, class ScalarT>
+inline __device__ void warpSum(vec4<ScalarT> &val, WarpT &warp) {
     val.x = cg::reduce(warp, val.x, cg::plus<ScalarT>());
     val.y = cg::reduce(warp, val.y, cg::plus<ScalarT>());
     val.z = cg::reduce(warp, val.z, cg::plus<ScalarT>());
     val.w = cg::reduce(warp, val.w, cg::plus<ScalarT>());
 }
 
-template <class WarpT, class ScalarT> inline __device__ void warpSum(vec3<ScalarT> &val, WarpT &warp) {
+template <class WarpT, class ScalarT>
+inline __device__ void warpSum(vec3<ScalarT> &val, WarpT &warp) {
     val.x = cg::reduce(warp, val.x, cg::plus<ScalarT>());
     val.y = cg::reduce(warp, val.y, cg::plus<ScalarT>());
     val.z = cg::reduce(warp, val.z, cg::plus<ScalarT>());
 }
 
-template <class WarpT, class ScalarT> inline __device__ void warpSum(vec2<ScalarT> &val, WarpT &warp) {
+template <class WarpT, class ScalarT>
+inline __device__ void warpSum(vec2<ScalarT> &val, WarpT &warp) {
     val.x = cg::reduce(warp, val.x, cg::plus<ScalarT>());
     val.y = cg::reduce(warp, val.y, cg::plus<ScalarT>());
 }
 
-template <class WarpT, class ScalarT> inline __device__ void warpSum(mat4<ScalarT> &val, WarpT &warp) {
+template <class WarpT, class ScalarT>
+inline __device__ void warpSum(mat4<ScalarT> &val, WarpT &warp) {
     warpSum(val[0], warp);
     warpSum(val[1], warp);
     warpSum(val[2], warp);
     warpSum(val[3], warp);
 }
 
-template <class WarpT, class ScalarT> inline __device__ void warpSum(mat3<ScalarT> &val, WarpT &warp) {
+template <class WarpT, class ScalarT>
+inline __device__ void warpSum(mat3<ScalarT> &val, WarpT &warp) {
     warpSum(val[0], warp);
     warpSum(val[1], warp);
     warpSum(val[2], warp);
 }
 
-template <class WarpT, class ScalarT> inline __device__ void warpSum(mat2<ScalarT> &val, WarpT &warp) {
+template <class WarpT, class ScalarT>
+inline __device__ void warpSum(mat2<ScalarT> &val, WarpT &warp) {
     warpSum(val[0], warp);
     warpSum(val[1], warp);
 }
 
-template <class WarpT, class ScalarT> inline __device__ void warpMax(ScalarT &val, WarpT &warp) {
+template <class WarpT, class ScalarT>
+inline __device__ void warpMax(ScalarT &val, WarpT &warp) {
     val = cg::reduce(warp, val, cg::greater<ScalarT>());
 }
 

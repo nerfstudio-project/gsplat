@@ -1,5 +1,6 @@
 #include "bindings.h"
 #include "helpers.cuh"
+#include "types.cuh"
 #include <cooperative_groups.h>
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>
@@ -21,9 +22,9 @@ __global__ void isect_tiles(
     const int64_t *__restrict__ camera_ids,   // [nnz] optional
     const int64_t *__restrict__ gaussian_ids, // [nnz] optional
     // data
-    const typename Float2<T>::type *__restrict__ means2d,              // [C, N, 2] or [nnz, 2]
+    const vec2<T> *__restrict__ means2d,             // [C, N, 2] or [nnz, 2]
     const int32_t *__restrict__ radii,               // [C, N] or [nnz]
-    const T *__restrict__ depths,                // [C, N] or [nnz]
+    const T *__restrict__ depths,                    // [C, N] or [nnz]
     const int64_t *__restrict__ cum_tiles_per_gauss, // [C, N] or [nnz]
     const uint32_t tile_size, const uint32_t tile_width, const uint32_t tile_height,
     const uint32_t tile_n_bits,
@@ -131,8 +132,8 @@ isect_tiles_tensor(const torch::Tensor &means2d, // [C, N, 2] or [nnz, 2]
     // uint32_t cam_n_bits = std::bit_width(C);
     uint32_t tile_n_bits = (uint32_t)floor(log2(n_tiles)) + 1;
     uint32_t cam_n_bits = (uint32_t)floor(log2(C)) + 1;
-    // the first 32 bits are used for the camera id and tile id altogether, so check if
-    // we have enough bits for them.
+    // the first 32 bits are used for the camera id and tile id altogether, so
+    // check if we have enough bits for them.
     assert(tile_n_bits + cam_n_bits <= 32);
 
     // first pass: compute number of tiles per gaussian
@@ -145,9 +146,10 @@ isect_tiles_tensor(const torch::Tensor &means2d, // [C, N, 2] or [nnz, 2]
         isect_tiles<<<(total_elems + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
                       stream>>>(
             packed, C, N, nnz, camera_ids_ptr, gaussian_ids_ptr,
-            (float2 *)means2d.data_ptr<float>(), radii.data_ptr<int32_t>(),
-            depths.data_ptr<float>(), nullptr, tile_size, tile_width, tile_height,
-            tile_n_bits, tiles_per_gauss.data_ptr<int32_t>(), nullptr, nullptr);
+            reinterpret_cast<vec2<float> *>(means2d.data_ptr<float>()),
+            radii.data_ptr<int32_t>(), depths.data_ptr<float>(), nullptr, tile_size,
+            tile_width, tile_height, tile_n_bits, tiles_per_gauss.data_ptr<int32_t>(),
+            nullptr, nullptr);
         cum_tiles_per_gauss = torch::cumsum(tiles_per_gauss.view({-1}), 0);
         n_isects = cum_tiles_per_gauss[-1].item<int64_t>();
     } else {
@@ -163,10 +165,11 @@ isect_tiles_tensor(const torch::Tensor &means2d, // [C, N, 2] or [nnz, 2]
         isect_tiles<<<(total_elems + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
                       stream>>>(
             packed, C, N, nnz, camera_ids_ptr, gaussian_ids_ptr,
-            (float2 *)means2d.data_ptr<float>(), radii.data_ptr<int32_t>(),
-            depths.data_ptr<float>(), cum_tiles_per_gauss.data_ptr<int64_t>(),
-            tile_size, tile_width, tile_height, tile_n_bits, nullptr,
-            isect_ids.data_ptr<int64_t>(), flatten_ids.data_ptr<int32_t>());
+            reinterpret_cast<vec2<float> *>(means2d.data_ptr<float>()),
+            radii.data_ptr<int32_t>(), depths.data_ptr<float>(),
+            cum_tiles_per_gauss.data_ptr<int64_t>(), tile_size, tile_width, tile_height,
+            tile_n_bits, nullptr, isect_ids.data_ptr<int64_t>(),
+            flatten_ids.data_ptr<int32_t>());
     }
 
     // optionally sort the Gaussians by isect_ids
@@ -199,7 +202,8 @@ isect_tiles_tensor(const torch::Tensor &means2d, // [C, N, 2] or [nnz, 2]
                 break;
             }
             // printf("DoubleBuffer d_keys selector: %d\n", d_keys.selector);
-            // printf("DoubleBuffer d_values selector: %d\n", d_values.selector);
+            // printf("DoubleBuffer d_values selector: %d\n",
+            // d_values.selector);
         } else {
             CUB_WRAPPER(cub::DeviceRadixSort::SortPairs, isect_ids.data_ptr<int64_t>(),
                         isect_ids_sorted.data_ptr<int64_t>(),
@@ -244,8 +248,8 @@ __global__ void isect_offset_encode(const uint32_t n_isects,
     }
 
     if (idx > 0) {
-        // visit the current and previous isect_id and check if the (cid, tile_id)
-        // pair changes.
+        // visit the current and previous isect_id and check if the (cid,
+        // tile_id) pair changes.
         int64_t isect_id_prev = isect_ids[idx - 1] >> 32; // shift out the depth
         if (isect_id_prev == isect_id_curr)
             return;

@@ -1,24 +1,26 @@
 #include "bindings.h"
+#include "types.cuh"
 #include "utils.cuh"
 
 #include <cuda_runtime.h>
 
-// Evaluate spherical harmonics bases at unit direction for high orders using approach
-// described by Efficient Spherical Harmonic Evaluation, Peter-Pike Sloan, JCGT 2013 See
-// https://jcgt.org/published/0002/02/06/ for reference implementation
+// Evaluate spherical harmonics bases at unit direction for high orders using
+// approach described by Efficient Spherical Harmonic Evaluation, Peter-Pike
+// Sloan, JCGT 2013 See https://jcgt.org/published/0002/02/06/ for reference
+// implementation
 template <typename T>
 inline __device__ void
 sh_coeffs_to_color_fast(const uint32_t degree, // degree of SH to be evaluated
                         const uint32_t c,      // color channel
-                        const typename Float3<T>::type &dir,     // [3]
-                        const T *coeffs,   // [K, 3]
+                        const vec3<T> &dir,    // [3]
+                        const T *coeffs,       // [K, 3]
                         // output
                         T *colors // [3]
 ) {
     T result = 0.2820947917738781f * coeffs[c];
     if (degree >= 1) {
-        // Normally rsqrt is faster than sqrt, but --use_fast_math will optimize sqrt
-        // on single precision, so we use sqrt here.
+        // Normally rsqrt is faster than sqrt, but --use_fast_math will optimize
+        // sqrt on single precision, so we use sqrt here.
         T inorm = rsqrtf(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
         T x = dir.x * inorm;
         T y = dir.y * inorm;
@@ -93,12 +95,12 @@ template <typename T>
 inline __device__ void
 sh_coeffs_to_color_fast_vjp(const uint32_t degree, // degree of SH to be evaluated
                             const uint32_t c,      // color channel
-                            const typename Float3<T>::type &dir,     // [3]
-                            const T *coeffs,   // [K, 3]
-                            const T *v_colors, // [3]
+                            const vec3<T> &dir,    // [3]
+                            const T *coeffs,       // [K, 3]
+                            const T *v_colors,     // [3]
                             // output
-                            T *v_coeffs, // [K, 3]
-                            typename Float3<T>::type *v_dir    // [3] optional
+                            T *v_coeffs,   // [K, 3]
+                            vec3<T> *v_dir // [3] optional
 ) {
     T v_colors_local = v_colors[c];
 
