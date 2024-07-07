@@ -140,6 +140,11 @@ class Config:
     # Weight for normal loss
     normal_lambda: float = 1e-2
 
+    # Distortion loss. (experimental)
+    dist_loss: bool = False
+    # Weight for distortion loss
+    dist_lambda: float = 1e-3
+
     # Dump information to tensorboard every this steps
     tb_every: int = 100
     # Save training images to tensorboard
@@ -489,6 +494,7 @@ class Runner:
                 far_plane=cfg.far_plane,
                 image_ids=image_ids,
                 render_mode="RGB+ED" if cfg.depth_loss else "RGB+D",
+                distloss=self.cfg.dist_loss,
             )
             if renders.shape[-1] == 4:
                 colors, depths = renders[..., 0:3], renders[..., 3:4]
@@ -529,21 +535,24 @@ class Runner:
             
             if cfg.normal_loss:
                 # normal consistency loss
-                # import pdb
-                # pdb.set_trace()
                 render_normals = render_normals.squeeze(0).permute((2, 0, 1))
                 render_normals_from_depth = render_normals_from_depth.permute((2, 0, 1))
                 normal_error = (1 - (render_normals * render_normals_from_depth).sum(dim=0))[None]
                 normal_loss = cfg.normal_lambda * normal_error.mean()
-                # import pdb
-                # pdb.set_trace()
                 loss += normal_loss
+
+            if cfg.dist_loss:
+                distloss = info["render_distloss"].mean()
+                loss += distloss * cfg.dist_lambda
+
 
             loss.backward()
             
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
             if cfg.depth_loss:
                 desc += f"depth loss={depthloss.item():.6f}| "
+            if cfg.dist_loss:
+                desc += f"dist loss={distloss.item():.6f}| "
             if cfg.pose_opt and cfg.pose_noise:
                 # monitor the pose error if we inject noise
                 pose_err = F.l1_loss(camtoworlds_gt, camtoworlds)
@@ -561,6 +570,8 @@ class Runner:
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
+                if cfg.dist_loss:
+                    self.writer.add_scalar("train/distloss", distloss.item(), step)
                 if cfg.tb_save_image:
                     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
                     canvas = canvas.reshape(-1, *canvas.shape[2:])
@@ -858,15 +869,6 @@ class Runner:
         metrics = {"psnr": [], "ssim": [], "lpips": []}
         for i, data in enumerate(valloader):
             camtoworlds = data["camtoworld"].to(device)
-            # if i == 14:
-            #     # import pdb
-            #     # pdb.set_trace()
-            #     camtoworlds = torch.Tensor([[-0.71543751,  0.28910808, -0.63605478,  0.63053711],
-            #                                 [ 0.69861815,  0.30780676, -0.64590067,  0.57568061],
-            #                                 [ 0.00904686, -0.90646098, -0.42219266,  0.65942747],
-            #                                 [ 0.        ,  0.        ,  0.        ,  1.        ]]).to("cuda")
-            #     camtoworlds = camtoworlds.unsqueeze(0)
-            # print(camtoworlds)
             Ks = data["K"].to(device)
             pixels = data["image"].to(device) / 255.0
             height, width = pixels.shape[1:3]

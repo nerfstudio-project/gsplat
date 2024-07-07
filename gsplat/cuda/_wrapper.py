@@ -1415,6 +1415,7 @@ def rasterize_to_pixels_2dgs(
     backgrounds: Optional[Tensor] = None,
     packed: bool = False,
     absgrad: bool = False,
+    distloss: bool = False,
 ) -> Tuple[Tensor, Tensor]:
     C = isect_offsets.size(0)
     device = means2d.device
@@ -1467,7 +1468,7 @@ def rasterize_to_pixels_2dgs(
 
     # densifications = torch.zeros_like(means2d)
     # pdb.set_trace()
-    render_colors, render_alphas, render_normals = _RasterizeToPixels2DGS.apply(
+    render_colors, render_alphas, render_normals, render_distloss = _RasterizeToPixels2DGS.apply(
         means2d.contiguous(),
         ray_transformations.contiguous(),
         colors.contiguous(),
@@ -1481,13 +1482,14 @@ def rasterize_to_pixels_2dgs(
         isect_offsets.contiguous(),
         flatten_ids.contiguous(),
         absgrad,
+        distloss,
     )
 
     if padded_channels > 0:
         render_colors = render_colors[..., :-padded_channels]
 
     # pdb.set_trace()
-    return render_colors, render_alphas, render_normals
+    return render_colors, render_alphas, render_normals, render_distloss
 
 
 @torch.no_grad()
@@ -1556,8 +1558,9 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         isect_offsets: Tensor,
         flatten_ids: Tensor,
         absgrad: bool,
+        distloss: bool,
     ) -> Tuple[Tensor, Tensor]:
-        render_colors, render_alphas, render_normals, last_ids = _make_lazy_cuda_func(
+        render_colors, render_alphas, render_normals, render_distloss, last_ids = _make_lazy_cuda_func(
             "rasterize_to_pixels_fwd_2dgs"
         )(
             means2d,
@@ -1571,6 +1574,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             tile_size,
             isect_offsets,
             flatten_ids,
+            distloss,
         )
 
         ctx.save_for_backward(
@@ -1590,12 +1594,12 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         ctx.height = height
         ctx.tile_size = tile_size
         ctx.absgrad = absgrad
-
+        ctx.distloss = distloss
 
         
         # doubel to float
         render_alphas = render_alphas.float()
-        return render_colors, render_alphas, render_normals
+        return render_colors, render_alphas, render_normals, render_distloss
 
     @staticmethod
     def backward(
@@ -1603,6 +1607,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         v_render_colors: Tensor,
         v_render_alphas: Tensor,
         v_render_normals: Tensor,
+        v_render_distloss: Tensor,
     ):
         (
             means2d,
@@ -1621,6 +1626,12 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         height = ctx.height
         tile_size = ctx.tile_size
         absgrad = ctx.absgrad
+        distloss = ctx.distloss
+        if distloss: 
+            assert v_render_distloss is not None, "v_render_distloss should bot be None"
+            v_render_distloss = v_render_distloss.contiguous()
+        else:
+            assert v_render_distloss is None, "v_render_distloss should be None"
 
         (
             v_means2d_abs,
@@ -1648,6 +1659,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             v_render_colors.contiguous(),
             v_render_alphas.contiguous(),
             v_render_normals.contiguous(),
+            v_render_distloss,
             absgrad,
         )
 

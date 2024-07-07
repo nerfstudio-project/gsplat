@@ -239,7 +239,7 @@ fully_fused_projection_packed_fwd_2dgs_tensor(
     const float near_plane, const float far_plane, const float radius_clip
 );
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_2dgs_tensor(
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_2dgs_tensor(
     // Gaussian parameters
     const torch::Tensor &means2d,
     const torch::Tensor &colors,
@@ -330,6 +330,7 @@ rasterize_to_pixels_bwd_2dgs_tensor(
     const torch::Tensor &v_render_colors,
     const torch::Tensor &v_render_alphas,
     const torch::Tensor &v_render_normals,
+    const torch::Tensor &v_render_distloss,
     // options
     bool absgrad
 );

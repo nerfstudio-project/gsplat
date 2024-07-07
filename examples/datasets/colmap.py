@@ -166,7 +166,7 @@ class Parser:
         }
 
         # Normalize the world space.
-        if normalize and False:
+        if normalize:
             T1 = similarity_from_cameras(camtoworlds)
             camtoworlds = transform_cameras(T1, camtoworlds)
             points = transform_points(T1, points)

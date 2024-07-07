@@ -109,7 +109,7 @@ def rasterization(
         `meta["means2d"].absgrad`. This is an implementation of the paper
         `AbsGS: Recovering Fine Details for 3D Gaussian Splatting <https://arxiv.org/abs/2404.10484>`_,
         which is shown to be more effective for splitting Gaussians during training.
-
+            
     .. warning::
         This function is currently not differentiable w.r.t. the camera intrinsics `Ks`.
 
@@ -199,7 +199,7 @@ def rasterization(
     assert viewmats.shape == (C, 4, 4), viewmats.shape
     assert Ks.shape == (C, 3, 3), Ks.shape
     assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
-
+  
     if sh_degree is None:
         # treat colors as post-activation values
         # colors should be in shape [N, D] or (C, N, D) (silently support)
@@ -596,6 +596,7 @@ def rasterization_2dgs(
     sparse_grad: bool = False,
     absgrad: bool = False,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
+    distloss: bool = False,
 ) -> Tuple[Tensor, Tensor, Dict]:
 
     N = means.shape[0]
@@ -607,6 +608,13 @@ def rasterization_2dgs(
     assert viewmats.shape == (C, 4, 4), viewmats.shape
     assert Ks.shape == (C, 3, 3), Ks.shape
     assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
+    if distloss:
+        assert render_mode in [
+            "D",
+            "ED",
+            "RGB+D",
+            "RGB+ED",
+        ], f"distloss requires depth rendering, render_mode should be D, ED, RGB+D, RGB+ED, but got {render_mode}"
 
     if sh_degree is None:
         # treat colors as post-activation values
@@ -707,7 +715,7 @@ def rasterization_2dgs(
         )
         + 0
     )
-    render_colors, render_alphas, render_normals = rasterize_to_pixels_2dgs(
+    render_colors, render_alphas, render_normals, render_distloss = rasterize_to_pixels_2dgs(
         means2d,
         densifications,
         ray_transformations,
@@ -722,6 +730,7 @@ def rasterization_2dgs(
         backgrounds=backgrounds,
         packed=packed,
         absgrad=absgrad,
+        distloss=distloss,
     )
     render_normals_from_depth = None
     if render_mode in ["ED", "RGB+ED"]:
@@ -762,6 +771,7 @@ def rasterization_2dgs(
         "width": width,
         "height": height,
         "tile_size": tile_size,
+        "render_distloss": render_distloss,
     }
     
     # import pdb
