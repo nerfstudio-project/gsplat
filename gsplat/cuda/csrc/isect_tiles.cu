@@ -33,7 +33,7 @@ __global__ void isect_tiles(
     int32_t *__restrict__ flatten_ids      // [n_isects]
 ) {
     // For now we'll upcast float16 and bfloat16 to float32
-    using T = typename OpType<T>::type;
+    using OpT = typename OpType<T>::type;
     
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
