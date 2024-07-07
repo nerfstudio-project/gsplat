@@ -64,13 +64,13 @@ persp_proj_bwd_kernel(const uint32_t C, const uint32_t N,
     for (uint32_t i = 0; i < 3; i++) { // rows
         PRAGMA_UNROLL
         for (uint32_t j = 0; j < 3; j++) { // cols
-            v_covars[i * 3 + j] = v_covar[j][i];
+            v_covars[i * 3 + j] = T(v_covar[j][i]);
         }
     }
 
     PRAGMA_UNROLL
     for (uint32_t i = 0; i < 3; i++) {
-        v_means[i] = v_mean[i];
+        v_means[i] = T(v_mean[i]);
     }
 }
 
