@@ -28,6 +28,10 @@ __global__ void quat_scale_to_covar_preci_bwd_kernel(
     T *__restrict__ v_scales, // [N, 3]
     T *__restrict__ v_quats   // [N, 4]
 ) {
+
+    // For now we'll upcast float16 and bfloat16 to float32
+    using OpT = typename OpType<T>::type;
+
     // parallelize over N.
     uint32_t idx = cg::this_grid().thread_rank();
     if (idx >= N) {
@@ -38,49 +42,51 @@ __global__ void quat_scale_to_covar_preci_bwd_kernel(
     v_scales += idx * 3;
     v_quats += idx * 4;
 
-    vec4<T> quat = glm::make_vec4(quats + idx * 4);
-    vec3<T> scale = glm::make_vec3(scales + idx * 3);
-    mat3<T> rotmat = quat_to_rotmat<T>(quat);
+    vec4<OpT> quat = glm::make_vec4(quats + idx * 4);
+    vec3<OpT> scale = glm::make_vec3(scales + idx * 3);
+    mat3<OpT> rotmat = quat_to_rotmat<OpT>(quat);
 
-    vec4<T> v_quat(0.f);
-    vec3<T> v_scale(0.f);
+    vec4<OpT> v_quat(0.f);
+    vec3<OpT> v_scale(0.f);
     if (v_covars != nullptr) {
         // glm is column-major, input is row-major
-        mat3<T> v_covar;
+        mat3<OpT> v_covar;
         if (triu) {
             v_covars += idx * 6;
-            v_covar = mat3<T>(v_covars[0], v_covars[1] * .5f, v_covars[2] * .5f,
-                              v_covars[1] * .5f, v_covars[3], v_covars[4] * .5f,
-                              v_covars[2] * .5f, v_covars[4] * .5f, v_covars[5]);
+            v_covar = mat3<OpT>(v_covars[0], v_covars[1] * .5f, v_covars[2] * .5f,
+                                v_covars[1] * .5f, v_covars[3], v_covars[4] * .5f,
+                                v_covars[2] * .5f, v_covars[4] * .5f, v_covars[5]);
         } else {
             v_covars += idx * 9;
-            v_covar = glm::transpose(glm::make_mat3(v_covars));
+            mat3<OpT> v_covar_cast = glm::make_mat3(v_covars);
+            v_covar = glm::transpose(v_covar_cast);
         }
-        quat_scale_to_covar_vjp<T>(quat, scale, rotmat, v_covar, v_quat, v_scale);
+        quat_scale_to_covar_vjp<OpT>(quat, scale, rotmat, v_covar, v_quat, v_scale);
     }
     if (v_precis != nullptr) {
         // glm is column-major, input is row-major
-        mat3<T> v_preci;
+        mat3<OpT> v_preci;
         if (triu) {
             v_precis += idx * 6;
-            v_preci = mat3<T>(v_precis[0], v_precis[1] * .5f, v_precis[2] * .5f,
-                              v_precis[1] * .5f, v_precis[3], v_precis[4] * .5f,
-                              v_precis[2] * .5f, v_precis[4] * .5f, v_precis[5]);
+            v_preci = mat3<OpT>(v_precis[0], v_precis[1] * .5f, v_precis[2] * .5f,
+                                v_precis[1] * .5f, v_precis[3], v_precis[4] * .5f,
+                                v_precis[2] * .5f, v_precis[4] * .5f, v_precis[5]);
         } else {
             v_precis += idx * 9;
-            v_preci = glm::transpose(glm::make_mat3(v_precis));
+            mat3<OpT> v_precis_cast = glm::make_mat3(v_precis);
+            v_preci = glm::transpose(v_precis_cast);
         }
-        quat_scale_to_preci_vjp<T>(quat, scale, rotmat, v_preci, v_quat, v_scale);
+        quat_scale_to_preci_vjp<OpT>(quat, scale, rotmat, v_preci, v_quat, v_scale);
     }
 
     // write out results
     PRAGMA_UNROLL
     for (uint32_t k = 0; k < 3; ++k) {
-        v_scales[k] = v_scale[k];
+        v_scales[k] = T(v_scale[k]);
     }
     PRAGMA_UNROLL
     for (uint32_t k = 0; k < 4; ++k) {
-        v_quats[k] = v_quat[k];
+        v_quats[k] = T(v_quat[k]);
     }
 }
 
@@ -107,11 +113,13 @@ std::tuple<torch::Tensor, torch::Tensor> quat_scale_to_covar_preci_bwd_tensor(
 
     if (N) {
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
-        quat_scale_to_covar_preci_bwd_kernel<float><<<(N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
-            N, quats.data_ptr<float>(), scales.data_ptr<float>(),
-            v_covars.has_value() ? v_covars.value().data_ptr<float>() : nullptr,
-            v_precis.has_value() ? v_precis.value().data_ptr<float>() : nullptr, triu,
-            v_scales.data_ptr<float>(), v_quats.data_ptr<float>());
+        AT_DISPATCH_FLOATING_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16, quats.scalar_type(), "quat_scale_to_covar_preci_bwd", [&]() {
+            quat_scale_to_covar_preci_bwd_kernel<scalar_t><<<(N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
+                N, quats.data_ptr<scalar_t>(), scales.data_ptr<scalar_t>(),
+                v_covars.has_value() ? v_covars.value().data_ptr<scalar_t>() : nullptr,
+                v_precis.has_value() ? v_precis.value().data_ptr<scalar_t>() : nullptr, triu,
+                v_scales.data_ptr<scalar_t>(), v_quats.data_ptr<scalar_t>());
+        });
     }
 
     return std::make_tuple(v_quats, v_scales);
