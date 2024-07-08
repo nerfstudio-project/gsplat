@@ -841,7 +841,7 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
 
 if __name__ == "__main__":
     """
-    
+
     CUDA_VISIBLE_DEVICES=0,2 python simple_trainer_mcmc.py --steps_scaler 0.5 --cap_max 500000
     7k:
     Step:  3499 {'mem': 1.2938737869262695, 'ellipse_time': 153.14019989967346, 'num_GS': 500000}

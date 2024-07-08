@@ -1016,7 +1016,7 @@ if __name__ == "__main__":
     Step:  3499 {'mem': 5.072880268096924, 'ellipse_time': 317.50284695625305, 'num_GS': 2244441}
     Step:  3499 {'mem': 4.873777866363525, 'ellipse_time': 318.75603342056274, 'num_GS': 2135991}
     PSNR: 26.171, SSIM: 0.8280, LPIPS: 0.126 Time: 0.076s/image Number of GS: 2135991
-    
+
     CUDA_VISIBLE_DEVICES=0 python simple_trainer.py --batch_size 2 --steps_scaler 0.5
     Step:  3499 {'mem': 8.903686046600342, 'ellipse_time': 349.8184747695923, 'num_GS': 4434950}
     PSNR: 26.175, SSIM: 0.8296, LPIPS: 0.126 Time: 0.021s/image Number of GS: 4434950
@@ -1026,11 +1026,11 @@ if __name__ == "__main__":
     Step:  1749 {'mem': 3.479849338531494, 'ellipse_time': 228.7728567123413, 'num_GS': 1061422}
     Step:  1749 {'mem': 3.6650757789611816, 'ellipse_time': 228.6867446899414, 'num_GS': 1134071}
     Step:  1749 {'mem': 3.5960493087768555, 'ellipse_time': 228.25761008262634, 'num_GS': 1109247}
-    PSNR: 26.259, SSIM: 0.8314, LPIPS: 0.124 Time: 0.112s/image Number of GS: 1109247  
+    PSNR: 26.259, SSIM: 0.8314, LPIPS: 0.124 Time: 0.112s/image Number of GS: 1109247
 
     CUDA_VISIBLE_DEVICES=5,6 python simple_trainer.py --batch_size 2 --steps_scaler 0.25 --disable_viewer
     <OOM>
-    
+
     CUDA_VISIBLE_DEVICES=7 python simple_trainer.py --batch_size 4 --steps_scaler 0.25 --disable_viewer
     <OOM>
 
