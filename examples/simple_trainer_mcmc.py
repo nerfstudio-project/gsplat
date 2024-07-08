@@ -37,7 +37,7 @@ from simple_trainer import create_splats_with_optimizers
 
 @dataclass
 class Config:
-    # Model type can be 3dgs, 2dgs
+    # Model type can be 3dgs, 3dgs_inria, or 2dgs_inria
     model_type: str = "3dgs"
     # Disable viewer
     disable_viewer: bool = False

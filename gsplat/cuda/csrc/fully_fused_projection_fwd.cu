@@ -47,8 +47,6 @@ fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
     means += gid * 3;
     viewmats += cid * 16;
     Ks += cid * 9;
-    quats += gid * 4;
-    scales += gid * 3;
 
     // glm is column-major but input is row-major
     mat3<T> R = mat3<T>(viewmats[0], viewmats[4], viewmats[8], // 1st column
@@ -67,6 +65,7 @@ fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
 
     // transform Gaussian covariance to camera space
     mat3<T> covar;
+    vec3<T> normal;
     if (covars != nullptr) {
         covars += gid * 6;
         covar = mat3<T>(covars[0], covars[1], covars[2], // 1st column
@@ -74,8 +73,13 @@ fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
                         covars[2], covars[4], covars[5]  // 3rd column
         );
     } else {
+        quats += gid * 4;
+        scales += gid * 3;
         // compute from quaternions and scales
         quat_scale_to_covar_preci<T>(glm::make_vec4(quats), glm::make_vec3(scales), &covar, nullptr);
+
+        glm::mat3 rotmat = quat_to_rotmat(glm::make_vec4(quats));
+        normal = rotmat[2];
     }
     mat3<T> covar_c;
     covar_world_to_cam(R, covar, covar_c);
@@ -116,16 +120,14 @@ fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
         return;
     }
 
-    glm::mat3 rotmat = quat_to_rotmat(glm::make_vec4(quats));
-
     // write to outputs
     radii[idx] = (int32_t)radius;
     means2d[idx * 2] = mean2d.x;
     means2d[idx * 2 + 1] = mean2d.y;
     depths[idx] = mean_c.z;
-    normals[idx * 3] = rotmat[2].x;
-    normals[idx * 3 + 1] = rotmat[2].y;
-    normals[idx * 3 + 2] = rotmat[2].z;
+    normals[idx * 3] = normal.x;
+    normals[idx * 3 + 1] = normal.y;
+    normals[idx * 3 + 2] = normal.z;
     conics[idx * 3] = covar2d_inv[0][0];
     conics[idx * 3 + 1] = covar2d_inv[0][1];
     conics[idx * 3 + 2] = covar2d_inv[1][1];
