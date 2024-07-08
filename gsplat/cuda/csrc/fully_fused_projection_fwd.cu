@@ -73,9 +73,9 @@ fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
                         covars[2], covars[4], covars[5]  // 3rd column
         );
     } else {
+        // compute from quaternions and scales
         quats += gid * 4;
         scales += gid * 3;
-        // compute from quaternions and scales
         quat_scale_to_covar_preci<T>(glm::make_vec4(quats), glm::make_vec3(scales), &covar, nullptr);
 
         glm::mat3 rotmat = quat_to_rotmat(glm::make_vec4(quats));

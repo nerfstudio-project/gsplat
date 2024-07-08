@@ -106,7 +106,6 @@ inline __device__ void quat_scale_to_covar_vjp(
     v_scale[2] += R[2][0] * v_M[2][0] + R[2][1] * v_M[2][1] + R[2][2] * v_M[2][2];
 }
 
-
 template <typename T>
 inline __device__ void quat_scale_to_preci_vjp(
     // fwd inputs
