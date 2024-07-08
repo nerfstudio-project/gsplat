@@ -32,7 +32,6 @@ from gsplat.rendering import (
 )
 from gsplat.relocation import compute_relocation
 from gsplat.normal_utils import depth_to_normal
-from gsplat.color_utils import apply_float_colormap
 from simple_trainer import create_splats_with_optimizers
 
 
@@ -152,13 +151,6 @@ class Config:
     normal_consistency_lambda: float = 0.05
     # Start applying normal consistency loss after this iteration
     normal_consistency_start_iter: int = 7000
-
-    # Distoration loss. (experimental)
-    dist_loss: bool = False
-    # Weight for distortion loss
-    dist_lambda: float = 100
-    # Start applying distortion loss after this iteration
-    dist_start_iter: int = 3000
 
     # Dump information to tensorboard every this steps
     tb_every: int = 100
@@ -484,11 +476,6 @@ class Runner:
                 if step > cfg.normal_consistency_start_iter:
                     loss += normalconsistencyloss * cfg.normal_consistency_lambda
 
-            if cfg.dist_loss:
-                distloss = info["render_distloss"].mean()
-                if step > cfg.dist_start_iter:
-                    loss += distloss * cfg.dist_lambda
-
             loss.backward()
 
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
@@ -517,8 +504,6 @@ class Runner:
                         normalconsistencyloss.item(),
                         step,
                     )
-                if cfg.dist_loss:
-                    self.writer.add_scalar("train/distloss", distloss.item(), step)
                 if cfg.tb_save_image:
                     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
                     canvas = canvas.reshape(-1, *canvas.shape[2:])
@@ -753,7 +738,7 @@ class Runner:
             if cfg.depth_loss:
                 depths = renders[..., -1:]
                 depths = (depths - depths.min()) / (depths.max() - depths.min())
-                canvas_list.append(apply_float_colormap(1 - depths, colormap="turbo"))
+                canvas_list.append(depths)
             if cfg.normal_consistency_loss:
                 depths = renders[..., -1:]
                 normals = renders[..., -4:-1]
@@ -767,14 +752,6 @@ class Runner:
                 normals_surf = normals_surf * (alphas).detach()
                 canvas_list.extend([normals * 0.5 + 0.5])
                 canvas_list.extend([normals_surf * 0.5 + 0.5])
-            if cfg.dist_loss:
-                distloss = info["render_distloss"]
-                distloss = (distloss - distloss.min()) / (
-                    distloss.max() - distloss.min()
-                )
-                canvas_list.append(
-                    apply_float_colormap(distloss, colormap="cmr.voltage")
-                )
 
             # write images
             canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()
@@ -856,7 +833,7 @@ class Runner:
             if cfg.depth_loss:
                 depths = renders[..., -1:]
                 depths = (depths - depths.min()) / (depths.max() - depths.min())
-                canvas_list.append(apply_float_colormap(1 - depths, colormap="turbo"))
+                canvas_list.append(depths)
             if cfg.normal_consistency_loss:
                 depths = renders[..., -1:]
                 normals = renders[..., -4:-1]
@@ -870,14 +847,6 @@ class Runner:
                 normals_surf = normals_surf * (alphas).detach()
                 canvas_list.extend([normals * 0.5 + 0.5])
                 canvas_list.extend([normals_surf * 0.5 + 0.5])
-            if cfg.dist_loss:
-                distloss = info["render_distloss"]
-                distloss = (distloss - distloss.min()) / (
-                    distloss.max() - distloss.min()
-                )
-                canvas_list.append(
-                    apply_float_colormap(distloss, colormap="cmr.voltage")
-                )
 
             # write images
             canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()
