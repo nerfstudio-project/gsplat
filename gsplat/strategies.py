@@ -1,22 +1,26 @@
 from abc import ABC, abstractmethod
-from typing import List, Optional, Any, DefaultDict, Dict
-from config import Config
-import torch
-from torch import Tensor
-import torch.nn.functional as F
-import gsplat
-
-from examples.utils import (
-    normalized_quat_to_rotmat,
-)
-
-from abc import ABC, abstractmethod
-from gsplat.gaussians import Gaussians
 from collections import defaultdict
+from typing import Any, DefaultDict, Dict, List, Optional
+
+import torch
+import torch.nn.functional as F
+from config import Config
+from torch import Tensor
+
+import gsplat
+from examples.utils import normalized_quat_to_rotmat
+from gsplat.gaussians import Gaussians
+
 
 class Strategy(ABC):
     @abstractmethod
-    def __init__(self, gaussians: Gaussians, optimizers: List[torch.optim.Optimizer], schedulers: List[torch.optim.lr_scheduler._LRScheduler], **kwargs):
+    def __init__(
+        self,
+        gaussians: Gaussians,
+        optimizers: List[torch.optim.Optimizer],
+        schedulers: List[torch.optim.lr_scheduler._LRScheduler],
+        **kwargs,
+    ):
         pass
 
     @abstractmethod
@@ -27,6 +31,7 @@ class Strategy(ABC):
     def step_post_backward(self, info: Dict[str, Any]):
         pass
 
+
 class SplatfactoStrategy(Strategy):
     def __init__(
         self,
@@ -34,7 +39,6 @@ class SplatfactoStrategy(Strategy):
         optimizers: List[torch.optim.Optimizer],
         schedulers: List[torch.optim.lr_scheduler._LRScheduler],
         device: torch.device = torch.device("cuda"),
-
         # params specific to this strategy
         prune_opa: float = 0.005,
         grow_grad2d: float = 0.0002,
@@ -56,13 +60,12 @@ class SplatfactoStrategy(Strategy):
         self.device = device
 
         # Similar to `torch.optim.Optimizer`, A Strategy may also need to maintain some running states of the model
-		# https://pytorch.org/docs/stable/_modules/torch/optim/optimizer.html#Optimizer
+        # https://pytorch.org/docs/stable/_modules/torch/optim/optimizer.html#Optimizer
         self.state: DefaultDict[str, Any] = defaultdict(dict)
         self.state["step"] = 0
         n_gauss = len(self.gaussians["means3d"])
         self.state["grad2d"] = torch.zeros(n_gauss, device=self.device)
         self.state["count"] = torch.zeros(n_gauss, device=self.device, dtype=torch.int)
-
 
         self.prune_opa = prune_opa
         self.grow_grad2d = grow_grad2d
@@ -82,7 +85,6 @@ class SplatfactoStrategy(Strategy):
 
     @torch.no_grad()
     def update_state(self, info: Dict[str, Any]):
-
         if self.absgrad:
             grads = info["means2d"].absgrad.clone()
         else:
@@ -94,9 +96,7 @@ class SplatfactoStrategy(Strategy):
             # grads is [nnz, 2]
             gs_ids = info["gaussian_ids"]  # [nnz] or None
             self.state["grad2d"].index_add_(0, gs_ids, grads.norm(dim=-1))
-            self.state["count"].index_add_(
-                0, gs_ids, torch.ones_like(gs_ids).int()
-            )
+            self.state["count"].index_add_(0, gs_ids, torch.ones_like(gs_ids).int())
         else:
             # grads is [C, N, 2]
             sel = info["radii"] > 0.0  # [C, N]
@@ -149,7 +149,7 @@ class SplatfactoStrategy(Strategy):
                 optimizer.param_groups[i]["params"] = [p_new]
                 optimizer.state[p_new] = p_state
                 self.gaussians[name] = p_new
-        
+
         for k, v in self.state.items():
             if v is None:
                 continue
@@ -205,7 +205,7 @@ class SplatfactoStrategy(Strategy):
         for k, v in self.running_stats.items():
             self.running_stats[k] = v[sel]
         torch.cuda.empty_cache()
-    
+
     @torch.no_grad()
     def _reset_opa(self, value: float = 0.01):
         """Utility function to reset opacities."""
@@ -234,20 +234,25 @@ class SplatfactoStrategy(Strategy):
         grads = grads.clamp_min(1)
 
         is_grad_high = grads > self.grow_grad2d
-        is_small = torch.exp(self.gaussians["scales"].max(dim=-1).values <= self.grow_scale3d * self.scene_scale)
+        is_small = torch.exp(
+            self.gaussians["scales"].max(dim=-1).values
+            <= self.grow_scale3d * self.scene_scale
+        )
         is_dupli = is_grad_high & is_small
         n_dupli = is_dupli.sum()
 
         if n_dupli > 0:
             self.gaussians._duplicate(is_dupli)
 
-        is_split = is_grad_high & ~ is_small
-        is_split = torch.cat([
-                    is_split,
-                    # new GSs added by duplication will not be split
-                    torch.zeros(n_dupli)
-                    ])
-        
+        is_split = is_grad_high & ~is_small
+        is_split = torch.cat(
+            [
+                is_split,
+                # new GSs added by duplication will not be split
+                torch.zeros(n_dupli),
+            ]
+        )
+
         n_split = is_split.sum().item()
         self._refine_split(is_split)
         print(
@@ -258,7 +263,10 @@ class SplatfactoStrategy(Strategy):
     def _prune_GSs(self):
         is_prune = torch.sigmoid(self.gaussians["opacities"]) < self.prune_opa
         if self.state["step"] > self.reset_every:
-            is_too_big = (torch.exp(self.gaussians["scales"]).max(dim=-1).values > self.prune_scale3d * self.scene_scale)
+            is_too_big = (
+                torch.exp(self.gaussians["scales"]).max(dim=-1).values
+                > self.prune_scale3d * self.scene_scale
+            )
             is_prune = is_prune | is_too_big
 
         n_prune = is_prune.sum().item()
@@ -272,17 +280,17 @@ class SplatfactoStrategy(Strategy):
         if self.state["step"] % self.reset_every == 0:
             self._reset_opa(value=self.prune_opa)
 
-    
-
     def step_pre_backward(self, info: Dict[str, Any]):
         return
 
     def step_post_backward(self, info: Dict[str, Any]):
-    
         if self.state["step"] < self.refine_stop_iter:
             self.update_state(info)
 
-            if self.state["step"] > self.refine_start_iter and self.state["step"] & self.refine_every == 0:
+            if (
+                self.state["step"] > self.refine_start_iter
+                and self.state["step"] & self.refine_every == 0
+            ):
                 self._grow_GSs()
                 self._prune_GSs()
 
@@ -291,11 +299,12 @@ class SplatfactoStrategy(Strategy):
 
         if self.state["step"] % self.reset_every == 0:
             self._reset_opa(value=self.prune_opa * 2.0)
-            
+
         self.state["step"] += 1
 
         return
-    
+
+
 class MCMCStrategy(Strategy):
     def __init__(
         self,
@@ -303,13 +312,11 @@ class MCMCStrategy(Strategy):
         optimizers: List[torch.optim.Optimizer],
         schedulers: List[torch.optim.lr_scheduler._LRScheduler],
         device: torch.device = torch.device("cuda"),
-
         # new to MCMC
         cap_max: int = 1_000_000,
         noise_lr: int = 5e5,
         opacity_reg: float = 0.001,
         scale_reg: float = 0.01,
-
         refine_start_iter: int = 500,
         # new refine_stop_iter
         refine_stop_iter: int = 25_000,
@@ -326,7 +333,7 @@ class MCMCStrategy(Strategy):
         self.device = device
 
         # Similar to `torch.optim.Optimizer`, A Strategy may also need to maintain some running states of the model
-		# https://pytorch.org/docs/stable/_modules/torch/optim/optimizer.html#Optimizer
+        # https://pytorch.org/docs/stable/_modules/torch/optim/optimizer.html#Optimizer
         self.state: DefaultDict[str, Any] = defaultdict(dict)
         self.state["step"] = 0
         self.state["count"] = 0
@@ -348,14 +355,17 @@ class MCMCStrategy(Strategy):
         self.sparse_grad = sparse_grad
 
     def step_pre_backward(self, info: Dict[str, Any]):
-        """ do nothing """
+        """do nothing"""
         return
-    
+
     def step_post_backward(self, info: Dict[str, Any]):
         if self.state["step"] < self.refine_stop_iter:
             self.update_state(info)
 
-            if self.state["step"] > self.refine_start_iter and self.state["step"] & self.refine_every == 0:
+            if (
+                self.state["step"] > self.refine_start_iter
+                and self.state["step"] & self.refine_every == 0
+            ):
                 self._grow_GSs()
                 self._prune_GSs()
 
@@ -364,9 +374,10 @@ class MCMCStrategy(Strategy):
 
         if self.state["step"] % self.reset_every == 0:
             self._reset_opa(value=self.prune_opa * 2.0)
-            
+
         self.state["step"] += 1
-    
+
+
 class RevisedDensificationStrategy(SplatfactoStrategy):
     def _refine_split(self, mask: Tensor):
         raise NotImplementedError

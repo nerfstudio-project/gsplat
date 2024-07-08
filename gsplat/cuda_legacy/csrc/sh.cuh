@@ -4,8 +4,8 @@
 namespace cg = cooperative_groups;
 
 enum class SHType {
-	Poly,
-	Fast,
+    Poly,
+    Fast,
 };
 
 __device__ __constant__ float SH_C0 = 0.28209479177387814f;
