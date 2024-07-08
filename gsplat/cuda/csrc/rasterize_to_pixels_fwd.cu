@@ -19,6 +19,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     const S *__restrict__ colors,        // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
     const S *__restrict__ opacities,     // [C, N] or [nnz]
     const S *__restrict__ backgrounds,   // [C, COLOR_DIM]
+    const bool *__restrict__ masks,      // [C, tile_height, tile_width]
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     const uint32_t tile_width, const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
@@ -43,6 +44,9 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     if (backgrounds != nullptr) {
         backgrounds += camera_id * COLOR_DIM;
     }
+    if (masks != nullptr) {
+        masks += camera_id * tile_height * tile_width;
+    }
 
     S px = (S)j + 0.5f;
     S py = (S)i + 0.5f;
@@ -52,6 +56,15 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     // keep not rasterizing threads around for reading data
     bool inside = (i < image_height && j < image_width);
     bool done = !inside;
+
+    // when the mask is provided, render 0.0 and return if this tile
+    // is labeled as not local
+    if (masks != nullptr && inside && !masks[tile_id]) {
+        for (uint32_t k = 0; k < COLOR_DIM; ++k) {
+            render_colors[pix_id * COLOR_DIM + k] = 0.0f;
+        }
+        return;
+    }
 
     // have all threads in tile process the same gaussians in batches
     // first collect gaussians between range.x and range.y in batches
@@ -167,6 +180,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
     const torch::Tensor &colors,    // [C, N, channels] or [nnz, channels]
     const torch::Tensor &opacities, // [C, N]  or [nnz]
     const at::optional<torch::Tensor> &backgrounds, // [C, channels]
+    const at::optional<torch::Tensor> &masks,       // [C, tile_height, tile_width]
     // image size
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     // intersections
@@ -182,6 +196,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
     CHECK_INPUT(flatten_ids);
     if (backgrounds.has_value()) {
         CHECK_INPUT(backgrounds.value());
+    }
+    if (masks.has_value()) {
+        CHECK_INPUT(masks.value());
     }
     bool packed = means2d.dim() == 2;
 
@@ -225,6 +242,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
             reinterpret_cast<vec3<float> *>(conics.data_ptr<float>()),
             colors.data_ptr<float>(), opacities.data_ptr<float>(),
             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
+            masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
             image_width, image_height, tile_size, tile_width, tile_height,
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
@@ -240,6 +258,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
     const torch::Tensor &colors,    // [C, N, channels] or [nnz, channels]
     const torch::Tensor &opacities, // [C, N]  or [nnz]
     const at::optional<torch::Tensor> &backgrounds, // [C, channels]
+    const at::optional<torch::Tensor> &masks,       // [C, tile_height, tile_width]
     // image size
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     // intersections
@@ -252,7 +271,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
 #define __GS__CALL_(N)                                                                 \
     case N:                                                                            \
         return call_kernel_with_dim<N>(means2d, conics, colors, opacities,             \
-                                       backgrounds, image_width, image_height,         \
+                                       backgrounds, masks, image_width, image_height,  \
                                        tile_size, tile_offsets, flatten_ids);
 
     // TODO: an optimization can be done by passing the actual number of channels into
