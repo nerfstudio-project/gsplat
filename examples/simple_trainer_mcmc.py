@@ -192,7 +192,7 @@ class Runner:
         else:
             raise ValueError(f"Unsupported model type: {cfg.model_type}")
 
-        self.render_mode = "RGB+ED"
+        self.render_mode = "RGB"
         if cfg.depth_loss or cfg.normal_consistency_loss:
             self.render_mode = "RGB+ED"
 
