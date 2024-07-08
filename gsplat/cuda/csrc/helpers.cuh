@@ -7,6 +7,7 @@
 #include <cooperative_groups/reduce.h>
 
 #include <ATen/cuda/Atomic.cuh>
+#include <ATen/Dispatch.h>
 
 #define PRAGMA_UNROLL _Pragma("unroll")
 
