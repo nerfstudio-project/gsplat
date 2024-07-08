@@ -213,18 +213,6 @@ def rasterization(
     assert viewmats.shape == (C, 4, 4), viewmats.shape
     assert Ks.shape == (C, 3, 3), Ks.shape
     assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
-    # if distributed:
-    #     world_rank = torch.distributed.get_rank()
-    #     world_size = torch.distributed.get_world_size()
-    #     N_world = [None] * world_size
-    #     C_world = [None] * world_size
-    #     torch.distributed.all_gather_object(N_world, N)
-    #     torch.distributed.all_gather_object(C_world, C)
-    # else:
-    #     world_rank = 0
-    #     world_size = 1
-    #     N_world = [N]
-    #     C_world = [C]
 
     if sh_degree is None:
         # treat colors as post-activation values, should be in shape [N, D] or [C, N, D]
@@ -311,7 +299,9 @@ def rasterization(
 
     meta.update(
         {
+            # global camera_ids
             "camera_ids": camera_ids,
+            # local gaussian_ids
             "gaussian_ids": gaussian_ids,
             "radii": radii,
             "means2d": means2d,
@@ -355,7 +345,7 @@ def rasterization(
             dirs = means[None, :, :] - camtoworlds[:, None, :3, 3]  # [C, N, 3]
             masks = radii > 0  # [C, N]
             if colors.dim() == 3:
-                # Turn [N, K, 3] into [C, N, 3]
+                # Turn [N, K, 3] into [C, N, K, 3]
                 shs = colors.expand(C, -1, -1, -1)  # [C, N, K, 3]
             else:
                 # colors is already [C, N, K, 3]
@@ -369,7 +359,89 @@ def rasterization(
     # stage.
     if distributed:
         if packed:
-            raise NotImplementedError("Distributed mode does not support packed mode.")
+            # package the Gaussian attributes
+            data = torch.cat(
+                [
+                    radii[..., None].float(),
+                    means2d,
+                    depths[..., None],
+                    conics,
+                    opacities[..., None],
+                    colors,
+                ],
+                dim=-1,
+            )  # [nnz, :]
+            cnts = torch.bincount(camera_ids, minlength=C)  # all cameras
+            cnts = cnts.split(C_world, dim=0)
+            cnts = [cuts.sum() for cuts in cnts]  # List: number of GSs for each rank
+
+            collected_cnts = [torch.empty_like(cnt) for cnt in cnts]
+            DistF.all_to_all(collected_cnts, cnts)
+
+            cnts_list = [cnt.item() for cnt in cnts]  # To List of int
+            collected_cnts_list = [
+                cnt.item() for cnt in collected_cnts
+            ]  # To List of int
+
+            data_fl_list = data.split(cnts_list, dim=0)  # List of [N_i, :]
+            collected_fl_list = [
+                torch.empty((N_i, data.shape[-1]), device=data.device, dtype=data.dtype)
+                for N_i in collected_cnts_list
+            ]
+            # differentiable all_to_all
+            DistF.all_to_all(collected_fl_list, data_fl_list)
+            collected = torch.cat(collected_fl_list, dim=0)  # [N, :]
+
+            # collected contains:
+            radii = collected[..., 0].int()
+            means2d = collected[..., 1:3]
+            depths = collected[..., 3]
+            conics = collected[..., 4:7]
+            opacities = collected[..., 7]
+            colors = collected[..., 8:]
+
+            # before sending the data, we should turn the camera_ids from global to local
+            # and gaussian_ids from local to global
+            offsets = torch.tensor(
+                [0] + C_world[:-1], device=camera_ids.device, dtype=camera_ids.dtype
+            )
+            offsets = torch.cumsum(offsets, dim=0)
+            offsets = offsets.repeat_interleave(torch.stack(cnts))
+            camera_ids = camera_ids - offsets
+
+            offsets = torch.tensor(
+                [0] + N_world[:-1], device=gaussian_ids.device, dtype=gaussian_ids.dtype
+            )
+            offsets = torch.cumsum(offsets, dim=0)
+            offsets = offsets.repeat_interleave(torch.stack(cnts))
+            gaussian_ids = gaussian_ids + offsets
+
+            # now send the data
+            data = torch.cat(
+                [
+                    # local camera_ids
+                    camera_ids[..., None],
+                    # global gaussian_ids
+                    gaussian_ids[..., None],
+                ],
+                dim=-1,
+            )
+            data_fl_list = data.split(cnts_list, dim=0)  # List of [N_i, 2]
+            collected_fl_list = [
+                torch.empty((N_i, data.shape[-1]), device=data.device, dtype=data.dtype)
+                for N_i in collected_cnts_list
+            ]
+            # differentiable all_to_all
+            DistF.all_to_all(collected_fl_list, data_fl_list)
+            collected = torch.cat(collected_fl_list, dim=0)
+
+            # collected contains:
+            camera_ids = collected[..., 0]
+            gaussian_ids = collected[..., 1]
+
+            # Silently change C from global #Cameras to local #Cameras.
+            C = C_world[world_rank]
+
         else:
             # Silently change C from global #Cameras to local #Cameras.
             C = C_world[world_rank]

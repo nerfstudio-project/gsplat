@@ -1033,6 +1033,17 @@ if __name__ == "__main__":
     
     CUDA_VISIBLE_DEVICES=7 python simple_trainer.py --batch_size 4 --steps_scaler 0.25 --disable_viewer
     <OOM>
+
+    ---
+    CUDA_VISIBLE_DEVICES=0,1 python simple_trainer.py --steps_scaler 0.5
+    Step:  3499 {'mem': 4.9834771156311035, 'ellipse_time': 254.7932469844818, 'num_GS': 2190816}
+    Step:  3499 {'mem': 5.038218975067139, 'ellipse_time': 254.57188820838928, 'num_GS': 2221608}
+    PSNR: 26.197, SSIM: 0.8285, LPIPS: 0.125 Time: 0.044s/image Number of GS: 2190816
+
+    CUDA_VISIBLE_DEVICES=0,1 python simple_trainer.py --steps_scaler 0.5 --packed
+    Step:  3499 {'mem': 3.840606689453125, 'ellipse_time': 233.5287470817566, 'num_GS': 2235098}
+    Step:  3499 {'mem': 3.723649501800537, 'ellipse_time': 233.49604105949402, 'num_GS': 2169797}
+    PSNR: 26.184, SSIM: 0.8287, LPIPS: 0.125 Time: 0.042s/image Number of GS: 2169797
     """
 
     cfg = tyro.cli(Config)

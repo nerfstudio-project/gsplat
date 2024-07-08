@@ -857,6 +857,12 @@ if __name__ == "__main__":
     7k:
     Step:  3499 {'mem': 2.462855815887451, 'ellipse_time': 204.48375606536865, 'num_GS': 1000000}
     PSNR: 25.865, SSIM: 0.8119, LPIPS: 0.159 Time: 0.008s/image Number of GS: 1000000
+
+    ---
+    CUDA_VISIBLE_DEVICES=0,1 python simple_trainer_mcmc.py --batch_size 1 --steps_scaler 0.5 --cap_max 500000 --packed
+    Step:  3499 {'mem': 1.1325106620788574, 'ellipse_time': 159.6369378566742, 'num_GS': 500000}
+    Step:  3499 {'mem': 1.1362886428833008, 'ellipse_time': 159.48205280303955, 'num_GS': 500000}
+    PSNR: 25.893, SSIM: 0.8103, LPIPS: 0.158 Time: 0.027s/image Number of GS: 500000
     """
     cfg = tyro.cli(Config)
     cfg.adjust_steps(cfg.steps_scaler)
