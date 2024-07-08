@@ -467,7 +467,7 @@ class Runner:
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
 
-            if cfg.normal_consistency_loss and step > cfg.normal_consistency_start_iter:
+            if cfg.normal_consistency_loss:
                 depths = renders[..., -1:]
                 normals = renders[..., -4:-1]
                 normals_surf = depth_to_normal(
@@ -481,11 +481,13 @@ class Runner:
                 normalconsistencyloss = (
                     1 - (normals * normals_surf).sum(dim=-1)
                 ).mean()
-                loss += normalconsistencyloss * cfg.normal_consistency_lambda
+                if step > cfg.normal_consistency_start_iter:
+                    loss += normalconsistencyloss * cfg.normal_consistency_lambda
 
-            if cfg.dist_loss and step > cfg.dist_start_iter:
+            if cfg.dist_loss:
                 distloss = info["render_distloss"].mean()
-                loss += distloss * cfg.dist_lambda
+                if step > cfg.dist_start_iter:
+                    loss += distloss * cfg.dist_lambda
 
             loss.backward()
 
@@ -509,16 +511,13 @@ class Runner:
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
-                if (
-                    cfg.normal_consistency_loss
-                    and step > cfg.normal_consistency_start_iter
-                ):
+                if cfg.normal_consistency_loss:
                     self.writer.add_scalar(
                         "train/normalconsistencyloss",
                         normalconsistencyloss.item(),
                         step,
                     )
-                if cfg.dist_loss and step > cfg.dist_start_iter:
+                if cfg.dist_loss:
                     self.writer.add_scalar("train/distloss", distloss.item(), step)
                 if cfg.tb_save_image:
                     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
