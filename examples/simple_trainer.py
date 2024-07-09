@@ -1044,6 +1044,11 @@ if __name__ == "__main__":
     Step:  3499 {'mem': 3.840606689453125, 'ellipse_time': 233.5287470817566, 'num_GS': 2235098}
     Step:  3499 {'mem': 3.723649501800537, 'ellipse_time': 233.49604105949402, 'num_GS': 2169797}
     PSNR: 26.184, SSIM: 0.8287, LPIPS: 0.125 Time: 0.042s/image Number of GS: 2169797
+
+    CUDA_VISIBLE_DEVICES=0 python simple_trainer.py --batch_size=2 --steps_scaler 0.5 --disable_viewer --packed
+    Step:  3499 {'mem': 7.562112808227539, 'ellipse_time': 365.50351881980896, 'num_GS': 4436051}
+    PSNR: 26.189, SSIM: 0.8297, LPIPS: 0.126 Time: 0.027s/image Number of GS: 4436051
+    
     """
 
     cfg = tyro.cli(Config)
