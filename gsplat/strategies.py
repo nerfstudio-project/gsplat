@@ -1,24 +1,24 @@
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from typing import Any, DefaultDict, Dict, List, Optional
+from typing import Any, DefaultDict, Dict, List, Optional, Callable
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from config import Config
 from torch import Tensor
 
 import gsplat
 from examples.utils import normalized_quat_to_rotmat
-from gsplat.gaussians import Gaussians
 
 
 class Strategy(ABC):
     @abstractmethod
     def __init__(
         self,
-        gaussians: Gaussians,
+        params: nn.ParameterDict,
+        activations: Dict[str, Callable],
         optimizers: List[torch.optim.Optimizer],
-        schedulers: List[torch.optim.lr_scheduler._LRScheduler],
         **kwargs,
     ):
         pass
@@ -31,14 +31,15 @@ class Strategy(ABC):
     def step_post_backward(self, info: Dict[str, Any]):
         pass
 
-
 class SplatfactoStrategy(Strategy):
     def __init__(
         self,
-        gaussians: Gaussians,
+        params: nn.ParameterDict,
+        activations: Dict[str, Callable],
         optimizers: List[torch.optim.Optimizer],
         schedulers: List[torch.optim.lr_scheduler._LRScheduler],
         device: torch.device = torch.device("cuda"),
+
         # params specific to this strategy
         prune_opa: float = 0.005,
         grow_grad2d: float = 0.0002,
@@ -54,7 +55,8 @@ class SplatfactoStrategy(Strategy):
         packed: bool = False,
         sparse_grad: bool = False,
     ):
-        self.gaussians = gaussians
+        self.params = params
+        self.activations = activations
         self.optimizers = optimizers
         self.schedulers = schedulers
         self.device = device
@@ -62,10 +64,10 @@ class SplatfactoStrategy(Strategy):
         # Similar to `torch.optim.Optimizer`, A Strategy may also need to maintain some running states of the model
         # https://pytorch.org/docs/stable/_modules/torch/optim/optimizer.html#Optimizer
         self.state: DefaultDict[str, Any] = defaultdict(dict)
-        self.state["step"] = 0
-        n_gauss = len(self.gaussians["means3d"])
+        n_gauss = len(self.params["means3d"])
         self.state["grad2d"] = torch.zeros(n_gauss, device=self.device)
         self.state["count"] = torch.zeros(n_gauss, device=self.device, dtype=torch.int)
+        self.state["step"] = 0
 
         self.prune_opa = prune_opa
         self.grow_grad2d = grow_grad2d
@@ -111,8 +113,8 @@ class SplatfactoStrategy(Strategy):
         sel = torch.where(mask)[0]
         rest = torch.where(~mask)[0]
 
-        scales = torch.exp(self.gaussians["scales"][sel])
-        quats = F.normalize(self.gaussians["quats"][sel], dim=-1)
+        scales = torch.exp(self.params["scales"][sel])
+        quats = F.normalize(self.params["quats"][sel], dim=-1)
         rotmats = normalized_quat_to_rotmat(quats)  # [N, 3, 3]
         samples = torch.einsum(
             "nij,nj,bnj->bni",
@@ -148,7 +150,7 @@ class SplatfactoStrategy(Strategy):
                     p_state[key] = torch.cat([v[rest], v_split])
                 optimizer.param_groups[i]["params"] = [p_new]
                 optimizer.state[p_new] = p_state
-                self.gaussians[name] = p_new
+                self.params[name] = p_new
 
         for k, v in self.state.items():
             if v is None:
@@ -180,7 +182,7 @@ class SplatfactoStrategy(Strategy):
                 p_new = torch.nn.Parameter(torch.cat([p, p[sel]]))
                 optimizer.param_groups[i]["params"] = [p_new]
                 optimizer.state[p_new] = p_state
-                self.gaussians[name] = p_new
+                self.params[name] = p_new
         for k, v in self.state.items():
             self.state[k] = torch.cat((v, v[sel]))
         torch.cuda.empty_cache()
@@ -201,7 +203,7 @@ class SplatfactoStrategy(Strategy):
                 p_new = torch.nn.Parameter(p[sel])
                 optimizer.param_groups[i]["params"] = [p_new]
                 optimizer.state[p_new] = p_state
-                self.gaussians[name] = p_new
+                self.params[name] = p_new
         for k, v in self.running_stats.items():
             self.running_stats[k] = v[sel]
         torch.cuda.empty_cache()
@@ -210,7 +212,7 @@ class SplatfactoStrategy(Strategy):
     def _reset_opa(self, value: float = 0.01):
         """Utility function to reset opacities."""
         opacities = torch.clamp(
-            self.gaussians["opacities"], max=torch.logit(torch.tensor(value)).item()
+            self.params["opacities"], max=torch.logit(torch.tensor(value)).item()
         )
         for optimizer in self.optimizers:
             for i, param_group in enumerate(optimizer.param_groups):
@@ -225,7 +227,7 @@ class SplatfactoStrategy(Strategy):
                 p_new = torch.nn.Parameter(opacities)
                 optimizer.param_groups[i]["params"] = [p_new]
                 optimizer.state[p_new] = p_state
-                self.gaussians[param_group["name"]] = p_new
+                self.params[param_group["name"]] = p_new
         torch.cuda.empty_cache()
 
     def _grow_GSs(self):
@@ -235,14 +237,14 @@ class SplatfactoStrategy(Strategy):
 
         is_grad_high = grads > self.grow_grad2d
         is_small = torch.exp(
-            self.gaussians["scales"].max(dim=-1).values
+            self.params["scales"].max(dim=-1).values
             <= self.grow_scale3d * self.scene_scale
         )
         is_dupli = is_grad_high & is_small
         n_dupli = is_dupli.sum()
 
         if n_dupli > 0:
-            self.gaussians._duplicate(is_dupli)
+            self.params._duplicate(is_dupli)
 
         is_split = is_grad_high & ~is_small
         is_split = torch.cat(
@@ -257,14 +259,14 @@ class SplatfactoStrategy(Strategy):
         self._refine_split(is_split)
         print(
             f"Step {self.state['step']}: {n_dupli} GSs duplicated, {n_split} GSs split. "
-            f"Now having {len(self.gaussians['means3d'])} GSs."
+            f"Now having {len(self.params['means3d'])} GSs."
         )
 
     def _prune_GSs(self):
-        is_prune = torch.sigmoid(self.gaussians["opacities"]) < self.prune_opa
+        is_prune = torch.sigmoid(self.params["opacities"]) < self.prune_opa
         if self.state["step"] > self.reset_every:
             is_too_big = (
-                torch.exp(self.gaussians["scales"]).max(dim=-1).values
+                torch.exp(self.params["scales"]).max(dim=-1).values
                 > self.prune_scale3d * self.scene_scale
             )
             is_prune = is_prune | is_too_big
@@ -274,7 +276,7 @@ class SplatfactoStrategy(Strategy):
 
         print(
             f"Step {self.state['step']}: {n_prune} GSs pruned. "
-            f"Now having {len(self.gaussians['means3d'])} GSs."
+            f"Now having {len(self.params['means3d'])} GSs."
         )
 
         if self.state["step"] % self.reset_every == 0:
@@ -308,7 +310,8 @@ class SplatfactoStrategy(Strategy):
 class MCMCStrategy(Strategy):
     def __init__(
         self,
-        gaussians: Gaussians,
+        params: nn.ParameterDict,
+        activations: Dict[str, Callable],
         optimizers: List[torch.optim.Optimizer],
         schedulers: List[torch.optim.lr_scheduler._LRScheduler],
         device: torch.device = torch.device("cuda"),
@@ -327,7 +330,8 @@ class MCMCStrategy(Strategy):
         packed: bool = False,
         sparse_grad: bool = False,
     ):
-        self.gaussians = gaussians
+        self.params = params
+        self.activations = activations
         self.optimizers = optimizers
         self.schedulers = schedulers
         self.device = device
