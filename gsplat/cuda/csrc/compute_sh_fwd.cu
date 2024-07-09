@@ -6,14 +6,13 @@
 
 namespace cg = cooperative_groups;
 
-
 template <typename T>
 __global__ void compute_sh_fwd_kernel(const uint32_t N, const uint32_t K,
                                       const uint32_t degrees_to_use,
-                                      const typename Float3<T>::type *__restrict__ dirs,  // [N, 3]
-                                      const T *__restrict__ coeffs, // [N, K, 3]
+                                      const vec3<T> *__restrict__ dirs, // [N, 3]
+                                      const T *__restrict__ coeffs,     // [N, K, 3]
                                       const bool *__restrict__ masks,   // [N]
-                                      T *__restrict__ colors        // [N, 3]
+                                      T *__restrict__ colors            // [N, 3]
 ) {
     // parallelize over N * 3
     uint32_t idx = cg::this_grid().thread_rank();
@@ -28,7 +27,6 @@ __global__ void compute_sh_fwd_kernel(const uint32_t N, const uint32_t K,
     sh_coeffs_to_color_fast(degrees_to_use, c, dirs[elem_id], coeffs + elem_id * K * 3,
                             colors + elem_id * 3);
 }
-
 
 torch::Tensor compute_sh_fwd_tensor(const uint32_t degrees_to_use,
                                     torch::Tensor &dirs,              // [..., 3]
@@ -48,12 +46,13 @@ torch::Tensor compute_sh_fwd_tensor(const uint32_t degrees_to_use,
     torch::Tensor colors = torch::empty_like(dirs); // [..., 3]
     // parallelize over N * 3
     if (N) {
-        compute_sh_fwd_kernel<float><<<(N * 3 + N_THREADS - 1) / N_THREADS, N_THREADS>>>(
-            N, K, degrees_to_use, (float3 *)dirs.data_ptr<float>(),
-            coeffs.data_ptr<float>(),
-            masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
-            colors.data_ptr<float>());
+        compute_sh_fwd_kernel<float>
+            <<<(N * 3 + N_THREADS - 1) / N_THREADS, N_THREADS>>>(
+                N, K, degrees_to_use,
+                reinterpret_cast<vec3<float> *>(dirs.data_ptr<float>()),
+                coeffs.data_ptr<float>(),
+                masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
+                colors.data_ptr<float>());
     }
     return colors; // [..., 3]
 }
-
