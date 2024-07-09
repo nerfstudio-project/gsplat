@@ -536,6 +536,7 @@ class Runner:
             if cfg.normal_loss:
                 # normal consistency loss
                 render_normals = render_normals.squeeze(0).permute((2, 0, 1))
+                render_normals_from_depth *= alphas.squeeze(0).detach()
                 render_normals_from_depth = render_normals_from_depth.permute((2, 0, 1))
                 normal_error = (1 - (render_normals * render_normals_from_depth).sum(dim=0))[None]
                 normal_loss = cfg.normal_lambda * normal_error.mean()
@@ -875,7 +876,7 @@ class Runner:
 
             torch.cuda.synchronize()
             tic = time.time()
-            colors, _, render_normals, render_normals_from_depth, info = self.rasterize_splats(
+            colors, alphas, render_normals, render_normals_from_depth, info = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -904,7 +905,9 @@ class Runner:
             )
             
             # write normals from depth
+            render_normals_from_depth *= alphas.squeeze(0).detach()
             render_normals_from_depth = (render_normals_from_depth * 0.5 + 0.5).cpu().numpy()
+            render_normals_from_depth = (render_normals_from_depth - np.min(render_normals_from_depth)) / (np.max(render_normals_from_depth) - np.min(render_normals_from_depth))
             normals_from_depth_output = (render_normals_from_depth * 255).astype(np.uint8)
             imageio.imwrite(
                 f"{self.render_dir}/val_{i:04d}_normals_from_depth_{step}.png", normals_from_depth_output

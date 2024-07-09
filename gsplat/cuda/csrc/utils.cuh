@@ -395,7 +395,7 @@ inline __device__ void compute_aabb_vjp(const glm::mat3 M, const glm::vec3 v_mea
 }
 
 inline __device__ void compute_ray_transformation_vjp(const glm::mat3x4 W, const glm::mat3 P,
-                                                        const glm::vec3 cam_pos, const glm::vec3 mean_c,
+                                                        const glm::vec3 cam_pos, const glm::vec3 mean,
                                                         const glm::vec4 quat, const glm::vec3 scale, 
                                                         const glm::mat3 v_ray_transformation, const glm::vec3 v_normal3d,
                                                         glm::mat3& v_R, glm::vec2& v_scale, 
@@ -420,7 +420,7 @@ inline __device__ void compute_ray_transformation_vjp(const glm::mat3x4 W, const
 
     // dual visible
     glm::vec3 tn = W * R[2];
-    float cos = glm::dot(-tn, mean_c);
+    float cos = glm::dot(-tn, mean);
     float multiplier = cos > 0 ? 1 : -1;
     v_tn *= multiplier;
     // v_R = glm::mat3(

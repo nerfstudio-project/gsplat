@@ -745,13 +745,20 @@ def rasterization_2dgs(
     if render_mode in ["RGB+ED", "RGB+D"]:
         render_depths = render_colors[..., -1:]
         render_normals_from_depth = depth_to_normal(
-            torch.linalg.inv(viewmats.squeeze(0)), # c2w 
-            Ks.squeeze(0), 
-            width, 
-            height, 
-            render_depths
-        )
+            render_depths,
+            torch.linalg.inv(viewmats), # c2w 
+            Ks, 
+            near_plane,
+            far_plane
+        ).squeeze(0)
 
+        # render_normals_from_depth = depth_to_normal(
+        #     torch.linalg.inv(viewmats.squeeze(0)),
+        #     Ks.squeeze(0),
+        #     width,
+        #     height,
+        #     render_depths,
+        # )
     
     meta = {
         "camera_ids": camera_ids,
@@ -776,6 +783,6 @@ def rasterization_2dgs(
     
     # import pdb
     # pdb.set_trace()
-    render_normals = render_normals @ viewmats[0, :3, :3].T
+    render_normals = render_normals @ torch.linalg.inv(viewmats)[0, :3, :3].T
     
     return (render_colors, render_alphas, render_normals, render_normals_from_depth), meta

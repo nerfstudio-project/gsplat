@@ -1656,7 +1656,6 @@ fully_fused_projection_fwd_2dgs_kernel(const uint32_t C, const uint32_t N,
         glm::dot(f, M[0] * M[2]),
         glm::dot(f, M[1] * M[2])
     );
-    // printf("");
 
     // printf("mean2d: %.2f, %.2f, %.2f\n", mean2d.x, mean2d.y, mean2d.z);
     // take 3 sigma as the radius (non differentiable)
@@ -1685,6 +1684,7 @@ fully_fused_projection_fwd_2dgs_kernel(const uint32_t C, const uint32_t N,
 
     // normals dual visiable
     glm::vec3 normal = RS_camera[2];
+    printf("");
     float cos = glm::dot(-normal, mean_c);
     float multiplier = cos > 0 ? 1 : -1;
     normal *= multiplier;
