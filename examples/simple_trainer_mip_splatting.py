@@ -368,7 +368,7 @@ class Runner:
 
         scales_after_square = scales_square + torch.square(filters)[:, None]  # [N, 1]
         det2 = scales_after_square.prod(dim=1)  # [N,]
-        coef = torch.sqrt(det1 / det2)  # [N,]
+        coef = torch.sqrt(det1 / det2 + 1e-7)  # [N,]
         opacities = opacities * coef
 
         scales = torch.square(scales) + torch.square(filters)[:, None]  # [N, 3]
@@ -777,11 +777,11 @@ class Runner:
 
         scales_after_square = scales_square + torch.square(filters)[:, None]  # [N, 1]
         det2 = scales_after_square.prod(dim=1)  # [N,]
-        coef = torch.sqrt(det1 / det2)  # [N,]
+        coef = torch.sqrt(det1 / det2 + 1e-7)  # [N,]
         opacities = opacities * coef
 
         opacities_reset = torch.min(opacities, torch.ones_like(opacities) * value)
-        opacities_reset = opacities_reset / coef
+        opacities_reset = opacities_reset / (coef + 1e-7)
         opacities = torch.logit(opacities_reset)
 
         for optimizer in self.optimizers:
