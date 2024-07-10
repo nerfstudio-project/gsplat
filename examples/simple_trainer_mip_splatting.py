@@ -361,19 +361,19 @@ class Runner:
         scales = torch.exp(self.splats["scales"])  # [N, 3]
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
         filters = self.splats["filters"]  # [N,]
-        
+
         # apply 3D smoothing filter to scales and opacities
-        scales_square = torch.square(scales) # [N, 3]
-        det1 = scales_square.prod(dim=1)     # [N, ]
-        
-        scales_after_square = scales_square + torch.square(filters) [:, None] # [N, 1]
-        det2 = scales_after_square.prod(dim=1) # [N,]
-        coef = torch.sqrt(det1 / det2) # [N,]
+        scales_square = torch.square(scales)  # [N, 3]
+        det1 = scales_square.prod(dim=1)  # [N, ]
+
+        scales_after_square = scales_square + torch.square(filters)[:, None]  # [N, 1]
+        det2 = scales_after_square.prod(dim=1)  # [N,]
+        coef = torch.sqrt(det1 / det2)  # [N,]
         opacities = opacities * coef
-    
+
         scales = torch.square(scales) + torch.square(filters)[:, None]  # [N, 3]
         scales = torch.sqrt(scales)
-        
+
         image_ids = kwargs.pop("image_ids", None)
         if self.cfg.app_opt:
             colors = self.app_module(
@@ -444,7 +444,7 @@ class Runner:
 
         # determine the 3D smoothing filter before training
         self.compute_3D_smoothing_filter()
-        
+
         # Training loop.
         global_tic = time.time()
         pbar = tqdm.tqdm(range(init_step, max_steps))
@@ -690,44 +690,47 @@ class Runner:
         device = self.device
         xyz = self.splats["means3d"]
         print("xyz", xyz.shape, xyz.device)
-        
+
         distance = torch.ones((xyz.shape[0]), device=xyz.device) * 100000.0
         valid_points = torch.zeros((xyz.shape[0]), device=xyz.device, dtype=torch.bool)
-        focal_length = 0.
-        
+        focal_length = 0.0
+
         for data in self.trainset:
-            worldtocam = data["worldtocam"].to(device)  # [4, 4] 
+            worldtocam = data["worldtocam"].to(device)  # [4, 4]
             K = data["K"].to(device)  # [3, 3]
             height, width = data["image"].shape[:2]
             R = worldtocam[:3, :3]
             T = worldtocam[:3, 3]
-            
+
             xyz_cam = xyz @ R.transpose(1, 0) + T[None, :]
-            
+
             # project to screen space
             valid_depth = xyz_cam[:, 2] > cfg.near_plane
-            
+
             x, y, z = xyz_cam[:, 0], xyz_cam[:, 1], xyz_cam[:, 2]
             z = torch.clamp(z, min=0.001)
-            
+
             x = x / z * K[0, 0] + K[0, 2]
             y = y / z * K[1, 1] + K[1, 2]
-            
-            # use similar tangent space filtering as in 3DGS, 
+
+            # use similar tangent space filtering as in 3DGS,
             # TODO check gsplat's implementation
-            in_screen = torch.logical_and(torch.logical_and(x >= -0.15 * width, x <= width * 1.15), torch.logical_and(y >= -0.15 * height, y <= 1.15 * height))
+            in_screen = torch.logical_and(
+                torch.logical_and(x >= -0.15 * width, x <= width * 1.15),
+                torch.logical_and(y >= -0.15 * height, y <= 1.15 * height),
+            )
             valid = torch.logical_and(valid_depth, in_screen)
-            
+
             distance[valid] = torch.min(distance[valid], z[valid])
             valid_points = torch.logical_or(valid_points, valid)
             if focal_length < K[0, 0]:
                 focal_length = K[0, 0]
-            
+
         distance[~valid_points] = distance[valid_points].max()
-        
-        filter_3D = distance / focal_length * (0.2 ** 0.5)
+
+        filter_3D = distance / focal_length * (0.2**0.5)
         self.splats["filters"] = torch.nn.Parameter(filter_3D)
-    
+
     @torch.no_grad()
     def update_running_stats(self, info: Dict):
         """Update running stats."""
@@ -762,25 +765,25 @@ class Runner:
         # opacities = torch.clamp(
         #     self.splats["opacities"], max=torch.logit(torch.tensor(value)).item()
         # )
-        
+
         scales = torch.exp(self.splats["scales"])  # [N, 3]
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
         filters = self.splats["filters"]  # [N,]
-        
+
         # apply 3D smoothing filter to scales and opacities
         print("apply 3D smoothing filter in reset opacities")
-        scales_square = torch.square(scales) # [N, 3]
-        det1 = scales_square.prod(dim=1)     # [N, ]
-        
-        scales_after_square = scales_square + torch.square(filters) [:, None] # [N, 1]
-        det2 = scales_after_square.prod(dim=1) # [N,]
-        coef = torch.sqrt(det1 / det2) # [N,]
+        scales_square = torch.square(scales)  # [N, 3]
+        det1 = scales_square.prod(dim=1)  # [N, ]
+
+        scales_after_square = scales_square + torch.square(filters)[:, None]  # [N, 1]
+        det2 = scales_after_square.prod(dim=1)  # [N,]
+        coef = torch.sqrt(det1 / det2)  # [N,]
         opacities = opacities * coef
-        
-        opacities_reset = torch.min(opacities, torch.ones_like(opacities)*value)
+
+        opacities_reset = torch.min(opacities, torch.ones_like(opacities) * value)
         opacities_reset = opacities_reset / coef
         opacities = torch.logit(opacities_reset)
-        
+
         for optimizer in self.optimizers:
             for i, param_group in enumerate(optimizer.param_groups):
                 if param_group["name"] != "opacities":

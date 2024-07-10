@@ -256,7 +256,7 @@ class Dataset:
         params = self.parser.params_dict[camera_id]
         camtoworlds = self.parser.camtoworlds[index]
         worldtocams = self.parser.worldtocams[index]
-        
+
         if len(params) > 0:
             # Images are distorted. Undistort them.
             mapx, mapy = (
