@@ -6,7 +6,20 @@ from torch import Tensor
 
 
 class Strategy(ABC):
-    """Base class for the GS optimization strategy."""
+    """Base class for the GS optimization strategy.
+    
+    ...
+
+    ```
+    activations = {
+        "sigmoid": torch.sigmoid,
+        "relu": torch.relu,
+        "tanh": torch.tanh,
+        "quats": lamda x: F.normalize(x, dim=-1),
+    }
+    ```
+    
+    """
 
     def __init__(
         self,
@@ -79,6 +92,8 @@ class DefaultStrategy(Strategy):
         refine_every: int = 100,
         # Use absolute gradients for GS splitting
         absgrad: bool = False,
+        # TODO
+        revised_opacity: bool = False,
     ):
         super().__init__(params, activations, optimizers)
         self._verbose = verbose
@@ -170,6 +185,7 @@ class MCMCStrategy(Strategy):
         params: torch.nn.ParameterDict,
         activations: Dict[str, Callable],
         optimizers: List[torch.optim.Optimizer],
+        schedulers: List[torch.optim.lr_scheduler._LRScheduler],
         verbose: bool = False,
         # Maximum number of GSs.
         cap_max: int = 1_000_000,
