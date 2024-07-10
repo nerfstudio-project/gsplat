@@ -545,7 +545,7 @@ class Runner:
                         "step": step,
                         "splats": self.splats.state_dict(),
                     },
-                    f"{self.ckpt_dir}/ckpt_{step}.pt",
+                    f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt"
                 )
 
             # eval the full set
