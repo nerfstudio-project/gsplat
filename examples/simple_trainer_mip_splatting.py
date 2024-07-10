@@ -29,6 +29,7 @@ from utils import (
 )
 
 from gsplat.rendering import rasterization
+from gsplat import compute_3D_smoothing_filter
 
 
 @dataclass
@@ -685,6 +686,27 @@ class Runner:
 
     @torch.no_grad()
     def compute_3D_smoothing_filter(self):
+        cfg = self.cfg
+        device = self.device
+        xyz = self.splats["means3d"]
+        print("xyz", xyz.shape, xyz.device)
+
+        worldtocams = (
+            torch.from_numpy(self.trainset.parser.worldtocams).float().to(device)
+        )
+        # TODO, currently use K, H, W of the first image
+        data = self.trainset[0]
+        K = data["K"].to(device)  # [3, 3]
+        height, width = data["image"].shape[:2]
+        Ks = torch.stack([K] * len(worldtocams), dim=0)  # [C, 3, 3]
+        filter_3D = compute_3D_smoothing_filter(
+            xyz, worldtocams, Ks, width, height, cfg.near_plane
+        )
+        filter_3D = filter_3D * (0.2**0.5)
+        self.splats["filters"] = torch.nn.Parameter(filter_3D)
+
+    @torch.no_grad()
+    def compute_3D_smoothing_filter_torch(self):
         print("Computing 3D filter")
         cfg = self.cfg
         device = self.device
@@ -1057,7 +1079,7 @@ def main(cfg: Config):
         for k in runner.splats.keys():
             runner.splats[k].data = ckpt["splats"][k]
         runner.eval(step=ckpt["step"])
-        runner.render_traj(step=ckpt["step"])
+        # runner.render_traj(step=ckpt["step"])
     else:
         runner.train()
 

@@ -572,6 +572,34 @@ def rasterize_to_indices_in_range(
     return out_gauss_ids, out_pixel_ids, out_camera_ids
 
 
+def compute_3D_smoothing_filter(
+    means: Tensor,  # [N, 3]
+    viewmats: Tensor,  # [C, 4, 4]
+    Ks: Tensor,  # [C, 3, 3]
+    width: int,
+    height: int,
+    near_plane: float = 0.01,
+) -> Tensor:
+    """Compute 3D smoothing filter."""
+    C = viewmats.size(0)
+    N = means.size(0)
+    assert means.size() == (N, 3), means.size()
+    assert viewmats.size() == (C, 4, 4), viewmats.size()
+    assert Ks.size() == (C, 3, 3), Ks.size()
+    means = means.contiguous()
+    viewmats = viewmats.contiguous()
+    Ks = Ks.contiguous()
+
+    return _Compute3DSmoothingFilter.apply(
+        means,
+        viewmats,
+        Ks,
+        width,
+        height,
+        near_plane,
+    )
+
+
 class _QuatScaleToCovarPreci(torch.autograd.Function):
     """Converts quaternions and scales to covariance and precision matrices."""
 
@@ -1143,3 +1171,28 @@ class _SphericalHarmonics(torch.autograd.Function):
         if not compute_v_dirs:
             v_dirs = None
         return None, v_dirs, v_coeffs, None
+
+
+class _Compute3DSmoothingFilter(torch.autograd.Function):
+    """Compute 3D Smoothing filter."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        means: Tensor,  # [N, 3]
+        viewmats: Tensor,  # [C, 4, 4]
+        Ks: Tensor,  # [C, 3, 3]
+        width: int,
+        height: int,
+        near_plane: float,
+    ) -> Tensor:
+        filter_3D = _make_lazy_cuda_func("compute_3D_smoothing_filter_fwd")(
+            means,
+            viewmats,
+            Ks,
+            width,
+            height,
+            near_plane,
+        )
+
+        return filter_3D

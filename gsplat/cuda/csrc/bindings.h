@@ -175,6 +175,13 @@ compute_sh_bwd_tensor(const uint32_t K, const uint32_t degrees_to_use,
                       torch::Tensor &v_colors,           // [..., 3]
                       bool compute_v_dirs);
 
+torch::Tensor compute_3D_smoothing_filter_fwd_tensor(
+    const torch::Tensor &means,                // [N, 3]
+    const torch::Tensor &viewmats,             // [C, 4, 4]
+    const torch::Tensor &Ks,                   // [C, 3, 3]
+    const uint32_t image_width, const uint32_t image_height, 
+    const float near_plane);
+
 /****************************************************************************************
  * Packed Version
  ****************************************************************************************/
