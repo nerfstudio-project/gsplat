@@ -456,24 +456,26 @@ class Runner:
                 )
             )
 
-        self.strategy = SplatfactoStrategy(params=self.splats, 
-                                           activations=self.activations,
-                                           optimizers=self.optimizers, 
-                                           schedulers=schedulers, 
-                                           device=device, 
-                                           prune_opa=cfg.prune_opa, 
-                                           grow_grad2d=cfg.grow_grad2d, 
-                                           grow_scale3d=cfg.grow_scale3d,
-                                           prune_scale3d=cfg.prune_scale3d,
-                                           refine_start_iter=cfg.refine_start_iter,
-                                           refine_stop_iter=cfg.refine_stop_iter,
-                                           reset_every=cfg.reset_every,
-                                           refine_every=cfg.refine_every,
-                                           scene_scale=self.scene_scale,
-                                           absgrad=cfg.absgrad,
-                                           batch_size=cfg.batch_size,
-                                           packed=cfg.packed,
-                                           sparse_grad=cfg.sparse_grad)
+        self.strategy = SplatfactoStrategy(
+            params=self.splats, 
+            activations=self.activations,
+            optimizers=self.optimizers, 
+            schedulers=schedulers, 
+            device=device, 
+            prune_opa=cfg.prune_opa, 
+            grow_grad2d=cfg.grow_grad2d, 
+            grow_scale3d=cfg.grow_scale3d,
+            prune_scale3d=cfg.prune_scale3d,
+            refine_start_iter=cfg.refine_start_iter,
+            refine_stop_iter=cfg.refine_stop_iter,
+            reset_every=cfg.reset_every,
+            refine_every=cfg.refine_every,
+            scene_scale=self.scene_scale,
+            absgrad=cfg.absgrad,
+            batch_size=cfg.batch_size,
+            packed=cfg.packed,
+            sparse_grad=cfg.sparse_grad
+        )
 
         trainloader = torch.utils.data.DataLoader(
             self.trainset,
@@ -600,64 +602,9 @@ class Runner:
                     self.writer.add_image("train/render", canvas, step)
                 self.writer.flush()
 
-            # update running stats for prunning & growing
-            if step < cfg.refine_stop_iter:
-                self.update_running_stats(info)
-
-                if step > cfg.refine_start_iter and step % cfg.refine_every == 0:
-                    grads = self.running_stats["grad2d"] / self.running_stats[
-                        "count"
-                    ].clamp_min(1)
-
-                    # grow GSs
-                    is_grad_high = grads >= cfg.grow_grad2d
-                    is_small = (
-                        self.get_param("scales").max(dim=-1).values
-                        <= cfg.grow_scale3d * self.scene_scale
-                    )
-                    is_dupli = is_grad_high & is_small
-                    n_dupli = is_dupli.sum().item()
-                    self.refine_duplicate(is_dupli)
-
-                    is_split = is_grad_high & ~is_small
-                    is_split = torch.cat(
-                        [
-                            is_split,
-                            # new GSs added by duplication will not be split
-                            torch.zeros(n_dupli, device=device, dtype=torch.bool),
-                        ]
-                    )
-                    n_split = is_split.sum().item()
-                    self.refine_split(is_split)
-                    print(
-                        f"Step {step}: {n_dupli} GSs duplicated, {n_split} GSs split. "
-                        f"Now having {len(self.get_param('means3d'))} GSs."
-                    )
-
-                    # prune GSs
-                    is_prune = self.get_param("opacities") < cfg.prune_opa
-                    if step > cfg.reset_every:
-                        # The official code also implements sreen-size pruning but
-                        # it's actually not being used due to a bug:
-                        # https://github.com/graphdeco-inria/gaussian-splatting/issues/123
-                        is_too_big = (
-                            self.get_param("scales").max(dim=-1).values
-                            > cfg.prune_scale3d * self.scene_scale
-                        )
-                        is_prune = is_prune | is_too_big
-                    n_prune = is_prune.sum().item()
-                    self.refine_keep(~is_prune)
-                    print(
-                        f"Step {step}: {n_prune} GSs pruned. "
-                        f"Now having {len(self.get_param('means3d'))} GSs."
-                    )
-
-                    # reset running stats
-                    self.running_stats["grad2d"].zero_()
-                    self.running_stats["count"].zero_()
-
-                if step % cfg.reset_every == 0:
-                    self.reset_opa(cfg.prune_opa * 2.0)
+            # strategy's callback after loss.backward()
+            # adaptive density control handled here
+            self.strategy.step_post_backward(info)
 
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:
@@ -721,159 +668,6 @@ class Runner:
                 self.viewer.state.num_train_rays_per_sec = num_train_rays_per_sec
                 # Update the scene.
                 self.viewer.update(step, num_train_rays_per_step)
-
-    @torch.no_grad()
-    def update_running_stats(self, info: Dict):
-        """Update running stats."""
-        cfg = self.cfg
-
-        # normalize grads to [-1, 1] screen space
-        if cfg.absgrad:
-            grads = info["means2d"].absgrad.clone()
-        else:
-            grads = info["means2d"].grad.clone()
-        grads[..., 0] *= info["width"] / 2.0 * cfg.batch_size
-        grads[..., 1] *= info["height"] / 2.0 * cfg.batch_size
-        if cfg.packed:
-            # grads is [nnz, 2]
-            gs_ids = info["gaussian_ids"]  # [nnz] or None
-            self.running_stats["grad2d"].index_add_(0, gs_ids, grads.norm(dim=-1))
-            self.running_stats["count"].index_add_(
-                0, gs_ids, torch.ones_like(gs_ids).int()
-            )
-        else:
-            # grads is [C, N, 2]
-            sel = info["radii"] > 0.0  # [C, N]
-            gs_ids = torch.where(sel)[1]  # [nnz]
-            self.running_stats["grad2d"].index_add_(0, gs_ids, grads[sel].norm(dim=-1))
-            self.running_stats["count"].index_add_(
-                0, gs_ids, torch.ones_like(gs_ids).int()
-            )
-
-    @torch.no_grad()
-    def reset_opa(self, value: float = 0.01):
-        """Utility function to reset opacities."""
-        opacities = torch.clamp(
-            self.splats["opacities"], max=torch.logit(torch.tensor(value)).item()
-        )
-        for optimizer in self.optimizers:
-            for i, param_group in enumerate(optimizer.param_groups):
-                if param_group["name"] != "opacities":
-                    continue
-                p = param_group["params"][0]
-                p_state = optimizer.state[p]
-                del optimizer.state[p]
-                for key in p_state.keys():
-                    if key != "step":
-                        p_state[key] = torch.zeros_like(p_state[key])
-                p_new = torch.nn.Parameter(opacities)
-                optimizer.param_groups[i]["params"] = [p_new]
-                optimizer.state[p_new] = p_state
-                self.splats[param_group["name"]] = p_new
-        torch.cuda.empty_cache()
-
-    @torch.no_grad()
-    def refine_split(self, mask: Tensor):
-        """Utility function to grow GSs."""
-        device = self.device
-
-        sel = torch.where(mask)[0]
-        rest = torch.where(~mask)[0]
-
-        scales = self.get_param("scales")[sel]  # [N, 3]
-        quats = F.normalize(self.get_param("quats")[sel], dim=-1)  # [N, 4]
-        rotmats = normalized_quat_to_rotmat(quats)  # [N, 3, 3]
-        samples = torch.einsum(
-            "nij,nj,bnj->bni",
-            rotmats,
-            scales,
-            torch.randn(2, len(scales), 3, device=device),
-        )  # [2, N, 3]
-
-        for optimizer in self.optimizers:
-            for i, param_group in enumerate(optimizer.param_groups):
-                p = param_group["params"][0]
-                name = param_group["name"]
-                # create new params
-                if name == "means3d":
-                    p_split = (p[sel] + samples).reshape(-1, 3)  # [2N, 3]
-                elif name == "scales":
-                    p_split = torch.log(scales / 1.6).repeat(2, 1)  # [2N, 3]
-                else:
-                    repeats = [2] + [1] * (p.dim() - 1)
-                    p_split = p[sel].repeat(repeats)
-                p_new = torch.cat([p[rest], p_split])
-                p_new = torch.nn.Parameter(p_new)
-                # update optimizer
-                p_state = optimizer.state[p]
-                del optimizer.state[p]
-                for key in p_state.keys():
-                    if key == "step":
-                        continue
-                    v = p_state[key]
-                    # new params are assigned with zero optimizer states
-                    # (worth investigating it)
-                    v_split = torch.zeros((2 * len(sel), *v.shape[1:]), device=device)
-                    p_state[key] = torch.cat([v[rest], v_split])
-                optimizer.param_groups[i]["params"] = [p_new]
-                optimizer.state[p_new] = p_state
-                self.splats[name] = p_new
-        for k, v in self.running_stats.items():
-            if v is None:
-                continue
-            repeats = [2] + [1] * (v.dim() - 1)
-            v_new = v[sel].repeat(repeats)
-            self.running_stats[k] = torch.cat((v[rest], v_new))
-        torch.cuda.empty_cache()
-
-    @torch.no_grad()
-    def refine_duplicate(self, mask: Tensor):
-        """Unility function to duplicate GSs."""
-        sel = torch.where(mask)[0]
-        for optimizer in self.optimizers:
-            for i, param_group in enumerate(optimizer.param_groups):
-                p = param_group["params"][0]
-                name = param_group["name"]
-                p_state = optimizer.state[p]
-                del optimizer.state[p]
-                for key in p_state.keys():
-                    if key != "step":
-                        # new params are assigned with zero optimizer states
-                        # (worth investigating it as it will lead to a lot more GS.)
-                        v = p_state[key]
-                        v_new = torch.zeros(
-                            (len(sel), *v.shape[1:]), device=self.device
-                        )
-                        # v_new = v[sel]
-                        p_state[key] = torch.cat([v, v_new])
-                p_new = torch.nn.Parameter(torch.cat([p, p[sel]]))
-                optimizer.param_groups[i]["params"] = [p_new]
-                optimizer.state[p_new] = p_state
-                self.splats[name] = p_new
-        for k, v in self.running_stats.items():
-            self.running_stats[k] = torch.cat((v, v[sel]))
-        torch.cuda.empty_cache()
-
-    @torch.no_grad()
-    def refine_keep(self, mask: Tensor):
-        """Unility function to prune GSs."""
-        sel = torch.where(mask)[0]
-        for optimizer in self.optimizers:
-            for i, param_group in enumerate(optimizer.param_groups):
-                p = param_group["params"][0]
-                name = param_group["name"]
-                p_state = optimizer.state[p]
-                del optimizer.state[p]
-                for key in p_state.keys():
-                    if key != "step":
-                        p_state[key] = p_state[key][sel]
-                p_new = torch.nn.Parameter(p[sel])
-                optimizer.param_groups[i]["params"] = [p_new]
-                optimizer.state[p_new] = p_state
-                self.splats[name] = p_new
-        for k, v in self.running_stats.items():
-            self.running_stats[k] = v[sel]
-        torch.cuda.empty_cache()
 
     @torch.no_grad()
     def eval(self, step: int):
