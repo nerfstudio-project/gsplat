@@ -398,6 +398,7 @@ def rasterization(
         "width": width,
         "height": height,
         "tile_size": tile_size,
+        "n_cameras": C,
     }
     return render_colors, render_alphas, meta
 
