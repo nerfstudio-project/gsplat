@@ -22,12 +22,8 @@ from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMe
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from utils import AppearanceOptModule, CameraOptModule, set_random_seed
 
-from gsplat import quat_scale_to_covar_preci
-from gsplat._gaussian import Gaussian3D
-from gsplat.cuda_legacy._torch_impl import scale_rot_to_cov3d
-from gsplat.relocation import compute_relocation
 from gsplat.rendering import rasterization
-from gsplat.strategies import MCMCStrategy
+from gsplat.strategy import MCMCStrategy
 
 
 @dataclass
@@ -36,6 +32,8 @@ class Config:
     disable_viewer: bool = False
     # Path to the .pt file. If provide, it will skip training and render a video
     ckpt: Optional[str] = None
+    # Verbose
+    verbose: bool = False
 
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
@@ -215,20 +213,12 @@ class Runner:
             params=self.splats,
             activations=self.activations,
             optimizers=self.optimizers,
-            device=self.device,
+            verbose=cfg.verbose,
             cap_max=cfg.cap_max,
             noise_lr=cfg.noise_lr,
-            opacity_reg=cfg.opacity_reg,
-            scale_reg=cfg.scale_reg,
             refine_start_iter=cfg.refine_start_iter,
             refine_stop_iter=cfg.refine_stop_iter,
             refine_every=cfg.refine_every,
-            reset_every=cfg.reset_every,
-            scene_scale=self.scene_scale,
-            absgrad=cfg.absgrad,
-            batch_size=cfg.batch_size,
-            packed=cfg.packed,
-            sparse_grad=cfg.sparse_grad,
         )
 
         self.pose_optimizers = []
@@ -435,7 +425,7 @@ class Runner:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
 
-            info["means2d"].retain_grad()  # used for running stats
+            self.strategy.step_pre_backward(step, info)
 
             # loss
             l1loss = F.l1_loss(colors, pixels)
@@ -463,8 +453,8 @@ class Runner:
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
 
-            loss = loss + cfg.opacity_reg * torch.abs(self["opacities"]).mean()
-            loss = loss + cfg.scale_reg * torch.abs(self["scales"]).mean()
+            loss = loss + cfg.opacity_reg * torch.abs(self.splats["opacities"]).mean()
+            loss = loss + cfg.scale_reg * torch.abs(self.splats["scales"]).mean()
 
             loss.backward()
 
@@ -493,7 +483,8 @@ class Runner:
                 self.writer.flush()
 
             # edit GSs
-            self.strategy.step_post_backward()
+            last_lr = schedulers[0].get_last_lr()[0]
+            self.strategy.step_post_backward(step, info, last_lr)
 
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:
@@ -522,10 +513,6 @@ class Runner:
                 optimizer.zero_grad(set_to_none=True)
             for scheduler in schedulers:
                 scheduler.step()
-
-            # add noise to GSs
-            last_lr = schedulers[0].get_last_lr()[0]
-            self.add_noise_to_gs(last_lr)
 
             # save checkpoint
             if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
@@ -561,51 +548,6 @@ class Runner:
                 self.viewer.state.num_train_rays_per_sec = num_train_rays_per_sec
                 # Update the scene.
                 self.viewer.update(step, num_train_rays_per_step)
-
-    @torch.no_grad()
-    def add_new_gs(self, cap_max: int, min_opacity: float = 0.005) -> int:
-        current_num_points = len(self.splats["means3d"])
-        target_num = min(cap_max, int(1.05 * current_num_points))
-        num_gs = max(0, target_num - current_num_points)
-        if num_gs <= 0:
-            return num_gs
-
-        # Sample for new GSs
-        eps = torch.finfo(torch.float32).eps
-        probs = torch.sigmoid(self.splats["opacities"])
-        probs = probs / (probs.sum() + eps)
-        sampled_idxs = torch.multinomial(probs, num_gs, replacement=True)
-        new_opacities, new_scales = compute_relocation(
-            opacities=torch.sigmoid(self.splats["opacities"])[sampled_idxs],
-            scales=torch.exp(self.splats["scales"])[sampled_idxs],
-            ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
-        )
-        new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
-        self.splats["opacities"][sampled_idxs] = torch.logit(new_opacities)
-        self.splats["scales"][sampled_idxs] = torch.log(new_scales)
-
-        # Update splats and optimizers
-        for k in self.splats.keys():
-            self.splats[k] = torch.cat([self.splats[k], self.splats[k][sampled_idxs]])
-        for optimizer in self.optimizers:
-            for i, param_group in enumerate(optimizer.param_groups):
-                p = param_group["params"][0]
-                name = param_group["name"]
-                p_state = optimizer.state[p]
-                del optimizer.state[p]
-                for key in p_state.keys():
-                    if key != "step":
-                        v = p_state[key]
-                        v_new = torch.zeros(
-                            (len(sampled_idxs), *v.shape[1:]), device=self.device
-                        )
-                        p_state[key] = torch.cat([v, v_new])
-                p_new = torch.nn.Parameter(self.splats[name])
-                optimizer.param_groups[i]["params"] = [p_new]
-                optimizer.state[p_new] = p_state
-                self.splats[name] = p_new
-        torch.cuda.empty_cache()
-        return num_gs
 
     @torch.no_grad()
     def eval(self, step: int):

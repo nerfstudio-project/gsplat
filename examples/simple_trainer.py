@@ -24,13 +24,12 @@ from utils import (
     AppearanceOptModule,
     CameraOptModule,
     knn,
-    normalized_quat_to_rotmat,
     rgb_to_sh,
     set_random_seed,
 )
 
 from gsplat.rendering import rasterization
-from gsplat.strategies import SplatfactoStrategy
+from gsplat.strategy import DefaultStrategy
 
 
 @dataclass
@@ -39,6 +38,9 @@ class Config:
     disable_viewer: bool = False
     # Path to the .pt file. If provide, it will skip training and render a video
     ckpt: Optional[str] = None
+
+    # Verbose
+    verbose: bool = False
 
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
@@ -116,6 +118,8 @@ class Config:
     absgrad: bool = False
     # Anti-aliasing in rasterization. Might slightly hurt quantitative metrics.
     antialiased: bool = False
+    # Whether to use revised opacity heuristic from arXiv:2404.06109
+    revised_opacity: bool = False
 
     # Use random background for training to discourage transparency
     random_bkgd: bool = False
@@ -429,6 +433,9 @@ class Runner:
             rasterize_mode=rasterize_mode,
             **kwargs,
         )
+        
+        info["device"] = self.device
+
         return render_colors, render_alphas, info
 
     def train(self):
@@ -456,12 +463,11 @@ class Runner:
                 )
             )
 
-        self.strategy = SplatfactoStrategy(
+        self.strategy = DefaultStrategy(
             params=self.splats, 
             activations=self.activations,
             optimizers=self.optimizers, 
-            schedulers=schedulers, 
-            device=device, 
+            verbose=cfg.verbose,
             prune_opa=cfg.prune_opa, 
             grow_grad2d=cfg.grow_grad2d, 
             grow_scale3d=cfg.grow_scale3d,
@@ -470,11 +476,8 @@ class Runner:
             refine_stop_iter=cfg.refine_stop_iter,
             reset_every=cfg.reset_every,
             refine_every=cfg.refine_every,
-            scene_scale=self.scene_scale,
             absgrad=cfg.absgrad,
-            batch_size=cfg.batch_size,
-            packed=cfg.packed,
-            sparse_grad=cfg.sparse_grad
+            revised_opacity=cfg.revised_opacity,
         )
 
         trainloader = torch.utils.data.DataLoader(
@@ -547,7 +550,7 @@ class Runner:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
 
-            info["means2d"].retain_grad()  # used for running stats
+            self.strategy.step_pre_backward(step, info)
 
             # loss
             l1loss = F.l1_loss(colors, pixels)
