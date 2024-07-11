@@ -34,14 +34,7 @@ def test_strategy():
             "colors": torch.rand(N, 3),
         }
     ).to(device)
-    lrs = {
-        "means3d": 1e-3,
-        "scales": 1e-3,
-        "quats": 1e-3,
-        "opacities": 1e-3,
-        "colors": 1e-3,
-    }
-    optimizers = {k: torch.optim.Adam([v], lr=lrs[k]) for k, v in params.items()}
+    optimizers = {k: torch.optim.Adam([v], lr=1e-3) for k, v in params.items()}
 
     # A dummy rendering call
     render_colors, render_alphas, info = rasterization(
@@ -56,7 +49,6 @@ def test_strategy():
         height=10,
         packed=False,
     )
-    print(render_colors.shape, render_alphas.shape)
 
     # Test Strategy
     strategy = Strategy()
