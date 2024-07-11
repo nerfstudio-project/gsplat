@@ -1,4 +1,5 @@
-from typing import Any, Callable, DefaultDict, Dict, List, Tuple, Union
+from dataclasses import dataclass
+from typing import Any, Dict, List, Tuple, Union
 
 import torch
 import torch.nn.functional as F
@@ -9,6 +10,7 @@ from gsplat.utils import normalized_quat_to_rotmat
 from .base import Strategy
 
 
+@dataclass
 class DefaultStrategy(Strategy):
     """A default strategy that follows the original 3DGS paper:
 
@@ -22,56 +24,39 @@ class DefaultStrategy(Strategy):
     https://arxiv.org/abs/2404.10484
     """
 
-    def __init__(
-        self,
-        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-        optimizers: Dict[str, torch.optim.Optimizer],
-        verbose: bool = False,
-        scene_scale: float = 1.0,
-        # GSs with opacity below this value will be pruned
-        prune_opa: float = 0.005,
-        # GSs with image plane gradient above this value will be split/duplicated
-        grow_grad2d: float = 0.0002,
-        # GSs with scale below this value will be duplicated. Above will be split
-        grow_scale3d: float = 0.01,
-        # GSs with scale above this value will be pruned.
-        prune_scale3d: float = 0.1,
-        # Start refining GSs after this iteration
-        refine_start_iter: int = 500,
-        # Stop refining GSs after this iteration
-        refine_stop_iter: int = 15_000,
-        # Reset opacities every this steps
-        reset_every: int = 3000,
-        # Refine GSs every this steps
-        refine_every: int = 100,
-        # Use absolute gradients for GS splitting
-        absgrad: bool = False,
-        # Whether to use revised opacity heuristic from arXiv:2404.06109
-        # (experimental)
-        revised_opacity: bool = False,
-    ):
-        super().__init__(params, optimizers)
+    # Whether to print verbose information
+    verbose: bool = False
+    # The scale of the scene for calibrating the scale-related logic.
+    scene_scale: float = 1.0
+    # GSs with opacity below this value will be pruned
+    prune_opa: float = 0.005
+    # GSs with image plane gradient above this value will be split/duplicated
+    grow_grad2d: float = 0.0002
+    # GSs with scale below this value will be duplicated. Above will be split
+    grow_scale3d: float = 0.01
+    # GSs with scale above this value will be pruned.
+    prune_scale3d: float = 0.1
+    # Start refining GSs after this iteration
+    refine_start_iter: int = 500
+    # Stop refining GSs after this iteration
+    refine_stop_iter: int = 15_000
+    # Reset opacities every this steps
+    reset_every: int = 3000
+    # Refine GSs every this steps
+    refine_every: int = 100
+    # Use absolute gradients for GS splitting
+    absgrad: bool = False
+    # Whether to use revised opacity heuristic from arXiv:2404.06109 (experimental)
+    revised_opacity: bool = False
 
+    def __post_init__(self):
         # The following keys are required for this strategy.
         for key in ["means3d", "scales", "quats", "opacities"]:
-            assert key in self._params, f"{key} is required in params but missing."
-
-        self._verbose = verbose
-        self._scene_scale = scene_scale
-        self._prune_opa = prune_opa
-        self._grow_grad2d = grow_grad2d
-        self._grow_scale3d = grow_scale3d
-        self._prune_scale3d = prune_scale3d
-        self._refine_start_iter = refine_start_iter
-        self._refine_stop_iter = refine_stop_iter
-        self._reset_every = reset_every
-        self._refine_every = refine_every
-        self._absgrad = absgrad
-        self._revised_opacity = revised_opacity
+            assert key in self.params, f"{key} is required in params but missing."
 
         # Postpone the initialization of the state to the first step so that we can
         # put them on the correct device.
-        self._state = {
+        self.state = {
             # running accum: the norm of the image plane gradients for each GS.
             "grad2d": None,
             # running accum: counting how many time each GS is visible.
@@ -93,45 +78,45 @@ class DefaultStrategy(Strategy):
 
         Update running state and perform GS pruning, splitting, and duplicating.
         """
-        if step >= self._refine_stop_iter:
+        if step >= self.refine_stop_iter:
             return
 
         self._update_state(info, packed=packed)
 
-        if step > self._refine_start_iter and step % self._refine_every == 0:
+        if step > self.refine_start_iter and step % self.refine_every == 0:
             # grow GSs
             n_dupli, n_split = self._grow_gs()
-            if self._verbose:
+            if self.verbose:
                 print(
                     f"Step {step}: {n_dupli} GSs duplicated, {n_split} GSs split. "
-                    f"Now having {len(self._params['means3d'])} GSs."
+                    f"Now having {len(self.params['means3d'])} GSs."
                 )
 
             # prune GSs
             n_prune = self._prune_gs(step)
-            if self._verbose:
+            if self.verbose:
                 print(
                     f"Step {step}: {n_prune} GSs pruned. "
-                    f"Now having {len(self._params['means3d'])} GSs."
+                    f"Now having {len(self.params['means3d'])} GSs."
                 )
 
             # reset running stats
-            self._state["grad2d"].zero_()
-            self._state["count"].zero_()
+            self.state["grad2d"].zero_()
+            self.state["count"].zero_()
 
-        if step % self._reset_every == 0:
-            self._reset_opa(value=self._prune_opa * 2.0)
+        if step % self.reset_every == 0:
+            self._reset_opa(value=self.prune_opa * 2.0)
 
     @torch.no_grad()
     def _grow_gs(self) -> Tuple[int, int]:
-        count = self._state["count"]
-        grads = self._state["grad2d"] / count.clamp_min(1)
+        count = self.state["count"]
+        grads = self.state["grad2d"] / count.clamp_min(1)
         device = grads.device
 
-        is_grad_high = grads > self._grow_grad2d
+        is_grad_high = grads > self.grow_grad2d
         is_small = (
-            torch.exp(self._params["scales"]).max(dim=-1).values
-            <= self._grow_scale3d * self._scene_scale
+            torch.exp(self.params["scales"]).max(dim=-1).values
+            <= self.grow_scale3d * self.scene_scale
         )
         is_dupli = is_grad_high & is_small
         n_dupli = is_dupli.sum().item()
@@ -155,14 +140,14 @@ class DefaultStrategy(Strategy):
 
     @torch.no_grad()
     def _prune_gs(self, step) -> int:
-        is_prune = torch.sigmoid(self._params["opacities"]) < self._prune_opa
-        if step > self._reset_every:
+        is_prune = torch.sigmoid(self.params["opacities"]) < self.prune_opa
+        if step > self.reset_every:
             # The official code also implements sreen-size pruning but
             # it's actually not being used due to a bug:
             # https://github.com/graphdeco-inria/gaussian-splatting/issues/123
             is_too_big = (
-                torch.exp(self._params["scales"]).max(dim=-1).values
-                > self._prune_scale3d * self._scene_scale
+                torch.exp(self.params["scales"]).max(dim=-1).values
+                > self.prune_scale3d * self.scene_scale
             )
             is_prune = is_prune | is_too_big
 
@@ -176,7 +161,7 @@ class DefaultStrategy(Strategy):
             assert key in info, f"{key} is required but missing."
 
         # normalize grads to [-1, 1] screen space
-        if self._absgrad:
+        if self.absgrad:
             grads = info["means2d"].absgrad.clone()
         else:
             grads = info["means2d"].grad.clone()
@@ -184,26 +169,26 @@ class DefaultStrategy(Strategy):
         grads[..., 1] *= info["height"] / 2.0 * info["n_cameras"]
 
         # initialize states on the first run
-        n_gaussian = len(list(self._params.values())[0])
-        if self._state["grad2d"] is None:
-            self._state["grad2d"] = torch.zeros(n_gaussian, device=grads.device)
-        if self._state["count"] is None:
-            self._state["count"] = torch.zeros(n_gaussian, device=grads.device)
+        n_gaussian = len(list(self.params.values())[0])
+        if self.state["grad2d"] is None:
+            self.state["grad2d"] = torch.zeros(n_gaussian, device=grads.device)
+        if self.state["count"] is None:
+            self.state["count"] = torch.zeros(n_gaussian, device=grads.device)
 
         # update the running state
         if packed:
             # grads is [nnz, 2]
             gs_ids = info["gaussian_ids"]  # [nnz]
-            self._state["grad2d"].index_add_(0, gs_ids, grads.norm(dim=-1))
-            self._state["count"].index_add_(
+            self.state["grad2d"].index_add_(0, gs_ids, grads.norm(dim=-1))
+            self.state["count"].index_add_(
                 0, gs_ids, torch.ones_like(gs_ids, dtype=torch.float32)
             )
         else:
             # grads is [C, N, 2]
             sel = info["radii"] > 0.0  # [C, N]
             gs_ids = torch.where(sel)[1]  # [nnz]
-            self._state["grad2d"].index_add_(0, gs_ids, grads[sel].norm(dim=-1))
-            self._state["count"].index_add_(
+            self.state["grad2d"].index_add_(0, gs_ids, grads[sel].norm(dim=-1))
+            self.state["count"].index_add_(
                 0, gs_ids, torch.ones_like(gs_ids, dtype=torch.float32)
             )
 
@@ -211,7 +196,7 @@ class DefaultStrategy(Strategy):
     def _refine_duplicate(self, mask: Tensor):
         device = mask.device
         sel = torch.where(mask)[0]
-        for name, optimizer in self._optimizers.items():
+        for name, optimizer in self.optimizers.items():
             for i, param_group in enumerate(optimizer.param_groups):
                 p = param_group["params"][0]
                 p_state = optimizer.state[p]
@@ -226,9 +211,9 @@ class DefaultStrategy(Strategy):
                 p_new = torch.nn.Parameter(torch.cat([p, p[sel]]))
                 optimizer.param_groups[i]["params"] = [p_new]
                 optimizer.state[p_new] = p_state
-                self._params[name] = p_new
-        for k, v in self._state.items():
-            self._state[k] = torch.cat((v, v[sel]))
+                self.params[name] = p_new
+        for k, v in self.state.items():
+            self.state[k] = torch.cat((v, v[sel]))
         torch.cuda.empty_cache()
 
     @torch.no_grad()
@@ -237,9 +222,9 @@ class DefaultStrategy(Strategy):
         sel = torch.where(mask)[0]
         rest = torch.where(~mask)[0]
 
-        scales = torch.exp(self._params["scales"])[sel]
-        quats = F.normalize(self._params["quats"], dim=-1)[sel]
-        opacities = torch.sigmoid(self._params["opacities"])[sel]
+        scales = torch.exp(self.params["scales"])[sel]
+        quats = F.normalize(self.params["quats"], dim=-1)[sel]
+        opacities = torch.sigmoid(self.params["opacities"])[sel]
         rotmats = normalized_quat_to_rotmat(quats)  # [N, 3, 3]
         samples = torch.einsum(
             "nij,nj,bnj->bni",
@@ -248,7 +233,7 @@ class DefaultStrategy(Strategy):
             torch.randn(2, len(scales), 3, device=device),
         )  # [2, N, 3]
 
-        for name, optimizer in self._optimizers.items():
+        for name, optimizer in self.optimizers.items():
             for i, param_group in enumerate(optimizer.param_groups):
                 p = param_group["params"][0]
                 # create new params
@@ -258,7 +243,7 @@ class DefaultStrategy(Strategy):
                     p_split = torch.log(scales / 1.6).repeat(2, 1)  # [2N, 3]
 
                 # TODO: test if this is correct
-                elif name == "opacities" and self._revised_opacity:
+                elif name == "opacities" and self.revised_opacity:
                     new_opacities = 1 - torch.sqrt(1 - opacities)
                     p_split = torch.logit(new_opacities).repeat(2, 1)
                 else:
@@ -279,21 +264,21 @@ class DefaultStrategy(Strategy):
                     p_state[key] = torch.cat([v[rest], v_split])
                 optimizer.param_groups[i]["params"] = [p_new]
                 optimizer.state[p_new] = p_state
-                self._params[name] = p_new
+                self.params[name] = p_new
 
-        for k, v in self._state.items():
+        for k, v in self.state.items():
             if v is None:
                 continue
             repeats = [2] + [1] * (v.dim() - 1)
             v_new = v[sel].repeat(repeats)
-            self._state[k] = torch.cat((v[rest], v_new))
+            self.state[k] = torch.cat((v[rest], v_new))
         torch.cuda.empty_cache()
 
     @torch.no_grad()
     def _refine_keep(self, mask: Tensor):
         """Unility function to prune GSs."""
         sel = torch.where(mask)[0]
-        for name, optimizer in self._optimizers.items():
+        for name, optimizer in self.optimizers.items():
             for i, param_group in enumerate(optimizer.param_groups):
                 p = param_group["params"][0]
                 p_state = optimizer.state[p]
@@ -304,18 +289,18 @@ class DefaultStrategy(Strategy):
                 p_new = torch.nn.Parameter(p[sel])
                 optimizer.param_groups[i]["params"] = [p_new]
                 optimizer.state[p_new] = p_state
-                self._params[name] = p_new
-        for k, v in self._state.items():
-            self._state[k] = v[sel]
+                self.params[name] = p_new
+        for k, v in self.state.items():
+            self.state[k] = v[sel]
         torch.cuda.empty_cache()
 
     @torch.no_grad()
     def _reset_opa(self, value: float = 0.01):
         """Utility function to reset opacities."""
         opacities = torch.clamp(
-            self._params["opacities"], max=torch.logit(torch.tensor(value)).item()
+            self.params["opacities"], max=torch.logit(torch.tensor(value)).item()
         )
-        for name, optimizer in self._optimizers.items():
+        for name, optimizer in self.optimizers.items():
             for i, param_group in enumerate(optimizer.param_groups):
                 if name != "opacities":
                     continue
@@ -328,5 +313,5 @@ class DefaultStrategy(Strategy):
                 p_new = torch.nn.Parameter(opacities)
                 optimizer.param_groups[i]["params"] = [p_new]
                 optimizer.state[p_new] = p_state
-                self._params[name] = p_new
+                self.params[name] = p_new
         torch.cuda.empty_cache()

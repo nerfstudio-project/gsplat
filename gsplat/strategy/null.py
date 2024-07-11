@@ -1,8 +1,10 @@
-from typing import Any, Callable, DefaultDict, Dict, List, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, List, Tuple
 
 from .base import Strategy
 
 
+@dataclass
 class NullStrategy(Strategy):
     """A null strategy that does nothing."""
 

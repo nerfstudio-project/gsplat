@@ -1,43 +1,36 @@
-from abc import ABC, abstractmethod
-from collections import defaultdict
-from typing import Any, Callable, DefaultDict, Dict, List, Tuple, Union
+import abc
+from dataclasses import dataclass
+from typing import Any, Dict, List, Tuple, Union
 
 import torch
 
 
-class Strategy(ABC):
+@dataclass
+class Strategy(abc.ABC):
     """Base class for the GS optimization strategy."""
 
-    def __init__(
-        self,
-        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-        optimizers: Dict[str, torch.optim.Optimizer],
-        *args,
-        **kwargs,
-    ):
-        self._params = params
-        self._optimizers = optimizers
+    # Gaussian Parameters
+    params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict]
+    # Optimizers for each parameter
+    optimizers: Dict[str, torch.optim.Optimizer]
 
-        # some running states for the strategy
-        self._state: DefaultDict[str, Any] = defaultdict(dict)
-
-        # sanity checks
-        assert set(params.keys()) == set(optimizers.keys()), (
+    def __post_init__(self):
+        assert set(self.params.keys()) == set(self.optimizers.keys()), (
             "params and optimizers must have the same keys, "
-            f"but got {params.keys()} and {optimizers.keys()}"
+            f"but got {self.params.keys()} and {self.optimizers.keys()}"
         )
 
-        for optimizer in optimizers.values():
+        for optimizer in self.optimizers.values():
             assert len(optimizer.param_groups) == 1, (
                 "Each optimizer must have exactly one param_group, "
                 "that cooresponds to each parameter, "
                 f"but got {len(optimizer.param_groups)}"
             )
 
-    @abstractmethod
+    @abc.abstractmethod
     def step_pre_backward(self, step: int, info: Dict[str, Any]):
         raise NotImplementedError
 
-    @abstractmethod
+    @abc.abstractmethod
     def step_post_backward(self, step: int, info: Dict[str, Any]):
         raise NotImplementedError
