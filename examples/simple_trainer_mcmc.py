@@ -22,9 +22,6 @@ from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMe
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from utils import AppearanceOptModule, CameraOptModule, set_random_seed
 
-from gsplat import quat_scale_to_covar_preci
-from gsplat.cuda_legacy._torch_impl import scale_rot_to_cov3d
-from gsplat.relocation import compute_relocation
 from gsplat.rendering import rasterization
 from gsplat.strategy import MCMCStrategy
 
@@ -210,6 +207,7 @@ class Runner:
         )
         print("Model initialized. Number of GS:", len(self.splats["means3d"]))
 
+        # Densification Strategy
         self.strategy = MCMCStrategy(
             params=self.splats,
             optimizers=self.optimizers,
@@ -478,9 +476,8 @@ class Runner:
                     self.writer.add_image("train/render", canvas, step)
                 self.writer.flush()
 
-            # edit GSs
             self.strategy.step_post_backward(
-                step, info, lr=schedulers[0].get_last_lr()[0]
+                step=step, info=info, lr=schedulers[0].get_last_lr()[0]
             )
 
             # Turn Gradients into Sparse Tensor before running optimizer
