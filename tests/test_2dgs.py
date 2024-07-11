@@ -50,8 +50,8 @@ def test_data():
     opacities = torch.ones(1, len(means), device=device) * 0.5
     colors = torch.rand(1, len(means), 3, device=device)
     viewmats = torch.eye(4, device=device).reshape(1, 4, 4)
-    W, H = 640, 480
-    # W, H = 640, 640
+    W, H = 480, 320
+    # W, H = 640, 480
     fx, fy, cx, cy = W, W, W // 2, H // 2
     Ks = torch.tensor(
         [[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], device=device
@@ -194,7 +194,7 @@ def test_rasterize_to_pixels_2dgs(test_data):
     # import pdb
     # pdb.set_trace()
     densifications = torch.zeros_like(means2d)
-    render_colors, render_alphas, _ = rasterize_to_pixels_2dgs(
+    render_colors, render_alphas, render_normals, render_distloss = rasterize_to_pixels_2dgs(
         means2d,
         densifications,
         ray_Ms,
@@ -207,6 +207,7 @@ def test_rasterize_to_pixels_2dgs(test_data):
         isect_offsets,
         flatten_ids,
         backgrounds=backgrounds,
+        distloss=True,
     )
     _render_colors, _render_alphas = _rasterize_to_pixels_2dgs(
         means2d,
@@ -271,6 +272,8 @@ def test_rasterize_to_pixels_2dgs(test_data):
 
     # assert close backward
     torch.testing.assert_close(v_means2d, _v_means2d, rtol=1e-3, atol=1e-3)
+    import pdb
+    pdb.set_trace()
     torch.testing.assert_close(v_ray_Ms, _v_ray_Ms, rtol=1e-3, atol=1e-3)
     torch.testing.assert_close(v_colors, _v_colors, rtol=1e-3, atol=1e-3)
     torch.testing.assert_close(v_opacities, _v_opacities, rtol=1e-3, atol=1e-3)

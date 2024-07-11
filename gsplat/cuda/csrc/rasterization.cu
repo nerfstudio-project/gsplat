@@ -538,6 +538,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
 
+    // printf("Hereee\n");
     auto block = cg::this_thread_block();
     int32_t camera_id = block.group_index().x;
     int32_t tile_id = block.group_index().y * tile_width + block.group_index().z;
@@ -620,6 +621,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
             const float3 xy_opac = xy_opacity_batch[t];
             const float opac = xy_opac.z;
             const float2 delta = {xy_opac.x - px, xy_opac.y - py};
+
             const float sigma =
                 0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
                 conic.y * delta.x * delta.y;
@@ -677,6 +679,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
     const torch::Tensor &flatten_ids   // [n_isects]
 ) {
+
+    // printf("Here!\n");
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
     CHECK_INPUT(conics);
@@ -1377,6 +1381,7 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
             float3 h_u = {-u_transform.x + px * w_transform.x, -u_transform.y + px * w_transform.y, -u_transform.z + px * w_transform.z};
             float3 h_v = {-v_transform.x + py * w_transform.x, -v_transform.y + py * w_transform.y, -v_transform.z + py * w_transform.z};
 
+            // printf("py: ||| %.2f |||", py);
             float3 intersect = cross_product(h_u, h_v);
             if (intersect.z == 0.0) continue;
             
@@ -1389,10 +1394,12 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
             float gauss_weight = min(gauss_weight_3d, gauss_weight_2d);
 
             const float sigma = 0.5f * gauss_weight;
-            const float alpha = min(0.999f, opac * __expf(-sigma));
+            float alpha = min(0.999f, opac * __expf(-sigma));
+            // printf("px, py, sigma, alpha out: %.2f, %.2f, %.2f, %.2f\n", px, py, sigma, alpha);
 
 
             if (sigma < 0.f || alpha < 1.f / 255.f) {
+                // printf("px, py out: %.2f, %.2f\n", px, py);
                 continue;
             }
 
@@ -1764,21 +1771,22 @@ __global__ void rasterize_to_indices_in_range_2dgs_kernel(
         // process gaussians in the current batch for this pixel
         uint32_t batch_size = min(block_size, isect_range_end - batch_start);
         for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
-            const float3 u_transform = u_transform_batch[t];
-            const float3 v_transform = v_transform_batch[t];
-            const float3 w_transform = w_transform_batch[t];
+            float3 u_transform = u_transform_batch[t];
+            float3 v_transform = v_transform_batch[t];
+            float3 w_transform = w_transform_batch[t];
             const float3 xy_opac = xy_opacity_batch[t];
             const float opac = xy_opac.z;
 
             float3 h_u = {-u_transform.x + px * w_transform.x, -u_transform.y + px * w_transform.y, -u_transform.z + px * w_transform.z};
             float3 h_v = {-v_transform.x + py * w_transform.x, -v_transform.y + py * w_transform.y, -v_transform.z + py * w_transform.z};
 
+            // printf("-- py: %.2f --", py);
             // cross product of two planes is a line
             float3 intersect = cross_product(h_u, h_v);
 
             // No intersection
             if (intersect.z == 0.0) continue;
-            
+
             float2 s = {intersect.x / intersect.z, intersect.y / intersect.z};
 
             // 3D distance. Compute Mahalanobis distance in the canonoical splat space.
@@ -1791,9 +1799,11 @@ __global__ void rasterize_to_indices_in_range_2dgs_kernel(
             float gauss_weight = min(gauss_weight_3d, gauss_weight_2d);
 
             const float sigma = 0.5f * gauss_weight;
-            const float alpha = min(0.999f, opac * __expf(-sigma));
+            float alpha = min(0.999f, opac * __expf(-sigma));
+            // printf("px, py, sigma, alpha range: %.2f, %.2f, %.2f, %.2f\n", px, py, sigma, alpha);
 
             if (sigma < 0.f || alpha < 1.f / 255.f) {
+                // printf("px, py range: %.2f, %.2f, %.2f, %.2f, %.2f\n", px, py);
                 continue;
             }
 
@@ -1820,6 +1830,7 @@ __global__ void rasterize_to_indices_in_range_2dgs_kernel(
     }
     if (inside && first_pass) {
         chunk_cnts += camera_id * image_height * image_width;
+        // printf("cnt %d \n", cnt);
         chunk_cnts[pix_id] = cnt;
     }
 }
@@ -1886,11 +1897,13 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_2dgs_tens
         //     chunk_starts.amin().item<int32_t>(),
         //     chunk_starts.amax().item<int32_t>()
         // );
+        // printf("chunk_cnts size: %d\n", C * image_height * image_width);
 
     } else {
         n_elems = 0;
     }
 
+    printf("second pass \n");
     // Second pass: allocate memory and write out the gaussian and pixel ids.
     torch::Tensor gaussian_ids = 
         torch::empty({n_elems}, means2d.options().dtype(torch::kInt64));

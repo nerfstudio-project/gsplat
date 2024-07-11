@@ -588,6 +588,10 @@ def accumulate_2dgs(
     deltas = pixel_coords - means2d[camera_ids, gaussian_ids]  # [M, 2]
 
     M = ray_transforms[camera_ids, gaussian_ids]  # [M, 3, 3]
+    # print("\n")
+    # print(M.shape)
+    # for py in pixel_ids_y:
+    #     print(f"px: {py}")
     h_u = -M[..., :3, 0] + M[..., :3, 2] * pixel_ids_x[..., None]  # [M, 3]
     h_v = -M[..., :3, 1] + M[..., :3, 2] * pixel_ids_y[..., None]  # [M, 3]
     tmp = torch.cross(h_u, h_v, dim=-1)
@@ -596,9 +600,12 @@ def accumulate_2dgs(
     sigmas_3d = us**2 + vs**2  # [M]
     sigmas_2d = 2 * (deltas[..., 0] ** 2 + deltas[..., 1] ** 2)
     sigmas = 0.5 * torch.minimum(sigmas_3d, sigmas_2d)  # [M]
+
     alphas = torch.clamp_max(
         opacities[camera_ids, gaussian_ids] * torch.exp(-sigmas), 0.999
     )
+    # for s, a in zip(sigmas, alphas):
+    #     print(s, a)
 
     indices = camera_ids * image_height * image_width + pixel_ids
     total_pixels = C * image_height * image_width
@@ -664,6 +671,7 @@ def _rasterize_to_pixels_2dgs(
     render_alphas = torch.zeros((C, image_height, image_width, 1), device=device)
 
     # Split Gaussians into batches and iteratively accumulate the renderings
+
     block_size = tile_size * tile_size
     n_isects = flatten_ids.shape[0]
     isect_offsets_fl = torch.cat(
@@ -681,7 +689,7 @@ def _rasterize_to_pixels_2dgs(
             step + batch_per_iter,
             transmittances,
             means2d,
-            ray_transforms,
+            ray_transforms.transpose(-1, -2),
             opacities,
             image_width,
             image_height,
