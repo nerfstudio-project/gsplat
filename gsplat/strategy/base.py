@@ -6,31 +6,62 @@ import torch
 
 
 @dataclass
-class Strategy(abc.ABC):
+class Strategy:
     """Base class for the GS optimization strategy."""
 
-    # Gaussian Parameters
-    params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict]
-    # Optimizers for each parameter
-    optimizers: Dict[str, torch.optim.Optimizer]
+    def initialize_state(self) -> Dict[str, Any]:
+        """Initialize the state for the strategy.
 
-    def __post_init__(self):
-        assert set(self.params.keys()) == set(self.optimizers.keys()), (
+        Returns an empty dictionary in the base class.
+        """
+        return {}
+
+    def check_sanity(
+        self,
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+        optimizers: Dict[str, torch.optim.Optimizer],
+    ):
+        """Check the sanity of the parameters and optimizers.
+
+        It is not required but highly recommended for the user to call this
+        function before calling `step_pre_backward()` and `step_post_backward()`.
+        """
+        assert set(params.keys()) == set(optimizers.keys()), (
             "params and optimizers must have the same keys, "
-            f"but got {self.params.keys()} and {self.optimizers.keys()}"
+            f"but got {params.keys()} and {optimizers.keys()}"
         )
 
-        for optimizer in self.optimizers.values():
+        for optimizer in optimizers.values():
             assert len(optimizer.param_groups) == 1, (
                 "Each optimizer must have exactly one param_group, "
                 "that cooresponds to each parameter, "
                 f"but got {len(optimizer.param_groups)}"
             )
 
-    @abc.abstractmethod
-    def step_pre_backward(self, step: int, info: Dict[str, Any]):
-        raise NotImplementedError
+    def step_pre_backward(
+        self,
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+        optimizers: Dict[str, torch.optim.Optimizer],
+        state: Dict[str, Any],
+        step: int,
+        info: Dict[str, Any],
+    ):
+        """Function to be executed before the backward() call.
 
-    @abc.abstractmethod
-    def step_post_backward(self, step: int, info: Dict[str, Any]):
-        raise NotImplementedError
+        Does nothing in the base class.
+        """
+        pass
+
+    def step_post_backward(
+        self,
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+        optimizers: Dict[str, torch.optim.Optimizer],
+        state: Dict[str, Any],
+        step: int,
+        info: Dict[str, Any],
+    ):
+        """Function to be executed after the backward() call.
+
+        Does nothing in the base class.
+        """
+        pass

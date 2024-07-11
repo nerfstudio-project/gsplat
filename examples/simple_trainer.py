@@ -282,8 +282,6 @@ class Runner:
 
         # Densification Strategy
         self.strategy = DefaultStrategy(
-            params=self.splats,
-            optimizers=self.optimizers,
             verbose=True,
             scene_scale=self.scene_scale,
             prune_opa=cfg.prune_opa,
@@ -296,6 +294,8 @@ class Runner:
             refine_every=cfg.refine_every,
             absgrad=cfg.absgrad,
         )
+        self.strategy.check_sanity(self.splats, self.optimizers)
+        self.strategy_state = self.strategy.initialize_state()
 
         self.pose_optimizers = []
         if cfg.pose_opt:
@@ -490,7 +490,13 @@ class Runner:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
 
-            self.strategy.step_pre_backward(step=step, info=info)
+            self.strategy.step_pre_backward(
+                params=self.splats,
+                optimizers=self.optimizers,
+                state=self.strategy_state,
+                step=step,
+                info=info,
+            )
 
             # loss
             l1loss = F.l1_loss(colors, pixels)
@@ -546,7 +552,14 @@ class Runner:
                     self.writer.add_image("train/render", canvas, step)
                 self.writer.flush()
 
-            self.strategy.step_post_backward(step=step, info=info)
+            self.strategy.step_post_backward(
+                params=self.splats,
+                optimizers=self.optimizers,
+                state=self.strategy_state,
+                step=step,
+                info=info,
+            )
+            
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:
                 assert cfg.packed, "Sparse gradients only work with packed mode."

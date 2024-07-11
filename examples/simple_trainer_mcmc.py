@@ -209,8 +209,6 @@ class Runner:
 
         # Densification Strategy
         self.strategy = MCMCStrategy(
-            params=self.splats,
-            optimizers=self.optimizers,
             verbose=True,
             cap_max=cfg.cap_max,
             noise_lr=cfg.noise_lr,
@@ -218,6 +216,8 @@ class Runner:
             refine_stop_iter=cfg.refine_stop_iter,
             refine_every=cfg.refine_every,
         )
+        self.strategy.check_sanity(self.splats, self.optimizers)
+        self.strategy_state = self.strategy.initialize_state()
 
         self.pose_optimizers = []
         if cfg.pose_opt:
@@ -477,7 +477,12 @@ class Runner:
                 self.writer.flush()
 
             self.strategy.step_post_backward(
-                step=step, info=info, lr=schedulers[0].get_last_lr()[0]
+                params=self.splats,
+                optimizers=self.optimizers,
+                state=self.strategy_state,
+                step=step,
+                info=info,
+                lr=schedulers[0].get_last_lr()[0],
             )
 
             # Turn Gradients into Sparse Tensor before running optimizer

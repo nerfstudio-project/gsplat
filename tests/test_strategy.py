@@ -19,7 +19,7 @@ device = torch.device("cuda:0")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_strategy():
     from gsplat.rendering import rasterization
-    from gsplat.strategy import DefaultStrategy, MCMCStrategy, NullStrategy
+    from gsplat.strategy import DefaultStrategy, MCMCStrategy, Strategy
 
     torch.manual_seed(42)
 
@@ -58,23 +58,29 @@ def test_strategy():
     )
     print(render_colors.shape, render_alphas.shape)
 
-    # Test NullStrategy
-    strategy = NullStrategy(params, optimizers)
-    strategy.step_pre_backward(step=0, info=info)
+    # Test Strategy
+    strategy = Strategy()
+    strategy.check_sanity(params, optimizers)
+    state = strategy.initialize_state()
+    strategy.step_pre_backward(params, optimizers, state, step=0, info=info)
     render_colors.mean().backward(retain_graph=True)
-    strategy.step_post_backward(step=0, info=info)
+    strategy.step_post_backward(params, optimizers, state, step=0, info=info)
 
     # Test DefaultStrategy
-    strategy = DefaultStrategy(params, optimizers, verbose=True)
-    strategy.step_pre_backward(step=600, info=info)
+    strategy = DefaultStrategy(verbose=True)
+    strategy.check_sanity(params, optimizers)
+    state = strategy.initialize_state()
+    strategy.step_pre_backward(params, optimizers, state, step=600, info=info)
     render_colors.mean().backward(retain_graph=True)
-    strategy.step_post_backward(step=600, info=info)
+    strategy.step_post_backward(params, optimizers, state, step=600, info=info)
 
     # Test MCMCStrategy
-    strategy = MCMCStrategy(params, optimizers, verbose=True)
-    strategy.step_pre_backward(step=600, info=info)
+    strategy = MCMCStrategy(verbose=True)
+    strategy.check_sanity(params, optimizers)
+    state = strategy.initialize_state()
+    strategy.step_pre_backward(params, optimizers, state, step=600, info=info)
     render_colors.mean().backward(retain_graph=True)
-    strategy.step_post_backward(step=600, info=info, lr=1e-3)
+    strategy.step_post_backward(params, optimizers, state, step=600, info=info, lr=1e-3)
 
 
 if __name__ == "__main__":
