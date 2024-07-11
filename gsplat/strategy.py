@@ -1,15 +1,14 @@
 from abc import ABC, abstractmethod
-from typing import Callable, Dict, List, DefaultDict, Any
 from collections import defaultdict
+from typing import Any, Callable, DefaultDict, Dict, List, Tuple
 
 import torch
-from torch import Tensor
 import torch.nn.functional as F
+from torch import Tensor
 
 from gsplat import quat_scale_to_covar_preci
 from gsplat.relocation import compute_relocation
-
-from examples.utils import normalized_quat_to_rotmat
+from gsplat.utils import normalized_quat_to_rotmat
 
 
 class Strategy(ABC):
@@ -70,6 +69,7 @@ class DefaultStrategy(Strategy):
         activations: Dict[str, Callable],
         optimizers: List[torch.optim.Optimizer],
         verbose: bool = False,
+        scene_scale: float = 1.0,
         # GSs with opacity below this value will be pruned
         prune_opa: float = 0.005,
         # GSs with image plane gradient above this value will be split/duplicated
@@ -100,6 +100,7 @@ class DefaultStrategy(Strategy):
             assert key in self._params, f"{key} is required in params but missing."
 
         self._verbose = verbose
+        self._scene_scale = scene_scale
         self._prune_opa = prune_opa
         self._grow_grad2d = grow_grad2d
         self._grow_scale3d = grow_scale3d
@@ -141,21 +142,34 @@ class DefaultStrategy(Strategy):
         self._update_state(info, packed=packed)
 
         if step > self._refine_start_iter and step % self._refine_every == 0:
-            self._grow_gs(device=info["device"])
-            self._prune_gs(step)
+            # grow GSs
+            n_dupli, n_split = self._grow_gs()
+            if self._verbose:
+                print(
+                    f"Step {step}: {n_dupli} GSs duplicated, {n_split} GSs split. "
+                    f"Now having {len(self._params['means3d'])} GSs."
+                )
+
+            # prune GSs
+            n_prune = self._prune_gs(step)
+            if self._verbose:
+                print(
+                    f"Step {step}: {n_prune} GSs pruned. "
+                    f"Now having {len(self._params['means3d'])} GSs."
+                )
+
+            # reset running stats
+            self._state["grad2d"].zero_()
+            self._state["count"].zero_()
 
         if step % self._reset_every == 0:
             self._reset_opa(value=self._prune_opa * 2.0)
 
-        self._state["grad2d"].zero_()
-        self._state["count"].zero_()
-
     @torch.no_grad()
-    def _grow_gs(self):
+    def _grow_gs(self) -> Tuple[int, int]:
         count = self._state["count"]
-        grads = self._state["grads2d"] / count
+        grads = self._state["grad2d"] / count.clamp_min(1)
         device = grads.device
-        grads = grads.clamp_min(1)
 
         is_grad_high = grads > self._grow_grad2d
         is_small = (
@@ -163,33 +177,32 @@ class DefaultStrategy(Strategy):
             <= self._grow_scale3d * self._scene_scale
         )
         is_dupli = is_grad_high & is_small
-        n_dupli = is_dupli.sum()
+        n_dupli = is_dupli.sum().item()
 
         if n_dupli > 0:
-            self._refine_duplicate(is_dupli, device=device)
+            self._refine_duplicate(is_dupli)
 
         is_split = is_grad_high & ~is_small
         is_split = torch.cat(
             [
                 is_split,
                 # new GSs added by duplication will not be split
-                torch.zeros(n_dupli),
+                torch.zeros(n_dupli, dtype=torch.bool, device=device),
             ]
         )
 
         n_split = is_split.sum().item()
-        self._refine_split(is_split, device=device)
-
-        if self._verbose:
-            print(
-                f"Step {self._state['step']}: {n_dupli} GSs duplicated, {n_split} GSs split. "
-                f"Now having {len(self._params['means3d'])} GSs."
-            )
+        if n_split > 0:
+            self._refine_split(is_split)
+        return n_dupli, n_split
 
     @torch.no_grad()
-    def _prune_gs(self, step: int):
+    def _prune_gs(self, step) -> int:
         is_prune = self._get_param("opacities") < self._prune_opa
         if step > self._reset_every:
+            # The official code also implements sreen-size pruning but
+            # it's actually not being used due to a bug:
+            # https://github.com/graphdeco-inria/gaussian-splatting/issues/123
             is_too_big = (
                 self._get_param("scales").max(dim=-1).values
                 > self._prune_scale3d * self._scene_scale
@@ -197,16 +210,9 @@ class DefaultStrategy(Strategy):
             is_prune = is_prune | is_too_big
 
         n_prune = is_prune.sum().item()
-        self._refine_keep(~is_prune)
-
-        if self._verbose:
-            print(
-                f"Step {step}: {n_prune} GSs pruned. "
-                f"Now having {len(self._params['means3d'])} GSs."
-            )
-
-        if step % self._reset_every == 0:
-            self._reset_opa(value=self._prune_opa)
+        if n_prune > 0:
+            self._refine_keep(~is_prune)
+        return n_prune
 
     def _update_state(self, info: Dict[str, Any], packed: bool = False):
         for key in ["means2d", "width", "height", "n_cameras", "radii", "gaussian_ids"]:
@@ -221,7 +227,7 @@ class DefaultStrategy(Strategy):
         grads[..., 1] *= info["height"] / 2.0 * info["n_cameras"]
 
         # initialize states on the first run
-        n_gaussian = len(self._params.values()[0])
+        n_gaussian = len(list(self._params.values())[0])
         if self._state["grad2d"] is None:
             self._state["grad2d"] = torch.zeros(n_gaussian, device=grads.device)
         if self._state["count"] is None:
@@ -232,16 +238,21 @@ class DefaultStrategy(Strategy):
             # grads is [nnz, 2]
             gs_ids = info["gaussian_ids"]  # [nnz]
             self._state["grad2d"].index_add_(0, gs_ids, grads.norm(dim=-1))
-            self._state["count"].index_add_(0, gs_ids, torch.ones_like(gs_ids))
+            self._state["count"].index_add_(
+                0, gs_ids, torch.ones_like(gs_ids, dtype=torch.float32)
+            )
         else:
             # grads is [C, N, 2]
             sel = info["radii"] > 0.0  # [C, N]
             gs_ids = torch.where(sel)[1]  # [nnz]
             self._state["grad2d"].index_add_(0, gs_ids, grads[sel].norm(dim=-1))
-            self._state["count"].index_add_(0, gs_ids, torch.ones_like(gs_ids).int())
+            self._state["count"].index_add_(
+                0, gs_ids, torch.ones_like(gs_ids, dtype=torch.float32)
+            )
 
     @torch.no_grad()
-    def _refine_duplicate(self, mask: Tensor, device: torch.device):
+    def _refine_duplicate(self, mask: Tensor):
+        device = mask.device
         sel = torch.where(mask)[0]
         for optimizer in self._optimizers:
             for i, param_group in enumerate(optimizer.param_groups):
@@ -265,7 +276,8 @@ class DefaultStrategy(Strategy):
         torch.cuda.empty_cache()
 
     @torch.no_grad()
-    def _refine_split(self, mask: Tensor, device: torch.device):
+    def _refine_split(self, mask: Tensor):
+        device = mask.device
         sel = torch.where(mask)[0]
         rest = torch.where(~mask)[0]
 
@@ -339,8 +351,8 @@ class DefaultStrategy(Strategy):
                 optimizer.param_groups[i]["params"] = [p_new]
                 optimizer.state[p_new] = p_state
                 self._params[name] = p_new
-        for k, v in self._running_stats.items():
-            self._running_stats[k] = v[sel]
+        for k, v in self._state.items():
+            self._state[k] = v[sel]
         torch.cuda.empty_cache()
 
     @torch.no_grad()
@@ -408,12 +420,9 @@ class MCMCStrategy(Strategy):
     def step_pre_backward(self, step: int, info: Dict[str, Any]):
         """Step before the backward pass.
 
-        Retain the gradients of the image plane projections of the GSs.
+        Nothing needs to be done here for MCMCStrategy.
         """
-        assert (
-            "means2d" in info
-        ), "The 2D means of the Gaussians is required but missing."
-        info["means2d"].retain_grad()
+        pass
 
     def step_post_backward(self, step: int, info: Dict[str, Any], lr: float):
         """Step after the backward pass.
@@ -425,22 +434,25 @@ class MCMCStrategy(Strategy):
             and step > self._refine_start_iter
             and step % self._refine_every == 0
         ):
+            # teleport GSs
             n_relocated_gs = self._relocate_gs()
             if self._verbose:
                 print(f"Step {step}: Relocated {n_relocated_gs} GSs.")
 
+            # add new GSs
             n_new_gs = self._add_new_gs(self._cap_max)
             if self._verbose:
                 print(
                     f"Step {step}: Added {n_new_gs} GSs. "
-                    f"Now having {len(self._splats['means3d'])} GSs."
+                    f"Now having {len(self._params['means3d'])} GSs."
                 )
 
+        # add noise to GSs
         self._add_noise_to_gs(lr)
 
     @torch.no_grad()
     def _relocate_gs(self, min_opacity: float = 0.005) -> int:
-        dead_mask = self._params["opacities"] <= min_opacity
+        dead_mask = self._get_param("opacities") <= min_opacity
         dead_indices = dead_mask.nonzero(as_tuple=True)[0]
         alive_indices = (~dead_mask).nonzero(as_tuple=True)[0]
         n_gs = len(dead_indices)
@@ -449,13 +461,13 @@ class MCMCStrategy(Strategy):
 
         # Sample for new GSs
         eps = torch.finfo(torch.float32).eps
-        probs = self._params["opacities"][alive_indices]
+        probs = self._get_param("opacities")[alive_indices]
         probs = probs / (probs.sum() + eps)
         sampled_idxs = torch.multinomial(probs, n_gs, replacement=True)
         sampled_idxs = alive_indices[sampled_idxs]
         new_opacities, new_scales = compute_relocation(
-            opacities=self._params["opacities"][sampled_idxs],
-            scales=self._params["scales"][sampled_idxs],
+            opacities=self._get_param("opacities")[sampled_idxs],
+            scales=self._get_param("scales")[sampled_idxs],
             ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
         )
         new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
@@ -491,12 +503,12 @@ class MCMCStrategy(Strategy):
 
         # Sample for new GSs
         eps = torch.finfo(torch.float32).eps
-        probs = self._params["opacities"]
+        probs = self._get_param("opacities")
         probs = probs / (probs.sum() + eps)
         sampled_idxs = torch.multinomial(probs, n_gs, replacement=True)
         new_opacities, new_scales = compute_relocation(
-            opacities=self._params["opacities"][sampled_idxs],
-            scales=self._params["scales"][sampled_idxs],
+            opacities=self._get_param("opacities")[sampled_idxs],
+            scales=self._get_param("scales")[sampled_idxs],
             ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
         )
         new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
@@ -518,7 +530,7 @@ class MCMCStrategy(Strategy):
                     if key != "step":
                         v = p_state[key]
                         v_new = torch.zeros(
-                            (len(sampled_idxs), *v.shape[1:]), device=self.device
+                            (len(sampled_idxs), *v.shape[1:]), device=v.device
                         )
                         p_state[key] = torch.cat([v, v_new])
                 p_new = torch.nn.Parameter(self._params[name])
@@ -530,8 +542,8 @@ class MCMCStrategy(Strategy):
 
     @torch.no_grad()
     def _add_noise_to_gs(self, lr: float):
-        opacities = self._params["opacities"]
-        scales = self._params["scales"]
+        opacities = self._get_param("opacities")
+        scales = self._get_param("scales")
         actual_covariance, _ = quat_scale_to_covar_preci(
             self._params["quats"],
             scales,

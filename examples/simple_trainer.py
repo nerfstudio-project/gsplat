@@ -3,8 +3,7 @@ import math
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple, Callable
-from collections import OrderedDict
+from typing import Callable, Dict, List, Optional, Tuple
 
 import imageio
 import nerfview
@@ -20,13 +19,7 @@ from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
-from utils import (
-    AppearanceOptModule,
-    CameraOptModule,
-    knn,
-    rgb_to_sh,
-    set_random_seed,
-)
+from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
 
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy
@@ -38,9 +31,6 @@ class Config:
     disable_viewer: bool = False
     # Path to the .pt file. If provide, it will skip training and render a video
     ckpt: Optional[str] = None
-
-    # Verbose
-    verbose: bool = False
 
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
@@ -119,7 +109,8 @@ class Config:
     # Anti-aliasing in rasterization. Might slightly hurt quantitative metrics.
     antialiased: bool = False
     # Whether to use revised opacity heuristic from arXiv:2404.06109
-    revised_opacity: bool = False
+    # TODO: verify this works before we expose this to the user
+    # revised_opacity: bool = False
 
     # Use random background for training to discourage transparency
     random_bkgd: bool = False
@@ -162,9 +153,6 @@ class Config:
         self.reset_every = int(self.reset_every * factor)
         self.refine_every = int(self.refine_every * factor)
 
-def add_activations(activations: OrderedDict[str, Callable], name: str, activation: Callable = lambda x: x) -> None:
-    """Add an activation function to the activations dictionary. Default activation is the identity function."""
-    activations[name] = activation
 
 def create_splats_with_optimizers(
     parser: Parser,
@@ -179,7 +167,7 @@ def create_splats_with_optimizers(
     batch_size: int = 1,
     feature_dim: Optional[int] = None,
     device: str = "cuda",
-) -> Tuple[torch.nn.ParameterDict, torch.optim.Optimizer, OrderedDict[str, Callable]]:
+) -> Tuple[torch.nn.ParameterDict, Dict[str, Callable], List[torch.optim.Optimizer]]:
     if init_type == "sfm":
         points = torch.from_numpy(parser.points).float()
         rgbs = torch.from_numpy(parser.points_rgb / 255.0).float()
@@ -189,13 +177,11 @@ def create_splats_with_optimizers(
     else:
         raise ValueError("Please specify a correct init_type: sfm or random")
 
-    
     N = points.shape[0]
     # Initialize the GS size to be the average dist of the 3 nearest neighbors
     dist2_avg = (knn(points, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
     dist_avg = torch.sqrt(dist2_avg)
     scales = torch.log(dist_avg * init_scale).unsqueeze(-1).repeat(1, 3)  # [N, 3]
-
     quats = torch.rand((N, 4))  # [N, 4]
     opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
 
@@ -206,18 +192,12 @@ def create_splats_with_optimizers(
         ("quats", torch.nn.Parameter(quats), 1e-3),
         ("opacities", torch.nn.Parameter(opacities), 5e-2),
     ]
-
-    activations = OrderedDict()
-    # more explicitly:
-    # activations["means3d"] = lambda x: x
-    # activations["scales"] = torch.exp
-    # activations["quats"] = F.normalize
-    # activations["opacities"] = torch.sigmoid
-
-    add_activations(activations, "means3d")
-    add_activations(activations, "scales", torch.exp)
-    add_activations(activations, "quats", "quats": lambda x: F.normalize(x, dim=-1),)
-    add_activations(activations, "opacities", torch.sigmoid)
+    activations = {
+        "means3d": lambda x: x,
+        "scales": torch.exp,
+        "quats": lambda x: F.normalize(x, dim=-1),
+        "opacities": torch.sigmoid,
+    }
 
     if feature_dim is None:
         # color is SH coefficients.
@@ -225,18 +205,12 @@ def create_splats_with_optimizers(
         colors[:, 0, :] = rgb_to_sh(rgbs)
         params.append(("sh0", torch.nn.Parameter(colors[:, :1, :]), 2.5e-3))
         params.append(("shN", torch.nn.Parameter(colors[:, 1:, :]), 2.5e-3 / 20))
-
-        add_activations(activations, "sh0")
-        add_activations(activations, "shN")
     else:
         # features will be used for appearance and view-dependent shading
         features = torch.rand(N, feature_dim)  # [N, feature_dim]
         params.append(("features", torch.nn.Parameter(features), 2.5e-3))
         colors = torch.logit(rgbs)  # [N, 3]
         params.append(("colors", torch.nn.Parameter(colors), 2.5e-3))
-
-        add_activations(activations, "features")
-        add_activations(activations, "colors")
 
     splats = torch.nn.ParameterDict({n: v for n, v, _ in params}).to(device)
     # Scale learning rate based on batch size, reference:
@@ -245,19 +219,14 @@ def create_splats_with_optimizers(
     # https://arxiv.org/pdf/2402.18824v1
     optimizers = [
         (torch.optim.SparseAdam if sparse_grad else torch.optim.Adam)(
-            [
-                {
-                    "params": activations[name](splats[name]),
-                    "lr": lr * math.sqrt(batch_size),
-                    "name": name
-                }
-            ],
+            [{"params": splats[name], "lr": lr * math.sqrt(batch_size), "name": name}],
             eps=1e-15 / math.sqrt(batch_size),
             betas=(1 - batch_size * (1 - 0.9), 1 - batch_size * (1 - 0.999)),
         )
         for name, _, lr in params
     ]
-    return splats, optimizers, activations
+    return splats, activations, optimizers
+
 
 class Runner:
     """Engine for training and testing."""
@@ -301,7 +270,7 @@ class Runner:
 
         # Model
         feature_dim = 32 if cfg.app_opt else None
-        self.splats, self.optimizers, self.activations = create_splats_with_optimizers(
+        self.splats, self.activations, self.optimizers = create_splats_with_optimizers(
             self.parser,
             init_type=cfg.init_type,
             init_num_pts=cfg.init_num_pts,
@@ -315,7 +284,25 @@ class Runner:
             feature_dim=feature_dim,
             device=self.device,
         )
-        print("Model initialized. Number of GS:", len(self.get_param("means3d")))
+        print("Model initialized. Number of GS:", len(self.splats["means3d"]))
+
+        # Densification Strategy
+        self.strategy = DefaultStrategy(
+            params=self.splats,
+            activations=self.activations,
+            optimizers=self.optimizers,
+            verbose=True,
+            scene_scale=self.scene_scale,
+            prune_opa=cfg.prune_opa,
+            grow_grad2d=cfg.grow_grad2d,
+            grow_scale3d=cfg.grow_scale3d,
+            prune_scale3d=cfg.prune_scale3d,
+            refine_start_iter=cfg.refine_start_iter,
+            refine_stop_iter=cfg.refine_stop_iter,
+            reset_every=cfg.reset_every,
+            refine_every=cfg.refine_every,
+            absgrad=cfg.absgrad,
+        )
 
         self.pose_optimizers = []
         if cfg.pose_opt:
@@ -369,52 +356,33 @@ class Runner:
                 mode="training",
             )
 
-        # Running stats for prunning & growing.
-        n_gauss = len(self.get_param("means3d"))
-        self.running_stats = {
-            "grad2d": torch.zeros(n_gauss, device=self.device),  # norm of the gradient
-            "count": torch.zeros(n_gauss, device=self.device, dtype=torch.int),
-        }
-
-    def get_param(self, name: str, mask: Optional[Tensor] = None) -> Tensor:
-        """Fetches the tensor associated with 'name' and applies the corresponding activation function."""
-        if name not in self.splats:
-            raise KeyError(f"Parameter '{name}' not found.")
-
-        activation = self.activations[name]
-        if mask is None:
-            return activation(self.splats[name])
-        else:
-            return activation(self.splats[name][mask])
-
     def rasterize_splats(
         self,
-        activations: OrderedDict[str, Callable],
         camtoworlds: Tensor,
         Ks: Tensor,
         width: int,
         height: int,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
-        means = self.get_param("means3d")  # [N, 3]
-        # quats = self.get_param("quats")  # [N, 4]
+        means = self.splats["means3d"]  # [N, 3]
+        # quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
         # rasterization does normalization internally
-        quats = self.splats["quats"]
-        scales = self.get_param("scales")  # [N, 3]
-        opacities = self.get_param("opacities")  # [N,]
+        quats = self.splats["quats"]  # [N, 4]
+        scales = torch.exp(self.splats["scales"])  # [N, 3]
+        opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
 
         image_ids = kwargs.pop("image_ids", None)
         if self.cfg.app_opt:
             colors = self.app_module(
-                features=self.get_param("features"),
+                features=self.splats["features"],
                 embed_ids=image_ids,
                 dirs=means[None, :, :] - camtoworlds[:, None, :3, 3],
                 sh_degree=kwargs.pop("sh_degree", self.cfg.sh_degree),
             )
-            colors = colors + self.get_param("colors")
+            colors = colors + self.splats["colors"]
             colors = torch.sigmoid(colors)
         else:
-            colors = torch.cat([self.get_param("sh0"), self.get_param("shN")], 1)  # [N, K, 3]
+            colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
         render_colors, render_alphas, info = rasterization(
@@ -433,7 +401,6 @@ class Runner:
             rasterize_mode=rasterize_mode,
             **kwargs,
         )
-
         return render_colors, render_alphas, info
 
     def train(self):
@@ -460,23 +427,6 @@ class Runner:
                     self.pose_optimizers[0], gamma=0.01 ** (1.0 / max_steps)
                 )
             )
-
-        self.strategy = DefaultStrategy(
-            params=self.splats, 
-            activations=self.activations,
-            optimizers=self.optimizers, 
-            verbose=cfg.verbose,
-            prune_opa=cfg.prune_opa, 
-            grow_grad2d=cfg.grow_grad2d, 
-            grow_scale3d=cfg.grow_scale3d,
-            prune_scale3d=cfg.prune_scale3d,
-            refine_start_iter=cfg.refine_start_iter,
-            refine_stop_iter=cfg.refine_stop_iter,
-            reset_every=cfg.reset_every,
-            refine_every=cfg.refine_every,
-            absgrad=cfg.absgrad,
-            revised_opacity=cfg.revised_opacity,
-        )
 
         trainloader = torch.utils.data.DataLoader(
             self.trainset,
@@ -528,7 +478,6 @@ class Runner:
 
             # forward
             renders, alphas, info = self.rasterize_splats(
-                activations=self.activations,
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -548,7 +497,7 @@ class Runner:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
 
-            self.strategy.step_pre_backward(step, info)
+            self.strategy.step_pre_backward(step=step, info=info)
 
             # loss
             l1loss = F.l1_loss(colors, pixels)
@@ -556,7 +505,6 @@ class Runner:
                 pixels.permute(0, 3, 1, 2), colors.permute(0, 3, 1, 2)
             )
             loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
-            
             if cfg.depth_loss:
                 # query depths from depth map
                 points = torch.stack(
@@ -593,7 +541,9 @@ class Runner:
                 self.writer.add_scalar("train/loss", loss.item(), step)
                 self.writer.add_scalar("train/l1loss", l1loss.item(), step)
                 self.writer.add_scalar("train/ssimloss", ssimloss.item(), step)
-                self.writer.add_scalar("train/num_GS", len(self.get_param("means3d")), step)
+                self.writer.add_scalar(
+                    "train/num_GS", len(self.splats["means3d"]), step
+                )
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
@@ -603,10 +553,7 @@ class Runner:
                     self.writer.add_image("train/render", canvas, step)
                 self.writer.flush()
 
-            # strategy's callback after loss.backward()
-            # adaptive density control handled here
-            self.strategy.step_post_backward(info)
-
+            self.strategy.step_post_backward(step=step, info=info)
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:
                 assert cfg.packed, "Sparse gradients only work with packed mode."
@@ -641,7 +588,7 @@ class Runner:
                 stats = {
                     "mem": mem,
                     "ellipse_time": time.time() - global_tic,
-                    "num_GS": len(self.get_param("means3d")),
+                    "num_GS": len(self.splats["means3d"]),
                 }
                 print("Step: ", step, stats)
                 with open(f"{self.stats_dir}/train_step{step:04d}.json", "w") as f:
@@ -723,7 +670,7 @@ class Runner:
         print(
             f"PSNR: {psnr.item():.3f}, SSIM: {ssim.item():.4f}, LPIPS: {lpips.item():.3f} "
             f"Time: {ellipse_time:.3f}s/image "
-            f"Number of GS: {len(self.get_param('means3d'))}"
+            f"Number of GS: {len(self.splats['means3d'])}"
         )
         # save stats as json
         stats = {
@@ -731,7 +678,7 @@ class Runner:
             "ssim": ssim.item(),
             "lpips": lpips.item(),
             "ellipse_time": ellipse_time,
-            "num_GS": len(self.get_param("means3d")),
+            "num_GS": len(self.splats["means3d"]),
         }
         with open(f"{self.stats_dir}/val_step{step:04d}.json", "w") as f:
             json.dump(stats, f)

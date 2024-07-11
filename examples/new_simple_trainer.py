@@ -23,7 +23,6 @@ from utils import (
     AppearanceOptModule,
     CameraOptModule,
     knn,
-    normalized_quat_to_rotmat,
     rgb_to_sh,
     set_random_seed,
 )
@@ -31,7 +30,7 @@ from utils import (
 from gsplat.rendering import rasterization
 from gsplat.gaussians import Gaussians
 from gsplat.strategies_old import SplatfactoStrategy
-
+from gsplat.utils import normalized_quat_to_rotmat
 
 @dataclass
 class Config:
