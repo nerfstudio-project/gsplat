@@ -1,4 +1,4 @@
-from typing import Any, Callable, DefaultDict, Dict, List, Tuple
+from typing import Any, Callable, DefaultDict, Dict, List, Tuple, Union
 
 import torch
 import torch.nn.functional as F
@@ -24,8 +24,8 @@ class DefaultStrategy(Strategy):
 
     def __init__(
         self,
-        params: torch.nn.ParameterDict,
-        optimizers: List[torch.optim.Optimizer],
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+        optimizers: Dict[str, torch.optim.Optimizer],
         verbose: bool = False,
         scene_scale: float = 1.0,
         # GSs with opacity below this value will be pruned
@@ -52,6 +52,7 @@ class DefaultStrategy(Strategy):
     ):
         super().__init__(params, optimizers)
 
+        # The following keys are required for this strategy.
         for key in ["means3d", "scales", "quats", "opacities"]:
             assert key in self._params, f"{key} is required in params but missing."
 
@@ -210,10 +211,9 @@ class DefaultStrategy(Strategy):
     def _refine_duplicate(self, mask: Tensor):
         device = mask.device
         sel = torch.where(mask)[0]
-        for optimizer in self._optimizers:
+        for name, optimizer in self._optimizers.items():
             for i, param_group in enumerate(optimizer.param_groups):
                 p = param_group["params"][0]
-                name = param_group["name"]
                 p_state = optimizer.state[p]
                 del optimizer.state[p]
                 for key in p_state.keys():
@@ -248,10 +248,9 @@ class DefaultStrategy(Strategy):
             torch.randn(2, len(scales), 3, device=device),
         )  # [2, N, 3]
 
-        for optimizer in self._optimizers:
+        for name, optimizer in self._optimizers.items():
             for i, param_group in enumerate(optimizer.param_groups):
                 p = param_group["params"][0]
-                name = param_group["name"]
                 # create new params
                 if name == "means3d":
                     p_split = (p[sel] + samples).reshape(-1, 3)  # [2N, 3]
@@ -294,10 +293,9 @@ class DefaultStrategy(Strategy):
     def _refine_keep(self, mask: Tensor):
         """Unility function to prune GSs."""
         sel = torch.where(mask)[0]
-        for optimizer in self._optimizers:
+        for name, optimizer in self._optimizers.items():
             for i, param_group in enumerate(optimizer.param_groups):
                 p = param_group["params"][0]
-                name = param_group["name"]
                 p_state = optimizer.state[p]
                 del optimizer.state[p]
                 for key in p_state.keys():
@@ -317,9 +315,9 @@ class DefaultStrategy(Strategy):
         opacities = torch.clamp(
             self._params["opacities"], max=torch.logit(torch.tensor(value)).item()
         )
-        for optimizer in self._optimizers:
+        for name, optimizer in self._optimizers.items():
             for i, param_group in enumerate(optimizer.param_groups):
-                if param_group["name"] != "opacities":
+                if name != "opacities":
                     continue
                 p = param_group["params"][0]
                 p_state = optimizer.state[p]
@@ -330,5 +328,5 @@ class DefaultStrategy(Strategy):
                 p_new = torch.nn.Parameter(opacities)
                 optimizer.param_groups[i]["params"] = [p_new]
                 optimizer.state[p_new] = p_state
-                self._params[param_group["name"]] = p_new
+                self._params[name] = p_new
         torch.cuda.empty_cache()

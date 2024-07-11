@@ -167,7 +167,7 @@ def create_splats_with_optimizers(
     batch_size: int = 1,
     feature_dim: Optional[int] = None,
     device: str = "cuda",
-) -> Tuple[torch.nn.ParameterDict, List[torch.optim.Optimizer]]:
+) -> Tuple[torch.nn.ParameterDict, Dict[str, torch.optim.Optimizer]]:
     if init_type == "sfm":
         points = torch.from_numpy(parser.points).float()
         rgbs = torch.from_numpy(parser.points_rgb / 255.0).float()
@@ -211,14 +211,14 @@ def create_splats_with_optimizers(
     # https://www.cs.princeton.edu/~smalladi/blog/2024/01/22/SDEs-ScalingRules/
     # Note that this would not make the training exactly equivalent, see
     # https://arxiv.org/pdf/2402.18824v1
-    optimizers = [
-        (torch.optim.SparseAdam if sparse_grad else torch.optim.Adam)(
-            [{"params": splats[name], "lr": lr * math.sqrt(batch_size), "name": name}],
+    optimizers = {
+        name: (torch.optim.SparseAdam if sparse_grad else torch.optim.Adam)(
+            [{"params": splats[name], "lr": lr * math.sqrt(batch_size)}],
             eps=1e-15 / math.sqrt(batch_size),
             betas=(1 - batch_size * (1 - 0.9), 1 - batch_size * (1 - 0.999)),
         )
         for name, _, lr in params
-    ]
+    }
     return splats, optimizers
 
 
@@ -410,7 +410,7 @@ class Runner:
         schedulers = [
             # means3d has a learning rate schedule, that end at 0.01 of the initial value
             torch.optim.lr_scheduler.ExponentialLR(
-                self.optimizers[0], gamma=0.01 ** (1.0 / max_steps)
+                self.optimizers["means3d"], gamma=0.01 ** (1.0 / max_steps)
             ),
         ]
         if cfg.pose_opt:
@@ -563,7 +563,7 @@ class Runner:
                     )
 
             # optimize
-            for optimizer in self.optimizers:
+            for optimizer in self.optimizers.values():
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
             for optimizer in self.pose_optimizers:

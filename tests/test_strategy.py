@@ -41,11 +41,7 @@ def test_strategy():
         "opacities": 1e-3,
         "colors": 1e-3,
     }
-    optimizers = [
-        torch.optim.Adam(
-            [{"params": v, "lr": lrs[k], "name": k} for k, v in params.items()]
-        )
-    ]
+    optimizers = {k: torch.optim.Adam([v], lr=lrs[k]) for k, v in params.items()}
 
     # A dummy rendering call
     render_colors, render_alphas, info = rasterization(

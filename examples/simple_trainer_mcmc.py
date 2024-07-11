@@ -332,7 +332,7 @@ class Runner:
         schedulers = [
             # means3d has a learning rate schedule, that end at 0.01 of the initial value
             torch.optim.lr_scheduler.ExponentialLR(
-                self.optimizers[0], gamma=0.01 ** (1.0 / max_steps)
+                self.optimizers["means3d"], gamma=0.01 ** (1.0 / max_steps)
             ),
         ]
         if cfg.pose_opt:
@@ -496,7 +496,7 @@ class Runner:
                     )
 
             # optimize
-            for optimizer in self.optimizers:
+            for optimizer in self.optimizers.values():
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
             for optimizer in self.pose_optimizers:
