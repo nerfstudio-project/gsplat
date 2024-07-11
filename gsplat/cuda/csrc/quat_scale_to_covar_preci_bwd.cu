@@ -42,8 +42,8 @@ __global__ void quat_scale_to_covar_preci_bwd_kernel(
     v_scales += idx * 3;
     v_quats += idx * 4;
 
-    vec4<OpT> quat = glm::make_vec4(quats + idx * 4);
-    vec3<OpT> scale = glm::make_vec3(scales + idx * 3);
+    vec4<OpT> quat = vec4<OpT>(glm::make_vec4(quats + idx * 4));
+    vec3<OpT> scale = vec3<OpT>(glm::make_vec3(scales + idx * 3));
     mat3<OpT> rotmat = quat_to_rotmat<OpT>(quat);
 
     vec4<OpT> v_quat(0.f);
@@ -58,7 +58,7 @@ __global__ void quat_scale_to_covar_preci_bwd_kernel(
                                 v_covars[2] * .5f, v_covars[4] * .5f, v_covars[5]);
         } else {
             v_covars += idx * 9;
-            mat3<OpT> v_covar_cast = glm::make_mat3(v_covars);
+            mat3<OpT> v_covar_cast = mat3<OpT>(glm::make_mat3(v_covars));
             v_covar = glm::transpose(v_covar_cast);
         }
         quat_scale_to_covar_vjp<OpT>(quat, scale, rotmat, v_covar, v_quat, v_scale);
@@ -73,7 +73,7 @@ __global__ void quat_scale_to_covar_preci_bwd_kernel(
                                 v_precis[2] * .5f, v_precis[4] * .5f, v_precis[5]);
         } else {
             v_precis += idx * 9;
-            mat3<OpT> v_precis_cast = glm::make_mat3(v_precis);
+            mat3<OpT> v_precis_cast = mat3<OpT>(glm::make_mat3(v_precis));
             v_preci = glm::transpose(v_precis_cast);
         }
         quat_scale_to_preci_vjp<OpT>(quat, scale, rotmat, v_preci, v_quat, v_scale);
