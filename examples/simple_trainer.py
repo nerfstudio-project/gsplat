@@ -216,7 +216,7 @@ def create_splats_with_optimizers(
 
     add_activations(activations, "means3d")
     add_activations(activations, "scales", torch.exp)
-    add_activations(activations, "quats", F.normalize)
+    add_activations(activations, "quats", "quats": lambda x: F.normalize(x, dim=-1),)
     add_activations(activations, "opacities", torch.sigmoid)
 
     if feature_dim is None:
@@ -433,8 +433,6 @@ class Runner:
             rasterize_mode=rasterize_mode,
             **kwargs,
         )
-        
-        info["device"] = self.device
 
         return render_colors, render_alphas, info
 

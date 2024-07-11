@@ -28,13 +28,6 @@ class Strategy(ABC):
         self._optimizers = optimizers
         # some running states for the strategy
         self._state: DefaultDict[str, Any] = defaultdict(dict)
-        self._activations = {
-            "sigmoid": torch.sigmoid,
-            "relu": torch.relu,
-            "tanh": torch.tanh,
-            "exp": torch.exp,
-        }
-        pass
 
     def _get_param(self, name: str) -> Tensor:
         return self._activations[name](self._params[name])
@@ -99,6 +92,13 @@ class DefaultStrategy(Strategy):
         revised_opacity: bool = False,
     ):
         super().__init__(params, activations, optimizers)
+
+        for key in ["means3d", "scales", "quats", "opacities"]:
+            assert (
+                key in self._activations
+            ), f"{key} is required in activations but missing."
+            assert key in self._params, f"{key} is required in params but missing."
+
         self._verbose = verbose
         self._prune_opa = prune_opa
         self._grow_grad2d = grow_grad2d
@@ -119,15 +119,6 @@ class DefaultStrategy(Strategy):
             # running accum: counting how many time each GS is visible.
             "count": None,
         }
-
-        self._activations.update(
-            {
-                "means3d": lambda x: x,
-                "scales": torch.exp,
-                "quats": lambda x: F.normalize(x, dim=-1),
-                "opacities": torch.sigmoid,
-            }
-        )
 
     def step_pre_backward(self, step: int, info: Dict[str, Any]):
         """Step before the backward pass.
@@ -160,9 +151,10 @@ class DefaultStrategy(Strategy):
         self._state["count"].zero_()
 
     @torch.no_grad()
-    def _grow_gs(self, device: torch.device):
+    def _grow_gs(self):
         count = self._state["count"]
         grads = self._state["grads2d"] / count
+        device = grads.device
         grads = grads.clamp_min(1)
 
         is_grad_high = grads > self._grow_grad2d
@@ -198,13 +190,15 @@ class DefaultStrategy(Strategy):
     def _prune_gs(self, step: int):
         is_prune = self._get_param("opacities") < self._prune_opa
         if step > self._reset_every:
-            is_too_big = (self._get_param("scales").max(dim=-1).values > self._prune_scale3d * self._scene_scale)
+            is_too_big = (
+                self._get_param("scales").max(dim=-1).values
+                > self._prune_scale3d * self._scene_scale
+            )
             is_prune = is_prune | is_too_big
 
         n_prune = is_prune.sum().item()
         self._refine_keep(~is_prune)
 
-        
         if self._verbose:
             print(
                 f"Step {step}: {n_prune} GSs pruned. "
@@ -260,9 +254,7 @@ class DefaultStrategy(Strategy):
                         # new params are assigned with zero optimizer states
                         # (worth investigating it as it will lead to a lot more GS.)
                         v = p_state[key]
-                        v_new = torch.zeros(
-                            (len(sel), *v.shape[1:]), device=device
-                        )
+                        v_new = torch.zeros((len(sel), *v.shape[1:]), device=device)
                         p_state[key] = torch.cat([v, v_new])
                 p_new = torch.nn.Parameter(torch.cat([p, p[sel]]))
                 optimizer.param_groups[i]["params"] = [p_new]
@@ -271,7 +263,7 @@ class DefaultStrategy(Strategy):
         for k, v in self._state.items():
             self._state[k] = torch.cat((v, v[sel]))
         torch.cuda.empty_cache()
-    
+
     @torch.no_grad()
     def _refine_split(self, mask: Tensor, device: torch.device):
         sel = torch.where(mask)[0]
@@ -351,7 +343,6 @@ class DefaultStrategy(Strategy):
             self._running_stats[k] = v[sel]
         torch.cuda.empty_cache()
 
-
     @torch.no_grad()
     def _reset_opa(self, value: float = 0.01):
         """Utility function to reset opacities."""
@@ -373,6 +364,7 @@ class DefaultStrategy(Strategy):
                 optimizer.state[p_new] = p_state
                 self._params[param_group["name"]] = p_new
         torch.cuda.empty_cache()
+
 
 class MCMCStrategy(Strategy):
     """Strategy that uses MCMC for GS splitting.
@@ -399,6 +391,13 @@ class MCMCStrategy(Strategy):
         refine_every: int = 100,
     ):
         super().__init__(params, activations, optimizers)
+
+        for key in ["means3d", "scales", "quats", "opacities"]:
+            assert (
+                key in self._activations
+            ), f"{key} is required in activations but missing."
+            assert key in self._params, f"{key} is required in params but missing."
+
         self._verbose = verbose
         self._cap_max = cap_max
         self._noise_lr = noise_lr
@@ -417,6 +416,10 @@ class MCMCStrategy(Strategy):
         info["means2d"].retain_grad()
 
     def step_post_backward(self, step: int, info: Dict[str, Any], lr: float):
+        """Step after the backward pass.
+
+        Relocate Gaussians, create new Gaussians, and add noise to Gaussians.
+        """
         if (
             step < self._refine_stop_iter
             and step > self._refine_start_iter
@@ -548,8 +551,3 @@ class MCMCStrategy(Strategy):
         )
         noise = torch.bmm(actual_covariance, noise.unsqueeze(-1)).squeeze(-1)
         self._params["means3d"].add_(noise)
-
-
-class RevisedDensificationStrategy(DefaultStrategy):
-    # TODO: Fill things here
-    ...
