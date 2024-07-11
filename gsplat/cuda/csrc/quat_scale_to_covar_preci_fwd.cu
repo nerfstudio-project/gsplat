@@ -121,9 +121,9 @@ quat_scale_to_covar_preci_fwd_tensor(const torch::Tensor &quats,  // [N, 4]
         AT_DISPATCH_FLOATING_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16, quats.scalar_type(), "quat_scale_to_covar_preci_fwd", [&]() {
             quat_scale_to_covar_preci_fwd_kernel<<<(N + N_THREADS - 1) / N_THREADS,
                                                 N_THREADS, 0, stream>>>(
-                N, quats.data_ptr<float>(), scales.data_ptr<float>(), triu,
-                compute_covar ? covars.data_ptr<float>() : nullptr,
-                compute_preci ? precis.data_ptr<float>() : nullptr);
+                N, quats.data_ptr<scalar_t>(), scales.data_ptr<scalar_t>(), triu,
+                compute_covar ? covars.data_ptr<scalar_t>() : nullptr,
+                compute_preci ? precis.data_ptr<scalar_t>() : nullptr);
         });
     }
     return std::make_tuple(covars, precis);
