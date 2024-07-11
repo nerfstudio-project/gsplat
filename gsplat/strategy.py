@@ -83,6 +83,7 @@ class DefaultStrategy(Strategy):
         # Use absolute gradients for GS splitting
         absgrad: bool = False,
         # Whether to use revised opacity heuristic from arXiv:2404.06109
+        # (experimental)
         revised_opacity: bool = False,
     ):
         super().__init__(params, optimizers)
