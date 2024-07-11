@@ -34,13 +34,6 @@ def test_strategy():
             "colors": torch.rand(N, 3),
         }
     ).to(device)
-    activations = {
-        "means3d": lambda x: x,
-        "scales": lambda x: torch.exp(x),
-        "quats": lambda x: F.normalize(x, p=2, dim=-1),
-        "opacities": lambda x: torch.sigmoid(x),
-        "colors": lambda x: torch.sigmoid(x),
-    }
     lrs = {
         "means3d": 1e-3,
         "scales": 1e-3,
@@ -56,11 +49,11 @@ def test_strategy():
 
     # A dummy rendering call
     render_colors, render_alphas, info = rasterization(
-        means=activations["means3d"](params["means3d"]),
-        quats=activations["quats"](params["quats"]),
-        scales=activations["scales"](params["scales"]),
-        opacities=activations["opacities"](params["opacities"]),
-        colors=activations["colors"](params["colors"]),
+        means=params["means3d"],
+        quats=params["quats"],  # F.normalize is fused into the kernel
+        scales=torch.exp(params["scales"]),
+        opacities=torch.sigmoid(params["opacities"]),
+        colors=params["colors"],
         viewmats=torch.eye(4).unsqueeze(0).to(device),
         Ks=torch.eye(3).unsqueeze(0).to(device),
         width=10,
@@ -70,19 +63,19 @@ def test_strategy():
     print(render_colors.shape, render_alphas.shape)
 
     # Test NullStrategy
-    strategy = NullStrategy(params, activations, optimizers)
+    strategy = NullStrategy(params, optimizers)
     strategy.step_pre_backward(step=0, info=info)
     render_colors.mean().backward(retain_graph=True)
     strategy.step_post_backward(step=0, info=info)
 
     # Test DefaultStrategy
-    strategy = DefaultStrategy(params, activations, optimizers, verbose=True)
+    strategy = DefaultStrategy(params, optimizers, verbose=True)
     strategy.step_pre_backward(step=600, info=info)
     render_colors.mean().backward(retain_graph=True)
     strategy.step_post_backward(step=600, info=info)
 
     # Test MCMCStrategy
-    strategy = MCMCStrategy(params, activations, optimizers, verbose=True)
+    strategy = MCMCStrategy(params, optimizers, verbose=True)
     strategy.step_pre_backward(step=600, info=info)
     render_colors.mean().backward(retain_graph=True)
     strategy.step_post_backward(step=600, info=info, lr=1e-3)

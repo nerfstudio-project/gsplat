@@ -167,7 +167,7 @@ def create_splats_with_optimizers(
     batch_size: int = 1,
     feature_dim: Optional[int] = None,
     device: str = "cuda",
-) -> Tuple[torch.nn.ParameterDict, Dict[str, Callable], List[torch.optim.Optimizer]]:
+) -> Tuple[torch.nn.ParameterDict, List[torch.optim.Optimizer]]:
     if init_type == "sfm":
         points = torch.from_numpy(parser.points).float()
         rgbs = torch.from_numpy(parser.points_rgb / 255.0).float()
@@ -192,12 +192,6 @@ def create_splats_with_optimizers(
         ("quats", torch.nn.Parameter(quats), 1e-3),
         ("opacities", torch.nn.Parameter(opacities), 5e-2),
     ]
-    activations = {
-        "means3d": lambda x: x,
-        "scales": torch.exp,
-        "quats": lambda x: F.normalize(x, dim=-1),
-        "opacities": torch.sigmoid,
-    }
 
     if feature_dim is None:
         # color is SH coefficients.
@@ -225,7 +219,7 @@ def create_splats_with_optimizers(
         )
         for name, _, lr in params
     ]
-    return splats, activations, optimizers
+    return splats, optimizers
 
 
 class Runner:
@@ -270,7 +264,7 @@ class Runner:
 
         # Model
         feature_dim = 32 if cfg.app_opt else None
-        self.splats, self.activations, self.optimizers = create_splats_with_optimizers(
+        self.splats, self.optimizers = create_splats_with_optimizers(
             self.parser,
             init_type=cfg.init_type,
             init_num_pts=cfg.init_num_pts,
@@ -289,7 +283,6 @@ class Runner:
         # Densification Strategy
         self.strategy = DefaultStrategy(
             params=self.splats,
-            activations=self.activations,
             optimizers=self.optimizers,
             verbose=True,
             scene_scale=self.scene_scale,

@@ -17,19 +17,14 @@ class Strategy(ABC):
     def __init__(
         self,
         params: torch.nn.ParameterDict,
-        activations: Dict[str, Callable],
         optimizers: List[torch.optim.Optimizer],
         *args,
         **kwargs,
     ):
         self._params = params
-        self._activations = activations
         self._optimizers = optimizers
         # some running states for the strategy
         self._state: DefaultDict[str, Any] = defaultdict(dict)
-
-    def _get_param(self, name: str) -> Tensor:
-        return self._activations[name](self._params[name])
 
     @abstractmethod
     def step_pre_backward(self, step: int, info: Dict[str, Any]):
@@ -66,7 +61,6 @@ class DefaultStrategy(Strategy):
     def __init__(
         self,
         params: torch.nn.ParameterDict,
-        activations: Dict[str, Callable],
         optimizers: List[torch.optim.Optimizer],
         verbose: bool = False,
         scene_scale: float = 1.0,
@@ -91,12 +85,9 @@ class DefaultStrategy(Strategy):
         # Whether to use revised opacity heuristic from arXiv:2404.06109
         revised_opacity: bool = False,
     ):
-        super().__init__(params, activations, optimizers)
+        super().__init__(params, optimizers)
 
         for key in ["means3d", "scales", "quats", "opacities"]:
-            assert (
-                key in self._activations
-            ), f"{key} is required in activations but missing."
             assert key in self._params, f"{key} is required in params but missing."
 
         self._verbose = verbose
@@ -173,7 +164,7 @@ class DefaultStrategy(Strategy):
 
         is_grad_high = grads > self._grow_grad2d
         is_small = (
-            self._get_param("scales").max(dim=-1).values
+            torch.exp(self._params["scales"]).max(dim=-1).values
             <= self._grow_scale3d * self._scene_scale
         )
         is_dupli = is_grad_high & is_small
@@ -198,13 +189,13 @@ class DefaultStrategy(Strategy):
 
     @torch.no_grad()
     def _prune_gs(self, step) -> int:
-        is_prune = self._get_param("opacities") < self._prune_opa
+        is_prune = torch.sigmoid(self._params["opacities"]) < self._prune_opa
         if step > self._reset_every:
             # The official code also implements sreen-size pruning but
             # it's actually not being used due to a bug:
             # https://github.com/graphdeco-inria/gaussian-splatting/issues/123
             is_too_big = (
-                self._get_param("scales").max(dim=-1).values
+                torch.exp(self._params["scales"]).max(dim=-1).values
                 > self._prune_scale3d * self._scene_scale
             )
             is_prune = is_prune | is_too_big
@@ -281,9 +272,9 @@ class DefaultStrategy(Strategy):
         sel = torch.where(mask)[0]
         rest = torch.where(~mask)[0]
 
-        scales = self._get_param("scales")[sel]
-        quats = self._get_param("quats")[sel]
-        opacities = self._get_param("opacities")[sel]
+        scales = torch.exp(self._params["scales"])[sel]
+        quats = F.normalize(self._params["quats"], dim=-1)[sel]
+        opacities = torch.sigmoid(self._params["opacities"])[sel]
         rotmats = normalized_quat_to_rotmat(quats)  # [N, 3, 3]
         samples = torch.einsum(
             "nij,nj,bnj->bni",
@@ -388,7 +379,6 @@ class MCMCStrategy(Strategy):
     def __init__(
         self,
         params: torch.nn.ParameterDict,
-        activations: Dict[str, Callable],
         optimizers: List[torch.optim.Optimizer],
         verbose: bool = False,
         # Maximum number of GSs.
@@ -402,12 +392,9 @@ class MCMCStrategy(Strategy):
         # Refine GSs every this steps
         refine_every: int = 100,
     ):
-        super().__init__(params, activations, optimizers)
+        super().__init__(params, optimizers)
 
         for key in ["means3d", "scales", "quats", "opacities"]:
-            assert (
-                key in self._activations
-            ), f"{key} is required in activations but missing."
             assert key in self._params, f"{key} is required in params but missing."
 
         self._verbose = verbose
@@ -452,7 +439,7 @@ class MCMCStrategy(Strategy):
 
     @torch.no_grad()
     def _relocate_gs(self, min_opacity: float = 0.005) -> int:
-        dead_mask = self._get_param("opacities") <= min_opacity
+        dead_mask = torch.sigmoid(self._params["opacities"]) <= min_opacity
         dead_indices = dead_mask.nonzero(as_tuple=True)[0]
         alive_indices = (~dead_mask).nonzero(as_tuple=True)[0]
         n_gs = len(dead_indices)
@@ -461,13 +448,13 @@ class MCMCStrategy(Strategy):
 
         # Sample for new GSs
         eps = torch.finfo(torch.float32).eps
-        probs = self._get_param("opacities")[alive_indices]
+        probs = torch.sigmoid(self._params["opacities"])[alive_indices]
         probs = probs / (probs.sum() + eps)
         sampled_idxs = torch.multinomial(probs, n_gs, replacement=True)
         sampled_idxs = alive_indices[sampled_idxs]
         new_opacities, new_scales = compute_relocation(
-            opacities=self._get_param("opacities")[sampled_idxs],
-            scales=self._get_param("scales")[sampled_idxs],
+            opacities=torch.sigmoid(self._params["opacities"])[sampled_idxs],
+            scales=torch.exp(self._params["scales"])[sampled_idxs],
             ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
         )
         new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
@@ -503,12 +490,12 @@ class MCMCStrategy(Strategy):
 
         # Sample for new GSs
         eps = torch.finfo(torch.float32).eps
-        probs = self._get_param("opacities")
+        probs = torch.sigmoid(self._params["opacities"])
         probs = probs / (probs.sum() + eps)
         sampled_idxs = torch.multinomial(probs, n_gs, replacement=True)
         new_opacities, new_scales = compute_relocation(
-            opacities=self._get_param("opacities")[sampled_idxs],
-            scales=self._get_param("scales")[sampled_idxs],
+            opacities=torch.sigmoid(self._params["opacities"])[sampled_idxs],
+            scales=torch.exp(self._params["scales"])[sampled_idxs],
             ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
         )
         new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
@@ -542,8 +529,8 @@ class MCMCStrategy(Strategy):
 
     @torch.no_grad()
     def _add_noise_to_gs(self, lr: float):
-        opacities = self._get_param("opacities")
-        scales = self._get_param("scales")
+        opacities = torch.sigmoid(self._params["opacities"])
+        scales = torch.exp(self._params["scales"])
         actual_covariance, _ = quat_scale_to_covar_preci(
             self._params["quats"],
             scales,

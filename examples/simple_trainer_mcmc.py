@@ -194,7 +194,7 @@ class Runner:
 
         # Model
         feature_dim = 32 if cfg.app_opt else None
-        self.splats, self.activations, self.optimizers = create_splats_with_optimizers(
+        self.splats, self.optimizers = create_splats_with_optimizers(
             self.parser,
             init_type=cfg.init_type,
             init_num_pts=cfg.init_num_pts,
@@ -212,7 +212,6 @@ class Runner:
 
         self.strategy = MCMCStrategy(
             params=self.splats,
-            activations=self.activations,
             optimizers=self.optimizers,
             verbose=True,
             cap_max=cfg.cap_max,
