@@ -132,7 +132,9 @@ class MCMCStrategy(Strategy):
             torch.cuda.empty_cache()
 
         # add noise to GSs
-        inject_noise_to_position(params, optimizers, lr * self.noise_lr)
+        inject_noise_to_position(
+            params=params, optimizers=optimizers, state={}, scaler=lr * self.noise_lr
+        )
 
     @torch.no_grad()
     def _relocate_gs(
@@ -141,7 +143,7 @@ class MCMCStrategy(Strategy):
         optimizers: Dict[str, torch.optim.Optimizer],
     ) -> int:
         opacities = torch.sigmoid(params["opacities"])
-        dead_mask = opacities <= min_opacity
+        dead_mask = opacities <= self.min_opacity
         n_gs = dead_mask.sum().item()
         if n_gs > 0:
             relocate(
