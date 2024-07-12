@@ -14,19 +14,38 @@ from .ops import inject_noise_to_position, relocate, sample_add
 
 @dataclass
 class MCMCStrategy(Strategy):
-    """Strategy that uses MCMC for GS splitting.
+    """Strategy that follows the paper:
 
-    "3D Gaussian Splatting as Markov Chain Monte Carlo"
-    https://arxiv.org/abs/2404.09591
+    `3D Gaussian Splatting as Markov Chain Monte Carlo <https://arxiv.org/abs/2404.09591>`_
+
+    This strategy will:
+
+    - Periodically teleport GSs with low opacity to a place that has high opacity.
+    - Periodically introduce new GSs sampled based on the opacity distribution.
+    - Periodically perturb the GSs locations.
 
     Args:
-        cap_max (int): Maximum number of GSs.
-        noise_lr (float): MCMC samping noise learning rate.
-        refine_start_iter (int): Start refining GSs after this iteration.
-        refine_stop_iter (int): Stop refining GSs after this iteration.
-        refine_every (int): Refine GSs every this steps.
-        min_opacity (float): GSs with opacity below this value will be pruned.
-        verbose (bool): Whether to print verbose information
+        cap_max (int): Maximum number of GSs. Default to 1_000_000.
+        noise_lr (float): MCMC samping noise learning rate. Default to 5e5.
+        refine_start_iter (int): Start refining GSs after this iteration. Default to 500.
+        refine_stop_iter (int): Stop refining GSs after this iteration. Default to 25_000.
+        refine_every (int): Refine GSs every this steps. Default to 100.
+        min_opacity (float): GSs with opacity below this value will be pruned. Default to 0.005.
+        verbose (bool): Whether to print verbose information. Default to False.
+
+    Examples:
+
+        >>> from gsplat import MCMCStrategy, rasterization
+        >>> params: Dict[str, torch.nn.Parameter] | torch.nn.ParameterDict = ...
+        >>> optimizers: Dict[str, torch.optim.Optimizer] = ...
+        >>> strategy = MCMCStrategy()
+        >>> strategy.check_sanity(params, optimizers)
+        >>> for step in range(1000):
+        ...     render_image, render_alpha, info = rasterization(...)
+        ...     loss = ...
+        ...     loss.backward()
+        ...     strategy.step_post_backward(params, optimizers, step, info, lr=1e-3)
+
     """
 
     cap_max: int = 1_000_000
@@ -37,49 +56,60 @@ class MCMCStrategy(Strategy):
     min_opacity: float = 0.005
     verbose: bool = False
 
-    def initialize_state(self) -> Dict[str, Any]:
-        """Initialize the state for the strategy.
-
-        Returns an empty dictionary in the base class.
-        """
-        return {}
+    # def initialize_state(self) -> Dict[str, Any]:
+    #     """Initialize and return the running state for this strategy."""
+    #     return {}
 
     def check_sanity(
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
     ):
+        """Sanity check for the parameters and optimizers.
+
+        Check if:
+            * `params` and `optimizers` have the same keys.
+            * Each optimizer has exactly one param_group, corresponding to each parameter.
+            * The following keys are present: {"means", "scales", "quats", "opacities"}.
+
+        Raises:
+            AssertionError: If any of the above conditions is not met.
+
+        .. note::
+            It is not required but highly recommended for the user to call this function
+            after initializing the strategy to ensure the convention of the parameters
+            and optimizers is as expected.
+        """
+
         super().check_sanity(params, optimizers)
         # The following keys are required for this strategy.
         for key in ["means", "scales", "quats", "opacities"]:
             assert key in params, f"{key} is required in params but missing."
 
-    def step_pre_backward(
-        self,
-        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-        optimizers: Dict[str, torch.optim.Optimizer],
-        state: Dict[str, Any],
-        step: int,
-        info: Dict[str, Any],
-    ):
-        """Step before the backward pass.
-
-        Nothing needs to be done here for MCMCStrategy.
-        """
-        pass
+    # def step_pre_backward(
+    #     self,
+    #     params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+    #     optimizers: Dict[str, torch.optim.Optimizer],
+    #     # state: Dict[str, Any],
+    #     step: int,
+    #     info: Dict[str, Any],
+    # ):
+    #     """Callback function to be executed before the `loss.backward()` call."""
+    #     pass
 
     def step_post_backward(
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
-        state: Dict[str, Any],
+        # state: Dict[str, Any],
         step: int,
         info: Dict[str, Any],
         lr: float,
     ):
-        """Step after the backward pass.
+        """Callback function to be executed before the `loss.backward()` call.
 
-        Relocate Gaussians, create new Gaussians, and add noise to Gaussians.
+        Args:
+            lr (float): Learning rate for "means" attribute of the GS.
         """
         if (
             step < self.refine_stop_iter

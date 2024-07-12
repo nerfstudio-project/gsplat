@@ -7,25 +7,18 @@ import torch
 
 @dataclass
 class Strategy:
-    """Base class for the GS optimization strategy."""
+    """Base class for the GS densification strategy.
 
-    def initialize_state(self) -> Dict[str, Any]:
-        """Initialize the state for the strategy.
-
-        Returns an empty dictionary in the base class.
-        """
-        return {}
+    This class is an base class that defines the interface for the GS
+    densification strategy.
+    """
 
     def check_sanity(
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
     ):
-        """Check the sanity of the parameters and optimizers.
-
-        It is not required but highly recommended for the user to call this
-        function before calling `step_pre_backward()` and `step_post_backward()`.
-        """
+        """Sanity check for the parameters and optimizers."""
         assert set(params.keys()) == set(optimizers.keys()), (
             "params and optimizers must have the same keys, "
             f"but got {params.keys()} and {optimizers.keys()}"
@@ -40,28 +33,16 @@ class Strategy:
 
     def step_pre_backward(
         self,
-        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-        optimizers: Dict[str, torch.optim.Optimizer],
-        state: Dict[str, Any],
-        step: int,
-        info: Dict[str, Any],
+        *args,
+        **kwargs,
     ):
-        """Function to be executed before the backward() call.
-
-        Does nothing in the base class.
-        """
+        """Callback function to be executed before the `loss.backward()` call."""
         pass
 
     def step_post_backward(
         self,
-        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-        optimizers: Dict[str, torch.optim.Optimizer],
-        state: Dict[str, Any],
-        step: int,
-        info: Dict[str, Any],
+        *args,
+        **kwargs,
     ):
-        """Function to be executed after the backward() call.
-
-        Does nothing in the base class.
-        """
+        """Callback function to be executed after the `loss.backward()` call."""
         pass
