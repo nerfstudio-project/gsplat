@@ -1,19 +1,17 @@
 import math
+
 import torch
 from torch import Tensor
-from .cuda._wrapper import _make_lazy_cuda_func
 
-N_MAX = 51
-BINOMS = torch.zeros((N_MAX, N_MAX)).float().cuda()
-for n in range(N_MAX):
-    for k in range(n + 1):
-        BINOMS[n, k] = math.comb(n, k)
+from .cuda._wrapper import _make_lazy_cuda_func
 
 
 def compute_relocation(
     opacities: Tensor,  # [N]
     scales: Tensor,  # [N, 3]
     ratios: Tensor,  # [N]
+    binoms: Tensor,  # [n_max, n_max]
+    n_max: int,
 ) -> tuple[Tensor, Tensor]:
     """Compute new Gaussians from a set of old Gaussians.
 
@@ -38,10 +36,10 @@ def compute_relocation(
     assert ratios.shape == (N,), ratios.shape
     opacities = opacities.contiguous()
     scales = scales.contiguous()
-    ratios.clamp_(min=1, max=N_MAX)
+    ratios.clamp_(min=1, max=n_max)
     ratios = ratios.int().contiguous()
 
     new_opacities, new_scales = _make_lazy_cuda_func("compute_relocation")(
-        opacities, scales, ratios, BINOMS, N_MAX
+        opacities, scales, ratios, binoms, n_max
     )
     return new_opacities, new_scales

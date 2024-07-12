@@ -61,8 +61,9 @@ def test_strategy():
     # Test MCMCStrategy
     strategy = MCMCStrategy(verbose=True)
     strategy.check_sanity(params, optimizers)
+    state = strategy.initialize_state()
     render_colors.mean().backward(retain_graph=True)
-    strategy.step_post_backward(params, optimizers, step=600, info=info, lr=1e-3)
+    strategy.step_post_backward(params, optimizers, state, step=600, info=info, lr=1e-3)
 
 
 if __name__ == "__main__":
