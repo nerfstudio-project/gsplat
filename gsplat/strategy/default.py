@@ -23,31 +23,37 @@ class DefaultStrategy(Strategy):
 
     "AbsGS: Recovering Fine Details for 3D Gaussian Splatting"
     https://arxiv.org/abs/2404.10484
+
+    Args:
+        scene_scale (float): The scale of the scene for calibrating the scale-related logic.
+        prune_opa (float): GSs with opacity below this value will be pruned.
+        grow_grad2d (float): GSs with image plane gradient above this value will be
+            split/duplicated.
+        grow_scale3d (float): GSs with scale below this value will be duplicated. Above
+            will be split.
+        prune_scale3d (float): GSs with scale above this value will be pruned.
+        refine_start_iter (int): Start refining GSs after this iteration.
+        refine_stop_iter (int): Stop refining GSs after this iteration.
+        reset_every (int): Reset opacities every this steps.
+        refine_every (int): Reine GSs every this steps.
+        absgrad (bool): Use absolute gradients for GS splitting.
+        revised_opacity (bool): Whether to use revised opacity heuristic from
+            arXiv:2404.06109 (experimental).
+        verbose (bool): Whether to print verbose information
+
     """
 
-    # The scale of the scene for calibrating the scale-related logic.
     scene_scale: float = 1.0
-    # GSs with opacity below this value will be pruned
     prune_opa: float = 0.005
-    # GSs with image plane gradient above this value will be split/duplicated
     grow_grad2d: float = 0.0002
-    # GSs with scale below this value will be duplicated. Above will be split
     grow_scale3d: float = 0.01
-    # GSs with scale above this value will be pruned.
     prune_scale3d: float = 0.1
-    # Start refining GSs after this iteration
     refine_start_iter: int = 500
-    # Stop refining GSs after this iteration
     refine_stop_iter: int = 15_000
-    # Reset opacities every this steps
     reset_every: int = 3000
-    # Refine GSs every this steps
     refine_every: int = 100
-    # Use absolute gradients for GS splitting
     absgrad: bool = False
-    # Whether to use revised opacity heuristic from arXiv:2404.06109 (experimental)
     revised_opacity: bool = False
-    # Whether to print verbose information
     verbose: bool = False
 
     def initialize_state(self) -> Dict[str, Any]:

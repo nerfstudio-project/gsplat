@@ -18,21 +18,23 @@ class MCMCStrategy(Strategy):
 
     "3D Gaussian Splatting as Markov Chain Monte Carlo"
     https://arxiv.org/abs/2404.09591
+
+    Args:
+        cap_max (int): Maximum number of GSs.
+        noise_lr (float): MCMC samping noise learning rate.
+        refine_start_iter (int): Start refining GSs after this iteration.
+        refine_stop_iter (int): Stop refining GSs after this iteration.
+        refine_every (int): Refine GSs every this steps.
+        min_opacity (float): GSs with opacity below this value will be pruned.
+        verbose (bool): Whether to print verbose information
     """
 
-    # Maximum number of GSs.
     cap_max: int = 1_000_000
-    # MCMC samping noise learning rate
     noise_lr: float = 5e5
-    # Start refining GSs after this iteration
     refine_start_iter: int = 500
-    # Stop refining GSs after this iteration
     refine_stop_iter: int = 25_000
-    # Refine GSs every this steps
     refine_every: int = 100
-    # GSs with opacity below this value will be pruned
     min_opacity: float = 0.005
-    # Whether to print verbose information.
     verbose: bool = False
 
     def initialize_state(self) -> Dict[str, Any]:

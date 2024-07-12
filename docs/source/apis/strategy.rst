@@ -9,7 +9,9 @@ Below are densification strategies that we supports.
     :members:
 
 .. autoclass:: DefaultStrategy
+    :show-inheritance:
     :members:
 
 .. autoclass:: MCMCStrategy
+    :show-inheritance:
     :members:
