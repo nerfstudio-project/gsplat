@@ -264,11 +264,9 @@ class DefaultStrategy(Strategy):
                     p_split = (p[sel] + samples).reshape(-1, 3)  # [2N, 3]
                 elif name == "scales":
                     p_split = torch.log(scales / 1.6).repeat(2, 1)  # [2N, 3]
-
-                # TODO: test if this is correct
                 elif name == "opacities" and self.revised_opacity:
-                    new_opacities = 1 - torch.sqrt(1 - opacities)
-                    p_split = torch.logit(new_opacities).repeat(2, 1)
+                    opacities = 1.0 - torch.sqrt(1.0 - opacities)
+                    p_split = torch.logit(opacities).repeat(2)  # [2N]
                 else:
                     repeats = [2] + [1] * (p.dim() - 1)
                     p_split = p[sel].repeat(repeats)

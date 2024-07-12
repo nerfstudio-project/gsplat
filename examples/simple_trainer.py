@@ -108,9 +108,8 @@ class Config:
     absgrad: bool = False
     # Anti-aliasing in rasterization. Might slightly hurt quantitative metrics.
     antialiased: bool = False
-    # Whether to use revised opacity heuristic from arXiv:2404.06109
-    # TODO: verify this works before we expose this to the user
-    # revised_opacity: bool = False
+    # Whether to use revised opacity heuristic from arXiv:2404.06109 (experimental)
+    revised_opacity: bool = False
 
     # Use random background for training to discourage transparency
     random_bkgd: bool = False
@@ -293,6 +292,7 @@ class Runner:
             reset_every=cfg.reset_every,
             refine_every=cfg.refine_every,
             absgrad=cfg.absgrad,
+            revised_opacity=cfg.revised_opacity,
         )
         self.strategy.check_sanity(self.splats, self.optimizers)
         self.strategy_state = self.strategy.initialize_state()
@@ -559,7 +559,7 @@ class Runner:
                 step=step,
                 info=info,
             )
-            
+
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:
                 assert cfg.packed, "Sparse gradients only work with packed mode."
