@@ -8,6 +8,7 @@ from torch import Tensor
 from gsplat.utils import normalized_quat_to_rotmat
 
 from .base import Strategy
+from .ops import _update_param_with_optimizer
 
 
 @dataclass
@@ -219,22 +220,15 @@ class DefaultStrategy(Strategy):
     def _refine_duplicate(self, params, optimizers, state, mask: Tensor):
         device = mask.device
         sel = torch.where(mask)[0]
-        for name, optimizer in optimizers.items():
-            for i, param_group in enumerate(optimizer.param_groups):
-                p = param_group["params"][0]
-                p_state = optimizer.state[p]
-                del optimizer.state[p]
-                for key in p_state.keys():
-                    if key != "step":
-                        # new params are assigned with zero optimizer state
-                        # (worth investigating it as it will lead to a lot more GS.)
-                        v = p_state[key]
-                        v_new = torch.zeros((len(sel), *v.shape[1:]), device=device)
-                        p_state[key] = torch.cat([v, v_new])
-                p_new = torch.nn.Parameter(torch.cat([p, p[sel]]))
-                optimizer.param_groups[i]["params"] = [p_new]
-                optimizer.state[p_new] = p_state
-                params[name] = p_new
+
+        def param_fn(name: str, p: Tensor) -> Tensor:
+            return torch.nn.Parameter(torch.cat([p, p[sel]]))
+
+        def optimizer_fn(key: str, v: Tensor) -> Tensor:
+            return torch.cat([v, torch.zeros((len(sel), *v.shape[1:]), device=device)])
+
+        _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
+
         for k, v in state.items():
             state[k] = torch.cat((v, v[sel]))
         torch.cuda.empty_cache()
@@ -256,36 +250,26 @@ class DefaultStrategy(Strategy):
             torch.randn(2, len(scales), 3, device=device),
         )  # [2, N, 3]
 
-        for name, optimizer in optimizers.items():
-            for i, param_group in enumerate(optimizer.param_groups):
-                p = param_group["params"][0]
-                # create new params
-                if name == "means3d":
-                    p_split = (p[sel] + samples).reshape(-1, 3)  # [2N, 3]
-                elif name == "scales":
-                    p_split = torch.log(scales / 1.6).repeat(2, 1)  # [2N, 3]
-                elif name == "opacities" and self.revised_opacity:
-                    opacities = 1.0 - torch.sqrt(1.0 - opacities)
-                    p_split = torch.logit(opacities).repeat(2)  # [2N]
-                else:
-                    repeats = [2] + [1] * (p.dim() - 1)
-                    p_split = p[sel].repeat(repeats)
-                p_new = torch.cat([p[rest], p_split])
-                p_new = torch.nn.Parameter(p_new)
-                # update optimizer
-                p_state = optimizer.state[p]
-                del optimizer.state[p]
-                for key in p_state.keys():
-                    if key == "step":
-                        continue
-                    v = p_state[key]
-                    # new params are assigned with zero optimizer state
-                    # (worth investigating it)
-                    v_split = torch.zeros((2 * len(sel), *v.shape[1:]), device=device)
-                    p_state[key] = torch.cat([v[rest], v_split])
-                optimizer.param_groups[i]["params"] = [p_new]
-                optimizer.state[p_new] = p_state
-                params[name] = p_new
+        def param_fn(name: str, p: Tensor) -> Tensor:
+            if name == "means3d":
+                p_split = (p[sel] + samples).reshape(-1, 3)  # [2N, 3]
+            elif name == "scales":
+                p_split = torch.log(scales / 1.6).repeat(2, 1)  # [2N, 3]
+            elif name == "opacities" and self.revised_opacity:
+                opacities = 1.0 - torch.sqrt(1.0 - opacities)
+                p_split = torch.logit(opacities).repeat(2)  # [2N]
+            else:
+                repeats = [2] + [1] * (p.dim() - 1)
+                p_split = p[sel].repeat(repeats)
+            p_new = torch.cat([p[rest], p_split])
+            p_new = torch.nn.Parameter(p_new)
+            return p_new
+
+        def optimizer_fn(key: str, v: Tensor) -> Tensor:
+            v_split = torch.zeros((2 * len(sel), *v.shape[1:]), device=device)
+            return torch.cat([v[rest], v_split])
+
+        _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
 
         for k, v in state.items():
             if v is None:
@@ -299,18 +283,15 @@ class DefaultStrategy(Strategy):
     def _refine_keep(self, params, optimizers, state, mask: Tensor):
         """Unility function to prune GSs."""
         sel = torch.where(mask)[0]
-        for name, optimizer in optimizers.items():
-            for i, param_group in enumerate(optimizer.param_groups):
-                p = param_group["params"][0]
-                p_state = optimizer.state[p]
-                del optimizer.state[p]
-                for key in p_state.keys():
-                    if key != "step":
-                        p_state[key] = p_state[key][sel]
-                p_new = torch.nn.Parameter(p[sel])
-                optimizer.param_groups[i]["params"] = [p_new]
-                optimizer.state[p_new] = p_state
-                params[name] = p_new
+
+        def param_fn(name: str, p: Tensor) -> Tensor:
+            return torch.nn.Parameter(p[sel])
+
+        def optimizer_fn(key: str, v: Tensor) -> Tensor:
+            return v[sel]
+
+        _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
+
         for k, v in state.items():
             state[k] = v[sel]
         torch.cuda.empty_cache()
@@ -318,21 +299,18 @@ class DefaultStrategy(Strategy):
     @torch.no_grad()
     def _reset_opa(self, params, optimizers, state, value: float = 0.01):
         """Utility function to reset opacities."""
-        opacities = torch.clamp(
-            params["opacities"], max=torch.logit(torch.tensor(value)).item()
+
+        def param_fn(name: str, p: Tensor) -> Tensor:
+            if name == "opacities":
+                opacities = torch.clamp(p, max=torch.logit(torch.tensor(value)).item())
+                return torch.nn.Parameter(opacities)
+            else:
+                raise ValueError(f"Unexpected parameter name: {name}")
+
+        def optimizer_fn(key: str, v: Tensor) -> Tensor:
+            return torch.zeros_like(v)
+
+        _update_param_with_optimizer(
+            param_fn, optimizer_fn, params, optimizers, names=["opacities"]
         )
-        for name, optimizer in optimizers.items():
-            for i, param_group in enumerate(optimizer.param_groups):
-                if name != "opacities":
-                    continue
-                p = param_group["params"][0]
-                p_state = optimizer.state[p]
-                del optimizer.state[p]
-                for key in p_state.keys():
-                    if key != "step":
-                        p_state[key] = torch.zeros_like(p_state[key])
-                p_new = torch.nn.Parameter(opacities)
-                optimizer.param_groups[i]["params"] = [p_new]
-                optimizer.state[p_new] = p_state
-                params[name] = p_new
         torch.cuda.empty_cache()

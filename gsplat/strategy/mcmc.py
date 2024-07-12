@@ -9,6 +9,7 @@ from gsplat import quat_scale_to_covar_preci
 from gsplat.relocation import compute_relocation
 
 from .base import Strategy
+from .ops import _update_param_with_optimizer
 
 
 @dataclass
@@ -97,7 +98,8 @@ class MCMCStrategy(Strategy):
         optimizers: Dict[str, torch.optim.Optimizer],
         min_opacity: float = 0.005,
     ) -> int:
-        dead_mask = torch.sigmoid(params["opacities"]) <= min_opacity
+        opacities = torch.sigmoid(params["opacities"])
+        dead_mask = opacities <= min_opacity
         dead_indices = dead_mask.nonzero(as_tuple=True)[0]
         alive_indices = (~dead_mask).nonzero(as_tuple=True)[0]
         n_gs = len(dead_indices)
@@ -106,34 +108,31 @@ class MCMCStrategy(Strategy):
 
         # Sample for new GSs
         eps = torch.finfo(torch.float32).eps
-        probs = torch.sigmoid(params["opacities"])[alive_indices]
+        probs = opacities[alive_indices]
         probs = probs / (probs.sum() + eps)
         sampled_idxs = torch.multinomial(probs, n_gs, replacement=True)
         sampled_idxs = alive_indices[sampled_idxs]
         new_opacities, new_scales = compute_relocation(
-            opacities=torch.sigmoid(params["opacities"])[sampled_idxs],
+            opacities=opacities[sampled_idxs],
             scales=torch.exp(params["scales"])[sampled_idxs],
             ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
         )
         new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
-        params["opacities"][sampled_idxs] = torch.logit(new_opacities)
-        params["scales"][sampled_idxs] = torch.log(new_scales)
 
-        # Update splats and optimizers
-        for k in params.keys():
-            params[k][dead_indices] = params[k][sampled_idxs]
-        for name, optimizer in optimizers.items():
-            for i, param_group in enumerate(optimizer.param_groups):
-                p = param_group["params"][0]
-                p_state = optimizer.state[p]
-                del optimizer.state[p]
-                for key in p_state.keys():
-                    if key != "step":
-                        p_state[key][sampled_idxs] = 0
-                p_new = torch.nn.Parameter(params[name])
-                optimizer.param_groups[i]["params"] = [p_new]
-                optimizer.state[p_new] = p_state
-                params[name] = p_new
+        def param_fn(name: str, p: Tensor) -> Tensor:
+            if name == "opacities":
+                p[sampled_idxs] = torch.logit(new_opacities)
+            elif name == "scales":
+                p[sampled_idxs] = torch.log(new_scales)
+            p[dead_indices] = p[sampled_idxs]
+            return torch.nn.Parameter(p)
+
+        def optimizer_fn(key: str, v: Tensor) -> Tensor:
+            v[sampled_idxs] = 0
+            return v
+
+        _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
+
         torch.cuda.empty_cache()
         return n_gs
 
@@ -162,28 +161,21 @@ class MCMCStrategy(Strategy):
             ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
         )
         new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
-        params["opacities"][sampled_idxs] = torch.logit(new_opacities)
-        params["scales"][sampled_idxs] = torch.log(new_scales)
 
-        # Update splats and optimizers
-        for k in params.keys():
-            params[k] = torch.cat([params[k], params[k][sampled_idxs]])
-        for name, optimizer in optimizers.items():
-            for i, param_group in enumerate(optimizer.param_groups):
-                p = param_group["params"][0]
-                p_state = optimizer.state[p]
-                del optimizer.state[p]
-                for key in p_state.keys():
-                    if key != "step":
-                        v = p_state[key]
-                        v_new = torch.zeros(
-                            (len(sampled_idxs), *v.shape[1:]), device=v.device
-                        )
-                        p_state[key] = torch.cat([v, v_new])
-                p_new = torch.nn.Parameter(params[name])
-                optimizer.param_groups[i]["params"] = [p_new]
-                optimizer.state[p_new] = p_state
-                params[name] = p_new
+        def param_fn(name: str, p: Tensor) -> Tensor:
+            if name == "opacities":
+                p[sampled_idxs] = torch.logit(new_opacities)
+            elif name == "scales":
+                p[sampled_idxs] = torch.log(new_scales)
+            p = torch.cat([p, p[sampled_idxs]])
+            return torch.nn.Parameter(p)
+
+        def optimizer_fn(key: str, v: Tensor) -> Tensor:
+            v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
+            return torch.cat([v, v_new])
+
+        _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
+
         torch.cuda.empty_cache()
         return n_gs
 
