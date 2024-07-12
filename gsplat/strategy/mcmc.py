@@ -20,8 +20,6 @@ class MCMCStrategy(Strategy):
     https://arxiv.org/abs/2404.09591
     """
 
-    # Whether to print verbose information.
-    verbose: bool = False
     # Maximum number of GSs.
     cap_max: int = 1_000_000
     # MCMC samping noise learning rate
@@ -34,6 +32,15 @@ class MCMCStrategy(Strategy):
     refine_every: int = 100
     # GSs with opacity below this value will be pruned
     min_opacity: float = 0.005
+    # Whether to print verbose information.
+    verbose: bool = False
+
+    def initialize_state(self) -> Dict[str, Any]:
+        """Initialize the state for the strategy.
+
+        Returns an empty dictionary in the base class.
+        """
+        return {}
 
     def check_sanity(
         self,

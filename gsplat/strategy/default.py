@@ -25,8 +25,6 @@ class DefaultStrategy(Strategy):
     https://arxiv.org/abs/2404.10484
     """
 
-    # Whether to print verbose information
-    verbose: bool = False
     # The scale of the scene for calibrating the scale-related logic.
     scene_scale: float = 1.0
     # GSs with opacity below this value will be pruned
@@ -49,6 +47,8 @@ class DefaultStrategy(Strategy):
     absgrad: bool = False
     # Whether to use revised opacity heuristic from arXiv:2404.06109 (experimental)
     revised_opacity: bool = False
+    # Whether to print verbose information
+    verbose: bool = False
 
     def initialize_state(self) -> Dict[str, Any]:
         # Postpone the initialization of the state to the first step so that we can
