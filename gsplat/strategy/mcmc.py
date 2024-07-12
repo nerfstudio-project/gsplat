@@ -42,7 +42,7 @@ class MCMCStrategy(Strategy):
     ):
         super().check_sanity(params, optimizers)
         # The following keys are required for this strategy.
-        for key in ["means3d", "scales", "quats", "opacities"]:
+        for key in ["means", "scales", "quats", "opacities"]:
             assert key in params, f"{key} is required in params but missing."
 
     def step_pre_backward(
@@ -87,7 +87,7 @@ class MCMCStrategy(Strategy):
             if self.verbose:
                 print(
                     f"Step {step}: Added {n_new_gs} GSs. "
-                    f"Now having {len(params['means3d'])} GSs."
+                    f"Now having {len(params['means'])} GSs."
                 )
 
             torch.cuda.empty_cache()
@@ -120,7 +120,7 @@ class MCMCStrategy(Strategy):
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
     ) -> int:
-        current_n_points = len(params["means3d"])
+        current_n_points = len(params["means"])
         n_target = min(self.cap_max, int(1.05 * current_n_points))
         n_gs = max(0, n_target - current_n_points)
         if n_gs > 0:

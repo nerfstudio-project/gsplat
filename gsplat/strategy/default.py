@@ -67,7 +67,7 @@ class DefaultStrategy(Strategy):
     ):
         super().check_sanity(params, optimizers)
         # The following keys are required for this strategy.
-        for key in ["means3d", "scales", "quats", "opacities"]:
+        for key in ["means", "scales", "quats", "opacities"]:
             assert key in params, f"{key} is required in params but missing."
 
     def step_pre_backward(
@@ -111,7 +111,7 @@ class DefaultStrategy(Strategy):
             if self.verbose:
                 print(
                     f"Step {step}: {n_dupli} GSs duplicated, {n_split} GSs split. "
-                    f"Now having {len(params['means3d'])} GSs."
+                    f"Now having {len(params['means'])} GSs."
                 )
 
             # prune GSs
@@ -119,7 +119,7 @@ class DefaultStrategy(Strategy):
             if self.verbose:
                 print(
                     f"Step {step}: {n_prune} GSs pruned. "
-                    f"Now having {len(params['means3d'])} GSs."
+                    f"Now having {len(params['means'])} GSs."
                 )
 
             # reset running stats
@@ -138,7 +138,6 @@ class DefaultStrategy(Strategy):
     def _update_state(
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-        optimizers: Dict[str, torch.optim.Optimizer],
         state: Dict[str, Any],
         info: Dict[str, Any],
         packed: bool = False,

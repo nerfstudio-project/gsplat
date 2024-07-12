@@ -27,7 +27,7 @@ def test_strategy():
     N = 100
     params = torch.nn.ParameterDict(
         {
-            "means3d": torch.randn(N, 3),
+            "means": torch.randn(N, 3),
             "scales": torch.rand(N, 3),
             "quats": torch.randn(N, 4),
             "opacities": torch.rand(N),
@@ -38,7 +38,7 @@ def test_strategy():
 
     # A dummy rendering call
     render_colors, render_alphas, info = rasterization(
-        means=params["means3d"],
+        means=params["means"],
         quats=params["quats"],  # F.normalize is fused into the kernel
         scales=torch.exp(params["scales"]),
         opacities=torch.sigmoid(params["opacities"]),

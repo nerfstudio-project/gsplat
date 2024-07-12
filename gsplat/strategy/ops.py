@@ -111,7 +111,7 @@ def split(
     )  # [2, N, 3]
 
     def param_fn(name: str, p: Tensor) -> Tensor:
-        if name == "means3d":
+        if name == "means":
             p_split = (p[sel] + samples).reshape(-1, 3)  # [2N, 3]
         elif name == "scales":
             p_split = torch.log(scales / 1.6).repeat(2, 1)  # [2N, 3]
@@ -311,9 +311,9 @@ def inject_noise_to_position(
         return 1 / (1 + torch.exp(-k * (x - x0)))
 
     noise = (
-        torch.randn_like(params["means3d"])
+        torch.randn_like(params["means"])
         * (op_sigmoid(1 - opacities)).unsqueeze(-1)
         * scaler
     )
     noise = torch.bmm(covars, noise.unsqueeze(-1)).squeeze(-1)
-    params["means3d"].add_(noise)
+    params["means"].add_(noise)
