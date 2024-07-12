@@ -6,7 +6,7 @@ def normalized_quat_to_rotmat(quat: Tensor) -> Tensor:
     """Convert normalized quaternion to rotation matrix.
 
     Args:
-        quat: Normalized quaternion (..., 4)
+        quat: Normalized quaternion in wxyz convension. (..., 4)
 
     Returns:
         Rotation matrix (..., 3, 3)

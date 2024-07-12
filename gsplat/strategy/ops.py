@@ -323,5 +323,5 @@ def inject_noise_to_position(
         * (op_sigmoid(1 - opacities)).unsqueeze(-1)
         * scaler
     )
-    noise = torch.bmm(covars, noise.unsqueeze(-1)).squeeze(-1)
+    noise = torch.einsum("bij,bj->bi", covars, noise)
     params["means"].add_(noise)
