@@ -33,29 +33,6 @@ class DefaultStrategy(Strategy):
     higher value, e.g., 0.0008. Also, the :func:`rasterization` function should be called
     with `absgrad=True` as well so that the absolute gradients are computed.
 
-    .. note::
-        This strategy will inplacely update the Gaussian parameters as well as the optimizers,
-        so it has a specific expectation on the format of the parameters and the optimizers.
-        It is designed to work with the Guassians defined as either a Dict of
-        `torch.nn.Parameter <https://pytorch.org/docs/stable/generated/torch.nn.parameter.Parameter.html>`_
-        or a
-        `torch.nn.ParameterDict <https://pytorch.org/docs/stable/generated/torch.nn.ParameterDict.html>`_
-        with at least the following keys: {"means", "scales", "quats", "opacities"}. On top of these attributes,
-        arbitrarily number of extra attributes are supported. Besides the parameters, it also
-        expects a Dict of `torch.optim.Optimizer <https://pytorch.org/docs/stable/optim.html>`_
-        with the same keys as the parameters, and each optimizer should correspond to only
-        one learnable parameter.
-
-        For example, the following is a valid format for the parameters and the optimizers
-        that can be used with this strategy:
-
-        >>> N = 100
-        >>> params = torch.nn.ParameterDict({
-            "means": Tensor(N, 3), "scales": Tensor(N), "quats": Tensor(N, 4), "opacities": Tensor(N),
-            "colors": Tensor(N, 25, 3), "features1": Tensor(N, 128), "features2": Tensor(N, 64),
-        }
-        >>> optimizers = {k: torch.optim.Adam([p], lr=1e-3) for k, p in params.keys()}
-
     Args:
         scene_scale (float): The scale of the scene for calibrating the scale-related logic. Default is 1.0.
         prune_opa (float): GSs with opacity below this value will be pruned. Default is 0.005.
