@@ -1,4 +1,5 @@
 import math
+from typing import Tuple
 
 import torch
 from torch import Tensor
@@ -12,7 +13,7 @@ def compute_relocation(
     ratios: Tensor,  # [N]
     binoms: Tensor,  # [n_max, n_max]
     n_max: int,
-) -> tuple[Tensor, Tensor]:
+) -> Tuple[Tensor, Tensor]:
     """Compute new Gaussians from a set of old Gaussians.
 
     This function interprets the Gaussians as samples from a likelihood distribution.
