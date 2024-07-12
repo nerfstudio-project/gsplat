@@ -15,31 +15,55 @@ from .ops import duplicate, remove, reset_opa, split
 class DefaultStrategy(Strategy):
     """A default strategy that follows the original 3DGS paper:
 
-    "3D Gaussian Splatting for Real-Time Radiance Field Rendering"
-    https://arxiv.org/abs/2308.04079
+    `3D Gaussian Splatting for Real-Time Radiance Field Rendering <https://arxiv.org/abs/2308.04079>`_
 
-    If absgrad=True, it will use the absolute gradients for GS splitting, following the
-    AbsGS paper:
+    The strategy will:
 
-    "AbsGS: Recovering Fine Details for 3D Gaussian Splatting"
-    https://arxiv.org/abs/2404.10484
+    - Periodically duplicate GSs with high image plane gradients and small scales.
+    - Periodically split GSs with high image plane gradients and large scales.
+    - Periodically prune GSs with low opacity.
+    - Periodically reset GSs to a lower opacity.
+
+    If `absgrad=True`, it will use the absolute gradients instead of average gradients
+    for GS duplicating & splitting, following the AbsGS paper:
+
+    `AbsGS: Recovering Fine Details for 3D Gaussian Splatting <https://arxiv.org/abs/2404.10484>`_
+
+    Which typically leads to better results but requires to set the `grow_grad2d` to a
+    higher value, e.g., 0.0008. Also, the :func:`rasterization` function should be called
+    with `absgrad=True` as well so that the absolute gradients are computed.
 
     Args:
-        scene_scale (float): The scale of the scene for calibrating the scale-related logic.
-        prune_opa (float): GSs with opacity below this value will be pruned.
+        scene_scale (float): The scale of the scene for calibrating the scale-related logic. Default is 1.0.
+        prune_opa (float): GSs with opacity below this value will be pruned. Default is 0.005.
         grow_grad2d (float): GSs with image plane gradient above this value will be
-            split/duplicated.
+            split/duplicated. Default is 0.0002.
         grow_scale3d (float): GSs with scale below this value will be duplicated. Above
-            will be split.
-        prune_scale3d (float): GSs with scale above this value will be pruned.
-        refine_start_iter (int): Start refining GSs after this iteration.
-        refine_stop_iter (int): Stop refining GSs after this iteration.
-        reset_every (int): Reset opacities every this steps.
-        refine_every (int): Reine GSs every this steps.
-        absgrad (bool): Use absolute gradients for GS splitting.
+            will be split. Default is 0.01.
+        prune_scale3d (float): GSs with scale above this value will be pruned. Default is 0.1.
+        refine_start_iter (int): Start refining GSs after this iteration. Default is 500.
+        refine_stop_iter (int): Stop refining GSs after this iteration. Default is 15_000.
+        reset_every (int): Reset opacities every this steps. Default is 3000.
+        refine_every (int): Reine GSs every this steps. Default is 100.
+        absgrad (bool): Use absolute gradients for GS splitting. Default is False.
         revised_opacity (bool): Whether to use revised opacity heuristic from
-            arXiv:2404.06109 (experimental).
-        verbose (bool): Whether to print verbose information
+            arXiv:2404.06109 (experimental). Default is False.
+        verbose (bool): Whether to print verbose information. Default is False.
+
+    Examples:
+
+        >>> from gsplat import DefaultStrategy, rasterization
+        >>> params = {"means": ..., "scales": ..., "quats": ..., "opacities": ...}
+        >>> optimizers = {"means": ..., "scales": ..., "quats": ..., "opacities": ...}
+        >>> strategy = DefaultStrategy()
+        >>> strategy.check_sanity(params, optimizers)
+        >>> strategy_state = strategy.initialize_state()
+        >>> for step in range(1000):
+        ...     render_image, render_alpha, info = rasterization(...)
+        ...     strategy.step_pre_backward(params, optimizers, strategy_state, step, info)
+        ...     loss = ...
+        ...     loss.backward()
+        ...     strategy.step_post_backward(params, optimizers, strategy_state, step, info)
 
     """
 
@@ -57,20 +81,38 @@ class DefaultStrategy(Strategy):
     verbose: bool = False
 
     def initialize_state(self) -> Dict[str, Any]:
+        """Initialize and return the running state for this strategy.
+
+        The returned state should be passed to the `step_pre_backward()` and
+        `step_post_backward()` functions.
+        """
         # Postpone the initialization of the state to the first step so that we can
         # put them on the correct device.
-        return {
-            # running accum: the norm of the image plane gradients for each GS.
-            "grad2d": None,
-            # running accum: counting how many time each GS is visible.
-            "count": None,
-        }
+        # - grad2d: running accum of the norm of the image plane gradients for each GS.
+        # - count: running accum of how many time each GS is visible.
+        return {"grad2d": None, "count": None}
 
     def check_sanity(
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
     ):
+        """Sanity check for the parameters and optimizers.
+
+        Check if:
+            * `params` and `optimizers` have the same keys.
+            * Each optimizer has exactly one param_group, corresponding to each parameter.
+            * The following keys are present: {"means", "scales", "quats", "opacities"}.
+
+        Raises:
+            AssertionError: If any of the above conditions is not met.
+
+        .. note::
+            It is not required but highly recommended for the user to call this function
+            after initializing the strategy to ensure the convention of the parameters
+            and optimizers is as expected.
+        """
+
         super().check_sanity(params, optimizers)
         # The following keys are required for this strategy.
         for key in ["means", "scales", "quats", "opacities"]:
@@ -84,10 +126,7 @@ class DefaultStrategy(Strategy):
         step: int,
         info: Dict[str, Any],
     ):
-        """Step before the backward pass.
-
-        Retain the gradients of the image plane projections of the GSs.
-        """
+        """Callback function to be executed before the `loss.backward()` call."""
         assert (
             "means2d" in info
         ), "The 2D means of the Gaussians is required but missing."
@@ -102,10 +141,7 @@ class DefaultStrategy(Strategy):
         info: Dict[str, Any],
         packed: bool = False,
     ):
-        """Step after the backward pass.
-
-        Update running state and perform GS pruning, splitting, and duplicating.
-        """
+        """Callback function to be executed after the `loss.backward()` call."""
         if step >= self.refine_stop_iter:
             return
 
