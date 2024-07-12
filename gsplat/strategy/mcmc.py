@@ -9,7 +9,7 @@ from gsplat import quat_scale_to_covar_preci
 from gsplat.relocation import compute_relocation
 
 from .base import Strategy
-from .ops import _update_param_with_optimizer
+from .ops import inject_noise_to_position, relocate, sample_add
 
 
 @dataclass
@@ -32,6 +32,8 @@ class MCMCStrategy(Strategy):
     refine_stop_iter: int = 25_000
     # Refine GSs every this steps
     refine_every: int = 100
+    # GSs with opacity below this value will be pruned
+    min_opacity: float = 0.005
 
     def check_sanity(
         self,
@@ -81,59 +83,35 @@ class MCMCStrategy(Strategy):
                 print(f"Step {step}: Relocated {n_relocated_gs} GSs.")
 
             # add new GSs
-            n_new_gs = self._add_new_gs(params, optimizers, self.cap_max)
+            n_new_gs = self._add_new_gs(params, optimizers)
             if self.verbose:
                 print(
                     f"Step {step}: Added {n_new_gs} GSs. "
                     f"Now having {len(params['means3d'])} GSs."
                 )
 
+            torch.cuda.empty_cache()
+
         # add noise to GSs
-        self._add_noise_to_gs(params, optimizers, lr)
+        inject_noise_to_position(params, optimizers, lr * self.noise_lr)
 
     @torch.no_grad()
     def _relocate_gs(
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
-        min_opacity: float = 0.005,
     ) -> int:
         opacities = torch.sigmoid(params["opacities"])
         dead_mask = opacities <= min_opacity
-        dead_indices = dead_mask.nonzero(as_tuple=True)[0]
-        alive_indices = (~dead_mask).nonzero(as_tuple=True)[0]
-        n_gs = len(dead_indices)
-        if n_gs <= 0:
-            return n_gs
-
-        # Sample for new GSs
-        eps = torch.finfo(torch.float32).eps
-        probs = opacities[alive_indices]
-        probs = probs / (probs.sum() + eps)
-        sampled_idxs = torch.multinomial(probs, n_gs, replacement=True)
-        sampled_idxs = alive_indices[sampled_idxs]
-        new_opacities, new_scales = compute_relocation(
-            opacities=opacities[sampled_idxs],
-            scales=torch.exp(params["scales"])[sampled_idxs],
-            ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
-        )
-        new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
-
-        def param_fn(name: str, p: Tensor) -> Tensor:
-            if name == "opacities":
-                p[sampled_idxs] = torch.logit(new_opacities)
-            elif name == "scales":
-                p[sampled_idxs] = torch.log(new_scales)
-            p[dead_indices] = p[sampled_idxs]
-            return torch.nn.Parameter(p)
-
-        def optimizer_fn(key: str, v: Tensor) -> Tensor:
-            v[sampled_idxs] = 0
-            return v
-
-        _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
-
-        torch.cuda.empty_cache()
+        n_gs = dead_mask.sum().item()
+        if n_gs > 0:
+            relocate(
+                params=params,
+                optimizers=optimizers,
+                state={},
+                mask=dead_mask,
+                min_opacity=self.min_opacity,
+            )
         return n_gs
 
     @torch.no_grad()
@@ -141,69 +119,16 @@ class MCMCStrategy(Strategy):
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
-        cap_max: int,
-        min_opacity: float = 0.005,
     ) -> int:
         current_n_points = len(params["means3d"])
-        n_target = min(cap_max, int(1.05 * current_n_points))
+        n_target = min(self.cap_max, int(1.05 * current_n_points))
         n_gs = max(0, n_target - current_n_points)
-        if n_gs <= 0:
-            return n_gs
-
-        # Sample for new GSs
-        eps = torch.finfo(torch.float32).eps
-        probs = torch.sigmoid(params["opacities"])
-        probs = probs / (probs.sum() + eps)
-        sampled_idxs = torch.multinomial(probs, n_gs, replacement=True)
-        new_opacities, new_scales = compute_relocation(
-            opacities=torch.sigmoid(params["opacities"])[sampled_idxs],
-            scales=torch.exp(params["scales"])[sampled_idxs],
-            ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
-        )
-        new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
-
-        def param_fn(name: str, p: Tensor) -> Tensor:
-            if name == "opacities":
-                p[sampled_idxs] = torch.logit(new_opacities)
-            elif name == "scales":
-                p[sampled_idxs] = torch.log(new_scales)
-            p = torch.cat([p, p[sampled_idxs]])
-            return torch.nn.Parameter(p)
-
-        def optimizer_fn(key: str, v: Tensor) -> Tensor:
-            v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
-            return torch.cat([v, v_new])
-
-        _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
-
-        torch.cuda.empty_cache()
+        if n_gs > 0:
+            sample_add(
+                params=params,
+                optimizers=optimizers,
+                state={},
+                n=n_gs,
+                min_opacity=self.min_opacity,
+            )
         return n_gs
-
-    @torch.no_grad()
-    def _add_noise_to_gs(
-        self,
-        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-        optimizers: Dict[str, torch.optim.Optimizer],
-        lr: float,
-    ):
-        opacities = torch.sigmoid(params["opacities"])
-        scales = torch.exp(params["scales"])
-        actual_covariance, _ = quat_scale_to_covar_preci(
-            params["quats"],
-            scales,
-            compute_covar=True,
-            compute_preci=False,
-            triu=False,
-        )
-
-        def op_sigmoid(x, k=100, x0=0.995):
-            return 1 / (1 + torch.exp(-k * (x - x0)))
-
-        noise = (
-            torch.randn_like(params["means3d"])
-            * (op_sigmoid(1 - opacities)).unsqueeze(-1)
-            * self.noise_lr
-            * lr
-        )
-        noise = torch.bmm(actual_covariance, noise.unsqueeze(-1)).squeeze(-1)
-        params["means3d"].add_(noise)

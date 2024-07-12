@@ -8,7 +8,7 @@ from torch import Tensor
 from gsplat.utils import normalized_quat_to_rotmat
 
 from .base import Strategy
-from .ops import _update_param_with_optimizer
+from .ops import duplicate, remove, reset_opa, split
 
 
 @dataclass
@@ -125,12 +125,23 @@ class DefaultStrategy(Strategy):
             # reset running stats
             state["grad2d"].zero_()
             state["count"].zero_()
+            torch.cuda.empty_cache()
 
         if step % self.reset_every == 0:
-            self._reset_opa(params, optimizers, state, value=self.prune_opa * 2.0)
+            reset_opa(
+                params=params,
+                optimizers=optimizers,
+                state=state,
+                value=self.prune_opa * 2.0,
+            )
 
     def _update_state(
-        self, params, state: Dict[str, Any], info: Dict[str, Any], packed: bool = False
+        self,
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+        optimizers: Dict[str, torch.optim.Optimizer],
+        state: Dict[str, Any],
+        info: Dict[str, Any],
+        packed: bool = False,
     ):
         for key in ["means2d", "width", "height", "n_cameras", "radii", "gaussian_ids"]:
             assert key in info, f"{key} is required but missing."
@@ -168,7 +179,12 @@ class DefaultStrategy(Strategy):
             )
 
     @torch.no_grad()
-    def _grow_gs(self, params, optimizers, state) -> Tuple[int, int]:
+    def _grow_gs(
+        self,
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+        optimizers: Dict[str, torch.optim.Optimizer],
+        state: Dict[str, Any],
+    ) -> Tuple[int, int]:
         count = state["count"]
         grads = state["grad2d"] / count.clamp_min(1)
         device = grads.device
@@ -182,7 +198,7 @@ class DefaultStrategy(Strategy):
         n_dupli = is_dupli.sum().item()
 
         if n_dupli > 0:
-            self._refine_duplicate(params, optimizers, state, is_dupli)
+            duplicate(params=params, optimizers=optimizers, state=state, mask=is_dupli)
 
         is_split = is_grad_high & ~is_small
         is_split = torch.cat(
@@ -195,11 +211,23 @@ class DefaultStrategy(Strategy):
 
         n_split = is_split.sum().item()
         if n_split > 0:
-            self._refine_split(params, optimizers, state, is_split)
+            split(
+                params=params,
+                optimizers=optimizers,
+                state=state,
+                mask=is_split,
+                revised_opacity=self.revised_opacity,
+            )
         return n_dupli, n_split
 
     @torch.no_grad()
-    def _prune_gs(self, params, optimizers, state, step) -> int:
+    def _prune_gs(
+        self,
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+        optimizers: Dict[str, torch.optim.Optimizer],
+        state: Dict[str, Any],
+        step: int,
+    ) -> int:
         is_prune = torch.sigmoid(params["opacities"]) < self.prune_opa
         if step > self.reset_every:
             # The official code also implements sreen-size pruning but
@@ -213,104 +241,6 @@ class DefaultStrategy(Strategy):
 
         n_prune = is_prune.sum().item()
         if n_prune > 0:
-            self._refine_keep(params, optimizers, state, ~is_prune)
+            remove(params=params, optimizers=optimizers, state=state, mask=is_prune)
+
         return n_prune
-
-    @torch.no_grad()
-    def _refine_duplicate(self, params, optimizers, state, mask: Tensor):
-        device = mask.device
-        sel = torch.where(mask)[0]
-
-        def param_fn(name: str, p: Tensor) -> Tensor:
-            return torch.nn.Parameter(torch.cat([p, p[sel]]))
-
-        def optimizer_fn(key: str, v: Tensor) -> Tensor:
-            return torch.cat([v, torch.zeros((len(sel), *v.shape[1:]), device=device)])
-
-        _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
-
-        for k, v in state.items():
-            state[k] = torch.cat((v, v[sel]))
-        torch.cuda.empty_cache()
-
-    @torch.no_grad()
-    def _refine_split(self, params, optimizers, state, mask: Tensor):
-        device = mask.device
-        sel = torch.where(mask)[0]
-        rest = torch.where(~mask)[0]
-
-        scales = torch.exp(params["scales"])[sel]
-        quats = F.normalize(params["quats"], dim=-1)[sel]
-        opacities = torch.sigmoid(params["opacities"])[sel]
-        rotmats = normalized_quat_to_rotmat(quats)  # [N, 3, 3]
-        samples = torch.einsum(
-            "nij,nj,bnj->bni",
-            rotmats,
-            scales,
-            torch.randn(2, len(scales), 3, device=device),
-        )  # [2, N, 3]
-
-        def param_fn(name: str, p: Tensor) -> Tensor:
-            if name == "means3d":
-                p_split = (p[sel] + samples).reshape(-1, 3)  # [2N, 3]
-            elif name == "scales":
-                p_split = torch.log(scales / 1.6).repeat(2, 1)  # [2N, 3]
-            elif name == "opacities" and self.revised_opacity:
-                opacities = 1.0 - torch.sqrt(1.0 - opacities)
-                p_split = torch.logit(opacities).repeat(2)  # [2N]
-            else:
-                repeats = [2] + [1] * (p.dim() - 1)
-                p_split = p[sel].repeat(repeats)
-            p_new = torch.cat([p[rest], p_split])
-            p_new = torch.nn.Parameter(p_new)
-            return p_new
-
-        def optimizer_fn(key: str, v: Tensor) -> Tensor:
-            v_split = torch.zeros((2 * len(sel), *v.shape[1:]), device=device)
-            return torch.cat([v[rest], v_split])
-
-        _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
-
-        for k, v in state.items():
-            if v is None:
-                continue
-            repeats = [2] + [1] * (v.dim() - 1)
-            v_new = v[sel].repeat(repeats)
-            state[k] = torch.cat((v[rest], v_new))
-        torch.cuda.empty_cache()
-
-    @torch.no_grad()
-    def _refine_keep(self, params, optimizers, state, mask: Tensor):
-        """Unility function to prune GSs."""
-        sel = torch.where(mask)[0]
-
-        def param_fn(name: str, p: Tensor) -> Tensor:
-            return torch.nn.Parameter(p[sel])
-
-        def optimizer_fn(key: str, v: Tensor) -> Tensor:
-            return v[sel]
-
-        _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
-
-        for k, v in state.items():
-            state[k] = v[sel]
-        torch.cuda.empty_cache()
-
-    @torch.no_grad()
-    def _reset_opa(self, params, optimizers, state, value: float = 0.01):
-        """Utility function to reset opacities."""
-
-        def param_fn(name: str, p: Tensor) -> Tensor:
-            if name == "opacities":
-                opacities = torch.clamp(p, max=torch.logit(torch.tensor(value)).item())
-                return torch.nn.Parameter(opacities)
-            else:
-                raise ValueError(f"Unexpected parameter name: {name}")
-
-        def optimizer_fn(key: str, v: Tensor) -> Tensor:
-            return torch.zeros_like(v)
-
-        _update_param_with_optimizer(
-            param_fn, optimizer_fn, params, optimizers, names=["opacities"]
-        )
-        torch.cuda.empty_cache()
