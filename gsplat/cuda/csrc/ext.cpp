@@ -23,6 +23,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("rasterize_to_pixels_fwd", &rasterize_to_pixels_fwd_tensor);
     m.def("rasterize_to_pixels_bwd", &rasterize_to_pixels_bwd_tensor);
 
+    m.def("raytracing_to_pixels_fwd", &raytracing_to_pixels_fwd_tensor);
+    m.def("raytracing_to_pixels_bwd", &raytracing_to_pixels_bwd_tensor);
+
     m.def("rasterize_to_indices_in_range", &rasterize_to_indices_in_range_tensor);
 
     m.def("compute_3D_smoothing_filter_fwd", &compute_3D_smoothing_filter_fwd_tensor);
