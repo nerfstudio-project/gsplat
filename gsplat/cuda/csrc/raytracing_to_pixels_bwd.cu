@@ -246,16 +246,10 @@ __global__ void raytracing_to_pixels_bwd_kernel(
                 // here is different to 3DGS, in 3DGS the gradient is computed even if opac * vis > 0.999f
                 if (opac * vis <= 0.999f) {
                     const S dL_dG = opac * v_alpha;
-                    const S gdx = vis * delta.x;
-                    const S gdy = vis * delta.y;
-                    const S dG_ddelx = -gdx * conic.x - gdy * conic.y;
-                    const S dG_ddely = -gdy * conic.z - gdx * conic.y;
+                    const S v_sigma = -opac * vis * v_alpha;
+                    v_xy_local = {v_sigma * (conic.x * delta.x + conic.y * delta.y),
+                                  v_sigma * (conic.y * delta.x + conic.z * delta.y)};
 
-                    // const S v_sigma = -opac * vis * v_alpha;
-                    // v_conic_local = {0.5f * v_sigma * delta.x * delta.x,
-                    //                  v_sigma * delta.x * delta.y,
-                    //                  0.5f * v_sigma * delta.y * delta.y};
-                    v_xy_local = {dL_dG * dG_ddelx, dL_dG * dG_ddely};
                     if (v_means2d_abs != nullptr) {
                         v_xy_abs_local = {abs(v_xy_local.x), abs(v_xy_local.y)};
                     }
