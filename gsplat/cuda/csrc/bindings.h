@@ -126,6 +126,29 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
     const torch::Tensor &flatten_ids   // [n_isects]
 );
 
+torch::Tensor view_to_gaussians_fwd_tensor(
+    const torch::Tensor &means,                // [N, 3]
+    const torch::Tensor &quats,                // [N, 4] 
+    const torch::Tensor &scales,               // [N, 3] 
+    const torch::Tensor &viewmats,             // [C, 4, 4]
+    const torch::Tensor &radii                // [C, N]
+);
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+view_to_gaussians_bwd_tensor(
+    // fwd inputs
+    const torch::Tensor &means,                // [N, 3]
+    const torch::Tensor &quats,                // [N, 4] 
+    const torch::Tensor &scales,               // [N, 3] 
+    const torch::Tensor &viewmats,             // [C, 4, 4]
+    const torch::Tensor &radii,                // [C, N]
+    // fwd outputs
+    const torch::Tensor &view2gaussians,       // [C, N, 10]
+    // grad outputs
+    const torch::Tensor &v_view2gaussians,     // [C, N, 10]
+    const bool viewmats_requires_grad
+);
+
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 rasterize_to_pixels_bwd_tensor(
     // Gaussian parameters

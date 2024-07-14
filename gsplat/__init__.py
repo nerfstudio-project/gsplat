@@ -11,6 +11,7 @@ from .cuda._wrapper import (
     rasterize_to_pixels,
     raytracing_to_pixels,
     spherical_harmonics,
+    view_to_gaussians,
     world_to_cam,
     compute_3D_smoothing_filter,
 )
@@ -111,6 +112,7 @@ all = [
     "quat_scale_to_covar_preci",
     "rasterize_to_pixels",
     "raytracing_to_pixels",
+    "view_to_gaussian",
     "world_to_cam",
     "accumulate",
     "rasterize_to_indices_in_range",

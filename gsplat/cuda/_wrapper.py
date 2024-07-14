@@ -600,6 +600,109 @@ def compute_3D_smoothing_filter(
     )
 
 
+def view_to_gaussians(
+    means: Tensor,  # [N, 3]
+    quats: Tensor,  # [N, 4] or None
+    scales: Tensor,  # [N, 3] or None
+    viewmats: Tensor,  # [C, 4, 4]
+    radii: Tensor,  # [C, N]
+    packed: bool = False,
+    sparse_grad: bool = False,
+) -> Tensor:
+    """Projects Gaussians to 2D.
+
+    This function fuse the process of computing covariances
+    (:func:`quat_scale_to_covar_preci()`), transforming to camera space (:func:`world_to_cam()`),
+    and perspective projection (:func:`persp_proj()`).
+
+    .. note::
+
+        During projection, we ignore the Gaussians that are outside of the camera frustum.
+        So not all the elements in the output tensors are valid. The output `radii` could serve as
+        an indicator, in which zero radii means the corresponding elements are invalid in
+        the output tensors and will be ignored in the next rasterization process. If `packed=True`,
+        the output tensors will be packed into a flattened tensor, in which all elements are valid.
+        In this case, a `camera_ids` tensor and `gaussian_ids` tensor will be returned to indicate the
+        row (camera) and column (Gaussian) indices of the packed flattened tensor, which is essentially
+        following the COO sparse tensor format.
+
+    .. note::
+
+        This functions supports projecting Gaussians with either covariances or {quaternions, scales},
+        which will be converted to covariances internally in a fused CUDA kernel. Either `covars` or
+        {`quats`, `scales`} should be provided.
+
+    Args:
+        means: Gaussian means. [N, 3]
+        covars: Gaussian covariances (flattened upper triangle). [N, 6] Optional.
+        quats: Quaternions (No need to be normalized). [N, 4] Optional.
+        scales: Scales. [N, 3] Optional.
+        viewmats: Camera-to-world matrices. [C, 4, 4]
+        Ks: Camera intrinsics. [C, 3, 3]
+        width: Image width.
+        height: Image height.
+        eps2d: A epsilon added to the 2D covariance for numerical stability. Default: 0.3.
+        near_plane: Near plane distance. Default: 0.01.
+        far_plane: Far plane distance. Default: 1e10.
+        radius_clip: Gaussians with projected radii smaller than this value will be ignored. Default: 0.0.
+        packed: If True, the output tensors will be packed into a flattened tensor. Default: False.
+        sparse_grad: This is only effective when `packed` is True. If True, during backward the gradients
+          of {`means`, `covars`, `quats`, `scales`} will be a sparse Tensor in COO layout. Default: False.
+        calc_compensations: If True, a view-dependent opacity compensation factor will be computed, which
+          is useful for anti-aliasing. Default: False.
+
+    Returns:
+        A tuple:
+
+        If `packed` is True:
+
+        - **camera_ids**. The row indices of the projected Gaussians. Int32 tensor of shape [nnz].
+        - **gaussian_ids**. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].
+        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz].
+        - **means**. Projected Gaussian means in 2D. [nnz, 2]
+        - **depths**. The z-depth of the projected Gaussians. [nnz]
+        - **conics**. Inverse of the projected covariances. Return the flattend upper triangle with [nnz, 3]
+        - **compensations**. The view-dependent opacity compensation factor. [nnz]
+
+        If `packed` is False:
+
+        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N].
+        - **means**. Projected Gaussian means in 2D. [C, N, 2]
+        - **depths**. The z-depth of the projected Gaussians. [C, N]
+        - **conics**. Inverse of the projected covariances. Return the flattend upper triangle with [C, N, 3]
+        - **compensations**. The view-dependent opacity compensation factor. [C, N]
+    """
+    C = viewmats.size(0)
+    N = means.size(0)
+    assert means.size() == (N, 3), means.size()
+    assert viewmats.size() == (C, 4, 4), viewmats.size()
+    assert quats is not None, "covars or quats is required"
+    assert scales is not None, "covars or scales is required"
+    assert quats.size() == (N, 4), quats.size()
+    assert scales.size() == (N, 3), scales.size()
+    assert radii.size() == (C, N), radii.size()
+    means = means.contiguous()
+    radii = radii.contiguous()
+    quats = quats.contiguous()
+    scales = scales.contiguous()
+    
+    if sparse_grad:
+        assert packed, "sparse_grad is only supported when packed is True"
+
+    viewmats = viewmats.contiguous()
+
+    if packed:
+        raise NotImplementedError("packed mode is not supported")
+    else:
+        return _ViewToGaussians.apply(
+            means,
+            quats,
+            scales,
+            viewmats,
+            radii,
+        )
+        
+
 def raytracing_to_pixels(
     means2d: Tensor,  # [C, N, 2] or [nnz, 2]
     conics: Tensor,  # [C, N, 3] or [nnz, 3]
@@ -1226,6 +1329,76 @@ class _RayTracingToPixels(torch.autograd.Function):
             None,
             None,
             None,
+            None,
+        )
+
+
+class _ViewToGaussians(torch.autograd.Function):
+    """Compute View to Gaussians."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        means: Tensor,    # [N, 3]
+        quats: Tensor,    # [N, 4] 
+        scales: Tensor,   # [N, 3]
+        viewmats: Tensor, # [C, 4, 4]
+        radii: Tensor,    # [C, N]
+    ) -> Tensor:
+        
+        view2gaussians = _make_lazy_cuda_func(
+            "view_to_gaussians_fwd"
+        )(
+            means,
+            quats,
+            scales,
+            viewmats,
+            radii,
+        )
+        
+        ctx.save_for_backward(
+            means, quats, scales, viewmats, radii, view2gaussians
+        )
+        
+        return view2gaussians
+
+    @staticmethod
+    def backward(ctx, v_view2gaussians):
+        (
+            means,
+            quats,
+            scales,
+            viewmats,
+            radii,
+            view2gaussians,
+        ) = ctx.saved_tensors
+        
+        v_means, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
+            "view_to_gaussians_bwd"
+        )(
+            means,
+            quats,
+            scales,
+            viewmats,
+            radii,
+            view2gaussians.contiguous(),
+            v_view2gaussians.contiguous(),
+            ctx.needs_input_grad[3],  # viewmats_requires_grad
+        )
+        if not ctx.needs_input_grad[0]:
+            v_means = None
+        if not ctx.needs_input_grad[1]:
+            v_quats = None
+        if not ctx.needs_input_grad[2]:
+            v_scales = None
+        if not ctx.needs_input_grad[3]:
+            v_viewmats = None
+            
+        return (
+            v_means,
+            v_quats,
+            v_scales,
+            v_viewmats,
             None,
         )
 

@@ -13,6 +13,7 @@ from .cuda._wrapper import (
     rasterize_to_pixels,
     raytracing_to_pixels,
     spherical_harmonics,
+    view_to_gaussians,
 )
 
 
@@ -626,11 +627,11 @@ def rasterization_inria_wrapper(
     return render_colors, None, {}
 
 
-def view_to_gaussians(
+def _view_to_gaussians(
     means: Tensor,  # [N, 3]
     quats: Tensor,  # [N, 4]
     scales: Tensor,  # [N, 3]
-    viewmats: Tensor,  # [C, 4, 4] world to camera transform
+    camtoworlds: Tensor,  # [C, 4, 4] world to camera transform
 ) -> Tensor:
     
     quats = F.normalize(quats, p=2, dim=-1)
@@ -653,7 +654,6 @@ def view_to_gaussians(
     R = R.reshape(quats.shape[:-1] + (3, 3))  # (..., 3, 3)
     # R.register_hook(lambda grad: print("grad R", grad))
 
-    camtoworlds = torch.linalg.inv(viewmats)  # [C, 4, 4]
     worldtogaussian = torch.zeros((means.shape[0], 4, 4), device=means.device)
     worldtogaussian[:, :3, :3] = R.transpose(1, 2)  # (..., 3, 3)
     worldtogaussian[:, :3, 3:] = -R.transpose(1, 2) @ means[:, :, None]  # (..., 3)
@@ -662,7 +662,7 @@ def view_to_gaussians(
     view2gaussians = worldtogaussian[None, ...] @ camtoworlds[:, None, ...] # [C, N, 4, 4]
     R = view2gaussians[..., :3, :3]
     t = view2gaussians[..., :3, 3:]
-    scales_inv_square = 1.0 / scales ** 2
+    scales_inv_square = 1.0 / (scales ** 2 + 1e-7)
     
     C = torch.sum((t ** 2) * scales_inv_square[None, :, :, None], dim=2)  # [C, N, 3, 1]
     scales_inv_square_R = scales_inv_square[None, :, :, None] * R
@@ -976,7 +976,9 @@ def raytracing(
         colors = torch.clamp_min(colors + 0.5, 0.0)
 
     # precompute view to gaussian
-    view2gaussians = view_to_gaussians(means, quats, scales, viewmats)
+    camtoworlds = torch.linalg.inv(viewmats)  # [C, 4, 4]
+    view2gaussians = view_to_gaussians(means, quats, scales, camtoworlds, radii)
+    
     
     # hack to retain_grad for means2d as we need it for gaussian densification
     if means.requires_grad:

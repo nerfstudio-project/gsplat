@@ -17,6 +17,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fully_fused_projection_fwd", &fully_fused_projection_fwd_tensor);
     m.def("fully_fused_projection_bwd", &fully_fused_projection_bwd_tensor);
 
+    m.def("view_to_gaussians_fwd", &view_to_gaussians_fwd_tensor);
+    m.def("view_to_gaussians_bwd", &view_to_gaussians_bwd_tensor);
+
     m.def("isect_tiles", &isect_tiles_tensor);
     m.def("isect_offset_encode", &isect_offset_encode_tensor);
 
