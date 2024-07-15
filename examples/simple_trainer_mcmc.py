@@ -36,8 +36,8 @@ from simple_trainer import create_splats_with_optimizers
 
 @dataclass
 class Config:
-    # Model type can be 3dgs, 3dgs_inria, or 2dgs_inria
-    model_type: str = "3dgs"
+    # Rasterization backend can be 3dgs, 3dgs_inria, or 2dgs_inria
+    rasterization_backend: str = "3dgs"
     # Disable viewer
     disable_viewer: bool = False
     # Path to the .pt file. If provide, it will skip training and render a video
@@ -174,14 +174,16 @@ class Runner:
 
         self.cfg = cfg
         self.device = "cuda"
-        if cfg.model_type == "3dgs":
+        if cfg.rasterization_backend == "3dgs":
             self.rasterization_fn = rasterization
-        elif cfg.model_type == "3dgs_inria":
+        elif cfg.rasterization_backend == "3dgs_inria":
             self.rasterization_fn = rasterization_inria_wrapper
-        elif cfg.model_type == "2dgs_inria":
+        elif cfg.rasterization_backend == "2dgs_inria":
             self.rasterization_fn = rasterization_2dgs_inria_wrapper
         else:
-            raise ValueError(f"Unsupported model type: {cfg.model_type}")
+            raise ValueError(
+                f"Unsupported rasterization backend: {cfg.rasterization_backend}"
+            )
 
         self.render_mode = "RGB"
         if cfg.depth_loss:

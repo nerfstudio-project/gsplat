@@ -1,8 +1,9 @@
 import torch
 import torch.nn.functional as F
 import math
+from torch import Tensor
 
-from .camera_utils import _getProjectionMatrix
+from .camera_utils import getProjectionMatrix
 
 
 def _depths_to_points(depthmap, world_view_transform, full_proj_transform):
@@ -43,7 +44,13 @@ def _depth_to_normal(depth, world_view_transform, full_proj_transform):
     return output
 
 
-def depth_to_normal(depths, viewmats, Ks, near_plane, far_plane):
+def depth_to_normal(
+    depths: Tensor,  # [C, H, W, 1]
+    viewmats: Tensor,  # [C, 4, 4]
+    Ks: Tensor,  # [C, 3, 3]
+    near_plane: float = 0.01,
+    far_plane: float = 1e10,
+) -> Tensor:
     height, width = depths.shape[1:3]
 
     normals = []
@@ -51,7 +58,7 @@ def depth_to_normal(depths, viewmats, Ks, near_plane, far_plane):
         FoVx = 2 * math.atan(width / (2 * Ks[cid, 0, 0].item()))
         FoVy = 2 * math.atan(height / (2 * Ks[cid, 1, 1].item()))
         world_view_transform = viewmats[cid].transpose(0, 1)
-        projection_matrix = _getProjectionMatrix(
+        projection_matrix = getProjectionMatrix(
             znear=near_plane, zfar=far_plane, fovX=FoVx, fovY=FoVy, device=depths.device
         ).transpose(0, 1)
         full_proj_transform = (

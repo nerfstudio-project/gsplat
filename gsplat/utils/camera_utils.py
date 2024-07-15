@@ -2,7 +2,7 @@ import math
 import torch
 
 
-def _getProjectionMatrix(znear, zfar, fovX, fovY, device="cuda"):
+def getProjectionMatrix(znear, zfar, fovX, fovY, device="cuda"):
     tanHalfFovY = math.tan((fovY / 2))
     tanHalfFovX = math.tan((fovX / 2))
 

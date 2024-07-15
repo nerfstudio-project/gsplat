@@ -14,7 +14,7 @@ from .cuda._wrapper import (
     spherical_harmonics,
 )
 from .utils.normal_utils import depth_to_normal
-from .utils.camera_utils import _getProjectionMatrix
+from .utils.camera_utils import getProjectionMatrix
 
 
 def rasterization(
@@ -562,7 +562,7 @@ def rasterization_inria_wrapper(
         tanfovy = math.tan(FoVy * 0.5)
 
         world_view_transform = viewmats[cid].transpose(0, 1)
-        projection_matrix = _getProjectionMatrix(
+        projection_matrix = getProjectionMatrix(
             znear=near_plane, zfar=far_plane, fovX=FoVx, fovY=FoVy, device=device
         ).transpose(0, 1)
         full_proj_transform = (
@@ -669,7 +669,7 @@ def rasterization_2dgs_inria_wrapper(
         tanfovy = math.tan(FoVy * 0.5)
 
         world_view_transform = viewmats[cid].transpose(0, 1)
-        projection_matrix = _getProjectionMatrix(
+        projection_matrix = getProjectionMatrix(
             znear=near_plane, zfar=far_plane, fovX=FoVx, fovY=FoVy, device=device
         ).transpose(0, 1)
         full_proj_transform = (
