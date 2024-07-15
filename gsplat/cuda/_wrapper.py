@@ -685,7 +685,7 @@ def view_to_gaussians(
     radii = radii.contiguous()
     quats = quats.contiguous()
     scales = scales.contiguous()
-    
+
     if sparse_grad:
         assert packed, "sparse_grad is only supported when packed is True"
 
@@ -701,7 +701,7 @@ def view_to_gaussians(
             viewmats,
             radii,
         )
-        
+
 
 def raytracing_to_pixels(
     means2d: Tensor,  # [C, N, 2] or [nnz, 2]
@@ -742,7 +742,7 @@ def raytracing_to_pixels(
         - **Rendered alphas**. [C, image_height, image_width, 1]
     """
     assert not packed, "raytracing_to_pixels only supports non-packed mode"
-    
+
     C = isect_offsets.size(0)
     device = means2d.device
     if packed:
@@ -760,7 +760,7 @@ def raytracing_to_pixels(
         assert opacities.shape == (C, N), opacities.shape
         assert view2guassian.shape == (C, N, 10), view2guassian.shape
         assert Ks.shape == (C, 3, 3), Ks.shape
-        
+
     if backgrounds is not None:
         assert backgrounds.shape == (C, colors.shape[-1]), backgrounds.shape
         backgrounds = backgrounds.contiguous()
@@ -1305,7 +1305,7 @@ class _RayTracingToPixels(torch.autograd.Function):
             v_render_alphas.contiguous(),
             absgrad,
         )
-        
+
         if absgrad:
             means2d.absgrad = v_means2d_abs
 
@@ -1339,27 +1339,23 @@ class _ViewToGaussians(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        means: Tensor,    # [N, 3]
-        quats: Tensor,    # [N, 4] 
-        scales: Tensor,   # [N, 3]
-        viewmats: Tensor, # [C, 4, 4]
-        radii: Tensor,    # [C, N]
+        means: Tensor,  # [N, 3]
+        quats: Tensor,  # [N, 4]
+        scales: Tensor,  # [N, 3]
+        viewmats: Tensor,  # [C, 4, 4]
+        radii: Tensor,  # [C, N]
     ) -> Tensor:
-        
-        view2gaussians = _make_lazy_cuda_func(
-            "view_to_gaussians_fwd"
-        )(
+
+        view2gaussians = _make_lazy_cuda_func("view_to_gaussians_fwd")(
             means,
             quats,
             scales,
             viewmats,
             radii,
         )
-        
-        ctx.save_for_backward(
-            means, quats, scales, viewmats, radii, view2gaussians
-        )
-        
+
+        ctx.save_for_backward(means, quats, scales, viewmats, radii, view2gaussians)
+
         return view2gaussians
 
     @staticmethod
@@ -1372,7 +1368,7 @@ class _ViewToGaussians(torch.autograd.Function):
             radii,
             view2gaussians,
         ) = ctx.saved_tensors
-        
+
         v_means, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
             "view_to_gaussians_bwd"
         )(
@@ -1393,7 +1389,7 @@ class _ViewToGaussians(torch.autograd.Function):
             v_scales = None
         if not ctx.needs_input_grad[3]:
             v_viewmats = None
-            
+
         return (
             v_means,
             v_quats,

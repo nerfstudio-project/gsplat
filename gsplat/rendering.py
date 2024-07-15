@@ -633,7 +633,7 @@ def _view_to_gaussians(
     scales: Tensor,  # [N, 3]
     camtoworlds: Tensor,  # [C, 4, 4] world to camera transform
 ) -> Tensor:
-    
+
     quats = F.normalize(quats, p=2, dim=-1)
     w, x, y, z = torch.unbind(quats, dim=-1)
     R = torch.stack(
@@ -654,23 +654,31 @@ def _view_to_gaussians(
     R = R.reshape(quats.shape[:-1] + (3, 3))  # (..., 3, 3)
     # R.register_hook(lambda grad: print("grad R", grad))
 
-    worldtogaussian = torch.zeros((means.shape[0], 4, 4), device=means.device, dtype=means.dtype)
+    worldtogaussian = torch.zeros(
+        (means.shape[0], 4, 4), device=means.device, dtype=means.dtype
+    )
     worldtogaussian[:, :3, :3] = R.transpose(1, 2)  # (..., 3, 3)
     worldtogaussian[:, :3, 3:] = -R.transpose(1, 2) @ means[:, :, None]  # (..., 3)
     worldtogaussian[:, 3, 3] = 1.0
-            
-    view2gaussians = worldtogaussian[None, ...] @ camtoworlds[:, None, ...] # [C, N, 4, 4]
+
+    view2gaussians = (
+        worldtogaussian[None, ...] @ camtoworlds[:, None, ...]
+    )  # [C, N, 4, 4]
     R = view2gaussians[..., :3, :3]
     t = view2gaussians[..., :3, 3:]
-    scales_inv_square = 1.0 / (scales ** 2 + 1e-10)
-    
-    C = torch.sum((t ** 2) * scales_inv_square[None, :, :, None], dim=2)  # [C, N, 3, 1]
+    scales_inv_square = 1.0 / (scales**2 + 1e-10)
+
+    C = torch.sum((t**2) * scales_inv_square[None, :, :, None], dim=2)  # [C, N, 3, 1]
     scales_inv_square_R = scales_inv_square[None, :, :, None] * R
     B = t.transpose(-2, -1) @ scales_inv_square_R
     Sigma = R.transpose(-2, -1) @ scales_inv_square_R
-    merged = torch.cat([Sigma[:, :, :, 0], Sigma[:, :, 1:, 1], Sigma[:, :, 2:, 2], B.squeeze(-2), C], dim=-1)
-    
+    merged = torch.cat(
+        [Sigma[:, :, :, 0], Sigma[:, :, 1:, 1], Sigma[:, :, 2:, 2], B.squeeze(-2), C],
+        dim=-1,
+    )
+
     return merged
+
 
 def raytracing(
     means: Tensor,  # [N, 3]
@@ -857,7 +865,7 @@ def raytracing(
     assert viewmats.shape == (C, 4, 4), viewmats.shape
     assert Ks.shape == (C, 3, 3), Ks.shape
     assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
-    
+
     if sh_degree is None:
         # treat colors as post-activation values, should be in shape [N, D] or [C, N, D]
         assert (colors.dim() == 2 and colors.shape[0] == N) or (
@@ -978,12 +986,11 @@ def raytracing(
     # precompute view to gaussian
     camtoworlds = torch.linalg.inv(viewmats)  # [C, 4, 4]
     view2gaussians = view_to_gaussians(means, quats, scales, camtoworlds, radii)
-    
-    
+
     # hack to retain_grad for means2d as we need it for gaussian densification
     if means.requires_grad:
         means2d.requires_grad = True
-        
+
     # Rasterize to pixels
     if render_mode in ["RGB+D", "RGB+ED"]:
         colors = torch.cat((colors, depths[..., None]), dim=-1)
