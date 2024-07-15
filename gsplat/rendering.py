@@ -13,7 +13,8 @@ from .cuda._wrapper import (
     rasterize_to_pixels,
     spherical_harmonics,
 )
-from .normal_utils import depth_to_normal
+from .utils.normal_utils import depth_to_normal
+from .utils.camera_utils import _getProjectionMatrix
 
 
 def rasterization(
@@ -381,55 +382,43 @@ def rasterization(
             absgrad=absgrad,
         )
 
-    meta = {}
+    meta = {
+        "camera_ids": camera_ids,
+        "gaussian_ids": gaussian_ids,
+        "radii": radii,
+        "means2d": means2d,
+        "depths": depths,
+        "conics": conics,
+        "opacities": opacities,
+        "tile_width": tile_width,
+        "tile_height": tile_height,
+        "tiles_per_gauss": tiles_per_gauss,
+        "isect_ids": isect_ids,
+        "flatten_ids": flatten_ids,
+        "isect_offsets": isect_offsets,
+        "width": width,
+        "height": height,
+        "tile_size": tile_size,
+    }
     if render_mode in ["ED", "RGB+ED", "RGB+ED+N"]:
         # normalize the accumulated depth to get the expected depth
-        depths_expected = render_colors[..., -1:] / render_alphas.clamp(min=1e-10)
-        if render_mode in ["RGB+ED+N"]:
-            normals_rend = render_colors[..., -4:-1]
-            normals_surf = depth_to_normal(
-                depths_expected,
-                viewmats,
-                Ks,
-                near_plane=near_plane,
-                far_plane=far_plane,
-            )
-            normals_surf = normals_surf * (render_alphas).detach()
-            meta.update(
-                {
-                    "normals_rend": normals_rend,
-                    "normals_surf": normals_surf,
-                }
-            )
-
-        render_colors = torch.cat(
-            [
-                render_colors[..., :3],
-                depths_expected,
-            ],
-            dim=-1,
+        render_colors[..., -1:] /= render_alphas.clamp(min=1e-10)
+    if render_mode in ["RGB+ED+N"]:
+        normals_rend = render_colors[..., -4:-1]
+        normals_surf = depth_to_normal(
+            render_colors[..., -1:],
+            viewmats,
+            Ks,
+            near_plane=near_plane,
+            far_plane=far_plane,
         )
-
-    meta.update(
-        {
-            "camera_ids": camera_ids,
-            "gaussian_ids": gaussian_ids,
-            "radii": radii,
-            "means2d": means2d,
-            "depths": depths,
-            "conics": conics,
-            "opacities": opacities,
-            "tile_width": tile_width,
-            "tile_height": tile_height,
-            "tiles_per_gauss": tiles_per_gauss,
-            "isect_ids": isect_ids,
-            "flatten_ids": flatten_ids,
-            "isect_offsets": isect_offsets,
-            "width": width,
-            "height": height,
-            "tile_size": tile_size,
-        }
-    )
+        normals_surf = normals_surf * (render_alphas).detach()
+        meta.update(
+            {
+                "normals_rend": normals_rend,
+                "normals_surf": normals_surf,
+            }
+        )
     return render_colors, render_alphas, meta
 
 
@@ -557,28 +546,6 @@ def rasterization_inria_wrapper(
         GaussianRasterizer,
     )
 
-    def _getProjectionMatrix(znear, zfar, fovX, fovY, device="cuda"):
-        tanHalfFovY = math.tan((fovY / 2))
-        tanHalfFovX = math.tan((fovX / 2))
-
-        top = tanHalfFovY * znear
-        bottom = -top
-        right = tanHalfFovX * znear
-        left = -right
-
-        P = torch.zeros(4, 4, device=device)
-
-        z_sign = 1.0
-
-        P[0, 0] = 2.0 * znear / (right - left)
-        P[1, 1] = 2.0 * znear / (top - bottom)
-        P[0, 2] = (right + left) / (right - left)
-        P[1, 2] = (top + bottom) / (top - bottom)
-        P[3, 2] = z_sign
-        P[2, 2] = z_sign * zfar / (zfar - znear)
-        P[2, 3] = -(zfar * znear) / (zfar - znear)
-        return P
-
     assert eps2d == 0.3, "This is hard-coded in CUDA to be 0.3"
     C = len(viewmats)
     device = means.device
@@ -684,28 +651,6 @@ def rasterization_2dgs_inria_wrapper(
         GaussianRasterizationSettings,
         GaussianRasterizer,
     )
-
-    def _getProjectionMatrix(znear, zfar, fovX, fovY, device="cuda"):
-        tanHalfFovY = math.tan((fovY / 2))
-        tanHalfFovX = math.tan((fovX / 2))
-
-        top = tanHalfFovY * znear
-        bottom = -top
-        right = tanHalfFovX * znear
-        left = -right
-
-        P = torch.zeros(4, 4, device=device)
-
-        z_sign = 1.0
-
-        P[0, 0] = 2.0 * znear / (right - left)
-        P[1, 1] = 2.0 * znear / (top - bottom)
-        P[0, 2] = (right + left) / (right - left)
-        P[1, 2] = (top + bottom) / (top - bottom)
-        P[3, 2] = z_sign
-        P[2, 2] = z_sign * zfar / (zfar - znear)
-        P[2, 3] = -(zfar * znear) / (zfar - znear)
-        return P
 
     assert eps2d == 0.3, "This is hard-coded in CUDA to be 0.3"
     C = len(viewmats)
@@ -814,10 +759,10 @@ def rasterization_2dgs_inria_wrapper(
     )
     normals_surf = normals_surf * (render_alphas).detach()
 
+    render_colors = torch.cat([render_colors, render_depth], dim=-1)
     meta = {
         "normals_rend": render_normal,
         "normals_surf": normals_surf,
         "render_distloss": render_dist,
     }
-    render_colors = torch.cat([render_colors, render_depth], dim=-1)
     return render_colors, render_alphas, meta

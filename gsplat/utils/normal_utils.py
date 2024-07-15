@@ -1,8 +1,8 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
 import math
+
+from .camera_utils import _getProjectionMatrix
 
 
 def _depths_to_points(depthmap, world_view_transform, full_proj_transform):
@@ -38,7 +38,7 @@ def _depth_to_normal(depth, world_view_transform, full_proj_transform):
     output = torch.zeros_like(points)
     dx = torch.cat([points[2:, 1:-1] - points[:-2, 1:-1]], dim=0)
     dy = torch.cat([points[1:-1, 2:] - points[1:-1, :-2]], dim=1)
-    normal_map = torch.nn.functional.normalize(torch.cross(dx, dy, dim=-1), dim=-1)
+    normal_map = F.normalize(torch.cross(dx, dy, dim=-1), dim=-1)
     output[1:-1, 1:-1, :] = normal_map
     return output
 
@@ -61,26 +61,3 @@ def depth_to_normal(depths, viewmats, Ks, near_plane, far_plane):
         normals.append(normal)
     normals = torch.stack(normals, dim=0)
     return normals
-
-
-def _getProjectionMatrix(znear, zfar, fovX, fovY, device="cuda"):
-    tanHalfFovY = math.tan((fovY / 2))
-    tanHalfFovX = math.tan((fovX / 2))
-
-    top = tanHalfFovY * znear
-    bottom = -top
-    right = tanHalfFovX * znear
-    left = -right
-
-    P = torch.zeros(4, 4, device=device)
-
-    z_sign = 1.0
-
-    P[0, 0] = 2.0 * znear / (right - left)
-    P[1, 1] = 2.0 * znear / (top - bottom)
-    P[0, 2] = (right + left) / (right - left)
-    P[1, 2] = (top + bottom) / (top - bottom)
-    P[3, 2] = z_sign
-    P[2, 2] = z_sign * zfar / (zfar - znear)
-    P[2, 3] = -(zfar * znear) / (zfar - znear)
-    return P
