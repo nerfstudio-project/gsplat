@@ -69,7 +69,7 @@ __global__ void view_to_gaussians_bwd_kernel(
     mat3<T> view2gaussian_R =  worldtogaussian_R * camtoworlds_R;
     vec3<T> view2gaussian_t = worldtogaussian_R * camtoworlds_t + worldtogaussian_t;
 
-    vec3<T> scales_inv_square = {1.0f / (scale.x * scale.x + 1e-7), 1.0f / (scale.y * scale.y + 1e-7), 1.0f / (scale.z * scale.z + 1e-7)};
+    vec3<T> scales_inv_square = {1.0f / (scale.x * scale.x + 1e-10f), 1.0f / (scale.y * scale.y + 1e-10f), 1.0f / (scale.z * scale.z + 1e-10f)};
 	T CC = view2gaussian_t.x * view2gaussian_t.x * scales_inv_square.x + \
            view2gaussian_t.y * view2gaussian_t.y * scales_inv_square.y + \
            view2gaussian_t.z * view2gaussian_t.z * scales_inv_square.z;
@@ -132,11 +132,12 @@ __global__ void view_to_gaussians_bwd_kernel(
     // vec3<T> view2gaussian_t = worldtogaussian_R * camtoworlds_t + worldtogaussian_t;
     vec3<T> v_worldtogaussian_t = v_view2gaussian_t;
     mat3<T> v_worldtogaussian_R = v_view2gaussian_R * glm::transpose(camtoworlds_R) + glm::outerProduct(v_view2gaussian_t, camtoworlds_t);
-    // mat3<T> worldtogaussian_R = glm::transpose(rotmat);
     // vec3<T> worldtogaussian_t = -worldtogaussian_R * mean;
-    mat3<T> v_rotmat = glm::transpose(v_worldtogaussian_R);
+    v_worldtogaussian_R -= glm::outerProduct(v_worldtogaussian_t, mean);
     vec3<T> v_mean = -glm::transpose(worldtogaussian_R) * v_worldtogaussian_t;
-
+    // mat3<T> worldtogaussian_R = glm::transpose(rotmat);
+    mat3<T> v_rotmat = glm::transpose(v_worldtogaussian_R);
+    
     // grad for quat rotmat
     vec4<T> v_quat(0.f);
     quat_to_rotmat_vjp<T>(quat, v_rotmat, v_quat);
@@ -233,6 +234,19 @@ view_to_gaussians_bwd_tensor(
             v_quats.data_ptr<float>(),
             v_scales.data_ptr<float>(),
             viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr);
+        // view_to_gaussians_bwd_kernel<double><<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
+        //     C, N, 
+        //     means.data_ptr<double>(),
+        //     quats.data_ptr<double>(),
+        //     scales.data_ptr<double>(),
+        //     viewmats.data_ptr<double>(),
+        //     radii.data_ptr<int32_t>(), 
+        //     view2gaussians.data_ptr<double>(),
+        //     v_view2gaussians.data_ptr<double>(),
+        //     v_means.data_ptr<double>(),
+        //     v_quats.data_ptr<double>(),
+        //     v_scales.data_ptr<double>(),
+        //     viewmats_requires_grad ? v_viewmats.data_ptr<double>() : nullptr);
     }
     return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
 }

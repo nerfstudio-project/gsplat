@@ -72,7 +72,7 @@ view_to_gaussians_fwd_kernel(const uint32_t C, const uint32_t N,
 	// For B, we can precompute S^-1 @ S^-1 @ R @ v, which is a vector and store it in 3 values
 	// and C is fixed, so we only need to store 1 value
 	// Therefore, we only need to store 10 values in the view2gaussian matrix
-    vec3<T> scales_inv_square = {1.0f / (scale.x * scale.x + 1e-7), 1.0f / (scale.y * scale.y + 1e-7), 1.0f / (scale.z * scale.z + 1e-7)};
+    vec3<T> scales_inv_square = {1.0f / (scale.x * scale.x + 1e-10f), 1.0f / (scale.y * scale.y + 1e-10f), 1.0f / (scale.z * scale.z + 1e-10f)};
 	T CC = view2gaussian_t.x * view2gaussian_t.x * scales_inv_square.x + \
            view2gaussian_t.y * view2gaussian_t.y * scales_inv_square.y + \
            view2gaussian_t.z * view2gaussian_t.z * scales_inv_square.z;
@@ -128,6 +128,13 @@ torch::Tensor view_to_gaussians_fwd_tensor(
             viewmats.data_ptr<float>(),
             radii.data_ptr<int32_t>(),
             view2gaussians.data_ptr<float>());
+        // view_to_gaussians_fwd_kernel<double><<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
+        //     C, N, means.data_ptr<double>(),
+        //     quats.data_ptr<double>(),
+        //     scales.data_ptr<double>(),
+        //     viewmats.data_ptr<double>(),
+        //     radii.data_ptr<int32_t>(),
+        //     view2gaussians.data_ptr<double>());
     }
     return view2gaussians;
 }

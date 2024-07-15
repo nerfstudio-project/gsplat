@@ -184,7 +184,7 @@ __global__ void raytracing_to_pixels_bwd_kernel(
                 // t is the depth of the gaussian
                 depth = -BB/(2*AA);
                 //TODO take near plane as input
-                #define NEAR_PLANE 0.2
+                #define NEAR_PLANE 0.01f
                 // depth must be positive otherwise it is not valid and we skip it
                 if (depth <= NEAR_PLANE)
                     valid = false;
