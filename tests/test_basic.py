@@ -582,11 +582,11 @@ def test_view_to_gaussians():
     torch.set_float32_matmul_precision("highest")
     torch.manual_seed(42)
 
-    means = torch.load("means.pt")
-    quats = torch.load("quats.pt")
-    scales = torch.load("scales.pt")
-    radii = torch.load("radii.pt")
-    camtoworlds = torch.load("camtoworlds.pt")
+    means = torch.load("../assets/means.pt")
+    quats = torch.load("../assets/quats.pt")
+    scales = torch.load("../assets/scales.pt")
+    radii = torch.load("../assets/radii.pt")
+    camtoworlds = torch.load("../assets/camtoworlds.pt")
 
     means.requires_grad = True
     quats.requires_grad = True
