@@ -43,9 +43,8 @@ def _depth_to_normal(depth, world_view_transform, full_proj_transform):
     return output
 
 
-def depth_to_normal(depths, camtoworlds, Ks, near_plane, far_plane):
+def depth_to_normal(depths, viewmats, Ks, near_plane, far_plane):
     height, width = depths.shape[1:3]
-    viewmats = torch.linalg.inv(camtoworlds)  # [C, 4, 4]
 
     normals = []
     for cid, depth in enumerate(depths):

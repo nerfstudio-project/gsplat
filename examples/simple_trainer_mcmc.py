@@ -31,7 +31,6 @@ from gsplat.rendering import (
     rasterization_inria_wrapper,
 )
 from gsplat.relocation import compute_relocation
-from gsplat.normal_utils import depth_to_normal
 from simple_trainer import create_splats_with_optimizers
 
 
@@ -185,8 +184,10 @@ class Runner:
             raise ValueError(f"Unsupported model type: {cfg.model_type}")
 
         self.render_mode = "RGB"
-        if cfg.depth_loss or cfg.normal_consistency_loss:
+        if cfg.depth_loss:
             self.render_mode = "RGB+ED"
+        if cfg.normal_consistency_loss:
+            self.render_mode = "RGB+ED+N"
 
         # Where to dump results.
         os.makedirs(cfg.result_dir, exist_ok=True)
@@ -460,18 +461,10 @@ class Runner:
                 loss += depthloss * cfg.depth_lambda
 
             if cfg.normal_consistency_loss:
-                depths = renders[..., -1:]
-                normals = renders[..., -4:-1]
-                normals_surf = depth_to_normal(
-                    depths,
-                    camtoworlds,
-                    Ks,
-                    near_plane=cfg.near_plane,
-                    far_plane=cfg.far_plane,
-                )
-                normals_surf = normals_surf * (alphas).detach()
+                normals_rend = info["normals_rend"]
+                normals_surf = info["normals_surf"]
                 normalconsistencyloss = (
-                    1 - (normals * normals_surf).sum(dim=-1)
+                    1 - (normals_rend * normals_surf).sum(dim=-1)
                 ).mean()
                 if step > cfg.normal_consistency_start_iter:
                     loss += normalconsistencyloss * cfg.normal_consistency_lambda
@@ -729,7 +722,7 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 render_mode=self.render_mode,
-            )  # [1, H, W, C]
+            )  # [1, H, W, K]
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
 
@@ -740,17 +733,9 @@ class Runner:
                 depths = (depths - depths.min()) / (depths.max() - depths.min())
                 canvas_list.append(depths)
             if cfg.normal_consistency_loss:
-                depths = renders[..., -1:]
-                normals = renders[..., -4:-1]
-                normals_surf = depth_to_normal(
-                    depths,
-                    camtoworlds,
-                    Ks,
-                    near_plane=cfg.near_plane,
-                    far_plane=cfg.far_plane,
-                )
-                normals_surf = normals_surf * (alphas).detach()
-                canvas_list.extend([normals * 0.5 + 0.5])
+                normals_rend = info["normals_rend"]
+                normals_surf = info["normals_surf"]
+                canvas_list.extend([normals_rend * 0.5 + 0.5])
                 canvas_list.extend([normals_surf * 0.5 + 0.5])
 
             # write images
@@ -826,7 +811,7 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 render_mode=self.render_mode,
-            )  # [1, H, W, C]
+            )  # [1, H, W, K]
 
             colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)
             canvas_list = [colors]
@@ -835,17 +820,9 @@ class Runner:
                 depths = (depths - depths.min()) / (depths.max() - depths.min())
                 canvas_list.append(depths)
             if cfg.normal_consistency_loss:
-                depths = renders[..., -1:]
-                normals = renders[..., -4:-1]
-                normals_surf = depth_to_normal(
-                    depths,
-                    camtoworlds,
-                    Ks,
-                    near_plane=cfg.near_plane,
-                    far_plane=cfg.far_plane,
-                )
-                normals_surf = normals_surf * (alphas).detach()
-                canvas_list.extend([normals * 0.5 + 0.5])
+                normals_rend = info["normals_rend"]
+                normals_surf = info["normals_surf"]
+                canvas_list.extend([normals_rend * 0.5 + 0.5])
                 canvas_list.extend([normals_surf * 0.5 + 0.5])
 
             # write images

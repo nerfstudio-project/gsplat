@@ -13,6 +13,7 @@ from .cuda._wrapper import (
     rasterize_to_pixels,
     spherical_harmonics,
 )
+from .normal_utils import depth_to_normal
 
 
 def rasterization(
@@ -33,7 +34,7 @@ def rasterization(
     packed: bool = True,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
-    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
+    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED", "RGB+ED+N"] = "RGB",
     sparse_grad: bool = False,
     absgrad: bool = False,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
@@ -198,7 +199,7 @@ def rasterization(
     assert opacities.shape == (N,), opacities.shape
     assert viewmats.shape == (C, 4, 4), viewmats.shape
     assert Ks.shape == (C, 3, 3), Ks.shape
-    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
+    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED", "RGB+ED+N"], render_mode
 
     if sh_degree is None:
         # treat colors as post-activation values, should be in shape [N, D] or [C, N, D]
@@ -318,7 +319,7 @@ def rasterization(
 
     # Rasterize to pixels
     if render_mode in ["RGB+D", "RGB+ED"]:
-        colors = torch.cat((colors, normals, depths[..., None]), dim=-1)
+        colors = torch.cat((colors, depths[..., None]), dim=-1)
         if backgrounds is not None:
             backgrounds = torch.cat(
                 [backgrounds, torch.zeros(C, 1, device=backgrounds.device)], dim=-1
@@ -327,6 +328,12 @@ def rasterization(
         colors = depths[..., None]
         if backgrounds is not None:
             backgrounds = torch.zeros(C, 1, device=backgrounds.device)
+    elif render_mode in ["RGB+ED+N"]:
+        colors = torch.cat((colors, normals, depths[..., None]), dim=-1)
+        if backgrounds is not None:
+            backgrounds = torch.cat(
+                [backgrounds, torch.zeros(C, 1, device=backgrounds.device)], dim=-1
+            )
     else:  # RGB
         pass
     if colors.shape[-1] > channel_chunk:
@@ -373,35 +380,55 @@ def rasterization(
             packed=packed,
             absgrad=absgrad,
         )
-    if render_mode in ["ED", "RGB+ED"]:
+
+    meta = {}
+    if render_mode in ["ED", "RGB+ED", "RGB+ED+N"]:
         # normalize the accumulated depth to get the expected depth
+        depths_expected = render_colors[..., -1:] / render_alphas.clamp(min=1e-10)
         render_colors = torch.cat(
             [
                 render_colors[..., :3],
-                render_colors[..., -4:-1],
-                render_colors[..., -1:] / render_alphas.clamp(min=1e-10),
+                depths_expected,
             ],
             dim=-1,
         )
+        if render_mode in ["RGB+ED+N"]:
+            normals_rend = render_colors[..., -4:-1]
+            normals_surf = depth_to_normal(
+                depths_expected,
+                viewmats,
+                Ks,
+                near_plane=near_plane,
+                far_plane=far_plane,
+            )
+            normals_surf = normals_surf * (render_alphas).detach()
+            meta.update(
+                {
+                    "normals_rend": normals_rend,
+                    "normals_surf": normals_surf,
+                }
+            )
 
-    meta = {
-        "camera_ids": camera_ids,
-        "gaussian_ids": gaussian_ids,
-        "radii": radii,
-        "means2d": means2d,
-        "depths": depths,
-        "conics": conics,
-        "opacities": opacities,
-        "tile_width": tile_width,
-        "tile_height": tile_height,
-        "tiles_per_gauss": tiles_per_gauss,
-        "isect_ids": isect_ids,
-        "flatten_ids": flatten_ids,
-        "isect_offsets": isect_offsets,
-        "width": width,
-        "height": height,
-        "tile_size": tile_size,
-    }
+    meta.update(
+        {
+            "camera_ids": camera_ids,
+            "gaussian_ids": gaussian_ids,
+            "radii": radii,
+            "means2d": means2d,
+            "depths": depths,
+            "conics": conics,
+            "opacities": opacities,
+            "tile_width": tile_width,
+            "tile_height": tile_height,
+            "tiles_per_gauss": tiles_per_gauss,
+            "isect_ids": isect_ids,
+            "flatten_ids": flatten_ids,
+            "isect_offsets": isect_offsets,
+            "width": width,
+            "height": height,
+            "tile_size": tile_size,
+        }
+    )
     return render_colors, render_alphas, meta
 
 
@@ -777,6 +804,19 @@ def rasterization_2dgs_inria_wrapper(
         render_depth_expected * (1 - depth_ratio) + (depth_ratio) * render_depth_median
     )
 
-    meta = {"render_distloss": render_dist}
-    render_colors = torch.cat([render_colors, render_normal, render_depth], dim=-1)
+    normals_surf = depth_to_normal(
+        render_depth,
+        viewmats,
+        Ks,
+        near_plane=near_plane,
+        far_plane=far_plane,
+    )
+    normals_surf = normals_surf * (render_alphas).detach()
+
+    meta = {
+        "normals_rend": render_normal,
+        "normals_surf": normals_surf,
+        "render_distloss": render_dist,
+    }
+    render_colors = torch.cat([render_colors, render_depth], dim=-1)
     return render_colors, render_alphas, meta
