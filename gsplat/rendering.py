@@ -385,13 +385,6 @@ def rasterization(
     if render_mode in ["ED", "RGB+ED", "RGB+ED+N"]:
         # normalize the accumulated depth to get the expected depth
         depths_expected = render_colors[..., -1:] / render_alphas.clamp(min=1e-10)
-        render_colors = torch.cat(
-            [
-                render_colors[..., :3],
-                depths_expected,
-            ],
-            dim=-1,
-        )
         if render_mode in ["RGB+ED+N"]:
             normals_rend = render_colors[..., -4:-1]
             normals_surf = depth_to_normal(
@@ -408,6 +401,14 @@ def rasterization(
                     "normals_surf": normals_surf,
                 }
             )
+
+        render_colors = torch.cat(
+            [
+                render_colors[..., :3],
+                depths_expected,
+            ],
+            dim=-1,
+        )
 
     meta.update(
         {
