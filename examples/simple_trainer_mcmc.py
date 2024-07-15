@@ -14,7 +14,7 @@ import tyro
 import viser
 import nerfview
 from datasets.colmap import Dataset, Parser
-from datasets.traj import generate_interpolated_path
+from datasets.traj import generate_interpolated_path, generate_ellipse_path_z
 from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
@@ -42,6 +42,8 @@ class Config:
     disable_viewer: bool = False
     # Path to the .pt file. If provide, it will skip training and render a video
     ckpt: Optional[str] = None
+    # Render trajectory path
+    render_traj_path: str = "interp"
 
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
@@ -784,7 +786,20 @@ class Runner:
         device = self.device
 
         camtoworlds_all = self.parser.camtoworlds[5:-5]
-        camtoworlds_all = generate_interpolated_path(camtoworlds_all, 1)  # [N, 3, 4]
+        if cfg.render_traj_path == "interp":
+            camtoworlds_all = generate_interpolated_path(
+                camtoworlds_all, 1
+            )  # [N, 3, 4]
+        elif cfg.render_traj_path == "ellipse":
+            height = camtoworlds_all[:, 2, 3].mean()
+            camtoworlds_all = generate_ellipse_path_z(
+                camtoworlds_all, height=height
+            )  # [N, 3, 4]
+        else:
+            raise ValueError(
+                f"Render trajectory type not supported: {cfg.render_traj_path}"
+            )
+
         camtoworlds_all = np.concatenate(
             [
                 camtoworlds_all,
