@@ -50,8 +50,8 @@ def test_data():
     opacities = torch.ones(1, len(means), device=device) * 0.5
     colors = torch.rand(1, len(means), 3, device=device)
     viewmats = torch.eye(4, device=device).reshape(1, 4, 4)
-    W, H = 480, 320
-    # W, H = 640, 480
+    # W, H = 64, 48
+    W, H = 640, 480
     fx, fy, cx, cy = W, W, W // 2, H // 2
     Ks = torch.tensor(
         [[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], device=device
@@ -209,9 +209,11 @@ def test_rasterize_to_pixels_2dgs(test_data):
         backgrounds=backgrounds,
         distloss=True,
     )
+
+    ray_Ms_torch = ray_Ms.transpose(-1, -2).clone()
     _render_colors, _render_alphas = _rasterize_to_pixels_2dgs(
         means2d,
-        ray_Ms.transpose(-1, -2),
+        ray_Ms_torch,
         colors,
         opacities,
         width,
@@ -237,6 +239,9 @@ def test_rasterize_to_pixels_2dgs(test_data):
 
     v_render_colors = torch.rand_like(render_colors)
     v_render_alphas = torch.rand_like(render_alphas)
+    
+    # v_render_colors = torch.zeros_like(render_colors)
+    # v_render_alphas = torch.ones_like(render_alphas)
 
     v_means2d, v_ray_Ms, v_colors, v_opacities, v_backgrounds = torch.autograd.grad(
         (render_colors * v_render_colors).sum()
@@ -252,7 +257,7 @@ def test_rasterize_to_pixels_2dgs(test_data):
     ) = torch.autograd.grad(
         (_render_colors * v_render_colors).sum()
         + (_render_alphas * v_render_alphas).sum(),
-        (means2d, ray_Ms, colors, opacities, backgrounds),
+        (means2d, ray_Ms_torch, colors, opacities, backgrounds),
     )
 
     pairs = {

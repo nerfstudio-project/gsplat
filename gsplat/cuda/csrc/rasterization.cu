@@ -2232,9 +2232,11 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 } else {
                     const float v_G_ddelx = -vis * FilterInvSquare * d.x;
                     const float v_G_ddely = -vis * FilterInvSquare * d.y;
+                    // printf("%.2f, %.2f \n", v_G_ddelx, v_G_ddely);
                     v_xy_local = {v_G * v_G_ddelx, v_G * v_G_ddely};
                 }
 
+                // printf("true val: %.2f, %.2f \n", gauss_weight_3d, gauss_weight_2d);
                 if (opac * vis <= 0.999f) {
                     v_opacity_local = vis * v_alpha;
                 }
@@ -2275,28 +2277,29 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 }
 
                 //====== 2DGS ======//
-                if (gauss_weight_3d <= gauss_weight_2d) {
-                    float *v_ray_transformation_ptr = (float *)(v_ray_transformations) + 9 * g;
-                    atomicAdd(v_ray_transformation_ptr, v_u_transform_local.x);
-                    atomicAdd(v_ray_transformation_ptr + 1, v_u_transform_local.y);
-                    atomicAdd(v_ray_transformation_ptr + 2, v_u_transform_local.z);
-                    atomicAdd(v_ray_transformation_ptr + 3, v_v_transform_local.x);
-                    atomicAdd(v_ray_transformation_ptr + 4, v_v_transform_local.y);
-                    atomicAdd(v_ray_transformation_ptr + 5, v_v_transform_local.z);
-                    atomicAdd(v_ray_transformation_ptr + 6, v_w_transform_local.x);
-                    atomicAdd(v_ray_transformation_ptr + 7, v_w_transform_local.y);
-                    atomicAdd(v_ray_transformation_ptr + 8, v_w_transform_local.z);
-                } else {
-                    float *v_xy_ptr = (float *)(v_means2d) + 2 * g;
-                    atomicAdd(v_xy_ptr, v_xy_local.x);
-                    atomicAdd(v_xy_ptr + 1, v_xy_local.y);
+                // if (gauss_weight_3d <= gauss_weight_2d) {
+                float *v_ray_transformation_ptr = (float *)(v_ray_transformations) + 9 * g;
+                atomicAdd(v_ray_transformation_ptr, v_u_transform_local.x);
+                atomicAdd(v_ray_transformation_ptr + 1, v_u_transform_local.y);
+                atomicAdd(v_ray_transformation_ptr + 2, v_u_transform_local.z);
+                atomicAdd(v_ray_transformation_ptr + 3, v_v_transform_local.x);
+                atomicAdd(v_ray_transformation_ptr + 4, v_v_transform_local.y);
+                atomicAdd(v_ray_transformation_ptr + 5, v_v_transform_local.z);
+                atomicAdd(v_ray_transformation_ptr + 6, v_w_transform_local.x);
+                atomicAdd(v_ray_transformation_ptr + 7, v_w_transform_local.y);
+                atomicAdd(v_ray_transformation_ptr + 8, v_w_transform_local.z);
+                // } else {
+                // printf("%.2f, %.2f \n", gauss_weight_3d, gauss_weight_2d);
+                float *v_xy_ptr = (float *)(v_means2d) + 2 * g;
+                atomicAdd(v_xy_ptr, v_xy_local.x);
+                atomicAdd(v_xy_ptr + 1, v_xy_local.y);
 
-                    if (v_means2d_abs != nullptr) {
-                        float *v_xy_abs_ptr = (float *)(v_means2d_abs) + 2 * g;
-                        atomicAdd(v_xy_abs_ptr, v_xy_abs_local.x);
-                        atomicAdd(v_xy_abs_ptr + 1, v_xy_abs_local.y);
-                    }
+                if (v_means2d_abs != nullptr) {
+                    float *v_xy_abs_ptr = (float *)(v_means2d_abs) + 2 * g;
+                    atomicAdd(v_xy_abs_ptr, v_xy_abs_local.x);
+                    atomicAdd(v_xy_abs_ptr + 1, v_xy_abs_local.y);
                 }
+                // }
 
 
                 float *v_normal_ptr = (float *)(v_normal3d) + 3 * g;
