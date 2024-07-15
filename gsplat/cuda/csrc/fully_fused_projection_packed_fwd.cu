@@ -36,6 +36,7 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
     int32_t *__restrict__ radii,        // [nnz]
     T *__restrict__ means2d,        // [nnz, 2]
     T *__restrict__ depths,         // [nnz]
+    T *__restrict__ normals,        // [nnz, 3]
     T *__restrict__ conics,         // [nnz, 3]
     T *__restrict__ compensations   // [nnz] optional
 ) {
@@ -75,6 +76,7 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
     mat2<T> covar2d;
     vec2<T> mean2d;
     mat2<T> covar2d_inv;
+    vec3<T> normal;
     T compensation;
     T det;
     if (valid) {
@@ -92,6 +94,9 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
             quats += col_idx * 4;
             scales += col_idx * 3;
             quat_scale_to_covar_preci<T>(glm::make_vec4(quats), glm::make_vec3(scales), &covar, nullptr);
+
+            glm::mat3 rotmat = quat_to_rotmat(glm::make_vec4(quats));
+            normal = rotmat[2];
         }
         mat3<T> covar_c;
         covar_world_to_cam(R, covar, covar_c);
@@ -163,6 +168,9 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
             means2d[thread_data * 2] = mean2d.x;
             means2d[thread_data * 2 + 1] = mean2d.y;
             depths[thread_data] = mean_c.z;
+            normals[thread_data * 3] = normal.x;
+            normals[thread_data * 3 + 1] = normal.y;
+            normals[thread_data * 3 + 2] = normal.z;
             conics[thread_data * 3] = covar2d_inv[0][0];
             conics[thread_data * 3 + 1] = covar2d_inv[0][1];
             conics[thread_data * 3 + 2] = covar2d_inv[1][1];
@@ -183,7 +191,7 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
-           torch::Tensor, torch::Tensor, torch::Tensor>
+           torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fully_fused_projection_packed_fwd_tensor(
     const torch::Tensor &means,                // [N, 3]
     const at::optional<torch::Tensor> &covars, // [N, 6]
@@ -232,7 +240,7 @@ fully_fused_projection_packed_fwd_tensor(
             viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
             eps2d, near_plane, far_plane, radius_clip, nullptr,
             block_cnts.data_ptr<int32_t>(), nullptr, nullptr, nullptr, nullptr, nullptr,
-            nullptr, nullptr, nullptr);
+            nullptr, nullptr, nullptr, nullptr);
         block_accum = torch::cumsum(block_cnts, 0, torch::kInt32);
         nnz = block_accum[-1].item<int32_t>();
     } else {
@@ -246,6 +254,7 @@ fully_fused_projection_packed_fwd_tensor(
     torch::Tensor radii = torch::empty({nnz}, means.options().dtype(torch::kInt32));
     torch::Tensor means2d = torch::empty({nnz, 2}, means.options());
     torch::Tensor depths = torch::empty({nnz}, means.options());
+    torch::Tensor normals = torch::empty({nnz, 3}, means.options());
     torch::Tensor conics = torch::empty({nnz, 3}, means.options());
     torch::Tensor compensations;
     if (calc_compensations) {
@@ -264,12 +273,12 @@ fully_fused_projection_packed_fwd_tensor(
             nullptr, indptr.data_ptr<int32_t>(), camera_ids.data_ptr<int64_t>(),
             gaussian_ids.data_ptr<int64_t>(), radii.data_ptr<int32_t>(),
             means2d.data_ptr<float>(), depths.data_ptr<float>(),
-            conics.data_ptr<float>(),
+            normals.data_ptr<float>(), conics.data_ptr<float>(),
             calc_compensations ? compensations.data_ptr<float>() : nullptr);
     } else {
         indptr.fill_(0);
     }
 
     return std::make_tuple(indptr, camera_ids, gaussian_ids, radii, means2d, depths,
-                           conics, compensations);
+                           normals, conics, compensations);
 }

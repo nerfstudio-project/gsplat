@@ -31,7 +31,7 @@ fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
                                   int32_t *__restrict__ radii,      // [C, N]
                                   T *__restrict__ means2d,      // [C, N, 2]
                                   T *__restrict__ depths,       // [C, N]
-                                  T *__restrict__ normals,       // [C, N, 3]
+                                  T *__restrict__ normals,      // [C, N, 3]
                                   T *__restrict__ conics,       // [C, N, 3]
                                   T *__restrict__ compensations // [C, N] optional
 ) {

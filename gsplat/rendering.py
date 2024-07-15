@@ -242,6 +242,7 @@ def rasterization(
             radii,
             means2d,
             depths,
+            normals,
             conics,
             compensations,
         ) = proj_results

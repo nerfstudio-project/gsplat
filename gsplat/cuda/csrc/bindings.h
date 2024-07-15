@@ -180,7 +180,7 @@ compute_sh_bwd_tensor(const uint32_t K, const uint32_t degrees_to_use,
  * Packed Version
  ****************************************************************************************/
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
-           torch::Tensor, torch::Tensor, torch::Tensor>
+           torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fully_fused_projection_packed_fwd_tensor(
     const torch::Tensor &means,                // [N, 3]
     const at::optional<torch::Tensor> &covars, // [N, 6]
@@ -210,6 +210,7 @@ fully_fused_projection_packed_bwd_tensor(
     // grad outputs
     const torch::Tensor &v_means2d,                     // [nnz, 2]
     const torch::Tensor &v_depths,                      // [nnz]
+    const torch::Tensor &v_normals,                     // [nnz, 3]
     const torch::Tensor &v_conics,                      // [nnz, 3]
     const at::optional<torch::Tensor> &v_compensations, // [nnz] optional
     const bool viewmats_requires_grad, const bool sparse_grad);
