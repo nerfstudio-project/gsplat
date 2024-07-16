@@ -6,14 +6,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 
-def _quat_scale_to_covar_preci(
-    quats: Tensor,  # [N, 4],
-    scales: Tensor,  # [N, 3],
-    compute_covar: bool = True,
-    compute_preci: bool = True,
-    triu: bool = False,
-) -> Tuple[Optional[Tensor], Optional[Tensor]]:
-    """PyTorch implementation of `gsplat.cuda._wrapper.quat_scale_to_covar_preci()`."""
+def _quat_to_rotmat(quats: Tensor) -> Tensor:
     quats = F.normalize(quats, p=2, dim=-1)
     w, x, y, z = torch.unbind(quats, dim=-1)
     R = torch.stack(
@@ -30,8 +23,19 @@ def _quat_scale_to_covar_preci(
         ],
         dim=-1,
     )
-
     R = R.reshape(quats.shape[:-1] + (3, 3))  # (..., 3, 3)
+    return R
+
+
+def _quat_scale_to_covar_preci(
+    quats: Tensor,  # [N, 4],
+    scales: Tensor,  # [N, 3],
+    compute_covar: bool = True,
+    compute_preci: bool = True,
+    triu: bool = False,
+) -> Tuple[Optional[Tensor], Optional[Tensor]]:
+    """PyTorch implementation of `gsplat.cuda._wrapper.quat_scale_to_covar_preci()`."""
+    R = _quat_to_rotmat(quats)
     # R.register_hook(lambda grad: print("grad R", grad))
 
     if compute_covar:
@@ -129,7 +133,8 @@ def _world_to_cam(
 
 def _fully_fused_projection(
     means: Tensor,  # [N, 3]
-    covars: Tensor,  # [N, 3, 3]
+    quats: Tensor,
+    scales: Tensor,
     viewmats: Tensor,  # [C, 4, 4]
     Ks: Tensor,  # [C, 3, 3]
     width: int,
@@ -146,6 +151,11 @@ def _fully_fused_projection(
         This is a minimal implementation of fully fused version, which has more
         arguments. Not all arguments are supported.
     """
+
+    covars, _ = _quat_scale_to_covar_preci(quats, scales, triu=False)  # [N, 3, 3]
+    normals = _quat_to_rotmat(quats)[..., 2]
+    normals = normals.repeat(viewmats.shape[0], 1, 1)
+
     means_c, covars_c = _world_to_cam(means, covars, viewmats)
     means2d, covars2d = _persp_proj(means_c, covars_c, Ks, width, height)
     det_orig = (
@@ -194,7 +204,7 @@ def _fully_fused_projection(
     radius[~inside] = 0.0
 
     radii = radius.int()
-    return radii, means2d, depths, conics, compensations
+    return radii, means2d, depths, normals, conics, compensations
 
 
 @torch.no_grad()

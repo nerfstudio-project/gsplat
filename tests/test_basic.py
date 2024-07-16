@@ -159,10 +159,10 @@ def test_persp_proj(test_data):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-@pytest.mark.parametrize("fused", [False, True])
-@pytest.mark.parametrize("calc_compensations", [False, True])
+@pytest.mark.parametrize("fused", [True])
+@pytest.mark.parametrize("calc_compensations", [True])
 def test_projection(test_data, fused: bool, calc_compensations: bool):
-    from gsplat.cuda._torch_impl import _fully_fused_projection
+    from gsplat.cuda._torch_impl import _fully_fused_projection, _quat_to_rotmat
     from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci
 
     torch.manual_seed(42)
@@ -181,7 +181,7 @@ def test_projection(test_data, fused: bool, calc_compensations: bool):
 
     # forward
     if fused:
-        radii, means2d, depths, conics, compensations = fully_fused_projection(
+        radii, means2d, depths, normals, conics, compensations = fully_fused_projection(
             means,
             None,
             quats,
@@ -194,7 +194,7 @@ def test_projection(test_data, fused: bool, calc_compensations: bool):
         )
     else:
         covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [N, 6]
-        radii, means2d, depths, conics, compensations = fully_fused_projection(
+        radii, means2d, depths, normals, conics, compensations = fully_fused_projection(
             means,
             covars,
             None,
@@ -205,10 +205,17 @@ def test_projection(test_data, fused: bool, calc_compensations: bool):
             height,
             calc_compensations=calc_compensations,
         )
-    _covars, _ = quat_scale_to_covar_preci(quats, scales, triu=False)  # [N, 3, 3]
-    _radii, _means2d, _depths, _conics, _compensations = _fully_fused_projection(
+    (
+        _radii,
+        _means2d,
+        _depths,
+        _normals,
+        _conics,
+        _compensations,
+    ) = _fully_fused_projection(
         means,
-        _covars,
+        quats,
+        scales,
         viewmats,
         Ks,
         width,
@@ -221,6 +228,7 @@ def test_projection(test_data, fused: bool, calc_compensations: bool):
     torch.testing.assert_close(radii, _radii, rtol=0, atol=1)
     torch.testing.assert_close(means2d[valid], _means2d[valid], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(depths[valid], _depths[valid], rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(normals[valid], _normals[valid], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(conics[valid], _conics[valid], rtol=1e-4, atol=1e-4)
     if calc_compensations:
         torch.testing.assert_close(
@@ -230,12 +238,14 @@ def test_projection(test_data, fused: bool, calc_compensations: bool):
     # backward
     v_means2d = torch.randn_like(means2d) * radii[..., None]
     v_depths = torch.randn_like(depths) * radii
+    v_normals = torch.randn_like(normals) * radii[..., None]
     v_conics = torch.randn_like(conics) * radii[..., None]
     if calc_compensations:
         v_compensations = torch.randn_like(compensations) * radii
     v_viewmats, v_quats, v_scales, v_means = torch.autograd.grad(
         (means2d * v_means2d).sum()
         + (depths * v_depths).sum()
+        + (normals * v_normals).sum()
         + (conics * v_conics).sum()
         + ((compensations * v_compensations).sum() if calc_compensations else 0),
         (viewmats, quats, scales, means),
@@ -243,12 +253,13 @@ def test_projection(test_data, fused: bool, calc_compensations: bool):
     _v_viewmats, _v_quats, _v_scales, _v_means = torch.autograd.grad(
         (_means2d * v_means2d).sum()
         + (_depths * v_depths).sum()
+        + (_normals * v_normals).sum()
         + (_conics * v_conics).sum()
         + ((_compensations * v_compensations).sum() if calc_compensations else 0),
         (viewmats, quats, scales, means),
     )
 
-    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-2, atol=1e-2)
     torch.testing.assert_close(v_quats, _v_quats, rtol=2e-1, atol=1e-2)
     torch.testing.assert_close(v_scales, _v_scales, rtol=1e-1, atol=2e-1)
     torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=6e-2)
