@@ -10,7 +10,6 @@
 
 namespace cg = cooperative_groups;
 
-
 /****************************************************************************
  * Perspective Projection Forward Pass
  ****************************************************************************/
@@ -23,10 +22,10 @@ __global__ void persp_proj_fwd_kernel(const uint32_t C, const uint32_t N,
                                       const uint32_t width, const uint32_t height,
                                       T *__restrict__ means2d, // [C, N, 2]
                                       T *__restrict__ covars2d // [C, N, 2, 2]
-) { 
+) {
     // For now we'll upcast float16 and bfloat16 to float32
     using OpT = typename OpType<T>::type;
-    
+
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
     if (idx >= C * N) {
@@ -63,7 +62,6 @@ __global__ void persp_proj_fwd_kernel(const uint32_t C, const uint32_t N,
     }
 }
 
-
 std::tuple<torch::Tensor, torch::Tensor>
 persp_proj_fwd_tensor(const torch::Tensor &means,  // [C, N, 3]
                       const torch::Tensor &covars, // [C, N, 3, 3]
@@ -82,12 +80,15 @@ persp_proj_fwd_tensor(const torch::Tensor &means,  // [C, N, 3]
 
     if (C && N) {
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
-        AT_DISPATCH_FLOATING_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16, means.scalar_type(), "persp_proj_fwd", [&]() {
-            persp_proj_fwd_kernel<scalar_t><<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
-                C, N, means.data_ptr<scalar_t>(), covars.data_ptr<scalar_t>(),
-                Ks.data_ptr<scalar_t>(), width, height, means2d.data_ptr<scalar_t>(),
-                covars2d.data_ptr<scalar_t>());
-        });
+        AT_DISPATCH_FLOATING_TYPES_AND2(
+            at::ScalarType::Half, at::ScalarType::BFloat16, means.scalar_type(),
+            "persp_proj_fwd", [&]() {
+                persp_proj_fwd_kernel<scalar_t>
+                    <<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
+                        C, N, means.data_ptr<scalar_t>(), covars.data_ptr<scalar_t>(),
+                        Ks.data_ptr<scalar_t>(), width, height,
+                        means2d.data_ptr<scalar_t>(), covars2d.data_ptr<scalar_t>());
+            });
     }
     return std::make_tuple(means2d, covars2d);
 }
