@@ -1379,7 +1379,7 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
             float3 w_transform = w_transform_batch[t];
 
             float3 h_u = {-u_transform.x + px * w_transform.x, -u_transform.y + px * w_transform.y, -u_transform.z + px * w_transform.z};
-            float3 h_v = {-v_transform.x + py * w_transform.x, -v_transform.y + py * w_transform.y, -v_transform.z + py * w_transform.z};
+            float3 h_v = {-v_transform.x + py * w_transform.x, -v_transform.y + py * w_transform.y, -v_transform.z + py * w_transform.z};            
 
             // printf("py: ||| %.2f |||", py);
             float3 intersect = cross_product(h_u, h_v);
@@ -2108,7 +2108,8 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
 
                 h_u = {-u_transform.x + px * w_transform.x, -u_transform.y + px * w_transform.y, -u_transform.z + px * w_transform.z};
                 h_v = {-v_transform.x + py * w_transform.x, -v_transform.y + py * w_transform.y, -v_transform.z + py * w_transform.z};
-
+                
+                // printf("h_v bwd: %.2f, %.2f, %.2f \n", h_v.x, h_v.y, h_v.z);
 
                 // cross product of two planes is a line
                 intersect = cross_product(h_u, h_v);
@@ -2205,39 +2206,39 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 }
 
                 //====== 2DGS ======//
-                const float v_G = opac * v_alpha;
-                float v_depth = 0.f;
-                if (gauss_weight_3d <= gauss_weight_2d) {
-                    const float2 v_s = {
-                        v_G * -vis * s.x + v_depth * w_transform.x,
-                        v_G * -vis * s.y + v_depth * w_transform.y
-                    };
-                    const float3 v_z_w_transform = {s.x, s.y, 1.0};
-                    const float v_sx_pz = v_s.x / intersect.z;
-                    const float v_sy_pz = v_s.y / intersect.z;
-                    const float3 v_intersect = {v_sx_pz, v_sy_pz, -(v_sx_pz * s.x + v_sy_pz * s.y)};
-                    const float3 v_h_u = cross_product(h_v, v_intersect);
-                    const float3 v_h_v = cross_product(v_intersect, h_u);
-                    
-                    const float3 v_u_transform = {-v_h_u.x, -v_h_u.y, -v_h_u.z};
-                    const float3 v_v_transform = {-v_h_v.x, -v_h_v.y, -v_h_v.z};
-                    const float3 v_w_transform = {
-                        px * v_h_u.x + py * v_h_v.x + v_depth * v_z_w_transform.x,
-                        px * v_h_u.y + py * v_h_v.y + v_depth * v_z_w_transform.y,
-                        px * v_h_u.z + py * v_h_v.z + v_depth * v_z_w_transform.z
-                    };
-                    v_u_transform_local = {v_u_transform.x, v_u_transform.y, v_u_transform.z};
-                    v_v_transform_local = {v_v_transform.x, v_v_transform.y, v_v_transform.z};
-                    v_w_transform_local = {v_w_transform.x, v_w_transform.y, v_w_transform.z};
-                } else {
-                    const float v_G_ddelx = -vis * FilterInvSquare * d.x;
-                    const float v_G_ddely = -vis * FilterInvSquare * d.y;
-                    // printf("%.2f, %.2f \n", v_G_ddelx, v_G_ddely);
-                    v_xy_local = {v_G * v_G_ddelx, v_G * v_G_ddely};
-                }
-
-                // printf("true val: %.2f, %.2f \n", gauss_weight_3d, gauss_weight_2d);
                 if (opac * vis <= 0.999f) {
+                    const float v_G = opac * v_alpha;
+                    float v_depth = 0.f;
+                    if (gauss_weight_3d <= gauss_weight_2d) {
+                        printf("v_depth: %.2f \n", v_depth);
+                        const float2 v_s = {
+                            v_G * -vis * s.x + v_depth * w_transform.x,
+                            v_G * -vis * s.y + v_depth * w_transform.y
+                        };
+                        const float3 v_z_w_transform = {s.x, s.y, 1.0};
+                        const float v_sx_pz = v_s.x / intersect.z;
+                        const float v_sy_pz = v_s.y / intersect.z;
+                        const float3 v_intersect = {v_sx_pz, v_sy_pz, -(v_sx_pz * s.x + v_sy_pz * s.y)};
+                        const float3 v_h_u = cross_product(h_v, v_intersect);
+                        const float3 v_h_v = cross_product(v_intersect, h_u);
+                        
+                        const float3 v_u_transform = {-v_h_u.x, -v_h_u.y, -v_h_u.z};
+                        const float3 v_v_transform = {-v_h_v.x, -v_h_v.y, -v_h_v.z};
+                        const float3 v_w_transform = {
+                            px * v_h_u.x + py * v_h_v.x + v_depth * v_z_w_transform.x,
+                            px * v_h_u.y + py * v_h_v.y + v_depth * v_z_w_transform.y,
+                            px * v_h_u.z + py * v_h_v.z + v_depth * v_z_w_transform.z
+                        };
+                        v_u_transform_local = {v_u_transform.x, v_u_transform.y, v_u_transform.z};
+                        v_v_transform_local = {v_v_transform.x, v_v_transform.y, v_v_transform.z};
+                        v_w_transform_local = {v_w_transform.x, v_w_transform.y, v_w_transform.z};
+                    } else {
+                        const float v_G_ddelx = -vis * FilterInvSquare * d.x;
+                        const float v_G_ddely = -vis * FilterInvSquare * d.y;
+                        v_xy_local = {v_G * v_G_ddelx, v_G * v_G_ddely};
+                    }
+
+                    // printf("true val: %.2f, %.2f \n", gauss_weight_3d, gauss_weight_2d);
                     v_opacity_local = vis * v_alpha;
                 }
 
@@ -2254,8 +2255,6 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 float depth = w_transform.z;
                 v_densification_local.x = v_u_transform_local.z * depth;
                 v_densification_local.y = v_v_transform_local.z * depth;
-
-
             }
             warpSum<COLOR_DIM, float>(v_rgb_local, warp);
             warpSum<3, float>(v_normal_local, warp);

@@ -50,7 +50,7 @@ def test_data():
     opacities = torch.ones(1, len(means), device=device) * 0.5
     colors = torch.rand(1, len(means), 3, device=device)
     viewmats = torch.eye(4, device=device).reshape(1, 4, 4)
-    # W, H = 64, 48
+    # W, H = 24, 20
     W, H = 640, 480
     fx, fy, cx, cy = W, W, W // 2, H // 2
     Ks = torch.tensor(
@@ -257,7 +257,7 @@ def test_rasterize_to_pixels_2dgs(test_data):
     ) = torch.autograd.grad(
         (_render_colors * v_render_colors).sum()
         + (_render_alphas * v_render_alphas).sum(),
-        (means2d, ray_Ms_torch, colors, opacities, backgrounds),
+        (means2d, ray_Ms, colors, opacities, backgrounds),
     )
 
     pairs = {
@@ -286,6 +286,6 @@ def test_rasterize_to_pixels_2dgs(test_data):
 
 
 if __name__ == "__main__":
-    test_projection_2dgs(test_data())
+    # test_projection_2dgs(test_data())
     test_rasterize_to_pixels_2dgs(test_data())
     print("All tests passed.")
