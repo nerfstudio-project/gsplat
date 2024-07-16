@@ -10,7 +10,6 @@
 
 namespace cg = cooperative_groups;
 
-
 /****************************************************************************
  * World to Camera Transformation Backward Pass
  ****************************************************************************/
@@ -113,7 +112,6 @@ world_to_cam_bwd_kernel(const uint32_t C, const uint32_t N,
     }
 }
 
-
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 world_to_cam_bwd_tensor(const torch::Tensor &means,                    // [N, 3]
                         const torch::Tensor &covars,                   // [N, 3, 3]
@@ -148,16 +146,22 @@ world_to_cam_bwd_tensor(const torch::Tensor &means,                    // [N, 3]
 
     if (C && N) {
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
-        AT_DISPATCH_FLOATING_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16, means.scalar_type(), "world_to_cam_bwd", [&]() {
-            world_to_cam_bwd_kernel<scalar_t><<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
-                C, N, means.data_ptr<scalar_t>(), covars.data_ptr<scalar_t>(),
-                viewmats.data_ptr<scalar_t>(),
-                v_means_c.has_value() ? v_means_c.value().data_ptr<scalar_t>() : nullptr,
-                v_covars_c.has_value() ? v_covars_c.value().data_ptr<scalar_t>() : nullptr,
-                means_requires_grad ? v_means.data_ptr<scalar_t>() : nullptr,
-                covars_requires_grad ? v_covars.data_ptr<scalar_t>() : nullptr,
-                viewmats_requires_grad ? v_viewmats.data_ptr<scalar_t>() : nullptr);
-        });
+        AT_DISPATCH_FLOATING_TYPES_AND2(
+            at::ScalarType::Half, at::ScalarType::BFloat16, means.scalar_type(),
+            "world_to_cam_bwd", [&]() {
+                world_to_cam_bwd_kernel<scalar_t>
+                    <<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
+                        C, N, means.data_ptr<scalar_t>(), covars.data_ptr<scalar_t>(),
+                        viewmats.data_ptr<scalar_t>(),
+                        v_means_c.has_value() ? v_means_c.value().data_ptr<scalar_t>()
+                                              : nullptr,
+                        v_covars_c.has_value() ? v_covars_c.value().data_ptr<scalar_t>()
+                                               : nullptr,
+                        means_requires_grad ? v_means.data_ptr<scalar_t>() : nullptr,
+                        covars_requires_grad ? v_covars.data_ptr<scalar_t>() : nullptr,
+                        viewmats_requires_grad ? v_viewmats.data_ptr<scalar_t>()
+                                               : nullptr);
+            });
     }
     return std::make_tuple(v_means, v_covars, v_viewmats);
 }

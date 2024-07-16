@@ -42,8 +42,7 @@ quat_scale_to_covar_preci_fwd_kernel(const uint32_t N,
     mat3<OpT> covar, preci;
     const vec4<OpT> quat = glm::make_vec4(quats);
     const vec3<OpT> scale = glm::make_vec3(scales);
-    quat_scale_to_covar_preci(quat, scale,
-                              covars ? &covar : nullptr, 
+    quat_scale_to_covar_preci(quat, scale, covars ? &covar : nullptr,
                               precis ? &preci : nullptr);
 
     // write to outputs: glm is column-major but we want row-major
@@ -118,13 +117,15 @@ quat_scale_to_covar_preci_fwd_tensor(const torch::Tensor &quats,  // [N, 4]
 
     if (N) {
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
-        AT_DISPATCH_FLOATING_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16, quats.scalar_type(), "quat_scale_to_covar_preci_fwd", [&]() {
-            quat_scale_to_covar_preci_fwd_kernel<<<(N + N_THREADS - 1) / N_THREADS,
-                                                N_THREADS, 0, stream>>>(
-                N, quats.data_ptr<float>(), scales.data_ptr<float>(), triu,
-                compute_covar ? covars.data_ptr<float>() : nullptr,
-                compute_preci ? precis.data_ptr<float>() : nullptr);
-        });
+        AT_DISPATCH_FLOATING_TYPES_AND2(
+            at::ScalarType::Half, at::ScalarType::BFloat16, quats.scalar_type(),
+            "quat_scale_to_covar_preci_fwd", [&]() {
+                quat_scale_to_covar_preci_fwd_kernel<<<(N + N_THREADS - 1) / N_THREADS,
+                                                       N_THREADS, 0, stream>>>(
+                    N, quats.data_ptr<float>(), scales.data_ptr<float>(), triu,
+                    compute_covar ? covars.data_ptr<float>() : nullptr,
+                    compute_preci ? precis.data_ptr<float>() : nullptr);
+            });
     }
     return std::make_tuple(covars, precis);
 }

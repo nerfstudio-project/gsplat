@@ -2,8 +2,8 @@
 #define GSPLAT_CUDA_TYPES_H
 
 #include <cuda.h>
-#include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#include <cuda_runtime.h>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -24,12 +24,11 @@ template <typename T> using mat4 = glm::mat<4, 4, T>;
 
 template <typename T> using mat3x2 = glm::mat<3, 2, T>;
 
-
 template <typename T> struct OpType {
     typedef T type;
 };
 
-template<> struct OpType<__nv_bfloat16> {
+template <> struct OpType<__nv_bfloat16> {
     typedef float type;
 };
 

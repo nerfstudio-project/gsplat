@@ -6,9 +6,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
-
-template <typename T>
-inline __device__ mat3<T> quat_to_rotmat(const vec4<T> quat) {
+template <typename T> inline __device__ mat3<T> quat_to_rotmat(const vec4<T> quat) {
     T w = quat[0], x = quat[1], y = quat[2], z = quat[3];
     // normalize
     T inv_norm = rsqrt(x * x + y * y + z * z + w * w);
@@ -29,7 +27,8 @@ inline __device__ mat3<T> quat_to_rotmat(const vec4<T> quat) {
 }
 
 template <typename T>
-inline __device__ void quat_to_rotmat_vjp(const vec4<T> quat, const mat3<T> v_R, vec4<T> &v_quat) {
+inline __device__ void quat_to_rotmat_vjp(const vec4<T> quat, const mat3<T> v_R,
+                                          vec4<T> &v_quat) {
     T w = quat[0], x = quat[1], y = quat[2], z = quat[3];
     // normalize
     T inv_norm = rsqrt(x * x + y * y + z * z + w * w);
@@ -65,8 +64,8 @@ inline __device__ void quat_scale_to_covar_preci(const vec4<T> quat,
     }
     if (preci != nullptr) {
         // P = R * S^-1 * S^-1 * Rt
-        mat3<T> S = mat3<T>(1.0f / scale[0], 0.f, 0.f, 0.f, 1.0f / scale[1], 0.f,
-                                0.f, 0.f, 1.0f / scale[2]);
+        mat3<T> S = mat3<T>(1.0f / scale[0], 0.f, 0.f, 0.f, 1.0f / scale[1], 0.f, 0.f,
+                            0.f, 1.0f / scale[2]);
         mat3<T> M = R * S;
         *preci = M * glm::transpose(M);
     }
@@ -184,8 +183,8 @@ inline __device__ void quat_scale_to_preci_vjp(
 template <typename T>
 inline __device__ void persp_proj(
     // inputs
-    const vec3<T> mean3d, const mat3<T> cov3d, const T fx, const T fy,
-    const T cx, const T cy, const uint32_t width, const uint32_t height,
+    const vec3<T> mean3d, const mat3<T> cov3d, const T fx, const T fy, const T cx,
+    const T cy, const uint32_t width, const uint32_t height,
     // outputs
     mat2<T> &cov2d, vec2<T> &mean2d) {
     T x = mean3d[0], y = mean3d[1], z = mean3d[2];
@@ -212,8 +211,8 @@ inline __device__ void persp_proj(
 template <typename T>
 inline __device__ void persp_proj_vjp(
     // fwd inputs
-    const vec3<T> mean3d, const mat3<T> cov3d, const T fx, const T fy,
-    const T cx, const T cy, const uint32_t width, const uint32_t height,
+    const vec3<T> mean3d, const mat3<T> cov3d, const T fx, const T fy, const T cx,
+    const T cy, const uint32_t width, const uint32_t height,
     // grad outputs
     const mat2<T> v_cov2d, const vec2<T> v_mean2d,
     // grad inputs
@@ -232,8 +231,8 @@ inline __device__ void persp_proj_vjp(
 
     // mat3x2 is 3 columns x 2 rows.
     mat3x2<T> J = mat3x2<T>(fx * rz, 0.f,                  // 1st column
-                                0.f, fy * rz,                  // 2nd column
-                                -fx * tx * rz2, -fy * ty * rz2 // 3rd column
+                            0.f, fy * rz,                  // 2nd column
+                            -fx * tx * rz2, -fy * ty * rz2 // 3rd column
     );
 
     // cov = J * V * Jt; G = df/dcov = v_cov
@@ -252,7 +251,8 @@ inline __device__ void persp_proj_vjp(
     // df/dz = -fx * rz2 * df/dJ_00 - fy * rz2 * df/dJ_11
     //         + 2 * fx * tx * rz3 * df/dJ_02 + 2 * fy * ty * rz3
     T rz3 = rz2 * rz;
-    mat3x2<T> v_J = v_cov2d * J * glm::transpose(cov3d) + glm::transpose(v_cov2d) * J * cov3d;
+    mat3x2<T> v_J =
+        v_cov2d * J * glm::transpose(cov3d) + glm::transpose(v_cov2d) * J * cov3d;
 
     // fov clipping
     if (x * rz <= lim_x && x * rz >= -lim_x) {
@@ -317,8 +317,7 @@ inline __device__ void covar_world_to_cam_vjp(
     v_covar += glm::transpose(R) * v_covar_c * R;
 }
 
-template <typename T>
-inline __device__ T inverse(const mat2<T> M, mat2<T> &Minv) {
+template <typename T> inline __device__ T inverse(const mat2<T> M, mat2<T> &Minv) {
     T det = M[0][0] * M[1][1] - M[0][1] * M[1][0];
     if (det <= 0.f) {
         return det;
@@ -339,8 +338,7 @@ inline __device__ void inverse_vjp(const T Minv, const T v_Minv, T &v_M) {
 }
 
 template <typename T>
-inline __device__ T add_blur(const T eps2d, mat2<T> &covar,
-                             T &compensation) {
+inline __device__ T add_blur(const T eps2d, mat2<T> &covar, T &compensation) {
     T det_orig = covar[0][0] * covar[1][1] - covar[0][1] * covar[1][0];
     covar[0][0] += eps2d;
     covar[1][1] += eps2d;
@@ -351,8 +349,8 @@ inline __device__ T add_blur(const T eps2d, mat2<T> &covar,
 
 template <typename T>
 inline __device__ void add_blur_vjp(const T eps2d, const mat2<T> conic_blur,
-                                    const T compensation,
-                                    const T v_compensation, mat2<T> &v_covar) {
+                                    const T compensation, const T v_compensation,
+                                    mat2<T> &v_covar) {
     // comp = sqrt(det(covar) / det(covar_blur))
 
     // d [det(M)] / d M = adj(M)
