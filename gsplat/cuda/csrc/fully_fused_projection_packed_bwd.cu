@@ -10,7 +10,6 @@
 
 namespace cg = cooperative_groups;
 
-
 /****************************************************************************
  * Projection of Gaussians (Batched) Backward Pass
  ****************************************************************************/
@@ -29,12 +28,11 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     // fwd outputs
     const int64_t *__restrict__ camera_ids,   // [nnz]
     const int64_t *__restrict__ gaussian_ids, // [nnz]
-    const T *__restrict__ conics,         // [nnz, 3]
-    const T *__restrict__ compensations,  // [nnz] optional
+    const T *__restrict__ conics,             // [nnz, 6]
+    const T *__restrict__ compensations,      // [nnz] optional
     // grad outputs
-    const T *__restrict__ v_means2d,       // [nnz, 2]
-    const T *__restrict__ v_depths,        // [nnz]
-    const T *__restrict__ v_conics,        // [nnz, 3]
+    const T *__restrict__ v_means2d,       // [nnz, 3]
+    const T *__restrict__ v_conics,        // [nnz, 6]
     const T *__restrict__ v_compensations, // [nnz] optional
     const bool sparse_grad, // whether the outputs are in COO format [nnz, ...]
     // grad inputs
@@ -57,30 +55,15 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     viewmats += cid * 16;
     Ks += cid * 9;
 
-    conics += idx * 3;
+    conics += idx * 6;
 
-    v_means2d += idx * 2;
-    v_depths += idx;
-    v_conics += idx * 3;
-
-    // vjp: compute the inverse of the 2d covariance
-    mat2<T> covar2d_inv = mat2<T>(conics[0], conics[1], conics[1], conics[2]);
-    mat2<T> v_covar2d_inv =
-        mat2<T>(v_conics[0], v_conics[1] * .5f, v_conics[1] * .5f, v_conics[2]);
-    mat2<T> v_covar2d(0.f);
-    inverse_vjp(covar2d_inv, v_covar2d_inv, v_covar2d);
-
-    if (v_compensations != nullptr) {
-        // vjp: compensation term
-        const T compensation = compensations[idx];
-        const T v_compensation = v_compensations[idx];
-        add_blur_vjp(eps2d, covar2d_inv, compensation, v_compensation, v_covar2d);
-    }
+    v_means2d += idx * 3;
+    v_conics += idx * 6;
 
     // transform Gaussian to camera space
     mat3<T> R = mat3<T>(viewmats[0], viewmats[4], viewmats[8], // 1st column
-                            viewmats[1], viewmats[5], viewmats[9], // 2nd column
-                            viewmats[2], viewmats[6], viewmats[10] // 3rd column
+                        viewmats[1], viewmats[5], viewmats[9], // 2nd column
+                        viewmats[2], viewmats[6], viewmats[10] // 3rd column
     );
     vec3<T> t = vec3<T>(viewmats[3], viewmats[7], viewmats[11]);
     mat3<T> covar;
@@ -104,15 +87,45 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     mat3<T> covar_c;
     covar_world_to_cam(R, covar, covar_c);
 
+    // perspective projection
+    mat3<T> covar2d;
+    vec3<T> mean2d;
+    persp_proj<T>(mean_c, covar_c, Ks[0], Ks[4], Ks[2], Ks[5], image_width,
+                  image_height, covar2d, mean2d);
+
+    // vjp: compute the inverse of the 2d covariance
+    mat3<T> covar2d_inv = mat3<T>(conics[0], conics[1], conics[2], // 1st column
+                                  conics[1], conics[3], conics[4], // 2nd column
+                                  conics[2], conics[4], conics[5]  // 3rd column
+    );
+    mat3<T> v_covar2d_inv =
+        mat3<T>(v_conics[0], v_conics[1] * .5f, v_conics[2] * .5f, // 1st column
+                v_conics[1] * .5f, v_conics[3], v_conics[4] * .5f, // 2nd column
+                v_conics[2] * .5f, v_conics[4] * .5f, v_conics[5]  // 3rd column
+        );
+    mat3<T> v_covar2d(0.f);
+    inverse_vjp(covar2d_inv, v_covar2d_inv, v_covar2d);
+
+    if (v_compensations != nullptr) {
+        // perspective projection
+        mat3<T> covar2d;
+        vec3<T> mean2d;
+        persp_proj<T>(mean_c, covar_c, Ks[0], Ks[4], Ks[2], Ks[5], image_width,
+                      image_height, covar2d, mean2d);
+
+        // vjp: compensation term
+        const T compensation = compensations[idx];
+        const T v_compensation = v_compensations[idx];
+        add_blur_vjp(eps2d, covar2d, covar2d_inv, compensation, v_compensation,
+                     v_covar2d);
+    }
+
     // vjp: perspective projection
     T fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
     mat3<T> v_covar_c(0.f);
     vec3<T> v_mean_c(0.f);
     persp_proj_vjp<T>(mean_c, covar_c, fx, fy, cx, cy, image_width, image_height,
-                          v_covar2d, glm::make_vec2(v_means2d), v_mean_c, v_covar_c);
-
-    // add contribution from v_depths
-    v_mean_c.z += v_depths[0];
+                      v_covar2d, glm::make_vec3(v_means2d), v_mean_c, v_covar_c);
 
     // vjp: transform Gaussian covariance to camera space
     vec3<T> v_mean(0.f);
@@ -235,12 +248,11 @@ fully_fused_projection_packed_bwd_tensor(
     // fwd outputs
     const torch::Tensor &camera_ids,                  // [nnz]
     const torch::Tensor &gaussian_ids,                // [nnz]
-    const torch::Tensor &conics,                      // [nnz, 3]
+    const torch::Tensor &conics,                      // [nnz, 6]
     const at::optional<torch::Tensor> &compensations, // [nnz] optional
     // grad outputs
-    const torch::Tensor &v_means2d,                     // [nnz, 2]
-    const torch::Tensor &v_depths,                      // [nnz]
-    const torch::Tensor &v_conics,                      // [nnz, 3]
+    const torch::Tensor &v_means2d,                     // [nnz, 3]
+    const torch::Tensor &v_conics,                      // [nnz, 6]
     const at::optional<torch::Tensor> &v_compensations, // [nnz] optional
     const bool viewmats_requires_grad, const bool sparse_grad) {
     DEVICE_GUARD(means);
@@ -258,7 +270,6 @@ fully_fused_projection_packed_bwd_tensor(
     CHECK_INPUT(gaussian_ids);
     CHECK_INPUT(conics);
     CHECK_INPUT(v_means2d);
-    CHECK_INPUT(v_depths);
     CHECK_INPUT(v_conics);
     if (compensations.has_value()) {
         CHECK_INPUT(compensations.value());
@@ -298,25 +309,25 @@ fully_fused_projection_packed_bwd_tensor(
         }
     }
     if (nnz) {
-        fully_fused_projection_packed_bwd_kernel<float><<<(nnz + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
-            C, N, nnz, means.data_ptr<float>(),
-            covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
-            covars.has_value() ? nullptr : quats.value().data_ptr<float>(),
-            covars.has_value() ? nullptr : scales.value().data_ptr<float>(),
-            viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
-            eps2d, camera_ids.data_ptr<int64_t>(), gaussian_ids.data_ptr<int64_t>(),
-            conics.data_ptr<float>(),
-            compensations.has_value() ? compensations.value().data_ptr<float>()
-                                      : nullptr,
-            v_means2d.data_ptr<float>(), v_depths.data_ptr<float>(),
-            v_conics.data_ptr<float>(),
-            v_compensations.has_value() ? v_compensations.value().data_ptr<float>()
-                                        : nullptr,
-            sparse_grad, v_means.data_ptr<float>(),
-            covars.has_value() ? v_covars.data_ptr<float>() : nullptr,
-            covars.has_value() ? nullptr : v_quats.data_ptr<float>(),
-            covars.has_value() ? nullptr : v_scales.data_ptr<float>(),
-            viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr);
+        fully_fused_projection_packed_bwd_kernel<float>
+            <<<(nnz + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
+                C, N, nnz, means.data_ptr<float>(),
+                covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
+                covars.has_value() ? nullptr : quats.value().data_ptr<float>(),
+                covars.has_value() ? nullptr : scales.value().data_ptr<float>(),
+                viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width,
+                image_height, eps2d, camera_ids.data_ptr<int64_t>(),
+                gaussian_ids.data_ptr<int64_t>(), conics.data_ptr<float>(),
+                compensations.has_value() ? compensations.value().data_ptr<float>()
+                                          : nullptr,
+                v_means2d.data_ptr<float>(), v_conics.data_ptr<float>(),
+                v_compensations.has_value() ? v_compensations.value().data_ptr<float>()
+                                            : nullptr,
+                sparse_grad, v_means.data_ptr<float>(),
+                covars.has_value() ? v_covars.data_ptr<float>() : nullptr,
+                covars.has_value() ? nullptr : v_quats.data_ptr<float>(),
+                covars.has_value() ? nullptr : v_scales.data_ptr<float>(),
+                viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr);
     }
     return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats);
 }

@@ -17,8 +17,10 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import viser
+from torch import Tensor
+
 from gsplat._helper import load_test_data
-from gsplat.rendering import rasterization
+from gsplat.rendering import _rasterization, rasterization
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -38,6 +40,94 @@ assert args.scene_grid % 2 == 1, "scene_grid must be odd"
 torch.manual_seed(42)
 device = "cuda"
 
+
+def getProjectionMatrix(znear, zfar, fovX, fovY, device="cuda"):
+    tanHalfFovY = math.tan((fovY / 2))
+    tanHalfFovX = math.tan((fovX / 2))
+
+    top = tanHalfFovY * znear
+    bottom = -top
+    right = tanHalfFovX * znear
+    left = -right
+
+    P = torch.zeros(4, 4, device=device)
+
+    z_sign = 1.0
+
+    P[0, 0] = 2.0 * znear / (right - left)
+    P[1, 1] = 2.0 * znear / (top - bottom)
+    P[0, 2] = (right + left) / (right - left)
+    P[1, 2] = (top + bottom) / (top - bottom)
+    P[3, 2] = z_sign
+    P[2, 2] = z_sign * zfar / (zfar - znear)
+    P[2, 3] = -(zfar * znear) / (zfar - znear)
+    return P
+
+
+def _depths_to_points(depthmap, world_view_transform, full_proj_transform):
+    c2w = (world_view_transform.T).inverse()
+    H, W = depthmap.shape[:2]
+    ndc2pix = (
+        torch.tensor([[W / 2, 0, 0, (W) / 2], [0, H / 2, 0, (H) / 2], [0, 0, 0, 1]])
+        .float()
+        .cuda()
+        .T
+    )
+    projection_matrix = c2w.T @ full_proj_transform
+    intrins = (projection_matrix @ ndc2pix)[:3, :3].T
+
+    grid_x, grid_y = torch.meshgrid(
+        torch.arange(W, device="cuda").float(),
+        torch.arange(H, device="cuda").float(),
+        indexing="xy",
+    )
+    points = torch.stack([grid_x, grid_y, torch.ones_like(grid_x)], dim=-1).reshape(
+        -1, 3
+    )
+    rays_d = points @ intrins.inverse().T @ c2w[:3, :3].T
+    rays_o = c2w[:3, 3]
+    points = depthmap.reshape(-1, 1) * rays_d + rays_o
+    return points
+
+
+def _depth_to_normal(depth, world_view_transform, full_proj_transform):
+    points = _depths_to_points(
+        depth, world_view_transform, full_proj_transform
+    ).reshape(*depth.shape[:2], 3)
+    output = torch.zeros_like(points)
+    dx = torch.cat([points[2:, 1:-1] - points[:-2, 1:-1]], dim=0)
+    dy = torch.cat([points[1:-1, 2:] - points[1:-1, :-2]], dim=1)
+    normal_map = F.normalize(torch.cross(dx, dy, dim=-1), dim=-1)
+    output[1:-1, 1:-1, :] = normal_map
+    return output
+
+
+def depth_to_normal(
+    depths: Tensor,  # [C, H, W, 1]
+    viewmats: Tensor,  # [C, 4, 4]
+    Ks: Tensor,  # [C, 3, 3]
+    near_plane: float = 0.01,
+    far_plane: float = 1e10,
+) -> Tensor:
+    height, width = depths.shape[1:3]
+
+    normals = []
+    for cid, depth in enumerate(depths):
+        FoVx = 2 * math.atan(width / (2 * Ks[cid, 0, 0].item()))
+        FoVy = 2 * math.atan(height / (2 * Ks[cid, 1, 1].item()))
+        world_view_transform = viewmats[cid].transpose(0, 1)
+        projection_matrix = getProjectionMatrix(
+            znear=near_plane, zfar=far_plane, fovX=FoVx, fovY=FoVy, device=depths.device
+        ).transpose(0, 1)
+        full_proj_transform = (
+            world_view_transform.unsqueeze(0).bmm(projection_matrix.unsqueeze(0))
+        ).squeeze(0)
+        normal = _depth_to_normal(depth, world_view_transform, full_proj_transform)
+        normals.append(normal)
+    normals = torch.stack(normals, dim=0)
+    return normals
+
+
 if args.ckpt is None:
     (
         means,
@@ -55,8 +145,20 @@ if args.ckpt is None:
     N = len(means)
     print("Number of Gaussians:", N)
 
+    ckpt = torch.load("results/garden/ckpts/ckpt_6999.pt", map_location=device)[
+        "splats"
+    ]
+    means = ckpt["means3d"]
+    quats = F.normalize(ckpt["quats"], p=2, dim=-1)
+    scales = torch.exp(ckpt["scales"])
+    opacities = torch.sigmoid(ckpt["opacities"])
+    sh0 = ckpt["sh0"]
+    shN = ckpt["shN"]
+    colors = torch.cat([sh0, shN], dim=-2)
+    sh_degree = int(math.sqrt(colors.shape[-2]) - 1)
+
     # batched render
-    render_colors, render_alphas, meta = rasterization(
+    render_colors, render_alphas, meta = _rasterization(
         means,  # [N, 3]
         quats,  # [N, 4]
         scales,  # [N, 3]
@@ -66,13 +168,17 @@ if args.ckpt is None:
         Ks,  # [C, 3, 3]
         width,
         height,
-        render_mode="RGB+D",
+        render_mode="RGB+ED",
+        sh_degree=sh_degree,
+        accurate_depth=False,
     )
     assert render_colors.shape == (C, height, width, 4)
     assert render_alphas.shape == (C, height, width, 1)
 
     render_rgbs = render_colors[..., 0:3]
     render_depths = render_colors[..., 3:4]
+    render_normals = depth_to_normal(render_depths, viewmats, Ks)
+    render_normals = render_normals * 0.5 + 0.5  # [-1, 1] -> [0, 1]
     render_depths = render_depths / render_depths.max()
 
     # dump batch images
@@ -82,6 +188,7 @@ if args.ckpt is None:
             [
                 render_rgbs.reshape(C * height, width, 3),
                 render_depths.reshape(C * height, width, 1).expand(-1, -1, 3),
+                render_normals.reshape(C * height, width, 3),
                 render_alphas.reshape(C * height, width, 1).expand(-1, -1, 3),
             ],
             dim=1,

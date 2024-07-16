@@ -14,8 +14,8 @@ namespace cg = cooperative_groups;
 template <uint32_t COLOR_DIM, typename S>
 __global__ void rasterize_to_pixels_fwd_kernel(
     const uint32_t C, const uint32_t N, const uint32_t n_isects, const bool packed,
-    const vec2<S> *__restrict__ means2d, // [C, N, 2] or [nnz, 2]
-    const vec3<S> *__restrict__ conics,  // [C, N, 3] or [nnz, 3]
+    const vec3<S> *__restrict__ means2d, // [C, N, 3] or [nnz, 3]
+    const S *__restrict__ conics,        // [C, N, 6] or [nnz, 6]
     const S *__restrict__ colors,        // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
     const S *__restrict__ opacities,     // [C, N] or [nnz]
     const S *__restrict__ backgrounds,   // [C, COLOR_DIM]
@@ -65,11 +65,10 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     uint32_t num_batches = (range_end - range_start + block_size - 1) / block_size;
 
     extern __shared__ int s[];
-    int32_t *id_batch = (int32_t *)s; // [block_size]
-    vec3<S> *xy_opacity_batch =
-        reinterpret_cast<vec3<float> *>(&id_batch[block_size]); // [block_size]
-    vec3<S> *conic_batch =
-        reinterpret_cast<vec3<float> *>(&xy_opacity_batch[block_size]); // [block_size]
+    int32_t *id_batch = (int32_t *)s;                         // [block_size]
+    vec3<S> *mean2d_batch = (vec3<S> *)&id_batch[block_size]; // [block_size]
+    S *opac_batch = (S *)&mean2d_batch[block_size];           // [block_size]
+    S *conic_batch = (S *)&opac_batch[block_size];            // [block_size * 6]
 
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
@@ -99,10 +98,14 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         if (idx < range_end) {
             int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
             id_batch[tr] = g;
-            const vec2<S> xy = means2d[g];
+            const vec3<S> mean2d = means2d[g];
             const S opac = opacities[g];
-            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
-            conic_batch[tr] = conics[g];
+            mean2d_batch[tr] = mean2d;
+            opac_batch[tr] = opac;
+            PRAGMA_UNROLL
+            for (uint32_t k = 0; k < 6; ++k) {
+                conic_batch[tr * 6 + k] = conics[g * 6 + k];
+            }
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -111,13 +114,18 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         // process gaussians in the current batch for this pixel
         uint32_t batch_size = min(block_size, range_end - batch_start);
         for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
-            const vec3<S> conic = conic_batch[t];
-            const vec3<S> xy_opac = xy_opacity_batch[t];
-            const S opac = xy_opac.z;
-            const vec2<S> delta = {xy_opac.x - px, xy_opac.y - py};
+            const S conic00 = conic_batch[t * 6 + 0];
+            const S conic01 = conic_batch[t * 6 + 1];
+            const S conic02 = conic_batch[t * 6 + 2];
+            const S conic11 = conic_batch[t * 6 + 3];
+            const S conic12 = conic_batch[t * 6 + 4];
+            const S conic22 = conic_batch[t * 6 + 5];
+            const vec3<S> mean2d = mean2d_batch[t];
+            const S opac = opac_batch[t];
+            const vec2<S> delta = {mean2d.x - px, mean2d.y - py};
             const S sigma =
-                0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
-                conic.y * delta.x * delta.y;
+                0.5f * (conic00 * delta.x * delta.x + conic11 * delta.y * delta.y) +
+                conic01 * delta.x * delta.y;
             S alpha = min(0.999f, opac * __expf(-sigma));
             if (sigma < 0.f || alpha < 1.f / 255.f) {
                 continue;
@@ -162,8 +170,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
 template <uint32_t CDIM>
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
     // Gaussian parameters
-    const torch::Tensor &means2d,   // [C, N, 2] or [nnz, 2]
-    const torch::Tensor &conics,    // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &means2d,   // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &conics,    // [C, N, 6] or [nnz, 6]
     const torch::Tensor &colors,    // [C, N, channels] or [nnz, channels]
     const torch::Tensor &opacities, // [C, N]  or [nnz]
     const at::optional<torch::Tensor> &backgrounds, // [C, channels]
@@ -207,7 +215,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
     const uint32_t shared_mem =
         tile_size * tile_size *
-        (sizeof(int32_t) + sizeof(vec3<float>) + sizeof(vec3<float>));
+        (sizeof(int32_t) + sizeof(vec3<float>) + sizeof(float) + sizeof(float) * 6);
 
     // TODO: an optimization can be done by passing the actual number of channels into
     // the kernel functions and avoid necessary global memory writes. This requires
@@ -221,9 +229,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
     rasterize_to_pixels_fwd_kernel<CDIM, float>
         <<<blocks, threads, shared_mem, stream>>>(
             C, N, n_isects, packed,
-            reinterpret_cast<vec2<float> *>(means2d.data_ptr<float>()),
-            reinterpret_cast<vec3<float> *>(conics.data_ptr<float>()),
-            colors.data_ptr<float>(), opacities.data_ptr<float>(),
+            reinterpret_cast<vec3<float> *>(means2d.data_ptr<float>()),
+            conics.data_ptr<float>(), colors.data_ptr<float>(),
+            opacities.data_ptr<float>(),
             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
             image_width, image_height, tile_size, tile_width, tile_height,
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
@@ -235,8 +243,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_tensor(
     // Gaussian parameters
-    const torch::Tensor &means2d,   // [C, N, 2] or [nnz, 2]
-    const torch::Tensor &conics,    // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &means2d,   // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &conics,    // [C, N, 6] or [nnz, 6]
     const torch::Tensor &colors,    // [C, N, channels] or [nnz, channels]
     const torch::Tensor &opacities, // [C, N]  or [nnz]
     const at::optional<torch::Tensor> &backgrounds, // [C, channels]

@@ -28,9 +28,8 @@ fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
                                   const T radius_clip,
                                   // outputs
                                   int32_t *__restrict__ radii,  // [C, N]
-                                  T *__restrict__ means2d,      // [C, N, 2]
-                                  T *__restrict__ depths,       // [C, N]
-                                  T *__restrict__ conics,       // [C, N, 3]
+                                  T *__restrict__ means2d,      // [C, N, 3]
+                                  T *__restrict__ conics,       // [C, N, 6]
                                   T *__restrict__ compensations // [C, N] optional
 ) {
     // parallelize over C * N.
@@ -80,8 +79,8 @@ fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
     covar_world_to_cam(R, covar, covar_c);
 
     // perspective projection
-    mat2<T> covar2d;
-    vec2<T> mean2d;
+    mat3<T> covar2d;
+    vec3<T> mean2d;
     persp_proj<T>(mean_c, covar_c, Ks[0], Ks[4], Ks[2], Ks[5], image_width,
                   image_height, covar2d, mean2d);
 
@@ -93,7 +92,7 @@ fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
     }
 
     // compute the inverse of the 2d covariance
-    mat2<T> covar2d_inv;
+    mat3<T> covar2d_inv;
     inverse(covar2d, covar2d_inv);
 
     // take 3 sigma as the radius (non differentiable)
@@ -117,18 +116,21 @@ fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
 
     // write to outputs
     radii[idx] = (int32_t)radius;
-    means2d[idx * 2] = mean2d.x;
-    means2d[idx * 2 + 1] = mean2d.y;
-    depths[idx] = mean_c.z;
-    conics[idx * 3] = covar2d_inv[0][0];
-    conics[idx * 3 + 1] = covar2d_inv[0][1];
-    conics[idx * 3 + 2] = covar2d_inv[1][1];
+    means2d[idx * 3] = mean2d.x;
+    means2d[idx * 3 + 1] = mean2d.y;
+    means2d[idx * 3 + 2] = mean2d.z;
+    conics[idx * 6] = covar2d_inv[0][0];
+    conics[idx * 6 + 1] = covar2d_inv[0][1];
+    conics[idx * 6 + 2] = covar2d_inv[0][2];
+    conics[idx * 6 + 3] = covar2d_inv[1][1];
+    conics[idx * 6 + 4] = covar2d_inv[1][2];
+    conics[idx * 6 + 5] = covar2d_inv[2][2];
     if (compensations != nullptr) {
         compensations[idx] = compensation;
     }
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fully_fused_projection_fwd_tensor(
     const torch::Tensor &means,                // [N, 3]
     const at::optional<torch::Tensor> &covars, // [N, 6] optional
@@ -156,9 +158,8 @@ fully_fused_projection_fwd_tensor(
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
     torch::Tensor radii = torch::empty({C, N}, means.options().dtype(torch::kInt32));
-    torch::Tensor means2d = torch::empty({C, N, 2}, means.options());
-    torch::Tensor depths = torch::empty({C, N}, means.options());
-    torch::Tensor conics = torch::empty({C, N, 3}, means.options());
+    torch::Tensor means2d = torch::empty({C, N, 3}, means.options());
+    torch::Tensor conics = torch::empty({C, N, 6}, means.options());
     torch::Tensor compensations;
     if (calc_compensations) {
         // we dont want NaN to appear in this tensor, so we zero intialize it
@@ -174,8 +175,8 @@ fully_fused_projection_fwd_tensor(
                 viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width,
                 image_height, eps2d, near_plane, far_plane, radius_clip,
                 radii.data_ptr<int32_t>(), means2d.data_ptr<float>(),
-                depths.data_ptr<float>(), conics.data_ptr<float>(),
+                conics.data_ptr<float>(),
                 calc_compensations ? compensations.data_ptr<float>() : nullptr);
     }
-    return std::make_tuple(radii, means2d, depths, conics, compensations);
+    return std::make_tuple(radii, means2d, conics, compensations);
 }

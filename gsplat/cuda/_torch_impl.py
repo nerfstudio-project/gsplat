@@ -60,6 +60,7 @@ def _persp_proj(
     Ks: Tensor,  # [C, 3, 3]
     width: int,
     height: int,
+    reduce_z: bool = False,
 ) -> Tuple[Tensor, Tensor]:
     """PyTorch implementation of prespective projection for 3D Gaussians.
 
@@ -69,12 +70,13 @@ def _persp_proj(
         Ks: Camera intrinsics. [C, 3, 3].
         width: Image width.
         height: Image height.
+        reduce_z: Whether to reduce the z-coordinate.
 
     Returns:
         A tuple:
 
-        - **means2d**: Projected means. [C, N, 2].
-        - **cov2d**: Projected covariances. [C, N, 2, 2].
+        - **means2d**: Projected means. [C, N, 2] if `reduce_z=True` or [C, N, 3].
+        - **cov2d**: Projected covariances. [C, N, 2, 2] if `reduce_z=True` or [C, N, 3, 3].
     """
     C, N, _ = means.shape
 
@@ -92,14 +94,21 @@ def _persp_proj(
     ty = tz * torch.clamp(ty / tz, min=-lim_y, max=lim_y)
 
     O = torch.zeros((C, N), device=means.device, dtype=means.dtype)
+    I = torch.ones((C, N), device=means.device, dtype=means.dtype)
     J = torch.stack(
-        [fx / tz, O, -fx * tx / tz2, O, fy / tz, -fy * ty / tz2], dim=-1
-    ).reshape(C, N, 2, 3)
+        [fx / tz, O, -fx * tx / tz2, O, fy / tz, -fy * ty / tz2, O, O, I], dim=-1
+    ).reshape(C, N, 3, 3)
 
     cov2d = torch.einsum("...ij,...jk,...kl->...il", J, covars, J.transpose(-1, -2))
-    means2d = torch.einsum("cij,cnj->cni", Ks[:, :2, :3], means)  # [C, N, 2]
-    means2d = means2d / tz[..., None]  # [C, N, 2]
-    return means2d, cov2d  # [C, N, 2], [C, N, 2, 2]
+    means2d = torch.einsum("cij,cnj->cni", Ks[:, :3, :3], means)  # [C, N, 2]
+    if reduce_z:
+        cov2d = cov2d[..., :2, :2]
+        means2d = means2d[..., :2] / means2d[..., 2:]  # [C, N, 2]
+    else:
+        means2d = torch.cat(
+            [means2d[..., :2] / means2d[..., 2:], means2d[..., 2:]], dim=-1
+        )  # [C, N, 3]
+    return means2d, cov2d
 
 
 def _world_to_cam(
@@ -129,7 +138,7 @@ def _world_to_cam(
 
 def _fully_fused_projection(
     means: Tensor,  # [N, 3]
-    covars: Tensor,  # [N, 3, 3]
+    covars: Tensor,  # [N, 3, 3] or [N, 6]
     viewmats: Tensor,  # [C, 4, 4]
     Ks: Tensor,  # [C, 3, 3]
     width: int,
@@ -138,6 +147,7 @@ def _fully_fused_projection(
     near_plane: float = 0.01,
     far_plane: float = 1e10,
     calc_compensations: bool = False,
+    triu: bool = True,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Optional[Tensor]]:
     """PyTorch implementation of `gsplat.cuda._wrapper.fully_fused_projection()`
 
@@ -146,33 +156,42 @@ def _fully_fused_projection(
         This is a minimal implementation of fully fused version, which has more
         arguments. Not all arguments are supported.
     """
-    means_c, covars_c = _world_to_cam(means, covars, viewmats)
-    means2d, covars2d = _persp_proj(means_c, covars_c, Ks, width, height)
-    det_orig = (
-        covars2d[..., 0, 0] * covars2d[..., 1, 1]
-        - covars2d[..., 0, 1] * covars2d[..., 1, 0]
-    )
-    covars2d = covars2d + torch.eye(2, device=means.device, dtype=means.dtype) * eps2d
+    if triu:
+        covars = torch.stack(
+            [
+                covars[..., 0],
+                covars[..., 1],
+                covars[..., 2],
+                covars[..., 1],
+                covars[..., 3],
+                covars[..., 4],
+                covars[..., 2],
+                covars[..., 4],
+                covars[..., 5],
+            ],
+            dim=-1,
+        ).reshape(
+            -1, 3, 3
+        )  # [N, 3, 3]
 
-    det = (
-        covars2d[..., 0, 0] * covars2d[..., 1, 1]
-        - covars2d[..., 0, 1] * covars2d[..., 1, 0]
+    means_c, covars_c = _world_to_cam(means, covars, viewmats)
+    means2d, covars2d = _persp_proj(
+        means_c, covars_c, Ks, width, height, reduce_z=False
     )
+    det_orig = torch.det(covars2d)  # [C, N]
+
+    eps = torch.tensor(
+        [[eps2d, 0.0, 0.0], [0.0, eps2d, 0.0], [0.0, 0.0, eps2d]], device=means.device
+    )
+    covars2d = covars2d + eps
+
+    det = torch.det(covars2d)  # [C, N]
     det = det.clamp(min=1e-10)
 
     if calc_compensations:
         compensations = torch.sqrt(torch.clamp(det_orig / det, min=0.0))
     else:
         compensations = None
-
-    conics = torch.stack(
-        [
-            covars2d[..., 1, 1] / det,
-            -(covars2d[..., 0, 1] + covars2d[..., 1, 0]) / 2.0 / det,
-            covars2d[..., 0, 0] / det,
-        ],
-        dim=-1,
-    )  # [C, N, 3]
 
     depths = means_c[..., 2]  # [C, N]
 
@@ -194,7 +213,14 @@ def _fully_fused_projection(
     radius[~inside] = 0.0
 
     radii = radius.int()
-    return radii, means2d, depths, conics, compensations
+    conics = torch.inverse(covars2d)  # [C, N, 3, 3]
+
+    if triu:
+        conics = conics.reshape(*conics.shape[:-2], 9)
+        conics = (
+            conics[..., [0, 1, 2, 4, 5, 8]] + conics[..., [0, 3, 6, 4, 7, 8]]
+        ) / 2.0
+    return radii, means2d, conics, compensations
 
 
 @torch.no_grad()
@@ -300,8 +326,8 @@ def _isect_offset_encode(
 
 
 def accumulate(
-    means2d: Tensor,  # [C, N, 2]
-    conics: Tensor,  # [C, N, 3]
+    means2d: Tensor,  # [C, N, 3]
+    conics: Tensor,  # [C, N, 6]
     opacities: Tensor,  # [C, N]
     colors: Tensor,  # [C, N, channels]
     gaussian_ids: Tensor,  # [M]
@@ -360,10 +386,10 @@ def accumulate(
     pixel_ids_x = pixel_ids % image_width
     pixel_ids_y = pixel_ids // image_width
     pixel_coords = torch.stack([pixel_ids_x, pixel_ids_y], dim=-1) + 0.5  # [M, 2]
-    deltas = pixel_coords - means2d[camera_ids, gaussian_ids]  # [M, 2]
-    c = conics[camera_ids, gaussian_ids]  # [M, 3]
+    deltas = pixel_coords - means2d[camera_ids, gaussian_ids, :2]  # [M, 3]
+    c = conics[camera_ids, gaussian_ids]  # [M, 6]
     sigmas = (
-        0.5 * (c[:, 0] * deltas[:, 0] ** 2 + c[:, 2] * deltas[:, 1] ** 2)
+        0.5 * (c[:, 0] * deltas[:, 0] ** 2 + c[:, 3] * deltas[:, 1] ** 2)
         + c[:, 1] * deltas[:, 0] * deltas[:, 1]
     )  # [M]
     alphas = torch.clamp_max(
@@ -373,6 +399,16 @@ def accumulate(
     indices = camera_ids * image_height * image_width + pixel_ids
     total_pixels = C * image_height * image_width
 
+    # calculate depths
+    mu = means2d[camera_ids, gaussian_ids]  # [M, 3]
+    o = torch.cat(
+        [pixel_coords, torch.zeros_like(pixel_ids_x)[..., None]], dim=-1
+    )  # [M, 3]
+    A = c[:, -1]  # [M,] conics22
+    B = torch.einsum("...i,...i->...", c[:, [2, 4, 5]], (mu - o))  # [M]
+    D = B / A  # [M]
+
+    # alpha compositing
     weights, trans = render_weight_from_alpha(
         alphas, ray_indices=indices, n_rays=total_pixels
     )
@@ -385,13 +421,16 @@ def accumulate(
     alphas = accumulate_along_rays(
         weights, None, ray_indices=indices, n_rays=total_pixels
     ).reshape(C, image_height, image_width, 1)
+    depths = accumulate_along_rays(
+        weights, D[..., None], ray_indices=indices, n_rays=total_pixels
+    ).reshape(C, image_height, image_width, 1)
 
-    return renders, alphas
+    return renders, alphas, depths
 
 
 def _rasterize_to_pixels(
-    means2d: Tensor,  # [C, N, 2]
-    conics: Tensor,  # [C, N, 3]
+    means2d: Tensor,  # [C, N, 3]
+    conics: Tensor,  # [C, N, 6]
     colors: Tensor,  # [C, N, channels]
     opacities: Tensor,  # [C, N]
     image_width: int,
@@ -434,6 +473,7 @@ def _rasterize_to_pixels(
         (C, image_height, image_width, colors.shape[-1]), device=device
     )
     render_alphas = torch.zeros((C, image_height, image_width, 1), device=device)
+    render_depths = torch.zeros((C, image_height, image_width, 1), device=device)
 
     # Split Gaussians into batches and iteratively accumulate the renderings
     block_size = tile_size * tile_size
@@ -464,7 +504,7 @@ def _rasterize_to_pixels(
             break
 
         # Accumulate the renderings within this batch of Gaussians.
-        renders_step, accs_step = accumulate(
+        renders_step, accs_step, depths_step = accumulate(
             means2d,
             conics,
             opacities,
@@ -477,6 +517,7 @@ def _rasterize_to_pixels(
         )
         render_colors = render_colors + renders_step * transmittances[..., None]
         render_alphas = render_alphas + accs_step * transmittances[..., None]
+        render_depths = render_depths + depths_step * transmittances[..., None]
 
     render_alphas = render_alphas
     if backgrounds is not None:
@@ -484,7 +525,7 @@ def _rasterize_to_pixels(
             1.0 - render_alphas
         )
 
-    return render_colors, render_alphas
+    return render_colors, render_alphas, render_depths
 
 
 def _eval_sh_bases_fast(basis_dim: int, dirs: Tensor):

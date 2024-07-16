@@ -96,8 +96,8 @@ def persp_proj(
     Returns:
         A tuple:
 
-        - **Projected means**. [C, N, 2]
-        - **Projected covariances**. [C, N, 2, 2]
+        - **Projected means**. [C, N, 3]
+        - **Projected covariances**. [C, N, 3, 3]
     """
     C, N, _ = means.shape
     assert means.shape == (C, N, 3), means.size()
@@ -206,16 +206,14 @@ def fully_fused_projection(
         - **gaussian_ids**. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].
         - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz].
         - **means**. Projected Gaussian means in 2D. [nnz, 2]
-        - **depths**. The z-depth of the projected Gaussians. [nnz]
         - **conics**. Inverse of the projected covariances. Return the flattend upper triangle with [nnz, 3]
         - **compensations**. The view-dependent opacity compensation factor. [nnz]
 
         If `packed` is False:
 
         - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N].
-        - **means**. Projected Gaussian means in 2D. [C, N, 2]
-        - **depths**. The z-depth of the projected Gaussians. [C, N]
-        - **conics**. Inverse of the projected covariances. Return the flattend upper triangle with [C, N, 3]
+        - **means**. Projected Gaussian means in 2D. [C, N, 3]
+        - **conics**. Inverse of the projected covariances. Return the flattend upper triangle with [C, N, 6]
         - **compensations**. The view-dependent opacity compensation factor. [C, N]
     """
     C = viewmats.size(0)
@@ -369,8 +367,8 @@ def isect_offset_encode(
 
 
 def rasterize_to_pixels(
-    means2d: Tensor,  # [C, N, 2] or [nnz, 2]
-    conics: Tensor,  # [C, N, 3] or [nnz, 3]
+    means2d: Tensor,  # [C, N, 3] or [nnz, 3]
+    conics: Tensor,  # [C, N, 6] or [nnz, 6]
     colors: Tensor,  # [C, N, channels] or [nnz, channels]
     opacities: Tensor,  # [C, N] or [nnz]
     image_width: int,
@@ -409,14 +407,14 @@ def rasterize_to_pixels(
     device = means2d.device
     if packed:
         nnz = means2d.size(0)
-        assert means2d.shape == (nnz, 2), means2d.shape
-        assert conics.shape == (nnz, 3), conics.shape
+        assert means2d.shape == (nnz, 3), means2d.shape
+        assert conics.shape == (nnz, 6), conics.shape
         assert colors.shape[0] == nnz, colors.shape
         assert opacities.shape == (nnz,), opacities.shape
     else:
         N = means2d.size(1)
-        assert means2d.shape == (C, N, 2), means2d.shape
-        assert conics.shape == (C, N, 3), conics.shape
+        assert means2d.shape == (C, N, 3), means2d.shape
+        assert conics.shape == (C, N, 6), conics.shape
         assert colors.shape[:2] == (C, N), colors.shape
         assert opacities.shape == (C, N), opacities.shape
     if backgrounds is not None:
@@ -502,8 +500,8 @@ def rasterize_to_indices_in_range(
     range_start: int,
     range_end: int,
     transmittances: Tensor,  # [C, image_height, image_width]
-    means2d: Tensor,  # [C, N, 2]
-    conics: Tensor,  # [C, N, 3]
+    means2d: Tensor,  # [C, N, 3]
+    conics: Tensor,  # [C, N, 6]
     opacities: Tensor,  # [C, N]
     image_width: int,
     image_height: int,
@@ -542,7 +540,7 @@ def rasterize_to_indices_in_range(
     """
 
     C, N, _ = means2d.shape
-    assert conics.shape == (C, N, 3), conics.shape
+    assert conics.shape == (C, N, 6), conics.shape
     assert opacities.shape == (C, N), opacities.shape
     assert isect_offsets.shape[0] == C, isect_offsets.shape
 
@@ -707,9 +705,9 @@ class _FullyFusedProjection(torch.autograd.Function):
         far_plane: float,
         radius_clip: float,
         calc_compensations: bool,
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         # "covars" and {"quats", "scales"} are mutually exclusive
-        radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
+        radii, means2d, conics, compensations = _make_lazy_cuda_func(
             "fully_fused_projection_fwd"
         )(
             means,
@@ -735,10 +733,10 @@ class _FullyFusedProjection(torch.autograd.Function):
         ctx.height = height
         ctx.eps2d = eps2d
 
-        return radii, means2d, depths, conics, compensations
+        return radii, means2d, conics, compensations
 
     @staticmethod
-    def backward(ctx, v_radii, v_means2d, v_depths, v_conics, v_compensations):
+    def backward(ctx, v_radii, v_means2d, v_conics, v_compensations):
         (
             means,
             covars,
@@ -771,7 +769,6 @@ class _FullyFusedProjection(torch.autograd.Function):
             conics,
             compensations,
             v_means2d.contiguous(),
-            v_depths.contiguous(),
             v_conics.contiguous(),
             v_compensations,
             ctx.needs_input_grad[4],  # viewmats_requires_grad
@@ -947,14 +944,13 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         radius_clip: float,
         sparse_grad: bool,
         calc_compensations: bool,
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
         (
             indptr,
             camera_ids,
             gaussian_ids,
             radii,
             means2d,
-            depths,
             conics,
             compensations,
         ) = _make_lazy_cuda_func("fully_fused_projection_packed_fwd")(
@@ -991,7 +987,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         ctx.eps2d = eps2d
         ctx.sparse_grad = sparse_grad
 
-        return camera_ids, gaussian_ids, radii, means2d, depths, conics, compensations
+        return camera_ids, gaussian_ids, radii, means2d, conics, compensations
 
     @staticmethod
     def backward(
@@ -1000,7 +996,6 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         v_gaussian_ids,
         v_radii,
         v_means2d,
-        v_depths,
         v_conics,
         v_compensations,
     ):
@@ -1040,7 +1035,6 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             conics,
             compensations,
             v_means2d.contiguous(),
-            v_depths.contiguous(),
             v_conics.contiguous(),
             v_compensations,
             ctx.needs_input_grad[4],  # viewmats_requires_grad

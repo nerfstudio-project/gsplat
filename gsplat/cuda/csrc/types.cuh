@@ -22,8 +22,6 @@ template <typename T> using mat3 = glm::mat<3, 3, T>;
 
 template <typename T> using mat4 = glm::mat<4, 4, T>;
 
-template <typename T> using mat3x2 = glm::mat<3, 2, T>;
-
 template <typename T> struct OpType {
     typedef T type;
 };
