@@ -359,6 +359,9 @@ def test_fully_fused_projection_packed(
         (viewmats, quats, scales, means),
         retain_graph=True,
     )
+    
+    sel = (__radii > 0)
+    print(torch.count_nonzero(_radii), torch.count_nonzero(__radii))
     v_viewmats, v_quats, v_scales, v_means = torch.autograd.grad(
         (means2d * v_means2d[sel]).sum()
         + (depths * v_depths[sel]).sum()
