@@ -65,7 +65,7 @@ world_to_cam_bwd_tensor(const torch::Tensor &means,                    // [N, 3]
                         const bool means_requires_grad, const bool covars_requires_grad,
                         const bool viewmats_requires_grad);
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fully_fused_projection_fwd_tensor(
     const torch::Tensor &means,                // [N, 3]
     const at::optional<torch::Tensor> &covars, // [N, 6] optional
@@ -89,12 +89,11 @@ fully_fused_projection_bwd_tensor(
     const uint32_t image_width, const uint32_t image_height, const float eps2d,
     // fwd outputs
     const torch::Tensor &radii,                       // [C, N]
-    const torch::Tensor &conics,                      // [C, N, 3]
+    const torch::Tensor &conics,                      // [C, N, 6]
     const at::optional<torch::Tensor> &compensations, // [C, N] optional
     // grad outputs
-    const torch::Tensor &v_means2d,                     // [C, N, 2]
-    const torch::Tensor &v_depths,                      // [C, N]
-    const torch::Tensor &v_conics,                      // [C, N, 3]
+    const torch::Tensor &v_means2d,                     // [C, N, 3]
+    const torch::Tensor &v_conics,                      // [C, N, 6]
     const at::optional<torch::Tensor> &v_compensations, // [C, N] optional
     const bool viewmats_requires_grad);
 
@@ -179,7 +178,7 @@ compute_sh_bwd_tensor(const uint32_t K, const uint32_t degrees_to_use,
  * Packed Version
  ****************************************************************************************/
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
-           torch::Tensor, torch::Tensor, torch::Tensor>
+           torch::Tensor, torch::Tensor>
 fully_fused_projection_packed_fwd_tensor(
     const torch::Tensor &means,                // [N, 3]
     const at::optional<torch::Tensor> &covars, // [N, 6]
@@ -204,20 +203,15 @@ fully_fused_projection_packed_bwd_tensor(
     // fwd outputs
     const torch::Tensor &camera_ids,                  // [nnz]
     const torch::Tensor &gaussian_ids,                // [nnz]
-    const torch::Tensor &conics,                      // [nnz, 3]
+    const torch::Tensor &conics,                      // [nnz, 6]
     const at::optional<torch::Tensor> &compensations, // [nnz] optional
     // grad outputs
-    const torch::Tensor &v_means2d,                     // [nnz, 2]
-    const torch::Tensor &v_depths,                      // [nnz]
-    const torch::Tensor &v_conics,                      // [nnz, 3]
+    const torch::Tensor &v_means2d,                     // [nnz, 3]
+    const torch::Tensor &v_conics,                      // [nnz, 6]
     const at::optional<torch::Tensor> &v_compensations, // [nnz] optional
     const bool viewmats_requires_grad, const bool sparse_grad);
 
 std::tuple<torch::Tensor, torch::Tensor>
-compute_relocation_tensor(
-    torch::Tensor& opacities,
-    torch::Tensor& scales,
-    torch::Tensor& ratios,
-    torch::Tensor& binoms,
-    const int n_max
-);
+compute_relocation_tensor(torch::Tensor &opacities, torch::Tensor &scales,
+                          torch::Tensor &ratios, torch::Tensor &binoms,
+                          const int n_max);

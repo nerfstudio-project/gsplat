@@ -15,8 +15,8 @@ template <typename T>
 __global__ void rasterize_to_indices_in_range_kernel(
     const uint32_t range_start, const uint32_t range_end, const uint32_t C,
     const uint32_t N, const uint32_t n_isects,
-    const vec2<T> *__restrict__ means2d, // [C, N, 2]
-    const vec3<T> *__restrict__ conics,  // [C, N, 3]
+    const vec3<T> *__restrict__ means2d, // [C, N, 3]
+    const T *__restrict__ conics,        // [C, N, 6]
     const T *__restrict__ opacities,     // [C, N]
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     const uint32_t tile_width, const uint32_t tile_height,
@@ -76,11 +76,10 @@ __global__ void rasterize_to_indices_in_range_kernel(
     }
 
     extern __shared__ int s[];
-    int32_t *id_batch = (int32_t *)s; // [block_size]
-    vec3<T> *xy_opacity_batch =
-        reinterpret_cast<vec3<float> *>(&id_batch[block_size]); // [block_size]
-    vec3<T> *conic_batch =
-        reinterpret_cast<vec3<float> *>(&xy_opacity_batch[block_size]); // [block_size]
+    int32_t *id_batch = (int32_t *)s;                         // [block_size]
+    vec3<T> *mean2d_batch = (vec3<T> *)&id_batch[block_size]; // [block_size]
+    T *opac_batch = (T *)&mean2d_batch[block_size];           // [block_size]
+    T *conic_batch = (T *)&opac_batch[block_size];            // [block_size * 6]
 
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
@@ -112,10 +111,14 @@ __global__ void rasterize_to_indices_in_range_kernel(
         if (idx < isect_range_end) {
             int32_t g = flatten_ids[idx];
             id_batch[tr] = g;
-            const vec2<T> xy = means2d[g];
+            const vec3<T> mean2d = means2d[g];
             const T opac = opacities[g];
-            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
-            conic_batch[tr] = conics[g];
+            mean2d_batch[tr] = mean2d;
+            opac_batch[tr] = opac;
+            PRAGMA_UNROLL
+            for (uint32_t k = 0; k < 6; ++k) {
+                conic_batch[tr * 6 + k] = conics[g * 6 + k];
+            }
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -124,13 +127,18 @@ __global__ void rasterize_to_indices_in_range_kernel(
         // process gaussians in the current batch for this pixel
         uint32_t batch_size = min(block_size, isect_range_end - batch_start);
         for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
-            const vec3<T> conic = conic_batch[t];
-            const vec3<T> xy_opac = xy_opacity_batch[t];
-            const T opac = xy_opac.z;
-            const vec2<T> delta = {xy_opac.x - px, xy_opac.y - py};
+            const T conic00 = conic_batch[t * 6 + 0];
+            const T conic01 = conic_batch[t * 6 + 1];
+            const T conic02 = conic_batch[t * 6 + 2];
+            const T conic11 = conic_batch[t * 6 + 3];
+            const T conic12 = conic_batch[t * 6 + 4];
+            const T conic22 = conic_batch[t * 6 + 5];
+            const vec3<T> mean2d = mean2d_batch[t];
+            const T opac = opac_batch[t];
+            const vec2<T> delta = {mean2d.x - px, mean2d.y - py};
             const T sigma =
-                0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
-                conic.y * delta.x * delta.y;
+                0.5f * (conic00 * delta.x * delta.x + conic11 * delta.y * delta.y) +
+                conic01 * delta.x * delta.y;
             T alpha = min(0.999f, opac * __expf(-sigma));
 
             if (sigma < 0.f || alpha < 1.f / 255.f) {
@@ -170,8 +178,8 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
     const uint32_t range_end,           // iteration steps
     const torch::Tensor transmittances, // [C, image_height, image_width]
     // Gaussian parameters
-    const torch::Tensor &means2d,   // [C, N, 2]
-    const torch::Tensor &conics,    // [C, N, 3]
+    const torch::Tensor &means2d,   // [C, N, 3]
+    const torch::Tensor &conics,    // [C, N, 6]
     const torch::Tensor &opacities, // [C, N]
     // image size
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
@@ -200,7 +208,7 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
     const uint32_t shared_mem =
         tile_size * tile_size *
-        (sizeof(int32_t) + sizeof(vec3<float>) + sizeof(vec3<float>));
+        (sizeof(int32_t) + sizeof(vec3<float>) + sizeof(float) + sizeof(float) * 6);
     if (cudaFuncSetAttribute(rasterize_to_indices_in_range_kernel<float>,
                              cudaFuncAttributeMaxDynamicSharedMemorySize,
                              shared_mem) != cudaSuccess) {
@@ -217,12 +225,12 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
         rasterize_to_indices_in_range_kernel<float>
             <<<blocks, threads, shared_mem, stream>>>(
                 range_start, range_end, C, N, n_isects,
-                reinterpret_cast<vec2<float> *>(means2d.data_ptr<float>()),
-                reinterpret_cast<vec3<float> *>(conics.data_ptr<float>()),
-                opacities.data_ptr<float>(), image_width, image_height, tile_size,
-                tile_width, tile_height, tile_offsets.data_ptr<int32_t>(),
-                flatten_ids.data_ptr<int32_t>(), transmittances.data_ptr<float>(),
-                nullptr, chunk_cnts.data_ptr<int32_t>(), nullptr, nullptr);
+                reinterpret_cast<vec3<float> *>(means2d.data_ptr<float>()),
+                conics.data_ptr<float>(), opacities.data_ptr<float>(), image_width,
+                image_height, tile_size, tile_width, tile_height,
+                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+                transmittances.data_ptr<float>(), nullptr,
+                chunk_cnts.data_ptr<int32_t>(), nullptr, nullptr);
 
         torch::Tensor cumsum = torch::cumsum(chunk_cnts, 0, chunk_cnts.scalar_type());
         n_elems = cumsum[-1].item<int64_t>();
@@ -240,13 +248,13 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
         rasterize_to_indices_in_range_kernel<float>
             <<<blocks, threads, shared_mem, stream>>>(
                 range_start, range_end, C, N, n_isects,
-                reinterpret_cast<vec2<float> *>(means2d.data_ptr<float>()),
-                reinterpret_cast<vec3<float> *>(conics.data_ptr<float>()),
-                opacities.data_ptr<float>(), image_width, image_height, tile_size,
-                tile_width, tile_height, tile_offsets.data_ptr<int32_t>(),
-                flatten_ids.data_ptr<int32_t>(), transmittances.data_ptr<float>(),
-                chunk_starts.data_ptr<int32_t>(), nullptr,
-                gaussian_ids.data_ptr<int64_t>(), pixel_ids.data_ptr<int64_t>());
+                reinterpret_cast<vec3<float> *>(means2d.data_ptr<float>()),
+                conics.data_ptr<float>(), opacities.data_ptr<float>(), image_width,
+                image_height, tile_size, tile_width, tile_height,
+                tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
+                transmittances.data_ptr<float>(), chunk_starts.data_ptr<int32_t>(),
+                nullptr, gaussian_ids.data_ptr<int64_t>(),
+                pixel_ids.data_ptr<int64_t>());
     }
     return std::make_tuple(gaussian_ids, pixel_ids);
 }

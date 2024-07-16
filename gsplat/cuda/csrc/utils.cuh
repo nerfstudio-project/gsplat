@@ -148,7 +148,7 @@ inline __device__ void persp_proj(
     const vec3<T> mean3d, const mat3<T> cov3d, const T fx, const T fy, const T cx,
     const T cy, const uint32_t width, const uint32_t height,
     // outputs
-    mat2<T> &cov2d, vec2<T> &mean2d) {
+    mat3<T> &cov2d, vec3<T> &mean2d) {
     T x = mean3d[0], y = mean3d[1], z = mean3d[2];
 
     T tan_fovx = 0.5f * width / fx;
@@ -161,13 +161,12 @@ inline __device__ void persp_proj(
     T tx = z * min(lim_x, max(-lim_x, x * rz));
     T ty = z * min(lim_y, max(-lim_y, y * rz));
 
-    // mat3x2 is 3 columns x 2 rows.
-    mat3x2<T> J = mat3x2<T>(fx * rz, 0.f,                  // 1st column
-                            0.f, fy * rz,                  // 2nd column
-                            -fx * tx * rz2, -fy * ty * rz2 // 3rd column
+    mat3<T> J = mat3<T>(fx * rz, 0.f, 0.f,                  // 1st column
+                        0.f, fy * rz, 0.f,                  // 2nd column
+                        -fx * tx * rz2, -fy * ty * rz2, 1.f // 3rd column
     );
-    cov2d = J * cov3d * glm::transpose(J);
-    mean2d = vec2<T>({fx * x * rz + cx, fy * y * rz + cy});
+    cov2d = J * cov3d * glm::transpose(J); // 3x3 mat
+    mean2d = vec3<T>({fx * x * rz + cx, fy * y * rz + cy, z});
 }
 
 template <typename T>
@@ -176,7 +175,7 @@ inline __device__ void persp_proj_vjp(
     const vec3<T> mean3d, const mat3<T> cov3d, const T fx, const T fy, const T cx,
     const T cy, const uint32_t width, const uint32_t height,
     // grad outputs
-    const mat2<T> v_cov2d, const vec2<T> v_mean2d,
+    const mat3<T> v_cov2d, const vec3<T> v_mean2d,
     // grad inputs
     vec3<T> &v_mean3d, mat3<T> &v_cov3d) {
     T x = mean3d[0], y = mean3d[1], z = mean3d[2];
@@ -191,10 +190,9 @@ inline __device__ void persp_proj_vjp(
     T tx = z * min(lim_x, max(-lim_x, x * rz));
     T ty = z * min(lim_y, max(-lim_y, y * rz));
 
-    // mat3x2 is 3 columns x 2 rows.
-    mat3x2<T> J = mat3x2<T>(fx * rz, 0.f,                  // 1st column
-                            0.f, fy * rz,                  // 2nd column
-                            -fx * tx * rz2, -fy * ty * rz2 // 3rd column
+    mat3<T> J = mat3<T>(fx * rz, 0.f, 0.f,                  // 1st column
+                        0.f, fy * rz, 0.f,                  // 2nd column
+                        -fx * tx * rz2, -fy * ty * rz2, 1.f // 3rd column
     );
 
     // cov = J * V * Jt; G = df/dcov = v_cov
@@ -205,15 +203,16 @@ inline __device__ void persp_proj_vjp(
     // df/dx = fx * rz * df/dpixx
     // df/dy = fy * rz * df/dpixy
     // df/dz = - fx * mean.x * rz2 * df/dpixx - fy * mean.y * rz2 * df/dpixy
-    v_mean3d += vec3<T>(fx * rz * v_mean2d[0], fy * rz * v_mean2d[1],
-                        -(fx * x * v_mean2d[0] + fy * y * v_mean2d[1]) * rz2);
+    v_mean3d +=
+        vec3<T>(fx * rz * v_mean2d[0], fy * rz * v_mean2d[1],
+                -(fx * x * v_mean2d[0] + fy * y * v_mean2d[1]) * rz2 + v_mean2d[2]);
 
     // df/dx = -fx * rz2 * df/dJ_02
     // df/dy = -fy * rz2 * df/dJ_12
     // df/dz = -fx * rz2 * df/dJ_00 - fy * rz2 * df/dJ_11
     //         + 2 * fx * tx * rz3 * df/dJ_02 + 2 * fy * ty * rz3
     T rz3 = rz2 * rz;
-    mat3x2<T> v_J =
+    mat3<T> v_J =
         v_cov2d * J * glm::transpose(cov3d) + glm::transpose(v_cov2d) * J * cov3d;
 
     // fov clipping
@@ -279,17 +278,8 @@ inline __device__ void covar_world_to_cam_vjp(
     v_covar += glm::transpose(R) * v_covar_c * R;
 }
 
-template <typename T> inline __device__ T inverse(const mat2<T> M, mat2<T> &Minv) {
-    T det = M[0][0] * M[1][1] - M[0][1] * M[1][0];
-    if (det <= 0.f) {
-        return det;
-    }
-    T invDet = 1.f / det;
-    Minv[0][0] = M[1][1] * invDet;
-    Minv[0][1] = -M[0][1] * invDet;
-    Minv[1][0] = Minv[0][1];
-    Minv[1][1] = M[0][0] * invDet;
-    return det;
+template <typename T> inline __device__ void inverse(const T M, T &Minv) {
+    Minv = glm::inverse(M);
 }
 
 template <typename T>
@@ -300,19 +290,22 @@ inline __device__ void inverse_vjp(const T Minv, const T v_Minv, T &v_M) {
 }
 
 template <typename T>
-inline __device__ T add_blur(const T eps2d, mat2<T> &covar, T &compensation) {
-    T det_orig = covar[0][0] * covar[1][1] - covar[0][1] * covar[1][0];
+inline __device__ T add_blur(const T eps2d, mat3<T> &covar, T &compensation) {
+    T det_orig = glm::determinant(covar);
     covar[0][0] += eps2d;
     covar[1][1] += eps2d;
-    T det_blur = covar[0][0] * covar[1][1] - covar[0][1] * covar[1][0];
+    covar[2][2] += eps2d;
+    T det_blur = glm::determinant(covar);
     compensation = sqrt(max(0.f, det_orig / det_blur));
     return det_blur;
 }
 
 template <typename T>
-inline __device__ void add_blur_vjp(const T eps2d, const mat2<T> conic_blur,
-                                    const T compensation, const T v_compensation,
-                                    mat2<T> &v_covar) {
+inline __device__ void add_blur_vjp(const T eps2d, const mat3<T> covar,
+                                    const mat3<T> conic_blur, const T compensation,
+                                    const T v_compensation, mat3<T> &v_covar) {
+    // https://www.math.uwaterloo.ca/~hwolkowi/matrixcookbook.pdf
+
     // comp = sqrt(det(covar) / det(covar_blur))
 
     // d [det(M)] / d M = adj(M)
@@ -329,16 +322,24 @@ inline __device__ void add_blur_vjp(const T eps2d, const mat2<T> conic_blur,
     // = (1 - comp^2) * inv(M + aI) - aI * det(inv(M + aI))
     // = (1 - comp^2) * conic_blur - aI * det(conic_blur)
 
-    T det_conic_blur =
-        conic_blur[0][0] * conic_blur[1][1] - conic_blur[0][1] * conic_blur[1][0];
-    T v_sqr_comp = v_compensation * 0.5 / (compensation + 1e-6);
-    T one_minus_sqr_comp = 1 - compensation * compensation;
-    v_covar[0][0] +=
-        v_sqr_comp * (one_minus_sqr_comp * conic_blur[0][0] - eps2d * det_conic_blur);
-    v_covar[0][1] += v_sqr_comp * (one_minus_sqr_comp * conic_blur[0][1]);
-    v_covar[1][0] += v_sqr_comp * (one_minus_sqr_comp * conic_blur[1][0]);
-    v_covar[1][1] +=
-        v_sqr_comp * (one_minus_sqr_comp * conic_blur[1][1] - eps2d * det_conic_blur);
+    T det_conic_blur = glm::determinant(conic_blur);
+    T v_sqr_comp = v_compensation * 0.5f / (compensation + 1e-6f);
+    // T one_minus_sqr_comp = 1.f - compensation * compensation;
+    // v_covar += v_sqr_comp * (one_minus_sqr_comp * conic_blur -
+    //                          eps2d * det_conic_blur * glm::identity<mat3<T>>());
+
+    // (M.inverse().t() - (M + aI).inverse().t()) * M.det() / (M + aI).det()
+    v_covar += v_sqr_comp * compensation * compensation *
+               (glm::transpose(glm::inverse(covar)) - glm::transpose(conic_blur));
+
+    // v_covar[0][0] +=
+    //     v_sqr_comp * (one_minus_sqr_comp * conic_blur[0][0] - eps2d *
+    //     det_conic_blur);
+    // v_covar[0][1] += v_sqr_comp * (one_minus_sqr_comp * conic_blur[0][1]);
+    // v_covar[1][0] += v_sqr_comp * (one_minus_sqr_comp * conic_blur[1][0]);
+    // v_covar[1][1] +=
+    //     v_sqr_comp * (one_minus_sqr_comp * conic_blur[1][1] - eps2d *
+    //     det_conic_blur);
 }
 
 #endif // GSPLAT_CUDA_UTILS_H

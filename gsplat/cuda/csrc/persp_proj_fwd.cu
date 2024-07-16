@@ -20,8 +20,8 @@ __global__ void persp_proj_fwd_kernel(const uint32_t C, const uint32_t N,
                                       const T *__restrict__ covars, // [C, N, 3, 3]
                                       const T *__restrict__ Ks,     // [C, 3, 3]
                                       const uint32_t width, const uint32_t height,
-                                      T *__restrict__ means2d, // [C, N, 2]
-                                      T *__restrict__ covars2d // [C, N, 2, 2]
+                                      T *__restrict__ means2d, // [C, N, 3]
+                                      T *__restrict__ covars2d // [C, N, 3, 3]
 ) {
     // For now we'll upcast float16 and bfloat16 to float32
     using OpT = typename OpType<T>::type;
@@ -38,26 +38,26 @@ __global__ void persp_proj_fwd_kernel(const uint32_t C, const uint32_t N,
     means += idx * 3;
     covars += idx * 9;
     Ks += cid * 9;
-    means2d += idx * 2;
-    covars2d += idx * 4;
+    means2d += idx * 3;
+    covars2d += idx * 9;
 
     OpT fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
-    mat2<OpT> covar2d(0.f);
-    vec2<OpT> mean2d(0.f);
+    mat3<OpT> covar2d(0.f);
+    vec3<OpT> mean2d(0.f);
     const vec3<OpT> mean = glm::make_vec3(means);
     const mat3<OpT> covar = glm::make_mat3(covars);
     persp_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
 
     // write to outputs: glm is column-major but we want row-major
     PRAGMA_UNROLL
-    for (uint32_t i = 0; i < 2; i++) { // rows
+    for (uint32_t i = 0; i < 3; i++) { // rows
         PRAGMA_UNROLL
-        for (uint32_t j = 0; j < 2; j++) { // cols
-            covars2d[i * 2 + j] = T(covar2d[j][i]);
+        for (uint32_t j = 0; j < 3; j++) { // cols
+            covars2d[i * 3 + j] = T(covar2d[j][i]);
         }
     }
     PRAGMA_UNROLL
-    for (uint32_t i = 0; i < 2; i++) {
+    for (uint32_t i = 0; i < 3; i++) {
         means2d[i] = T(mean2d[i]);
     }
 }
@@ -75,8 +75,8 @@ persp_proj_fwd_tensor(const torch::Tensor &means,  // [C, N, 3]
     uint32_t C = means.size(0);
     uint32_t N = means.size(1);
 
-    torch::Tensor means2d = torch::empty({C, N, 2}, means.options());
-    torch::Tensor covars2d = torch::empty({C, N, 2, 2}, covars.options());
+    torch::Tensor means2d = torch::empty({C, N, 3}, means.options());
+    torch::Tensor covars2d = torch::empty({C, N, 3, 3}, covars.options());
 
     if (C && N) {
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
