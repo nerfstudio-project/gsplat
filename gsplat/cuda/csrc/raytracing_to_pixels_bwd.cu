@@ -49,8 +49,8 @@ __global__ void raytracing_to_pixels_bwd_kernel(
 
     tile_offsets += camera_id * tile_height * tile_width;
     render_alphas += camera_id * image_height * image_width;
-    last_ids += camera_id * image_height * image_width;
-    v_render_colors += camera_id * image_height * image_width * COLOR_DIM;
+    last_ids += camera_id * image_height * image_width * 2;
+    v_render_colors += camera_id * image_height * image_width * (COLOR_DIM + 1 + 3);
     v_render_alphas += camera_id * image_height * image_width;
     Ks += camera_id * 9;
     if (backgrounds != nullptr) {
@@ -99,16 +99,24 @@ __global__ void raytracing_to_pixels_bwd_kernel(
     S T = T_final;
     // the contribution from gaussians behind the current one
     S buffer[COLOR_DIM] = {0.f};
+    S buffer_normal[3] = {0.f};
     // index of last gaussian to contribute to this pixel
-    const int32_t bin_final = inside ? last_ids[pix_id] : 0;
-
+    const int32_t bin_final = inside ? last_ids[pix_id * 2] : 0;
+    const int32_t bin_max = inside? last_ids[pix_id * 2 + 1] : 0;
     // df/d_out for this pixel
     S v_render_c[COLOR_DIM];
     PRAGMA_UNROLL
     for (uint32_t k = 0; k < COLOR_DIM; ++k) {
-        v_render_c[k] = v_render_colors[pix_id * COLOR_DIM + k];
+        v_render_c[k] = v_render_colors[pix_id * (COLOR_DIM + 1 + 3) + k];
     }
     const S v_render_a = v_render_alphas[pix_id];
+    // gradient for normal and depth
+    S v_render_normal[3];
+    PRAGMA_UNROLL
+    for (uint32_t k = 0; k < 3; ++k) {
+        v_render_normal[k] = v_render_colors[pix_id * (COLOR_DIM + 1 + 3) + COLOR_DIM + k];
+    }
+    S v_render_depth = v_render_colors[pix_id * (COLOR_DIM + 1 + 3) + COLOR_DIM + 3];
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing
@@ -210,6 +218,7 @@ __global__ void raytracing_to_pixels_bwd_kernel(
                 continue;
             }
             S v_rgb_local[COLOR_DIM] = {0.f};
+            S dL_dnormal_normalized[3] = {0.f};
             vec3<S> v_conic_local = {0.f, 0.f, 0.f};
             vec2<S> v_xy_local = {0.f, 0.f};
             vec2<S> v_xy_abs_local = {0.f, 0.f};
@@ -217,6 +226,10 @@ __global__ void raytracing_to_pixels_bwd_kernel(
             S v_view2gaussian_local[10] = {0.f};
             // initialize everything to 0, only set if the lane is valid
             if (valid) {
+                
+                const S length = sqrt(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2] + 1e-7);
+			    const vec3<S> normal_normalized = { -normal[0] / length, -normal[1] / length, -normal[2] / length };
+
                 // compute the current T for this gaussian
                 S ra = 1.0f / (1.0f - alpha);
                 T *= ra;
@@ -226,11 +239,21 @@ __global__ void raytracing_to_pixels_bwd_kernel(
                 for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                     v_rgb_local[k] = fac * v_render_c[k];
                 }
+                // contribution from normal and depth
+                PRAGMA_UNROLL
+                for (uint32_t k = 0; k < 3; ++k) {
+                    dL_dnormal_normalized[k] = fac * v_render_normal[k];
+                }
                 // contribution from this pixel
                 S v_alpha = 0.f;
                 for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                     v_alpha += (rgbs_batch[t * COLOR_DIM + k] * T - buffer[k] * ra) *
                                v_render_c[k];
+                }
+                // contribution from this pixel's normal
+                for (uint32_t k = 0; k < 3; ++k) {
+                    v_alpha += (normal_normalized[k] * T - buffer_normal[k] * ra) *
+                               v_render_normal[k];
                 }
 
                 v_alpha += T_final * ra * v_render_a;
@@ -257,7 +280,20 @@ __global__ void raytracing_to_pixels_bwd_kernel(
 
                     // gradient of depth
                     S dL_dt = 0.0f;
-                    S dL_dnormal[3] = {0.0f, 0.0f, 0.0f};
+                    vec3<S> dL_dnormal = {0.0f, 0.0f, 0.0f};
+                    // float length = sqrt(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2] + 1e-7);
+                    // const float normal_normalized[3] = { -normal[0] / length, -normal[1] / length, -normal[2] / length};
+                    S dL_dlength = (dL_dnormal_normalized[0] * normal[0] + dL_dnormal_normalized[1] * normal[1] + dL_dnormal_normalized[2] * normal[2]);
+                    dL_dlength *= 1.f / (length * length);
+                    dL_dnormal += vec3<S>(
+                        (-dL_dnormal_normalized[0] + dL_dlength * normal[0]) / length,
+                        (-dL_dnormal_normalized[1] + dL_dlength * normal[1]) / length,
+                        (-dL_dnormal_normalized[2] + dL_dlength * normal[2]) / length
+                    );
+
+                    if (batch_end - t == bin_max){
+                        dL_dt += v_render_depth;
+                    }
 
                     // vis = exp(power);
                     const S dG_dpower = vis;
@@ -312,6 +348,10 @@ __global__ void raytracing_to_pixels_bwd_kernel(
                 PRAGMA_UNROLL
                 for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                     buffer[k] += rgbs_batch[t * COLOR_DIM + k] * fac;
+                }
+                PRAGMA_UNROLL
+                for (uint32_t k = 0; k < 3; ++k) {
+                    buffer_normal[k] += normal_normalized[k] * fac;
                 }
             }
             warpSum<COLOR_DIM, S>(v_rgb_local, warp);

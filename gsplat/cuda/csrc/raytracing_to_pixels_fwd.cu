@@ -39,9 +39,9 @@ __global__ void raytracing_to_pixels_fwd_kernel(
     uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
 
     tile_offsets += camera_id * tile_height * tile_width;
-    render_colors += camera_id * image_height * image_width * COLOR_DIM;
+    render_colors += camera_id * image_height * image_width * (COLOR_DIM + 1 + 3);
     render_alphas += camera_id * image_height * image_width;
-    last_ids += camera_id * image_height * image_width;
+    last_ids += camera_id * image_height * image_width * 2;
     Ks += camera_id * 9;
     
     if (backgrounds != nullptr) {
@@ -90,13 +90,14 @@ __global__ void raytracing_to_pixels_fwd_kernel(
     S T = 1.0f;
     // index of most recent gaussian to write to this thread's pixel
     uint32_t cur_idx = 0;
-
+    uint32_t max_contributor = -1;
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing its
     // designated pixel
     uint32_t tr = block.thread_rank();
 
-    S pix_out[COLOR_DIM] = {0.f};
+    // + 1 for depth and + 3 for normal
+    S pix_out[COLOR_DIM + 1 + 3] = {0.f};
     for (uint32_t b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
@@ -177,6 +178,34 @@ __global__ void raytracing_to_pixels_fwd_kernel(
             for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                 pix_out[k] += c_ptr[k] * vis;
             }
+
+            // render depth, normal, distortion
+            // NDC mapping is taken from 2DGS paper, please check here https://arxiv.org/pdf/2403.17888.pdf
+			// const float max_t = t;
+			// const float mapped_max_t = (FAR_PLANE * max_t - FAR_PLANE * NEAR_PLANE) / ((FAR_PLANE - NEAR_PLANE) * max_t);
+			
+			// normalize normal
+			const S length = sqrt(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2] + 1e-7);
+			const vec3<S> normal_normalized = { -normal[0] / length, -normal[1] / length, -normal[2] / length };
+
+			// distortion loss is taken from 2DGS paper, please check https://arxiv.org/pdf/2403.17888.pdf
+			// float A = 1-T;
+			// float error = mapped_max_t * mapped_max_t * A + dist2 - 2 * mapped_max_t * dist1;
+			// distortion += error * alpha * T;
+			
+			// dist1 += mapped_max_t * alpha * T;
+			// dist2 += mapped_max_t * mapped_max_t * alpha * T;
+            
+            // normal
+			for (int k = 0; k < 3; k++)
+				pix_out[COLOR_DIM + k] += normal_normalized[k] * vis;
+			
+			// depth and alpha
+			if (T > 0.5){
+				pix_out[COLOR_DIM + 3] = depth;
+				max_contributor = batch_start + t;
+			}
+
             cur_idx = batch_start + t;
 
             T = next_T;
@@ -192,11 +221,21 @@ __global__ void raytracing_to_pixels_fwd_kernel(
         render_alphas[pix_id] = 1.0f - T;
         PRAGMA_UNROLL
         for (uint32_t k = 0; k < COLOR_DIM; ++k) {
-            render_colors[pix_id * COLOR_DIM + k] =
+            render_colors[pix_id * (COLOR_DIM + 1 + 3) + k] =
                 backgrounds == nullptr ? pix_out[k] : (pix_out[k] + T * backgrounds[k]);
         }
+        // normal
+        PRAGMA_UNROLL
+        for (uint32_t k = 0; k < 3; ++k) {
+            render_colors[pix_id * (COLOR_DIM + 1 + 3) + COLOR_DIM + k] = pix_out[COLOR_DIM + k];
+        }
+		// depth
+        render_colors[pix_id * (COLOR_DIM + 1 + 3) + COLOR_DIM + 3] = pix_out[COLOR_DIM + 3];
+
         // index in bin of last gaussian in this pixel
-        last_ids[pix_id] = static_cast<int32_t>(cur_idx);
+        last_ids[pix_id * 2] = static_cast<int32_t>(cur_idx);
+        // index in bn of the gaussian that contributes the most to this pixel/depth
+        last_ids[pix_id * 2 + 1] = static_cast<int32_t>(max_contributor);
     }
 }
 
@@ -242,11 +281,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
     dim3 threads = {tile_size, tile_size, 1};
     dim3 blocks = {C, tile_height, tile_width};
 
-    torch::Tensor renders = torch::empty({C, image_height, image_width, channels},
+    // + 1 for depth and + 3 for normal
+    torch::Tensor renders = torch::empty({C, image_height, image_width, channels + 1 + 3},
                                          means2d.options().dtype(torch::kFloat32));
     torch::Tensor alphas = torch::empty({C, image_height, image_width, 1},
                                         means2d.options().dtype(torch::kFloat32));
-    torch::Tensor last_ids = torch::empty({C, image_height, image_width},
+    // 1 for last_ids and 1 for max_contributor 
+    torch::Tensor last_ids = torch::empty({C, image_height, image_width, 2},
                                           means2d.options().dtype(torch::kInt32));
 
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();

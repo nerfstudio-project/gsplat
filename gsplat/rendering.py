@@ -865,7 +865,8 @@ def raytracing(
     assert viewmats.shape == (C, 4, 4), viewmats.shape
     assert Ks.shape == (C, 3, 3), Ks.shape
     assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
-
+    assert packed == False, "Packed mode is not supported yet."
+    
     if sh_degree is None:
         # treat colors as post-activation values, should be in shape [N, D] or [C, N, D]
         assert (colors.dim() == 2 and colors.shape[0] == N) or (
@@ -992,18 +993,19 @@ def raytracing(
         means2d.requires_grad = True
 
     # Rasterize to pixels
-    if render_mode in ["RGB+D", "RGB+ED"]:
-        colors = torch.cat((colors, depths[..., None]), dim=-1)
-        if backgrounds is not None:
-            backgrounds = torch.cat(
-                [backgrounds, torch.zeros(C, 1, device=backgrounds.device)], dim=-1
-            )
-    elif render_mode in ["D", "ED"]:
-        colors = depths[..., None]
-        if backgrounds is not None:
-            backgrounds = torch.zeros(C, 1, device=backgrounds.device)
-    else:  # RGB
-        pass
+    # if render_mode in ["RGB+D", "RGB+ED"]:
+    #     colors = torch.cat((colors, depths[..., None]), dim=-1)
+    #     if backgrounds is not None:
+    #         backgrounds = torch.cat(
+    #             [backgrounds, torch.zeros(C, 1, device=backgrounds.device)], dim=-1
+    #         )
+    # elif render_mode in ["D", "ED"]:
+    #     colors = depths[..., None]
+    #     if backgrounds is not None:
+    #         backgrounds = torch.zeros(C, 1, device=backgrounds.device)
+    # else:  # RGB
+    #     pass
+    
     if colors.shape[-1] > channel_chunk:
         # slice into chunks
         n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk
@@ -1052,15 +1054,16 @@ def raytracing(
             packed=packed,
             absgrad=absgrad,
         )
-    if render_mode in ["ED", "RGB+ED"]:
-        # normalize the accumulated depth to get the expected depth
-        render_colors = torch.cat(
-            [
-                render_colors[..., :-1],
-                render_colors[..., -1:] / render_alphas.clamp(min=1e-10),
-            ],
-            dim=-1,
-        )
+        
+    # if render_mode in ["ED", "RGB+ED"]:
+    #     # normalize the accumulated depth to get the expected depth
+    #     render_colors = torch.cat(
+    #         [
+    #             render_colors[..., :-1],
+    #             render_colors[..., -1:] / render_alphas.clamp(min=1e-10),
+    #         ],
+    #         dim=-1,
+    #     )
 
     meta = {
         "camera_ids": camera_ids,
