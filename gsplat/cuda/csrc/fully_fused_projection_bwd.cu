@@ -153,8 +153,7 @@ __global__ void fully_fused_projection_bwd_kernel(
         mat3<T> rotmat = quat_to_rotmat<T>(quat);
         vec4<T> v_quat(0.f);
         vec3<T> v_scale(0.f);
-        // quat_scale_to_covar_vjp<T>(quat, scale, rotmat, v_covar, v_quat, v_scale);
-        quat_scale_to_covar_vjp_normal<T>(quat, scale, rotmat, v_covar, glm::make_vec3(v_normals), v_quat, v_scale);
+        quat_scale_to_covar_normal_vjp<T>(quat, scale, rotmat, v_covar, glm::make_vec3(v_normals), v_quat, v_scale);
 
         warpSum(v_quat, warp_group_g);
         warpSum(v_scale, warp_group_g);

@@ -146,12 +146,7 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
             mat3<T> rotmat = quat_to_rotmat<T>(quat);
             vec4<T> v_quat(0.f);
             vec3<T> v_scale(0.f);
-            quat_scale_to_covar_vjp<T>(quat, scale, rotmat, v_covar, v_quat, v_scale);
-
-            // add contribution from v_normals. Please check if this is correct.
-            mat3<T> v_rotmat = quat_to_rotmat<T>(quat);
-            v_rotmat[2] += glm::make_vec3(v_normals);
-            quat_to_rotmat_vjp<T>(quat, v_rotmat, v_quat);
+            quat_scale_to_covar_normal_vjp<T>(quat, scale, rotmat, v_covar, glm::make_vec3(v_normals), v_quat, v_scale);
 
             v_quats += idx * 4;
             v_scales += idx * 3;
@@ -195,12 +190,7 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
             mat3<T> rotmat = quat_to_rotmat<T>(quat);
             vec4<T> v_quat(0.f);
             vec3<T> v_scale(0.f);
-            quat_scale_to_covar_vjp<T>(quat, scale, rotmat, v_covar, v_quat, v_scale);
-
-            // add contribution from v_normals. Please check if this is correct.
-            mat3<T> v_rotmat = quat_to_rotmat<T>(quat);
-            v_rotmat[2] += glm::make_vec3(v_normals);
-            quat_to_rotmat_vjp<T>(quat, v_rotmat, v_quat);
+            quat_scale_to_covar_normal_vjp<T>(quat, scale, rotmat, v_covar, glm::make_vec3(v_normals), v_quat, v_scale);
 
             warpSum(v_quat, warp_group_g);
             warpSum(v_scale, warp_group_g);

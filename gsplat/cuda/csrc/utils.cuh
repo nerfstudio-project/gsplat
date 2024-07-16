@@ -107,7 +107,7 @@ inline __device__ void quat_scale_to_covar_vjp(
 }
 
 template <typename T>
-inline __device__ void quat_scale_to_covar_vjp_normal(
+inline __device__ void quat_scale_to_covar_normal_vjp(
     // fwd inputs
     const vec4<T> quat, const vec3<T> scale,
     // precompute
@@ -133,11 +133,8 @@ inline __device__ void quat_scale_to_covar_vjp_normal(
     mat3<T> v_M = (v_covar + glm::transpose(v_covar)) * M;
     mat3<T> v_R = v_M * S;
 
+    // add contribution from v_normal
     v_R[2] += v_normal;
-
-    // // add contribution from v_normals. Please check if this is correct.
-    // mat3<T> v_rotmat = quat_to_rotmat<T>(quat);
-    // quat_to_rotmat_vjp<T>(quat, v_rotmat, v_quat);
 
     // grad for (quat, scale) from covar
     quat_to_rotmat_vjp<T>(quat, v_R, v_quat);
