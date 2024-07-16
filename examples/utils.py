@@ -176,21 +176,27 @@ def set_random_seed(seed: int):
 
 def depths_to_points(K: Tensor, depthmap: Tensor) -> Tensor:
     """
-        K: camera intrinsic
-        depth: depthmap 
+    K: camera intrinsic
+    depth: depthmap
     """
     H, W = depthmap.shape
-    grid_x, grid_y = torch.meshgrid(torch.arange(W, device='cuda').float() + 0.5, torch.arange(H, device='cuda').float() + 0.5, indexing='xy')
-    points = torch.stack([grid_x, grid_y, torch.ones_like(grid_x)], dim=-1).reshape(-1, 3)
-    rays_d = points @ K.inverse().T 
+    grid_x, grid_y = torch.meshgrid(
+        torch.arange(W, device="cuda").float() + 0.5,
+        torch.arange(H, device="cuda").float() + 0.5,
+        indexing="xy",
+    )
+    points = torch.stack([grid_x, grid_y, torch.ones_like(grid_x)], dim=-1).reshape(
+        -1, 3
+    )
+    rays_d = points @ K.inverse().T
     points = depthmap.reshape(-1, 1) * rays_d
     return points
 
 
 def depth_to_normal(K: Tensor, depth: Tensor) -> Tensor:
     """
-        K: camera intrinsic
-        depth: depthmap 
+    K: camera intrinsic
+    depth: depthmap
     """
     points = depths_to_points(K, depth).reshape(*depth.shape, 3)
     output = torch.zeros_like(points)

@@ -497,9 +497,13 @@ class Runner:
                 image_ids=image_ids,
                 render_mode="RGB+ED" if cfg.depth_loss else "RGB",
             )
-            
+
             if renders.shape[-1] == 7:
-                colors, normals, depths = renders[..., 0:3], renders[..., 3:6], renders[..., 6:7]
+                colors, normals, depths = (
+                    renders[..., 0:3],
+                    renders[..., 3:6],
+                    renders[..., 6:7],
+                )
             else:
                 colors, depths = renders, None
 
@@ -538,14 +542,14 @@ class Runner:
             # depth normal consistency loss
             normals = F.normalize(normals, dim=-1)
             depth_normals = depth_to_normal(Ks[0], depths[0, ..., 0])
-            
+
             normal_error = 1 - (normals[0] * depth_normals).sum(dim=-1)
             depth_normal_loss = normal_error.mean()
             if step > 15000:
                 loss += depth_normal_loss * 0.05
-            
+
             loss.backward()
-            
+
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
             if cfg.depth_loss:
                 desc += f"depth loss={depthloss.item():.6f}| "
@@ -559,13 +563,32 @@ class Runner:
             if step % 100 == 0:
                 normals_vis = normals * 0.5 + 0.5
                 depth_normals_vis = depth_normals * 0.5 + 0.5
-                depths_vis = (depths - depths.min()) / (depths.max() - depths.min()).repeat(1, 1, 1, 3)
+                depths_vis = (depths - depths.min()) / (
+                    depths.max() - depths.min()
+                ).repeat(1, 1, 1, 3)
                 # breakpoint()
                 colors = torch.clamp(colors, 0, 1)
-                canvas = torch.cat([pixels, colors, depths_vis, normals_vis, depth_normals_vis[None]], dim=-2).detach().cpu().numpy()
+                canvas = (
+                    torch.cat(
+                        [
+                            pixels,
+                            colors,
+                            depths_vis,
+                            normals_vis,
+                            depth_normals_vis[None],
+                        ],
+                        dim=-2,
+                    )
+                    .detach()
+                    .cpu()
+                    .numpy()
+                )
                 canvas = canvas.reshape(-1, *canvas.shape[2:])
-                imageio.imwrite(f"{cfg.result_dir}/train_{step:04d}.png", (canvas * 255).astype(np.uint8))
-                
+                imageio.imwrite(
+                    f"{cfg.result_dir}/train_{step:04d}.png",
+                    (canvas * 255).astype(np.uint8),
+                )
+
             if cfg.tb_every > 0 and step % cfg.tb_every == 0:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
                 self.writer.add_scalar("train/loss", loss.item(), step)
@@ -978,10 +1001,10 @@ class Runner:
                 far_plane=cfg.far_plane,
             )  # [1, H, W, 3]
             colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)  # [N, H, W, 3]
-            # normals = renders[..., 3:6]  # [N, H, W, 3]    
+            # normals = renders[..., 3:6]  # [N, H, W, 3]
             # depths = renders[..., 6:7]  # [N, H, W, 1]
             # depths = (depths - depths.min()) / (depths.max() - depths.min())
-            
+
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
 
@@ -1056,7 +1079,7 @@ class Runner:
                 render_mode="RGB+ED",
             )  # [1, H, W, 4]
             colors = torch.clamp(renders[0, ..., 0:3], 0.0, 1.0)  # [H, W, 3]
-            normals = renders[0, ..., 3:6]  # [H, W, 3]    
+            normals = renders[0, ..., 3:6]  # [H, W, 3]
             depths = renders[0, ..., 6:7]  # [H, W, 1]
             depths = (depths - depths.min()) / (depths.max() - depths.min())
 
@@ -1064,7 +1087,8 @@ class Runner:
             normals = (normals + 1.0) / 2.0
             # write images
             canvas = torch.cat(
-                [colors, normals, depths.repeat(1, 1, 3)], dim=0 if width > height else 1
+                [colors, normals, depths.repeat(1, 1, 3)],
+                dim=0 if width > height else 1,
             )
             canvas = (canvas.cpu().numpy() * 255).astype(np.uint8)
             canvas_all.append(canvas)
