@@ -244,9 +244,9 @@ def test_projection(test_data, calc_compensations: bool):
         (viewmats, quats, scales, means),
     )
 
-    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-2, atol=1e-2)
-    torch.testing.assert_close(v_quats, _v_quats, rtol=2e-1, atol=1e-1)
-    torch.testing.assert_close(v_scales, _v_scales, rtol=2e-1, atol=2e-1)
+    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(v_quats, _v_quats, rtol=2e-1, atol=1e-2)
+    torch.testing.assert_close(v_scales, _v_scales, rtol=1e-1, atol=2e-1)
     torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=6e-2)
 
 
@@ -421,8 +421,6 @@ def test_rasterize_to_pixels(test_data, channels: int):
         fully_fused_projection,
         isect_offset_encode,
         isect_tiles,
-        persp_proj,
-        quat_scale_to_covar_preci,
         rasterize_to_pixels,
     )
 
@@ -439,8 +437,6 @@ def test_rasterize_to_pixels(test_data, channels: int):
     C = len(Ks)
     colors = torch.randn(C, len(means), channels, device=device)
     backgrounds = torch.rand((C, colors.shape[-1]), device=device)
-
-    # covars, _ = quat_scale_to_covar_preci(quats, scales, compute_preci=False, triu=True)
 
     # Project Gaussians to 2D
     radii, means2d, depths, normals, conics, compensations = fully_fused_projection(
