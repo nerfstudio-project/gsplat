@@ -78,7 +78,7 @@ fully_fused_projection_fwd_kernel(const uint32_t C, const uint32_t N,
         scales += gid * 3;
         quat_scale_to_covar_preci<T>(glm::make_vec4(quats), glm::make_vec3(scales), &covar, nullptr);
 
-        glm::mat3 rotmat = quat_to_rotmat(glm::make_vec4(quats));
+        mat3<T> rotmat = quat_to_rotmat<T>(glm::make_vec4(quats));
         normal = rotmat[2];
     }
     mat3<T> covar_c;
