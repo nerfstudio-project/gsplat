@@ -99,9 +99,8 @@ def split(
     sel = torch.where(mask)[0]
     rest = torch.where(~mask)[0]
 
-    scales = torch.exp(params["scales"])[sel]
-    quats = F.normalize(params["quats"], dim=-1)[sel]
-    opacities = torch.sigmoid(params["opacities"])[sel]
+    scales = torch.exp(params["scales"][sel])
+    quats = F.normalize(params["quats"][sel], dim=-1)
     rotmats = normalized_quat_to_rotmat(quats)  # [N, 3, 3]
     samples = torch.einsum(
         "nij,nj,bnj->bni",
@@ -116,8 +115,8 @@ def split(
         elif name == "scales":
             p_split = torch.log(scales / 1.6).repeat(2, 1)  # [2N, 3]
         elif name == "opacities" and revised_opacity:
-            opacities = 1.0 - torch.sqrt(1.0 - opacities)
-            p_split = torch.logit(opacities).repeat(2)  # [2N]
+            new_opacities = 1.0 - torch.sqrt(1.0 - torch.sigmoid(p[sel]))
+            p_split = torch.logit(new_opacities).repeat(2)  # [2N]
         else:
             repeats = [2] + [1] * (p.dim() - 1)
             p_split = p[sel].repeat(repeats)
