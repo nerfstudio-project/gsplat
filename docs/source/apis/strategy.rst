@@ -5,7 +5,7 @@ Densification Strategy
 
 In `gsplat`, we abstract out the densification and pruning process of the Gaussian 
 training into a strategy. A strategy is a class that defines how the Gaussian parameters
-(along with their optimizers) should be updated (splitting, pruning etc) during the training. 
+(along with their optimizers) should be updated (splitting, pruning, etc.) during the training. 
 
 An example of the training workflow using :class:`DefaultStrategy` is like:
 
@@ -50,7 +50,7 @@ It is designed to work with the Guassians defined as either a Dict of
 or a
 `torch.nn.ParameterDict <https://pytorch.org/docs/stable/generated/torch.nn.ParameterDict.html>`_
 with at least the following keys: {"means", "scales", "quats", "opacities"}. On top of these attributes,
-arbitrarily number of extra attributes are supported. Besides the parameters, it also
+an arbitrary  number of extra attributes are supported. Besides the parameters, it also
 expects a Dict of `torch.optim.Optimizer <https://pytorch.org/docs/stable/optim.html>`_
 with the same keys as the parameters, and each optimizer should correspond to only
 one learnable parameter.
