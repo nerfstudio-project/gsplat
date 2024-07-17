@@ -39,14 +39,6 @@ def color_correct(img, ref, num_iters=5, eps=0.5 / 255):
             warp.append(w)
         warp = torch.stack(warp, dim=-1)
         # Apply the warp to update img_mat.
-        img_mat = torch.clip(matmul(a_mat, warp), 0, 1)
+        img_mat = torch.clip(torch.matmul(a_mat, warp), 0, 1)
     corrected_img = torch.reshape(img_mat, img.shape)
     return corrected_img
-
-
-def matmul(a, b):
-    return (a[..., None] * b[..., None, :, :]).sum(dim=-2)
-    # B,3,4,1  B,1,4,3
-
-    # cause nan when fp16
-    # return torch.matmul(a, b)

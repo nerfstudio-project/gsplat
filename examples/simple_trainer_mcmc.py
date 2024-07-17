@@ -832,7 +832,7 @@ class Runner:
 
             depths = renders[0, ..., 3:4]  # [H, W, 1]
             depths = (depths - depths.min()) / (depths.max() - depths.min())
-            # canvas_list.append(depths.repeat(1, 1, 3))
+            canvas_list.append(depths.repeat(1, 1, 3))
 
             # write images
             canvas = torch.cat(canvas_list, dim=1)
