@@ -14,8 +14,7 @@ import tyro
 import viser
 import nerfview
 from datasets.colmap import Dataset, Parser
-from datasets.traj import generate_interpolated_path
-from datasets.traj_utils import generate_spiral_path
+from datasets.traj import generate_interpolated_path, generate_spiral_path
 from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
