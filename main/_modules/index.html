@@ -2,11 +2,10 @@
 <html class="no-js" lang="en" data-content_root="../">
   <head><meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
-    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" /><link rel="next" title="Profiling" href="profile.html" /><link rel="prev" title="Utils" href="../apis/utils.html" />
+    <meta name="color-scheme" content="light dark"><link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" />
 
     <!-- Generated with Sphinx 7.4.5 and Furo 2024.05.06 -->
-        <title>Evaluation - gsplat documentation</title>
+        <title>Overview: module code - gsplat documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=387cc868" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=36a5483c" />
@@ -191,7 +190,7 @@
           <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
         </button>
       </div>
-      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+      <label class="toc-overlay-icon toc-header-icon no-toc" for="__toc">
         <div class="visually-hidden">Toggle table of contents sidebar</div>
         <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
       </label>
@@ -279,10 +278,10 @@
 <li class="toctree-l1"><a class="reference internal" href="../apis/utils.html">Utils</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tests</span></p>
-<ul class="current">
-<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Evaluation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="profile.html">Profiling</a></li>
-<li class="toctree-l1"><a class="reference internal" href="tests.html">Tests</a></li>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../tests/eval.html">Evaluation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tests/profile.html">Profiling</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tests/tests.html">Tests</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Migration</span></p>
 <ul>
@@ -307,13 +306,7 @@
           <span>Back to top</span>
         </a>
         <div class="content-icon-container">
-          <div class="view-this-page">
-  <a class="muted-link" href="../_sources/tests/eval.rst.txt" title="View this page">
-    <svg><use href="#svg-eye"></use></svg>
-    <span class="visually-hidden">View this page</span>
-  </a>
-</div>
-<div class="theme-toggle-container theme-toggle-content">
+          <div class="theme-toggle-container theme-toggle-content">
             <button class="theme-toggle">
               <div class="visually-hidden">Toggle Light / Dark / Auto color theme</div>
               <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
@@ -322,425 +315,26 @@
               <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
             </button>
           </div>
-          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+          <label class="toc-overlay-icon toc-content-icon no-toc" for="__toc">
             <div class="visually-hidden">Toggle table of contents sidebar</div>
             <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          <section id="evaluation">
-<h1>Evaluation<a class="headerlink" href="#evaluation" title="Link to this heading">¶</a></h1>
-<div class="table-wrapper docutils container" id="id1">
-<table class="docutils align-default" id="id1">
-<caption><span class="caption-text">Performance on <a class="reference external" href="https://jonbarron.info/mipnerf360/">Mip-NeRF 360 Captures</a> (Averaged Over 7 Scenes)</span><a class="headerlink" href="#id1" title="Link to this table">¶</a></caption>
-<thead>
-<tr class="row-odd"><th class="head"></th>
-<th class="head"><p>PSNR</p></th>
-<th class="head"><p>SSIM</p></th>
-<th class="head"><p>LPIPS</p></th>
-<th class="head"><p>Train Mem</p></th>
-<th class="head"><p>Train Time</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>inria-7k</p></td>
-<td><p>27.23</p></td>
-<td><p>0.829</p></td>
-<td><p>0.204</p></td>
-<td><p>7.7 GB</p></td>
-<td><p>4m05s</p></td>
-</tr>
-<tr class="row-odd"><td><p>gsplat-7k</p></td>
-<td><p>27.21</p></td>
-<td><p>0.831</p></td>
-<td><p>0.202</p></td>
-<td><p><strong>4.3GB</strong></p></td>
-<td><p><strong>5m35s</strong></p></td>
-</tr>
-<tr class="row-even"><td><p>inria-30k</p></td>
-<td><p>28.95</p></td>
-<td><p>0.870</p></td>
-<td><p>0.138</p></td>
-<td><p>9.0 GB</p></td>
-<td><p>37m13s</p></td>
-</tr>
-<tr class="row-odd"><td><p>gsplat-30k</p></td>
-<td><p>28.95</p></td>
-<td><p>0.870</p></td>
-<td><p>0.135</p></td>
-<td><p><strong>5.7 GB</strong></p></td>
-<td><p><strong>35m49s</strong></p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>This repo comes with a standalone script (<code class="code docutils literal notranslate"><span class="pre">examples/simple_trainer.py</span></code>) that reproduces
-the <a class="reference external" href="https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/">Gaussian Splatting</a> with
-exactly the same performance on PSNR, SSIM, LPIPS, and converged number of Gaussians.
-Powered by <cite>gsplat</cite>’s efficient CUDA implementation, the training takes up to
-<strong>4x less GPU memory</strong> with up to <strong>15% less time</strong> to finish than the official implementation.</p>
-<section id="trains-faster-with-less-gpu-memory">
-<h2>Trains Faster with Less GPU Memory<a class="headerlink" href="#trains-faster-with-less-gpu-memory" title="Link to this heading">¶</a></h2>
-<div class="table-wrapper docutils container">
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>Train Mem (GB)</p></th>
-<th class="head"><p>Bicycle</p></th>
-<th class="head"><p>Bonsai</p></th>
-<th class="head"><p>Counter</p></th>
-<th class="head"><p>Garden</p></th>
-<th class="head"><p>Kitchen</p></th>
-<th class="head"><p>Room</p></th>
-<th class="head"><p>Stump</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>inria-7k</p></td>
-<td><p>7.86</p></td>
-<td><p>7.61</p></td>
-<td><p>6.47</p></td>
-<td><p>8.99</p></td>
-<td><p>8.08</p></td>
-<td><p>7.88</p></td>
-<td><p>7.23</p></td>
-</tr>
-<tr class="row-odd"><td><p>gsplat-7k</p></td>
-<td><p><strong>6.10</strong></p></td>
-<td><p><strong>2.20</strong></p></td>
-<td><p><strong>1.93</strong></p></td>
-<td><p><strong>7.57</strong></p></td>
-<td><p><strong>2.89</strong></p></td>
-<td><p><strong>2.04</strong></p></td>
-<td><p><strong>6.25</strong></p></td>
-</tr>
-<tr class="row-even"><td><p>inria-30k</p></td>
-<td><p>11.56</p></td>
-<td><p>7.70</p></td>
-<td><p>6.73</p></td>
-<td><p>11.04</p></td>
-<td><p>8.33</p></td>
-<td><p>8.50</p></td>
-<td><p>8.82</p></td>
-</tr>
-<tr class="row-odd"><td><p>gsplat-30k</p></td>
-<td><p><strong>10.58</strong></p></td>
-<td><p><strong>2.29</strong></p></td>
-<td><p><strong>2.23</strong></p></td>
-<td><p><strong>9.88</strong></p></td>
-<td><p><strong>3.17</strong></p></td>
-<td><p><strong>2.79</strong></p></td>
-<td><p><strong>8.10</strong></p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<div class="table-wrapper docutils container">
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>Train Time (s)</p></th>
-<th class="head"><p>Bicycle</p></th>
-<th class="head"><p>Bonsai</p></th>
-<th class="head"><p>Counter</p></th>
-<th class="head"><p>Garden</p></th>
-<th class="head"><p>Kitchen</p></th>
-<th class="head"><p>Room</p></th>
-<th class="head"><p>Stump</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>inria-7k</p></td>
-<td><p>336</p></td>
-<td><p>340</p></td>
-<td><p>364</p></td>
-<td><p>427</p></td>
-<td><p>436</p></td>
-<td><p>336</p></td>
-<td><p>321</p></td>
-</tr>
-<tr class="row-odd"><td><p>gsplat-7k</p></td>
-<td><p><strong>319</strong></p></td>
-<td><p><strong>299</strong></p></td>
-<td><p><strong>318</strong></p></td>
-<td><p><strong>415</strong></p></td>
-<td><p><strong>389</strong></p></td>
-<td><p><strong>301</strong></p></td>
-<td><p><strong>304</strong></p></td>
-</tr>
-<tr class="row-even"><td><p>inria-30k</p></td>
-<td><p>2980</p></td>
-<td><p>1552</p></td>
-<td><p>1725</p></td>
-<td><p>3092</p></td>
-<td><p>2144</p></td>
-<td><p>1773</p></td>
-<td><p>2366</p></td>
-</tr>
-<tr class="row-odd"><td><p>gsplat-30k</p></td>
-<td><p><strong>2964</strong></p></td>
-<td><p><strong>1422</strong></p></td>
-<td><p><strong>1621</strong></p></td>
-<td><p><strong>3013</strong></p></td>
-<td><p><strong>2020</strong></p></td>
-<td><p><strong>1708</strong></p></td>
-<td><p><strong>2299</strong></p></td>
-</tr>
-</tbody>
-</table>
-</div>
-</section>
-<section id="reproduced-metrics">
-<h2>Reproduced Metrics<a class="headerlink" href="#reproduced-metrics" title="Link to this heading">¶</a></h2>
-<div class="table-wrapper docutils container">
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>PSNR</p></th>
-<th class="head"><p>Bicycle</p></th>
-<th class="head"><p>Bonsai</p></th>
-<th class="head"><p>Counter</p></th>
-<th class="head"><p>Garden</p></th>
-<th class="head"><p>Kitchen</p></th>
-<th class="head"><p>Room</p></th>
-<th class="head"><p>Stump</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>inria-7k</p></td>
-<td><p>23.59</p></td>
-<td><p>29.75</p></td>
-<td><p>27.21</p></td>
-<td><p>26.13</p></td>
-<td><p>29.02</p></td>
-<td><p>29.26</p></td>
-<td><p>25.64</p></td>
-</tr>
-<tr class="row-odd"><td><p>gsplat-7k</p></td>
-<td><p>23.71</p></td>
-<td><p>29.66</p></td>
-<td><p>27.14</p></td>
-<td><p>26.30</p></td>
-<td><p>28.86</p></td>
-<td><p>29.21</p></td>
-<td><p>25.62</p></td>
-</tr>
-<tr class="row-even"><td><p>inria-30k</p></td>
-<td><p>25.19</p></td>
-<td><p>32.21</p></td>
-<td><p>29.02</p></td>
-<td><p>27.29</p></td>
-<td><p>31.07</p></td>
-<td><p>31.31</p></td>
-<td><p>26.56</p></td>
-</tr>
-<tr class="row-odd"><td><p>gsplat-30k</p></td>
-<td><p>25.22</p></td>
-<td><p>32.06</p></td>
-<td><p>29.02</p></td>
-<td><p>27.32</p></td>
-<td><p>31.16</p></td>
-<td><p>31.36</p></td>
-<td><p>26.53</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<div class="table-wrapper docutils container">
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>SSIM</p></th>
-<th class="head"><p>Bicycle</p></th>
-<th class="head"><p>Bonsai</p></th>
-<th class="head"><p>Counter</p></th>
-<th class="head"><p>Garden</p></th>
-<th class="head"><p>Kitchen</p></th>
-<th class="head"><p>Room</p></th>
-<th class="head"><p>Stump</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>inria-7k</p></td>
-<td><p>0.662</p></td>
-<td><p>0.921</p></td>
-<td><p>0.877</p></td>
-<td><p>0.824</p></td>
-<td><p>0.902</p></td>
-<td><p>0.893</p></td>
-<td><p>0.721</p></td>
-</tr>
-<tr class="row-odd"><td><p>gsplat-7k</p></td>
-<td><p>0.668</p></td>
-<td><p>0.922</p></td>
-<td><p>0.878</p></td>
-<td><p>0.833</p></td>
-<td><p>0.902</p></td>
-<td><p>0.893</p></td>
-<td><p>0.720</p></td>
-</tr>
-<tr class="row-even"><td><p>inria-30k</p></td>
-<td><p>0.763</p></td>
-<td><p>0.941</p></td>
-<td><p>0.906</p></td>
-<td><p>0.863</p></td>
-<td><p>0.925</p></td>
-<td><p>0.918</p></td>
-<td><p>0.771</p></td>
-</tr>
-<tr class="row-odd"><td><p>gsplat-30k</p></td>
-<td><p>0.764</p></td>
-<td><p>0.941</p></td>
-<td><p>0.907</p></td>
-<td><p>0.865</p></td>
-<td><p>0.926</p></td>
-<td><p>0.918</p></td>
-<td><p>0.768</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<div class="table-wrapper docutils container">
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>LPIPS</p></th>
-<th class="head"><p>Bicycle</p></th>
-<th class="head"><p>Bonsai</p></th>
-<th class="head"><p>Counter</p></th>
-<th class="head"><p>Garden</p></th>
-<th class="head"><p>Kitchen</p></th>
-<th class="head"><p>Room</p></th>
-<th class="head"><p>Stump</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>inria-7k</p></td>
-<td><p>0.329</p></td>
-<td><p>0.164</p></td>
-<td><p>0.207</p></td>
-<td><p>0.130</p></td>
-<td><p>0.125</p></td>
-<td><p>0.219</p></td>
-<td><p>0.254</p></td>
-</tr>
-<tr class="row-odd"><td><p>gsplat-7k</p></td>
-<td><p>0.324</p></td>
-<td><p>0.162</p></td>
-<td><p>0.206</p></td>
-<td><p>0.123</p></td>
-<td><p>0.127</p></td>
-<td><p>0.217</p></td>
-<td><p>0.253</p></td>
-</tr>
-<tr class="row-even"><td><p>inria-30k</p></td>
-<td><p>0.177</p></td>
-<td><p>0.133</p></td>
-<td><p>0.157</p></td>
-<td><p>0.078</p></td>
-<td><p>0.096</p></td>
-<td><p>0.168</p></td>
-<td><p>0.155</p></td>
-</tr>
-<tr class="row-odd"><td><p>gsplat-30k</p></td>
-<td><p>0.172</p></td>
-<td><p>0.132</p></td>
-<td><p>0.154</p></td>
-<td><p>0.075</p></td>
-<td><p>0.094</p></td>
-<td><p>0.164</p></td>
-<td><p>0.153</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<div class="table-wrapper docutils container">
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>Number of GSs</p></th>
-<th class="head"><p>Bicycle</p></th>
-<th class="head"><p>Bonsai</p></th>
-<th class="head"><p>Counter</p></th>
-<th class="head"><p>Garden</p></th>
-<th class="head"><p>Kitchen</p></th>
-<th class="head"><p>Room</p></th>
-<th class="head"><p>Stump</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>inria-7k</p></td>
-<td><p>3.57M</p></td>
-<td><p>1.16M</p></td>
-<td><p>1.01M</p></td>
-<td><p>4.33M</p></td>
-<td><p>1.63M</p></td>
-<td><p>1.11M</p></td>
-<td><p>3.75M</p></td>
-</tr>
-<tr class="row-odd"><td><p>gsplat-7k</p></td>
-<td><p>3.62M</p></td>
-<td><p>1.17M</p></td>
-<td><p>1.02M</p></td>
-<td><p>4.48M</p></td>
-<td><p>1.63M</p></td>
-<td><p>1.11M</p></td>
-<td><p>3.71M</p></td>
-</tr>
-<tr class="row-even"><td><p>inria-30k</p></td>
-<td><p>6.06M</p></td>
-<td><p>1.24M</p></td>
-<td><p>1.19M</p></td>
-<td><p>5.71M</p></td>
-<td><p>1.78M</p></td>
-<td><p>1.55M</p></td>
-<td><p>4.82M</p></td>
-</tr>
-<tr class="row-odd"><td><p>gsplat-30k</p></td>
-<td><p>6.26M</p></td>
-<td><p>1.25M</p></td>
-<td><p>1.21M</p></td>
-<td><p>5.84M</p></td>
-<td><p>1.79M</p></td>
-<td><p>1.59M</p></td>
-<td><p>4.81M</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>Note: Evaluations are conducted on a NVIDIA TITAN RTX GPU. The LPIPS metric is evaluated
-using <code class="code docutils literal notranslate"><span class="pre">from</span> <span class="pre">torchmetrics.image.lpip</span> <span class="pre">import</span> <span class="pre">LearnedPerceptualImagePatchSimilarity</span></code>, which
-is different from what’s reported in the original paper that uses
-<code class="code docutils literal notranslate"><span class="pre">from</span> <span class="pre">lpipsPyTorch</span> <span class="pre">import</span> <span class="pre">lpips</span></code>.</p>
-<p>The evaluation of <cite>gsplat-X</cite> can be reproduced with the command
-<code class="code docutils literal notranslate"><span class="pre">cd</span> <span class="pre">examples;</span> <span class="pre">bash</span> <span class="pre">benchmark.sh</span></code>
-within the gsplat repo (commit 6acdce4).</p>
-<p>The evaluation of <cite>inria-X</cite> can be
-reproduced with our forked wersion of the official implementation at
-<a class="reference external" href="https://github.com/liruilong940607/gaussian-splatting/tree/benchmark">here</a>,
-with the command <code class="code docutils literal notranslate"><span class="pre">python</span> <span class="pre">full_eval_m360.py</span></code> (commit 36546ce).</p>
-</section>
-</section>
-
+          <h1>All modules for which code is available</h1>
+<ul><li><a href="gsplat/cuda/_torch_impl.html">gsplat.cuda._torch_impl</a></li>
+<li><a href="gsplat/cuda/_wrapper.html">gsplat.cuda._wrapper</a></li>
+<li><a href="gsplat/rendering.html">gsplat.rendering</a></li>
+<li><a href="gsplat/strategy/default.html">gsplat.strategy.default</a></li>
+<li><a href="gsplat/strategy/mcmc.html">gsplat.strategy.mcmc</a></li>
+</ul>
         </article>
       </div>
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="profile.html">
-              <div class="page-info">
-                <div class="context">
-                  <span>Next</span>
-                </div>
-                <div class="title">Profiling</div>
-              </div>
-              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
-            </a>
-          <a class="prev-page" href="../apis/utils.html">
-              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
-              <div class="page-info">
-                <div class="context">
-                  <span>Previous</span>
-                </div>
-                
-                <div class="title">Utils</div>
-                
-              </div>
-            </a>
+          
+          
         </div>
         <div class="bottom-of-page">
           <div class="left-details">
@@ -759,28 +353,8 @@ with the command <code class="code docutils literal notranslate"><span class="pr
         
       </footer>
     </div>
-    <aside class="toc-drawer">
+    <aside class="toc-drawer no-toc">
       
-      
-      <div class="toc-sticky toc-scroll">
-        <div class="toc-title-container">
-          <span class="toc-title">
-            On this page
-          </span>
-        </div>
-        <div class="toc-tree-container">
-          <div class="toc-tree">
-            <ul>
-<li><a class="reference internal" href="#">Evaluation</a><ul>
-<li><a class="reference internal" href="#trains-faster-with-less-gpu-memory">Trains Faster with Less GPU Memory</a></li>
-<li><a class="reference internal" href="#reproduced-metrics">Reproduced Metrics</a></li>
-</ul>
-</li>
-</ul>
-
-          </div>
-        </div>
-      </div>
       
       
     </aside>
