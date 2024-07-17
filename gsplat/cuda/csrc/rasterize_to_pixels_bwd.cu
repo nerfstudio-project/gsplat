@@ -58,7 +58,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     }
 
     // when the mask is provided, do nothing and return if
-    // this tile is labeled as not local
+    // this tile is labeled as False
     if (masks != nullptr && !masks[tile_id]) {
         return;
     }
