@@ -5,7 +5,7 @@
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="index" title="Index" href="genindex.html" /><link rel="search" title="Search" href="search.html" /><link rel="next" title="Fit a COLMAP Capture" href="examples/colmap.html" />
 
-    <!-- Generated with Sphinx 7.3.7 and Furo 2024.05.06 -->
+    <!-- Generated with Sphinx 7.4.5 and Furo 2024.05.06 -->
         <title>gsplat documentation</title>
       <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=387cc868" />
@@ -275,6 +275,7 @@
 <p class="caption" role="heading"><span class="caption-text">Python API</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="apis/rasterization.html">Rasterization</a></li>
+<li class="toctree-l1"><a class="reference internal" href="apis/strategy.html">Densification Strategy</a></li>
 <li class="toctree-l1"><a class="reference internal" href="apis/utils.html">Utils</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tests</span></p>
@@ -338,13 +339,13 @@
 Real-Time Rendering of Radiance Fields” <span id="id1">[<a class="reference internal" href="#id3" title="Bernhard Kerbl, Georgios Kopanas, Thomas Leimkühler, and George Drettakis. 3d gaussian splatting for real-time radiance field rendering. ACM Transactions on Graphics, July 2023. URL: https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/.">1</a>]</span>, but we’ve made <em>gsplat</em> even
 faster, more memory efficient, and with a growing list of new features!</p>
 <ul class="simple">
-<li><p><em>gsplat</em> is developed with efficiency in mind. Comparing to the <a class="reference external" href="https://github.com/graphdeco-inria/gaussian-splatting">official implementation</a>, <em>gsplat</em> enables up to <strong>4x less training memory footprint</strong>, and up to <strong>2x less training time</strong> on Mip-NeRF 360 captures, and potential more on larger scenes. See <a class="reference internal" href="tests/eval.html"><span class="doc">Evaluation</span></a> for details.</p></li>
+<li><p><em>gsplat</em> is developed with efficiency in mind. Comparing to the <a class="reference external" href="https://github.com/graphdeco-inria/gaussian-splatting">official implementation</a>, <em>gsplat</em> enables up to <strong>4x less training memory footprint</strong>, and up to <strong>15% less training time</strong> on Mip-NeRF 360 captures, and potential more on larger scenes. See <a class="reference internal" href="tests/eval.html"><span class="doc">Evaluation</span></a> for details.</p></li>
 <li><p><em>gsplat</em> is designed to <strong>support extremely large scene rendering</strong>, which is magnitudes faster than the official CUDA backend <a class="reference external" href="https://github.com/graphdeco-inria/diff-gaussian-rasterization">diff-gaussian-rasterization</a>. See <a class="reference internal" href="examples/large_scale.html"><span class="doc">Render a Large Scene</span></a> for an example.</p></li>
 <li><p><em>gsplat</em> offers many extra features, including <strong>batch rasterization</strong>,  <strong>N-D feature rendering</strong>, <strong>depth rendering</strong>, <strong>sparse gradient</strong> etc. See <a class="reference internal" href="apis/rasterization.html"><span class="doc">Rasterization</span></a> for details.</p></li>
 <li><p><em>gsplat</em> is equipped with the <strong>latest and greatest</strong> 3D Gaussian Splatting techniques, including <a class="reference external" href="https://ty424.github.io/AbsGS.github.io/">absgrad</a>, <a class="reference external" href="https://niujinshuchong.github.io/mip-splatting/">anti-aliasing</a> etc. And more to come!</p></li>
 </ul>
 <div style="position:relative; padding-bottom:56.25%; height:0; width:100%">
-   <iframe style="position:absolute; top:0; left:0; width:100%; height:100%" src="https://www.youtube.com/embed/G4SmXplWIrY?si=t1zLvrpvPyjB2n52" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+   <iframe style="position:absolute; top:0; left:0; width:100%; height:100%" src="https://www.youtube.com/embed/d5vOUYm5k34?si=fQBdwPgoi0FZOSyD" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
 </div></section>
 <section id="installation">
 <h2>Installation<a class="headerlink" href="#installation" title="Link to this heading">¶</a></h2>
@@ -395,6 +396,7 @@ to feedback, bug-reports, and improvements to help expand the capabilities of th
 <p class="caption" role="heading"><span class="caption-text">Python API</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="apis/rasterization.html">Rasterization</a></li>
+<li class="toctree-l1"><a class="reference internal" href="apis/strategy.html">Densification Strategy</a></li>
 <li class="toctree-l1"><a class="reference internal" href="apis/utils.html">Utils</a></li>
 </ul>
 </div>
