@@ -205,7 +205,6 @@ def relocate(
     state: Dict[str, Tensor],
     mask: Tensor,
     binoms: Tensor,
-    n_max: int,
     min_opacity: float = 0.005,
 ):
     """Inplace relocate some dead Gaussians to the lives ones.
@@ -231,7 +230,6 @@ def relocate(
         scales=torch.exp(params["scales"])[sampled_idxs],
         ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
         binoms=binoms,
-        n_max=n_max,
     )
     new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
 
@@ -261,7 +259,6 @@ def sample_add(
     state: Dict[str, Tensor],
     n: int,
     binoms: Tensor,
-    n_max: int,
     min_opacity: float = 0.005,
 ):
     opacities = torch.sigmoid(params["opacities"])
@@ -274,7 +271,6 @@ def sample_add(
         scales=torch.exp(params["scales"])[sampled_idxs],
         ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
         binoms=binoms,
-        n_max=n_max,
     )
     new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
 

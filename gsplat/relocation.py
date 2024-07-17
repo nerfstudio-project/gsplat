@@ -1,7 +1,5 @@
-import math
 from typing import Tuple
 
-import torch
 from torch import Tensor
 
 from .cuda._wrapper import _make_lazy_cuda_func
@@ -25,6 +23,8 @@ def compute_relocation(
         opacities: The opacities of the Gaussians. [N]
         scales: The scales of the Gaussians. [N, 3]
         ratios: The relative frequencies for each of the Gaussians. [N]
+        binoms: Precomputed lookup table for binomial coefficients used in
+          Equation 9 in the paper. [n_max, n_max]
 
     Returns:
         A tuple:
@@ -33,6 +33,7 @@ def compute_relocation(
         **new_scales**: The scales of the Gaussians. [N, 3]
     """
     N = opacities.shape[0]
+    n_max, _ = binoms.shape
     assert scales.shape == (N, 3), scales.shape
     assert ratios.shape == (N,), ratios.shape
     opacities = opacities.contiguous()
