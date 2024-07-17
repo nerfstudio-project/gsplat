@@ -1,9 +1,8 @@
 import math
 from dataclasses import dataclass
-from typing import Any, Callable, DefaultDict, Dict, List, Tuple, Union
+from typing import Any, Dict, Union
 
 import torch
-import torch.nn.functional as F
 from torch import Tensor
 
 from .base import Strategy

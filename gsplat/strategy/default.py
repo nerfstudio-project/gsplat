@@ -1,11 +1,7 @@
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, Tuple, Union
 
 import torch
-import torch.nn.functional as F
-from torch import Tensor
-
-from gsplat.utils import normalized_quat_to_rotmat
 
 from .base import Strategy
 from .ops import duplicate, remove, reset_opa, split
