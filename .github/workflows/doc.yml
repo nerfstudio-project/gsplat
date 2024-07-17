@@ -68,6 +68,7 @@ jobs:
       # This will be useful for dynamically generating lists of possible doc links.
       - name: Update versions index.txt
         run: |
+          git fetch
           git checkout .  # Revert change to version.py from earlier...
           git checkout gh-pages
           git pull
