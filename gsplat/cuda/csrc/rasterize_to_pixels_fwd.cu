@@ -73,7 +73,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     int32_t range_end =
         (camera_id == C - 1) && (tile_id == tile_width * tile_height - 1)
             ? n_isects
-            : tile_offsets[tile_id + 1];A
+            : tile_offsets[tile_id + 1];
     const uint32_t block_size = block.size();
     uint32_t num_batches = (range_end - range_start + block_size - 1) / block_size;
 
