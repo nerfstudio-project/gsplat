@@ -746,7 +746,8 @@ class Runner:
             # write images
             canvas = torch.cat([pixels, colors], dim=2).squeeze(0).cpu().numpy()
             imageio.imwrite(
-                f"{self.render_dir}/val_{i:04d}.png", (canvas * 255).astype(np.uint8)
+                f"{self.render_dir}/val_step{step:04d}_{i:04d}.png",
+                (canvas * 255).astype(np.uint8),
             )
 
             pixels = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
@@ -828,13 +829,14 @@ class Runner:
                 render_mode="RGB+ED",
             )  # [1, H, W, 4]
             colors = torch.clamp(renders[0, ..., 0:3], 0.0, 1.0)  # [H, W, 3]
+            canvas_list = [colors]
+
             depths = renders[0, ..., 3:4]  # [H, W, 1]
             depths = (depths - depths.min()) / (depths.max() - depths.min())
+            # canvas_list.append(depths.repeat(1, 1, 3))
 
             # write images
-            canvas = torch.cat(
-                [colors, depths.repeat(1, 1, 3)], dim=0 if width > height else 1
-            )
+            canvas = torch.cat(canvas_list, dim=1)
             canvas = (canvas.cpu().numpy() * 255).astype(np.uint8)
             canvas_all.append(canvas)
 
