@@ -111,7 +111,7 @@ def rasterization(
 
     Args:
         means: The 3D centers of the Gaussians. [N, 3]
-        quats: The quaternions of the Gaussians. It's not required to be normalized. [N, 4]
+        quats: The quaternions of the Gaussians (wxyz convension). It's not required to be normalized. [N, 4]
         scales: The scales of the Gaussians. [N, 3]
         opacities: The opacities of the Gaussians. [N]
         colors: The colors of the Gaussians. [(C,) N, D] or [(C,) N, K, 3] for SH coefficients.
@@ -398,6 +398,7 @@ def rasterization(
         "width": width,
         "height": height,
         "tile_size": tile_size,
+        "n_cameras": C,
     }
     return render_colors, render_alphas, meta
 
