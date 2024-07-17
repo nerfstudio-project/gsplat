@@ -287,6 +287,7 @@ class Runner:
             grow_grad2d=cfg.grow_grad2d,
             grow_scale3d=cfg.grow_scale3d,
             prune_scale3d=cfg.prune_scale3d,
+            # refine_scale2d_stop_iter=4000, # splatfacto behavior
             refine_start_iter=cfg.refine_start_iter,
             refine_stop_iter=cfg.refine_stop_iter,
             reset_every=cfg.reset_every,

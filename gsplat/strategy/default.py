@@ -30,20 +30,28 @@ class DefaultStrategy(Strategy):
     with `absgrad=True` as well so that the absolute gradients are computed.
 
     Args:
-        scene_scale (float): The scale of the scene for calibrating the scale-related logic. Default is 1.0.
+        scene_scale (float): The scale of the scene for calibrating the scale-related
+          logic. Default is 1.0.
         prune_opa (float): GSs with opacity below this value will be pruned. Default is 0.005.
         grow_grad2d (float): GSs with image plane gradient above this value will be
-            split/duplicated. Default is 0.0002.
-        grow_scale3d (float): GSs with scale below this value will be duplicated. Above
-            will be split. Default is 0.01.
-        prune_scale3d (float): GSs with scale above this value will be pruned. Default is 0.1.
+          split/duplicated. Default is 0.0002.
+        grow_scale3d (float): GSs with 3d scale (normalized by scene_scale) below this
+          value will be duplicated. Above will be split. Default is 0.01.
+        grow_scale2d (float): GSs with 2d scale (normalized by image resolution) above
+          this value will be split. Default is 0.05.
+        prune_scale3d (float): GSs with 3d scale (normalized by scene_scale) above this
+          value will be pruned. Default is 0.1.
+        prune_scale2d (float): GSs with 2d scale (normalized by image resolution) above
+          this value will be pruned. Default is 0.15.
+        refine_scale2d_stop_iter (int): Stop refining GSs based on 2d scale after this
+          iteration. Default is 0. Set to a positive value to enable this feature.
         refine_start_iter (int): Start refining GSs after this iteration. Default is 500.
         refine_stop_iter (int): Stop refining GSs after this iteration. Default is 15_000.
         reset_every (int): Reset opacities every this steps. Default is 3000.
         refine_every (int): Reine GSs every this steps. Default is 100.
         absgrad (bool): Use absolute gradients for GS splitting. Default is False.
         revised_opacity (bool): Whether to use revised opacity heuristic from
-            arXiv:2404.06109 (experimental). Default is False.
+          arXiv:2404.06109 (experimental). Default is False.
         verbose (bool): Whether to print verbose information. Default is False.
 
     Examples:
@@ -67,7 +75,10 @@ class DefaultStrategy(Strategy):
     prune_opa: float = 0.005
     grow_grad2d: float = 0.0002
     grow_scale3d: float = 0.01
+    grow_scale2d: float = 0.05
     prune_scale3d: float = 0.1
+    prune_scale2d: float = 0.15
+    refine_scale2d_stop_iter: int = 0
     refine_start_iter: int = 500
     refine_stop_iter: int = 15_000
     reset_every: int = 3000
@@ -86,7 +97,11 @@ class DefaultStrategy(Strategy):
         # put them on the correct device.
         # - grad2d: running accum of the norm of the image plane gradients for each GS.
         # - count: running accum of how many time each GS is visible.
-        return {"grad2d": None, "count": None}
+        # - radii: the radii of the GSs (normalized by the image resolution).
+        state = {"grad2d": None, "count": None}
+        if self.refine_scale2d_stop_iter > 0:
+            state["radii"] = None
+        return state
 
     def check_sanity(
         self,
@@ -145,7 +160,7 @@ class DefaultStrategy(Strategy):
 
         if step > self.refine_start_iter and step % self.refine_every == 0:
             # grow GSs
-            n_dupli, n_split = self._grow_gs(params, optimizers, state)
+            n_dupli, n_split = self._grow_gs(params, optimizers, state, step)
             if self.verbose:
                 print(
                     f"Step {step}: {n_dupli} GSs duplicated, {n_split} GSs split. "
@@ -197,22 +212,32 @@ class DefaultStrategy(Strategy):
             state["grad2d"] = torch.zeros(n_gaussian, device=grads.device)
         if state["count"] is None:
             state["count"] = torch.zeros(n_gaussian, device=grads.device)
+        if self.refine_scale2d_stop_iter > 0 and state["radii"] is None:
+            assert "radii" in info, "radii is required but missing."
+            state["radii"] = torch.zeros(n_gaussian, device=grads.device)
 
         # update the running state
         if packed:
             # grads is [nnz, 2]
             gs_ids = info["gaussian_ids"]  # [nnz]
-            state["grad2d"].index_add_(0, gs_ids, grads.norm(dim=-1))
-            state["count"].index_add_(
-                0, gs_ids, torch.ones_like(gs_ids, dtype=torch.float32)
-            )
+            radii = info["radii"]  # [nnz]
         else:
             # grads is [C, N, 2]
             sel = info["radii"] > 0.0  # [C, N]
             gs_ids = torch.where(sel)[1]  # [nnz]
-            state["grad2d"].index_add_(0, gs_ids, grads[sel].norm(dim=-1))
-            state["count"].index_add_(
-                0, gs_ids, torch.ones_like(gs_ids, dtype=torch.float32)
+            grads = grads[sel]  # [nnz, 2]
+            radii = info["radii"][sel]  # [nnz]
+
+        state["grad2d"].index_add_(0, gs_ids, grads.norm(dim=-1))
+        state["count"].index_add_(
+            0, gs_ids, torch.ones_like(gs_ids, dtype=torch.float32)
+        )
+        if self.refine_scale2d_stop_iter > 0:
+            # Should be ideally using scatter max
+            state["radii"][gs_ids] = torch.maximum(
+                state["radii"][gs_ids],
+                # normalize radii to [0, 1] screen space
+                radii / float(max(info["width"], info["height"])),
             )
 
     @torch.no_grad()
@@ -221,6 +246,7 @@ class DefaultStrategy(Strategy):
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
         state: Dict[str, Any],
+        step: int,
     ) -> Tuple[int, int]:
         count = state["count"]
         grads = state["grad2d"] / count.clamp_min(1)
@@ -234,19 +260,25 @@ class DefaultStrategy(Strategy):
         is_dupli = is_grad_high & is_small
         n_dupli = is_dupli.sum().item()
 
+        is_large = ~is_small
+        if step < self.refine_scale2d_stop_iter:
+            is_large |= state["radii"] > self.grow_scale2d
+        is_split = is_grad_high & is_large
+        n_split = is_split.sum().item()
+
+        # first duplicate
         if n_dupli > 0:
             duplicate(params=params, optimizers=optimizers, state=state, mask=is_dupli)
 
-        is_split = is_grad_high & ~is_small
+        # new GSs added by duplication will not be split
         is_split = torch.cat(
             [
                 is_split,
-                # new GSs added by duplication will not be split
                 torch.zeros(n_dupli, dtype=torch.bool, device=device),
             ]
         )
 
-        n_split = is_split.sum().item()
+        # then split
         if n_split > 0:
             split(
                 params=params,
@@ -267,13 +299,18 @@ class DefaultStrategy(Strategy):
     ) -> int:
         is_prune = torch.sigmoid(params["opacities"]) < self.prune_opa
         if step > self.reset_every:
-            # The official code also implements sreen-size pruning but
-            # it's actually not being used due to a bug:
-            # https://github.com/graphdeco-inria/gaussian-splatting/issues/123
             is_too_big = (
                 torch.exp(params["scales"]).max(dim=-1).values
                 > self.prune_scale3d * self.scene_scale
             )
+            # The official code also implements sreen-size pruning but
+            # it's actually not being used due to a bug:
+            # https://github.com/graphdeco-inria/gaussian-splatting/issues/123
+            # We implement it here for completeness but set `refine_scale2d_stop_iter`
+            # to 0 by default to disable it.
+            if step < self.refine_scale2d_stop_iter:
+                is_too_big |= state["radii"] > self.prune_scale2d
+
             is_prune = is_prune | is_too_big
 
         n_prune = is_prune.sum().item()
