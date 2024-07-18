@@ -116,9 +116,7 @@ class MCMCStrategy(Strategy):
         """
         # move to the correct device
         state["binoms"] = state["binoms"].to(params["means"].device)
-
         binoms = state["binoms"]
-        n_max = state["n_max"]
 
         if (
             step < self.refine_stop_iter
@@ -126,12 +124,12 @@ class MCMCStrategy(Strategy):
             and step % self.refine_every == 0
         ):
             # teleport GSs
-            n_relocated_gs = self._relocate_gs(params, optimizers, binoms, n_max)
+            n_relocated_gs = self._relocate_gs(params, optimizers, binoms)
             if self.verbose:
                 print(f"Step {step}: Relocated {n_relocated_gs} GSs.")
 
             # add new GSs
-            n_new_gs = self._add_new_gs(params, optimizers, binoms, n_max)
+            n_new_gs = self._add_new_gs(params, optimizers, binoms)
             if self.verbose:
                 print(
                     f"Step {step}: Added {n_new_gs} GSs. "
