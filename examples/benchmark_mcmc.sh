@@ -4,13 +4,13 @@
 # SCENE_LIST="garden bicycle stump treehill flowers bonsai counter kitchen room"
 # RENDER_TRAJ_PATH="ellipse"
 
-# SCENE_FOLDER="data/bilarf/bilarf_data/testscenes"
-# SCENE_LIST="chinesearch lionpavilion pondbike statue strat building"
-# RENDER_TRAJ_PATH="spiral"
-
-SCENE_FOLDER="data/bilarf/bilarf_data/editscenes"
-SCENE_LIST="rawnerf_windowlegovary rawnerf_sharpshadow scibldg"
+SCENE_FOLDER="data/bilarf/bilarf_data/testscenes"
+SCENE_LIST="chinesearch lionpavilion pondbike statue strat building"
 RENDER_TRAJ_PATH="spiral"
+
+# SCENE_FOLDER="data/bilarf/bilarf_data/editscenes"
+# SCENE_LIST="rawnerf_windowlegovary rawnerf_sharpshadow scibldg"
+# RENDER_TRAJ_PATH="spiral"
 
 for SCENE in $SCENE_LIST;
 do
