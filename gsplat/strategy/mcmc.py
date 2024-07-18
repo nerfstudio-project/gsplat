@@ -151,7 +151,6 @@ class MCMCStrategy(Strategy):
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
         binoms: Tensor,
-        n_max: int,
     ) -> int:
         opacities = torch.sigmoid(params["opacities"])
         dead_mask = opacities <= self.min_opacity
@@ -163,7 +162,6 @@ class MCMCStrategy(Strategy):
                 state={},
                 mask=dead_mask,
                 binoms=binoms,
-                n_max=n_max,
                 min_opacity=self.min_opacity,
             )
         return n_gs
@@ -174,7 +172,6 @@ class MCMCStrategy(Strategy):
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
         binoms: Tensor,
-        n_max: int,
     ) -> int:
         current_n_points = len(params["means"])
         n_target = min(self.cap_max, int(1.05 * current_n_points))
@@ -186,7 +183,6 @@ class MCMCStrategy(Strategy):
                 state={},
                 n=n_gs,
                 binoms=binoms,
-                n_max=n_max,
                 min_opacity=self.min_opacity,
             )
         return n_gs
