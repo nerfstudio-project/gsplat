@@ -24,8 +24,8 @@ from utils import AppearanceOptModule, CameraOptModule, set_random_seed
 
 from gsplat.rendering import rasterization
 from gsplat.strategy import MCMCStrategy
-from gsplat.utils.lib_bilagrid import BilateralGrid, slice
-from gsplat.utils.color_utils import color_correct
+from gsplat.util.lib_bilagrid import BilateralGrid, slice
+from gsplat.util.color_utils import color_correct
 
 
 @dataclass
