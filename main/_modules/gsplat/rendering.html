@@ -4,11 +4,11 @@
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <meta name="color-scheme" content="light dark"><link rel="index" title="Index" href="../../genindex.html" /><link rel="search" title="Search" href="../../search.html" />
 
-    <!-- Generated with Sphinx 7.4.5 and Furo 2024.05.06 -->
+    <!-- Generated with Sphinx 7.4.6 and Furo 2024.07.18 -->
         <title>gsplat.rendering - gsplat documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
-    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=387cc868" />
-    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=36a5483c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=613ab9ff" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=302659d7" />
     
     
 
@@ -87,19 +87,6 @@
       <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
     </svg>
   </symbol>
-  <symbol id="svg-sun-half" viewBox="0 0 24 24">
-    <title>Auto light/dark mode</title>
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-shadow">
-      <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
-      <circle cx="12" cy="12" r="9" />
-      <path d="M13 12h5" />
-      <path d="M13 15h4" />
-      <path d="M13 18h1" />
-      <path d="M13 9h4" />
-      <path d="M13 6h1" />
-    </svg>
-  </symbol>
   <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
     <title>Auto light/dark, in light mode</title>
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -140,7 +127,7 @@
       <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
       <path d="M13.5 6.5l4 4" />
       <path d="M20 21l2 -2l-2 -2" />
-      <path d="M17 17l-2 2l2 2" /
+      <path d="M17 17l-2 2l2 2" />
     </svg>
   </symbol>
   <symbol id="svg-eye" viewBox="0 0 24 24">
@@ -730,6 +717,222 @@
 
 
 
+<span class="k">def</span> <span class="nf">_rasterization</span><span class="p">(</span>
+    <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
+    <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 4]</span>
+    <span class="n">scales</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
+    <span class="n">opacities</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N]</span>
+    <span class="n">colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [(C,) N, D] or [(C,) N, K, 3]</span>
+    <span class="n">viewmats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, 4, 4]</span>
+    <span class="n">Ks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, 3, 3]</span>
+    <span class="n">width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">near_plane</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.01</span><span class="p">,</span>
+    <span class="n">far_plane</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e10</span><span class="p">,</span>
+    <span class="n">eps2d</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.3</span><span class="p">,</span>
+    <span class="n">sh_degree</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">16</span><span class="p">,</span>
+    <span class="n">backgrounds</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">render_mode</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;RGB&quot;</span><span class="p">,</span> <span class="s2">&quot;D&quot;</span><span class="p">,</span> <span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;RGB&quot;</span><span class="p">,</span>
+    <span class="n">rasterize_mode</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;classic&quot;</span><span class="p">,</span> <span class="s2">&quot;antialiased&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;classic&quot;</span><span class="p">,</span>
+    <span class="n">channel_chunk</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">32</span><span class="p">,</span>
+    <span class="n">batch_per_iter</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">100</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Dict</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;A version of rasterization() that utilies on PyTorch&#39;s autograd.</span>
+
+<span class="sd">    .. note::</span>
+<span class="sd">        This function still relies on gsplat&#39;s CUDA backend for some computation, but the</span>
+<span class="sd">        entire differentiable graph is on of PyTorch (and nerfacc) so could use Pytorch&#39;s</span>
+<span class="sd">        autograd for backpropagation.</span>
+
+<span class="sd">    .. note::</span>
+<span class="sd">        This function relies on installing latest nerfacc, via:</span>
+<span class="sd">        pip install git+https://github.com/nerfstudio-project/nerfacc</span>
+
+<span class="sd">    .. note::</span>
+<span class="sd">        Compared to rasterization(), this function does not support some arguments such as</span>
+<span class="sd">        `packed`, `sparse_grad` and `absgrad`.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="kn">from</span> <span class="nn">gsplat.cuda._torch_impl</span> <span class="kn">import</span> <span class="p">(</span>
+        <span class="n">_fully_fused_projection</span><span class="p">,</span>
+        <span class="n">_quat_scale_to_covar_preci</span><span class="p">,</span>
+        <span class="n">_rasterize_to_pixels</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="n">N</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">C</span> <span class="o">=</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="k">assert</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">assert</span> <span class="n">quats</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">quats</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">assert</span> <span class="n">scales</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">scales</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">assert</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">N</span><span class="p">,),</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">assert</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">assert</span> <span class="n">Ks</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">Ks</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">assert</span> <span class="n">render_mode</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;RGB&quot;</span><span class="p">,</span> <span class="s2">&quot;D&quot;</span><span class="p">,</span> <span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">],</span> <span class="n">render_mode</span>
+
+    <span class="k">if</span> <span class="n">sh_degree</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="c1"># treat colors as post-activation values, should be in shape [N, D] or [C, N, D]</span>
+        <span class="k">assert</span> <span class="p">(</span><span class="n">colors</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="mi">2</span> <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="n">N</span><span class="p">)</span> <span class="ow">or</span> <span class="p">(</span>
+            <span class="n">colors</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="mi">3</span> <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">)</span>
+        <span class="p">),</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="c1"># treat colors as SH coefficients, should be in shape [N, K, 3] or [C, N, K, 3]</span>
+        <span class="c1"># Allowing for activating partial SH bands</span>
+        <span class="k">assert</span> <span class="p">(</span>
+            <span class="n">colors</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="mi">3</span> <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="n">N</span> <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="mi">3</span>
+        <span class="p">)</span> <span class="ow">or</span> <span class="p">(</span>
+            <span class="n">colors</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="mi">4</span> <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">)</span> <span class="ow">and</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span> <span class="o">==</span> <span class="mi">3</span>
+        <span class="p">),</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="p">(</span><span class="n">sh_degree</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span> <span class="o">&lt;=</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">],</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span>
+
+    <span class="c1"># Project Gaussians to 2D.</span>
+    <span class="c1"># The results are with shape [C, N, ...]. Only the elements with radii &gt; 0 are valid.</span>
+    <span class="n">covars</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">_quat_scale_to_covar_preci</span><span class="p">(</span><span class="n">quats</span><span class="p">,</span> <span class="n">scales</span><span class="p">,</span> <span class="kc">True</span><span class="p">,</span> <span class="kc">False</span><span class="p">,</span> <span class="n">triu</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+    <span class="n">radii</span><span class="p">,</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">depths</span><span class="p">,</span> <span class="n">conics</span><span class="p">,</span> <span class="n">compensations</span> <span class="o">=</span> <span class="n">_fully_fused_projection</span><span class="p">(</span>
+        <span class="n">means</span><span class="p">,</span>
+        <span class="n">covars</span><span class="p">,</span>
+        <span class="n">viewmats</span><span class="p">,</span>
+        <span class="n">Ks</span><span class="p">,</span>
+        <span class="n">width</span><span class="p">,</span>
+        <span class="n">height</span><span class="p">,</span>
+        <span class="n">eps2d</span><span class="o">=</span><span class="n">eps2d</span><span class="p">,</span>
+        <span class="n">near_plane</span><span class="o">=</span><span class="n">near_plane</span><span class="p">,</span>
+        <span class="n">far_plane</span><span class="o">=</span><span class="n">far_plane</span><span class="p">,</span>
+        <span class="n">calc_compensations</span><span class="o">=</span><span class="p">(</span><span class="n">rasterize_mode</span> <span class="o">==</span> <span class="s2">&quot;antialiased&quot;</span><span class="p">),</span>
+    <span class="p">)</span>
+    <span class="n">opacities</span> <span class="o">=</span> <span class="n">opacities</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>  <span class="c1"># [C, N]</span>
+    <span class="n">camera_ids</span><span class="p">,</span> <span class="n">gaussian_ids</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
+
+    <span class="k">if</span> <span class="n">compensations</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">opacities</span> <span class="o">=</span> <span class="n">opacities</span> <span class="o">*</span> <span class="n">compensations</span>
+
+    <span class="c1"># Identify intersecting tiles</span>
+    <span class="n">tile_width</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="n">width</span> <span class="o">/</span> <span class="nb">float</span><span class="p">(</span><span class="n">tile_size</span><span class="p">))</span>
+    <span class="n">tile_height</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="n">height</span> <span class="o">/</span> <span class="nb">float</span><span class="p">(</span><span class="n">tile_size</span><span class="p">))</span>
+    <span class="n">tiles_per_gauss</span><span class="p">,</span> <span class="n">isect_ids</span><span class="p">,</span> <span class="n">flatten_ids</span> <span class="o">=</span> <span class="n">isect_tiles</span><span class="p">(</span>
+        <span class="n">means2d</span><span class="p">,</span>
+        <span class="n">radii</span><span class="p">,</span>
+        <span class="n">depths</span><span class="p">,</span>
+        <span class="n">tile_size</span><span class="p">,</span>
+        <span class="n">tile_width</span><span class="p">,</span>
+        <span class="n">tile_height</span><span class="p">,</span>
+        <span class="n">packed</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+        <span class="n">n_cameras</span><span class="o">=</span><span class="n">C</span><span class="p">,</span>
+        <span class="n">camera_ids</span><span class="o">=</span><span class="n">camera_ids</span><span class="p">,</span>
+        <span class="n">gaussian_ids</span><span class="o">=</span><span class="n">gaussian_ids</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">isect_offsets</span> <span class="o">=</span> <span class="n">isect_offset_encode</span><span class="p">(</span><span class="n">isect_ids</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">tile_width</span><span class="p">,</span> <span class="n">tile_height</span><span class="p">)</span>
+
+    <span class="c1"># Turn colors into [C, N, D] or [nnz, D] to pass into rasterize_to_pixels()</span>
+    <span class="k">if</span> <span class="n">sh_degree</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="c1"># Colors are post-activation values, with shape [N, D] or [C, N, D]</span>
+        <span class="k">if</span> <span class="n">colors</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="c1"># Turn [N, D] into [C, N, D]</span>
+            <span class="n">colors</span> <span class="o">=</span> <span class="n">colors</span><span class="o">.</span><span class="n">expand</span><span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># colors is already [C, N, D]</span>
+            <span class="k">pass</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="c1"># Colors are SH coefficients, with shape [N, K, 3] or [C, N, K, 3]</span>
+        <span class="n">camtoworlds</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">inverse</span><span class="p">(</span><span class="n">viewmats</span><span class="p">)</span>  <span class="c1"># [C, 4, 4]</span>
+        <span class="n">dirs</span> <span class="o">=</span> <span class="n">means</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:,</span> <span class="p">:]</span> <span class="o">-</span> <span class="n">camtoworlds</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>  <span class="c1"># [C, N, 3]</span>
+        <span class="n">masks</span> <span class="o">=</span> <span class="n">radii</span> <span class="o">&gt;</span> <span class="mi">0</span>  <span class="c1"># [C, N]</span>
+        <span class="k">if</span> <span class="n">colors</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="mi">3</span><span class="p">:</span>
+            <span class="c1"># Turn [N, K, 3] into [C, N, 3]</span>
+            <span class="n">shs</span> <span class="o">=</span> <span class="n">colors</span><span class="o">.</span><span class="n">expand</span><span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span>  <span class="c1"># [C, N, K, 3]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># colors is already [C, N, K, 3]</span>
+            <span class="n">shs</span> <span class="o">=</span> <span class="n">colors</span>
+        <span class="n">colors</span> <span class="o">=</span> <span class="n">spherical_harmonics</span><span class="p">(</span><span class="n">sh_degree</span><span class="p">,</span> <span class="n">dirs</span><span class="p">,</span> <span class="n">shs</span><span class="p">,</span> <span class="n">masks</span><span class="o">=</span><span class="n">masks</span><span class="p">)</span>  <span class="c1"># [C, N, 3]</span>
+        <span class="c1"># make it apple-to-apple with Inria&#39;s CUDA Backend.</span>
+        <span class="n">colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">clamp_min</span><span class="p">(</span><span class="n">colors</span> <span class="o">+</span> <span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span>
+
+    <span class="c1"># Rasterize to pixels</span>
+    <span class="k">if</span> <span class="n">render_mode</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;RGB+D&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">]:</span>
+        <span class="n">colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">((</span><span class="n">colors</span><span class="p">,</span> <span class="n">depths</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">]),</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">backgrounds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">backgrounds</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span>
+                <span class="p">[</span><span class="n">backgrounds</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">backgrounds</span><span class="o">.</span><span class="n">device</span><span class="p">)],</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span>
+            <span class="p">)</span>
+    <span class="k">elif</span> <span class="n">render_mode</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;D&quot;</span><span class="p">,</span> <span class="s2">&quot;ED&quot;</span><span class="p">]:</span>
+        <span class="n">colors</span> <span class="o">=</span> <span class="n">depths</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">backgrounds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">backgrounds</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">backgrounds</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>  <span class="c1"># RGB</span>
+        <span class="k">pass</span>
+    <span class="k">if</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">channel_chunk</span><span class="p">:</span>
+        <span class="c1"># slice into chunks</span>
+        <span class="n">n_chunks</span> <span class="o">=</span> <span class="p">(</span><span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="n">channel_chunk</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">//</span> <span class="n">channel_chunk</span>
+        <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span> <span class="o">=</span> <span class="p">[],</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_chunks</span><span class="p">):</span>
+            <span class="n">colors_chunk</span> <span class="o">=</span> <span class="n">colors</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">i</span> <span class="o">*</span> <span class="n">channel_chunk</span> <span class="p">:</span> <span class="p">(</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="n">channel_chunk</span><span class="p">]</span>
+            <span class="n">backgrounds_chunk</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">backgrounds</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">i</span> <span class="o">*</span> <span class="n">channel_chunk</span> <span class="p">:</span> <span class="p">(</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="n">channel_chunk</span><span class="p">]</span>
+                <span class="k">if</span> <span class="n">backgrounds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+                <span class="k">else</span> <span class="kc">None</span>
+            <span class="p">)</span>
+            <span class="n">render_colors_</span><span class="p">,</span> <span class="n">render_alphas_</span> <span class="o">=</span> <span class="n">_rasterize_to_pixels</span><span class="p">(</span>
+                <span class="n">means2d</span><span class="p">,</span>
+                <span class="n">conics</span><span class="p">,</span>
+                <span class="n">colors_chunk</span><span class="p">,</span>
+                <span class="n">opacities</span><span class="p">,</span>
+                <span class="n">width</span><span class="p">,</span>
+                <span class="n">height</span><span class="p">,</span>
+                <span class="n">tile_size</span><span class="p">,</span>
+                <span class="n">isect_offsets</span><span class="p">,</span>
+                <span class="n">flatten_ids</span><span class="p">,</span>
+                <span class="n">backgrounds</span><span class="o">=</span><span class="n">backgrounds_chunk</span><span class="p">,</span>
+                <span class="n">batch_per_iter</span><span class="o">=</span><span class="n">batch_per_iter</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="n">render_colors</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">render_colors_</span><span class="p">)</span>
+            <span class="n">render_alphas</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">render_alphas_</span><span class="p">)</span>
+        <span class="n">render_colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span><span class="n">render_colors</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">render_alphas</span> <span class="o">=</span> <span class="n">render_alphas</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>  <span class="c1"># discard the rest</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span> <span class="o">=</span> <span class="n">_rasterize_to_pixels</span><span class="p">(</span>
+            <span class="n">means2d</span><span class="p">,</span>
+            <span class="n">conics</span><span class="p">,</span>
+            <span class="n">colors</span><span class="p">,</span>
+            <span class="n">opacities</span><span class="p">,</span>
+            <span class="n">width</span><span class="p">,</span>
+            <span class="n">height</span><span class="p">,</span>
+            <span class="n">tile_size</span><span class="p">,</span>
+            <span class="n">isect_offsets</span><span class="p">,</span>
+            <span class="n">flatten_ids</span><span class="p">,</span>
+            <span class="n">backgrounds</span><span class="o">=</span><span class="n">backgrounds</span><span class="p">,</span>
+            <span class="n">batch_per_iter</span><span class="o">=</span><span class="n">batch_per_iter</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="k">if</span> <span class="n">render_mode</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;ED&quot;</span><span class="p">,</span> <span class="s2">&quot;RGB+ED&quot;</span><span class="p">]:</span>
+        <span class="c1"># normalize the accumulated depth to get the expected depth</span>
+        <span class="n">render_colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span>
+            <span class="p">[</span>
+                <span class="n">render_colors</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span>
+                <span class="n">render_colors</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">:]</span> <span class="o">/</span> <span class="n">render_alphas</span><span class="o">.</span><span class="n">clamp</span><span class="p">(</span><span class="nb">min</span><span class="o">=</span><span class="mf">1e-10</span><span class="p">),</span>
+            <span class="p">],</span>
+            <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="n">meta</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">&quot;camera_ids&quot;</span><span class="p">:</span> <span class="n">camera_ids</span><span class="p">,</span>
+        <span class="s2">&quot;gaussian_ids&quot;</span><span class="p">:</span> <span class="n">gaussian_ids</span><span class="p">,</span>
+        <span class="s2">&quot;radii&quot;</span><span class="p">:</span> <span class="n">radii</span><span class="p">,</span>
+        <span class="s2">&quot;means2d&quot;</span><span class="p">:</span> <span class="n">means2d</span><span class="p">,</span>
+        <span class="s2">&quot;depths&quot;</span><span class="p">:</span> <span class="n">depths</span><span class="p">,</span>
+        <span class="s2">&quot;conics&quot;</span><span class="p">:</span> <span class="n">conics</span><span class="p">,</span>
+        <span class="s2">&quot;opacities&quot;</span><span class="p">:</span> <span class="n">opacities</span><span class="p">,</span>
+        <span class="s2">&quot;tile_width&quot;</span><span class="p">:</span> <span class="n">tile_width</span><span class="p">,</span>
+        <span class="s2">&quot;tile_height&quot;</span><span class="p">:</span> <span class="n">tile_height</span><span class="p">,</span>
+        <span class="s2">&quot;tiles_per_gauss&quot;</span><span class="p">:</span> <span class="n">tiles_per_gauss</span><span class="p">,</span>
+        <span class="s2">&quot;isect_ids&quot;</span><span class="p">:</span> <span class="n">isect_ids</span><span class="p">,</span>
+        <span class="s2">&quot;flatten_ids&quot;</span><span class="p">:</span> <span class="n">flatten_ids</span><span class="p">,</span>
+        <span class="s2">&quot;isect_offsets&quot;</span><span class="p">:</span> <span class="n">isect_offsets</span><span class="p">,</span>
+        <span class="s2">&quot;width&quot;</span><span class="p">:</span> <span class="n">width</span><span class="p">,</span>
+        <span class="s2">&quot;height&quot;</span><span class="p">:</span> <span class="n">height</span><span class="p">,</span>
+        <span class="s2">&quot;tile_size&quot;</span><span class="p">:</span> <span class="n">tile_size</span><span class="p">,</span>
+        <span class="s2">&quot;n_cameras&quot;</span><span class="p">:</span> <span class="n">C</span><span class="p">,</span>
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">meta</span>
+
+
 <div class="viewcode-block" id="rasterization_legacy_wrapper">
 <a class="viewcode-back" href="../../apis/utils.html#gsplat.rasterization_legacy_wrapper">[docs]</a>
 <span class="k">def</span> <span class="nf">rasterization_legacy_wrapper</span><span class="p">(</span>
@@ -991,6 +1194,6 @@
 </div><script src="../../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../../_static/doctools.js?v=9a2dae69"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
-    <script src="../../_static/scripts/furo.js?v=4e2eecee"></script>
+    <script src="../../_static/scripts/furo.js?v=5fa4622c"></script>
     </body>
 </html>
