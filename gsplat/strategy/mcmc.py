@@ -116,6 +116,7 @@ class MCMCStrategy(Strategy):
         """
         # move to the correct device
         state["binoms"] = state["binoms"].to(params["means"].device)
+
         binoms = state["binoms"]
 
         if (
