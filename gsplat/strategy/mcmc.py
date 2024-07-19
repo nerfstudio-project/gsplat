@@ -61,7 +61,7 @@ class MCMCStrategy(Strategy):
         for n in range(n_max):
             for k in range(n + 1):
                 binoms[n, k] = math.comb(n, k)
-        return {"binoms": binoms, "n_max": n_max}
+        return {"binoms": binoms}
 
     def check_sanity(
         self,
