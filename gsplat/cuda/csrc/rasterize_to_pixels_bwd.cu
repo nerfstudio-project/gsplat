@@ -20,6 +20,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     const S *__restrict__ colors,        // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
     const S *__restrict__ opacities,     // [C, N] or [nnz]
     const S *__restrict__ backgrounds,   // [C, COLOR_DIM] or [nnz, COLOR_DIM]
+    const bool *__restrict__ masks,      // [C, tile_height, tile_width]
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     const uint32_t tile_width, const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
@@ -51,6 +52,15 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     v_render_alphas += camera_id * image_height * image_width;
     if (backgrounds != nullptr) {
         backgrounds += camera_id * COLOR_DIM;
+    }
+    if (masks != nullptr) {
+        masks += camera_id * tile_height * tile_width;
+    }
+
+    // when the mask is provided, do nothing and return if
+    // this tile is labeled as False
+    if (masks != nullptr && !masks[tile_id]) {
+        return;
     }
 
     const S px = (S)j + 0.5f;
@@ -257,6 +267,7 @@ call_kernel_with_dim(
     const torch::Tensor &colors,                    // [C, N, 3] or [nnz, 3]
     const torch::Tensor &opacities,                 // [C, N] or [nnz]
     const at::optional<torch::Tensor> &backgrounds, // [C, 3]
+    const at::optional<torch::Tensor> &masks,       // [C, tile_height, tile_width]
     // image size
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     // intersections
@@ -284,6 +295,9 @@ call_kernel_with_dim(
     CHECK_INPUT(v_render_alphas);
     if (backgrounds.has_value()) {
         CHECK_INPUT(backgrounds.value());
+    }
+    if (masks.has_value()) {
+        CHECK_INPUT(masks.value());
     }
 
     bool packed = means2d.dim() == 2;
@@ -329,6 +343,7 @@ call_kernel_with_dim(
                 colors.data_ptr<float>(), opacities.data_ptr<float>(),
                 backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
                                         : nullptr,
+                masks.has_value() ? masks.value().data_ptr<bool>(): nullptr,
                 image_width, image_height, tile_size, tile_width, tile_height,
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
@@ -352,6 +367,7 @@ rasterize_to_pixels_bwd_tensor(
     const torch::Tensor &colors,                    // [C, N, 3] or [nnz, 3]
     const torch::Tensor &opacities,                 // [C, N] or [nnz]
     const at::optional<torch::Tensor> &backgrounds, // [C, 3]
+    const at::optional<torch::Tensor> &masks,       // [C, tile_height, tile_width]
     // image size
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     // intersections
@@ -372,7 +388,7 @@ rasterize_to_pixels_bwd_tensor(
 #define __GS__CALL_(N)                                                                 \
     case N:                                                                            \
         return call_kernel_with_dim<N>(                                                \
-            means2d, conics, colors, opacities, backgrounds, image_width,              \
+            means2d, conics, colors, opacities, backgrounds, masks, image_width,       \
             image_height, tile_size, tile_offsets, flatten_ids, render_alphas,         \
             last_ids, v_render_colors, v_render_alphas, absgrad);
 

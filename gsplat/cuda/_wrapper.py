@@ -379,6 +379,7 @@ def rasterize_to_pixels(
     isect_offsets: Tensor,  # [C, tile_height, tile_width]
     flatten_ids: Tensor,  # [n_isects]
     backgrounds: Optional[Tensor] = None,  # [C, channels]
+    masks: Optional[Tensor] = None,  # [C, tile_height, tile_width]
     packed: bool = False,
     absgrad: bool = False,
 ) -> Tuple[Tensor, Tensor]:
@@ -395,6 +396,7 @@ def rasterize_to_pixels(
         isect_offsets: Intersection offsets outputs from `isect_offset_encode()`. [C, tile_height, tile_width]
         flatten_ids: The global flatten indices in [C * N] or [nnz] from  `isect_tiles()`. [n_isects]
         backgrounds: Background colors. [C, channels]. Default: None.
+        masks: Optional tile mask to skip rendering GS to masked tiles. [C, tile_height, tile_width]. Default: None.
         packed: If True, the input tensors are expected to be packed with shape [nnz, ...]. Default: False.
         absgrad: If True, the backward pass will compute a `.absgrad` attribute for `means2d`. Default: False.
 
@@ -422,6 +424,9 @@ def rasterize_to_pixels(
     if backgrounds is not None:
         assert backgrounds.shape == (C, colors.shape[-1]), backgrounds.shape
         backgrounds = backgrounds.contiguous()
+    if masks is not None:
+        assert masks.shape == isect_offsets.shape, masks.shape
+        masks = masks.contiguous()
 
     # Pad the channels to the nearest supported number if necessary
     channels = colors.shape[-1]
@@ -484,6 +489,7 @@ def rasterize_to_pixels(
         colors.contiguous(),
         opacities.contiguous(),
         backgrounds,
+        masks,
         image_width,
         image_height,
         tile_size,
@@ -817,6 +823,7 @@ class _RasterizeToPixels(torch.autograd.Function):
         colors: Tensor,  # [C, N, D]
         opacities: Tensor,  # [C, N]
         backgrounds: Tensor,  # [C, D], Optional
+        masks: Tensor,  # [C, tile_height, tile_width], Optional
         width: int,
         height: int,
         tile_size: int,
@@ -832,6 +839,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             colors,
             opacities,
             backgrounds,
+            masks,
             width,
             height,
             tile_size,
@@ -845,6 +853,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             colors,
             opacities,
             backgrounds,
+            masks,
             isect_offsets,
             flatten_ids,
             render_alphas,
@@ -871,6 +880,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             colors,
             opacities,
             backgrounds,
+            masks,
             isect_offsets,
             flatten_ids,
             render_alphas,
@@ -893,6 +903,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             colors,
             opacities,
             backgrounds,
+            masks,
             width,
             height,
             tile_size,
@@ -921,6 +932,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             v_colors,
             v_opacities,
             v_backgrounds,
+            None,
             None,
             None,
             None,

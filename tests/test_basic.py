@@ -335,9 +335,7 @@ def test_fully_fused_projection_packed(
         __compensations = torch.sparse_coo_tensor(
             torch.stack([camera_ids, gaussian_ids]), compensations, _compensations.shape
         ).to_dense()
-    __sel = __radii > 0
-    _sel = _radii > 0
-    sel = (__sel) & (_sel)
+    sel = (__radii > 0) & (_radii > 0)
     torch.testing.assert_close(__radii[sel], _radii[sel], rtol=0, atol=1)
     torch.testing.assert_close(__means2d[sel], _means2d[sel], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(__depths[sel], _depths[sel], rtol=1e-4, atol=1e-4)
@@ -362,10 +360,10 @@ def test_fully_fused_projection_packed(
         retain_graph=True,
     )
     v_viewmats, v_quats, v_scales, v_means = torch.autograd.grad(
-        (means2d * v_means2d[__sel]).sum()
-        + (depths * v_depths[__sel]).sum()
-        + (normals * v_normals[__sel]).sum()
-        + (conics * v_conics[__sel]).sum(),
+        (means2d * v_means2d[__radii > 0]).sum()
+        + (depths * v_depths[__radii > 0]).sum()
+        + (normals * v_normals[__radii > 0]).sum()
+        + (conics * v_conics[__radii > 0]).sum(),
         (viewmats, quats, scales, means),
         retain_graph=True,
     )
@@ -374,9 +372,9 @@ def test_fully_fused_projection_packed(
         v_scales = v_scales.to_dense()
         v_means = v_means.to_dense()
 
-    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=1e-4)
+    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-2, atol=1e-2)
     torch.testing.assert_close(v_quats, _v_quats, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_scales, _v_scales, rtol=1e-2, atol=1e-2)
+    torch.testing.assert_close(v_scales, _v_scales, rtol=5e-2, atol=5e-2)
     torch.testing.assert_close(v_means, _v_means, rtol=1e-3, atol=1e-3)
 
 

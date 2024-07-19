@@ -29,6 +29,7 @@ extensions = [
     "sphinx.ext.intersphinx",
     "sphinxcontrib.bibtex",
     "sphinxcontrib.video",
+    "sphinx.ext.viewcode",
 ]
 
 intersphinx_mapping = {

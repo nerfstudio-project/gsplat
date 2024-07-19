@@ -17,6 +17,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import viser
+
 from gsplat._helper import load_test_data
 from gsplat.rendering import rasterization
 
@@ -92,7 +93,7 @@ if args.ckpt is None:
     imageio.imsave(f"{args.output_dir}/render.png", (canvas * 255).astype(np.uint8))
 else:
     ckpt = torch.load(args.ckpt, map_location=device)["splats"]
-    means = ckpt["means3d"]
+    means = ckpt["means"]
     quats = F.normalize(ckpt["quats"], p=2, dim=-1)
     scales = torch.exp(ckpt["scales"])
     opacities = torch.sigmoid(ckpt["opacities"])
