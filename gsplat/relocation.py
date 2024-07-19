@@ -10,7 +10,6 @@ def compute_relocation(
     scales: Tensor,  # [N, 3]
     ratios: Tensor,  # [N]
     binoms: Tensor,  # [n_max, n_max]
-    n_max: int,
 ) -> Tuple[Tensor, Tensor]:
     """Compute new Gaussians from a set of old Gaussians.
 
