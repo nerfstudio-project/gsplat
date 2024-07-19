@@ -61,7 +61,7 @@ class MCMCStrategy(Strategy):
         for n in range(n_max):
             for k in range(n + 1):
                 binoms[n, k] = math.comb(n, k)
-        return {"binoms": binoms, "n_max": n_max}
+        return {"binoms": binoms}
 
     def check_sanity(
         self,
@@ -118,7 +118,6 @@ class MCMCStrategy(Strategy):
         state["binoms"] = state["binoms"].to(params["means"].device)
 
         binoms = state["binoms"]
-        n_max = state["n_max"]
 
         if (
             step < self.refine_stop_iter
@@ -126,12 +125,12 @@ class MCMCStrategy(Strategy):
             and step % self.refine_every == 0
         ):
             # teleport GSs
-            n_relocated_gs = self._relocate_gs(params, optimizers, binoms, n_max)
+            n_relocated_gs = self._relocate_gs(params, optimizers, binoms)
             if self.verbose:
                 print(f"Step {step}: Relocated {n_relocated_gs} GSs.")
 
             # add new GSs
-            n_new_gs = self._add_new_gs(params, optimizers, binoms, n_max)
+            n_new_gs = self._add_new_gs(params, optimizers, binoms)
             if self.verbose:
                 print(
                     f"Step {step}: Added {n_new_gs} GSs. "
@@ -151,7 +150,6 @@ class MCMCStrategy(Strategy):
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
         binoms: Tensor,
-        n_max: int,
     ) -> int:
         opacities = torch.sigmoid(params["opacities"])
         dead_mask = opacities <= self.min_opacity
@@ -163,7 +161,6 @@ class MCMCStrategy(Strategy):
                 state={},
                 mask=dead_mask,
                 binoms=binoms,
-                n_max=n_max,
                 min_opacity=self.min_opacity,
             )
         return n_gs
@@ -174,7 +171,6 @@ class MCMCStrategy(Strategy):
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
         binoms: Tensor,
-        n_max: int,
     ) -> int:
         current_n_points = len(params["means"])
         n_target = min(self.cap_max, int(1.05 * current_n_points))
@@ -186,7 +182,6 @@ class MCMCStrategy(Strategy):
                 state={},
                 n=n_gs,
                 binoms=binoms,
-                n_max=n_max,
                 min_opacity=self.min_opacity,
             )
         return n_gs
