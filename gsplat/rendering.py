@@ -13,8 +13,8 @@ from .cuda._wrapper import (
     rasterize_to_pixels,
     spherical_harmonics,
 )
-from .utils.normal_utils import depth_to_normal
-from .utils.camera_utils import getProjectionMatrix
+from .util.normal_utils import depth_to_normal
+from .util.camera_utils import getProjectionMatrix
 
 
 def rasterization(
