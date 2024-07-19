@@ -376,7 +376,7 @@
         <span class="k">for</span> <span class="n">n</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_max</span><span class="p">):</span>
             <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n</span> <span class="o">+</span> <span class="mi">1</span><span class="p">):</span>
                 <span class="n">binoms</span><span class="p">[</span><span class="n">n</span><span class="p">,</span> <span class="n">k</span><span class="p">]</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">comb</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">k</span><span class="p">)</span>
-        <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;binoms&quot;</span><span class="p">:</span> <span class="n">binoms</span><span class="p">,</span> <span class="s2">&quot;n_max&quot;</span><span class="p">:</span> <span class="n">n_max</span><span class="p">}</span></div>
+        <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;binoms&quot;</span><span class="p">:</span> <span class="n">binoms</span><span class="p">}</span></div>
 
 
 <div class="viewcode-block" id="MCMCStrategy.check_sanity">
@@ -439,7 +439,6 @@
         <span class="n">state</span><span class="p">[</span><span class="s2">&quot;binoms&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">state</span><span class="p">[</span><span class="s2">&quot;binoms&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="s2">&quot;means&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
 
         <span class="n">binoms</span> <span class="o">=</span> <span class="n">state</span><span class="p">[</span><span class="s2">&quot;binoms&quot;</span><span class="p">]</span>
-        <span class="n">n_max</span> <span class="o">=</span> <span class="n">state</span><span class="p">[</span><span class="s2">&quot;n_max&quot;</span><span class="p">]</span>
 
         <span class="k">if</span> <span class="p">(</span>
             <span class="n">step</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">refine_stop_iter</span>
@@ -447,12 +446,12 @@
             <span class="ow">and</span> <span class="n">step</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">refine_every</span> <span class="o">==</span> <span class="mi">0</span>
         <span class="p">):</span>
             <span class="c1"># teleport GSs</span>
-            <span class="n">n_relocated_gs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_relocate_gs</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">optimizers</span><span class="p">,</span> <span class="n">binoms</span><span class="p">,</span> <span class="n">n_max</span><span class="p">)</span>
+            <span class="n">n_relocated_gs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_relocate_gs</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">optimizers</span><span class="p">,</span> <span class="n">binoms</span><span class="p">)</span>
             <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">verbose</span><span class="p">:</span>
                 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Step </span><span class="si">{</span><span class="n">step</span><span class="si">}</span><span class="s2">: Relocated </span><span class="si">{</span><span class="n">n_relocated_gs</span><span class="si">}</span><span class="s2"> GSs.&quot;</span><span class="p">)</span>
 
             <span class="c1"># add new GSs</span>
-            <span class="n">n_new_gs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_add_new_gs</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">optimizers</span><span class="p">,</span> <span class="n">binoms</span><span class="p">,</span> <span class="n">n_max</span><span class="p">)</span>
+            <span class="n">n_new_gs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_add_new_gs</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">optimizers</span><span class="p">,</span> <span class="n">binoms</span><span class="p">)</span>
             <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">verbose</span><span class="p">:</span>
                 <span class="nb">print</span><span class="p">(</span>
                     <span class="sa">f</span><span class="s2">&quot;Step </span><span class="si">{</span><span class="n">step</span><span class="si">}</span><span class="s2">: Added </span><span class="si">{</span><span class="n">n_new_gs</span><span class="si">}</span><span class="s2"> GSs. &quot;</span>
@@ -473,7 +472,6 @@
         <span class="n">params</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">Parameter</span><span class="p">],</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">ParameterDict</span><span class="p">],</span>
         <span class="n">optimizers</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">optim</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">],</span>
         <span class="n">binoms</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
-        <span class="n">n_max</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
         <span class="n">opacities</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">sigmoid</span><span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="s2">&quot;opacities&quot;</span><span class="p">])</span>
         <span class="n">dead_mask</span> <span class="o">=</span> <span class="n">opacities</span> <span class="o">&lt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">min_opacity</span>
@@ -485,7 +483,6 @@
                 <span class="n">state</span><span class="o">=</span><span class="p">{},</span>
                 <span class="n">mask</span><span class="o">=</span><span class="n">dead_mask</span><span class="p">,</span>
                 <span class="n">binoms</span><span class="o">=</span><span class="n">binoms</span><span class="p">,</span>
-                <span class="n">n_max</span><span class="o">=</span><span class="n">n_max</span><span class="p">,</span>
                 <span class="n">min_opacity</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">min_opacity</span><span class="p">,</span>
             <span class="p">)</span>
         <span class="k">return</span> <span class="n">n_gs</span>
@@ -496,7 +493,6 @@
         <span class="n">params</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">Parameter</span><span class="p">],</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">ParameterDict</span><span class="p">],</span>
         <span class="n">optimizers</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">optim</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">],</span>
         <span class="n">binoms</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
-        <span class="n">n_max</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
         <span class="n">current_n_points</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="s2">&quot;means&quot;</span><span class="p">])</span>
         <span class="n">n_target</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">cap_max</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="mf">1.05</span> <span class="o">*</span> <span class="n">current_n_points</span><span class="p">))</span>
@@ -508,7 +504,6 @@
                 <span class="n">state</span><span class="o">=</span><span class="p">{},</span>
                 <span class="n">n</span><span class="o">=</span><span class="n">n_gs</span><span class="p">,</span>
                 <span class="n">binoms</span><span class="o">=</span><span class="n">binoms</span><span class="p">,</span>
-                <span class="n">n_max</span><span class="o">=</span><span class="n">n_max</span><span class="p">,</span>
                 <span class="n">min_opacity</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">min_opacity</span><span class="p">,</span>
             <span class="p">)</span>
         <span class="k">return</span> <span class="n">n_gs</span></div>
