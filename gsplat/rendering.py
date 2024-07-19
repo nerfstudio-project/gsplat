@@ -401,6 +401,25 @@ def rasterization(
         "tile_size": tile_size,
         "n_cameras": C,
     }
+    if render_mode in ["ED", "RGB+ED", "RGB+ED+N"]:
+        # normalize the accumulated depth to get the expected depth
+        render_colors[..., -1:] /= render_alphas.clamp(min=1e-10)
+    if render_mode in ["RGB+ED+N"]:
+        normals_rend = render_colors[..., -4:-1]
+        normals_surf = depth_to_normal(
+            render_colors[..., -1:],
+            viewmats,
+            Ks,
+            near_plane=near_plane,
+            far_plane=far_plane,
+        )
+        normals_surf = normals_surf * (render_alphas).detach()
+        meta.update(
+            {
+                "normals_rend": normals_rend,
+                "normals_surf": normals_surf,
+            }
+        )
     return render_colors, render_alphas, meta
 
 
@@ -420,7 +439,7 @@ def _rasterization(
     sh_degree: Optional[int] = None,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
-    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
+    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED", "RGB+ED+N"] = "RGB",
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
     channel_chunk: int = 32,
     batch_per_iter: int = 100,
@@ -454,7 +473,7 @@ def _rasterization(
     assert opacities.shape == (N,), opacities.shape
     assert viewmats.shape == (C, 4, 4), viewmats.shape
     assert Ks.shape == (C, 3, 3), Ks.shape
-    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
+    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED", "RGB+ED+N"], render_mode
 
     if sh_degree is None:
         # treat colors as post-activation values, should be in shape [N, D] or [C, N, D]
@@ -473,10 +492,10 @@ def _rasterization(
 
     # Project Gaussians to 2D.
     # The results are with shape [C, N, ...]. Only the elements with radii > 0 are valid.
-    covars, _ = _quat_scale_to_covar_preci(quats, scales, True, False, triu=False)
-    radii, means2d, depths, conics, compensations = _fully_fused_projection(
+    radii, means2d, depths, normals, conics, compensations = _fully_fused_projection(
         means,
-        covars,
+        quats,
+        scales,
         viewmats,
         Ks,
         width,
@@ -544,6 +563,12 @@ def _rasterization(
         colors = depths[..., None]
         if backgrounds is not None:
             backgrounds = torch.zeros(C, 1, device=backgrounds.device)
+    elif render_mode in ["RGB+ED+N"]:
+        colors = torch.cat((colors, normals, depths[..., None]), dim=-1)
+        if backgrounds is not None:
+            backgrounds = torch.cat(
+                [backgrounds, torch.zeros(C, 1, device=backgrounds.device)], dim=-1
+            )
     else:  # RGB
         pass
     if colors.shape[-1] > channel_chunk:
