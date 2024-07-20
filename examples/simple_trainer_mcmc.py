@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import imageio
+import tifffile
 import nerfview
 import numpy as np
 import torch
@@ -20,7 +21,7 @@ from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
-from utils import AppearanceOptModule, CameraOptModule, set_random_seed
+from utils import AppearanceOptModule, CameraOptModule, set_random_seed, sh_to_rgb
 
 from gsplat.rendering import rasterization
 from gsplat.strategy import MCMCStrategy
@@ -530,6 +531,31 @@ class Runner:
                     f"{self.ckpt_dir}/ckpt_{step}.pt",
                 )
 
+                n_gs = len(self.splats["means"])
+                grid_sidelen = int(n_gs**0.5)
+                params_to_sort = torch.cat(
+                    [v.reshape(n_gs, -1) for v in self.splats.values()], dim=-1
+                )
+                grid = params_to_sort.reshape((grid_sidelen, grid_sidelen, -1))
+                print(grid.shape)
+                grid_rgb = sh_to_rgb(grid[:, :, 11:14])
+                grid_rgb = torch.clamp(grid_rgb, 0.0, 1.0)
+
+                grid_rgb = grid_rgb.detach().cpu().numpy()
+                imageio.imwrite(
+                    f"{self.ckpt_dir}/ckpt_{step}.png",
+                    (grid_rgb * 255).astype(np.uint8),
+                )
+
+                grid_mins = grid.amin(dim=(0, 1))
+                grid_maxs = grid.amax(dim=(0, 1))
+                grid_norm = (grid - grid_mins) / (grid_maxs - grid_mins)
+                grid_norm = grid_norm.detach().cpu().numpy()
+                grid_norm = (grid_norm * 255).astype(np.uint8)
+                tifffile.imwrite(
+                    f"{self.ckpt_dir}/ckpt_{step}.tif", grid_norm, compression="zlib"
+                )
+
             # eval the full set
             if step in [i - 1 for i in cfg.eval_steps] or step == max_steps - 1:
                 self.eval(step)
@@ -582,7 +608,8 @@ class Runner:
             # write images
             canvas = torch.cat([pixels, colors], dim=2).squeeze(0).cpu().numpy()
             imageio.imwrite(
-                f"{self.render_dir}/val_{i:04d}.png", (canvas * 255).astype(np.uint8)
+                f"{self.render_dir}/val_step{step:04d}_{i:04d}.png",
+                (canvas * 255).astype(np.uint8),
             )
 
             pixels = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]

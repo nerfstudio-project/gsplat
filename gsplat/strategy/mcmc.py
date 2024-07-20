@@ -4,9 +4,17 @@ from typing import Any, Dict, Union
 
 import torch
 from torch import Tensor
+from plas import sort_with_plas
 
 from .base import Strategy
-from .ops import inject_noise_to_position, relocate, sample_add
+from .ops import (
+    inject_noise_to_position,
+    relocate,
+    sample_add,
+    _update_param_with_optimizer,
+)
+import numpy as np
+import imageio
 
 
 @dataclass
@@ -51,8 +59,9 @@ class MCMCStrategy(Strategy):
     refine_start_iter: int = 500
     refine_stop_iter: int = 25_000
     refine_every: int = 100
+    sort_every: int = 1000
     min_opacity: float = 0.005
-    verbose: bool = False
+    verbose: bool = True
 
     def initialize_state(self) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy."""
@@ -139,6 +148,13 @@ class MCMCStrategy(Strategy):
 
             torch.cuda.empty_cache()
 
+        if step > self.refine_start_iter and step % self.sort_every == 0:
+            self._sort_into_grid(params, optimizers)
+            if self.verbose:
+                print("Sorted grid.")
+
+            torch.cuda.empty_cache()
+
         # add noise to GSs
         inject_noise_to_position(
             params=params, optimizers=optimizers, state={}, scaler=lr * self.noise_lr
@@ -174,6 +190,7 @@ class MCMCStrategy(Strategy):
     ) -> int:
         current_n_points = len(params["means"])
         n_target = min(self.cap_max, int(1.05 * current_n_points))
+        n_target = round(n_target**0.5) ** 2
         n_gs = max(0, n_target - current_n_points)
         if n_gs > 0:
             sample_add(
@@ -185,3 +202,49 @@ class MCMCStrategy(Strategy):
                 min_opacity=self.min_opacity,
             )
         return n_gs
+
+    @torch.no_grad()
+    def _sort_into_grid(
+        self,
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+        optimizers: Dict[str, torch.optim.Optimizer],
+    ):
+        n_gs = len(params["means"])
+        params_to_sort = torch.cat(
+            [v.reshape(n_gs, -1) for v in params.values()], dim=-1
+        )
+
+        # Shuffle before sorting
+        shuffled_indices = torch.randperm(
+            params_to_sort.shape[0], device=params_to_sort.device
+        )
+        params_to_sort = params_to_sort[shuffled_indices]
+
+        grid_sidelen = int(n_gs**0.5)
+        grid = params_to_sort.reshape((grid_sidelen, grid_sidelen, -1))
+        _, sorted_indices = sort_with_plas(
+            grid.permute(2, 0, 1), improvement_break=1e-4, verbose=self.verbose
+        )
+        sorted_indices = sorted_indices.squeeze().flatten()
+        sorted_indices = shuffled_indices[sorted_indices]
+
+        def param_fn(name: str, p: Tensor) -> Tensor:
+            return torch.nn.Parameter(p[sorted_indices])
+
+        def optimizer_fn(key: str, v: Tensor) -> Tensor:
+            return v[sorted_indices]
+
+        # update the parameters and the state in the optimizers
+        _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
+
+        # means = params["means"]
+        # means_grid = means.reshape((grid_sidelen, grid_sidelen, -1))
+        # print(means_grid.shape)
+
+        # means_grid_norm = (means_grid - means_grid.min()) / (means_grid.max() - means_grid.min())
+        # means_grid_norm = means_grid_norm.cpu().numpy()
+        # print(means_grid_norm.shape)
+        # imageio.imwrite(
+        #     "tmp/grid_norm.png", (means_grid_norm * 255).astype(np.uint8)
+        # )
+        # raise
