@@ -8,7 +8,7 @@
 #include <cub/cub.cuh>
 #include <cuda.h>
 #include <cuda_runtime.h>
-
+#include "error.cuh"
 namespace cg = cooperative_groups;
 
 /****************************************************************************
@@ -1631,9 +1631,9 @@ fully_fused_projection_fwd_2dgs_kernel(const uint32_t C, const uint32_t N,
 
     // build H and transform from world space to camera space
     glm::vec4 quat = glm::make_vec4(quats + gid * 4);
-    glm::vec3 scale = glm::make_vec3(scales + gid * 3);
-    glm::vec3 scale_2dgs = glm::vec3(scale.x, scale.y, 1.f);
-    glm::mat3 RS = quat_to_rotmat(quat) * scale_to_mat(scale_2dgs, 1.0f);
+    glm::vec2 scale = glm::make_vec2(scales + gid * 3);
+    // glm::vec3 scale_2dgs = glm::vec3(scale.x, scale.y, 1.f);
+    glm::mat3 RS = quat_to_rotmat(quat) * scale_to_mat(scale, 1.0f);
     glm::mat3 RS_camera = R * RS;
     glm::mat3 WH = glm::mat3(RS_camera[0], RS_camera[1], mean_c);
 
@@ -1651,13 +1651,11 @@ fully_fused_projection_fwd_2dgs_kernel(const uint32_t C, const uint32_t N,
     if (distance == 0.0f) return;
 
     glm::vec3 f = (1 / distance) * temp_point;
-    // printf("f: %.2f, %.2f, %.2f\n", f.x, f.y, f.z);
     glm::vec2 mean2d = glm::vec2(
         glm::dot(f, M[0] * M[2]),
         glm::dot(f, M[1] * M[2])
     );
 
-    // printf("mean2d: %.2f, %.2f, %.2f\n", mean2d.x, mean2d.y, mean2d.z);
     // take 3 sigma as the radius (non differentiable)
     glm::vec2 half_extend = mean2d * mean2d - 
         glm::vec2(
@@ -1666,9 +1664,7 @@ fully_fused_projection_fwd_2dgs_kernel(const uint32_t C, const uint32_t N,
         );
     float eps = 1e-4;
     half_extend = sqrt(glm::vec2(max(eps, half_extend.x), max(eps, half_extend.y)));
-    // printf("half_extend: %.2f\n", half_extend);
     float radius = ceil(3.f * max(half_extend.x, half_extend.y));
-    // printf("radius: %.2f \n", radius);
 
     if (radius <= radius_clip) {
         radii[idx] = 0;
@@ -1684,7 +1680,6 @@ fully_fused_projection_fwd_2dgs_kernel(const uint32_t C, const uint32_t N,
 
     // normals dual visiable
     glm::vec3 normal = RS_camera[2];
-    printf("");
     float cos = glm::dot(-normal, mean_c);
     float multiplier = cos > 0 ? 1 : -1;
     normal *= multiplier;
@@ -1748,6 +1743,8 @@ fully_fused_projection_fwd_2dgs_tensor(
             means2d.data_ptr<float>(), depths.data_ptr<float>(),
             ray_transformations.data_ptr<float>(),
             normals.data_ptr<float>());
+        CUDA_CHECK_ERROR;
+        CUDA_SAFE_CALL(cudaStreamSynchronize(stream.stream()));
     }
     return std::make_tuple(radii, means2d, depths, ray_transformations, normals);
 }
@@ -2035,42 +2032,22 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     v_normals += idx * 3;
     v_ray_transformations += idx * 9;
 
-    // quats += gid * 4;
-    // scales
-    // //====== Old Version ======//
-    // glm::vec3 p_world = glm::vec3(means[0], means[1], means[2]);
-
-    // glm::vec3 v_mean3D;
-    // glm::vec2 v_scale;
-    // glm::vec4 v_quat;
-
-    // build_transform_and_AABB(
-
-    // )
-
     //====== AABB Gradients======//
-    glm::mat3 M = glm::mat3(
-        ray_transformations[0], ray_transformations[1], ray_transformations[2],
-        ray_transformations[3], ray_transformations[4], ray_transformations[5],
-        ray_transformations[6], ray_transformations[7], ray_transformations[8]
-    );
-    glm::vec3 v_mean2D = glm::vec3(v_means2d[0], v_means2d[1], v_means2d[2]);
     glm::mat3 _v_ray_transformation = glm::mat3(
         v_ray_transformations[0], v_ray_transformations[1], v_ray_transformations[2],
         v_ray_transformations[3], v_ray_transformations[4], v_ray_transformations[5],
         v_ray_transformations[6], v_ray_transformations[7], v_ray_transformations[8]
     );
-    // glm::mat3 _v_ray_transformation = glm::mat3(0.f);
-    compute_aabb_vjp(M, v_mean2D, _v_ray_transformation);
-    // v_ray_transformations[0] += _v_ray_transformation[0][0];
-    // v_ray_transformations[1] += _v_ray_transformation[0][1];
-    // v_ray_transformations[2] += _v_ray_transformation[0][2];
-    // v_ray_transformations[3] += _v_ray_transformation[1][0];
-    // v_ray_transformations[4] += _v_ray_transformation[1][1];
-    // v_ray_transformations[5] += _v_ray_transformation[1][2];
-    // v_ray_transformations[6] += _v_ray_transformation[2][0];
-    // v_ray_transformations[7] += _v_ray_transformation[2][1];
-    // v_ray_transformations[8] += _v_ray_transformation[2][2];
+
+    if (v_means2d[0] != 0 || v_means2d[1] != 0) {
+        glm::vec2 v_mean2D = glm::vec2(v_means2d[0], v_means2d[1]);
+        glm::mat3 M = glm::mat3(
+            ray_transformations[0], ray_transformations[1], ray_transformations[2],
+            ray_transformations[3], ray_transformations[4], ray_transformations[5],
+            ray_transformations[6], ray_transformations[7], ray_transformations[8]
+        );
+        compute_aabb_vjp(M, v_mean2D, _v_ray_transformation);
+    }
 
     //====== ray transformation gradient ======//
     // camera information
@@ -2091,30 +2068,24 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
         Ks[2], Ks[5], 1.0
     );
     glm::vec4 quat = glm::make_vec4(quats + gid * 4);
-    glm::vec3 scale = glm::make_vec3(scales + gid * 3);
-    glm::vec3 v_normal3d = glm::vec3(v_normals[0], v_normals[1], v_normals[2]);
+    scales += gid * 3;
+    // glm::vec3 scale = glm::make_vec3(scales + gid * 3);
+    // glm::vec3 v_normal3d = glm::vec3(v_normals[0], v_normals[1], v_normals[2]);
 
-    // printf("v_normal3d: %.8f, %.8f, %.8f \n", v_normal3d.x, v_normal3d.y, v_normal3d.z);
-    glm::mat3 v_R(0.f);
+    // glm::mat3 v_R(0.f);
+    glm::vec4 v_quat(0.f);
     glm::vec2 v_scale(0.f);
     glm::vec3 v_mean(0.f);
-    // _v_ray_transformation = glm::mat3(
-    //     v_ray_transformations[0], v_ray_transformations[1], v_ray_transformations[2],
-    //     v_ray_transformations[3], v_ray_transformations[4], v_ray_transformations[5],
-    //     v_ray_transformations[6], v_ray_transformations[7], v_ray_transformations[8]
-    // );
 
-    // printf("");
     compute_ray_transformation_vjp(W, P, 
                                     cam_pos, mean_c, 
-                                    quat, scale, 
-                                    _v_ray_transformation, v_normal3d,
-                                    v_R, v_scale, v_mean);
+                                    glm::make_vec4(quats + gid * 4), glm::vec3(scales[0], scales[1], 1.f), 
+                                    _v_ray_transformation, glm::make_vec3(v_normals),
+                                    v_quat,
+                                    v_scale, v_mean);
 
-    // printf("v_mean: %.2f, %.2f, %.2f \n", v_mean.x, v_mean.y, v_mean.z);
 
-    glm::vec4 v_quat(0.f);
-    quat_to_rotmat_vjp(quat, v_R, v_quat);
+    // printf("");
     
     // write out results with warp-level reduction
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
@@ -2133,7 +2104,6 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     }
     // TODO WZ: Currently only support quat, scale/
     // Directly output gradients w.r.t. the quaternion and scale
-    glm::mat3 rotmat = quat_to_rotmat(quat);
     warpSum(v_quat, warp_group_g);
     warpSum(v_scale, warp_group_g);
     if (warp_group_g.thread_rank() == 0) {
@@ -2214,6 +2184,8 @@ fully_fused_projection_bwd_2dgs_tensor(
             v_scales.data_ptr<float>(),
             viewmats_requires_grad ? viewmats.data_ptr<float>() : nullptr
         );
+        CUDA_CHECK_ERROR;
+        CUDA_SAFE_CALL(cudaStreamSynchronize(stream.stream()));
     }
 
     return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
@@ -2313,9 +2285,9 @@ __global__ void fully_fused_projection_packed_bwd_2dgs_kernel(
     );
 
     glm::vec4 quat = glm::make_vec4(quats + gid * 4);
-    glm::vec3 scale = glm::make_vec3(scales + gid * 3);
-    glm::vec3 scale_2dgs = {scale.x, scale.y, 1.f};
-    glm::mat3 S = scale_to_mat(scale_2dgs, 1.0f);
+    glm::vec2 scale = glm::make_vec2(scales + gid * 3);
+    // glm::vec3 scale_2dgs = {scale.x, scale.y, 1.f};
+    glm::mat3 S = scale_to_mat(scale, 1.0f);
     glm::mat3 R = quat_to_rotmat(quat);
     glm::mat3 RS = R * S;
 

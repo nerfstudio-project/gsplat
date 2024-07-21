@@ -3,6 +3,7 @@
 #include "utils.cuh"
 #include <cooperative_groups.h>
 #include <cub/cub.cuh>
+#include "error.cuh"
 
 namespace cg = cooperative_groups;
 
@@ -1567,6 +1568,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
             renders.data_ptr<float>(), alphas.data_ptr<float>(), 
             render_normals.data_ptr<float>(), distortions.data_ptr<float>(),
             last_ids.data_ptr<int32_t>());
+        CUDA_CHECK_ERROR;
+        CUDA_SAFE_CALL(cudaStreamSynchronize(stream.stream()));
         break;
     case 8:
         rasterize_to_pixels_fwd_2dgs_kernel<8><<<blocks, threads, 0, stream>>>(
@@ -2210,7 +2213,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                     const float v_G = opac * v_alpha;
                     float v_depth = 0.f;
                     if (gauss_weight_3d <= gauss_weight_2d) {
-                        printf("v_depth: %.2f \n", v_depth);
+                        // printf("v_depth: %.2f \n", v_depth);
                         const float2 v_s = {
                             v_G * -vis * s.x + v_depth * w_transform.x,
                             v_G * -vis * s.y + v_depth * w_transform.y
@@ -2473,6 +2476,8 @@ rasterize_to_pixels_bwd_2dgs_tensor(
                 v_opacities.data_ptr<float>(), v_normals.data_ptr<float>(),
                 (float2 *)v_densifications.data_ptr<float>()
             );
+            CUDA_CHECK_ERROR;
+            CUDA_SAFE_CALL(cudaStreamSynchronize(stream.stream()));
             break;
         case 8:
             rasterize_to_pixels_bwd_2dgs_kernel<8><<<blocks, threads, 0, stream>>>(

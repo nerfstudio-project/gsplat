@@ -1274,6 +1274,7 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
             v_ray_transformations.contiguous(),
             ctx.needs_input_grad[4],  # viewmats_requires_grad
         )
+        torch.cuda.synchronize()
         if not ctx.needs_input_grad[0]:
             v_means = None
         if not ctx.needs_input_grad[1]:
@@ -1665,7 +1666,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             v_render_distloss,
             absgrad,
         )
-
+        torch.cuda.synchronize()
         if absgrad:
             means2d.absgrad = v_means2d_abs
 
