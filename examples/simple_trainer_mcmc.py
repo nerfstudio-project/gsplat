@@ -548,22 +548,22 @@ class Runner:
             for scheduler in schedulers:
                 scheduler.step()
 
-            if cfg.sort and step % 100 == 0 and step > 500:
-                n_gs = len(self.splats["means"])
-                n_sidelen = int(n_gs**0.5)
-                reg_keys = ["means", "scales", "quats", "sh0"]
-                params_to_sort = torch.cat(
-                    [self.splats[k].reshape(n_gs, -1) for k in reg_keys], dim=-1
-                )
-                grid = params_to_sort.reshape((n_sidelen, n_sidelen, -1))
+            # if cfg.sort and step % 100 == 0 and step > 500:
+            #     n_gs = len(self.splats["means"])
+            #     n_sidelen = int(n_gs**0.5)
+            #     reg_keys = ["means", "scales", "quats", "sh0"]
+            #     params_to_sort = torch.cat(
+            #         [self.splats[k].reshape(n_gs, -1) for k in reg_keys], dim=-1
+            #     )
+            #     grid = params_to_sort.reshape((n_sidelen, n_sidelen, -1))
 
-                grid_rgb = sh_to_rgb(grid[:, :, -3:])
-                grid_rgb = torch.clamp(grid_rgb, 0.0, 1.0)
-                grid_rgb = grid_rgb.detach().cpu().numpy()
-                imageio.imwrite(
-                    f"{self.ckpt_dir}/step_{step}.png",
-                    (grid_rgb * 255).astype(np.uint8),
-                )
+            #     grid_rgb = sh_to_rgb(grid[:, :, -3:])
+            #     grid_rgb = torch.clamp(grid_rgb, 0.0, 1.0)
+            #     grid_rgb = grid_rgb.detach().cpu().numpy()
+            #     imageio.imwrite(
+            #         f"{self.ckpt_dir}/step_{step}.png",
+            #         (grid_rgb * 255).astype(np.uint8),
+            #     )
 
             # save checkpoint
             if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:

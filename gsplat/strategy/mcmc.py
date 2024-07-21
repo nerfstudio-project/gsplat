@@ -150,8 +150,15 @@ class MCMCStrategy(Strategy):
                 )
             if n_new_gs == 0:
                 self.done_adding_new_gs = True
+                
+            torch.cuda.empty_cache()
 
-        if self.sort and self.done_adding_new_gs and step % self.sort_every == 0:
+        if (
+            self.sort
+            and self.done_adding_new_gs
+            and step <= self.refine_stop_iter
+            and step % self.sort_every == 0
+        ):
             self._sort_into_grid(params, optimizers)
             if self.verbose:
                 print("Sorted grid.")
@@ -215,7 +222,7 @@ class MCMCStrategy(Strategy):
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
-        shuffle_before_sort: bool = False,
+        shuffle_before_sort: bool = True,
     ):
         n_gs = len(params["means"])
         n_sidelen = int(n_gs**0.5)
@@ -223,14 +230,13 @@ class MCMCStrategy(Strategy):
         params_to_sort = torch.cat(
             [params[k].reshape(n_gs, -1) for k in reg_keys], dim=-1
         )
-        grid = params_to_sort.reshape((n_sidelen, n_sidelen, -1))
-
         if shuffle_before_sort:
             shuffled_indices = torch.randperm(
                 params_to_sort.shape[0], device=params_to_sort.device
             )
             params_to_sort = params_to_sort[shuffled_indices]
 
+        grid = params_to_sort.reshape((n_sidelen, n_sidelen, -1))
         sorted_grid, sorted_indices = sort_with_plas(
             grid.permute(2, 0, 1), improvement_break=1e-4, verbose=self.verbose
         )
