@@ -11,6 +11,7 @@ import nerfview
 import numpy as np
 import torch
 import torch.nn.functional as F
+import torchvision
 import tqdm
 import tyro
 import viser
@@ -111,6 +112,8 @@ class Config:
 
     # Use random background for training to discourage transparency
     random_bkgd: bool = False
+    # Sort
+    sort: bool = False
 
     # Enable camera optimization.
     pose_opt: bool = False
@@ -216,6 +219,7 @@ class Runner:
             refine_start_iter=cfg.refine_start_iter,
             refine_stop_iter=cfg.refine_stop_iter,
             refine_every=cfg.refine_every,
+            sort=cfg.sort,
         )
         self.strategy.check_sanity(self.splats, self.optimizers)
         self.strategy_state = self.strategy.initialize_state()
@@ -438,6 +442,32 @@ class Runner:
                 disp_gt = 1.0 / depths_gt  # [1, M]
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
+            if (
+                cfg.sort
+                and self.strategy.done_adding_new_gs
+                and self.strategy.sorted_params is not None
+            ):
+                n_gs = len(self.splats["means"])
+                n_sidelen = int(n_gs**0.5)
+                reg_keys = ["means", "scales", "quats", "sh0"]
+                params_to_sort = torch.cat(
+                    [self.splats[k].reshape(n_gs, -1) for k in reg_keys], dim=-1
+                )
+
+                params_blurred = params_to_sort.detach().clone()
+                params_blurred[
+                    ~self.strategy.sorted_mask
+                ] = self.strategy.sorted_params[~self.strategy.sorted_mask]
+                grid_blurred = params_blurred.reshape((n_sidelen, n_sidelen, -1))
+                grid_blurred = torchvision.transforms.functional.gaussian_blur(
+                    grid_blurred.permute(2, 0, 1), kernel_size=5
+                ).permute(1, 2, 0)
+                params_blurred = grid_blurred.reshape(n_gs, -1)
+                nbloss = F.huber_loss(
+                    params_blurred[self.strategy.sorted_mask],
+                    params_to_sort[self.strategy.sorted_mask],
+                )
+                loss += nbloss * 1.0
 
             loss = (
                 loss
@@ -469,6 +499,12 @@ class Runner:
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
+                if (
+                    cfg.sort
+                    and self.strategy.done_adding_new_gs
+                    and self.strategy.sorted_params is not None
+                ):
+                    self.writer.add_scalar("train/nbloss", nbloss.item(), step)
                 if cfg.tb_save_image:
                     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
                     canvas = canvas.reshape(-1, *canvas.shape[2:])
@@ -512,6 +548,23 @@ class Runner:
             for scheduler in schedulers:
                 scheduler.step()
 
+            if cfg.sort and step % 100 == 0 and step > 500:
+                n_gs = len(self.splats["means"])
+                n_sidelen = int(n_gs**0.5)
+                reg_keys = ["means", "scales", "quats", "sh0"]
+                params_to_sort = torch.cat(
+                    [self.splats[k].reshape(n_gs, -1) for k in reg_keys], dim=-1
+                )
+                grid = params_to_sort.reshape((n_sidelen, n_sidelen, -1))
+
+                grid_rgb = sh_to_rgb(grid[:, :, -3:])
+                grid_rgb = torch.clamp(grid_rgb, 0.0, 1.0)
+                grid_rgb = grid_rgb.detach().cpu().numpy()
+                imageio.imwrite(
+                    f"{self.ckpt_dir}/step_{step}.png",
+                    (grid_rgb * 255).astype(np.uint8),
+                )
+
             # save checkpoint
             if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
@@ -529,31 +582,6 @@ class Runner:
                         "splats": self.splats.state_dict(),
                     },
                     f"{self.ckpt_dir}/ckpt_{step}.pt",
-                )
-
-                n_gs = len(self.splats["means"])
-                grid_sidelen = int(n_gs**0.5)
-                params_to_sort = torch.cat(
-                    [v.reshape(n_gs, -1) for v in self.splats.values()], dim=-1
-                )
-                grid = params_to_sort.reshape((grid_sidelen, grid_sidelen, -1))
-                print(grid.shape)
-                grid_rgb = sh_to_rgb(grid[:, :, 11:14])
-                grid_rgb = torch.clamp(grid_rgb, 0.0, 1.0)
-
-                grid_rgb = grid_rgb.detach().cpu().numpy()
-                imageio.imwrite(
-                    f"{self.ckpt_dir}/ckpt_{step}.png",
-                    (grid_rgb * 255).astype(np.uint8),
-                )
-
-                grid_mins = grid.amin(dim=(0, 1))
-                grid_maxs = grid.amax(dim=(0, 1))
-                grid_norm = (grid - grid_mins) / (grid_maxs - grid_mins)
-                grid_norm = grid_norm.detach().cpu().numpy()
-                grid_norm = (grid_norm * 255).astype(np.uint8)
-                tifffile.imwrite(
-                    f"{self.ckpt_dir}/ckpt_{step}.tif", grid_norm, compression="zlib"
                 )
 
             # eval the full set

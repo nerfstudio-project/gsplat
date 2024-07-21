@@ -13,8 +13,6 @@ from .ops import (
     sample_add,
     _update_param_with_optimizer,
 )
-import numpy as np
-import imageio
 
 
 @dataclass
@@ -58,10 +56,15 @@ class MCMCStrategy(Strategy):
     noise_lr: float = 5e5
     refine_start_iter: int = 500
     refine_stop_iter: int = 25_000
-    refine_every: int = 100
-    sort_every: int = 1000
+    refine_every: int = 1000
     min_opacity: float = 0.005
     verbose: bool = True
+    sort: bool = False
+    sort_every: int = 1000
+
+    done_adding_new_gs: bool = False
+    sorted_params: Tensor | None = None
+    sorted_mask: Tensor | None = None
 
     def initialize_state(self) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy."""
@@ -129,8 +132,8 @@ class MCMCStrategy(Strategy):
         binoms = state["binoms"]
 
         if (
-            step < self.refine_stop_iter
-            and step > self.refine_start_iter
+            step <= self.refine_stop_iter
+            and step >= self.refine_start_iter
             and step % self.refine_every == 0
         ):
             # teleport GSs
@@ -145,10 +148,10 @@ class MCMCStrategy(Strategy):
                     f"Step {step}: Added {n_new_gs} GSs. "
                     f"Now having {len(params['means'])} GSs."
                 )
+            if n_new_gs == 0:
+                self.done_adding_new_gs = True
 
-            torch.cuda.empty_cache()
-
-        if step > self.refine_start_iter and step % self.sort_every == 0:
+        if self.sort and self.done_adding_new_gs and step % self.sort_every == 0:
             self._sort_into_grid(params, optimizers)
             if self.verbose:
                 print("Sorted grid.")
@@ -169,6 +172,10 @@ class MCMCStrategy(Strategy):
     ) -> int:
         opacities = torch.sigmoid(params["opacities"])
         dead_mask = opacities <= self.min_opacity
+
+        if self.sort and self.sorted_mask is not None:
+            self.sorted_mask[dead_mask] = 0
+
         n_gs = dead_mask.sum().item()
         if n_gs > 0:
             relocate(
@@ -190,7 +197,7 @@ class MCMCStrategy(Strategy):
     ) -> int:
         current_n_points = len(params["means"])
         n_target = min(self.cap_max, int(1.05 * current_n_points))
-        n_target = round(n_target**0.5) ** 2
+        n_target = int(n_target**0.5) ** 2
         n_gs = max(0, n_target - current_n_points)
         if n_gs > 0:
             sample_add(
@@ -208,25 +215,29 @@ class MCMCStrategy(Strategy):
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
+        shuffle_before_sort: bool = False,
     ):
         n_gs = len(params["means"])
+        n_sidelen = int(n_gs**0.5)
+        reg_keys = ["means", "scales", "quats", "sh0"]
         params_to_sort = torch.cat(
-            [v.reshape(n_gs, -1) for v in params.values()], dim=-1
+            [params[k].reshape(n_gs, -1) for k in reg_keys], dim=-1
         )
+        grid = params_to_sort.reshape((n_sidelen, n_sidelen, -1))
 
-        # Shuffle before sorting
-        shuffled_indices = torch.randperm(
-            params_to_sort.shape[0], device=params_to_sort.device
-        )
-        params_to_sort = params_to_sort[shuffled_indices]
+        if shuffle_before_sort:
+            shuffled_indices = torch.randperm(
+                params_to_sort.shape[0], device=params_to_sort.device
+            )
+            params_to_sort = params_to_sort[shuffled_indices]
 
-        grid_sidelen = int(n_gs**0.5)
-        grid = params_to_sort.reshape((grid_sidelen, grid_sidelen, -1))
-        _, sorted_indices = sort_with_plas(
+        sorted_grid, sorted_indices = sort_with_plas(
             grid.permute(2, 0, 1), improvement_break=1e-4, verbose=self.verbose
         )
+        sorted_grid = sorted_grid.permute(1, 2, 0)
         sorted_indices = sorted_indices.squeeze().flatten()
-        sorted_indices = shuffled_indices[sorted_indices]
+        if shuffle_before_sort:
+            sorted_indices = shuffled_indices[sorted_indices]
 
         def param_fn(name: str, p: Tensor) -> Tensor:
             return torch.nn.Parameter(p[sorted_indices])
@@ -237,14 +248,5 @@ class MCMCStrategy(Strategy):
         # update the parameters and the state in the optimizers
         _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
 
-        # means = params["means"]
-        # means_grid = means.reshape((grid_sidelen, grid_sidelen, -1))
-        # print(means_grid.shape)
-
-        # means_grid_norm = (means_grid - means_grid.min()) / (means_grid.max() - means_grid.min())
-        # means_grid_norm = means_grid_norm.cpu().numpy()
-        # print(means_grid_norm.shape)
-        # imageio.imwrite(
-        #     "tmp/grid_norm.png", (means_grid_norm * 255).astype(np.uint8)
-        # )
-        # raise
+        self.sorted_params = sorted_grid.reshape(n_gs, -1)
+        self.sorted_mask = torch.ones(n_gs, dtype=bool).to(self.sorted_params.device)

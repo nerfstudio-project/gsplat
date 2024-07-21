@@ -14,9 +14,9 @@ do
     fi
 
     CAP_MAX=1000000
-    MAX_STEPS=30001
-    EVAL_STEPS="1000 1001 3000 3001 7000 7001 15000 15001 30000 30001"
-    SAVE_STEPS="1000 1001 3000 3001 7000 7001 15000 15001 30000 30001"
+    MAX_STEPS=30000
+    EVAL_STEPS="1000 7000 15000 30000"
+    SAVE_STEPS="1000 7000 15000 30000"
 
     python simple_trainer_mcmc.py --eval_steps $EVAL_STEPS --save_steps $SAVE_STEPS --disable_viewer --data_factor $DATA_FACTOR \
         --init_type sfm \
@@ -24,6 +24,15 @@ do
         --max_steps $MAX_STEPS \
         --data_dir $SCENE_DIR/$SCENE/ \
         --sh_degree 0 \
-        --result_dir $RESULTS_DIR/3dgs_compress/$SCENE/
+        --sort \
+        --result_dir $RESULTS_DIR/3dgs_sh0_sort/$SCENE/
+
+    # python simple_trainer_mcmc.py --eval_steps $EVAL_STEPS --save_steps $SAVE_STEPS --disable_viewer --data_factor $DATA_FACTOR \
+    #     --init_type sfm \
+    #     --cap_max $CAP_MAX \
+    #     --max_steps $MAX_STEPS \
+    #     --data_dir $SCENE_DIR/$SCENE/ \
+    #     --sh_degree 0 \
+    #     --result_dir $RESULTS_DIR/3dgs_sh0/$SCENE/
 
 done
