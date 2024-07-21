@@ -68,6 +68,24 @@ def main():
     imageio.imwrite(os.path.join(out_dir, "rgb.jpg"), grid_rgb)
     # imagecodecs.imwrite(os.path.join(out_dir, "rgb.jxl"), grid_rgb)
 
+def gif():
+    ckpt_dir = "examples/results/360_v2/3dgs_sh0_sort/garden/ckpts"
+    
+    writer = imageio.get_writer(f"{ckpt_dir}/grids.mp4", fps=10)
+    
+    for step in range(500, 8900, 100):
+        grid = imageio.imread(os.path.join(ckpt_dir, f"grid_step{step:04d}.png"))
+        if grid.shape[0] != 0:
+            img = np.zeros((1000, 1000, 3), dtype=np.uint8)
+            img[:grid.shape[0], :grid.shape[1], :] = grid
+        else:
+            img = grid
+            
+        writer.append_data(img)
+    writer.close()
+    
+        
 
 if __name__ == "__main__":
-    main()
+    # main()
+    gif()

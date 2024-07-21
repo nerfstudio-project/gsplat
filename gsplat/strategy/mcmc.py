@@ -155,7 +155,8 @@ class MCMCStrategy(Strategy):
 
         if (
             self.sort
-            and self.done_adding_new_gs
+            # and self.done_adding_new_gs
+            and step >= self.refine_start_iter
             and step <= self.refine_stop_iter
             and step % self.sort_every == 0
         ):
@@ -181,7 +182,7 @@ class MCMCStrategy(Strategy):
         dead_mask = opacities <= self.min_opacity
 
         if self.sort and self.sorted_mask is not None:
-            self.sorted_mask[dead_mask] = 0
+            self.sorted_mask[dead_mask[:len(self.sorted_mask)]] = 0
 
         n_gs = dead_mask.sum().item()
         if n_gs > 0:
