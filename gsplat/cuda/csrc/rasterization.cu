@@ -1568,8 +1568,6 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
             renders.data_ptr<float>(), alphas.data_ptr<float>(), 
             render_normals.data_ptr<float>(), distortions.data_ptr<float>(),
             last_ids.data_ptr<int32_t>());
-        CUDA_CHECK_ERROR;
-        CUDA_SAFE_CALL(cudaStreamSynchronize(stream.stream()));
         break;
     case 8:
         rasterize_to_pixels_fwd_2dgs_kernel<8><<<blocks, threads, 0, stream>>>(
@@ -2118,7 +2116,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 intersect = cross_product(h_u, h_v);
 
                 // No intersection
-                if (intersect.z == 0.0) continue;
+                if (intersect.z == 0.0) valid = false;
                 s = {intersect.x / intersect.z, intersect.y / intersect.z};
 
                 gauss_weight_3d = (s.x * s.x + s.y * s.y);
@@ -2476,8 +2474,8 @@ rasterize_to_pixels_bwd_2dgs_tensor(
                 v_opacities.data_ptr<float>(), v_normals.data_ptr<float>(),
                 (float2 *)v_densifications.data_ptr<float>()
             );
-            CUDA_CHECK_ERROR;
-            CUDA_SAFE_CALL(cudaStreamSynchronize(stream.stream()));
+            // CUDA_CHECK_ERROR;
+            // CUDA_SAFE_CALL(cudaStreamSynchronize(stream.stream()));
             break;
         case 8:
             rasterize_to_pixels_bwd_2dgs_kernel<8><<<blocks, threads, 0, stream>>>(

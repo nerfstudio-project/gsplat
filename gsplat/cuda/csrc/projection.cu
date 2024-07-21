@@ -1743,8 +1743,8 @@ fully_fused_projection_fwd_2dgs_tensor(
             means2d.data_ptr<float>(), depths.data_ptr<float>(),
             ray_transformations.data_ptr<float>(),
             normals.data_ptr<float>());
-        CUDA_CHECK_ERROR;
-        CUDA_SAFE_CALL(cudaStreamSynchronize(stream.stream()));
+        // CUDA_CHECK_ERROR;
+        // CUDA_SAFE_CALL(cudaStreamSynchronize(stream.stream()));
     }
     return std::make_tuple(radii, means2d, depths, ray_transformations, normals);
 }
@@ -2184,8 +2184,8 @@ fully_fused_projection_bwd_2dgs_tensor(
             v_scales.data_ptr<float>(),
             viewmats_requires_grad ? viewmats.data_ptr<float>() : nullptr
         );
-        CUDA_CHECK_ERROR;
-        CUDA_SAFE_CALL(cudaStreamSynchronize(stream.stream()));
+        // CUDA_CHECK_ERROR;
+        // CUDA_SAFE_CALL(cudaStreamSynchronize(stream.stream()));
     }
 
     return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
