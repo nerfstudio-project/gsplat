@@ -150,7 +150,7 @@ class MCMCStrategy(Strategy):
                 )
             if n_new_gs == 0:
                 self.done_adding_new_gs = True
-                
+
             torch.cuda.empty_cache()
 
         if (
