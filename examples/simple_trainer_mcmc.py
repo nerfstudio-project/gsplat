@@ -6,12 +6,10 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import imageio
-import tifffile
 import nerfview
 import numpy as np
 import torch
 import torch.nn.functional as F
-import torchvision
 import tqdm
 import tyro
 import viser
@@ -22,10 +20,10 @@ from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
-from utils import AppearanceOptModule, CameraOptModule, set_random_seed, sh_to_rgb
+from utils import AppearanceOptModule, CameraOptModule, set_random_seed
 
 from gsplat.rendering import rasterization
-from gsplat.strategy import MCMCStrategy
+from gsplat.strategy import MCMCStrategy, SortStrategy
 
 
 @dataclass
@@ -112,8 +110,6 @@ class Config:
 
     # Use random background for training to discourage transparency
     random_bkgd: bool = False
-    # Sort
-    sort: bool = False
 
     # Enable camera optimization.
     pose_opt: bool = False
@@ -137,6 +133,11 @@ class Config:
     depth_loss: bool = False
     # Weight for depth loss
     depth_lambda: float = 1e-2
+
+    # Enable sort loss. (experimental)
+    sort: bool = False
+    # Weight for sort neighborhood loss
+    sort_nb_lambda: float = 1.0
 
     # Dump information to tensorboard every this steps
     tb_every: int = 100
@@ -210,6 +211,12 @@ class Runner:
             device=self.device,
         )
         print("Model initialized. Number of GS:", len(self.splats["means"]))
+
+        if cfg.sort:
+            # Round cap_max to nearest square
+            cfg.cap_max = round(cfg.cap_max**0.5) ** 2
+            self.sort_strategy = SortStrategy(cap_max=cfg.cap_max)
+            self.sort_state = self.sort_strategy.initialize_state()
 
         # Densification Strategy
         self.strategy = MCMCStrategy(
@@ -442,33 +449,9 @@ class Runner:
                 disp_gt = 1.0 / depths_gt  # [1, M]
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
-            if (
-                cfg.sort
-                and self.strategy.done_adding_new_gs
-                and self.strategy.sorted_params is not None
-                and len(self.strategy.sorted_params) == len(self.splats["means"])
-            ):
-                n_gs = len(self.splats["means"])
-                n_sidelen = int(n_gs**0.5)
-                reg_keys = ["means", "scales", "quats", "sh0"]
-                params_to_sort = torch.cat(
-                    [self.splats[k].reshape(n_gs, -1) for k in reg_keys], dim=-1
-                )
-
-                params_blurred = params_to_sort.detach().clone()
-                params_blurred[
-                    ~self.strategy.sorted_mask
-                ] = self.strategy.sorted_params[~self.strategy.sorted_mask]
-                grid_blurred = params_blurred.reshape((n_sidelen, n_sidelen, -1))
-                grid_blurred = torchvision.transforms.functional.gaussian_blur(
-                    grid_blurred.permute(2, 0, 1), kernel_size=5
-                ).permute(1, 2, 0)
-                params_blurred = grid_blurred.reshape(n_gs, -1)
-                nbloss = F.huber_loss(
-                    params_blurred[self.strategy.sorted_mask],
-                    params_to_sort[self.strategy.sorted_mask],
-                )
-                loss += nbloss * 1.0
+            if cfg.sort:
+                nbloss = self.sort_strategy.nb_loss(self.splats, self.sort_state)
+                loss += nbloss * cfg.sort_nb_lambda
 
             loss = (
                 loss
@@ -500,12 +483,7 @@ class Runner:
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
-                if (
-                    cfg.sort
-                    and self.strategy.done_adding_new_gs
-                    and self.strategy.sorted_params is not None
-                    and len(self.strategy.sorted_params) == len(self.splats["means"])
-                ):
+                if cfg.sort:
                     self.writer.add_scalar("train/nbloss", nbloss.item(), step)
                 if cfg.tb_save_image:
                     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
@@ -521,6 +499,22 @@ class Runner:
                 info=info,
                 lr=schedulers[0].get_last_lr()[0],
             )
+
+            if cfg.sort:
+                self.sort_strategy.step_post_backward(
+                    params=self.splats,
+                    optimizers=self.optimizers,
+                    state=self.sort_state,
+                    step=step,
+                    info=info,
+                )
+                if step % 100 == 0:
+                    grid_rgb = self.sort_strategy.debug(self.splats)
+                    if grid_rgb is not None:
+                        imageio.imwrite(
+                            os.path.join(self.ckpt_dir, f"grid_step{step:04d}.png"),
+                            grid_rgb,
+                        )
 
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:
@@ -550,34 +544,6 @@ class Runner:
             for scheduler in schedulers:
                 scheduler.step()
 
-            if step >= 500 and step % 100 == 0:
-                splats = self.splats
-                n_gs = len(splats["means"])
-                n_sidelen = int(n_gs**0.5)
-                params = torch.cat(
-                    [splats[k].reshape(n_gs, -1) for k in splats.keys()], dim=-1
-                )
-
-                if self.strategy.sorted_params is not None:
-                    x = int(self.strategy.sorted_params.shape[0] ** 0.5)
-                    y = math.ceil(n_gs / x)
-                    c = params.shape[-1]
-                else:
-                    x = n_sidelen
-                    y = n_sidelen
-                    c = params.shape[-1]
-
-                grid = params[: n_sidelen * x].reshape(n_sidelen, x, c)
-                grid2 = params[n_sidelen * x :].reshape(n_sidelen, -1, c)
-                grid = torch.hstack([grid, grid2])
-                grid_rgb = sh_to_rgb(grid[:, :, -3:])
-                grid_rgb = torch.clamp(grid_rgb, 0.0, 1.0)
-                grid_rgb = grid_rgb.detach().cpu().numpy()
-                grid_rgb = (grid_rgb * 255).astype(np.uint8)
-                imageio.imwrite(
-                    os.path.join(self.ckpt_dir, f"grid_step{step:04d}.png"), grid_rgb
-                )
-
             # save checkpoint
             if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
@@ -595,22 +561,6 @@ class Runner:
                         "splats": self.splats.state_dict(),
                     },
                     f"{self.ckpt_dir}/ckpt_{step}.pt",
-                )
-
-                n_gs = len(self.splats["means"])
-                n_sidelen = int(n_gs**0.5)
-                reg_keys = ["means", "scales", "quats", "sh0"]
-                params_to_sort = torch.cat(
-                    [self.splats[k].reshape(n_gs, -1) for k in reg_keys], dim=-1
-                )
-                grid = params_to_sort.reshape((n_sidelen, n_sidelen, -1))
-
-                grid_rgb = sh_to_rgb(grid[:, :, -3:])
-                grid_rgb = torch.clamp(grid_rgb, 0.0, 1.0)
-                grid_rgb = grid_rgb.detach().cpu().numpy()
-                imageio.imwrite(
-                    f"{self.ckpt_dir}/ckpt_{step}.png",
-                    (grid_rgb * 255).astype(np.uint8),
                 )
 
             # eval the full set
