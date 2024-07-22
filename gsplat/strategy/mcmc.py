@@ -182,7 +182,7 @@ class MCMCStrategy(Strategy):
         dead_mask = opacities <= self.min_opacity
 
         if self.sort and self.sorted_mask is not None:
-            self.sorted_mask[dead_mask[:len(self.sorted_mask)]] = 0
+            self.sorted_mask[dead_mask[: len(self.sorted_mask)]] = 0
 
         n_gs = dead_mask.sum().item()
         if n_gs > 0:
@@ -223,7 +223,7 @@ class MCMCStrategy(Strategy):
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
-        shuffle_before_sort: bool = True,
+        shuffle_before_sort: bool = False,
     ):
         n_gs = len(params["means"])
         n_sidelen = int(n_gs**0.5)

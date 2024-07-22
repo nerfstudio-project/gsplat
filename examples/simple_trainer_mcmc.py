@@ -554,26 +554,29 @@ class Runner:
                 splats = self.splats
                 n_gs = len(splats["means"])
                 n_sidelen = int(n_gs**0.5)
-                params = torch.cat([splats[k].reshape(n_gs, -1) for k in splats.keys()], dim=-1)
-                
+                params = torch.cat(
+                    [splats[k].reshape(n_gs, -1) for k in splats.keys()], dim=-1
+                )
+
                 if self.strategy.sorted_params is not None:
-                    x = int(self.strategy.sorted_params.shape[0]**0.5)
+                    x = int(self.strategy.sorted_params.shape[0] ** 0.5)
                     y = math.ceil(n_gs / x)
                     c = params.shape[-1]
                 else:
                     x = n_sidelen
                     y = n_sidelen
                     c = params.shape[-1]
-                
-                grid = params[:n_sidelen * x].reshape(n_sidelen, x, c)
-                grid2 = params[n_sidelen*x:].reshape(n_sidelen, -1, c)
-                print(grid.shape, grid2.shape)
+
+                grid = params[: n_sidelen * x].reshape(n_sidelen, x, c)
+                grid2 = params[n_sidelen * x :].reshape(n_sidelen, -1, c)
                 grid = torch.hstack([grid, grid2])
                 grid_rgb = sh_to_rgb(grid[:, :, -3:])
                 grid_rgb = torch.clamp(grid_rgb, 0.0, 1.0)
                 grid_rgb = grid_rgb.detach().cpu().numpy()
                 grid_rgb = (grid_rgb * 255).astype(np.uint8)
-                imageio.imwrite(os.path.join(self.ckpt_dir, f"grid_step{step:04d}.png"), grid_rgb)
+                imageio.imwrite(
+                    os.path.join(self.ckpt_dir, f"grid_step{step:04d}.png"), grid_rgb
+                )
 
             # save checkpoint
             if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
