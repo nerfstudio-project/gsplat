@@ -4,6 +4,7 @@ import imageio
 import os
 from utils import sh_to_rgb
 import imagecodecs
+from tqdm import tqdm
 
 
 def compress_splats(splats, compress_dir):
@@ -70,20 +71,22 @@ def main():
 
 
 def gif():
-    ckpt_dir = "examples/results/360_v2/3dgs_sh0_sort/garden/ckpts"
+    scenes = ["garden", "bicycle", "stump", "treehill", "flowers", "bonsai"]
+    for scene in tqdm(scenes):
+        ckpt_dir = f"examples/results/360_v2/3dgs_sh0_sort/{scene}/ckpts"
 
-    writer = imageio.get_writer(f"{ckpt_dir}/grids.mp4", fps=10)
+        writer = imageio.get_writer(f"{ckpt_dir}/{scene}_mcmc_grid.mp4", fps=10)
 
-    for step in range(500, 9900, 100):
-        grid = imageio.imread(os.path.join(ckpt_dir, f"grid_step{step:04d}.png"))
-        if grid.shape[0] != 0:
-            img = np.zeros((1000, 1000, 3), dtype=np.uint8)
-            img[: grid.shape[0], : grid.shape[1], :] = grid
-        else:
-            img = grid
+        for step in range(500, 30000, 100):
+            grid = imageio.imread(os.path.join(ckpt_dir, f"grid_step{step:04d}.png"))
+            if grid.shape[0] != 0:
+                img = np.zeros((1000, 1000, 3), dtype=np.uint8)
+                img[: grid.shape[0], : grid.shape[1], :] = grid
+            else:
+                img = grid
 
-        writer.append_data(img)
-    writer.close()
+            writer.append_data(img)
+        writer.close()
 
 
 if __name__ == "__main__":
