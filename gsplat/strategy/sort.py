@@ -60,10 +60,8 @@ class SortStrategy(Strategy):
         optimizers: Dict[str, torch.optim.Optimizer],
         state: Dict[str, Any],
     ):
-        n_sidelen = int(self.cap_max**0.5)
-        reg_keys = ["means", "scales", "quats", "sh0"]
         params_to_sort = torch.cat(
-            [params[k].reshape(self.cap_max, -1) for k in reg_keys], dim=-1
+            [params[k].reshape(self.cap_max, -1) for k in self.sort_attributes], dim=-1
         )
         if self.shuffle_before_sort:
             shuffled_indices = torch.randperm(
@@ -71,11 +69,11 @@ class SortStrategy(Strategy):
             )
             params_to_sort = params_to_sort[shuffled_indices]
 
+        n_sidelen = int(self.cap_max**0.5)
         grid = params_to_sort.reshape((n_sidelen, n_sidelen, -1))
         sorted_grid, sorted_indices = sort_with_plas(
             grid.permute(2, 0, 1), improvement_break=1e-4, verbose=self.verbose
-        )
-        sorted_grid = sorted_grid.permute(1, 2, 0)
+        ).permute(1, 2, 0)
         sorted_indices = sorted_indices.squeeze().flatten()
         if self.shuffle_before_sort:
             sorted_indices = shuffled_indices[sorted_indices]
@@ -105,22 +103,25 @@ class SortStrategy(Strategy):
         if sort_state["sorted_params"] is None:
             return torch.tensor(0.0, requires_grad=True)
 
+        # update state for sorted_mask
         sort_state["sorted_mask"][strategy_state["relocated_mask"]] = 0
 
-        n_sidelen = int(n_gs**0.5)
         params_to_sort = torch.cat(
-            [params[k].reshape(n_gs, -1) for k in self.sort_attributes], dim=-1
+            [params[k].reshape(self.cap_max, -1) for k in self.sort_attributes], dim=-1
         )
 
+        # make smooth param target
         params_blurred = params_to_sort.detach().clone()
         params_blurred[~sort_state["sorted_mask"]] = sort_state["sorted_params"][
             ~sort_state["sorted_mask"]
         ]
+        n_sidelen = int(n_gs**0.5)
         grid_blurred = params_blurred.reshape((n_sidelen, n_sidelen, -1))
         grid_blurred = torchvision.transforms.functional.gaussian_blur(
             grid_blurred.permute(2, 0, 1), kernel_size=5
         ).permute(1, 2, 0)
         params_blurred = grid_blurred.reshape(n_gs, -1)
+
         nbloss = F.huber_loss(
             params_blurred[sort_state["sorted_mask"]],
             params_to_sort[sort_state["sorted_mask"]],
@@ -132,11 +133,11 @@ class SortStrategy(Strategy):
         if n_gs != self.cap_max:
             return None
 
-        n_sidelen = int(n_gs**0.5)
         params_to_sort = torch.cat(
             [params[k].reshape(n_gs, -1) for k in self.sort_attributes], dim=-1
         )
 
+        n_sidelen = int(n_gs**0.5)
         grid = params_to_sort.reshape(n_sidelen, n_sidelen, -1)
         grid_mins = torch.amin(grid, dim=(0, 1))
         grid_maxs = torch.amax(grid, dim=(0, 1))
