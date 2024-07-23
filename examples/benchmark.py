@@ -11,7 +11,7 @@ import GPUtil
 
 @dataclass
 class BenchmarkConfig:
-    """Baseline config"""
+    """Benchmark config"""
 
     # trainer to run
     trainer: str = "simple_trainer.py"
@@ -40,29 +40,29 @@ class BenchmarkConfig:
 
 
 # Configurations to run
-baseline_config = BenchmarkConfig(model_configs={"--max_steps": 30000})
-baseline_config_absgrad = BenchmarkConfig(
+baseline_config = BenchmarkConfig()
+absgrad_config = BenchmarkConfig(
     result_dir="results/absgrad",
     model_configs={"--absgrad": True, "--grow_grad2d": 0.0006},
 )
-baseline_config_antialiased = BenchmarkConfig(
+antialiased_config = BenchmarkConfig(
     result_dir="results/antialiased", model_configs={"--antialiased": True}
 )
 mcmc_config = BenchmarkConfig(
     trainer="simple_trainer_mcmc.py",
     result_dir="results/mcmc",
-    model_configs={"--max_steps": 30000},
 )
 
 configs_to_run = [
-    mcmc_config,
-    # baseline_config,
-    # baseline_config_absgrad,
-    # baseline_config_antialiased,
+    baseline_config,
+    # mcmc_config,
+    # absgrad_config,
+    # antialiased_config,
 ]
 
 
 def train_scene(gpu, scene, factor, config):
+    """Train a single scene with config on current gpu"""
     # additional user set model configs
     model_config_args = " ".join(f"{k} {v}" for k, v in config.model_configs.items())
 
@@ -85,10 +85,10 @@ def train_scene(gpu, scene, factor, config):
 
 
 def worker(gpu, scene, factor, config):
+    """This worker function starts a job and returns when it's done."""
     print(f"Starting {config.trainer} job on GPU {gpu} with scene {scene}\n")
     train_scene(gpu, scene, factor, config)
     print(f"Finished {config.trainer} job on GPU {gpu} with scene {scene}\n")
-    # This worker function starts a job and returns when it's done.
 
 
 def dispatch_jobs(jobs, executor, config):
@@ -100,7 +100,6 @@ def dispatch_jobs(jobs, executor, config):
         all_available_gpus = set(
             GPUtil.getAvailable(order="first", limit=10, maxMemory=0.1, maxLoad=0.1)
         )
-        # all_available_gpus = set([0,1,2,3])
         available_gpus = list(all_available_gpus - reserved_gpus - config.excluded_gpus)
 
         # Launch new jobs on available GPUs
@@ -111,7 +110,6 @@ def dispatch_jobs(jobs, executor, config):
                 worker, gpu, *job, config
             )  # Unpacking job as arguments to worker
             future_to_job[future] = (gpu, job)
-
             reserved_gpus.add(gpu)  # Reserve this GPU until the job starts processing
 
         # Check for completed jobs and remove them from the list of running jobs.
@@ -132,11 +130,13 @@ def dispatch_jobs(jobs, executor, config):
 
 
 def main():
-    """Launch batch_configs in serial"""
+    """Launch batch_configs in serial but process each config in parallel (multi gpu)"""
+
     for config in configs_to_run:
-        # num jobs = num scenes to run for batch_config
+        # num jobs = num scenes to run for current config
         jobs = list(zip(config.scenes, config.factors))
-        print(jobs)
+
+        # Run multiple gpu train scripts
         # Using ThreadPoolExecutor to manage the thread pool
         with ThreadPoolExecutor(max_workers=8) as executor:
             dispatch_jobs(jobs, executor, config)
