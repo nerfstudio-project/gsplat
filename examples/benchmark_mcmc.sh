@@ -13,7 +13,7 @@ do
         DATA_FACTOR=4
     fi
 
-    CAP_MAX=150000 # 1000000
+    CAP_MAX=1000000
     MAX_STEPS=30000
     EVAL_STEPS="2000 7000 15000 30000"
     SAVE_STEPS="2000 7000 15000 30000"
@@ -25,7 +25,7 @@ do
         --data_dir $SCENE_DIR/$SCENE/ \
         --sh_degree 0 \
         --sort \
-        --result_dir $RESULTS_DIR/3dgs_sh0_sort_refactor/$SCENE/
+        --result_dir $RESULTS_DIR/3dgs_sh0_sort/$SCENE/
 
     # python simple_trainer_mcmc.py --eval_steps $EVAL_STEPS --save_steps $SAVE_STEPS --disable_viewer --data_factor $DATA_FACTOR \
     #     --init_type sfm \

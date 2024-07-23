@@ -226,7 +226,6 @@ class Runner:
             refine_start_iter=cfg.refine_start_iter,
             refine_stop_iter=cfg.refine_stop_iter,
             refine_every=cfg.refine_every,
-            sort=cfg.sort,
         )
         self.strategy.check_sanity(self.splats, self.optimizers)
         self.strategy_state = self.strategy.initialize_state()
@@ -450,7 +449,11 @@ class Runner:
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
             if cfg.sort:
-                nbloss = self.sort_strategy.nb_loss(self.splats, self.sort_state)
+                nbloss = self.sort_strategy.nb_loss(
+                    self.splats,
+                    sort_state=self.sort_state,
+                    strategy_state=self.strategy_state,
+                )
                 loss += nbloss * cfg.sort_nb_lambda
 
             loss = (

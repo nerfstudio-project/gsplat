@@ -4,14 +4,12 @@ from typing import Any, Dict, Union
 
 import torch
 from torch import Tensor
-from plas import sort_with_plas
 
 from .base import Strategy
 from .ops import (
     inject_noise_to_position,
     relocate,
     sample_add,
-    _update_param_with_optimizer,
 )
 
 
@@ -59,12 +57,6 @@ class MCMCStrategy(Strategy):
     refine_every: int = 1000
     min_opacity: float = 0.005
     verbose: bool = True
-    sort: bool = False
-    sort_every: int = 1000
-
-    done_adding_new_gs: bool = False
-    sorted_params: Tensor | None = None
-    sorted_mask: Tensor | None = None
 
     def initialize_state(self) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy."""
@@ -73,7 +65,9 @@ class MCMCStrategy(Strategy):
         for n in range(n_max):
             for k in range(n + 1):
                 binoms[n, k] = math.comb(n, k)
-        return {"binoms": binoms}
+
+        relocated_mask = torch.zeros([])
+        return {"binoms": binoms, "relocated_mask": relocated_mask}
 
     def check_sanity(
         self,
@@ -137,7 +131,7 @@ class MCMCStrategy(Strategy):
             and step % self.refine_every == 0
         ):
             # teleport GSs
-            n_relocated_gs = self._relocate_gs(params, optimizers, binoms)
+            n_relocated_gs = self._relocate_gs(params, optimizers, binoms, state)
             if self.verbose:
                 print(f"Step {step}: Relocated {n_relocated_gs} GSs.")
 
@@ -153,19 +147,6 @@ class MCMCStrategy(Strategy):
 
             torch.cuda.empty_cache()
 
-        if (
-            self.sort
-            # and self.done_adding_new_gs
-            and step >= self.refine_start_iter
-            and step <= self.refine_stop_iter
-            and step % self.sort_every == 0
-        ):
-            self._sort_into_grid(params, optimizers)
-            if self.verbose:
-                print("Sorted grid.")
-
-            torch.cuda.empty_cache()
-
         # add noise to GSs
         inject_noise_to_position(
             params=params, optimizers=optimizers, state={}, scaler=lr * self.noise_lr
@@ -177,12 +158,13 @@ class MCMCStrategy(Strategy):
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
         binoms: Tensor,
+        state: Dict[str, Any],
     ) -> int:
         opacities = torch.sigmoid(params["opacities"])
         dead_mask = opacities <= self.min_opacity
 
-        if self.sort and self.sorted_mask is not None:
-            self.sorted_mask[dead_mask[: len(self.sorted_mask)]] = 0
+        # keep track of relocated GSs for compression
+        state["relocated_mask"] = dead_mask
 
         n_gs = dead_mask.sum().item()
         if n_gs > 0:
@@ -205,7 +187,6 @@ class MCMCStrategy(Strategy):
     ) -> int:
         current_n_points = len(params["means"])
         n_target = min(self.cap_max, int(1.05 * current_n_points))
-        n_target = int(n_target**0.5) ** 2
         n_gs = max(0, n_target - current_n_points)
         if n_gs > 0:
             sample_add(
@@ -217,43 +198,3 @@ class MCMCStrategy(Strategy):
                 min_opacity=self.min_opacity,
             )
         return n_gs
-
-    @torch.no_grad()
-    def _sort_into_grid(
-        self,
-        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-        optimizers: Dict[str, torch.optim.Optimizer],
-        shuffle_before_sort: bool = False,
-    ):
-        n_gs = len(params["means"])
-        n_sidelen = int(n_gs**0.5)
-        reg_keys = ["means", "scales", "quats", "sh0"]
-        params_to_sort = torch.cat(
-            [params[k].reshape(n_gs, -1) for k in reg_keys], dim=-1
-        )
-        if shuffle_before_sort:
-            shuffled_indices = torch.randperm(
-                params_to_sort.shape[0], device=params_to_sort.device
-            )
-            params_to_sort = params_to_sort[shuffled_indices]
-
-        grid = params_to_sort.reshape((n_sidelen, n_sidelen, -1))
-        sorted_grid, sorted_indices = sort_with_plas(
-            grid.permute(2, 0, 1), improvement_break=1e-4, verbose=self.verbose
-        )
-        sorted_grid = sorted_grid.permute(1, 2, 0)
-        sorted_indices = sorted_indices.squeeze().flatten()
-        if shuffle_before_sort:
-            sorted_indices = shuffled_indices[sorted_indices]
-
-        def param_fn(name: str, p: Tensor) -> Tensor:
-            return torch.nn.Parameter(p[sorted_indices])
-
-        def optimizer_fn(key: str, v: Tensor) -> Tensor:
-            return v[sorted_indices]
-
-        # update the parameters and the state in the optimizers
-        _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
-
-        self.sorted_params = sorted_grid.reshape(n_gs, -1)
-        self.sorted_mask = torch.ones(n_gs, dtype=bool).to(self.sorted_params.device)

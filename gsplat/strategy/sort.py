@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Union
 
 import numpy as np
@@ -9,9 +9,7 @@ import torch.nn.functional as F
 from plas import sort_with_plas
 
 from .base import Strategy
-from .ops import (
-    _update_param_with_optimizer,
-)
+from .ops import _update_param_with_optimizer
 
 
 @dataclass
@@ -21,6 +19,9 @@ class SortStrategy(Strategy):
     sort_stop_iter: int = 25_000
     sort_every: int = 1000
     shuffle_before_sort: bool = False
+    sort_attributes: list[str] = field(
+        default_factory=lambda: ["sh0", "scales", "quats"]
+    )
 
     def initialize_state(self) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy."""
@@ -46,7 +47,7 @@ class SortStrategy(Strategy):
             return
 
         if step <= self.sort_stop_iter and step % self.sort_every == 0:
-            self._sort_into_grid(params, optimizers)
+            self._sort_into_grid(params, optimizers, state)
             if self.verbose:
                 print("Sorted grid.")
 
@@ -57,6 +58,7 @@ class SortStrategy(Strategy):
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
+        state: Dict[str, Any],
     ):
         n_sidelen = int(self.cap_max**0.5)
         reg_keys = ["means", "scales", "quats", "sh0"]
@@ -87,26 +89,32 @@ class SortStrategy(Strategy):
         # update the parameters and the state in the optimizers
         _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
 
+        # update state
+        state["sorted_params"] = sorted_grid.reshape(self.cap_max, -1)
+        state["sorted_mask"].fill_(1)
+
     def nb_loss(
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-        state: Dict[str, Any],
+        sort_state: Dict[str, Any],
+        strategy_state: Dict[str, Any],
     ):
         n_gs = params["means"].shape[0]
         if n_gs != self.cap_max:
             return torch.tensor(0.0, requires_grad=True)
-        if state["sorted_params"] is None:
+        if sort_state["sorted_params"] is None:
             return torch.tensor(0.0, requires_grad=True)
 
+        sort_state["sorted_mask"][strategy_state["relocated_mask"]] = 0
+
         n_sidelen = int(n_gs**0.5)
-        reg_keys = ["means", "scales", "quats", "sh0"]
         params_to_sort = torch.cat(
-            [params[k].reshape(n_gs, -1) for k in reg_keys], dim=-1
+            [params[k].reshape(n_gs, -1) for k in self.sort_attributes], dim=-1
         )
 
         params_blurred = params_to_sort.detach().clone()
-        params_blurred[~self.strategy.sorted_mask] = self.strategy.sorted_params[
-            ~self.strategy.sorted_mask
+        params_blurred[~sort_state["sorted_mask"]] = sort_state["sorted_params"][
+            ~sort_state["sorted_mask"]
         ]
         grid_blurred = params_blurred.reshape((n_sidelen, n_sidelen, -1))
         grid_blurred = torchvision.transforms.functional.gaussian_blur(
@@ -114,8 +122,8 @@ class SortStrategy(Strategy):
         ).permute(1, 2, 0)
         params_blurred = grid_blurred.reshape(n_gs, -1)
         nbloss = F.huber_loss(
-            params_blurred[self.strategy.sorted_mask],
-            params_to_sort[self.strategy.sorted_mask],
+            params_blurred[sort_state["sorted_mask"]],
+            params_to_sort[sort_state["sorted_mask"]],
         )
         return nbloss
 
@@ -126,7 +134,7 @@ class SortStrategy(Strategy):
 
         n_sidelen = int(n_gs**0.5)
         params_to_sort = torch.cat(
-            [params[k].reshape(n_gs, -1) for k in params.keys()], dim=-1
+            [params[k].reshape(n_gs, -1) for k in self.sort_attributes], dim=-1
         )
 
         grid = params_to_sort.reshape(n_sidelen, n_sidelen, -1)
@@ -134,7 +142,7 @@ class SortStrategy(Strategy):
         grid_maxs = torch.amax(grid, dim=(0, 1))
         grid_norm = (grid - grid_mins) / (grid_maxs - grid_mins)
 
-        grid_rgb = grid_norm[:, :, -3:]
+        grid_rgb = grid_norm[:, :, :3]
         grid_rgb = grid_rgb.detach().cpu().numpy()
         grid_rgb = (grid_rgb * 255).astype(np.uint8)
         return grid_rgb
