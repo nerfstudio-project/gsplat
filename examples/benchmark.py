@@ -18,7 +18,7 @@ class BenchmarkConfig:
     # path to data
     data_dir: str = "data/360_v2"
     # scenes to run
-    scenes: set[str] = (
+    scenes: set = (
         "bicycle",
         "bonsai",
         "counter",
@@ -28,7 +28,7 @@ class BenchmarkConfig:
         "room",
     )
     # downscale factors
-    factors: set[str] = (4, 2, 2, 4, 4, 2, 2)
+    factors: set = (4, 2, 2, 4, 4, 2, 2)
     # exclude gpus
     excluded_gpus: set = field(default_factory=set)
     # result directory
@@ -40,7 +40,7 @@ class BenchmarkConfig:
 
 
 # Configurations to run
-baseline_config = BenchmarkConfig(model_configs={"--max_steps": 1})
+baseline_config = BenchmarkConfig(model_configs={"--max_steps": 30000})
 baseline_config_absgrad = BenchmarkConfig(
     result_dir="results/absgrad",
     model_configs={"--absgrad": True, "--grow_grad2d": 0.0006},
