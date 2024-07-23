@@ -18,7 +18,7 @@ class SortStrategy(Strategy):
     cap_max: int = 1_000_000
     sort_stop_iter: int = 25_000
     sort_every: int = 1000
-    shuffle_before_sort: bool = False
+    shuffle_before_sort: bool = True
     sort_attributes: list[str] = field(
         default_factory=lambda: ["sh0", "scales", "quats"]
     )
@@ -73,7 +73,8 @@ class SortStrategy(Strategy):
         grid = params_to_sort.reshape((n_sidelen, n_sidelen, -1))
         sorted_grid, sorted_indices = sort_with_plas(
             grid.permute(2, 0, 1), improvement_break=1e-4, verbose=self.verbose
-        ).permute(1, 2, 0)
+        )
+        sorted_grid = sorted_grid.permute(1, 2, 0)
         sorted_indices = sorted_indices.squeeze().flatten()
         if self.shuffle_before_sort:
             sorted_indices = shuffled_indices[sorted_indices]
@@ -88,7 +89,7 @@ class SortStrategy(Strategy):
         _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
 
         # update state
-        state["sorted_params"] = sorted_grid.reshape(self.cap_max, -1)
+        state["sorted_params"] = sorted_grid.reshape(self.cap_max, -1).detach()
         state["sorted_mask"].fill_(1)
 
     def nb_loss(
