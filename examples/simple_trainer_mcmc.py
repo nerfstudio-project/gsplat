@@ -24,6 +24,7 @@ from utils import AppearanceOptModule, CameraOptModule, set_random_seed
 
 from gsplat.rendering import rasterization
 from gsplat.strategy import MCMCStrategy, SortStrategy
+from gsplat.compression import compress_splats, decompress_splats
 
 
 @dataclass
@@ -734,9 +735,10 @@ def main(cfg: Config):
     if cfg.ckpt is not None:
         # run eval only
         ckpt = torch.load(cfg.ckpt, map_location=runner.device)
+
         for k in runner.splats.keys():
             runner.splats[k].data = ckpt["splats"][k]
-        runner.eval(step=ckpt["step"])
+        runner.eval(step=ckpt["step"], prefix="eval_")
         runner.render_traj(step=ckpt["step"])
     else:
         runner.train()
