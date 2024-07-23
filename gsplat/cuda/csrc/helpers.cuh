@@ -84,4 +84,42 @@ __device__ __forceinline__ float atomicMax(float *address, float val) {
     return __int_as_float(old);
 }
 
+//====== Below are helper functions to improve CUDA efficiency of 2DGS ======//
+__device__ __forceinline__ float3 operator*(float a, float3 b) {
+    return make_float3(a * b.x, a * b.y, a * b.z);
+}
+
+__device__ __forceinline__ float3 operator*(float3 a, float3 b) {
+    return make_float3(a.x * b.x, a.y * b.y, a.z * b.z);
+}
+
+__device__ __forceinline__ float2 operator*(float2 a, float2 b) {
+    return make_float2(a.x * b.x, a.y * b.y);
+}
+
+__device__ __forceinline__ float3 operator-(float3 a, float3 b) {
+    return make_float3(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+
+__device__ __forceinline__ float2 operator-(float2 a, float2 b) {
+    return make_float2(a.x - b.x, a.y - b.y);
+}
+
+__device__ __forceinline__ float f2_norm2(float2 a) {
+    // Technically L2 norm squared
+    return a.x * a.x + a.y * a.y;
+}
+
+__device__ __forceinline__ float f3_sum(float3 a) {
+    return a.x + a.y + a.z;
+}
+
+__device__ __forceinline__ float3 cross_product(float3 a, float3 b ) {
+    return make_float3(
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x
+    );
+}
+
 #endif // GSPLAT_CUDA_HELPERS_H

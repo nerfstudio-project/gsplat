@@ -1263,7 +1263,7 @@ rasterize_to_pixels_bwd_tensor(
 }
 
 //====== 2DGS ======//
-template <int32_t COLOR_DIM>
+template <uint32_t COLOR_DIM>
 __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
     const uint32_t C, const uint32_t N, const uint32_t n_isects, const bool packed,
     const float2 *__restrict__ means2d,
@@ -1379,28 +1379,28 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
             float3 v_transform = v_transform_batch[t];
             float3 w_transform = w_transform_batch[t];
 
-            float3 h_u = {-u_transform.x + px * w_transform.x, -u_transform.y + px * w_transform.y, -u_transform.z + px * w_transform.z};
-            float3 h_v = {-v_transform.x + py * w_transform.x, -v_transform.y + py * w_transform.y, -v_transform.z + py * w_transform.z};            
+            float3 h_u = px * w_transform - u_transform;
+            float3 h_v = py * w_transform - v_transform;
 
-            // printf("py: ||| %.2f |||", py);
             float3 intersect = cross_product(h_u, h_v);
             if (intersect.z == 0.0) continue;
             
             float2 s = {intersect.x / intersect.z, intersect.y / intersect.z};
 
-            float gauss_weight_3d = (s.x * s.x + s.y * s.y);
+            // float gauss_weight_3d = (s.x * s.x + s.y * s.y);
+            float gauss_weight_3d = f2_norm2(s);
 
             float2 d = {xy_opac.x - px, xy_opac.y - py};
-            float gauss_weight_2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
+            // float gauss_weight_2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
+            float gauss_weight_2d = FilterInvSquare * f2_norm2(d);
+
             float gauss_weight = min(gauss_weight_3d, gauss_weight_2d);
 
             const float sigma = 0.5f * gauss_weight;
             float alpha = min(0.999f, opac * __expf(-sigma));
-            // printf("px, py, sigma, alpha out: %.2f, %.2f, %.2f, %.2f\n", px, py, sigma, alpha);
 
 
             if (sigma < 0.f || alpha < 1.f / 255.f) {
-                // printf("px, py out: %.2f, %.2f\n", px, py);
                 continue;
             }
 
@@ -1778,10 +1778,10 @@ __global__ void rasterize_to_indices_in_range_2dgs_kernel(
             const float3 xy_opac = xy_opacity_batch[t];
             const float opac = xy_opac.z;
 
-            float3 h_u = {-u_transform.x + px * w_transform.x, -u_transform.y + px * w_transform.y, -u_transform.z + px * w_transform.z};
-            float3 h_v = {-v_transform.x + py * w_transform.x, -v_transform.y + py * w_transform.y, -v_transform.z + py * w_transform.z};
+          
+            float3 h_u = px * w_transform - u_transform;
+            float3 h_v = py * w_transform - v_transform;
 
-            // printf("-- py: %.2f --", py);
             // cross product of two planes is a line
             float3 intersect = cross_product(h_u, h_v);
 
@@ -1791,20 +1791,18 @@ __global__ void rasterize_to_indices_in_range_2dgs_kernel(
             float2 s = {intersect.x / intersect.z, intersect.y / intersect.z};
 
             // 3D distance. Compute Mahalanobis distance in the canonoical splat space.
-            float gauss_weight_3d = (s.x * s.x + s.y * s.y);
+            float gauss_weight_3d = f2_norm2(s);
 
             // Low pass filter 
             float2 d = {xy_opac.x - px, xy_opac.y - py};
             // 2D screen distance
-            float gauss_weight_2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
+            float gauss_weight_2d = FilterInvSquare * f2_norm2(d);
             float gauss_weight = min(gauss_weight_3d, gauss_weight_2d);
 
             const float sigma = 0.5f * gauss_weight;
             float alpha = min(0.999f, opac * __expf(-sigma));
-            // printf("px, py, sigma, alpha range: %.2f, %.2f, %.2f, %.2f\n", px, py, sigma, alpha);
 
             if (sigma < 0.f || alpha < 1.f / 255.f) {
-                // printf("px, py range: %.2f, %.2f, %.2f, %.2f, %.2f\n", px, py);
                 continue;
             }
 
@@ -1904,7 +1902,6 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_2dgs_tens
         n_elems = 0;
     }
 
-    printf("second pass \n");
     // Second pass: allocate memory and write out the gaussian and pixel ids.
     torch::Tensor gaussian_ids = 
         torch::empty({n_elems}, means2d.options().dtype(torch::kInt64));
@@ -2014,13 +2011,13 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
     // df/d_out for this pixel
     float v_render_c[COLOR_DIM];
     PRAGMA_UNROLL
-    for (uint32_t k = 0; k < COLOR_DIM; k++) {
+    for (uint32_t k = 0; k < COLOR_DIM; ++k) {
         v_render_c[k] = v_render_colors[pix_id * COLOR_DIM + k];
     }
     const float v_render_a = v_render_alphas[pix_id];
     float v_render_n[3];
     PRAGMA_UNROLL
-    for (uint32_t k = 0; k < 3; k++) {
+    for (uint32_t k = 0; k < 3; ++k) {
         v_render_n[k] = v_render_normals[pix_id * 3 + k];
     }
 
@@ -2055,9 +2052,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
         const int32_t batch_end = range_end - 1 - block_size * b;
         const int32_t batch_size = min(block_size, batch_end + 1 - range_start);
         const int32_t idx = batch_end - tr;
-
         if (idx >= range_start) {
-
             int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
             id_batch[tr] = g;
             const float2 xy = means2d[g];
@@ -2090,7 +2085,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
             }
             float alpha;
             float opac;
-            float vis;
+            float vis; 
             float gauss_weight_3d;
             float gauss_weight_2d;
             float gauss_weight;
@@ -2107,10 +2102,9 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 const float3 v_transform = v_transform_batch[t];
                 w_transform = w_transform_batch[t];
 
-                h_u = {-u_transform.x + px * w_transform.x, -u_transform.y + px * w_transform.y, -u_transform.z + px * w_transform.z};
-                h_v = {-v_transform.x + py * w_transform.x, -v_transform.y + py * w_transform.y, -v_transform.z + py * w_transform.z};
+                h_u = px * w_transform - u_transform;
+                h_v = py * w_transform - v_transform;
                 
-                // printf("h_v bwd: %.2f, %.2f, %.2f \n", h_v.x, h_v.y, h_v.z);
 
                 // cross product of two planes is a line
                 intersect = cross_product(h_u, h_v);
@@ -2119,9 +2113,9 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 if (intersect.z == 0.0) valid = false;
                 s = {intersect.x / intersect.z, intersect.y / intersect.z};
 
-                gauss_weight_3d = (s.x * s.x + s.y * s.y);
+                gauss_weight_3d = f2_norm2(s);
                 d = {xy_opac.x - px, xy_opac.y - py};
-                gauss_weight_2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
+                gauss_weight_2d = FilterInvSquare * f2_norm2(d);
 
                 gauss_weight = min(gauss_weight_3d, gauss_weight_2d);
                 const float sigma = 0.5f * gauss_weight;
@@ -2211,7 +2205,6 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                     const float v_G = opac * v_alpha;
                     float v_depth = 0.f;
                     if (gauss_weight_3d <= gauss_weight_2d) {
-                        // printf("v_depth: %.2f \n", v_depth);
                         const float2 v_s = {
                             v_G * -vis * s.x + v_depth * w_transform.x,
                             v_G * -vis * s.y + v_depth * w_transform.y
@@ -2223,23 +2216,22 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                         const float3 v_h_u = cross_product(h_v, v_intersect);
                         const float3 v_h_v = cross_product(v_intersect, h_u);
                         
-                        const float3 v_u_transform = {-v_h_u.x, -v_h_u.y, -v_h_u.z};
-                        const float3 v_v_transform = {-v_h_v.x, -v_h_v.y, -v_h_v.z};
-                        const float3 v_w_transform = {
+                        v_u_transform_local = {-v_h_u.x, -v_h_u.y, -v_h_u.z};
+                        v_v_transform_local = {-v_h_v.x, -v_h_v.y, -v_h_v.z};
+                        v_w_transform_local = {
                             px * v_h_u.x + py * v_h_v.x + v_depth * v_z_w_transform.x,
                             px * v_h_u.y + py * v_h_v.y + v_depth * v_z_w_transform.y,
                             px * v_h_u.z + py * v_h_v.z + v_depth * v_z_w_transform.z
                         };
-                        v_u_transform_local = {v_u_transform.x, v_u_transform.y, v_u_transform.z};
-                        v_v_transform_local = {v_v_transform.x, v_v_transform.y, v_v_transform.z};
-                        v_w_transform_local = {v_w_transform.x, v_w_transform.y, v_w_transform.z};
+                        // v_u_transform_local = {v_u_transform.x, v_u_transform.y, v_u_transform.z};
+                        // v_v_transform_local = {v_v_transform.x, v_v_transform.y, v_v_transform.z};
+                        // v_w_transform_local = {v_w_transform.x, v_w_transform.y, v_w_transform.z};
                     } else {
                         const float v_G_ddelx = -vis * FilterInvSquare * d.x;
                         const float v_G_ddely = -vis * FilterInvSquare * d.y;
                         v_xy_local = {v_G * v_G_ddelx, v_G * v_G_ddely};
                     }
 
-                    // printf("true val: %.2f, %.2f \n", gauss_weight_3d, gauss_weight_2d);
                     v_opacity_local = vis * v_alpha;
                 }
 

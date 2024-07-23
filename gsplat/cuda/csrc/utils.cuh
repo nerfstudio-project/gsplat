@@ -11,15 +11,6 @@
 // #define FilterInvSquare 1/(FilterSize*FilterSize)
 #define FilterInvSquare 2.f
 
-inline __device__ float3 cross_product(
-    float3 a, float3 b 
-) {
-    float3 result;
-    result.x = a.y * b.z - a.z * b.y;
-    result.y = a.z * b.x - a.x * b.z;
-    result.z = a.x * b.y - a.y * b.x;
-    return result;
-}
 
 inline __device__ glm::mat3 quat_to_rotmat(const glm::vec4 quat) {
     float w = quat[0], x = quat[1], y = quat[2], z = quat[3];
@@ -371,18 +362,18 @@ inline __device__ void compute_aabb_vjp(const glm::mat3 M, const glm::vec2 v_mea
 
     const float distance = M[2].x * M[2].x + M[2].y * M[2].y - M[2].z * M[2].z;
     const float f = 1 / (distance);
-		const float dpx_dT00 =  f * M[2].x;
-		const float dpx_dT01 =  f * M[2].y;
-		const float dpx_dT02 = -f * M[2].z;
-		const float dpy_dT10 =  f * M[2].x;
-		const float dpy_dT11 =  f * M[2].y;
-		const float dpy_dT12 = -f * M[2].z;
-		const float dpx_dT30 =  M[0].x * (f - 2 * f * f * M[2].x * M[2].x);
-		const float dpx_dT31 =  M[0].y * (f - 2 * f * f * M[2].y * M[2].y);
-		const float dpx_dT32 = -M[0].z * (f + 2 * f * f * M[2].z * M[2].z);
-		const float dpy_dT30 =  M[1].x * (f - 2 * f * f * M[2].x * M[2].x);
-		const float dpy_dT31 =  M[1].y * (f - 2 * f * f * M[2].y * M[2].y);
-		const float dpy_dT32 = -M[1].z * (f + 2 * f * f * M[2].z * M[2].z);
+    const float dpx_dT00 =  f * M[2].x;
+    const float dpx_dT01 =  f * M[2].y;
+    const float dpx_dT02 = -f * M[2].z;
+    const float dpy_dT10 =  f * M[2].x;
+    const float dpy_dT11 =  f * M[2].y;
+    const float dpy_dT12 = -f * M[2].z;
+    const float dpx_dT30 =  M[0].x * (f - 2 * f * f * M[2].x * M[2].x);
+    const float dpx_dT31 =  M[0].y * (f - 2 * f * f * M[2].y * M[2].y);
+    const float dpx_dT32 = -M[0].z * (f + 2 * f * f * M[2].z * M[2].z);
+    const float dpy_dT30 =  M[1].x * (f - 2 * f * f * M[2].x * M[2].x);
+    const float dpy_dT31 =  M[1].y * (f - 2 * f * f * M[2].y * M[2].y);
+    const float dpy_dT32 = -M[1].z * (f + 2 * f * f * M[2].z * M[2].z);
   
 
     v_ray_transformation[0][0] += v_mean2D.x * dpx_dT00;

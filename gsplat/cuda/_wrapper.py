@@ -1630,11 +1630,11 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         absgrad = ctx.absgrad
         distloss = ctx.distloss
         
-        if distloss: 
-            assert v_render_distloss is not None, "v_render_distloss should not be None"
-            v_render_distloss = v_render_distloss.contiguous()
-        else:
-            assert v_render_distloss is None, "v_render_distloss should be None"
+        # if distloss: 
+        #     assert v_render_distloss is not None, "v_render_distloss should not be None"
+        #     v_render_distloss = v_render_distloss.contiguous()
+        # else:
+        #     assert v_render_distloss is None, "v_render_distloss should be None"
 
         (
             v_means2d_abs,

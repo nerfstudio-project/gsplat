@@ -1632,9 +1632,8 @@ fully_fused_projection_fwd_2dgs_kernel(const uint32_t C, const uint32_t N,
     // build H and transform from world space to camera space
     glm::vec4 quat = glm::make_vec4(quats + gid * 4);
     glm::vec2 scale = glm::make_vec2(scales + gid * 3);
-    // glm::vec3 scale_2dgs = glm::vec3(scale.x, scale.y, 1.f);
-    glm::mat3 RS = quat_to_rotmat(quat) * scale_to_mat(scale, 1.0f);
-    glm::mat3 RS_camera = R * RS;
+
+    glm::mat3 RS_camera = R * quat_to_rotmat(quat) * scale_to_mat(scale, 1.0f);
     glm::mat3 WH = glm::mat3(RS_camera[0], RS_camera[1], mean_c);
 
     glm::mat3 inverse_intrinsic = glm::mat3(
@@ -1644,27 +1643,39 @@ fully_fused_projection_fwd_2dgs_kernel(const uint32_t C, const uint32_t N,
     );
     glm::mat3 M = glm::transpose(WH) * inverse_intrinsic;
 
-    // compute AABB
-    glm::vec3 temp_point = glm::vec3(1.0f, 1.0f, -1.0f);
-    float distance = glm::dot(temp_point, M[2] * M[2]);
+    // compute AABB 
+    // (WZ): Discard glm and try with float
+    float3 M0 = {M[0][0], M[0][1], M[0][2]};
+    float3 M1 = {M[1][0], M[1][1], M[1][2]};
+    float3 M2 = {M[2][0], M[2][1], M[2][2]};
+
+    float3 temp_point = {1.0f, 1.0f, -1.0f};
+    float distance = f3_sum(temp_point * M2 * M2);
+
+
 
     if (distance == 0.0f) return;
 
-    glm::vec3 f = (1 / distance) * temp_point;
-    glm::vec2 mean2d = glm::vec2(
-        glm::dot(f, M[0] * M[2]),
-        glm::dot(f, M[1] * M[2])
-    );
+    float3 f = (1 / distance) * temp_point;
+    float2 mean2d = {
+        f3_sum(f * M0 * M2),
+        f3_sum(f * M1 * M2)
+    };
 
     // take 3 sigma as the radius (non differentiable)
-    glm::vec2 half_extend = mean2d * mean2d - 
-        glm::vec2(
-            glm::dot(f, M[0] * M[0]),
-            glm::dot(f, M[1] * M[1])
-        );
+    float2 temp = {
+        f3_sum(f * M0 * M0),
+        f3_sum(f * M1 * M1)
+    };
+
+    float2 half_extend = mean2d * mean2d - temp;
+    // glm::vec2 half_extend = mean2d * mean2d - 
+    //     glm::vec2(
+    //         glm::dot(f, M[0] * M[0]),
+    //         glm::dot(f, M[1] * M[1])
+    //     );
     float eps = 1e-4;
-    half_extend = sqrt(glm::vec2(max(eps, half_extend.x), max(eps, half_extend.y)));
-    float radius = ceil(3.f * max(half_extend.x, half_extend.y));
+    float radius = ceil(3.f * sqrt(max(eps, max(half_extend.x, half_extend.y))));
 
     if (radius <= radius_clip) {
         radii[idx] = 0;
@@ -1743,8 +1754,7 @@ fully_fused_projection_fwd_2dgs_tensor(
             means2d.data_ptr<float>(), depths.data_ptr<float>(),
             ray_transformations.data_ptr<float>(),
             normals.data_ptr<float>());
-        // CUDA_CHECK_ERROR;
-        // CUDA_SAFE_CALL(cudaStreamSynchronize(stream.stream()));
+
     }
     return std::make_tuple(radii, means2d, depths, ray_transformations, normals);
 }
@@ -1806,8 +1816,7 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
     if (valid) {
         glm::vec4 quat = glm::make_vec4(quats + col_idx * 4);
         glm::vec3 scale = glm::make_vec3(scales + col_idx * 3);
-        glm::mat3 RS = quat_to_rotmat(quat) * scale_to_mat(scale, 1.0f);
-        glm::mat3 RS_camera = R * RS;
+        glm::mat3 RS_camera = R * quat_to_rotmat(quat) * scale_to_mat(scale, 1.0f);
         glm::mat3 WH = glm::mat3(RS_camera[0], RS_camera[1], mean_c);
 
         glm::mat3 inverse_intrinsic = glm::mat3(
@@ -2084,8 +2093,6 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
                                     v_quat,
                                     v_scale, v_mean);
 
-
-    // printf("");
     
     // write out results with warp-level reduction
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
@@ -2287,9 +2294,9 @@ __global__ void fully_fused_projection_packed_bwd_2dgs_kernel(
     glm::vec4 quat = glm::make_vec4(quats + gid * 4);
     glm::vec2 scale = glm::make_vec2(scales + gid * 3);
     // glm::vec3 scale_2dgs = {scale.x, scale.y, 1.f};
-    glm::mat3 S = scale_to_mat(scale, 1.0f);
+    // glm::mat3 S = scale_to_mat(scale, 1.0f);
     glm::mat3 R = quat_to_rotmat(quat);
-    glm::mat3 RS = R * S;
+    // glm::mat3 RS = R * S;
 
     glm::mat3 v_T = glm::mat3(
         v_ray_transformations[0], v_ray_transformations[1], v_ray_transformations[2],
