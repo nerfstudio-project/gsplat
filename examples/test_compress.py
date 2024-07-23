@@ -7,7 +7,7 @@ from gsplat.compression import compress_splats, decompress_splats
 
 def main():
     device = "cpu"
-    ckpt_path = "examples/results/360_v2/3dgs_sh0_sort_old/bicycle/ckpts/ckpt_29999.pt"
+    ckpt_path = "examples/results/360_v2/3dgs_sort/bicycle/ckpts/ckpt_29999.pt"
     compress_dir = "examples/results/compress"
     if not os.path.exists(compress_dir):
         os.makedirs(compress_dir, exist_ok=True)
@@ -15,7 +15,7 @@ def main():
     ckpt = torch.load(ckpt_path, map_location=device)
     splats0 = ckpt["splats"]
     # torch.save({"splats": ckpt["splats"]}, os.path.join(out_dir, "splats.pt"))
-    compress_splats(splats0, compress_dir)
+    compress_splats(compress_dir, splats0)
     splats1 = decompress_splats(compress_dir)
     for k in splats1.keys():
         attr0 = splats0[k]
@@ -26,8 +26,9 @@ def main():
             attr1.shape,
             attr0.dtype,
             attr1.dtype,
-            (attr0 - attr1).abs().mean(),
         )
+        if attr0.numel() != 0:
+            print((attr0 - attr1).abs().max())
 
     # splats = ckpt["splats"]
     # n_gs = len(splats["means"])

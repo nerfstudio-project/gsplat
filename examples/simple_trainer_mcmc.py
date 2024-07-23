@@ -736,9 +736,15 @@ def main(cfg: Config):
         # run eval only
         ckpt = torch.load(cfg.ckpt, map_location=runner.device)
 
+        compress_dir = os.path.join(cfg.result_dir, "compress")
+        compress_splats(compress_dir, ckpt["splats"])
+        ckpt["splats"] = decompress_splats(compress_dir)
+        for k, v in ckpt["splats"].items():
+            ckpt["splats"][k] = v.to(runner.device)
+
         for k in runner.splats.keys():
             runner.splats[k].data = ckpt["splats"][k]
-        runner.eval(step=ckpt["step"], prefix="eval_")
+        runner.eval(step=ckpt["step"])
         runner.render_traj(step=ckpt["step"])
     else:
         runner.train()
