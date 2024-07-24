@@ -20,14 +20,18 @@ class SortStrategy(Strategy):
     sort_every: int = 1000
     shuffle_before_sort: bool = True
     sort_attributes: list[str] = field(
-        default_factory=lambda: ["sh0", "scales", "quats"]
+        default_factory=lambda: ["means", "scales", "sh0"]
     )
+    blur_attributes: list[str] = field(default_factory=lambda: ["sh0", "shN", "quats"])
 
     def initialize_state(self) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy."""
         sorted_params = None
         sorted_mask = torch.ones(self.cap_max, dtype=bool)
-        return {"sorted_params": sorted_params, "sorted_mask": sorted_mask}
+        return {
+            "sorted_params": sorted_params,
+            "sorted_mask": sorted_mask,
+        }
 
     def step_post_backward(
         self,
@@ -89,7 +93,10 @@ class SortStrategy(Strategy):
         _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
 
         # update state
-        state["sorted_params"] = sorted_grid.reshape(self.cap_max, -1).detach()
+        sorted_params = torch.cat(
+            [params[k].reshape(self.cap_max, -1) for k in self.blur_attributes], dim=-1
+        )
+        state["sorted_params"] = sorted_params.detach()
         state["sorted_mask"].fill_(1)
 
     def nb_loss(
@@ -107,12 +114,12 @@ class SortStrategy(Strategy):
         # update state for sorted_mask
         sort_state["sorted_mask"][strategy_state["relocated_mask"]] = 0
 
-        params_to_sort = torch.cat(
-            [params[k].reshape(self.cap_max, -1) for k in self.sort_attributes], dim=-1
+        params_to_blur = torch.cat(
+            [params[k].reshape(self.cap_max, -1) for k in self.blur_attributes], dim=-1
         )
 
         # make smooth param target
-        params_blurred = params_to_sort.detach().clone()
+        params_blurred = params_to_blur.detach().clone()
         params_blurred[~sort_state["sorted_mask"]] = sort_state["sorted_params"][
             ~sort_state["sorted_mask"]
         ]
@@ -125,7 +132,7 @@ class SortStrategy(Strategy):
 
         nbloss = F.huber_loss(
             params_blurred[sort_state["sorted_mask"]],
-            params_to_sort[sort_state["sorted_mask"]],
+            params_to_blur[sort_state["sorted_mask"]],
         )
         return nbloss
 
@@ -134,12 +141,12 @@ class SortStrategy(Strategy):
         if n_gs != self.cap_max:
             return None
 
-        params_to_sort = torch.cat(
-            [params[k].reshape(n_gs, -1) for k in self.sort_attributes], dim=-1
+        params_to_blur = torch.cat(
+            [params[k].reshape(n_gs, -1) for k in self.blur_attributes], dim=-1
         )
 
         n_sidelen = int(n_gs**0.5)
-        grid = params_to_sort.reshape(n_sidelen, n_sidelen, -1)
+        grid = params_to_blur.reshape(n_sidelen, n_sidelen, -1)
         grid_mins = torch.amin(grid, dim=(0, 1))
         grid_maxs = torch.amax(grid, dim=(0, 1))
         grid_norm = (grid - grid_mins) / (grid_maxs - grid_mins)
