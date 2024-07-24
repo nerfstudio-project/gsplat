@@ -453,7 +453,6 @@ class Runner:
                 nbloss = self.sort_strategy.nb_loss(
                     self.splats,
                     sort_state=self.sort_state,
-                    strategy_state=self.strategy_state,
                 )
                 loss += nbloss * cfg.sort_nb_lambda
 
@@ -514,7 +513,7 @@ class Runner:
                     info=info,
                 )
                 if step % 100 == 0:
-                    print("Num unsorted:", (~self.sort_state["sorted_mask"]).sum())
+                    print("Num sorted:", (self.sort_state["sorted_mask"]).sum())
 
                     grid_rgb = self.sort_strategy.debug(self.splats)
                     if grid_rgb is not None:

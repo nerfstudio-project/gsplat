@@ -29,7 +29,7 @@ class SortStrategy(Strategy):
     def initialize_state(self) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy."""
         sorted_params = None
-        sorted_mask = torch.ones(self.cap_max, dtype=bool)
+        sorted_mask = torch.zeros(self.cap_max, dtype=bool)
         return {
             "sorted_params": sorted_params,
             "sorted_mask": sorted_mask,
@@ -49,11 +49,16 @@ class SortStrategy(Strategy):
         Args:
             lr (float): Learning rate for "means" attribute of the GS.
         """
-        n_gs = params["means"].shape[0]
-        if n_gs != self.cap_max:
-            return
+        # update sorted_mask with relocated_mask
+        if strategy_state["relocated_mask"].shape[0] == self.cap_max:
+            sort_state["sorted_mask"][strategy_state["relocated_mask"]] = 0
+            strategy_state["relocated_mask"].fill_(0)
 
-        if step <= self.sort_stop_iter and step % self.sort_every == 0:
+        if (
+            params["means"].shape[0] == self.cap_max
+            and step <= self.sort_stop_iter
+            and step % self.sort_every == 0
+        ):
             self._sort_into_grid(params, optimizers, sort_state, strategy_state)
             if self.verbose:
                 print("Sorted grid.")
@@ -102,55 +107,48 @@ class SortStrategy(Strategy):
         )
         sort_state["sorted_params"] = sorted_params.detach()
         sort_state["sorted_mask"].fill_(1)
-        strategy_state["relocated_mask"].fill_(0)
 
     def nb_loss(
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         sort_state: Dict[str, Any],
-        strategy_state: Dict[str, Any],
     ):
-        n_gs = params["means"].shape[0]
-        if n_gs != self.cap_max:
-            return torch.tensor(0.0, requires_grad=True)
         if sort_state["sorted_params"] is None:
             return torch.tensor(0.0, requires_grad=True)
 
-        # update state for sorted_mask
-        sort_state["sorted_mask"][strategy_state["relocated_mask"]] = 0
+        # make loss input
+        params_to_blur = torch.cat(
+            [params[k].reshape(self.cap_max, -1) for k in self.blur_attributes], dim=-1
+        )
+
+        # make loss target which is the input smoothed
+        params_blurred = params_to_blur.detach().clone()
+        # avoid smoothing splats that are not sorted
+        params_blurred[~sort_state["sorted_mask"]] = sort_state["sorted_params"][
+            ~sort_state["sorted_mask"]
+        ]
+        n_sidelen = int(self.cap_max**0.5)
+        grid_blurred = params_blurred.reshape((n_sidelen, n_sidelen, -1))
+        grid_blurred = torchvision.transforms.functional.gaussian_blur(
+            grid_blurred.permute(2, 0, 1), kernel_size=5
+        ).permute(1, 2, 0)
+        params_blurred = grid_blurred.reshape(self.cap_max, -1)
+
+        nbloss = F.huber_loss(
+            params_to_blur[sort_state["sorted_mask"]],
+            params_blurred[sort_state["sorted_mask"]],
+        )
+        return nbloss
+
+    def debug(self, params):
+        if params["means"].shape[0] != self.cap_max:
+            return None
 
         params_to_blur = torch.cat(
             [params[k].reshape(self.cap_max, -1) for k in self.blur_attributes], dim=-1
         )
 
-        # make smooth param target
-        params_blurred = params_to_blur.detach().clone()
-        params_blurred[~sort_state["sorted_mask"]] = sort_state["sorted_params"][
-            ~sort_state["sorted_mask"]
-        ]
-        n_sidelen = int(n_gs**0.5)
-        grid_blurred = params_blurred.reshape((n_sidelen, n_sidelen, -1))
-        grid_blurred = torchvision.transforms.functional.gaussian_blur(
-            grid_blurred.permute(2, 0, 1), kernel_size=5
-        ).permute(1, 2, 0)
-        params_blurred = grid_blurred.reshape(n_gs, -1)
-
-        nbloss = F.huber_loss(
-            params_blurred[sort_state["sorted_mask"]],
-            params_to_blur[sort_state["sorted_mask"]],
-        )
-        return nbloss
-
-    def debug(self, params):
-        n_gs = params["means"].shape[0]
-        if n_gs != self.cap_max:
-            return None
-
-        params_to_blur = torch.cat(
-            [params[k].reshape(n_gs, -1) for k in self.blur_attributes], dim=-1
-        )
-
-        n_sidelen = int(n_gs**0.5)
+        n_sidelen = int(self.cap_max**0.5)
         grid = params_to_blur.reshape(n_sidelen, n_sidelen, -1)
         grid_mins = torch.amin(grid, dim=(0, 1))
         grid_maxs = torch.amax(grid, dim=(0, 1))
