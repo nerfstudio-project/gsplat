@@ -735,12 +735,17 @@ def main(cfg: Config):
     if cfg.ckpt is not None:
         # run eval only
         ckpt = torch.load(cfg.ckpt, map_location=runner.device)
-        
+
         # Sort
         from plas import sort_with_plas
+
         splats = ckpt["splats"]
         params_to_sort = torch.cat(
-            [splats[k].reshape(cfg.cap_max, -1) for k in ["means", "opacities", "quats", "scales", "sh0"]], dim=-1
+            [
+                splats[k].reshape(cfg.cap_max, -1)
+                for k in ["means", "opacities", "quats", "scales", "sh0"]
+            ],
+            dim=-1,
         )
         shuffled_indices = torch.randperm(
             params_to_sort.shape[0], device=params_to_sort.device

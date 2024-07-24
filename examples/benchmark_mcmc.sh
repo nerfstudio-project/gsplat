@@ -28,7 +28,7 @@ do
 
     python simple_trainer_mcmc.py --disable_viewer --data_factor $DATA_FACTOR \
         --data_dir $SCENE_DIR/$SCENE/ \
-        --result_dir $RESULTS_DIR/3dgs+q+s/$SCENE/ \
+        --result_dir $RESULTS_DIR/3dgs+sq3/$SCENE/ \
         --ckpt $RESULTS_DIR/3dgs/$SCENE/ckpts/ckpt_29999.pt
 
 done

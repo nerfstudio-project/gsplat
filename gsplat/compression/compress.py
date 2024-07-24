@@ -124,7 +124,10 @@ def _decompress_sh0(compress_dir: str, meta: dict[str, Any]) -> Tensor:
 
 
 def _compress_shN(compress_dir: str, params: Tensor) -> Tensor:
-    kmeans = KMeans(n_clusters=65536, distance="euclidean", verbose=True)
+    if params.numel() == 0:
+        return {"shape": list(params.shape)}
+
+    kmeans = KMeans(n_clusters=16384, distance="euclidean", verbose=True)
     x = params.reshape(params.shape[0], -1).permute(1, 0).contiguous()
     labels = kmeans.fit(x)
     centroids = kmeans.centroids.permute(1, 0)
@@ -150,6 +153,9 @@ def _compress_shN(compress_dir: str, params: Tensor) -> Tensor:
 
 
 def _decompress_shN(compress_dir: str, meta: dict[str, Any]) -> Tensor:
+    if meta["shape"][1] == 0:
+        return torch.zeros(meta["shape"], dtype=torch.float32)
+
     npz_dict = np.load(os.path.join(compress_dir, "shN.npz"))
     labels = npz_dict["labels"]
     centroids = npz_dict["centroids"]

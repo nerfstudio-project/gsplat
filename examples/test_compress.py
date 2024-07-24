@@ -35,21 +35,21 @@ def main():
 
 
 def gif():
-    # results_dir = "examples/results/360_v2/3dgs"
-    results_dir = "examples/results/360_v2/3dgs_sort"
+    results_dir = "examples/results/360_v2/3dgs+sq2"
+    # results_dir = "examples/results/360_v2/3dgs_sort"
     scenes = ["garden", "bicycle", "stump", "bonsai", "counter", "kitchen", "room"]
 
     info = defaultdict(list)
     for scene in scenes:
         scene_dir = os.path.join(results_dir, scene)
-        compress_dir = os.path.join(scene_dir, "compressed_results")
+        # compress_dir = os.path.join(scene_dir, "compressed_results")
         # ckpt_dir = os.path.join(scene_dir, "ckpts")
         # stats_path = os.path.join(scene_dir, f"stats/val_step29999.json")
-        stats_path = os.path.join(compress_dir, f"stats/val_step29999.json")
+        stats_path = os.path.join(scene_dir, f"stats/val_step29999.json")
 
-        # cmd = f"zip -r {compress_dir}/compress.zip {compress_dir}/compress"
-        # subprocess.run(cmd, shell=True)
-        cmd = f"stat -c%s {compress_dir}/compress.zip"
+        cmd = f"zip -r {scene_dir}/compress.zip {scene_dir}/compress"
+        subprocess.run(cmd, shell=True)
+        cmd = f"stat -c%s {scene_dir}/compress.zip"
         size = subprocess.run(cmd, shell=True, capture_output=True).stdout
         info["size"].append(int(size))
 
@@ -70,5 +70,5 @@ def gif():
 
 
 if __name__ == "__main__":
-    main()
-    # gif()
+    # main()
+    gif()
