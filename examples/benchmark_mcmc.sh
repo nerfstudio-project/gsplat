@@ -1,7 +1,7 @@
 
 SCENE_DIR="data/360_v2"
 RESULTS_DIR="results/360_v2"
-SCENE_LIST="garden" #bicycle stump bonsai counter kitchen room treehill flowers"
+SCENE_LIST="garden bicycle stump bonsai counter kitchen room" # treehill flowers
 
 for SCENE in $SCENE_LIST;
 do

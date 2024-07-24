@@ -514,6 +514,8 @@ class Runner:
                     info=info,
                 )
                 if step % 100 == 0:
+                    print("Num unsorted:", (~self.sort_state["sorted_mask"]).sum())
+
                     grid_rgb = self.sort_strategy.debug(self.splats)
                     if grid_rgb is not None:
                         imageio.imwrite(

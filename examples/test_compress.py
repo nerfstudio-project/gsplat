@@ -4,6 +4,8 @@ import imageio
 import os
 from gsplat.compression import compress_splats, decompress_splats
 import json
+import subprocess
+from collections import defaultdict
 
 
 def main():
@@ -33,21 +35,31 @@ def main():
 
 
 def gif():
-    # results_dir = "examples/results/360_v2/3dgs_sort"
+    # results_dir = "examples/results/360_v2/3dgs"
     results_dir = "examples/results/360_v2/3dgs_sort"
     scenes = ["garden", "bicycle", "stump", "bonsai", "counter", "kitchen", "room"]
-    psnrs = []
+
+    info = defaultdict(list)
     for scene in scenes:
         scene_dir = os.path.join(results_dir, scene)
+        compress_dir = os.path.join(scene_dir, "compressed_results")
         # ckpt_dir = os.path.join(scene_dir, "ckpts")
-        stats_path = os.path.join(scene_dir, f"stats/val_step29999.json")
-        # stats_path = os.path.join(scene_dir, f"compressed_results/stats/val_step29999.json")
+        # stats_path = os.path.join(scene_dir, f"stats/val_step29999.json")
+        stats_path = os.path.join(compress_dir, f"stats/val_step29999.json")
+
+        # cmd = f"zip -r {compress_dir}/compress.zip {compress_dir}/compress"
+        # subprocess.run(cmd, shell=True)
+        cmd = f"stat -c%s {compress_dir}/compress.zip"
+        size = subprocess.run(cmd, shell=True, capture_output=True).stdout
+        info["size"].append(int(size))
 
         with open(stats_path, "r") as f:
             stats = json.load(f)
-            psnrs.append(stats["psnr"])
-    print(psnrs)
-    print(np.mean(psnrs))
+            for k, v in stats.items():
+                info[k].append(v)
+
+    for k, v in info.items():
+        print(k, np.mean(v))
 
     # writer = imageio.get_writer(f"{ckpt_dir}/{scene}_mcmc_grid.mp4", fps=10)
 
@@ -58,5 +70,5 @@ def gif():
 
 
 if __name__ == "__main__":
-    main()
-    # gif()
+    # main()
+    gif()

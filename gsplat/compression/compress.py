@@ -23,30 +23,39 @@ def inverse_log_transform(y):
 def _compress_means(compress_dir: str, params: Tensor) -> dict[str, Any]:
     params = log_transform(params)
 
-    params_mins = torch.amin(params, dim=(0, 1))
-    params_maxs = torch.amax(params, dim=(0, 1))
-    params_norm = (params - params_mins) / (params_maxs - params_mins)
-    params_norm = params_norm.detach().cpu().numpy()
-    arr = (params_norm * 65535).astype(np.uint16)
-    np.savez_compressed(os.path.join(compress_dir, "means.npz"), arr=arr)
+    n_sidelen = int(params.shape[0] ** 0.5)
+    grid = params.reshape((n_sidelen, n_sidelen, -1))
+    grid_mins = torch.amin(grid, dim=(0, 1))
+    grid_maxs = torch.amax(grid, dim=(0, 1))
+    grid_norm = (grid - grid_mins) / (grid_maxs - grid_mins)
+    img_norm = grid_norm.detach().cpu().numpy()
+    img = (img_norm * 65535).astype(np.uint16)
+
+    img_l = img & 0xFF
+    img_u = (img >> 8) & 0xFF
+    imageio.imwrite(os.path.join(compress_dir, "means_l.png"), img_l.astype(np.uint8))
+    imageio.imwrite(os.path.join(compress_dir, "means_u.png"), img_u.astype(np.uint8))
 
     meta = {
         "shape": list(params.shape),
-        "mins": params_mins.tolist(),
-        "maxs": params_maxs.tolist(),
+        "mins": grid_mins.tolist(),
+        "maxs": grid_maxs.tolist(),
     }
     return meta
 
 
 def _decompress_means(compress_dir: str, meta: dict[str, Any]) -> Tensor:
-    arr = np.load(os.path.join(compress_dir, "means.npz"))["arr"]
-    params_norm = arr / 65535.0
-    params_norm = torch.tensor(params_norm, dtype=torch.float32)
-    params_mins = torch.tensor(meta["mins"], dtype=torch.float32)
-    params_maxs = torch.tensor(meta["maxs"], dtype=torch.float32)
-    params = params_norm * (params_maxs - params_mins) + params_mins
+    img_l = imageio.imread(os.path.join(compress_dir, "means_l.png")).astype(np.uint16)
+    img_u = imageio.imread(os.path.join(compress_dir, "means_u.png")).astype(np.uint16)
+    img = (img_u << 8) + img_l
 
-    params = params.reshape(meta["shape"])
+    img_norm = img / 65535.0
+    grid_norm = torch.tensor(img_norm, dtype=torch.float32)
+    grid_mins = torch.tensor(meta["mins"], dtype=torch.float32)
+    grid_maxs = torch.tensor(meta["maxs"], dtype=torch.float32)
+    grid = grid_norm * (grid_maxs - grid_mins) + grid_mins
+
+    params = grid.reshape(meta["shape"])
     params = inverse_log_transform(params)
     return params
 
@@ -83,33 +92,34 @@ def _decompress_scales(compress_dir: str, meta: dict[str, Any]) -> Tensor:
 
 
 def _compress_sh0(compress_dir: str, params: Tensor) -> Tensor:
-    n_sidelen = int(params.shape[0] ** 0.5)
-    grid = params.reshape((n_sidelen, n_sidelen, -1))
+    def sh_to_rgb(sh: Tensor) -> Tensor:
+        C0 = 0.28209479177387814
+        return sh * C0 + 0.5
 
-    grid_mins = torch.amin(grid, dim=(0, 1))
-    grid_maxs = torch.amax(grid, dim=(0, 1))
-    grid_norm = (grid - grid_mins) / (grid_maxs - grid_mins)
-    img_norm = grid_norm.detach().cpu().numpy()
-    img = (img_norm * 255).astype(np.uint8)
+    rgb = sh_to_rgb(params)
+    rgb = torch.clamp(rgb, 0.0, 1.0)
+    n_sidelen = int(params.shape[0] ** 0.5)
+    grid = rgb.reshape((n_sidelen, n_sidelen, -1))
+    grid = grid.detach().cpu().numpy()
+    img = (grid * 255).astype(np.uint8)
     imageio.imwrite(os.path.join(compress_dir, "sh0.png"), img)
 
     meta = {
         "shape": list(params.shape),
-        "mins": grid_mins.tolist(),
-        "maxs": grid_maxs.tolist(),
     }
     return meta
 
 
 def _decompress_sh0(compress_dir: str, meta: dict[str, Any]) -> Tensor:
-    img = imageio.imread(os.path.join(compress_dir, "sh0.png"))
-    img_norm = img / 255.0
-    grid_norm = torch.tensor(img_norm, dtype=torch.float32)
-    grid_mins = torch.tensor(meta["mins"], dtype=torch.float32)
-    grid_maxs = torch.tensor(meta["maxs"], dtype=torch.float32)
-    grid = grid_norm * (grid_maxs - grid_mins) + grid_mins
+    def rgb_to_sh(rgb: Tensor) -> Tensor:
+        C0 = 0.28209479177387814
+        return (rgb - 0.5) / C0
 
-    params = grid.reshape(meta["shape"])
+    img = imageio.imread(os.path.join(compress_dir, "sh0.png"))
+    grid = img / 255.0
+    grid = torch.tensor(grid, dtype=torch.float32)
+    rgb = grid.reshape(meta["shape"])
+    params = rgb_to_sh(rgb)
     return params
 
 
@@ -156,7 +166,6 @@ def _decompress_shN(compress_dir: str, meta: dict[str, Any]) -> Tensor:
 
 
 def _compress_quats(compress_dir: str, params: Tensor) -> Tensor:
-    params = F.normalize(params, dim=-1)
     n_sidelen = int(params.shape[0] ** 0.5)
     grid = params.reshape((n_sidelen, n_sidelen, -1))
 

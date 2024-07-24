@@ -20,10 +20,10 @@ class SortStrategy(Strategy):
     sort_every: int = 1000
     shuffle_before_sort: bool = True
     sort_attributes: list[str] = field(
-        default_factory=lambda: ["sh0", "quats", "scales"]
+        default_factory=lambda: ["means", "opacities", "quats", "scales", "sh0"]
     )
     blur_attributes: list[str] = field(
-        default_factory=lambda: ["sh0", "quats", "scales"]
+        default_factory=lambda: ["means", "quats", "scales", "sh0"]
     )
 
     def initialize_state(self) -> Dict[str, Any]:
@@ -156,7 +156,7 @@ class SortStrategy(Strategy):
         grid_maxs = torch.amax(grid, dim=(0, 1))
         grid_norm = (grid - grid_mins) / (grid_maxs - grid_mins)
 
-        grid_rgb = grid_norm[:, :, :3]
+        grid_rgb = grid_norm[:, :, -3:]
         grid_rgb = grid_rgb.detach().cpu().numpy()
         grid_rgb = (grid_rgb * 255).astype(np.uint8)
         return grid_rgb
