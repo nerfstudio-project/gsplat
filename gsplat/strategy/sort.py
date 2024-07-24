@@ -28,6 +28,10 @@ class SortStrategy(Strategy):
 
     def initialize_state(self) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy."""
+        assert (
+            self.cap_max == round(self.cap_max**0.5) ** 2
+        ), "cap_max must be a perfect square"
+
         sorted_params = None
         sorted_mask = torch.zeros(self.cap_max, dtype=bool)
         return {

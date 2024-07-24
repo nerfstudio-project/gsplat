@@ -213,12 +213,6 @@ class Runner:
         )
         print("Model initialized. Number of GS:", len(self.splats["means"]))
 
-        if cfg.sort:
-            # Round cap_max to nearest square
-            cfg.cap_max = round(cfg.cap_max**0.5) ** 2
-            self.sort_strategy = SortStrategy(cap_max=cfg.cap_max)
-            self.sort_state = self.sort_strategy.initialize_state()
-
         # Densification Strategy
         self.strategy = MCMCStrategy(
             verbose=True,
@@ -230,6 +224,10 @@ class Runner:
         )
         self.strategy.check_sanity(self.splats, self.optimizers)
         self.strategy_state = self.strategy.initialize_state()
+
+        if cfg.sort:
+            self.sort_strategy = SortStrategy(cap_max=cfg.cap_max)
+            self.sort_state = self.sort_strategy.initialize_state()
 
         self.pose_optimizers = []
         if cfg.pose_opt:

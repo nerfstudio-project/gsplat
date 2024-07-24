@@ -54,9 +54,9 @@ class MCMCStrategy(Strategy):
     noise_lr: float = 5e5
     refine_start_iter: int = 500
     refine_stop_iter: int = 25_000
-    refine_every: int = 1000
+    refine_every: int = 100
     min_opacity: float = 0.005
-    verbose: bool = True
+    verbose: bool = False
 
     def initialize_state(self) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy."""
@@ -142,8 +142,6 @@ class MCMCStrategy(Strategy):
                     f"Step {step}: Added {n_new_gs} GSs. "
                     f"Now having {len(params['means'])} GSs."
                 )
-            if n_new_gs == 0:
-                self.done_adding_new_gs = True
 
             torch.cuda.empty_cache()
 
