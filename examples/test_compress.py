@@ -6,8 +6,8 @@ from gsplat.compression import compress_splats, decompress_splats
 
 
 def main():
-    device = "cpu"
-    ckpt_path = "examples/results/360_v2/3dgs_sort/bicycle/ckpts/ckpt_29999.pt"
+    device = "cuda:0"
+    ckpt_path = "examples/results/360_v2/3dgs_sort/garden/ckpts/ckpt_14999.pt"
     compress_dir = "examples/results/compress"
     if not os.path.exists(compress_dir):
         os.makedirs(compress_dir, exist_ok=True)
@@ -19,7 +19,7 @@ def main():
     splats1 = decompress_splats(compress_dir)
     for k in splats1.keys():
         attr0 = splats0[k]
-        attr1 = splats1[k]
+        attr1 = splats1[k].to(attr0.device)
         print(
             k,
             attr0.shape,

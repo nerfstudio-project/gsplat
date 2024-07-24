@@ -4,6 +4,7 @@ import json
 import torch
 from torch import Tensor
 import torch.nn.functional as F
+from torchpq.clustering import KMeans
 import numpy as np
 import imageio
 
@@ -116,44 +117,44 @@ def _decompress_sh0(compress_dir: str, meta: dict[str, Any]) -> Tensor:
 
 
 def _compress_shN(compress_dir: str, params: Tensor, n_sidelen: int) -> Tensor:
-    k = params.shape[1]
-    grids = params.reshape((n_sidelen, n_sidelen, -1, 3))
+    kmeans = KMeans(n_clusters=65536, distance="euclidean", verbose=True)
+    x = params.reshape(params.shape[0], -1).permute(1, 0).contiguous()
+    labels = kmeans.fit(x)
+    centroids = kmeans.centroids.permute(1, 0)
 
-    all_grid_mins = []
-    all_grid_maxs = []
-    for i in range(k):
-        grid = grids[:, :, i, :]
-        grid_mins = torch.amin(grid, dim=(0, 1))
-        grid_maxs = torch.amax(grid, dim=(0, 1))
-        grid_norm = (grid - grid_mins) / (grid_maxs - grid_mins)
-        img_norm = grid_norm.detach().cpu().numpy()
-        img = (img_norm * 255).astype(np.uint8)
-        imageio.imwrite(os.path.join(compress_dir, f"sh{i+1}.png"), img)
-        all_grid_mins.append(grid_mins.tolist())
-        all_grid_maxs.append(grid_maxs.tolist())
+    centroids_mins = torch.min(centroids)
+    centroid_maxs = torch.max(centroids)
+    centroids_norm = (centroids - centroids_mins) / (centroid_maxs - centroids_mins)
+
+    labels = labels.detach().cpu().numpy()
+    centroids_norm = centroids_norm.detach().cpu().numpy()
+    labels = labels.astype(np.uint16)
+    centroids = (centroids_norm * 255).astype(np.uint16)
+    np.savez_compressed(
+        os.path.join(compress_dir, "shN.npz"), labels=labels, centroids=centroids
+    )
 
     meta = {
         "shape": list(params.shape),
-        "mins": all_grid_mins,
-        "maxs": all_grid_maxs,
+        "mins": centroids_mins.tolist(),
+        "maxs": centroid_maxs.tolist(),
     }
     return meta
 
 
 def _decompress_shN(compress_dir: str, meta: dict[str, Any]) -> Tensor:
-    k = meta["shape"][1]
+    npz_dict = np.load(os.path.join(compress_dir, "shN.npz"))
+    labels = npz_dict["labels"]
+    centroids = npz_dict["centroids"]
 
-    grids = []
-    for i in range(k):
-        img = imageio.imread(os.path.join(compress_dir, f"sh{i+1}.png"))
-        img_norm = img / 255.0
-        grid_norm = torch.tensor(img_norm, dtype=torch.float32)
-        grid_mins = torch.tensor(meta["mins"][i], dtype=torch.float32)
-        grid_maxs = torch.tensor(meta["maxs"][i], dtype=torch.float32)
-        grid = grid_norm * (grid_maxs - grid_mins) + grid_mins
-        grids.append(grid)
-    grids = torch.stack(grids, dim=2)
-    params = grids.reshape(meta["shape"])
+    centroids_norm = centroids / 255.0
+    centroids_norm = torch.tensor(centroids_norm, dtype=torch.float32)
+    centroids_mins = torch.tensor(meta["mins"], dtype=torch.float32)
+    centroids_maxs = torch.tensor(meta["maxs"], dtype=torch.float32)
+    centroids = centroids_norm * (centroids_maxs - centroids_mins) + centroids_mins
+
+    params = centroids[labels]
+    params = params.reshape(meta["shape"])
     return params
 
 
