@@ -44,25 +44,19 @@ def main():
     # imagecodecs.imwrite(os.path.join(out_dir, "rgb.jxl"), grid_rgb)
 
 
-# def gif():
-#     scenes = ["garden", "bicycle", "stump", "treehill", "flowers", "bonsai"]
-#     for scene in tqdm(scenes):
-#         ckpt_dir = f"examples/results/360_v2/3dgs_sh0_sort/{scene}/ckpts"
+def gif():
+    scenes = ["garden", "bicycle", "stump", "treehill", "flowers", "bonsai"]
+    for scene in scenes:
+        ckpt_dir = f"examples/results/360_v2/3dgs_sort/{scene}/ckpts"
 
-#         writer = imageio.get_writer(f"{ckpt_dir}/{scene}_mcmc_grid.mp4", fps=10)
+        writer = imageio.get_writer(f"{ckpt_dir}/{scene}_mcmc_grid.mp4", fps=10)
 
-#         for step in range(500, 30000, 100):
-#             grid = imageio.imread(os.path.join(ckpt_dir, f"grid_step{step:04d}.png"))
-#             if grid.shape[0] != 0:
-#                 img = np.zeros((1000, 1000, 3), dtype=np.uint8)
-#                 img[: grid.shape[0], : grid.shape[1], :] = grid
-#             else:
-#                 img = grid
-
-#             writer.append_data(img)
-#         writer.close()
+        for step in range(4500, 5500, 100):
+            grid = imageio.imread(os.path.join(ckpt_dir, f"grid_step{step:04d}.png"))
+            writer.append_data(grid)
+        writer.close()
 
 
 if __name__ == "__main__":
-    main()
-    # gif()
+    # main()
+    gif()

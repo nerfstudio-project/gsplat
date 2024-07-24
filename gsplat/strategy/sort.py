@@ -20,9 +20,11 @@ class SortStrategy(Strategy):
     sort_every: int = 1000
     shuffle_before_sort: bool = True
     sort_attributes: list[str] = field(
-        default_factory=lambda: ["means", "scales", "sh0"]
+        default_factory=lambda: ["sh0", "quats", "scales"]
     )
-    blur_attributes: list[str] = field(default_factory=lambda: ["sh0", "shN", "quats"])
+    blur_attributes: list[str] = field(
+        default_factory=lambda: ["sh0", "quats", "scales"]
+    )
 
     def initialize_state(self) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy."""
