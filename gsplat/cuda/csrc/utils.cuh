@@ -9,8 +9,9 @@
 
 // #define FilterSize 0.7071067811865476
 // #define FilterInvSquare 1/(FilterSize*FilterSize)
-#define FilterInvSquare 2.f
+// #define FilterInvSquare 2.f
 
+__device__ const float FilterInvSquare = 2.0f;
 
 inline __device__ glm::mat3 quat_to_rotmat(const glm::vec4 quat) {
     float w = quat[0], x = quat[1], y = quat[2], z = quat[3];
@@ -389,22 +390,22 @@ inline __device__ void compute_aabb_vjp(const glm::mat3 M, const glm::vec2 v_mea
 
 inline __device__ void compute_ray_transformation_vjp(const glm::mat3x4 W, const glm::mat3 P,
                                                         const glm::vec3 cam_pos, const glm::vec3 mean,
-                                                        const glm::vec4 quat, const glm::vec3 scale, 
+                                                        const glm::vec4 quat, const glm::vec2 scale, 
                                                         const glm::mat3 v_ray_transformation, const glm::vec3 v_normal3d,
                                                         glm::vec4& v_quat,
                                                         glm::vec2& v_scale, 
                                                         glm::vec3& v_mean3D) {
-    glm::vec3 scale_2dgs = glm::vec3(scale.x, scale.y, 1.f);
-    glm::mat3 S = scale_to_mat(scale_2dgs, 1.f);
+    // glm::vec3 scale_2dgs = glm::vec3(scale.x, scale.y, 1.f);
+    glm::mat3 S = scale_to_mat(scale, 1.f);
     glm::mat3 R = quat_to_rotmat(quat);
     glm::mat3 RS = R * S;
 
-    glm::mat3 v_M_aug = glm::transpose(P) * glm::transpose(v_ray_transformation);
-    glm::mat3 v_M = glm::mat3(
-        glm::vec3(v_M_aug[0]),
-        glm::vec3(v_M_aug[1]),
-        glm::vec3(v_M_aug[2])
-    );
+    glm::mat3 v_M = P * glm::transpose(v_ray_transformation);
+    // glm::mat3 v_M = glm::mat3(
+    //     glm::vec3(v_M_aug[0]),
+    //     glm::vec3(v_M_aug[1]),
+    //     glm::vec3(v_M_aug[2])
+    // );
 
     glm::mat3 W_t = glm::transpose(W);
     glm::mat3 v_RS = W_t * v_M;
@@ -417,8 +418,8 @@ inline __device__ void compute_ray_transformation_vjp(const glm::mat3x4 W, const
     v_tn *= multiplier;
 
     glm::mat3 v_R = glm::mat3(
-        v_RS[0] * scale_2dgs[0],
-        v_RS[1] * scale_2dgs[1],
+        v_RS[0] * scale[0],
+        v_RS[1] * scale[1],
         v_tn
     );
 

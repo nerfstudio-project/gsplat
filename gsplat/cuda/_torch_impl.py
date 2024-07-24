@@ -5,7 +5,6 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
-
 def _quat_scale_to_RS_preci(
     quats: Tensor,  # [N, 4],
     scales: Tensor,  # [N, 3],
@@ -526,6 +525,15 @@ def _fully_fused_projection_2dgs(
     )
     RS_cl = torch.einsum("cij,njk->cnik", R_cw, RS_wl)  # [C, N, 3, 3]
 
+    # compute normals
+
+    normals = RS_cl[..., 2] # [C, N, 3]
+    C, N, _ = normals.shape
+    cos = -normals.reshape((C * N, 1, 3)) @ means_c.reshape((C * N, 3, 1))
+    cos = cos.reshape((C, N, 1))
+    multiplier = torch.where(cos > 0, torch.tensor(1.0), torch.tensor(-1.0))
+    normals *= multiplier
+    
     # ray transform matrix, omitting the z rotation
     T_cl = torch.cat([RS_cl[..., :2], means_c[..., None]], dim=-1)  # [C, N, 3, 3]
     T_sl = torch.einsum("cij,cnjk->cnik", Ks[:, :3, :3], T_cl)  # [C, N, 3, 3]
@@ -559,7 +567,7 @@ def _fully_fused_projection_2dgs(
     )
     radius[~inside] = 0.0
     radii = radius.int()
-    return radii, means2d, depths, M
+    return radii, means2d, depths, M, normals
 
 
 def accumulate_2dgs(
@@ -567,6 +575,7 @@ def accumulate_2dgs(
     ray_transforms: Tensor,  # [C, N, 3, 3]
     opacities: Tensor,  # [C, N]
     colors: Tensor,  # [C, N, channels]
+    normals: Tensor, # [C, N, 3]
     gaussian_ids: Tensor,  # [M]
     pixel_ids: Tensor,  # [M]
     camera_ids: Tensor,  # [M]
@@ -622,13 +631,20 @@ def accumulate_2dgs(
     alphas = accumulate_along_rays(
         weights, None, ray_indices=indices, n_rays=total_pixels
     ).reshape(C, image_height, image_width, 1)
-    return renders, alphas
+    renders_normal = accumulate_along_rays(
+        weights,
+        normals[camera_ids, gaussian_ids],
+        ray_indices=indices,
+        n_rays=total_pixels,
+    ).reshape(C, image_height, image_width, 3)
+    return renders, alphas, renders_normal
 
 
 def _rasterize_to_pixels_2dgs(
     means2d: Tensor,  # [C, N, 2]
     ray_transforms: Tensor,  # [C, N, 3, 3]
     colors: Tensor,  # [C, N, channels]
+    normals: Tensor, # [C, N, 3]
     opacities: Tensor,  # [C, N]
     image_width: int,
     image_height: int,
@@ -669,7 +685,9 @@ def _rasterize_to_pixels_2dgs(
         (C, image_height, image_width, colors.shape[-1]), device=device
     )
     render_alphas = torch.zeros((C, image_height, image_width, 1), device=device)
-
+    render_normals = torch.zeros(
+        (C, image_height, image_width, 3), device=device
+    )
     # Split Gaussians into batches and iteratively accumulate the renderings
 
     block_size = tile_size * tile_size
@@ -702,11 +720,12 @@ def _rasterize_to_pixels_2dgs(
             break
 
         # Accumulate the renderings within this batch of Gaussians.
-        renders_step, accs_step = accumulate_2dgs(
+        renders_step, accs_step, renders_normal_step = accumulate_2dgs(
             means2d,
             ray_transforms,
             opacities,
             colors,
+            normals,
             gs_ids,
             pixel_ids,
             camera_ids,
@@ -715,14 +734,15 @@ def _rasterize_to_pixels_2dgs(
         )
         render_colors = render_colors + renders_step * transmittances[..., None]
         render_alphas = render_alphas + accs_step * transmittances[..., None]
-
+        render_normals = render_normals + renders_normal_step * transmittances[..., None]
+        
     render_alphas = render_alphas
     if backgrounds is not None:
         render_colors = render_colors + backgrounds[:, None, None, :] * (
             1.0 - render_alphas
         )
 
-    return render_colors, render_alphas
+    return render_colors, render_alphas, render_normals
 
 
 def _eval_sh_bases_fast(basis_dim: int, dirs: Tensor):

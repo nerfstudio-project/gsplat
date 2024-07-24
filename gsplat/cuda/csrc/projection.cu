@@ -1645,37 +1645,32 @@ fully_fused_projection_fwd_2dgs_kernel(const uint32_t C, const uint32_t N,
 
     // compute AABB 
     // (WZ): Discard glm and try with float
-    float3 M0 = {M[0][0], M[0][1], M[0][2]};
-    float3 M1 = {M[1][0], M[1][1], M[1][2]};
-    float3 M2 = {M[2][0], M[2][1], M[2][2]};
+    const float3 M0 = {M[0][0], M[0][1], M[0][2]};
+    const float3 M1 = {M[1][0], M[1][1], M[1][2]};
+    const float3 M2 = {M[2][0], M[2][1], M[2][2]};
 
-    float3 temp_point = {1.0f, 1.0f, -1.0f};
-    float distance = f3_sum(temp_point * M2 * M2);
+    const float3 temp_point = {1.0f, 1.0f, -1.0f};
+    const float distance = f3_sum(temp_point * M2 * M2);
 
 
 
     if (distance == 0.0f) return;
 
-    float3 f = (1 / distance) * temp_point;
-    float2 mean2d = {
+    const float3 f = (1 / distance) * temp_point;
+    const float2 mean2d = {
         f3_sum(f * M0 * M2),
         f3_sum(f * M1 * M2)
     };
 
     // take 3 sigma as the radius (non differentiable)
-    float2 temp = {
+    const float2 temp = {
         f3_sum(f * M0 * M0),
         f3_sum(f * M1 * M1)
     };
 
-    float2 half_extend = mean2d * mean2d - temp;
-    // glm::vec2 half_extend = mean2d * mean2d - 
-    //     glm::vec2(
-    //         glm::dot(f, M[0] * M[0]),
-    //         glm::dot(f, M[1] * M[1])
-    //     );
-    float eps = 1e-4;
-    float radius = ceil(3.f * sqrt(max(eps, max(half_extend.x, half_extend.y))));
+    const float2 half_extend = mean2d * mean2d - temp;
+
+    const float radius = ceil(3.f * sqrt(max(1e-4, max(half_extend.x, half_extend.y))));
 
     if (radius <= radius_clip) {
         radii[idx] = 0;
@@ -2071,24 +2066,22 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     glm::vec3 mean_c;
     pos_world_to_cam(W, cam_pos, glm::make_vec3(means), mean_c);
 
-    glm::mat3 P = glm::mat3(
-        Ks[0], 0.0, 0.0,
-        0.0, Ks[4], 0.0,
-        Ks[2], Ks[5], 1.0
+    const glm::mat3 P = glm::mat3(
+        Ks[0], 0.0, Ks[2],
+        0.0, Ks[4], Ks[5],
+        0.0, 0.0, 1.0
     );
-    glm::vec4 quat = glm::make_vec4(quats + gid * 4);
-    scales += gid * 3;
-    // glm::vec3 scale = glm::make_vec3(scales + gid * 3);
-    // glm::vec3 v_normal3d = glm::vec3(v_normals[0], v_normals[1], v_normals[2]);
+    const glm::vec4 quat = glm::make_vec4(quats + gid * 4);
+    const glm::vec2 scale = glm::make_vec2(scales + gid * 3);
 
-    // glm::mat3 v_R(0.f);
     glm::vec4 v_quat(0.f);
     glm::vec2 v_scale(0.f);
     glm::vec3 v_mean(0.f);
 
+    
     compute_ray_transformation_vjp(W, P, 
                                     cam_pos, mean_c, 
-                                    glm::make_vec4(quats + gid * 4), glm::vec3(scales[0], scales[1], 1.f), 
+                                    quat, scale, 
                                     _v_ray_transformation, glm::make_vec3(v_normals),
                                     v_quat,
                                     v_scale, v_mean);

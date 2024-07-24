@@ -2223,9 +2223,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                             px * v_h_u.y + py * v_h_v.y + v_depth * v_z_w_transform.y,
                             px * v_h_u.z + py * v_h_v.z + v_depth * v_z_w_transform.z
                         };
-                        // v_u_transform_local = {v_u_transform.x, v_u_transform.y, v_u_transform.z};
-                        // v_v_transform_local = {v_v_transform.x, v_v_transform.y, v_v_transform.z};
-                        // v_w_transform_local = {v_w_transform.x, v_w_transform.y, v_w_transform.z};
+                        
                     } else {
                         const float v_G_ddelx = -vis * FilterInvSquare * d.x;
                         const float v_G_ddely = -vis * FilterInvSquare * d.y;
