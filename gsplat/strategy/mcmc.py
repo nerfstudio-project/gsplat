@@ -66,7 +66,7 @@ class MCMCStrategy(Strategy):
             for k in range(n + 1):
                 binoms[n, k] = math.comb(n, k)
 
-        relocated_mask = torch.zeros([])
+        relocated_mask = torch.zeros((0,))
         return {"binoms": binoms, "relocated_mask": relocated_mask}
 
     def check_sanity(

@@ -10,7 +10,7 @@ from collections import defaultdict
 
 def main():
     device = "cuda:0"
-    ckpt_path = "examples/results/360_v2/3dgs/garden/ckpts/ckpt_29999.pt"
+    ckpt_path = "examples/results/360_v2/3dgs_sort/garden/ckpts/ckpt_29999.pt"
     compress_dir = "examples/results/test_compress"
     if not os.path.exists(compress_dir):
         os.makedirs(compress_dir, exist_ok=True)
@@ -70,5 +70,5 @@ def gif():
 
 
 if __name__ == "__main__":
-    # main()
-    gif()
+    main()
+    # gif()
