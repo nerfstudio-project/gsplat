@@ -39,7 +39,8 @@ class SortStrategy(Strategy):
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
-        state: Dict[str, Any],
+        sort_state: Dict[str, Any],
+        strategy_state: Dict[str, Any],
         step: int,
         info: Dict[str, Any],
     ):
@@ -53,7 +54,7 @@ class SortStrategy(Strategy):
             return
 
         if step <= self.sort_stop_iter and step % self.sort_every == 0:
-            self._sort_into_grid(params, optimizers, state)
+            self._sort_into_grid(params, optimizers, sort_state, strategy_state)
             if self.verbose:
                 print("Sorted grid.")
 
@@ -64,7 +65,8 @@ class SortStrategy(Strategy):
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
-        state: Dict[str, Any],
+        sort_state: Dict[str, Any],
+        strategy_state: Dict[str, Any],
     ):
         params_to_sort = torch.cat(
             [params[k].reshape(self.cap_max, -1) for k in self.sort_attributes], dim=-1
@@ -98,8 +100,9 @@ class SortStrategy(Strategy):
         sorted_params = torch.cat(
             [params[k].reshape(self.cap_max, -1) for k in self.blur_attributes], dim=-1
         )
-        state["sorted_params"] = sorted_params.detach()
-        state["sorted_mask"].fill_(1)
+        sort_state["sorted_params"] = sorted_params.detach()
+        sort_state["sorted_mask"].fill_(1)
+        strategy_state["relocated_mask"].fill_(0)
 
     def nb_loss(
         self,

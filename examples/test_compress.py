@@ -3,12 +3,13 @@ import numpy as np
 import imageio
 import os
 from gsplat.compression import compress_splats, decompress_splats
+import json
 
 
 def main():
     device = "cuda:0"
-    ckpt_path = "examples/results/360_v2/3dgs_sort/garden/ckpts/ckpt_14999.pt"
-    compress_dir = "examples/results/compress"
+    ckpt_path = "examples/results/360_v2/3dgs/garden/ckpts/ckpt_29999.pt"
+    compress_dir = "examples/results/test_compress"
     if not os.path.exists(compress_dir):
         os.makedirs(compress_dir, exist_ok=True)
 
@@ -30,33 +31,32 @@ def main():
         if attr0.numel() != 0:
             print((attr0 - attr1).abs().max())
 
-    # splats = ckpt["splats"]
-    # n_gs = len(splats["means"])
-    # n_sidelen = int(n_gs**0.5)
-    # params = torch.cat([splats[k].reshape(n_gs, -1) for k in splats.keys()], dim=-1)
-    # grid = params.reshape((n_sidelen, n_sidelen, -1))
-    # grid_rgb = sh_to_rgb(grid[:, :, -3:])
-    # grid_rgb = torch.clamp(grid_rgb, 0.0, 1.0)
-    # grid_rgb = grid_rgb.detach().cpu().numpy()
-    # grid_rgb = (grid_rgb * 255).astype(np.uint8)
-    # imageio.imwrite(os.path.join(out_dir, "rgb.png"), grid_rgb)
-    # imageio.imwrite(os.path.join(out_dir, "rgb.jpg"), grid_rgb)
-    # imagecodecs.imwrite(os.path.join(out_dir, "rgb.jxl"), grid_rgb)
-
 
 def gif():
-    scenes = ["garden", "bicycle", "stump", "treehill", "flowers", "bonsai"]
+    # results_dir = "examples/results/360_v2/3dgs_sort"
+    results_dir = "examples/results/360_v2/3dgs_sort"
+    scenes = ["garden", "bicycle", "stump", "bonsai", "counter", "kitchen", "room"]
+    psnrs = []
     for scene in scenes:
-        ckpt_dir = f"examples/results/360_v2/3dgs_sort/{scene}/ckpts"
+        scene_dir = os.path.join(results_dir, scene)
+        # ckpt_dir = os.path.join(scene_dir, "ckpts")
+        stats_path = os.path.join(scene_dir, f"stats/val_step29999.json")
+        # stats_path = os.path.join(scene_dir, f"compressed_results/stats/val_step29999.json")
 
-        writer = imageio.get_writer(f"{ckpt_dir}/{scene}_mcmc_grid.mp4", fps=10)
+        with open(stats_path, "r") as f:
+            stats = json.load(f)
+            psnrs.append(stats["psnr"])
+    print(psnrs)
+    print(np.mean(psnrs))
 
-        for step in range(4500, 5500, 100):
-            grid = imageio.imread(os.path.join(ckpt_dir, f"grid_step{step:04d}.png"))
-            writer.append_data(grid)
-        writer.close()
+    # writer = imageio.get_writer(f"{ckpt_dir}/{scene}_mcmc_grid.mp4", fps=10)
+
+    # for step in range(4500, 5500, 100):
+    #     grid = imageio.imread(os.path.join(ckpt_dir, f"grid_step{step:04d}.png"))
+    #     writer.append_data(grid)
+    # writer.close()
 
 
 if __name__ == "__main__":
-    # main()
-    gif()
+    main()
+    # gif()

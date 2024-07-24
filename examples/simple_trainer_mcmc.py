@@ -508,7 +508,8 @@ class Runner:
                 self.sort_strategy.step_post_backward(
                     params=self.splats,
                     optimizers=self.optimizers,
-                    state=self.sort_state,
+                    sort_state=self.sort_state,
+                    strategy_state=self.strategy_state,
                     step=step,
                     info=info,
                 )
@@ -565,11 +566,6 @@ class Runner:
                         "splats": self.splats.state_dict(),
                     },
                     f"{self.ckpt_dir}/ckpt_{step}.pt",
-                )
-
-                # Compress splats
-                compress_splats(
-                    os.path.join(self.ckpt_dir, f"ckpt_{step}"), self.splats
                 )
 
             # eval the full set
@@ -741,11 +737,11 @@ def main(cfg: Config):
         # run eval only
         ckpt = torch.load(cfg.ckpt, map_location=runner.device)
 
-        # compress_dir = os.path.join(cfg.result_dir, "compress")
-        # compress_splats(compress_dir, ckpt["splats"])
-        # splats_c = decompress_splats(compress_dir)
-        # for k in ["means", "opacities", "quats", "scales", "sh0", "shN"]:
-        #     ckpt["splats"][k] = splats_c[k].to(runner.device)
+        compress_dir = os.path.join(cfg.result_dir, "compress")
+        compress_splats(compress_dir, ckpt["splats"])
+        splats_c = decompress_splats(compress_dir)
+        for k in splats_c.keys():
+            ckpt["splats"][k] = splats_c[k].to(runner.device)
 
         for k in runner.splats.keys():
             runner.splats[k].data = ckpt["splats"][k]
