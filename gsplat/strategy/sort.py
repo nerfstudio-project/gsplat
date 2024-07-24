@@ -63,7 +63,7 @@ class SortStrategy(Strategy):
             and step <= self.sort_stop_iter
             and step % self.sort_every == 0
         ):
-            self._sort_into_grid(params, optimizers, sort_state, strategy_state)
+            self._sort_into_grid(params, optimizers, sort_state)
             if self.verbose:
                 print("Sorted grid.")
 
@@ -75,7 +75,6 @@ class SortStrategy(Strategy):
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
         sort_state: Dict[str, Any],
-        strategy_state: Dict[str, Any],
     ):
         params_to_sort = torch.cat(
             [params[k].reshape(self.cap_max, -1) for k in self.sort_attributes], dim=-1
@@ -88,10 +87,9 @@ class SortStrategy(Strategy):
 
         n_sidelen = int(self.cap_max**0.5)
         grid = params_to_sort.reshape((n_sidelen, n_sidelen, -1))
-        sorted_grid, sorted_indices = sort_with_plas(
+        _, sorted_indices = sort_with_plas(
             grid.permute(2, 0, 1), improvement_break=1e-4, verbose=self.verbose
         )
-        sorted_grid = sorted_grid.permute(1, 2, 0)
         sorted_indices = sorted_indices.squeeze().flatten()
         if self.shuffle_before_sort:
             sorted_indices = shuffled_indices[sorted_indices]
