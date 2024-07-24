@@ -43,10 +43,10 @@ class BenchmarkConfig:
 baseline_config = BenchmarkConfig()
 absgrad_config = BenchmarkConfig(
     result_dir="results/absgrad",
-    model_configs={"--absgrad": True, "--grow_grad2d": 0.0006},
+    model_configs={"--absgrad": "", "--grow_grad2d": 0.0006},
 )
 antialiased_config = BenchmarkConfig(
-    result_dir="results/antialiased", model_configs={"--antialiased": True}
+    result_dir="results/antialiased", model_configs={"--antialiased": ""}
 )
 mcmc_config = BenchmarkConfig(
     trainer="simple_trainer_mcmc.py",
