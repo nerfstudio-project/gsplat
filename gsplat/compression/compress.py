@@ -29,7 +29,7 @@ def _compress_means(compress_dir: str, params: Tensor) -> dict[str, Any]:
     grid_maxs = torch.amax(grid, dim=(0, 1))
     grid_norm = (grid - grid_mins) / (grid_maxs - grid_mins)
     img_norm = grid_norm.detach().cpu().numpy()
-    img = (img_norm * 65535).astype(np.uint16)
+    img = (img_norm * (2**16 - 1)).astype(np.uint16)
 
     img_l = img & 0xFF
     img_u = (img >> 8) & 0xFF
@@ -49,7 +49,7 @@ def _decompress_means(compress_dir: str, meta: dict[str, Any]) -> Tensor:
     img_u = imageio.imread(os.path.join(compress_dir, "means_u.png")).astype(np.uint16)
     img = (img_u << 8) + img_l
 
-    img_norm = img / 65535.0
+    img_norm = img / (2**16 - 1)
     grid_norm = torch.tensor(img_norm, dtype=torch.float32)
     grid_mins = torch.tensor(meta["mins"], dtype=torch.float32)
     grid_maxs = torch.tensor(meta["maxs"], dtype=torch.float32)
@@ -68,8 +68,12 @@ def _compress_scales(compress_dir: str, params: Tensor) -> dict[str, Any]:
     grid_maxs = torch.amax(grid, dim=(0, 1))
     grid_norm = (grid - grid_mins) / (grid_maxs - grid_mins)
     img_norm = grid_norm.detach().cpu().numpy()
-    img = (img_norm * 255).astype(np.uint8)
-    imageio.imwrite(os.path.join(compress_dir, "scales.png"), img)
+    img = (img_norm * (2**16 - 1)).astype(np.uint16)
+
+    img_l = img & 0xFF
+    img_u = (img >> 8) & 0xFF
+    imageio.imwrite(os.path.join(compress_dir, "scales_l.png"), img_l.astype(np.uint8))
+    imageio.imwrite(os.path.join(compress_dir, "scales_u.png"), img_u.astype(np.uint8))
 
     meta = {
         "shape": list(params.shape),
@@ -80,8 +84,11 @@ def _compress_scales(compress_dir: str, params: Tensor) -> dict[str, Any]:
 
 
 def _decompress_scales(compress_dir: str, meta: dict[str, Any]) -> Tensor:
-    img = imageio.imread(os.path.join(compress_dir, "scales.png"))
-    img_norm = img / 255.0
+    img_l = imageio.imread(os.path.join(compress_dir, "scales_l.png")).astype(np.uint16)
+    img_u = imageio.imread(os.path.join(compress_dir, "scales_u.png")).astype(np.uint16)
+    img = (img_u << 8) + img_l
+
+    img_norm = img / (2**16 - 1)
     grid_norm = torch.tensor(img_norm, dtype=torch.float32)
     grid_mins = torch.tensor(meta["mins"], dtype=torch.float32)
     grid_maxs = torch.tensor(meta["maxs"], dtype=torch.float32)
@@ -101,7 +108,7 @@ def _compress_sh0(compress_dir: str, params: Tensor) -> Tensor:
     n_sidelen = int(params.shape[0] ** 0.5)
     grid = rgb.reshape((n_sidelen, n_sidelen, -1))
     grid = grid.detach().cpu().numpy()
-    img = (grid * 255).astype(np.uint8)
+    img = (grid * (2**8 - 1)).astype(np.uint8)
     imageio.imwrite(os.path.join(compress_dir, "sh0.png"), img)
 
     meta = {
@@ -116,7 +123,7 @@ def _decompress_sh0(compress_dir: str, meta: dict[str, Any]) -> Tensor:
         return (rgb - 0.5) / C0
 
     img = imageio.imread(os.path.join(compress_dir, "sh0.png"))
-    grid = img / 255.0
+    grid = img / (2**8 - 1)
     grid = torch.tensor(grid, dtype=torch.float32)
     rgb = grid.reshape(meta["shape"])
     params = rgb_to_sh(rgb)
@@ -127,7 +134,7 @@ def _compress_shN(compress_dir: str, params: Tensor) -> Tensor:
     if params.numel() == 0:
         return {"shape": list(params.shape)}
 
-    kmeans = KMeans(n_clusters=16384, distance="euclidean", verbose=True)
+    kmeans = KMeans(n_clusters=2**16, distance="euclidean", verbose=True)
     x = params.reshape(params.shape[0], -1).permute(1, 0).contiguous()
     labels = kmeans.fit(x)
     centroids = kmeans.centroids.permute(1, 0)
@@ -139,7 +146,7 @@ def _compress_shN(compress_dir: str, params: Tensor) -> Tensor:
     labels = labels.detach().cpu().numpy()
     centroids_norm = centroids_norm.detach().cpu().numpy()
     labels = labels.astype(np.uint16)
-    centroids = (centroids_norm * 255).astype(np.uint16)
+    centroids = (centroids_norm * (2**16 - 1)).astype(np.uint16)
     np.savez_compressed(
         os.path.join(compress_dir, "shN.npz"), labels=labels, centroids=centroids
     )
@@ -160,7 +167,7 @@ def _decompress_shN(compress_dir: str, meta: dict[str, Any]) -> Tensor:
     labels = npz_dict["labels"]
     centroids = npz_dict["centroids"]
 
-    centroids_norm = centroids / 255.0
+    centroids_norm = centroids / (2**16 - 1)
     centroids_norm = torch.tensor(centroids_norm, dtype=torch.float32)
     centroids_mins = torch.tensor(meta["mins"], dtype=torch.float32)
     centroids_maxs = torch.tensor(meta["maxs"], dtype=torch.float32)
@@ -175,28 +182,23 @@ def _compress_quats(compress_dir: str, params: Tensor) -> Tensor:
     n_sidelen = int(params.shape[0] ** 0.5)
     grid = params.reshape((n_sidelen, n_sidelen, -1))
 
-    grid_mins = torch.amin(grid, dim=(0, 1))
-    grid_maxs = torch.amax(grid, dim=(0, 1))
-    grid_norm = (grid - grid_mins) / (grid_maxs - grid_mins)
+    grid_norm = F.normalize(grid, dim=-1)
+    grid_norm = grid_norm * 0.5 + 0.5
     img_norm = grid_norm.detach().cpu().numpy()
-    img = (img_norm * 255).astype(np.uint8)
+    img = (img_norm * (2**8 - 1)).astype(np.uint8)
     imageio.imwrite(os.path.join(compress_dir, "quats.png"), img)
 
     meta = {
         "shape": list(params.shape),
-        "mins": grid_mins.tolist(),
-        "maxs": grid_maxs.tolist(),
     }
     return meta
 
 
 def _decompress_quats(compress_dir: str, meta: dict[str, Any]) -> Tensor:
     img = imageio.imread(os.path.join(compress_dir, "quats.png"))
-    img_norm = img / 255.0
+    img_norm = img / (2**8 - 1)
     grid_norm = torch.tensor(img_norm, dtype=torch.float32)
-    grid_mins = torch.tensor(meta["mins"], dtype=torch.float32)
-    grid_maxs = torch.tensor(meta["maxs"], dtype=torch.float32)
-    grid = grid_norm * (grid_maxs - grid_mins) + grid_mins
+    grid = grid_norm * 2 - 1
 
     params = grid.reshape(meta["shape"])
     return params
@@ -210,7 +212,7 @@ def _compress_opacities(compress_dir: str, params: Tensor) -> Tensor:
     grid_maxs = torch.amax(grid, dim=(0, 1))
     grid_norm = (grid - grid_mins) / (grid_maxs - grid_mins)
     img_norm = grid_norm.detach().cpu().numpy()
-    img = (img_norm * 255).astype(np.uint8)
+    img = (img_norm * (2**8 - 1)).astype(np.uint8)
     imageio.imwrite(os.path.join(compress_dir, "opacities.png"), img)
 
     meta = {
@@ -223,7 +225,7 @@ def _compress_opacities(compress_dir: str, params: Tensor) -> Tensor:
 
 def _decompress_opacities(compress_dir: str, meta: dict[str, Any]) -> Tensor:
     img = imageio.imread(os.path.join(compress_dir, "opacities.png"))
-    img_norm = img / 255.0
+    img_norm = img / (2**8 - 1)
     grid_norm = torch.tensor(img_norm, dtype=torch.float32)
     grid_mins = torch.tensor(meta["mins"], dtype=torch.float32)
     grid_maxs = torch.tensor(meta["maxs"], dtype=torch.float32)

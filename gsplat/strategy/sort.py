@@ -19,12 +19,12 @@ class SortStrategy(Strategy):
     sort_stop_iter: int = 25_000
     sort_every: int = 1000
     shuffle_before_sort: bool = True
-    sort_attributes: list[str] = field(
-        default_factory=lambda: ["means", "opacities", "quats", "scales", "sh0"]
-    )
-    blur_attributes: list[str] = field(
-        default_factory=lambda: ["means", "quats", "scales", "sh0"]
-    )
+    # sort_attributes: list[str] = field(
+    #     default_factory=lambda: ["means", "scales", "sh0"]
+    # )
+    # blur_attributes: list[str] = field(
+    #     default_factory=lambda: ["quats"]
+    # )
 
     def initialize_state(self) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy."""
@@ -76,9 +76,18 @@ class SortStrategy(Strategy):
         optimizers: Dict[str, torch.optim.Optimizer],
         sort_state: Dict[str, Any],
     ):
+        # params_to_sort = torch.cat(
+        #     [params[k].reshape(self.cap_max, -1) for k in self.sort_attributes], dim=-1
+        # )
         params_to_sort = torch.cat(
-            [params[k].reshape(self.cap_max, -1) for k in self.sort_attributes], dim=-1
+            [
+                params["means"],
+                torch.exp(params["scales"]),
+                params["sh0"].reshape(self.cap_max, -1),
+            ],
+            dim=-1,
         )
+
         if self.shuffle_before_sort:
             shuffled_indices = torch.randperm(
                 params_to_sort.shape[0], device=params_to_sort.device
@@ -104,8 +113,15 @@ class SortStrategy(Strategy):
         _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
 
         # update state
+        # sorted_params = torch.cat(
+        #     [params[k].reshape(self.cap_max, -1) for k in self.blur_attributes], dim=-1
+        # )
         sorted_params = torch.cat(
-            [params[k].reshape(self.cap_max, -1) for k in self.blur_attributes], dim=-1
+            [
+                F.normalize(params["quats"]),
+                # params["sh0"].reshape(self.cap_max, -1),
+            ],
+            dim=-1,
         )
         sort_state["sorted_params"] = sorted_params.detach()
         sort_state["sorted_mask"].fill_(1)
@@ -119,12 +135,19 @@ class SortStrategy(Strategy):
             return torch.tensor(0.0, requires_grad=True)
 
         # make loss input
-        params_to_blur = torch.cat(
-            [params[k].reshape(self.cap_max, -1) for k in self.blur_attributes], dim=-1
+        # params_to_blur = torch.cat(
+        #     [params[k].reshape(self.cap_max, -1) for k in self.blur_attributes], dim=-1
+        # )
+        params_to_sort = torch.cat(
+            [
+                F.normalize(params["quats"]),
+                # params["sh0"].reshape(self.cap_max, -1),
+            ],
+            dim=-1,
         )
 
         # make loss target which is the input smoothed
-        params_blurred = params_to_blur.detach().clone()
+        params_blurred = params_to_sort.detach().clone()
         # avoid smoothing splats that are not sorted
         params_blurred[~sort_state["sorted_mask"]] = sort_state["sorted_params"][
             ~sort_state["sorted_mask"]
@@ -137,7 +160,7 @@ class SortStrategy(Strategy):
         params_blurred = grid_blurred.reshape(self.cap_max, -1)
 
         nbloss = F.huber_loss(
-            params_to_blur[sort_state["sorted_mask"]],
+            params_to_sort[sort_state["sorted_mask"]],
             params_blurred[sort_state["sorted_mask"]],
         )
         return nbloss
@@ -146,12 +169,15 @@ class SortStrategy(Strategy):
         if params["means"].shape[0] != self.cap_max:
             return None
 
-        params_to_blur = torch.cat(
-            [params[k].reshape(self.cap_max, -1) for k in self.blur_attributes], dim=-1
+        params_to_sort = torch.cat(
+            [
+                params["sh0"].reshape(self.cap_max, -1),
+            ],
+            dim=-1,
         )
 
         n_sidelen = int(self.cap_max**0.5)
-        grid = params_to_blur.reshape(n_sidelen, n_sidelen, -1)
+        grid = params_to_sort.reshape(n_sidelen, n_sidelen, -1)
         grid_mins = torch.amin(grid, dim=(0, 1))
         grid_maxs = torch.amax(grid, dim=(0, 1))
         grid_norm = (grid - grid_mins) / (grid_maxs - grid_mins)
