@@ -68,8 +68,8 @@ def _compress_scales(compress_dir: str, params: Tensor) -> dict[str, Any]:
     grid_maxs = torch.amax(grid, dim=(0, 1))
     grid_norm = (grid - grid_mins) / (grid_maxs - grid_mins)
     img_norm = grid_norm.detach().cpu().numpy()
-    img = (img_norm * (2**16 - 1)).astype(np.uint16)
 
+    img = (img_norm * (2**12 - 1)).astype(np.uint16)
     img_l = img & 0xFF
     img_u = (img >> 8) & 0xFF
     imageio.imwrite(os.path.join(compress_dir, "scales_l.png"), img_l.astype(np.uint8))
@@ -87,8 +87,8 @@ def _decompress_scales(compress_dir: str, meta: dict[str, Any]) -> Tensor:
     img_l = imageio.imread(os.path.join(compress_dir, "scales_l.png")).astype(np.uint16)
     img_u = imageio.imread(os.path.join(compress_dir, "scales_u.png")).astype(np.uint16)
     img = (img_u << 8) + img_l
+    img_norm = img / (2**12 - 1)
 
-    img_norm = img / (2**16 - 1)
     grid_norm = torch.tensor(img_norm, dtype=torch.float32)
     grid_mins = torch.tensor(meta["mins"], dtype=torch.float32)
     grid_maxs = torch.tensor(meta["maxs"], dtype=torch.float32)
@@ -146,7 +146,7 @@ def _compress_shN(compress_dir: str, params: Tensor) -> Tensor:
     labels = labels.detach().cpu().numpy()
     centroids_norm = centroids_norm.detach().cpu().numpy()
     labels = labels.astype(np.uint16)
-    centroids = (centroids_norm * (2**16 - 1)).astype(np.uint16)
+    centroids = (centroids_norm * (2**8 - 1)).astype(np.uint8)
     np.savez_compressed(
         os.path.join(compress_dir, "shN.npz"), labels=labels, centroids=centroids
     )
@@ -167,7 +167,7 @@ def _decompress_shN(compress_dir: str, meta: dict[str, Any]) -> Tensor:
     labels = npz_dict["labels"]
     centroids = npz_dict["centroids"]
 
-    centroids_norm = centroids / (2**16 - 1)
+    centroids_norm = centroids / (2**8 - 1)
     centroids_norm = torch.tensor(centroids_norm, dtype=torch.float32)
     centroids_mins = torch.tensor(meta["mins"], dtype=torch.float32)
     centroids_maxs = torch.tensor(meta["maxs"], dtype=torch.float32)
@@ -241,6 +241,12 @@ def compress_splats(compress_dir: str, splats: dict[str, Tensor]) -> None:
 
     meta = {}
     for attr_name in splats.keys():
+        # if attr_name == "shN":
+        #     with open(os.path.join(compress_dir, "meta.json"), "r") as f:
+        #         meta2 = json.load(f)
+        #         meta[attr_name] = meta2[attr_name]
+        #     continue
+
         compress_fn = eval(f"_compress_{attr_name}")
         meta[attr_name] = compress_fn(compress_dir, splats[attr_name])
 

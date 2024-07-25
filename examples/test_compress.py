@@ -36,7 +36,7 @@ def main():
 
 def gif():
     # results_dir = "examples/results/360_v2/3dgs"
-    results_dir = "examples/results/360_v2/3dgs_sort+q"
+    results_dir = "examples/results/360_v2/3dgs+sq2"
     scenes = ["garden", "bicycle", "stump", "bonsai", "counter", "kitchen", "room"]
 
     info = defaultdict(list)

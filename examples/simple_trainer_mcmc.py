@@ -738,27 +738,28 @@ def main(cfg: Config):
         splats = ckpt["splats"]
 
         # Sort
-        # from plas import sort_with_plas
-        # params_to_sort = torch.cat(
-        #     [
-        #         splats[k].reshape(cfg.cap_max, -1)
-        #         for k in ["means", "opacities", "quats", "scales", "sh0"]
-        #     ],
-        #     dim=-1,
-        # )
-        # shuffled_indices = torch.randperm(
-        #     params_to_sort.shape[0], device=params_to_sort.device
-        # )
-        # params_to_sort = params_to_sort[shuffled_indices]
-        # n_sidelen = int(cfg.cap_max**0.5)
-        # grid = params_to_sort.reshape((n_sidelen, n_sidelen, -1))
-        # _, sorted_indices = sort_with_plas(
-        #     grid.permute(2, 0, 1), improvement_break=1e-4, verbose=True
-        # )
-        # sorted_indices = sorted_indices.squeeze().flatten()
-        # sorted_indices = shuffled_indices[sorted_indices]
-        # for k, v in splats.items():
-        #     splats[k] = v[sorted_indices]
+        from plas import sort_with_plas
+
+        params_to_sort = torch.cat(
+            [
+                splats[k].reshape(cfg.cap_max, -1)
+                for k in ["means", "opacities", "quats", "scales", "sh0"]
+            ],
+            dim=-1,
+        )
+        shuffled_indices = torch.randperm(
+            params_to_sort.shape[0], device=params_to_sort.device
+        )
+        params_to_sort = params_to_sort[shuffled_indices]
+        n_sidelen = int(cfg.cap_max**0.5)
+        grid = params_to_sort.reshape((n_sidelen, n_sidelen, -1))
+        _, sorted_indices = sort_with_plas(
+            grid.permute(2, 0, 1), improvement_break=1e-4, verbose=True
+        )
+        sorted_indices = sorted_indices.squeeze().flatten()
+        sorted_indices = shuffled_indices[sorted_indices]
+        for k, v in splats.items():
+            splats[k] = v[sorted_indices]
 
         # Compress
         compress_dir = os.path.join(cfg.result_dir, "compress")
@@ -770,7 +771,7 @@ def main(cfg: Config):
         for k in runner.splats.keys():
             runner.splats[k].data = ckpt["splats"][k]
         runner.eval(step=ckpt["step"])
-        runner.render_traj(step=ckpt["step"])
+        # runner.render_traj(step=ckpt["step"])
     else:
         runner.train()
 
