@@ -10,13 +10,17 @@ from .cuda._wrapper import (
     rasterize_to_indices_in_range,
     rasterize_to_pixels,
     raytracing_to_pixels,
+    integrate_to_points,
     spherical_harmonics,
     view_to_gaussians,
     world_to_cam,
     compute_3D_smoothing_filter,
+    project_points,
 )
 from .rendering import (
     rasterization,
+    integration,
+    raytracing,
     rasterization_inria_wrapper,
     rasterization_legacy_wrapper,
 )
@@ -107,11 +111,13 @@ all = [
     "spherical_harmonics",
     "isect_offset_encode",
     "isect_tiles",
+    "points_isect_tiles",
     "persp_proj",
     "fully_fused_projection",
     "quat_scale_to_covar_preci",
     "rasterize_to_pixels",
     "raytracing_to_pixels",
+    "integrate_to_points",
     "view_to_gaussian",
     "world_to_cam",
     "accumulate",
@@ -126,4 +132,5 @@ all = [
     "compute_cov2d_bounds",
     "get_tile_bin_edges",
     "compute_3D_smoothing_filter",
+    "project_points",
 ]

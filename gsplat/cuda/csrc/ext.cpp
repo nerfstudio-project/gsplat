@@ -22,6 +22,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("isect_tiles", &isect_tiles_tensor);
     m.def("isect_offset_encode", &isect_offset_encode_tensor);
+    m.def("points_isect_tiles", &points_isect_tiles_tensor);
+    
 
     m.def("rasterize_to_pixels_fwd", &rasterize_to_pixels_fwd_tensor);
     m.def("rasterize_to_pixels_bwd", &rasterize_to_pixels_bwd_tensor);
@@ -32,6 +34,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("rasterize_to_indices_in_range", &rasterize_to_indices_in_range_tensor);
 
     m.def("compute_3D_smoothing_filter_fwd", &compute_3D_smoothing_filter_fwd_tensor);
+    m.def("project_points_fwd", &project_points_fwd_tensor);
+    m.def("integrate_to_points_fwd", &integrate_to_points_fwd_tensor);
 
     // packed version
     m.def("fully_fused_projection_packed_fwd", &fully_fused_projection_packed_fwd_tensor);

@@ -349,6 +349,80 @@ def isect_tiles(
 
 
 @torch.no_grad()
+def points_isect_tiles(
+    means2d: Tensor,  # [C, N, 2] or [nnz, 2]
+    radii: Tensor,  # [C, N] or [nnz]
+    depths: Tensor,  # [C, N] or [nnz]
+    tile_size: int,
+    tile_width: int,
+    tile_height: int,
+    sort: bool = True,
+    packed: bool = False,
+    n_cameras: Optional[int] = None,
+    camera_ids: Optional[Tensor] = None,
+    gaussian_ids: Optional[Tensor] = None,
+) -> Tuple[Tensor, Tensor, Tensor]:
+    """Maps projected Gaussians to intersecting tiles.
+
+    Args:
+        means2d: Projected Gaussian means. [C, N, 2] if packed is False, [nnz, 2] if packed is True.
+        radii: Maximum radii of the projected Gaussians. [C, N] if packed is False, [nnz] if packed is True.
+        depths: Z-depth of the projected Gaussians. [C, N] if packed is False, [nnz] if packed is True.
+        tile_size: Tile size.
+        tile_width: Tile width.
+        tile_height: Tile height.
+        sort: If True, the returned intersections will be sorted by the intersection ids. Default: True.
+        packed: If True, the input tensors are packed. Default: False.
+        n_cameras: Number of cameras. Required if packed is True.
+        camera_ids: The row indices of the projected Gaussians. Required if packed is True.
+        gaussian_ids: The column indices of the projected Gaussians. Required if packed is True.
+
+    Returns:
+        A tuple:
+
+        - **Tiles per Gaussian**. The number of tiles intersected by each Gaussian.
+          Int32 [C, N] if packed is False, Int32 [nnz] if packed is True.
+        - **Intersection ids**. Each id is an 64-bit integer with the following
+          information: camera_id (Xc bits) | tile_id (Xt bits) | depth (32 bits).
+          Xc and Xt are the maximum number of bits required to represent the camera and
+          tile ids, respectively. Int64 [n_isects]
+        - **Flatten ids**. The global flatten indices in [C * N] or [nnz] (packed). [n_isects]
+    """
+    if packed:
+        nnz = means2d.size(0)
+        assert means2d.shape == (nnz, 2), means2d.size()
+        assert radii.shape == (nnz,), radii.size()
+        assert depths.shape == (nnz,), depths.size()
+        assert camera_ids is not None, "camera_ids is required if packed is True"
+        assert gaussian_ids is not None, "gaussian_ids is required if packed is True"
+        assert n_cameras is not None, "n_cameras is required if packed is True"
+        camera_ids = camera_ids.contiguous()
+        gaussian_ids = gaussian_ids.contiguous()
+        C = n_cameras
+
+    else:
+        C, N, _ = means2d.shape
+        assert means2d.shape == (C, N, 2), means2d.size()
+        assert radii.shape == (C, N), radii.size()
+        assert depths.shape == (C, N), depths.size()
+
+    isect_ids, flatten_ids = _make_lazy_cuda_func("points_isect_tiles")(
+        means2d.contiguous(),
+        radii.contiguous(),
+        depths.contiguous(),
+        camera_ids,
+        gaussian_ids,
+        C,
+        tile_size,
+        tile_width,
+        tile_height,
+        sort,
+        True,  # DoubleBuffer: memory efficient radixsort
+    )
+    return isect_ids, flatten_ids
+
+
+@torch.no_grad()
 def isect_offset_encode(
     isect_ids: Tensor, n_cameras: int, tile_width: int, tile_height: int
 ) -> Tensor:
@@ -840,6 +914,137 @@ def raytracing_to_pixels(
         render_colors = render_colors[..., :-padded_channels]
     return render_colors, render_alphas
 
+@torch.no_grad()
+def project_points(
+    means: Tensor,  # [N, 3]
+    viewmats: Tensor,  # [C, 4, 4]
+    Ks: Tensor,  # [C, 3, 3]
+    width: int,
+    height: int,
+    near_plane: float = 0.01,
+    far_plane: float = 1e10,
+) -> Tensor:
+    """Project 3D points to 2D images space"""
+    C = viewmats.size(0)
+    N = means.size(0)
+    assert means.size() == (N, 3), means.size()
+    assert viewmats.size() == (C, 4, 4), viewmats.size()
+    assert Ks.size() == (C, 3, 3), Ks.size()
+    means = means.contiguous()
+    viewmats = viewmats.contiguous()
+    Ks = Ks.contiguous()
+
+    radii, means2d, depths = _make_lazy_cuda_func("project_points_fwd")(
+            means,
+            viewmats,
+            Ks,
+            width,
+            height,
+            near_plane,
+            far_plane
+        )
+    return radii, means2d, depths
+    
+    
+def integrate_to_points(
+    points2d: Tensor,  # [C, N, 2] or [nnz, 2]
+    point_depths: Tensor,  # [C, N] or [nnz]
+    means2d: Tensor,  # [C, N, 2] or [nnz, 2]
+    conics: Tensor,  # [C, N, 3] or [nnz, 3]
+    colors: Tensor,  # [C, N, channels] or [nnz, channels]
+    opacities: Tensor,  # [C, N] or [nnz]
+    view2guassian: Tensor,  # [C, N, 10] or [nnz, 10]
+    Ks: Tensor,  # [C, 3, 3]
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    isect_offsets: Tensor,  # [C, tile_height, tile_width]
+    flatten_ids: Tensor,  # [n_isects]
+    point_isect_offsets: Tensor,  # [C, tile_height, tile_width]
+    point_flatten_ids: Tensor,  # [n_isects]
+    backgrounds: Optional[Tensor] = None,  # [C, channels]
+    packed: bool = False,
+    absgrad: bool = False,
+) -> Tuple[Tensor, Tensor]:
+    """Rasterizes Gaussians to pixels.
+
+    Args:
+        means2d: Projected Gaussian means. [C, N, 2] if packed is False, [nnz, 2] if packed is True.
+        conics: Inverse of the projected covariances with only upper triangle values. [C, N, 3] if packed is False, [nnz, 3] if packed is True.
+        colors: Gaussian colors or ND features. [C, N, channels] if packed is False, [nnz, channels] if packed is True.
+        opacities: Gaussian opacities that support per-view values. [C, N] if packed is False, [nnz] if packed is True.
+        image_width: Image width.
+        image_height: Image height.
+        tile_size: Tile size.
+        isect_offsets: Intersection offsets outputs from `isect_offset_encode()`. [C, tile_height, tile_width]
+        flatten_ids: The global flatten indices in [C * N] or [nnz] from  `isect_tiles()`. [n_isects]
+        backgrounds: Background colors. [C, channels]. Default: None.
+        packed: If True, the input tensors are expected to be packed with shape [nnz, ...]. Default: False.
+        absgrad: If True, the backward pass will compute a `.absgrad` attribute for `means2d`. Default: False.
+
+    Returns:
+        A tuple:
+
+        - **Rendered colors**. [C, image_height, image_width, channels]
+        - **Rendered alphas**. [C, image_height, image_width, 1]
+    """
+    assert not packed, "integrate_to_points only supports non-packed mode."
+
+    C = isect_offsets.size(0)
+    device = means2d.device
+    if packed:
+        nnz = means2d.size(0)
+        assert means2d.shape == (nnz, 2), means2d.shape
+        assert conics.shape == (nnz, 3), conics.shape
+        assert colors.shape[0] == nnz, colors.shape
+        assert opacities.shape == (nnz,), opacities.shape
+        assert view2guassian.shape == (nnz, 10), view2guassian.shape
+    else:
+        N = means2d.size(1)
+        assert means2d.shape == (C, N, 2), means2d.shape
+        assert conics.shape == (C, N, 3), conics.shape
+        assert colors.shape[:2] == (C, N), colors.shape
+        assert opacities.shape == (C, N), opacities.shape
+        assert view2guassian.shape == (C, N, 10), view2guassian.shape
+        assert Ks.shape == (C, 3, 3), Ks.shape
+        PN = points2d.size(1)
+        assert points2d.shape == (C, PN, 2), points2d.shape
+        assert point_depths.shape == (C, PN), point_depths.shape
+    if backgrounds is not None:
+        assert backgrounds.shape == (C, colors.shape[-1]), backgrounds.shape
+        backgrounds = backgrounds.contiguous()
+
+    tile_height, tile_width = isect_offsets.shape[1:3]
+    assert (
+        tile_height * tile_size >= image_height
+    ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
+    assert (
+        tile_width * tile_size >= image_width
+    ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
+
+    render_colors, render_alphas = _make_lazy_cuda_func(
+            "integrate_to_points_fwd"
+        )(
+            points2d,
+            point_depths,
+            means2d,
+            conics,
+            colors,
+            opacities,
+            view2guassian,
+            Ks,
+            backgrounds,
+            image_width,
+            image_height,
+            tile_size,
+            isect_offsets,
+            flatten_ids,
+            point_isect_offsets,
+            point_flatten_ids,
+        )
+        
+
+    return render_colors, render_alphas
 
 class _QuatScaleToCovarPreci(torch.autograd.Function):
     """Converts quaternions and scales to covariance and precision matrices."""

@@ -5,7 +5,7 @@ import torch
 from sklearn.neighbors import NearestNeighbors
 from torch import Tensor
 import torch.nn.functional as F
-
+import trimesh
 
 class CameraOptModule(torch.nn.Module):
     """Camera pose optimization module."""
@@ -205,3 +205,47 @@ def depth_to_normal(K: Tensor, depth: Tensor) -> Tensor:
     normal_map = torch.nn.functional.normalize(torch.cross(dx, dy, dim=-1), dim=-1)
     output[1:-1, 1:-1, :] = normal_map
     return output
+
+
+def create_tetrahedra_points(quats, xyz, scale, opacity=None, opacity_threshold=0.1):
+    device = xyz.device
+    
+    M = trimesh.creation.box(extents=[2.0, 2.0, 2.0])
+
+    quats = F.normalize(quats, p=2, dim=-1)
+    w, x, y, z = torch.unbind(quats, dim=-1)
+    R = torch.stack(
+        [
+            1 - 2 * (y**2 + z**2),
+            2 * (x * y - w * z),
+            2 * (x * z + w * y),
+            2 * (x * y + w * z),
+            1 - 2 * (x**2 + z**2),
+            2 * (y * z - w * x),
+            2 * (x * z - w * y),
+            2 * (y * z + w * x),
+            1 - 2 * (x**2 + y**2),
+        ],
+        dim=-1,
+    )
+
+    rots = R.reshape(quats.shape[:-1] + (3, 3))  # (..., 3, 3)
+    scale = scale * 3.0 # scale up the box at 3 sigma
+
+    # filter points with small opacity 
+    if opacity is not None:
+        mask = (opacity > opacity_threshold).squeeze(-1)
+        xyz = xyz[mask]
+        scale = scale[mask]
+        rots = rots[mask]
+        
+    vertices = M.vertices.T    
+    vertices = torch.from_numpy(vertices).float().to(device).unsqueeze(0).repeat(xyz.shape[0], 1, 1)
+    # scale vertices first
+    vertices = vertices * scale.unsqueeze(-1)
+    vertices = torch.bmm(rots, vertices).squeeze(-1) + xyz.unsqueeze(-1)
+    vertices = vertices.permute(0, 2, 1).reshape(-1, 3).contiguous()
+    # concat center points
+    vertices = torch.cat([vertices, xyz], dim=0)
+    
+    return vertices

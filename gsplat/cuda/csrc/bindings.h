@@ -108,6 +108,16 @@ isect_tiles_tensor(const torch::Tensor &means2d, // [C, N, 2] or [nnz, 2]
                    const uint32_t tile_width, const uint32_t tile_height,
                    const bool sort, const bool double_buffer);
 
+std::tuple<torch::Tensor, torch::Tensor>
+points_isect_tiles_tensor(const torch::Tensor &means2d, // [C, N, 2] or [nnz, 2]
+                          const torch::Tensor &radii,   // [C, N] or [nnz]
+                          const torch::Tensor &depths,  // [C, N] or [nnz]
+                          const at::optional<torch::Tensor> &camera_ids,   // [nnz]
+                          const at::optional<torch::Tensor> &gaussian_ids, // [nnz]
+                          const uint32_t C, const uint32_t tile_size,
+                          const uint32_t tile_width, const uint32_t tile_height,
+                          const bool sort, const bool double_buffer);
+
 torch::Tensor isect_offset_encode_tensor(const torch::Tensor &isect_ids, // [n_isects]
                                          const uint32_t C, const uint32_t tile_width,
                                          const uint32_t tile_height);
@@ -244,6 +254,37 @@ torch::Tensor compute_3D_smoothing_filter_fwd_tensor(
     const torch::Tensor &Ks,                   // [C, 3, 3]
     const uint32_t image_width, const uint32_t image_height, 
     const float near_plane);
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+project_points_fwd_tensor(
+    const torch::Tensor &means,                // [N, 3]
+    const torch::Tensor &viewmats,             // [C, 4, 4]
+    const torch::Tensor &Ks,                   // [C, 3, 3]
+    const uint32_t image_width, const uint32_t image_height,
+    const float near_plane, const float far_plane);
+
+std::tuple<torch::Tensor, torch::Tensor> 
+integrate_to_points_fwd_tensor(
+    // Point parameters
+    const torch::Tensor &points2d,                   // [C, N, 2]
+    const torch::Tensor &point_depths,                    // [C, N, 3]
+    // Gaussian parameters
+    const torch::Tensor &means2d,                   // [C, N, 2]
+    const torch::Tensor &conics,                    // [C, N, 3]
+    const torch::Tensor &colors,                    // [C, N, D]
+    const torch::Tensor &opacities,                 // [N]
+    const torch::Tensor &view2gaussians,            // [C, N, 10]
+    const torch::Tensor &Ks,                   // [C, 3, 3]
+    const at::optional<torch::Tensor> &backgrounds, // [C, D]
+    // image size
+    const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
+    // intersections
+    const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
+    const torch::Tensor &flatten_ids,   // [n_isects]
+    // points intersections
+    const torch::Tensor &point_tile_offsets, // [C, tile_height, tile_width]
+    const torch::Tensor &point_flatten_ids   // [n_isects]
+);
 
 /****************************************************************************************
  * Packed Version

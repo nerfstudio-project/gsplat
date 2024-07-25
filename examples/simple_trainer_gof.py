@@ -27,11 +27,13 @@ from utils import (
     rgb_to_sh,
     set_random_seed,
     depth_to_normal,
+    create_tetrahedra_points,
 )
 
-from gsplat.rendering import raytracing
+from gsplat.rendering import raytracing, integration
 from gsplat import compute_3D_smoothing_filter
-
+from tetranerf.utils.extension import cpp
+from gsplat.tetmesh import marching_tetrahedra
 
 @dataclass
 class Config:
@@ -348,18 +350,7 @@ class Runner:
             "count": torch.zeros(n_gauss, device=self.device, dtype=torch.int),
         }
 
-    def rasterize_splats(
-        self,
-        camtoworlds: Tensor,
-        Ks: Tensor,
-        width: int,
-        height: int,
-        **kwargs,
-    ) -> Tuple[Tensor, Tensor, Dict]:
-        means = self.splats["means3d"]  # [N, 3]
-        # quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
-        # rasterization does normalization internally
-        quats = self.splats["quats"]  # [N, 4]
+    def get_scale_opacity_with_smoothing_filer(self):
         scales = torch.exp(self.splats["scales"])  # [N, 3]
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
         filters = self.splats["filters"]  # [N,]
@@ -375,6 +366,22 @@ class Runner:
 
         scales = torch.square(scales) + torch.square(filters)[:, None]  # [N, 3]
         scales = torch.sqrt(scales)
+        return scales, opacities
+    
+    def rasterize_splats(
+        self,
+        camtoworlds: Tensor,
+        Ks: Tensor,
+        width: int,
+        height: int,
+        **kwargs,
+    ) -> Tuple[Tensor, Tensor, Dict]:
+        means = self.splats["means3d"]  # [N, 3]
+        # quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
+        # rasterization does normalization internally
+        quats = self.splats["quats"]  # [N, 4]
+        
+        scales, opacities = self.get_scale_opacity_with_smoothing_filer()
 
         image_ids = kwargs.pop("image_ids", None)
         if self.cfg.app_opt:
@@ -641,7 +648,7 @@ class Runner:
                     )
 
                     # prune GSs
-                    is_prune = torch.sigmoid(self.splats["opacities"]) < cfg.prune_opa
+                    is_prune = torch.sigmoid(self.splats["opacities"]) < (cfg.prune_opa * 10.)
                     if step > cfg.reset_every:
                         # The official code also implements sreen-size pruning but
                         # it's actually not being used due to a bug:
@@ -747,8 +754,10 @@ class Runner:
         filter_3D = compute_3D_smoothing_filter(
             xyz, worldtocams, Ks, width, height, cfg.near_plane
         )
+        valid_points = filter_3D < 1000000.0
+        filter_3D[~valid_points] = filter_3D[valid_points].max()
         # 0.3 since we don't use anti-aliasing for gof at the moment
-        filter_3D = filter_3D * (0.3**0.5)
+        filter_3D = filter_3D * (0.3**0.5)        
         self.splats["filters"] = torch.nn.Parameter(filter_3D)
 
     @torch.no_grad()
@@ -1124,6 +1133,128 @@ class Runner:
         colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)
         return colors[0].cpu().numpy()
 
+    @torch.no_grad()
+    def evaluate_alpha(self, points, **kwargs):
+        device = self.device
+        means = self.splats["means3d"]  # [N, 3]
+        quats = self.splats["quats"]  # [N, 4]
+        scales, opacities = self.get_scale_opacity_with_smoothing_filer()
+        colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
+        
+        trainloader = torch.utils.data.DataLoader(
+            self.trainset, batch_size=1, shuffle=False, num_workers=1
+        )
+        
+        final_alpha = torch.ones((points.shape[0]), dtype=torch.float32, device=device)
+        
+        for i, data in enumerate(trainloader):
+            print(i)
+            camtoworlds = data["camtoworld"].to(device)
+            Ks = data["K"].to(device)
+            pixels = data["image"].to(device) / 255.0
+            height, width = pixels.shape[1:3]
+            
+            render_colors, render_alphas, info = integration(
+                points=points,
+                means=means,
+                quats=quats,
+                scales=scales,
+                opacities=opacities,
+                colors=colors,
+                viewmats=torch.linalg.inv(camtoworlds),  # [C, 4, 4]
+                Ks=Ks,  # [C, 3, 3]
+                width=width,
+                height=height,
+                sh_degree=self.cfg.sh_degree,
+                **kwargs,
+            )
+            # out_colors = torch.clamp(render_colors[..., :3], 0.0, 1.0)
+            # # write images
+            # canvas = torch.cat([pixels, out_colors], dim=2).squeeze(0).cpu().numpy()
+            # imageio.imwrite(
+            #     f"{self.render_dir}/train_{i:04d}.png", (canvas * 255).astype(np.uint8)
+            # )
+            # breakpoint()
+            assert render_alphas.shape[0] == 1
+            final_alpha = torch.min(final_alpha, render_alphas.reshape(-1))
+            print(final_alpha.mean())
+            # break
+        alpha = 1 - final_alpha
+        return alpha
+            
+    @torch.no_grad()       
+    def extract_mesh(self, **kwargs):
+        import trimesh
+        device = self.device
+        means = self.splats["means3d"]  # [N, 3]
+        quats = self.splats["quats"]  # [N, 4]
+        scales, opacities = self.get_scale_opacity_with_smoothing_filer()
+        points = create_tetrahedra_points(quats, means, scales)
+        print(points.shape, means.shape)
+        print("create cells and save")
+        cells = cpp.triangulate(points)
+        # print("save cells", cells.shape)
+        torch.save(cells,  f"{cfg.result_dir}/cells.pt")
+        # load cells
+        print("load cells")
+        cells = torch.load(f"{cfg.result_dir}/cells.pt")
+        tets = cells.cuda().long()
+        
+        alpha = self.evaluate_alpha(points)
+        
+        print(points.shape, tets.shape, alpha.shape)
+        def alpha_to_sdf(alpha):    
+            sdf = alpha - 0.5
+            sdf = sdf[None]
+            return sdf
+        
+        sdf = alpha_to_sdf(alpha)
+        
+        torch.cuda.empty_cache()
+        # breakpoint()
+        # temp for points_scale
+        points_scale = sdf[0]
+        verts_list, scale_list, faces_list, _ = marching_tetrahedra(points[None], tets, sdf, points_scale[None])
+        torch.cuda.empty_cache()
+        
+        end_points, end_sdf = verts_list[0]
+        end_scales = scale_list[0]
+        
+        faces=faces_list[0].cpu().numpy()
+        points = (end_points[:, 0, :] + end_points[:, 1, :]) / 2.
+            
+        left_points = end_points[:, 0, :]
+        right_points = end_points[:, 1, :]
+        left_sdf = end_sdf[:, 0, :]
+        right_sdf = end_sdf[:, 1, :]
+        left_scale = end_scales[:, 0, 0]
+        right_scale = end_scales[:, 1, 0]
+        distance = torch.norm(left_points - right_points, dim=-1)
+        scale = left_scale + right_scale
+        
+        n_binary_steps = 8
+        for step in range(n_binary_steps):
+            print("binary search in step {}".format(step))
+            mid_points = (left_points + right_points) / 2
+            alpha = self.evaluate_alpha(mid_points)
+            mid_sdf = alpha_to_sdf(alpha).squeeze().unsqueeze(-1)
+            
+            ind_low = ((mid_sdf < 0) & (left_sdf < 0)) | ((mid_sdf > 0) & (left_sdf > 0))
+
+            left_sdf[ind_low] = mid_sdf[ind_low]
+            right_sdf[~ind_low] = mid_sdf[~ind_low]
+            left_points[ind_low.flatten()] = mid_points[ind_low.flatten()]
+            right_points[~ind_low.flatten()] = mid_points[~ind_low.flatten()]
+        
+            points = (left_points + right_points) / 2
+            if step not in [7]:
+                continue
+            
+            vertex_colors=None
+            mesh = trimesh.Trimesh(vertices=points.cpu().numpy(), faces=faces, vertex_colors=vertex_colors, process=False)
+            
+            mesh.export(f"{cfg.result_dir}/{step}.ply")
+        
 
 def main(cfg: Config):
     runner = Runner(cfg)
@@ -1133,8 +1264,9 @@ def main(cfg: Config):
         ckpt = torch.load(cfg.ckpt, map_location=runner.device)
         for k in runner.splats.keys():
             runner.splats[k].data = ckpt["splats"][k]
-        runner.eval(step=ckpt["step"])
-        runner.render_traj(step=ckpt["step"])
+        # runner.eval(step=ckpt["step"])
+        # runner.render_traj(step=ckpt["step"])
+        runner.extract_mesh()
     else:
         runner.train()
 
