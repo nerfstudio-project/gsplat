@@ -1,31 +1,5 @@
 # SpotLessSplats: Ignoring Distractors in 3D Gaussian Splatting
 
-## Reproduced Results
-Vanilla 3DGS on Crab (2):
-<img src="https://github.com/lilygoli/SpotLessSplats/tree/main/assets/base_crab2.gif" height="400px" alt="Crab Base">
-SpotLessSplats on  Crab (2):
-<img src="https://github.com/lilygoli/SpotLessSplats/tree/main/assets/sls_crab2.gif" height="400px" alt="Crab Ours">
-The reproduced results of Fig. 8 in the paper on `gsplat`:
-
-|              |Android |Statue |Crab (2)| Yoda |Mountain|Fountain|Corner|Patio | Spot   | Patio High | Average
-|--------------|--------|-------|--------|-----|--------|--------|------|----|-----|-----|-----| -----|
-|3DGS          |  23.23 | 21.45 | 30.03 | 29.7 | 20.02 | 21.49 | 22.34 |  16.77 | 18.93 | 17.09 | 22.105 |
-|RobustFilter  |  24.34 |22.46 | 34.15 | 34.91 | 21.2 | 21.91| 25.66|17.9|23.21|20.22|24.596|
-|SLS-agg       |   25.01|22.76|34.96|35.06|21.66|22.66|25.77|22.58|24.37|22.72|25.755 |
-|SLS-mlp       |   25.05 |	22.85 |	35.33 |	35.4 |	21.67 |	22.51 |	25.84 |	22.68 |	25.06 |	23.12 |	25.95 |
-|SLS-mlp + UBP |  24.96 | 22.65 | 35.3| 35.26| 21.31| 22.3| 26.36| 22.2|25.12|23.00|25.846 |
-The original results in the paper:
-
-![Fig 8](https://github.com/lilygoli/SpotLessSplats/tree/main/assets/sls-benchmark-paper.png)
-
-The effect of UBP with $\kappa=10^{-14}$ on `gsplat`:
- 
-|              |Compression Factor |PSNR drop
-|--------------|--------|-------|
-|bicycle          |  2.21$\times$ | -0.32|
-|garden  |  3.35$\times$ |-0.41 | 
-|stump       |   2.53$\times$|-0.23|
-
 ## Installation
 Installation process is similar to the main `gsplat` branch. Make sure to `pip install -r requirements.txt` under the examples directory.
 
@@ -65,3 +39,28 @@ We assume that the image files have prefixes determining clean (`clean`), clutte
 python ./examples/datasets/prep_data.py
 ```
 
+## Reproduced Results
+Vanilla 3DGS on Crab (2):
+<img src="https://github.com/lilygoli/SpotLessSplats/tree/main/assets/base_crab2.gif" height="400px" alt="Crab Base">
+SpotLessSplats on  Crab (2):
+<img src="https://github.com/lilygoli/SpotLessSplats/tree/main/assets/sls_crab2.gif" height="400px" alt="Crab Ours">
+The reproduced results of Fig. 8 in the paper on `gsplat`:
+
+|              |Android |Statue |Crab (2)| Yoda |Mountain|Fountain|Corner|Patio | Spot   | Patio High | Average
+|--------------|--------|-------|--------|-----|--------|--------|------|----|-----|-----|-----| -----|
+|3DGS          |  23.23 | 21.45 | 30.03 | 29.7 | 20.02 | 21.49 | 22.34 |  16.77 | 18.93 | 17.09 | 22.105 |
+|RobustFilter  |  24.34 |22.46 | 34.15 | 34.91 | 21.2 | 21.91| 25.66|17.9|23.21|20.22|24.596|
+|SLS-agg       |   25.01|22.76|34.96|35.06|21.66|22.66|25.77|22.58|24.37|22.72|25.755 |
+|SLS-mlp       |   25.05 |	22.85 |	35.33 |	35.4 |	21.67 |	22.51 |	25.84 |	22.68 |	25.06 |	23.12 |	25.95 |
+|SLS-mlp + UBP |  24.96 | 22.65 | 35.3| 35.26| 21.31| 22.3| 26.36| 22.2|25.12|23.00|25.846 |
+The original results in the paper:
+
+![Fig 8](https://github.com/lilygoli/SpotLessSplats/tree/main/assets/sls-benchmark-paper.png)
+
+The effect of UBP with $\kappa=10^{-14}$ on `gsplat`:
+ 
+|              |Compression Factor |PSNR drop
+|--------------|--------|-------|
+|bicycle          |  2.21$\times$ | -0.32|
+|garden  |  3.35$\times$ |-0.41 | 
+|stump       |   2.53$\times$|-0.23|
