@@ -16,3 +16,6 @@ opencv-python
 tyro
 Pillow
 tensorboard
+mediapy
+diffusers==0.27.2 
+transformers==4.40.1

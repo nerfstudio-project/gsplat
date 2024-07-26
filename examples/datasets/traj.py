@@ -154,6 +154,35 @@ def generate_ellipse_path_y(
 
     return np.stack([viewmatrix(p - center, up, p) for p in positions])
 
+def get_ordered_poses(
+    poses,
+) :
+    """
+    Returns ordered poses and intrinsics by euclidian distance between poses.
+
+    Args:
+        poses: list of camera poses
+
+    Returns:
+        tuple of ordered poses and intrinsics
+
+    """
+
+    poses_num = poses.shape[0]
+
+    ordered_poses = np.expand_dims(poses[0], 0)
+
+    # remove the first pose from poses
+    poses = poses[1:]
+
+    for _ in range(poses_num - 1):
+        distances = np.linalg.norm((ordered_poses[-1, :, 3] - poses[:, :, 3])*np.array([[1,1,100,1]]), axis=1)
+
+        idx = np.argmin(distances)
+        ordered_poses = np.concatenate((ordered_poses, np.expand_dims(poses[idx], 0)), axis=0)
+        poses = np.concatenate((poses[0:idx], poses[idx + 1 :]), axis=0)
+
+    return ordered_poses
 
 def generate_interpolated_path(
     poses: np.ndarray,

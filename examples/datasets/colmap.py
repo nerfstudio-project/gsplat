@@ -4,7 +4,12 @@ from typing import Any, Dict, List, Optional
 import cv2
 import imageio.v2 as imageio
 import numpy as np
+import scipy as sp
+import mediapy as media
+from sklearn.cluster import AgglomerativeClustering
+from sklearn.neighbors import kneighbors_graph
 import torch
+import torch.nn as nn
 from pycolmap import SceneManager
 
 from .normalize import (
@@ -22,6 +27,8 @@ def _get_rel_paths(path_dir: str) -> List[str]:
         for f in fn:
             paths.append(os.path.relpath(os.path.join(dp, f), path_dir))
     return paths
+
+
 
 
 class Parser:
@@ -59,8 +66,24 @@ class Parser:
         params_dict = dict()
         imsize_dict = dict()  # width, height
         bottom = np.array([0, 0, 0, 1]).reshape(1, 4)
+        # Load images.
+        colmap_image_dir = os.path.join(data_dir, "images")
+        if not os.path.exists(colmap_image_dir):
+            raise ValueError(f"Image folder {colmap_image_dir} does not exist.")
+        downsample = False
+        if factor > 1:
+            image_dir_suffix = f"_{factor}"
+            image_dir = os.path.join(data_dir, "images" + image_dir_suffix)
+            if not os.path.exists(image_dir):
+                print("downsampling and saving the images.")
+                downsample = True
+                os.makedirs(image_dir)
+        else:
+            image_dir = colmap_image_dir
+
         for k in imdata:
             im = imdata[k]
+
             rot = im.R()
             trans = im.tvec.reshape(3, 1)
             w2c = np.concatenate([np.concatenate([rot, trans], 1), bottom], axis=0)
@@ -105,6 +128,13 @@ class Parser:
 
             # image size
             imsize_dict[camera_id] = (cam.width // factor, cam.height // factor)
+            if downsample:
+                im_path = os.path.join(colmap_image_dir, im.name)
+                im_rgb = media.read_image(im_path)
+                resize_im = media.resize(im_rgb, imsize_dict[camera_id])
+                out_path = os.path.join(image_dir, im.name)
+                media.write_image(out_path, resize_im)
+                
 
         print(
             f"[Parser] {len(imdata)} images, taken by {len(set(camera_ids))} cameras."
@@ -130,17 +160,6 @@ class Parser:
         image_names = [image_names[i] for i in inds]
         camtoworlds = camtoworlds[inds]
         camera_ids = [camera_ids[i] for i in inds]
-
-        # Load images.
-        if factor > 1:
-            image_dir_suffix = f"_{factor}"
-        else:
-            image_dir_suffix = ""
-        colmap_image_dir = os.path.join(data_dir, "images")
-        image_dir = os.path.join(data_dir, "images" + image_dir_suffix)
-        for d in [image_dir, colmap_image_dir]:
-            if not os.path.exists(d):
-                raise ValueError(f"Image folder {d} does not exist.")
 
         # Downsampled images may have different names vs images used for COLMAP,
         # so we need to map between the two sorted lists of files.
@@ -223,6 +242,57 @@ class Parser:
         dists = np.linalg.norm(camera_locations - scene_center, axis=1)
         self.scene_scale = np.max(dists)
 
+class SemanticParser(Parser):
+    """COLMAP parser for cluttered scenes."""
+
+    def __init__(
+        self,
+        data_dir: str,
+        factor: int = 1,
+        normalize: bool = False,
+        load_keyword: str = "clutter",
+        semantic_dir: str = "SD",
+        cluster: bool = False,
+    ):
+        super().__init__(
+                data_dir,
+                factor,
+                normalize,
+                -1,
+                )
+        self.features = [] 
+        imdirectory = "images"
+        if factor > 1:
+            imdirectory = f"images_{factor}"
+        for ind, impath in enumerate(self.image_paths):
+            image_id = self.image_names[ind].split(".")[-2]
+            cid = self.camera_ids[ind]
+            if self.image_names[ind].find(load_keyword) != -1:
+                feature_path = os.path.join(os.path.join(data_dir, semantic_dir), f"{image_id}.npy")
+                feature = np.load(feature_path)
+                if cluster:
+                    ft_flat = np.transpose(feature.reshape((1280, 50*50)), (1,0))
+                    x = np.linspace(0, 1, 50)
+                    y = np.linspace(0, 1, 50)
+                    xv, yv = np.meshgrid(x, y)
+                    indxy = np.reshape(np.stack([xv, yv], axis=-1), (50 * 50, 2))
+                    knn_graph = kneighbors_graph(indxy, 8, include_self=False)
+                    model = AgglomerativeClustering(
+                            linkage="ward", connectivity=knn_graph,
+                            n_clusters=100)
+                    model.fit(ft_flat)
+                    feature = np.array(
+                            [
+                                model.labels_ == i for i in range(model.n_clusters)
+                                ],
+                            dtype=np.float32,
+                            ).reshape((model.n_clusters, 50 , 50))
+                self.features.append(feature)
+            else:
+                self.features.append([])
+                    
+                
+ 
 
 class Dataset:
     """A simple dataset class."""
@@ -310,6 +380,49 @@ class Dataset:
         return data
 
 
+class ClutterDataset(Dataset):
+    """A dataset class for cluttered scenes."""
+
+    def __init__(
+        self,
+        parser: Parser,
+        split: str = "train",
+        patch_size: Optional[int] = None,
+        load_depths: bool = False,
+        train_keyword: str = "clutter",
+        test_keyword: str = "extra",
+        semantics: bool = False,
+    ):
+        super().__init__(
+                parser,
+                split,
+                patch_size,
+                load_depths,)
+        indices = np.arange(len(self.parser.image_names))
+        self.semantics = semantics
+        if train_keyword == "":
+            if split == "train":
+                self.indices = indices[indices % self.parser.test_every != 0]
+            else:
+                self.indices = indices[indices % self.parser.test_every == 0]
+        else:
+            if split == "train":
+                self.indices = [idx for idx in indices if self.parser.image_names[idx].find(train_keyword)!=-1]
+            else:
+                self.indices = [idx for idx in indices if self.parser.image_names[idx].find(test_keyword)!=-1]
+
+    
+    def __getitem__(self, item: int) -> Dict[str, Any]:
+        data = super().__getitem__(item)
+        if self.semantics:
+            index = self.indices[item]
+            data["semantics"] = torch.from_numpy(self.parser.features[index]).float()
+
+        return data
+
+
+
+ 
 if __name__ == "__main__":
     import argparse
 

@@ -35,6 +35,7 @@ def rasterization(
     render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
     sparse_grad: bool = False,
     absgrad: bool = False,
+    ubp: bool = False,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
     channel_chunk: int = 32,
 ) -> Tuple[Tensor, Tensor, Dict]:
@@ -105,7 +106,8 @@ def rasterization(
         `meta["means2d"].absgrad`. This is an implementation of the paper
         `AbsGS: Recovering Fine Details for 3D Gaussian Splatting <https://arxiv.org/abs/2404.10484>`_,
         which is shown to be more effective for splitting Gaussians during training.
-
+    .. note::
+       **UBP**: If `ubp` is True, the sum of squared projected positional gradients are computed and used tomeasure utilization of each primitive. If the total utilization after M iterations is less than a threshold the primitive is pruned (https://arxiv.org/pdf/2406.20055 section 4.2.3)
     .. warning::
         This function is currently not differentiable w.r.t. the camera intrinsics `Ks`.
 
@@ -143,6 +145,7 @@ def rasterization(
         absgrad: If true, the absolute gradients of the projected 2D means
             will be computed during the backward pass, which could be accessed by
             `meta["means2d"].absgrad`. Default is False.
+        ubp: If true, the sum of squared projected positional gradients of rendered color is computed as a measure of utilization and used for pruning unused or lesser used primitives.
         rasterize_mode: The rasterization mode. Supported modes are "classic" and
             "antialiased". Default is "classic".
         channel_chunk: The number of channels to render in one go. Default is 32.
@@ -351,6 +354,7 @@ def rasterization(
                 backgrounds=backgrounds_chunk,
                 packed=packed,
                 absgrad=absgrad,
+                ubp=ubp,
             )
             render_colors.append(render_colors_)
             render_alphas.append(render_alphas_)
@@ -370,6 +374,7 @@ def rasterization(
             backgrounds=backgrounds,
             packed=packed,
             absgrad=absgrad,
+            ubp=ubp,
         )
     if render_mode in ["ED", "RGB+ED"]:
         # normalize the accumulated depth to get the expected depth

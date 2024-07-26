@@ -381,6 +381,7 @@ def rasterize_to_pixels(
     backgrounds: Optional[Tensor] = None,  # [C, channels]
     packed: bool = False,
     absgrad: bool = False,
+    ubp: bool = False,
 ) -> Tuple[Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
@@ -397,7 +398,7 @@ def rasterize_to_pixels(
         backgrounds: Background colors. [C, channels]. Default: None.
         packed: If True, the input tensors are expected to be packed with shape [nnz, ...]. Default: False.
         absgrad: If True, the backward pass will compute a `.absgrad` attribute for `means2d`. Default: False.
-
+        ubp: If True, the backward pass will compute a `.sqrgrad` attribute for `means2d`. Note this is implemented for L1 photometric loss. Default: False.
     Returns:
         A tuple:
 
@@ -490,6 +491,7 @@ def rasterize_to_pixels(
         isect_offsets.contiguous(),
         flatten_ids.contiguous(),
         absgrad,
+        ubp,
     )
 
     if padded_channels > 0:
@@ -820,6 +822,7 @@ class _RasterizeToPixels(torch.autograd.Function):
         isect_offsets: Tensor,  # [C, tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
         absgrad: bool,
+        ubp: bool,
     ) -> Tuple[Tensor, Tensor]:
         render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
             "rasterize_to_pixels_fwd"
@@ -851,6 +854,7 @@ class _RasterizeToPixels(torch.autograd.Function):
         ctx.height = height
         ctx.tile_size = tile_size
         ctx.absgrad = absgrad
+        ctx.ubp = ubp
 
         # double to float
         render_alphas = render_alphas.float()
@@ -877,8 +881,10 @@ class _RasterizeToPixels(torch.autograd.Function):
         height = ctx.height
         tile_size = ctx.tile_size
         absgrad = ctx.absgrad
+        ubp = ctx.ubp
 
         (
+            v_means2d_sqr,
             v_means2d_abs,
             v_means2d,
             v_conics,
@@ -900,11 +906,13 @@ class _RasterizeToPixels(torch.autograd.Function):
             v_render_colors.contiguous(),
             v_render_alphas.contiguous(),
             absgrad,
+            ubp,
         )
 
         if absgrad:
             means2d.absgrad = v_means2d_abs
-
+        if ubp:
+            means2d.sqrgrad = v_means2d_sqr
         if ctx.needs_input_grad[4]:
             v_backgrounds = (v_render_colors * (1.0 - render_alphas).float()).sum(
                 dim=(1, 2)
@@ -918,6 +926,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             v_colors,
             v_opacities,
             v_backgrounds,
+            None,
             None,
             None,
             None,
