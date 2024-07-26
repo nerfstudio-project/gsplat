@@ -62,7 +62,7 @@ To run all the experiments together run:
 ## Preparing Datasets
 The [RobustNeRF  dataset](https://storage.googleapis.com/jax3d-public/projects/robustnerf/robustnerf.tar.gz) and [NeRF On-the-go dataset](https://cvg-data.inf.ethz.ch/on-the-go.zip) are used for experiments. The Stable Diffusion features used for these scenes can be found [here](https://borealisdata.ca/dataset.xhtml?persistentId=doi:10.5683/SP3/WOFXFT&faces-redirect=true).
  
-To extract these features on your own datasets you can run `./examples/datasets/sd_feature_extraction.ipynb` Jupyter notebook. 
+To extract these features on your own datasets you can run the Jupyter notebook `./examples/datasets/sd_feature_extraction.ipynb`. 
 
 We assume that the image files have prefixes determining clean (`clean`), cluttered train data (`clutter`) and clean test data (`extra`). You can process datasets like NeRF On-the-go datasets that provide a JSON file with these tags with running:
 ```
