@@ -736,6 +736,8 @@ def main(cfg: Config):
         # run eval only
         ckpt = torch.load(cfg.ckpt, map_location=runner.device)
         splats = ckpt["splats"]
+        
+        # shN_copy = ckpt["splats"]["shN"].clone()
 
         # Sort
         from plas import sort_with_plas
@@ -743,7 +745,7 @@ def main(cfg: Config):
         params_to_sort = torch.cat(
             [
                 splats[k].reshape(cfg.cap_max, -1)
-                for k in ["means", "opacities", "quats", "scales", "sh0"]
+                for k in ["quats", "means", "opacities", "quats", "scales", "sh0"]
             ],
             dim=-1,
         )
@@ -765,6 +767,8 @@ def main(cfg: Config):
         compress_dir = os.path.join(cfg.result_dir, "compress")
         compress_splats(compress_dir, splats)
         splats_c = decompress_splats(compress_dir)
+        # splats_c["shN"] = shN_copy[sorted_indices]
+        
         for k in splats_c.keys():
             ckpt["splats"][k] = splats_c[k].to(runner.device)
 

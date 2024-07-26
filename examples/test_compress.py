@@ -44,6 +44,8 @@ def gif():
         scene_dir = os.path.join(results_dir, scene)
         stats_path = os.path.join(scene_dir, f"stats/val_step29999.json")
 
+        cmd = f"rm {scene_dir}/compress.zip"
+        subprocess.run(cmd, shell=True)
         cmd = f"zip -r {scene_dir}/compress.zip {scene_dir}/compress"
         subprocess.run(cmd, shell=True)
         cmd = f"stat -c%s {scene_dir}/compress.zip"
