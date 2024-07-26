@@ -236,11 +236,11 @@ def compress_splats(compress_dir: str, splats: dict[str, Tensor]) -> None:
 
     meta = {}
     for attr_name in splats.keys():
-        # if attr_name == "shN":
-        #     with open(os.path.join(compress_dir, "meta.json"), "r") as f:
-        #         meta2 = json.load(f)
-        #         meta[attr_name] = meta2[attr_name]
-        #     continue
+        if attr_name == "shN":
+            with open(os.path.join(compress_dir, "meta.json"), "r") as f:
+                meta2 = json.load(f)
+                meta[attr_name] = meta2[attr_name]
+            continue
 
         compress_fn = eval(f"_compress_{attr_name}")
         meta[attr_name] = compress_fn(compress_dir, splats[attr_name])
