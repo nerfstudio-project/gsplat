@@ -2,7 +2,7 @@
 ### [Project Page](https://spotlesssplats.github.io/) | [Paper](https://arxiv.org/abs/2406.20055)
 
 ## Reproduced Results
-The results in the SpotLessSplats paper are reproduced on `gsplat` codebase. The reported results on `gsplat` are reported without enabling the appearance modeling method of `gsplat`.
+The results in the SpotLessSplats paper are reproduced on `gsplat` codebase. The results on `gsplat` are reported without enabling the appearance modeling method of `gsplat`.
 
 Vanilla 3DGS on Crab (2):
 <img src="https://github.com/lilygoli/SpotLessSplats/raw/main/assets/base_crab2.gif" height="400px" alt="Crab Base">
