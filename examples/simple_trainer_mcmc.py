@@ -211,6 +211,7 @@ class Runner:
             feature_dim=feature_dim,
             device=self.device,
         )
+        self.labels = torch.zeros(cfg.cap_max, dtype=torch.int32).to(self.device)
         print("Model initialized. Number of GS:", len(self.splats["means"]))
 
         # Densification Strategy
@@ -307,6 +308,7 @@ class Runner:
             colors = colors + self.splats["colors"]
             colors = torch.sigmoid(colors)
         else:
+            self.splats["shN"] = self.splats["centroids"][self.labels].reshape(self.labels_shape)
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
@@ -735,21 +737,27 @@ def main(cfg: Config):
     if cfg.ckpt is not None:
         # run eval only
         ckpt = torch.load(cfg.ckpt, map_location=runner.device)
-        # splats = ckpt["splats"]
+        splats = ckpt["splats"]
         # shN_copy = ckpt["splats"]["shN"].clone()
         # splats_c["shN"] = shN_copy[sorted_indices]
         
-        # # Sort
-        # splats = sort_splats(cfg, splats)
-        # # Compress
-        # compress_dir = os.path.join(cfg.result_dir, "compress")
-        # compress_splats(compress_dir, splats)
-        # splats_c = decompress_splats(compress_dir)
+        # Sort
+        compress_dir = os.path.join(cfg.result_dir, "compress")
+        splats = sort_splats(cfg, splats)
+        compress_splats(compress_dir, splats)
+        splats_c = decompress_splats(compress_dir)
         # for k in splats_c.keys():
         #     ckpt["splats"][k] = splats_c[k].to(runner.device)
 
-        for k in runner.splats.keys():
-            runner.splats[k].data = ckpt["splats"][k]
+        for k in splats_c.keys():
+            if k != "shN":
+                runner.splats[k].data = splats_c[k].to(runner.device)
+            else:
+                centroids, labels, shape = splats_c[k]
+                # runner.splats[k].data = centroids[labels].reshape(shape).to(runner.device)
+                runner.splats["centroids"].data = centroids.to(runner.device)
+                runner.labels = torch.tensor(labels, dtype=torch.int32).to(runner.device)
+                runner.labels_shape = shape
             
         runner.train()
         # runner.eval(step=ckpt["step"])

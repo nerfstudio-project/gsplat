@@ -131,9 +131,9 @@ class MCMCStrategy(Strategy):
             and step % self.refine_every == 0
         ):
             # teleport GSs
-            n_relocated_gs = self._relocate_gs(params, optimizers, binoms, state)
-            if self.verbose:
-                print(f"Step {step}: Relocated {n_relocated_gs} GSs.")
+            # n_relocated_gs = self._relocate_gs(params, optimizers, binoms, state)
+            # if self.verbose:
+            #     print(f"Step {step}: Relocated {n_relocated_gs} GSs.")
 
             # add new GSs
             n_new_gs = self._add_new_gs(params, optimizers, binoms)
