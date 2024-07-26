@@ -13,7 +13,7 @@ do
         DATA_FACTOR=4
     fi
 
-    CAP_MAX=1999396
+    CAP_MAX=1000000
     MAX_STEPS=30000
     EVAL_STEPS="2000 7000 15000 30000"
     SAVE_STEPS="2000 7000 15000 30000"
@@ -28,7 +28,7 @@ do
     python simple_trainer_mcmc.py --disable_viewer --data_factor $DATA_FACTOR \
         --cap_max $CAP_MAX \
         --data_dir $SCENE_DIR/$SCENE/ \
-        --result_dir $RESULTS_DIR/3dgs_2m+sq2/$SCENE/ \
-        --ckpt $RESULTS_DIR/3dgs_2m/$SCENE/ckpts/ckpt_29999.pt
+        --result_dir $RESULTS_DIR/3dgs_1m_finetune/$SCENE/ \
+        --ckpt $RESULTS_DIR/3dgs_1m/$SCENE/ckpts/ckpt_29999.pt
 
 done
