@@ -27,9 +27,9 @@ The effect of UBP with $\kappa=10^{-14}$ on `gsplat`:
  
 |              |Compression Factor |PSNR drop
 |--------------|--------|-------|
-|bicycle          |  2.21$\times$ | -0.32|
-|garden  |  3.35$\times$ |-0.41 | 
-|stump       |   2.53$\times$|-0.23|
+|bicycle          |  2.21x | -0.32|
+|garden  |  3.35x |-0.41 | 
+|stump       |   2.53x|-0.23|
 
 ## Installation
 Installation process is similar to the main `gsplat` branch. Make sure to `pip install -r requirements.txt` under the examples directory.
