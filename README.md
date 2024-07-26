@@ -18,6 +18,7 @@ The reproduced results of Fig. 8 in the paper on `gsplat`:
 |SLS-agg       |   25.01|22.76|34.96|35.06|21.66|22.66|25.77|22.58|24.37|22.72|25.755 |
 |SLS-mlp       |   25.05 |	22.85 |	35.33 |	35.4 |	21.67 |	22.51 |	25.84 |	22.68 |	25.06 |	23.12 |	25.95 |
 |SLS-mlp + UBP |  24.96 | 22.65 | 35.3| 35.26| 21.31| 22.3| 26.36| 22.2|25.12|23.00|25.846 |
+
 The original results in the paper:
 
 ![Fig 8](https://github.com/lilygoli/SpotLessSplats/raw/main/assets/sls-benchmark-paper.png)
