@@ -17,6 +17,7 @@ from .rendering import (
     rasterization_inria_wrapper,
     rasterization_legacy_wrapper,
 )
+from .strategy import DefaultStrategy, MCMCStrategy, Strategy
 from .version import __version__
 
 
@@ -98,6 +99,9 @@ def get_tile_bin_edges(*args, **kwargs):
 
 
 all = [
+    "DefaultStrategy",
+    "MCMCStrategy",
+    "Strategy",
     "rasterization",
     "rasterization_legacy_wrapper",
     "rasterization_inria_wrapper",

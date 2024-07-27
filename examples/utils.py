@@ -200,7 +200,6 @@ def rotation_6d_to_matrix(d6: Tensor) -> Tensor:
     b3 = torch.cross(b1, b2, dim=-1)
     return torch.stack((b1, b2, b3), dim=-2)
 
-
 def normalized_quat_to_rotmat(quat: Tensor) -> Tensor:
     assert quat.shape[-1] == 4, quat.shape
     w, x, y, z = torch.unbind(quat, dim=-1)
@@ -219,7 +218,6 @@ def normalized_quat_to_rotmat(quat: Tensor) -> Tensor:
         dim=-1,
     )
     return mat.reshape(quat.shape[:-1] + (3, 3))
-
 
 def knn(x: Tensor, K: int = 4) -> Tensor:
     x_np = x.cpu().numpy()

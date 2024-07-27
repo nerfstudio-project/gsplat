@@ -1,5 +1,3 @@
-#include "third_party/glm/glm/glm.hpp"
-#include "third_party/glm/glm/gtc/type_ptr.hpp"
 #include <c10/cuda/CUDAGuard.h>
 #include <torch/extension.h>
 #include <tuple>
@@ -121,6 +119,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_
     const torch::Tensor &colors,                    // [C, N, D]
     const torch::Tensor &opacities,                 // [N]
     const at::optional<torch::Tensor> &backgrounds, // [C, D]
+    const at::optional<torch::Tensor> &mask,        // [C, tile_height, tile_width]
     // image size
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     // intersections
@@ -136,6 +135,7 @@ rasterize_to_pixels_bwd_tensor(
     const torch::Tensor &colors,                    // [C, N, 3]
     const torch::Tensor &opacities,                 // [N]
     const at::optional<torch::Tensor> &backgrounds, // [C, 3]
+    const at::optional<torch::Tensor> &mask,        // [C, tile_height, tile_width]
     // image size
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     // intersections
