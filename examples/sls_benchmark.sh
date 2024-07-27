@@ -5,11 +5,21 @@ DATA_DIR=./data/spotless
 RES_DIR=./results
 
 # The default runs robust optimization with mlp masking
-for SCENE in android3 yoda3 crab2 statue3 fountain mountain corner patio patio-high spot
+for SCENE in android3 yoda3 crab2 statue3 fountain mountain corner patio 
 do
 	python spotless_trainer.py \
 		--data_dir="${DATA_DIR}/${SCENE}" \
 		--result_dir="${RES_DIR}/${SCENE}_mlp_${NAME}" 
+done
+
+# Higher robustness for scenes with high-occlusion transient.
+for SCENE in patio-high spot
+do
+	python spotless_trainer.py \
+		--data_dir="${DATA_DIR}/${SCENE}" \
+		--result_dir="${RES_DIR}/${SCENE}_mlp_${NAME}" \
+  		--lower_bound=0.3 \
+    		--upper_bound=0.8
 done
 
 
@@ -22,7 +32,18 @@ do
 		--ubp
 done
 
-# Rather than optimizing an mlp, clustering the semantic features yields similar results while faster
+for SCENE in patio-high spot
+do
+	python spotless_trainer.py \
+		--data_dir="${DATA_DIR}/${SCENE}" \
+		--result_dir="${RES_DIR}/${SCENE}_mlp_ubp_${NAME}" \
+  		--lower_bound=0.3 \
+    		--upper_bound=0.8 \
+      		--ubp
+done
+
+
+# Rather than optimizing an mlp, clustering the semantic features yields similar results while faster training
 for SCENE in android3 yoda3 crab2 statue3 fountain mountain corner patio patio-high spot
 do
 	python spotless_trainer.py \

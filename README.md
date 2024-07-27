@@ -4,10 +4,11 @@
 ## Reproduced Results
 The results in the SpotLessSplats paper are reproduced on `gsplat` codebase. The results on `gsplat` are reported without enabling the appearance modeling method of `gsplat`.
 
-Vanilla 3DGS on Crab (2):
-<img src="https://github.com/lilygoli/SpotLessSplats/raw/main/assets/base_crab2.gif" height="400px" alt="Crab Base">
-SpotLessSplats on  Crab (2):
+SpotLessSplats on  Crab (2) dataset:
 <img src="https://github.com/lilygoli/SpotLessSplats/raw/main/assets/sls_crab2.gif" height="400px" alt="Crab Ours">
+
+Vanilla 3DGS on Crab (2) dataset:
+<img src="https://github.com/lilygoli/SpotLessSplats/raw/main/assets/base_crab2.gif" height="400px" alt="Crab Base">
 
 The reproduced results of Fig. 8 in the paper on `gsplat`:
 
