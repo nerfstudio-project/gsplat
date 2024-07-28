@@ -308,7 +308,6 @@ class Runner:
             colors = colors + self.splats["colors"]
             colors = torch.sigmoid(colors)
         else:
-            self.splats["shN"] = self.splats["centroids"][self.labels].reshape(self.labels_shape)
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
@@ -750,18 +749,27 @@ def main(cfg: Config):
         #     ckpt["splats"][k] = splats_c[k].to(runner.device)
 
         for k in splats_c.keys():
-            if k != "shN":
-                runner.splats[k].data = splats_c[k].to(runner.device)
-            else:
-                centroids, labels, shape = splats_c[k]
-                # runner.splats[k].data = centroids[labels].reshape(shape).to(runner.device)
-                runner.splats["centroids"].data = centroids.to(runner.device)
-                runner.labels = torch.tensor(labels, dtype=torch.int32).to(runner.device)
-                runner.labels_shape = shape
+            runner.splats[k].data = splats_c[k].to(runner.device)
             
-        runner.train()
-        # runner.eval(step=ckpt["step"])
-        # runner.render_traj(step=ckpt["step"])
+            # if k != "shN":
+            #     runner.splats[k].data = splats_c[k].to(runner.device)
+            # else:
+            #     centroids, labels, shape = splats_c[k]
+            #     # runner.splats[k].data = centroids[labels].reshape(shape).to(runner.device)
+            #     runner.splats["centroids"].data = centroids.to(runner.device)
+            #     runner.labels = torch.tensor(labels, dtype=torch.int32).to(runner.device)
+            #     runner.labels_shape = shape
+            
+        # runner.train()
+        runner.eval(step=ckpt["step"])
+        runner.render_traj(step=ckpt["step"])
+        torch.save(
+            {
+                "splats": runner.splats.state_dict(),
+            },
+            f"{runner.ckpt_dir}/ckpt_29999.pt",
+        )
+        
     else:
         runner.train()
 
