@@ -122,59 +122,68 @@ class SpotLessModule(torch.nn.Module):
         self.num_features = num_features
 
         self.mlp = nn.Sequential(
-        	nn.Linear(num_features, 16),
-        	nn.ReLU(),
-        	nn.Linear(16, num_classes),
-        	nn.Sigmoid(),)
-
+            nn.Linear(num_features, 16),
+            nn.ReLU(),
+            nn.Linear(16, num_classes),
+            nn.Sigmoid(),
+        )
 
     def softplus(self, x):
         return torch.log(1 + torch.exp(x))
-    
+
     def get_regularizer(self):
-        return torch.max(abs(self.mlp[0].weight.data)) * torch.max(abs(self.mlp[2].weight.data))
-    
+        return torch.max(abs(self.mlp[0].weight.data)) * torch.max(
+            abs(self.mlp[2].weight.data)
+        )
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.mlp(x)
-        
 
-def get_positional_encodings(height: int, width: int,
-		num_frequencies: int,
-		device: str = 'cuda') -> torch.Tensor:
+
+def get_positional_encodings(
+    height: int, width: int, num_frequencies: int, device: str = "cuda"
+) -> torch.Tensor:
     """Generates positional encodings for a given image size and frequency range.
-    
+
     Args:
       height: height of the image
       width: width of the image
       num_frequencies: number of frequencies
       device: device to use
-    
+
     Returns:
-    
+
     """
     # Generate grid of (x, y) coordinates
-    y, x = torch.meshgrid(torch.arange(height, device=device),
-      	  torch.arange(width, device=device), indexing='ij')
-    
+    y, x = torch.meshgrid(
+        torch.arange(height, device=device),
+        torch.arange(width, device=device),
+        indexing="ij",
+    )
+
     # Normalize coordinates to the range [0, 1]
     y = y / (height - 1)
     x = x / (width - 1)
-    
+
     # Create frequency range [1, 2, 4, ..., 2^(num_frequencies-1)]
-    frequencies = torch.pow(2, torch.arange(num_frequencies,
-        device=device)).float() * torch.pi
-    
+    frequencies = (
+        torch.pow(2, torch.arange(num_frequencies, device=device)).float() * torch.pi
+    )
+
     # Compute sine and cosine of the frequencies multiplied by the coordinates
-    y_encodings = torch.cat([torch.sin(frequencies * y[..., None]),
-        torch.cos(frequencies * y[..., None])], dim=-1)
-    x_encodings = torch.cat([torch.sin(frequencies * x[..., None]),
-        torch.cos(frequencies * x[..., None])], dim=-1)
-    
+    y_encodings = torch.cat(
+        [torch.sin(frequencies * y[..., None]), torch.cos(frequencies * y[..., None])],
+        dim=-1,
+    )
+    x_encodings = torch.cat(
+        [torch.sin(frequencies * x[..., None]), torch.cos(frequencies * x[..., None])],
+        dim=-1,
+    )
+
     # Combine the encodings
     pos_encodings = torch.cat([y_encodings, x_encodings], dim=-1)
-    
-    return pos_encodings
 
+    return pos_encodings
 
 
 def rotation_6d_to_matrix(d6: Tensor) -> Tensor:
@@ -200,6 +209,7 @@ def rotation_6d_to_matrix(d6: Tensor) -> Tensor:
     b3 = torch.cross(b1, b2, dim=-1)
     return torch.stack((b1, b2, b3), dim=-2)
 
+
 def normalized_quat_to_rotmat(quat: Tensor) -> Tensor:
     assert quat.shape[-1] == 4, quat.shape
     w, x, y, z = torch.unbind(quat, dim=-1)
@@ -218,6 +228,7 @@ def normalized_quat_to_rotmat(quat: Tensor) -> Tensor:
         dim=-1,
     )
     return mat.reshape(quat.shape[:-1] + (3, 3))
+
 
 def knn(x: Tensor, K: int = 4) -> Tensor:
     x_np = x.cpu().numpy()

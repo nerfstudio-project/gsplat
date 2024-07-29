@@ -29,8 +29,6 @@ def _get_rel_paths(path_dir: str) -> List[str]:
     return paths
 
 
-
-
 class Parser:
     """COLMAP parser."""
 
@@ -134,7 +132,6 @@ class Parser:
                 resize_im = media.resize(im_rgb, imsize_dict[camera_id])
                 out_path = os.path.join(image_dir, im.name)
                 media.write_image(out_path, resize_im)
-                
 
         print(
             f"[Parser] {len(imdata)} images, taken by {len(set(camera_ids))} cameras."
@@ -242,6 +239,7 @@ class Parser:
         dists = np.linalg.norm(camera_locations - scene_center, axis=1)
         self.scene_scale = np.max(dists)
 
+
 class SemanticParser(Parser):
     """COLMAP parser for cluttered scenes."""
 
@@ -255,12 +253,12 @@ class SemanticParser(Parser):
         cluster: bool = False,
     ):
         super().__init__(
-                data_dir,
-                factor,
-                normalize,
-                -1,
-                )
-        self.features = [] 
+            data_dir,
+            factor,
+            normalize,
+            -1,
+        )
+        self.features = []
         imdirectory = "images"
         if factor > 1:
             imdirectory = f"images_{factor}"
@@ -268,31 +266,29 @@ class SemanticParser(Parser):
             image_id = self.image_names[ind].split(".")[-2]
             cid = self.camera_ids[ind]
             if self.image_names[ind].find(load_keyword) != -1:
-                feature_path = os.path.join(os.path.join(data_dir, semantic_dir), f"{image_id}.npy")
+                feature_path = os.path.join(
+                    os.path.join(data_dir, semantic_dir), f"{image_id}.npy"
+                )
                 feature = np.load(feature_path)
                 if cluster:
-                    ft_flat = np.transpose(feature.reshape((1280, 50*50)), (1,0))
+                    ft_flat = np.transpose(feature.reshape((1280, 50 * 50)), (1, 0))
                     x = np.linspace(0, 1, 50)
                     y = np.linspace(0, 1, 50)
                     xv, yv = np.meshgrid(x, y)
                     indxy = np.reshape(np.stack([xv, yv], axis=-1), (50 * 50, 2))
                     knn_graph = kneighbors_graph(indxy, 8, include_self=False)
                     model = AgglomerativeClustering(
-                            linkage="ward", connectivity=knn_graph,
-                            n_clusters=100)
+                        linkage="ward", connectivity=knn_graph, n_clusters=100
+                    )
                     model.fit(ft_flat)
                     feature = np.array(
-                            [
-                                model.labels_ == i for i in range(model.n_clusters)
-                                ],
-                            dtype=np.float32,
-                            ).reshape((model.n_clusters, 50 , 50))
+                        [model.labels_ == i for i in range(model.n_clusters)],
+                        dtype=np.float32,
+                    ).reshape((model.n_clusters, 50, 50))
                 self.features.append(feature)
             else:
                 self.features.append([])
-                    
-                
- 
+
 
 class Dataset:
     """A simple dataset class."""
@@ -394,10 +390,11 @@ class ClutterDataset(Dataset):
         semantics: bool = False,
     ):
         super().__init__(
-                parser,
-                split,
-                patch_size,
-                load_depths,)
+            parser,
+            split,
+            patch_size,
+            load_depths,
+        )
         indices = np.arange(len(self.parser.image_names))
         self.semantics = semantics
         if train_keyword == "":
@@ -407,11 +404,18 @@ class ClutterDataset(Dataset):
                 self.indices = indices[indices % self.parser.test_every == 0]
         else:
             if split == "train":
-                self.indices = [idx for idx in indices if self.parser.image_names[idx].find(train_keyword)!=-1]
+                self.indices = [
+                    idx
+                    for idx in indices
+                    if self.parser.image_names[idx].find(train_keyword) != -1
+                ]
             else:
-                self.indices = [idx for idx in indices if self.parser.image_names[idx].find(test_keyword)!=-1]
+                self.indices = [
+                    idx
+                    for idx in indices
+                    if self.parser.image_names[idx].find(test_keyword) != -1
+                ]
 
-    
     def __getitem__(self, item: int) -> Dict[str, Any]:
         data = super().__getitem__(item)
         if self.semantics:
@@ -421,8 +425,6 @@ class ClutterDataset(Dataset):
         return data
 
 
-
- 
 if __name__ == "__main__":
     import argparse
 

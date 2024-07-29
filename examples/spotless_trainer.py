@@ -46,7 +46,7 @@ class Config:
     # Downsample factor for the dataset
     data_factor: int = 8
     # Normalize the axis and world view
-    normalize: bool = True 
+    normalize: bool = True
     # Directory to save results
     result_dir: str = "results/garden"
     # Every N images there is a test image
@@ -281,12 +281,12 @@ class Runner:
         # Load data: Training data should contain initial points and colors.
         if cfg.semantics:
             self.parser = SemanticParser(
-                    data_dir=cfg.data_dir,
-                    factor=cfg.data_factor,
-                    normalize=cfg.normalize,
-                    load_keyword=cfg.train_keyword,
-                    cluster=cfg.cluster,
-                    )
+                data_dir=cfg.data_dir,
+                factor=cfg.data_factor,
+                normalize=cfg.normalize,
+                load_keyword=cfg.train_keyword,
+                cluster=cfg.cluster,
+            )
         else:
             self.parser = Parser(
                 data_dir=cfg.data_dir,
@@ -303,11 +303,13 @@ class Runner:
             test_keyword=cfg.test_keyword,
             semantics=cfg.semantics,
         )
-        self.valset = ClutterDataset(self.parser, split="test",
+        self.valset = ClutterDataset(
+            self.parser,
+            split="test",
             train_keyword=cfg.train_keyword,
             test_keyword=cfg.test_keyword,
             semantics=False,
-            )
+        )
         self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
         print("Scene scale:", self.scene_scale)
 
@@ -369,15 +371,17 @@ class Runner:
         if self.mlp_spotless:
             # currently using positional encoding of order 20 (4*20 = 80)
             self.spotless_module = SpotLessModule(
-      		    num_classes=1, 
-      		    num_features=self.trainset[0]["semantics"].shape[0] + 80
-      		).cuda()
-            self.spotless_optimizers = [torch.optim.Adam(
-      		    self.spotless_module.parameters(), lr=1e-3,
-      		)]
+                num_classes=1, num_features=self.trainset[0]["semantics"].shape[0] + 80
+            ).cuda()
+            self.spotless_optimizers = [
+                torch.optim.Adam(
+                    self.spotless_module.parameters(),
+                    lr=1e-3,
+                )
+            ]
             self.spotless_loss = lambda p, minimum, maximum: torch.mean(
-      		    torch.nn.ReLU()(p - minimum) + torch.nn.ReLU()(maximum - p)
-      		)
+                torch.nn.ReLU()(p - minimum) + torch.nn.ReLU()(maximum - p)
+            )
 
         # Losses & Metrics.
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
@@ -401,10 +405,10 @@ class Runner:
             "grad2d": torch.zeros(n_gauss, device=self.device),  # norm of the gradient
             "count": torch.zeros(n_gauss, device=self.device, dtype=torch.int),
             "hist_err": torch.zeros((cfg.bin_size,)),
-            "avg_err": 1.0, 
-            "lower_err": 0.0, 
-            "upper_err": 1.0, 
-            "sqrgrad": torch.zeros(n_gauss, device=self.device)
+            "avg_err": 1.0,
+            "lower_err": 0.0,
+            "upper_err": 1.0,
+            "sqrgrad": torch.zeros(n_gauss, device=self.device),
         }
 
     def rasterize_splats(
@@ -452,42 +456,45 @@ class Runner:
             sparse_grad=self.cfg.sparse_grad,
             rasterize_mode=rasterize_mode,
             **kwargs,
-            )
+        )
         return render_colors, render_alphas, info
 
-
-    def robust_mask(self, error_per_pixel: torch.Tensor, loss_threshold: float) -> torch.Tensor:
+    def robust_mask(
+        self, error_per_pixel: torch.Tensor, loss_threshold: float
+    ) -> torch.Tensor:
         epsilon = 1e-3
         error_per_pixel = error_per_pixel.mean(axis=-1, keepdims=True)
         error_per_pixel = error_per_pixel.squeeze(-1).unsqueeze(0)
         is_inlier_pixel = (error_per_pixel < loss_threshold).float()
         window_size = 3
         channel = 1
-        window = torch.ones((1, 1, window_size, window_size),
-                dtype=torch.float) / (window_size * window_size)
+        window = torch.ones((1, 1, window_size, window_size), dtype=torch.float) / (
+            window_size * window_size
+        )
         if error_per_pixel.is_cuda:
             window = window.cuda(error_per_pixel.get_device())
         window = window.type_as(error_per_pixel)
         has_inlier_neighbors = F.conv2d(
-                is_inlier_pixel, window, padding=window_size // 2, groups=channel)
+            is_inlier_pixel, window, padding=window_size // 2, groups=channel
+        )
         has_inlier_neighbors = (has_inlier_neighbors > 0.5).float()
         is_inlier_pixel = ((has_inlier_neighbors + is_inlier_pixel) > epsilon).float()
         pred_mask = is_inlier_pixel.squeeze(0).unsqueeze(-1)
         return pred_mask
 
-
     def robust_cluster_mask(self, inlier_sf, semantics):
         inlier_sf = inlier_sf.squeeze(-1).unsqueeze(0)
         cluster_size = torch.sum(
-                semantics, axis=[-1, -2], keepdims=True, dtype=torch.float)
+            semantics, axis=[-1, -2], keepdims=True, dtype=torch.float
+        )
         inlier_cluster_size = torch.sum(
-                inlier_sf * semantics, axis=[-1, -2], keepdims=True, 
-                dtype=torch.float)
+            inlier_sf * semantics, axis=[-1, -2], keepdims=True, dtype=torch.float
+        )
         cluster_inlier_percentage = (inlier_cluster_size / cluster_size).float()
         is_inlier_cluster = (cluster_inlier_percentage > 0.5).float()
         inlier_sf = torch.sum(
-                semantics * is_inlier_cluster, axis=1, keepdims=True, 
-                dtype=torch.float)
+            semantics * is_inlier_cluster, axis=1, keepdims=True, dtype=torch.float
+        )
         pred_mask = inlier_sf.squeeze(0).unsqueeze(-1)
         return pred_mask
 
@@ -587,7 +594,7 @@ class Runner:
                 colors = colors + bkgd * (1.0 - alphas)
 
             info["means2d"].retain_grad()  # used for running stats
-            
+
             rgb_pred_mask = None
 
             # loss
@@ -596,37 +603,52 @@ class Runner:
             else:
                 # robust loss
                 error_per_pixel = torch.abs(colors - pixels)
-                pred_mask = self.robust_mask(error_per_pixel, self.running_stats["avg_err"])
+                pred_mask = self.robust_mask(
+                    error_per_pixel, self.running_stats["avg_err"]
+                )
                 if cfg.semantics:
                     sf = data["semantics"].to(device)
                     if cfg.cluster:
                         # cluster the semantic feature and mask based on cluster voting
                         sf = nn.Upsample(
-                            size=(colors.shape[1], colors.shape[2]), mode="nearest",
-                            )(sf).squeeze(0)
+                            size=(colors.shape[1], colors.shape[2]),
+                            mode="nearest",
+                        )(sf).squeeze(0)
                         pred_mask = self.robust_cluster_mask(pred_mask, semantics=sf)
-                    else: 
+                    else:
                         # use spotless mlp to predict the mask
                         sf = nn.Upsample(
-                            size=(colors.shape[1], colors.shape[2]), mode="bilinear",
-                            )(sf).squeeze(0)
+                            size=(colors.shape[1], colors.shape[2]),
+                            mode="bilinear",
+                        )(sf).squeeze(0)
                         pos_enc = get_positional_encodings(
-                                colors.shape[1], colors.shape[2], 20).permute((2, 0, 1))
+                            colors.shape[1], colors.shape[2], 20
+                        ).permute((2, 0, 1))
                         sf = torch.cat([sf, pos_enc], dim=0)
-                        sf_flat = sf.reshape(sf.shape[0], -1).permute((1,0))
+                        sf_flat = sf.reshape(sf.shape[0], -1).permute((1, 0))
                         self.spotless_module.eval()
                         pred_mask_up = self.spotless_module(sf_flat)
-                        pred_mask = pred_mask_up.reshape(1, colors.shape[1], colors.shape[2], 1)
+                        pred_mask = pred_mask_up.reshape(
+                            1, colors.shape[1], colors.shape[2], 1
+                        )
                         # calculate lower and upper bound masks for spotless mlp loss
-                        lower_mask = self.robust_mask(error_per_pixel, self.running_stats["lower_err"])
-                        upper_mask = self.robust_mask(error_per_pixel, self.running_stats["upper_err"])
+                        lower_mask = self.robust_mask(
+                            error_per_pixel, self.running_stats["lower_err"]
+                        )
+                        upper_mask = self.robust_mask(
+                            error_per_pixel, self.running_stats["upper_err"]
+                        )
                 log_pred_mask = pred_mask.clone()
                 if cfg.schedule:
                     # schedule sampling of the mask based on alpha
                     alpha = np.exp(cfg.schedule_beta * np.floor((1 + step) / 1.5))
                     pred_mask = torch.bernoulli(
-                        torch.clip(alpha + (1 - alpha) * pred_mask.clone().detach(),
-                        min=0.0, max=1.0))
+                        torch.clip(
+                            alpha + (1 - alpha) * pred_mask.clone().detach(),
+                            min=0.0,
+                            max=1.0,
+                        )
+                    )
                 rgbloss = (pred_mask.clone().detach() * error_per_pixel).mean()
             ssimloss = 1.0 - self.ssim(
                 pixels.permute(0, 3, 1, 2), colors.permute(0, 3, 1, 2)
@@ -656,20 +678,19 @@ class Runner:
 
             if self.mlp_spotless:
                 self.spotless_module.train()
-                spot_loss = self.spotless_loss(pred_mask_up.flatten(), upper_mask.flatten(), lower_mask.flatten())
+                spot_loss = self.spotless_loss(
+                    pred_mask_up.flatten(), upper_mask.flatten(), lower_mask.flatten()
+                )
                 reg = 0.5 * self.spotless_module.get_regularizer()
                 spot_loss = spot_loss + reg
                 spot_loss.backward()
 
-
             # Pass the error histogram for capturing error statistics
             info["err"] = torch.histogram(
-                    torch.mean(torch.abs(
-                        colors - pixels), dim=-3).clone().detach().cpu(),
-                    bins=cfg.bin_size,
-                    range=(0.0, 1.0),
-                    )[0]
-            
+                torch.mean(torch.abs(colors - pixels), dim=-3).clone().detach().cpu(),
+                bins=cfg.bin_size,
+                range=(0.0, 1.0),
+            )[0]
 
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
             if cfg.depth_loss:
@@ -761,7 +782,7 @@ class Runner:
                 if step % cfg.reset_every == 0 and cfg.loss_type != "robust":
                     self.reset_opa(cfg.prune_opa * 2.0)
                 if step == cfg.reset_sh and cfg.loss_type == "robust":
-                    self.reset_sh() 
+                    self.reset_sh()
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:
                 assert cfg.packed, "Sparse gradients only work with packed mode."
@@ -796,11 +817,20 @@ class Runner:
             # Save the mask image
             if step > max_steps - 200 and cfg.semantics:
                 st_interval = time.time()
-                rgb_pred_mask = (log_pred_mask>0.5).repeat(1,1,1,3).clone().detach()
-                canvas = torch.cat([pixels, rgb_pred_mask, colors], dim=2).squeeze(0).cpu().detach().numpy()
+                rgb_pred_mask = (
+                    (log_pred_mask > 0.5).repeat(1, 1, 1, 3).clone().detach()
+                )
+                canvas = (
+                    torch.cat([pixels, rgb_pred_mask, colors], dim=2)
+                    .squeeze(0)
+                    .cpu()
+                    .detach()
+                    .numpy()
+                )
                 imname = image_ids.cpu().detach().numpy()
                 imageio.imwrite(
-                    f"{self.render_dir}/train_{imname}.png", (canvas * 255).astype(np.uint8)
+                    f"{self.render_dir}/train_{imname}.png",
+                    (canvas * 255).astype(np.uint8),
                 )
                 global_tic += time.time() - st_interval
 
@@ -850,22 +880,33 @@ class Runner:
         else:
             grads = info["means2d"].grad.clone()
         if cfg.ubp:
-            sqrgrads =  info["means2d"].sqrgrad.clone()
+            sqrgrads = info["means2d"].sqrgrad.clone()
         grads[..., 0] *= info["width"] / 2.0 * cfg.batch_size
         grads[..., 1] *= info["height"] / 2.0 * cfg.batch_size
-        
-        self.running_stats["hist_err"] = 0.95 * self.running_stats["hist_err"] + info["err"]
-        mid_err = torch.sum(self.running_stats["hist_err"]) * cfg.robust_percentile 
-        self.running_stats["avg_err"] = torch.linspace(0, 1, cfg.bin_size+1)[
-                torch.where(torch.cumsum(self.running_stats["hist_err"], 0) >= mid_err)[0][0]]
+
+        self.running_stats["hist_err"] = (
+            0.95 * self.running_stats["hist_err"] + info["err"]
+        )
+        mid_err = torch.sum(self.running_stats["hist_err"]) * cfg.robust_percentile
+        self.running_stats["avg_err"] = torch.linspace(0, 1, cfg.bin_size + 1)[
+            torch.where(torch.cumsum(self.running_stats["hist_err"], 0) >= mid_err)[0][
+                0
+            ]
+        ]
 
         lower_err = torch.sum(self.running_stats["hist_err"]) * cfg.lower_bound
         upper_err = torch.sum(self.running_stats["hist_err"]) * cfg.upper_bound
 
         self.running_stats["lower_err"] = torch.linspace(0, 1, cfg.bin_size + 1)[
-                torch.where(torch.cumsum(self.running_stats["hist_err"], 0) >= lower_err)[0][0]]
+            torch.where(torch.cumsum(self.running_stats["hist_err"], 0) >= lower_err)[
+                0
+            ][0]
+        ]
         self.running_stats["upper_err"] = torch.linspace(0, 1, cfg.bin_size + 1)[
-                torch.where(torch.cumsum(self.running_stats["hist_err"], 0) >= upper_err)[0][0]]
+            torch.where(torch.cumsum(self.running_stats["hist_err"], 0) >= upper_err)[
+                0
+            ][0]
+        ]
 
         if cfg.packed:
             # grads is [nnz, 2]
@@ -875,7 +916,9 @@ class Runner:
                 0, gs_ids, torch.ones_like(gs_ids).int()
             )
             if cfg.ubp:
-                self.running_stats["sqrgrad"].index_add_(0, gs_ids, torch.sum(sqrgrads, dim=-1))
+                self.running_stats["sqrgrad"].index_add_(
+                    0, gs_ids, torch.sum(sqrgrads, dim=-1)
+                )
         else:
             # grads is [C, N, 2]
             sel = info["radii"] > 0.0  # [C, N]
@@ -885,7 +928,9 @@ class Runner:
                 0, gs_ids, torch.ones_like(gs_ids).int()
             )
             if cfg.ubp:
-                self.running_stats["sqrgrad"].index_add_(0, gs_ids, torch.sum(sqrgrads[sel], dim=-1))
+                self.running_stats["sqrgrad"].index_add_(
+                    0, gs_ids, torch.sum(sqrgrads[sel], dim=-1)
+                )
 
     @torch.no_grad()
     def reset_opa(self, value: float = 0.01):
@@ -908,7 +953,7 @@ class Runner:
                 optimizer.state[p_new] = p_state
                 self.splats[param_group["name"]] = p_new
         torch.cuda.empty_cache()
-    
+
     @torch.no_grad()
     def reset_sh(self, value: float = 0.001):
         """Utility function to reset SH specular coefficients."""
@@ -929,7 +974,7 @@ class Runner:
                 optimizer.param_groups[i]["params"] = [p_new]
                 optimizer.state[p_new] = p_state
                 self.splats[param_group["name"]] = p_new
-        torch.cuda.empty_cache()   
+        torch.cuda.empty_cache()
 
     @torch.no_grad()
     def refine_split(self, mask: Tensor):
@@ -978,12 +1023,14 @@ class Runner:
                 optimizer.state[p_new] = p_state
                 self.splats[name] = p_new
         for k, v in self.running_stats.items():
-            if v is None or k.find("err")!=-1:
+            if v is None or k.find("err") != -1:
                 continue
             repeats = [2] + [1] * (v.dim() - 1)
             v_new = v[sel].repeat(repeats)
             if k == "sqrgrad":
-                v_new = torch.ones_like(v_new) #the new ones are assumed to have high utilization in the start
+                v_new = torch.ones_like(
+                    v_new
+                )  # the new ones are assumed to have high utilization in the start
             self.running_stats[k] = torch.cat((v[rest], v_new))
         torch.cuda.empty_cache()
 
@@ -1012,11 +1059,13 @@ class Runner:
                 optimizer.state[p_new] = p_state
                 self.splats[name] = p_new
         for k, v in self.running_stats.items():
-            if k.find("err")!=-1:
+            if k.find("err") != -1:
                 continue
             if k == "sqrgrad":
-                self.running_stats[k] = torch.cat((v, torch.ones_like(v[sel]))) # new ones are assumed to have high utilization
-            else:    
+                self.running_stats[k] = torch.cat(
+                    (v, torch.ones_like(v[sel]))
+                )  # new ones are assumed to have high utilization
+            else:
                 self.running_stats[k] = torch.cat((v, v[sel]))
         torch.cuda.empty_cache()
 
@@ -1038,7 +1087,7 @@ class Runner:
                 optimizer.state[p_new] = p_state
                 self.splats[name] = p_new
         for k, v in self.running_stats.items():
-            if k.find("err")!=-1:
+            if k.find("err") != -1:
                 continue
             self.running_stats[k] = v[sel]
         torch.cuda.empty_cache()
@@ -1122,8 +1171,10 @@ class Runner:
 
         K = torch.from_numpy(list(self.parser.Ks_dict.values())[0]).float().to(device)
         camtoworlds = get_ordered_poses(self.parser.camtoworlds)
-    
-        camtoworlds = generate_interpolated_path(camtoworlds[::20].copy(), 40, spline_degree=1, smoothness=0.3)  # [N, 3, 4]
+
+        camtoworlds = generate_interpolated_path(
+            camtoworlds[::20].copy(), 40, spline_degree=1, smoothness=0.3
+        )  # [N, 3, 4]
         camtoworlds = np.concatenate(
             [
                 camtoworlds,
@@ -1131,7 +1182,7 @@ class Runner:
             ],
             axis=1,
         )  # [N, 4, 4]
-        camtoworlds = camtoworlds * np.reshape([1.1, 1.1, 1, 1], (1,4,1))
+        camtoworlds = camtoworlds * np.reshape([1.1, 1.1, 1, 1], (1, 4, 1))
 
         camtoworlds = torch.from_numpy(camtoworlds).float().to(device)
         width, height = list(self.parser.imsize_dict.values())[0]

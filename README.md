@@ -1,72 +1,88 @@
-# SpotLessSplats: Ignoring Distractors in 3D Gaussian Splatting
-### [Project Page](https://spotlesssplats.github.io/) | [Paper](https://arxiv.org/abs/2406.20055)
+# gsplat
 
-## Reproduced Results
-The results in the SpotLessSplats paper are reproduced on `gsplat` codebase. The results on `gsplat` are reported without enabling the appearance modeling method of `gsplat`.
+[![Core Tests.](https://github.com/nerfstudio-project/gsplat/actions/workflows/core_tests.yml/badge.svg?branch=main)](https://github.com/nerfstudio-project/gsplat/actions/workflows/core_tests.yml)
+[![Docs](https://github.com/nerfstudio-project/gsplat/actions/workflows/doc.yml/badge.svg?branch=main)](https://github.com/nerfstudio-project/gsplat/actions/workflows/doc.yml)
 
-SpotLessSplats on  Crab (2) dataset:
-<img src="https://github.com/lilygoli/SpotLessSplats/raw/main/assets/sls_crab2.gif" height="400px" alt="Crab Ours">
+[http://www.gsplat.studio/](http://www.gsplat.studio/)
 
-Vanilla 3DGS on Crab (2) dataset:
-<img src="https://github.com/lilygoli/SpotLessSplats/raw/main/assets/base_crab2.gif" height="400px" alt="Crab Base">
+gsplat is an open-source library for CUDA accelerated rasterization of gaussians with python bindings. It is inspired by the SIGGRAPH paper [3D Gaussian Splatting for Real-Time Rendering of Radiance Fields](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/), but we’ve made gsplat even faster, more memory efficient, and with a growing list of new features! 
 
-The reproduced results of Fig. 8 in the paper on `gsplat`:
-
-|              |Android |Statue |Crab (2)| Yoda |Mountain|Fountain|Corner|Patio | Spot   | Patio High | Average
-|--------------|--------|-------|--------|------|--------|--------|------|------|--------|------------|--------
-|3DGS          |  23.23 | 21.45 | 30.03 | 29.7 | 20.02 | 21.49 | 22.34 |  16.77 | 18.93 | 17.09 | 22.105 |
-|RobustFilter  |  24.34 |22.46 | 34.15 | 34.91 | 21.2 | 21.91| 25.66|17.9|23.21|20.22|24.596|
-|SLS-agg       |   25.01|22.76|34.96|35.06|21.66|22.66|25.77|22.58|24.37|22.72|25.755 |
-|SLS-mlp       |   25.05 |	22.85 |	35.33 |	35.4 |	21.67 |	22.51 |	25.84 |	22.68 |	25.06 |	23.12 |	25.95 |
-|SLS-mlp + UBP |  24.96 | 22.65 | 35.3| 35.26| 21.31| 22.3| 26.36| 22.2|25.12|23.00|25.846 |
-
-The original results in the paper:
-
-![Fig 8](https://github.com/lilygoli/SpotLessSplats/raw/main/assets/sls-benchmark-paper.png)
-
-The effect of UBP with $\kappa=10^{-14}$ on `gsplat`:
- 
-|              |Compression Factor |PSNR drop
-|--------------|--------|-------|
-|bicycle          |  2.21x | -0.32|
-|garden  |  3.35x |-0.41 | 
-|stump       |   2.53x|-0.23|
+<div align="center">
+  <video src="https://github.com/nerfstudio-project/gsplat/assets/10151885/64c2e9ca-a9a6-4c7e-8d6f-47eeacd15159" width="100%" />
+</div>
 
 ## Installation
-Installation process is similar to the main `gsplat` branch. Make sure to `pip install -r requirements.txt` under the examples directory.
 
-## Run Experiments
-You can run experiments with the robust masking as below:
+**Dependence**: Please install [Pytorch](https://pytorch.org/get-started/locally/) first.
 
-To run the SLS-mlp version run:
-``` 
-python spotless_trainer.py  --data_dir [data directory] --data_factor 8   --result_dir [result directory] --loss_type robust --semantics --no-cluster --train_keyword "clutter" --test_keyword "extra" 
-```
-To run the SLS-agg version run:
-``` 
-python spotless_trainer.py  --data_dir [data directory] --data_factor 8   --result_dir [result directory] --loss_type robust --semantics --cluster --train_keyword "clutter" --test_keyword "extra" 
-```
-To run the RobustFilter version run:
-``` 
-python spotless_trainer.py  --data_dir [data directory] --data_factor 8   --result_dir [result directory] --loss_type robust --no-semantics --no-cluster --train_keyword "clutter" --test_keyword "extra" 
-```
-To run baseline 3DGS run:
-``` 
-python spotless_trainer.py  --data_dir [data directory] --data_factor 8   --result_dir [result directory] --loss_type l1 --no-semantics --no-cluster --train_keyword "clutter" --test_keyword "extra" 
-```
-For enabling utilization-based pruning (UBP) add `--ubp` to the runs.
 
-## Benchmarking
-To run all the experiments together run:
-```
-./sls_benchmark.sh
-```
-## Preparing Datasets
-The [RobustNeRF  dataset](https://storage.googleapis.com/jax3d-public/projects/robustnerf/robustnerf.tar.gz) and [NeRF On-the-go dataset](https://cvg-data.inf.ethz.ch/on-the-go.zip) are used for experiments. The Stable Diffusion features used for these scenes can be found [here](https://borealisdata.ca/dataset.xhtml?persistentId=doi:10.5683/SP3/WOFXFT&faces-redirect=true).
- 
-To extract these features on your own datasets you can run the Jupyter notebook `./examples/datasets/sd_feature_extraction.ipynb`. 
 
-We assume that the image files have prefixes determining clean (`clean`), cluttered train data (`clutter`) and clean test data (`extra`). You can process datasets like NeRF On-the-go datasets that provide a JSON file with these tags with running:
+
+The easiest way is to install from PyPI. In this way it will build the CUDA code **on the first run** (JIT).
+
+```bash
+pip install gsplat
 ```
-python ./examples/datasets/prep_data.py
+
+Or install from source. In this way it will build the CUDA code during installation.
+
+```bash
+pip install git+https://github.com/nerfstudio-project/gsplat.git
 ```
+
+To install gsplat on Windows, please check [this instruction](docs/INSTALL_WIN.md).
+
+## Evaluation
+
+This repo comes with a standalone script that reproduces the official Gaussian Splatting with exactly the same performance on PSNR, SSIM, LPIPS, and converged number of Gaussians. Powered by gsplat’s efficient CUDA implementation, the training takes up to **4x less GPU memory** with up to **15% less time** to finish than the official implementation. Full report can be found [here](https://docs.gsplat.studio/main/tests/eval.html).
+
+```bash
+# under examples/
+pip install -r requirements.txt
+# download mipnerf_360 benchmark data
+python datasets/download_dataset.py
+# run batch evaluation
+bash benchmark.sh
+```
+
+## Examples
+
+We provide a set of examples to get you started! Below you can find the details about
+the examples (requires to install some exta dependences via `pip install -r examples/requirements.txt`)
+
+- [Train a 3D Gaussian splatting model on a COLMAP capture.](https://docs.gsplat.studio/main/examples/colmap.html)
+- [Fit a 2D image with 3D Gaussians.](https://docs.gsplat.studio/main/examples/image.html)
+- [Render a large scene in real-time.](https://docs.gsplat.studio/main/examples/large_scale.html)
+- [Robustness to Transients.](https://docs.gsplat.studio/main/examples/sls.html)
+
+## Development and Contribution
+
+This repository was born from the curiosity of people on the Nerfstudio team trying to understand a new rendering technique. We welcome contributions of any kind and are open to feedback, bug-reports, and improvements to help expand the capabilities of this software.
+
+This project is developed by the following wonderful contributors (unordered):
+
+- [Angjoo Kanazawa](https://people.eecs.berkeley.edu/~kanazawa/) (UC Berkeley): Mentor of the project.
+- [Matthew Tancik](https://www.matthewtancik.com/about-me) (Luma AI): Mentor of the project.
+- [Vickie Ye](https://people.eecs.berkeley.edu/~vye/) (UC Berkeley): Project lead. v0.1 lead.
+- [Matias Turkulainen](https://maturk.github.io/) (Aalto University): Core developer.
+- [Ruilong Li](https://www.liruilong.cn/) (UC Berkeley): Core developer. v1.0 lead.
+- [Justin Kerr](https://kerrj.github.io/) (UC Berkeley): Core developer.
+- [Brent Yi](https://github.com/brentyi) (UC Berkeley): Core developer.
+- [Zhuoyang Pan](https://panzhy.com/) (ShanghaiTech University): Core developer.
+- [Jianbo Ye](http://www.jianboye.org/) (Amazon): Core developer.
+
+We also have made the mathematical supplement, with conventions and derivations, available [here](https://arxiv.org/abs/2312.02121). If you find this library useful in your projects or papers, please consider citing:
+
+```
+@misc{ye2023mathematical,
+    title={Mathematical Supplement for the $\texttt{gsplat}$ Library}, 
+    author={Vickie Ye and Angjoo Kanazawa},
+    year={2023},
+    eprint={2312.02121},
+    archivePrefix={arXiv},
+    primaryClass={cs.MS}
+}
+```
+
+We welcome contributions of any kind and are open to feedback, bug-reports, and improvements to help expand the capabilities of this software. Please check [docs/DEV.md](docs/DEV.md) for more info about development.
+

@@ -33,7 +33,7 @@ def similarity_from_cameras(c2w, strict_scaling=False, center_method="focus"):
     else:
         # In the unlikely case the original data has y+ up axis,
         # rotate 180-deg about x axis
-        print('flip for y')
+        print("flip for y")
         R_align = np.array([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
 
     #  R_align = np.eye(3) # DEBUG
