@@ -5,7 +5,7 @@
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" /><link rel="next" title="Profiling" href="profile.html" /><link rel="prev" title="Utils" href="../apis/utils.html" />
 
-    <!-- Generated with Sphinx 7.4.6 and Furo 2024.07.18 -->
+    <!-- Generated with Sphinx 7.4.7 and Furo 2024.07.18 -->
         <title>Evaluation - gsplat documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=613ab9ff" />
@@ -366,6 +366,91 @@ the <a class="reference external" href="https://repo-sam.inria.fr/fungraph/3d-ga
 exactly the same performance on PSNR, SSIM, LPIPS, and converged number of Gaussians.
 Powered by <cite>gsplat</cite>’s efficient CUDA implementation, the training takes up to
 <strong>4x less GPU memory</strong> with up to <strong>15% less time</strong> to finish than the official implementation.</p>
+<section id="feature-ablation">
+<h2>Feature Ablation<a class="headerlink" href="#feature-ablation" title="Link to this heading">¶</a></h2>
+<p>Evaluation of features provided in <cite>gsplat</cite> on Mip-NeRF (averaged over 7 scenes). We ablate <cite>gsplat</cite> with default settings, with absgrad and mcmc densification strategies, and antialiased mode.
+Absgrad method uses <cite>–grow_grad2d 0.0006</cite> config. These results are obtained with an A100.</p>
+<div class="table-wrapper docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"></th>
+<th class="head"><p>PSNR</p></th>
+<th class="head"><p>SSIM</p></th>
+<th class="head"><p>LPIPS</p></th>
+<th class="head"><p>Num GSs</p></th>
+<th class="head"><p>Mem (GB)</p></th>
+<th class="head"><p>Time (min)</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>gsplat (default settings)</p></td>
+<td><p>29.00</p></td>
+<td><p>0.87</p></td>
+<td><p>0.14</p></td>
+<td><p>3237318</p></td>
+<td><p>5.62</p></td>
+<td><p>19.39</p></td>
+</tr>
+<tr class="row-odd"><td><p>absgrad</p></td>
+<td><p>29.11</p></td>
+<td><p>0.88</p></td>
+<td><p>0.12</p></td>
+<td><p>2465986</p></td>
+<td><p>4.40</p></td>
+<td><p>18.10</p></td>
+</tr>
+<tr class="row-even"><td><p>antialiased</p></td>
+<td><p>29.03</p></td>
+<td><p>0.87</p></td>
+<td><p>0.14</p></td>
+<td><p>3377807</p></td>
+<td><p>5.87</p></td>
+<td><p>19.52</p></td>
+</tr>
+<tr class="row-odd"><td><p>mcmc  (1 mill)</p></td>
+<td><p>29.18</p></td>
+<td><p>0.87</p></td>
+<td><p>0.14</p></td>
+<td><p>1000000</p></td>
+<td><p>1.98</p></td>
+<td><p>15.42</p></td>
+</tr>
+<tr class="row-even"><td><p>mcmc  (2 mill)</p></td>
+<td><p>29.53</p></td>
+<td><p>0.88</p></td>
+<td><p>0.13</p></td>
+<td><p>2000000</p></td>
+<td><p>3.43</p></td>
+<td><p>21.79</p></td>
+</tr>
+<tr class="row-odd"><td><p>mcmc  (3 mill)</p></td>
+<td><p>29.65</p></td>
+<td><p>0.89</p></td>
+<td><p>0.12</p></td>
+<td><p>3000000</p></td>
+<td><p>4.99</p></td>
+<td><p>27.63</p></td>
+</tr>
+<tr class="row-even"><td><p>absgrad &amp; antialiased</p></td>
+<td><p>29.14</p></td>
+<td><p>0.88</p></td>
+<td><p>0.13</p></td>
+<td><p>2563156</p></td>
+<td><p>4.57</p></td>
+<td><p>18.43</p></td>
+</tr>
+<tr class="row-odd"><td><p>mcmc &amp; antialiased</p></td>
+<td><p>29.23</p></td>
+<td><p>0.87</p></td>
+<td><p>0.14</p></td>
+<td><p>1000000</p></td>
+<td><p>2.00</p></td>
+<td><p>15.75</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
 <section id="trains-faster-with-less-gpu-memory">
 <h2>Trains Faster with Less GPU Memory<a class="headerlink" href="#trains-faster-with-less-gpu-memory" title="Link to this heading">¶</a></h2>
 <div class="table-wrapper docutils container">
@@ -759,6 +844,7 @@ with the command <code class="code docutils literal notranslate"><span class="pr
           <div class="toc-tree">
             <ul>
 <li><a class="reference internal" href="#">Evaluation</a><ul>
+<li><a class="reference internal" href="#feature-ablation">Feature Ablation</a></li>
 <li><a class="reference internal" href="#trains-faster-with-less-gpu-memory">Trains Faster with Less GPU Memory</a></li>
 <li><a class="reference internal" href="#reproduced-metrics">Reproduced Metrics</a></li>
 </ul>
