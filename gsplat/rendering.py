@@ -628,13 +628,20 @@ def rasterization_2dgs(
             colors.dim() == 3 and colors.shape[0] == N and colors.shape[2] == 3
         ), colors.shape
         assert (sh_degree + 1) ** 2 <= colors.shape[1], colors.shape
-
+    
+    densifications = (
+        torch.zeros(
+            (means.shape[0], 2), dtype=means.dtype, requires_grad=True, device="cuda"
+        )
+        + 0
+    )
     # Compute Ray-Splat intersection transformation.
     proj_results = fully_fused_projection_2dgs(
         means,
         quats,
         scales,
         viewmats,
+        densifications, 
         Ks,
         width,
         height,
@@ -709,15 +716,18 @@ def rasterization_2dgs(
         colors = depths[..., None]
     else:  # RGB
         pass
-    densifications = (
+
+    densify = (
         torch.zeros_like(
-            means2d, dtype=means2d.dtype, requires_grad=True, device="cuda"
+            means2d, dtype=means.dtype, requires_grad=True, device="cuda"
         )
         + 0
     )
+
+    
     render_colors, render_alphas, render_normals, render_distloss = rasterize_to_pixels_2dgs(
         means2d,
-        densifications,
+        densify,
         ray_transformations,
         colors,
         opacities,

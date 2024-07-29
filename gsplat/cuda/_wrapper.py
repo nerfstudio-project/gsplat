@@ -1133,6 +1133,7 @@ def fully_fused_projection_2dgs(
     quats: Tensor,  # [N, 4]
     scales: Tensor,
     viewmats: Tensor,
+    densifications: Tensor,
     Ks: Tensor,
     width: int,
     height: int,
@@ -1188,6 +1189,7 @@ def fully_fused_projection_2dgs(
             quats,
             scales,
             viewmats,
+            densifications,
             Ks,
             width,
             height,
@@ -1208,6 +1210,7 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
         quats: Tensor,
         scales: Tensor,
         viewmats: Tensor,
+        densifications: Tensor,
         Ks: Tensor,
         width: int,
         height: int,
@@ -1232,7 +1235,7 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
             radius_clip,
         )
         ctx.save_for_backward(
-            means, quats, scales, viewmats, Ks, radii, ray_transformations, normals
+            means, quats, scales, viewmats, densifications, Ks, radii, ray_transformations, normals
         )
         ctx.width = width
         ctx.height = height
@@ -1247,6 +1250,7 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
             quats,
             scales,
             viewmats,
+            densifications, 
             Ks,
             radii,
             ray_transformations,
@@ -1255,13 +1259,14 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
         width = ctx.width
         height = ctx.height
         eps2d = ctx.eps2d
-        v_means, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
+        v_means, v_quats, v_scales, v_viewmats, v_densifications = _make_lazy_cuda_func(
             "fully_fused_projection_bwd_2dgs"
         )(
             means,
             quats,
             scales,
             viewmats,
+            densifications,
             Ks,
             width,
             height,
@@ -1283,11 +1288,16 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
             v_scales = None
         if not ctx.needs_input_grad[3]:
             v_viewmats = None
+        if not ctx.needs_input_grad[4]:
+            v_densifications = None
+        # import pdb
+        # pdb.set_trace()
         return (
             v_means,
             v_quats,
             v_scales,
             v_viewmats,
+            v_densifications,
             None,
             None,
             None,

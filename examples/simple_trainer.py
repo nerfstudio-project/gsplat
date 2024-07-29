@@ -81,7 +81,7 @@ class Config:
     far_plane: float = 1e10
 
     # GSs with opacity below this value will be pruned
-    prune_opa: float = 0.005
+    prune_opa: float = 0.05
     # GSs with image plane gradient above this value will be split/duplicated
     grow_grad2d: float = 0.0002
     # GSs with scale below this value will be duplicated. Above will be split
@@ -139,6 +139,8 @@ class Config:
     normal_loss: bool = False
     # Weight for normal loss
     normal_lambda: float = 1e-2
+    # Iteration to start normal consistency regulerization
+    normal_start_iter: int = 7_000
 
     # Distortion loss. (experimental)
     dist_loss: bool = False
@@ -188,6 +190,7 @@ def create_splats_with_optimizers(
         ("quats", torch.nn.Parameter(quats), 1e-3),
         ("opacities", torch.nn.Parameter(opacities), 5e-2),
     ]
+
 
     if feature_dim is None:
         # color is SH coefficients.
@@ -384,6 +387,8 @@ class Runner:
         #     rasterize_mode=rasterize_mode,
         #     **kwargs,
         # )
+        # import pdb
+        # pdb.set_trace()
         results, info = rasterize_fnc(
             means=means,
             quats=quats,
@@ -533,7 +538,7 @@ class Runner:
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
             
-            if cfg.normal_loss:
+            if cfg.normal_loss and step > cfg.normal_start_iter:
                 # normal consistency loss
                 render_normals = render_normals.squeeze(0).permute((2, 0, 1))
                 render_normals_from_depth *= alphas.squeeze(0).detach()
@@ -587,12 +592,14 @@ class Runner:
                     grads = self.running_stats["grad2d"] / self.running_stats[
                         "count"
                     ].clamp_min(1)
-
                     # grow GSs
                     is_grad_high = grads >= cfg.grow_grad2d
+                    print(f"Num GS modified: {is_grad_high.sum().item()}")
                     # print(f"unique grads: {torch.unique(grads)}")
                     # print(f"is_grad_high: {sum(is_grad_high)}")
-
+                    # print(f"grads min: {torch.min(grads)}")
+                    # print(f"grads max: {torch.max(grads)}")
+                    
                     is_small = (
                         torch.exp(self.splats["scales"][..., :2]).max(dim=-1).values
                         <= cfg.grow_scale3d * self.scene_scale
@@ -619,12 +626,15 @@ class Runner:
 
                     # prune GSs
                     is_prune = torch.sigmoid(self.splats["opacities"]) < cfg.prune_opa
+                    # import pdb
+                    # pdb.set_trace()
+                    # print(f"is_prune: {is_prune.sum().item()}")
                     if step > cfg.reset_every:
                         # The official code also implements sreen-size pruning but
                         # it's actually not being used due to a bug:
                         # https://github.com/graphdeco-inria/gaussian-splatting/issues/123
                         is_too_big = (
-                            torch.exp(self.splats["scales"]).max(dim=-1).values
+                            torch.exp(self.splats["scales"][..., :2]).max(dim=-1).values
                             > cfg.prune_scale3d * self.scene_scale
                         )
                         is_prune = is_prune | is_too_big
@@ -634,7 +644,8 @@ class Runner:
                         f"Step {step}: {n_prune} GSs pruned. "
                         f"Now having {len(self.splats['means3d'])} GSs."
                     )
-
+                    # import pdb
+                    # pdb.set_trace()
                     # reset running stats
                     self.running_stats["grad2d"].zero_()
                     self.running_stats["count"].zero_()
@@ -715,8 +726,10 @@ class Runner:
             grads = info["means2d"].absgrad.clone()
         else:
             grads = info["means2d"].grad.clone()
+        grads = grads.unsqueeze(0)
         grads[..., 0] *= info["width"] / 2.0 * cfg.batch_size
         grads[..., 1] *= info["height"] / 2.0 * cfg.batch_size
+        # print(f"grads is nan: {grads.isnan().sum().item()}")
         if cfg.packed:
             # grads is [nnz, 2]
             gs_ids = info["gaussian_ids"]  # [nnz] or None

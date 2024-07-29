@@ -97,8 +97,10 @@ def test_projection_2dgs(test_data):
         (0, 1, 3, 2)
     )  # TODO(WZ): Figure out why do we need to permute here
 
+    densifications = torch.zeros((means.shape[0], 2), device=device)
+
     radii, means2d, depths, ray_Ms, normals = fully_fused_projection_2dgs(
-        means, quats, scales, viewmats, Ks, width, height
+        means, quats, scales, viewmats, densifications, Ks, width, height
     )
 
     # TODO (WZ): is the following true for 2dgs as while?
@@ -171,9 +173,10 @@ def test_rasterize_to_pixels_2dgs(test_data):
     N = means.shape[0]
     C = viewmats.shape[0]
     backgrounds = torch.zeros((C, colors.shape[-1]), device=device)
-
+    densifications = torch.zeros((N, 2), device=device)
+    
     radii, means2d, depths, ray_Ms, normals = fully_fused_projection_2dgs(
-        means, quats, scales, viewmats, Ks, width, height
+        means, quats, scales, viewmats, densifications, Ks, width, height
     )
 
     # Identify intersecting tiles
@@ -299,8 +302,8 @@ def test_rasterize_to_pixels_2dgs(test_data):
     torch.testing.assert_close(v_opacities, _v_opacities, rtol=1e-3, atol=1e-3)
     torch.testing.assert_close(v_backgrounds, _v_backgrounds, rtol=1e-5, atol=1e-5)
     torch.testing.assert_close(v_normals, _v_normals, rtol=1e-3, atol=1e-3)
-    import pdb
-    pdb.set_trace()
+    # import pdb
+    # pdb.set_trace()
 
 if __name__ == "__main__":
     # test_projection_2dgs(test_data())

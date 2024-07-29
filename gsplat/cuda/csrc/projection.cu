@@ -1634,7 +1634,11 @@ fully_fused_projection_fwd_2dgs_kernel(const uint32_t C, const uint32_t N,
     glm::vec2 scale = glm::make_vec2(scales + gid * 3);
 
     glm::mat3 RS_camera = R * quat_to_rotmat(quat) * scale_to_mat(scale, 1.0f);
-    glm::mat3 WH = glm::mat3(RS_camera[0], RS_camera[1], mean_c);
+    glm::mat3 WH = glm::mat3(
+        RS_camera[0], 
+        RS_camera[1], 
+        mean_c
+    );
 
     glm::mat3 inverse_intrinsic = glm::mat3(
         Ks[0], 0.0, Ks[2],
@@ -2000,6 +2004,7 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     const float *__restrict__ scales,
     const float *__restrict__ viewmats,
     const float *__restrict__ Ks,
+    const float *__restrict__ densifications,
     const int32_t image_width, const int32_t image_height, const float eps2d,
     // fwd outputs
     const int32_t *__restrict__ radii,
@@ -2013,7 +2018,8 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     float *__restrict__ v_means,
     float *__restrict__ v_quats,
     float *__restrict__ v_scales,
-    float *__restrict__ v_viewmats
+    float *__restrict__ v_viewmats,
+    float *__restrict__ v_densifications
 ) {
 
     // parallelize over C * N.
@@ -2035,27 +2041,9 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     v_depths += idx;
     v_normals += idx * 3;
     v_ray_transformations += idx * 9;
+    v_densifications += idx * 2;
 
     //====== AABB Gradients======//
-    glm::mat3 _v_ray_transformation = glm::mat3(
-        v_ray_transformations[0], v_ray_transformations[1], v_ray_transformations[2],
-        v_ray_transformations[3], v_ray_transformations[4], v_ray_transformations[5],
-        v_ray_transformations[6], v_ray_transformations[7], v_ray_transformations[8]
-    );
-
-    if (v_means2d[0] != 0 || v_means2d[1] != 0) {
-        glm::vec2 v_mean2D = glm::vec2(v_means2d[0], v_means2d[1]);
-        glm::mat3 M = glm::mat3(
-            ray_transformations[0], ray_transformations[1], ray_transformations[2],
-            ray_transformations[3], ray_transformations[4], ray_transformations[5],
-            ray_transformations[6], ray_transformations[7], ray_transformations[8]
-        );
-        compute_aabb_vjp(M, v_mean2D, _v_ray_transformation);
-    }
-
-    //====== ray transformation gradient ======//
-    // camera information
-
     const glm::mat3 W = glm::mat3(
         viewmats[0], viewmats[4], viewmats[8],
         viewmats[1], viewmats[5], viewmats[9],
@@ -2073,19 +2061,31 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     );
     const glm::vec4 quat = glm::make_vec4(quats + gid * 4);
     const glm::vec2 scale = glm::make_vec2(scales + gid * 3);
-
+    const glm::vec3 v_normal3d = glm::make_vec3(v_normals);
+    glm::mat3 _v_ray_transformation = glm::mat3(
+        v_ray_transformations[0], v_ray_transformations[1], v_ray_transformations[2],
+        v_ray_transformations[3], v_ray_transformations[4], v_ray_transformations[5],
+        v_ray_transformations[6], v_ray_transformations[7], v_ray_transformations[8]
+    );    
     glm::vec4 v_quat(0.f);
     glm::vec2 v_scale(0.f);
     glm::vec3 v_mean(0.f);
 
-    
-    compute_ray_transformation_vjp(W, P, 
-                                    cam_pos, mean_c, 
-                                    quat, scale, 
-                                    _v_ray_transformation, glm::make_vec3(v_normals),
-                                    v_quat,
-                                    v_scale, v_mean);
-
+    compute_ray_Ms_aabb_vjp(
+        ray_transformations,
+        v_means2d,
+        v_normal3d,
+        W,
+        P,
+        cam_pos,
+        mean_c,
+        quat,
+        scale,
+        _v_ray_transformation,
+        v_quat,
+        v_scale,
+        v_mean
+    );
     
     // write out results with warp-level reduction
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
@@ -2117,19 +2117,21 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
         atomicAdd(v_scales + 1, v_scale[1]);
     }
 
-    // float depth = ray_transformations[8];
-    // v_densification[0] = ray_transformations[2] * depth * 0.5 * float(image_width);
-    // v_densification[1] = ray_transformations[5] * depth * 0.5 * float(image_height);
+    float depth = ray_transformations[8];
+    v_densifications[0] = _v_ray_transformation[0].z * depth;
+    v_densifications[1] = _v_ray_transformation[1].z * depth;
+    // printf("den grad: %.8f, %.8f \n", v_densifications[0], v_densifications[1]);
     // TODO WZ: viewmat gradients
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fully_fused_projection_bwd_2dgs_tensor(
     // fwd inputs
     const torch::Tensor &means,
     const torch::Tensor &quats,
     const torch::Tensor &scales,
     const torch::Tensor &viewmats,
+    const torch::Tensor densifications, // dummy tensor for densification gradient
     const torch::Tensor &Ks,
     const uint32_t image_width, const uint32_t image_height, const float eps2d,
     // fwd outputs
@@ -2154,7 +2156,7 @@ fully_fused_projection_bwd_2dgs_tensor(
     CHECK_INPUT(v_depths);
     CHECK_INPUT(v_normals);
     CHECK_INPUT(v_ray_transformations);
-    
+    CHECK_INPUT(densifications);
 
     uint32_t N = means.size(0);     // number of gaussians
     uint32_t C = viewmats.size(0);  // number of cameras
@@ -2168,6 +2170,7 @@ fully_fused_projection_bwd_2dgs_tensor(
     if (viewmats_requires_grad) {
         v_viewmats = torch::zeros_like(viewmats);
     }
+    torch::Tensor v_densifications = torch::zeros_like(densifications);
     // torch::Tensor v_densification = torch::zeros_like(v_means2d);
     if (C && N) {
         fully_fused_projection_bwd_2dgs_kernel<<<(C * N + N_THREADS - 1) / N_THREADS,
@@ -2175,20 +2178,22 @@ fully_fused_projection_bwd_2dgs_tensor(
             C, N, means.data_ptr<float>(),
             quats.data_ptr<float>(),
             scales.data_ptr<float>(),
-            viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
+            viewmats.data_ptr<float>(), Ks.data_ptr<float>(), densifications.data_ptr<float>(),
+            image_width, image_height,
             eps2d, radii.data_ptr<int32_t>(), ray_transformations.data_ptr<float>(),
             v_means2d.data_ptr<float>(), v_depths.data_ptr<float>(), v_normals.data_ptr<float>(),
             v_ray_transformations.data_ptr<float>(),
             v_means.data_ptr<float>(),
             v_quats.data_ptr<float>(),
             v_scales.data_ptr<float>(),
-            viewmats_requires_grad ? viewmats.data_ptr<float>() : nullptr
+            viewmats_requires_grad ? viewmats.data_ptr<float>() : nullptr,
+            v_densifications.data_ptr<float>()
         );
         // CUDA_CHECK_ERROR;
         // CUDA_SAFE_CALL(cudaStreamSynchronize(stream.stream()));
     }
 
-    return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
+    return std::make_tuple(v_means, v_quats, v_scales, v_viewmats, v_densifications);
 }
 
 __global__ void fully_fused_projection_packed_bwd_2dgs_kernel(

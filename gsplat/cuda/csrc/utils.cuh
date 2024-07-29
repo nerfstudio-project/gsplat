@@ -358,62 +358,133 @@ inline __device__ void add_blur_vjp(const float eps2d, const glm::mat2 conic_blu
         v_sqr_comp * (one_minus_sqr_comp * conic_blur[1][1] - eps2d * det_conic_blur);
 }
 
-inline __device__ void compute_aabb_vjp(const glm::mat3 M, const glm::vec2 v_mean2D,
-                                        glm::mat3 &v_ray_transformation) {
+// inline __device__ void compute_aabb_vjp(const glm::mat3 M, const glm::vec2 v_mean2D,
+//                                         glm::mat3 &v_ray_transformation) {
 
-    const float distance = M[2].x * M[2].x + M[2].y * M[2].y - M[2].z * M[2].z;
-    const float f = 1 / (distance);
-    const float dpx_dT00 =  f * M[2].x;
-    const float dpx_dT01 =  f * M[2].y;
-    const float dpx_dT02 = -f * M[2].z;
-    const float dpy_dT10 =  f * M[2].x;
-    const float dpy_dT11 =  f * M[2].y;
-    const float dpy_dT12 = -f * M[2].z;
-    const float dpx_dT30 =  M[0].x * (f - 2 * f * f * M[2].x * M[2].x);
-    const float dpx_dT31 =  M[0].y * (f - 2 * f * f * M[2].y * M[2].y);
-    const float dpx_dT32 = -M[0].z * (f + 2 * f * f * M[2].z * M[2].z);
-    const float dpy_dT30 =  M[1].x * (f - 2 * f * f * M[2].x * M[2].x);
-    const float dpy_dT31 =  M[1].y * (f - 2 * f * f * M[2].y * M[2].y);
-    const float dpy_dT32 = -M[1].z * (f + 2 * f * f * M[2].z * M[2].z);
+//     const float distance = ray_transformations[6] * ray_transformations[6] + ray_transformations[7] * ray_transformations[7] - ray_transformations[8] * ray_transformations[8];
+//     const float f = 1 / (distance);
+//     const float dpx_dT00 =  f * ray_transformations[6];
+//     const float dpx_dT01 =  f * ray_transformations[7];
+//     const float dpx_dT02 = -f * ray_transformations[8];
+//     const float dpy_dT10 =  f * ray_transformations[6];
+//     const float dpy_dT11 =  f * ray_transformations[7];
+//     const float dpy_dT12 = -f * ray_transformations[8];
+//     const float dpx_dT30 =  ray_transformations[0] * (f - 2 * f * f * ray_transformations[6] * ray_transformations[6]);
+//     const float dpx_dT31 =  ray_transformations[1] * (f - 2 * f * f * ray_transformations[7] * ray_transformations[7]);
+//     const float dpx_dT32 = -ray_transformations[2] * (f + 2 * f * f * ray_transformations[8] * ray_transformations[8]);
+//     const float dpy_dT30 =  ray_transformations[3] * (f - 2 * f * f * ray_transformations[6] * ray_transformations[6]);
+//     const float dpy_dT31 =  ray_transformations[4] * (f - 2 * f * f * ray_transformations[7] * ray_transformations[7]);
+//     const float dpy_dT32 = -ray_transformations[5] * (f + 2 * f * f * ray_transformations[8] * ray_transformations[8]);
   
 
-    v_ray_transformation[0][0] += v_mean2D.x * dpx_dT00;
-    v_ray_transformation[0][1] += v_mean2D.x * dpx_dT01;
-    v_ray_transformation[0][2] += v_mean2D.x * dpx_dT02;
-    v_ray_transformation[1][0] += v_mean2D.y * dpy_dT10;
-    v_ray_transformation[1][1] += v_mean2D.y * dpy_dT11;
-    v_ray_transformation[1][2] += v_mean2D.y * dpy_dT12;
-    v_ray_transformation[2][0] += v_mean2D.x * dpx_dT30 + v_mean2D.y * dpy_dT30;
-    v_ray_transformation[2][1] += v_mean2D.x * dpx_dT31 + v_mean2D.y * dpy_dT31;
-    v_ray_transformation[2][2] += v_mean2D.x * dpx_dT32 + v_mean2D.y * dpy_dT32;
-}
+//     v_ray_transformation[0][0] += v_means2d[0] * dpx_dT00;
+//     v_ray_transformation[0][1] += v_means2d[0] * dpx_dT01;
+//     v_ray_transformation[0][2] += v_means2d[0] * dpx_dT02;
+//     v_ray_transformation[1][0] += v_means2d[1] * dpy_dT10;
+//     v_ray_transformation[1][1] += v_means2d[1] * dpy_dT11;
+//     v_ray_transformation[1][2] += v_means2d[1] * dpy_dT12;
+//     v_ray_transformation[2][0] += v_means2d[0] * dpx_dT30 + v_means2d[1] * dpy_dT30;
+//     v_ray_transformation[2][1] += v_means2d[0] * dpx_dT31 + v_means2d[1] * dpy_dT31;
+//     v_ray_transformation[2][2] += v_means2d[0] * dpx_dT32 + v_means2d[1] * dpy_dT32;
+// }
 
-inline __device__ void compute_ray_transformation_vjp(const glm::mat3x4 W, const glm::mat3 P,
-                                                        const glm::vec3 cam_pos, const glm::vec3 mean,
-                                                        const glm::vec4 quat, const glm::vec2 scale, 
-                                                        const glm::mat3 v_ray_transformation, const glm::vec3 v_normal3d,
-                                                        glm::vec4& v_quat,
-                                                        glm::vec2& v_scale, 
-                                                        glm::vec3& v_mean3D) {
-    // glm::vec3 scale_2dgs = glm::vec3(scale.x, scale.y, 1.f);
-    glm::mat3 S = scale_to_mat(scale, 1.f);
+// inline __device__ void compute_ray_transformation_vjp(const glm::mat3x4 W, const glm::mat3 P,
+//                                                         const glm::vec3 cam_pos, const glm::vec3 mean,
+//                                                         const glm::vec4 quat, const glm::vec2 scale, 
+//                                                         const glm::mat3 v_ray_transformation, const glm::vec3 v_normal3d,
+//                                                         glm::vec4& v_quat,
+//                                                         glm::vec2& v_scale, 
+//                                                         glm::vec3& v_mean3D) {
+//     // glm::vec3 scale_2dgs = glm::vec3(scale.x, scale.y, 1.f);
+//     glm::mat3 S = scale_to_mat(scale, 1.f);
+//     glm::mat3 R = quat_to_rotmat(quat);
+//     glm::mat3 RS = R * S;
+
+//     glm::mat3 v_M = P * glm::transpose(v_ray_transformation);
+
+
+//     glm::mat3 W_t = glm::transpose(W);
+//     glm::mat3 v_RS = W_t * v_M;
+//     glm::vec3 v_tn = W_t * v_normal3d;
+
+//     // dual visible
+//     glm::vec3 tn = W * R[2];
+//     float cos = glm::dot(-tn, mean);
+//     float multiplier = cos > 0 ? 1 : -1;
+//     v_tn *= multiplier;
+
+//     glm::mat3 v_R = glm::mat3(
+//         v_RS[0] * scale[0],
+//         v_RS[1] * scale[1],
+//         v_tn
+//     );
+
+//     quat_to_rotmat_vjp(quat, v_R, v_quat);
+
+//     v_scale[0] += (float)glm::dot(v_RS[0], R[0]);
+//     v_scale[1] += (float)glm::dot(v_RS[1], R[1]);
+    
+//     v_mean3D += v_RS[2];
+// }
+
+
+inline __device__ void compute_ray_Ms_aabb_vjp(
+    const float* ray_transformations,
+    const float* v_means2d,
+    const glm::vec3 v_normals,
+    const glm::mat3 W,
+    const glm::mat3 P,
+    const glm::vec3 cam_pos,
+    const glm::vec3 mean_c,
+    const glm::vec4 quat,
+    const glm::vec2 scale,
+    glm::mat3& _v_ray_transformation,
+    glm::vec4& v_quat,
+    glm::vec2& v_scale,
+    glm::vec3& v_mean
+) {
+
+    if (v_means2d[0] != 0 || v_means2d[1] != 0) {
+        const float distance = ray_transformations[6] * ray_transformations[6] 
+                                + ray_transformations[7] * ray_transformations[7] 
+                                - ray_transformations[8] * ray_transformations[8];
+        const float f = 1 / (distance);
+        const float dpx_dT00 =  f * ray_transformations[6];
+        const float dpx_dT01 =  f * ray_transformations[7];
+        const float dpx_dT02 = -f * ray_transformations[8];
+        const float dpy_dT10 =  f * ray_transformations[6];
+        const float dpy_dT11 =  f * ray_transformations[7];
+        const float dpy_dT12 = -f * ray_transformations[8];
+        const float dpx_dT30 =  ray_transformations[0] * (f - 2 * f * f * ray_transformations[6] * ray_transformations[6]);
+        const float dpx_dT31 =  ray_transformations[1] * (f - 2 * f * f * ray_transformations[7] * ray_transformations[7]);
+        const float dpx_dT32 = -ray_transformations[2] * (f + 2 * f * f * ray_transformations[8] * ray_transformations[8]);
+        const float dpy_dT30 =  ray_transformations[3] * (f - 2 * f * f * ray_transformations[6] * ray_transformations[6]);
+        const float dpy_dT31 =  ray_transformations[4] * (f - 2 * f * f * ray_transformations[7] * ray_transformations[7]);
+        const float dpy_dT32 = -ray_transformations[5] * (f + 2 * f * f * ray_transformations[8] * ray_transformations[8]);
+    
+
+        _v_ray_transformation[0][0] += v_means2d[0] * dpx_dT00;
+        _v_ray_transformation[0][1] += v_means2d[0] * dpx_dT01;
+        _v_ray_transformation[0][2] += v_means2d[0] * dpx_dT02;
+        _v_ray_transformation[1][0] += v_means2d[1] * dpy_dT10;
+        _v_ray_transformation[1][1] += v_means2d[1] * dpy_dT11;
+        _v_ray_transformation[1][2] += v_means2d[1] * dpy_dT12;
+        _v_ray_transformation[2][0] += v_means2d[0] * dpx_dT30 + v_means2d[1] * dpy_dT30;
+        _v_ray_transformation[2][1] += v_means2d[0] * dpx_dT31 + v_means2d[1] * dpy_dT31;
+        _v_ray_transformation[2][2] += v_means2d[0] * dpx_dT32 + v_means2d[1] * dpy_dT32;
+    }
+
     glm::mat3 R = quat_to_rotmat(quat);
-    glm::mat3 RS = R * S;
 
-    glm::mat3 v_M = P * glm::transpose(v_ray_transformation);
-    // glm::mat3 v_M = glm::mat3(
-    //     glm::vec3(v_M_aug[0]),
-    //     glm::vec3(v_M_aug[1]),
-    //     glm::vec3(v_M_aug[2])
-    // );
+    glm::mat3 v_M = P * glm::transpose(_v_ray_transformation);
 
     glm::mat3 W_t = glm::transpose(W);
     glm::mat3 v_RS = W_t * v_M;
-    glm::vec3 v_tn = W_t * v_normal3d;
+    glm::vec3 v_tn = W_t * v_normals;
 
     // dual visible
     glm::vec3 tn = W * R[2];
-    float cos = glm::dot(-tn, mean);
+    float cos = glm::dot(-tn, mean_c);
     float multiplier = cos > 0 ? 1 : -1;
     v_tn *= multiplier;
 
@@ -428,7 +499,6 @@ inline __device__ void compute_ray_transformation_vjp(const glm::mat3x4 W, const
     v_scale[0] += (float)glm::dot(v_RS[0], R[0]);
     v_scale[1] += (float)glm::dot(v_RS[1], R[1]);
     
-    v_mean3D += v_RS[2];
+    v_mean += v_RS[2];
 }
-
 #endif // GSPLAT_CUDA_UTILS_H
