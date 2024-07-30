@@ -688,7 +688,7 @@ class Runner:
         splats_c = decompress_splats(self.compress_dir)
         for k in splats_c.keys():
             self.splats[k].data = splats_c[k].to(self.device)
-        self.eval(step=f"{step}_compressed")
+        self.eval(step=step)
 
     @torch.no_grad()
     def _viewer_render_fn(
