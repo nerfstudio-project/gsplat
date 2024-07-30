@@ -170,8 +170,6 @@ class Runner:
         os.makedirs(self.stats_dir, exist_ok=True)
         self.render_dir = f"{cfg.result_dir}/renders"
         os.makedirs(self.render_dir, exist_ok=True)
-        self.compress_dir = f"{cfg.result_dir}/renders"
-        os.makedirs(self.compress_dir, exist_ok=True)
 
         # Tensorboard
         self.writer = SummaryWriter(log_dir=f"{cfg.result_dir}/tb")
@@ -555,7 +553,7 @@ class Runner:
                 self.viewer.update(step, num_train_rays_per_step)
 
     @torch.no_grad()
-    def eval(self, step: int):
+    def eval(self, step: int, stage: str = "val"):
         """Entry for evaluation."""
         print("Running evaluation...")
         cfg = self.cfg
@@ -590,7 +588,7 @@ class Runner:
             # write images
             canvas = torch.cat([pixels, colors], dim=2).squeeze(0).cpu().numpy()
             imageio.imwrite(
-                f"{self.render_dir}/val_step{step}_{i:04d}.png",
+                f"{self.render_dir}/{stage}_step{step}_{i:04d}.png",
                 (canvas * 255).astype(np.uint8),
             )
 
@@ -618,11 +616,12 @@ class Runner:
             "ellipse_time": ellipse_time,
             "num_GS": len(self.splats["means"]),
         }
-        with open(f"{self.stats_dir}/val_step{step}.json", "w") as f:
+        with open(f"{self.stats_dir}/{stage}_step{step}.json", "w") as f:
             json.dump(stats, f)
+
         # save stats to tensorboard
         for k, v in stats.items():
-            self.writer.add_scalar(f"val/{k}", v, step)
+            self.writer.add_scalar(f"{stage}/{k}", v, step)
         self.writer.flush()
 
     @torch.no_grad()
@@ -682,13 +681,15 @@ class Runner:
     def compress(self, step: int):
         """Entry for running compression."""
         print("Running compression...")
+        compress_dir = f"{cfg.result_dir}/compression"
+        os.makedirs(compress_dir, exist_ok=True)
         compress_splats(self.compress_dir, self.splats)
 
         # eval
         splats_c = decompress_splats(self.compress_dir)
         for k in splats_c.keys():
             self.splats[k].data = splats_c[k].to(self.device)
-        self.eval(step=step)
+        self.eval(step=step, stage="compress")
 
     @torch.no_grad()
     def _viewer_render_fn(
@@ -720,7 +721,6 @@ def main(cfg: Config):
         ckpt = torch.load(cfg.ckpt, map_location=runner.device)
         for k in runner.splats.keys():
             runner.splats[k].data = ckpt["splats"][k]
-
         runner.eval(step=ckpt["step"])
         runner.render_traj(step=ckpt["step"])
         if cfg.compress:
