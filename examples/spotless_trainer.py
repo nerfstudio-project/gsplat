@@ -131,7 +131,7 @@ class Config:
     # Refine GSs every this steps
     refine_every: int = 100
     # Reset SH specular coefficients once
-    reset_sh: int = 8000002
+    reset_sh: int = 8002
     # Use packed mode for rasterization, this leads to less memory usage but slightly slower.
     packed: bool = False
     # Use sparse gradients for optimization. (experimental)
