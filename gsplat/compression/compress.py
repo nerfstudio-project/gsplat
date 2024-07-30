@@ -28,11 +28,11 @@ def compress_splats(
     """
     n_gs = len(splats["means"])
     n_sidelen = int(n_gs**0.5)
-    if n_sidelen**2 != n_gs:
-        n_remove = n_gs - n_sidelen**2
-        print(f"Number of Gaussians is not square. Removing {n_remove} Gaussians.")
+    n_diff = n_gs - n_sidelen**2
+    if n_diff != 0:
+        print(f"Number of Gaussians is not square. Removing {n_diff} Gaussians.")
         opacities = splats["opacities"]
-        keep_indices = torch.argsort(opacities, descending=True)[: n_gs - n_remove]
+        keep_indices = torch.argsort(opacities, descending=True)[:-n_diff]
         for k, v in splats.items():
             splats[k] = v[keep_indices]
 
@@ -41,22 +41,21 @@ def compress_splats(
     meta = {}
     for param_name in splats.keys():
         compress_fn = eval(f"_compress_{param_name}")
-        compress_kwargs = {}
+        kwargs = {}
         if param_name == "shN":
-            compress_kwargs["use_kmeans"] = use_kmeans
-        meta[param_name] = compress_fn(
-            compress_dir, splats[param_name], **compress_kwargs
-        )
+            kwargs["use_kmeans"] = use_kmeans
+        meta[param_name] = compress_fn(compress_dir, splats[param_name], **kwargs)
 
     with open(os.path.join(compress_dir, "meta.json"), "w") as f:
         json.dump(meta, f)
 
 
-def decompress_splats(compress_dir: str) -> dict[str, Tensor]:
+def decompress_splats(compress_dir: str, use_kmeans: bool = True) -> dict[str, Tensor]:
     """Decompress splats from directory.
 
     Args:
         compress_dir (str): compression directory
+        use_kmeans (bool, optional): Whether to use K-means to compress spherical harmonics. Defaults to True.
 
     Returns:
         dict[str, Tensor]: splats
@@ -67,7 +66,10 @@ def decompress_splats(compress_dir: str) -> dict[str, Tensor]:
     splats = {}
     for param_name, param_meta in meta.items():
         decompress_fn = eval(f"_decompress_{param_name}")
-        splats[param_name] = decompress_fn(compress_dir, param_meta)
+        kwargs = {}
+        if param_name == "shN":
+            kwargs["use_kmeans"] = use_kmeans
+        splats[param_name] = decompress_fn(compress_dir, param_meta, **kwargs)
     return splats
 
 
@@ -272,30 +274,28 @@ def _compress_shN(compress_dir: str, params: Tensor, use_kmeans: bool = True) ->
     if params.numel() == 0:
         return {"shape": list(params.shape)}
 
-    codebook = params
     if use_kmeans:
         kmeans = KMeans(n_clusters=2**16, distance="manhattan", verbose=True)
         x = params.reshape(params.shape[0], -1).permute(1, 0).contiguous()
         labels = kmeans.fit(x)
         labels = labels.detach().cpu().numpy()
         labels = labels.astype(np.uint16)
-        codebook = kmeans.centroids.permute(1, 0)
+        params = kmeans.centroids.permute(1, 0)
 
-    codebook_mins = torch.min(codebook)
-    codebook_maxs = torch.max(codebook)
-    codebook_norm = (codebook - codebook_mins) / (codebook_maxs - codebook_mins)
-    codebook_norm = codebook_norm.detach().cpu().numpy()
-    codebook = (codebook_norm * (2**6 - 1)).round().astype(np.uint8)
+    mins = torch.min(params)
+    maxs = torch.max(params)
+    params_norm = (params - mins) / (maxs - mins)
+    params_norm = params_norm.detach().cpu().numpy()
+    params_quant = (params_norm * (2**6 - 1)).round().astype(np.uint8)
 
-    npz_dict = {"codebook": codebook}
+    npz_dict = {"params": params_quant}
     if use_kmeans:
         npz_dict["labels"] = labels
-
     np.savez_compressed(os.path.join(compress_dir, "shN.npz"), **npz_dict)
     meta = {
         "shape": list(params.shape),
-        "mins": codebook_mins.tolist(),
-        "maxs": codebook_maxs.tolist(),
+        "mins": mins.tolist(),
+        "maxs": maxs.tolist(),
     }
     return meta
 
@@ -307,16 +307,16 @@ def _decompress_shN(
         return torch.zeros(meta["shape"], dtype=torch.float32)
 
     npz_dict = np.load(os.path.join(compress_dir, "shN.npz"))
-    codebook = npz_dict["codebook"]
+    params_quant = npz_dict["params"]
 
-    codebook_norm = codebook / (2**6 - 1)
-    codebook_norm = torch.tensor(codebook_norm, dtype=torch.float32)
-    codebook_mins = torch.tensor(meta["mins"], dtype=torch.float32)
-    codebook_maxs = torch.tensor(meta["maxs"], dtype=torch.float32)
-    codebook = codebook_norm * (codebook_maxs - codebook_mins) + codebook_mins
+    params_norm = params_quant / (2**6 - 1)
+    params_norm = torch.tensor(params_norm, dtype=torch.float32)
+    mins = torch.tensor(meta["mins"], dtype=torch.float32)
+    maxs = torch.tensor(meta["maxs"], dtype=torch.float32)
+    params = params_norm * (maxs - mins) + mins
 
     if use_kmeans:
         labels = npz_dict["labels"]
-        codebook = codebook[labels]
-    params = codebook.reshape(meta["shape"])
+        params = params[labels]
+    params = params.reshape(meta["shape"])
     return params

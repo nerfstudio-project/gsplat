@@ -19,10 +19,11 @@ from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
-from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
+from utils import AppearanceOptModule, CameraOptModule, knn, set_random_seed
 
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy
+from gsplat.utils import rgb_to_sh
 
 
 @dataclass
