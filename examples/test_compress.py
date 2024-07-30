@@ -36,7 +36,7 @@ def main():
 
 def gif():
     # results_dir = "examples/results/360_v2/3dgs"
-    results_dir = "examples/results/360_v2/3dgs_0.5m+sq"
+    results_dir = "examples/results/360_v2/3dgs_1m_codebook_kmeans"
     scenes = ["garden", "bicycle", "stump", "bonsai", "counter", "kitchen", "room"]
 
     info = defaultdict(list)
@@ -44,13 +44,13 @@ def gif():
         scene_dir = os.path.join(results_dir, scene)
         stats_path = os.path.join(scene_dir, f"stats/val_step29999.json")
 
-        cmd = f"rm {scene_dir}/compress.zip"
-        subprocess.run(cmd, shell=True)
-        cmd = f"zip -r {scene_dir}/compress.zip {scene_dir}/compress"
-        subprocess.run(cmd, shell=True)
-        cmd = f"stat -c%s {scene_dir}/compress.zip"
-        size = subprocess.run(cmd, shell=True, capture_output=True).stdout
-        info["size"].append(int(size))
+        # cmd = f"rm {scene_dir}/compress.zip"
+        # subprocess.run(cmd, shell=True)
+        # cmd = f"zip -r {scene_dir}/compress.zip {scene_dir}/compress"
+        # subprocess.run(cmd, shell=True)
+        # cmd = f"stat -c%s {scene_dir}/compress.zip"
+        # size = subprocess.run(cmd, shell=True, capture_output=True).stdout
+        # info["size"].append(int(size))
 
         with open(stats_path, "r") as f:
             stats = json.load(f)

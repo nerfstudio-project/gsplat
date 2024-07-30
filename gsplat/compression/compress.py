@@ -11,18 +11,80 @@ import imageio
 from plas import sort_with_plas
 
 
-def log_transform(x):
-    return torch.sign(x) * torch.log1p(torch.abs(x))
+def compress_splats(compress_dir: str, splats: dict[str, Tensor]) -> None:
+    if not os.path.exists(compress_dir):
+        os.makedirs(compress_dir, exist_ok=True)
+
+    meta = {}
+    for attr_name in splats.keys():
+        # if attr_name == "shN":
+            # with open(os.path.join(compress_dir, "meta.json"), "r") as f:
+            #     meta2 = json.load(f)
+            #     meta[attr_name] = meta2[attr_name]
+            # continue
+        if "shN_codebook" in attr_name:
+            compress_fn = eval(f"_compress_{attr_name}")
+            meta[attr_name] = compress_fn(compress_dir, splats[attr_name], splats["shN_indices"])
+            continue
+        if "shN_indices" in attr_name:
+            continue
+
+        compress_fn = eval(f"_compress_{attr_name}")
+        meta[attr_name] = compress_fn(compress_dir, splats[attr_name])
+
+    with open(os.path.join(compress_dir, "meta.json"), "w") as f:
+        json.dump(meta, f)
 
 
-def inverse_log_transform(y):
-    assert (
-        y.max() < 20
-    ), "Probably mixed up linear and log values for xyz. These going in here are supposed to be quite small (log scale)"
-    return torch.sign(y) * (torch.expm1(torch.abs(y)))
+def decompress_splats(compress_dir: str) -> dict[str, Tensor]:
+    with open(os.path.join(compress_dir, "meta.json"), "r") as f:
+        meta = json.load(f)
+
+    splats = {}
+    for attr_name, attr_meta in meta.items():
+        if "shN_codebook" in attr_name:
+            decompress_fn = eval(f"_decompress_{attr_name}")
+            splats["shN"] = decompress_fn(compress_dir, attr_meta)
+            continue
+        if "shN_indices" in attr_name:
+            continue
+        
+        decompress_fn = eval(f"_decompress_{attr_name}")
+        splats[attr_name] = decompress_fn(compress_dir, attr_meta)
+    return splats
+
+def sort_splats(cfg, splats):
+    params_to_sort = torch.cat(
+        [
+            splats[k].reshape(cfg.cap_max, -1)
+            for k in ["quats", "means", "opacities", "quats", "scales", "sh0"]
+        ],
+        dim=-1,
+    )
+    shuffled_indices = torch.randperm(
+        params_to_sort.shape[0], device=params_to_sort.device
+    )
+    params_to_sort = params_to_sort[shuffled_indices]
+    n_sidelen = int(cfg.cap_max**0.5)
+    grid = params_to_sort.reshape((n_sidelen, n_sidelen, -1))
+    _, sorted_indices = sort_with_plas(
+        grid.permute(2, 0, 1), improvement_break=1e-4, verbose=True
+    )
+    sorted_indices = sorted_indices.squeeze().flatten()
+    sorted_indices = shuffled_indices[sorted_indices]
+    for k, v in splats.items():
+        if k == "shN_codebook":
+            continue
+        splats[k] = v[sorted_indices]
+    return splats
+
+
 
 
 def _compress_means(compress_dir: str, params: Tensor) -> dict[str, Any]:
+    def log_transform(x):
+        return torch.sign(x) * torch.log1p(torch.abs(x))
+
     params = log_transform(params)
 
     n_sidelen = int(params.shape[0] ** 0.5)
@@ -47,6 +109,9 @@ def _compress_means(compress_dir: str, params: Tensor) -> dict[str, Any]:
 
 
 def _decompress_means(compress_dir: str, meta: dict[str, Any]) -> Tensor:
+    def inverse_log_transform(y):
+        return torch.sign(y) * (torch.expm1(torch.abs(y)))
+    
     img_l = imageio.imread(os.path.join(compress_dir, "means_l.png")).astype(np.uint16)
     img_u = imageio.imread(os.path.join(compress_dir, "means_u.png")).astype(np.uint16)
     img = (img_u << 8) + img_l
@@ -158,26 +223,6 @@ def _compress_shN(compress_dir: str, params: Tensor, use_kmeans:bool=False) -> T
     }
     return meta
 
-# def _compress_shN_codebook(compress_dir: str, centroids: Tensor, labels: Tensor) -> Tensor:
-#     centroids_mins = torch.min(centroids)
-#     centroid_maxs = torch.max(centroids)
-#     centroids_norm = (centroids - centroids_mins) / (centroid_maxs - centroids_mins)
-
-#     labels = labels.detach().cpu().numpy()
-#     centroids_norm = centroids_norm.detach().cpu().numpy()
-#     labels = labels.astype(np.uint16)
-#     centroids = (centroids_norm * (2**6 - 1)).round().astype(np.uint8)
-#     np.savez_compressed(
-#         os.path.join(compress_dir, "shN.npz"), labels=labels, centroids=centroids
-#     )
-
-#     meta = {
-#         # "shape": list(params.shape),
-#         "mins": centroids_mins.tolist(),
-#         "maxs": centroid_maxs.tolist(),
-#     }
-#     return meta
-
 
 def _decompress_shN(compress_dir: str, meta: dict[str, Any], use_kmeans:bool=False) -> Tensor:
     if meta["shape"][1] == 0:
@@ -198,20 +243,40 @@ def _decompress_shN(compress_dir: str, meta: dict[str, Any], use_kmeans:bool=Fal
     params = codebook.reshape(meta["shape"])
     return params
 
-# def _decompress_shN_codebook(compress_dir: str, meta: dict[str, Any]) -> Tensor:
-#     npz_dict = np.load(os.path.join(compress_dir, "shN.npz"))
-#     labels = npz_dict["labels"]
-#     centroids = npz_dict["centroids"]
+def _compress_shN_codebook(compress_dir: str, centroids: Tensor, labels: Tensor) -> Tensor:
+    centroids_mins = torch.min(centroids)
+    centroid_maxs = torch.max(centroids)
+    centroids_norm = (centroids - centroids_mins) / (centroid_maxs - centroids_mins)
 
-#     centroids_norm = centroids / (2**6 - 1)
-#     centroids_norm = torch.tensor(centroids_norm, dtype=torch.float32)
-#     centroids_mins = torch.tensor(meta["mins"], dtype=torch.float32)
-#     centroids_maxs = torch.tensor(meta["maxs"], dtype=torch.float32)
-#     centroids = centroids_norm * (centroids_maxs - centroids_mins) + centroids_mins
+    labels = labels.detach().cpu().numpy()
+    centroids_norm = centroids_norm.detach().cpu().numpy()
+    labels = labels.astype(np.uint16)
+    centroids = (centroids_norm * (2**16 - 1)).round().astype(np.uint16)
+    np.savez_compressed(
+        os.path.join(compress_dir, "shN.npz"), labels=labels, centroids=centroids
+    )
 
-#     params = centroids[labels]
-#     # params = params.reshape(meta["shape"])
-#     return params
+    meta = {
+        # "shape": list(params.shape),
+        "mins": centroids_mins.tolist(),
+        "maxs": centroid_maxs.tolist(),
+    }
+    return meta
+
+def _decompress_shN_codebook(compress_dir: str, meta: dict[str, Any]) -> Tensor:
+    npz_dict = np.load(os.path.join(compress_dir, "shN.npz"))
+    labels = npz_dict["labels"]
+    centroids = npz_dict["centroids"]
+
+    centroids_norm = centroids / (2**16 - 1)
+    centroids_norm = torch.tensor(centroids_norm, dtype=torch.float32)
+    centroids_mins = torch.tensor(meta["mins"], dtype=torch.float32)
+    centroids_maxs = torch.tensor(meta["maxs"], dtype=torch.float32)
+    centroids = centroids_norm * (centroids_maxs - centroids_mins) + centroids_mins
+
+    params = centroids[labels]
+    # params = params.reshape(meta["shape"])
+    return params
 
 
 def _compress_quats(compress_dir: str, params: Tensor) -> Tensor:
@@ -269,71 +334,3 @@ def _decompress_opacities(compress_dir: str, meta: dict[str, Any]) -> Tensor:
 
     params = grid.reshape(meta["shape"])
     return params
-
-
-def compress_splats(compress_dir: str, splats: dict[str, Tensor]) -> None:
-    if not os.path.exists(compress_dir):
-        os.makedirs(compress_dir, exist_ok=True)
-
-    meta = {}
-    for attr_name in splats.keys():
-        # if attr_name == "shN":
-            # with open(os.path.join(compress_dir, "meta.json"), "r") as f:
-            #     meta2 = json.load(f)
-            #     meta[attr_name] = meta2[attr_name]
-            # continue
-        # if "shN_codebook" in attr_name:
-        #     compress_fn = eval(f"_compress_{attr_name}")
-        #     meta[attr_name] = compress_fn(compress_dir, splats[attr_name], splats["shN_indices"])
-        #     continue
-        # if "shN_indices" in attr_name:
-        #     continue
-
-        compress_fn = eval(f"_compress_{attr_name}")
-        meta[attr_name] = compress_fn(compress_dir, splats[attr_name])
-
-    with open(os.path.join(compress_dir, "meta.json"), "w") as f:
-        json.dump(meta, f)
-
-
-def decompress_splats(compress_dir: str) -> dict[str, Tensor]:
-    with open(os.path.join(compress_dir, "meta.json"), "r") as f:
-        meta = json.load(f)
-
-    splats = {}
-    for attr_name, attr_meta in meta.items():
-        # if "shN_codebook" in attr_name:
-        #     decompress_fn = eval(f"_decompress_{attr_name}")
-        #     splats["shN"] = decompress_fn(compress_dir, attr_meta)
-        #     continue
-        # if "shN_indices" in attr_name:
-        #     continue
-        
-        decompress_fn = eval(f"_decompress_{attr_name}")
-        splats[attr_name] = decompress_fn(compress_dir, attr_meta)
-    return splats
-
-def sort_splats(cfg, splats):
-    params_to_sort = torch.cat(
-        [
-            splats[k].reshape(cfg.cap_max, -1)
-            for k in ["quats", "means", "opacities", "quats", "scales", "sh0"]
-        ],
-        dim=-1,
-    )
-    shuffled_indices = torch.randperm(
-        params_to_sort.shape[0], device=params_to_sort.device
-    )
-    params_to_sort = params_to_sort[shuffled_indices]
-    n_sidelen = int(cfg.cap_max**0.5)
-    grid = params_to_sort.reshape((n_sidelen, n_sidelen, -1))
-    _, sorted_indices = sort_with_plas(
-        grid.permute(2, 0, 1), improvement_break=1e-4, verbose=True
-    )
-    sorted_indices = sorted_indices.squeeze().flatten()
-    sorted_indices = shuffled_indices[sorted_indices]
-    for k, v in splats.items():
-        if k == "shN_codebook":
-            continue
-        splats[k] = v[sorted_indices]
-    return splats
