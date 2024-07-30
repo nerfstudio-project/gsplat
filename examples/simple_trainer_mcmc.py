@@ -92,6 +92,8 @@ class Config:
     opacity_reg = 0.01
     # Scale regularization
     scale_reg = 0.01
+    # shN regularization
+    shN_reg = 0.001
 
     # Start refining GSs after this iteration
     refine_start_iter: int = 500
@@ -464,6 +466,7 @@ class Runner:
                 loss
                 + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
             )
+            loss += cfg.shN_reg * torch.abs(self.splats["shN"]).mean()
 
             loss.backward()
 
@@ -737,32 +740,18 @@ def main(cfg: Config):
         # run eval only
         ckpt = torch.load(cfg.ckpt, map_location=runner.device)
         splats = ckpt["splats"]
-        # shN_copy = ckpt["splats"]["shN"].clone()
-        # splats_c["shN"] = shN_copy[sorted_indices]
         
         # Sort
         compress_dir = os.path.join(cfg.result_dir, "compress")
         splats = sort_splats(cfg, splats)
         compress_splats(compress_dir, splats)
         splats_c = decompress_splats(compress_dir)
-        # for k in splats_c.keys():
-        #     ckpt["splats"][k] = splats_c[k].to(runner.device)
 
         for k in splats_c.keys():
             runner.splats[k].data = splats_c[k].to(runner.device)
             
-            # if k != "shN":
-            #     runner.splats[k].data = splats_c[k].to(runner.device)
-            # else:
-            #     centroids, labels, shape = splats_c[k]
-            #     # runner.splats[k].data = centroids[labels].reshape(shape).to(runner.device)
-            #     runner.splats["centroids"].data = centroids.to(runner.device)
-            #     runner.labels = torch.tensor(labels, dtype=torch.int32).to(runner.device)
-            #     runner.labels_shape = shape
-            
-        # runner.train()
         runner.eval(step=ckpt["step"])
-        runner.render_traj(step=ckpt["step"])
+        # runner.render_traj(step=ckpt["step"])
         torch.save(
             {
                 "splats": runner.splats.state_dict(),

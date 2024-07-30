@@ -127,52 +127,91 @@ def _decompress_sh0(compress_dir: str, meta: dict[str, Any]) -> Tensor:
     return params
 
 
-def _compress_shN(compress_dir: str, params: Tensor) -> Tensor:
+def _compress_shN(compress_dir: str, params: Tensor, use_kmeans:bool=False) -> Tensor:
     if params.numel() == 0:
         return {"shape": list(params.shape)}
 
-    kmeans = KMeans(n_clusters=2**16, distance="euclidean", verbose=True)
-    x = params.reshape(params.shape[0], -1).permute(1, 0).contiguous()
-    labels = kmeans.fit(x)
-    centroids = kmeans.centroids.permute(1, 0)
-
-    centroids_mins = torch.min(centroids)
-    centroid_maxs = torch.max(centroids)
-    centroids_norm = (centroids - centroids_mins) / (centroid_maxs - centroids_mins)
-
-    labels = labels.detach().cpu().numpy()
-    centroids_norm = centroids_norm.detach().cpu().numpy()
-    labels = labels.astype(np.uint16)
-    centroids = (centroids_norm * (2**6 - 1)).round().astype(np.uint8)
-    np.savez_compressed(
-        os.path.join(compress_dir, "shN.npz"), labels=labels, centroids=centroids
-    )
-
+    codebook = params
+    if use_kmeans:
+        kmeans = KMeans(n_clusters=2**16, distance="manhattan", verbose=True)
+        x = params.reshape(params.shape[0], -1).permute(1, 0).contiguous()
+        labels = kmeans.fit(x)
+        labels = labels.detach().cpu().numpy()
+        labels = labels.astype(np.uint16)
+        codebook = kmeans.centroids.permute(1, 0)
+        
+    codebook_mins = torch.min(codebook)
+    codebook_maxs = torch.max(codebook)
+    codebook_norm = (codebook - codebook_mins) / (codebook_maxs - codebook_mins)
+    codebook_norm = codebook_norm.detach().cpu().numpy()
+    codebook = (codebook_norm * (2**6 - 1)).round().astype(np.uint8)
+    
+    npz_dict = {"codebook": codebook}
+    if use_kmeans:
+        npz_dict["labels"] = labels
+    
+    np.savez_compressed(os.path.join(compress_dir, "shN.npz"), **npz_dict)
     meta = {
         "shape": list(params.shape),
-        "mins": centroids_mins.tolist(),
-        "maxs": centroid_maxs.tolist(),
+        "mins": codebook_mins.tolist(),
+        "maxs": codebook_maxs.tolist(),
     }
     return meta
 
+# def _compress_shN_codebook(compress_dir: str, centroids: Tensor, labels: Tensor) -> Tensor:
+#     centroids_mins = torch.min(centroids)
+#     centroid_maxs = torch.max(centroids)
+#     centroids_norm = (centroids - centroids_mins) / (centroid_maxs - centroids_mins)
 
-def _decompress_shN(compress_dir: str, meta: dict[str, Any]) -> Tensor:
+#     labels = labels.detach().cpu().numpy()
+#     centroids_norm = centroids_norm.detach().cpu().numpy()
+#     labels = labels.astype(np.uint16)
+#     centroids = (centroids_norm * (2**6 - 1)).round().astype(np.uint8)
+#     np.savez_compressed(
+#         os.path.join(compress_dir, "shN.npz"), labels=labels, centroids=centroids
+#     )
+
+#     meta = {
+#         # "shape": list(params.shape),
+#         "mins": centroids_mins.tolist(),
+#         "maxs": centroid_maxs.tolist(),
+#     }
+#     return meta
+
+
+def _decompress_shN(compress_dir: str, meta: dict[str, Any], use_kmeans:bool=False) -> Tensor:
     if meta["shape"][1] == 0:
         return torch.zeros(meta["shape"], dtype=torch.float32)
 
     npz_dict = np.load(os.path.join(compress_dir, "shN.npz"))
-    labels = npz_dict["labels"]
-    centroids = npz_dict["centroids"]
+    codebook = npz_dict["codebook"]
 
-    centroids_norm = centroids / (2**6 - 1)
-    centroids_norm = torch.tensor(centroids_norm, dtype=torch.float32)
-    centroids_mins = torch.tensor(meta["mins"], dtype=torch.float32)
-    centroids_maxs = torch.tensor(meta["maxs"], dtype=torch.float32)
-    centroids = centroids_norm * (centroids_maxs - centroids_mins) + centroids_mins
+    codebook_norm = codebook / (2**6 - 1)
+    codebook_norm = torch.tensor(codebook_norm, dtype=torch.float32)
+    codebook_mins = torch.tensor(meta["mins"], dtype=torch.float32)
+    codebook_maxs = torch.tensor(meta["maxs"], dtype=torch.float32)
+    codebook = codebook_norm * (codebook_maxs - codebook_mins) + codebook_mins
 
-    params = centroids[labels]
-    params = params.reshape(meta["shape"])
+    if use_kmeans:
+        labels = npz_dict["labels"]
+        codebook = codebook[labels]
+    params = codebook.reshape(meta["shape"])
     return params
+
+# def _decompress_shN_codebook(compress_dir: str, meta: dict[str, Any]) -> Tensor:
+#     npz_dict = np.load(os.path.join(compress_dir, "shN.npz"))
+#     labels = npz_dict["labels"]
+#     centroids = npz_dict["centroids"]
+
+#     centroids_norm = centroids / (2**6 - 1)
+#     centroids_norm = torch.tensor(centroids_norm, dtype=torch.float32)
+#     centroids_mins = torch.tensor(meta["mins"], dtype=torch.float32)
+#     centroids_maxs = torch.tensor(meta["maxs"], dtype=torch.float32)
+#     centroids = centroids_norm * (centroids_maxs - centroids_mins) + centroids_mins
+
+#     params = centroids[labels]
+#     # params = params.reshape(meta["shape"])
+#     return params
 
 
 def _compress_quats(compress_dir: str, params: Tensor) -> Tensor:
@@ -239,9 +278,15 @@ def compress_splats(compress_dir: str, splats: dict[str, Tensor]) -> None:
     meta = {}
     for attr_name in splats.keys():
         # if attr_name == "shN":
-        #     with open(os.path.join(compress_dir, "meta.json"), "r") as f:
-        #         meta2 = json.load(f)
-        #         meta[attr_name] = meta2[attr_name]
+            # with open(os.path.join(compress_dir, "meta.json"), "r") as f:
+            #     meta2 = json.load(f)
+            #     meta[attr_name] = meta2[attr_name]
+            # continue
+        # if "shN_codebook" in attr_name:
+        #     compress_fn = eval(f"_compress_{attr_name}")
+        #     meta[attr_name] = compress_fn(compress_dir, splats[attr_name], splats["shN_indices"])
+        #     continue
+        # if "shN_indices" in attr_name:
         #     continue
 
         compress_fn = eval(f"_compress_{attr_name}")
@@ -257,6 +302,13 @@ def decompress_splats(compress_dir: str) -> dict[str, Tensor]:
 
     splats = {}
     for attr_name, attr_meta in meta.items():
+        # if "shN_codebook" in attr_name:
+        #     decompress_fn = eval(f"_decompress_{attr_name}")
+        #     splats["shN"] = decompress_fn(compress_dir, attr_meta)
+        #     continue
+        # if "shN_indices" in attr_name:
+        #     continue
+        
         decompress_fn = eval(f"_decompress_{attr_name}")
         splats[attr_name] = decompress_fn(compress_dir, attr_meta)
     return splats
@@ -281,5 +333,7 @@ def sort_splats(cfg, splats):
     sorted_indices = sorted_indices.squeeze().flatten()
     sorted_indices = shuffled_indices[sorted_indices]
     for k, v in splats.items():
+        if k == "shN_codebook":
+            continue
         splats[k] = v[sorted_indices]
     return splats
