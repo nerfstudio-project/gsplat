@@ -170,6 +170,8 @@ class Runner:
         os.makedirs(self.stats_dir, exist_ok=True)
         self.render_dir = f"{cfg.result_dir}/renders"
         os.makedirs(self.render_dir, exist_ok=True)
+        self.compress_dir = f"{cfg.result_dir}/renders"
+        os.makedirs(self.compress_dir, exist_ok=True)
 
         # Tensorboard
         self.writer = SummaryWriter(log_dir=f"{cfg.result_dir}/tb")
@@ -207,7 +209,6 @@ class Runner:
             feature_dim=feature_dim,
             device=self.device,
         )
-        self.labels = torch.zeros(cfg.cap_max, dtype=torch.int32).to(self.device)
         print("Model initialized. Number of GS:", len(self.splats["means"]))
 
         # Densification Strategy
@@ -681,11 +682,10 @@ class Runner:
     def compress(self, step: int):
         """Entry for running compression."""
         print("Running compression...")
-        compress_dir = os.path.join(cfg.result_dir, "compression")
-        compress_splats(compress_dir, self.splats)
+        compress_splats(self.compress_dir, self.splats)
 
-        # eval compression
-        splats_c = decompress_splats(compress_dir)
+        # eval
+        splats_c = decompress_splats(self.compress_dir)
         for k in splats_c.keys():
             self.splats[k].data = splats_c[k].to(self.device)
         self.eval(step=f"{step}_compressed")
@@ -718,15 +718,13 @@ def main(cfg: Config):
     if cfg.ckpt is not None:
         # run eval only
         ckpt = torch.load(cfg.ckpt, map_location=runner.device)
-
-        for k in ckpt["splats"].keys():
-            runner.splats[k].data = ckpt["splats"][k].to(runner.device)
+        for k in runner.splats.keys():
+            runner.splats[k].data = ckpt["splats"][k]
 
         runner.eval(step=ckpt["step"])
         runner.render_traj(step=ckpt["step"])
         if cfg.compress:
             runner.compress(step=ckpt["step"])
-
     else:
         runner.train()
 

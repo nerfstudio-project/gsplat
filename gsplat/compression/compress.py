@@ -14,9 +14,6 @@ from plas import sort_with_plas
 def compress_splats(
     compress_dir: str, splats: dict[str, Tensor], sort_plas: bool = True
 ) -> None:
-    if not os.path.exists(compress_dir):
-        os.makedirs(compress_dir, exist_ok=True)
-
     if sort_plas:
         splats = sort_splats_with_plas(splats)
 

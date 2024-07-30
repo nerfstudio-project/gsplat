@@ -6,11 +6,7 @@ import torch
 from torch import Tensor
 
 from .base import Strategy
-from .ops import (
-    inject_noise_to_position,
-    relocate,
-    sample_add,
-)
+from .ops import inject_noise_to_position, relocate, sample_add
 
 
 @dataclass
@@ -124,12 +120,12 @@ class MCMCStrategy(Strategy):
         binoms = state["binoms"]
 
         if (
-            step <= self.refine_stop_iter
-            and step >= self.refine_start_iter
+            step < self.refine_stop_iter
+            and step > self.refine_start_iter
             and step % self.refine_every == 0
         ):
             # teleport GSs
-            n_relocated_gs = self._relocate_gs(params, optimizers, binoms, state)
+            n_relocated_gs = self._relocate_gs(params, optimizers, binoms)
             if self.verbose:
                 print(f"Step {step}: Relocated {n_relocated_gs} GSs.")
 
@@ -154,11 +150,9 @@ class MCMCStrategy(Strategy):
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
         binoms: Tensor,
-        state: Dict[str, Any],
     ) -> int:
         opacities = torch.sigmoid(params["opacities"])
         dead_mask = opacities <= self.min_opacity
-
         n_gs = dead_mask.sum().item()
         if n_gs > 0:
             relocate(
