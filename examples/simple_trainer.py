@@ -28,7 +28,7 @@ from utils import (
     set_random_seed,
 )
 
-from gsplat.rendering import rasterization, rasterization_2dgs
+from gsplat.rendering import rasterization, rasterization_2dgs, rasterization_2dgs_inria_wrapper
 
 
 @dataclass
@@ -76,9 +76,11 @@ class Config:
     ssim_lambda: float = 0.2
 
     # Near plane clipping distance
-    near_plane: float = 0.01
+    # near_plane: float = 0.01
+    near_plane: float = 0.2
     # Far plane clipping distance
-    far_plane: float = 1e10
+    # far_plane: float = 1e10
+    far_plane: float = 100.0
 
     # GSs with opacity below this value will be pruned
     prune_opa: float = 0.05
@@ -107,7 +109,7 @@ class Config:
     # Anti-aliasing in rasterization. Might slightly hurt quantitative metrics.
     antialiased: bool = False
     # Model for splatting. Currently support 3DGS and 2DGS
-    model_type: Literal["3dgs", "2dgs"] = "3dgs"
+    model_type: Literal["3dgs", "2dgs", "2dgs-inria"] = "3dgs"
 
     # Use random background for training to discourage transparency
     random_bkgd: bool = False
@@ -370,6 +372,8 @@ class Runner:
             rasterize_fnc = rasterization
         elif self.model_type == "2dgs":
             rasterize_fnc = rasterization_2dgs
+        elif self.model_type == "2dgs-inria":
+            rasterize_fnc = rasterization_2dgs_inria_wrapper
             
         # render_colors, render_alphas, info = rasterization(
         #     means=means,
@@ -410,8 +414,12 @@ class Runner:
             render_colors, render_alphas, render_normals, render_normals_from_depth = results
         else: 
             render_colors, render_alphas = results
-            render_normals = None
-            render_normals_from_depth = None
+            if self.model_type == "2dgs-inria":
+                render_normals = info["normals_rend"]
+                render_normals_from_depth = info["normals_surf"]
+            else:
+                render_normals = None
+                render_normals_from_depth = None
          
         return render_colors, render_alphas, render_normals, render_normals_from_depth, info
 
@@ -542,6 +550,8 @@ class Runner:
                 # normal consistency loss
                 render_normals = render_normals.squeeze(0).permute((2, 0, 1))
                 render_normals_from_depth *= alphas.squeeze(0).detach()
+                if len(render_normals_from_depth.shape) == 4:
+                    render_normals_from_depth = render_normals_from_depth.squeeze(0)
                 render_normals_from_depth = render_normals_from_depth.permute((2, 0, 1))
                 normal_error = (1 - (render_normals * render_normals_from_depth).sum(dim=0))[None]
                 normal_loss = cfg.normal_lambda * normal_error.mean()
@@ -592,6 +602,7 @@ class Runner:
                     grads = self.running_stats["grad2d"] / self.running_stats[
                         "count"
                     ].clamp_min(1)
+                    print(f"grads mean: {torch.mean(grads)}")
                     # grow GSs
                     is_grad_high = grads >= cfg.grow_grad2d
                     print(f"Num GS modified: {is_grad_high.sum().item()}")
@@ -727,9 +738,9 @@ class Runner:
         else:
             grads = info["means2d"].grad.clone()
         grads = grads.unsqueeze(0)
-        grads[..., 0] *= info["width"] / 2.0 * cfg.batch_size
-        grads[..., 1] *= info["height"] / 2.0 * cfg.batch_size
-        # print(f"grads is nan: {grads.isnan().sum().item()}")
+        if self.model_type != "2dgs-inria":
+            grads[..., 0] *= info["width"] / 2.0 * cfg.batch_size
+            grads[..., 1] *= info["height"] / 2.0 * cfg.batch_size
         if cfg.packed:
             # grads is [nnz, 2]
             gs_ids = info["gaussian_ids"]  # [nnz] or None
@@ -922,6 +933,8 @@ class Runner:
             render_normals_from_depth = (render_normals_from_depth * 0.5 + 0.5).cpu().numpy()
             render_normals_from_depth = (render_normals_from_depth - np.min(render_normals_from_depth)) / (np.max(render_normals_from_depth) - np.min(render_normals_from_depth))
             normals_from_depth_output = (render_normals_from_depth * 255).astype(np.uint8)
+            if len(normals_from_depth_output.shape) == 4:
+                normals_from_depth_output = normals_from_depth_output.squeeze(0)
             imageio.imwrite(
                 f"{self.render_dir}/val_{i:04d}_normals_from_depth_{step}.png", normals_from_depth_output
             )

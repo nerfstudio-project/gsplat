@@ -125,4 +125,5 @@ compile_commands.json
 /result
 /results
 /renders
-*.png
+
+/gsplat/diff-surfel-rasterization

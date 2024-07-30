@@ -2118,8 +2118,8 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     }
 
     float depth = ray_transformations[8];
-    v_densifications[0] = _v_ray_transformation[0].z * depth;
-    v_densifications[1] = _v_ray_transformation[1].z * depth;
+    v_densifications[0] = v_ray_transformations[2] * depth;
+    v_densifications[1] = v_ray_transformations[5] * depth;
     // printf("den grad: %.8f, %.8f \n", v_densifications[0], v_densifications[1]);
     // TODO WZ: viewmat gradients
 }

@@ -306,6 +306,6 @@ def test_rasterize_to_pixels_2dgs(test_data):
     # pdb.set_trace()
 
 if __name__ == "__main__":
-    # test_projection_2dgs(test_data())
+    test_projection_2dgs(test_data())
     test_rasterize_to_pixels_2dgs(test_data())
     print("All tests passed.")
