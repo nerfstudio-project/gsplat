@@ -33,6 +33,7 @@ class Config:
     disable_viewer: bool = False
     # Path to the .pt file. If provide, it will skip training and render a video
     ckpt: Optional[str] = None
+    # Run compression
     compress: bool = False
 
     # Path to the Mip-NeRF 360 dataset
@@ -539,7 +540,7 @@ class Runner:
 
             # compress
             if cfg.compress and step == max_steps - 1:
-                self.compress(step=step)
+                self.run_compression(step=step)
 
             if not cfg.disable_viewer:
                 self.viewer.lock.release()
@@ -678,15 +679,15 @@ class Runner:
         print(f"Video saved to {video_dir}/traj_{step}.mp4")
 
     @torch.no_grad()
-    def compress(self, step: int):
+    def run_compression(self, step: int):
         """Entry for running compression."""
         print("Running compression...")
         compress_dir = f"{cfg.result_dir}/compression"
         os.makedirs(compress_dir, exist_ok=True)
-        compress_splats(self.compress_dir, self.splats)
+        compress_splats(compress_dir, self.splats)
 
         # eval
-        splats_c = decompress_splats(self.compress_dir)
+        splats_c = decompress_splats(compress_dir)
         for k in splats_c.keys():
             self.splats[k].data = splats_c[k].to(self.device)
         self.eval(step=step, stage="compress")
@@ -724,7 +725,7 @@ def main(cfg: Config):
         runner.eval(step=ckpt["step"])
         runner.render_traj(step=ckpt["step"])
         if cfg.compress:
-            runner.compress(step=ckpt["step"])
+            runner.run_compression(step=ckpt["step"])
     else:
         runner.train()
 
