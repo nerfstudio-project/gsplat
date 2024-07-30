@@ -6,7 +6,7 @@ from collections import defaultdict
 
 
 def main():
-    results_dir = "examples/results/360_v2/3dgs_1m_compressed"
+    results_dir = "examples/results/360_v2/3dgs_0.5m"
     scenes = ["garden", "bicycle", "stump", "bonsai", "counter", "kitchen", "room"]
     stage = "compress"
 

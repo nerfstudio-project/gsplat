@@ -26,9 +26,18 @@ def compress_splats(
         use_sort (bool, optional): Whether to sort splats before compression. Defaults to True.
         use_kmeans (bool, optional): Whether to use K-means to compress spherical harmonics. Defaults to True.
     """
+    n_gs = len(splats["means"])
+    n_sidelen = int(n_gs**0.5)
+    if n_sidelen**2 != n_gs:
+        n_remove = n_gs - n_sidelen**2
+        print(f"Number of Gaussians is not square. Removing {n_remove} Gaussians.")
+        opacities = splats["opacities"]
+        keep_indices = torch.argsort(opacities, descending=True)[: n_gs - n_remove]
+        for k, v in splats.items():
+            splats[k] = v[keep_indices]
+
     if use_sort:
         splats = sort_splats(splats)
-
     meta = {}
     for param_name in splats.keys():
         compress_fn = eval(f"_compress_{param_name}")
