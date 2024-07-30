@@ -23,8 +23,8 @@ from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from utils import AppearanceOptModule, CameraOptModule, set_random_seed
 
 from gsplat.rendering import rasterization
-from gsplat.strategy import MCMCStrategy, SortStrategy
-from gsplat.compression import compress_splats, decompress_splats, sort_splats
+from gsplat.strategy import MCMCStrategy
+from gsplat.compression import compress_splats, decompress_splats
 
 
 @dataclass
@@ -33,6 +33,7 @@ class Config:
     disable_viewer: bool = False
     # Path to the .pt file. If provide, it will skip training and render a video
     ckpt: Optional[str] = None
+    compress: bool = False
 
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
@@ -92,8 +93,6 @@ class Config:
     opacity_reg = 0.01
     # Scale regularization
     scale_reg = 0.01
-    # shN regularization
-    shN_reg = 0.001
 
     # Start refining GSs after this iteration
     refine_start_iter: int = 500
@@ -136,11 +135,6 @@ class Config:
     depth_loss: bool = False
     # Weight for depth loss
     depth_lambda: float = 1e-2
-
-    # Enable sort loss. (experimental)
-    sort: bool = False
-    # Weight for sort neighborhood loss
-    sort_nb_lambda: float = 10.0
 
     # Dump information to tensorboard every this steps
     tb_every: int = 100
@@ -227,10 +221,6 @@ class Runner:
         )
         self.strategy.check_sanity(self.splats, self.optimizers)
         self.strategy_state = self.strategy.initialize_state()
-
-        if cfg.sort:
-            self.sort_strategy = SortStrategy(cap_max=cfg.cap_max)
-            self.sort_state = self.sort_strategy.initialize_state()
 
         self.pose_optimizers = []
         if cfg.pose_opt:
@@ -450,12 +440,6 @@ class Runner:
                 disp_gt = 1.0 / depths_gt  # [1, M]
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
-            if cfg.sort:
-                nbloss = self.sort_strategy.nb_loss(
-                    self.splats,
-                    sort_state=self.sort_state,
-                )
-                loss += nbloss * cfg.sort_nb_lambda
 
             loss = (
                 loss
@@ -466,7 +450,6 @@ class Runner:
                 loss
                 + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
             )
-            loss += cfg.shN_reg * torch.abs(self.splats["shN"]).mean()
 
             loss.backward()
 
@@ -488,8 +471,6 @@ class Runner:
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
-                if cfg.sort:
-                    self.writer.add_scalar("train/nbloss", nbloss.item(), step)
                 if cfg.tb_save_image:
                     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
                     canvas = canvas.reshape(-1, *canvas.shape[2:])
@@ -504,25 +485,6 @@ class Runner:
                 info=info,
                 lr=schedulers[0].get_last_lr()[0],
             )
-
-            if cfg.sort:
-                self.sort_strategy.step_post_backward(
-                    params=self.splats,
-                    optimizers=self.optimizers,
-                    sort_state=self.sort_state,
-                    strategy_state=self.strategy_state,
-                    step=step,
-                    info=info,
-                )
-                if step % 100 == 0:
-                    # print("Num sorted:", (self.sort_state["sorted_mask"]).sum())
-
-                    grid_rgb = self.sort_strategy.debug(self.splats)
-                    if grid_rgb is not None:
-                        imageio.imwrite(
-                            os.path.join(self.ckpt_dir, f"grid_step{step:04d}.png"),
-                            grid_rgb,
-                        )
 
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:
@@ -561,7 +523,7 @@ class Runner:
                     "num_GS": len(self.splats["means"]),
                 }
                 print("Step: ", step, stats)
-                with open(f"{self.stats_dir}/train_step{step:04d}.json", "w") as f:
+                with open(f"{self.stats_dir}/train_step{step}.json", "w") as f:
                     json.dump(stats, f)
                 torch.save(
                     {
@@ -575,6 +537,10 @@ class Runner:
             if step in [i - 1 for i in cfg.eval_steps] or step == max_steps - 1:
                 self.eval(step)
                 self.render_traj(step)
+
+            # compress
+            if cfg.compress and step == max_steps - 1:
+                self.compress(step=step)
 
             if not cfg.disable_viewer:
                 self.viewer.lock.release()
@@ -623,7 +589,7 @@ class Runner:
             # write images
             canvas = torch.cat([pixels, colors], dim=2).squeeze(0).cpu().numpy()
             imageio.imwrite(
-                f"{self.render_dir}/val_step{step:04d}_{i:04d}.png",
+                f"{self.render_dir}/val_step{step}_{i:04d}.png",
                 (canvas * 255).astype(np.uint8),
             )
 
@@ -651,7 +617,7 @@ class Runner:
             "ellipse_time": ellipse_time,
             "num_GS": len(self.splats["means"]),
         }
-        with open(f"{self.stats_dir}/val_step{step:04d}.json", "w") as f:
+        with open(f"{self.stats_dir}/val_step{step}.json", "w") as f:
             json.dump(stats, f)
         # save stats to tensorboard
         for k, v in stats.items():
@@ -712,6 +678,19 @@ class Runner:
         print(f"Video saved to {video_dir}/traj_{step}.mp4")
 
     @torch.no_grad()
+    def compress(self, step: int):
+        """Entry for running compression."""
+        print("Running compression...")
+        compress_dir = os.path.join(cfg.result_dir, "compression")
+        compress_splats(compress_dir, self.splats)
+
+        # eval compression
+        splats_c = decompress_splats(compress_dir)
+        for k in splats_c.keys():
+            self.splats[k].data = splats_c[k].to(self.device)
+        self.eval(step=f"{step}_compressed")
+
+    @torch.no_grad()
     def _viewer_render_fn(
         self, camera_state: nerfview.CameraState, img_wh: Tuple[int, int]
     ):
@@ -739,26 +718,15 @@ def main(cfg: Config):
     if cfg.ckpt is not None:
         # run eval only
         ckpt = torch.load(cfg.ckpt, map_location=runner.device)
-        splats = ckpt["splats"]
-        
-        # Sort
-        compress_dir = os.path.join(cfg.result_dir, "compress")
-        splats = sort_splats(cfg, splats)
-        compress_splats(compress_dir, splats)
-        splats_c = decompress_splats(compress_dir)
 
-        for k in splats_c.keys():
-            runner.splats[k].data = splats_c[k].to(runner.device)
-            
+        for k in ckpt["splats"].keys():
+            runner.splats[k].data = ckpt["splats"][k].to(runner.device)
+
         runner.eval(step=ckpt["step"])
-        # runner.render_traj(step=ckpt["step"])
-        torch.save(
-            {
-                "splats": runner.splats.state_dict(),
-            },
-            f"{runner.ckpt_dir}/ckpt_29999.pt",
-        )
-        
+        runner.render_traj(step=ckpt["step"])
+        if cfg.compress:
+            runner.compress(step=ckpt["step"])
+
     else:
         runner.train()
 

@@ -1,4 +1,3 @@
-
 import numpy as np
 import torch
 from torch.ao.quantization.fake_quantize import FakeQuantize
@@ -36,26 +35,27 @@ from torchpq.clustering import KMeans
 def check_equal(sorted_indices):
     x = np.load("x.npz")
     arr0 = x["arr"][sorted_indices]
-    
+
     arr1 = np.load("y0.npz")["arr1"]
     assert np.allclose(arr0, arr1)
-    
+
     y1 = np.load("y1.npz")
     labels = y1["labels"]
-    deltas = y1["deltas"].transpose(1,0)
-    centroids = y1["centroids"].transpose(1,0)
-    
+    deltas = y1["deltas"].transpose(1, 0)
+    centroids = y1["centroids"].transpose(1, 0)
+
     arr2 = centroids[labels] + deltas
     print(np.abs(arr0 - arr2).max())
     assert np.allclose(arr0, arr2)
-    
-    
-    
+
 
 ckpt_path = "examples/results/360_v2/3dgs/garden/ckpts/ckpt_29999.pt"
 splats = torch.load(ckpt_path)["splats"]
 n_gs = len(splats["means"])
-params = [splats[k].reshape(n_gs, -1) for k in ["quats", "means", "opacities", "quats", "scales", "sh0"]]
+params = [
+    splats[k].reshape(n_gs, -1)
+    for k in ["quats", "means", "opacities", "quats", "scales", "sh0"]
+]
 x = torch.cat(params, dim=-1).cuda()
 
 mins = torch.amin(x, dim=0)
@@ -87,8 +87,8 @@ deltas = deltas[sorted_indices]
 
 
 labels = labels.detach().cpu().numpy()
-centroids = centroids.detach().cpu().numpy().transpose(1,0)
-deltas = deltas.detach().cpu().numpy().transpose(1,0)
+centroids = centroids.detach().cpu().numpy().transpose(1, 0)
+deltas = deltas.detach().cpu().numpy().transpose(1, 0)
 print(labels.shape, labels.min(), labels.max())
 print(centroids.shape, centroids.min(), centroids.max())
 print(deltas.shape, deltas.min(), deltas.max())
@@ -107,9 +107,7 @@ sorted_indices = sorted_indices.cpu().numpy()
 check_equal(sorted_indices)
 
 
-
 # sorted_indices = np.argsort(x[:,0])
 # y = x[sorted_indices, :]
 # print(y.shape)
 # np.savez_compressed("y.npz", arr=y)
-

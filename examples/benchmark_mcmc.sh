@@ -23,12 +23,14 @@ do
     #     --cap_max $CAP_MAX \
     #     --max_steps $MAX_STEPS \
     #     --data_dir $SCENE_DIR/$SCENE/ \
-    #     --result_dir $RESULTS_DIR/3dgs_1m_reg/$SCENE/
+    #     --compress \
+    #     --result_dir $RESULTS_DIR/3dgs_1m2/$SCENE/
 
     python simple_trainer_mcmc.py --disable_viewer --data_factor $DATA_FACTOR \
         --cap_max $CAP_MAX \
         --data_dir $SCENE_DIR/$SCENE/ \
-        --result_dir $RESULTS_DIR/3dgs_1m_codebook_kmeans+sq2/$SCENE/ \
-        --ckpt $RESULTS_DIR/3dgs_1m_codebook_kmeans/$SCENE/ckpts/ckpt_29999.pt
+        --result_dir $RESULTS_DIR/3dgs_1m_compressed/$SCENE/ \
+        --compress \
+        --ckpt $RESULTS_DIR/3dgs_1m/$SCENE/ckpts/ckpt_29999.pt
 
 done
