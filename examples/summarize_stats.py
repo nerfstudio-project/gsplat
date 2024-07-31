@@ -6,9 +6,9 @@ from collections import defaultdict
 
 
 def main():
-    results_dir = "examples/results/360_v2/3dgs_2m"
+    results_dir = "examples/results/360_v2/3dgs_1m"
     scenes = ["garden", "bicycle", "stump", "bonsai", "counter", "kitchen", "room"]
-    stage = "val"
+    stage = "compress"
 
     summary = defaultdict(list)
     for scene in scenes:

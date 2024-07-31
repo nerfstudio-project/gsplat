@@ -34,7 +34,9 @@ def compress_splats(
         keep_indices = torch.argsort(opacities, descending=True)[:-n_diff]
         for k, v in splats.items():
             splats[k] = v[keep_indices]
-        print(f"Number of Gaussians was not square. Removed {n_diff} Gaussians.")
+        print(
+            f"Warning: Number of Gaussians was not square. Removed {n_diff} Gaussians."
+        )
 
     if use_sort:
         splats = sort_splats(splats)
