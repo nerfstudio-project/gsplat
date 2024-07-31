@@ -18,7 +18,7 @@ def compress_splats(
     use_sort: bool = True,
     use_kmeans: bool = True,
 ) -> None:
-    """Compress splats with sorting, quantization, and optionally, K-means clustering.
+    """Compress splats with quantization, sorting, and K-means clustering of the spherical harmonic coefficents.
 
     Args:
         compress_dir (str): compression directory
