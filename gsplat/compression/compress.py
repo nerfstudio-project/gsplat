@@ -15,7 +15,7 @@ from gsplat.utils import sh_to_rgb, rgb_to_sh, log_transform, inverse_log_transf
 def compress_splats(
     compress_dir: str,
     splats: dict[str, Tensor],
-    use_sort: bool = False,
+    use_sort: bool = True,
     use_kmeans: bool = True,
 ) -> None:
     """Compress splats with sorting, quantization, and optionally, K-means clustering.
@@ -271,8 +271,9 @@ def _decompress_sh0(compress_dir: str, meta: dict[str, Any]) -> Tensor:
 
 
 def _compress_shN(compress_dir: str, params: Tensor, use_kmeans: bool = True) -> Tensor:
+    shape = params.shape
     if params.numel() == 0:
-        return {"shape": list(params.shape)}
+        return {"shape": list(shape)}
 
     if use_kmeans:
         kmeans = KMeans(n_clusters=2**16, distance="manhattan", verbose=True)
@@ -293,7 +294,7 @@ def _compress_shN(compress_dir: str, params: Tensor, use_kmeans: bool = True) ->
         npz_dict["labels"] = labels
     np.savez_compressed(os.path.join(compress_dir, "shN.npz"), **npz_dict)
     meta = {
-        "shape": list(params.shape),
+        "shape": list(shape),
         "mins": mins.tolist(),
         "maxs": maxs.tolist(),
     }
