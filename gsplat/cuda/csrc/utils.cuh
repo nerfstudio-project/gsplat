@@ -221,12 +221,12 @@ inline __device__ void persp_proj_vjp(
         v_cov2d * J * glm::transpose(cov3d) + glm::transpose(v_cov2d) * J * cov3d;
 
     // fov clipping
-    if (x * rz <= lim_x && x * rz >= -lim_x) {
+    if (x * rz <= lim_x_pos && x * rz >= -lim_x_neg) {
         v_mean3d.x += -fx * rz2 * v_J[2][0];
     } else {
         v_mean3d.z += -fx * rz3 * v_J[2][0] * tx;
     }
-    if (y * rz <= lim_y && y * rz >= -lim_y) {
+    if (y * rz <= lim_y_pos && y * rz >= -lim_y_neg) {
         v_mean3d.y += -fy * rz2 * v_J[2][1];
     } else {
         v_mean3d.z += -fy * rz3 * v_J[2][1] * ty;
