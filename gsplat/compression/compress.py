@@ -30,11 +30,11 @@ def compress_splats(
     n_sidelen = int(n_gs**0.5)
     n_diff = n_gs - n_sidelen**2
     if n_diff != 0:
-        print(f"Number of Gaussians is not square. Removing {n_diff} Gaussians.")
         opacities = splats["opacities"]
         keep_indices = torch.argsort(opacities, descending=True)[:-n_diff]
         for k, v in splats.items():
             splats[k] = v[keep_indices]
+        print(f"Number of Gaussians was not square. Removed {n_diff} Gaussians.")
 
     if use_sort:
         splats = sort_splats(splats)
@@ -50,7 +50,7 @@ def compress_splats(
         json.dump(meta, f)
 
 
-def decompress_splats(compress_dir: str, use_kmeans: bool = True) -> dict[str, Tensor]:
+def decompress_splats(compress_dir: str) -> dict[str, Tensor]:
     """Decompress splats from directory.
 
     Args:
@@ -66,10 +66,7 @@ def decompress_splats(compress_dir: str, use_kmeans: bool = True) -> dict[str, T
     splats = {}
     for param_name, param_meta in meta.items():
         decompress_fn = eval(f"_decompress_{param_name}")
-        kwargs = {}
-        if param_name == "shN":
-            kwargs["use_kmeans"] = use_kmeans
-        splats[param_name] = decompress_fn(compress_dir, param_meta, **kwargs)
+        splats[param_name] = decompress_fn(compress_dir, param_meta)
     return splats
 
 
@@ -125,6 +122,7 @@ def _compress_means(compress_dir: str, params: Tensor) -> dict[str, Any]:
 
     meta = {
         "shape": list(params.shape),
+        "dtype": str(params.dtype).split(".")[1],
         "mins": mins.tolist(),
         "maxs": maxs.tolist(),
     }
@@ -137,12 +135,13 @@ def _decompress_means(compress_dir: str, meta: dict[str, Any]) -> Tensor:
     img = (img_u << 8) + img_l
 
     img_norm = img / (2**16 - 1)
-    grid_norm = torch.tensor(img_norm, dtype=torch.float32)
-    mins = torch.tensor(meta["mins"], dtype=torch.float32)
-    maxs = torch.tensor(meta["maxs"], dtype=torch.float32)
+    grid_norm = torch.tensor(img_norm)
+    mins = torch.tensor(meta["mins"])
+    maxs = torch.tensor(meta["maxs"])
     grid = grid_norm * (maxs - mins) + mins
 
     params = grid.reshape(meta["shape"])
+    params = params.to(dtype=getattr(torch, meta["dtype"]))
     params = inverse_log_transform(params)
     return params
 
@@ -163,6 +162,7 @@ def _compress_scales(compress_dir: str, params: Tensor) -> dict[str, Any]:
 
     meta = {
         "shape": list(params.shape),
+        "dtype": str(params.dtype).split(".")[1],
         "mins": mins.tolist(),
         "maxs": maxs.tolist(),
     }
@@ -173,12 +173,13 @@ def _decompress_scales(compress_dir: str, meta: dict[str, Any]) -> Tensor:
     img = imageio.imread(os.path.join(compress_dir, "scales.png"))
     img_norm = img / (2**8 - 1)
 
-    grid_norm = torch.tensor(img_norm, dtype=torch.float32)
-    mins = torch.tensor(meta["mins"], dtype=torch.float32)
-    maxs = torch.tensor(meta["maxs"], dtype=torch.float32)
+    grid_norm = torch.tensor(img_norm)
+    mins = torch.tensor(meta["mins"])
+    maxs = torch.tensor(meta["maxs"])
     grid = grid_norm * (maxs - mins) + mins
 
     params = grid.reshape(meta["shape"])
+    params = params.to(dtype=getattr(torch, meta["dtype"]))
     return params
 
 
@@ -196,6 +197,7 @@ def _compress_quats(compress_dir: str, params: Tensor) -> Tensor:
 
     meta = {
         "shape": list(params.shape),
+        "dtype": str(params.dtype).split(".")[1],
     }
     return meta
 
@@ -203,10 +205,11 @@ def _compress_quats(compress_dir: str, params: Tensor) -> Tensor:
 def _decompress_quats(compress_dir: str, meta: dict[str, Any]) -> Tensor:
     img = imageio.imread(os.path.join(compress_dir, "quats.png"))
     img_norm = img / (2**8 - 1)
-    grid_norm = torch.tensor(img_norm, dtype=torch.float32)
+    grid_norm = torch.tensor(img_norm)
     grid = grid_norm * 2 - 1
 
     params = grid.reshape(meta["shape"])
+    params = params.to(dtype=getattr(torch, meta["dtype"]))
     return params
 
 
@@ -225,6 +228,7 @@ def _compress_opacities(compress_dir: str, params: Tensor) -> Tensor:
 
     meta = {
         "shape": list(params.shape),
+        "dtype": str(params.dtype).split(".")[1],
         "mins": mins.tolist(),
         "maxs": maxs.tolist(),
     }
@@ -234,12 +238,13 @@ def _compress_opacities(compress_dir: str, params: Tensor) -> Tensor:
 def _decompress_opacities(compress_dir: str, meta: dict[str, Any]) -> Tensor:
     img = imageio.imread(os.path.join(compress_dir, "opacities.png"))
     img_norm = img / (2**8 - 1)
-    grid_norm = torch.tensor(img_norm, dtype=torch.float32)
-    mins = torch.tensor(meta["mins"], dtype=torch.float32)
-    maxs = torch.tensor(meta["maxs"], dtype=torch.float32)
+    grid_norm = torch.tensor(img_norm)
+    mins = torch.tensor(meta["mins"])
+    maxs = torch.tensor(meta["maxs"])
     grid = grid_norm * (maxs - mins) + mins
 
     params = grid.reshape(meta["shape"])
+    params = params.to(dtype=getattr(torch, meta["dtype"]))
     return params
 
 
@@ -257,6 +262,7 @@ def _compress_sh0(compress_dir: str, params: Tensor) -> Tensor:
 
     meta = {
         "shape": list(params.shape),
+        "dtype": str(params.dtype).split(".")[1],
     }
     return meta
 
@@ -264,16 +270,23 @@ def _compress_sh0(compress_dir: str, params: Tensor) -> Tensor:
 def _decompress_sh0(compress_dir: str, meta: dict[str, Any]) -> Tensor:
     img = imageio.imread(os.path.join(compress_dir, "sh0.png"))
     grid = img / (2**8 - 1)
-    grid = torch.tensor(grid, dtype=torch.float32)
-    rgb = grid.reshape(meta["shape"])
-    params = rgb_to_sh(rgb)
+    grid = torch.tensor(grid)
+    params = rgb_to_sh(grid)
+
+    params = params.reshape(meta["shape"])
+    params = params.to(dtype=getattr(torch, meta["dtype"]))
     return params
 
 
 def _compress_shN(compress_dir: str, params: Tensor, use_kmeans: bool = True) -> Tensor:
     shape = params.shape
+    dtype = params.dtype
     if params.numel() == 0:
-        return {"shape": list(shape)}
+        meta = {
+            "shape": list(shape),
+            "dtype": str(dtype).split(".")[1],
+        }
+        return meta
 
     if use_kmeans:
         kmeans = KMeans(n_clusters=2**16, distance="manhattan", verbose=True)
@@ -295,29 +308,31 @@ def _compress_shN(compress_dir: str, params: Tensor, use_kmeans: bool = True) ->
     np.savez_compressed(os.path.join(compress_dir, "shN.npz"), **npz_dict)
     meta = {
         "shape": list(shape),
+        "dtype": str(dtype).split(".")[1],
         "mins": mins.tolist(),
         "maxs": maxs.tolist(),
     }
     return meta
 
 
-def _decompress_shN(
-    compress_dir: str, meta: dict[str, Any], use_kmeans: bool = True
-) -> Tensor:
-    if meta["shape"][1] == 0:
-        return torch.zeros(meta["shape"], dtype=torch.float32)
+def _decompress_shN(compress_dir: str, meta: dict[str, Any]) -> Tensor:
+    if not np.all(meta["shape"]):
+        params = torch.zeros(meta["shape"])
+        params = params.to(dtype=getattr(torch, meta["dtype"]))
+        return params
 
     npz_dict = np.load(os.path.join(compress_dir, "shN.npz"))
     params_quant = npz_dict["params"]
 
     params_norm = params_quant / (2**6 - 1)
-    params_norm = torch.tensor(params_norm, dtype=torch.float32)
-    mins = torch.tensor(meta["mins"], dtype=torch.float32)
-    maxs = torch.tensor(meta["maxs"], dtype=torch.float32)
+    params_norm = torch.tensor(params_norm)
+    mins = torch.tensor(meta["mins"])
+    maxs = torch.tensor(meta["maxs"])
     params = params_norm * (maxs - mins) + mins
 
-    if use_kmeans:
+    if "labels" in npz_dict:
         labels = npz_dict["labels"]
         params = params[labels]
     params = params.reshape(meta["shape"])
+    params = params.to(dtype=getattr(torch, meta["dtype"]))
     return params
