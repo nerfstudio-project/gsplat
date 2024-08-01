@@ -14,7 +14,7 @@ import tqdm
 import tyro
 import viser
 from datasets.colmap import Dataset, Parser
-from datasets.traj import generate_interpolated_path
+from datasets.traj import generate_interpolated_path, generate_spiral_path
 from simple_trainer import create_splats_with_optimizers
 from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
@@ -24,6 +24,8 @@ from utils import AppearanceOptModule, CameraOptModule, set_random_seed
 
 from gsplat.rendering import rasterization
 from gsplat.strategy import MCMCStrategy
+from gsplat.util.lib_bilagrid import BilateralGrid, slice
+from gsplat.util.color_utils import color_correct
 
 
 @dataclass
@@ -32,6 +34,8 @@ class Config:
     disable_viewer: bool = False
     # Path to the .pt file. If provide, it will skip training and render a video
     ckpt: Optional[str] = None
+    # Render trajectory path
+    render_traj_path: str = "interp"
 
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
@@ -128,6 +132,11 @@ class Config:
     app_opt_lr: float = 1e-3
     # Regularization for appearance optimization as weight decay
     app_opt_reg: float = 1e-6
+
+    # Enable exposure optimization. (experimental)
+    exp_opt: bool = False
+    # Weight for total variation loss
+    exp_tv_lambda: float = 10.0
 
     # Enable depth loss. (experimental)
     depth_loss: bool = False
@@ -255,6 +264,18 @@ class Runner:
                 ),
             ]
 
+        self.exp_optimizers = []
+        if cfg.exp_opt:
+            self.exp_grids = BilateralGrid(len(self.trainset)).to(self.device)
+            self.exp_optimizers = [
+                torch.optim.Adam(
+                    self.exp_grids.parameters(),
+                    lr=0.001 * math.sqrt(cfg.batch_size),
+                    betas=[0.9, 0.99],
+                    eps=1e-15,
+                ),
+            ]
+
         # Losses & Metrics.
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
         self.psnr = PeakSignalNoiseRatio(data_range=1.0).to(self.device)
@@ -342,6 +363,12 @@ class Runner:
                     self.pose_optimizers[0], gamma=0.01 ** (1.0 / max_steps)
                 )
             )
+        if cfg.exp_opt:
+            schedulers.append(
+                torch.optim.lr_scheduler.ExponentialLR(
+                    self.exp_optimizers[0], gamma=0.01 ** (1.0 / max_steps)
+                )
+            )
 
         trainloader = torch.utils.data.DataLoader(
             self.trainset,
@@ -408,6 +435,18 @@ class Runner:
             else:
                 colors, depths = renders, None
 
+            if cfg.exp_opt:
+                grid_x, grid_y = torch.meshgrid(
+                    torch.arange(width, device="cuda").float(),
+                    torch.arange(height, device="cuda").float(),
+                    indexing="xy",
+                )
+                pix_xy = torch.stack([grid_x, grid_y], dim=-1)
+                pix_xy = pix_xy.reshape(1, height, width, 2) + 0.5
+                pix_xy[..., 0] /= width
+                pix_xy[..., 1] /= height
+                colors = slice(self.exp_grids, pix_xy, colors, image_ids)["rgb"]
+
             if cfg.random_bkgd:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
@@ -437,6 +476,9 @@ class Runner:
                 disp_gt = 1.0 / depths_gt  # [1, M]
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
+            if cfg.exp_opt:
+                tvloss = self.exp_grids.tv_loss()
+                loss += cfg.exp_tv_lambda * tvloss
 
             loss = (
                 loss
@@ -468,6 +510,8 @@ class Runner:
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
+                if cfg.exp_opt:
+                    self.writer.add_scalar("train/tvloss", tvloss.item(), step)
                 if cfg.tb_save_image:
                     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
                     canvas = canvas.reshape(-1, *canvas.shape[2:])
@@ -506,6 +550,9 @@ class Runner:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
             for optimizer in self.app_optimizers:
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+            for optimizer in self.exp_optimizers:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
             for scheduler in schedulers:
@@ -557,7 +604,7 @@ class Runner:
             self.valset, batch_size=1, shuffle=False, num_workers=1
         )
         ellipse_time = 0
-        metrics = {"psnr": [], "ssim": [], "lpips": []}
+        metrics = {"psnr": [], "cc_psnr": [], "ssim": [], "lpips": []}
         for i, data in enumerate(valloader):
             camtoworlds = data["camtoworld"].to(device)
             Ks = data["K"].to(device)
@@ -579,31 +626,38 @@ class Runner:
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
 
+            cc_colors = color_correct(colors, pixels)
+
             # write images
             canvas = torch.cat([pixels, colors], dim=2).squeeze(0).cpu().numpy()
             imageio.imwrite(
-                f"{self.render_dir}/val_{i:04d}.png", (canvas * 255).astype(np.uint8)
+                f"{self.render_dir}/val_step{step:04d}_{i:04d}.png",
+                (canvas * 255).astype(np.uint8),
             )
 
             pixels = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
             colors = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
+            cc_colors = cc_colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
             metrics["psnr"].append(self.psnr(colors, pixels))
+            metrics["cc_psnr"].append(self.psnr(cc_colors, pixels))
             metrics["ssim"].append(self.ssim(colors, pixels))
             metrics["lpips"].append(self.lpips(colors, pixels))
 
         ellipse_time /= len(valloader)
 
         psnr = torch.stack(metrics["psnr"]).mean()
+        cc_psnr = torch.stack(metrics["cc_psnr"]).mean()
         ssim = torch.stack(metrics["ssim"]).mean()
         lpips = torch.stack(metrics["lpips"]).mean()
         print(
-            f"PSNR: {psnr.item():.3f}, SSIM: {ssim.item():.4f}, LPIPS: {lpips.item():.3f} "
+            f"PSNR: {psnr.item():.3f}, CC PSNR: {cc_psnr.item():.3f}, SSIM: {ssim.item():.4f}, LPIPS: {lpips.item():.3f} "
             f"Time: {ellipse_time:.3f}s/image "
             f"Number of GS: {len(self.splats['means'])}"
         )
         # save stats as json
         stats = {
             "psnr": psnr.item(),
+            "cc_psnr": cc_psnr.item(),
             "ssim": ssim.item(),
             "lpips": lpips.item(),
             "ellipse_time": ellipse_time,
@@ -624,7 +678,17 @@ class Runner:
         device = self.device
 
         camtoworlds = self.parser.camtoworlds[5:-5]
-        camtoworlds = generate_interpolated_path(camtoworlds, 1)  # [N, 3, 4]
+        if cfg.render_traj_path == "interp":
+            camtoworlds = generate_interpolated_path(camtoworlds, 1)  # [N, 3, 4]
+        elif cfg.render_traj_path == "spiral":
+            camtoworlds = generate_spiral_path(
+                camtoworlds,
+                bounds=self.parser.bounds * self.scene_scale,
+                spiral_scale_r=self.parser.extconf["spiral_radius_scale"],
+            )
+        else:
+            raise ValueError(f"Trajectory type not supported: {cfg.render_traj_path}")
+
         camtoworlds = np.concatenate(
             [
                 camtoworlds,
@@ -650,18 +714,19 @@ class Runner:
                 render_mode="RGB+ED",
             )  # [1, H, W, 4]
             colors = torch.clamp(renders[0, ..., 0:3], 0.0, 1.0)  # [H, W, 3]
+            canvas_list = [colors]
+
             depths = renders[0, ..., 3:4]  # [H, W, 1]
             depths = (depths - depths.min()) / (depths.max() - depths.min())
+            canvas_list.append(depths.repeat(1, 1, 3))
 
             # write images
-            canvas = torch.cat(
-                [colors, depths.repeat(1, 1, 3)], dim=0 if width > height else 1
-            )
+            canvas = torch.cat(canvas_list, dim=1)
             canvas = (canvas.cpu().numpy() * 255).astype(np.uint8)
             canvas_all.append(canvas)
 
         # save to video
-        video_dir = f"{cfg.result_dir}/videos"
+        video_dir = os.path.join(cfg.result_dir, "videos")
         os.makedirs(video_dir, exist_ok=True)
         writer = imageio.get_writer(f"{video_dir}/traj_{step}.mp4", fps=30)
         for canvas in canvas_all:
