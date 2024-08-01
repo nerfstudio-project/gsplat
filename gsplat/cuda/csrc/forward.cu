@@ -63,10 +63,14 @@ __global__ void project_gaussians_forward_kernel(
     float cy = intrins.w;
     float tan_fovx = 0.5 * img_size.x / fx;
     float tan_fovy = 0.5 * img_size.y / fy;
+    float lim_x_pos = (img_size.x - cx) / fx + 0.3f * tan_fovx;
+    float lim_x_neg = cx / fx + 0.3f * tan_fovx;
+    float lim_y_pos = (img_size.y - cy) / fy + 0.3f * tan_fovy;
+    float lim_y_neg = cy / fy + 0.3f * tan_fovy;
     float3 cov2d;
     float comp;
     project_cov3d_ewa(
-        p_world, cur_cov3d, viewmat, fx, fy, tan_fovx, tan_fovy,
+        p_world, cur_cov3d, viewmat, fx, fy, lim_x_pos, lim_x_neg, lim_y_pos, lim_y_neg,
         cov2d, comp
     );
     // printf("cov2d %d, %.2f %.2f %.2f\n", idx, cov2d.x, cov2d.y, cov2d.z);
@@ -425,8 +429,10 @@ __device__ void project_cov3d_ewa(
     const float* __restrict__ viewmat,
     const float fx,
     const float fy,
-    const float tan_fovx,
-    const float tan_fovy,
+    const float lim_x_pos,
+    const float lim_x_neg,
+    const float lim_y_pos,
+    const float lim_y_neg,
     float3 &cov2d,
     float &compensation
 ) {
@@ -447,11 +453,8 @@ __device__ void project_cov3d_ewa(
     glm::vec3 p = glm::vec3(viewmat[3], viewmat[7], viewmat[11]);
     glm::vec3 t = W * glm::vec3(mean3d.x, mean3d.y, mean3d.z) + p;
 
-    // clip so that the covariance
-    float lim_x = 1.3f * tan_fovx;
-    float lim_y = 1.3f * tan_fovy;
-    t.x = t.z * std::min(lim_x, std::max(-lim_x, t.x / t.z));
-    t.y = t.z * std::min(lim_y, std::max(-lim_y, t.y / t.z));
+    t.x = t.z * std::min(lim_x_pos, std::max(-lim_x_neg, t.x / t.z));
+    t.y = t.z * std::min(lim_y_pos, std::max(-lim_y_neg, t.y / t.z));
 
     float rz = 1.f / t.z;
     float rz2 = rz * rz;

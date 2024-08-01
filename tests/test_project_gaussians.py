@@ -217,13 +217,15 @@ def test_project_gaussians_backward():
         """
         tan_fovx = 0.5 * W / fx
         tan_fovy = 0.5 * H / fy
+        lim_x = ((W - cx) / fx + 0.3 * tan_fovx, cx / fx + 0.3 * tan_fovx)
+        lim_y = ((H - cy) / fy + 0.3 * tan_fovy, cy / fy + 0.3 * tan_fovy)
 
         cov3d_mat = torch.zeros(*cov3d.shape[:-1], 3, 3, device=device)
         i, j = torch.triu_indices(3, 3)
         cov3d_mat[..., i, j] = cov3d
         cov3d_mat[..., [1, 2, 2], [0, 0, 1]] = cov3d[..., [1, 2, 4]]
         cov2d, _ = _torch_impl.project_cov3d_ewa(
-            mean3d, cov3d_mat, viewmat, fx, fy, tan_fovx, tan_fovy
+            mean3d, cov3d_mat, viewmat, fx, fy, lim_x, lim_y
         )
         ii, jj = torch.triu_indices(2, 2)
         return cov2d[..., ii, jj]

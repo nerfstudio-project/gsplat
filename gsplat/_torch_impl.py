@@ -245,8 +245,8 @@ def project_cov3d_ewa(
     viewmat: Tensor,
     fx: float,
     fy: float,
-    tan_fovx: float,
-    tan_fovy: float,
+    lim_x: Tuple[float, float],
+    lim_y: Tuple[float, float],
     is_valid: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor]:
     assert mean3d.shape[-1] == 3, mean3d.shape
@@ -263,10 +263,8 @@ def project_cov3d_ewa(
     rz = 1.0 / t[..., 2]  # (...,)
     rz2 = rz**2  # (...,)
 
-    lim_x = 1.3 * torch.tensor([tan_fovx], device=mean3d.device)
-    lim_y = 1.3 * torch.tensor([tan_fovy], device=mean3d.device)
-    x_clamp = t[..., 2] * torch.clamp(t[..., 0] * rz, min=-lim_x, max=lim_x)
-    y_clamp = t[..., 2] * torch.clamp(t[..., 1] * rz, min=-lim_y, max=lim_y)
+    x_clamp = t[..., 2] * torch.clamp(t[..., 0] * rz, min=-lim_x[1], max=lim_x[0])
+    y_clamp = t[..., 2] * torch.clamp(t[..., 1] * rz, min=-lim_y[1], max=lim_y[0])
     t = torch.stack([x_clamp, y_clamp, t[..., 2]], dim=-1)
 
     O = torch.zeros_like(rz)
@@ -352,7 +350,7 @@ def project_pix(fxfy, p_view, center, eps=1e-6):
     return torch.stack([u, v], dim=-1)
 
 
-def clip_near_plane(p, viewmat, clip_thresh=0.01):
+def clip_near_plane(p, viewmat, clip_thresh=0.01) -> Tuple[Tensor, Tensor]:
     R = viewmat[:3, :3]
     T = viewmat[:3, 3]
     p_view = torch.einsum("ij,nj->ni", R, p) + T[None]
@@ -404,10 +402,12 @@ def project_gaussians_forward(
     fx, fy, cx, cy = intrins
     tan_fovx = 0.5 * img_size[0] / fx
     tan_fovy = 0.5 * img_size[1] / fy
+    lim_x = ((img_size[0] - cx) / fx + 0.3 * tan_fovx, cx / fx + 0.3 * tan_fovx)
+    lim_y = ((img_size[1] - cy) / fy + 0.3 * tan_fovy, cy / fy + 0.3 * tan_fovy)
     p_view, is_close = clip_near_plane(means3d, viewmat, clip_thresh)
     cov3d = scale_rot_to_cov3d(scales, glob_scale, quats)
     cov2d, compensation = project_cov3d_ewa(
-        means3d, cov3d, viewmat, fx, fy, tan_fovx, tan_fovy, ~is_close
+        means3d, cov3d, viewmat, fx, fy, lim_x, lim_y, ~is_close
     )
     conic, radius, det_valid = compute_cov2d_bounds(cov2d, ~is_close)
     xys = project_pix((fx, fy), p_view, (cx, cy))

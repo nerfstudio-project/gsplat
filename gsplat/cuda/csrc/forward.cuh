@@ -64,8 +64,10 @@ __device__ void project_cov3d_ewa(
     const float *viewmat,
     const float fx,
     const float fy,
-    const float tan_fovx,
-    const float tan_fovy,
+    const float lim_x_pos,
+    const float lim_x_neg,
+    const float lim_y_pos,
+    const float lim_y_neg,
     float3 &cov2d,
     float &comp
 );
