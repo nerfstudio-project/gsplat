@@ -13,7 +13,7 @@ from gsplat.utils import sh_to_rgb, rgb_to_sh, log_transform, inverse_log_transf
 def compress_splats(
     compress_dir: str,
     splats: dict[str, Tensor],
-    use_sort: bool = False,
+    use_sort: bool = True,
     use_kmeans: bool = True,
 ) -> None:
     """Compress splats with quantization, sorting, and K-means clustering of the spherical harmonic coefficents.
@@ -80,7 +80,7 @@ def decompress_splats(compress_dir: str) -> dict[str, Tensor]:
     return splats
 
 
-def sort_splats(splats: dict[str, Tensor], verbose: bool = False) -> dict[str, Tensor]:
+def sort_splats(splats: dict[str, Tensor], verbose: bool = True) -> dict[str, Tensor]:
     """Sort splats with Parallel Linear Assignment Sorting from the paper `Compact 3D Scene Representation via
     Self-Organizing Gaussian Grids <https://arxiv.org/pdf/2312.13299>`_.
 
@@ -89,7 +89,7 @@ def sort_splats(splats: dict[str, Tensor], verbose: bool = False) -> dict[str, T
 
     Args:
         splats (dict[str, Tensor]): splats
-        verbose (bool, optional): Whether to print verbose information. Default to False.
+        verbose (bool, optional): Whether to print verbose information. Default to True.
 
     Returns:
         dict[str, Tensor]: sorted splats
@@ -299,7 +299,7 @@ def _decompress_sh0(compress_dir: str, meta: dict[str, Any]) -> Tensor:
 
 
 def _compress_shN(
-    compress_dir: str, params: Tensor, use_kmeans: bool = True
+    compress_dir: str, params: Tensor, use_kmeans: bool = True, verbose: bool = True
 ) -> dict[str, Any]:
     """Compress spherical harmonic coefficients to a npz file.
 
@@ -310,6 +310,7 @@ def _compress_shN(
         compress_dir (str): compression directory
         params (Tensor): parameters to compress
         use_kmeans (bool, optional): Whether to use K-means clustering during compression. Defaults to True.
+        verbose (bool, optional): Whether to print verbose information. Default to True.
 
     Returns:
         dict[str, Any]: metadata
@@ -331,7 +332,7 @@ def _compress_shN(
                 "Please install torchpq with 'pip install torchpq' to use K-means clustering"
             )
 
-        kmeans = KMeans(n_clusters=2**16, distance="manhattan", verbose=True)
+        kmeans = KMeans(n_clusters=2**16, distance="manhattan", verbose=verbose)
         x = params.reshape(params.shape[0], -1).permute(1, 0).contiguous()
         labels = kmeans.fit(x)
         labels = labels.detach().cpu().numpy()
