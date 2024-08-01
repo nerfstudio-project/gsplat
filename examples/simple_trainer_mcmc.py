@@ -33,7 +33,7 @@ class Config:
     disable_viewer: bool = False
     # Path to the .pt file. If provide, it will skip training and render a video
     ckpt: Optional[str] = None
-    # Run compression
+    # Run compression after training
     compress: bool = False
 
     # Path to the Mip-NeRF 360 dataset
@@ -538,7 +538,7 @@ class Runner:
                 self.eval(step)
                 self.render_traj(step)
 
-            # compress
+            # run compression
             if cfg.compress and step == max_steps - 1:
                 self.run_compression(step=step)
 
@@ -686,7 +686,7 @@ class Runner:
         os.makedirs(compress_dir, exist_ok=True)
         compress_splats(compress_dir, self.splats)
 
-        # eval
+        # evaluate compression
         splats_c = decompress_splats(compress_dir)
         for k in splats_c.keys():
             self.splats[k].data = splats_c[k].to(self.device)

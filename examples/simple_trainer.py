@@ -24,6 +24,7 @@ from utils import AppearanceOptModule, CameraOptModule, knn, set_random_seed
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy
 from gsplat.utils import rgb_to_sh
+from gsplat.compression import compress_splats, decompress_splats
 
 
 @dataclass
@@ -32,6 +33,8 @@ class Config:
     disable_viewer: bool = False
     # Path to the .pt file. If provide, it will skip training and render a video
     ckpt: Optional[str] = None
+    # Run compression after training
+    compress: bool = False
 
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
@@ -597,7 +600,7 @@ class Runner:
                     "num_GS": len(self.splats["means"]),
                 }
                 print("Step: ", step, stats)
-                with open(f"{self.stats_dir}/train_step{step:04d}.json", "w") as f:
+                with open(f"{self.stats_dir}/train_step{step}.json", "w") as f:
                     json.dump(stats, f)
                 torch.save(
                     {
@@ -612,6 +615,10 @@ class Runner:
                 self.eval(step)
                 self.render_traj(step)
 
+            # run compression
+            if cfg.compress and step == max_steps - 1:
+                self.run_compression(step=step)
+
             if not cfg.disable_viewer:
                 self.viewer.lock.release()
                 num_train_steps_per_sec = 1.0 / (time.time() - tic)
@@ -624,7 +631,7 @@ class Runner:
                 self.viewer.update(step, num_train_rays_per_step)
 
     @torch.no_grad()
-    def eval(self, step: int):
+    def eval(self, step: int, stage: str = "val"):
         """Entry for evaluation."""
         print("Running evaluation...")
         cfg = self.cfg
@@ -659,7 +666,8 @@ class Runner:
             # write images
             canvas = torch.cat([pixels, colors], dim=2).squeeze(0).cpu().numpy()
             imageio.imwrite(
-                f"{self.render_dir}/val_{i:04d}.png", (canvas * 255).astype(np.uint8)
+                f"{self.render_dir}/{stage}_step{step}_{i:04d}.png",
+                (canvas * 255).astype(np.uint8),
             )
 
             pixels = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
@@ -686,11 +694,11 @@ class Runner:
             "ellipse_time": ellipse_time,
             "num_GS": len(self.splats["means"]),
         }
-        with open(f"{self.stats_dir}/val_step{step:04d}.json", "w") as f:
+        with open(f"{self.stats_dir}/{stage}_step{step}.json", "w") as f:
             json.dump(stats, f)
         # save stats to tensorboard
         for k, v in stats.items():
-            self.writer.add_scalar(f"val/{k}", v, step)
+            self.writer.add_scalar(f"{stage}/{k}", v, step)
         self.writer.flush()
 
     @torch.no_grad()
@@ -747,6 +755,20 @@ class Runner:
         print(f"Video saved to {video_dir}/traj_{step}.mp4")
 
     @torch.no_grad()
+    def run_compression(self, step: int):
+        """Entry for running compression."""
+        print("Running compression...")
+        compress_dir = f"{cfg.result_dir}/compression"
+        os.makedirs(compress_dir, exist_ok=True)
+        compress_splats(compress_dir, self.splats)
+
+        # evaluate compression
+        splats_c = decompress_splats(compress_dir)
+        for k in splats_c.keys():
+            self.splats[k].data = splats_c[k].to(self.device)
+        self.eval(step=step, stage="compress")
+
+    @torch.no_grad()
     def _viewer_render_fn(
         self, camera_state: nerfview.CameraState, img_wh: Tuple[int, int]
     ):
@@ -778,6 +800,8 @@ def main(cfg: Config):
             runner.splats[k].data = ckpt["splats"][k]
         runner.eval(step=ckpt["step"])
         runner.render_traj(step=ckpt["step"])
+        if cfg.compress:
+            runner.run_compression(step=ckpt["step"])
     else:
         runner.train()
 
