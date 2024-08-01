@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import numpy as np
 import imageio
 
-from gsplat.utils import sh_to_rgb, rgb_to_sh, log_transform, inverse_log_transform
+from gsplat.utils import log_transform, inverse_log_transform
 
 
 def compress_splats(
@@ -273,27 +273,32 @@ def _compress_sh0(compress_dir: str, params: Tensor) -> dict[str, Any]:
     n_sidelen = int(n_gs**0.5)
     assert n_sidelen**2 == n_gs, "Must be a perfect square"
 
-    rgb = sh_to_rgb(params)
-    rgb = torch.clamp(rgb, 0.0, 1.0)
-    grid = rgb.reshape((n_sidelen, n_sidelen, -1))
-    grid = grid.detach().cpu().numpy()
-    img = (grid * (2**8 - 1)).round().astype(np.uint8)
+    grid = params.reshape((n_sidelen, n_sidelen, -1))
+    mins = torch.amin(grid, dim=(0, 1))
+    maxs = torch.amax(grid, dim=(0, 1))
+    grid_norm = (grid - mins) / (maxs - mins)
+    img_norm = grid_norm.detach().cpu().numpy()
+    img = (img_norm * (2**8 - 1)).round().astype(np.uint8)
     imageio.imwrite(os.path.join(compress_dir, "sh0.png"), img)
 
     meta = {
         "shape": list(params.shape),
         "dtype": str(params.dtype).split(".")[1],
+        "mins": mins.tolist(),
+        "maxs": maxs.tolist(),
     }
     return meta
 
 
 def _decompress_sh0(compress_dir: str, meta: dict[str, Any]) -> Tensor:
     img = imageio.imread(os.path.join(compress_dir, "sh0.png"))
-    grid = img / (2**8 - 1)
-    grid = torch.tensor(grid)
-    params = rgb_to_sh(grid)
+    img_norm = img / (2**8 - 1)
+    grid_norm = torch.tensor(img_norm)
+    mins = torch.tensor(meta["mins"])
+    maxs = torch.tensor(meta["maxs"])
+    grid = grid_norm * (maxs - mins) + mins
 
-    params = params.reshape(meta["shape"])
+    params = grid.reshape(meta["shape"])
     params = params.to(dtype=getattr(torch, meta["dtype"]))
     return params
 
