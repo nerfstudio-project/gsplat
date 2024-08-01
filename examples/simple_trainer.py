@@ -30,7 +30,7 @@ from utils import (
     set_random_seed,
 )
 
-from gsplat.core import cli
+from gsplat.core import cli, profiler, timeit
 from gsplat.rendering import rasterization
 
 
@@ -456,24 +456,25 @@ class Runner:
                 self.viewer.lock.acquire()
                 tic = time.time()
 
-            try:
-                data = next(trainloader_iter)
-            except StopIteration:
-                trainloader_iter = iter(trainloader)
-                data = next(trainloader_iter)
+            with timeit("load data from CPU to GPU"):
+                try:
+                    data = next(trainloader_iter)
+                except StopIteration:
+                    trainloader_iter = iter(trainloader)
+                    data = next(trainloader_iter)
 
-            camtoworlds = camtoworlds_gt = data["camtoworld"].to(device)  # [1, 4, 4]
-            Ks = data["K"].to(device)  # [1, 3, 3]
-            pixels = data["image"].to(device) / 255.0  # [1, H, W, 3]
-            num_train_rays_per_step = (
-                pixels.shape[0] * pixels.shape[1] * pixels.shape[2]
-            )
-            image_ids = data["image_id"].to(device)
-            if cfg.depth_loss:
-                points = data["points"].to(device)  # [1, M, 2]
-                depths_gt = data["depths"].to(device)  # [1, M]
+                camtoworlds = camtoworlds_gt = data["camtoworld"].to(device)  # [1, 4, 4]
+                Ks = data["K"].to(device)  # [1, 3, 3]
+                pixels = data["image"].to(device) / 255.0  # [1, H, W, 3]
+                num_train_rays_per_step = (
+                    pixels.shape[0] * pixels.shape[1] * pixels.shape[2]
+                )
+                image_ids = data["image_id"].to(device)
+                if cfg.depth_loss:
+                    points = data["points"].to(device)  # [1, M, 2]
+                    depths_gt = data["depths"].to(device)  # [1, M]
 
-            height, width = pixels.shape[1:3]
+                height, width = pixels.shape[1:3]
 
             if cfg.pose_noise:
                 camtoworlds = self.pose_perturb(camtoworlds, image_ids)
@@ -484,57 +485,60 @@ class Runner:
             # sh schedule
             sh_degree_to_use = min(step // cfg.sh_degree_interval, cfg.sh_degree)
 
-            # forward
-            renders, alphas, info = self.rasterize_splats(
-                camtoworlds=camtoworlds,
-                Ks=Ks,
-                width=width,
-                height=height,
-                sh_degree=sh_degree_to_use,
-                near_plane=cfg.near_plane,
-                far_plane=cfg.far_plane,
-                image_ids=image_ids,
-                render_mode="RGB+ED" if cfg.depth_loss else "RGB",
-            )
+            with timeit("forward:rasterize"):
+                # forward
+                renders, alphas, info = self.rasterize_splats(
+                    camtoworlds=camtoworlds,
+                    Ks=Ks,
+                    width=width,
+                    height=height,
+                    sh_degree=sh_degree_to_use,
+                    near_plane=cfg.near_plane,
+                    far_plane=cfg.far_plane,
+                    image_ids=image_ids,
+                    render_mode="RGB+ED" if cfg.depth_loss else "RGB",
+                )
 
-            if renders.shape[-1] == 4:
-                colors, depths = renders[..., 0:3], renders[..., 3:4]
-            else:
-                colors, depths = renders, None
+                if renders.shape[-1] == 4:
+                    colors, depths = renders[..., 0:3], renders[..., 3:4]
+                else:
+                    colors, depths = renders, None
 
-            if cfg.random_bkgd:
-                bkgd = torch.rand(1, 3, device=device)
-                colors = colors + bkgd * (1.0 - alphas)
+                if cfg.random_bkgd:
+                    bkgd = torch.rand(1, 3, device=device)
+                    colors = colors + bkgd * (1.0 - alphas)
 
-            info["means2d"].retain_grad()  # used for running stats
+                info["means2d"].retain_grad()  # used for running stats
 
-            # loss
-            l1loss = F.l1_loss(colors, pixels)
-            ssimloss = 1.0 - self.ssim(
-                pixels.permute(0, 3, 1, 2), colors.permute(0, 3, 1, 2)
-            )
-            loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
-            if cfg.depth_loss:
-                # query depths from depth map
-                points = torch.stack(
-                    [
-                        points[:, :, 0] / (width - 1) * 2 - 1,
-                        points[:, :, 1] / (height - 1) * 2 - 1,
-                    ],
-                    dim=-1,
-                )  # normalize to [-1, 1]
-                grid = points.unsqueeze(2)  # [1, M, 1, 2]
-                depths = F.grid_sample(
-                    depths.permute(0, 3, 1, 2), grid, align_corners=True
-                )  # [1, 1, M, 1]
-                depths = depths.squeeze(3).squeeze(1)  # [1, M]
-                # calculate loss in disparity space
-                disp = torch.where(depths > 0.0, 1.0 / depths, torch.zeros_like(depths))
-                disp_gt = 1.0 / depths_gt  # [1, M]
-                depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
-                loss += depthloss * cfg.depth_lambda
-
-            loss.backward()
+            with timeit("forward:loss"):
+                # loss
+                l1loss = F.l1_loss(colors, pixels)
+                ssimloss = 1.0 - self.ssim(
+                    pixels.permute(0, 3, 1, 2), colors.permute(0, 3, 1, 2)
+                )
+                loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
+                if cfg.depth_loss:
+                    # query depths from depth map
+                    points = torch.stack(
+                        [
+                            points[:, :, 0] / (width - 1) * 2 - 1,
+                            points[:, :, 1] / (height - 1) * 2 - 1,
+                        ],
+                        dim=-1,
+                    )  # normalize to [-1, 1]
+                    grid = points.unsqueeze(2)  # [1, M, 1, 2]
+                    depths = F.grid_sample(
+                        depths.permute(0, 3, 1, 2), grid, align_corners=True
+                    )  # [1, 1, M, 1]
+                    depths = depths.squeeze(3).squeeze(1)  # [1, M]
+                    # calculate loss in disparity space
+                    disp = torch.where(depths > 0.0, 1.0 / depths, torch.zeros_like(depths))
+                    disp_gt = 1.0 / depths_gt  # [1, M]
+                    depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
+                    loss += depthloss * cfg.depth_lambda
+            
+            with timeit("backward"):
+                loss.backward()
 
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
             if cfg.depth_loss:
@@ -590,6 +594,7 @@ class Runner:
                 torch.save(
                     data, f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt"
                 )
+                print(profiler)
 
             # update running stats for prunning & growing
             if step < cfg.refine_stop_iter:
