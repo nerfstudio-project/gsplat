@@ -4,11 +4,9 @@ import json
 import torch
 from torch import Tensor
 import torch.nn.functional as F
-from torchpq.clustering import KMeans
 import numpy as np
 import imageio
 
-from plas import sort_with_plas
 from gsplat.utils import sh_to_rgb, rgb_to_sh, log_transform, inverse_log_transform
 
 
@@ -16,7 +14,7 @@ def compress_splats(
     compress_dir: str,
     splats: dict[str, Tensor],
     use_sort: bool = False,
-    use_kmeans: bool = False,
+    use_kmeans: bool = True,
 ) -> None:
     """Compress splats with quantization, sorting, and K-means clustering of the spherical harmonic coefficents.
 
@@ -86,6 +84,9 @@ def sort_splats(splats: dict[str, Tensor], verbose: bool = False) -> dict[str, T
     """Sort splats with Parallel Linear Assignment Sorting from the paper `Compact 3D Scene Representation via
     Self-Organizing Gaussian Grids <https://arxiv.org/pdf/2312.13299>`_.
 
+    .. warning::
+        PLAS must installed to use sorting.
+
     Args:
         splats (dict[str, Tensor]): splats
         verbose (bool, optional): Whether to print verbose information. Default to False.
@@ -93,6 +94,13 @@ def sort_splats(splats: dict[str, Tensor], verbose: bool = False) -> dict[str, T
     Returns:
         dict[str, Tensor]: sorted splats
     """
+    try:
+        from plas import sort_with_plas
+    except:
+        raise ImportError(
+            "Please install PLAS with 'pip install git+https://github.com/fraunhoferhhi/PLAS.git' to use sorting"
+        )
+
     n_gs = len(splats["means"])
     n_sidelen = int(n_gs**0.5)
     assert n_sidelen**2 == n_gs, "Must be a perfect square"
@@ -293,6 +301,19 @@ def _decompress_sh0(compress_dir: str, meta: dict[str, Any]) -> Tensor:
 def _compress_shN(
     compress_dir: str, params: Tensor, use_kmeans: bool = True
 ) -> dict[str, Any]:
+    """Compress spherical harmonic coefficients to a npz file.
+
+    .. warning::
+        TorchPQ must installed to use K-means clustering.
+
+    Args:
+        compress_dir (str): compression directory
+        params (Tensor): parameters to compress
+        use_kmeans (bool, optional): Whether to use K-means clustering during compression. Defaults to True.
+
+    Returns:
+        dict[str, Any]: metadata
+    """
     shape = params.shape
     dtype = params.dtype
     if params.numel() == 0:
@@ -303,6 +324,13 @@ def _compress_shN(
         return meta
 
     if use_kmeans:
+        try:
+            from torchpq.clustering import KMeans
+        except:
+            raise ImportError(
+                "Please install torchpq with 'pip install torchpq' to use K-means clustering"
+            )
+
         kmeans = KMeans(n_clusters=2**16, distance="manhattan", verbose=True)
         x = params.reshape(params.shape[0], -1).permute(1, 0).contiguous()
         labels = kmeans.fit(x)
