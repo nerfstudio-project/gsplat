@@ -15,8 +15,8 @@ from gsplat.utils import sh_to_rgb, rgb_to_sh, log_transform, inverse_log_transf
 def compress_splats(
     compress_dir: str,
     splats: dict[str, Tensor],
-    use_sort: bool = True,
-    use_kmeans: bool = True,
+    use_sort: bool = False,
+    use_kmeans: bool = False,
 ) -> None:
     """Compress splats with quantization, sorting, and K-means clustering of the spherical harmonic coefficents.
 
@@ -40,12 +40,18 @@ def compress_splats(
 
     if use_sort:
         splats = sort_splats(splats)
+
     meta = {}
     for param_name in splats.keys():
-        compress_fn = eval(f"_compress_{param_name}")
         kwargs = {}
         if param_name == "shN":
             kwargs["use_kmeans"] = use_kmeans
+
+        try:
+            compress_fn = eval(f"_compress_{param_name}")
+        except NameError:
+            compress_fn = _compress_npz
+            kwargs["param_name"] = param_name
         meta[param_name] = compress_fn(compress_dir, splats[param_name], **kwargs)
 
     with open(os.path.join(compress_dir, "meta.json"), "w") as f:
@@ -57,7 +63,6 @@ def decompress_splats(compress_dir: str) -> dict[str, Tensor]:
 
     Args:
         compress_dir (str): compression directory
-        use_kmeans (bool, optional): Whether to use K-means to compress spherical harmonics. Defaults to True.
 
     Returns:
         dict[str, Tensor]: splats
@@ -67,8 +72,13 @@ def decompress_splats(compress_dir: str) -> dict[str, Tensor]:
 
     splats = {}
     for param_name, param_meta in meta.items():
-        decompress_fn = eval(f"_decompress_{param_name}")
-        splats[param_name] = decompress_fn(compress_dir, param_meta)
+        kwargs = {}
+        try:
+            decompress_fn = eval(f"_decompress_{param_name}")
+        except NameError:
+            decompress_fn = _decompress_npz
+            kwargs["param_name"] = param_name
+        splats[param_name] = decompress_fn(compress_dir, param_meta, **kwargs)
     return splats
 
 
@@ -185,7 +195,7 @@ def _decompress_scales(compress_dir: str, meta: dict[str, Any]) -> Tensor:
     return params
 
 
-def _compress_quats(compress_dir: str, params: Tensor) -> Tensor:
+def _compress_quats(compress_dir: str, params: Tensor) -> dict[str, Any]:
     n_gs = len(params)
     n_sidelen = int(n_gs**0.5)
     assert n_sidelen**2 == n_gs, "Must be a perfect square"
@@ -215,7 +225,7 @@ def _decompress_quats(compress_dir: str, meta: dict[str, Any]) -> Tensor:
     return params
 
 
-def _compress_opacities(compress_dir: str, params: Tensor) -> Tensor:
+def _compress_opacities(compress_dir: str, params: Tensor) -> dict[str, Any]:
     n_gs = len(params)
     n_sidelen = int(n_gs**0.5)
     assert n_sidelen**2 == n_gs, "Must be a perfect square"
@@ -250,7 +260,7 @@ def _decompress_opacities(compress_dir: str, meta: dict[str, Any]) -> Tensor:
     return params
 
 
-def _compress_sh0(compress_dir: str, params: Tensor) -> Tensor:
+def _compress_sh0(compress_dir: str, params: Tensor) -> dict[str, Any]:
     n_gs = len(params)
     n_sidelen = int(n_gs**0.5)
     assert n_sidelen**2 == n_gs, "Must be a perfect square"
@@ -280,7 +290,9 @@ def _decompress_sh0(compress_dir: str, meta: dict[str, Any]) -> Tensor:
     return params
 
 
-def _compress_shN(compress_dir: str, params: Tensor, use_kmeans: bool = True) -> Tensor:
+def _compress_shN(
+    compress_dir: str, params: Tensor, use_kmeans: bool = True
+) -> dict[str, Any]:
     shape = params.shape
     dtype = params.dtype
     if params.numel() == 0:
@@ -335,6 +347,24 @@ def _decompress_shN(compress_dir: str, meta: dict[str, Any]) -> Tensor:
     if "labels" in npz_dict:
         labels = npz_dict["labels"]
         params = params[labels]
+    params = params.reshape(meta["shape"])
+    params = params.to(dtype=getattr(torch, meta["dtype"]))
+    return params
+
+
+def _compress_npz(compress_dir: str, params: Tensor, param_name: str) -> dict[str, Any]:
+    npz_dict = {"arr": params.detach().cpu().numpy()}
+    np.savez_compressed(os.path.join(compress_dir, f"{param_name}.npz"), **npz_dict)
+    meta = {
+        "shape": params.shape,
+        "dtype": str(params.dtype).split(".")[1],
+    }
+    return meta
+
+
+def _decompress_npz(compress_dir: str, meta: dict[str, Any], param_name: str) -> Tensor:
+    arr = np.load(os.path.join(compress_dir, f"{param_name}.npz"))["arr"]
+    params = torch.tensor(arr)
     params = params.reshape(meta["shape"])
     params = params.to(dtype=getattr(torch, meta["dtype"]))
     return params
