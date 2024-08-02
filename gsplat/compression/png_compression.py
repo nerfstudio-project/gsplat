@@ -40,7 +40,7 @@ class PngCompressionStrategy:
             return _compress_npz
 
     def get_decompress_fn(self, param_name: str) -> Callable:
-        decompress_fn_map: dict[str, Callable] = {
+        decompress_fn_map = {
             "means": _decompress_png_16bit,
             "scales": _decompress_png,
             "quats": _decompress_png,
