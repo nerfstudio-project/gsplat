@@ -6,7 +6,8 @@ import torch.distributed
 from torch import Tensor
 from torch.distributed.nn.functional import all_gather, all_to_all
 
-from gsplat.core import cli, profiler, timeit
+from gsplat.distributed import cli
+from gsplat.profile import profiler, timeit
 
 
 @timeit()
@@ -172,28 +173,28 @@ def main(local_rank: int, world_rank, world_size: int, _):
     viewmats = torch.rand((C, 4, 4), device=device)
     Ks = torch.rand((C, 3, 3), device=device)
 
-    # for _ in range(100):
-    #     _ = _dist_gather_int32_2(world_rank, world_size, 3)
-    # for _ in range(100):
-    #     _ = _dist_gather_int32(world_rank, world_size, 3)
+    for _ in range(100):
+        _ = _dist_gather_int32_2(world_rank, world_size, 3)
+    for _ in range(100):
+        _ = _dist_gather_int32(world_rank, world_size, 3)
     # {'_dist_gather_integers': 0.16876974957995117, '_dist_gather_integers2': 0.028658458031713963}
 
     # for _ in range(100):
     #     _ = _dist_gather_camera(world_rank, world_size, viewmats, Ks)
 
-    tensor1 = torch.rand((C, 4, 4), device=device, requires_grad=True)
-    tensor2 = torch.rand((C, 3, 3), device=device, requires_grad=False)
+    # tensor1 = torch.rand((C, 4, 4), device=device, requires_grad=True)
+    # tensor2 = torch.rand((C, 3, 3), device=device, requires_grad=False)
 
     # for _ in range(100):
     #     _ = _dist_all_gather_non_diff(world_rank, world_size, [tensor1, tensor2])
     # for _ in range(100):
     #     _ = _dist_all_gather_non_diff_2(world_rank, world_size, [tensor1, tensor2])
 
-    for _ in range(100):
-        a = _dist_all_gather(world_rank, world_size, [tensor1, tensor2])
-    with timeit("_dist_all_gather backward"):
-        for _ in range(1):
-            sum([t.sum() for t in a]).backward(retain_graph=True)
+    # for _ in range(100):
+    #     a = _dist_all_gather(world_rank, world_size, [tensor1, tensor2])
+    # with timeit("_dist_all_gather backward"):
+    #     for _ in range(1):
+    #         sum([t.sum() for t in a]).backward(retain_graph=True)
 
     # for _ in range(100):
     #     a = _dist_all_gather_2(world_rank, world_size, [tensor1, tensor2])

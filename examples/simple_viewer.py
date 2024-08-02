@@ -20,7 +20,7 @@ import tqdm
 import viser
 
 from gsplat._helper import load_test_data
-from gsplat.core import cli
+from gsplat.distributed import cli
 from gsplat.rendering import rasterization
 
 

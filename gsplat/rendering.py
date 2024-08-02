@@ -3,11 +3,9 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.distributed
-import torch.distributed.nn.functional as DistF
 from torch import Tensor
 from typing_extensions import Literal
 
-from .core import timeit
 from .cuda._wrapper import (
     fully_fused_projection,
     isect_offset_encode,
@@ -15,103 +13,12 @@ from .cuda._wrapper import (
     rasterize_to_pixels,
     spherical_harmonics,
 )
-
-
-@timeit()
-def _dist_gather_camera(
-    world_rank: int, world_size: int, viewmats: Tensor, Ks: Tensor
-) -> Tuple[Tensor, Tensor]:
-    # Gather cameras from all ranks. We assume the number of cameras
-    # is the same across all ranks.
-    if world_size == 1:
-        assert world_rank == 0, "world_size is 1, but world_rank is not 0."
-    else:
-        device = viewmats.device
-        C = len(viewmats)
-
-        # [TODO] `all_gather` is not differentiable w.r.t. viewmats and Ks
-        out_tensor_list = [
-            torch.empty((C, 4, 4), device=device) for _ in range(world_size)
-        ]
-        torch.distributed.all_gather(out_tensor_list, viewmats.contiguous())
-        viewmats = torch.cat(out_tensor_list, dim=0)
-
-        out_tensor_list = [
-            torch.empty((C, 3, 3), device=device) for _ in range(world_size)
-        ]
-        torch.distributed.all_gather(out_tensor_list, Ks.contiguous())
-        Ks = torch.cat(out_tensor_list, dim=0)
-    return viewmats, Ks
-
-
-@timeit()
-def _dist_gather_int32(world_rank: int, world_size: int, value: int) -> List[int]:
-    # This is faster than `torch.distributed.all_gather_object`
-    device = torch.device("cuda", world_rank)
-    value_tensor = torch.tensor(value, dtype=torch.int, device=device)
-
-    collected = torch.empty(world_size, dtype=torch.int, device=device)
-    torch.distributed.all_gather_into_tensor(collected, value_tensor)
-    return collected.tolist()
-
-
-@timeit()
-def _dist_all_gather(
-    world_rank: int, world_size: int, tensor_list: List[Tensor]
-) -> List[Tensor]:
-    N = len(tensor_list[0])
-
-    data = torch.cat([t.reshape(N, -1) for t in tensor_list], dim=-1)
-    sizes = [t.numel() // N for t in tensor_list]
-
-    if data.requires_grad:
-        # Differentiable gather
-        collected = DistF.all_gather(data)
-    else:
-        # Non-differentiable gather
-        collected = [torch.empty_like(data) for _ in range(world_size)]
-        torch.distributed.all_gather(collected, data)
-    collected = torch.cat(collected, dim=0)
-
-    out_tensor_tuple = torch.split(collected, sizes, dim=-1)
-    out_tensor_list = []
-    for out_tensor, tensor in zip(out_tensor_tuple, tensor_list):
-        out_tensor = out_tensor.view(N * world_size, *tensor.shape[1:])
-        out_tensor_list.append(out_tensor.contiguous())
-    return out_tensor_list
-
-
-@timeit()
-def _dist_all_to_all(
-    world_rank: int,
-    world_size: int,
-    tensor_list: List[Tensor],
-    input_cnts: List[int],
-    output_cnts: List[int],
-) -> List[Tensor]:
-    N = len(tensor_list[0])
-
-    data = torch.cat([t.reshape(N, -1) for t in tensor_list], dim=-1)
-    sizes = [t.numel() // N for t in tensor_list]
-
-    collected = [
-        torch.empty((l, *data.shape[1:]), dtype=data.dtype, device=data.device)
-        for l in output_cnts
-    ]
-    if data.requires_grad:
-        # Differentiable all_to_all
-        DistF.all_to_all(collected, data.split(input_cnts, dim=0))
-    else:
-        # Non-differentiable all_to_all
-        torch.distributed.all_to_all(collected, list(data.split(input_cnts, dim=0)))
-    collected = torch.cat(collected, dim=0)
-
-    out_tensor_tuple = torch.split(collected, sizes, dim=-1)
-    out_tensor_list = []
-    for out_tensor, tensor in zip(out_tensor_tuple, tensor_list):
-        out_tensor = out_tensor.view(-1, *tensor.shape[1:])
-        out_tensor_list.append(out_tensor)
-    return out_tensor_list
+from .distributed import (
+    all_gather_int32,
+    all_gather_tensor_list,
+    all_to_all_int32,
+    all_to_all_tensor_list,
+)
 
 
 def rasterization(
@@ -340,155 +247,182 @@ def rasterization(
                 colors.dim() == 3
             ), "Distributed mode only supports per-Gaussian colors."
 
+    if absgrad:
+        assert not distributed, "AbsGrad is not supported in distributed mode."
+
     # If in distributed mode, we distribute the projection computation over Gaussians
     # and the rasterize computation over cameras. So first we gather the cameras
     # from all ranks for projection.
     if distributed:
-        with timeit("gather cameras"):
-            world_rank = torch.distributed.get_rank()
-            world_size = torch.distributed.get_world_size()
+        world_rank = torch.distributed.get_rank()
+        world_size = torch.distributed.get_world_size()
 
-            # Gather the number of Gaussians in each rank.
-            N_world = _dist_gather_int32(world_rank, world_size, N)
+        # Gather the number of Gaussians in each rank.
+        N_world = all_gather_int32(world_size, N, device=device)
 
-            # Enforce that the number of cameras is the same across all ranks.
-            C_world = [C] * world_size
-            viewmats, Ks = _dist_all_gather(world_rank, world_size, [viewmats, Ks])
+        # Enforce that the number of cameras is the same across all ranks.
+        C_world = [C] * world_size
+        viewmats, Ks = all_gather_tensor_list(world_size, [viewmats, Ks])
 
-            # Silently change C from local #Cameras to global #Cameras.
-            C = len(viewmats)
+        # Silently change C from local #Cameras to global #Cameras.
+        C = len(viewmats)
 
-    with timeit("fully_fused_projection"):
-        # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
-        proj_results = fully_fused_projection(
-            means,
-            None,  # covars,
-            quats,
-            scales,
-            viewmats,
-            Ks,
-            width,
-            height,
-            eps2d=eps2d,
-            packed=packed,
-            near_plane=near_plane,
-            far_plane=far_plane,
-            radius_clip=radius_clip,
-            sparse_grad=sparse_grad,
-            calc_compensations=(rasterize_mode == "antialiased"),
-        )
+    # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
+    proj_results = fully_fused_projection(
+        means,
+        None,  # covars,
+        quats,
+        scales,
+        viewmats,
+        Ks,
+        width,
+        height,
+        eps2d=eps2d,
+        packed=packed,
+        near_plane=near_plane,
+        far_plane=far_plane,
+        radius_clip=radius_clip,
+        sparse_grad=sparse_grad,
+        calc_compensations=(rasterize_mode == "antialiased"),
+    )
 
+    if packed:
+        # The results are packed into shape [nnz, ...]. All elements are valid.
+        (
+            camera_ids,
+            gaussian_ids,
+            radii,
+            means2d,
+            depths,
+            conics,
+            compensations,
+        ) = proj_results
+        opacities = opacities[gaussian_ids]  # [nnz]
+    else:
+        # The results are with shape [C, N, ...]. Only the elements with radii > 0 are valid.
+        radii, means2d, depths, conics, compensations = proj_results
+        opacities = opacities.repeat(C, 1)  # [C, N]
+        camera_ids, gaussian_ids = None, None
+
+    if compensations is not None:
+        opacities = opacities * compensations
+
+    meta.update(
+        {
+            # global camera_ids
+            "camera_ids": camera_ids,
+            # local gaussian_ids
+            "gaussian_ids": gaussian_ids,
+            "radii": radii,
+            "means2d": means2d,
+            "depths": depths,
+            "conics": conics,
+            "opacities": opacities,
+        }
+    )
+
+    # Turn colors into [C, N, D] or [nnz, D] to pass into rasterize_to_pixels()
+    if sh_degree is None:
+        # Colors are post-activation values, with shape [N, D] or [C, N, D]
         if packed:
-            # The results are packed into shape [nnz, ...]. All elements are valid.
-            (
-                camera_ids,
-                gaussian_ids,
-                radii,
-                means2d,
-                depths,
-                conics,
-                compensations,
-            ) = proj_results
-            opacities = opacities[gaussian_ids]  # [nnz]
-        else:
-            # The results are with shape [C, N, ...]. Only the elements with radii > 0 are valid.
-            radii, means2d, depths, conics, compensations = proj_results
-            opacities = opacities.repeat(C, 1)  # [C, N]
-            camera_ids, gaussian_ids = None, None
-
-        if compensations is not None:
-            opacities = opacities * compensations
-
-        meta.update(
-            {
-                # global camera_ids
-                "camera_ids": camera_ids,
-                # local gaussian_ids
-                "gaussian_ids": gaussian_ids,
-                "radii": radii,
-                "means2d": means2d,
-                "depths": depths,
-                "conics": conics,
-                "opacities": opacities,
-            }
-        )
-
-    with timeit("color SH"):
-        # Turn colors into [C, N, D] or [nnz, D] to pass into rasterize_to_pixels()
-        if sh_degree is None:
-            # Colors are post-activation values, with shape [N, D] or [C, N, D]
-            if packed:
-                if colors.dim() == 2:
-                    # Turn [N, D] into [nnz, D]
-                    colors = colors[gaussian_ids]
-                else:
-                    # Turn [C, N, D] into [nnz, D]
-                    colors = colors[camera_ids, gaussian_ids]
+            if colors.dim() == 2:
+                # Turn [N, D] into [nnz, D]
+                colors = colors[gaussian_ids]
             else:
-                if colors.dim() == 2:
-                    # Turn [N, D] into [C, N, D]
-                    colors = colors.expand(C, -1, -1)
-                else:
-                    # colors is already [C, N, D]
-                    pass
+                # Turn [C, N, D] into [nnz, D]
+                colors = colors[camera_ids, gaussian_ids]
         else:
-            # Colors are SH coefficients, with shape [N, K, 3] or [C, N, K, 3]
-            camtoworlds = torch.inverse(viewmats)  # [C, 4, 4]
-            if packed:
-                dirs = (
-                    means[gaussian_ids, :] - camtoworlds[camera_ids, :3, 3]
-                )  # [nnz, 3]
-                masks = radii > 0  # [nnz]
-                if colors.dim() == 3:
-                    # Turn [N, K, 3] into [nnz, 3]
-                    shs = colors[gaussian_ids, :, :]  # [nnz, K, 3]
-                else:
-                    # Turn [C, N, K, 3] into [nnz, 3]
-                    shs = colors[camera_ids, gaussian_ids, :, :]  # [nnz, K, 3]
-                colors = spherical_harmonics(
-                    sh_degree, dirs, shs, masks=masks
-                )  # [nnz, 3]
+            if colors.dim() == 2:
+                # Turn [N, D] into [C, N, D]
+                colors = colors.expand(C, -1, -1)
             else:
-                dirs = means[None, :, :] - camtoworlds[:, None, :3, 3]  # [C, N, 3]
-                masks = radii > 0  # [C, N]
-                if colors.dim() == 3:
-                    # Turn [N, K, 3] into [C, N, K, 3]
-                    shs = colors.expand(C, -1, -1, -1)  # [C, N, K, 3]
-                else:
-                    # colors is already [C, N, K, 3]
-                    shs = colors
-                colors = spherical_harmonics(
-                    sh_degree, dirs, shs, masks=masks
-                )  # [C, N, 3]
-            # make it apple-to-apple with Inria's CUDA Backend.
-            colors = torch.clamp_min(colors + 0.5, 0.0)
+                # colors is already [C, N, D]
+                pass
+    else:
+        # Colors are SH coefficients, with shape [N, K, 3] or [C, N, K, 3]
+        camtoworlds = torch.inverse(viewmats)  # [C, 4, 4]
+        if packed:
+            dirs = means[gaussian_ids, :] - camtoworlds[camera_ids, :3, 3]  # [nnz, 3]
+            masks = radii > 0  # [nnz]
+            if colors.dim() == 3:
+                # Turn [N, K, 3] into [nnz, 3]
+                shs = colors[gaussian_ids, :, :]  # [nnz, K, 3]
+            else:
+                # Turn [C, N, K, 3] into [nnz, 3]
+                shs = colors[camera_ids, gaussian_ids, :, :]  # [nnz, K, 3]
+            colors = spherical_harmonics(sh_degree, dirs, shs, masks=masks)  # [nnz, 3]
+        else:
+            dirs = means[None, :, :] - camtoworlds[:, None, :3, 3]  # [C, N, 3]
+            masks = radii > 0  # [C, N]
+            if colors.dim() == 3:
+                # Turn [N, K, 3] into [C, N, K, 3]
+                shs = colors.expand(C, -1, -1, -1)  # [C, N, K, 3]
+            else:
+                # colors is already [C, N, K, 3]
+                shs = colors
+            colors = spherical_harmonics(sh_degree, dirs, shs, masks=masks)  # [C, N, 3]
+        # make it apple-to-apple with Inria's CUDA Backend.
+        colors = torch.clamp_min(colors + 0.5, 0.0)
 
     # If in distributed mode, we need to scatter the GSs to the destination ranks, based
     # on which cameras they are visible to, which we already figured out in the projection
     # stage.
     if distributed:
         if packed:
-            with timeit("alltoall [1]"):
-                # package the Gaussian attributes
-                cnts = torch.bincount(camera_ids, minlength=C)  # all cameras
+            # count how many elements need to be sent to each rank
+            cnts = torch.bincount(camera_ids, minlength=C)  # all cameras
+            cnts = cnts.split(C_world, dim=0)
+            cnts = [cuts.sum() for cuts in cnts]
 
-            with timeit("alltoall [2]"):
-                cnts = cnts.split(C_world, dim=0)
-                cnts = [
-                    cuts.sum() for cuts in cnts
-                ]  # List: number of GSs for each rank
+            # all to all communication across all ranks. After this step, each rank
+            # would have all the necessary GSs to render its own images.
+            collected_splits = all_to_all_int32(world_size, cnts, device=device)
+            (radii,) = all_to_all_tensor_list(
+                world_size, [radii], cnts, output_splits=collected_splits
+            )
+            (means2d, depths, conics, opacities, colors) = all_to_all_tensor_list(
+                world_size,
+                [means2d, depths, conics, opacities, colors],
+                cnts,
+                output_splits=collected_splits,
+            )
 
-            with timeit("alltoall [3]"):
-                collected_cnts = [torch.empty_like(cnt) for cnt in cnts]
-                DistF.all_to_all(collected_cnts, cnts)
+            # before sending the data, we should turn the camera_ids from global to local.
+            # i.e. the camera_ids produced by the projection stage are over all cameras world-wide,
+            # so we need to turn them into camera_ids that are local to each rank.
+            offsets = torch.tensor(
+                [0] + C_world[:-1], device=camera_ids.device, dtype=camera_ids.dtype
+            )
+            offsets = torch.cumsum(offsets, dim=0)
+            offsets = offsets.repeat_interleave(torch.stack(cnts))
+            camera_ids = camera_ids - offsets
 
-            with timeit("alltoall [4]"):
-                cnts_list = [cnt.item() for cnt in cnts]  # To List of int
-                collected_cnts_list = [
-                    cnt.item() for cnt in collected_cnts
-                ]  # To List of int
+            # and turn gaussian ids from local to global.
+            offsets = torch.tensor(
+                [0] + N_world[:-1],
+                device=gaussian_ids.device,
+                dtype=gaussian_ids.dtype,
+            )
+            offsets = torch.cumsum(offsets, dim=0)
+            offsets = offsets.repeat_interleave(torch.stack(cnts))
+            gaussian_ids = gaussian_ids + offsets
 
-            # with timeit("alltoall [5]"):
+            # all to all communication across all ranks.
+            (camera_ids, gaussian_ids) = all_to_all_tensor_list(
+                world_size,
+                [camera_ids, gaussian_ids],
+                cnts,
+                output_splits=collected_splits,
+            )
+
+            # Silently change C from global #Cameras to local #Cameras.
+            C = C_world[world_rank]
+
+        else:
+            # Silently change C from global #Cameras to local #Cameras.
+            C = C_world[world_rank]
+
+            # # package the Gaussian attributes
             # data = torch.cat(
             #     [
             #         radii[..., None].float(),
@@ -499,139 +433,61 @@ def rasterization(
             #         colors,
             #     ],
             #     dim=-1,
-            # )  # [nnz, :]
+            # )  # [C, N_i, :]
 
-            # data_fl_list = data.split(cnts_list, dim=0)  # List of [N_i, :]
+            # all to all communication across all ranks. After this step, each rank
+            # would have all the necessary GSs to render its own images.
+            (radii,) = all_to_all_tensor_list(
+                world_size,
+                [radii.flatten(0, 1)],
+                splits=[C_i * N for C_i in C_world],
+                output_splits=[C * N_i for N_i in N_world],
+            )
+            radii = radii.reshape(C, -1)
+
+            (means2d, depths, conics, opacities, colors) = all_to_all_tensor_list(
+                world_size,
+                [
+                    means2d.flatten(0, 1),
+                    depths.flatten(0, 1),
+                    conics.flatten(0, 1),
+                    opacities.flatten(0, 1),
+                    colors.flatten(0, 1),
+                ],
+                splits=[C_i * N for C_i in C_world],
+                output_splits=[C * N_i for N_i in N_world],
+            )
+            means2d = means2d.reshape(C, -1, 2)
+            depths = depths.reshape(C, -1)
+            conics = conics.reshape(C, -1, 3)
+            opacities = opacities.reshape(C, -1)
+            colors = colors.reshape(C, -1, colors.shape[-1])
+
+            # # All to all gather. [C, N_i, :] -> [C_i, N, :]
+            # data_list = data.split(C_world, dim=0)  # List of [C_i, N_i, :]
+            # data_fl_list = [
+            #     data.flatten(0, 1) for data in data_list
+            # ]  # List of [C_i * N_i, :]
             # collected_fl_list = [
             #     torch.empty(
-            #         (N_i, data.shape[-1]), device=data.device, dtype=data.dtype
+            #         (C * N_i, data.shape[-1]), device=data.device, dtype=data.dtype
             #     )
-            #     for N_i in collected_cnts_list
+            #     for N_i in N_world
             # ]
             # # differentiable all_to_all
             # DistF.all_to_all(collected_fl_list, data_fl_list)
-            # collected = torch.cat(collected_fl_list, dim=0)  # [N, :]
+            # collected_fl = torch.cat(collected_fl_list, dim=0)  # [C_i * N, :]
+            # collected = collected_fl.reshape(
+            #     C, sum(N_world), data.shape[-1]
+            # )  # [C_i, N, :]
 
-            with timeit("alltoall [6]"):
-                # # collected contains:
-                # radii = collected[..., 0].int()
-                # means2d = collected[..., 1:3]
-                # depths = collected[..., 3]
-                # conics = collected[..., 4:7]
-                # opacities = collected[..., 7]
-                # colors = collected[..., 8:]
-
-                (radii,) = _dist_all_to_all(
-                    world_rank, world_size, [radii], cnts_list, collected_cnts_list
-                )
-                (means2d, depths, conics, opacities, colors) = _dist_all_to_all(
-                    world_rank,
-                    world_size,
-                    [means2d, depths, conics, opacities, colors],
-                    cnts_list,
-                    collected_cnts_list,
-                )
-
-            with timeit("alltoall [7]"):
-                # before sending the data, we should turn the camera_ids from global to local
-                # and gaussian_ids from local to global
-                offsets = torch.tensor(
-                    [0] + C_world[:-1], device=camera_ids.device, dtype=camera_ids.dtype
-                )
-                offsets = torch.cumsum(offsets, dim=0)
-                offsets = offsets.repeat_interleave(torch.stack(cnts))
-                camera_ids = camera_ids - offsets
-
-            with timeit("alltoall [8]"):
-                offsets = torch.tensor(
-                    [0] + N_world[:-1],
-                    device=gaussian_ids.device,
-                    dtype=gaussian_ids.dtype,
-                )
-                offsets = torch.cumsum(offsets, dim=0)
-                offsets = offsets.repeat_interleave(torch.stack(cnts))
-                gaussian_ids = gaussian_ids + offsets
-
-            # with timeit("alltoall [9]"):
-            #     # now send the data
-            #     data = torch.cat(
-            #         [
-            #             # local camera_ids
-            #             camera_ids[..., None],
-            #             # global gaussian_ids
-            #             gaussian_ids[..., None],
-            #         ],
-            #         dim=-1,
-            #     )
-            #     data_fl_list = data.split(cnts_list, dim=0)  # List of [N_i, 2]
-            #     collected_fl_list = [
-            #         torch.empty(
-            #             (N_i, data.shape[-1]), device=data.device, dtype=data.dtype
-            #         )
-            #         for N_i in collected_cnts_list
-            #     ]
-            #     # differentiable all_to_all
-            #     DistF.all_to_all(collected_fl_list, data_fl_list)
-            #     collected = torch.cat(collected_fl_list, dim=0)
-
-            with timeit("alltoall [10]"):
-                # # collected contains:
-                # camera_ids = collected[..., 0]
-                # gaussian_ids = collected[..., 1]
-
-                (camera_ids, gaussian_ids) = _dist_all_to_all(
-                    world_rank,
-                    world_size,
-                    [camera_ids, gaussian_ids],
-                    cnts_list,
-                    collected_cnts_list,
-                )
-
-                # Silently change C from global #Cameras to local #Cameras.
-                C = C_world[world_rank]
-
-        else:
-            # Silently change C from global #Cameras to local #Cameras.
-            C = C_world[world_rank]
-
-            # package the Gaussian attributes
-            data = torch.cat(
-                [
-                    radii[..., None].float(),
-                    means2d,
-                    depths[..., None],
-                    conics,
-                    opacities[..., None],
-                    colors,
-                ],
-                dim=-1,
-            )  # [C, N_i, :]
-
-            # All to all gather. [C, N_i, :] -> [C_i, N, :]
-            data_list = data.split(C_world, dim=0)  # List of [C_i, N_i, :]
-            data_fl_list = [
-                data.flatten(0, 1) for data in data_list
-            ]  # List of [C_i * N_i, :]
-            collected_fl_list = [
-                torch.empty(
-                    (C * N_i, data.shape[-1]), device=data.device, dtype=data.dtype
-                )
-                for N_i in N_world
-            ]
-            # differentiable all_to_all
-            DistF.all_to_all(collected_fl_list, data_fl_list)
-            collected_fl = torch.cat(collected_fl_list, dim=0)  # [C_i * N, :]
-            collected = collected_fl.reshape(
-                C, sum(N_world), data.shape[-1]
-            )  # [C_i, N, :]
-
-            # collected contains:
-            radii = collected[..., 0].int()
-            means2d = collected[..., 1:3]
-            depths = collected[..., 3]
-            conics = collected[..., 4:7]
-            opacities = collected[..., 7]
-            colors = collected[..., 8:]
+            # # collected contains:
+            # radii = collected[..., 0].int()
+            # means2d = collected[..., 1:3]
+            # depths = collected[..., 3]
+            # conics = collected[..., 4:7]
+            # opacities = collected[..., 7]
+            # colors = collected[..., 8:]
 
     # Rasterize to pixels
     if render_mode in ["RGB+D", "RGB+ED"]:
@@ -647,93 +503,92 @@ def rasterization(
     else:  # RGB
         pass
 
-    with timeit("alpha compositing"):
-        # Identify intersecting tiles
-        tile_width = math.ceil(width / float(tile_size))
-        tile_height = math.ceil(height / float(tile_size))
-        tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
-            means2d,
-            radii,
-            depths,
-            tile_size,
-            tile_width,
-            tile_height,
-            packed=packed,
-            n_cameras=C,
-            camera_ids=camera_ids,
-            gaussian_ids=gaussian_ids,
-        )
-        # print("rank", world_rank, "Before isect_offset_encode")
-        isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
+    # Identify intersecting tiles
+    tile_width = math.ceil(width / float(tile_size))
+    tile_height = math.ceil(height / float(tile_size))
+    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
+        means2d,
+        radii,
+        depths,
+        tile_size,
+        tile_width,
+        tile_height,
+        packed=packed,
+        n_cameras=C,
+        camera_ids=camera_ids,
+        gaussian_ids=gaussian_ids,
+    )
+    # print("rank", world_rank, "Before isect_offset_encode")
+    isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
 
-        meta.update(
-            {
-                "tile_width": tile_width,
-                "tile_height": tile_height,
-                "tiles_per_gauss": tiles_per_gauss,
-                "isect_ids": isect_ids,
-                "flatten_ids": flatten_ids,
-                "isect_offsets": isect_offsets,
-                "width": width,
-                "height": height,
-                "tile_size": tile_size,
-            }
-        )
+    meta.update(
+        {
+            "tile_width": tile_width,
+            "tile_height": tile_height,
+            "tiles_per_gauss": tiles_per_gauss,
+            "isect_ids": isect_ids,
+            "flatten_ids": flatten_ids,
+            "isect_offsets": isect_offsets,
+            "width": width,
+            "height": height,
+            "tile_size": tile_size,
+        }
+    )
 
-        # print("rank", world_rank, "Before rasterize_to_pixels")
-        if colors.shape[-1] > channel_chunk:
-            # slice into chunks
-            n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk
-            render_colors, render_alphas = [], []
-            for i in range(n_chunks):
-                colors_chunk = colors[..., i * channel_chunk : (i + 1) * channel_chunk]
-                backgrounds_chunk = (
-                    backgrounds[..., i * channel_chunk : (i + 1) * channel_chunk]
-                    if backgrounds is not None
-                    else None
-                )
-                render_colors_, render_alphas_ = rasterize_to_pixels(
-                    means2d,
-                    conics,
-                    colors_chunk,
-                    opacities,
-                    width,
-                    height,
-                    tile_size,
-                    isect_offsets,
-                    flatten_ids,
-                    backgrounds=backgrounds_chunk,
-                    packed=packed,
-                    absgrad=absgrad,
-                )
-                render_colors.append(render_colors_)
-                render_alphas.append(render_alphas_)
-            render_colors = torch.cat(render_colors, dim=-1)
-            render_alphas = render_alphas[0]  # discard the rest
-        else:
-            render_colors, render_alphas = rasterize_to_pixels(
+    # print("rank", world_rank, "Before rasterize_to_pixels")
+    if colors.shape[-1] > channel_chunk:
+        # slice into chunks
+        n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk
+        render_colors, render_alphas = [], []
+        for i in range(n_chunks):
+            colors_chunk = colors[..., i * channel_chunk : (i + 1) * channel_chunk]
+            backgrounds_chunk = (
+                backgrounds[..., i * channel_chunk : (i + 1) * channel_chunk]
+                if backgrounds is not None
+                else None
+            )
+            render_colors_, render_alphas_ = rasterize_to_pixels(
                 means2d,
                 conics,
-                colors,
+                colors_chunk,
                 opacities,
                 width,
                 height,
                 tile_size,
                 isect_offsets,
                 flatten_ids,
-                backgrounds=backgrounds,
+                backgrounds=backgrounds_chunk,
                 packed=packed,
                 absgrad=absgrad,
             )
-        if render_mode in ["ED", "RGB+ED"]:
-            # normalize the accumulated depth to get the expected depth
-            render_colors = torch.cat(
-                [
-                    render_colors[..., :-1],
-                    render_colors[..., -1:] / render_alphas.clamp(min=1e-10),
-                ],
-                dim=-1,
-            )
+            render_colors.append(render_colors_)
+            render_alphas.append(render_alphas_)
+        render_colors = torch.cat(render_colors, dim=-1)
+        render_alphas = render_alphas[0]  # discard the rest
+    else:
+        render_colors, render_alphas = rasterize_to_pixels(
+            means2d,
+            conics,
+            colors,
+            opacities,
+            width,
+            height,
+            tile_size,
+            isect_offsets,
+            flatten_ids,
+            backgrounds=backgrounds,
+            packed=packed,
+            absgrad=absgrad,
+        )
+    if render_mode in ["ED", "RGB+ED"]:
+        # normalize the accumulated depth to get the expected depth
+        render_colors = torch.cat(
+            [
+                render_colors[..., :-1],
+                render_colors[..., -1:] / render_alphas.clamp(min=1e-10),
+            ],
+            dim=-1,
+        )
 
     return render_colors, render_alphas, meta
 

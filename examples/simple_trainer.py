@@ -30,7 +30,8 @@ from utils import (
     set_random_seed,
 )
 
-from gsplat.core import cli, profiler, timeit
+from gsplat.distributed import cli
+from gsplat.profile import profiler, timeit
 from gsplat.rendering import rasterization
 
 

@@ -23,8 +23,8 @@ from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from utils import AppearanceOptModule, CameraOptModule, set_random_seed
 
 from gsplat import quat_scale_to_covar_preci
-from gsplat.core import cli
 from gsplat.cuda_legacy._torch_impl import scale_rot_to_cov3d
+from gsplat.distributed import cli
 from gsplat.relocation import compute_relocation
 from gsplat.rendering import rasterization
 
@@ -545,7 +545,7 @@ class Runner:
                         "step": step,
                         "splats": self.splats.state_dict(),
                     },
-                    f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt"
+                    f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt",
                 )
 
             # eval the full set

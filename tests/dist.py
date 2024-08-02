@@ -2,7 +2,7 @@ import torch
 import torch.distributed
 import torch.distributed.nn.functional as dist_func
 
-from gsplat.core import cli
+from gsplat.profile import cli
 
 
 def main(local_rank: int, world_rank, world_size: int, _):
