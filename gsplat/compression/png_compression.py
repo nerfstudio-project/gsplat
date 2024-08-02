@@ -253,7 +253,9 @@ def _decompress_png_16bit(
     return params
 
 
-def _compress_npz(compress_dir: str, param_name: str, params: Tensor) -> dict[str, Any]:
+def _compress_npz(
+    compress_dir: str, param_name: str, params: Tensor, **kwargs
+) -> dict[str, Any]:
     """Compress parameters with numpy's NPZ compression."""
     npz_dict = {"arr": params.detach().cpu().numpy()}
     np.savez_compressed(os.path.join(compress_dir, f"{param_name}.npz"), **npz_dict)
