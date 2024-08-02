@@ -121,6 +121,13 @@ def _compress_png(
     Returns:
         dict[str, Any]: metadata
     """
+    if torch.numel == 0:
+        meta = {
+            "shape": list(params.shape),
+            "dtype": str(params.dtype).split(".")[1],
+        }
+        return meta
+
     grid = params.reshape((n_sidelen, n_sidelen, -1))
     mins = torch.amin(grid, dim=(0, 1))
     maxs = torch.amax(grid, dim=(0, 1))
@@ -151,6 +158,10 @@ def _decompress_png(compress_dir: str, param_name: str, meta: dict[str, Any]) ->
     Returns:
         Tensor: parameters
     """
+    if not np.all(meta["shape"]):
+        params = torch.zeros(meta["shape"], dtype=getattr(torch, meta["dtype"]))
+        return meta
+
     img = imageio.imread(os.path.join(compress_dir, f"{param_name}.png"))
     img_norm = img / (2**8 - 1)
 
@@ -178,6 +189,13 @@ def _compress_png_16bit(
     Returns:
         dict[str, Any]: metadata
     """
+    if torch.numel == 0:
+        meta = {
+            "shape": list(params.shape),
+            "dtype": str(params.dtype).split(".")[1],
+        }
+        return meta
+
     grid = params.reshape((n_sidelen, n_sidelen, -1))
     mins = torch.amin(grid, dim=(0, 1))
     maxs = torch.amax(grid, dim=(0, 1))
@@ -216,6 +234,10 @@ def _decompress_png_16bit(
     Returns:
         Tensor: parameters
     """
+    if not np.all(meta["shape"]):
+        params = torch.zeros(meta["shape"], dtype=getattr(torch, meta["dtype"]))
+        return meta
+
     img_l = imageio.imread(os.path.join(compress_dir, f"{param_name}_l.png"))
     img_u = imageio.imread(os.path.join(compress_dir, f"{param_name}_u.png"))
     img_u = img_u.astype(np.uint16)
@@ -257,6 +279,7 @@ def _compress_kmeans(
     param_name: str,
     params: Tensor,
     n_clusters: int = 65536,
+    quantization: int = 6,
     verbose: bool = True,
     **kwargs,
 ) -> dict[str, Any]:
@@ -270,6 +293,7 @@ def _compress_kmeans(
         param_name (str): parameter field name
         params (Tensor): parameters to compress
         n_clusters (int): number of K-means clusters
+        quantization (int): number of bits in quantization
         verbose (bool, optional): Whether to print verbose information. Default to True.
 
     Returns:
@@ -282,6 +306,13 @@ def _compress_kmeans(
             "Please install torchpq with 'pip install torchpq' to use K-means clustering"
         )
 
+    if torch.numel == 0:
+        meta = {
+            "shape": list(params.shape),
+            "dtype": str(params.dtype).split(".")[1],
+        }
+        return meta
+
     kmeans = KMeans(n_clusters=n_clusters, distance="manhattan", verbose=verbose)
     x = params.reshape(params.shape[0], -1).permute(1, 0).contiguous()
     labels = kmeans.fit(x)
@@ -292,7 +323,9 @@ def _compress_kmeans(
     maxs = torch.max(centroids)
     centroids_norm = (centroids - mins) / (maxs - mins)
     centroids_norm = centroids_norm.detach().cpu().numpy()
-    centroids_quant = (centroids_norm * (2**6 - 1)).round().astype(np.uint8)
+    centroids_quant = (
+        (centroids_norm * (2**quantization - 1)).round().astype(np.uint8)
+    )
     labels = labels.astype(np.uint16)
 
     npz_dict = {
@@ -305,6 +338,7 @@ def _compress_kmeans(
         "dtype": str(params.dtype).split(".")[1],
         "mins": mins.tolist(),
         "maxs": maxs.tolist(),
+        "quantization": quantization,
     }
     return meta
 
@@ -322,11 +356,15 @@ def _decompress_kmeans(
     Returns:
         Tensor: parameters
     """
+    if not np.all(meta["shape"]):
+        params = torch.zeros(meta["shape"], dtype=getattr(torch, meta["dtype"]))
+        return meta
+
     npz_dict = np.load(os.path.join(compress_dir, f"{param_name}.npz"))
     centroids_quant = npz_dict["centroids"]
     labels = npz_dict["labels"]
 
-    centroids_norm = centroids_quant / (2**6 - 1)
+    centroids_norm = centroids_quant / (2 ** meta["quantization"] - 1)
     centroids_norm = torch.tensor(centroids_norm)
     mins = torch.tensor(meta["mins"])
     maxs = torch.tensor(meta["maxs"])
