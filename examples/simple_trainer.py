@@ -32,8 +32,8 @@ class Config:
     disable_viewer: bool = False
     # Path to the .pt file. If provide, it will skip training and render a video
     ckpt: Optional[str] = None
-    # Run compression after training
-    compress: bool = False
+    # Name of compression strategy to use
+    compression_strategy: Optional[str] = None
 
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
@@ -300,6 +300,11 @@ class Runner:
         )
         self.strategy.check_sanity(self.splats, self.optimizers)
         self.strategy_state = self.strategy.initialize_state()
+
+        # Compression Strategy
+        self.compression_strategy = None
+        if cfg.compression_strategy == "png":
+            self.compression_strategy = PngCompressionStrategy()
 
         self.pose_optimizers = []
         if cfg.pose_opt:
@@ -615,7 +620,7 @@ class Runner:
                 self.render_traj(step)
 
             # run compression
-            if cfg.compress and step == max_steps - 1:
+            if cfg.compression_strategy is not None and step == max_steps - 1:
                 self.run_compression(step=step)
 
             if not cfg.disable_viewer:
@@ -759,10 +764,11 @@ class Runner:
         print("Running compression...")
         compress_dir = f"{cfg.result_dir}/compression"
         os.makedirs(compress_dir, exist_ok=True)
-        compress_splats(compress_dir, self.splats)
+
+        self.compression_strategy.compress(compress_dir, self.splats)
 
         # evaluate compression
-        splats_c = decompress_splats(compress_dir)
+        splats_c = self.compression_strategy.decompress(compress_dir)
         for k in splats_c.keys():
             self.splats[k].data = splats_c[k].to(self.device)
         self.eval(step=step, stage="compress")
@@ -799,7 +805,7 @@ def main(cfg: Config):
             runner.splats[k].data = ckpt["splats"][k]
         runner.eval(step=ckpt["step"])
         runner.render_traj(step=ckpt["step"])
-        if cfg.compress:
+        if cfg.compression_strategy is not None:
             runner.run_compression(step=ckpt["step"])
     else:
         runner.train()

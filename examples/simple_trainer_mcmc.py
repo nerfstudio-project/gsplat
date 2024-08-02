@@ -34,7 +34,7 @@ class Config:
     # Path to the .pt file. If provide, it will skip training and render a video
     ckpt: Optional[str] = None
     # Name of compression strategy to use
-    compression_strategy: str = "none"
+    compression_strategy: Optional[str] = None
 
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
@@ -544,7 +544,7 @@ class Runner:
                 self.render_traj(step)
 
             # run compression
-            if cfg.compression_strategy != "none" and step == max_steps - 1:
+            if cfg.compression_strategy is not None and step == max_steps - 1:
                 self.run_compression(step=step)
 
             if not cfg.disable_viewer:
@@ -730,7 +730,7 @@ def main(cfg: Config):
             runner.splats[k].data = ckpt["splats"][k]
         runner.eval(step=ckpt["step"])
         runner.render_traj(step=ckpt["step"])
-        if cfg.compression_strategy != "none":
+        if cfg.compression_strategy is not None:
             runner.run_compression(step=ckpt["step"])
     else:
         runner.train()
