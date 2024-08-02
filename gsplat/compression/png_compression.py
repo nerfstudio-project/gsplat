@@ -14,8 +14,8 @@ from gsplat.utils import log_transform, inverse_log_transform
 
 @dataclass
 class PngCompressionStrategy:
-    """Compress splats with quantization, sorting, and K-means clustering of
-    the spherical harmonic coefficents.
+    """Uses quantization and sorting to compress splats into PNG files. It also optionally uses
+    K-means clustering to compress the spherical harmonic coefficents.
 
     Args:
         use_sort (bool, optional): Whether to sort splats before compression. Defaults to True.
