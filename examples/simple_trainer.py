@@ -23,7 +23,7 @@ from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_rand
 
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy
-from gsplat.compression import compress_splats, decompress_splats
+from gsplat.compression import PngCompressionStrategy
 
 
 @dataclass
