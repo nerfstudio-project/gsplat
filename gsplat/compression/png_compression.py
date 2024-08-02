@@ -62,7 +62,7 @@ class PngCompressionStrategy:
         n_sidelen = int(n_gs**0.5)
         n_crop = n_gs - n_sidelen**2
         if n_crop != 0:
-            splats = self._crop_n_splats(splats, n_crop)
+            splats = _crop_n_splats(splats, n_crop)
             print(
                 f"Warning: Number of Gaussians was not square. Removed {n_crop} Gaussians."
             )
@@ -97,14 +97,13 @@ class PngCompressionStrategy:
         splats["means"] = inverse_log_transform(splats["means"])
         return splats
 
-    def _crop_n_splats(
-        self, splats: dict[str, Tensor], n_crop: int
-    ) -> dict[str, Tensor]:
-        opacities = splats["opacities"]
-        keep_indices = torch.argsort(opacities, descending=True)[:-n_crop]
-        for k, v in splats.items():
-            splats[k] = v[keep_indices]
-        return splats
+
+def _crop_n_splats(splats: dict[str, Tensor], n_crop: int) -> dict[str, Tensor]:
+    opacities = splats["opacities"]
+    keep_indices = torch.argsort(opacities, descending=True)[:-n_crop]
+    for k, v in splats.items():
+        splats[k] = v[keep_indices]
+    return splats
 
 
 def _compress_png(
