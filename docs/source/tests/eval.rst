@@ -3,17 +3,19 @@ Evaluation
 
 .. table:: Performance on `Mip-NeRF 360 Captures <https://jonbarron.info/mipnerf360/>`_ (Averaged Over 7 Scenes)
 
-    +------------+-------+-------+-------+------------------+------------+
-    |            | PSNR  | SSIM  | LPIPS | Train Mem        | Train Time |
-    +============+=======+=======+=======+==================+============+
-    | inria-7k   | 27.23 | 0.829 | 0.204 | 7.7 GB           | 6m05s      |
-    +------------+-------+-------+-------+------------------+------------+
-    | gsplat-7k  | 27.21 | 0.831 | 0.202 | **4.3GB**        | **5m35s**  |
-    +------------+-------+-------+-------+------------------+------------+
-    | inria-30k  | 28.95 | 0.870 | 0.138 | 9.0 GB           | 37m13s     |
-    +------------+-------+-------+-------+------------------+------------+
-    | gsplat-30k | 28.95 | 0.870 | 0.135 | **5.7 GB**       | **35m49s** |
-    +------------+-------+-------+-------+------------------+------------+
+    +---------------------+-------+-------+-------+------------------+------------+
+    |                     | PSNR  | SSIM  | LPIPS | Train Mem        | Train Time |
+    +=====================+=======+=======+=======+==================+============+
+    | inria-7k            | 27.23 | 0.829 | 0.204 | 7.7 GB           | 6m05s      |
+    +---------------------+-------+-------+-------+------------------+------------+
+    | gsplat-7k           | 27.21 | 0.831 | 0.202 | **4.3GB**        | **5m35s**  |
+    +---------------------+-------+-------+-------+------------------+------------+
+    | inria-30k           | 28.95 | 0.870 | 0.138 | 9.0 GB           | 37m13s     |
+    +---------------------+-------+-------+-------+------------------+------------+
+    | gsplat-30k (1 GPU)  | 28.95 | 0.870 | 0.135 | **5.7 GB**       | **35m49s** |
+    +---------------------+-------+-------+-------+------------------+------------+
+    | gsplat-30k (4 GPUs) | 28.91 | 0.871 | 0.135 | **2.0 GB**       | **11m28s** |
+    +---------------------+-------+-------+-------+------------------+------------+
 
 This repo comes with a standalone script (:code:`examples/simple_trainer.py`) that reproduces 
 the `Gaussian Splatting <https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/>`_ with
@@ -131,7 +133,7 @@ is different from what's reported in the original paper that uses
 :code:`from lpipsPyTorch import lpips`.
 
 The evaluation of `gsplat-X` can be reproduced with the command 
-:code:`cd examples; bash benchmark.sh` 
+:code:`cd examples; bash benchmarks/basic.sh` 
 within the gsplat repo (commit 6acdce4). 
 
 The evaluation of `inria-X` can be 

@@ -16,11 +16,13 @@ import viser
 from datasets.colmap import Dataset, Parser
 from datasets.traj import generate_interpolated_path
 from torch import Tensor
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
 
+from gsplat.distributed import cli
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy
 from gsplat.compression import PngCompressionStrategy
@@ -169,6 +171,8 @@ def create_splats_with_optimizers(
     batch_size: int = 1,
     feature_dim: Optional[int] = None,
     device: str = "cuda",
+    world_rank: int = 0,
+    world_size: int = 1,
 ) -> Tuple[torch.nn.ParameterDict, Dict[str, torch.optim.Optimizer]]:
     if init_type == "sfm":
         points = torch.from_numpy(parser.points).float()
@@ -179,11 +183,17 @@ def create_splats_with_optimizers(
     else:
         raise ValueError("Please specify a correct init_type: sfm or random")
 
-    N = points.shape[0]
     # Initialize the GS size to be the average dist of the 3 nearest neighbors
     dist2_avg = (knn(points, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
     dist_avg = torch.sqrt(dist2_avg)
     scales = torch.log(dist_avg * init_scale).unsqueeze(-1).repeat(1, 3)  # [N, 3]
+
+    # Distribute the GSs to different ranks (also works for single rank)
+    points = points[world_rank::world_size]
+    rgbs = rgbs[world_rank::world_size]
+    scales = scales[world_rank::world_size]
+
+    N = points.shape[0]
     quats = torch.rand((N, 4))  # [N, 4]
     opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
 
@@ -213,11 +223,13 @@ def create_splats_with_optimizers(
     # https://www.cs.princeton.edu/~smalladi/blog/2024/01/22/SDEs-ScalingRules/
     # Note that this would not make the training exactly equivalent, see
     # https://arxiv.org/pdf/2402.18824v1
+    BS = batch_size * world_size
     optimizers = {
         name: (torch.optim.SparseAdam if sparse_grad else torch.optim.Adam)(
-            [{"params": splats[name], "lr": lr * math.sqrt(batch_size)}],
-            eps=1e-15 / math.sqrt(batch_size),
-            betas=(1 - batch_size * (1 - 0.9), 1 - batch_size * (1 - 0.999)),
+            [{"params": splats[name], "lr": lr * math.sqrt(BS), "name": name}],
+            eps=1e-15 / math.sqrt(BS),
+            # TODO: check betas logic when BS is larger than 10 betas[0] will be zero.
+            betas=(1 - BS * (1 - 0.9), 1 - BS * (1 - 0.999)),
         )
         for name, _, lr in params
     }
@@ -227,11 +239,16 @@ def create_splats_with_optimizers(
 class Runner:
     """Engine for training and testing."""
 
-    def __init__(self, cfg: Config) -> None:
-        set_random_seed(42)
+    def __init__(
+        self, local_rank: int, world_rank, world_size: int, cfg: Config
+    ) -> None:
+        set_random_seed(42 + local_rank)
 
         self.cfg = cfg
-        self.device = "cuda"
+        self.world_rank = world_rank
+        self.local_rank = local_rank
+        self.world_size = world_size
+        self.device = f"cuda:{local_rank}"
 
         # Where to dump results.
         os.makedirs(cfg.result_dir, exist_ok=True)
@@ -279,6 +296,8 @@ class Runner:
             batch_size=cfg.batch_size,
             feature_dim=feature_dim,
             device=self.device,
+            world_rank=world_rank,
+            world_size=world_size,
         )
         print("Model initialized. Number of GS:", len(self.splats["means"]))
 
@@ -317,10 +336,14 @@ class Runner:
                     weight_decay=cfg.pose_opt_reg,
                 )
             ]
+            if world_size > 1:
+                self.pose_adjust = DDP(self.pose_adjust)
 
         if cfg.pose_noise > 0.0:
             self.pose_perturb = CameraOptModule(len(self.trainset)).to(self.device)
             self.pose_perturb.random_init(cfg.pose_noise)
+            if world_size > 1:
+                self.pose_perturb = DDP(self.pose_perturb)
 
         self.app_optimizers = []
         if cfg.app_opt:
@@ -341,6 +364,8 @@ class Runner:
                     lr=cfg.app_opt_lr * math.sqrt(cfg.batch_size),
                 ),
             ]
+            if world_size > 1:
+                self.app_module = DDP(self.app_module)
 
         # Losses & Metrics.
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
@@ -401,6 +426,7 @@ class Runner:
             absgrad=self.cfg.absgrad,
             sparse_grad=self.cfg.sparse_grad,
             rasterize_mode=rasterize_mode,
+            distributed=self.world_size > 1,
             **kwargs,
         )
         return render_colors, render_alphas, info
@@ -408,10 +434,13 @@ class Runner:
     def train(self):
         cfg = self.cfg
         device = self.device
+        world_rank = self.world_rank
+        world_size = self.world_size
 
         # Dump cfg.
-        with open(f"{cfg.result_dir}/cfg.json", "w") as f:
-            json.dump(vars(cfg), f)
+        if world_rank == 0:
+            with open(f"{cfg.result_dir}/cfg.json", "w") as f:
+                json.dump(vars(cfg), f)
 
         max_steps = cfg.max_steps
         init_step = 0
@@ -544,7 +573,16 @@ class Runner:
                 desc += f"pose err={pose_err.item():.6f}| "
             pbar.set_description(desc)
 
-            if cfg.tb_every > 0 and step % cfg.tb_every == 0:
+            # write images (gt and render)
+            # if world_rank == 0 and step % 800 == 0:
+            #     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
+            #     canvas = canvas.reshape(-1, *canvas.shape[2:])
+            #     imageio.imwrite(
+            #         f"{self.render_dir}/train_rank{self.world_rank}.png",
+            #         (canvas * 255).astype(np.uint8),
+            #     )
+
+            if world_rank == 0 and cfg.tb_every > 0 and step % cfg.tb_every == 0:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
                 self.writer.add_scalar("train/loss", loss.item(), step)
                 self.writer.add_scalar("train/l1loss", l1loss.item(), step)
@@ -559,12 +597,42 @@ class Runner:
                     self.writer.add_image("train/render", canvas, step)
                 self.writer.flush()
 
+            # save checkpoint before updating the model
+            if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
+                mem = torch.cuda.max_memory_allocated() / 1024**3
+                stats = {
+                    "mem": mem,
+                    "ellipse_time": time.time() - global_tic,
+                    "num_GS": len(self.splats["means"]),
+                }
+                print("Step: ", step, stats)
+                with open(
+                    f"{self.stats_dir}/train_step{step:04d}_rank{self.world_rank}.json",
+                    "w",
+                ) as f:
+                    json.dump(stats, f)
+                data = {"step": step, "splats": self.splats.state_dict()}
+                if cfg.pose_opt:
+                    if world_size > 1:
+                        data["pose_adjust"] = self.pose_adjust.module.state_dict()
+                    else:
+                        data["pose_adjust"] = self.pose_adjust.state_dict()
+                if cfg.app_opt:
+                    if world_size > 1:
+                        data["app_module"] = self.app_module.module.state_dict()
+                    else:
+                        data["app_module"] = self.app_module.state_dict()
+                torch.save(
+                    data, f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt"
+                )
+
             self.strategy.step_post_backward(
                 params=self.splats,
                 optimizers=self.optimizers,
                 state=self.strategy_state,
                 step=step,
                 info=info,
+                packed=cfg.packed,
             )
 
             # Turn Gradients into Sparse Tensor before running optimizer
@@ -595,25 +663,6 @@ class Runner:
             for scheduler in schedulers:
                 scheduler.step()
 
-            # save checkpoint
-            if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
-                mem = torch.cuda.max_memory_allocated() / 1024**3
-                stats = {
-                    "mem": mem,
-                    "ellipse_time": time.time() - global_tic,
-                    "num_GS": len(self.splats["means"]),
-                }
-                print("Step: ", step, stats)
-                with open(f"{self.stats_dir}/train_step{step}.json", "w") as f:
-                    json.dump(stats, f)
-                torch.save(
-                    {
-                        "step": step,
-                        "splats": self.splats.state_dict(),
-                    },
-                    f"{self.ckpt_dir}/ckpt_{step}.pt",
-                )
-
             # eval the full set
             if step in [i - 1 for i in cfg.eval_steps] or step == max_steps - 1:
                 self.eval(step)
@@ -640,6 +689,8 @@ class Runner:
         print("Running evaluation...")
         cfg = self.cfg
         device = self.device
+        world_rank = self.world_rank
+        world_size = self.world_size
 
         valloader = torch.utils.data.DataLoader(
             self.valset, batch_size=1, shuffle=False, num_workers=1
@@ -667,43 +718,45 @@ class Runner:
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
 
-            # write images
-            canvas = torch.cat([pixels, colors], dim=2).squeeze(0).cpu().numpy()
-            imageio.imwrite(
-                f"{self.render_dir}/{stage}_step{step}_{i:04d}.png",
-                (canvas * 255).astype(np.uint8),
+            if world_rank == 0:
+                # write images
+                canvas = torch.cat([pixels, colors], dim=2).squeeze(0).cpu().numpy()
+                imageio.imwrite(
+                    f"{self.render_dir}/{stage}_{i:04d}.png",
+                    (canvas * 255).astype(np.uint8),
+                )
+
+                pixels = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
+                colors = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
+                metrics["psnr"].append(self.psnr(colors, pixels))
+                metrics["ssim"].append(self.ssim(colors, pixels))
+                metrics["lpips"].append(self.lpips(colors, pixels))
+
+        if world_rank == 0:
+            ellipse_time /= len(valloader)
+
+            psnr = torch.stack(metrics["psnr"]).mean()
+            ssim = torch.stack(metrics["ssim"]).mean()
+            lpips = torch.stack(metrics["lpips"]).mean()
+            print(
+                f"PSNR: {psnr.item():.3f}, SSIM: {ssim.item():.4f}, LPIPS: {lpips.item():.3f} "
+                f"Time: {ellipse_time:.3f}s/image "
+                f"Number of GS: {len(self.splats['means'])}"
             )
-
-            pixels = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
-            colors = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
-            metrics["psnr"].append(self.psnr(colors, pixels))
-            metrics["ssim"].append(self.ssim(colors, pixels))
-            metrics["lpips"].append(self.lpips(colors, pixels))
-
-        ellipse_time /= len(valloader)
-
-        psnr = torch.stack(metrics["psnr"]).mean()
-        ssim = torch.stack(metrics["ssim"]).mean()
-        lpips = torch.stack(metrics["lpips"]).mean()
-        print(
-            f"PSNR: {psnr.item():.3f}, SSIM: {ssim.item():.4f}, LPIPS: {lpips.item():.3f} "
-            f"Time: {ellipse_time:.3f}s/image "
-            f"Number of GS: {len(self.splats['means'])}"
-        )
-        # save stats as json
-        stats = {
-            "psnr": psnr.item(),
-            "ssim": ssim.item(),
-            "lpips": lpips.item(),
-            "ellipse_time": ellipse_time,
-            "num_GS": len(self.splats["means"]),
-        }
-        with open(f"{self.stats_dir}/{stage}_step{step}.json", "w") as f:
-            json.dump(stats, f)
-        # save stats to tensorboard
-        for k, v in stats.items():
-            self.writer.add_scalar(f"{stage}/{k}", v, step)
-        self.writer.flush()
+            # save stats as json
+            stats = {
+                "psnr": psnr.item(),
+                "ssim": ssim.item(),
+                "lpips": lpips.item(),
+                "ellipse_time": ellipse_time,
+                "num_GS": len(self.splats["means"]),
+            }
+            with open(f"{self.stats_dir}/{stage}_step{step:04d}.json", "w") as f:
+                json.dump(stats, f)
+            # save stats to tensorboard
+            for k, v in stats.items():
+                self.writer.add_scalar(f"{stage}/{k}", v, step)
+            self.writer.flush()
 
     @torch.no_grad()
     def render_traj(self, step: int):
@@ -795,8 +848,13 @@ class Runner:
         return render_colors[0].cpu().numpy()
 
 
-def main(cfg: Config):
-    runner = Runner(cfg)
+def main(local_rank: int, world_rank, world_size: int, cfg: Config):
+    if world_size > 1 and not cfg.disable_viewer:
+        cfg.disable_viewer = True
+        if world_rank == 0:
+            print("Viewer is disabled in distributed training.")
+
+    runner = Runner(local_rank, world_rank, world_size, cfg)
 
     if cfg.ckpt is not None:
         # run eval only
@@ -816,6 +874,18 @@ def main(cfg: Config):
 
 
 if __name__ == "__main__":
+    """
+    Usage:
+
+    ```bash
+    # Single GPU training
+    CUDA_VISIBLE_DEVICES=0 python simple_trainer.py
+
+    # Distributed training on 4 GPUs: Effectively 4x batch size so run 4x less steps.
+    CUDA_VISIBLE_DEVICES=0,1,2,3 python simple_trainer.py --steps_scaler 0.25
+
+    """
+
     cfg = tyro.cli(Config)
     cfg.adjust_steps(cfg.steps_scaler)
-    main(cfg)
+    cli(main, cfg, verbose=True)
