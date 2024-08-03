@@ -131,7 +131,7 @@ is different from what's reported in the original paper that uses
 :code:`from lpipsPyTorch import lpips`.
 
 The evaluation of `gsplat-X` can be reproduced with the command 
-:code:`cd examples; bash benchmark.sh` 
+:code:`cd examples; bash benchmarks/basic.sh` 
 within the gsplat repo (commit 6acdce4). 
 
 The evaluation of `inria-X` can be 
