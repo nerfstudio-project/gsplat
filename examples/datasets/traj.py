@@ -90,7 +90,7 @@ def generate_ellipse_path_z(
     ind_up = np.argmax(np.abs(avg_up))
     up = np.eye(3)[ind_up] * np.sign(avg_up[ind_up])
 
-    return np.stack([viewmatrix(p - center, up, p) for p in positions])
+    return np.stack([viewmatrix(center - p, up, p) for p in positions])
 
 
 def generate_ellipse_path_y(

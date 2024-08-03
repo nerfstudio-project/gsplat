@@ -34,6 +34,7 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     // grad outputs
     const T *__restrict__ v_means2d,       // [nnz, 2]
     const T *__restrict__ v_depths,        // [nnz]
+    const T *__restrict__ v_normals,       // [nnz, 3]
     const T *__restrict__ v_conics,        // [nnz, 3]
     const T *__restrict__ v_compensations, // [nnz] optional
     const bool sparse_grad, // whether the outputs are in COO format [nnz, ...]
@@ -145,6 +146,15 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
             vec4<T> v_quat(0.f);
             vec3<T> v_scale(0.f);
             quat_scale_to_covar_vjp<T>(quat, scale, rotmat, v_covar, v_quat, v_scale);
+
+            // add contribution from v_normals
+            v_normals += idx * 3;
+            quat_to_rotmat_vjp<T>(
+                quat,
+                mat3<T>(0.f, 0.f, 0.f, 0.f, 0.f, 0.f, v_normals[0], v_normals[1], v_normals[2]),
+                v_quat
+            );
+
             v_quats += idx * 4;
             v_scales += idx * 3;
             v_quats[0] = v_quat[0];
@@ -188,6 +198,15 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
             vec4<T> v_quat(0.f);
             vec3<T> v_scale(0.f);
             quat_scale_to_covar_vjp<T>(quat, scale, rotmat, v_covar, v_quat, v_scale);
+
+            // add contribution from v_normals
+            v_normals += idx * 3;
+            quat_to_rotmat_vjp<T>(
+                quat,
+                mat3<T>(0.f, 0.f, 0.f, 0.f, 0.f, 0.f, v_normals[0], v_normals[1], v_normals[2]),
+                v_quat
+            );
+
             warpSum(v_quat, warp_group_g);
             warpSum(v_scale, warp_group_g);
             if (warp_group_g.thread_rank() == 0) {
@@ -240,6 +259,7 @@ fully_fused_projection_packed_bwd_tensor(
     // grad outputs
     const torch::Tensor &v_means2d,                     // [nnz, 2]
     const torch::Tensor &v_depths,                      // [nnz]
+    const torch::Tensor &v_normals,                     // [nnz, 3]
     const torch::Tensor &v_conics,                      // [nnz, 3]
     const at::optional<torch::Tensor> &v_compensations, // [nnz] optional
     const bool viewmats_requires_grad, const bool sparse_grad) {
@@ -259,6 +279,7 @@ fully_fused_projection_packed_bwd_tensor(
     CHECK_INPUT(conics);
     CHECK_INPUT(v_means2d);
     CHECK_INPUT(v_depths);
+    CHECK_INPUT(v_normals);
     CHECK_INPUT(v_conics);
     if (compensations.has_value()) {
         CHECK_INPUT(compensations.value());
@@ -309,7 +330,7 @@ fully_fused_projection_packed_bwd_tensor(
             compensations.has_value() ? compensations.value().data_ptr<float>()
                                       : nullptr,
             v_means2d.data_ptr<float>(), v_depths.data_ptr<float>(),
-            v_conics.data_ptr<float>(),
+            v_normals.data_ptr<float>(), v_conics.data_ptr<float>(),
             v_compensations.has_value() ? v_compensations.value().data_ptr<float>()
                                         : nullptr,
             sparse_grad, v_means.data_ptr<float>(),

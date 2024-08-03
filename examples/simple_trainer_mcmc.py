@@ -14,7 +14,7 @@ import tqdm
 import tyro
 import viser
 from datasets.colmap import Dataset, Parser
-from datasets.traj import generate_interpolated_path
+from datasets.traj import generate_interpolated_path, generate_ellipse_path_z
 from simple_trainer import create_splats_with_optimizers
 from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
@@ -28,10 +28,14 @@ from gsplat.strategy import MCMCStrategy
 
 @dataclass
 class Config:
+    # Rasterization backend can be 3dgs, 3dgs_inria, or 2dgs_inria
+    rasterization_backend: str = "3dgs"
     # Disable viewer
     disable_viewer: bool = False
     # Path to the .pt file. If provide, it will skip training and render a video
     ckpt: Optional[str] = None
+    # Render trajectory path
+    render_traj_path: str = "interp"
 
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
@@ -134,6 +138,13 @@ class Config:
     # Weight for depth loss
     depth_lambda: float = 1e-2
 
+    # Enable normal consistency loss. (experimental)
+    normal_consistency_loss: bool = False
+    # Weight for normal consistency loss
+    normal_consistency_lambda: float = 0.05
+    # Start applying normal consistency loss after this iteration
+    normal_consistency_start_iter: int = 7000
+
     # Dump information to tensorboard every this steps
     tb_every: int = 100
     # Save training images to tensorboard
@@ -157,6 +168,22 @@ class Runner:
 
         self.cfg = cfg
         self.device = "cuda"
+        if cfg.rasterization_backend == "3dgs":
+            self.rasterization_fn = rasterization
+        elif cfg.rasterization_backend == "3dgs_inria":
+            self.rasterization_fn = rasterization_inria_wrapper
+        elif cfg.rasterization_backend == "2dgs_inria":
+            self.rasterization_fn = rasterization_2dgs_inria_wrapper
+        else:
+            raise ValueError(
+                f"Unsupported rasterization backend: {cfg.rasterization_backend}"
+            )
+
+        self.render_mode = "RGB"
+        if cfg.depth_loss:
+            self.render_mode = "RGB+ED"
+        if cfg.normal_consistency_loss:
+            self.render_mode = "RGB+ED+N"
 
         # Where to dump results.
         os.makedirs(cfg.result_dir, exist_ok=True)
@@ -280,8 +307,6 @@ class Runner:
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         means = self.splats["means"]  # [N, 3]
-        # quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
-        # rasterization does normalization internally
         quats = self.splats["quats"]  # [N, 4]
         scales = torch.exp(self.splats["scales"])  # [N, 3]
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
@@ -300,7 +325,8 @@ class Runner:
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
-        render_colors, render_alphas, info = rasterization(
+
+        render_colors, render_alphas, info = self.rasterization_fn(
             means=means,
             quats=quats,
             scales=scales,
@@ -401,12 +427,9 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 image_ids=image_ids,
-                render_mode="RGB+ED" if cfg.depth_loss else "RGB",
+                render_mode=self.render_mode,
             )
-            if renders.shape[-1] == 4:
-                colors, depths = renders[..., 0:3], renders[..., 3:4]
-            else:
-                colors, depths = renders, None
+            colors = renders[..., :3]
 
             if cfg.random_bkgd:
                 bkgd = torch.rand(1, 3, device=device)
@@ -418,7 +441,14 @@ class Runner:
                 pixels.permute(0, 3, 1, 2), colors.permute(0, 3, 1, 2)
             )
             loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
+            loss += (
+                cfg.opacity_reg
+                * torch.abs(torch.sigmoid(self.splats["opacities"])).mean()
+            )
+            loss += cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
+
             if cfg.depth_loss:
+                depths = renders[..., -1:]
                 # query depths from depth map
                 points = torch.stack(
                     [
@@ -438,15 +468,14 @@ class Runner:
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
 
-            loss = (
-                loss
-                + cfg.opacity_reg
-                * torch.abs(torch.sigmoid(self.splats["opacities"])).mean()
-            )
-            loss = (
-                loss
-                + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
-            )
+            if cfg.normal_consistency_loss:
+                normals_rend = info["normals_rend"]
+                normals_surf = info["normals_surf"]
+                normalconsistencyloss = (
+                    1 - (normals_rend * normals_surf).sum(dim=-1)
+                ).mean()
+                if step > cfg.normal_consistency_start_iter:
+                    loss += normalconsistencyloss * cfg.normal_consistency_lambda
 
             loss.backward()
 
@@ -468,6 +497,12 @@ class Runner:
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
+                if cfg.normal_consistency_loss:
+                    self.writer.add_scalar(
+                        "train/normalconsistencyloss",
+                        normalconsistencyloss.item(),
+                        step,
+                    )
                 if cfg.tb_save_image:
                     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
                     canvas = canvas.reshape(-1, *canvas.shape[2:])
@@ -566,7 +601,7 @@ class Runner:
 
             torch.cuda.synchronize()
             tic = time.time()
-            colors, _, _ = self.rasterize_splats(
+            renders, alphas, info = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -574,16 +609,27 @@ class Runner:
                 sh_degree=cfg.sh_degree,
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
-            )  # [1, H, W, 3]
-            colors = torch.clamp(colors, 0.0, 1.0)
+                render_mode=self.render_mode,
+            )  # [1, H, W, K]
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
 
+            colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)
+            canvas_list = [pixels, colors]
+            if cfg.depth_loss:
+                depths = renders[..., -1:]
+                depths = (depths - depths.min()) / (depths.max() - depths.min())
+                canvas_list.append(depths)
+            if cfg.normal_consistency_loss:
+                normals_rend = info["normals_rend"]
+                normals_surf = info["normals_surf"]
+                canvas_list.extend([normals_rend * 0.5 + 0.5])
+                canvas_list.extend([normals_surf * 0.5 + 0.5])
+
             # write images
-            canvas = torch.cat([pixels, colors], dim=2).squeeze(0).cpu().numpy()
-            imageio.imwrite(
-                f"{self.render_dir}/val_{i:04d}.png", (canvas * 255).astype(np.uint8)
-            )
+            canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()
+            canvas = (canvas * 255).astype(np.uint8)
+            imageio.imwrite(f"{self.render_dir}/val_step{step:04d}_{i:04d}.png", canvas)
 
             pixels = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
             colors = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
@@ -623,41 +669,66 @@ class Runner:
         cfg = self.cfg
         device = self.device
 
-        camtoworlds = self.parser.camtoworlds[5:-5]
-        camtoworlds = generate_interpolated_path(camtoworlds, 1)  # [N, 3, 4]
-        camtoworlds = np.concatenate(
+        camtoworlds_all = self.parser.camtoworlds[5:-5]
+        if cfg.render_traj_path == "interp":
+            camtoworlds_all = generate_interpolated_path(
+                camtoworlds_all, 1
+            )  # [N, 3, 4]
+        elif cfg.render_traj_path == "ellipse":
+            height = camtoworlds_all[:, 2, 3].mean()
+            camtoworlds_all = generate_ellipse_path_z(
+                camtoworlds_all, height=height
+            )  # [N, 3, 4]
+        else:
+            raise ValueError(
+                f"Render trajectory type not supported: {cfg.render_traj_path}"
+            )
+
+        camtoworlds_all = np.concatenate(
             [
-                camtoworlds,
-                np.repeat(np.array([[[0.0, 0.0, 0.0, 1.0]]]), len(camtoworlds), axis=0),
+                camtoworlds_all,
+                np.repeat(
+                    np.array([[[0.0, 0.0, 0.0, 1.0]]]), len(camtoworlds_all), axis=0
+                ),
             ],
             axis=1,
         )  # [N, 4, 4]
 
-        camtoworlds = torch.from_numpy(camtoworlds).float().to(device)
+        camtoworlds_all = torch.from_numpy(camtoworlds_all).float().to(device)
         K = torch.from_numpy(list(self.parser.Ks_dict.values())[0]).float().to(device)
         width, height = list(self.parser.imsize_dict.values())[0]
 
         canvas_all = []
-        for i in tqdm.trange(len(camtoworlds), desc="Rendering trajectory"):
-            renders, _, _ = self.rasterize_splats(
-                camtoworlds=camtoworlds[i : i + 1],
-                Ks=K[None],
+        for i in tqdm.trange(len(camtoworlds_all), desc="Rendering trajectory"):
+            camtoworlds = camtoworlds_all[i : i + 1]
+            Ks = K[None]
+
+            renders, alphas, info = self.rasterize_splats(
+                camtoworlds=camtoworlds,
+                Ks=Ks,
                 width=width,
                 height=height,
                 sh_degree=cfg.sh_degree,
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
-                render_mode="RGB+ED",
-            )  # [1, H, W, 4]
-            colors = torch.clamp(renders[0, ..., 0:3], 0.0, 1.0)  # [H, W, 3]
-            depths = renders[0, ..., 3:4]  # [H, W, 1]
-            depths = (depths - depths.min()) / (depths.max() - depths.min())
+                render_mode=self.render_mode,
+            )  # [1, H, W, K]
+
+            colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)
+            canvas_list = [colors]
+            if cfg.depth_loss:
+                depths = renders[..., -1:]
+                depths = (depths - depths.min()) / (depths.max() - depths.min())
+                canvas_list.append(depths)
+            if cfg.normal_consistency_loss:
+                normals_rend = info["normals_rend"]
+                normals_surf = info["normals_surf"]
+                canvas_list.extend([normals_rend * 0.5 + 0.5])
+                canvas_list.extend([normals_surf * 0.5 + 0.5])
 
             # write images
-            canvas = torch.cat(
-                [colors, depths.repeat(1, 1, 3)], dim=0 if width > height else 1
-            )
-            canvas = (canvas.cpu().numpy() * 255).astype(np.uint8)
+            canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()
+            canvas = (canvas * 255).astype(np.uint8)
             canvas_all.append(canvas)
 
         # save to video

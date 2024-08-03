@@ -715,7 +715,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         calc_compensations: bool,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         # "covars" and {"quats", "scales"} are mutually exclusive
-        radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
+        radii, means2d, depths, normals, conics, compensations = _make_lazy_cuda_func(
             "fully_fused_projection_fwd"
         )(
             means,
@@ -741,10 +741,12 @@ class _FullyFusedProjection(torch.autograd.Function):
         ctx.height = height
         ctx.eps2d = eps2d
 
-        return radii, means2d, depths, conics, compensations
+        return radii, means2d, depths, normals, conics, compensations
 
     @staticmethod
-    def backward(ctx, v_radii, v_means2d, v_depths, v_conics, v_compensations):
+    def backward(
+        ctx, v_radii, v_means2d, v_depths, v_normals, v_conics, v_compensations
+    ):
         (
             means,
             covars,
@@ -778,6 +780,7 @@ class _FullyFusedProjection(torch.autograd.Function):
             compensations,
             v_means2d.contiguous(),
             v_depths.contiguous(),
+            v_normals.contiguous(),
             v_conics.contiguous(),
             v_compensations,
             ctx.needs_input_grad[4],  # viewmats_requires_grad
@@ -967,6 +970,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             radii,
             means2d,
             depths,
+            normals,
             conics,
             compensations,
         ) = _make_lazy_cuda_func("fully_fused_projection_packed_fwd")(
@@ -1003,7 +1007,16 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         ctx.eps2d = eps2d
         ctx.sparse_grad = sparse_grad
 
-        return camera_ids, gaussian_ids, radii, means2d, depths, conics, compensations
+        return (
+            camera_ids,
+            gaussian_ids,
+            radii,
+            means2d,
+            depths,
+            normals,
+            conics,
+            compensations,
+        )
 
     @staticmethod
     def backward(
@@ -1013,6 +1026,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         v_radii,
         v_means2d,
         v_depths,
+        v_normals,
         v_conics,
         v_compensations,
     ):
@@ -1053,6 +1067,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             compensations,
             v_means2d.contiguous(),
             v_depths.contiguous(),
+            v_normals.contiguous(),
             v_conics.contiguous(),
             v_compensations,
             ctx.needs_input_grad[4],  # viewmats_requires_grad
