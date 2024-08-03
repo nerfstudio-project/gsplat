@@ -23,7 +23,7 @@ device = torch.device("cuda:0")
 def test_rasterization(
     per_view_color: bool, sh_degree: Optional[int], render_mode: str, packed: bool
 ):
-    from gsplat.rendering import rasterization
+    from gsplat.rendering import _rasterization, rasterization
 
     torch.manual_seed(42)
 
@@ -51,7 +51,7 @@ def test_rasterization(
     ).expand(C, -1, -1)
     viewmats = torch.eye(4, device=device).expand(C, -1, -1)
 
-    colors, alphas, meta = rasterization(
+    renders, alphas, meta = rasterization(
         means=means,
         quats=quats,
         scales=scales,
@@ -67,8 +67,24 @@ def test_rasterization(
     )
 
     if render_mode == "D":
-        assert colors.shape == (C, height, width, 1)
+        assert renders.shape == (C, height, width, 1)
     elif render_mode == "RGB":
-        assert colors.shape == (C, height, width, 3)
+        assert renders.shape == (C, height, width, 3)
     elif render_mode == "RGB+D":
-        assert colors.shape == (C, height, width, 4)
+        assert renders.shape == (C, height, width, 4)
+
+    _renders, _alphas, _meta = _rasterization(
+        means=means,
+        quats=quats,
+        scales=scales,
+        opacities=opacities,
+        colors=colors,
+        viewmats=viewmats,
+        Ks=Ks,
+        width=width,
+        height=height,
+        sh_degree=sh_degree,
+        render_mode=render_mode,
+    )
+    torch.testing.assert_close(renders, _renders, rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(alphas, _alphas, rtol=1e-4, atol=1e-4)

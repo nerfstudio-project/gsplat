@@ -9,7 +9,6 @@ import imageio
 import nerfview
 import numpy as np
 import torch
-import torch.distributed
 import torch.nn.functional as F
 import tqdm
 import tyro
@@ -21,18 +20,11 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
-from utils import (
-    AppearanceOptModule,
-    CameraOptModule,
-    knn,
-    normalized_quat_to_rotmat,
-    rgb_to_sh,
-    set_random_seed,
-)
+from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
 
 from gsplat.distributed import cli
-from gsplat.profile import profiler, timeit
 from gsplat.rendering import rasterization
+from gsplat.strategy import DefaultStrategy
 
 
 @dataclass
@@ -118,6 +110,8 @@ class Config:
     absgrad: bool = False
     # Anti-aliasing in rasterization. Might slightly hurt quantitative metrics.
     antialiased: bool = False
+    # Whether to use revised opacity heuristic from arXiv:2404.06109 (experimental)
+    revised_opacity: bool = False
 
     # Use random background for training to discourage transparency
     random_bkgd: bool = False
@@ -176,7 +170,7 @@ def create_splats_with_optimizers(
     device: str = "cuda",
     world_rank: int = 0,
     world_size: int = 1,
-) -> Tuple[torch.nn.ParameterDict, torch.optim.Optimizer]:
+) -> Tuple[torch.nn.ParameterDict, Dict[str, torch.optim.Optimizer]]:
     if init_type == "sfm":
         points = torch.from_numpy(parser.points).float()
         rgbs = torch.from_numpy(parser.points_rgb / 255.0).float()
@@ -202,7 +196,7 @@ def create_splats_with_optimizers(
 
     params = [
         # name, value, lr
-        ("means3d", torch.nn.Parameter(points), 1.6e-4 * scene_scale),
+        ("means", torch.nn.Parameter(points), 1.6e-4 * scene_scale),
         ("scales", torch.nn.Parameter(scales), 5e-3),
         ("quats", torch.nn.Parameter(quats), 1e-3),
         ("opacities", torch.nn.Parameter(opacities), 5e-2),
@@ -227,15 +221,15 @@ def create_splats_with_optimizers(
     # Note that this would not make the training exactly equivalent, see
     # https://arxiv.org/pdf/2402.18824v1
     BS = batch_size * world_size
-    optimizers = [
-        (torch.optim.SparseAdam if sparse_grad else torch.optim.Adam)(
+    optimizers = {
+        name: (torch.optim.SparseAdam if sparse_grad else torch.optim.Adam)(
             [{"params": splats[name], "lr": lr * math.sqrt(BS), "name": name}],
             eps=1e-15 / math.sqrt(BS),
             # TODO: check betas logic when BS is larger than 10 betas[0] will be zero.
             betas=(1 - BS * (1 - 0.9), 1 - BS * (1 - 0.999)),
         )
         for name, _, lr in params
-    ]
+    }
     return splats, optimizers
 
 
@@ -302,7 +296,26 @@ class Runner:
             world_rank=world_rank,
             world_size=world_size,
         )
-        print("Model initialized. Number of GS:", len(self.splats["means3d"]))
+        print("Model initialized. Number of GS:", len(self.splats["means"]))
+
+        # Densification Strategy
+        self.strategy = DefaultStrategy(
+            verbose=True,
+            scene_scale=self.scene_scale,
+            prune_opa=cfg.prune_opa,
+            grow_grad2d=cfg.grow_grad2d,
+            grow_scale3d=cfg.grow_scale3d,
+            prune_scale3d=cfg.prune_scale3d,
+            # refine_scale2d_stop_iter=4000, # splatfacto behavior
+            refine_start_iter=cfg.refine_start_iter,
+            refine_stop_iter=cfg.refine_stop_iter,
+            reset_every=cfg.reset_every,
+            refine_every=cfg.refine_every,
+            absgrad=cfg.absgrad,
+            revised_opacity=cfg.revised_opacity,
+        )
+        self.strategy.check_sanity(self.splats, self.optimizers)
+        self.strategy_state = self.strategy.initialize_state()
 
         self.pose_optimizers = []
         if cfg.pose_opt:
@@ -315,10 +328,14 @@ class Runner:
                     weight_decay=cfg.pose_opt_reg,
                 )
             ]
+            if world_size > 1:
+                self.pose_adjust = DDP(self.pose_adjust)
 
         if cfg.pose_noise > 0.0:
             self.pose_perturb = CameraOptModule(len(self.trainset)).to(self.device)
             self.pose_perturb.random_init(cfg.pose_noise)
+            if world_size > 1:
+                self.pose_perturb = DDP(self.pose_perturb)
 
         self.app_optimizers = []
         if cfg.app_opt:
@@ -339,6 +356,8 @@ class Runner:
                     lr=cfg.app_opt_lr * math.sqrt(cfg.batch_size),
                 ),
             ]
+            if world_size > 1:
+                self.app_module = DDP(self.app_module)
 
         # Losses & Metrics.
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
@@ -356,13 +375,6 @@ class Runner:
                 mode="training",
             )
 
-        # Running stats for prunning & growing.
-        n_gauss = len(self.splats["means3d"])
-        self.running_stats = {
-            "grad2d": torch.zeros(n_gauss, device=self.device),  # norm of the gradient
-            "count": torch.zeros(n_gauss, device=self.device, dtype=torch.int),
-        }
-
     def rasterize_splats(
         self,
         camtoworlds: Tensor,
@@ -371,7 +383,7 @@ class Runner:
         height: int,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
-        means = self.splats["means3d"]  # [N, 3]
+        means = self.splats["means"]  # [N, 3]
         # quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
         # rasterization does normalization internally
         quats = self.splats["quats"]  # [N, 4]
@@ -414,9 +426,11 @@ class Runner:
     def train(self):
         cfg = self.cfg
         device = self.device
+        world_rank = self.world_rank
+        world_size = self.world_size
 
         # Dump cfg.
-        if self.world_rank == 0:
+        if world_rank == 0:
             with open(f"{cfg.result_dir}/cfg.json", "w") as f:
                 json.dump(vars(cfg), f)
 
@@ -424,9 +438,9 @@ class Runner:
         init_step = 0
 
         schedulers = [
-            # means3d has a learning rate schedule, that end at 0.01 of the initial value
+            # means has a learning rate schedule, that end at 0.01 of the initial value
             torch.optim.lr_scheduler.ExponentialLR(
-                self.optimizers[0], gamma=0.01 ** (1.0 / max_steps)
+                self.optimizers["means"], gamma=0.01 ** (1.0 / max_steps)
             ),
         ]
         if cfg.pose_opt:
@@ -457,25 +471,24 @@ class Runner:
                 self.viewer.lock.acquire()
                 tic = time.time()
 
-            with timeit("load data from CPU to GPU"):
-                try:
-                    data = next(trainloader_iter)
-                except StopIteration:
-                    trainloader_iter = iter(trainloader)
-                    data = next(trainloader_iter)
+            try:
+                data = next(trainloader_iter)
+            except StopIteration:
+                trainloader_iter = iter(trainloader)
+                data = next(trainloader_iter)
 
-                camtoworlds = camtoworlds_gt = data["camtoworld"].to(device)  # [1, 4, 4]
-                Ks = data["K"].to(device)  # [1, 3, 3]
-                pixels = data["image"].to(device) / 255.0  # [1, H, W, 3]
-                num_train_rays_per_step = (
-                    pixels.shape[0] * pixels.shape[1] * pixels.shape[2]
-                )
-                image_ids = data["image_id"].to(device)
-                if cfg.depth_loss:
-                    points = data["points"].to(device)  # [1, M, 2]
-                    depths_gt = data["depths"].to(device)  # [1, M]
+            camtoworlds = camtoworlds_gt = data["camtoworld"].to(device)  # [1, 4, 4]
+            Ks = data["K"].to(device)  # [1, 3, 3]
+            pixels = data["image"].to(device) / 255.0  # [1, H, W, 3]
+            num_train_rays_per_step = (
+                pixels.shape[0] * pixels.shape[1] * pixels.shape[2]
+            )
+            image_ids = data["image_id"].to(device)
+            if cfg.depth_loss:
+                points = data["points"].to(device)  # [1, M, 2]
+                depths_gt = data["depths"].to(device)  # [1, M]
 
-                height, width = pixels.shape[1:3]
+            height, width = pixels.shape[1:3]
 
             if cfg.pose_noise:
                 camtoworlds = self.pose_perturb(camtoworlds, image_ids)
@@ -486,60 +499,62 @@ class Runner:
             # sh schedule
             sh_degree_to_use = min(step // cfg.sh_degree_interval, cfg.sh_degree)
 
-            with timeit("forward:rasterize"):
-                # forward
-                renders, alphas, info = self.rasterize_splats(
-                    camtoworlds=camtoworlds,
-                    Ks=Ks,
-                    width=width,
-                    height=height,
-                    sh_degree=sh_degree_to_use,
-                    near_plane=cfg.near_plane,
-                    far_plane=cfg.far_plane,
-                    image_ids=image_ids,
-                    render_mode="RGB+ED" if cfg.depth_loss else "RGB",
-                )
+            # forward
+            renders, alphas, info = self.rasterize_splats(
+                camtoworlds=camtoworlds,
+                Ks=Ks,
+                width=width,
+                height=height,
+                sh_degree=sh_degree_to_use,
+                near_plane=cfg.near_plane,
+                far_plane=cfg.far_plane,
+                image_ids=image_ids,
+                render_mode="RGB+ED" if cfg.depth_loss else "RGB",
+            )
+            if renders.shape[-1] == 4:
+                colors, depths = renders[..., 0:3], renders[..., 3:4]
+            else:
+                colors, depths = renders, None
 
-                if renders.shape[-1] == 4:
-                    colors, depths = renders[..., 0:3], renders[..., 3:4]
-                else:
-                    colors, depths = renders, None
+            if cfg.random_bkgd:
+                bkgd = torch.rand(1, 3, device=device)
+                colors = colors + bkgd * (1.0 - alphas)
 
-                if cfg.random_bkgd:
-                    bkgd = torch.rand(1, 3, device=device)
-                    colors = colors + bkgd * (1.0 - alphas)
+            self.strategy.step_pre_backward(
+                params=self.splats,
+                optimizers=self.optimizers,
+                state=self.strategy_state,
+                step=step,
+                info=info,
+            )
 
-                info["means2d"].retain_grad()  # used for running stats
+            # loss
+            l1loss = F.l1_loss(colors, pixels)
+            ssimloss = 1.0 - self.ssim(
+                pixels.permute(0, 3, 1, 2), colors.permute(0, 3, 1, 2)
+            )
+            loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
+            if cfg.depth_loss:
+                # query depths from depth map
+                points = torch.stack(
+                    [
+                        points[:, :, 0] / (width - 1) * 2 - 1,
+                        points[:, :, 1] / (height - 1) * 2 - 1,
+                    ],
+                    dim=-1,
+                )  # normalize to [-1, 1]
+                grid = points.unsqueeze(2)  # [1, M, 1, 2]
+                depths = F.grid_sample(
+                    depths.permute(0, 3, 1, 2), grid, align_corners=True
+                )  # [1, 1, M, 1]
+                depths = depths.squeeze(3).squeeze(1)  # [1, M]
+                # calculate loss in disparity space
+                disp = torch.where(depths > 0.0, 1.0 / depths, torch.zeros_like(depths))
+                disp_gt = 1.0 / depths_gt  # [1, M]
+                depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
+                loss += depthloss * cfg.depth_lambda
 
-            with timeit("forward:loss"):
-                # loss
-                l1loss = F.l1_loss(colors, pixels)
-                ssimloss = 1.0 - self.ssim(
-                    pixels.permute(0, 3, 1, 2), colors.permute(0, 3, 1, 2)
-                )
-                loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
-                if cfg.depth_loss:
-                    # query depths from depth map
-                    points = torch.stack(
-                        [
-                            points[:, :, 0] / (width - 1) * 2 - 1,
-                            points[:, :, 1] / (height - 1) * 2 - 1,
-                        ],
-                        dim=-1,
-                    )  # normalize to [-1, 1]
-                    grid = points.unsqueeze(2)  # [1, M, 1, 2]
-                    depths = F.grid_sample(
-                        depths.permute(0, 3, 1, 2), grid, align_corners=True
-                    )  # [1, 1, M, 1]
-                    depths = depths.squeeze(3).squeeze(1)  # [1, M]
-                    # calculate loss in disparity space
-                    disp = torch.where(depths > 0.0, 1.0 / depths, torch.zeros_like(depths))
-                    disp_gt = 1.0 / depths_gt  # [1, M]
-                    depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
-                    loss += depthloss * cfg.depth_lambda
-            
-            with timeit("backward"):
-                loss.backward()
+            loss.backward()
 
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
             if cfg.depth_loss:
@@ -551,22 +566,20 @@ class Runner:
             pbar.set_description(desc)
 
             # write images (gt and render)
-            if self.world_rank == 0 and step % 800 == 0:
-                canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
-                canvas = canvas.reshape(-1, *canvas.shape[2:])
-                imageio.imwrite(
-                    f"{self.render_dir}/train.png",
-                    (canvas * 255).astype(np.uint8),
-                )
+            # if world_rank == 0 and step % 800 == 0:
+            #     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
+            #     canvas = canvas.reshape(-1, *canvas.shape[2:])
+            #     imageio.imwrite(
+            #         f"{self.render_dir}/train_rank{self.world_rank}.png",
+            #         (canvas * 255).astype(np.uint8),
+            #     )
 
-            if cfg.tb_every > 0 and step % cfg.tb_every == 0:
+            if world_rank == 0 and cfg.tb_every > 0 and step % cfg.tb_every == 0:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
                 self.writer.add_scalar("train/loss", loss.item(), step)
                 self.writer.add_scalar("train/l1loss", l1loss.item(), step)
                 self.writer.add_scalar("train/ssimloss", ssimloss.item(), step)
-                self.writer.add_scalar(
-                    "train/num_GS", len(self.splats["means3d"]), step
-                )
+                self.writer.add_scalar("train/num_GS", len(self.splats["means"]), step)
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
@@ -582,79 +595,37 @@ class Runner:
                 stats = {
                     "mem": mem,
                     "ellipse_time": time.time() - global_tic,
-                    "num_GS": len(self.splats["means3d"]),
+                    "num_GS": len(self.splats["means"]),
                 }
                 print("Step: ", step, stats)
-                with open(f"{self.stats_dir}/train_step{step:04d}.json", "w") as f:
+                with open(
+                    f"{self.stats_dir}/train_step{step:04d}_rank{self.world_rank}.json",
+                    "w",
+                ) as f:
                     json.dump(stats, f)
                 data = {"step": step, "splats": self.splats.state_dict()}
                 if cfg.pose_opt:
-                    data["pose_adjust"] = self.pose_adjust.state_dict()
+                    if world_size > 1:
+                        data["pose_adjust"] = self.pose_adjust.module.state_dict()
+                    else:
+                        data["pose_adjust"] = self.pose_adjust.state_dict()
                 if cfg.app_opt:
-                    data["app_module"] = self.app_module.state_dict()
+                    if world_size > 1:
+                        data["app_module"] = self.app_module.module.state_dict()
+                    else:
+                        data["app_module"] = self.app_module.state_dict()
                 torch.save(
                     data, f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt"
                 )
-                print(profiler)
 
-            # update running stats for prunning & growing
-            if step < cfg.refine_stop_iter:
-                self.update_running_stats(info)
-
-                if step > cfg.refine_start_iter and step % cfg.refine_every == 0:
-                    grads = self.running_stats["grad2d"] / self.running_stats[
-                        "count"
-                    ].clamp_min(1)
-
-                    # grow GSs
-                    is_grad_high = grads >= cfg.grow_grad2d
-                    is_small = (
-                        torch.exp(self.splats["scales"]).max(dim=-1).values
-                        <= cfg.grow_scale3d * self.scene_scale
-                    )
-                    is_dupli = is_grad_high & is_small
-                    n_dupli = is_dupli.sum().item()
-                    self.refine_duplicate(is_dupli)
-
-                    is_split = is_grad_high & ~is_small
-                    is_split = torch.cat(
-                        [
-                            is_split,
-                            # new GSs added by duplication will not be split
-                            torch.zeros(n_dupli, device=device, dtype=torch.bool),
-                        ]
-                    )
-                    n_split = is_split.sum().item()
-                    self.refine_split(is_split)
-                    print(
-                        f"Step {step}: {n_dupli} GSs duplicated, {n_split} GSs split. "
-                        f"Now having {len(self.splats['means3d'])} GSs."
-                    )
-
-                    # prune GSs
-                    is_prune = torch.sigmoid(self.splats["opacities"]) < cfg.prune_opa
-                    if step > cfg.reset_every:
-                        # The official code also implements sreen-size pruning but
-                        # it's actually not being used due to a bug:
-                        # https://github.com/graphdeco-inria/gaussian-splatting/issues/123
-                        is_too_big = (
-                            torch.exp(self.splats["scales"]).max(dim=-1).values
-                            > cfg.prune_scale3d * self.scene_scale
-                        )
-                        is_prune = is_prune | is_too_big
-                    n_prune = is_prune.sum().item()
-                    self.refine_keep(~is_prune)
-                    print(
-                        f"Step {step}: {n_prune} GSs pruned. "
-                        f"Now having {len(self.splats['means3d'])} GSs."
-                    )
-
-                    # reset running stats
-                    self.running_stats["grad2d"].zero_()
-                    self.running_stats["count"].zero_()
-
-                if step % cfg.reset_every == 0:
-                    self.reset_opa(cfg.prune_opa * 2.0)
+            self.strategy.step_post_backward(
+                params=self.splats,
+                optimizers=self.optimizers,
+                state=self.strategy_state,
+                step=step,
+                info=info,
+                packed=cfg.packed,
+            )
 
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:
@@ -672,7 +643,7 @@ class Runner:
                     )
 
             # optimize
-            for optimizer in self.optimizers:
+            for optimizer in self.optimizers.values():
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
             for optimizer in self.pose_optimizers:
@@ -685,7 +656,11 @@ class Runner:
                 scheduler.step()
 
             # eval the full set
-            if step in [i - 1 for i in cfg.eval_steps] or step == max_steps - 1:
+            if (
+                world_rank == 0
+                and step in [i - 1 for i in cfg.eval_steps]
+                or step == max_steps - 1
+            ):
                 self.eval(step)
                 self.render_traj(step)
 
@@ -699,159 +674,6 @@ class Runner:
                 self.viewer.state.num_train_rays_per_sec = num_train_rays_per_sec
                 # Update the scene.
                 self.viewer.update(step, num_train_rays_per_step)
-
-    @torch.no_grad()
-    def update_running_stats(self, info: Dict):
-        """Update running stats."""
-        cfg = self.cfg
-
-        # normalize grads to [-1, 1] screen space
-        if cfg.absgrad:
-            grads = info["means2d"].absgrad.clone()
-        else:
-            grads = info["means2d"].grad.clone()
-        grads[..., 0] *= info["width"] / 2.0 * cfg.batch_size
-        grads[..., 1] *= info["height"] / 2.0 * cfg.batch_size
-        if cfg.packed:
-            # grads is [nnz, 2]
-            gs_ids = info["gaussian_ids"]  # [nnz] or None
-            self.running_stats["grad2d"].index_add_(0, gs_ids, grads.norm(dim=-1))
-            self.running_stats["count"].index_add_(
-                0, gs_ids, torch.ones_like(gs_ids).int()
-            )
-        else:
-            # grads is [C, N, 2]
-            sel = info["radii"] > 0.0  # [C, N]
-            gs_ids = torch.where(sel)[1]  # [nnz]
-            self.running_stats["grad2d"].index_add_(0, gs_ids, grads[sel].norm(dim=-1))
-            self.running_stats["count"].index_add_(
-                0, gs_ids, torch.ones_like(gs_ids).int()
-            )
-
-    @torch.no_grad()
-    def reset_opa(self, value: float = 0.01):
-        """Utility function to reset opacities."""
-        opacities = torch.clamp(
-            self.splats["opacities"], max=torch.logit(torch.tensor(value)).item()
-        )
-        for optimizer in self.optimizers:
-            for i, param_group in enumerate(optimizer.param_groups):
-                if param_group["name"] != "opacities":
-                    continue
-                p = param_group["params"][0]
-                p_state = optimizer.state[p]
-                del optimizer.state[p]
-                for key in p_state.keys():
-                    if key != "step":
-                        p_state[key] = torch.zeros_like(p_state[key])
-                p_new = torch.nn.Parameter(opacities)
-                optimizer.param_groups[i]["params"] = [p_new]
-                optimizer.state[p_new] = p_state
-                self.splats[param_group["name"]] = p_new
-        torch.cuda.empty_cache()
-
-    @torch.no_grad()
-    def refine_split(self, mask: Tensor):
-        """Utility function to grow GSs."""
-        device = self.device
-
-        sel = torch.where(mask)[0]
-        rest = torch.where(~mask)[0]
-
-        scales = torch.exp(self.splats["scales"][sel])  # [N, 3]
-        quats = F.normalize(self.splats["quats"][sel], dim=-1)  # [N, 4]
-        rotmats = normalized_quat_to_rotmat(quats)  # [N, 3, 3]
-        samples = torch.einsum(
-            "nij,nj,bnj->bni",
-            rotmats,
-            scales,
-            torch.randn(2, len(scales), 3, device=device),
-        )  # [2, N, 3]
-
-        for optimizer in self.optimizers:
-            for i, param_group in enumerate(optimizer.param_groups):
-                p = param_group["params"][0]
-                name = param_group["name"]
-                # create new params
-                if name == "means3d":
-                    p_split = (p[sel] + samples).reshape(-1, 3)  # [2N, 3]
-                elif name == "scales":
-                    p_split = torch.log(scales / 1.6).repeat(2, 1)  # [2N, 3]
-                else:
-                    repeats = [2] + [1] * (p.dim() - 1)
-                    p_split = p[sel].repeat(repeats)
-                p_new = torch.cat([p[rest], p_split])
-                p_new = torch.nn.Parameter(p_new)
-                # update optimizer
-                p_state = optimizer.state[p]
-                del optimizer.state[p]
-                for key in p_state.keys():
-                    if key == "step":
-                        continue
-                    v = p_state[key]
-                    # new params are assigned with zero optimizer states
-                    # (worth investigating it)
-                    v_split = torch.zeros((2 * len(sel), *v.shape[1:]), device=device)
-                    p_state[key] = torch.cat([v[rest], v_split])
-                optimizer.param_groups[i]["params"] = [p_new]
-                optimizer.state[p_new] = p_state
-                self.splats[name] = p_new
-        for k, v in self.running_stats.items():
-            if v is None:
-                continue
-            repeats = [2] + [1] * (v.dim() - 1)
-            v_new = v[sel].repeat(repeats)
-            self.running_stats[k] = torch.cat((v[rest], v_new))
-        torch.cuda.empty_cache()
-
-    @torch.no_grad()
-    def refine_duplicate(self, mask: Tensor):
-        """Unility function to duplicate GSs."""
-        sel = torch.where(mask)[0]
-        for optimizer in self.optimizers:
-            for i, param_group in enumerate(optimizer.param_groups):
-                p = param_group["params"][0]
-                name = param_group["name"]
-                p_state = optimizer.state[p]
-                del optimizer.state[p]
-                for key in p_state.keys():
-                    if key != "step":
-                        # new params are assigned with zero optimizer states
-                        # (worth investigating it as it will lead to a lot more GS.)
-                        v = p_state[key]
-                        v_new = torch.zeros(
-                            (len(sel), *v.shape[1:]), device=self.device
-                        )
-                        # v_new = v[sel]
-                        p_state[key] = torch.cat([v, v_new])
-                p_new = torch.nn.Parameter(torch.cat([p, p[sel]]))
-                optimizer.param_groups[i]["params"] = [p_new]
-                optimizer.state[p_new] = p_state
-                self.splats[name] = p_new
-        for k, v in self.running_stats.items():
-            self.running_stats[k] = torch.cat((v, v[sel]))
-        torch.cuda.empty_cache()
-
-    @torch.no_grad()
-    def refine_keep(self, mask: Tensor):
-        """Unility function to prune GSs."""
-        sel = torch.where(mask)[0]
-        for optimizer in self.optimizers:
-            for i, param_group in enumerate(optimizer.param_groups):
-                p = param_group["params"][0]
-                name = param_group["name"]
-                p_state = optimizer.state[p]
-                del optimizer.state[p]
-                for key in p_state.keys():
-                    if key != "step":
-                        p_state[key] = p_state[key][sel]
-                p_new = torch.nn.Parameter(p[sel])
-                optimizer.param_groups[i]["params"] = [p_new]
-                optimizer.state[p_new] = p_state
-                self.splats[name] = p_new
-        for k, v in self.running_stats.items():
-            self.running_stats[k] = v[sel]
-        torch.cuda.empty_cache()
 
     @torch.no_grad()
     def eval(self, step: int):
@@ -906,7 +728,7 @@ class Runner:
         print(
             f"PSNR: {psnr.item():.3f}, SSIM: {ssim.item():.4f}, LPIPS: {lpips.item():.3f} "
             f"Time: {ellipse_time:.3f}s/image "
-            f"Number of GS: {len(self.splats['means3d'])}"
+            f"Number of GS: {len(self.splats['means'])}"
         )
         # save stats as json
         stats = {
@@ -914,7 +736,7 @@ class Runner:
             "ssim": ssim.item(),
             "lpips": lpips.item(),
             "ellipse_time": ellipse_time,
-            "num_GS": len(self.splats["means3d"]),
+            "num_GS": len(self.splats["means"]),
         }
         with open(f"{self.stats_dir}/val_step{step:04d}.json", "w") as f:
             json.dump(stats, f)
@@ -999,6 +821,11 @@ class Runner:
 
 
 def main(local_rank: int, world_rank, world_size: int, cfg: Config):
+    if world_size > 1 and not cfg.disable_viewer:
+        cfg.disable_viewer = True
+        if world_rank == 0:
+            print("Viewer is disabled in distributed training.")
+
     runner = Runner(local_rank, world_rank, world_size, cfg)
 
     if cfg.ckpt is not None:
@@ -1018,43 +845,15 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
 
 if __name__ == "__main__":
     """
-    CUDA_VISIBLE_DEVICES=0,2 python simple_trainer.py --steps_scaler 0.5
-    Step:  3499 {'mem': 5.072880268096924, 'ellipse_time': 317.50284695625305, 'num_GS': 2244441}
-    Step:  3499 {'mem': 4.873777866363525, 'ellipse_time': 318.75603342056274, 'num_GS': 2135991}
-    PSNR: 26.171, SSIM: 0.8280, LPIPS: 0.126 Time: 0.076s/image Number of GS: 2135991
+    Usage:
 
-    CUDA_VISIBLE_DEVICES=0 python simple_trainer.py --batch_size 2 --steps_scaler 0.5
-    Step:  3499 {'mem': 8.903686046600342, 'ellipse_time': 349.8184747695923, 'num_GS': 4434950}
-    PSNR: 26.175, SSIM: 0.8296, LPIPS: 0.126 Time: 0.021s/image Number of GS: 4434950
+    ```bash
+    # Single GPU training
+    CUDA_VISIBLE_DEVICES=0 python simple_trainer.py
 
-    CUDA_VISIBLE_DEVICES=5,6,7,8 python simple_trainer.py --steps_scaler 0.25 --disable_viewer
-    Step:  1749 {'mem': 3.5573081970214844, 'ellipse_time': 228.86491537094116, 'num_GS': 1090741}
-    Step:  1749 {'mem': 3.479849338531494, 'ellipse_time': 228.7728567123413, 'num_GS': 1061422}
-    Step:  1749 {'mem': 3.6650757789611816, 'ellipse_time': 228.6867446899414, 'num_GS': 1134071}
-    Step:  1749 {'mem': 3.5960493087768555, 'ellipse_time': 228.25761008262634, 'num_GS': 1109247}
-    PSNR: 26.259, SSIM: 0.8314, LPIPS: 0.124 Time: 0.112s/image Number of GS: 1109247
+    # Distributed training on 4 GPUs: Effectively 4x batch size so run 4x less steps.
+    CUDA_VISIBLE_DEVICES=0,1,2,3 python simple_trainer.py --steps_scaler 0.25
 
-    CUDA_VISIBLE_DEVICES=5,6 python simple_trainer.py --batch_size 2 --steps_scaler 0.25 --disable_viewer
-    <OOM>
-
-    CUDA_VISIBLE_DEVICES=7 python simple_trainer.py --batch_size 4 --steps_scaler 0.25 --disable_viewer
-    <OOM>
-
-    ---
-    CUDA_VISIBLE_DEVICES=0,1 python simple_trainer.py --steps_scaler 0.5
-    Step:  3499 {'mem': 4.9834771156311035, 'ellipse_time': 254.7932469844818, 'num_GS': 2190816}
-    Step:  3499 {'mem': 5.038218975067139, 'ellipse_time': 254.57188820838928, 'num_GS': 2221608}
-    PSNR: 26.197, SSIM: 0.8285, LPIPS: 0.125 Time: 0.044s/image Number of GS: 2190816
-
-    CUDA_VISIBLE_DEVICES=0,1 python simple_trainer.py --steps_scaler 0.5 --packed
-    Step:  3499 {'mem': 3.840606689453125, 'ellipse_time': 233.5287470817566, 'num_GS': 2235098}
-    Step:  3499 {'mem': 3.723649501800537, 'ellipse_time': 233.49604105949402, 'num_GS': 2169797}
-    PSNR: 26.184, SSIM: 0.8287, LPIPS: 0.125 Time: 0.042s/image Number of GS: 2169797
-
-    CUDA_VISIBLE_DEVICES=0 python simple_trainer.py --batch_size=2 --steps_scaler 0.5 --disable_viewer --packed
-    Step:  3499 {'mem': 7.562112808227539, 'ellipse_time': 365.50351881980896, 'num_GS': 4436051}
-    PSNR: 26.189, SSIM: 0.8297, LPIPS: 0.126 Time: 0.027s/image Number of GS: 4436051
-    
     """
 
     cfg = tyro.cli(Config)

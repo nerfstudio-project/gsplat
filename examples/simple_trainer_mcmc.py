@@ -17,16 +17,15 @@ from datasets.colmap import Dataset, Parser
 from datasets.traj import generate_interpolated_path
 from simple_trainer import create_splats_with_optimizers
 from torch import Tensor
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from utils import AppearanceOptModule, CameraOptModule, set_random_seed
 
-from gsplat import quat_scale_to_covar_preci
-from gsplat.cuda_legacy._torch_impl import scale_rot_to_cov3d
 from gsplat.distributed import cli
-from gsplat.relocation import compute_relocation
 from gsplat.rendering import rasterization
+from gsplat.strategy import MCMCStrategy
 
 
 @dataclass
@@ -215,7 +214,19 @@ class Runner:
             world_rank=world_rank,
             world_size=world_size,
         )
-        print("Model initialized. Number of GS:", len(self.splats["means3d"]))
+        print("Model initialized. Number of GS:", len(self.splats["means"]))
+
+        # Densification Strategy
+        self.strategy = MCMCStrategy(
+            verbose=True,
+            cap_max=cfg.cap_max,
+            noise_lr=cfg.noise_lr,
+            refine_start_iter=cfg.refine_start_iter,
+            refine_stop_iter=cfg.refine_stop_iter,
+            refine_every=cfg.refine_every,
+        )
+        self.strategy.check_sanity(self.splats, self.optimizers)
+        self.strategy_state = self.strategy.initialize_state()
 
         self.pose_optimizers = []
         if cfg.pose_opt:
@@ -228,10 +239,14 @@ class Runner:
                     weight_decay=cfg.pose_opt_reg,
                 )
             ]
+            if world_size > 1:
+                self.pose_adjust = DDP(self.pose_adjust)
 
         if cfg.pose_noise > 0.0:
             self.pose_perturb = CameraOptModule(len(self.trainset)).to(self.device)
             self.pose_perturb.random_init(cfg.pose_noise)
+            if world_size > 1:
+                self.pose_perturb = DDP(self.pose_perturb)
 
         self.app_optimizers = []
         if cfg.app_opt:
@@ -252,6 +267,8 @@ class Runner:
                     lr=cfg.app_opt_lr * math.sqrt(cfg.batch_size),
                 ),
             ]
+            if world_size > 1:
+                self.app_module = DDP(self.app_module)
 
         # Losses & Metrics.
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
@@ -277,7 +294,7 @@ class Runner:
         height: int,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
-        means = self.splats["means3d"]  # [N, 3]
+        means = self.splats["means"]  # [N, 3]
         # quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
         # rasterization does normalization internally
         quats = self.splats["quats"]  # [N, 4]
@@ -320,18 +337,21 @@ class Runner:
     def train(self):
         cfg = self.cfg
         device = self.device
+        world_rank = self.world_rank
+        world_size = self.world_size
 
         # Dump cfg.
-        with open(f"{cfg.result_dir}/cfg.json", "w") as f:
-            json.dump(vars(cfg), f)
+        if world_rank == 0:
+            with open(f"{cfg.result_dir}/cfg.json", "w") as f:
+                json.dump(vars(cfg), f)
 
         max_steps = cfg.max_steps
         init_step = 0
 
         schedulers = [
-            # means3d has a learning rate schedule, that end at 0.01 of the initial value
+            # means has a learning rate schedule, that end at 0.01 of the initial value
             torch.optim.lr_scheduler.ExponentialLR(
-                self.optimizers[0], gamma=0.01 ** (1.0 / max_steps)
+                self.optimizers["means"], gamma=0.01 ** (1.0 / max_steps)
             ),
         ]
         if cfg.pose_opt:
@@ -411,8 +431,6 @@ class Runner:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
 
-            # info["means2d"].retain_grad()  # used for running stats
-
             # loss
             l1loss = F.l1_loss(colors, pixels)
             ssimloss = 1.0 - self.ssim(
@@ -461,22 +479,20 @@ class Runner:
             pbar.set_description(desc)
 
             # write images (gt and render)
-            if step % 400 == 0:
-                canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
-                canvas = canvas.reshape(-1, *canvas.shape[2:])
-                imageio.imwrite(
-                    f"{self.render_dir}/train_rank{self.world_rank}.png",
-                    (canvas * 255).astype(np.uint8),
-                )
+            # if world_rank == 0 and step % 800 == 0:
+            #     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
+            #     canvas = canvas.reshape(-1, *canvas.shape[2:])
+            #     imageio.imwrite(
+            #         f"{self.render_dir}/train_rank{self.world_rank}.png",
+            #         (canvas * 255).astype(np.uint8),
+            #     )
 
-            if cfg.tb_every > 0 and step % cfg.tb_every == 0:
+            if world_rank == 0 and cfg.tb_every > 0 and step % cfg.tb_every == 0:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
                 self.writer.add_scalar("train/loss", loss.item(), step)
                 self.writer.add_scalar("train/l1loss", l1loss.item(), step)
                 self.writer.add_scalar("train/ssimloss", ssimloss.item(), step)
-                self.writer.add_scalar(
-                    "train/num_GS", len(self.splats["means3d"]), step
-                )
+                self.writer.add_scalar("train/num_GS", len(self.splats["means"]), step)
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
@@ -486,16 +502,43 @@ class Runner:
                     self.writer.add_image("train/render", canvas, step)
                 self.writer.flush()
 
-            # edit GSs
-            if step < cfg.refine_stop_iter:
-                if step > cfg.refine_start_iter and step % cfg.refine_every == 0:
-                    num_relocated_gs = self.relocate_gs()
-                    print(f"Step {step}: Relocated {num_relocated_gs} GSs.")
+            # save checkpoint before updating the model
+            if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
+                mem = torch.cuda.max_memory_allocated() / 1024**3
+                stats = {
+                    "mem": mem,
+                    "ellipse_time": time.time() - global_tic,
+                    "num_GS": len(self.splats["means"]),
+                }
+                print("Step: ", step, stats)
+                with open(
+                    f"{self.stats_dir}/train_step{step:04d}_rank{self.world_rank}.json",
+                    "w",
+                ) as f:
+                    json.dump(stats, f)
+                data = {"step": step, "splats": self.splats.state_dict()}
+                if cfg.pose_opt:
+                    if world_size > 1:
+                        data["pose_adjust"] = self.pose_adjust.module.state_dict()
+                    else:
+                        data["pose_adjust"] = self.pose_adjust.state_dict()
+                if cfg.app_opt:
+                    if world_size > 1:
+                        data["app_module"] = self.app_module.module.state_dict()
+                    else:
+                        data["app_module"] = self.app_module.state_dict()
+                torch.save(
+                    data, f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt"
+                )
 
-                    num_new_gs = self.add_new_gs(cfg.cap_max)
-                    print(
-                        f"Step {step}: Added {num_new_gs} GSs. Now having {len(self.splats['means3d'])} GSs."
-                    )
+            self.strategy.step_post_backward(
+                params=self.splats,
+                optimizers=self.optimizers,
+                state=self.strategy_state,
+                step=step,
+                info=info,
+                lr=schedulers[0].get_last_lr()[0],
+            )
 
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:
@@ -513,7 +556,7 @@ class Runner:
                     )
 
             # optimize
-            for optimizer in self.optimizers:
+            for optimizer in self.optimizers.values():
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
             for optimizer in self.pose_optimizers:
@@ -525,31 +568,12 @@ class Runner:
             for scheduler in schedulers:
                 scheduler.step()
 
-            # add noise to GSs
-            last_lr = schedulers[0].get_last_lr()[0]
-            self.add_noise_to_gs(last_lr)
-
-            # save checkpoint
-            if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
-                mem = torch.cuda.max_memory_allocated() / 1024**3
-                stats = {
-                    "mem": mem,
-                    "ellipse_time": time.time() - global_tic,
-                    "num_GS": len(self.splats["means3d"]),
-                }
-                print("Step: ", step, stats)
-                with open(f"{self.stats_dir}/train_step{step:04d}.json", "w") as f:
-                    json.dump(stats, f)
-                torch.save(
-                    {
-                        "step": step,
-                        "splats": self.splats.state_dict(),
-                    },
-                    f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt",
-                )
-
             # eval the full set
-            if step in [i - 1 for i in cfg.eval_steps] or step == max_steps - 1:
+            if (
+                world_rank == 0
+                and step in [i - 1 for i in cfg.eval_steps]
+                or step == max_steps - 1
+            ):
                 self.eval(step)
                 self.render_traj(step)
 
@@ -563,118 +587,6 @@ class Runner:
                 self.viewer.state.num_train_rays_per_sec = num_train_rays_per_sec
                 # Update the scene.
                 self.viewer.update(step, num_train_rays_per_step)
-
-    @torch.no_grad()
-    def relocate_gs(self, min_opacity: float = 0.005) -> int:
-        dead_mask = torch.sigmoid(self.splats["opacities"]) <= min_opacity
-        dead_indices = dead_mask.nonzero(as_tuple=True)[0]
-        alive_indices = (~dead_mask).nonzero(as_tuple=True)[0]
-        num_gs = len(dead_indices)
-        if num_gs <= 0:
-            return num_gs
-
-        # Sample for new GSs
-        eps = torch.finfo(torch.float32).eps
-        probs = torch.sigmoid(self.splats["opacities"])[alive_indices]
-        probs = probs / (probs.sum() + eps)
-        sampled_idxs = torch.multinomial(probs, num_gs, replacement=True)
-        sampled_idxs = alive_indices[sampled_idxs]
-        new_opacities, new_scales = compute_relocation(
-            opacities=torch.sigmoid(self.splats["opacities"])[sampled_idxs],
-            scales=torch.exp(self.splats["scales"])[sampled_idxs],
-            ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
-        )
-        new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
-        self.splats["opacities"][sampled_idxs] = torch.logit(new_opacities)
-        self.splats["scales"][sampled_idxs] = torch.log(new_scales)
-
-        # Update splats and optimizers
-        for k in self.splats.keys():
-            self.splats[k][dead_indices] = self.splats[k][sampled_idxs]
-        for optimizer in self.optimizers:
-            for i, param_group in enumerate(optimizer.param_groups):
-                p = param_group["params"][0]
-                name = param_group["name"]
-                p_state = optimizer.state[p]
-                del optimizer.state[p]
-                for key in p_state.keys():
-                    if key != "step":
-                        p_state[key][sampled_idxs] = 0
-                p_new = torch.nn.Parameter(self.splats[name])
-                optimizer.param_groups[i]["params"] = [p_new]
-                optimizer.state[p_new] = p_state
-                self.splats[name] = p_new
-        torch.cuda.empty_cache()
-        return num_gs
-
-    @torch.no_grad()
-    def add_new_gs(self, cap_max: int, min_opacity: float = 0.005) -> int:
-        current_num_points = len(self.splats["means3d"])
-        target_num = min(cap_max, int(1.05 * current_num_points))
-        num_gs = max(0, target_num - current_num_points)
-        if num_gs <= 0:
-            return num_gs
-
-        # Sample for new GSs
-        eps = torch.finfo(torch.float32).eps
-        probs = torch.sigmoid(self.splats["opacities"])
-        probs = probs / (probs.sum() + eps)
-        sampled_idxs = torch.multinomial(probs, num_gs, replacement=True)
-        new_opacities, new_scales = compute_relocation(
-            opacities=torch.sigmoid(self.splats["opacities"])[sampled_idxs],
-            scales=torch.exp(self.splats["scales"])[sampled_idxs],
-            ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
-        )
-        new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
-        self.splats["opacities"][sampled_idxs] = torch.logit(new_opacities)
-        self.splats["scales"][sampled_idxs] = torch.log(new_scales)
-
-        # Update splats and optimizers
-        for k in self.splats.keys():
-            self.splats[k] = torch.cat([self.splats[k], self.splats[k][sampled_idxs]])
-        for optimizer in self.optimizers:
-            for i, param_group in enumerate(optimizer.param_groups):
-                p = param_group["params"][0]
-                name = param_group["name"]
-                p_state = optimizer.state[p]
-                del optimizer.state[p]
-                for key in p_state.keys():
-                    if key != "step":
-                        v = p_state[key]
-                        v_new = torch.zeros(
-                            (len(sampled_idxs), *v.shape[1:]), device=self.device
-                        )
-                        p_state[key] = torch.cat([v, v_new])
-                p_new = torch.nn.Parameter(self.splats[name])
-                optimizer.param_groups[i]["params"] = [p_new]
-                optimizer.state[p_new] = p_state
-                self.splats[name] = p_new
-        torch.cuda.empty_cache()
-        return num_gs
-
-    @torch.no_grad()
-    def add_noise_to_gs(self, last_lr):
-        opacities = torch.sigmoid(self.splats["opacities"])
-        scales = torch.exp(self.splats["scales"])
-        actual_covariance, _ = quat_scale_to_covar_preci(
-            self.splats["quats"],
-            scales,
-            compute_covar=True,
-            compute_preci=False,
-            triu=False,
-        )
-
-        def op_sigmoid(x, k=100, x0=0.995):
-            return 1 / (1 + torch.exp(-k * (x - x0)))
-
-        noise = (
-            torch.randn_like(self.splats["means3d"])
-            * (op_sigmoid(1 - opacities)).unsqueeze(-1)
-            * self.cfg.noise_lr
-            * last_lr
-        )
-        noise = torch.bmm(actual_covariance, noise.unsqueeze(-1)).squeeze(-1)
-        self.splats["means3d"].add_(noise)
 
     @torch.no_grad()
     def eval(self, step: int):
@@ -729,7 +641,7 @@ class Runner:
         print(
             f"PSNR: {psnr.item():.3f}, SSIM: {ssim.item():.4f}, LPIPS: {lpips.item():.3f} "
             f"Time: {ellipse_time:.3f}s/image "
-            f"Number of GS: {len(self.splats['means3d'])}"
+            f"Number of GS: {len(self.splats['means'])}"
         )
         # save stats as json
         stats = {
@@ -737,7 +649,7 @@ class Runner:
             "ssim": ssim.item(),
             "lpips": lpips.item(),
             "ellipse_time": ellipse_time,
-            "num_GS": len(self.splats["means3d"]),
+            "num_GS": len(self.splats["means"]),
         }
         with open(f"{self.stats_dir}/val_step{step:04d}.json", "w") as f:
             json.dump(stats, f)
@@ -822,6 +734,11 @@ class Runner:
 
 
 def main(local_rank: int, world_rank, world_size: int, cfg: Config):
+    if world_size > 1 and not cfg.disable_viewer:
+        cfg.disable_viewer = True
+        if world_rank == 0:
+            print("Viewer is disabled in distributed training.")
+
     runner = Runner(local_rank, world_rank, world_size, cfg)
 
     if cfg.ckpt is not None:
@@ -840,30 +757,6 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
 
 
 if __name__ == "__main__":
-    """
-
-    CUDA_VISIBLE_DEVICES=0,2 python simple_trainer_mcmc.py --steps_scaler 0.5 --cap_max 500000
-    7k:
-    Step:  3499 {'mem': 1.2938737869262695, 'ellipse_time': 153.14019989967346, 'num_GS': 500000}
-    Step:  3499 {'mem': 1.3011698722839355, 'ellipse_time': 153.2966911792755, 'num_GS': 500000}
-    PSNR: 25.891, SSIM: 0.8108, LPIPS: 0.157 Time: 0.029s/image Number of GS: 500000
-
-    CUDA_VISIBLE_DEVICES=0 python simple_trainer_mcmc.py
-    7k:
-    Step:  6999 {'mem': 1.7902350425720215, 'ellipse_time': 232.5816080570221, 'num_GS': 1000000}
-    PSNR: 25.993, SSIM: 0.8155, LPIPS: 0.158 Time: 0.007s/image Number of GS: 1000000
-
-    CUDA_VISIBLE_DEVICES=0 python simple_trainer_mcmc.py --batch_size 2 --steps_scaler 0.5
-    7k:
-    Step:  3499 {'mem': 2.462855815887451, 'ellipse_time': 204.48375606536865, 'num_GS': 1000000}
-    PSNR: 25.865, SSIM: 0.8119, LPIPS: 0.159 Time: 0.008s/image Number of GS: 1000000
-
-    ---
-    CUDA_VISIBLE_DEVICES=0,1 python simple_trainer_mcmc.py --batch_size 1 --steps_scaler 0.5 --cap_max 500000 --packed
-    Step:  3499 {'mem': 1.1325106620788574, 'ellipse_time': 159.6369378566742, 'num_GS': 500000}
-    Step:  3499 {'mem': 1.1362886428833008, 'ellipse_time': 159.48205280303955, 'num_GS': 500000}
-    PSNR: 25.893, SSIM: 0.8103, LPIPS: 0.158 Time: 0.027s/image Number of GS: 500000
-    """
     cfg = tyro.cli(Config)
     cfg.adjust_steps(cfg.steps_scaler)
     cli(main, cfg, verbose=True)

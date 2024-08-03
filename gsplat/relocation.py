@@ -1,22 +1,18 @@
 import math
+from typing import Tuple
 
 import torch
 from torch import Tensor
 
 from .cuda._wrapper import _make_lazy_cuda_func
 
-# N_MAX = 51
-# BINOMS = torch.zeros((N_MAX, N_MAX)).float().cuda()  # TODO
-# for n in range(N_MAX):
-#     for k in range(n + 1):
-#         BINOMS[n, k] = math.comb(n, k)
-
 
 def compute_relocation(
     opacities: Tensor,  # [N]
     scales: Tensor,  # [N, 3]
     ratios: Tensor,  # [N]
-) -> tuple[Tensor, Tensor]:
+    binoms: Tensor,  # [n_max, n_max]
+) -> Tuple[Tensor, Tensor]:
     """Compute new Gaussians from a set of old Gaussians.
 
     This function interprets the Gaussians as samples from a likelihood distribution.
@@ -28,6 +24,8 @@ def compute_relocation(
         opacities: The opacities of the Gaussians. [N]
         scales: The scales of the Gaussians. [N, 3]
         ratios: The relative frequencies for each of the Gaussians. [N]
+        binoms: Precomputed lookup table for binomial coefficients used in
+          Equation 9 in the paper. [n_max, n_max]
 
     Returns:
         A tuple:
@@ -43,14 +41,15 @@ def compute_relocation(
             BINOMS[n, k] = math.comb(n, k)
 
     N = opacities.shape[0]
+    n_max, _ = binoms.shape
     assert scales.shape == (N, 3), scales.shape
     assert ratios.shape == (N,), ratios.shape
     opacities = opacities.contiguous()
     scales = scales.contiguous()
-    ratios.clamp_(min=1, max=N_MAX)
+    ratios.clamp_(min=1, max=n_max)
     ratios = ratios.int().contiguous()
 
     new_opacities, new_scales = _make_lazy_cuda_func("compute_relocation")(
-        opacities, scales, ratios, BINOMS, N_MAX
+        opacities, scales, ratios, binoms, n_max
     )
     return new_opacities, new_scales

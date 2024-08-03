@@ -54,12 +54,12 @@ def rasterization(
 
     .. note::
         **Multi-GPU Distributed Rasterization**: This function can be used in a multi-GPU
-        distributed setting by setting `distributed` to True. When `distributed` is True,
+        distributed scenario by setting `distributed` to True. When `distributed` is True,
         a subset of total Gaussians could be passed into this function in each rank, and
         the function will collaboratively render a set of images using Gaussians from all ranks. Note
-        to achieve balanced computation, it is recommended (not enforced) to have the same number of
+        to achieve balanced computation, it is recommended (not enforced) to have similar number of
         Gaussians in each rank. But we do enforce that the number of cameras to be rendered
-        shall be the same across all ranks. The function will return the rendered images
+        in each rank is the same. The function will return the rendered images
         corresponds to the input cameras in each rank, and allows for gradients to flow back to the
         Gaussians living in other ranks. For the details, please refer to the paper
         `On Scaling Up 3D Gaussian Splatting Training <https://arxiv.org/abs/2406.18533>`_.
@@ -131,7 +131,7 @@ def rasterization(
 
     Args:
         means: The 3D centers of the Gaussians. [N, 3]
-        quats: The quaternions of the Gaussians. It's not required to be normalized. [N, 4]
+        quats: The quaternions of the Gaussians (wxyz convension). It's not required to be normalized. [N, 4]
         scales: The scales of the Gaussians. [N, 3]
         opacities: The opacities of the Gaussians. [N]
         colors: The colors of the Gaussians. [(C,) N, D] or [(C,) N, K, 3] for SH coefficients.
@@ -422,19 +422,6 @@ def rasterization(
             # Silently change C from global #Cameras to local #Cameras.
             C = C_world[world_rank]
 
-            # # package the Gaussian attributes
-            # data = torch.cat(
-            #     [
-            #         radii[..., None].float(),
-            #         means2d,
-            #         depths[..., None],
-            #         conics,
-            #         opacities[..., None],
-            #         colors,
-            #     ],
-            #     dim=-1,
-            # )  # [C, N_i, :]
-
             # all to all communication across all ranks. After this step, each rank
             # would have all the necessary GSs to render its own images.
             (radii,) = all_to_all_tensor_list(
@@ -462,32 +449,6 @@ def rasterization(
             conics = conics.reshape(C, -1, 3)
             opacities = opacities.reshape(C, -1)
             colors = colors.reshape(C, -1, colors.shape[-1])
-
-            # # All to all gather. [C, N_i, :] -> [C_i, N, :]
-            # data_list = data.split(C_world, dim=0)  # List of [C_i, N_i, :]
-            # data_fl_list = [
-            #     data.flatten(0, 1) for data in data_list
-            # ]  # List of [C_i * N_i, :]
-            # collected_fl_list = [
-            #     torch.empty(
-            #         (C * N_i, data.shape[-1]), device=data.device, dtype=data.dtype
-            #     )
-            #     for N_i in N_world
-            # ]
-            # # differentiable all_to_all
-            # DistF.all_to_all(collected_fl_list, data_fl_list)
-            # collected_fl = torch.cat(collected_fl_list, dim=0)  # [C_i * N, :]
-            # collected = collected_fl.reshape(
-            #     C, sum(N_world), data.shape[-1]
-            # )  # [C_i, N, :]
-
-            # # collected contains:
-            # radii = collected[..., 0].int()
-            # means2d = collected[..., 1:3]
-            # depths = collected[..., 3]
-            # conics = collected[..., 4:7]
-            # opacities = collected[..., 7]
-            # colors = collected[..., 8:]
 
     # Rasterize to pixels
     if render_mode in ["RGB+D", "RGB+ED"]:
@@ -532,6 +493,7 @@ def rasterization(
             "width": width,
             "height": height,
             "tile_size": tile_size,
+            "n_cameras": C,
         }
     )
 
@@ -590,6 +552,222 @@ def rasterization(
             dim=-1,
         )
 
+    return render_colors, render_alphas, meta
+
+
+def _rasterization(
+    means: Tensor,  # [N, 3]
+    quats: Tensor,  # [N, 4]
+    scales: Tensor,  # [N, 3]
+    opacities: Tensor,  # [N]
+    colors: Tensor,  # [(C,) N, D] or [(C,) N, K, 3]
+    viewmats: Tensor,  # [C, 4, 4]
+    Ks: Tensor,  # [C, 3, 3]
+    width: int,
+    height: int,
+    near_plane: float = 0.01,
+    far_plane: float = 1e10,
+    eps2d: float = 0.3,
+    sh_degree: Optional[int] = None,
+    tile_size: int = 16,
+    backgrounds: Optional[Tensor] = None,
+    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
+    rasterize_mode: Literal["classic", "antialiased"] = "classic",
+    channel_chunk: int = 32,
+    batch_per_iter: int = 100,
+) -> Tuple[Tensor, Tensor, Dict]:
+    """A version of rasterization() that utilies on PyTorch's autograd.
+
+    .. note::
+        This function still relies on gsplat's CUDA backend for some computation, but the
+        entire differentiable graph is on of PyTorch (and nerfacc) so could use Pytorch's
+        autograd for backpropagation.
+
+    .. note::
+        This function relies on installing latest nerfacc, via:
+        pip install git+https://github.com/nerfstudio-project/nerfacc
+
+    .. note::
+        Compared to rasterization(), this function does not support some arguments such as
+        `packed`, `sparse_grad` and `absgrad`.
+    """
+    from gsplat.cuda._torch_impl import (
+        _fully_fused_projection,
+        _quat_scale_to_covar_preci,
+        _rasterize_to_pixels,
+    )
+
+    N = means.shape[0]
+    C = viewmats.shape[0]
+    assert means.shape == (N, 3), means.shape
+    assert quats.shape == (N, 4), quats.shape
+    assert scales.shape == (N, 3), scales.shape
+    assert opacities.shape == (N,), opacities.shape
+    assert viewmats.shape == (C, 4, 4), viewmats.shape
+    assert Ks.shape == (C, 3, 3), Ks.shape
+    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
+
+    if sh_degree is None:
+        # treat colors as post-activation values, should be in shape [N, D] or [C, N, D]
+        assert (colors.dim() == 2 and colors.shape[0] == N) or (
+            colors.dim() == 3 and colors.shape[:2] == (C, N)
+        ), colors.shape
+    else:
+        # treat colors as SH coefficients, should be in shape [N, K, 3] or [C, N, K, 3]
+        # Allowing for activating partial SH bands
+        assert (
+            colors.dim() == 3 and colors.shape[0] == N and colors.shape[2] == 3
+        ) or (
+            colors.dim() == 4 and colors.shape[:2] == (C, N) and colors.shape[3] == 3
+        ), colors.shape
+        assert (sh_degree + 1) ** 2 <= colors.shape[-2], colors.shape
+
+    # Project Gaussians to 2D.
+    # The results are with shape [C, N, ...]. Only the elements with radii > 0 are valid.
+    covars, _ = _quat_scale_to_covar_preci(quats, scales, True, False, triu=False)
+    radii, means2d, depths, conics, compensations = _fully_fused_projection(
+        means,
+        covars,
+        viewmats,
+        Ks,
+        width,
+        height,
+        eps2d=eps2d,
+        near_plane=near_plane,
+        far_plane=far_plane,
+        calc_compensations=(rasterize_mode == "antialiased"),
+    )
+    opacities = opacities.repeat(C, 1)  # [C, N]
+    camera_ids, gaussian_ids = None, None
+
+    if compensations is not None:
+        opacities = opacities * compensations
+
+    # Identify intersecting tiles
+    tile_width = math.ceil(width / float(tile_size))
+    tile_height = math.ceil(height / float(tile_size))
+    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
+        means2d,
+        radii,
+        depths,
+        tile_size,
+        tile_width,
+        tile_height,
+        packed=False,
+        n_cameras=C,
+        camera_ids=camera_ids,
+        gaussian_ids=gaussian_ids,
+    )
+    isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
+
+    # Turn colors into [C, N, D] or [nnz, D] to pass into rasterize_to_pixels()
+    if sh_degree is None:
+        # Colors are post-activation values, with shape [N, D] or [C, N, D]
+        if colors.dim() == 2:
+            # Turn [N, D] into [C, N, D]
+            colors = colors.expand(C, -1, -1)
+        else:
+            # colors is already [C, N, D]
+            pass
+    else:
+        # Colors are SH coefficients, with shape [N, K, 3] or [C, N, K, 3]
+        camtoworlds = torch.inverse(viewmats)  # [C, 4, 4]
+        dirs = means[None, :, :] - camtoworlds[:, None, :3, 3]  # [C, N, 3]
+        masks = radii > 0  # [C, N]
+        if colors.dim() == 3:
+            # Turn [N, K, 3] into [C, N, 3]
+            shs = colors.expand(C, -1, -1, -1)  # [C, N, K, 3]
+        else:
+            # colors is already [C, N, K, 3]
+            shs = colors
+        colors = spherical_harmonics(sh_degree, dirs, shs, masks=masks)  # [C, N, 3]
+        # make it apple-to-apple with Inria's CUDA Backend.
+        colors = torch.clamp_min(colors + 0.5, 0.0)
+
+    # Rasterize to pixels
+    if render_mode in ["RGB+D", "RGB+ED"]:
+        colors = torch.cat((colors, depths[..., None]), dim=-1)
+        if backgrounds is not None:
+            backgrounds = torch.cat(
+                [backgrounds, torch.zeros(C, 1, device=backgrounds.device)], dim=-1
+            )
+    elif render_mode in ["D", "ED"]:
+        colors = depths[..., None]
+        if backgrounds is not None:
+            backgrounds = torch.zeros(C, 1, device=backgrounds.device)
+    else:  # RGB
+        pass
+    if colors.shape[-1] > channel_chunk:
+        # slice into chunks
+        n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk
+        render_colors, render_alphas = [], []
+        for i in range(n_chunks):
+            colors_chunk = colors[..., i * channel_chunk : (i + 1) * channel_chunk]
+            backgrounds_chunk = (
+                backgrounds[..., i * channel_chunk : (i + 1) * channel_chunk]
+                if backgrounds is not None
+                else None
+            )
+            render_colors_, render_alphas_ = _rasterize_to_pixels(
+                means2d,
+                conics,
+                colors_chunk,
+                opacities,
+                width,
+                height,
+                tile_size,
+                isect_offsets,
+                flatten_ids,
+                backgrounds=backgrounds_chunk,
+                batch_per_iter=batch_per_iter,
+            )
+            render_colors.append(render_colors_)
+            render_alphas.append(render_alphas_)
+        render_colors = torch.cat(render_colors, dim=-1)
+        render_alphas = render_alphas[0]  # discard the rest
+    else:
+        render_colors, render_alphas = _rasterize_to_pixels(
+            means2d,
+            conics,
+            colors,
+            opacities,
+            width,
+            height,
+            tile_size,
+            isect_offsets,
+            flatten_ids,
+            backgrounds=backgrounds,
+            batch_per_iter=batch_per_iter,
+        )
+    if render_mode in ["ED", "RGB+ED"]:
+        # normalize the accumulated depth to get the expected depth
+        render_colors = torch.cat(
+            [
+                render_colors[..., :-1],
+                render_colors[..., -1:] / render_alphas.clamp(min=1e-10),
+            ],
+            dim=-1,
+        )
+
+    meta = {
+        "camera_ids": camera_ids,
+        "gaussian_ids": gaussian_ids,
+        "radii": radii,
+        "means2d": means2d,
+        "depths": depths,
+        "conics": conics,
+        "opacities": opacities,
+        "tile_width": tile_width,
+        "tile_height": tile_height,
+        "tiles_per_gauss": tiles_per_gauss,
+        "isect_ids": isect_ids,
+        "flatten_ids": flatten_ids,
+        "isect_offsets": isect_offsets,
+        "width": width,
+        "height": height,
+        "tile_size": tile_size,
+        "n_cameras": C,
+    }
     return render_colors, render_alphas, meta
 
 
