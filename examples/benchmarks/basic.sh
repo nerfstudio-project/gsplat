@@ -30,7 +30,7 @@ for SCENE in bicycle bonsai counter garden kitchen room stump;
 do
     echo "=== Eval Stats ==="
 
-    for STATS in $RESULT_DIR/$SCENE/stats/val*;
+    for STATS in $RESULT_DIR/$SCENE/stats/val*.json;
     do  
         echo $STATS
         cat $STATS; 
@@ -39,7 +39,7 @@ do
 
     echo "=== Train Stats ==="
 
-    for STATS in $RESULT_DIR/$SCENE/stats/train*;
+    for STATS in $RESULT_DIR/$SCENE/stats/train*_rank0.json;
     do  
         echo $STATS
         cat $STATS; 
