@@ -656,11 +656,7 @@ class Runner:
                 scheduler.step()
 
             # eval the full set
-            if (
-                world_rank == 0
-                and step in [i - 1 for i in cfg.eval_steps]
-                or step == max_steps - 1
-            ):
+            if step in [i - 1 for i in cfg.eval_steps] or step == max_steps - 1:
                 self.eval(step)
                 self.render_traj(step)
 
@@ -681,6 +677,8 @@ class Runner:
         print("Running evaluation...")
         cfg = self.cfg
         device = self.device
+        world_rank = self.world_rank
+        world_size = self.world_size
 
         valloader = torch.utils.data.DataLoader(
             self.valset, batch_size=1, shuffle=False, num_workers=1
@@ -708,42 +706,45 @@ class Runner:
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
 
-            # write images
-            canvas = torch.cat([pixels, colors], dim=2).squeeze(0).cpu().numpy()
-            imageio.imwrite(
-                f"{self.render_dir}/val_{i:04d}.png", (canvas * 255).astype(np.uint8)
+            if world_rank == 0:
+                # write images
+                canvas = torch.cat([pixels, colors], dim=2).squeeze(0).cpu().numpy()
+                imageio.imwrite(
+                    f"{self.render_dir}/val_{i:04d}.png",
+                    (canvas * 255).astype(np.uint8),
+                )
+
+                pixels = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
+                colors = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
+                metrics["psnr"].append(self.psnr(colors, pixels))
+                metrics["ssim"].append(self.ssim(colors, pixels))
+                metrics["lpips"].append(self.lpips(colors, pixels))
+
+        if world_rank == 0:
+            ellipse_time /= len(valloader)
+
+            psnr = torch.stack(metrics["psnr"]).mean()
+            ssim = torch.stack(metrics["ssim"]).mean()
+            lpips = torch.stack(metrics["lpips"]).mean()
+            print(
+                f"PSNR: {psnr.item():.3f}, SSIM: {ssim.item():.4f}, LPIPS: {lpips.item():.3f} "
+                f"Time: {ellipse_time:.3f}s/image "
+                f"Number of GS: {len(self.splats['means'])}"
             )
-
-            pixels = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
-            colors = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
-            metrics["psnr"].append(self.psnr(colors, pixels))
-            metrics["ssim"].append(self.ssim(colors, pixels))
-            metrics["lpips"].append(self.lpips(colors, pixels))
-
-        ellipse_time /= len(valloader)
-
-        psnr = torch.stack(metrics["psnr"]).mean()
-        ssim = torch.stack(metrics["ssim"]).mean()
-        lpips = torch.stack(metrics["lpips"]).mean()
-        print(
-            f"PSNR: {psnr.item():.3f}, SSIM: {ssim.item():.4f}, LPIPS: {lpips.item():.3f} "
-            f"Time: {ellipse_time:.3f}s/image "
-            f"Number of GS: {len(self.splats['means'])}"
-        )
-        # save stats as json
-        stats = {
-            "psnr": psnr.item(),
-            "ssim": ssim.item(),
-            "lpips": lpips.item(),
-            "ellipse_time": ellipse_time,
-            "num_GS": len(self.splats["means"]),
-        }
-        with open(f"{self.stats_dir}/val_step{step:04d}.json", "w") as f:
-            json.dump(stats, f)
-        # save stats to tensorboard
-        for k, v in stats.items():
-            self.writer.add_scalar(f"val/{k}", v, step)
-        self.writer.flush()
+            # save stats as json
+            stats = {
+                "psnr": psnr.item(),
+                "ssim": ssim.item(),
+                "lpips": lpips.item(),
+                "ellipse_time": ellipse_time,
+                "num_GS": len(self.splats["means"]),
+            }
+            with open(f"{self.stats_dir}/val_step{step:04d}.json", "w") as f:
+                json.dump(stats, f)
+            # save stats to tensorboard
+            for k, v in stats.items():
+                self.writer.add_scalar(f"val/{k}", v, step)
+            self.writer.flush()
 
     @torch.no_grad()
     def render_traj(self, step: int):
