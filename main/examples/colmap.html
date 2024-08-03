@@ -324,7 +324,7 @@ exact same logic with the <a class="reference external" href="https://github.com
 able to reproduce the metrics in the paper, with much better training speed and memory
 footprint. See <a class="reference internal" href="../tests/eval.html"><span class="doc">Evaluation</span></a> for more details on the comparision.</p>
 <p>Simply run the script under <cite>examples/</cite>:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>simple_trainer.py<span class="w"> </span><span class="se">\</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CUDA_VISIBLE_DEVICES</span><span class="o">=</span><span class="m">0</span><span class="w"> </span>python<span class="w"> </span>simple_trainer.py<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--data_dir<span class="w"> </span>data/360_v2/garden/<span class="w"> </span>--data_factor<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--result_dir<span class="w"> </span>./results/garden
 </pre></div>

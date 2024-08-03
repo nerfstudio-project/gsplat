@@ -333,7 +333,7 @@ Gaussian radius which is configurable in our <a class="reference internal" href=
 switch to low resolution if the rendering is slow.</p>
 <p>The code for this example can be found under <cite>examples/</cite>:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># First train a 3DGS model</span>
-python<span class="w"> </span>simple_trainer.py<span class="w"> </span><span class="se">\</span>
+<span class="nv">CUDA_VISIBLE_DEVICES</span><span class="o">=</span><span class="m">0</span><span class="w"> </span>python<span class="w"> </span>simple_trainer.py<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--data_dir<span class="w"> </span>data/360_v2/garden/<span class="w"> </span>--data_factor<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--result_dir<span class="w"> </span>./results/garden
 

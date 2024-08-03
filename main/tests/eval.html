@@ -351,12 +351,19 @@
 <td><p>9.0 GB</p></td>
 <td><p>37m13s</p></td>
 </tr>
-<tr class="row-odd"><td><p>gsplat-30k</p></td>
+<tr class="row-odd"><td><p>gsplat-30k (1 GPU)</p></td>
 <td><p>28.95</p></td>
 <td><p>0.870</p></td>
 <td><p>0.135</p></td>
 <td><p><strong>5.7 GB</strong></p></td>
 <td><p><strong>35m49s</strong></p></td>
+</tr>
+<tr class="row-even"><td><p>gsplat-30k (4 GPUs)</p></td>
+<td><p>28.91</p></td>
+<td><p>0.871</p></td>
+<td><p>0.135</p></td>
+<td><p><strong>2.0 GB</strong></p></td>
+<td><p><strong>11m28s</strong></p></td>
 </tr>
 </tbody>
 </table>
@@ -779,7 +786,7 @@ using <code class="code docutils literal notranslate"><span class="pre">from</sp
 is different from what’s reported in the original paper that uses
 <code class="code docutils literal notranslate"><span class="pre">from</span> <span class="pre">lpipsPyTorch</span> <span class="pre">import</span> <span class="pre">lpips</span></code>.</p>
 <p>The evaluation of <cite>gsplat-X</cite> can be reproduced with the command
-<code class="code docutils literal notranslate"><span class="pre">cd</span> <span class="pre">examples;</span> <span class="pre">bash</span> <span class="pre">benchmark.sh</span></code>
+<code class="code docutils literal notranslate"><span class="pre">cd</span> <span class="pre">examples;</span> <span class="pre">bash</span> <span class="pre">benchmarks/basic.sh</span></code>
 within the gsplat repo (commit 6acdce4).</p>
 <p>The evaluation of <cite>inria-X</cite> can be
 reproduced with our forked wersion of the official implementation at
