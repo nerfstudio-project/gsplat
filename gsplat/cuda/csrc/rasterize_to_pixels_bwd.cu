@@ -34,6 +34,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     const S *__restrict__ v_render_alphas, // [C, image_height, image_width, 1]
     // grad inputs
     vec2<S> *__restrict__ v_means2d_abs, // [C, N, 2] or [nnz, 2]
+    vec2<S> *__restrict__ v_means2d_sqr, // [C, N, 2] or [nnz, 2]
     vec2<S> *__restrict__ v_means2d,     // [C, N, 2] or [nnz, 2]
     vec3<S> *__restrict__ v_conics,      // [C, N, 3] or [nnz, 3]
     S *__restrict__ v_colors,            // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
@@ -173,6 +174,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             S v_rgb_local[COLOR_DIM] = {0.f};
             vec3<S> v_conic_local = {0.f, 0.f, 0.f};
             vec2<S> v_xy_local = {0.f, 0.f};
+            vec2<S> v_xy_sqr_local = {0.f, 0.f};
             vec2<S> v_xy_abs_local = {0.f, 0.f};
             S v_opacity_local = 0.f;
             // initialize everything to 0, only set if the lane is valid
@@ -214,6 +216,9 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                     if (v_means2d_abs != nullptr) {
                         v_xy_abs_local = {abs(v_xy_local.x), abs(v_xy_local.y)};
                     }
+                    if (v_means2d_sqr != nullptr) {
+                        v_xy_sqr_local = {v_xy_local.x * v_xy_local.x, v_xy_local.y * v_xy_local.y};
+                    }
                     v_opacity_local = vis * v_alpha;
                 }
 
@@ -227,6 +232,9 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             warpSum<decltype(warp), S>(v_xy_local, warp);
             if (v_means2d_abs != nullptr) {
                 warpSum<decltype(warp), S>(v_xy_abs_local, warp);
+            }
+            if (v_means2d_sqr != nullptr) {
+                warpSum(v_xy_sqr_local, warp);
             }
             warpSum<decltype(warp), S>(v_opacity_local, warp);
             if (warp.thread_rank() == 0) {
@@ -251,6 +259,12 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                     gpuAtomicAdd(v_xy_abs_ptr, v_xy_abs_local.x);
                     gpuAtomicAdd(v_xy_abs_ptr + 1, v_xy_abs_local.y);
                 }
+                if (v_means2d_sqr != nullptr) {
+                    S *v_xy_sqr_ptr = (S*)(v_means2d_sqr) + 2 * g;
+                    gpuAtomicAdd(v_xy_sqr_ptr, v_xy_sqr_local.x);
+                    gpuAtomicAdd(v_xy_sqr_ptr + 1, v_xy_sqr_local.y);
+                }
+
 
                 gpuAtomicAdd(v_opacities + g, v_opacity_local);
             }
@@ -259,7 +273,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
 }
 
 template <uint32_t CDIM>
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 call_kernel_with_dim(
     // Gaussian parameters
     const torch::Tensor &means2d,                   // [C, N, 2] or [nnz, 2]
@@ -280,7 +294,8 @@ call_kernel_with_dim(
     const torch::Tensor &v_render_colors, // [C, image_height, image_width, 3]
     const torch::Tensor &v_render_alphas, // [C, image_height, image_width, 1]
     // options
-    bool absgrad) {
+    bool absgrad,
+    bool ubp) {
 
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
@@ -319,8 +334,12 @@ call_kernel_with_dim(
     torch::Tensor v_colors = torch::zeros_like(colors);
     torch::Tensor v_opacities = torch::zeros_like(opacities);
     torch::Tensor v_means2d_abs;
+    torch::Tensor v_means2d_sqr;
     if (absgrad) {
         v_means2d_abs = torch::zeros_like(means2d);
+    }
+    if (ubp) {
+        v_means2d_sqr = torch::zeros_like(means2d);
     }
 
     if (n_isects) {
@@ -351,15 +370,18 @@ call_kernel_with_dim(
                 absgrad
                     ? reinterpret_cast<vec2<float> *>(v_means2d_abs.data_ptr<float>())
                     : nullptr,
+                ubp
+                    ? reinterpret_cast<vec2<float> *>(v_means2d_sqr.data_ptr<float>())
+                    : nullptr,    
                 reinterpret_cast<vec2<float> *>(v_means2d.data_ptr<float>()),
                 reinterpret_cast<vec3<float> *>(v_conics.data_ptr<float>()),
                 v_colors.data_ptr<float>(), v_opacities.data_ptr<float>());
     }
 
-    return std::make_tuple(v_means2d_abs, v_means2d, v_conics, v_colors, v_opacities);
+    return std::make_tuple(v_means2d_sqr, v_means2d_abs, v_means2d, v_conics, v_colors, v_opacities);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 rasterize_to_pixels_bwd_tensor(
     // Gaussian parameters
     const torch::Tensor &means2d,                   // [C, N, 2] or [nnz, 2]
@@ -380,7 +402,8 @@ rasterize_to_pixels_bwd_tensor(
     const torch::Tensor &v_render_colors, // [C, image_height, image_width, 3]
     const torch::Tensor &v_render_alphas, // [C, image_height, image_width, 1]
     // options
-    bool absgrad) {
+    bool absgrad,
+    bool ubp) {
 
     CHECK_INPUT(colors);
     uint32_t COLOR_DIM = colors.size(-1);
@@ -390,7 +413,7 @@ rasterize_to_pixels_bwd_tensor(
         return call_kernel_with_dim<N>(                                                \
             means2d, conics, colors, opacities, backgrounds, masks, image_width,       \
             image_height, tile_size, tile_offsets, flatten_ids, render_alphas,         \
-            last_ids, v_render_colors, v_render_alphas, absgrad);
+            last_ids, v_render_colors, v_render_alphas, absgrad, ubp);
 
     switch (COLOR_DIM) {
         __GS__CALL_(1)
