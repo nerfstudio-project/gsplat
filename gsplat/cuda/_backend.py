@@ -5,10 +5,48 @@ import shutil
 from subprocess import DEVNULL, call
 
 from rich.console import Console
-from torch.utils.cpp_extension import _get_build_directory, load
+from torch.utils.cpp_extension import (
+    _get_build_directory,
+    _import_module_from_library,
+    load,
+)
 
 PATH = os.path.dirname(os.path.abspath(__file__))
 NO_FAST_MATH = os.getenv("NO_FAST_MATH", "0") == "1"
+MAX_JOBS = os.getenv("MAX_JOBS")
+need_to_unset_max_jobs = False
+if not MAX_JOBS:
+    need_to_unset_max_jobs = True
+    os.environ["MAX_JOBS"] = "10"
+
+
+def load_extension(
+    name,
+    sources,
+    extra_cflags=None,
+    extra_cuda_cflags=None,
+    extra_ldflags=None,
+    extra_include_paths=None,
+    build_directory=None,
+):
+    """Load a JIT compiled extension."""
+    # If the JIT build happens concurrently in multiple processes,
+    # race conditions can occur when removing the lock file at:
+    # https://github.com/pytorch/pytorch/blob/e3513fb2af7951ddf725d8c5b6f6d962a053c9da/torch/utils/cpp_extension.py#L1736
+    # But it's ok so we catch this exception and ignore it.
+    try:
+        return load(
+            name,
+            sources,
+            extra_cflags=extra_cflags,
+            extra_cuda_cflags=extra_cuda_cflags,
+            extra_ldflags=extra_ldflags,
+            extra_include_paths=extra_include_paths,
+            build_directory=build_directory,
+        )
+    except OSError:
+        # The module should be already compiled
+        return _import_module_from_library(name, build_directory, True)
 
 
 def cuda_toolkit_available():
@@ -44,7 +82,10 @@ except ImportError:
     if cuda_toolkit_available():
         name = "gsplat_cuda"
         build_dir = _get_build_directory(name, verbose=False)
-        extra_include_paths = [os.path.join(PATH, "csrc/")]
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        glm_path = os.path.join(current_dir, "csrc", "third_party", "glm")
+
+        extra_include_paths = [os.path.join(PATH, "csrc/"), glm_path]
         extra_cflags = ["-O3"]
         if NO_FAST_MATH:
             extra_cuda_cflags = ["-O3"]
@@ -66,32 +107,38 @@ except ImportError:
         ):
             # If the build exists, we assume the extension has been built
             # and we can load it.
-            _C = load(
+            _C = load_extension(
                 name=name,
                 sources=sources,
                 extra_cflags=extra_cflags,
                 extra_cuda_cflags=extra_cuda_cflags,
                 extra_include_paths=extra_include_paths,
+                build_directory=build_dir,
             )
         else:
             # Build from scratch. Remove the build directory just to be safe: pytorch jit might stuck
             # if the build directory exists with a lock file in it.
             shutil.rmtree(build_dir)
             with Console().status(
-                "[bold yellow]gsplat: Setting up CUDA (This may take a few minutes the first time)",
+                f"[bold yellow]gsplat: Setting up CUDA with MAX_JOBS={os.environ['MAX_JOBS']} (This may take a few minutes the first time)",
                 spinner="bouncingBall",
             ):
-                _C = load(
+                _C = load_extension(
                     name=name,
                     sources=sources,
                     extra_cflags=extra_cflags,
                     extra_cuda_cflags=extra_cuda_cflags,
                     extra_include_paths=extra_include_paths,
+                    build_directory=build_dir,
                 )
+
     else:
         Console().print(
             "[yellow]gsplat: No CUDA toolkit found. gsplat will be disabled.[/yellow]"
         )
+
+if need_to_unset_max_jobs:
+    os.environ.pop("MAX_JOBS")
 
 
 __all__ = ["_C"]
