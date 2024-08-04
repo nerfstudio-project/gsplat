@@ -106,8 +106,6 @@ def test_projection_2dgs(test_data):
         (quats, scales, means),
     )
 
-    import pdb
-    pdb.set_trace()
     # torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=1e-3)
     torch.testing.assert_close(v_quats, _v_quats, rtol=2e-1, atol=1e-2)
     torch.testing.assert_close(v_scales[..., :2], _v_scales[..., :2], rtol=1e-1, atol=2e-1)
@@ -251,8 +249,6 @@ def test_rasterize_to_pixels_2dgs(test_data):
         diff = (v - _v).abs()
         print(f"{name=} {v.shape} {diff.max()=} {diff.mean()=}")
 
-    import pdb
-    pdb.set_trace()
     
     # assert close forward
     torch.testing.assert_close(render_colors, _render_colors)
