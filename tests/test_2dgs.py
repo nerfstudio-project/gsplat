@@ -98,6 +98,7 @@ def test_projection_2dgs(test_data):
     )  # TODO(WZ): Figure out why do we need to permute here
 
     densifications = torch.zeros((means.shape[0], 2), device=device)
+    densifications.requires_grad = True
 
     radii, means2d, depths, ray_Ms, normals = fully_fused_projection_2dgs(
         means, quats, scales, viewmats, densifications, Ks, width, height
@@ -118,13 +119,14 @@ def test_projection_2dgs(test_data):
     v_ray_Ms = torch.randn_like(ray_Ms) * radii[..., None, None]
     v_normals = torch.randn_like(normals) * radii[..., None]
 
-    v_quats, v_scales, v_means = torch.autograd.grad(
+    v_quats, v_scales, v_means, v_densify = torch.autograd.grad(
         (means2d * v_means2d).sum()
         + (depths * v_depths).sum()
         + (ray_Ms * v_ray_Ms).sum()
         + (normals * v_normals).sum(),
-        (quats, scales, means),
+        (quats, scales, means, densifications),
     )
+    
     _v_quats, _v_scales, _v_means = torch.autograd.grad(
         (_means2d * v_means2d).sum()
         + (_depths * v_depths).sum()
@@ -132,7 +134,8 @@ def test_projection_2dgs(test_data):
         + (_normals * v_normals).sum(),
         (quats, scales, means),
     )
-
+    import pdb
+    pdb.set_trace()
     # torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=1e-3)
     torch.testing.assert_close(v_quats, _v_quats, rtol=2e-1, atol=1e-2)
     torch.testing.assert_close(v_scales[..., :2], _v_scales[..., :2], rtol=1e-1, atol=2e-1)
@@ -290,6 +293,7 @@ def test_rasterize_to_pixels_2dgs(test_data):
         diff = (v - _v).abs()
         print(f"{name=} {v.shape} {diff.max()=} {diff.mean()=}")
 
+    
     # assert close forward
     torch.testing.assert_close(render_colors, _render_colors)
     torch.testing.assert_close(render_alphas, _render_alphas)

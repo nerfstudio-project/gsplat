@@ -754,6 +754,8 @@ class Runner:
             self.running_stats["count"].index_add_(
                 0, gs_ids, torch.ones_like(gs_ids).int()
             )
+            # import pdb
+            # pdb.set_trace()
 
     @torch.no_grad()
     def reset_opa(self, value: float = 0.01):

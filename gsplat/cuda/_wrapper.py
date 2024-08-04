@@ -1290,8 +1290,6 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
             v_viewmats = None
         if not ctx.needs_input_grad[4]:
             v_densifications = None
-        # import pdb
-        # pdb.set_trace()
         return (
             v_means,
             v_quats,
