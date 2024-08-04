@@ -5,7 +5,6 @@ import torch
 from sklearn.neighbors import NearestNeighbors
 from torch import Tensor
 import torch.nn.functional as F
-import matplotlib.pyplot as plt
 
 
 class CameraOptModule(torch.nn.Module):
@@ -137,26 +136,6 @@ def rotation_6d_to_matrix(d6: Tensor) -> Tensor:
     return torch.stack((b1, b2, b3), dim=-2)
 
 
-def normalized_quat_to_rotmat(quat: Tensor) -> Tensor:
-    assert quat.shape[-1] == 4, quat.shape
-    w, x, y, z = torch.unbind(quat, dim=-1)
-    mat = torch.stack(
-        [
-            1 - 2 * (y**2 + z**2),
-            2 * (x * y - w * z),
-            2 * (x * z + w * y),
-            2 * (x * y + w * z),
-            1 - 2 * (x**2 + z**2),
-            2 * (y * z - w * x),
-            2 * (x * z - w * y),
-            2 * (y * z + w * x),
-            1 - 2 * (x**2 + y**2),
-        ],
-        dim=-1,
-    )
-    return mat.reshape(quat.shape[:-1] + (3, 3))
-
-
 def knn(x: Tensor, K: int = 4) -> Tensor:
     x_np = x.cpu().numpy()
     model = NearestNeighbors(n_neighbors=K, metric="euclidean").fit(x_np)
@@ -173,20 +152,3 @@ def set_random_seed(seed: int):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-
-
-# ref: https://github.com/hbb1/2d-gaussian-splatting/blob/main/utils/general_utils.py#L163
-def colormap(img, cmap='jet'):
-    W, H = img.shape[:2]
-    dpi = 300
-    fig, ax = plt.subplots(1, figsize=(H/dpi, W/dpi), dpi=dpi)
-    im = ax.imshow(img, cmap=cmap)
-    ax.set_axis_off()
-    fig.colorbar(im, ax=ax)
-    fig.tight_layout()
-    fig.canvas.draw()
-    data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-    data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-    img = torch.from_numpy(data).float().permute(2,0,1)
-    plt.close()
-    return img

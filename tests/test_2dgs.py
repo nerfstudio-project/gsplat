@@ -8,34 +8,6 @@ from gsplat._helper import load_test_data
 
 device = torch.device("cuda:0")
 
-# @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-# @pytest.fixture
-# def test_data_2():
-#     (
-#         means,
-#         quats,
-#         scales,
-#         opacities,
-#         colors,
-#         viewmats,
-#         Ks,
-#         width,
-#         height,
-#     ) = load_test_data(device=device)
-#     colors = colors[None].repeat(len(viewmats), 1, 1)
-#     return {
-#         "means": means,
-#         "quats": quats,
-#         "scales": scales,
-#         "opacities": opacities,
-#         "colors": colors,
-#         "viewmats": viewmats,
-#         "Ks": Ks,
-#         "width": width,
-#         "height": height,
-#     }
-
-
 @pytest.fixture
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_data():
@@ -72,7 +44,7 @@ def test_data():
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_projection_2dgs(test_data):
-    from gsplat.cuda._torch_impl import _fully_fused_projection_2dgs
+    from gsplat.cuda._torch_impl_2dgs import _fully_fused_projection_2dgs
     from gsplat.cuda._wrapper import fully_fused_projection_2dgs
 
     torch.manual_seed(42)
@@ -126,7 +98,6 @@ def test_projection_2dgs(test_data):
         + (normals * v_normals).sum(),
         (quats, scales, means, densifications),
     )
-    
     _v_quats, _v_scales, _v_means = torch.autograd.grad(
         (_means2d * v_means2d).sum()
         + (_depths * v_depths).sum()
@@ -134,6 +105,7 @@ def test_projection_2dgs(test_data):
         + (_normals * v_normals).sum(),
         (quats, scales, means),
     )
+
     import pdb
     pdb.set_trace()
     # torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=1e-3)
@@ -141,21 +113,11 @@ def test_projection_2dgs(test_data):
     torch.testing.assert_close(v_scales[..., :2], _v_scales[..., :2], rtol=1e-1, atol=2e-1)
     torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=6e-2)
 
-    # print(f"{_radii.shape=} {_means2d.shape=} {_depths.shape=} {_ray_Ms.shape=}")
-    # import ipdb
-
-    # ipdb.set_trace()
-
-
-# # @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-# def test_fully_fused_projection_packed(test_data):
-#     pass
-
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 # @pytest.mark.parametrize("channels", [3, 32, 128])
 def test_rasterize_to_pixels_2dgs(test_data):
-    from gsplat.cuda._torch_impl import _rasterize_to_pixels_2dgs
+    from gsplat.cuda._torch_impl_2dgs import _rasterize_to_pixels_2dgs
     from gsplat.cuda._wrapper import (
         fully_fused_projection_2dgs,
         isect_offset_encode,
@@ -202,12 +164,8 @@ def test_rasterize_to_pixels_2dgs(test_data):
     backgrounds.requires_grad = True
     normals.requires_grad = True
 
-    # import pdb
-    # pdb.set_trace()
-    densifications = torch.zeros_like(means2d)
-    render_colors, render_alphas, render_normals, render_distloss = rasterize_to_pixels_2dgs(
+    render_colors, render_alphas, render_normals = rasterize_to_pixels_2dgs(
         means2d,
-        densifications,
         ray_Ms,
         colors,
         opacities,
@@ -293,6 +251,8 @@ def test_rasterize_to_pixels_2dgs(test_data):
         diff = (v - _v).abs()
         print(f"{name=} {v.shape} {diff.max()=} {diff.mean()=}")
 
+    import pdb
+    pdb.set_trace()
     
     # assert close forward
     torch.testing.assert_close(render_colors, _render_colors)
@@ -306,8 +266,6 @@ def test_rasterize_to_pixels_2dgs(test_data):
     torch.testing.assert_close(v_opacities, _v_opacities, rtol=1e-3, atol=1e-3)
     torch.testing.assert_close(v_backgrounds, _v_backgrounds, rtol=1e-5, atol=1e-5)
     torch.testing.assert_close(v_normals, _v_normals, rtol=1e-3, atol=1e-3)
-    # import pdb
-    # pdb.set_trace()
 
 if __name__ == "__main__":
     test_projection_2dgs(test_data())

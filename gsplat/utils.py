@@ -1,4 +1,3 @@
-# ref: https://github.com/hbb1/2d-gaussian-splatting/blob/61c7b417393d5e0c58b742ad5e2e5f9e9f240cc6/utils/point_utils.py#L26
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,39 +7,34 @@ import matplotlib.pyplot as plt
 import math
 from torch import Tensor
 
-import pdb
+def normalized_quat_to_rotmat(quat: Tensor) -> Tensor:
+    """Convert normalized quaternion to rotation matrix.
 
-# def depths_to_points(
-#     c2w: Tensor, 
-#     intrinsic: Tensor, 
-#     width: int,
-#     height: int,
-#     depthmap
-# ) -> Tensor:
-#     grid_x, grid_y = torch.meshgrid(torch.arange(width, device="cuda").float(), torch.arange(height, device="cuda").float(), indexing='xy')
-#     points = torch.stack([grid_x, grid_y, torch.ones_like(grid_x)], dim=-1).reshape(-1, 3)
-#     rays_d = points @ intrinsic.inverse().T @ c2w[:3, :3].T
-#     rays_o = c2w[:3, 3]
-#     points = depthmap.reshape(-1, 1) * rays_d + rays_o
-#     return points 
-    
-# def depth_to_normal(
-#     c2w: Tensor, 
-#     intrinsic: Tensor, 
-#     width: int,
-#     height: int,
-#     depth
-# ):  
-#     c2w = torch.linalg.inv(c2w)
-#     points = depths_to_points(c2w, intrinsic, width, height, depth).reshape(height, width, 3)
-#     output = torch.zeros_like(points)
-#     dx = torch.cat([points[2:, 1:-1] - points[:-2, 1:-1]], dim=0)
-#     dy = torch.cat([points[1:-1, 2:] - points[1:-1, :-2]], dim=1)
-#     normal_map = torch.nn.functional.normalize(torch.cross(dx, dy, dim=-1), dim=-1)
-#     output[1:-1, 1:-1, :] = normal_map
-#     return output
-    
+    Args:
+        quat: Normalized quaternion in wxyz convension. (..., 4)
 
+    Returns:
+        Rotation matrix (..., 3, 3)
+    """
+    assert quat.shape[-1] == 4, quat.shape
+    w, x, y, z = torch.unbind(quat, dim=-1)
+    mat = torch.stack(
+        [
+            1 - 2 * (y**2 + z**2),
+            2 * (x * y - w * z),
+            2 * (x * z + w * y),
+            2 * (x * y + w * z),
+            1 - 2 * (x**2 + z**2),
+            2 * (y * z - w * x),
+            2 * (x * z - w * y),
+            2 * (y * z + w * x),
+            1 - 2 * (x**2 + y**2),
+        ],
+        dim=-1,
+    )
+    return mat.reshape(quat.shape[:-1] + (3, 3))
+
+# ref: https://github.com/hbb1/2d-gaussian-splatting/blob/61c7b417393d5e0c58b742ad5e2e5f9e9f240cc6/utils/point_utils.py#L26
 def _depths_to_points(depthmap, world_view_transform, full_proj_transform, fx, fy):
     c2w = (world_view_transform.T).inverse()
     # import pdb

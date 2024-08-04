@@ -16,8 +16,8 @@ from .rendering import (
     rasterization,
     rasterization_inria_wrapper,
     rasterization_legacy_wrapper,
-    rasterization_2dgs,
 )
+from .strategy import DefaultStrategy, MCMCStrategy, Strategy
 from .version import __version__
 
 
@@ -99,6 +99,9 @@ def get_tile_bin_edges(*args, **kwargs):
 
 
 all = [
+    "DefaultStrategy",
+    "MCMCStrategy",
+    "Strategy",
     "rasterization",
     "rasterization_2dgs"
     "rasterization_legacy_wrapper",
@@ -114,6 +117,9 @@ all = [
     "accumulate",
     "rasterize_to_indices_in_range",
     "__version__",
+    "full_fused_projection_2dgs",
+    "rasterize_to_pixels_2dgs",
+    "rasterize_to_indices_in_range_2dgs",
     # deprecated
     "rasterize_gaussians",
     "project_gaussians",

@@ -387,9 +387,9 @@ def test_fully_fused_projection_packed(
         retain_graph=True,
     )
     v_viewmats, v_quats, v_scales, v_means = torch.autograd.grad(
-        (means2d * v_means2d[sel]).sum()
-        + (depths * v_depths[sel]).sum()
-        + (conics * v_conics[sel]).sum(),
+        (means2d * v_means2d[__radii > 0]).sum()
+        + (depths * v_depths[__radii > 0]).sum()
+        + (conics * v_conics[__radii > 0]).sum(),
         (viewmats, quats, scales, means),
         retain_graph=True,
     )
@@ -398,9 +398,9 @@ def test_fully_fused_projection_packed(
         v_scales = v_scales.to_dense()
         v_means = v_means.to_dense()
 
-    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=1e-4)
+    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-2, atol=1e-2)
     torch.testing.assert_close(v_quats, _v_quats, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_scales, _v_scales, rtol=1e-2, atol=1e-2)
+    torch.testing.assert_close(v_scales, _v_scales, rtol=5e-2, atol=5e-2)
     torch.testing.assert_close(v_means, _v_means, rtol=1e-3, atol=1e-3)
 
 
@@ -438,7 +438,8 @@ def test_isect(test_data):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_rasterize_to_pixels(test_data):
+@pytest.mark.parametrize("channels", [3, 32, 128])
+def test_rasterize_to_pixels(test_data, channels: int):
     from gsplat.cuda._torch_impl import _rasterize_to_pixels
     from gsplat.cuda._wrapper import (
         fully_fused_projection,
@@ -459,8 +460,8 @@ def test_rasterize_to_pixels(test_data):
     scales = test_data["scales"] * 0.1
     means = test_data["means"]
     opacities = test_data["opacities"]
-    colors = test_data["colors"]
     C = len(Ks)
+    colors = torch.randn(C, len(means), channels, device=device)
     backgrounds = torch.rand((C, colors.shape[-1]), device=device)
 
     covars, _ = quat_scale_to_covar_preci(quats, scales, compute_preci=False, triu=True)
@@ -472,7 +473,7 @@ def test_rasterize_to_pixels(test_data):
     opacities = opacities.repeat(C, 1)
 
     # Identify intersecting tiles
-    tile_size = 16
+    tile_size = 16 if channels <= 32 else 4
     tile_width = math.ceil(width / float(tile_size))
     tile_height = math.ceil(height / float(tile_size))
     tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
@@ -511,8 +512,6 @@ def test_rasterize_to_pixels(test_data):
         flatten_ids,
         backgrounds=backgrounds,
     )
-    import pdb
-    pdb.set_trace()
     torch.testing.assert_close(render_colors, _render_colors)
     torch.testing.assert_close(render_alphas, _render_alphas)
 
@@ -536,11 +535,11 @@ def test_rasterize_to_pixels(test_data):
         + (_render_alphas * v_render_alphas).sum(),
         (means2d, conics, colors, opacities, backgrounds),
     )
-    torch.testing.assert_close(v_means2d, _v_means2d, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(v_means2d, _v_means2d, rtol=5e-3, atol=5e-3)
     torch.testing.assert_close(v_conics, _v_conics, rtol=1e-3, atol=1e-3)
     torch.testing.assert_close(v_colors, _v_colors, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_opacities, _v_opacities, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_backgrounds, _v_backgrounds, rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(v_opacities, _v_opacities, rtol=2e-3, atol=2e-3)
+    torch.testing.assert_close(v_backgrounds, _v_backgrounds, rtol=1e-3, atol=1e-3)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")

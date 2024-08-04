@@ -25,11 +25,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("rasterize_to_indices_in_range", &rasterize_to_indices_in_range_tensor);
 
-    // packed version
-    m.def("fully_fused_projection_packed_fwd", &fully_fused_projection_packed_fwd_tensor);
-    m.def("fully_fused_projection_packed_bwd", &fully_fused_projection_packed_bwd_tensor);
-
-    // 2dgs
+    // 2DGS
     m.def("fully_fused_projection_fwd_2dgs", &fully_fused_projection_fwd_2dgs_tensor);
     m.def("fully_fused_projection_bwd_2dgs", &fully_fused_projection_bwd_2dgs_tensor);
 
@@ -38,6 +34,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("rasterize_to_indices_in_range_2dgs", &rasterize_to_indices_in_range_2dgs_tensor);
 
-    m.def("fully_fused_projection_packed_fwd_2dgs", &fully_fused_projection_packed_fwd_2dgs_tensor);
-    m.def("fully_fused_projection_packed_bwd_2dgs", &fully_fused_projection_packed_bwd_2dgs_tensor);
+    // packed version
+    m.def("fully_fused_projection_packed_fwd",
+          &fully_fused_projection_packed_fwd_tensor);
+    m.def("fully_fused_projection_packed_bwd",
+          &fully_fused_projection_packed_bwd_tensor);
+
+    m.def("compute_relocation", &compute_relocation_tensor);
 }

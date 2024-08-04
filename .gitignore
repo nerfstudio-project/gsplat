@@ -121,9 +121,8 @@ venv.bak/
 compile_commands.json
 *.dump
 
-/data
-/result
-/results
-/renders
+data
+results
+renders
 
-/gsplat/diff-surfel-rasterization
+diff-surfel-rasterization
