@@ -203,11 +203,6 @@ class DefaultStrategy(Strategy):
             grads = info["means2d"].absgrad.clone()
         else:
             grads = info["means2d"].grad.clone()
-        if torch.isnan(grads).sum() != 0:
-            print(grads.shape)
-            print(torch.isnan(grads.squeeze(0)).squeeze(0).sum(dim=0))
-            print(f"means2d is nan: {grads[torch.isnan(grads)].shape}")
-            print(grads)
         grads[..., 0] *= info["width"] / 2.0 * info["n_cameras"]
         grads[..., 1] *= info["height"] / 2.0 * info["n_cameras"]
 
