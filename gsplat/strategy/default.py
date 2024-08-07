@@ -252,15 +252,11 @@ class DefaultStrategy(Strategy):
     ) -> Tuple[int, int]:
         count = state["count"]
         grads = state["grad2d"] / count.clamp_min(1)
-        state_grads = state["grad2d"]
-        print(f"grad is nan: {state_grads.isnan().sum()}")
         device = grads.device
 
         is_grad_high = grads > self.grow_grad2d
-        print(f"num is_grad_high: {is_grad_high.sum().item()}")
-        print(f"grads mean: {torch.mean(grads)}")
         is_small = (
-            torch.exp(params["scales"][..., :2]).max(dim=-1).values
+            torch.exp(params["scales"]).max(dim=-1).values
             <= self.grow_scale3d * self.scene_scale
         )
         is_dupli = is_grad_high & is_small
@@ -306,7 +302,7 @@ class DefaultStrategy(Strategy):
         is_prune = torch.sigmoid(params["opacities"]) < self.prune_opa
         if step > self.reset_every:
             is_too_big = (
-                torch.exp(params["scales"][..., :2]).max(dim=-1).values
+                torch.exp(params["scales"]).max(dim=-1).values
                 > self.prune_scale3d * self.scene_scale
             )
             # The official code also implements sreen-size pruning but

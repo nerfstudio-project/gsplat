@@ -29,6 +29,7 @@ namespace cg = cooperative_groups;
     S *__restrict__ render_colors,  // [C, image_height, image_width, COLOR_DIM]
     S *__restrict__ render_alphas,  // [C, image_height, image_width, 1]
     S *__restrict__ render_normals, // [C, image_height, image_width, 3]
+    S *__restrict__ render_distort, // [C, image_height, image_width, 1]
     int32_t *__restrict__ last_ids  // [C, image_height, image_width]
  ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
@@ -103,6 +104,12 @@ namespace cg = cooperative_groups;
     // each thread loads one gaussian at a time before rasterizing its
     // designated pixel
     uint32_t tr = block.thread_rank();
+
+    // Per-pixel distortion error proposed in Mip-NeRF 360.
+    // Implemented reference:
+    // https://github.com/nerfstudio-project/nerfacc/blob/master/nerfacc/losses.py#L7
+    S distort = 0.f;
+    S accum_vis_depth = 0.f; // accumulate vis * depth
 
     // TODO (WZ): merge pix_out and normal_out to
     //  S pix_out[COLOR_DIM + 3] = {0.f}
@@ -185,7 +192,17 @@ namespace cg = cooperative_groups;
                 normal_out[k] += n_ptr[k] * vis;
             }
 
-            // TODO (WZ): Add distortion loss
+            if (render_distort != nullptr) {
+                // the last channel of colors is depth
+                const S depth = c_ptr[COLOR_DIM - 1];
+                // in nerfacc, loss_bi_0 = weights * t_mids * exclusive_sum(weights)
+                const S distort_bi_0 = vis * depth * (1.0f - T);
+                // in nerfacc, loss_bi_1 = weights * exclusive_sum(weights * t_mids)
+                const S distort_bi_1 = vis * accum_vis_depth;
+                distort += 2.0f * (distort_bi_0 - distort_bi_1);
+                accum_vis_depth += vis * depth;
+            }
+
             cur_idx = batch_start + t;
 
             T = next_T;
@@ -213,12 +230,14 @@ namespace cg = cooperative_groups;
         // index in bin of last gaussian in this pixel
         last_ids[pix_id] = static_cast<int32_t>(cur_idx);
 
-        // TODO (WZ): render_distortion
+        if (render_distort != nullptr) {
+            render_distort[pix_id] = distort;
+        }
     }
 }
 
 template <uint32_t CDIM>
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2] or [nnz, 2]
     const torch::Tensor &ray_Ms,    // [C, N, 3, 3] or [nnz, 3, 3]
@@ -269,7 +288,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> call_kern
                                           means2d.options().dtype(torch::kInt32));
     torch::Tensor render_normals = torch::empty({C, image_height, image_width, 3},
                                         means2d.options().dtype(torch::kFloat32));
-    
+    torch::Tensor render_distort = torch::empty({C, image_height, image_width, 1},
+                                        means2d.options().dtype(torch::kFloat32));
+
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
     const uint32_t shared_mem =
         tile_size * tile_size *
@@ -296,13 +317,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> call_kern
             image_width, image_height, tile_size, tile_width, tile_height,
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
-            render_normals.data_ptr<float>(),
+            render_normals.data_ptr<float>(), render_distort.data_ptr<float>(),
             last_ids.data_ptr<int32_t>());
     
-    return std::make_tuple(renders, alphas, render_normals, last_ids);
+    return std::make_tuple(renders, alphas, render_normals, render_distort, last_ids);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_2dgs_tensor(
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_2dgs_tensor(
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2] or [nnz, 2]
     const torch::Tensor &ray_Ms,    // [C, N, 3] or [nnz, 3]

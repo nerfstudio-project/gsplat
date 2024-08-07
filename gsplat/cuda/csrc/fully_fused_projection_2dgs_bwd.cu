@@ -86,7 +86,7 @@ namespace cg = cooperative_groups;
     vec3<T> v_normal = glm::make_vec3(v_normals);
 
     vec3<T> v_mean(0.f);
-    vec3<T> v_scale(0.f);
+    vec2<T> v_scale(0.f);
     vec4<T> v_quat(0.f);
     compute_ray_Ms_aabb_vjp(
         ray_Ms,
@@ -132,7 +132,6 @@ namespace cg = cooperative_groups;
         gpuAtomicAdd(v_quats + 3, v_quat[3]);
         gpuAtomicAdd(v_scales, v_scale[0]);
         gpuAtomicAdd(v_scales + 1, v_scale[1]);
-        gpuAtomicAdd(v_scales + 2, v_scale[2]);
     }
 
     float depth = ray_Ms[8];
@@ -146,7 +145,7 @@ fully_fused_projection_bwd_2dgs_tensor(
     // fwd inputs
     const torch::Tensor &means,                // [N, 3]
     const torch::Tensor &quats,                // [N, 4]
-    const torch::Tensor &scales,               // [N, 3]
+    const torch::Tensor &scales,               // [N, 2]
     const torch::Tensor &densifications,       // [N, 2]
     const torch::Tensor &viewmats,             // [C, 4, 4]
     const torch::Tensor &Ks,                   // [C, 3, 3]

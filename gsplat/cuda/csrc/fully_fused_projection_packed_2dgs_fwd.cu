@@ -24,7 +24,7 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
     const T *__restrict__ scales,   // [N, 3]
     const T *__restrict__ viewmats, // [C, 4, 4]
     const T *__restrict__ Ks,       // [C, 3, 3]
-    const int32_t image_width, const int32_t image_height, const T eps2d,
+    const int32_t image_width, const int32_t image_height,
     const T near_plane, const T far_plane, const T radius_clip,
     const int32_t *__restrict__ block_accum, // [C * blocks_per_row] packing helper
     int32_t *__restrict__ block_cnts,        // [C * blocks_per_row] packing helper
@@ -36,6 +36,7 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
     T *__restrict__ means2d,        // [nnz, 2]
     T *__restrict__ depths,         // [nnz]
     T *__restrict__ ray_Ms,         // [nnz, 3, 3]
+    T *__restrict__ normals         // [nnz, 3]
 ) {
     int32_t blocks_per_row = gridDim.x;
 
@@ -72,10 +73,11 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
     vec2<T> mean2d;
     mat3<T> M;
     T radius;
+    vec3<T> normal;
     if (valid) {
         // build ray transformation matrix and transform from world space to camera space
-        quats += gid * 4;
-        scales += gid * 3;
+        quats += col_idx * 4;
+        scales += col_idx * 3;
 
         mat3<T> RS_camera = R * quat_to_rotmat<T>(glm::make_vec4(quats)) * scale_to_mat<T>(glm::make_vec2(scales), 1.0f);
         mat3<T> WH = mat3<T>(
@@ -103,7 +105,7 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
         if (distance == 0.0f) valid = false;
 
         const vec3<T> f = (1 / distance) * temp_point;
-        vec2<T> mean2d = vec2<T>(
+        mean2d = vec2<T>(
             f3_sum(f * M0 * M2),
             f3_sum(f * M1 * M2)
         );
@@ -124,6 +126,11 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
             mean2d.y + radius <= 0 || mean2d.y - radius >= image_height) {
             valid = false;
         }
+
+        // normal dual visible
+        normal = RS_camera[2];
+        T multipler = glm::dot(-normal, mean_c) > 0 ? 1 : -1;
+        normal *= multipler;
     }
 
     int32_t thread_data = static_cast<int32_t>(valid);
@@ -159,15 +166,18 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
             means2d[thread_data * 2] = mean2d.x;
             means2d[thread_data * 2 + 1] = mean2d.y;
             depths[thread_data] = mean_c.z;
-            ray_Ms[idx * 9] = M0.x;
-            ray_Ms[idx * 9 + 1] = M0.y;
-            ray_Ms[idx * 9 + 2] = M0.z;
-            ray_Ms[idx * 9 + 3] = M1.x;
-            ray_Ms[idx * 9 + 4] = M1.y;
-            ray_Ms[idx * 9 + 5] = M1.z;
-            ray_Ms[idx * 9 + 6] = M2.x;
-            ray_Ms[idx * 9 + 7] = M2.y;
-            ray_Ms[idx * 9 + 8] = M2.z;
+            ray_Ms[thread_data * 9] = M[0][0];
+            ray_Ms[thread_data * 9 + 1] = M[0][1];
+            ray_Ms[thread_data * 9 + 2] = M[0][2];
+            ray_Ms[thread_data * 9 + 3] = M[1][0];
+            ray_Ms[thread_data * 9 + 4] = M[1][1];
+            ray_Ms[thread_data * 9 + 5] = M[1][2];
+            ray_Ms[thread_data * 9 + 6] = M[2][0];
+            ray_Ms[thread_data * 9 + 7] = M[2][1];
+            ray_Ms[thread_data * 9 + 8] = M[2][2];
+            normals[thread_data * 3] = normal.x;
+            normals[thread_data * 3 + 1] = normal.y;
+            normals[thread_data * 3 + 2] = normal.z;
         }
         // lane 0 of the first block in each row writes the indptr
         if (threadIdx.x == 0 && block_col_idx == 0) {
@@ -183,17 +193,15 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
-           torch::Tensor, torch::Tensor>
+           torch::Tensor, torch::Tensor, torch::Tensor>
 fully_fused_projection_packed_fwd_2dgs_tensor(
     const torch::Tensor &means,                // [N, 3]
-    const at::optional<torch::Tensor> &covars, // [N, 6]
-    const at::optional<torch::Tensor> &quats,  // [N, 3]
-    const at::optional<torch::Tensor> &scales, // [N, 3]
+    const torch::Tensor &quats,                // [N, 3]
+    const torch::Tensor &scales,               // [N, 3]
     const torch::Tensor &viewmats,             // [C, 4, 4]
     const torch::Tensor &Ks,                   // [C, 3, 3]
     const uint32_t image_width, const uint32_t image_height,
-    const float near_plane, const float far_plane, const float radius_clip,
-    const bool calc_compensations) {
+    const float near_plane, const float far_plane, const float radius_clip) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
     CHECK_INPUT(quats);
@@ -223,10 +231,10 @@ fully_fused_projection_packed_fwd_2dgs_tensor(
             C, N, means.data_ptr<float>(),
             quats.data_ptr<float>(), scales.data_ptr<float>(),
             viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
-            eps2d, near_plane, far_plane, radius_clip, nullptr,
+            near_plane, far_plane, radius_clip, nullptr,
             block_cnts.data_ptr<int32_t>(), nullptr, nullptr, nullptr, nullptr, nullptr,
             nullptr, nullptr, nullptr);
-        block_accum = torch::accum(block_cnts, 0, torch::kInt32);
+        block_accum = torch::cumsum(block_cnts, 0, torch::kInt32);
         nnz = block_accum[-1].item<int32_t>();
     } else {
         nnz = 0;
@@ -239,7 +247,8 @@ fully_fused_projection_packed_fwd_2dgs_tensor(
     torch::Tensor radii = torch::empty({nnz}, means.options().dtype(torch::kInt32));
     torch::Tensor means2d = torch::empty({nnz, 2}, means.options());
     torch::Tensor depths = torch::empty({nnz}, means.options());
-    torch::Tensor conics = torch::empty({nnz, 3, 3}, means.options());
+    torch::Tensor ray_Ms = torch::empty({nnz, 3, 3}, means.options());
+    torch::Tensor normals = torch::empty({nnz, 3}, means.options());
 
     if (nnz) {
         fully_fused_projection_packed_fwd_2dgs_kernel<float><<<blocks, threads, 0, stream>>>(
@@ -247,14 +256,14 @@ fully_fused_projection_packed_fwd_2dgs_tensor(
             quats.data_ptr<float>(),
             scales.data_ptr<float>(),
             viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
-            eps2d, near_plane, far_plane, radius_clip, block_accum.data_ptr<int32_t>(),
+            near_plane, far_plane, radius_clip, block_accum.data_ptr<int32_t>(),
             nullptr, indptr.data_ptr<int32_t>(), camera_ids.data_ptr<int64_t>(),
             gaussian_ids.data_ptr<int64_t>(), radii.data_ptr<int32_t>(),
             means2d.data_ptr<float>(), depths.data_ptr<float>(),
-            ray_Ms.data_ptr<float>());
+            ray_Ms.data_ptr<float>(), normals.data_ptr<float>());
     } else {
         indptr.fill_(0);
     }
 
-    return std::make_tuple(indptr, camera_ids, gaussian_ids, radii, means2d, depths, ray_Ms);
+    return std::make_tuple(indptr, camera_ids, gaussian_ids, radii, means2d, depths, ray_Ms, normals);
 }

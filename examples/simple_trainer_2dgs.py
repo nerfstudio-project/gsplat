@@ -77,9 +77,9 @@ class Config:
     ssim_lambda: float = 0.2
 
     # Near plane clipping distance
-    near_plane: float = 0.01
+    near_plane: float = 0.2
     # Far plane clipping distance
-    far_plane: float = 1e10
+    far_plane: float = 200
 
     # GSs with opacity below this value will be pruned
     prune_opa: float = 0.05
@@ -422,13 +422,15 @@ class Runner:
              render_alphas,
              render_normals,
              normals_from_depth,
+             render_distort,
             ) = renders
         elif self.model_type == "2dgs-inria":
             render_colors, render_alphas = renders
             render_normals = info["normals_rend"]
             normals_from_depth = info["normals_surf"]
+            render_distort = info["render_distloss"]
             
-        return render_colors, render_alphas, render_normals, normals_from_depth, info
+        return render_colors, render_alphas, render_normals, normals_from_depth, render_distort, info
     
     def train(self):
         cfg = self.cfg
@@ -504,7 +506,7 @@ class Runner:
             sh_degree_to_use = min(step // cfg.sh_degree_interval, cfg.sh_degree)
 
             # forward
-            renders, alphas, normals, normals_from_depth, info = self.rasterize_splats(
+            renders, alphas, normals, normals_from_depth, render_distort, info = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -514,6 +516,7 @@ class Runner:
                 far_plane=cfg.far_plane,
                 image_ids=image_ids,
                 render_mode="RGB+ED" if cfg.depth_loss else "RGB+D",
+                distloss=self.cfg.dist_loss,
             )
             if renders.shape[-1] == 4:
                 colors, depths = renders[..., 0:3], renders[..., 3:4]
@@ -560,7 +563,7 @@ class Runner:
             
             if cfg.normal_loss:
                 if step > cfg.normal_start_iter:
-                    curr_normal_lambda = cfg.normal_start_iter
+                    curr_normal_lambda = cfg.normal_lambda
                 else:
                     curr_normal_lambda = 0.0
                 # normal consistency loss
@@ -570,18 +573,24 @@ class Runner:
                     normals_from_depth = normals_from_depth.squeeze(0)
                 normals_from_depth = normals_from_depth.permute((2, 0, 1))
                 normal_error = (1 - (normals * normals_from_depth).sum(dim=0))[None]
-                normalloss = cfg.normal_lambda * normal_error.mean()
+                normalloss = curr_normal_lambda * normal_error.mean()
                 loss += normalloss
                 
-            if cfg.dist_loss and False:
-                distloss = info["render_distloss"].mean()
-                loss += distloss * cfg.dist_lambda
+            if cfg.dist_loss:
+                if step > cfg.dist_start_iter:
+                    curr_dist_lambda = cfg.dist_lambda
+                else:
+                    curr_dist_lambda = 0.0
+                distloss = render_distort.mean()
+                loss += distloss * curr_dist_lambda
 
             loss.backward()
 
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
             if cfg.depth_loss:
                 desc += f"depth loss={depthloss.item():.6f}| "
+            if cfg.dist_loss:
+                desc += f"dist loss={distloss.item():.6f}"
             if cfg.pose_opt and cfg.pose_noise:
                 # monitor the pose error if we inject noise
                 pose_err = F.l1_loss(camtoworlds_gt, camtoworlds)
@@ -601,6 +610,8 @@ class Runner:
                     self.writer.add_scalar("train/distloss", distloss.item(), step)
                 if cfg.normal_loss:
                     self.writer.add_scalar("train/normalloss", normalloss.item(), step)
+                if cfg.dist_loss:
+                    self.writer.add_scalar("train/distloss", distloss.item(), step)
                 if cfg.tb_save_image:
                     canvas = torch.cat([pixels, colors[..., :3]], dim=2).detach().cpu().numpy()
                     canvas = canvas.reshape(-1, *canvas.shape[2:])
@@ -698,7 +709,7 @@ class Runner:
 
             torch.cuda.synchronize()
             tic = time.time()
-            colors, alphas, normals, normals_from_depth, _ = self.rasterize_splats(
+            colors, alphas, normals, normals_from_depth, render_distort, _ = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -737,6 +748,19 @@ class Runner:
                 f"{self.render_dir}/val_{i:04d}_normals_from_depth_{step}.png", normals_from_depth_output
             )
 
+            # write distortions
+            from utils import colormap
+            render_dist = render_distort
+            dist_max = torch.max(render_dist)
+            dist_min = torch.min(render_dist)
+            render_dist = (render_dist - dist_min) / (dist_max - dist_min)
+            # import pdb
+            # pdb.set_trace()
+            render_dist = colormap(render_dist.cpu().numpy()[0]).permute((1, 2, 0)).numpy().astype(np.uint8)
+            imageio.imwrite(
+                f"{self.render_dir}/val_{i:04d}_distortions_{step}.png", render_dist
+            )
+            
             pixels = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
             colors = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
             metrics["psnr"].append(self.psnr(colors, pixels))
@@ -791,7 +815,7 @@ class Runner:
 
         canvas_all = []
         for i in tqdm.trange(len(camtoworlds), desc="Rendering trajectory"):
-            renders, _, _, _, _ = self.rasterize_splats(
+            renders, _, _, _, _, _ = self.rasterize_splats(
                 camtoworlds=camtoworlds[i : i + 1],
                 Ks=K[None],
                 width=width,
@@ -832,7 +856,7 @@ class Runner:
         c2w = torch.from_numpy(c2w).float().to(self.device)
         K = torch.from_numpy(K).float().to(self.device)
 
-        render_colors, _, _, _, _ = self.rasterize_splats(
+        render_colors, _, _, _, _, _ = self.rasterize_splats(
             camtoworlds=c2w[None],
             Ks=K[None],
             width=W,

@@ -162,7 +162,7 @@ def test_rasterize_to_pixels_2dgs(test_data):
     backgrounds.requires_grad = True
     normals.requires_grad = True
 
-    render_colors, render_alphas, render_normals = rasterize_to_pixels_2dgs(
+    render_colors, render_alphas, render_normals, _ = rasterize_to_pixels_2dgs(
         means2d,
         ray_Ms,
         colors,

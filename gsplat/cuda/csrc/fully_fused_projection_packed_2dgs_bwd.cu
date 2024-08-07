@@ -31,9 +31,10 @@ __global__ void fully_fused_projection_packed_bwd_2dgs_kernel(
     // grad outputs
     const T *__restrict__ v_means2d,       // [nnz, 2]
     const T *__restrict__ v_depths,        // [nnz]
-    const T *__restrict__ v_ray_Ms,        // [nnz, 3]
+    const T *__restrict__ v_normals,        // [nnz, 3]
     const bool sparse_grad, // whether the outputs are in COO format [nnz, ...]
     // grad inputs
+    T *__restrict__ v_ray_Ms,
     T *__restrict__ v_means,   // [N, 3] or [nnz, 3]
     T *__restrict__ v_quats,   // [N, 4] or [nnz, 4] Optional
     T *__restrict__ v_scales,  // [N, 3] or [nnz, 3] Optional
@@ -64,6 +65,8 @@ __global__ void fully_fused_projection_packed_bwd_2dgs_kernel(
                             viewmats[2], viewmats[6], viewmats[10] // 3rd column
     );
     vec3<T> t = vec3<T>(viewmats[3], viewmats[7], viewmats[11]);
+    vec3<T> mean_c;
+    pos_world_to_cam(R, t, glm::make_vec3(means), mean_c);
 
     vec4<T> quat = glm::make_vec4(quats + gid * 4);
     vec3<T> scale = glm::make_vec3(scales + gid * 3);
@@ -83,7 +86,7 @@ __global__ void fully_fused_projection_packed_bwd_2dgs_kernel(
     vec3<T> v_mean(0.f);
     vec3<T> v_scale(0.f);
     vec4<T> v_quat(0.f);
-    compute_ray_Ms_aabb_vjp(
+    compute_ray_Ms_aabb_vjp<T>(
         ray_Ms,
         v_means2d,
         v_normal,
@@ -133,10 +136,6 @@ __global__ void fully_fused_projection_packed_bwd_2dgs_kernel(
             }
         }
         // Directly output gradients w.r.t. the quaternion and scale
-        mat3<T> rotmat = quat_to_rotmat<T>(quat);
-        vec4<T> v_quat(0.f);
-        vec3<T> v_scale(0.f);
-        quat_scale_to_covar_vjp<T>(quat, scale, rotmat, v_covar, v_quat, v_scale);
         warpSum(v_quat, warp_group_g);
         warpSum(v_scale, warp_group_g);
         if (warp_group_g.thread_rank() == 0) {
@@ -152,23 +151,23 @@ __global__ void fully_fused_projection_packed_bwd_2dgs_kernel(
         }
     }
 
-    // v_viewmats is always in dense layout
-    if (v_viewmats != nullptr) {
-        auto warp_group_c = cg::labeled_partition(warp, cid);
-        warpSum(v_R, warp_group_c);
-        warpSum(v_t, warp_group_c);
-        if (warp_group_c.thread_rank() == 0) {
-            v_viewmats += cid * 16;
-            PRAGMA_UNROLL
-            for (uint32_t i = 0; i < 3; i++) { // rows
-                PRAGMA_UNROLL
-                for (uint32_t j = 0; j < 3; j++) { // cols
-                    gpuAtomicAdd(v_viewmats + i * 4 + j, v_R[j][i]);
-                }
-                gpuAtomicAdd(v_viewmats + i * 4 + 3, v_t[i]);
-            }
-        }
-    }
+    // // v_viewmats is always in dense layout
+    // if (v_viewmats != nullptr) {
+    //     auto warp_group_c = cg::labeled_partition(warp, cid);
+    //     warpSum(v_R, warp_group_c);
+    //     warpSum(v_t, warp_group_c);
+    //     if (warp_group_c.thread_rank() == 0) {
+    //         v_viewmats += cid * 16;
+    //         PRAGMA_UNROLL
+    //         for (uint32_t i = 0; i < 3; i++) { // rows
+    //             PRAGMA_UNROLL
+    //             for (uint32_t j = 0; j < 3; j++) { // cols
+    //                 gpuAtomicAdd(v_viewmats + i * 4 + j, v_R[j][i]);
+    //             }
+    //             gpuAtomicAdd(v_viewmats + i * 4 + 3, v_t[i]);
+    //         }
+    //     }
+    // }
 }
 
 
@@ -188,6 +187,7 @@ fully_fused_projection_packed_bwd_2dgs_tensor(
     // grad outputs
     const torch::Tensor &v_means2d,                     // [nnz, 2]
     const torch::Tensor &v_depths,                      // [nnz]
+    const torch::Tensor &v_normals,                     // [nnz, 3]
     const torch::Tensor &v_ray_Ms,                      // [nnz, 3, 3]
     const bool viewmats_requires_grad, const bool sparse_grad) {
     DEVICE_GUARD(means);
@@ -201,17 +201,20 @@ fully_fused_projection_packed_bwd_2dgs_tensor(
     CHECK_INPUT(ray_Ms);
     CHECK_INPUT(v_means2d);
     CHECK_INPUT(v_depths);
+    CHECK_INPUT(v_normals);
     CHECK_INPUT(v_ray_Ms);
 
     uint32_t N = means.size(0);    // number of gaussians
     uint32_t C = viewmats.size(0); // number of cameras
     uint32_t nnz = camera_ids.size(0);
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+
+    torch::Tensor v_means, v_quats, v_scales, v_viewmats;
     if (sparse_grad) {
         v_means = torch::zeros({nnz, 3}, means.options());
         
-        v_quats = torch::zeros({nnz, 4}, quats.value().options());
-        v_scales = torch::zeros({nnz, 3}, scales.value().options());
+        v_quats = torch::zeros({nnz, 4}, quats.options());
+        v_scales = torch::zeros({nnz, 3}, scales.options());
 
         if (viewmats_requires_grad) {
             v_viewmats = torch::zeros({C, 4, 4}, viewmats.options());
@@ -219,8 +222,8 @@ fully_fused_projection_packed_bwd_2dgs_tensor(
     } else {
         v_means = torch::zeros_like(means);
 
-        v_quats = torch::zeros_like(quats.value());
-        v_scales = torch::zeros_like(scales.value());
+        v_quats = torch::zeros_like(quats);
+        v_scales = torch::zeros_like(scales);
     
         if (viewmats_requires_grad) {
             v_viewmats = torch::zeros_like(viewmats);
@@ -235,8 +238,9 @@ fully_fused_projection_packed_bwd_2dgs_tensor(
             camera_ids.data_ptr<int64_t>(), gaussian_ids.data_ptr<int64_t>(),
             ray_Ms.data_ptr<float>(),
             v_means2d.data_ptr<float>(), v_depths.data_ptr<float>(),
-            v_ray_Ms.data_ptr<float>(),
+            v_normals.data_ptr<float>(),
             sparse_grad, v_means.data_ptr<float>(),
+            v_ray_Ms.data_ptr<float>(),
             v_quats.data_ptr<float>(),
             v_scales.data_ptr<float>(),
             viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr);    

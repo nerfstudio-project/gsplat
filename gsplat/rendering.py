@@ -988,7 +988,7 @@ def rasterization_2dgs(
     else:  # RGB
         pass 
     
-    render_colors, render_alphas, render_normals = rasterize_to_pixels_2dgs(
+    render_colors, render_alphas, render_normals, render_distort = rasterize_to_pixels_2dgs(
         means2d,
         ray_transformations,
         colors,
@@ -1051,14 +1051,14 @@ def rasterization_2dgs(
         "height": height,
         "tile_size": tile_size,
         "n_cameras": C,
-        # "render_distloss": render_distloss,
+        "render_distort": render_distort,
     }
     
     # import pdb
     # pdb.set_trace()
     render_normals = render_normals @ torch.linalg.inv(viewmats)[0, :3, :3].T
     
-    return (render_colors, render_alphas, render_normals, render_normals_from_depth), meta
+    return (render_colors, render_alphas, render_normals, render_normals_from_depth, render_distort), meta
 
 def rasterization_2dgs_inria_wrapper(
     means: Tensor,  # [N, 3]
