@@ -114,10 +114,10 @@ torch::Tensor isect_offset_encode_tensor(const torch::Tensor &isect_ids, // [n_i
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 rasterize_to_pixels_fwd_tensor(
     // Gaussian parameters
-    const torch::Tensor &means2d,                   // [C, N, 2]
-    const torch::Tensor &conics,                    // [C, N, 3]
-    const torch::Tensor &colors,                    // [C, N, D]
-    const torch::Tensor &opacities,                 // [N]
+    const torch::Tensor &means2d,                   // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &conics,                    // [C, N, 6] or [nnz, 6]
+    const torch::Tensor &colors,                    // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &opacities,                 // [C, N] or [nnz]
     const at::optional<torch::Tensor> &backgrounds, // [C, D]
     // image size
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
@@ -130,10 +130,10 @@ rasterize_to_pixels_fwd_tensor(
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 rasterize_to_pixels_bwd_tensor(
     // Gaussian parameters
-    const torch::Tensor &means2d,                   // [C, N, 2]
-    const torch::Tensor &conics,                    // [C, N, 3]
-    const torch::Tensor &colors,                    // [C, N, 3]
-    const torch::Tensor &opacities,                 // [N]
+    const torch::Tensor &means2d,                   // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &conics,                    // [C, N, 6] or [nnz, 6]
+    const torch::Tensor &colors,                    // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &opacities,                 // [C, N] or [nnz]
     const at::optional<torch::Tensor> &backgrounds, // [C, 3]
     // image size
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
@@ -145,7 +145,10 @@ rasterize_to_pixels_bwd_tensor(
     const torch::Tensor &last_ids,      // [C, image_height, image_width]
     // gradients of outputs
     const torch::Tensor &v_render_colors, // [C, image_height, image_width, 3]
+    // TODO: make it optional
     const torch::Tensor &v_render_alphas, // [C, image_height, image_width, 1]
+    const at::optional<torch::Tensor>
+        &v_render_depths, // [C, image_height, image_width, 1]
     // options
     bool absgrad);
 

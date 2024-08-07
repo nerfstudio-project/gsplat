@@ -28,9 +28,9 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     const S *__restrict__ render_alphas,  // [C, image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [C, image_height, image_width]
     // grad outputs
-    const S *__restrict__ v_render_colors, // [C, image_height, image_width,
-                                           // COLOR_DIM]
+    const S *__restrict__ v_render_colors, // [C, image_height, image_width, COLOR_DIM]
     const S *__restrict__ v_render_alphas, // [C, image_height, image_width, 1]
+    const S *__restrict__ v_render_depths, // [C, image_height, image_width, 1] optional
     // grad inputs
     vec3<S> *__restrict__ v_means2d_abs, // [C, N, 3] or [nnz, 3]
     vec3<S> *__restrict__ v_means2d,     // [C, N, 3] or [nnz, 3]
@@ -49,6 +49,9 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     last_ids += camera_id * image_height * image_width;
     v_render_colors += camera_id * image_height * image_width * COLOR_DIM;
     v_render_alphas += camera_id * image_height * image_width;
+    if (v_render_depths != nullptr) {
+        v_render_depths += camera_id * image_height * image_width;
+    }
     if (backgrounds != nullptr) {
         backgrounds += camera_id * COLOR_DIM;
     }
@@ -84,7 +87,8 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     S T_final = 1.0f - render_alphas[pix_id];
     S T = T_final;
     // the contribution from gaussians behind the current one
-    S buffer[COLOR_DIM] = {0.f};
+    S buffer_c[COLOR_DIM] = {0.f};
+    S buffer_d = 0.f;
     // index of last gaussian to contribute to this pixel
     const int32_t bin_final = inside ? last_ids[pix_id] : 0;
 
@@ -95,6 +99,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         v_render_c[k] = v_render_colors[pix_id * COLOR_DIM + k];
     }
     const S v_render_a = v_render_alphas[pix_id];
+    const S v_render_d = v_render_depths != nullptr ? v_render_depths[pix_id] : 0.f;
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing
@@ -143,6 +148,8 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             vec2<S> delta;
             S conic00, conic01, conic02, conic11, conic12, conic22;
             S vis;
+            S depth;
+            vec3<S> mean2d;
 
             if (valid) {
                 conic00 = conic_batch[t * 6 + 0];
@@ -152,7 +159,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 conic12 = conic_batch[t * 6 + 4];
                 conic22 = conic_batch[t * 6 + 5];
 
-                const vec3<S> mean2d = mean2d_batch[t];
+                mean2d = mean2d_batch[t];
                 opac = opac_batch[t];
 
                 delta = {mean2d.x - px, mean2d.y - py};
@@ -189,8 +196,27 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 // contribution from this pixel
                 S v_alpha = 0.f;
                 for (uint32_t k = 0; k < COLOR_DIM; ++k) {
-                    v_alpha += (rgbs_batch[t * COLOR_DIM + k] * T - buffer[k] * ra) *
+                    v_alpha += (rgbs_batch[t * COLOR_DIM + k] * T - buffer_c[k] * ra) *
                                v_render_c[k];
+                }
+                // contribution from depth map
+                if (v_render_depths != nullptr) {
+                    S conic22_inv = 1.f / conic22;
+                    S depth = mean2d.z +
+                              (conic02 * (mean2d.x - px) + conic12 * (mean2d.y - py)) *
+                                  conic22_inv;
+
+                    v_alpha += (depth * T - buffer_d * ra) * v_render_d;
+
+                    S v_depth = fac * v_render_d;
+
+                    v_conic_local[2] += (mean2d.x - px) * conic22_inv * v_depth;
+                    v_conic_local[4] += (mean2d.y - py) * conic22_inv * v_depth;
+                    v_conic_local[5] += -(depth - mean2d.z) * conic22_inv * v_depth;
+
+                    v_mean2d_local.x += conic02 * v_depth;
+                    v_mean2d_local.y += conic12 * v_depth;
+                    v_mean2d_local.z += v_depth;
                 }
 
                 v_alpha += T_final * ra * v_render_a;
@@ -207,33 +233,30 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 if (opac * vis <= 0.999f) {
                     const S v_sigma = -opac * vis * v_alpha;
 
-                    v_conic_local[0] = 0.5f * v_sigma * delta.x * delta.x;
-                    v_conic_local[1] = v_sigma * delta.x * delta.y;
-                    v_conic_local[3] = 0.5f * v_sigma * delta.y * delta.y;
+                    v_conic_local[0] += 0.5f * v_sigma * delta.x * delta.x;
+                    v_conic_local[1] += v_sigma * delta.x * delta.y;
+                    v_conic_local[3] += 0.5f * v_sigma * delta.y * delta.y;
 
-                    // v_conic_local = {
-                    //     0.5f * v_sigma * delta.x * delta.x, // conic00
-                    //     v_sigma * delta.x * delta.y,        // conic01
-                    //     0.f,                                // conic02
-                    //     0.5f * v_sigma * delta.y * delta.y, // conic11
-                    //     0.f,                                // conic12
-                    //     0.f                                 // conic22
-                    // };
-                    v_mean2d_local = {
-                        v_sigma * (conic00 * delta.x + conic01 * delta.y), // x
-                        v_sigma * (conic01 * delta.x + conic11 * delta.y), // y
-                        0.f                                                // z
-                    };
-                    if (v_means2d_abs != nullptr) {
-                        v_mean2d_abs_local = {abs(v_mean2d_local.x),
-                                              abs(v_mean2d_local.y), 0.f};
-                    }
+                    v_mean2d_local.x +=
+                        v_sigma * (conic00 * delta.x + conic01 * delta.y);
+                    v_mean2d_local.y +=
+                        v_sigma * (conic01 * delta.x + conic11 * delta.y);
+
                     v_opacity_local = vis * v_alpha;
+                }
+
+                if (v_means2d_abs != nullptr) {
+                    v_mean2d_abs_local = {abs(v_mean2d_local.x), abs(v_mean2d_local.y),
+                                          abs(v_mean2d_local.z)};
                 }
 
                 PRAGMA_UNROLL
                 for (uint32_t k = 0; k < COLOR_DIM; ++k) {
-                    buffer[k] += rgbs_batch[t * COLOR_DIM + k] * fac;
+                    buffer_c[k] += rgbs_batch[t * COLOR_DIM + k] * fac;
+                }
+
+                if (v_render_depths != nullptr) {
+                    buffer_d += depth * fac;
                 }
             }
             warpSum<COLOR_DIM, S>(v_rgb_local, warp);
@@ -295,6 +318,8 @@ call_kernel_with_dim(
     // gradients of outputs
     const torch::Tensor &v_render_colors, // [C, image_height, image_width, 3]
     const torch::Tensor &v_render_alphas, // [C, image_height, image_width, 1]
+    const at::optional<torch::Tensor>
+        &v_render_depths, // [C, image_height, image_width, 1]
     // options
     bool absgrad) {
 
@@ -309,6 +334,9 @@ call_kernel_with_dim(
     CHECK_INPUT(last_ids);
     CHECK_INPUT(v_render_colors);
     CHECK_INPUT(v_render_alphas);
+    if (v_render_depths.has_value()) {
+        CHECK_INPUT(v_render_depths.value());
+    }
     if (backgrounds.has_value()) {
         CHECK_INPUT(backgrounds.value());
     }
@@ -361,6 +389,8 @@ call_kernel_with_dim(
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
                 render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
+                v_render_depths.has_value() ? v_render_depths.value().data_ptr<float>()
+                                            : nullptr,
                 absgrad
                     ? reinterpret_cast<vec3<float> *>(v_means2d_abs.data_ptr<float>())
                     : nullptr,
@@ -390,7 +420,10 @@ rasterize_to_pixels_bwd_tensor(
     const torch::Tensor &last_ids,      // [C, image_height, image_width]
     // gradients of outputs
     const torch::Tensor &v_render_colors, // [C, image_height, image_width, 3]
+    // TODO: make it optional
     const torch::Tensor &v_render_alphas, // [C, image_height, image_width, 1]
+    const at::optional<torch::Tensor>
+        &v_render_depths, // [C, image_height, image_width, 1]
     // options
     bool absgrad) {
 
@@ -402,7 +435,7 @@ rasterize_to_pixels_bwd_tensor(
         return call_kernel_with_dim<N>(                                                \
             means2d, conics, colors, opacities, backgrounds, image_width,              \
             image_height, tile_size, tile_offsets, flatten_ids, render_alphas,         \
-            last_ids, v_render_colors, v_render_alphas, absgrad);
+            last_ids, v_render_colors, v_render_alphas, v_render_depths, absgrad);
 
     switch (COLOR_DIM) {
         __GS__CALL_(1)
