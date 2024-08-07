@@ -138,9 +138,14 @@ class Parser:
             image_dir_suffix = ""
         colmap_image_dir = os.path.join(data_dir, "images")
         image_dir = os.path.join(data_dir, "images" + image_dir_suffix)
-        for d in [image_dir, colmap_image_dir]:
-            if not os.path.exists(d):
-                raise ValueError(f"Image folder {d} does not exist.")
+
+        if not os.path.exists(colmap_image_dir):
+            raise ValueError(f"Image folder {colmap_image_dir} does not exist.") 
+        if not os.path.exists(image_dir):
+            image_dir = colmap_image_dir
+            self.factor = factor
+        else:
+            self.factor = None
 
         # Downsampled images may have different names vs images used for COLMAP,
         # so we need to map between the two sorted lists of files.
@@ -249,11 +254,21 @@ class Dataset:
 
     def __getitem__(self, item: int) -> Dict[str, Any]:
         index = self.indices[item]
-        image = imageio.imread(self.parser.image_paths[index])[..., :3]
+        image = imageio.imread(self.parser.image_paths[index])
+        if image.shape[-1]==4:
+            mask = image[...,-1]
+            image = image[...,:3]
+        else:
+            mask = None
         camera_id = self.parser.camera_ids[index]
         K = self.parser.Ks_dict[camera_id].copy()  # undistorted K
         params = self.parser.params_dict[camera_id]
         camtoworlds = self.parser.camtoworlds[index]
+
+        if self.parser.factor is not None:
+            image = cv2.resize(image,self.parser.imsize_dict[camera_id])
+            if mask is not None:
+                mask = cv2.resize(mask,self.parser.imsize_dict[camera_id])
 
         if len(params) > 0:
             # Images are distorted. Undistort them.
@@ -274,11 +289,14 @@ class Dataset:
             K[0, 2] -= x
             K[1, 2] -= y
 
+        
+
         data = {
             "K": torch.from_numpy(K).float(),
             "camtoworld": torch.from_numpy(camtoworlds).float(),
             "image": torch.from_numpy(image).float(),
             "image_id": item,  # the index of the image in the dataset
+            "mask": torch.from_numpy(mask).float(),
         }
 
         if self.load_depths:

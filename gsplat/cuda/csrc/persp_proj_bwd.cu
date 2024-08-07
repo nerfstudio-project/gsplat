@@ -24,6 +24,8 @@ persp_proj_bwd_kernel(const uint32_t C, const uint32_t N,
                       const uint32_t width, const uint32_t height,
                       const T *__restrict__ v_means2d,  // [C, N, 2]
                       const T *__restrict__ v_covars2d, // [C, N, 2, 2]
+                      const T *__restrict__ v_ray_planes,  // [C, N, 2]
+                      const T *__restrict__ v_normals,     // [C, N, 3]
                       T *__restrict__ v_means,          // [C, N, 3]
                       T *__restrict__ v_covars          // [C, N, 3, 3]
 ) {
@@ -47,6 +49,8 @@ persp_proj_bwd_kernel(const uint32_t C, const uint32_t N,
     Ks += cid * 9;
     v_means2d += idx * 2;
     v_covars2d += idx * 4;
+    v_ray_planes += idx * 2;
+    v_normals += idx * 3;
 
     OpT fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
     mat3<OpT> v_covar(0.f);
@@ -55,9 +59,11 @@ persp_proj_bwd_kernel(const uint32_t C, const uint32_t N,
     const mat3<OpT> covar = glm::make_mat3(covars);
     const vec2<OpT> v_mean2d = glm::make_vec2(v_means2d);
     const mat2<OpT> v_covar2d = glm::make_mat2(v_covars2d);
+    const vec2<OpT> v_ray_plane = glm::make_vec2(v_ray_planes);
+    const vec3<OpT> v_normal = glm::make_vec3(v_normals);
     persp_proj_vjp<OpT>(mean, covar, fx, fy, cx, cy, width,
                         height, glm::transpose(v_covar2d),
-                        v_mean2d, v_mean, v_covar);
+                        v_mean2d, v_ray_plane, v_normal, v_mean, v_covar);
 
     // write to outputs: glm is column-major but we want row-major
     PRAGMA_UNROLL
@@ -80,7 +86,9 @@ persp_proj_bwd_tensor(const torch::Tensor &means,  // [C, N, 3]
                       const torch::Tensor &Ks,     // [C, 3, 3]
                       const uint32_t width, const uint32_t height,
                       const torch::Tensor &v_means2d, // [C, N, 2]
-                      const torch::Tensor &v_covars2d // [C, N, 2, 2]
+                      const torch::Tensor &v_covars2d, // [C, N, 2, 2]
+                      const torch::Tensor &v_ray_planes,  // [C, N, 2]
+                      const torch::Tensor &v_normals     // [C, N, 3]
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -102,6 +110,7 @@ persp_proj_bwd_tensor(const torch::Tensor &means,  // [C, N, 3]
                 C, N, means.data_ptr<scalar_t>(), covars.data_ptr<scalar_t>(),
                 Ks.data_ptr<scalar_t>(), width, height, v_means2d.data_ptr<scalar_t>(),
                 v_covars2d.data_ptr<scalar_t>(), v_means.data_ptr<scalar_t>(),
+                v_ray_planes.data_ptr<scalar_t>(), v_normals.data_ptr<scalar_t>(),
                 v_covars.data_ptr<scalar_t>());
         });
     }

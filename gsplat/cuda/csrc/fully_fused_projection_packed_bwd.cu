@@ -36,6 +36,9 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     const T *__restrict__ v_depths,        // [nnz]
     const T *__restrict__ v_conics,        // [nnz, 3]
     const T *__restrict__ v_compensations, // [nnz] optional
+    const T *__restrict__ v_ray_ts,        // [nnz]
+    const T *__restrict__ v_ray_planes,    // [nnz, 2]
+    const T *__restrict__ v_normals,       // [nnz, 3]
     const bool sparse_grad, // whether the outputs are in COO format [nnz, ...]
     // grad inputs
     T *__restrict__ v_means,   // [N, 3] or [nnz, 3]
@@ -62,6 +65,9 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     v_means2d += idx * 2;
     v_depths += idx;
     v_conics += idx * 3;
+    v_ray_ts += idx;
+    v_ray_planes += idx * 2;
+    v_normals += idx * 3;
 
     // vjp: compute the inverse of the 2d covariance
     mat2<T> covar2d_inv = mat2<T>(conics[0], conics[1], conics[1], conics[2]);
@@ -69,6 +75,9 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
         mat2<T>(v_conics[0], v_conics[1] * .5f, v_conics[1] * .5f, v_conics[2]);
     mat2<T> v_covar2d(0.f);
     inverse_vjp(covar2d_inv, v_covar2d_inv, v_covar2d);
+    T v_ray_t = v_ray_ts[0];
+    vec2<T> v_ray_plane = {v_ray_planes[0], v_ray_planes[1]};
+    vec3<T> v_normal = {v_normals[0], v_normals[1], v_normals[2]};
 
     if (v_compensations != nullptr) {
         // vjp: compensation term
@@ -109,10 +118,12 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     mat3<T> v_covar_c(0.f);
     vec3<T> v_mean_c(0.f);
     persp_proj_vjp<T>(mean_c, covar_c, fx, fy, cx, cy, image_width, image_height,
-                          v_covar2d, glm::make_vec2(v_means2d), v_mean_c, v_covar_c);
+                          v_covar2d, glm::make_vec2(v_means2d), v_ray_plane, v_normal,
+                           v_mean_c, v_covar_c);
 
     // add contribution from v_depths
     v_mean_c.z += v_depths[0];
+    v_mean_c += v_ray_ts[0] * glm::normalize(mean_c);
 
     // vjp: transform Gaussian covariance to camera space
     vec3<T> v_mean(0.f);
@@ -242,6 +253,9 @@ fully_fused_projection_packed_bwd_tensor(
     const torch::Tensor &v_depths,                      // [nnz]
     const torch::Tensor &v_conics,                      // [nnz, 3]
     const at::optional<torch::Tensor> &v_compensations, // [nnz] optional
+    const torch::Tensor &v_ray_ts,                        // [nnz]
+    const torch::Tensor &v_ray_planes,                    // [nnz, 2]
+    const torch::Tensor &v_normals,                       // [nnz, 3]
     const bool viewmats_requires_grad, const bool sparse_grad) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -260,6 +274,9 @@ fully_fused_projection_packed_bwd_tensor(
     CHECK_INPUT(v_means2d);
     CHECK_INPUT(v_depths);
     CHECK_INPUT(v_conics);
+    CHECK_INPUT(v_ray_ts);
+    CHECK_INPUT(v_ray_planes);
+    CHECK_INPUT(v_normals);
     if (compensations.has_value()) {
         CHECK_INPUT(compensations.value());
     }
@@ -312,6 +329,9 @@ fully_fused_projection_packed_bwd_tensor(
             v_conics.data_ptr<float>(),
             v_compensations.has_value() ? v_compensations.value().data_ptr<float>()
                                         : nullptr,
+            v_ray_ts.data_ptr<float>(),
+            v_ray_planes.data_ptr<float>(),
+            v_normals.data_ptr<float>(),
             sparse_grad, v_means.data_ptr<float>(),
             covars.has_value() ? v_covars.data_ptr<float>() : nullptr,
             covars.has_value() ? nullptr : v_quats.data_ptr<float>(),

@@ -21,7 +21,9 @@ __global__ void persp_proj_fwd_kernel(const uint32_t C, const uint32_t N,
                                       const T *__restrict__ Ks,     // [C, 3, 3]
                                       const uint32_t width, const uint32_t height,
                                       T *__restrict__ means2d, // [C, N, 2]
-                                      T *__restrict__ covars2d // [C, N, 2, 2]
+                                      T *__restrict__ covars2d, // [C, N, 2, 2]
+                                      T *__restrict__ ray_planes, // [C, N, 2]
+                                      T *__restrict__ normals // [C, N, 3]
 ) {
     // For now we'll upcast float16 and bfloat16 to float32
     using OpT = typename OpType<T>::type;
@@ -40,13 +42,17 @@ __global__ void persp_proj_fwd_kernel(const uint32_t C, const uint32_t N,
     Ks += cid * 9;
     means2d += idx * 2;
     covars2d += idx * 4;
+    ray_planes += idx * 2;
+    normals += idx * 3;
 
     OpT fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
     mat2<OpT> covar2d(0.f);
     vec2<OpT> mean2d(0.f);
+    vec2<OpT> ray_plane(0.f);
+    vec3<OpT> normal(0.f);
     const vec3<OpT> mean = glm::make_vec3(means);
     const mat3<OpT> covar = glm::make_mat3(covars);
-    persp_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
+    persp_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d, ray_plane, normal);
 
     // write to outputs: glm is column-major but we want row-major
     PRAGMA_UNROLL
@@ -59,6 +65,14 @@ __global__ void persp_proj_fwd_kernel(const uint32_t C, const uint32_t N,
     PRAGMA_UNROLL
     for (uint32_t i = 0; i < 2; i++) {
         means2d[i] = T(mean2d[i]);
+    }
+    PRAGMA_UNROLL
+    for (uint32_t i = 0; i < 2; i++) {
+        ray_planes[i] = T(ray_plane[i]);
+    }
+    PRAGMA_UNROLL
+    for (uint32_t i = 0; i < 2; i++) {
+        normals[i] = T(normal[i]);
     }
 }
 
@@ -77,6 +91,8 @@ persp_proj_fwd_tensor(const torch::Tensor &means,  // [C, N, 3]
 
     torch::Tensor means2d = torch::empty({C, N, 2}, means.options());
     torch::Tensor covars2d = torch::empty({C, N, 2, 2}, covars.options());
+    torch::Tensor ray_plane = torch::empty({C, N, 2}, covars.options());
+    torch::Tensor normal = torch::empty({C, N, 3}, covars.options());
 
     if (C && N) {
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
@@ -87,7 +103,8 @@ persp_proj_fwd_tensor(const torch::Tensor &means,  // [C, N, 3]
                     <<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
                         C, N, means.data_ptr<scalar_t>(), covars.data_ptr<scalar_t>(),
                         Ks.data_ptr<scalar_t>(), width, height,
-                        means2d.data_ptr<scalar_t>(), covars2d.data_ptr<scalar_t>());
+                        means2d.data_ptr<scalar_t>(), covars2d.data_ptr<scalar_t>(),
+                        ray_plane.data_ptr<scalar_t>(), normal.data_ptr<scalar_t>());
             });
     }
     return std::make_tuple(means2d, covars2d);
