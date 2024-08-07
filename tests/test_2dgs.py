@@ -111,7 +111,117 @@ def test_projection_2dgs(test_data):
     torch.testing.assert_close(v_scales[..., :2], _v_scales[..., :2], rtol=1e-1, atol=2e-1)
     torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=6e-2)
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.parametrize("sparse_grad", [False, True])
+def test_fully_fused_projection_packed_2dgs(
+    test_data, sparse_grad: bool,
+):
+    from gsplat.cuda._wrapper import fully_fused_projection_2dgs
+    
+    torch.manual_seed(42)
+    
+    Ks = test_data["Ks"]
+    viewmats = test_data["viewmats"]
+    height = test_data["height"]
+    width = test_data["width"]
+    quats = test_data["quats"]
+    scales = test_data["scales"]
+    means = test_data["means"]
+    viewmats.requires_grad = False
+    quats.requires_grad = True
+    scales.requires_grad = True
+    means.requires_grad = True
+    densifications = torch.zeros((means.shape[0], 2), device=device)
+    densifications.requires_grad = True
+    
+    print("Before")
+    (
+        camera_ids,
+        gaussian_ids,
+        radii,
+        means2d,
+        depths,
+        ray_Ms,
+        normals,
+    ) = fully_fused_projection_2dgs(
+        means,
+        quats,
+        scales,
+        viewmats,
+        densifications,
+        Ks,
+        width,
+        height,
+        packed=True,
+        sparse_grad=sparse_grad,
+    )
+    print("After")
+    
+    _radii, _means2d, _depths, _ray_Ms, _normals = fully_fused_projection_2dgs(
+        means,
+        quats,
+        scales,
+        viewmats,
+        densifications,
+        Ks,
+        width,
+        height,
+        packed=False,
+    )
+    # recover packed tensors to full matrices for testing
+    __radii = torch.sparse_coo_tensor(
+        torch.stack([camera_ids, gaussian_ids]), radii, _radii.shape
+    ).to_dense()
+    __means2d = torch.sparse_coo_tensor(
+        torch.stack([camera_ids, gaussian_ids]), means2d, _means2d.shape
+    ).to_dense()
+    __depths = torch.sparse_coo_tensor(
+        torch.stack([camera_ids, gaussian_ids]), depths, _depths.shape
+    ).to_dense()
+    __ray_Ms = torch.sparse_coo_tensor(
+        torch.stack([camera_ids, gaussian_ids]), ray_Ms, _ray_Ms.shape
+    ).to_dense()
+    __normals = torch.sparse_coo_tensor(
+        torch.stack([camera_ids, gaussian_ids]), normals, _normals.shape
+    ).to_dense()
+    
+    sel = (__radii > 0) & (_radii > 0)
+    torch.testing.assert_close(__radii[sel], _radii[sel], rtol=0, atol=1)
+    torch.testing.assert_close(__means2d[sel], _means2d[sel], rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(__depths[sel], _depths[sel], rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(__ray_Ms[sel], _ray_Ms[sel], rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(__normals[sel], _normals[sel], rtol=1e-4, atol=1e-4)
 
+    # # backward
+    # v_means2d = torch.randn_like(_means2d) * sel[..., None]
+    # v_depths = torch.randn_like(_depths) * sel
+    # v_ray_Ms = torch.randn_like(_ray_Ms) * sel[..., None, None]
+    # v_normals = torch.randn_like(_normals) * sel[..., None]
+    # _v_quats, _v_scales, _v_means = torch.autograd.grad(
+    #     (_means2d * v_means2d).sum()
+    #     + (_depths * v_depths).sum()
+    #     + (_ray_Ms * v_ray_Ms).sum()
+    #     + (_normals * v_normals).sum(),
+    #     (quats, scales, means),
+    #     retain_graph=True,
+    # )
+    # v_quats, v_scales, v_means = torch.autograd.grad(
+    #     (means2d * v_means2d[__radii > 0]).sum()
+    #     + (depths * v_depths[__radii > 0]).sum()
+    #     + (ray_Ms * v_ray_Ms[__radii > 0]).sum()
+    #     + (normals * v_normals[__radii > 0]).sum(),
+    #     (quats, scales, means),
+    #     retain_graph=True,
+    # )
+    # if sparse_grad:
+    #     v_quats = v_quats.to_dense()
+    #     v_scales = v_scales.to_dense()
+    #     v_means = v_means.to_dense()
+
+    # torch.testing.assert_close(v_quats, _v_quats, rtol=1e-3, atol=1e-3)
+    # torch.testing.assert_close(v_scales, _v_scales, rtol=5e-2, atol=5e-2)
+    # torch.testing.assert_close(v_means, _v_means, rtol=1e-3, atol=1e-3)
+    
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 # @pytest.mark.parametrize("channels", [3, 32, 128])
 def test_rasterize_to_pixels_2dgs(test_data):
@@ -266,4 +376,5 @@ def test_rasterize_to_pixels_2dgs(test_data):
 if __name__ == "__main__":
     test_projection_2dgs(test_data())
     test_rasterize_to_pixels_2dgs(test_data())
+    test_fully_fused_projection_packed_2dgs(test_data())
     print("All tests passed.")

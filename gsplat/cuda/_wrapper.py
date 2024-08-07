@@ -1206,7 +1206,6 @@ def fully_fused_projection_2dgs(
             Ks,
             width,
             height,
-            eps2d,
             near_plane,
             far_plane,
             radius_clip,
