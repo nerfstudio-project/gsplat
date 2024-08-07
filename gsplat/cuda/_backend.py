@@ -11,6 +11,9 @@ from torch.utils.cpp_extension import (
     load,
 )
 
+import gsplat
+
+
 PATH = os.path.dirname(os.path.abspath(__file__))
 NO_FAST_MATH = os.getenv("NO_FAST_MATH", "0") == "1"
 MAX_JOBS = os.getenv("MAX_JOBS")
@@ -80,7 +83,8 @@ try:
 except ImportError:
     # if failed, try with JIT compilation
     if cuda_toolkit_available():
-        name = "gsplat_cuda"
+        version = gsplat.__version__.replace(".", "_")
+        name = f"gsplat_cuda_{version}"
         build_dir = _get_build_directory(name, verbose=False)
         current_dir = os.path.dirname(os.path.abspath(__file__))
         glm_path = os.path.join(current_dir, "csrc", "third_party", "glm")
