@@ -318,7 +318,7 @@ inline __device__ void persp_proj_vjp(
         vec3<T> ray_normal_vector = {-plane.x*factor, -plane.y*factor, -1};
 		vec3<T> cam_normal_vector = nJ_T * ray_normal_vector;
 		vec3<T> normal = glm::normalize(cam_normal_vector);
-        vec2<T> ray_plane = {plane.x * factor / fx, plane.y * factor / fy};
+        // vec2<T> ray_plane = {plane.x * factor / fx, plane.y * factor / fy};
 
         T cam_normal_vector_length = glm::length(cam_normal_vector);
 
@@ -327,13 +327,13 @@ inline __device__ void persp_proj_vjp(
         vec3<T> v_ray_normal_vector = glm::transpose(nJ_T) * v_cam_normal_vector;
         v_nJ_T = glm::outerProduct(v_cam_normal_vector, ray_normal_vector);
 
-        // ray_plane_uv = {plane.x * factor, plane.y * factor};
+        vec2<T> ray_plane_uv = {plane.x * factor, plane.y * factor};
         const vec2<T> v_ray_plane_uv = {v_ray_plane.x / fx, v_ray_plane.y / fy};
         v_l = glm::dot(plane, -glm::make_vec2(v_ray_normal_vector) + v_ray_plane_uv) / nl;
         vec2<T> v_plane = {factor * (-v_ray_normal_vector.x + v_ray_plane_uv.x),
                             factor * (-v_ray_normal_vector.y + v_ray_plane_uv.y)};
         T v_nl = (-v_ray_normal_vector.x * ray_normal_vector.x - v_ray_normal_vector.y * ray_normal_vector.y
-                    -v_ray_plane.x*ray_plane.x - v_ray_plane.y*ray_plane.y) / nl;
+                    -v_ray_plane.x*ray_plane_uv.x - v_ray_plane.y*ray_plane_uv.y) / nl;
         
         T tmp = glm::dot(v_plane, plane);
         if(well_conditioned)
@@ -376,10 +376,11 @@ inline __device__ void persp_proj_vjp(
 
     v_cov3d += v_cov3d_;
 
+    vec3<T> v_mean3d_ = {0,0,0};
     // df/dx = fx * rz * df/dpixx
     // df/dy = fy * rz * df/dpixy
     // df/dz = - fx * mean.x * rz2 * df/dpixx - fy * mean.y * rz2 * df/dpixy
-    v_mean3d += vec3<T>(fx * rz * v_mean2d[0], fy * rz * v_mean2d[1],
+    v_mean3d_ += vec3<T>(fx * rz * v_mean2d[0], fy * rz * v_mean2d[1],
                         -(fx * x * v_mean2d[0] + fy * y * v_mean2d[1]) * rz2);
 
     // df/dx = -fx * rz2 * df/dJ_02
@@ -393,29 +394,30 @@ inline __device__ void persp_proj_vjp(
     // fov clipping
     T l3 = l * l * l;
     T v_mean3d_x = -fx * rz2 * v_J[2][0] + v_u * rz
-                    - v_nJ_T[0][2]*rz2 + v_nJ_T[2][0]*(1/l-tx*tx/l3) + (v_nJ_T[2][1] * tx + v_nJ_T[2][2] * z)*(-tx/l3)
+                    - v_nJ_T[0][2]*rz2 + v_nJ_T[2][0]*(1/l-tx*tx/l3) + (v_nJ_T[2][1] * ty + v_nJ_T[2][2] * z)*(-tx/l3)
                     + v_l * tx / l;
     T v_mean3d_y = -fy * rz2 * v_J[2][1]  + v_v * rz
                     - v_nJ_T[1][2]*rz2 + (v_nJ_T[2][0]* tx + v_nJ_T[2][2]* z) *(-ty/l3) + v_nJ_T[2][1]*(1/l-ty*ty/l3)
                     + v_l * ty / l;
     if (x * rz <= lim_x && x * rz >= -lim_x) {
-        v_mean3d.x += v_mean3d_x;
+        v_mean3d_.x += v_mean3d_x;
     } else {
         // v_mean3d.z += -fx * rz3 * v_J[2][0] * tx;
-        v_mean3d.z += v_mean3d_x * u;
+        v_mean3d_.z += v_mean3d_x * u;
     }
     if (y * rz <= lim_y && y * rz >= -lim_y) {
-        v_mean3d.y += v_mean3d_y;
+        v_mean3d_.y += v_mean3d_y;
     } else {
         // v_mean3d.z += -fy * rz3 * v_J[2][1] * ty;
-        v_mean3d.z += v_mean3d_y * v;
+        v_mean3d_.z += v_mean3d_y * v;
     }
-    v_mean3d.z += -fx * rz2 * v_J[0][0] - fy * rz2 * v_J[1][1]
+    v_mean3d_.z += -fx * rz2 * v_J[0][0] - fy * rz2 * v_J[1][1]
                   + 2.f * fx * tx * rz3 * v_J[2][0] + 2.f * fy * ty * rz3 * v_J[2][1]
                   - (v_u * tx + v_v * ty) * rz2
 			      + v_nJ_T[0][0] * (-rz2) + v_nJ_T[1][1] * (-rz2) + v_nJ_T[0][2] * (2 * tx * rz3) + v_nJ_T[1][2] * (2 * ty * rz3)
 				  + (v_nJ_T[2][0] * tx + v_nJ_T[2][1] * ty) * (-z/l3) + v_nJ_T[2][2] * (1 / l - z * z / l3)
 				  + v_l * z / l;
+    v_mean3d += v_mean3d_;
 }
 
 template <typename T>
