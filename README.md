@@ -42,7 +42,7 @@ pip install -r requirements.txt
 # download mipnerf_360 benchmark data
 python datasets/download_dataset.py
 # run batch evaluation
-bash benchmark.sh
+bash benchmarks/basic.sh
 ```
 
 ## Examples

@@ -15,7 +15,7 @@ Simply run the script under `examples/`:
 
 .. code-block:: bash
 
-    python simple_trainer.py \
+    CUDA_VISIBLE_DEVICES=0 python simple_trainer.py \
         --data_dir data/360_v2/garden/ --data_factor 4 \
         --result_dir ./results/garden
 
