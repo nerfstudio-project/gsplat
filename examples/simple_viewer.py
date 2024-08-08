@@ -148,7 +148,7 @@ if args.ckpt is None:
     ckpt = torch.load("results/garden/ckpts/ckpt_6999.pt", map_location=device)[
         "splats"
     ]
-    means = ckpt["means3d"]
+    means = ckpt["means"]
     quats = F.normalize(ckpt["quats"], p=2, dim=-1)
     scales = torch.exp(ckpt["scales"])
     opacities = torch.sigmoid(ckpt["opacities"])
@@ -170,7 +170,7 @@ if args.ckpt is None:
         height,
         render_mode="RGB+ED",
         sh_degree=sh_degree,
-        accurate_depth=False,
+        accurate_depth=True,
     )
     assert render_colors.shape == (C, height, width, 4)
     assert render_alphas.shape == (C, height, width, 1)

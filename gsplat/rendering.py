@@ -769,6 +769,7 @@ def _rasterization(
         isect_offsets,
         flatten_ids,
         backgrounds=backgrounds,
+        depth_mode="constant",
     )
     if accurate_depth:
         # Use the ray-GS intersection point for depth

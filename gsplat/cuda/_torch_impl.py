@@ -100,6 +100,22 @@ def _persp_proj(
         [fx / tz, O, -fx * tx / tz2, O, fy / tz, -fy * ty / tz2, O, O, I], dim=-1
     ).reshape(C, N, 3, 3)
 
+    # l = torch.sqrt(tx**2 + ty**2 + tz**2)
+    # J = torch.stack(
+    #     [
+    #         fx / tz,
+    #         O,
+    #         -fx * tx / tz2,
+    #         O,
+    #         fy / tz,
+    #         -fy * ty / tz2,
+    #         tx / l,
+    #         ty / l,
+    #         tz / l,
+    #     ],
+    #     dim=-1,
+    # ).reshape(C, N, 3, 3)
+
     cov2d = torch.einsum("...ij,...jk,...kl->...il", J, covars, J.transpose(-1, -2))
     means2d = torch.einsum("cij,cnj->cni", Ks[:, :3, :3], means)  # [C, N, 2]
     if reduce_z:
@@ -182,7 +198,7 @@ def _fully_fused_projection(
     det_orig = torch.det(covars2d[..., :2, :2])  # [C, N]
 
     eps = torch.tensor(
-        [[eps2d, 0.0, 0.0], [0.0, eps2d, 0.0], [0.0, 0.0, 1e-6]], device=means.device
+        [[eps2d, 0.0, 0.0], [0.0, eps2d, 0.0], [0.0, 0.0, 1e-3]], device=means.device
     )
     covars2d = covars2d + eps
 
@@ -405,13 +421,26 @@ def accumulate(
         D = means2d[camera_ids, gaussian_ids, -1]  # [M]
     elif depth_mode == "linear":
         # calculate depths
+
+        # mu is (x, y, z) in camera coordinate system
         mu = means2d[camera_ids, gaussian_ids]  # [M, 3]
+        # z = mu[..., 2]  # [M]
+
+        # # l is the length of the vector (x, y, z) (i.e., the distance from the origin)
+        # l = torch.linalg.norm(mu, dim=-1)  # [M]
+        # mu = torch.cat([mu[..., :2], l[..., None]], dim=-1)  # [M, 3]
+
+        # c is upper triangle of the \Sigma^{-1} matrix
         o = torch.cat(
             [pixel_coords, torch.zeros_like(pixel_ids_x)[..., None]], dim=-1
         )  # [M, 3]
         A = c[:, -1]  # [M,] conics22
         B = torch.einsum("...i,...i->...", c[:, [2, 4, 5]], (mu - o))  # [M]
         D = B / A  # [M]
+
+        # # the above calculation ends up t-depth, hence we need to convert it to z-depth
+        # D = D * z / l  # [M]
+
     elif depth_mode == "disabled":
         pass
     else:
