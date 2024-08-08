@@ -1431,8 +1431,8 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
             ray_Ms,
             v_means2d.contiguous(),
             v_depths.contiguous(),
-            v_normals.contiguous(),
             v_ray_Ms.contiguous(),
+            v_normals.contiguous(),
             ctx.needs_input_grad[4],  # viewmats_requires_grad
             sparse_grad, 
         )    

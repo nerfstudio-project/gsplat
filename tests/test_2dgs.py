@@ -134,7 +134,6 @@ def test_fully_fused_projection_packed_2dgs(
     densifications = torch.zeros((means.shape[0], 2), device=device)
     densifications.requires_grad = True
     
-    print("Before")
     (
         camera_ids,
         gaussian_ids,
@@ -155,7 +154,6 @@ def test_fully_fused_projection_packed_2dgs(
         packed=True,
         sparse_grad=sparse_grad,
     )
-    print("After")
     
     _radii, _means2d, _depths, _ray_Ms, _normals = fully_fused_projection_2dgs(
         means,
@@ -192,35 +190,35 @@ def test_fully_fused_projection_packed_2dgs(
     torch.testing.assert_close(__ray_Ms[sel], _ray_Ms[sel], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(__normals[sel], _normals[sel], rtol=1e-4, atol=1e-4)
 
-    # # backward
-    # v_means2d = torch.randn_like(_means2d) * sel[..., None]
-    # v_depths = torch.randn_like(_depths) * sel
-    # v_ray_Ms = torch.randn_like(_ray_Ms) * sel[..., None, None]
-    # v_normals = torch.randn_like(_normals) * sel[..., None]
-    # _v_quats, _v_scales, _v_means = torch.autograd.grad(
-    #     (_means2d * v_means2d).sum()
-    #     + (_depths * v_depths).sum()
-    #     + (_ray_Ms * v_ray_Ms).sum()
-    #     + (_normals * v_normals).sum(),
-    #     (quats, scales, means),
-    #     retain_graph=True,
-    # )
-    # v_quats, v_scales, v_means = torch.autograd.grad(
-    #     (means2d * v_means2d[__radii > 0]).sum()
-    #     + (depths * v_depths[__radii > 0]).sum()
-    #     + (ray_Ms * v_ray_Ms[__radii > 0]).sum()
-    #     + (normals * v_normals[__radii > 0]).sum(),
-    #     (quats, scales, means),
-    #     retain_graph=True,
-    # )
-    # if sparse_grad:
-    #     v_quats = v_quats.to_dense()
-    #     v_scales = v_scales.to_dense()
-    #     v_means = v_means.to_dense()
+    # backward
+    v_means2d = torch.randn_like(_means2d) * sel[..., None]
+    v_depths = torch.randn_like(_depths) * sel
+    v_ray_Ms = torch.randn_like(_ray_Ms) * sel[..., None, None]
+    v_normals = torch.randn_like(_normals) * sel[..., None]
+    _v_quats, _v_scales, _v_means = torch.autograd.grad(
+        (_means2d * v_means2d).sum()
+        + (_depths * v_depths).sum()
+        + (_ray_Ms * v_ray_Ms).sum()
+        + (_normals * v_normals).sum(),
+        (quats, scales, means),
+        retain_graph=True,
+    )
+    v_quats, v_scales, v_means = torch.autograd.grad(
+        (means2d * v_means2d[__radii > 0]).sum()
+        + (depths * v_depths[__radii > 0]).sum()
+        + (ray_Ms * v_ray_Ms[__radii > 0]).sum()
+        + (normals * v_normals[__radii > 0]).sum(),
+        (quats, scales, means),
+        retain_graph=True,
+    )    
+    if sparse_grad:
+        v_quats = v_quats.to_dense()
+        v_scales = v_scales.to_dense()
+        v_means = v_means.to_dense()
 
-    # torch.testing.assert_close(v_quats, _v_quats, rtol=1e-3, atol=1e-3)
-    # torch.testing.assert_close(v_scales, _v_scales, rtol=5e-2, atol=5e-2)
-    # torch.testing.assert_close(v_means, _v_means, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(v_quats, _v_quats, rtol=1e-2, atol=1e-2)
+    torch.testing.assert_close(v_scales, _v_scales, rtol=5e-2, atol=5e-2)
+    torch.testing.assert_close(v_means, _v_means, rtol=1e-3, atol=1e-3)
     
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 # @pytest.mark.parametrize("channels", [3, 32, 128])

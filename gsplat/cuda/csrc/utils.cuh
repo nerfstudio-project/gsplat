@@ -416,8 +416,13 @@ inline __device__ void compute_ray_Ms_aabb_vjp(
         v_tn
     );
 
-    quat_to_rotmat_vjp(quat, v_R, v_quat);
 
+    quat_to_rotmat_vjp<T>(quat, v_R, v_quat);
+
+    // printf("R[0]; %.4f, %.4f, %.4f \n", R[0].x, R[0].y, R[0].z);
+    // printf("R[1]; %.4f, %.4f, %.4f \n", R[1].x, R[1].y, R[1].z);
+    // printf("v_scale[0]: %.4f \n", (T)glm::dot(v_RS[0], R[0]));
+    // printf("v_scale[1]: %.4f \n", (T)glm::dot(v_RS[1], R[1]));
     v_scale[0] += (T)glm::dot(v_RS[0], R[0]);
     v_scale[1] += (T)glm::dot(v_RS[1], R[1]);
 
