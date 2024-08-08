@@ -195,18 +195,23 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 }
                 // contribution from this pixel
                 S v_alpha = 0.f;
+                PRAGMA_UNROLL
                 for (uint32_t k = 0; k < COLOR_DIM; ++k) {
-                    v_alpha += (rgbs_batch[t * COLOR_DIM + k] * T - buffer_c[k] * ra) *
-                               v_render_c[k];
+                    S rgb = rgbs_batch[t * COLOR_DIM + k];
+
+                    v_alpha += (rgb * T - buffer_c[k] * ra) * v_render_c[k];
+                    buffer_c[k] += rgb * fac;
                 }
+
                 // contribution from depth map
                 if (v_render_depths != nullptr) {
                     S conic22_inv = 1.f / conic22;
-                    S depth = mean2d.z +
-                              (conic02 * (mean2d.x - px) + conic12 * (mean2d.y - py)) *
-                                  conic22_inv;
+                    depth = mean2d.z +
+                            (conic02 * (mean2d.x - px) + conic12 * (mean2d.y - py)) *
+                                conic22_inv;
 
                     v_alpha += (depth * T - buffer_d * ra) * v_render_d;
+                    buffer_d += depth * fac;
 
                     S v_depth = fac * v_render_d;
 
@@ -214,8 +219,8 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                     v_conic_local[4] += (mean2d.y - py) * conic22_inv * v_depth;
                     v_conic_local[5] += -(depth - mean2d.z) * conic22_inv * v_depth;
 
-                    v_mean2d_local.x += conic02 * v_depth;
-                    v_mean2d_local.y += conic12 * v_depth;
+                    v_mean2d_local.x += conic02 * conic22_inv * v_depth;
+                    v_mean2d_local.y += conic12 * conic22_inv * v_depth;
                     v_mean2d_local.z += v_depth;
                 }
 
@@ -248,15 +253,6 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 if (v_means2d_abs != nullptr) {
                     v_mean2d_abs_local = {abs(v_mean2d_local.x), abs(v_mean2d_local.y),
                                           abs(v_mean2d_local.z)};
-                }
-
-                PRAGMA_UNROLL
-                for (uint32_t k = 0; k < COLOR_DIM; ++k) {
-                    buffer_c[k] += rgbs_batch[t * COLOR_DIM + k] * fac;
-                }
-
-                if (v_render_depths != nullptr) {
-                    buffer_d += depth * fac;
                 }
             }
             warpSum<COLOR_DIM, S>(v_rgb_local, warp);

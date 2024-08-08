@@ -178,14 +178,14 @@ def _fully_fused_projection(
     means2d, covars2d = _persp_proj(
         means_c, covars_c, Ks, width, height, reduce_z=False
     )
-    det_orig = torch.det(covars2d)  # [C, N]
+    det_orig = torch.det(covars2d[..., :2, :2])  # [C, N]
 
     eps = torch.tensor(
-        [[eps2d, 0.0, 0.0], [0.0, eps2d, 0.0], [0.0, 0.0, eps2d]], device=means.device
+        [[eps2d, 0.0, 0.0], [0.0, eps2d, 0.0], [0.0, 0.0, 1e-6]], device=means.device
     )
     covars2d = covars2d + eps
 
-    det = torch.det(covars2d)  # [C, N]
+    det = torch.det(covars2d[..., :2, :2])  # [C, N]
     det = det.clamp(min=1e-10)
 
     if calc_compensations:

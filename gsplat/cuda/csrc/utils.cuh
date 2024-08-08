@@ -291,11 +291,11 @@ inline __device__ void inverse_vjp(const T Minv, const T v_Minv, T &v_M) {
 
 template <typename T>
 inline __device__ T add_blur(const T eps2d, mat3<T> &covar, T &compensation) {
-    T det_orig = glm::determinant(covar);
+    T det_orig = covar[0][0] * covar[1][1] - covar[0][1] * covar[1][0];
     covar[0][0] += eps2d;
     covar[1][1] += eps2d;
-    covar[2][2] += eps2d;
-    T det_blur = glm::determinant(covar);
+    covar[2][2] += 1e-4f;
+    T det_blur = covar[0][0] * covar[1][1] - covar[0][1] * covar[1][0];
     compensation = sqrt(max(0.f, det_orig / det_blur));
     return det_blur;
 }
@@ -322,24 +322,21 @@ inline __device__ void add_blur_vjp(const T eps2d, const mat3<T> covar,
     // = (1 - comp^2) * inv(M + aI) - aI * det(inv(M + aI))
     // = (1 - comp^2) * conic_blur - aI * det(conic_blur)
 
-    T det_conic_blur = glm::determinant(conic_blur);
-    T v_sqr_comp = v_compensation * 0.5f / (compensation + 1e-6f);
-    // T one_minus_sqr_comp = 1.f - compensation * compensation;
-    // v_covar += v_sqr_comp * (one_minus_sqr_comp * conic_blur -
-    //                          eps2d * det_conic_blur * glm::identity<mat3<T>>());
+    // T det_conic_blur = glm::determinant(conic_blur);
+    // T v_sqr_comp = v_compensation * 0.5f / (compensation + 1e-6f);
+    // v_covar += v_sqr_comp * compensation * compensation *
+    //            (glm::transpose(glm::inverse(covar)) - glm::transpose(conic_blur));
 
-    // (M.inverse().t() - (M + aI).inverse().t()) * M.det() / (M + aI).det()
-    v_covar += v_sqr_comp * compensation * compensation *
-               (glm::transpose(glm::inverse(covar)) - glm::transpose(conic_blur));
-
-    // v_covar[0][0] +=
-    //     v_sqr_comp * (one_minus_sqr_comp * conic_blur[0][0] - eps2d *
-    //     det_conic_blur);
-    // v_covar[0][1] += v_sqr_comp * (one_minus_sqr_comp * conic_blur[0][1]);
-    // v_covar[1][0] += v_sqr_comp * (one_minus_sqr_comp * conic_blur[1][0]);
-    // v_covar[1][1] +=
-    //     v_sqr_comp * (one_minus_sqr_comp * conic_blur[1][1] - eps2d *
-    //     det_conic_blur);
+    T det_conic_blur =
+        conic_blur[0][0] * conic_blur[1][1] - conic_blur[0][1] * conic_blur[1][0];
+    T v_sqr_comp = v_compensation * 0.5 / (compensation + 1e-6);
+    T one_minus_sqr_comp = 1 - compensation * compensation;
+    v_covar[0][0] +=
+        v_sqr_comp * (one_minus_sqr_comp * conic_blur[0][0] - eps2d * det_conic_blur);
+    v_covar[0][1] += v_sqr_comp * (one_minus_sqr_comp * conic_blur[0][1]);
+    v_covar[1][0] += v_sqr_comp * (one_minus_sqr_comp * conic_blur[1][0]);
+    v_covar[1][1] +=
+        v_sqr_comp * (one_minus_sqr_comp * conic_blur[1][1] - eps2d * det_conic_blur);
 }
 
 #endif // GSPLAT_CUDA_UTILS_H
