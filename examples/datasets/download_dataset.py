@@ -9,9 +9,7 @@ from typing import Literal
 import tyro
 
 # dataset names
-dataset_names = Literal[
-    "mipnerf360",
-]
+dataset_names = Literal["mipnerf360",]
 
 # dataset urls
 urls = {"mipnerf360": "http://storage.googleapis.com/gresearch/refraw360/360_v2.zip"}

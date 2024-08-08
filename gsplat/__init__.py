@@ -11,6 +11,7 @@ from .cuda._wrapper import (
     rasterize_to_pixels,
     spherical_harmonics,
     world_to_cam,
+    compute_3D_smoothing_filter,
 )
 from .rendering import (
     rasterization,
@@ -124,4 +125,5 @@ all = [
     "compute_cumulative_intersects",
     "compute_cov2d_bounds",
     "get_tile_bin_edges",
+    "compute_3D_smoothing_filter",
 ]
