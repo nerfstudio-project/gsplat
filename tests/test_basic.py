@@ -571,3 +571,56 @@ def test_sh(test_data, sh_degree: int):
     torch.testing.assert_close(v_coeffs, _v_coeffs, rtol=1e-4, atol=1e-4)
     if sh_degree > 0:
         torch.testing.assert_close(v_dirs, _v_dirs, rtol=1e-4, atol=1e-4)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def test_view_to_gaussians():
+    # from gsplat.cuda._torch_impl import _quat_scale_to_covar_preci
+    from gsplat.cuda._wrapper import view_to_gaussians
+    from gsplat.rendering import _view_to_gaussians
+
+    torch.set_float32_matmul_precision("highest")
+    torch.manual_seed(42)
+
+    means = torch.load("../assets/means.pt")
+    quats = torch.load("../assets/quats.pt")
+    scales = torch.load("../assets/scales.pt")
+    radii = torch.load("../assets/radii.pt")
+    camtoworlds = torch.load("../assets/camtoworlds.pt")
+
+    means.requires_grad = True
+    quats.requires_grad = True
+    scales.requires_grad = True
+    radii.requires_grad = False
+    camtoworlds.requires_grad = False
+
+    # to double for numerical precision
+    means = means.double()
+    quats = quats.double()
+    scales = scales.double()
+    # radii = radii.double()
+    camtoworlds = camtoworlds.double()
+
+    # forward
+    # plus 10 to compute view2gaussians for all inputs
+    radii += 10
+    view2gaussians = view_to_gaussians(means, quats, scales, camtoworlds, radii)
+    _view2gaussians = _view_to_gaussians(means, quats, scales, camtoworlds)
+    torch.testing.assert_close(view2gaussians[:, :10], _view2gaussians[:, :10])
+
+    # backward
+    v_view2gaussians = torch.randn_like(view2gaussians)
+    v_means, v_quats, v_scales = torch.autograd.grad(
+        outputs=view2gaussians,
+        inputs=(means, quats, scales),
+        grad_outputs=v_view2gaussians,
+    )
+
+    _v_means, _v_quats, _v_scales = torch.autograd.grad(
+        outputs=_view2gaussians,
+        inputs=(means, quats, scales),
+        grad_outputs=v_view2gaussians,
+    )
+    torch.testing.assert_close(v_means, _v_means, rtol=1e-1, atol=1e-1)
+    torch.testing.assert_close(v_quats, _v_quats, rtol=1e-1, atol=1e-1)
+    torch.testing.assert_close(v_scales, _v_scales, rtol=1e-1, atol=1e-1)
