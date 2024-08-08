@@ -22,6 +22,12 @@
         func(temp_storage.get(), temp_storage_bytes, __VA_ARGS__);                     \
     } while (false)
 
+enum DEPTH_MODE {
+    DISABLED = 0,
+    CONSTANT = 1,
+    LINEAR = 2,
+};
+
 std::tuple<torch::Tensor, torch::Tensor>
 quat_scale_to_covar_preci_fwd_tensor(const torch::Tensor &quats,  // [N, 4]
                                      const torch::Tensor &scales, // [N, 3]
@@ -114,26 +120,25 @@ torch::Tensor isect_offset_encode_tensor(const torch::Tensor &isect_ids, // [n_i
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 rasterize_to_pixels_fwd_tensor(
     // Gaussian parameters
-    const torch::Tensor &means2d,                   // [C, N, 3] or [nnz, 3]
-    const torch::Tensor &conics,                    // [C, N, 6] or [nnz, 6]
-    const torch::Tensor &colors,                    // [C, N, 3] or [nnz, 3]
-    const torch::Tensor &opacities,                 // [C, N] or [nnz]
-    const at::optional<torch::Tensor> &backgrounds, // [C, D]
+    const torch::Tensor &means2d,   // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &conics,    // [C, N, 6] or [nnz, 6]
+    const torch::Tensor &colors,    // [C, N, channels] or [nnz, channels]
+    const torch::Tensor &opacities, // [C, N]  or [nnz]
+    const at::optional<torch::Tensor> &backgrounds, // [C, channels]
     // image size
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
     const torch::Tensor &flatten_ids,  // [n_isects]
-    const bool calc_depth              // whether to calculate depth
-);
+    const DEPTH_MODE depth_mode);
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 rasterize_to_pixels_bwd_tensor(
     // Gaussian parameters
-    const torch::Tensor &means2d,                   // [C, N, 3] or [nnz, 3]
-    const torch::Tensor &conics,                    // [C, N, 6] or [nnz, 6]
-    const torch::Tensor &colors,                    // [C, N, 3] or [nnz, 3]
-    const torch::Tensor &opacities,                 // [C, N] or [nnz]
+    const torch::Tensor &means2d,   // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &conics,    // [C, N, 6] or [nnz, 6]
+    const torch::Tensor &colors,    // [C, N, channels] or [nnz, channels]
+    const torch::Tensor &opacities, // [C, N] or [nnz]
     const at::optional<torch::Tensor> &backgrounds, // [C, 3]
     // image size
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
@@ -150,7 +155,7 @@ rasterize_to_pixels_bwd_tensor(
     const at::optional<torch::Tensor>
         &v_render_depths, // [C, image_height, image_width, 1]
     // options
-    bool absgrad);
+    const bool absgrad, const DEPTH_MODE depth_mode);
 
 std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
     const uint32_t range_start, const uint32_t range_end, // iteration steps

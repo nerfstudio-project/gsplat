@@ -1,4 +1,5 @@
 #include "bindings.h"
+#include <pybind11/pybind11.h>
 #include <torch/extension.h>
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -32,4 +33,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           &fully_fused_projection_packed_bwd_tensor);
 
     m.def("compute_relocation", &compute_relocation_tensor);
+
+    pybind11::enum_<DEPTH_MODE>(m, "DEPTH_MODE")
+        .value("DISABLED", DEPTH_MODE::DISABLED)
+        .value("CONSTANT", DEPTH_MODE::CONSTANT)
+        .value("LINEAR", DEPTH_MODE::LINEAR)
+        .export_values();
 }

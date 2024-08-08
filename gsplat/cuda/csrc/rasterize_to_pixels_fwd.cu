@@ -23,9 +23,10 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     const uint32_t tile_width, const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
+    const DEPTH_MODE depth_mode,
     S *__restrict__ render_colors, // [C, image_height, image_width, COLOR_DIM]
     S *__restrict__ render_alphas, // [C, image_height, image_width, 1]
-    S *__restrict__ render_depths, // [C, image_height, image_width, 1] optional
+    S *__restrict__ render_depths, // [C, image_height, image_width, 1]
     int32_t *__restrict__ last_ids // [C, image_height, image_width]
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
@@ -40,7 +41,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     tile_offsets += camera_id * tile_height * tile_width;
     render_colors += camera_id * image_height * image_width * COLOR_DIM;
     render_alphas += camera_id * image_height * image_width;
-    if (render_depths != nullptr) {
+    if (depth_mode != DEPTH_MODE::DISABLED) {
         render_depths += camera_id * image_height * image_width;
     }
     last_ids += camera_id * image_height * image_width;
@@ -151,11 +152,21 @@ __global__ void rasterize_to_pixels_fwd_kernel(
                 pix_out[k] += c_ptr[k] * vis;
             }
             // accumulate depth
-            if (render_depths != nullptr) {
-                S depth =
+            S depth;
+            switch (depth_mode) {
+            case DEPTH_MODE::DISABLED:
+                // do nothing
+                break;
+            case DEPTH_MODE::CONSTANT:
+                depth = mean2d.z;
+                depth_out += depth * vis;
+                break;
+            case DEPTH_MODE::LINEAR:
+                depth =
                     mean2d.z +
                     (conic02 * (mean2d.x - px) + conic12 * (mean2d.y - py)) / conic22;
                 depth_out += depth * vis;
+                break;
             }
             cur_idx = batch_start + t;
 
@@ -175,7 +186,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
             render_colors[pix_id * COLOR_DIM + k] =
                 backgrounds == nullptr ? pix_out[k] : (pix_out[k] + T * backgrounds[k]);
         }
-        if (render_depths != nullptr) {
+        if (depth_mode != DEPTH_MODE::DISABLED) {
             render_depths[pix_id] = depth_out;
         }
         // index in bin of last gaussian in this pixel
@@ -197,7 +208,7 @@ call_kernel_with_dim(
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
     const torch::Tensor &flatten_ids,  // [n_isects]
-    bool calc_depth) {
+    const DEPTH_MODE depth_mode) {
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
     CHECK_INPUT(conics);
@@ -227,7 +238,7 @@ call_kernel_with_dim(
     torch::Tensor alphas = torch::empty({C, image_height, image_width, 1},
                                         means2d.options().dtype(torch::kFloat32));
     torch::Tensor depths;
-    if (calc_depth) {
+    if (depth_mode != DEPTH_MODE::DISABLED) {
         depths = torch::empty({C, image_height, image_width, 1},
                               means2d.options().dtype(torch::kFloat32));
     }
@@ -257,8 +268,8 @@ call_kernel_with_dim(
             backgrounds.has_value() ? backgrounds.value().data_ptr<float>() : nullptr,
             image_width, image_height, tile_size, tile_width, tile_height,
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-            renders.data_ptr<float>(), alphas.data_ptr<float>(),
-            calc_depth ? depths.data_ptr<float>() : nullptr,
+            depth_mode, renders.data_ptr<float>(), alphas.data_ptr<float>(),
+            depth_mode == DEPTH_MODE::DISABLED ? nullptr : depths.data_ptr<float>(),
             last_ids.data_ptr<int32_t>());
 
     return std::make_tuple(renders, alphas, depths, last_ids);
@@ -277,7 +288,7 @@ rasterize_to_pixels_fwd_tensor(
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
     const torch::Tensor &flatten_ids,  // [n_isects]
-    bool calc_depth) {
+    const DEPTH_MODE depth_mode) {
     CHECK_INPUT(colors);
     uint32_t channels = colors.size(-1);
 
@@ -285,7 +296,7 @@ rasterize_to_pixels_fwd_tensor(
     case N:                                                                            \
         return call_kernel_with_dim<N>(                                                \
             means2d, conics, colors, opacities, backgrounds, image_width,              \
-            image_height, tile_size, tile_offsets, flatten_ids, calc_depth);
+            image_height, tile_size, tile_offsets, flatten_ids, depth_mode);
 
     // TODO: an optimization can be done by passing the actual number of channels into
     // the kernel functions and avoid necessary global memory writes. This requires

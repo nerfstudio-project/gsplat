@@ -24,6 +24,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     const uint32_t tile_width, const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
+    const DEPTH_MODE depth_mode,
     // fwd outputs
     const S *__restrict__ render_alphas,  // [C, image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [C, image_height, image_width]
@@ -49,7 +50,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     last_ids += camera_id * image_height * image_width;
     v_render_colors += camera_id * image_height * image_width * COLOR_DIM;
     v_render_alphas += camera_id * image_height * image_width;
-    if (v_render_depths != nullptr) {
+    if (depth_mode != DEPTH_MODE::DISABLED) {
         v_render_depths += camera_id * image_height * image_width;
     }
     if (backgrounds != nullptr) {
@@ -99,7 +100,8 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         v_render_c[k] = v_render_colors[pix_id * COLOR_DIM + k];
     }
     const S v_render_a = v_render_alphas[pix_id];
-    const S v_render_d = v_render_depths != nullptr ? v_render_depths[pix_id] : 0.f;
+    const S v_render_d =
+        depth_mode != DEPTH_MODE::DISABLED ? v_render_depths[pix_id] : 0.f;
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing
@@ -148,7 +150,6 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             vec2<S> delta;
             S conic00, conic01, conic02, conic11, conic12, conic22;
             S vis;
-            S depth;
             vec3<S> mean2d;
 
             if (valid) {
@@ -204,7 +205,13 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 }
 
                 // contribution from depth map
-                if (v_render_depths != nullptr) {
+                S depth;
+                S v_depth;
+                switch (depth_mode) {
+                case DEPTH_MODE::DISABLED:
+                    // do nothing
+                    break;
+                case DEPTH_MODE::LINEAR:
                     S conic22_inv = 1.f / conic22;
                     depth = mean2d.z +
                             (conic02 * (mean2d.x - px) + conic12 * (mean2d.y - py)) *
@@ -213,7 +220,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                     v_alpha += (depth * T - buffer_d * ra) * v_render_d;
                     buffer_d += depth * fac;
 
-                    S v_depth = fac * v_render_d;
+                    v_depth = fac * v_render_d;
 
                     v_conic_local[2] += (mean2d.x - px) * conic22_inv * v_depth;
                     v_conic_local[4] += (mean2d.y - py) * conic22_inv * v_depth;
@@ -222,6 +229,15 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                     v_mean2d_local.x += conic02 * conic22_inv * v_depth;
                     v_mean2d_local.y += conic12 * conic22_inv * v_depth;
                     v_mean2d_local.z += v_depth;
+                    break;
+                case DEPTH_MODE::CONSTANT:
+                    depth = mean2d.z;
+                    v_alpha += (depth * T - buffer_d * ra) * v_render_d;
+                    buffer_d += depth * fac;
+
+                    v_depth = fac * v_render_d;
+                    v_mean2d_local.z += v_depth;
+                    break;
                 }
 
                 v_alpha += T_final * ra * v_render_a;
@@ -317,7 +333,7 @@ call_kernel_with_dim(
     const at::optional<torch::Tensor>
         &v_render_depths, // [C, image_height, image_width, 1]
     // options
-    bool absgrad) {
+    const bool absgrad, const DEPTH_MODE depth_mode) {
 
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
@@ -330,7 +346,8 @@ call_kernel_with_dim(
     CHECK_INPUT(last_ids);
     CHECK_INPUT(v_render_colors);
     CHECK_INPUT(v_render_alphas);
-    if (v_render_depths.has_value()) {
+    if (depth_mode != DEPTH_MODE::DISABLED) {
+        assert(v_render_depths.has_value());
         CHECK_INPUT(v_render_depths.value());
     }
     if (backgrounds.has_value()) {
@@ -383,10 +400,12 @@ call_kernel_with_dim(
                                         : nullptr,
                 image_width, image_height, tile_size, tile_width, tile_height,
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
-                v_render_depths.has_value() ? v_render_depths.value().data_ptr<float>()
-                                            : nullptr,
+                depth_mode, render_alphas.data_ptr<float>(),
+                last_ids.data_ptr<int32_t>(), v_render_colors.data_ptr<float>(),
+                v_render_alphas.data_ptr<float>(),
+                depth_mode != DEPTH_MODE::DISABLED
+                    ? v_render_depths.value().data_ptr<float>()
+                    : nullptr,
                 absgrad
                     ? reinterpret_cast<vec3<float> *>(v_means2d_abs.data_ptr<float>())
                     : nullptr,
@@ -401,10 +420,10 @@ call_kernel_with_dim(
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 rasterize_to_pixels_bwd_tensor(
     // Gaussian parameters
-    const torch::Tensor &means2d,                   // [C, N, 3] or [nnz, 3]
-    const torch::Tensor &conics,                    // [C, N, 6] or [nnz, 6]
-    const torch::Tensor &colors,                    // [C, N, 3] or [nnz, 3]
-    const torch::Tensor &opacities,                 // [C, N] or [nnz]
+    const torch::Tensor &means2d,   // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &conics,    // [C, N, 6] or [nnz, 6]
+    const torch::Tensor &colors,    // [C, N, channels] or [nnz, channels]
+    const torch::Tensor &opacities, // [C, N] or [nnz]
     const at::optional<torch::Tensor> &backgrounds, // [C, 3]
     // image size
     const uint32_t image_width, const uint32_t image_height, const uint32_t tile_size,
@@ -421,7 +440,7 @@ rasterize_to_pixels_bwd_tensor(
     const at::optional<torch::Tensor>
         &v_render_depths, // [C, image_height, image_width, 1]
     // options
-    bool absgrad) {
+    const bool absgrad, const DEPTH_MODE depth_mode) {
 
     CHECK_INPUT(colors);
     uint32_t COLOR_DIM = colors.size(-1);
@@ -431,7 +450,8 @@ rasterize_to_pixels_bwd_tensor(
         return call_kernel_with_dim<N>(                                                \
             means2d, conics, colors, opacities, backgrounds, image_width,              \
             image_height, tile_size, tile_offsets, flatten_ids, render_alphas,         \
-            last_ids, v_render_colors, v_render_alphas, v_render_depths, absgrad);
+            last_ids, v_render_colors, v_render_alphas, v_render_depths, absgrad,      \
+            depth_mode);
 
     switch (COLOR_DIM) {
         __GS__CALL_(1)

@@ -2,6 +2,7 @@ from typing import Callable, Optional, Tuple
 
 import torch
 from torch import Tensor
+from typing_extensions import Literal
 
 
 def _make_lazy_cuda_func(name: str) -> Callable:
@@ -12,6 +13,20 @@ def _make_lazy_cuda_func(name: str) -> Callable:
         return getattr(_C, name)(*args, **kwargs)
 
     return call_cuda
+
+
+def _to_cuda_depth_mode(mode: Literal["disabled", "constant", "linear"]) -> int:
+    # pylint: disable=import-outside-toplevel
+    from ._backend import _C
+
+    if mode == "disabled":
+        return _C.DEPTH_MODE.DISABLED
+    elif mode == "constant":
+        return _C.DEPTH_MODE.CONSTANT
+    elif mode == "linear":
+        return _C.DEPTH_MODE.LINEAR
+    else:
+        raise ValueError(f"Unsupported depth_mode: {mode}")
 
 
 def spherical_harmonics(
@@ -379,7 +394,7 @@ def rasterize_to_pixels(
     backgrounds: Optional[Tensor] = None,  # [C, channels]
     packed: bool = False,
     absgrad: bool = False,
-    calc_depth: bool = False,
+    depth_mode: Literal["disabled", "constant", "linear"] = "disabled",
 ) -> Tuple[Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
@@ -396,15 +411,19 @@ def rasterize_to_pixels(
         backgrounds: Background colors. [C, channels]. Default: None.
         packed: If True, the input tensors are expected to be packed with shape [nnz, ...]. Default: False.
         absgrad: If True, the backward pass will compute a `.absgrad` attribute for `means2d`. Default: False.
-        calc_depth: If True, the depth maps will be computed. Else, the depth maps will be None. Default: False.
 
     Returns:
         A tuple:
 
         - **Rendered colors**. [C, image_height, image_width, channels]
         - **Rendered alphas**. [C, image_height, image_width, 1]
-        - **Rendered depths**. [C, image_height, image_width, 1] if `calc_depth` is True, else None.
+        - **Rendered depths**. [C, image_height, image_width, 1]
     """
+    assert depth_mode in (
+        "disabled",
+        "constant",
+        "linear",
+    ), f"Unsupported depth_mode: {depth_mode}"
 
     C = isect_offsets.size(0)
     device = means2d.device
@@ -491,7 +510,7 @@ def rasterize_to_pixels(
         isect_offsets.contiguous(),
         flatten_ids.contiguous(),
         absgrad,
-        calc_depth,
+        depth_mode,
     )
 
     if padded_channels > 0:
@@ -821,7 +840,7 @@ class _RasterizeToPixels(torch.autograd.Function):
         isect_offsets: Tensor,  # [C, tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
         absgrad: bool,
-        calc_depth: bool,
+        depth_mode: Literal["disabled", "constant", "linear"],
     ) -> Tuple[Tensor, Tensor, Tensor]:
         render_colors, render_alphas, render_depths, last_ids = _make_lazy_cuda_func(
             "rasterize_to_pixels_fwd"
@@ -836,10 +855,10 @@ class _RasterizeToPixels(torch.autograd.Function):
             tile_size,
             isect_offsets,
             flatten_ids,
-            calc_depth,
+            _to_cuda_depth_mode(depth_mode),
         )
 
-        if not calc_depth:
+        if depth_mode == 0:
             render_depths = None
 
         ctx.save_for_backward(
@@ -857,7 +876,7 @@ class _RasterizeToPixels(torch.autograd.Function):
         ctx.height = height
         ctx.tile_size = tile_size
         ctx.absgrad = absgrad
-        ctx.calc_depth = calc_depth
+        ctx.depth_mode = depth_mode
 
         return render_colors, render_alphas, render_depths
 
@@ -883,12 +902,12 @@ class _RasterizeToPixels(torch.autograd.Function):
         height = ctx.height
         tile_size = ctx.tile_size
         absgrad = ctx.absgrad
-        calc_depth = ctx.calc_depth
+        depth_mode = ctx.depth_mode
 
-        if calc_depth:
-            v_render_depths = v_render_depths.contiguous()
-        else:
+        if depth_mode == "disabled":
             v_render_depths = None
+        else:
+            v_render_depths = v_render_depths.contiguous()
 
         (
             v_means2d_abs,
@@ -913,6 +932,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             v_render_alphas.contiguous(),
             v_render_depths,
             absgrad,
+            _to_cuda_depth_mode(depth_mode),
         )
 
         if absgrad:

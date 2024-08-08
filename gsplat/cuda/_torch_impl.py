@@ -4,6 +4,7 @@ from typing import Optional, Tuple
 import torch
 import torch.nn.functional as F
 from torch import Tensor
+from typing_extensions import Literal
 
 
 def _quat_scale_to_covar_preci(
@@ -335,6 +336,7 @@ def accumulate(
     camera_ids: Tensor,  # [M]
     image_width: int,
     image_height: int,
+    depth_mode: Literal["disabled", "constant", "linear"] = "disabled",
 ) -> Tuple[Tensor, Tensor]:
     """Alpah compositing of 2D Gaussians in Pure Pytorch.
 
@@ -399,14 +401,21 @@ def accumulate(
     indices = camera_ids * image_height * image_width + pixel_ids
     total_pixels = C * image_height * image_width
 
-    # calculate depths
-    mu = means2d[camera_ids, gaussian_ids]  # [M, 3]
-    o = torch.cat(
-        [pixel_coords, torch.zeros_like(pixel_ids_x)[..., None]], dim=-1
-    )  # [M, 3]
-    A = c[:, -1]  # [M,] conics22
-    B = torch.einsum("...i,...i->...", c[:, [2, 4, 5]], (mu - o))  # [M]
-    D = B / A  # [M]
+    if depth_mode == "constant":
+        D = means2d[camera_ids, gaussian_ids, -1]  # [M]
+    elif depth_mode == "linear":
+        # calculate depths
+        mu = means2d[camera_ids, gaussian_ids]  # [M, 3]
+        o = torch.cat(
+            [pixel_coords, torch.zeros_like(pixel_ids_x)[..., None]], dim=-1
+        )  # [M, 3]
+        A = c[:, -1]  # [M,] conics22
+        B = torch.einsum("...i,...i->...", c[:, [2, 4, 5]], (mu - o))  # [M]
+        D = B / A  # [M]
+    elif depth_mode == "disabled":
+        pass
+    else:
+        raise ValueError(f"Unknown depth mode: {depth_mode}")
 
     # alpha compositing
     weights, trans = render_weight_from_alpha(
@@ -421,9 +430,13 @@ def accumulate(
     alphas = accumulate_along_rays(
         weights, None, ray_indices=indices, n_rays=total_pixels
     ).reshape(C, image_height, image_width, 1)
-    depths = accumulate_along_rays(
-        weights, D[..., None], ray_indices=indices, n_rays=total_pixels
-    ).reshape(C, image_height, image_width, 1)
+
+    if depth_mode != "disabled":
+        depths = accumulate_along_rays(
+            weights, D[..., None], ray_indices=indices, n_rays=total_pixels
+        ).reshape(C, image_height, image_width, 1)
+    else:
+        depths = None
 
     return renders, alphas, depths
 
@@ -440,6 +453,7 @@ def _rasterize_to_pixels(
     flatten_ids: Tensor,  # [n_isects]
     backgrounds: Optional[Tensor] = None,  # [C, channels]
     batch_per_iter: int = 100,
+    depth_mode: Literal["disabled", "constant", "linear"] = "disabled",
 ):
     """Pytorch implementation of `gsplat.cuda._wrapper.rasterize_to_pixels()`.
 
@@ -473,7 +487,11 @@ def _rasterize_to_pixels(
         (C, image_height, image_width, colors.shape[-1]), device=device
     )
     render_alphas = torch.zeros((C, image_height, image_width, 1), device=device)
-    render_depths = torch.zeros((C, image_height, image_width, 1), device=device)
+
+    if depth_mode != "disabled":
+        render_depths = torch.zeros((C, image_height, image_width, 1), device=device)
+    else:
+        render_depths = None
 
     # Split Gaussians into batches and iteratively accumulate the renderings
     block_size = tile_size * tile_size
@@ -514,10 +532,12 @@ def _rasterize_to_pixels(
             camera_ids,
             image_width,
             image_height,
+            depth_mode,
         )
         render_colors = render_colors + renders_step * transmittances[..., None]
         render_alphas = render_alphas + accs_step * transmittances[..., None]
-        render_depths = render_depths + depths_step * transmittances[..., None]
+        if depths_step is not None:
+            render_depths = render_depths + depths_step * transmittances[..., None]
 
     render_alphas = render_alphas
     if backgrounds is not None:

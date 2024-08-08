@@ -435,7 +435,8 @@ def test_isect(test_data):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("channels", [3, 32, 128])
-def test_rasterize_to_pixels(test_data, channels: int):
+@pytest.mark.parametrize("depth_mode", ["disabled", "constant", "linear"])
+def test_rasterize_to_pixels(test_data, channels: int, depth_mode: str):
     from gsplat.cuda._torch_impl import _rasterize_to_pixels
     from gsplat.cuda._wrapper import (
         fully_fused_projection,
@@ -499,7 +500,7 @@ def test_rasterize_to_pixels(test_data, channels: int):
         isect_offsets,
         flatten_ids,
         backgrounds=backgrounds,
-        calc_depth=True,
+        depth_mode=depth_mode,
     )
     _render_colors, _render_alphas, _render_depths = _rasterize_to_pixels(
         means2d,
@@ -512,20 +513,29 @@ def test_rasterize_to_pixels(test_data, channels: int):
         isect_offsets,
         flatten_ids,
         backgrounds=backgrounds,
+        depth_mode=depth_mode,
     )
     torch.testing.assert_close(render_colors, _render_colors)
     torch.testing.assert_close(render_alphas, _render_alphas)
-    torch.testing.assert_close(render_depths, _render_depths)
+    if depth_mode != "disabled":
+        torch.testing.assert_close(render_depths, _render_depths)
 
     # backward
     v_render_colors = torch.randn_like(render_colors)
     v_render_alphas = torch.randn_like(render_alphas)
-    v_render_depths = torch.randn_like(render_depths)
+    if depth_mode != "disabled":
+        v_render_depths = torch.randn_like(render_depths)
 
     v_means2d, v_conics, v_colors, v_opacities, v_backgrounds = torch.autograd.grad(
-        (render_colors * v_render_colors).sum()
-        + (render_alphas * v_render_alphas).sum()
-        + (render_depths * v_render_depths).sum(),
+        (
+            (render_colors * v_render_colors).sum()
+            + (render_alphas * v_render_alphas).sum()
+            + (
+                (render_depths * v_render_depths).sum()
+                if depth_mode != "disabled"
+                else 0
+            )
+        ),
         (means2d, conics, colors, opacities, backgrounds),
     )
     (
@@ -535,9 +545,15 @@ def test_rasterize_to_pixels(test_data, channels: int):
         _v_opacities,
         _v_backgrounds,
     ) = torch.autograd.grad(
-        (_render_colors * v_render_colors).sum()
-        + (_render_alphas * v_render_alphas).sum()
-        + (_render_depths * v_render_depths).sum(),
+        (
+            (_render_colors * v_render_colors).sum()
+            + (_render_alphas * v_render_alphas).sum()
+            + (
+                (_render_depths * v_render_depths).sum()
+                if depth_mode != "disabled"
+                else 0
+            )
+        ),
         (means2d, conics, colors, opacities, backgrounds),
     )
     torch.testing.assert_close(v_means2d, _v_means2d, rtol=5e-3, atol=5e-3)
