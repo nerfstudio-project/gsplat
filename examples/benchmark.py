@@ -11,7 +11,7 @@ import GPUtil
 
 @dataclass
 class BenchmarkConfig:
-    """Benchmark config"""
+    """Baseline benchmark config"""
 
     # trainer to run
     trainer: str = "simple_trainer.py"
@@ -39,7 +39,7 @@ class BenchmarkConfig:
     model_configs: dict = field(default_factory=dict)
 
 
-# Configurations to run
+# Configurations of different GSPLAT options
 baseline_config = BenchmarkConfig()
 absgrad_config = BenchmarkConfig(
     result_dir="results/absgrad",
@@ -53,11 +53,12 @@ mcmc_config = BenchmarkConfig(
     result_dir="results/mcmc",
 )
 
+# Configs to run
 configs_to_run = [
     baseline_config,
-    # mcmc_config,
-    # absgrad_config,
-    # antialiased_config,
+    mcmc_config,
+    absgrad_config,
+    antialiased_config,
 ]
 
 
