@@ -20,6 +20,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
+from typing_extensions import Literal
 from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
 
 from gsplat.compression import PngCompression
@@ -35,7 +36,7 @@ class Config:
     # Path to the .pt file. If provide, it will skip training and render a video
     ckpt: Optional[str] = None
     # Name of compression strategy to use
-    compressionl[str] = None
+    compression: Optional[Literal["png"]] = None
 
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
@@ -321,9 +322,11 @@ class Runner:
         self.strategy_state = self.strategy.initialize_state()
 
         # Compression Strategy
-        self.compression = None
+        self.compression_method = None
         if cfg.compression:
-            self.compression)
+            self.compression_method = PngCompression()
+        else:
+            raise ValueError(f"Unknown compression strategy: {cfg.compression}")
 
         self.pose_optimizers = []
         if cfg.pose_opt:
@@ -818,10 +821,10 @@ class Runner:
         compress_dir = f"{cfg.result_dir}/compression"
         os.makedirs(compress_dir, exist_ok=True)
 
-        self.compression.compress(compress_dir, self.splats)
+        self.compression_method.compress(compress_dir, self.splats)
 
         # evaluate compression
-        splats_c = self.compression.decompress(compress_dir)
+        splats_c = self.compression_method.decompress(compress_dir)
         for k in splats_c.keys():
             self.splats[k].data = splats_c[k].to(self.device)
         self.eval(step=step, stage="compress")
