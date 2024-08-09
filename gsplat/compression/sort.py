@@ -1,8 +1,10 @@
+from typing import Dict
+
 import torch
 from torch import Tensor
 
 
-def sort_splats(splats: dict[str, Tensor], verbose: bool = True) -> dict[str, Tensor]:
+def sort_splats(splats: Dict[str, Tensor], verbose: bool = True) -> Dict[str, Tensor]:
     """Sort splats with Parallel Linear Assignment Sorting from the paper `Compact 3D Scene Representation via
     Self-Organizing Gaussian Grids <https://arxiv.org/pdf/2312.13299>`_.
 
@@ -10,11 +12,11 @@ def sort_splats(splats: dict[str, Tensor], verbose: bool = True) -> dict[str, Te
         PLAS must installed to use sorting.
 
     Args:
-        splats (dict[str, Tensor]): splats
+        splats (Dict[str, Tensor]): splats
         verbose (bool, optional): Whether to print verbose information. Default to True.
 
     Returns:
-        dict[str, Tensor]: sorted splats
+        Dict[str, Tensor]: sorted splats
     """
     try:
         from plas import sort_with_plas
