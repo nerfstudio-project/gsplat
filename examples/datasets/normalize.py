@@ -98,10 +98,10 @@ def align_principle_axes(point_cloud):
 
 
 def transform_points(matrix, points):
-    """Transform points using a SE(4) matrix.
+    """Transform points using an SE(3) matrix.
 
     Args:
-        matrix: 4x4 SE(4) matrix
+        matrix: 4x4 SE(3) matrix
         points: Nx3 array of points
 
     Returns:
@@ -113,10 +113,10 @@ def transform_points(matrix, points):
 
 
 def transform_cameras(matrix, camtoworlds):
-    """Transform cameras using a SE(4) matrix.
+    """Transform cameras using an SE(3) matrix.
 
     Args:
-        matrix: 4x4 SE(4) matrix
+        matrix: 4x4 SE(3) matrix
         camtoworlds: Nx4x4 array of camera-to-world matrices
 
     Returns:
