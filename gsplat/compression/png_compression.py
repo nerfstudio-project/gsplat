@@ -1,15 +1,16 @@
-from dataclasses import dataclass
-import os
-from typing import Any, Callable
 import json
-import torch
-from torch import Tensor
-import torch.nn.functional as F
-import numpy as np
+import os
+from dataclasses import dataclass
+from typing import Any, Callable, Dict
+
 import imageio
+import numpy as np
+import torch
+import torch.nn.functional as F
+from torch import Tensor
 
 from gsplat.compression.sort import sort_splats
-from gsplat.utils import log_transform, inverse_log_transform
+from gsplat.utils import inverse_log_transform, log_transform
 
 
 @dataclass
@@ -53,7 +54,7 @@ class PngCompressionStrategy:
         else:
             return _decompress_npz
 
-    def compress(self, compress_dir: str, splats: dict[str, Tensor]) -> None:
+    def compress(self, compress_dir: str, splats: Dict[str, Tensor]) -> None:
         # Param-specific preprocessing
         splats["means"] = log_transform(splats["means"])
         splats["quats"] = F.normalize(splats["quats"], dim=-1)
@@ -84,7 +85,7 @@ class PngCompressionStrategy:
         with open(os.path.join(compress_dir, "meta.json"), "w") as f:
             json.dump(meta, f)
 
-    def decompress(self, compress_dir: str) -> dict[str, Tensor]:
+    def decompress(self, compress_dir: str) -> Dict[str, Tensor]:
         with open(os.path.join(compress_dir, "meta.json"), "r") as f:
             meta = json.load(f)
 
@@ -98,7 +99,7 @@ class PngCompressionStrategy:
         return splats
 
 
-def _crop_n_splats(splats: dict[str, Tensor], n_crop: int) -> dict[str, Tensor]:
+def _crop_n_splats(splats: Dict[str, Tensor], n_crop: int) -> Dict[str, Tensor]:
     opacities = splats["opacities"]
     keep_indices = torch.argsort(opacities, descending=True)[:-n_crop]
     for k, v in splats.items():
@@ -108,7 +109,7 @@ def _crop_n_splats(splats: dict[str, Tensor], n_crop: int) -> dict[str, Tensor]:
 
 def _compress_png(
     compress_dir: str, param_name: str, params: Tensor, n_sidelen: int, **kwargs
-) -> dict[str, Any]:
+) -> Dict[str, Any]:
     """Compress parameters with 8-bit quantization and lossless PNG compression.
 
     Args:
@@ -118,7 +119,7 @@ def _compress_png(
         n_sidelen (int): image side length
 
     Returns:
-        dict[str, Any]: metadata
+        Dict[str, Any]: metadata
     """
     if torch.numel == 0:
         meta = {
@@ -146,13 +147,13 @@ def _compress_png(
     return meta
 
 
-def _decompress_png(compress_dir: str, param_name: str, meta: dict[str, Any]) -> Tensor:
+def _decompress_png(compress_dir: str, param_name: str, meta: Dict[str, Any]) -> Tensor:
     """Decompress parameters from PNG file.
 
     Args:
         compress_dir (str): compression directory
         param_name (str): parameter field name
-        meta (dict[str, Any]): metadata
+        meta (Dict[str, Any]): metadata
 
     Returns:
         Tensor: parameters
@@ -176,7 +177,7 @@ def _decompress_png(compress_dir: str, param_name: str, meta: dict[str, Any]) ->
 
 def _compress_png_16bit(
     compress_dir: str, param_name: str, params: Tensor, n_sidelen: int, **kwargs
-) -> dict[str, Any]:
+) -> Dict[str, Any]:
     """Compress parameters with 16-bit quantization and PNG compression.
 
     Args:
@@ -186,7 +187,7 @@ def _compress_png_16bit(
         n_sidelen (int): image side length
 
     Returns:
-        dict[str, Any]: metadata
+        Dict[str, Any]: metadata
     """
     if torch.numel == 0:
         meta = {
@@ -221,14 +222,14 @@ def _compress_png_16bit(
 
 
 def _decompress_png_16bit(
-    compress_dir: str, param_name: str, meta: dict[str, Any]
+    compress_dir: str, param_name: str, meta: Dict[str, Any]
 ) -> Tensor:
     """Decompress parameters from PNG files.
 
     Args:
         compress_dir (str): compression directory
         param_name (str): parameter field name
-        meta (dict[str, Any]): metadata
+        meta (Dict[str, Any]): metadata
 
     Returns:
         Tensor: parameters
@@ -255,7 +256,7 @@ def _decompress_png_16bit(
 
 def _compress_npz(
     compress_dir: str, param_name: str, params: Tensor, **kwargs
-) -> dict[str, Any]:
+) -> Dict[str, Any]:
     """Compress parameters with numpy's NPZ compression."""
     npz_dict = {"arr": params.detach().cpu().numpy()}
     np.savez_compressed(os.path.join(compress_dir, f"{param_name}.npz"), **npz_dict)
@@ -266,7 +267,7 @@ def _compress_npz(
     return meta
 
 
-def _decompress_npz(compress_dir: str, param_name: str, meta: dict[str, Any]) -> Tensor:
+def _decompress_npz(compress_dir: str, param_name: str, meta: Dict[str, Any]) -> Tensor:
     """Decompress parameters with numpy's NPZ compression."""
     arr = np.load(os.path.join(compress_dir, f"{param_name}.npz"))["arr"]
     params = torch.tensor(arr)
@@ -283,7 +284,7 @@ def _compress_kmeans(
     quantization: int = 6,
     verbose: bool = True,
     **kwargs,
-) -> dict[str, Any]:
+) -> Dict[str, Any]:
     """Run K-means clustering on parameters and save centroids and labels to a npz file.
 
     .. warning::
@@ -298,7 +299,7 @@ def _compress_kmeans(
         verbose (bool, optional): Whether to print verbose information. Default to True.
 
     Returns:
-        dict[str, Any]: metadata
+        Dict[str, Any]: metadata
     """
     try:
         from torchpq.clustering import KMeans
@@ -345,14 +346,14 @@ def _compress_kmeans(
 
 
 def _decompress_kmeans(
-    compress_dir: str, param_name: str, meta: dict[str, Any], **kwargs
+    compress_dir: str, param_name: str, meta: Dict[str, Any], **kwargs
 ) -> Tensor:
     """Decompress parameters from K-means compression.
 
     Args:
         compress_dir (str): compression directory
         param_name (str): parameter field name
-        meta (dict[str, Any]): metadata
+        meta (Dict[str, Any]): metadata
 
     Returns:
         Tensor: parameters
