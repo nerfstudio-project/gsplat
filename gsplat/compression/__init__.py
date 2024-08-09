@@ -1,1 +1,1 @@
-from .png_compression import PngCompressionStrategy
+from .png_compression import PngCompression
