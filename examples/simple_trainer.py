@@ -323,10 +323,11 @@ class Runner:
 
         # Compression Strategy
         self.compression_method = None
-        if cfg.compression:
-            self.compression_method = PngCompression()
-        else:
-            raise ValueError(f"Unknown compression strategy: {cfg.compression}")
+        if cfg.compression is not None:
+            if cfg.compression == "png":
+                self.compression_method = PngCompression()
+            else:
+                raise ValueError(f"Unknown compression strategy: {cfg.compression}")
 
         self.pose_optimizers = []
         if cfg.pose_opt:
