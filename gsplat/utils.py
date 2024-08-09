@@ -28,3 +28,11 @@ def normalized_quat_to_rotmat(quat: Tensor) -> Tensor:
         dim=-1,
     )
     return mat.reshape(quat.shape[:-1] + (3, 3))
+
+
+def log_transform(x):
+    return torch.sign(x) * torch.log1p(torch.abs(x))
+
+
+def inverse_log_transform(y):
+    return torch.sign(y) * (torch.expm1(torch.abs(y)))

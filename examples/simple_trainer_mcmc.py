@@ -21,8 +21,10 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
+from typing_extensions import Literal
 from utils import AppearanceOptModule, CameraOptModule, set_random_seed
 
+from gsplat.compression import PngCompression
 from gsplat.distributed import cli
 from gsplat.rendering import rasterization
 from gsplat.strategy import MCMCStrategy
@@ -34,6 +36,8 @@ class Config:
     disable_viewer: bool = False
     # Path to the .pt file. If provide, it will skip training and render a video
     ckpt: Optional[str] = None
+    # Name of compression strategy to use
+    compression: Optional[Literal["png"]] = None
 
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
@@ -227,6 +231,14 @@ class Runner:
         )
         self.strategy.check_sanity(self.splats, self.optimizers)
         self.strategy_state = self.strategy.initialize_state()
+
+        # Compression Strategy
+        self.compression_method = None
+        if cfg.compression is not None:
+            if cfg.compression == "png":
+                self.compression_method = PngCompression()
+            else:
+                raise ValueError(f"Unknown compression strategy: {cfg.compression}")
 
         self.pose_optimizers = []
         if cfg.pose_opt:
@@ -573,6 +585,10 @@ class Runner:
                 self.eval(step)
                 self.render_traj(step)
 
+            # run compression
+            if cfg.compression is not None and step == max_steps - 1:
+                self.run_compression(step=step)
+
             if not cfg.disable_viewer:
                 self.viewer.lock.release()
                 num_train_steps_per_sec = 1.0 / (time.time() - tic)
@@ -585,7 +601,7 @@ class Runner:
                 self.viewer.update(step, num_train_rays_per_step)
 
     @torch.no_grad()
-    def eval(self, step: int):
+    def eval(self, step: int, stage: str = "val"):
         """Entry for evaluation."""
         print("Running evaluation...")
         cfg = self.cfg
@@ -623,7 +639,7 @@ class Runner:
                 # write images
                 canvas = torch.cat([pixels, colors], dim=2).squeeze(0).cpu().numpy()
                 imageio.imwrite(
-                    f"{self.render_dir}/val_{i:04d}.png",
+                    f"{self.render_dir}/{stage}_{i:04d}.png",
                     (canvas * 255).astype(np.uint8),
                 )
 
@@ -652,11 +668,11 @@ class Runner:
                 "ellipse_time": ellipse_time,
                 "num_GS": len(self.splats["means"]),
             }
-            with open(f"{self.stats_dir}/val_step{step:04d}.json", "w") as f:
+            with open(f"{self.stats_dir}/{stage}_step{step:04d}.json", "w") as f:
                 json.dump(stats, f)
             # save stats to tensorboard
             for k, v in stats.items():
-                self.writer.add_scalar(f"val/{k}", v, step)
+                self.writer.add_scalar(f"{stage}/{k}", v, step)
             self.writer.flush()
 
     @torch.no_grad()
@@ -713,6 +729,23 @@ class Runner:
         print(f"Video saved to {video_dir}/traj_{step}.mp4")
 
     @torch.no_grad()
+    def run_compression(self, step: int):
+        """Entry for running compression."""
+        print("Running compression...")
+        world_rank = self.world_rank
+
+        compress_dir = f"{cfg.result_dir}/compression/rank{world_rank}"
+        os.makedirs(compress_dir, exist_ok=True)
+
+        self.compression_method.compress(compress_dir, self.splats)
+
+        # evaluate compression
+        splats_c = self.compression_method.decompress(compress_dir)
+        for k in splats_c.keys():
+            self.splats[k].data = splats_c[k].to(self.device)
+        self.eval(step=step, stage="compress")
+
+    @torch.no_grad()
     def _viewer_render_fn(
         self, camera_state: nerfview.CameraState, img_wh: Tuple[int, int]
     ):
@@ -749,6 +782,8 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
             runner.splats[k].data = ckpt["splats"][k]
         runner.eval(step=ckpt["step"])
         runner.render_traj(step=ckpt["step"])
+        if cfg.compression is not None:
+            runner.run_compression(step=ckpt["step"])
     else:
         runner.train()
 
