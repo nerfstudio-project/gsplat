@@ -139,14 +139,14 @@ class Config:
     # Enable normal consistency loss. (Currently for 2DGS only)
     normal_loss: bool = False
     # Weight for normal loss
-    normal_lambda: float = 1e-2
+    normal_lambda: float = 5e-2
     # Iteration to start normal consistency regulerization
     normal_start_iter: int = 7_000
     
     # Distortion loss. (experimental)
     dist_loss: bool = False
     # Weight for distortion loss
-    dist_lambda: float = 1e-3
+    dist_lambda: float = 1e-2
     # Iteration to start distortion loss regulerization
     dist_start_iter: int = 3_000
     
