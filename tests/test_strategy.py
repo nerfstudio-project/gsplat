@@ -6,12 +6,9 @@ pytest <THIS_PY_FILE> -s
 ```
 """
 
-import math
-from typing import Optional
 
 import pytest
 import torch
-import torch.nn.functional as F
 
 device = torch.device("cuda:0")
 
