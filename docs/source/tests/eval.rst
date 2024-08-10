@@ -17,7 +17,7 @@ Evaluation
     | gsplat-30k (4 GPUs) | 28.91 | 0.871 | 0.135 | **2.0 GB**       | **11m28s** |
     +---------------------+-------+-------+-------+------------------+------------+
 
-This repo comes with a standalone script (:code:`examples/simple_trainer.py`) that reproduces 
+This repo comes with a standalone script (:code:`examples/simple_trainer.py default`) that reproduces 
 the `Gaussian Splatting <https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/>`_ with
 exactly the same performance on PSNR, SSIM, LPIPS, and converged number of Gaussians. 
 Powered by `gsplat`'s efficient CUDA implementation, the training takes up to 
