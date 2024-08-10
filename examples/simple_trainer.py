@@ -28,6 +28,7 @@ from datasets.colmap import Dataset, Parser
 from datasets.traj import generate_interpolated_path
 from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
 
+
 @dataclass
 class Config:
     # Disable viewer
