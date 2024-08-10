@@ -6,7 +6,6 @@ pytest <THIS_PY_FILE> -s
 ```
 """
 
-
 import pytest
 import torch
 

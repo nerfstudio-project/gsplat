@@ -401,9 +401,11 @@ class Runner:
             width=width,
             height=height,
             packed=self.cfg.packed,
-            absgrad=self.cfg.strategy.absgrad
-            if isinstance(self.cfg.strategy, DefaultStrategy)
-            else False,
+            absgrad=(
+                self.cfg.strategy.absgrad
+                if isinstance(self.cfg.strategy, DefaultStrategy)
+                else False
+            ),
             sparse_grad=self.cfg.sparse_grad,
             rasterize_mode=rasterize_mode,
             distributed=self.world_size > 1,
