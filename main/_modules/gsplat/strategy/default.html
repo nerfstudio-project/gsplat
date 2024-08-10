@@ -343,8 +343,6 @@
 <span class="sd">    with `absgrad=True` as well so that the absolute gradients are computed.</span>
 
 <span class="sd">    Args:</span>
-<span class="sd">        scene_scale (float): The scale of the scene for calibrating the scale-related</span>
-<span class="sd">          logic. Default is 1.0.</span>
 <span class="sd">        prune_opa (float): GSs with opacity below this value will be pruned. Default is 0.005.</span>
 <span class="sd">        grow_grad2d (float): GSs with image plane gradient above this value will be</span>
 <span class="sd">          split/duplicated. Default is 0.0002.</span>
@@ -384,7 +382,6 @@
 
 <span class="sd">    &quot;&quot;&quot;</span>
 
-    <span class="n">scene_scale</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span>
     <span class="n">prune_opa</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.005</span>
     <span class="n">grow_grad2d</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0002</span>
     <span class="n">grow_scale3d</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.01</span>
@@ -402,7 +399,7 @@
 
 <div class="viewcode-block" id="DefaultStrategy.initialize_state">
 <a class="viewcode-back" href="../../../apis/strategy.html#gsplat.DefaultStrategy.initialize_state">[docs]</a>
-    <span class="k">def</span> <span class="nf">initialize_state</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
+    <span class="k">def</span> <span class="nf">initialize_state</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">scene_scale</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialize and return the running state for this strategy.</span>
 
 <span class="sd">        The returned state should be passed to the `step_pre_backward()` and</span>
@@ -413,7 +410,7 @@
         <span class="c1"># - grad2d: running accum of the norm of the image plane gradients for each GS.</span>
         <span class="c1"># - count: running accum of how many time each GS is visible.</span>
         <span class="c1"># - radii: the radii of the GSs (normalized by the image resolution).</span>
-        <span class="n">state</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;grad2d&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span> <span class="s2">&quot;count&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">}</span>
+        <span class="n">state</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;grad2d&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span> <span class="s2">&quot;count&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span> <span class="s2">&quot;scene_scale&quot;</span><span class="p">:</span> <span class="n">scene_scale</span><span class="p">}</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">refine_scale2d_stop_iter</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
             <span class="n">state</span><span class="p">[</span><span class="s2">&quot;radii&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
         <span class="k">return</span> <span class="n">state</span></div>
@@ -580,7 +577,7 @@
         <span class="n">is_grad_high</span> <span class="o">=</span> <span class="n">grads</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">grow_grad2d</span>
         <span class="n">is_small</span> <span class="o">=</span> <span class="p">(</span>
             <span class="n">torch</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="s2">&quot;scales&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">values</span>
-            <span class="o">&lt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">grow_scale3d</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">scene_scale</span>
+            <span class="o">&lt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">grow_scale3d</span> <span class="o">*</span> <span class="n">state</span><span class="p">[</span><span class="s2">&quot;scene_scale&quot;</span><span class="p">]</span>
         <span class="p">)</span>
         <span class="n">is_dupli</span> <span class="o">=</span> <span class="n">is_grad_high</span> <span class="o">&amp;</span> <span class="n">is_small</span>
         <span class="n">n_dupli</span> <span class="o">=</span> <span class="n">is_dupli</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
@@ -626,7 +623,7 @@
         <span class="k">if</span> <span class="n">step</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">reset_every</span><span class="p">:</span>
             <span class="n">is_too_big</span> <span class="o">=</span> <span class="p">(</span>
                 <span class="n">torch</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="s2">&quot;scales&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">values</span>
-                <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">prune_scale3d</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">scene_scale</span>
+                <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">prune_scale3d</span> <span class="o">*</span> <span class="n">state</span><span class="p">[</span><span class="s2">&quot;scene_scale&quot;</span><span class="p">]</span>
             <span class="p">)</span>
             <span class="c1"># The official code also implements sreen-size pruning but</span>
             <span class="c1"># it&#39;s actually not being used due to a bug:</span>

@@ -317,14 +317,14 @@
         <article role="main" id="furo-main-content">
           <section id="fit-a-colmap-capture">
 <h1>Fit a COLMAP Capture<a class="headerlink" href="#fit-a-colmap-capture" title="Link to this heading">¶</a></h1>
-<p>The <code class="code docutils literal notranslate"><span class="pre">examples/simple_trainer.py</span></code> script allows you train a
+<p>The <code class="code docutils literal notranslate"><span class="pre">examples/simple_trainer.py</span> <span class="pre">default</span></code> script allows you train a
 <a class="reference external" href="https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/">3D Gaussian Splatting</a>
 model for novel view synthesis, on a COLMAP processed capture. This script follows the
 exact same logic with the <a class="reference external" href="https://github.com/graphdeco-inria/gaussian-splatting">official implementation</a> and we have verified it to be
 able to reproduce the metrics in the paper, with much better training speed and memory
 footprint. See <a class="reference internal" href="../tests/eval.html"><span class="doc">Evaluation</span></a> for more details on the comparision.</p>
 <p>Simply run the script under <cite>examples/</cite>:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CUDA_VISIBLE_DEVICES</span><span class="o">=</span><span class="m">0</span><span class="w"> </span>python<span class="w"> </span>simple_trainer.py<span class="w"> </span><span class="se">\</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CUDA_VISIBLE_DEVICES</span><span class="o">=</span><span class="m">0</span><span class="w"> </span>python<span class="w"> </span>simple_trainer.py<span class="w"> </span>default<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--data_dir<span class="w"> </span>data/360_v2/garden/<span class="w"> </span>--data_factor<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--result_dir<span class="w"> </span>./results/garden
 </pre></div>
