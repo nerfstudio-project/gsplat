@@ -21,6 +21,15 @@ class MCMCStrategy(Strategy):
     - Periodically introduce new GSs sampled based on the opacity distribution.
     - Periodically perturb the GSs locations.
 
+    Args:
+        cap_max (int): Maximum number of GSs. Default to 1_000_000.
+        noise_lr (float): MCMC samping noise learning rate. Default to 5e5.
+        refine_start_iter (int): Start refining GSs after this iteration. Default to 500.
+        refine_stop_iter (int): Stop refining GSs after this iteration. Default to 25_000.
+        refine_every (int): Refine GSs every this steps. Default to 100.
+        min_opacity (float): GSs with opacity below this value will be pruned. Default to 0.005.
+        verbose (bool): Whether to print verbose information. Default to False.
+
     Examples:
 
         >>> from gsplat import MCMCStrategy, rasterization
@@ -37,19 +46,12 @@ class MCMCStrategy(Strategy):
 
     """
 
-    # Maximum number of GSs.
     cap_max: int = 1_000_000
-    # MCMC sampling noise learning rate.
     noise_lr: float = 5e5
-    # Start refining GSs after this iteration.
     refine_start_iter: int = 500
-    # Stop refining GSs after this iteration.
     refine_stop_iter: int = 25_000
-    # Refine GSs every this steps.
     refine_every: int = 100
-    # GSs with opacity below this value will be pruned.
     min_opacity: float = 0.005
-    # Whether to print verbose information.
     verbose: bool = False
 
     def initialize_state(self) -> Dict[str, Any]:
