@@ -30,8 +30,6 @@ class DefaultStrategy(Strategy):
     with `absgrad=True` as well so that the absolute gradients are computed.
 
     Args:
-        scene_scale (float): The scale of the scene for calibrating the scale-related
-          logic. Default is 1.0.
         prune_opa (float): GSs with opacity below this value will be pruned. Default is 0.005.
         grow_grad2d (float): GSs with image plane gradient above this value will be
           split/duplicated. Default is 0.0002.
@@ -71,7 +69,6 @@ class DefaultStrategy(Strategy):
 
     """
 
-    scene_scale: float = 1.0
     prune_opa: float = 0.005
     grow_grad2d: float = 0.0002
     grow_scale3d: float = 0.01
@@ -87,7 +84,7 @@ class DefaultStrategy(Strategy):
     revised_opacity: bool = False
     verbose: bool = False
 
-    def initialize_state(self) -> Dict[str, Any]:
+    def initialize_state(self, scene_scale: float) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy.
 
         The returned state should be passed to the `step_pre_backward()` and
@@ -98,7 +95,7 @@ class DefaultStrategy(Strategy):
         # - grad2d: running accum of the norm of the image plane gradients for each GS.
         # - count: running accum of how many time each GS is visible.
         # - radii: the radii of the GSs (normalized by the image resolution).
-        state = {"grad2d": None, "count": None}
+        state = {"grad2d": None, "count": None, "scene_scale": scene_scale}
         if self.refine_scale2d_stop_iter > 0:
             state["radii"] = None
         return state
@@ -255,7 +252,7 @@ class DefaultStrategy(Strategy):
         is_grad_high = grads > self.grow_grad2d
         is_small = (
             torch.exp(params["scales"]).max(dim=-1).values
-            <= self.grow_scale3d * self.scene_scale
+            <= self.grow_scale3d * state["scene_scale"]
         )
         is_dupli = is_grad_high & is_small
         n_dupli = is_dupli.sum().item()
@@ -301,7 +298,7 @@ class DefaultStrategy(Strategy):
         if step > self.reset_every:
             is_too_big = (
                 torch.exp(params["scales"]).max(dim=-1).values
-                > self.prune_scale3d * self.scene_scale
+                > self.prune_scale3d * state["scene_scale"]
             )
             # The official code also implements sreen-size pruning but
             # it's actually not being used due to a bug:
