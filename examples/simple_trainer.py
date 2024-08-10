@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Tuple, Union
 import imageio
 import nerfview
 import numpy as np
+import yaml
 import torch
 import torch.nn.functional as F
 import tqdm
@@ -26,7 +27,6 @@ from typing_extensions import assert_never
 from datasets.colmap import Dataset, Parser
 from datasets.traj import generate_interpolated_path
 from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
-
 
 @dataclass
 class Config:
@@ -421,8 +421,8 @@ class Runner:
 
         # Dump cfg.
         if world_rank == 0:
-            with open(f"{cfg.result_dir}/cfg.json", "w") as f:
-                json.dump(vars(cfg), f)
+            with open(f"{cfg.result_dir}/cfg.yml", "w") as f:
+                yaml.dump(vars(cfg), f)
 
         max_steps = cfg.max_steps
         init_step = 0
@@ -658,7 +658,7 @@ class Runner:
                 scheduler.step()
 
             # eval the full set
-            if step in [i - 1 for i in cfg.eval_steps] or step == max_steps - 1:
+            if step in [i - 1 for i in cfg.eval_steps]:
                 self.eval(step)
                 self.render_traj(step)
 

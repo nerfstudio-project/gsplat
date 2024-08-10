@@ -75,7 +75,8 @@ def duplicate(
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
     # update the extra running state
     for k, v in state.items():
-        state[k] = torch.cat((v, v[sel]))
+        if isinstance(v, torch.Tensor):
+            state[k] = torch.cat((v, v[sel]))
 
 
 @torch.no_grad()
@@ -132,9 +133,10 @@ def split(
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
     # update the extra running state
     for k, v in state.items():
-        repeats = [2] + [1] * (v.dim() - 1)
-        v_new = v[sel].repeat(repeats)
-        state[k] = torch.cat((v[rest], v_new))
+        if isinstance(v, torch.Tensor):
+            repeats = [2] + [1] * (v.dim() - 1)
+            v_new = v[sel].repeat(repeats)
+            state[k] = torch.cat((v[rest], v_new))
 
 
 @torch.no_grad()
@@ -163,7 +165,8 @@ def remove(
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
     # update the extra running state
     for k, v in state.items():
-        state[k] = v[sel]
+        if isinstance(v, torch.Tensor):
+            state[k] = v[sel]
 
 
 @torch.no_grad()
@@ -248,7 +251,8 @@ def relocate(
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
     # update the extra running state
     for k, v in state.items():
-        v[sampled_idxs] = 0
+        if isinstance(v, torch.Tensor):
+            v[sampled_idxs] = 0
 
 
 @torch.no_grad()
@@ -290,7 +294,8 @@ def sample_add(
     # update the extra running state
     for k, v in state.items():
         v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
-        state[k] = torch.cat((v, v_new))
+        if isinstance(v, torch.Tensor):
+            state[k] = torch.cat((v, v_new))
 
 
 @torch.no_grad()
