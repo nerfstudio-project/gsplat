@@ -96,8 +96,6 @@ class Config:
     sparse_grad: bool = False
     # Anti-aliasing in rasterization. Might slightly hurt quantitative metrics.
     antialiased: bool = False
-    # Whether to use revised opacity heuristic from arXiv:2404.06109 (experimental)
-    revised_opacity: bool = False
 
     # Use random background for training to discourage transparency
     random_bkgd: bool = False
