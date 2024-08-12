@@ -356,7 +356,9 @@ def _compress_kmeans(
     maxs = torch.max(centroids)
     centroids_norm = (centroids - mins) / (maxs - mins)
     centroids_norm = centroids_norm.detach().cpu().numpy()
-    centroids_quant = (centroids_norm * (2**quantization - 1)).round().astype(np.uint8)
+    centroids_quant = (
+        (centroids_norm * (2**quantization - 1)).round().astype(np.uint8)
+    )
     labels = labels.astype(np.uint16)
 
     npz_dict = {
