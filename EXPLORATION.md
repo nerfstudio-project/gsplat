@@ -26,7 +26,7 @@
 | `--absgrad --grow_grad2d 2e-4`               | 8m30s    | 0.018s/im | 2.21 GB | 0.6251 | 20.68 | 0.587 | 0.89M |
 | `--absgrad --grow_grad2d 2e-4` (30k)         | --       | 0.030s/im | 5.25 GB | 0.7442 | 24.12 | 0.291 | 2.62M |
 
-Note: default args means running `python simple_trainer.py --data_dir <DATA_DIR>` with:
+Note: default args means running `CUDA_VISIBLE_DEVICES=0 python simple_trainer.py default --data_dir <DATA_DIR>` with:
 
 - Garden ([Source](https://jonbarron.info/mipnerf360/)): `--result_dir results/garden`
 - U1 (a.k.a University 1 from [Source](https://localrf.github.io/)): `--result_dir results/u1 --data_factor 1 --grow_scale3d 0.001`
