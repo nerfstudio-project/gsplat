@@ -1,11 +1,13 @@
-RESULT_DIR=results/benchmark
+SCENE_DIR="data/360_v2"
+RESULT_DIR="results/benchmark"
+SCENE_LIST="garden bicycle stump bonsai counter kitchen room" # treehill flowers
 
-for SCENE in bicycle bonsai counter garden kitchen room stump;
+for SCENE in $SCENE_LIST;
 do
-    if [ "$SCENE" = "bicycle" ] || [ "$SCENE" = "stump" ] || [ "$SCENE" = "garden" ]; then
-        DATA_FACTOR=4
-    else
+    if [ "$SCENE" = "bonsai" ] || [ "$SCENE" = "counter" ] || [ "$SCENE" = "kitchen" ] || [ "$SCENE" = "room" ]; then
         DATA_FACTOR=2
+    else
+        DATA_FACTOR=4
     fi
 
     echo "Running $SCENE"
@@ -26,7 +28,7 @@ do
 done
 
 
-for SCENE in bicycle bonsai counter garden kitchen room stump;
+for SCENE in $SCENE_LIST;
 do
     echo "=== Eval Stats ==="
 
