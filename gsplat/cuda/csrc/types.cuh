@@ -10,6 +10,8 @@
 
 #include <ATen/Dispatch.h>
 
+namespace gsplat {
+
 template <typename T> using vec2 = glm::vec<2, T>;
 
 template <typename T> using vec3 = glm::vec<3, T>;
@@ -43,4 +45,7 @@ template <> struct OpType<c10::Half> {
 template <> struct OpType<c10::BFloat16> {
     typedef float type;
 };
+
+} // namespace gsplat
+
 #endif // GSPLAT_CUDA_TYPES_H

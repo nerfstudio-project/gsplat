@@ -8,24 +8,27 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
-namespace cg = cooperative_groups;
+namespace gsplat {
 
+namespace cg = cooperative_groups;
 
 /****************************************************************************
  * Perspective Projection Backward Pass
  ****************************************************************************/
 
 template <typename T>
-__global__ void
-persp_proj_bwd_kernel(const uint32_t C, const uint32_t N,
-                      const T *__restrict__ means,  // [C, N, 3]
-                      const T *__restrict__ covars, // [C, N, 3, 3]
-                      const T *__restrict__ Ks,     // [C, 3, 3]
-                      const uint32_t width, const uint32_t height,
-                      const T *__restrict__ v_means2d,  // [C, N, 2]
-                      const T *__restrict__ v_covars2d, // [C, N, 2, 2]
-                      T *__restrict__ v_means,          // [C, N, 3]
-                      T *__restrict__ v_covars          // [C, N, 3, 3]
+__global__ void persp_proj_bwd_kernel(
+    const uint32_t C,
+    const uint32_t N,
+    const T *__restrict__ means,  // [C, N, 3]
+    const T *__restrict__ covars, // [C, N, 3, 3]
+    const T *__restrict__ Ks,     // [C, 3, 3]
+    const uint32_t width,
+    const uint32_t height,
+    const T *__restrict__ v_means2d,  // [C, N, 2]
+    const T *__restrict__ v_covars2d, // [C, N, 2, 2]
+    T *__restrict__ v_means,          // [C, N, 3]
+    T *__restrict__ v_covars          // [C, N, 3, 3]
 ) {
 
     // For now we'll upcast float16 and bfloat16 to float32
@@ -55,39 +58,51 @@ persp_proj_bwd_kernel(const uint32_t C, const uint32_t N,
     const mat3<OpT> covar = glm::make_mat3(covars);
     const vec2<OpT> v_mean2d = glm::make_vec2(v_means2d);
     const mat2<OpT> v_covar2d = glm::make_mat2(v_covars2d);
-    persp_proj_vjp<OpT>(mean, covar, fx, fy, cx, cy, width,
-                        height, glm::transpose(v_covar2d),
-                        v_mean2d, v_mean, v_covar);
+    persp_proj_vjp<OpT>(
+        mean,
+        covar,
+        fx,
+        fy,
+        cx,
+        cy,
+        width,
+        height,
+        glm::transpose(v_covar2d),
+        v_mean2d,
+        v_mean,
+        v_covar
+    );
 
     // write to outputs: glm is column-major but we want row-major
-    PRAGMA_UNROLL
+    GSPLAT_PRAGMA_UNROLL
     for (uint32_t i = 0; i < 3; i++) { // rows
-        PRAGMA_UNROLL
+        GSPLAT_PRAGMA_UNROLL
         for (uint32_t j = 0; j < 3; j++) { // cols
             v_covars[i * 3 + j] = T(v_covar[j][i]);
         }
     }
 
-    PRAGMA_UNROLL
+    GSPLAT_PRAGMA_UNROLL
     for (uint32_t i = 0; i < 3; i++) {
         v_means[i] = T(v_mean[i]);
     }
 }
 
-std::tuple<torch::Tensor, torch::Tensor>
-persp_proj_bwd_tensor(const torch::Tensor &means,  // [C, N, 3]
-                      const torch::Tensor &covars, // [C, N, 3, 3]
-                      const torch::Tensor &Ks,     // [C, 3, 3]
-                      const uint32_t width, const uint32_t height,
-                      const torch::Tensor &v_means2d, // [C, N, 2]
-                      const torch::Tensor &v_covars2d // [C, N, 2, 2]
+std::tuple<torch::Tensor, torch::Tensor> persp_proj_bwd_tensor(
+    const torch::Tensor &means,  // [C, N, 3]
+    const torch::Tensor &covars, // [C, N, 3, 3]
+    const torch::Tensor &Ks,     // [C, 3, 3]
+    const uint32_t width,
+    const uint32_t height,
+    const torch::Tensor &v_means2d, // [C, N, 2]
+    const torch::Tensor &v_covars2d // [C, N, 2, 2]
 ) {
-    DEVICE_GUARD(means);
-    CHECK_INPUT(means);
-    CHECK_INPUT(covars);
-    CHECK_INPUT(Ks);
-    CHECK_INPUT(v_means2d);
-    CHECK_INPUT(v_covars2d);
+    GSPLAT_DEVICE_GUARD(means);
+    GSPLAT_CHECK_INPUT(means);
+    GSPLAT_CHECK_INPUT(covars);
+    GSPLAT_CHECK_INPUT(Ks);
+    GSPLAT_CHECK_INPUT(v_means2d);
+    GSPLAT_CHECK_INPUT(v_covars2d);
 
     uint32_t C = means.size(0);
     uint32_t N = means.size(1);
@@ -97,13 +112,33 @@ persp_proj_bwd_tensor(const torch::Tensor &means,  // [C, N, 3]
 
     if (C && N) {
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
-        AT_DISPATCH_FLOATING_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16, v_means.scalar_type(), "persp_proj_bwd", [&]() {
-            persp_proj_bwd_kernel<scalar_t><<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
-                C, N, means.data_ptr<scalar_t>(), covars.data_ptr<scalar_t>(),
-                Ks.data_ptr<scalar_t>(), width, height, v_means2d.data_ptr<scalar_t>(),
-                v_covars2d.data_ptr<scalar_t>(), v_means.data_ptr<scalar_t>(),
-                v_covars.data_ptr<scalar_t>());
-        });
+        AT_DISPATCH_FLOATING_TYPES_AND2(
+            at::ScalarType::Half,
+            at::ScalarType::BFloat16,
+            v_means.scalar_type(),
+            "persp_proj_bwd",
+            [&]() {
+                persp_proj_bwd_kernel<scalar_t>
+                    <<<(C * N + GSPLAT_N_THREADS - 1) / GSPLAT_N_THREADS,
+                       GSPLAT_N_THREADS,
+                       0,
+                       stream>>>(
+                        C,
+                        N,
+                        means.data_ptr<scalar_t>(),
+                        covars.data_ptr<scalar_t>(),
+                        Ks.data_ptr<scalar_t>(),
+                        width,
+                        height,
+                        v_means2d.data_ptr<scalar_t>(),
+                        v_covars2d.data_ptr<scalar_t>(),
+                        v_means.data_ptr<scalar_t>(),
+                        v_covars.data_ptr<scalar_t>()
+                    );
+            }
+        );
     }
     return std::make_tuple(v_means, v_covars);
 }
+
+} // namespace gsplat
