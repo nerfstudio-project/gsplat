@@ -35,7 +35,7 @@ The code for this example can be found under `examples/`:
 .. code-block:: bash
 
     # First train a 3DGS model
-    CUDA_VISIBLE_DEVICES=0 python simple_trainer.py \
+    CUDA_VISIBLE_DEVICES=0 python simple_trainer.py default \
         --data_dir data/360_v2/garden/ --data_factor 4 \
         --result_dir ./results/garden
 

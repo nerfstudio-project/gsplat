@@ -445,7 +445,6 @@ def test_rasterize_to_pixels(test_data, channels: int):
         fully_fused_projection,
         isect_offset_encode,
         isect_tiles,
-        persp_proj,
         quat_scale_to_covar_preci,
         rasterize_to_pixels,
     )

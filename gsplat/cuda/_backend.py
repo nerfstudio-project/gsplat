@@ -30,6 +30,10 @@ def load_extension(
     build_directory=None,
 ):
     """Load a JIT compiled extension."""
+    # Make sure the build directory exists.
+    if build_directory:
+        os.makedirs(build_directory, exist_ok=True)
+
     # If the JIT build happens concurrently in multiple processes,
     # race conditions can occur when removing the lock file at:
     # https://github.com/pytorch/pytorch/blob/e3513fb2af7951ddf725d8c5b6f6d962a053c9da/torch/utils/cpp_extension.py#L1736

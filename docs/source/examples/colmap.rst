@@ -3,7 +3,7 @@ Fit a COLMAP Capture
 
 .. currentmodule:: gsplat
 
-The :code:`examples/simple_trainer.py` script allows you train a 
+The :code:`examples/simple_trainer.py default` script allows you train a 
 `3D Gaussian Splatting <https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/>`_ 
 model for novel view synthesis, on a COLMAP processed capture. This script follows the
 exact same logic with the `official implementation 
@@ -15,7 +15,7 @@ Simply run the script under `examples/`:
 
 .. code-block:: bash
 
-    CUDA_VISIBLE_DEVICES=0 python simple_trainer.py \
+    CUDA_VISIBLE_DEVICES=0 python simple_trainer.py default \
         --data_dir data/360_v2/garden/ --data_factor 4 \
         --result_dir ./results/garden
 
