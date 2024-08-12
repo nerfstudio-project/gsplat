@@ -154,11 +154,12 @@ def set_random_seed(seed: int):
     np.random.seed(seed)
     torch.manual_seed(seed)
 
+
 # ref: https://github.com/hbb1/2d-gaussian-splatting/blob/main/utils/general_utils.py#L163
-def colormap(img, cmap='jet'):
+def colormap(img, cmap="jet"):
     W, H = img.shape[:2]
     dpi = 300
-    fig, ax = plt.subplots(1, figsize=(H/dpi, W/dpi), dpi=dpi)
+    fig, ax = plt.subplots(1, figsize=(H / dpi, W / dpi), dpi=dpi)
     im = ax.imshow(img, cmap=cmap)
     ax.set_axis_off()
     fig.colorbar(im, ax=ax)
@@ -166,6 +167,6 @@ def colormap(img, cmap='jet'):
     fig.canvas.draw()
     data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
     data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-    img = torch.from_numpy(data).float().permute(2,0,1)
+    img = torch.from_numpy(data).float().permute(2, 0, 1)
     plt.close()
     return img

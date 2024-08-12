@@ -103,8 +103,7 @@ all = [
     "MCMCStrategy",
     "Strategy",
     "rasterization",
-    "rasterization_2dgs"
-    "rasterization_legacy_wrapper",
+    "rasterization_2dgs" "rasterization_legacy_wrapper",
     "rasterization_inria_wrapper",
     "spherical_harmonics",
     "isect_offset_encode",

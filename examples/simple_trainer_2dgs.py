@@ -24,6 +24,7 @@ from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_rand
 from gsplat.rendering import rasterization_2dgs, rasterization_2dgs_inria_wrapper
 from gsplat.strategy import DefaultStrategy
 
+
 @dataclass
 class Config:
     # Disable viewer
@@ -135,21 +136,21 @@ class Config:
     depth_loss: bool = False
     # Weight for depth loss
     depth_lambda: float = 1e-2
-    
+
     # Enable normal consistency loss. (Currently for 2DGS only)
     normal_loss: bool = False
     # Weight for normal loss
     normal_lambda: float = 5e-2
     # Iteration to start normal consistency regulerization
     normal_start_iter: int = 7_000
-    
+
     # Distortion loss. (experimental)
     dist_loss: bool = False
     # Weight for distortion loss
     dist_lambda: float = 1e-2
     # Iteration to start distortion loss regulerization
     dist_start_iter: int = 3_000
-    
+
     # Model for splatting.
     model_type: Literal["2dgs", "2dgs-inria"] = "2dgs"
 
@@ -167,7 +168,8 @@ class Config:
         self.refine_stop_iter = int(self.refine_stop_iter * factor)
         self.reset_every = int(self.reset_every * factor)
         self.refine_every = int(self.refine_every * factor)
-        
+
+
 def create_splats_with_optimizers(
     parser: Parser,
     init_type: str = "sfm",
@@ -234,6 +236,7 @@ def create_splats_with_optimizers(
         for name, _, lr in params
     }
     return splats, optimizers
+
 
 class Runner:
     """Engine for training and testing."""
@@ -394,12 +397,12 @@ class Runner:
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
-        
+
         if self.model_type == "2dgs":
             rasterize_fnc = rasterization_2dgs
         elif self.model_type == "2dgs-inria":
             rasterize_fnc = rasterization_2dgs_inria_wrapper
-            
+
         renders, info = rasterize_fnc(
             means=means,
             quats=quats,
@@ -416,22 +419,30 @@ class Runner:
             rasterize_mode=rasterize_mode,
             **kwargs,
         )
-        
+
         if self.model_type == "2dgs":
-            (render_colors,
-             render_alphas,
-             render_normals,
-             normals_from_depth,
-             render_distort,
+            (
+                render_colors,
+                render_alphas,
+                render_normals,
+                normals_from_depth,
+                render_distort,
             ) = renders
         elif self.model_type == "2dgs-inria":
             render_colors, render_alphas = renders
             render_normals = info["normals_rend"]
             normals_from_depth = info["normals_surf"]
             render_distort = info["render_distloss"]
-            
-        return render_colors, render_alphas, render_normals, normals_from_depth, render_distort, info
-    
+
+        return (
+            render_colors,
+            render_alphas,
+            render_normals,
+            normals_from_depth,
+            render_distort,
+            info,
+        )
+
     def train(self):
         cfg = self.cfg
         device = self.device
@@ -506,7 +517,14 @@ class Runner:
             sh_degree_to_use = min(step // cfg.sh_degree_interval, cfg.sh_degree)
 
             # forward
-            renders, alphas, normals, normals_from_depth, render_distort, info = self.rasterize_splats(
+            (
+                renders,
+                alphas,
+                normals,
+                normals_from_depth,
+                render_distort,
+                info,
+            ) = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -560,7 +578,7 @@ class Runner:
                 disp_gt = 1.0 / depths_gt  # [1, M]
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
-            
+
             if cfg.normal_loss:
                 if step > cfg.normal_start_iter:
                     curr_normal_lambda = cfg.normal_lambda
@@ -575,7 +593,7 @@ class Runner:
                 normal_error = (1 - (normals * normals_from_depth).sum(dim=0))[None]
                 normalloss = curr_normal_lambda * normal_error.mean()
                 loss += normalloss
-                
+
             if cfg.dist_loss:
                 if step > cfg.dist_start_iter:
                     curr_dist_lambda = cfg.dist_lambda
@@ -613,7 +631,12 @@ class Runner:
                 if cfg.dist_loss:
                     self.writer.add_scalar("train/distloss", distloss.item(), step)
                 if cfg.tb_save_image:
-                    canvas = torch.cat([pixels, colors[..., :3]], dim=2).detach().cpu().numpy()
+                    canvas = (
+                        torch.cat([pixels, colors[..., :3]], dim=2)
+                        .detach()
+                        .cpu()
+                        .numpy()
+                    )
                     canvas = canvas.reshape(-1, *canvas.shape[2:])
                     self.writer.add_image("train/render", canvas, step)
                 self.writer.flush()
@@ -688,7 +711,7 @@ class Runner:
                 self.viewer.state.num_train_rays_per_sec = num_train_rays_per_sec
                 # Update the scene.
                 self.viewer.update(step, num_train_rays_per_step)
-                
+
     @torch.no_grad()
     def eval(self, step: int):
         """Entry for evaluation."""
@@ -709,7 +732,14 @@ class Runner:
 
             torch.cuda.synchronize()
             tic = time.time()
-            colors, alphas, normals, normals_from_depth, render_distort, _ = self.rasterize_splats(
+            (
+                colors,
+                alphas,
+                normals,
+                normals_from_depth,
+                render_distort,
+                _,
+            ) = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -719,8 +749,8 @@ class Runner:
                 far_plane=cfg.far_plane,
                 render_mode="RGB+D",
             )  # [1, H, W, 3]
-            colors = torch.clamp(colors, 0.0, 1.0) 
-            colors = colors[..., :3] # Take RGB channels
+            colors = torch.clamp(colors, 0.0, 1.0)
+            colors = colors[..., :3]  # Take RGB channels
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
 
@@ -729,38 +759,47 @@ class Runner:
             imageio.imwrite(
                 f"{self.render_dir}/val_{i:04d}.png", (canvas * 255).astype(np.uint8)
             )
-            
+
             # write normals
             normals = (normals * 0.5 + 0.5).squeeze(0).cpu().numpy()
             normals_output = (normals * 255).astype(np.uint8)
             imageio.imwrite(
                 f"{self.render_dir}/val_{i:04d}_normal_{step}.png", normals_output
             )
-            
+
             # write normals from depth
             normals_from_depth *= alphas.squeeze(0).detach()
             normals_from_depth = (normals_from_depth * 0.5 + 0.5).cpu().numpy()
-            normals_from_depth = (normals_from_depth - np.min(normals_from_depth)) / (np.max(normals_from_depth) - np.min(normals_from_depth))
+            normals_from_depth = (normals_from_depth - np.min(normals_from_depth)) / (
+                np.max(normals_from_depth) - np.min(normals_from_depth)
+            )
             normals_from_depth_output = (normals_from_depth * 255).astype(np.uint8)
             if len(normals_from_depth_output.shape) == 4:
                 normals_from_depth_output = normals_from_depth_output.squeeze(0)
             imageio.imwrite(
-                f"{self.render_dir}/val_{i:04d}_normals_from_depth_{step}.png", normals_from_depth_output
+                f"{self.render_dir}/val_{i:04d}_normals_from_depth_{step}.png",
+                normals_from_depth_output,
             )
 
             # write distortions
             from utils import colormap
+
             render_dist = render_distort
             dist_max = torch.max(render_dist)
             dist_min = torch.min(render_dist)
             render_dist = (render_dist - dist_min) / (dist_max - dist_min)
             # import pdb
             # pdb.set_trace()
-            render_dist = colormap(render_dist.cpu().numpy()[0]).permute((1, 2, 0)).numpy().astype(np.uint8)
+            render_dist = (
+                colormap(render_dist.cpu().numpy()[0])
+                .permute((1, 2, 0))
+                .numpy()
+                .astype(np.uint8)
+            )
             imageio.imwrite(
                 f"{self.render_dir}/val_{i:04d}_distortions_{step}.png", render_dist
             )
-            
+
             pixels = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
             colors = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
             metrics["psnr"].append(self.psnr(colors, pixels))

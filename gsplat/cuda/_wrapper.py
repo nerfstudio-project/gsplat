@@ -8,6 +8,7 @@ def _make_lazy_cuda_func(name: str) -> Callable:
     def call_cuda(*args, **kwargs):
         # pylint: disable=import-outside-toplevel
         from ._backend import _C
+
         return getattr(_C, name)(*args, **kwargs)
 
     return call_cuda
@@ -1227,6 +1228,7 @@ def fully_fused_projection_2dgs(
             radius_clip,
         )
 
+
 class _FullyFusedProjection2DGS(torch.autograd.Function):
     """Projects Gaussians to 2D."""
 
@@ -1262,7 +1264,15 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
             radius_clip,
         )
         ctx.save_for_backward(
-            means, quats, scales, viewmats, densifications, Ks, radii, ray_transformations, normals
+            means,
+            quats,
+            scales,
+            viewmats,
+            densifications,
+            Ks,
+            radii,
+            ray_transformations,
+            normals,
         )
         ctx.width = width
         ctx.height = height
@@ -1277,7 +1287,7 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
             quats,
             scales,
             viewmats,
-            densifications, 
+            densifications,
             Ks,
             radii,
             ray_transformations,
@@ -1336,9 +1346,10 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
             None,
         )
 
+
 class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
     """Projects Gaussians to 2D. Return packed tensors."""
-    
+
     @staticmethod
     def forward(
         ctx,
@@ -1361,9 +1372,9 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
             radii,
             means2d,
             depths,
-            ray_Ms, 
+            ray_Ms,
             normals,
-        ) = _make_lazy_cuda_func("fully_fused_projection_packed_fwd_2dgs") (
+        ) = _make_lazy_cuda_func("fully_fused_projection_packed_fwd_2dgs")(
             means,
             quats,
             scales,
@@ -1387,10 +1398,10 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
         )
         ctx.width = width
         ctx.height = height
-        ctx.sparse_grad = sparse_grad   
-        
+        ctx.sparse_grad = sparse_grad
+
         return camera_ids, gaussian_ids, radii, means2d, depths, ray_Ms, normals
-    
+
     @staticmethod
     def backward(
         ctx,
@@ -1418,7 +1429,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
 
         v_means, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
             "fully_fused_projection_packed_bwd_2dgs"
-        ) (
+        )(
             means,
             quats,
             scales,
@@ -1434,9 +1445,9 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
             v_ray_Ms.contiguous(),
             v_normals.contiguous(),
             ctx.needs_input_grad[4],  # viewmats_requires_grad
-            sparse_grad, 
-        )    
-        
+            sparse_grad,
+        )
+
         if not ctx.needs_input_grad[0]:
             v_means = None
         else:
@@ -1472,8 +1483,8 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
                     is_coalesced=len(viewmats) == 1,
                 )
         if not ctx.needs_input_grad[4]:
-            v_viewmats = None    
-            
+            v_viewmats = None
+
         return (
             v_means,
             v_quats,
@@ -1488,8 +1499,9 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
             None,
             None,
             None,
-        )   
-        
+        )
+
+
 def rasterize_to_pixels_2dgs(
     means2d: Tensor,
     ray_transformations: Tensor,
@@ -1557,7 +1569,12 @@ def rasterize_to_pixels_2dgs(
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
     # pdb.set_trace()
-    render_colors, render_alphas, render_normals, render_distort = _RasterizeToPixels2DGS.apply(
+    (
+        render_colors,
+        render_alphas,
+        render_normals,
+        render_distort,
+    ) = _RasterizeToPixels2DGS.apply(
         means2d.contiguous(),
         ray_transformations.contiguous(),
         colors.contiguous(),
@@ -1579,6 +1596,7 @@ def rasterize_to_pixels_2dgs(
 
     # pdb.set_trace()
     return render_colors, render_alphas, render_normals, render_distort
+
 
 @torch.no_grad()
 def rasterize_to_indices_in_range_2dgs(
@@ -1626,6 +1644,7 @@ def rasterize_to_indices_in_range_2dgs(
     out_camera_ids = out_indices // (image_width * image_height)
     return out_gauss_ids, out_pixel_ids, out_camera_ids
 
+
 class _RasterizeToPixels2DGS(torch.autograd.Function):
     """Rasterize gaussians 2DGS"""
 
@@ -1647,9 +1666,13 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         absgrad: bool,
         distloss: bool,
     ) -> Tuple[Tensor, Tensor]:
-        render_colors, render_alphas, render_normals, render_distort, last_ids = _make_lazy_cuda_func(
-            "rasterize_to_pixels_fwd_2dgs"
-        )(
+        (
+            render_colors,
+            render_alphas,
+            render_normals,
+            render_distort,
+            last_ids,
+        ) = _make_lazy_cuda_func("rasterize_to_pixels_fwd_2dgs")(
             means2d,
             ray_transformations,
             colors,
@@ -1683,7 +1706,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         ctx.tile_size = tile_size
         ctx.absgrad = absgrad
         ctx.distloss = distloss
-        
+
         # doubel to float
         render_alphas = render_alphas.float()
         return render_colors, render_alphas, render_normals, render_distort
@@ -1694,7 +1717,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         v_render_colors: Tensor,
         v_render_alphas: Tensor,
         v_render_normals: Tensor,
-        v_render_distort: Tensor, 
+        v_render_distort: Tensor,
     ):
         (
             means2d,
@@ -1714,8 +1737,8 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         height = ctx.height
         tile_size = ctx.tile_size
         absgrad = ctx.absgrad
-        
-        # if distloss: 
+
+        # if distloss:
         #     assert v_render_distloss is not None, "v_render_distloss should not be None"
         #     v_render_distloss = v_render_distloss.contiguous()
         # else:
@@ -1761,7 +1784,6 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         else:
             v_backgrounds = None
 
-        
         # import pdb
         # pdb.set_trace()
         return (

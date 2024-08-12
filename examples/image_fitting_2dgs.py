@@ -12,8 +12,9 @@ from torch import Tensor, optim
 
 from gsplat.rendering import rasterization, rasterization_2dgs
 
-os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
-os.environ['TORCH_USE_CUDA_DSA'] = '1'
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+os.environ["TORCH_USE_CUDA_DSA"] = "1"
+
 
 class SimpleTrainer:
     """Trains random gaussians to fit an image."""
@@ -97,12 +98,12 @@ class SimpleTrainer:
             ],
             device=self.device,
         )
-        
+
         if model_type == "3dgs":
             rasterize_fnc = rasterization
         elif model_type == "2dgs":
             rasterize_fnc = rasterization_2dgs
-            
+
         for iter in range(iterations):
             start = time.time()
             # renders, _, _ = rasterization(

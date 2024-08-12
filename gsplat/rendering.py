@@ -1137,23 +1137,26 @@ def rasterization_2dgs(
     else:  # RGB
         pass
 
-    render_colors, render_alphas, render_normals, render_distort = (
-        rasterize_to_pixels_2dgs(
-            means2d,
-            ray_transformations,
-            colors,
-            opacities,
-            normals,
-            width,
-            height,
-            tile_size,
-            isect_offsets,
-            flatten_ids,
-            backgrounds=backgrounds,
-            packed=packed,
-            absgrad=absgrad,
-            distloss=distloss,
-        )
+    (
+        render_colors,
+        render_alphas,
+        render_normals,
+        render_distort,
+    ) = rasterize_to_pixels_2dgs(
+        means2d,
+        ray_transformations,
+        colors,
+        opacities,
+        normals,
+        width,
+        height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        backgrounds=backgrounds,
+        packed=packed,
+        absgrad=absgrad,
+        distloss=distloss,
     )
     render_normals_from_depth = None
     if render_mode in ["ED", "RGB+ED"]:
