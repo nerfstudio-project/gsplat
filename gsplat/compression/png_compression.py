@@ -3,7 +3,6 @@ import os
 from dataclasses import dataclass
 from typing import Any, Callable, Dict
 
-import imageio
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -19,7 +18,8 @@ class PngCompression:
     K-means clustering to compress the spherical harmonic coefficents.
 
     .. warning::
-        This class requires the `plas <https://github.com/DeMoriarty/TorchPQ?tab=readme-ov-file#install>`_
+        This class requires the `imageio <https://pypi.org/project/imageio/>`_,
+        `plas <https://github.com/DeMoriarty/TorchPQ?tab=readme-ov-file#install>`_
         and `torchpq <https://github.com/fraunhoferhhi/PLAS.git>`_ packages to be installed.
 
     References:
@@ -34,7 +34,7 @@ class PngCompression:
     use_sort: bool = True
     verbose: bool = True
 
-    def get_compress_fn(self, param_name: str) -> Callable:
+    def _get_compress_fn(self, param_name: str) -> Callable:
         compress_fn_map = {
             "means": _compress_png_16bit,
             "scales": _compress_png,
@@ -48,7 +48,7 @@ class PngCompression:
         else:
             return _compress_npz
 
-    def get_decompress_fn(self, param_name: str) -> Callable:
+    def _get_decompress_fn(self, param_name: str) -> Callable:
         decompress_fn_map = {
             "means": _decompress_png_16bit,
             "scales": _decompress_png,
@@ -63,6 +63,13 @@ class PngCompression:
             return _decompress_npz
 
     def compress(self, compress_dir: str, splats: Dict[str, Tensor]) -> None:
+        """Run compression
+
+        Args:
+            compress_dir (str): directory to save compressed files
+            splats (Dict[str, Tensor]): Gaussian splats to compress
+        """
+
         # Param-specific preprocessing
         splats["means"] = log_transform(splats["means"])
         splats["quats"] = F.normalize(splats["quats"], dim=-1)
@@ -81,7 +88,7 @@ class PngCompression:
 
         meta = {}
         for param_name in splats.keys():
-            compress_fn = self.get_compress_fn(param_name)
+            compress_fn = self._get_compress_fn(param_name)
             kwargs = {
                 "n_sidelen": n_sidelen,
                 "verbose": self.verbose,
@@ -94,12 +101,20 @@ class PngCompression:
             json.dump(meta, f)
 
     def decompress(self, compress_dir: str) -> Dict[str, Tensor]:
+        """Run decompression
+
+        Args:
+            compress_dir (str): directory that contains compressed files
+
+        Returns:
+            Dict[str, Tensor]: decompressed Gaussian splats
+        """
         with open(os.path.join(compress_dir, "meta.json"), "r") as f:
             meta = json.load(f)
 
         splats = {}
         for param_name, param_meta in meta.items():
-            decompress_fn = self.get_decompress_fn(param_name)
+            decompress_fn = self._get_decompress_fn(param_name)
             splats[param_name] = decompress_fn(compress_dir, param_name, param_meta)
 
         # Param-specific postprocessing
@@ -129,6 +144,8 @@ def _compress_png(
     Returns:
         Dict[str, Any]: metadata
     """
+    import imageio
+
     if torch.numel == 0:
         meta = {
             "shape": list(params.shape),
@@ -166,6 +183,8 @@ def _decompress_png(compress_dir: str, param_name: str, meta: Dict[str, Any]) ->
     Returns:
         Tensor: parameters
     """
+    import imageio
+
     if not np.all(meta["shape"]):
         params = torch.zeros(meta["shape"], dtype=getattr(torch, meta["dtype"]))
         return meta
@@ -197,6 +216,8 @@ def _compress_png_16bit(
     Returns:
         Dict[str, Any]: metadata
     """
+    import imageio
+
     if torch.numel == 0:
         meta = {
             "shape": list(params.shape),
@@ -242,6 +263,8 @@ def _decompress_png_16bit(
     Returns:
         Tensor: parameters
     """
+    import imageio
+
     if not np.all(meta["shape"]):
         params = torch.zeros(meta["shape"], dtype=getattr(torch, meta["dtype"]))
         return meta
