@@ -18,6 +18,14 @@ class PngCompression:
     """Uses quantization and sorting to compress splats into PNG files and uses
     K-means clustering to compress the spherical harmonic coefficents.
 
+    .. warning::
+        This class requires the `plas <https://github.com/DeMoriarty/TorchPQ?tab=readme-ov-file#install>`_
+        and `torchpq <https://github.com/fraunhoferhhi/PLAS.git>`_ packages to be installed.
+
+    References:
+        - `Compact 3D Scene Representation via Self-Organizing Gaussian Grids <https://arxiv.org/abs/2312.13299>`_
+        - `Making Gaussian Splats more smaller <https://aras-p.info/blog/2023/09/27/Making-Gaussian-Splats-more-smaller/>`_
+
     Args:
         use_sort (bool, optional): Whether to sort splats before compression. Defaults to True.
         verbose (bool, optional): Whether to print verbose information. Default to True.

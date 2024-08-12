@@ -1,5 +1,6 @@
 import warnings
 
+from .compression import PngCompression
 from .cuda._torch_impl import accumulate
 from .cuda._wrapper import (
     fully_fused_projection,
@@ -99,6 +100,7 @@ def get_tile_bin_edges(*args, **kwargs):
 
 
 all = [
+    "PngCompression",
     "DefaultStrategy",
     "MCMCStrategy",
     "Strategy",
