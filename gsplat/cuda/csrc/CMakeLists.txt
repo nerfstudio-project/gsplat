@@ -1,3 +1,5 @@
+# Needs g++ >= 11, which set C++17 as default standard.
+
 cmake_minimum_required(VERSION 3.12)
 project(gsplat LANGUAGES CXX CUDA)
 
