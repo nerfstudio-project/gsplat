@@ -22,6 +22,16 @@ class PngCompression:
         `plas <https://github.com/DeMoriarty/TorchPQ?tab=readme-ov-file#install>`_
         and `torchpq <https://github.com/fraunhoferhhi/PLAS.git>`_ packages to be installed.
 
+    .. warning::
+        This class might throw away a few lowest opacities splats if the number of
+        splats is not a square number.
+
+    .. note::
+        The splats parameters are expected to be pre-activation values. It expects
+        the following fields in the splats dictionary: "means", "scales", "quats",
+        "opacities", "sh0", "shN". More fields can be added to the dictionary, but
+        they will only be compressed using NPZ compression.
+
     References:
         - `Compact 3D Scene Representation via Self-Organizing Gaussian Grids <https://arxiv.org/abs/2312.13299>`_
         - `Making Gaussian Splats more smaller <https://aras-p.info/blog/2023/09/27/Making-Gaussian-Splats-more-smaller/>`_
@@ -290,7 +300,9 @@ def _compress_npz(
 ) -> Dict[str, Any]:
     """Compress parameters with numpy's NPZ compression."""
     npz_dict = {"arr": params.detach().cpu().numpy()}
-    np.savez_compressed(os.path.join(compress_dir, f"{param_name}.npz"), **npz_dict)
+    save_fp = os.path.join(compress_dir, f"{param_name}.npz")
+    os.makedirs(os.path.dirname(save_fp), exist_ok=True)
+    np.savez_compressed(save_fp, **npz_dict)
     meta = {
         "shape": params.shape,
         "dtype": str(params.dtype).split(".")[1],
@@ -356,9 +368,7 @@ def _compress_kmeans(
     maxs = torch.max(centroids)
     centroids_norm = (centroids - mins) / (maxs - mins)
     centroids_norm = centroids_norm.detach().cpu().numpy()
-    centroids_quant = (
-        (centroids_norm * (2**quantization - 1)).round().astype(np.uint8)
-    )
+    centroids_quant = (centroids_norm * (2**quantization - 1)).round().astype(np.uint8)
     labels = labels.astype(np.uint16)
 
     npz_dict = {
