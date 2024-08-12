@@ -1,12 +1,13 @@
-import numpy as np
-import os
 import json
+import os
 import subprocess
 from collections import defaultdict
 
+import numpy as np
+
 
 def main():
-    results_dir = "examples/results/360_v2/3dgs_1m"
+    results_dir = "results/benchmark_mcmc_1M_png_compression"
     scenes = ["garden", "bicycle", "stump", "bonsai", "counter", "kitchen", "room"]
     stage = "compress"
 
@@ -18,7 +19,7 @@ def main():
             zip_path = f"{scene_dir}/compression.zip"
             if os.path.exists(zip_path):
                 subprocess.run(f"rm {zip_path}", shell=True)
-            subprocess.run(f"zip -r {zip_path} {scene_dir}/compression", shell=True)
+            subprocess.run(f"zip -r {zip_path} {scene_dir}/compression/", shell=True)
             out = subprocess.run(
                 f"stat -c%s {zip_path}", shell=True, capture_output=True
             )

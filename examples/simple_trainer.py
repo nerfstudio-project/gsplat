@@ -675,7 +675,7 @@ class Runner:
                 self.render_traj(step)
 
             # run compression
-            if cfg.compression is not None and step == max_steps - 1:
+            if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:
                 self.run_compression(step=step)
 
             if not cfg.disable_viewer:
@@ -926,4 +926,17 @@ if __name__ == "__main__":
 
     cfg = tyro.cli(subcommand_type)
     cfg.adjust_steps(cfg.steps_scaler)
+
+    # try import extra dependencies
+    if cfg.compression == "png":
+        try:
+            import plas
+            import torchpq
+        except:
+            raise ImportError(
+                "To use PNG compression, you need to install "
+                "torchpq (instruction at https://github.com/DeMoriarty/TorchPQ?tab=readme-ov-file#install) "
+                "and plas (via 'pip install git+https://github.com/fraunhoferhhi/PLAS.git') "
+            )
+
     cli(main, cfg, verbose=True)
