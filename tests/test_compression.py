@@ -39,5 +39,6 @@ def test_png_compression():
     # decompress the compressed files
     splats_c = compression_method.decompress(compress_dir)
 
+
 if __name__ == "__main__":
     test_png_compression()
