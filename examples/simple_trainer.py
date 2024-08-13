@@ -103,6 +103,11 @@ class Config:
     # Use random background for training to discourage transparency
     random_bkgd: bool = False
 
+    # Opacity regularization
+    opacity_reg: float = 0.0
+    # Scale regularization
+    scale_reg: float = 0.0
+
     # Enable camera optimization.
     pose_opt: bool = False
     # Learning rate for camera optimization
@@ -556,6 +561,19 @@ class Runner:
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
 
+            # regularizations
+            if cfg.opacity_reg > 0.0:
+                loss = (
+                    loss
+                    + cfg.opacity_reg
+                    * torch.abs(torch.sigmoid(self.splats["opacities"])).mean()
+                )
+            if cfg.scale_reg > 0.0:
+                loss = (
+                    loss
+                    + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
+                )
+
             loss.backward()
 
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
@@ -908,6 +926,8 @@ if __name__ == "__main__":
             Config(
                 init_opa=0.5,
                 init_scale=0.1,
+                opacity_reg=0.01,
+                scale_reg=0.01,
                 strategy=MCMCStrategy(verbose=True),
             ),
         ),
