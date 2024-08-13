@@ -154,7 +154,7 @@ def _compress_png(
     Returns:
         Dict[str, Any]: metadata
     """
-    import imageio
+    import imageio.v2 as imageio
 
     if torch.numel == 0:
         meta = {
@@ -193,7 +193,7 @@ def _decompress_png(compress_dir: str, param_name: str, meta: Dict[str, Any]) ->
     Returns:
         Tensor: parameters
     """
-    import imageio
+    import imageio.v2 as imageio
 
     if not np.all(meta["shape"]):
         params = torch.zeros(meta["shape"], dtype=getattr(torch, meta["dtype"]))
@@ -226,7 +226,7 @@ def _compress_png_16bit(
     Returns:
         Dict[str, Any]: metadata
     """
-    import imageio
+    import imageio.v2 as imageio
 
     if torch.numel == 0:
         meta = {
@@ -273,7 +273,7 @@ def _decompress_png_16bit(
     Returns:
         Tensor: parameters
     """
-    import imageio
+    import imageio.v2 as imageio
 
     if not np.all(meta["shape"]):
         params = torch.zeros(meta["shape"], dtype=getattr(torch, meta["dtype"]))
@@ -368,9 +368,7 @@ def _compress_kmeans(
     maxs = torch.max(centroids)
     centroids_norm = (centroids - mins) / (maxs - mins)
     centroids_norm = centroids_norm.detach().cpu().numpy()
-    centroids_quant = (
-        (centroids_norm * (2**quantization - 1)).round().astype(np.uint8)
-    )
+    centroids_quant = (centroids_norm * (2**quantization - 1)).round().astype(np.uint8)
     labels = labels.astype(np.uint16)
 
     npz_dict = {
