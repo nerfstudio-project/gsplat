@@ -27,7 +27,7 @@ def test_png_compression():
             "quats": torch.randn(N, 4),
             "opacities": torch.randn(N),
             "sh0": torch.randn(N, 1, 3),
-            "sh1": torch.randn(N, 24, 3),
+            "shN": torch.randn(N, 24, 3),
             "features": torch.randn(N, 128),
         }
     ).to(device)
