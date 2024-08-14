@@ -3,10 +3,10 @@
   <head><meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" /><link rel="next" title="Render a Large Scene" href="large_scale.html" /><link rel="prev" title="Fit a COLMAP Capture" href="colmap.html" />
+<link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" /><link rel="next" title="Rasterization" href="rasterization.html" /><link rel="prev" title="Data Conventions" href="../conventions/data_conventions.html" />
 
     <!-- Generated with Sphinx 7.4.7 and Furo 2024.08.06 -->
-        <title>Fit a Single Image - gsplat documentation</title>
+        <title>Storage Compression - gsplat documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=354aac6f" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=302659d7" />
@@ -178,7 +178,7 @@
           <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
         </button>
       </div>
-      <label class="toc-overlay-icon toc-header-icon no-toc" for="__toc">
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
         <div class="visually-hidden">Toggle table of contents sidebar</div>
         <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
       </label>
@@ -250,21 +250,21 @@
 </form>
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
   <p class="caption" role="heading"><span class="caption-text">Examples</span></p>
-<ul class="current">
-<li class="toctree-l1"><a class="reference internal" href="colmap.html">Fit a COLMAP Capture</a></li>
-<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Fit a Single Image</a></li>
-<li class="toctree-l1"><a class="reference internal" href="large_scale.html">Render a Large Scene</a></li>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../examples/colmap.html">Fit a COLMAP Capture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/image.html">Fit a Single Image</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/large_scale.html">Render a Large Scene</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Conventions</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../conventions/data_conventions.html">Data Conventions</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Python API</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="../apis/compression.html">Storage Compression</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../apis/rasterization.html">Rasterization</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../apis/strategy.html">Densification Strategy</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../apis/utils.html">Utils</a></li>
+<ul class="current">
+<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Storage Compression</a></li>
+<li class="toctree-l1"><a class="reference internal" href="rasterization.html">Rasterization</a></li>
+<li class="toctree-l1"><a class="reference internal" href="strategy.html">Densification Strategy</a></li>
+<li class="toctree-l1"><a class="reference internal" href="utils.html">Utils</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tests</span></p>
 <ul>
@@ -296,7 +296,7 @@
         </a>
         <div class="content-icon-container">
           <div class="view-this-page">
-  <a class="muted-link" href="../_sources/examples/image.rst.txt" title="View this page">
+  <a class="muted-link" href="../_sources/apis/compression.rst.txt" title="View this page">
     <svg><use href="#svg-eye"></use></svg>
     <span class="visually-hidden">View this page</span>
   </a>
@@ -310,27 +310,109 @@
               <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
             </button>
           </div>
-          <label class="toc-overlay-icon toc-content-icon no-toc" for="__toc">
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
             <div class="visually-hidden">Toggle table of contents sidebar</div>
             <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          <section id="fit-a-single-image">
-<h1>Fit a Single Image<a class="headerlink" href="#fit-a-single-image" title="Link to this heading">¶</a></h1>
-<p>The <code class="code docutils literal notranslate"><span class="pre">examples/image_fitting.py</span></code> script allows you to test the basic rasterization process
-on a set of random gaussians and their differentiability on a single training image.</p>
-<p>Simply run the script under <cite>examples/</cite>:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>image_fitting.py<span class="w"> </span>--height<span class="w"> </span><span class="m">256</span><span class="w"> </span>--width<span class="w"> </span><span class="m">256</span><span class="w"> </span>--num_points<span class="w"> </span><span class="m">2000</span><span class="w"> </span>--save_imgs
+          <section id="storage-compression">
+<h1>Storage Compression<a class="headerlink" href="#storage-compression" title="Link to this heading">¶</a></h1>
+<p><cite>gsplat</cite> provides handy APIs for compressing and decompressing the Gaussian parameters,
+which can significantly reduce the storage / streaming cost. For example, using <a class="reference internal" href="#gsplat.PngCompression" title="gsplat.PngCompression"><code class="xref py py-class docutils literal notranslate"><span class="pre">PngCompression</span></code></a>,
+1 million Gaussians that are stored in 236 MB can be compressed to 16.5 MB, which only 0.5dB
+PSNR loss (29.18dB to 28.65dB).</p>
+<p>Similar to the <a class="reference internal" href="strategy.html"><span class="doc">Densification Strategy</span></a>, our compression APIs also has a specific expectation on
+the format of the Gaussian parameters. It is designed to work with the Guassians defined
+as either a Dict of
+<a class="reference external" href="https://pytorch.org/docs/stable/tensors.html">torch.Tensor</a>
+with at least the following keys: {“means”, “scales”, “quats”, “opacities”, “sh0”, “shN”}.
+On top of these attributes, an arbitrary number of extra attributes are supported.</p>
+<p>The following code snippet is an example of how to use the compression approach in <cite>gsplat</cite>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">gsplat</span> <span class="kn">import</span> <span class="n">PngCompression</span>
+
+<span class="n">splats</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;means&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="s2">&quot;scales&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">),</span> <span class="s2">&quot;quats&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="s2">&quot;opacities&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">),</span>
+    <span class="s2">&quot;sh0&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="s2">&quot;shN&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">24</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="s2">&quot;features1&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">128</span><span class="p">),</span> <span class="s2">&quot;features2&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span>
+<span class="p">}</span>
+
+<span class="n">compression_method</span> <span class="o">=</span> <span class="n">PngCompression</span><span class="p">()</span>
+<span class="c1"># run compression and save the compressed files to compress_dir</span>
+<span class="n">compression_method</span><span class="o">.</span><span class="n">compress</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="n">splats</span><span class="p">)</span>
+<span class="c1"># decompress the compressed files</span>
+<span class="n">splats_c</span> <span class="o">=</span> <span class="n">compression_method</span><span class="o">.</span><span class="n">decompress</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>to get a result similar to the one below:</p>
-<a class="reference internal image-reference" href="../_images/square.gif"><img alt="Gaussians overfit on a single image" src="../_images/square.gif" style="width: 256px;" />
-</a>
-<p>You can also provide a path to your own custom image file using the <code class="docutils literal notranslate"><span class="pre">--img_path</span></code> flag:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>image_fitting.py<span class="w"> </span>--img_path<span class="w"> </span>PATH_TO_IMG<span class="w"> </span>--save_imgs
-</pre></div>
+<p>Below is the APIs for the compression approaches we supported in <cite>gsplat</cite>:</p>
+<dl class="py class">
+<dt class="sig sig-object py" id="gsplat.PngCompression">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">PngCompression</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">use_sort</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">verbose</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/gsplat/compression/png_compression.html#PngCompression"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.PngCompression" title="Link to this definition">¶</a></dt>
+<dd><p>Uses quantization and sorting to compress splats into PNG files and uses
+K-means clustering to compress the spherical harmonic coefficents.</p>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>This class requires the <a class="reference external" href="https://pypi.org/project/imageio/">imageio</a>,
+<a class="reference external" href="https://github.com/DeMoriarty/TorchPQ?tab=readme-ov-file#install">plas</a>
+and <a class="reference external" href="https://github.com/fraunhoferhhi/PLAS.git">torchpq</a> packages to be installed.</p>
 </div>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>This class might throw away a few lowest opacities splats if the number of
+splats is not a square number.</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The splats parameters are expected to be pre-activation values. It expects
+the following fields in the splats dictionary: “means”, “scales”, “quats”,
+“opacities”, “sh0”, “shN”. More fields can be added to the dictionary, but
+they will only be compressed using NPZ compression.</p>
+</div>
+<p class="rubric">References</p>
+<ul class="simple">
+<li><p><a class="reference external" href="https://arxiv.org/abs/2312.13299">Compact 3D Scene Representation via Self-Organizing Gaussian Grids</a></p></li>
+<li><p><a class="reference external" href="https://aras-p.info/blog/2023/09/27/Making-Gaussian-Splats-more-smaller/">Making Gaussian Splats more smaller</a></p></li>
+</ul>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>use_sort</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)"><em>bool</em></a><em>, </em><em>optional</em>) – Whether to sort splats before compression. Defaults to True.</p></li>
+<li><p><strong>verbose</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)"><em>bool</em></a><em>, </em><em>optional</em>) – Whether to print verbose information. Default to True.</p></li>
+</ul>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="gsplat.PngCompression.compress">
+<span class="sig-name descname"><span class="pre">compress</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">compress_dir</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)"><span class="pre">str</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">splats</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)"><span class="pre">Dict</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)"><span class="pre">str</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.12)"><span class="pre">None</span></a></span></span><a class="reference internal" href="../_modules/gsplat/compression/png_compression.html#PngCompression.compress"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.PngCompression.compress" title="Link to this definition">¶</a></dt>
+<dd><p>Run compression</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>compress_dir</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)"><em>str</em></a>) – directory to save compressed files</p></li>
+<li><p><strong>splats</strong> (<em>Dict</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)"><em>str</em></a><em>, </em><em>Tensor</em><em>]</em>) – Gaussian splats to compress</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="gsplat.PngCompression.decompress">
+<span class="sig-name descname"><span class="pre">decompress</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">compress_dir</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)"><span class="pre">str</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)"><span class="pre">Dict</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)"><span class="pre">str</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="../_modules/gsplat/compression/png_compression.html#PngCompression.decompress"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.PngCompression.decompress" title="Link to this definition">¶</a></dt>
+<dd><p>Run decompression</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>compress_dir</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)"><em>str</em></a>) – directory that contains compressed files</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>decompressed Gaussian splats</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Dict[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, Tensor]</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
 </section>
 
         </article>
@@ -338,23 +420,23 @@ on a set of random gaussians and their differentiability on a single training im
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="large_scale.html">
+          <a class="next-page" href="rasterization.html">
               <div class="page-info">
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">Render a Large Scene</div>
+                <div class="title">Rasterization</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
-          <a class="prev-page" href="colmap.html">
+          <a class="prev-page" href="../conventions/data_conventions.html">
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
               <div class="page-info">
                 <div class="context">
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">Fit a COLMAP Capture</div>
+                <div class="title">Data Conventions</div>
                 
               </div>
             </a>
@@ -376,8 +458,31 @@ on a set of random gaussians and their differentiability on a single training im
         
       </footer>
     </div>
-    <aside class="toc-drawer no-toc">
+    <aside class="toc-drawer">
       
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">Storage Compression</a><ul>
+<li><a class="reference internal" href="#gsplat.PngCompression"><code class="docutils literal notranslate"><span class="pre">PngCompression</span></code></a><ul>
+<li><a class="reference internal" href="#gsplat.PngCompression.compress"><code class="docutils literal notranslate"><span class="pre">PngCompression.compress()</span></code></a></li>
+<li><a class="reference internal" href="#gsplat.PngCompression.decompress"><code class="docutils literal notranslate"><span class="pre">PngCompression.decompress()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
       
       
     </aside>
