@@ -136,6 +136,8 @@ class Config:
     # Save training images to tensorboard
     tb_save_image: bool = False
 
+    lpips_net: Literal["vgg", "alex"] = "alex"
+
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
         self.save_steps = [int(i * factor) for i in self.save_steps]
@@ -365,9 +367,9 @@ class Runner:
         # Losses & Metrics.
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
         self.psnr = PeakSignalNoiseRatio(data_range=1.0).to(self.device)
-        self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True).to(
-            self.device
-        )
+        self.lpips = LearnedPerceptualImagePatchSimilarity(
+            net_type=cfg.lpips_net, normalize=True
+        ).to(self.device)
 
         # Viewer
         if not self.cfg.disable_viewer:
@@ -888,7 +890,7 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         for k in runner.splats.keys():
             runner.splats[k].data = ckpt["splats"][k]
         runner.eval(step=ckpt["step"])
-        runner.render_traj(step=ckpt["step"])
+        # runner.render_traj(step=ckpt["step"])
         if cfg.compression is not None:
             runner.run_compression(step=ckpt["step"])
     else:
