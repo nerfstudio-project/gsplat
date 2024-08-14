@@ -8,25 +8,26 @@ from typing import Dict, List, Optional, Tuple, Union
 import imageio
 import nerfview
 import numpy as np
-import yaml
 import torch
 import torch.nn.functional as F
 import tqdm
 import tyro
 import viser
-from gsplat.distributed import cli
-from gsplat.rendering import rasterization
-from gsplat.strategy import DefaultStrategy, MCMCStrategy
+import yaml
+from datasets.colmap import Dataset, Parser
+from datasets.traj import generate_interpolated_path
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
-from typing_extensions import assert_never
-
-from datasets.colmap import Dataset, Parser
-from datasets.traj import generate_interpolated_path
+from typing_extensions import Literal, assert_never
 from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
+
+from gsplat.compression import PngCompression
+from gsplat.distributed import cli
+from gsplat.rendering import rasterization
+from gsplat.strategy import DefaultStrategy, MCMCStrategy
 
 
 @dataclass
@@ -35,6 +36,8 @@ class Config:
     disable_viewer: bool = False
     # Path to the .pt file. If provide, it will skip training and render a video
     ckpt: Optional[str] = None
+    # Name of compression strategy to use
+    compression: Optional[Literal["png"]] = None
 
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
@@ -132,6 +135,8 @@ class Config:
     tb_every: int = 100
     # Save training images to tensorboard
     tb_save_image: bool = False
+
+    lpips_net: Literal["vgg", "alex"] = "alex"
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -308,6 +313,14 @@ class Runner:
         else:
             assert_never(self.cfg.strategy)
 
+        # Compression Strategy
+        self.compression_method = None
+        if cfg.compression is not None:
+            if cfg.compression == "png":
+                self.compression_method = PngCompression()
+            else:
+                raise ValueError(f"Unknown compression strategy: {cfg.compression}")
+
         self.pose_optimizers = []
         if cfg.pose_opt:
             self.pose_adjust = CameraOptModule(len(self.trainset)).to(self.device)
@@ -354,9 +367,18 @@ class Runner:
         # Losses & Metrics.
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
         self.psnr = PeakSignalNoiseRatio(data_range=1.0).to(self.device)
-        self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True).to(
-            self.device
-        )
+
+        if cfg.lpips_net == "alex":
+            self.lpips = LearnedPerceptualImagePatchSimilarity(
+                net_type="alex", normalize=True
+            ).to(self.device)
+        elif cfg.lpips_net == "vgg":
+            # The 3DGS official repo uses lpips vgg, which is equivalent with the following:
+            self.lpips = LearnedPerceptualImagePatchSimilarity(
+                net_type="vgg", normalize=False
+            ).to(self.device)
+        else:
+            raise ValueError(f"Unknown LPIPS network: {cfg.lpips_net}")
 
         # Viewer
         if not self.cfg.disable_viewer:
@@ -681,6 +703,10 @@ class Runner:
                 self.eval(step)
                 self.render_traj(step)
 
+            # run compression
+            if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:
+                self.run_compression(step=step)
+
             if not cfg.disable_viewer:
                 self.viewer.lock.release()
                 num_train_steps_per_sec = 1.0 / (time.time() - tic)
@@ -693,7 +719,7 @@ class Runner:
                 self.viewer.update(step, num_train_rays_per_step)
 
     @torch.no_grad()
-    def eval(self, step: int):
+    def eval(self, step: int, stage: str = "val"):
         """Entry for evaluation."""
         print("Running evaluation...")
         cfg = self.cfg
@@ -731,7 +757,7 @@ class Runner:
                 # write images
                 canvas = torch.cat([pixels, colors], dim=2).squeeze(0).cpu().numpy()
                 imageio.imwrite(
-                    f"{self.render_dir}/val_{i:04d}.png",
+                    f"{self.render_dir}/{stage}_{i:04d}.png",
                     (canvas * 255).astype(np.uint8),
                 )
 
@@ -760,11 +786,11 @@ class Runner:
                 "ellipse_time": ellipse_time,
                 "num_GS": len(self.splats["means"]),
             }
-            with open(f"{self.stats_dir}/val_step{step:04d}.json", "w") as f:
+            with open(f"{self.stats_dir}/{stage}_step{step:04d}.json", "w") as f:
                 json.dump(stats, f)
             # save stats to tensorboard
             for k, v in stats.items():
-                self.writer.add_scalar(f"val/{k}", v, step)
+                self.writer.add_scalar(f"{stage}/{k}", v, step)
             self.writer.flush()
 
     @torch.no_grad()
@@ -821,6 +847,23 @@ class Runner:
         print(f"Video saved to {video_dir}/traj_{step}.mp4")
 
     @torch.no_grad()
+    def run_compression(self, step: int):
+        """Entry for running compression."""
+        print("Running compression...")
+        world_rank = self.world_rank
+
+        compress_dir = f"{cfg.result_dir}/compression/rank{world_rank}"
+        os.makedirs(compress_dir, exist_ok=True)
+
+        self.compression_method.compress(compress_dir, self.splats)
+
+        # evaluate compression
+        splats_c = self.compression_method.decompress(compress_dir)
+        for k in splats_c.keys():
+            self.splats[k].data = splats_c[k].to(self.device)
+        self.eval(step=step, stage="compress")
+
+    @torch.no_grad()
     def _viewer_render_fn(
         self, camera_state: nerfview.CameraState, img_wh: Tuple[int, int]
     ):
@@ -852,11 +895,13 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
 
     if cfg.ckpt is not None:
         # run eval only
-        ckpt = torch.load(cfg.ckpt, map_location=runner.device)
+        ckpt = torch.load(cfg.ckpt, map_location=runner.device, weights_only=True)
         for k in runner.splats.keys():
             runner.splats[k].data = ckpt["splats"][k]
         runner.eval(step=ckpt["step"])
-        runner.render_traj(step=ckpt["step"])
+        # runner.render_traj(step=ckpt["step"])
+        if cfg.compression is not None:
+            runner.run_compression(step=ckpt["step"])
     else:
         runner.train()
 
@@ -912,4 +957,17 @@ if __name__ == "__main__":
 
     cfg = tyro.cli(subcommand_type)
     cfg.adjust_steps(cfg.steps_scaler)
+
+    # try import extra dependencies
+    if cfg.compression == "png":
+        try:
+            import plas
+            import torchpq
+        except:
+            raise ImportError(
+                "To use PNG compression, you need to install "
+                "torchpq (instruction at https://github.com/DeMoriarty/TorchPQ?tab=readme-ov-file#install) "
+                "and plas (via 'pip install git+https://github.com/fraunhoferhhi/PLAS.git') "
+            )
+
     cli(main, cfg, verbose=True)
