@@ -367,9 +367,18 @@ class Runner:
         # Losses & Metrics.
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
         self.psnr = PeakSignalNoiseRatio(data_range=1.0).to(self.device)
-        self.lpips = LearnedPerceptualImagePatchSimilarity(
-            net_type=cfg.lpips_net, normalize=True
-        ).to(self.device)
+
+        if cfg.lpips_net == "alex":
+            self.lpips = LearnedPerceptualImagePatchSimilarity(
+                net_type="alex", normalize=True
+            ).to(self.device)
+        elif cfg.lpips_net == "vgg":
+            # The 3DGS official repo uses lpips vgg, which is equivalent with the following:
+            self.lpips = LearnedPerceptualImagePatchSimilarity(
+                net_type="vgg", normalize=False
+            ).to(self.device)
+        else:
+            raise ValueError(f"Unknown LPIPS network: {cfg.lpips_net}")
 
         # Viewer
         if not self.cfg.disable_viewer:
@@ -886,7 +895,7 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
 
     if cfg.ckpt is not None:
         # run eval only
-        ckpt = torch.load(cfg.ckpt, map_location=runner.device)
+        ckpt = torch.load(cfg.ckpt, map_location=runner.device, weights_only=True)
         for k in runner.splats.keys():
             runner.splats[k].data = ckpt["splats"][k]
         runner.eval(step=ckpt["step"])

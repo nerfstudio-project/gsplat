@@ -4,10 +4,10 @@ import subprocess
 from collections import defaultdict
 
 import numpy as np
+import tyro
 
 
-def main():
-    results_dir = "results/benchmark_mcmc_1M_png_compression"
+def main(results_dir: str = "results/benchmark_mcmc_0_36M_png_compression"):
     scenes = ["garden", "bicycle", "stump", "bonsai", "counter", "kitchen", "room"]
     stage = "compress"
 
@@ -36,4 +36,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    tyro.cli(main)
