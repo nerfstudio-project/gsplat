@@ -136,26 +136,6 @@ def rotation_6d_to_matrix(d6: Tensor) -> Tensor:
     return torch.stack((b1, b2, b3), dim=-2)
 
 
-def normalized_quat_to_rotmat(quat: Tensor) -> Tensor:
-    assert quat.shape[-1] == 4, quat.shape
-    w, x, y, z = torch.unbind(quat, dim=-1)
-    mat = torch.stack(
-        [
-            1 - 2 * (y**2 + z**2),
-            2 * (x * y - w * z),
-            2 * (x * z + w * y),
-            2 * (x * y + w * z),
-            1 - 2 * (x**2 + z**2),
-            2 * (y * z - w * x),
-            2 * (x * z - w * y),
-            2 * (y * z + w * x),
-            1 - 2 * (x**2 + y**2),
-        ],
-        dim=-1,
-    )
-    return mat.reshape(quat.shape[:-1] + (3, 3))
-
-
 def knn(x: Tensor, K: int = 4) -> Tensor:
     x_np = x.cpu().numpy()
     model = NearestNeighbors(n_neighbors=K, metric="euclidean").fit(x_np)

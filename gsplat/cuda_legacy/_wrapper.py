@@ -91,7 +91,7 @@ def get_tile_bin_edges(
 
 
 def compute_cov2d_bounds(
-    cov2d: Float[Tensor, "batch 3"]
+    cov2d: Float[Tensor, "batch 3"],
 ) -> Tuple[Float[Tensor, "batch_conics 3"], Float[Tensor, "batch_radii 1"]]:
     """Computes bounds of 2D covariance matrix
 
@@ -113,7 +113,7 @@ def compute_cov2d_bounds(
 
 
 def compute_cumulative_intersects(
-    num_tiles_hit: Float[Tensor, "batch 1"]
+    num_tiles_hit: Float[Tensor, "batch 1"],
 ) -> Tuple[int, Float[Tensor, "batch 1"]]:
     """Computes cumulative intersections of gaussians. This is useful for creating unique gaussian IDs and for sorting.
 

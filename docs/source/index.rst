@@ -13,13 +13,21 @@ Overview
 Real-Time Rendering of Radiance Fields" :cite:p:`kerbl3Dgaussians`, but we've made *gsplat* even 
 faster, more memory efficient, and with a growing list of new features!
 
-* *gsplat* is developed with efficiency in mind. Comparing to the `official implementation <https://github.com/graphdeco-inria/gaussian-splatting>`_, *gsplat* enables up to **4x less training memory footprint**, and up to **15% less training time** on Mip-NeRF 360 captures, and potential more on larger scenes. See :doc:`tests/eval` for details.
+* *gsplat* is developed with efficiency in mind. Comparing to the `official implementation <https://github.com/graphdeco-inria/gaussian-splatting>`_, 
+  *gsplat* enables up to **4x less training memory footprint**, and up to **15% less training time** on Mip-NeRF 360 captures, and potential more on larger scenes. See :doc:`tests/eval` for details.
 
-* *gsplat* is designed to **support extremely large scene rendering**, which is magnitudes faster than the official CUDA backend `diff-gaussian-rasterization <https://github.com/graphdeco-inria/diff-gaussian-rasterization>`_. See :doc:`examples/large_scale` for an example.
+* *gsplat* is designed to **support extremely large scene rendering**, which is magnitudes 
+  faster than the official CUDA backend `diff-gaussian-rasterization <https://github.com/graphdeco-inria/diff-gaussian-rasterization>`_. See :doc:`examples/large_scale` for an example.
 
-* *gsplat* offers many extra features, including **batch rasterization**,  **N-D feature rendering**, **depth rendering**, **sparse gradient** etc. See :doc:`apis/rasterization` for details.
+* *gsplat* offers many extra features, including **batch rasterization**,  
+  **N-D feature rendering**, **depth rendering**, **sparse gradient**, 
+  **multi-GPU distributed rasterization**
+  etc. See :doc:`apis/rasterization` for details.
 
-* *gsplat* is equipped with the **latest and greatest** 3D Gaussian Splatting techniques, including `absgrad <https://ty424.github.io/AbsGS.github.io/>`_, `anti-aliasing <https://niujinshuchong.github.io/mip-splatting/>`_ etc. And more to come!
+* *gsplat* is equipped with the **latest and greatest** 3D Gaussian Splatting techniques, 
+  including `absgrad <https://ty424.github.io/AbsGS.github.io/>`_, 
+  `anti-aliasing <https://niujinshuchong.github.io/mip-splatting/>`_,
+  `3DGS-MCMC <https://ubc-vision.github.io/3dgs-mcmc/>`_ etc. And more to come!
 
 
 .. raw:: html

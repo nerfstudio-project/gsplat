@@ -1,5 +1,6 @@
 import warnings
 
+from .compression import PngCompression
 from .cuda._torch_impl import accumulate
 from .cuda._wrapper import (
     fully_fused_projection,
@@ -17,6 +18,7 @@ from .rendering import (
     rasterization_inria_wrapper,
     rasterization_legacy_wrapper,
 )
+from .strategy import DefaultStrategy, MCMCStrategy, Strategy
 from .version import __version__
 
 
@@ -98,6 +100,10 @@ def get_tile_bin_edges(*args, **kwargs):
 
 
 all = [
+    "PngCompression",
+    "DefaultStrategy",
+    "MCMCStrategy",
+    "Strategy",
     "rasterization",
     "rasterization_legacy_wrapper",
     "rasterization_inria_wrapper",

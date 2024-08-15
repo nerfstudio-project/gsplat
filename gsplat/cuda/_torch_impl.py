@@ -83,13 +83,17 @@ def _persp_proj(
 
     fx = Ks[..., 0, 0, None]  # [C, 1]
     fy = Ks[..., 1, 1, None]  # [C, 1]
+    cx = Ks[..., 0, 2, None]  # [C, 1]
+    cy = Ks[..., 1, 2, None]  # [C, 1]
     tan_fovx = 0.5 * width / fx  # [C, 1]
     tan_fovy = 0.5 * height / fy  # [C, 1]
 
-    lim_x = 1.3 * tan_fovx
-    lim_y = 1.3 * tan_fovy
-    tx = tz * torch.clamp(tx / tz, min=-lim_x, max=lim_x)
-    ty = tz * torch.clamp(ty / tz, min=-lim_y, max=lim_y)
+    lim_x_pos = (width - cx) / fx + 0.3 * tan_fovx
+    lim_x_neg = cx / fx + 0.3 * tan_fovx
+    lim_y_pos = (height - cy) / fy + 0.3 * tan_fovy
+    lim_y_neg = cy / fy + 0.3 * tan_fovy
+    tx = tz * torch.clamp(tx / tz, min=-lim_x_neg, max=lim_x_pos)
+    ty = tz * torch.clamp(ty / tz, min=-lim_y_neg, max=lim_y_pos)
 
     O = torch.zeros((C, N), device=means.device, dtype=means.dtype)
     J = torch.stack(
@@ -427,6 +431,7 @@ def _rasterize_to_pixels(
     from ._wrapper import rasterize_to_indices_in_range
 
     C, N = means2d.shape[:2]
+    n_isects = len(flatten_ids)
     device = means2d.device
 
     render_colors = torch.zeros(
@@ -436,7 +441,10 @@ def _rasterize_to_pixels(
 
     # Split Gaussians into batches and iteratively accumulate the renderings
     block_size = tile_size * tile_size
-    max_range = (isect_offsets[1:] - isect_offsets[:-1]).max().item()
+    isect_offsets_fl = torch.cat(
+        [isect_offsets.flatten(), torch.tensor([n_isects], device=device)]
+    )
+    max_range = (isect_offsets_fl[1:] - isect_offsets_fl[:-1]).max().item()
     num_batches = (max_range + block_size - 1) // block_size
     for step in range(0, num_batches, batch_per_iter):
         transmittances = 1.0 - render_alphas[..., 0]
