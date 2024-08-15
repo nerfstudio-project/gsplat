@@ -933,7 +933,7 @@ if __name__ == "__main__":
             ),
         ),
         "mcmc": (
-            "Gaussian splatting training using densification  from the paper '3D Gaussian Splatting as Markov Chain Monte Carlo'.",
+            "Gaussian splatting training using densification from the paper '3D Gaussian Splatting as Markov Chain Monte Carlo'.",
             Config(
                 init_opa=0.5,
                 init_scale=0.1,
