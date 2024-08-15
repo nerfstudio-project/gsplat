@@ -43,7 +43,7 @@ file(GLOB_RECURSE SOURCES
 )
 
 # Create the library
-cuda_add_library(gsplat STATIC ${SOURCES})
+add_library(gsplat STATIC ${SOURCES})
 
 # Link libraries
 target_link_libraries(gsplat ${TORCH_LIBRARIES} ${PYTHON_LIBRARIES})
