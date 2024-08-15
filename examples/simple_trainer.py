@@ -943,19 +943,7 @@ if __name__ == "__main__":
             ),
         ),
     }
-
-    # We're going to do some advanced tyro stuff to make the CLI nicer.
-    #
-    # (1) Build a union type that lets us choose between the two config
-    # objects.
-    subcommand_type = tyro.extras.subcommand_type_from_defaults(
-        defaults={k: v[1] for k, v in configs.items()},
-        descriptions={k: v[0] for k, v in configs.items()},
-    )
-    # (2) Don't let the user override the strategy type provided by the default that they choose.
-    subcommand_type = tyro.conf.configure(tyro.conf.AvoidSubcommands)(subcommand_type)
-
-    cfg = tyro.cli(subcommand_type)
+    cfg = tyro.extras.overridable_config_cli(configs)
     cfg.adjust_steps(cfg.steps_scaler)
 
     # try import extra dependencies
