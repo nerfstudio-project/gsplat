@@ -64,13 +64,14 @@ namespace cg = cooperative_groups;
     quats += gid * 4;
     scales += gid * 3;
 
-    mat3<T> RS_camera = R * quat_to_rotmat<T>(glm::make_vec4(quats)) * scale_to_mat<T>(glm::make_vec2(scales), 1.0f);
+    mat3<T> RS_camera = R * quat_to_rotmat<T>(glm::make_vec4(quats)) * mat3<T>(scales[0], 0.0, 0.0, 0.0, scales[1], 0.0, 0.0, 0.0, 1.0);
+                
     mat3<T> WH = mat3<T>(
         RS_camera[0],
         RS_camera[1],
         mean_c
     );
-
+    
     mat3<T> world_2_pix = mat3<T>(
         Ks[0], 0.0, Ks[2],
         0.0, Ks[4], Ks[5],
@@ -84,19 +85,19 @@ namespace cg = cooperative_groups;
     const vec3<T> M2 = vec3<T>(M[2][0], M[2][1], M[2][2]);
 
     const vec3<T> temp_point = vec3<T>(1.0f, 1.0f, -1.0f);
-    const T distance = f3_sum(temp_point * M2 * M2);
+    const T distance = sum(temp_point * M2 * M2);
 
     if (distance == 0.0f) return;
 
     const vec3<T> f = (1 / distance) * temp_point;
     const vec2<T> mean2d = vec2<T>(
-        f3_sum(f * M0 * M2),
-        f3_sum(f * M1 * M2)
+        sum(f * M0 * M2),
+        sum(f * M1 * M2)
     );
 
     const vec2<T> temp = {
-        f3_sum(f * M0 * M0),
-        f3_sum(f * M1 * M1)
+        sum(f * M0 * M0),
+        sum(f * M1 * M1)
     };
     const vec2<T> half_extend = mean2d * mean2d - temp;
     const T radius = ceil(3.f * sqrt(max(1e-4, max(half_extend.x, half_extend.y))));

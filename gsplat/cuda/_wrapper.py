@@ -1426,6 +1426,8 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
         width = ctx.width
         height = ctx.height
         sparse_grad = ctx.sparse_grad
+        
+        print("v_normals: ", v_normals)
 
         v_means, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
             "fully_fused_projection_packed_bwd_2dgs"

@@ -153,7 +153,7 @@ namespace cg = cooperative_groups;
             const vec3<S> h_u = px * w_M - u_M;
             const vec3<S> h_v = py * w_M - v_M;
 
-            const vec3<S> ray_cross = cross_product(h_u, h_v);
+            const vec3<S> ray_cross = glm::cross(h_u, h_v);
             if (ray_cross.z == 0.0) continue;
 
             const vec2<S> s = vec2<S>(

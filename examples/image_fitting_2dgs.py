@@ -12,9 +12,6 @@ from torch import Tensor, optim
 
 from gsplat.rendering import rasterization, rasterization_2dgs
 
-os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-os.environ["TORCH_USE_CUDA_DSA"] = "1"
-
 
 class SimpleTrainer:
     """Trains random gaussians to fit an image."""

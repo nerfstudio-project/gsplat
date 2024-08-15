@@ -140,7 +140,7 @@ __global__ void rasterize_to_indices_in_range_kernel(
             const vec3<T> h_u = px * w_M - u_M;
             const vec3<T> h_v = py * w_M - v_M;
 
-            const vec3<T> ray_cross = cross_product(h_u, h_v);
+            const vec3<T> ray_cross = glm::cross(h_u, h_v);
 
             if (ray_cross.z == 0.0) continue;
 

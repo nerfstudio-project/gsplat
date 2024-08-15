@@ -6,7 +6,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
-__device__ const float FilterInvSquare = 2.0f;
+#define FILTER_INV_SQUARE 2.0f
 
 template <typename T>
 inline __device__ mat3<T> quat_to_rotmat(const vec4<T> quat) {
@@ -57,15 +57,6 @@ quat_to_rotmat_vjp(const vec4<T> quat, const mat3<T> v_R, vec4<T> &v_quat) {
 
     vec4<T> quat_n = vec4<T>(w, x, y, z);
     v_quat += (v_quat_n - glm::dot(v_quat_n, quat_n) * quat_n) * inv_norm;
-}
-
-template <typename T>
-inline __device__ mat3<T>
-scale_to_mat(const vec2<T> scale, const T glob_scale) {
-    mat3<T> S = mat3<T>(1.f);
-    S[0][0] = glob_scale * scale.x;
-    S[1][1] = glob_scale * scale.y;
-    return S;
 }
 
 template <typename T>
@@ -496,11 +487,6 @@ inline __device__ void compute_ray_Ms_aabb_vjp(
     mat3<T> v_R = mat3<T>(v_RS[0] * scale[0], v_RS[1] * scale[1], v_tn);
 
     quat_to_rotmat_vjp<T>(quat, v_R, v_quat);
-
-    // printf("R[0]; %.4f, %.4f, %.4f \n", R[0].x, R[0].y, R[0].z);
-    // printf("R[1]; %.4f, %.4f, %.4f \n", R[1].x, R[1].y, R[1].z);
-    // printf("v_scale[0]: %.4f \n", (T)glm::dot(v_RS[0], R[0]));
-    // printf("v_scale[1]: %.4f \n", (T)glm::dot(v_RS[1], R[1]));
     v_scale[0] += (T)glm::dot(v_RS[0], R[0]);
     v_scale[1] += (T)glm::dot(v_RS[1], R[1]);
 

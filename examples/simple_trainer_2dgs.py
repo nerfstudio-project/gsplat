@@ -300,7 +300,6 @@ class Runner:
         # Densification Strategy
         self.strategy = DefaultStrategy(
             verbose=True,
-            scene_scale=self.scene_scale,
             prune_opa=cfg.prune_opa,
             grow_grad2d=cfg.grow_grad2d,
             grow_scale3d=cfg.grow_scale3d,

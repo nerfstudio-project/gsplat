@@ -73,21 +73,6 @@ inline __device__ void warpMax(ScalarT &val, WarpT &warp) {
     val = cg::reduce(warp, val, cg::greater<ScalarT>());
 }
 
-///////////////////
-// template <uint32_t DIM, class T, class WarpT>
-// inline __device__ void warpSum(T *val, WarpT &warp) {
-//     PRAGMA_UNROLL
-//     for (uint32_t i = 0; i < DIM; i++) {
-//         val[i] = cg::reduce(warp, val[i], cg::plus<T>());
-//     }
-// }
-
-template <class WarpT>
-inline __device__ void warpSum(float3 &val, WarpT &warp) {
-    val.x = cg::reduce(warp, val.x, cg::plus<float>());
-    val.y = cg::reduce(warp, val.y, cg::plus<float>());
-    val.z = cg::reduce(warp, val.z, cg::plus<float>());
-}
 
 template <typename T>
 inline __device__ vec3<T> cross_product(vec3<T> a, vec3<T> b) {
@@ -96,44 +81,8 @@ inline __device__ vec3<T> cross_product(vec3<T> a, vec3<T> b) {
     );
 }
 
-template <typename T> __forceinline__ __device__ T f3_sum(vec3<T> a) {
+template <typename T> __forceinline__ __device__ T sum(vec3<T> a) {
     return a.x + a.y + a.z;
 }
 
-template <typename T> __forceinline__ __device__ T f2_norm2(vec2<T> a) {
-    return a.x * a.x + a.y * a.y;
-}
-
-__device__ __forceinline__ float3 operator*(float a, float3 b) {
-    return make_float3(a * b.x, a * b.y, a * b.z);
-}
-
-__device__ __forceinline__ float3 operator*(float3 a, float3 b) {
-    return make_float3(a.x * b.x, a.y * b.y, a.z * b.z);
-}
-
-__device__ __forceinline__ float2 operator*(float2 a, float2 b) {
-    return make_float2(a.x * b.x, a.y * b.y);
-}
-
-__device__ __forceinline__ float3 operator-(float3 a, float3 b) {
-    return make_float3(a.x - b.x, a.y - b.y, a.z - b.z);
-}
-
-__device__ __forceinline__ float2 operator-(float2 a, float2 b) {
-    return make_float2(a.x - b.x, a.y - b.y);
-}
-
-__device__ __forceinline__ float f2_norm2(float2 a) {
-    // Technically L2 norm squared
-    return a.x * a.x + a.y * a.y;
-}
-
-__device__ __forceinline__ float f3_sum(float3 a) { return a.x + a.y + a.z; }
-
-__device__ __forceinline__ float3 cross_product(float3 a, float3 b) {
-    return make_float3(
-        a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x
-    );
-}
 #endif // GSPLAT_CUDA_HELPERS_H

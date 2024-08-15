@@ -207,7 +207,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 h_u = px * w_M - u_M;
                 h_v = py * w_M - v_M;
 
-                ray_cross = cross_product(h_u, h_v);
+                ray_cross = glm::cross(h_u, h_v);
 
                 // no ray_crossion
                 if (ray_cross.z == 0.0) valid = false;
@@ -311,8 +311,8 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                         const S v_sx_pz = v_s.x / ray_cross.z;
                         const S v_sy_pz = v_s.y / ray_cross.z;
                         const vec3<S> v_ray_cross = {v_sx_pz, v_sy_pz, -(v_sx_pz * s.x + v_sy_pz * s.y)};
-                        const vec3<S> v_h_u = cross_product(h_v, v_ray_cross);
-                        const vec3<S> v_h_v = cross_product(v_ray_cross, h_u);
+                        const vec3<S> v_h_u = glm::cross(h_v, v_ray_cross);
+                        const vec3<S> v_h_v = glm::cross(v_ray_cross, h_u);
                         
                         v_u_M_local = {-v_h_u.x, -v_h_u.y, -v_h_u.z};
                         v_v_M_local = {-v_h_v.x, -v_h_v.y, -v_h_v.z};

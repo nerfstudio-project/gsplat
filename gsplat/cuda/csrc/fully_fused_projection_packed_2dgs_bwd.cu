@@ -56,6 +56,7 @@ __global__ void fully_fused_projection_packed_bwd_2dgs_kernel(
     ray_Ms += idx * 9;
 
     v_means2d += idx * 2;
+    v_normals += idx * 3;
     v_depths += idx;
     v_ray_Ms += idx * 9;
 

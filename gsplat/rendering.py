@@ -21,7 +21,7 @@ from .distributed import (
     all_to_all_int32,
     all_to_all_tensor_list,
 )
-from .utils import _getProjectionMatrix, depth_to_normal
+from .utils import _get_projection_matrix, depth_to_normal
 
 
 def rasterization(
@@ -898,7 +898,7 @@ def rasterization_inria_wrapper(
         GaussianRasterizer,
     )
 
-    def _getProjectionMatrix(znear, zfar, fovX, fovY, device="cuda"):
+    def _get_projection_matrix(znear, zfar, fovX, fovY, device="cuda"):
         tanHalfFovY = math.tan((fovY / 2))
         tanHalfFovX = math.tan((fovX / 2))
 
@@ -933,7 +933,7 @@ def rasterization_inria_wrapper(
         tanfovy = math.tan(FoVy * 0.5)
 
         world_view_transform = viewmats[cid].transpose(0, 1)
-        projection_matrix = _getProjectionMatrix(
+        projection_matrix = _get_projection_matrix(
             znear=near_plane, zfar=far_plane, fovX=FoVx, fovY=FoVy, device=device
         ).transpose(0, 1)
         full_proj_transform = (
@@ -1053,7 +1053,7 @@ def rasterization_2dgs(
         assert (sh_degree + 1) ** 2 <= colors.shape[1], colors.shape
 
     densifications = (
-        torch.zeros((C, N, 2), dtype=means.dtype, requires_grad=True, device="cuda") + 0
+        torch.zeros((C, N, 2), dtype=means.dtype, requires_grad=True, device="cuda")
     )
     # Compute Ray-Splat intersection transformation.
     proj_results = fully_fused_projection_2dgs(
@@ -1088,7 +1088,6 @@ def rasterization_2dgs(
         opacities = opacities.repeat(C, 1)
         camera_ids, gaussian_ids = None, None
 
-    # pdb.set_trace()
     # Identify intersecting tiles
     tile_width = math.ceil(width / float(tile_size))
     tile_height = math.ceil(height / float(tile_size))
@@ -1174,13 +1173,6 @@ def rasterization_2dgs(
             render_depths, torch.linalg.inv(viewmats), Ks, near_plane, far_plane  # c2w
         ).squeeze(0)
 
-        # render_normals_from_depth = depth_to_normal(
-        #     torch.linalg.inv(viewmats.squeeze(0)),
-        #     Ks.squeeze(0),
-        #     width,
-        #     height,
-        #     render_depths,
-        # )
 
     meta = {
         "camera_ids": camera_ids,
@@ -1204,8 +1196,6 @@ def rasterization_2dgs(
         "render_distort": render_distort,
     }
 
-    # import pdb
-    # pdb.set_trace()
     render_normals = render_normals @ torch.linalg.inv(viewmats)[0, :3, :3].T
 
     return (
@@ -1261,7 +1251,7 @@ def rasterization_2dgs_inria_wrapper(
         tanfovy = math.tan(FoVy * 0.5)
 
         world_view_transform = viewmats[cid].transpose(0, 1)
-        projection_matrix = _getProjectionMatrix(
+        projection_matrix = _get_projection_matrix(
             znear=near_plane, zfar=far_plane, fovX=FoVx, fovY=FoVy, device=device
         ).transpose(0, 1)
         full_proj_transform = (

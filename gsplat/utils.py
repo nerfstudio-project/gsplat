@@ -35,27 +35,13 @@ def normalized_quat_to_rotmat(quat: Tensor) -> Tensor:
 # ref: https://github.com/hbb1/2d-gaussian-splatting/blob/61c7b417393d5e0c58b742ad5e2e5f9e9f240cc6/utils/point_utils.py#L26
 def _depths_to_points(depthmap, world_view_transform, full_proj_transform, fx, fy):
     c2w = (world_view_transform.T).inverse()
-    # import pdb
-    # pdb.set_trace()
     H, W = depthmap.shape[:2]
-    # ndc2pix = (
-    #     torch.tensor([[W / 2, 0, 0, (W) / 2], [0, H / 2, 0, (H) / 2], [0, 0, 0, 1]])
-    #     .float()
-    #     .cuda()
-    #     .T
-    # )
-    # projection_matrix = c2w.T @ full_proj_transform
-    # intrins = (projection_matrix @ ndc2pix)[:3, :3].T
 
     intrins = (
         torch.tensor([[fx, 0.0, W / 2.0], [0.0, fy, H / 2.0], [0.0, 0.0, 1.0]])
         .float()
         .cuda()
     )
-
-    import pdb
-
-    # pdb.set_trace()
 
     grid_x, grid_y = torch.meshgrid(
         torch.arange(W, device="cuda").float(),
@@ -88,9 +74,6 @@ def _depth_to_normal(depth, world_view_transform, full_proj_transform, fx, fy):
 
 
 def depth_to_normal(depths, camtoworlds, Ks, near_plane, far_plane):
-    import pdb
-
-    # pdb.set_trace()
     height, width = depths.shape[1:3]
     viewmats = torch.linalg.inv(camtoworlds)  # [C, 4, 4]
 
@@ -99,7 +82,7 @@ def depth_to_normal(depths, camtoworlds, Ks, near_plane, far_plane):
         FoVx = 2 * math.atan(width / (2 * Ks[cid, 0, 0].item()))
         FoVy = 2 * math.atan(height / (2 * Ks[cid, 1, 1].item()))
         world_view_transform = viewmats[cid].transpose(0, 1)
-        projection_matrix = _getProjectionMatrix(
+        projection_matrix = _get_projection_matrix(
             znear=near_plane, zfar=far_plane, fovX=FoVx, fovY=FoVy, device=depths.device
         ).transpose(0, 1)
         full_proj_transform = (
@@ -117,7 +100,7 @@ def depth_to_normal(depths, camtoworlds, Ks, near_plane, far_plane):
     return normals
 
 
-def _getProjectionMatrix(znear, zfar, fovX, fovY, device="cuda"):
+def _get_projection_matrix(znear, zfar, fovX, fovY, device="cuda"):
     tanHalfFovY = math.tan((fovY / 2))
     tanHalfFovX = math.tan((fovX / 2))
 
