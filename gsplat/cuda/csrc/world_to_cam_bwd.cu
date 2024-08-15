@@ -8,6 +8,8 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
+namespace gsplat {
+
 namespace cg = cooperative_groups;
 
 /****************************************************************************
@@ -15,16 +17,17 @@ namespace cg = cooperative_groups;
  ****************************************************************************/
 
 template <typename T>
-__global__ void
-world_to_cam_bwd_kernel(const uint32_t C, const uint32_t N,
-                        const T *__restrict__ means,      // [N, 3]
-                        const T *__restrict__ covars,     // [N, 3, 3]
-                        const T *__restrict__ viewmats,   // [C, 4, 4]
-                        const T *__restrict__ v_means_c,  // [C, N, 3]
-                        const T *__restrict__ v_covars_c, // [C, N, 3, 3]
-                        T *__restrict__ v_means,          // [N, 3]
-                        T *__restrict__ v_covars,         // [N, 3, 3]
-                        T *__restrict__ v_viewmats        // [C, 4, 4]
+__global__ void world_to_cam_bwd_kernel(
+    const uint32_t C,
+    const uint32_t N,
+    const T *__restrict__ means,      // [N, 3]
+    const T *__restrict__ covars,     // [N, 3, 3]
+    const T *__restrict__ viewmats,   // [C, 4, 4]
+    const T *__restrict__ v_means_c,  // [C, N, 3]
+    const T *__restrict__ v_covars_c, // [C, N, 3, 3]
+    T *__restrict__ v_means,          // [N, 3]
+    T *__restrict__ v_covars,         // [N, 3, 3]
+    T *__restrict__ v_viewmats        // [C, 4, 4]
 ) {
 
     // For now we'll upcast float16 and bfloat16 to float32
@@ -44,9 +47,16 @@ world_to_cam_bwd_kernel(const uint32_t C, const uint32_t N,
     viewmats += cid * 16;
 
     // glm is column-major but input is row-major
-    const mat3<OpT> R = mat3<OpT>(viewmats[0], viewmats[4], viewmats[8], // 1st column
-                                  viewmats[1], viewmats[5], viewmats[9], // 2nd column
-                                  viewmats[2], viewmats[6], viewmats[10] // 3rd column
+    const mat3<OpT> R = mat3<OpT>(
+        viewmats[0],
+        viewmats[4],
+        viewmats[8], // 1st column
+        viewmats[1],
+        viewmats[5],
+        viewmats[9], // 2nd column
+        viewmats[2],
+        viewmats[6],
+        viewmats[10] // 3rd column
     );
     const vec3<OpT> t = vec3<OpT>(viewmats[3], viewmats[7], viewmats[11]);
 
@@ -75,7 +85,7 @@ world_to_cam_bwd_kernel(const uint32_t C, const uint32_t N,
         warpSum(v_mean, warp_group_g);
         if (warp_group_g.thread_rank() == 0) {
             v_means += gid * 3;
-            PRAGMA_UNROLL
+            GSPLAT_PRAGMA_UNROLL
             for (uint32_t i = 0; i < 3; i++) {
                 gpuAtomicAdd(v_means + i, v_mean[i]);
             }
@@ -85,9 +95,9 @@ world_to_cam_bwd_kernel(const uint32_t C, const uint32_t N,
         warpSum(v_covar, warp_group_g);
         if (warp_group_g.thread_rank() == 0) {
             v_covars += gid * 9;
-            PRAGMA_UNROLL
+            GSPLAT_PRAGMA_UNROLL
             for (uint32_t i = 0; i < 3; i++) { // rows
-                PRAGMA_UNROLL
+                GSPLAT_PRAGMA_UNROLL
                 for (uint32_t j = 0; j < 3; j++) { // cols
                     gpuAtomicAdd(v_covars + i * 3 + j, T(v_covar[j][i]));
                 }
@@ -100,9 +110,9 @@ world_to_cam_bwd_kernel(const uint32_t C, const uint32_t N,
         warpSum(v_t, warp_group_c);
         if (warp_group_c.thread_rank() == 0) {
             v_viewmats += cid * 16;
-            PRAGMA_UNROLL
+            GSPLAT_PRAGMA_UNROLL
             for (uint32_t i = 0; i < 3; i++) { // rows
-                PRAGMA_UNROLL
+                GSPLAT_PRAGMA_UNROLL
                 for (uint32_t j = 0; j < 3; j++) { // cols
                     gpuAtomicAdd(v_viewmats + i * 4 + j, T(v_R[j][i]));
                 }
@@ -112,23 +122,25 @@ world_to_cam_bwd_kernel(const uint32_t C, const uint32_t N,
     }
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-world_to_cam_bwd_tensor(const torch::Tensor &means,                    // [N, 3]
-                        const torch::Tensor &covars,                   // [N, 3, 3]
-                        const torch::Tensor &viewmats,                 // [C, 4, 4]
-                        const at::optional<torch::Tensor> &v_means_c,  // [C, N, 3]
-                        const at::optional<torch::Tensor> &v_covars_c, // [C, N, 3, 3]
-                        const bool means_requires_grad, const bool covars_requires_grad,
-                        const bool viewmats_requires_grad) {
-    DEVICE_GUARD(means);
-    CHECK_INPUT(means);
-    CHECK_INPUT(covars);
-    CHECK_INPUT(viewmats);
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> world_to_cam_bwd_tensor(
+    const torch::Tensor &means,                    // [N, 3]
+    const torch::Tensor &covars,                   // [N, 3, 3]
+    const torch::Tensor &viewmats,                 // [C, 4, 4]
+    const at::optional<torch::Tensor> &v_means_c,  // [C, N, 3]
+    const at::optional<torch::Tensor> &v_covars_c, // [C, N, 3, 3]
+    const bool means_requires_grad,
+    const bool covars_requires_grad,
+    const bool viewmats_requires_grad
+) {
+    GSPLAT_DEVICE_GUARD(means);
+    GSPLAT_CHECK_INPUT(means);
+    GSPLAT_CHECK_INPUT(covars);
+    GSPLAT_CHECK_INPUT(viewmats);
     if (v_means_c.has_value()) {
-        CHECK_INPUT(v_means_c.value());
+        GSPLAT_CHECK_INPUT(v_means_c.value());
     }
     if (v_covars_c.has_value()) {
-        CHECK_INPUT(v_covars_c.value());
+        GSPLAT_CHECK_INPUT(v_covars_c.value());
     }
     uint32_t N = means.size(0);
     uint32_t C = viewmats.size(0);
@@ -147,21 +159,38 @@ world_to_cam_bwd_tensor(const torch::Tensor &means,                    // [N, 3]
     if (C && N) {
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
         AT_DISPATCH_FLOATING_TYPES_AND2(
-            at::ScalarType::Half, at::ScalarType::BFloat16, means.scalar_type(),
-            "world_to_cam_bwd", [&]() {
+            at::ScalarType::Half,
+            at::ScalarType::BFloat16,
+            means.scalar_type(),
+            "world_to_cam_bwd",
+            [&]() {
                 world_to_cam_bwd_kernel<scalar_t>
-                    <<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
-                        C, N, means.data_ptr<scalar_t>(), covars.data_ptr<scalar_t>(),
+                    <<<(C * N + GSPLAT_N_THREADS - 1) / GSPLAT_N_THREADS,
+                       GSPLAT_N_THREADS,
+                       0,
+                       stream>>>(
+                        C,
+                        N,
+                        means.data_ptr<scalar_t>(),
+                        covars.data_ptr<scalar_t>(),
                         viewmats.data_ptr<scalar_t>(),
-                        v_means_c.has_value() ? v_means_c.value().data_ptr<scalar_t>()
-                                              : nullptr,
-                        v_covars_c.has_value() ? v_covars_c.value().data_ptr<scalar_t>()
-                                               : nullptr,
-                        means_requires_grad ? v_means.data_ptr<scalar_t>() : nullptr,
-                        covars_requires_grad ? v_covars.data_ptr<scalar_t>() : nullptr,
+                        v_means_c.has_value()
+                            ? v_means_c.value().data_ptr<scalar_t>()
+                            : nullptr,
+                        v_covars_c.has_value()
+                            ? v_covars_c.value().data_ptr<scalar_t>()
+                            : nullptr,
+                        means_requires_grad ? v_means.data_ptr<scalar_t>()
+                                            : nullptr,
+                        covars_requires_grad ? v_covars.data_ptr<scalar_t>()
+                                             : nullptr,
                         viewmats_requires_grad ? v_viewmats.data_ptr<scalar_t>()
-                                               : nullptr);
-            });
+                                               : nullptr
+                    );
+            }
+        );
     }
     return std::make_tuple(v_means, v_covars, v_viewmats);
 }
+
+} // namespace gsplat
