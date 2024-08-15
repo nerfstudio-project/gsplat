@@ -8,7 +8,17 @@ import tyro
 
 
 def main(results_dir: str = "results/benchmark_mcmc_0_36M_png_compression"):
-    scenes = ["garden", "bicycle", "stump", "bonsai", "counter", "kitchen", "room"]
+    scenes = [
+        "garden",
+        "bicycle",
+        "stump",
+        "bonsai",
+        "counter",
+        "kitchen",
+        "room",
+        "treehill",
+        "flowers",
+    ]
     stage = "compress"
 
     summary = defaultdict(list)

@@ -1,5 +1,6 @@
 SCENE_DIR="data/360_v2"
-SCENE_LIST="garden bicycle stump bonsai counter kitchen room" # treehill flowers
+# eval all 9 scenes for benchmarking
+SCENE_LIST="garden bicycle stump bonsai counter kitchen room treehill flowers"
 
 # # 0.36M GSs
 # RESULT_DIR="results/benchmark_mcmc_0_36M_png_compression"
