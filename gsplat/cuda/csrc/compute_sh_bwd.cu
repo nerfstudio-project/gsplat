@@ -52,10 +52,10 @@ __global__ void compute_sh_bwd_kernel(
 std::tuple<torch::Tensor, torch::Tensor> compute_sh_bwd_tensor(
     const uint32_t K,
     const uint32_t degrees_to_use,
-    torch::Tensor &dirs,               // [..., 3]
-    torch::Tensor &coeffs,             // [..., K, 3]
-    at::optional<torch::Tensor> masks, // [...]
-    torch::Tensor &v_colors,           // [..., 3]
+    const torch::Tensor &dirs,               // [..., 3]
+    const torch::Tensor &coeffs,             // [..., K, 3]
+    const at::optional<torch::Tensor> masks, // [...]
+    const torch::Tensor &v_colors,           // [..., 3]
     bool compute_v_dirs
 ) {
     GSPLAT_DEVICE_GUARD(dirs);

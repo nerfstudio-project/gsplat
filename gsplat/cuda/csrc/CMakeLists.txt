@@ -6,6 +6,9 @@ project(gsplat LANGUAGES CXX CUDA)
 # Set version
 set(GSPLAT_VERSION "0.1")
 
+# Ensure `-fPIC` is used
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 # Define CUDA flags
 set(NVCC_FLAGS "-O3 --use_fast_math")
 

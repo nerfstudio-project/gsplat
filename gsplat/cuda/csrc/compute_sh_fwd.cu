@@ -39,9 +39,9 @@ __global__ void compute_sh_fwd_kernel(
 
 torch::Tensor compute_sh_fwd_tensor(
     const uint32_t degrees_to_use,
-    torch::Tensor &dirs,              // [..., 3]
-    torch::Tensor &coeffs,            // [..., K, 3]
-    at::optional<torch::Tensor> masks // [...]
+    const torch::Tensor &dirs,              // [..., 3]
+    const torch::Tensor &coeffs,            // [..., K, 3]
+    const at::optional<torch::Tensor> masks // [...]
 ) {
     GSPLAT_DEVICE_GUARD(dirs);
     GSPLAT_CHECK_INPUT(dirs);
