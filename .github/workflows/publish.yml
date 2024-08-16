@@ -120,8 +120,7 @@ jobs:
         repository-url: https://test.pypi.org/legacy/
 
     - name: Publish package to PyPI
-      with:
-        env:
-          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
-        run: |         
-          twine upload --username __token__ --password $PYPI_TOKEN dist/*
+      env:
+        PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+      run: |         
+        twine upload --username __token__ --password $PYPI_TOKEN dist/*
