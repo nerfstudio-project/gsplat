@@ -42,19 +42,17 @@ jobs:
       - name: Free up disk space
         if: ${{ runner.os == 'Linux' }}
         run: |
+          echo "Disk space before cleanup:"
+          df -h
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /opt/ghc
           sudo rm -rf "/usr/local/share/boost"
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-
-      - name: Check disk usage
-        if: ${{ runner.os == 'Linux' }}
-        run: df -h
-
-      - name: Check directory sizes
-        if: ${{ runner.os == 'Linux' }}
-        run: du -sh /usr/local/* /opt/* /usr/* | sort -hr
-          
+          sudo apt-get clean
+          echo "Disk space after cleanup:"
+          df -h
+          du -sh /usr/local/* /opt/* /usr/* | sort -hr
+        
       - name: Determine PyTorch version
         id: get-torch-version
         shell: bash
