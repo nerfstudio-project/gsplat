@@ -3,9 +3,9 @@
 
 name: Upload Python Package
 
-on:
-  release:
-    types: [created]
+#on:
+#  release:
+#    types: [created]
     # branches: [main]
 
 jobs:
