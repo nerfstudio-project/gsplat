@@ -39,6 +39,11 @@ jobs:
           pip install --upgrade setuptools
           pip install ninja
 
+      - name: Free up disk space
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo rm -rf /usr/share/dotnet
+
       - name: Determine PyTorch version
         id: get-torch-version
         shell: bash
@@ -51,6 +56,9 @@ jobs:
             echo "torch_version=1.11.0" >> $GITHUB_ENV
           fi
           echo $GITHUB_ENV
+
+      - name: Display torch_version variable
+        run: echo "The value of torch_version is $torch_version"
 
       - name: Install CUDA ${{ matrix.cuda-version }}
         if: ${{ matrix.cuda-version != 'cpu' }}
