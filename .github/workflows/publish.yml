@@ -106,7 +106,10 @@ jobs:
           sed -i '/<!-- pypi-strip -->/,/<!-- \/pypi-strip -->/d' README.md
 
       - name: Build wheel
+        # using TORCH_CUDA_ARCH_LIST=7.5  to avoid error: no suitable conversion function from "__half" to "int" exists
+        # see https://github.com/nerfstudio-project/gsplat/issues/146
         run: |
+          export TORCH_CUDA_ARCH_LIST=7.5 
           pip install wheel
           source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
           python setup.py bdist_wheel --dist-dir=dist
