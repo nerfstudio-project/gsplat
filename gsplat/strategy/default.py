@@ -294,7 +294,7 @@ class DefaultStrategy(Strategy):
         state: Dict[str, Any],
         step: int,
     ) -> int:
-        is_prune = torch.sigmoid(params["opacities"]) < self.prune_opa
+        is_prune = torch.sigmoid(params["opacities"].flatten()) < self.prune_opa
         if step > self.reset_every:
             is_too_big = (
                 torch.exp(params["scales"]).max(dim=-1).values

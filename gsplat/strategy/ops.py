@@ -111,15 +111,15 @@ def split(
     )  # [2, N, 3]
 
     def param_fn(name: str, p: Tensor) -> Tensor:
+        repeats = [2] + [1] * (p.dim() - 1)
         if name == "means":
             p_split = (p[sel] + samples).reshape(-1, 3)  # [2N, 3]
         elif name == "scales":
             p_split = torch.log(scales / 1.6).repeat(2, 1)  # [2N, 3]
         elif name == "opacities" and revised_opacity:
             new_opacities = 1.0 - torch.sqrt(1.0 - torch.sigmoid(p[sel]))
-            p_split = torch.logit(new_opacities).repeat(2)  # [2N]
+            p_split = torch.logit(new_opacities).repeat(repeats)  # [2N]
         else:
-            repeats = [2] + [1] * (p.dim() - 1)
             p_split = p[sel].repeat(repeats)
         p_new = torch.cat([p[rest], p_split])
         p_new = torch.nn.Parameter(p_new)
@@ -216,6 +216,7 @@ def relocate(
         optimizers: A dictionary of optimizers, each corresponding to a parameter.
         mask: A boolean mask to indicates which Gaussians are dead.
     """
+    # support "opacities" with shape [N,] or [N, 1]
     opacities = torch.sigmoid(params["opacities"])
 
     dead_indices = mask.nonzero(as_tuple=True)[0]
@@ -224,7 +225,7 @@ def relocate(
 
     # Sample for new GSs
     eps = torch.finfo(torch.float32).eps
-    probs = opacities[alive_indices]
+    probs = opacities[alive_indices].flatten()  # ensure its shape is [N,]
     sampled_idxs = torch.multinomial(probs, n, replacement=True)
     sampled_idxs = alive_indices[sampled_idxs]
     new_opacities, new_scales = compute_relocation(
@@ -267,7 +268,7 @@ def sample_add(
     opacities = torch.sigmoid(params["opacities"])
 
     eps = torch.finfo(torch.float32).eps
-    probs = opacities
+    probs = opacities.flatten()
     sampled_idxs = torch.multinomial(probs, n, replacement=True)
     new_opacities, new_scales = compute_relocation(
         opacities=opacities[sampled_idxs],
@@ -305,7 +306,7 @@ def inject_noise_to_position(
     state: Dict[str, Tensor],
     scaler: float,
 ):
-    opacities = torch.sigmoid(params["opacities"])
+    opacities = torch.sigmoid(params["opacities"].flatten())
     scales = torch.exp(params["scales"])
     covars, _ = quat_scale_to_covar_preci(
         params["quats"],
