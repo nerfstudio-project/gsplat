@@ -12,10 +12,10 @@ jobs:
 
   clean_readme: 
     name: Strip unsupported tags in README
-     steps:
-      - name: Strip unsupported tags in README
-        run: |
-          sed -i '/<!-- pypi-strip -->/,/<!-- \/pypi-strip -->/d' README.md
+    steps:
+    - name: Strip unsupported tags in README
+      run: |
+        sed -i '/<!-- pypi-strip -->/,/<!-- \/pypi-strip -->/d' README.md
 
   build_wheels:
     name: Build wheels on ${{ matrix.os }}
@@ -23,7 +23,7 @@ jobs:
     environment: production
     strategy:
       matrix:
-        os: [ubuntu-20.04, windows-2019, macOS-11]
+        os: [ubuntu-20.04, windows-2019]
         python-version: ['3.7', '3.8', '3.9', '3.10', '3.11']
         cuda-version: ['cu113', 'cu115', 'cu116', 'cu117', 'cu118']
         exclude:
@@ -79,6 +79,14 @@ jobs:
         run: |
           python -m pip install build twine
 
+      - name: Set version
+        run: |
+          VERSION=`sed -n 's/^__version__ = "\(.*\)"/\1/p' gsplat/version.py`
+          CUDA_VERSION=`echo ${{ matrix.cuda-version }}`
+          echo "New version name: $VERSION+$CUDA_VERSION"
+          sed -i "s/$VERSION/$VERSION+$CUDA_VERSION/" gsplat/version.py
+        shell:
+          bash
       - name: Build wheel
         run: |
           pip install wheel
