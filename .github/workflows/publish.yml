@@ -10,12 +10,6 @@ on:
 
 jobs:
 
-  clean_readme: 
-    name: Strip unsupported tags in README
-    steps:
-    - name: Strip unsupported tags in README
-      run: |
-        sed -i '/<!-- pypi-strip -->/,/<!-- \/pypi-strip -->/d' README.md
 
   build_wheels:
     name: Build wheels on ${{ matrix.os }}
@@ -87,6 +81,11 @@ jobs:
           sed -i "s/$VERSION/$VERSION+$CUDA_VERSION/" gsplat/version.py
         shell:
           bash
+
+      - name: Strip unsupported tags in README
+        run: |
+          sed -i '/<!-- pypi-strip -->/,/<!-- \/pypi-strip -->/d' README.md
+
       - name: Build wheel
         run: |
           pip install wheel
