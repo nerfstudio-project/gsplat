@@ -50,6 +50,7 @@ jobs:
           elif [[ "${{ matrix.cuda-version }}" == "cu113" || "${{ matrix.cuda-version }}" == "cu115" ]]; then
             echo "torch_version=1.11.0" >> $GITHUB_ENV
           fi
+          echo $GITHUB_ENV
 
       - name: Install CUDA ${{ matrix.cuda-version }}
         if: ${{ matrix.cuda-version != 'cpu' }}
