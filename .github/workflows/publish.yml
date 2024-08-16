@@ -13,13 +13,13 @@ jobs:
 
 
   build_wheels:
-    name: Build wheels on ${{ matrix.os }} for python ${{ matrix.python-version }} and cuda {  matrix.cuda-version}
+    name: Build wheels on ${{ matrix.os }} for python ${{ matrix.python-version }} and cuda { matrix.cuda-version }}
     runs-on: ${{ matrix.os }}
     environment: production
     strategy:
       matrix:
-        os: [ubuntu-20.04, windows-2019]
-        python-version: ['3.10', '3.11']
+        os: [windows-2019, ]
+        python-version: ['3.10']
         cuda-version: ['cu118', ]
         exclude:
           - os: windows-2019
