@@ -93,7 +93,16 @@ jobs:
       - name: Free up disk space
         if: ${{ runner.os == 'Linux' }}
         run: |
+          echo "Disk space before cleanup:"
+          df -h
           sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          sudo apt-get clean
+          echo "Disk space after cleanup:"
+          df -h
+          du -sh /usr/local/* /opt/* /usr/* | sort -hr
 
       - name: Install CUDA ${{ matrix.cuda-version }}
         if: ${{ matrix.cuda-version != 'cpu' }}
