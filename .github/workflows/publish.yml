@@ -13,7 +13,7 @@ jobs:
 
 
   build_wheels:
-    name: Build wheels on ${{ matrix.os }}
+    name: Build wheels on ${{ matrix.os }} for python ${{ matrix.python-version }} and cuda {  matrix.cuda-version}
     runs-on: ${{ matrix.os }}
     environment: production
     strategy:
@@ -39,13 +39,9 @@ jobs:
           pip install --upgrade setuptools
           pip install ninja
 
-      - name: Install CUDA ${{ matrix.cuda-version }}
-        if: ${{ matrix.cuda-version != 'cpu' }}
-        run: |
-          bash .github/workflows/cuda/${{ runner.os }}.sh ${{ matrix.cuda-version }}
-
       - name: Determine PyTorch version
         id: get-torch-version
+        shell: bash
         run: |
           if [[ "${{ matrix.cuda-version }}" == "cu117" || "${{ matrix.cuda-version }}" == "cu118" ]]; then
             echo "torch_version=2.0.0" >> $GITHUB_ENV
@@ -54,6 +50,11 @@ jobs:
           elif [[ "${{ matrix.cuda-version }}" == "cu113" || "${{ matrix.cuda-version }}" == "cu115" ]]; then
             echo "torch_version=1.11.0" >> $GITHUB_ENV
           fi
+
+      - name: Install CUDA ${{ matrix.cuda-version }}
+        if: ${{ matrix.cuda-version != 'cpu' }}
+        run: |
+          bash .github/workflows/cuda/${{ runner.os }}.sh ${{ matrix.cuda-version }}
 
       - name: Install PyTorch 
         run: |
@@ -100,7 +101,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: Build sdist
-      run: pipx run build --sdist
+      run: BUILD_NO_CUDA=1 pipx run build --sdist
     - uses: actions/upload-artifact@v2
       with:
         path: dist/*.tar.gz
