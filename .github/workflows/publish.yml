@@ -3,6 +3,7 @@
 
 name: Upload Python Package
 
+on: [push]
 #on:
 #  release:
 #    types: [created]
