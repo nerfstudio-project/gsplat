@@ -48,9 +48,10 @@ jobs:
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
 
       - name: Check disk usage
-          run: df -h
-        - name: Check directory sizes
-          run: du -sh /usr/local/* /opt/* /usr/* | sort -hr
+        run: df -h
+
+      - name: Check directory sizes
+        run: du -sh /usr/local/* /opt/* /usr/* | sort -hr
           
       - name: Determine PyTorch version
         id: get-torch-version
