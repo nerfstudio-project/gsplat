@@ -1020,6 +1020,7 @@ def rasterization_2dgs(
     absgrad: bool = False,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
     distloss: bool = False,
+    depth_mode: Literal["expected", "median"] = "median",
 ) -> Tuple[Tensor, Tensor, Dict]:
 
     N = means.shape[0]
@@ -1141,6 +1142,7 @@ def rasterization_2dgs(
         render_alphas,
         render_normals,
         render_distort,
+        render_median,
     ) = rasterize_to_pixels_2dgs(
         means2d,
         ray_transformations,
@@ -1168,9 +1170,14 @@ def rasterization_2dgs(
             dim=-1,
         )
     if render_mode in ["RGB+ED", "RGB+D"]:
-        render_depths = render_colors[..., -1:]
+        # render_depths = render_colors[..., -1:]
+        if depth_mode == "expected":
+            depth_for_normal = render_colors[..., -1:]
+        elif depth_mode == "median":
+            depth_for_normal = render_median
+        
         render_normals_from_depth = depth_to_normal(
-            render_depths, torch.linalg.inv(viewmats), Ks, near_plane, far_plane  # c2w
+            depth_for_normal, torch.linalg.inv(viewmats), Ks, near_plane, far_plane  # c2w
         ).squeeze(0)
 
 
@@ -1204,6 +1211,7 @@ def rasterization_2dgs(
         render_normals,
         render_normals_from_depth,
         render_distort,
+        render_median,
     ), meta
 
 

@@ -19,7 +19,7 @@ from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
-from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
+from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed, colormap, apply_depth_colormap
 
 from gsplat.rendering import rasterization_2dgs, rasterization_2dgs_inria_wrapper
 from gsplat.strategy import DefaultStrategy
@@ -426,6 +426,7 @@ class Runner:
                 render_normals,
                 normals_from_depth,
                 render_distort,
+                render_median,
             ) = renders
         elif self.model_type == "2dgs-inria":
             render_colors, render_alphas = renders
@@ -439,6 +440,7 @@ class Runner:
             render_normals,
             normals_from_depth,
             render_distort,
+            render_median,
             info,
         )
 
@@ -522,6 +524,7 @@ class Runner:
                 normals,
                 normals_from_depth,
                 render_distort,
+                render_median,
                 info,
             ) = self.rasterize_splats(
                 camtoworlds=camtoworlds,
@@ -737,6 +740,7 @@ class Runner:
                 normals,
                 normals_from_depth,
                 render_distort,
+                render_median,
                 _,
             ) = self.rasterize_splats(
                 camtoworlds=camtoworlds,
@@ -759,6 +763,14 @@ class Runner:
                 f"{self.render_dir}/val_{i:04d}.png", (canvas * 255).astype(np.uint8)
             )
 
+            # write median depths
+            render_median = (render_median - render_median.min()) / (render_median.max() - render_median.min())
+            render_median = render_median.detach().cpu().squeeze(0).repeat(1, 1, 3).numpy()
+            
+            imageio.imwrite(
+                f"{self.render_dir}/val_{i:04d}_median_depth.png", (render_median * 255).astype(np.uint8)
+            )
+    
             # write normals
             normals = (normals * 0.5 + 0.5).squeeze(0).cpu().numpy()
             normals_output = (normals * 255).astype(np.uint8)
@@ -781,14 +793,11 @@ class Runner:
             )
 
             # write distortions
-            from utils import colormap
 
             render_dist = render_distort
             dist_max = torch.max(render_dist)
             dist_min = torch.min(render_dist)
             render_dist = (render_dist - dist_min) / (dist_max - dist_min)
-            # import pdb
-            # pdb.set_trace()
             render_dist = (
                 colormap(render_dist.cpu().numpy()[0])
                 .permute((1, 2, 0))
@@ -853,7 +862,7 @@ class Runner:
 
         canvas_all = []
         for i in tqdm.trange(len(camtoworlds), desc="Rendering trajectory"):
-            renders, _, _, _, _, _ = self.rasterize_splats(
+            renders, _, _, _, _, _, _ = self.rasterize_splats(
                 camtoworlds=camtoworlds[i : i + 1],
                 Ks=K[None],
                 width=width,
@@ -894,7 +903,7 @@ class Runner:
         c2w = torch.from_numpy(c2w).float().to(self.device)
         K = torch.from_numpy(K).float().to(self.device)
 
-        render_colors, _, _, _, _, _ = self.rasterize_splats(
+        render_colors, _, _, _, _, _, _ = self.rasterize_splats(
             camtoworlds=c2w[None],
             Ks=K[None],
             width=W,

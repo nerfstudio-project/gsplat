@@ -1576,6 +1576,7 @@ def rasterize_to_pixels_2dgs(
         render_alphas,
         render_normals,
         render_distort,
+        render_median,
     ) = _RasterizeToPixels2DGS.apply(
         means2d.contiguous(),
         ray_transformations.contiguous(),
@@ -1597,7 +1598,7 @@ def rasterize_to_pixels_2dgs(
         render_colors = render_colors[..., :-padded_channels]
 
     # pdb.set_trace()
-    return render_colors, render_alphas, render_normals, render_distort
+    return render_colors, render_alphas, render_normals, render_distort, render_median
 
 
 @torch.no_grad()
@@ -1673,7 +1674,9 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             render_alphas,
             render_normals,
             render_distort,
+            render_median,
             last_ids,
+            median_ids,
         ) = _make_lazy_cuda_func("rasterize_to_pixels_fwd_2dgs")(
             means2d,
             ray_transformations,
@@ -1702,6 +1705,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             render_colors,
             render_alphas,
             last_ids,
+            median_ids,
         )
         ctx.width = width
         ctx.height = height
@@ -1711,7 +1715,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
 
         # doubel to float
         render_alphas = render_alphas.float()
-        return render_colors, render_alphas, render_normals, render_distort
+        return render_colors, render_alphas, render_normals, render_distort, render_median
 
     @staticmethod
     def backward(
@@ -1720,6 +1724,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         v_render_alphas: Tensor,
         v_render_normals: Tensor,
         v_render_distort: Tensor,
+        v_render_median: Tensor,
     ):
         (
             means2d,
@@ -1734,6 +1739,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             render_colors,
             render_alphas,
             last_ids,
+            median_ids,
         ) = ctx.saved_tensors
         width = ctx.width
         height = ctx.height
@@ -1769,10 +1775,12 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             render_colors,
             render_alphas,
             last_ids,
+            median_ids,
             v_render_colors.contiguous(),
             v_render_alphas.contiguous(),
             v_render_normals.contiguous(),
             v_render_distort.contiguous(),
+            v_render_median.contiguous(),
             absgrad,
         )
         torch.cuda.synchronize()

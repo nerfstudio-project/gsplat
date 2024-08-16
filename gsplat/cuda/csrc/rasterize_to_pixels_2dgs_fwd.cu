@@ -26,11 +26,13 @@ namespace cg = cooperative_groups;
     const uint32_t tile_width, const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
-    S *__restrict__ render_colors,  // [C, image_height, image_width, COLOR_DIM]
-    S *__restrict__ render_alphas,  // [C, image_height, image_width, 1]
-    S *__restrict__ render_normals, // [C, image_height, image_width, 3]
-    S *__restrict__ render_distort, // [C, image_height, image_width, 1]
-    int32_t *__restrict__ last_ids  // [C, image_height, image_width]
+    S *__restrict__ render_colors,   // [C, image_height, image_width, COLOR_DIM]
+    S *__restrict__ render_alphas,   // [C, image_height, image_width, 1]
+    S *__restrict__ render_normals,  // [C, image_height, image_width, 3]
+    S *__restrict__ render_distort,  // [C, image_height, image_width, 1]
+    S *__restrict__ render_median,   // [C, image_height, image_width, 1]
+    int32_t *__restrict__ last_ids,  // [C, image_height, image_width]
+    int32_t *__restrict__ median_ids// [C, image_height, image_width] 
  ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
@@ -111,6 +113,10 @@ namespace cg = cooperative_groups;
     S distort = 0.f;
     S accum_vis_depth = 0.f; // accumulate vis * depth
 
+    // keep track of median depth contribution
+    S median_depth = 0.f;
+    uint32_t median_idx = 0.f;
+
     // TODO (WZ): merge pix_out and normal_out to
     //  S pix_out[COLOR_DIM + 3] = {0.f}
     S pix_out[COLOR_DIM] = {0.f};
@@ -143,6 +149,7 @@ namespace cg = cooperative_groups;
         // process gaussians in the current batch for this pixel
         uint32_t batch_size = min(block_size, range_end - batch_start);
         for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
+
             const vec3<S> xy_opac = xy_opacity_batch[t];
             const S opac = xy_opac.z;
             
@@ -163,7 +170,7 @@ namespace cg = cooperative_groups;
 
             const S gauss_weight_3d = s.x * s.x + s.y * s.y;
             const vec2<S> d = {xy_opac.x - px, xy_opac.y - py};
-            const S gauss_weight_2d = FilterInvSquare * (d.x * d.x + d.y * d.y);    
+            const S gauss_weight_2d = FILTER_INV_SQUARE * (d.x * d.x + d.y * d.y);    
             const S gauss_weight = min(gauss_weight_3d, gauss_weight_2d);
             
             const S sigma = 0.5f * gauss_weight;
@@ -203,6 +210,13 @@ namespace cg = cooperative_groups;
                 accum_vis_depth += vis * depth;
             }
 
+            // compute median depth
+            if (T > 0.5) {
+                median_depth = c_ptr[COLOR_DIM - 1];
+                median_idx = batch_start + t;
+
+            } 
+
             cur_idx = batch_start + t;
 
             T = next_T;
@@ -233,11 +247,16 @@ namespace cg = cooperative_groups;
         if (render_distort != nullptr) {
             render_distort[pix_id] = distort;
         }
+
+        render_median[pix_id] = median_depth;
+        // index in bin of gaussian that contributes to median depth
+        median_ids[pix_id] = static_cast<int32_t>(median_idx);
     }
 }
 
 template <uint32_t CDIM>
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> 
+call_kernel_with_dim(
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2] or [nnz, 2]
     const torch::Tensor &ray_Ms,    // [C, N, 3, 3] or [nnz, 3, 3]
@@ -286,9 +305,14 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
                                         means2d.options().dtype(torch::kFloat32));
     torch::Tensor last_ids = torch::empty({C, image_height, image_width},
                                           means2d.options().dtype(torch::kInt32));
+    torch::Tensor median_ids = torch::empty({C, image_height, image_width},
+                                            means2d.options().dtype(torch::kInt32));
+
     torch::Tensor render_normals = torch::empty({C, image_height, image_width, 3},
                                         means2d.options().dtype(torch::kFloat32));
     torch::Tensor render_distort = torch::empty({C, image_height, image_width, 1},
+                                        means2d.options().dtype(torch::kFloat32));
+    torch::Tensor render_median = torch::empty({C, image_height, image_width, 1},
                                         means2d.options().dtype(torch::kFloat32));
 
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
@@ -318,12 +342,14 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             render_normals.data_ptr<float>(), render_distort.data_ptr<float>(),
-            last_ids.data_ptr<int32_t>());
+            render_median.data_ptr<float>(), last_ids.data_ptr<int32_t>(),
+            median_ids.data_ptr<int32_t>());
     
-    return std::make_tuple(renders, alphas, render_normals, render_distort, last_ids);
+    return std::make_tuple(renders, alphas, render_normals, render_distort, render_median, last_ids, median_ids);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_2dgs_tensor(
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> 
+rasterize_to_pixels_fwd_2dgs_tensor(
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2] or [nnz, 2]
     const torch::Tensor &ray_Ms,    // [C, N, 3] or [nnz, 3]

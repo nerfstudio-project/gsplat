@@ -79,7 +79,7 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
         quats += col_idx * 4;
         scales += col_idx * 3;
 
-        mat3<T> RS_camera = R * quat_to_rotmat<T>(glm::make_vec4(quats)) * scale_to_mat<T>(glm::make_vec2(scales), 1.0f);
+        mat3<T> RS_camera = R * quat_to_rotmat<T>(glm::make_vec4(quats)) * mat3<T>(scales[0], 0.0, 0.0, 0.0, scales[1], 0.0, 0.0, 0.0, 1.0);;
         mat3<T> WH = mat3<T>(
             RS_camera[0],
             RS_camera[1],

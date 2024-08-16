@@ -27,15 +27,17 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
     // fwd outputs
-    const S *__restrict__ render_colors,  // [C, image_height, image_width, COLOR_DIM]
-    const S *__restrict__ render_alphas,  // [C, image_height, image_width, 1]
-    const int32_t *__restrict__ last_ids, // [C, image_height, image_width]
+    const S *__restrict__ render_colors,    // [C, image_height, image_width, COLOR_DIM]
+    const S *__restrict__ render_alphas,    // [C, image_height, image_width, 1]
+    const int32_t *__restrict__ last_ids,   // [C, image_height, image_width]
+    const int32_t *__restrict__ median_ids, // [C, image_height, image_width] 
     // grad outputs
     const S *__restrict__ v_render_colors, // [C, image_height, image_width,
                                            // COLOR_DIM]
     const S *__restrict__ v_render_alphas, // [C, image_height, image_width, 1]
     const S *__restrict__ v_render_normals, // [C, image_height, image_width, 3]
     const S *__restrict__ v_render_distort, // [C, image_height, image_width, 1]
+    const S *__restrict__ v_render_median,  // [C, image_height, image_width, 1]
     // grad inputs
     vec2<S> *__restrict__ v_means2d_abs, // [C, N, 2] or [nnz, 2]
     vec2<S> *__restrict__ v_means2d,     // [C, N, 2] or [nnz, 2]
@@ -53,9 +55,11 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
     tile_offsets += camera_id * tile_height * tile_width;
     render_alphas += camera_id * image_height * image_width;
     last_ids += camera_id * image_height * image_width;
+    median_ids += camera_id * image_height * image_width;
     v_render_colors += camera_id * image_height * image_width * COLOR_DIM;
     v_render_alphas += camera_id * image_height * image_width;
     v_render_normals += camera_id * image_height * image_width * 3;
+    v_render_median += camera_id * image_height * image_width;
     if (backgrounds != nullptr) {
         backgrounds += camera_id * COLOR_DIM;
     }
@@ -113,6 +117,8 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
     S buffer_normals[3] = {0.f};
     // index of last gaussian to contribute to this pixel
     const int32_t bin_final = inside ? last_ids[pix_id] : 0;
+    // index of gaussian that contributes to median depth
+    const int32_t median_idx = inside ? median_ids[pix_id] : 0;
 
     // df/d_out for this pixel
     S v_render_c[COLOR_DIM];
@@ -140,6 +146,10 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
         accum_w = accum_w_buffer;
         distort_buffer = 0.f;
     }
+
+    // median depth gradients
+    S v_median = v_render_median[pix_id];
+
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing
@@ -215,7 +225,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
 
                 gauss_weight_3d = s.x * s.x + s.y * s.y;
                 d = {xy_opac.x - px, xy_opac.y - py};
-                gauss_weight_2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
+                gauss_weight_2d = FILTER_INV_SQUARE * (d.x * d.x + d.y * d.y);
                 gauss_weight = min(gauss_weight_3d, gauss_weight_2d);
 
                 const S sigma = 0.5f * gauss_weight;
@@ -302,6 +312,9 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 if (opac * vis <= 0.999f) {
                     const S v_G = opac * v_alpha;
                     S v_depth = 0.f;
+                    if (batch_end - t == median_idx) {
+                        v_depth += v_median;
+                    }
                     if (gauss_weight_3d <= gauss_weight_2d) {
                         const vec2<S> v_s = {
                             v_G * -vis * s.x + v_depth * w_M.x,
@@ -323,8 +336,8 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                         };
                         
                     } else {
-                        const S v_G_ddelx = -vis * FilterInvSquare * d.x;
-                        const S v_G_ddely = -vis * FilterInvSquare * d.y;
+                        const S v_G_ddelx = -vis * FILTER_INV_SQUARE * d.x;
+                        const S v_G_ddely = -vis * FILTER_INV_SQUARE * d.y;
                         v_xy_local = {v_G * v_G_ddelx, v_G * v_G_ddely};
                         if (v_means2d_abs != nullptr) {
                             v_xy_abs_local = {abs(v_xy_local.x), abs(v_xy_local.y)};
@@ -415,11 +428,13 @@ call_kernel_with_dim(
     const torch::Tensor &render_colors, // [C, image_height, image_width, COLOR_DIM]
     const torch::Tensor &render_alphas, // [C, image_height, image_width, 1]
     const torch::Tensor &last_ids,      // [C, image_height, image_width]
+    const torch::Tensor &median_ids,    // [C, image_height, image_width]
     // gradients of outputs
     const torch::Tensor &v_render_colors,  // [C, image_height, image_width, 3]
     const torch::Tensor &v_render_alphas,  // [C, image_height, image_width, 1]
     const torch::Tensor &v_render_normals, // [C, image_height, image_width, 3]
     const torch::Tensor &v_render_distort, // [C, image_height, image_width, 1]
+    const torch::Tensor &v_render_median,  // [C, image_height, image_width, 1]
     // options
     bool absgrad) {
     
@@ -434,10 +449,12 @@ call_kernel_with_dim(
     CHECK_INPUT(render_colors);
     CHECK_INPUT(render_alphas);
     CHECK_INPUT(last_ids);
+    CHECK_INPUT(median_ids);
     CHECK_INPUT(v_render_colors);
     CHECK_INPUT(v_render_alphas);
     CHECK_INPUT(v_render_normals);
     CHECK_INPUT(v_render_distort);
+    CHECK_INPUT(v_render_median);
     if (backgrounds.has_value()) {
         CHECK_INPUT(backgrounds.value());
     }
@@ -495,9 +512,10 @@ call_kernel_with_dim(
                 image_width, image_height, tile_size, tile_width, tile_height,
                 tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
                 render_colors.data_ptr<float>(), render_alphas.data_ptr<float>(), 
-                last_ids.data_ptr<int32_t>(),
+                last_ids.data_ptr<int32_t>(), median_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(), v_render_alphas.data_ptr<float>(),
                 v_render_normals.data_ptr<float>(), v_render_distort.data_ptr<float>(),
+                v_render_median.data_ptr<float>(),
                 absgrad
                     ? reinterpret_cast<vec2<float> *>(v_means2d_abs.data_ptr<float>())
                     : nullptr,
@@ -528,11 +546,13 @@ rasterize_to_pixels_bwd_2dgs_tensor(
     const torch::Tensor &render_colors, // [C, image_height, image_width, COLOR_DIM]
     const torch::Tensor &render_alphas, // [C, image_height, image_width, 1]
     const torch::Tensor &last_ids,      // [C, image_height, image_width]
+    const torch::Tensor &median_ids,    // [C, image_height, image_width]
     // gradients of outputs
     const torch::Tensor &v_render_colors, // [C, image_height, image_width, 3]
     const torch::Tensor &v_render_alphas, // [C, image_height, image_width, 1]
     const torch::Tensor &v_render_normals,// [C, image_height, image_width, 3]
     const torch::Tensor &v_render_distort,// [C, image_height, image_width, 1]
+    const torch::Tensor &v_render_median, // [C, image_height, image_width, 1]
     // options
     bool absgrad) {
     
@@ -544,8 +564,9 @@ rasterize_to_pixels_bwd_2dgs_tensor(
         return call_kernel_with_dim<N>(                                                \
             means2d, ray_Ms, colors, opacities, normals, backgrounds, masks,           \
             image_width, image_height, tile_size, tile_offsets, flatten_ids,           \
-            render_colors, render_alphas, last_ids, v_render_colors,                   \
-            v_render_alphas, v_render_normals, v_render_distort, absgrad);
+            render_colors, render_alphas, last_ids, median_ids,                        \
+            v_render_colors, v_render_alphas, v_render_normals,                        \
+            v_render_distort, v_render_median, absgrad);
 
     switch (COLOR_DIM) {
         __GS__CALL_(1)
