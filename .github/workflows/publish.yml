@@ -18,7 +18,7 @@ jobs:
     environment: production
     strategy:
       matrix:
-        os: [windows-2019, ]
+        os: [ubuntu-20.04, ]
         python-version: ['3.10']
         cuda-version: ['cu118', ]
         exclude:
