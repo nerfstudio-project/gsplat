@@ -43,7 +43,15 @@ jobs:
         if: ${{ runner.os == 'Linux' }}
         run: |
           sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
 
+      - name: Check disk usage
+          run: df -h
+        - name: Check directory sizes
+          run: du -sh /usr/local/* /opt/* /usr/* | sort -hr
+          
       - name: Determine PyTorch version
         id: get-torch-version
         shell: bash
