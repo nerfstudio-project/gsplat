@@ -36,6 +36,7 @@ jobs:
           df -h
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
           sudo apt-get clean
           echo "Disk space after cleanup:"
           df -h
@@ -108,6 +109,7 @@ jobs:
       - name: Build wheel
         # using TORCH_CUDA_ARCH_LIST=7.5  to avoid error: no suitable conversion function from "__half" to "int" exists
         # see https://github.com/nerfstudio-project/gsplat/issues/146
+        # but do we want to specific the architecture here?
         run: |
           export TORCH_CUDA_ARCH_LIST=7.5 
           pip install wheel

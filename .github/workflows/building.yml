@@ -143,6 +143,7 @@ jobs:
 
       - name: Build wheel
         run: |
+          export TORCH_CUDA_ARCH_LIST=7.5 
           pip install wheel
           source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
           python setup.py bdist_wheel --dist-dir=dist
