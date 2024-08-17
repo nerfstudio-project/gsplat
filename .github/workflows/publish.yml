@@ -10,8 +10,6 @@ on: [push]
     # branches: [main]
 
 jobs:
-  env:
-    TORCH_CUDA_ARCH_LIST: 8.2
 
   build_wheels:
     name: Build wheels on ${{ matrix.os }} for python ${{ matrix.python-version }} and cuda { matrix.cuda-version }}

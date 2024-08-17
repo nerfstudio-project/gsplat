@@ -7,8 +7,7 @@ jobs:
   wheel:
     runs-on: ${{ matrix.os }}
     environment: production
-    env:
-      TORCH_CUDA_ARCH_LIST: 8.2
+
     strategy:
       fail-fast: false
       matrix:
