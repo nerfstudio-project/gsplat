@@ -143,10 +143,10 @@ jobs:
           BUILD_NO_CUDA=1 pip install .
 
       - name: Build wheel
-        run: |
-          export TORCH_CUDA_ARCH_LIST=8.2 
+        run: |          
           pip install wheel
           source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
+          export TORCH_CUDA_ARCH_LIST=8.2 
           python setup.py bdist_wheel --dist-dir=dist
         shell: bash  # `source` does not exist in windows powershell
 
