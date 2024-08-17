@@ -115,6 +115,10 @@ jobs:
           export TORCH_CUDA_ARCH_LIST="7.5"
           python setup.py bdist_wheel --dist-dir=dist
         shell: bash  # `source` does not exist in windows powershell
+      
+      - uses: actions/upload-artifact@v3
+        with:
+          path: dist/*.whl
 
   build_sdist:
     name: Build source distribution
@@ -123,24 +127,10 @@ jobs:
     - uses: actions/checkout@v2
     - name: Build sdist
       run: BUILD_NO_CUDA=1 pipx run build --sdist
-
-  upload_wheels:
-    name: Upload to Github artifacts
-    needs: [build_wheels, build_sdist]
-    runs-on: ubuntu-latest    
-    steps:
-    - name: Upload each file as a separate artifact
-      run: |
-        for file in dist/*; do
-          fname=$(basename "$file")
-          echo "Uploading $fname"
-          gh api \
-            -X POST \
-            -H "Accept: application/vnd.github.v3+json" \
-            /repos/${{ github.repository }}/actions/artifacts \
-            -F name="$fname" \
-            -F path="$file"
-        done
+    - uses: actions/upload-artifact@v3
+      with:
+        path: dist/*.tar.gz
+            
 
   upload_pypi:
     name: Upload to PyPi
