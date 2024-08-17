@@ -10,7 +10,6 @@ on: [push]
     # branches: [main]
 
 jobs:
-
   build_wheels:
     name: Build wheels on ${{ matrix.os }} for python ${{ matrix.python-version }} and cuda { matrix.cuda-version }}
     runs-on: ${{ matrix.os }}
@@ -116,10 +115,6 @@ jobs:
           export TORCH_CUDA_ARCH_LIST="7.5"
           python setup.py bdist_wheel --dist-dir=dist
         shell: bash  # `source` does not exist in windows powershell
-
-    - uses: actions/upload-artifact@v2
-      with:
-        path: dist/*.whl
 
   build_sdist:
     name: Build source distribution
