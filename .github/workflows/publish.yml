@@ -126,6 +126,8 @@ jobs:
 
   upload_wheels:
     name: Upload to Github artifacts
+    needs: [build_wheels, build_sdist]
+    runs-on: ubuntu-latest    
     steps:
     - name: Upload each file as a separate artifact
       run: |
