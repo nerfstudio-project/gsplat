@@ -768,7 +768,7 @@ class Runner:
             render_median = render_median.detach().cpu().squeeze(0).repeat(1, 1, 3).numpy()
             
             imageio.imwrite(
-                f"{self.render_dir}/val_{i:04d}_median_depth.png", (render_median * 255).astype(np.uint8)
+                f"{self.render_dir}/val_{i:04d}_median_depth_{step}.png", (render_median * 255).astype(np.uint8)
             )
     
             # write normals

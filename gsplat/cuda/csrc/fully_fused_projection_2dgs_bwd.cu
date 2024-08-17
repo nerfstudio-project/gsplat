@@ -83,6 +83,9 @@ namespace cg = cooperative_groups;
         v_ray_Ms[3], v_ray_Ms[4], v_ray_Ms[5],
         v_ray_Ms[6], v_ray_Ms[7], v_ray_Ms[8]
     );
+
+    // _v_ray_Ms[2][2] += v_depths[0];
+
     vec3<T> v_normal = glm::make_vec3(v_normals);
 
     vec3<T> v_mean(0.f);
@@ -103,7 +106,6 @@ namespace cg = cooperative_groups;
         v_scale,
         v_mean
     );
-
 
     // #if __CUDA_ARCH__ >= 700
     // write out results with warp-level reduction

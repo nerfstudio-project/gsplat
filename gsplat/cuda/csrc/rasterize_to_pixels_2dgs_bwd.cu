@@ -250,6 +250,11 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
             S v_opacity_local = 0.f;
             // initialize everything to 0, only set if the lane is valid
             if (valid) {
+                // gradient contribution from median depth
+                if (batch_end - t == median_idx) {
+                    v_rgb_local[COLOR_DIM - 1] += v_median;
+                }
+
                 // compute the current T for this gaussian
                 S ra = 1.0f / (1.0f - alpha);
                 T *= ra;
@@ -257,7 +262,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 const S fac = alpha * T;
                 PRAGMA_UNROLL
                 for (uint32_t k = 0; k < COLOR_DIM; ++k) {
-                    v_rgb_local[k] = fac * v_render_c[k];
+                    v_rgb_local[k] += fac * v_render_c[k];
                 }
                 // contribution from this pixel
                 S v_alpha = 0.f;
@@ -267,8 +272,6 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 }
 
                 // update v_normal for this gaussian
-                // TODO (WZ): derive the computational graph to see if the gradient flow
-                // is correct or not.
                 PRAGMA_UNROLL
                 for (uint32_t k = 0; k < 3; ++k) {
                     v_normal_local[k] = fac * v_render_n[k];
@@ -310,11 +313,8 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
 
                 //====== 2DGS ======//
                 if (opac * vis <= 0.999f) {
+                    S v_depth = v_rgb_local[COLOR_DIM - 1];
                     const S v_G = opac * v_alpha;
-                    S v_depth = 0.f;
-                    if (batch_end - t == median_idx) {
-                        v_depth += v_median;
-                    }
                     if (gauss_weight_3d <= gauss_weight_2d) {
                         const vec2<S> v_s = {
                             v_G * -vis * s.x + v_depth * w_M.x,
@@ -342,6 +342,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                         if (v_means2d_abs != nullptr) {
                             v_xy_abs_local = {abs(v_xy_local.x), abs(v_xy_local.y)};
                         }
+                        // v_w_M_local += v_depth;
                     }
                     v_opacity_local = vis * v_alpha;
                 }

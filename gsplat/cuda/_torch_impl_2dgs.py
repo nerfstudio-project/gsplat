@@ -141,10 +141,7 @@ def accumulate_2dgs(
     deltas = pixel_coords - means2d[camera_ids, gaussian_ids]  # [M, 2]
 
     M = ray_transforms[camera_ids, gaussian_ids]  # [M, 3, 3]
-    # print("\n")
-    # print(M.shape)
-    # for py in pixel_ids_y:
-    #     print(f"px: {py}")
+
     h_u = -M[..., :3, 0] + M[..., :3, 2] * pixel_ids_x[..., None]  # [M, 3]
     h_v = -M[..., :3, 1] + M[..., :3, 2] * pixel_ids_y[..., None]  # [M, 3]
     tmp = torch.cross(h_u, h_v, dim=-1)
@@ -181,6 +178,7 @@ def accumulate_2dgs(
         ray_indices=indices,
         n_rays=total_pixels,
     ).reshape(C, image_height, image_width, 3)
+
     return renders, alphas, renders_normal
 
 
@@ -239,6 +237,7 @@ def _rasterize_to_pixels_2dgs(
     )
     max_range = (isect_offsets_fl[1:] - isect_offsets_fl[:-1]).max().item()
     num_batches = int((max_range + block_size - 1) // block_size)
+    
     for step in range(0, num_batches, batch_per_iter):
         transmittances = 1.0 - render_alphas[..., 0]
 

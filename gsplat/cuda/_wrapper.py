@@ -1726,6 +1726,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         v_render_distort: Tensor,
         v_render_median: Tensor,
     ):
+        
         (
             means2d,
             ray_transformations,
@@ -1793,9 +1794,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             )
         else:
             v_backgrounds = None
-
-        # import pdb
-        # pdb.set_trace()
+            
         return (
             v_means2d,
             v_ray_transformations,

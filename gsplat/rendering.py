@@ -23,6 +23,7 @@ from .distributed import (
 )
 from .utils import _get_projection_matrix, depth_to_normal
 
+import torch.nn.functional as F
 
 def rasterization(
     means: Tensor,  # [N, 3]
@@ -1012,7 +1013,7 @@ def rasterization_2dgs(
     radius_clip: float = 0.0,
     eps2d: float = 0.3,
     sh_degree: Optional[int] = None,
-    packed: bool = True,
+    packed: bool = False,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
     render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
@@ -1132,6 +1133,7 @@ def rasterization_2dgs(
     # Rasterize to pixels
     if render_mode in ["RGB+D", "RGB+ED"]:
         colors = torch.cat((colors, depths[..., None]), dim=-1)
+        # backgrounds = torch.cat((backgrounds, torch.zeros((C, 1), device="cuda")), dim=-1)
     elif render_mode in ["D", "ED"]:
         colors = depths[..., None]
     else:  # RGB
@@ -1335,7 +1337,7 @@ def rasterization_2dgs_inria_wrapper(
     # render_depth is either median or expected by setting depth_ratio to 1 or 0
     # for bounded scene, use median depth, i.e., depth_ratio = 1;
     # for unbounded scene, use expected depth, i.e., depth_ratio = 0, to reduce disk aliasing.
-    depth_ratio = 0
+    depth_ratio = 1
     render_depth = (
         render_depth_expected * (1 - depth_ratio) + (depth_ratio) * render_depth_median
     )
