@@ -37,6 +37,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /opt/ghc
           sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
           sudo apt-get clean
           echo "Disk space after cleanup:"
           df -h
@@ -111,7 +112,7 @@ jobs:
         # see https://github.com/nerfstudio-project/gsplat/issues/146
         # but do we want to specific the architecture here?
         run: |
-          export TORCH_CUDA_ARCH_LIST=7.5 
+          export TORCH_CUDA_ARCH_LIST=8.2 
           pip install wheel
           source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
           python setup.py bdist_wheel --dist-dir=dist
