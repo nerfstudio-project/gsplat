@@ -15,7 +15,7 @@ jobs:
         # python-version: ['3.7']
         # torch-version: [1.11.0]
         # cuda-version: ['cu113']
-        os: [ubuntu-20.04, windows-2019]
+        os: [ubuntu-20.04]
         # support version based on: https://download.pytorch.org/whl/torch/
         #python-version: ['3.7', '3.8', '3.9', '3.10', '3.11']
         #torch-version: [1.11.0, 1.12.0, 1.13.0, 2.0.0]
@@ -145,7 +145,7 @@ jobs:
         run: |          
           pip install wheel
           source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
-          export TORCH_CUDA_ARCH_LIST="8.0;8.6"
+          export TORCH_CUDA_ARCH_LIST="8.0"
           python setup.py bdist_wheel --dist-dir=dist
         shell: bash  # `source` does not exist in windows powershell
 
