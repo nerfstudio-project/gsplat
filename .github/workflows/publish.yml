@@ -27,6 +27,23 @@ jobs:
         with:
           submodules: 'recursive'
 
+
+      - name: Display GPU name
+        run: |
+          if command -v nvidia-smi &> /dev/null
+          then
+            echo "GPU Information:"
+            nvidia-smi --query-gpu=name --format=csv,noheader
+          else
+            echo "nvidia-smi not found. Make sure you are running this on a machine with NVIDIA GPUs and that the NVIDIA drivers are installed."
+          fi
+          if command -v nvcc &> /dev/null
+          then
+            echo "Supported CUDA architectures:"
+            nvcc --list-gpu-arch
+          else
+            echo "nvcc not found. Make sure you have the CUDA toolkit installed."
+          fi
       - name: Free up disk space
         if: ${{ runner.os == 'Linux' }}
         run: |
@@ -108,7 +125,7 @@ jobs:
       - name: Build wheel
         # architectures 8.x and 9.x (Ampere, Ada, Hopper) are not avaible in the current github action
         # architectures 5.x give compilation errors "no suitable conversion function from "__half" to "int" exists"
-        # architectures 6.x give compilation errors  "namespace "cooperative_groups" has no member "labeled_partition""
+        # architectures 6.x give compilation errors "namespace "cooperative_groups" has no member "labeled_partition""
         run: |          
           pip install wheel
           source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
