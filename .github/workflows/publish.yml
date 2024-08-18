@@ -27,8 +27,6 @@ jobs:
         with:
           submodules: 'recursive'
 
-
-
       - name: Free up disk space
         if: ${{ runner.os == 'Linux' }}
         run: |
@@ -75,23 +73,6 @@ jobs:
         run: |
           bash .github/workflows/cuda/${{ runner.os }}.sh ${{ matrix.cuda-version }}
       
-      - name: Display GPU name
-        shell: bash
-        run: |
-          if command -v nvidia-smi &> /dev/null
-          then
-            echo "GPU Information:"
-            nvidia-smi --query-gpu=name --format=csv,noheader
-          else
-            echo "nvidia-smi not found. Make sure you are running this on a machine with NVIDIA GPUs and that the NVIDIA drivers are installed."
-          fi
-          if command -v nvcc &> /dev/null
-          then
-            echo "Supported CUDA architectures:"
-            nvcc --list-gpu-arch
-          else
-            echo "nvcc not found. Make sure you have the CUDA toolkit installed."
-          fi
       - name: Install PyTorch 
         run: |
           pip install torch==${{ env.torch_version }} --extra-index-url https://download.pytorch.org/whl/${{ matrix.cuda-version }}
@@ -131,6 +112,8 @@ jobs:
         run: |          
           pip install wheel
           source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
+          nvidia-smi --query-gpu=name --format=csv,noheader
+          nvcc --list-gpu-arch
           export TORCH_CUDA_ARCH_LIST="7.2;7.5"
           python setup.py bdist_wheel --dist-dir=dist
         shell: bash  # `source` does not exist in windows powershell
