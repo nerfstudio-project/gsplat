@@ -29,6 +29,7 @@ jobs:
 
 
       - name: Display GPU name
+        shell: bash
         run: |
           if command -v nvidia-smi &> /dev/null
           then
