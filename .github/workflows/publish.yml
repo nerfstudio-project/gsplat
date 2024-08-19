@@ -112,7 +112,6 @@ jobs:
         run: |          
           pip install wheel
           source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
-          nvidia-smi --query-gpu=name --format=csv,noheader
           nvcc --list-gpu-arch
           export TORCH_CUDA_ARCH_LIST="7.2;7.5"
           python setup.py bdist_wheel --dist-dir=dist
