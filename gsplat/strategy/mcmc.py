@@ -109,7 +109,7 @@ class MCMCStrategy(Strategy):
         info: Dict[str, Any],
         lr: float,
     ):
-        """Callback function to be executed before the `loss.backward()` call.
+        """Callback function to be executed after the `loss.backward()` call.
 
         Args:
             lr (float): Learning rate for "means" attribute of the GS.
