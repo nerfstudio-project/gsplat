@@ -1203,6 +1203,7 @@ def fully_fused_projection_2dgs(
             means,
             quats,
             scales,
+            densifications,
             viewmats,
             Ks,
             width,
@@ -1356,6 +1357,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
         means: Tensor,  # [N, 3]
         quats: Tensor,  # [N, 4]
         scales: Tensor,  # [N, 3]
+        densifications: Tensor, # [N, 2]
         viewmats: Tensor,  # [C, 4, 4]
         Ks: Tensor,  # [C, 3, 3]
         width: int,
@@ -1392,6 +1394,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
             means,
             quats,
             scales,
+            densifications,
             viewmats,
             Ks,
             ray_Ms,
@@ -1419,6 +1422,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
             means,
             quats,
             scales,
+            densifications,
             viewmats,
             Ks,
             ray_Ms,
@@ -1427,14 +1431,13 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
         height = ctx.height
         sparse_grad = ctx.sparse_grad
         
-        print("v_normals: ", v_normals)
-
-        v_means, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
+        v_means, v_quats, v_scales, v_viewmats, v_densify = _make_lazy_cuda_func(
             "fully_fused_projection_packed_bwd_2dgs"
         )(
             means,
             quats,
             scales,
+            densifications,
             viewmats,
             Ks,
             width,
@@ -1491,6 +1494,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
             v_means,
             v_quats,
             v_scales,
+            v_densify,
             v_viewmats,
             None,
             None,
@@ -1510,6 +1514,7 @@ def rasterize_to_pixels_2dgs(
     colors: Tensor,
     opacities: Tensor,
     normals: Tensor,
+    densify: Tensor,
     image_width: int,
     image_height: int,
     tile_size: int,
@@ -1527,7 +1532,7 @@ def rasterize_to_pixels_2dgs(
         nnz = means2d.size(0)
         assert means2d.shape == (nnz, 2), means2d.shape
         assert ray_transformations.shape == (nnz, 3, 3), ray_transformations.shape
-        assert colors.shape == nnz, colors.shape
+        assert colors.shape[0] == nnz, colors.shape
         assert opacities.shape == (nnz,), opacities.shape
     else:
         N = means2d.size(1)
@@ -1583,6 +1588,7 @@ def rasterize_to_pixels_2dgs(
         colors.contiguous(),
         opacities.contiguous(),
         normals.contiguous(),
+        densify.contiguous(),
         backgrounds,
         masks,
         image_width,
@@ -1659,6 +1665,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         colors: Tensor,
         opacities: Tensor,
         normals: Tensor,
+        densify: Tensor,
         backgrounds: Tensor,
         masks: Tensor,
         width: int,
@@ -1698,6 +1705,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             colors,
             opacities,
             normals,
+            densify,
             backgrounds,
             masks,
             isect_offsets,
@@ -1733,6 +1741,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             colors,
             opacities,
             normals,
+            densify,
             backgrounds,
             masks,
             isect_offsets,
@@ -1747,11 +1756,6 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         tile_size = ctx.tile_size
         absgrad = ctx.absgrad
 
-        # if distloss:
-        #     assert v_render_distloss is not None, "v_render_distloss should not be None"
-        #     v_render_distloss = v_render_distloss.contiguous()
-        # else:
-        #     assert v_render_distloss is None, "v_render_distloss should be None"
 
         (
             v_means2d_abs,
@@ -1760,12 +1764,14 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             v_colors,
             v_opacities,
             v_normals,
+            v_densify,
         ) = _make_lazy_cuda_func("rasterize_to_pixels_bwd_2dgs")(
             means2d,
             ray_transformations,
             colors,
             opacities,
             normals,
+            densify,
             backgrounds,
             masks,
             width,
@@ -1788,7 +1794,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         if absgrad:
             means2d.absgrad = v_means2d_abs
 
-        if ctx.needs_input_grad[5]:
+        if ctx.needs_input_grad[6]:
             v_backgrounds = (v_render_colors * (1.0 - render_alphas).float()).sum(
                 dim=(1, 2)
             )
@@ -1801,6 +1807,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             v_colors,
             v_opacities,
             v_normals,
+            v_densify,
             v_backgrounds,
             None,
             None,

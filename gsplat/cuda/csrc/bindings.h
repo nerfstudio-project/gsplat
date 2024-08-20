@@ -375,6 +375,7 @@ std::tuple<
     torch::Tensor,
     torch::Tensor,
     torch::Tensor,
+    torch::Tensor,
     torch::Tensor>
 rasterize_to_pixels_bwd_2dgs_tensor(
     // Gaussian parameters
@@ -382,7 +383,8 @@ rasterize_to_pixels_bwd_2dgs_tensor(
     const torch::Tensor &ray_Ms,    // [C, N, 3, 3] or [nnz, 3, 3]
     const torch::Tensor &colors,    // [C, N, 3] or [nnz, 3]
     const torch::Tensor &opacities, // [C, N] or [nnz]
-    const torch::Tensor &normals,   // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &normals,   // [C, N, 3] or [nnz, 3],
+    const torch::Tensor &densify,
     const at::optional<torch::Tensor> &backgrounds, // [C, 3]
     const at::optional<torch::Tensor> &masks, // [C, tile_height, tile_width]
     // image size
@@ -393,8 +395,7 @@ rasterize_to_pixels_bwd_2dgs_tensor(
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
     const torch::Tensor &flatten_ids,  // [n_isects]
     // forward outputs
-    const torch::Tensor
-        &render_colors, // [C, image_height, image_width, COLOR_DIM]
+    const torch::Tensor &render_colors, // [C, image_height, image_width, COLOR_DIM]
     const torch::Tensor &render_alphas, // [C, image_height, image_width, 1]
     const torch::Tensor &last_ids,      // [C, image_height, image_width]
     const torch::Tensor &median_ids,    // [C, image_height, image_width]
@@ -448,12 +449,13 @@ fully_fused_projection_packed_fwd_2dgs_tensor(
     const float radius_clip
 );
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fully_fused_projection_packed_bwd_2dgs_tensor(
     // fwd inputs
     const torch::Tensor &means,    // [N, 3]
     const torch::Tensor &quats,    // [N, 4]
     const torch::Tensor &scales,   // [N, 3]
+    const torch::Tensor &densifications, // [N, 2]
     const torch::Tensor &viewmats, // [C, 4, 4]
     const torch::Tensor &Ks,       // [C, 3, 3]
     const uint32_t image_width,

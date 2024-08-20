@@ -84,7 +84,7 @@ namespace cg = cooperative_groups;
         v_ray_Ms[6], v_ray_Ms[7], v_ray_Ms[8]
     );
 
-    // _v_ray_Ms[2][2] += v_depths[0];
+    _v_ray_Ms[2][2] += v_depths[0];
 
     vec3<T> v_normal = glm::make_vec3(v_normals);
 
@@ -136,7 +136,7 @@ namespace cg = cooperative_groups;
         gpuAtomicAdd(v_scales + 1, v_scale[1]);
     }
 
-    float depth = ray_Ms[8];
+    T depth = ray_Ms[8];
     v_densify[0] = v_ray_Ms[2] * depth;
     v_densify[1] = v_ray_Ms[5] * depth;
  }

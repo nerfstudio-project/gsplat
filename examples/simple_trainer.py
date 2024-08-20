@@ -25,7 +25,7 @@ from typing_extensions import assert_never
 from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
 
 from gsplat.distributed import cli
-from gsplat.rendering import rasterization
+from gsplat.rendering import rasterization, rasterization_2dgs
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 
 
@@ -391,7 +391,30 @@ class Runner:
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
-        render_colors, render_alphas, info = rasterization(
+        # render_colors, render_alphas, info = rasterization(
+        #     means=means,
+        #     quats=quats,
+        #     scales=scales,
+        #     opacities=opacities,
+        #     colors=colors,
+        #     viewmats=torch.linalg.inv(camtoworlds),  # [C, 4, 4]
+        #     Ks=Ks,  # [C, 3, 3]
+        #     width=width,
+        #     height=height,
+        #     packed=self.cfg.packed,
+        #     absgrad=(
+        #         self.cfg.strategy.absgrad
+        #         if isinstance(self.cfg.strategy, DefaultStrategy)
+        #         else False
+        #     ),
+        #     sparse_grad=self.cfg.sparse_grad,
+        #     rasterize_mode=rasterize_mode,
+        #     distributed=self.world_size > 1,
+        #     **kwargs,
+        # )
+        
+        # print(f"means: {means.shape}")
+        renders, info = rasterization_2dgs(
             means=means,
             quats=quats,
             scales=scales,
@@ -402,16 +425,13 @@ class Runner:
             width=width,
             height=height,
             packed=self.cfg.packed,
-            absgrad=(
-                self.cfg.strategy.absgrad
-                if isinstance(self.cfg.strategy, DefaultStrategy)
-                else False
-            ),
+            absgrad=False,
             sparse_grad=self.cfg.sparse_grad,
             rasterize_mode=rasterize_mode,
-            distributed=self.world_size > 1,
             **kwargs,
         )
+        render_colors, render_alphas = renders[0], renders[1]
+        
         return render_colors, render_alphas, info
 
     def train(self):

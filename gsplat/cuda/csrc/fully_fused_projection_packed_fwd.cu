@@ -237,8 +237,7 @@ fully_fused_projection_packed_fwd_tensor(
         nnz = block_accum[-1].item<int32_t>();
     } else {
         nnz = 0;
-    }
-
+    }    
     // second pass
     torch::Tensor indptr = torch::empty({C + 1}, opt);
     torch::Tensor camera_ids = torch::empty({nnz}, opt.dtype(torch::kInt64));

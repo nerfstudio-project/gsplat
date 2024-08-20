@@ -38,7 +38,8 @@ __global__ void fully_fused_projection_packed_bwd_2dgs_kernel(
     T *__restrict__ v_means,   // [N, 3] or [nnz, 3]
     T *__restrict__ v_quats,   // [N, 4] or [nnz, 4] Optional
     T *__restrict__ v_scales,  // [N, 3] or [nnz, 3] Optional
-    T *__restrict__ v_viewmats // [C, 4, 4] Optional
+    T *__restrict__ v_viewmats, // [C, 4, 4] Optional
+    T *__restrict__ v_densify
 ) {
     // parallelize over nnz.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -156,12 +157,13 @@ __global__ void fully_fused_projection_packed_bwd_2dgs_kernel(
 }
 
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fully_fused_projection_packed_bwd_2dgs_tensor(
     // fwd inputs
     const torch::Tensor &means,                // [N, 3]
     const torch::Tensor &quats,                // [N, 4]
     const torch::Tensor &scales,               // [N, 3]
+    const torch::Tensor &densifications,       // [N, 2]
     const torch::Tensor &viewmats,             // [C, 4, 4]
     const torch::Tensor &Ks,                   // [C, 3, 3]
     const uint32_t image_width, const uint32_t image_height,
@@ -180,6 +182,7 @@ fully_fused_projection_packed_bwd_2dgs_tensor(
     CHECK_INPUT(means);
     CHECK_INPUT(quats);
     CHECK_INPUT(scales);
+    CHECK_INPUT(densifications);
     CHECK_INPUT(viewmats);
     CHECK_INPUT(Ks);
     CHECK_INPUT(camera_ids);
@@ -196,7 +199,7 @@ fully_fused_projection_packed_bwd_2dgs_tensor(
 
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
-    torch::Tensor v_means, v_quats, v_scales, v_viewmats;
+    torch::Tensor v_means, v_quats, v_scales, v_viewmats, v_densify;
     if (sparse_grad) {
         v_means = torch::zeros({nnz, 3}, means.options());
         
@@ -206,6 +209,8 @@ fully_fused_projection_packed_bwd_2dgs_tensor(
         if (viewmats_requires_grad) {
             v_viewmats = torch::zeros({C, 4, 4}, viewmats.options());
         }
+
+        v_densify = torch::zeros({nnz, 2}, densifications.options());
     } else {
         v_means = torch::zeros_like(means);
 
@@ -215,6 +220,8 @@ fully_fused_projection_packed_bwd_2dgs_tensor(
         if (viewmats_requires_grad) {
             v_viewmats = torch::zeros_like(viewmats);
         }
+
+        v_densify = torch::zeros_like(densifications);
     }
     if (nnz) {
 
@@ -232,7 +239,8 @@ fully_fused_projection_packed_bwd_2dgs_tensor(
             v_means.data_ptr<float>(),
             v_quats.data_ptr<float>(),
             v_scales.data_ptr<float>(),
-            viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr);    
+            viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr,
+            v_densify.data_ptr<float>());    
     }
-    return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
+    return std::make_tuple(v_means, v_quats, v_scales, v_viewmats, v_densify);
 }

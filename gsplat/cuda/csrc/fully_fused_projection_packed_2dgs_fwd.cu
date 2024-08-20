@@ -239,7 +239,7 @@ fully_fused_projection_packed_fwd_2dgs_tensor(
     } else {
         nnz = 0;
     }
-
+    
     // second pass
     torch::Tensor indptr = torch::empty({C + 1}, opt);
     torch::Tensor camera_ids = torch::empty({nnz}, opt.dtype(torch::kInt64));

@@ -44,7 +44,8 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
     S *__restrict__ v_ray_Ms,      // [C, N, 3, 3] or [nnz, 3, 3]
     S *__restrict__ v_colors,            // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
     S *__restrict__ v_opacities,         // [C, N] or [nnz]
-    S *__restrict__ v_normals            // [C, N, 3] or [nnz, 3]   
+    S *__restrict__ v_normals,            // [C, N, 3] or [nnz, 3] 
+    S *__restrict__ v_densify  
 ) {
     auto block = cg::this_thread_block();
     uint32_t camera_id = block.group_index().x;
@@ -313,7 +314,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
 
                 //====== 2DGS ======//
                 if (opac * vis <= 0.999f) {
-                    S v_depth = v_rgb_local[COLOR_DIM - 1];
+                    S v_depth = 0.f;
                     const S v_G = opac * v_alpha;
                     if (gauss_weight_3d <= gauss_weight_2d) {
                         const vec2<S> v_s = {
@@ -342,7 +343,6 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                         if (v_means2d_abs != nullptr) {
                             v_xy_abs_local = {abs(v_xy_local.x), abs(v_xy_local.y)};
                         }
-                        // v_w_M_local += v_depth;
                     }
                     v_opacity_local = vis * v_alpha;
                 }
@@ -403,6 +403,11 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 }
 
                 gpuAtomicAdd(v_opacities + g, v_opacity_local);
+
+                S *v_densify_ptr = (S *)(v_densify) + 2 * g;
+                S depth = w_M.z;
+                v_densify_ptr[0] = v_ray_Ms_ptr[2] * depth;
+                v_densify_ptr[1] = v_ray_Ms_ptr[5] * depth;
             } 
         }
     }
@@ -410,7 +415,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
 
 
 template <uint32_t CDIM>
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 call_kernel_with_dim(
     // Gaussian parameters
     const torch::Tensor &means2d,                   // [C, N, 2] or [nnz, 2]
@@ -418,6 +423,7 @@ call_kernel_with_dim(
     const torch::Tensor &colors,                    // [C, N, 3] or [nnz, 3]
     const torch::Tensor &opacities,                 // [C, N] or [nnz]
     const torch::Tensor &normals,                   // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &densify,
     const at::optional<torch::Tensor> &backgrounds, // [C, 3]
     const at::optional<torch::Tensor> &masks,       // [C, tile_height, tile_width]
     // image size
@@ -445,6 +451,7 @@ call_kernel_with_dim(
     CHECK_INPUT(colors);
     CHECK_INPUT(opacities);
     CHECK_INPUT(normals);
+    CHECK_INPUT(densify);
     CHECK_INPUT(tile_offsets);
     CHECK_INPUT(flatten_ids);
     CHECK_INPUT(render_colors);
@@ -486,6 +493,7 @@ call_kernel_with_dim(
     if (absgrad) {
         v_means2d_abs = torch::zeros_like(means2d);
     }
+    torch::Tensor v_densify = torch::zeros_like(densify);
 
     if (n_isects) {
         const uint32_t shared_mem = tile_size * tile_size *
@@ -522,13 +530,13 @@ call_kernel_with_dim(
                     : nullptr,
                 reinterpret_cast<vec2<float> *>(v_means2d.data_ptr<float>()),
                 v_ray_Ms.data_ptr<float>(), v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>(), v_normals.data_ptr<float>());
+                v_opacities.data_ptr<float>(), v_normals.data_ptr<float>(), v_densify.data_ptr<float>());
     }
 
-    return std::make_tuple(v_means2d_abs, v_means2d, v_ray_Ms, v_colors, v_opacities, v_normals);
+    return std::make_tuple(v_means2d_abs, v_means2d, v_ray_Ms, v_colors, v_opacities, v_normals, v_densify);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 rasterize_to_pixels_bwd_2dgs_tensor(
     // Gaussian parameters
     const torch::Tensor &means2d,                   // [C, N, 2] or [nnz, 2]
@@ -536,6 +544,7 @@ rasterize_to_pixels_bwd_2dgs_tensor(
     const torch::Tensor &colors,                    // [C, N, 3] or [nnz, 3]
     const torch::Tensor &opacities,                 // [C, N] or [nnz]
     const torch::Tensor &normals,                   // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &densify,
     const at::optional<torch::Tensor> &backgrounds, // [C, 3]
     const at::optional<torch::Tensor> &masks,       // [C, tile_height, tile_width]
     // image size
@@ -563,7 +572,7 @@ rasterize_to_pixels_bwd_2dgs_tensor(
 #define __GS__CALL_(N)                                                                 \
     case N:                                                                            \
         return call_kernel_with_dim<N>(                                                \
-            means2d, ray_Ms, colors, opacities, normals, backgrounds, masks,           \
+            means2d, ray_Ms, colors, opacities, normals, densify, backgrounds, masks,  \
             image_width, image_height, tile_size, tile_offsets, flatten_ids,           \
             render_colors, render_alphas, last_ids, median_ids,                        \
             v_render_colors, v_render_alphas, v_render_normals,                        \

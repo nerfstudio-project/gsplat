@@ -69,7 +69,7 @@ class DefaultStrategy(Strategy):
 
     """
 
-    prune_opa: float = 0.005
+    prune_opa: float = 0.05
     grow_grad2d: float = 0.0002
     grow_scale3d: float = 0.01
     grow_scale2d: float = 0.05
@@ -205,6 +205,7 @@ class DefaultStrategy(Strategy):
 
         # initialize state on the first run
         n_gaussian = len(list(params.values())[0])
+        
         if state["grad2d"] is None:
             state["grad2d"] = torch.zeros(n_gaussian, device=grads.device)
         if state["count"] is None:
@@ -214,6 +215,7 @@ class DefaultStrategy(Strategy):
             state["radii"] = torch.zeros(n_gaussian, device=grads.device)
 
         # update the running state
+
         if packed:
             # grads is [nnz, 2]
             gs_ids = info["gaussian_ids"]  # [nnz]
@@ -222,9 +224,18 @@ class DefaultStrategy(Strategy):
             # grads is [C, N, 2]
             sel = info["radii"] > 0.0  # [C, N]
             gs_ids = torch.where(sel)[1]  # [nnz]
+            if len(grads.shape) != 3:
+                grads = grads.unsqueeze(0)
             grads = grads[sel]  # [nnz, 2]
             radii = info["radii"][sel]  # [nnz]
 
+        # sp = state["grad2d"].shape
+        # print(f"state shape: {sp}")
+        # print(f"gs_ids: {gs_ids.shape}")
+        # print(f"grads: {grads.shape}")
+        # print(f"n_gaussian: {n_gaussian}")
+        # import pdb
+        # pdb.set_trace()
         state["grad2d"].index_add_(0, gs_ids, grads.norm(dim=-1))
         state["count"].index_add_(
             0, gs_ids, torch.ones_like(gs_ids, dtype=torch.float32)

@@ -433,6 +433,7 @@ class Runner:
             render_normals = info["normals_rend"]
             normals_from_depth = info["normals_surf"]
             render_distort = info["render_distloss"]
+            render_median = render_colors[..., 3]
 
         return (
             render_colors,
@@ -626,8 +627,6 @@ class Runner:
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
-                if cfg.dist_loss and False:
-                    self.writer.add_scalar("train/distloss", distloss.item(), step)
                 if cfg.normal_loss:
                     self.writer.add_scalar("train/normalloss", normalloss.item(), step)
                 if cfg.dist_loss:
@@ -649,6 +648,7 @@ class Runner:
                 state=self.strategy_state,
                 step=step,
                 info=info,
+                packed=cfg.packed,
             )
 
             # Turn Gradients into Sparse Tensor before running optimizer
@@ -765,7 +765,8 @@ class Runner:
 
             # write median depths
             render_median = (render_median - render_median.min()) / (render_median.max() - render_median.min())
-            render_median = render_median.detach().cpu().squeeze(0).repeat(1, 1, 3).numpy()
+            render_median = render_median.detach().cpu().squeeze(0).unsqueeze(-1).repeat(1, 1, 3).numpy()
+            # render_median = render_median.detach().cpu().squeeze(0).repeat(1, 1, 3).numpy()
             
             imageio.imwrite(
                 f"{self.render_dir}/val_{i:04d}_median_depth_{step}.png", (render_median * 255).astype(np.uint8)
