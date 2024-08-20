@@ -35,7 +35,9 @@ def _multinomial_sample(weights: Tensor, n: int, replacement: bool = True) -> Te
         # Fallback to numpy.random.choice for larger element spaces
         weights = weights / weights.sum()
         weights_np = weights.detach().cpu().numpy()
-        sampled_idxs_np = np.random.choice(num_elements, size=n, p=weights_np, replace=replacement)
+        sampled_idxs_np = np.random.choice(
+            num_elements, size=n, p=weights_np, replace=replacement
+        )
         sampled_idxs = torch.from_numpy(sampled_idxs_np)
 
         # Return the sampled indices on the original device
