@@ -311,6 +311,7 @@
         <article role="main" id="furo-main-content">
           <h1>Source code for gsplat.cuda._wrapper</h1><div class="highlight"><pre>
 <span></span><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span>
+<span class="kn">import</span> <span class="nn">warnings</span>
 
 <span class="kn">import</span> <span class="nn">torch</span>
 <span class="kn">from</span> <span class="nn">torch</span> <span class="kn">import</span> <span class="n">Tensor</span>
@@ -395,8 +396,6 @@
 
 
 
-<div class="viewcode-block" id="persp_proj">
-<a class="viewcode-back" href="../../../apis/utils.html#gsplat.persp_proj">[docs]</a>
 <span class="k">def</span> <span class="nf">persp_proj</span><span class="p">(</span>
     <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 3]</span>
     <span class="n">covars</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 3, 3]</span>
@@ -405,6 +404,40 @@
     <span class="n">height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Perspective projection on Gaussians.</span>
+<span class="sd">    DEPRECATED: please use `proj` with `ortho=False` instead.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        means: Gaussian means. [C, N, 3]</span>
+<span class="sd">        covars: Gaussian covariances. [C, N, 3, 3]</span>
+<span class="sd">        Ks: Camera intrinsics. [C, 3, 3]</span>
+<span class="sd">        width: Image width.</span>
+<span class="sd">        height: Image height.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A tuple:</span>
+
+<span class="sd">        - **Projected means**. [C, N, 2]</span>
+<span class="sd">        - **Projected covariances**. [C, N, 2, 2]</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
+        <span class="s2">&quot;persp_proj is deprecated and will be removed in a future release. &quot;</span>
+        <span class="s2">&quot;Use proj with ortho=False instead.&quot;</span><span class="p">,</span>
+        <span class="ne">DeprecationWarning</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="n">proj</span><span class="p">(</span><span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">Ks</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">height</span><span class="p">,</span> <span class="n">ortho</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="proj">
+<a class="viewcode-back" href="../../../apis/utils.html#gsplat.proj">[docs]</a>
+<span class="k">def</span> <span class="nf">proj</span><span class="p">(</span>
+    <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 3]</span>
+    <span class="n">covars</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 3, 3]</span>
+    <span class="n">Ks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, 3, 3]</span>
+    <span class="n">width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">ortho</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Projection of Gaussians (perspective or orthographic).</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        means: Gaussian means. [C, N, 3]</span>
@@ -426,7 +459,7 @@
     <span class="n">means</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="n">covars</span> <span class="o">=</span> <span class="n">covars</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="n">Ks</span> <span class="o">=</span> <span class="n">Ks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
-    <span class="k">return</span> <span class="n">_PerspProj</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">Ks</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">height</span><span class="p">)</span></div>
+    <span class="k">return</span> <span class="n">_Proj</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">Ks</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">height</span><span class="p">,</span> <span class="n">ortho</span><span class="p">)</span></div>
 
 
 
@@ -480,12 +513,13 @@
     <span class="n">packed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">sparse_grad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">calc_compensations</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">ortho</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Projects Gaussians to 2D.</span>
 
 <span class="sd">    This function fuse the process of computing covariances</span>
 <span class="sd">    (:func:`quat_scale_to_covar_preci()`), transforming to camera space (:func:`world_to_cam()`),</span>
-<span class="sd">    and perspective projection (:func:`persp_proj()`).</span>
+<span class="sd">    and projection (:func:`proj()`).</span>
 
 <span class="sd">    .. note::</span>
 
@@ -581,6 +615,7 @@
             <span class="n">radius_clip</span><span class="p">,</span>
             <span class="n">sparse_grad</span><span class="p">,</span>
             <span class="n">calc_compensations</span><span class="p">,</span>
+            <span class="n">ortho</span><span class="p">,</span>
         <span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">_FullyFusedProjection</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span>
@@ -597,6 +632,7 @@
             <span class="n">far_plane</span><span class="p">,</span>
             <span class="n">radius_clip</span><span class="p">,</span>
             <span class="n">calc_compensations</span><span class="p">,</span>
+            <span class="n">ortho</span><span class="p">,</span>
         <span class="p">)</span></div>
 
 
@@ -958,7 +994,7 @@
         <span class="k">return</span> <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
 
 
-<span class="k">class</span> <span class="nc">_PerspProj</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
+<span class="k">class</span> <span class="nc">_Proj</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Perspective fully_fused_projection on Gaussians.&quot;&quot;&quot;</span>
 
     <span class="nd">@staticmethod</span>
@@ -969,13 +1005,15 @@
         <span class="n">Ks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, 3, 3]</span>
         <span class="n">width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
         <span class="n">height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">ortho</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-        <span class="n">means2d</span><span class="p">,</span> <span class="n">covars2d</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;persp_proj_fwd&quot;</span><span class="p">)(</span>
-            <span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">Ks</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">height</span>
+        <span class="n">means2d</span><span class="p">,</span> <span class="n">covars2d</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;proj_fwd&quot;</span><span class="p">)(</span>
+            <span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">Ks</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">height</span><span class="p">,</span> <span class="n">ortho</span>
         <span class="p">)</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">save_for_backward</span><span class="p">(</span><span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">Ks</span><span class="p">)</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">width</span> <span class="o">=</span> <span class="n">width</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">height</span> <span class="o">=</span> <span class="n">height</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">ortho</span> <span class="o">=</span> <span class="n">ortho</span>
         <span class="k">return</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">covars2d</span>
 
     <span class="nd">@staticmethod</span>
@@ -983,16 +1021,18 @@
         <span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">Ks</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
         <span class="n">width</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">width</span>
         <span class="n">height</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">height</span>
-        <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;persp_proj_bwd&quot;</span><span class="p">)(</span>
+        <span class="n">ortho</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">ortho</span>
+        <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;proj_bwd&quot;</span><span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">covars</span><span class="p">,</span>
             <span class="n">Ks</span><span class="p">,</span>
             <span class="n">width</span><span class="p">,</span>
             <span class="n">height</span><span class="p">,</span>
+            <span class="n">ortho</span><span class="p">,</span>
             <span class="n">v_means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
             <span class="n">v_covars2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="p">)</span>
-        <span class="k">return</span> <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
+        <span class="k">return</span> <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
 
 
 <span class="k">class</span> <span class="nc">_WorldToCam</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
@@ -1052,6 +1092,7 @@
         <span class="n">far_plane</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
         <span class="n">radius_clip</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
         <span class="n">calc_compensations</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+        <span class="n">ortho</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
         <span class="c1"># &quot;covars&quot; and {&quot;quats&quot;, &quot;scales&quot;} are mutually exclusive</span>
         <span class="n">radii</span><span class="p">,</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">depths</span><span class="p">,</span> <span class="n">conics</span><span class="p">,</span> <span class="n">compensations</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
@@ -1070,6 +1111,7 @@
             <span class="n">far_plane</span><span class="p">,</span>
             <span class="n">radius_clip</span><span class="p">,</span>
             <span class="n">calc_compensations</span><span class="p">,</span>
+            <span class="n">ortho</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="n">calc_compensations</span><span class="p">:</span>
             <span class="n">compensations</span> <span class="o">=</span> <span class="kc">None</span>
@@ -1079,6 +1121,7 @@
         <span class="n">ctx</span><span class="o">.</span><span class="n">width</span> <span class="o">=</span> <span class="n">width</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">height</span> <span class="o">=</span> <span class="n">height</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">eps2d</span> <span class="o">=</span> <span class="n">eps2d</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">ortho</span> <span class="o">=</span> <span class="n">ortho</span>
 
         <span class="k">return</span> <span class="n">radii</span><span class="p">,</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">depths</span><span class="p">,</span> <span class="n">conics</span><span class="p">,</span> <span class="n">compensations</span>
 
@@ -1098,6 +1141,7 @@
         <span class="n">width</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">width</span>
         <span class="n">height</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">height</span>
         <span class="n">eps2d</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">eps2d</span>
+        <span class="n">ortho</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">ortho</span>
         <span class="k">if</span> <span class="n">v_compensations</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">v_compensations</span> <span class="o">=</span> <span class="n">v_compensations</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
         <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span><span class="p">,</span> <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span><span class="p">,</span> <span class="n">v_viewmats</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
@@ -1112,6 +1156,7 @@
             <span class="n">width</span><span class="p">,</span>
             <span class="n">height</span><span class="p">,</span>
             <span class="n">eps2d</span><span class="p">,</span>
+            <span class="n">ortho</span><span class="p">,</span>
             <span class="n">radii</span><span class="p">,</span>
             <span class="n">conics</span><span class="p">,</span>
             <span class="n">compensations</span><span class="p">,</span>
@@ -1137,6 +1182,7 @@
             <span class="n">v_quats</span><span class="p">,</span>
             <span class="n">v_scales</span><span class="p">,</span>
             <span class="n">v_viewmats</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>
             <span class="kc">None</span><span class="p">,</span>
             <span class="kc">None</span><span class="p">,</span>
             <span class="kc">None</span><span class="p">,</span>
@@ -1298,6 +1344,7 @@
         <span class="n">radius_clip</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
         <span class="n">sparse_grad</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
         <span class="n">calc_compensations</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+        <span class="n">ortho</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
         <span class="p">(</span>
             <span class="n">indptr</span><span class="p">,</span>
@@ -1322,6 +1369,7 @@
             <span class="n">far_plane</span><span class="p">,</span>
             <span class="n">radius_clip</span><span class="p">,</span>
             <span class="n">calc_compensations</span><span class="p">,</span>
+            <span class="n">ortho</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="n">calc_compensations</span><span class="p">:</span>
             <span class="n">compensations</span> <span class="o">=</span> <span class="kc">None</span>
@@ -1341,6 +1389,7 @@
         <span class="n">ctx</span><span class="o">.</span><span class="n">height</span> <span class="o">=</span> <span class="n">height</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">eps2d</span> <span class="o">=</span> <span class="n">eps2d</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">sparse_grad</span> <span class="o">=</span> <span class="n">sparse_grad</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">ortho</span> <span class="o">=</span> <span class="n">ortho</span>
 
         <span class="k">return</span> <span class="n">camera_ids</span><span class="p">,</span> <span class="n">gaussian_ids</span><span class="p">,</span> <span class="n">radii</span><span class="p">,</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">depths</span><span class="p">,</span> <span class="n">conics</span><span class="p">,</span> <span class="n">compensations</span>
 
@@ -1371,6 +1420,7 @@
         <span class="n">height</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">height</span>
         <span class="n">eps2d</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">eps2d</span>
         <span class="n">sparse_grad</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">sparse_grad</span>
+        <span class="n">ortho</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">ortho</span>
 
         <span class="k">if</span> <span class="n">v_compensations</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">v_compensations</span> <span class="o">=</span> <span class="n">v_compensations</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
@@ -1386,6 +1436,7 @@
             <span class="n">width</span><span class="p">,</span>
             <span class="n">height</span><span class="p">,</span>
             <span class="n">eps2d</span><span class="p">,</span>
+            <span class="n">ortho</span><span class="p">,</span>
             <span class="n">camera_ids</span><span class="p">,</span>
             <span class="n">gaussian_ids</span><span class="p">,</span>
             <span class="n">conics</span><span class="p">,</span>
@@ -1451,6 +1502,7 @@
             <span class="n">v_quats</span><span class="p">,</span>
             <span class="n">v_scales</span><span class="p">,</span>
             <span class="n">v_viewmats</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>
             <span class="kc">None</span><span class="p">,</span>
             <span class="kc">None</span><span class="p">,</span>
             <span class="kc">None</span><span class="p">,</span>
