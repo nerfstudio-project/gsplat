@@ -35,6 +35,9 @@ conda activate gsplat
 
 ### 3. Activate the Visual Studio C++ environment
 
+The installation script setup.pt should automatically find the path to the visual studio compiler. However `gsplat` also requires to be able to compile C++ code on the fly (jit compilation) in some instances, which requires `cl.exe` to be on the path.
+
+In order to have `cl.exe` on the path you can:
 1. Navigate to the directory where vcvars64.bat is located. This path might vary depending on your installation. A common path is:
 ```
 C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build
