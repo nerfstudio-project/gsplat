@@ -19,7 +19,7 @@ Alternatively, you can install CUDA Toolkit 11.8 using the installer from [here]
 We suggest using Conda to create the Python environment as it enables you to install the CUDA dependencies in isolation.
 
 ### Create the python environment using Conda.
-Run  `conda env create -f environment.yml -n  <your_conda_environment>` with the `environment.yml`[environment.yml] you will find [here](../environment.yml).
+Run  `conda env create -f environment.yml -n  <your_conda_environment>` with the `environment.yml` file you will find [here](../environment.yml).
 
 ### Activate your conda environment:
     
