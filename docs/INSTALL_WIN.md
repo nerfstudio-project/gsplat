@@ -18,10 +18,10 @@ Alternatively, you can install CUDA Toolkit 11.8 using the installer from [here]
 
 We suggest using Conda to create the Python environment as it enables you to install the CUDA dependencies in isolation.
 
-### Create the python environment using Conda.
+### 1. Create the python environment using Conda.
 Run  `conda env create -f environment.yml -n  <your_conda_environment>` with the `environment.yml` file you will find [here](../environment.yml).
 
-### Activate your conda environment:
+### 2. Activate your conda environment:
     
 ```bash
 conda activate <your_conda_environment>
@@ -32,6 +32,20 @@ Replace `<your_conda_environment>` with the name of your conda environment. For 
 ```bash
 conda activate gsplat
 ```
+
+### 3. Activate the Visual Studio C++ environment
+
+1. Navigate to the directory where vcvars64.bat is located. This path might vary depending on your installation. A common path is:
+```
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build
+```
+
+2. Run the following command:
+```
+./vcvars64.bat
+```
+
+3. Check that `cl.exe` is in the path by using `where cl.exe`.
 
 ## Install `gsplat`
 
@@ -61,7 +75,7 @@ Run `pip install gsplat`
 
 ## Run the tests
 
-You will need to install the package in edit mode using `pip install -e .` for the tests to run as some of the tests assets are not packaged in the package.
+You will need to install the package in edit mode using `pip install -e .` for the tests to run as some of the tests assets are not packaged in the package. You will also need to activate the visual C++ environement as described above before running the tests because some of the test use jit compilation to compile code that has not beend compile during the package installation. 
 
 Some additional dependencies are required to run all the tests. They can be installed using `pip install pytest`
 
@@ -78,6 +92,6 @@ We list here some errors that can be uncountered when following the process abov
 |-----|--------|
 |fatal error C1083: Cannot open include file: 'glm/glm.hpp':  No such file or directory| glm is provided in the thridparty folder when using tje `--recursive` argument when clonning the repository. Alternativeley you can use `git submodule init` and `git submodule update`.
 A module that was compiled using NumPy 1.x cannot be run in NumPy 2.1.0 as it may crash. To support both 1.x and 2.x versions of NumPy, modules must be compiled with NumPy 2.0.Some module may need to rebuild instead e.g. with 'pybind11>=2.12'`| install numpy 1.26.4.
-subprocess.CalledProcessError: Command '['where', 'cl']' returned non-zero exit status 1| make sure the visual studio compiler `cl.exe` is in the path. 
+subprocess.CalledProcessError: Command '['where', 'cl']' returned non-zero exit status 1| make sure the visual studio compiler `cl.exe` is in the path (see section on activating the visual studio C++ environment) . 
 NerfAcc: No CUDA toolkit found. NerfAcc will be disabled.| make sure `nvcc.exe` in in the path once the python environment has been activated. It should have been installed in the conda environement with the line `cuda-toolkit=11.8` 
 TypeError: sparse_coo_tensor() received an invalid combination of arguments - got (indices=Tensor, values=Tensor, size=torch.Size, is_coalesced=bool, ).| `is_coalesced` has been added in pytorch 2.1
