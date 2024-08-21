@@ -106,7 +106,6 @@ def get_extensions():
         extra_compile_args=extra_compile_args,
         extra_link_args=extra_link_args,
     )
-
     extension_v2 = CUDAExtension(
         "gsplat.csrc",
         sources_v2,
@@ -116,7 +115,7 @@ def get_extensions():
         extra_compile_args=extra_compile_args,
         extra_link_args=extra_link_args,
     )
-    
+
     return [extension_v1, extension_v2]
 
 
