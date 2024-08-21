@@ -60,14 +60,20 @@ The installation step using pip has a mechanism to automatically find the path t
 
 In order to have `cl.exe` on the path you can:
 1. Navigate to the directory where vcvars64.bat is located. This path might vary depending on your installation. A common path is:
-```
-C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build
-```
+    ```
+    C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build
+    ```
 
 2. Run the following command:
-```
-./vcvars64.bat
-```
+    ```
+    ./vcvars64.bat
+    ```
+    If the above command does not work, try activating an older version of VC:
+    ```bash
+    ./vcvarsall.bat x64 -vcvars_ver=<your_VC++_compiler_toolset_version>
+    ```
+    Replace `<your_VC++_compiler_toolset_version>` with the version of your VC++ compiler toolset. The version number should appear in the same folder. For example `./vcvarsall.bat x64 -vcvars_ver=14.29`
+
 
 3. Check that `cl.exe` is in the path by using `where cl.exe`.
 
@@ -75,11 +81,11 @@ C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Buil
 
 `gsplat` can be installed using either the source package published in `pypi.org` or using a clone of the repository
 
-### Installation using the pypi package
+### Installation using the package pub;ished on `pypi.org`
 
 Run `pip install gsplat`
 
-### Installation using the Repository
+### Installation using a clone of the repository
 
 1. Clone the `gsplat` repository:
     ```bash
