@@ -111,6 +111,6 @@ Some additional dependencies are required to run all the tests. They can be inst
 ```
 pip install pytest nerfacc git+https://github.com/fraunhoferhhi/PLAS.git imageio torchpq cupy-cuda11x==12.3
 ```
-You can then run the test using `pytest tests`
+You can then run the tests using `pytest tests`
 
 Note: the test ` tests/test_compression.py::test_png_compression` currently fails due to some problem in kmeans (`ValueError: Cannot take a larger sample than population when 'replace=False'`)
