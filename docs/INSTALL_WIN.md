@@ -19,7 +19,28 @@ Alternatively, you can install CUDA Toolkit 11.8 using the installer from [here]
 We suggest using Conda to create the Python environment as it enables you to install the CUDA dependencies in isolation.
 
 ### 1. Create the python environment using Conda.
-Run  `conda env create -f environment.yml -n  <your_conda_environment>` with the `environment.yml` file you will find [here](../environment.yml).
+
+Create conda `environment.yml` files containing
+```
+name: <your_conda_environment>
+channels:
+  - pytorch
+  - defaults
+  - nvidia/label/cuda-11.8.0
+  - conda-forge
+dependencies:
+  - python=3.10
+  - cuda-version==11.8 
+  - cudnn==8.9.7.29
+  - cuda-toolkit=11.8
+  - pytorch=2.1.0
+  - pip:
+    - numpy==1.26.4
+variables:
+   CUDA_PATH: ""
+``` 
+
+Then run  `conda env create -f environment.yml` 
 
 ### 2. Activate your conda environment:
     

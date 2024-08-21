@@ -10,9 +10,6 @@ from torch.utils.cpp_extension import (
     _import_module_from_library,
     load,
 )
-import platform
-import warnings
-import sys
 
 PATH = os.path.dirname(os.path.abspath(__file__))
 NO_FAST_MATH = os.getenv("NO_FAST_MATH", "0") == "1"
@@ -21,6 +18,7 @@ need_to_unset_max_jobs = False
 if not MAX_JOBS:
     need_to_unset_max_jobs = True
     os.environ["MAX_JOBS"] = "10"
+
 
 def load_extension(
     name,

@@ -6,7 +6,6 @@ import platform
 import sys
 
 from setuptools import find_packages, setup
-import shutil, warnings
 
 __version__ = None
 exec(open("gsplat/version.py", "r").read())
@@ -98,17 +97,15 @@ def get_extensions():
 
     current_dir = pathlib.Path(__file__).parent.resolve()
     glm_path = os.path.join(current_dir, "gsplat", "cuda", "csrc", "third_party", "glm")
-    extensions = []
     extension_v1 = CUDAExtension(
-         "gsplat.csrc_legacy",
-         sources_v1,
-         include_dirs=[extensions_dir_v2, glm_path],  # glm lives in v2.
-         define_macros=define_macros,
-         undef_macros=undef_macros,
-         extra_compile_args=extra_compile_args,
-         extra_link_args=extra_link_args,
+        "gsplat.csrc_legacy",
+        sources_v1,
+        include_dirs=[extensions_dir_v2, glm_path],  # glm lives in v2.
+        define_macros=define_macros,
+        undef_macros=undef_macros,
+        extra_compile_args=extra_compile_args,
+        extra_link_args=extra_link_args,
     )
-    extensions.append(extension_v1)
 
     extension_v2 = CUDAExtension(
         "gsplat.csrc",
@@ -119,8 +116,9 @@ def get_extensions():
         extra_compile_args=extra_compile_args,
         extra_link_args=extra_link_args,
     )
-    extensions.append(extension_v2)
-    return extensions
+    
+    return [extension_v1, extension_v2]
+
 
 setup(
     name="gsplat",
