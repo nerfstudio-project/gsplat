@@ -106,7 +106,7 @@ Run `pip install gsplat`
 
 ## Run the tests
 
-You will need to install the package in edit mode using `pip install -e .` for the tests to run because some of the tests assets are not packaged in the package. You will also need to activate the visual C++ environment as described above before running the tests because some of the test use just-in-time compilation to compile code that has not been compiled during the package installation. 
+You will need to clone the gsplat repository locally and install the gsplat package in edit mode using `pip install -e .` for the tests to run because some of the tests assets are not packaged in the package. You will also need to activate the visual C++ environment as described above before running the tests because some of the test use just-in-time compilation to compile code that has not been compiled during the package installation. 
 Some additional dependencies are required to run all the tests. They can be installed using 
 ```
 pip install pytest nerfacc git+https://github.com/fraunhoferhhi/PLAS.git imageio torchpq cupy-cuda11x==12.3
