@@ -40,10 +40,11 @@ variables:
    CUDA_PATH: ""
 ``` 
 
-Then run  `conda env create -f environment.yml` 
+Then run  `conda env create -f environment.yml` to create the conda environment.
 
 ### 2. Activate your conda environment:
     
+Activate your environeent using:
 ```bash
 conda activate <your_conda_environment>
 ```
@@ -102,7 +103,8 @@ Run `pip install gsplat`
     ```bash
     pip install .
     ```
-    you can install in edit mode using `pip install -e .`
+
+Note: If you an to run the tests or modify the code you will to install the package in edit mode instead using `pip install -e .`
 
 ## Run the tests
 
