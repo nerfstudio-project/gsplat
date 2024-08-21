@@ -367,8 +367,8 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 warpSum<decltype(warp), S>(v_xy_abs_local, warp);
             }
             warpSum<decltype(warp), S>(v_opacity_local, warp);
+            int32_t g = id_batch[t]; // flatten index in [C * N] or [nnz]
             if (warp.thread_rank() == 0) {
-                int32_t g = id_batch[t]; // flatten index in [C * N] or [nnz]
                 S *v_rgb_ptr = (S *)(v_colors) + COLOR_DIM * g;
                 PRAGMA_UNROLL
                 for (uint32_t k = 0; k < COLOR_DIM; ++k) {
@@ -403,12 +403,15 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 }
 
                 gpuAtomicAdd(v_opacities + g, v_opacity_local);
+            } 
 
+            if (valid) {
                 S *v_densify_ptr = (S *)(v_densify) + 2 * g;
+                S *v_ray_Ms_ptr = (S *)(v_ray_Ms) + 9 * g;
                 S depth = w_M.z;
                 v_densify_ptr[0] = v_ray_Ms_ptr[2] * depth;
                 v_densify_ptr[1] = v_ray_Ms_ptr[5] * depth;
-            } 
+            }
         }
     }
 }

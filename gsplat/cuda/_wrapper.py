@@ -1756,7 +1756,6 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         tile_size = ctx.tile_size
         absgrad = ctx.absgrad
 
-
         (
             v_means2d_abs,
             v_means2d,
@@ -1800,7 +1799,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             )
         else:
             v_backgrounds = None
-            
+        
         return (
             v_means2d,
             v_ray_transformations,

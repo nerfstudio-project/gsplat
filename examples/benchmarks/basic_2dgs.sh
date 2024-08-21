@@ -1,4 +1,4 @@
-RESULT_DIR=results/inria-normal
+RESULT_DIR=results/benchmark-normal-distort
 
 for SCENE in bicycle bonsai counter garden kitchen room stump;
 do
@@ -13,19 +13,22 @@ do
     # train without eval
     CUDA_VISIBLE_DEVICES=0 python simple_trainer_2dgs.py --eval_steps -1 --disable_viewer --data_factor $DATA_FACTOR \
         --data_dir data/360_v2/$SCENE/ \
-        --model_type 2dgs-inria \
+        --model_type 2dgs \
         --result_dir $RESULT_DIR/$SCENE/ \
-        --normal_loss
+        --normal_loss \
+        --dist_loss 
 
     # run eval and render
     for CKPT in $RESULT_DIR/$SCENE/ckpts/*;
     do
         CUDA_VISIBLE_DEVICES=0 python simple_trainer_2dgs.py --disable_viewer --data_factor $DATA_FACTOR \
             --data_dir data/360_v2/$SCENE/ \
-            --model_type 2dgs-inria \
+            --model_type 2dgs \
             --result_dir $RESULT_DIR/$SCENE/ \
             --ckpt $CKPT \
-            --normal_loss
+            --normal_loss \ 
+            --dist_loss 
+
     done
 done
 

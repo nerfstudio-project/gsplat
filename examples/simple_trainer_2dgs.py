@@ -765,8 +765,8 @@ class Runner:
 
             # write median depths
             render_median = (render_median - render_median.min()) / (render_median.max() - render_median.min())
-            render_median = render_median.detach().cpu().squeeze(0).unsqueeze(-1).repeat(1, 1, 3).numpy()
-            # render_median = render_median.detach().cpu().squeeze(0).repeat(1, 1, 3).numpy()
+            # render_median = render_median.detach().cpu().squeeze(0).unsqueeze(-1).repeat(1, 1, 3).numpy()
+            render_median = render_median.detach().cpu().squeeze(0).repeat(1, 1, 3).numpy()
             
             imageio.imwrite(
                 f"{self.render_dir}/val_{i:04d}_median_depth_{step}.png", (render_median * 255).astype(np.uint8)
