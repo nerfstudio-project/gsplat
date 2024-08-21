@@ -35,8 +35,9 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
     const T radius_clip,
     const int32_t
         *__restrict__ block_accum,    // [C * blocks_per_row] packing helper
-    int32_t *__restrict__ block_cnts, // [C * blocks_per_row] packing helper
+    const bool ortho,
     // outputs
+    int32_t *__restrict__ block_cnts, // [C * blocks_per_row] packing helper
     int32_t *__restrict__ indptr,       // [C + 1]
     int64_t *__restrict__ camera_ids,   // [nnz]
     int64_t *__restrict__ gaussian_ids, // [nnz]
@@ -118,21 +119,38 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
         }
         mat3<T> covar_c;
         covar_world_to_cam(R, covar, covar_c);
-
-        // perspective projection
+        
         Ks += row_idx * 9;
-        persp_proj<T>(
-            mean_c,
-            covar_c,
-            Ks[0],
-            Ks[4],
-            Ks[2],
-            Ks[5],
-            image_width,
-            image_height,
-            covar2d,
-            mean2d
-        );
+        if (ortho){
+            // orthographic projection
+            ortho_proj<T>(
+                mean_c,
+                covar_c,
+                Ks[0],
+                Ks[4],
+                Ks[2],
+                Ks[5],
+                image_width,
+                image_height,
+                covar2d,
+                mean2d
+            );
+        } else {
+            // perspective projection
+            persp_proj<T>(
+                mean_c,
+                covar_c,
+                Ks[0],
+                Ks[4],
+                Ks[2],
+                Ks[5],
+                image_width,
+                image_height,
+                covar2d,
+                mean2d
+            );
+        }
+
 
         det = add_blur(eps2d, covar2d, compensation);
         if (det <= 0.f) {
@@ -237,7 +255,8 @@ fully_fused_projection_packed_fwd_tensor(
     const float near_plane,
     const float far_plane,
     const float radius_clip,
-    const bool calc_compensations
+    const bool calc_compensations,
+    const bool ortho
 ) {
     GSPLAT_DEVICE_GUARD(means);
     GSPLAT_CHECK_INPUT(means);
@@ -286,6 +305,7 @@ fully_fused_projection_packed_fwd_tensor(
                 far_plane,
                 radius_clip,
                 nullptr,
+                ortho,
                 block_cnts.data_ptr<int32_t>(),
                 nullptr,
                 nullptr,
@@ -335,6 +355,7 @@ fully_fused_projection_packed_fwd_tensor(
                 far_plane,
                 radius_clip,
                 block_accum.data_ptr<int32_t>(),
+                ortho,
                 nullptr,
                 indptr.data_ptr<int32_t>(),
                 camera_ids.data_ptr<int64_t>(),
