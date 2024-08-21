@@ -1163,7 +1163,6 @@ def fully_fused_projection_2dgs(
     quats: Tensor,  # [N, 4]
     scales: Tensor,
     viewmats: Tensor,
-    densifications: Tensor,
     Ks: Tensor,
     width: int,
     height: int,
@@ -1174,12 +1173,47 @@ def fully_fused_projection_2dgs(
     packed: bool = False,
     sparse_grad: bool = False,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
-    """Calculate ray transformations
+    """Prepare Gaussians for rasterization
+
+    This function prepares ray-splat intersection matrices, computes 
+    per splat bounding box and 2D means in image space.
+
+    Args:
+        means: Gaussian means. [N, 3]
+        quats: Quaternions (No need to be normalized). [N, 4].
+        scales: Scales. [N, 3].
+        viewmats: Camera-to-world matrices. [C, 4, 4]
+        Ks: Camera intrinsics. [C, 3, 3]
+        width: Image width.
+        height: Image height.
+        near_plane: Near plane distance. Default: 0.01.
+        far_plane: Far plane distance. Default: 200.
+        radius_clip: Gaussians with projected radii smaller than this value will be ignored. Default: 0.0.
+        packed: If True, the output tensors will be packed into a flattened tensor. Default: False.
+        sparse_grad: This is only effective when `packed` is True. If True, during backward the gradients
+          of {`means`, `covars`, `quats`, `scales`} will be a sparse Tensor in COO layout. Default: False.
+
     Returns:
-            - **radii**
-            - **means**
-            - **depths**
-            - **ray_transformations**
+        A tuple:
+
+        If `packed` is True:
+
+        - **camera_ids**. The row indices of the projected Gaussians. Int32 tensor of shape [nnz].
+        - **gaussian_ids**. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].
+        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz].
+        - **means**. Projected Gaussian means in 2D. [nnz, 2]
+        - **depths**. The z-depth of the projected Gaussians. [nnz]
+        - **ray_Ms**. transformation matrices that transforms xy-planes in pixel spaces into splat coordinates (WH)^T in equation (9) in paper [nnz, 3, 3]
+        - **normals**. The normals in camera spaces. [nnz, 3]
+
+        If `packed` is False:
+        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N].
+        - **means**. Projected Gaussian means in 2D. [C, N, 2]
+        - **depths**. The z-depth of the projected Gaussians. [C, N]
+        - **ray_Ms**. transformation matrices that transforms xy-planes in pixel spaces into splat coordinates.
+                        (WH)^T in equation (9) in paper [C, N, 3, 3]
+        - **normals**. The normals in camera spaces. [C, N, 3]
+
     """
     C = viewmats.size(0)
     N = means.size(0)
@@ -1187,8 +1221,8 @@ def fully_fused_projection_2dgs(
     assert viewmats.size() == (C, 4, 4), viewmats.size()
     assert Ks.size() == (C, 3, 3), Ks.size()
     means = means.contiguous()
-    assert quats is not None, "covars or quats is required"
-    assert scales is not None, "covars or scales is required"
+    assert quats is not None, "quats is required"
+    assert scales is not None, "scales is required"
     assert quats.size() == (N, 4), quats.size()
     assert scales.size() == (N, 3), scales.size()
     quats = quats.contiguous()
@@ -1203,7 +1237,6 @@ def fully_fused_projection_2dgs(
             means,
             quats,
             scales,
-            densifications,
             viewmats,
             Ks,
             width,
@@ -1219,7 +1252,6 @@ def fully_fused_projection_2dgs(
             quats,
             scales,
             viewmats,
-            densifications,
             Ks,
             width,
             height,
@@ -1240,7 +1272,6 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
         quats: Tensor,
         scales: Tensor,
         viewmats: Tensor,
-        densifications: Tensor,
         Ks: Tensor,
         width: int,
         height: int,
@@ -1249,7 +1280,7 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
         far_plane: float,
         radius_clip: float,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
-        radii, means2d, depths, ray_transformations, normals = _make_lazy_cuda_func(
+        radii, means2d, depths, ray_Ms, normals = _make_lazy_cuda_func(
             "fully_fused_projection_fwd_2dgs"
         )(
             means,
@@ -1269,55 +1300,50 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
             quats,
             scales,
             viewmats,
-            densifications,
             Ks,
             radii,
-            ray_transformations,
+            ray_Ms,
             normals,
         )
         ctx.width = width
         ctx.height = height
         ctx.eps2d = eps2d
 
-        return radii, means2d, depths, ray_transformations, normals
+        return radii, means2d, depths, ray_Ms, normals
 
     @staticmethod
-    def backward(ctx, v_radii, v_means2d, v_depths, v_ray_transformations, v_normals):
+    def backward(ctx, v_radii, v_means2d, v_depths, v_ray_Ms, v_normals):
         (
             means,
             quats,
             scales,
             viewmats,
-            densifications,
             Ks,
             radii,
-            ray_transformations,
+            ray_Ms,
             normals,
         ) = ctx.saved_tensors
         width = ctx.width
         height = ctx.height
         eps2d = ctx.eps2d
-        v_means, v_quats, v_scales, v_viewmats, v_densifications = _make_lazy_cuda_func(
+        v_means, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
             "fully_fused_projection_bwd_2dgs"
         )(
             means,
             quats,
             scales,
-            densifications,
             viewmats,
             Ks,
             width,
             height,
             radii,
-            ray_transformations,
+            ray_Ms,
             v_means2d.contiguous(),
             v_depths.contiguous(),
             v_normals.contiguous(),
-            v_ray_transformations.contiguous(),
+            v_ray_Ms.contiguous(),
             ctx.needs_input_grad[3],  # viewmats_requires_grad
         )
-        # import pdb
-        # pdb.set_trace()
         if not ctx.needs_input_grad[0]:
             v_means = None
         if not ctx.needs_input_grad[1]:
@@ -1326,17 +1352,12 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
             v_scales = None
         if not ctx.needs_input_grad[3]:
             v_viewmats = None
-        if not ctx.needs_input_grad[4]:
-            v_densifications = None
-        # import pdb
-        # pdb.set_trace()
-        # print((v_densifications.isnan()).sum())
+
         return (
             v_means,
             v_quats,
             v_scales,
             v_viewmats,
-            v_densifications,
             None,
             None,
             None,
@@ -1357,7 +1378,6 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
         means: Tensor,  # [N, 3]
         quats: Tensor,  # [N, 4]
         scales: Tensor,  # [N, 3]
-        densifications: Tensor, # [N, 2]
         viewmats: Tensor,  # [C, 4, 4]
         Ks: Tensor,  # [C, 3, 3]
         width: int,
@@ -1394,7 +1414,6 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
             means,
             quats,
             scales,
-            densifications,
             viewmats,
             Ks,
             ray_Ms,
@@ -1422,7 +1441,6 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
             means,
             quats,
             scales,
-            densifications,
             viewmats,
             Ks,
             ray_Ms,
@@ -1431,13 +1449,12 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
         height = ctx.height
         sparse_grad = ctx.sparse_grad
         
-        v_means, v_quats, v_scales, v_viewmats, v_densify = _make_lazy_cuda_func(
+        v_means, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
             "fully_fused_projection_packed_bwd_2dgs"
         )(
             means,
             quats,
             scales,
-            densifications,
             viewmats,
             Ks,
             width,
@@ -1494,7 +1511,6 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
             v_means,
             v_quats,
             v_scales,
-            v_densify,
             v_viewmats,
             None,
             None,
@@ -1510,7 +1526,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
 
 def rasterize_to_pixels_2dgs(
     means2d: Tensor,
-    ray_transformations: Tensor,
+    ray_Ms: Tensor,
     colors: Tensor,
     opacities: Tensor,
     normals: Tensor,
@@ -1526,18 +1542,47 @@ def rasterize_to_pixels_2dgs(
     absgrad: bool = False,
     distloss: bool = False,
 ) -> Tuple[Tensor, Tensor]:
+    """Rasterize Gaussians to pixels.
+
+    Args:
+        means2d: Projected Gaussian means. [C, N, 2] if packed is False, [nnz, 2] if packed is True.
+        ray_Ms: transformation matrices that transforms xy-planes in pixel spaces into splat coordinates.
+                (WH)^T in equation (9) in paper [C, N, 3, 3].
+        colors: Gaussian colors or ND features. [C, N, channels] if packed is False, [nnz, channels] if packed is True.
+        opacities: Gaussian opacities that support per-view values. [C, N] if packed is False, [nnz] if packed is True.
+        normals: The normals in camera space. [C, N, 3] if packed is False, [nnz, 3] if packed is True.
+        densify: Dummy variable to keep track of gradient for densification. [C, N, 2] if packed, [nnz, 3] if packed is True.
+        tile_size: Tile size.
+        isect_offsets: Intersection offsets outputs from `isect_offset_encode()`. [C, tile_height, tile_width]
+        flatten_ids: The global flatten indices in [C * N] or [nnz] from  `isect_tiles()`. [n_isects]
+        backgrounds: Background colors. [C, channels]. Default: None.
+        masks: Optional tile mask to skip rendering GS to masked tiles. [C, tile_height, tile_width]. Default: None.
+        packed: If True, the input tensors are expected to be packed with shape [nnz, ...]. Default: False.
+        absgrad: If True, the backward pass will compute a `.absgrad` attribute for `means2d`. Default: False. 
+    
+    Returns:
+        A tuple:
+
+        - **Rendered colors**.      [C, image_height, image_width, channels]
+        - **Rendered alphas**.      [C, image_height, image_width, 1]
+        - **Rendered normals**.     [C, image_height, image_width, 3]
+        - **Rendered distortion**.  [C, image_height, image_width, 1]
+        - **Rendered median depth**.[C, image_height, image_width, 1]
+        
+        
+    """
     C = isect_offsets.size(0)
     device = means2d.device
     if packed:
         nnz = means2d.size(0)
         assert means2d.shape == (nnz, 2), means2d.shape
-        assert ray_transformations.shape == (nnz, 3, 3), ray_transformations.shape
+        assert ray_Ms.shape == (nnz, 3, 3), ray_Ms.shape
         assert colors.shape[0] == nnz, colors.shape
         assert opacities.shape == (nnz,), opacities.shape
     else:
         N = means2d.size(1)
         assert means2d.shape == (C, N, 2), means2d.shape
-        assert ray_transformations.shape == (C, N, 3, 3), ray_transformations.shape
+        assert ray_Ms.shape == (C, N, 3, 3), ray_Ms.shape
         assert colors.shape[:2] == (C, N), colors.shape
         assert opacities.shape == (C, N), opacities.shape
     if backgrounds is not None:
@@ -1575,7 +1620,6 @@ def rasterize_to_pixels_2dgs(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-    # pdb.set_trace()
     (
         render_colors,
         render_alphas,
@@ -1584,7 +1628,7 @@ def rasterize_to_pixels_2dgs(
         render_median,
     ) = _RasterizeToPixels2DGS.apply(
         means2d.contiguous(),
-        ray_transformations.contiguous(),
+        ray_Ms.contiguous(),
         colors.contiguous(),
         opacities.contiguous(),
         normals.contiguous(),
@@ -1603,7 +1647,6 @@ def rasterize_to_pixels_2dgs(
     if padded_channels > 0:
         render_colors = render_colors[..., :-padded_channels]
 
-    # pdb.set_trace()
     return render_colors, render_alphas, render_normals, render_distort, render_median
 
 
@@ -1613,7 +1656,7 @@ def rasterize_to_indices_in_range_2dgs(
     range_end: int,
     transmittances: Tensor,
     means2d: Tensor,
-    ray_transformations: Tensor,
+    ray_Ms: Tensor,
     opacities: Tensor,
     image_width: int,
     image_height: int,
@@ -1622,7 +1665,7 @@ def rasterize_to_indices_in_range_2dgs(
     flatten_ids: Tensor,
 ) -> Tuple[Tensor, Tensor, Tensor]:
     C, N, _ = means2d.shape
-    assert ray_transformations.shape == (C, N, 3, 3), ray_transformations.shape
+    assert ray_Ms.shape == (C, N, 3, 3), ray_Ms.shape
     assert opacities.shape == (C, N), opacities.shape
     assert isect_offsets.shape[0] == C, isect_offsets.shape
 
@@ -1641,7 +1684,7 @@ def rasterize_to_indices_in_range_2dgs(
         range_end,
         transmittances.contiguous(),
         means2d.contiguous(),
-        ray_transformations.contiguous(),
+        ray_Ms.contiguous(),
         opacities.contiguous(),
         image_width,
         image_height,
@@ -1661,7 +1704,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
     def forward(
         ctx,
         means2d: Tensor,
-        ray_transformations: Tensor,
+        ray_Ms: Tensor,
         colors: Tensor,
         opacities: Tensor,
         normals: Tensor,
@@ -1686,7 +1729,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             median_ids,
         ) = _make_lazy_cuda_func("rasterize_to_pixels_fwd_2dgs")(
             means2d,
-            ray_transformations,
+            ray_Ms,
             colors,
             opacities,
             normals,
@@ -1701,7 +1744,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
 
         ctx.save_for_backward(
             means2d,
-            ray_transformations,
+            ray_Ms,
             colors,
             opacities,
             normals,
@@ -1737,7 +1780,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         
         (
             means2d,
-            ray_transformations,
+            ray_Ms,
             colors,
             opacities,
             normals,
@@ -1759,14 +1802,14 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         (
             v_means2d_abs,
             v_means2d,
-            v_ray_transformations,
+            v_ray_Ms,
             v_colors,
             v_opacities,
             v_normals,
             v_densify,
         ) = _make_lazy_cuda_func("rasterize_to_pixels_bwd_2dgs")(
             means2d,
-            ray_transformations,
+            ray_Ms,
             colors,
             opacities,
             normals,
@@ -1802,7 +1845,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         
         return (
             v_means2d,
-            v_ray_transformations,
+            v_ray_Ms,
             v_colors,
             v_opacities,
             v_normals,

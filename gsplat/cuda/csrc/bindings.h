@@ -320,14 +320,12 @@ std::tuple<
     torch::Tensor,
     torch::Tensor,
     torch::Tensor,
-    torch::Tensor,
     torch::Tensor>
 fully_fused_projection_bwd_2dgs_tensor(
     // fwd inputs
     const torch::Tensor &means,          // [N, 3]
     const torch::Tensor &quats,          // [N, 4]
     const torch::Tensor &scales,         // [N, 3]
-    const torch::Tensor &densifications, // [N, 2]
     const torch::Tensor &viewmats,       // [C, 4, 4]
     const torch::Tensor &Ks,             // [C, 3, 3]
     const uint32_t image_width,
@@ -449,13 +447,12 @@ fully_fused_projection_packed_fwd_2dgs_tensor(
     const float radius_clip
 );
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fully_fused_projection_packed_bwd_2dgs_tensor(
     // fwd inputs
     const torch::Tensor &means,    // [N, 3]
     const torch::Tensor &quats,    // [N, 4]
     const torch::Tensor &scales,   // [N, 3]
-    const torch::Tensor &densifications, // [N, 2]
     const torch::Tensor &viewmats, // [C, 4, 4]
     const torch::Tensor &Ks,       // [C, 3, 3]
     const uint32_t image_width,

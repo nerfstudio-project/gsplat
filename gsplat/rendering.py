@@ -1246,14 +1246,12 @@ def rasterization_2dgs_hold(
         # Silently change C from local #Cameras to global #Cameras.
         C = len(viewmats)
 
-    densifications = torch.zeros((N, 2), device=means.device)
     # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
     proj_results = fully_fused_projection_2dgs(
         means,
         quats,
         scales,
         viewmats,
-        densifications,
         Ks,
         width,
         height,
@@ -1632,16 +1630,13 @@ def rasterization_2dgs(
         ), colors.shape
         assert (sh_degree + 1) ** 2 <= colors.shape[1], colors.shape
 
-    densifications = (
-        torch.zeros((N, 2), dtype=means.dtype, requires_grad=True, device="cuda")
-    )
+
     # Compute Ray-Splat intersection transformation.
     proj_results = fully_fused_projection_2dgs(
         means,
         quats,
         scales,
         viewmats,
-        densifications,
         Ks,
         width,
         height,
@@ -1816,6 +1811,7 @@ def rasterization_2dgs_inria_wrapper(
     eps2d: float = 0.3,
     sh_degree: Optional[int] = None,
     backgrounds: Optional[Tensor] = None,
+    depth_ratio: int = 0,
     **kwargs,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Wrapper for 2DGS's rasterization backend which is based on Inria's backend.
@@ -1921,7 +1917,6 @@ def rasterization_2dgs_inria_wrapper(
     # render_depth is either median or expected by setting depth_ratio to 1 or 0
     # for bounded scene, use median depth, i.e., depth_ratio = 1;
     # for unbounded scene, use expected depth, i.e., depth_ratio = 0, to reduce disk aliasing.
-    depth_ratio = 0
     render_depth = (
         render_depth_expected * (1 - depth_ratio) + (depth_ratio) * render_depth_median
     )

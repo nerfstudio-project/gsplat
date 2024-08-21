@@ -36,8 +36,7 @@ namespace cg = cooperative_groups;
     T *__restrict__ v_means,            // [N, 3]
     T *__restrict__ v_quats,            // [N, 4]
     T *__restrict__ v_scales,           // [N, 3]
-    T *__restrict__ v_viewmats,         // [C, 4, 4]
-    T *__restrict__ v_densify           // [N, 2]
+    T *__restrict__ v_viewmats         // [C, 4, 4]
  ) {
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -58,7 +57,6 @@ namespace cg = cooperative_groups;
     v_depths += idx;
     v_normals += idx * 3;
     v_ray_Ms += idx * 9;
-    v_densify += idx * 2;
 
     // transform Gaussian to camera space
     mat3<T> R = mat3<T>(viewmats[0], viewmats[4], viewmats[8], // 1st column
@@ -135,20 +133,15 @@ namespace cg = cooperative_groups;
         gpuAtomicAdd(v_scales, v_scale[0]);
         gpuAtomicAdd(v_scales + 1, v_scale[1]);
     }
-
-    T depth = ray_Ms[8];
-    v_densify[0] = v_ray_Ms[2] * depth;
-    v_densify[1] = v_ray_Ms[5] * depth;
  }
 
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fully_fused_projection_bwd_2dgs_tensor(
     // fwd inputs
     const torch::Tensor &means,                // [N, 3]
     const torch::Tensor &quats,                // [N, 4]
     const torch::Tensor &scales,               // [N, 2]
-    const torch::Tensor &densifications,       // [N, 2]
     const torch::Tensor &viewmats,             // [C, 4, 4]
     const torch::Tensor &Ks,                   // [C, 3, 3]
     const uint32_t image_width, const uint32_t image_height, 
@@ -165,7 +158,6 @@ fully_fused_projection_bwd_2dgs_tensor(
     CHECK_INPUT(means);
     CHECK_INPUT(quats);
     CHECK_INPUT(scales);
-    CHECK_INPUT(densifications);
     CHECK_INPUT(viewmats);
     CHECK_INPUT(Ks);
     CHECK_INPUT(radii);
@@ -186,7 +178,6 @@ fully_fused_projection_bwd_2dgs_tensor(
     if (viewmats_requires_grad) {
         v_viewmats = torch::zeros_like(viewmats);
     }
-    torch::Tensor v_densify = torch::zeros_like(densifications);
     if (C && N) {
         fully_fused_projection_bwd_2dgs_kernel<float><<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
             C, N, means.data_ptr<float>(),
@@ -200,8 +191,7 @@ fully_fused_projection_bwd_2dgs_tensor(
             v_means.data_ptr<float>(),
             v_quats.data_ptr<float>(),
             v_scales.data_ptr<float>(),
-            viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr,
-            v_densify.data_ptr<float>());
+            viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr);
     }
-    return std::make_tuple(v_means, v_quats, v_scales, v_viewmats, v_densify);
+    return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
 }

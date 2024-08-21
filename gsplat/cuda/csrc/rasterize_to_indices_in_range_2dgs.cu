@@ -150,7 +150,7 @@ __global__ void rasterize_to_indices_in_range_kernel(
             // Low pass filter 
             const vec2<T> d = {xy_opac.x - px, xy_opac.y - py};
             // 2D screen distance
-            const T gauss_weight_2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
+            const T gauss_weight_2d = FILTER_INV_SQUARE * (d.x * d.x + d.y * d.y);
             const T gauss_weight = min(gauss_weight_3d, gauss_weight_2d);
 
             const T sigma = 0.5f * gauss_weight;

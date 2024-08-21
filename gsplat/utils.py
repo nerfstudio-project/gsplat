@@ -31,6 +31,50 @@ def normalized_quat_to_rotmat(quat: Tensor) -> Tensor:
     )
     return mat.reshape(quat.shape[:-1] + (3, 3))
 
+def depth_to_normal(
+        depths: Tensor, 
+        camtoworlds: Tensor, 
+        Ks: Tensor, 
+        near_plane: float, 
+        far_plane: float
+): 
+    """
+    Convert depth to surface normal 
+
+    Args:
+        depths: Z-depth of the Gaussians.
+        camtoworlds: camera to world transformation matrix.
+        Ks: camera intrinsics.
+        near_plane: Near plane distance.
+        far_plane: Far plane distance.
+
+    Returns:
+        -**Surface normals**
+    """
+    height, width = depths.shape[1:3]
+    viewmats = torch.linalg.inv(camtoworlds)  # [C, 4, 4]
+
+    normals = []
+    for cid, depth in enumerate(depths):
+        FoVx = 2 * math.atan(width / (2 * Ks[cid, 0, 0].item()))
+        FoVy = 2 * math.atan(height / (2 * Ks[cid, 1, 1].item()))
+        world_view_transform = viewmats[cid].transpose(0, 1)
+        projection_matrix = _get_projection_matrix(
+            znear=near_plane, zfar=far_plane, fovX=FoVx, fovY=FoVy, device=depths.device
+        ).transpose(0, 1)
+        full_proj_transform = (
+            world_view_transform.unsqueeze(0).bmm(projection_matrix.unsqueeze(0))
+        ).squeeze(0)
+        normal = _depth_to_normal(
+            depth,
+            world_view_transform,
+            full_proj_transform,
+            Ks[cid, 0, 0],
+            Ks[cid, 1, 1],
+        )
+        normals.append(normal)
+    normals = torch.stack(normals, dim=0)
+    return normals
 
 # ref: https://github.com/hbb1/2d-gaussian-splatting/blob/61c7b417393d5e0c58b742ad5e2e5f9e9f240cc6/utils/point_utils.py#L26
 def _depths_to_points(depthmap, world_view_transform, full_proj_transform, fx, fy):
@@ -71,33 +115,6 @@ def _depth_to_normal(depth, world_view_transform, full_proj_transform, fx, fy):
     normal_map = torch.nn.functional.normalize(torch.cross(dx, dy, dim=-1), dim=-1)
     output[1:-1, 1:-1, :] = normal_map
     return output
-
-
-def depth_to_normal(depths, camtoworlds, Ks, near_plane, far_plane):
-    height, width = depths.shape[1:3]
-    viewmats = torch.linalg.inv(camtoworlds)  # [C, 4, 4]
-
-    normals = []
-    for cid, depth in enumerate(depths):
-        FoVx = 2 * math.atan(width / (2 * Ks[cid, 0, 0].item()))
-        FoVy = 2 * math.atan(height / (2 * Ks[cid, 1, 1].item()))
-        world_view_transform = viewmats[cid].transpose(0, 1)
-        projection_matrix = _get_projection_matrix(
-            znear=near_plane, zfar=far_plane, fovX=FoVx, fovY=FoVy, device=depths.device
-        ).transpose(0, 1)
-        full_proj_transform = (
-            world_view_transform.unsqueeze(0).bmm(projection_matrix.unsqueeze(0))
-        ).squeeze(0)
-        normal = _depth_to_normal(
-            depth,
-            world_view_transform,
-            full_proj_transform,
-            Ks[cid, 0, 0],
-            Ks[cid, 1, 1],
-        )
-        normals.append(normal)
-    normals = torch.stack(normals, dim=0)
-    return normals
 
 
 def _get_projection_matrix(znear, zfar, fovX, fovY, device="cuda"):

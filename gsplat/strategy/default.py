@@ -69,7 +69,7 @@ class DefaultStrategy(Strategy):
 
     """
 
-    prune_opa: float = 0.05
+    prune_opa: float = 0.005
     grow_grad2d: float = 0.0002
     grow_scale3d: float = 0.01
     grow_scale2d: float = 0.05
@@ -229,13 +229,6 @@ class DefaultStrategy(Strategy):
             grads = grads[sel]  # [nnz, 2]
             radii = info["radii"][sel]  # [nnz]
 
-        # sp = state["grad2d"].shape
-        # print(f"state shape: {sp}")
-        # print(f"gs_ids: {gs_ids.shape}")
-        # print(f"grads: {grads.shape}")
-        # print(f"n_gaussian: {n_gaussian}")
-        # import pdb
-        # pdb.set_trace()
         state["grad2d"].index_add_(0, gs_ids, grads.norm(dim=-1))
         state["count"].index_add_(
             0, gs_ids, torch.ones_like(gs_ids, dtype=torch.float32)

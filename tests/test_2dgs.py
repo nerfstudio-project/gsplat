@@ -70,11 +70,9 @@ def test_projection_2dgs(test_data):
         (0, 1, 3, 2)
     )  # TODO(WZ): Figure out why do we need to permute here
 
-    densifications = torch.zeros((means.shape[0], 2), device=device)
-    densifications.requires_grad = True
 
     radii, means2d, depths, ray_Ms, normals = fully_fused_projection_2dgs(
-        means, quats, scales, viewmats, densifications, Ks, width, height
+        means, quats, scales, viewmats, Ks, width, height
     )
 
     # TODO (WZ): is the following true for 2dgs as while?
@@ -92,12 +90,12 @@ def test_projection_2dgs(test_data):
     v_ray_Ms = torch.randn_like(ray_Ms) * radii[..., None, None]
     v_normals = torch.randn_like(normals) * radii[..., None]
 
-    v_quats, v_scales, v_means, v_densify = torch.autograd.grad(
+    v_quats, v_scales, v_means = torch.autograd.grad(
         (means2d * v_means2d).sum()
         + (depths * v_depths).sum()
         + (ray_Ms * v_ray_Ms).sum()
         + (normals * v_normals).sum(),
-        (quats, scales, means, densifications),
+        (quats, scales, means),
     )
     _v_quats, _v_scales, _v_means = torch.autograd.grad(
         (_means2d * v_means2d).sum()
@@ -136,8 +134,6 @@ def test_fully_fused_projection_packed_2dgs(
     quats.requires_grad = True
     scales.requires_grad = True
     means.requires_grad = True
-    densifications = torch.zeros((means.shape[0], 2), device=device)
-    densifications.requires_grad = True
 
     (
         camera_ids,
@@ -152,7 +148,6 @@ def test_fully_fused_projection_packed_2dgs(
         quats,
         scales,
         viewmats,
-        densifications,
         Ks,
         width,
         height,
@@ -166,7 +161,6 @@ def test_fully_fused_projection_packed_2dgs(
         quats,
         scales,
         viewmats,
-        densifications,
         Ks,
         width,
         height,
@@ -251,10 +245,9 @@ def test_rasterize_to_pixels_2dgs(test_data):
 
     N = means.shape[0]
     C = viewmats.shape[0]
-    densifications = torch.zeros((N, 2), device=device)
 
     radii, means2d, depths, ray_Ms, normals = fully_fused_projection_2dgs(
-        means, quats, scales, viewmats, densifications, Ks, width, height
+        means, quats, scales, viewmats, Ks, width, height
     )
 
     colors = torch.concatenate((colors, depths.unsqueeze(-1)), dim=-1)
@@ -384,108 +377,8 @@ def test_rasterize_to_pixels_2dgs(test_data):
     torch.testing.assert_close(v_backgrounds, _v_backgrounds, rtol=1e-5, atol=1e-5)
     torch.testing.assert_close(v_normals, _v_normals, rtol=1e-3, atol=1e-3)
 
-# @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-# # @pytest.mark.parametrize("channels", [3, 32, 128])
-# def test_rasterize_full(test_data):
-#     from gsplat.rendering import rasterization_2dgs_inria_wrapper, rasterization_2dgs
-
-#     Ks = test_data["Ks"]
-#     viewmats = test_data["viewmats"]
-#     height = test_data["height"]
-#     width = test_data["width"]
-#     quats = test_data["quats"]
-#     scales = test_data["scales"]
-#     means = test_data["means"]
-#     colors = test_data["colors"]
-#     opacities = test_data["opacities"]
-#     viewmats.requires_grad = True
-#     quats.requires_grad = True
-#     scales.requires_grad = True
-#     means.requires_grad = True
-
-#     N = means.shape[0]
-#     C = viewmats.shape[0]
-#     densifications = torch.zeros((N, 2), device=device)
-#     backgrounds = torch.zeros((C, 3), device=device)
-    
-#     renders, meta = rasterization_2dgs(
-#         means,
-#         quats,
-#         scales,
-#         opacities.reshape((means.shape[0],)),
-#         colors,
-#         viewmats,
-#         Ks,
-#         width,
-#         height,
-#         backgrounds=backgrounds,
-#         render_mode="RGB+ED",
-#     )
-    
-    
-#     (render_colors,
-#      render_alphas,
-#      render_normals,
-#      surf_normals,
-#      render_distort,
-#      render_median,
-#     ) = renders
-    
-    
-#     renders_inria, meta_inria = rasterization_2dgs_inria_wrapper(
-#         means,
-#         quats,
-#         scales[..., :2],
-#         opacities,
-#         colors,
-#         viewmats,
-#         Ks,
-#         width,
-#         height,
-#         backgrounds=backgrounds
-#     )    
-#     render_colors_inria, render_alphas_inria = renders_inria
-#     render_normals_inria = meta_inria["normals_rend"]
-#     surf_normals_inria = meta_inria["normals_surf"]
-#     render_depth_inria = render_colors_inria[..., -1]
-    
-#     render_median = render_median.squeeze(0)
-#     render_median_inria = render_depth_inria.reshape((480, 640, 1))
-
-#     torch.testing.assert_close(render_median, render_median_inria)
-#     torch.testing.assert_close(render_alphas, render_alphas_inria)
-
-#     v_render_median = torch.rand_like(render_median)
-    
-#     (
-#         v_quats,
-#         v_scales,
-#         v_means,
-#     ) = torch.autograd.grad(
-#         (render_median * v_render_median).sum(),
-#         (quats, scales, means),
-#     )
-
-#     (
-#         _v_quats,
-#         _v_scales,
-#         _v_means,
-#     ) = torch.autograd.grad(
-#         (render_median_inria * v_render_median).sum(),
-#         (quats, scales, means),
-#     )
-
-#     pdb.set_trace()   
-     
-#     torch.testing.assert_close(v_quats, _v_quats, rtol=2e-1, atol=1e-2)
-#     torch.testing.assert_close(
-#         v_scales[..., :2], _v_scales[..., :2], rtol=1e-1, atol=2e-1
-#     )
-#     torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=6e-2)
-
 if __name__ == "__main__":
     test_projection_2dgs(test_data())
     test_rasterize_to_pixels_2dgs(test_data())
     test_fully_fused_projection_packed_2dgs(test_data())
-    # test_rasterize_full(test_data())
     print("All tests passed.")
