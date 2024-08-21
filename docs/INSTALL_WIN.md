@@ -4,68 +4,56 @@ Follow these steps to install `gsplat` on Windows.
 
 ## Prerequisites
 
-1. Install Visual Studio Build Tools. If MSVC 143 does not work, you may also need to install MSVC 142 for Visual Studio 2019. 
-2. Install CUDA Toolkit 11.8 and setup the CUDA_PATH Variable. The toolkit installer can be downloaded from. 
-We recommand to skip this step and instead to use conda to install the CUDA dependencies in isolation in the python environment (see bellow).   
+###  Visual Studio Build Tools
 
+Install Visual Studio Build Tools. If MSVC 143 does not work, you may also need to install MSVC 142 for Visual Studio 2019. 
 
-## Create the python environment
+###  CUDA Toolkit
 
-We recommand create the python environement using conda because it allows to install the CUDA dependencies in isolation.
+We recommend installing the CUDA dependencies as part of the Conda python environment creation. This has the advantage to install the CUDA dependencies automatically and in isolation from other python environment on the system, making the process less error prone.
 
-Run  `conda env create -f environment.yml` with the following `environment.yml` file
+Alternatively, you can install CUDA Toolkit 11.8 using the installer from [here](https://developer.nvidia.com/cuda-11-8-0-download-archive). You will then need to setup the PATH and CUDA_PATH variables accordingly. 
 
-```
-name: gsplat
-channels:
-  - pytorch
-  - defaults
-  - nvidia/label/cuda-11.8.0
-  - conda-forge
-dependencies:
-  - python=3.10
-  - cuda-version==11.8 
-  - cudnn==8.9.7.29
-  - cuda-toolkit=11.8
-  - pytorch=2.1.0
-  - pip:
-    - numpy==1.26.4
-variables:
-   CUDA_PATH: ""
+## Python environment setup
+
+We suggest using Conda to create the Python environment as it enables you to install the CUDA dependencies in isolation.
+
+### Create the python environment using Conda.
+Run  `conda env create -f environment.yml -n  <your_conda_environment>` with the `environment.yml`[environment.yml] you will find [here](../environment.yml).
+
+### Activate your conda environment:
+    
+```bash
+conda activate <your_conda_environment>
 ```
 
-2. Activate your conda environment:
-    ```bash
-    conda activate <your_conda_environment>
-    ```
-    Replace `<your_conda_environment>` with the name of your conda environment. For example:
-    ```bash
-    conda activate gsplat
-    ```
+Replace `<your_conda_environment>` with the name of your conda environment. For example:
 
+```bash
+conda activate gsplat
+```
 
 ## Install `gsplat`
 
-gsplat can be installed using the source package in pypi.org or using a clone of the repository
+`gsplat` can be installed using either the source package published in `pypi.org` or using a clone of the repository
 
 ### Installation using the pypi package
 
-`pip install gsplat`
+Run `pip install gsplat`
 
 ### Installation using the Repository
 
-5. Clone the `gsplat` repository:
+1. Clone the `gsplat` repository:
     ```bash
     git clone --recursive https://github.com/nerfstudio-project/gsplat.git
     ```
 
-6. Change into the `gsplat` directory:
+2. Change into the `gsplat` directory:
     ```bash
     cd gsplat
     ```
 
-
-7. Install `gsplat` using pip:
+3. Install `gsplat` using pip:
     ```bash
     pip install .
     ```
@@ -73,45 +61,23 @@ gsplat can be installed using the source package in pypi.org or using a clone of
 
 ## Run the tests
 
-Some additional dependencies are require to run all the tests. They can be installed using
+You will need to install the package in edit mode using `pip install -e .` for the tests to run as some of the tests assets are not packaged in the package.
 
-```
-pip install pytest numpy==1.26.4 
-```
+Some additional dependencies are required to run all the tests. They can be installed using `pip install pytest`
 
-Some more dependencie are required to run the compression tests:
-```
-pip install git+https://github.com/fraunhoferhhi/PLAS.git imageio torchpq cupy-cuda11x==12.3
-```
+Some more dependencie are required to run the compression tests. They can be installed using `pip install nerfacc git+https://github.com/fraunhoferhhi/PLAS.git imageio torchpq cupy-cuda11x==12.3`
+
+You can then run the test using `pytest tests`
+
+Note: the test ` tests/test_compression.py::test_png_compression` currently fails due to some problem in kmeans (`ValueError: Cannot take a larger sample than population when 'replace=False'`)
 
 ## Troubleshoot
 
-Error:
-```fatal error C1083: Cannot open include file: 'glm/glm.hpp':  No such file or directory```
-
-Solutions:
-glm is provided in the thridparty folder when using tje `--recursive` argument when clonning the repository.
-Alternativeley you can use `git submodule init` and `git submodule update`.
-
-
-Error:
-```
-A module that was compiled using NumPy 1.x cannot be run in
-NumPy 2.1.0 as it may crash. To support both 1.x and 2.x
-versions of NumPy, modules must be compiled with NumPy 2.0.
-Some module may need to rebuild instead e.g. with 'pybind11>=2.12'.
-```
-Solution:
-
-install numpy 1.26.4.
-
-```subprocess.CalledProcessError: Command '['where', 'cl']' returned non-zero exit status 1```
-make sure cl.exd is in the path. Note the cl should be automatically found after PR ?
-
-
-```NerfAcc: No CUDA toolkit found. NerfAcc will be disabled.```
-make sure `nvcc.exe` in in the path once the python environment has been activated. It shoudl have been installed in the conda environement with the line `cuda-toolkit=11.8` 
-
-
-```TypeError: sparse_coo_tensor() received an invalid combination of arguments - got (indices=Tensor, values=Tensor, size=torch.Size, is_coalesced=bool, )```.
- `is_coalesced` has been added in pytorch 2.1
+We list here some errors that can be uncountered when following the process above with possible solutions.
+|Error|Solution|
+|-----|--------|
+|fatal error C1083: Cannot open include file: 'glm/glm.hpp':  No such file or directory| glm is provided in the thridparty folder when using tje `--recursive` argument when clonning the repository. Alternativeley you can use `git submodule init` and `git submodule update`.
+A module that was compiled using NumPy 1.x cannot be run in NumPy 2.1.0 as it may crash. To support both 1.x and 2.x versions of NumPy, modules must be compiled with NumPy 2.0.Some module may need to rebuild instead e.g. with 'pybind11>=2.12'`| install numpy 1.26.4.
+subprocess.CalledProcessError: Command '['where', 'cl']' returned non-zero exit status 1| make sure the visual studio compiler `cl.exe` is in the path. 
+NerfAcc: No CUDA toolkit found. NerfAcc will be disabled.| make sure `nvcc.exe` in in the path once the python environment has been activated. It should have been installed in the conda environement with the line `cuda-toolkit=11.8` 
+TypeError: sparse_coo_tensor() received an invalid combination of arguments - got (indices=Tensor, values=Tensor, size=torch.Size, is_coalesced=bool, ).| `is_coalesced` has been added in pytorch 2.1
