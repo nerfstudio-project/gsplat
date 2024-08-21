@@ -45,7 +45,7 @@ def rasterization(
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
     channel_chunk: int = 32,
     distributed: bool = False,
-    ortho: bool = False
+    ortho: bool = False,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -172,7 +172,7 @@ def rasterization(
         distributed: Whether to use distributed rendering. Default is False. If True,
             The input Gaussians are expected to be a subset of scene in each rank, and
             the function will collaboratively render the images for all ranks.
-        ortho: Whether to use orthographic projection. In such case fx and fy become the scaling 
+        ortho: Whether to use orthographic projection. In such case fx and fy become the scaling
             factors to convert projected coordinates into pixel space and cx, cy become offsets.
 
     Returns:
@@ -287,7 +287,7 @@ def rasterization(
         radius_clip=radius_clip,
         sparse_grad=sparse_grad,
         calc_compensations=(rasterize_mode == "antialiased"),
-        ortho=ortho
+        ortho=ortho,
     )
 
     if packed:
