@@ -6,6 +6,7 @@ import platform
 import sys
 
 from setuptools import find_packages, setup
+import shutil, warnings
 
 __version__ = None
 exec(open("gsplat/version.py", "r").read())
@@ -21,6 +22,37 @@ if not MAX_JOBS:
     need_to_unset_max_jobs = True
     os.environ["MAX_JOBS"] = "10"
     print(f"Setting MAX_JOBS to {os.environ['MAX_JOBS']}")
+
+
+def _get_extra_path_for_msvc():
+    "copied from cupy/cuda/compiler.py"
+
+    cl_exe = shutil.which('cl.exe')
+    if cl_exe:
+        # The compiler is already on PATH, no extra path needed.
+        return None
+
+    try:
+        import setuptools
+        vctools = setuptools.msvc.EnvironmentInfo(platform.machine()).VCTools
+    except Exception as e:
+        warnings.warn(f'Failed to auto-detect cl.exe path: {type(e)}: {e}')
+        return None
+
+    for path in vctools:
+        cl_exe = os.path.join(path, 'cl.exe')
+        if os.path.exists(cl_exe):
+            return path
+    warnings.warn(f'cl.exe could not be found in {vctools}')
+    return None
+
+def add_msvc_path():
+    """Add MSVC path to PATH."""
+    extra_path = _get_extra_path_for_msvc()
+    if extra_path is not None:
+        # add path to PATH
+        os.environ['PATH'] = os.pathsep.join([extra_path, os.environ['PATH']])
+    assert shutil.which('cl.exe') is not None, "cl.exe not found in PATH"
 
 
 def get_ext():
@@ -50,6 +82,7 @@ def get_extensions():
     define_macros = []
 
     if sys.platform == "win32":
+        add_msvc_path()
         define_macros += [("gsplat_EXPORTS", None)]
 
     extra_compile_args = {"cxx": ["-O3"]}
@@ -97,15 +130,18 @@ def get_extensions():
 
     current_dir = pathlib.Path(__file__).parent.resolve()
     glm_path = os.path.join(current_dir, "gsplat", "cuda", "csrc", "third_party", "glm")
-    extension_v1 = CUDAExtension(
-        "gsplat.csrc_legacy",
-        sources_v1,
-        include_dirs=[extensions_dir_v2, glm_path],  # glm lives in v2.
-        define_macros=define_macros,
-        undef_macros=undef_macros,
-        extra_compile_args=extra_compile_args,
-        extra_link_args=extra_link_args,
-    )
+    extensions = []
+    # extension_v1 = CUDAExtension(
+    #     "gsplat.csrc_legacy",
+    #     sources_v1,
+    #     include_dirs=[extensions_dir_v2, glm_path],  # glm lives in v2.
+    #     define_macros=define_macros,
+    #     undef_macros=undef_macros,
+    #     extra_compile_args=extra_compile_args,
+    #     extra_link_args=extra_link_args,
+    # )
+    # extensions.append(extension_v1)
+
     extension_v2 = CUDAExtension(
         "gsplat.csrc",
         sources_v2,
@@ -115,9 +151,8 @@ def get_extensions():
         extra_compile_args=extra_compile_args,
         extra_link_args=extra_link_args,
     )
-
-    return [extension_v1, extension_v2]
-
+    extensions.append(extension_v2)
+    return extensions
 
 setup(
     name="gsplat",
