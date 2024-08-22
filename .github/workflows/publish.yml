@@ -17,9 +17,76 @@ jobs:
     strategy:
       matrix:
         os: [windows-2019, ]
-        python-version: ['3.7']
-        cuda-version: ['cu113','cu115','cu116','cu117','cu118']
-
+        python-version: ['3.7', '3.8', '3.9', '3.10', '3.11']
+        torch-version: [1.11.0, 1.12.1, 1.13.0, 2.0.1, 2.1.2, 2.2.2, 2.3.1, 2.4.0]
+        cuda-version: ['cu113', 'cu115', 'cu116', 'cu117', 'cu118']
+        exclude:
+          - cuda-version: 'cu113'
+            python-version: '3.11'
+          - cuda-version: 'cu115'
+            torch-version: 1.13.0
+          - cuda-version: 'cu115'
+            torch-version: 2.0.1
+          - cuda-version: 'cu115'
+            torch-version: 2.1.2'
+          - cuda-version: 'cu115'
+            torch-version: 2.2.2
+          - cuda-version: 'cu115'
+            torch-version: 2.3.1
+          - cuda-version: 'cu115'
+            torch-version: 2.4.0 
+          - cuda-version: 'cu115'
+            python-version: '3.11'
+          - cuda-version: 'cu115'
+            torch-version: 1.12.1
+          - cuda-version: 'cu115'
+            torch-version: 1.13.0
+          - cuda-version: 'cu115'
+            torch-version: 2.0.1
+          - cuda-version: 'cu115'
+            torch-version: 2.1.2
+          - cuda-version: 'cu115'
+            torch-version: 2.2.2
+          - cuda-version: 'cu115'
+            torch-version: 2.3.1
+          - cuda-version: 'cu115'
+            torch-version: 2.4.0 
+          - cuda-version: 'cu116'
+            python-version: '3.11'
+          - cuda-version: 'cu116'
+            torch-version: 1.11.0
+          - cuda-version: 'cu116'
+            torch-version: 2.0.1
+          - cuda-version: 'cu116'
+            torch-version: 2.2.2
+          - cuda-version: 'cu116'
+            torch-version: 2.3.1
+          - cuda-version: 'cu116'
+            torch-version: 2.4.0
+          - cuda-version: 'cu117'
+            python-version: '3.11'  
+          - cuda-version: 'cu117'
+            torch-version: 1.11.0
+          - cuda-version: 'cu117'
+            torch-version: 1.12.0
+          - cuda-version: 'cu117'
+            torch-version: 2.1.2
+          - cuda-version: 'cu117'
+            torch-version: 2.2.2
+          - cuda-version: 'cu117'
+            torch-version: 2.3.1
+          - cuda-version: 'cu117'
+            torch-version: 2.4.0
+          - cuda-version: 'cu118'
+            python-version: '3.7'
+          - cuda-version: 'cu118'
+            python-version: '3.7'
+          - cuda-version: 'cu118'
+            torch-version: 1.11.0
+          - cuda-version: 'cu118'
+            torch-version: 1.12.0
+          - cuda-version: 'cu118'
+            torch-version: 1.13.0
     steps:
       - uses: actions/checkout@v3
         with:
@@ -54,16 +121,20 @@ jobs:
         id: get-torch-version
         shell: bash
         run: |
-            if [[ "${{ matrix.cuda-version }}" == "cu117" || "${{ matrix.cuda-version }}" == "cu118" ]]; then
+            if [[ "${{ matrix.cuda-version }}" == "cu118" ]]; then
+                    echo "torch_version=2.4.0" >> $GITHUB_ENV
+            elif [[ "${{ matrix.cuda-version }}" == "cu117"]]; then
                 if [[ "${{ matrix.python-version }}" == "3.7" ]]; then
                     echo "torch_version=1.13.1" >> $GITHUB_ENV
                 else
-                    echo "torch_version=2.0.0" >> $GITHUB_ENV
+                    echo "torch_version=2.0.1" >> $GITHUB_ENV
                 fi
             elif [[ "${{ matrix.cuda-version }}" == "cu116" ]]; then
-                echo "torch_version=1.13.0" >> $GITHUB_ENV
-            elif [[ "${{ matrix.cuda-version }}" == "cu113" || "${{ matrix.cuda-version }}" == "cu115" ]]; then
-                echo "torch_version=1.11.0" >> $GITHUB_ENV
+                echo "torch_version=1.13.1" >> $GITHUB_ENV
+            elif [[ "${{ matrix.cuda-version }}" == "cu113" ]]; then 
+                echo "torch_version=1.12.1" >> $GITHUB_ENV
+            elif [[  "${{ matrix.cuda-version }}" == "cu115" ]]; then
+                 echo "torch_version=1.11.0" >> $GITHUB_ENV
             else
                 echo "No matching CUDA version found"
                 exit 1
@@ -99,8 +170,9 @@ jobs:
       - name: Set version
         run: |
           VERSION=`sed -n 's/^__version__ = "\(.*\)"/\1/p' gsplat/version.py`
+          TORCH_VERSION=`echo "pt${{ matrix.torch-version }}" | sed "s/..$//" | sed "s/\.//g"`
           CUDA_VERSION=`echo ${{ matrix.cuda-version }}`
-          echo "New version name: $VERSION+$CUDA_VERSION"
+          echo "New version name: $VERSION+$TORCH_VERSION$CUDA_VERSION"
           sed -i "s/$VERSION/$VERSION+$CUDA_VERSION/" gsplat/version.py
         shell:
           bash
