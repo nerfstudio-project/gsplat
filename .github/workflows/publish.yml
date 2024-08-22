@@ -17,8 +17,8 @@ jobs:
     strategy:
       matrix:
         os: [windows-2019, ]
-        python-version: ['3.10']
-        cuda-version: ['cu117']
+        python-version: ['3.9', '3.11']
+        cuda-version: ['cu113','cu115','cu116','cu117','cu118']
         exclude:
           - os: windows-2019
             python-version: '3.11'
