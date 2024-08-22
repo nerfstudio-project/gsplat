@@ -40,7 +40,7 @@ jobs:
     name: Build wheels on ${{ matrix.os }} for python ${{ matrix.python-version }} pytorch ${{ matrix.torch-version }} and cuda ${{ matrix.cuda-version }}
     runs-on: ${{ matrix.os }}
     environment: production
-    needs: [create_release]
+    needs: create_release
     strategy:
       matrix:
         include:
@@ -102,7 +102,7 @@ jobs:
 
       - name: Print release urk
         run: |
-          echo ${{ create_release.create_release.outputs.upload_url }} 
+          echo ${{ needs.create_release.outputs.upload_url }} 
 
       - uses: actions/checkout@v3
         with:
