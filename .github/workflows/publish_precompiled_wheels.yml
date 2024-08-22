@@ -100,7 +100,7 @@ jobs:
           #   cuda-version: cu118
     steps:
 
-      - name: Print release urk
+      - name: Print release url
         run: |
           echo ${{ needs.create_release.outputs.upload_url }} 
 
@@ -194,7 +194,7 @@ jobs:
       - name: Upload to GitHub Release
         uses: actions/upload-release-asset@v1
         with:
-          upload_url: ${{ create_release.create_release.outputs.upload_url }}
+          upload_url: ${{ needs.create_release.outputs.upload_url }}
           asset_path: ./dist/*.whl
           asset_name: ${{ env.WHEEL_NAME }}
           asset_content_type: application/zip
