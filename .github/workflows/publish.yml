@@ -112,10 +112,6 @@ jobs:
         run: |          
           pip install wheel
           source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
-          nvcc --list-gpu-arch
-          export TORCH_CUDA_ARCH_LIST="9.0"
-          echo "filtered architecture list"
-          echo TORCH_CUDA_ARCH_LIST
           python setup.py bdist_wheel --dist-dir=dist
         shell: bash  # `source` does not exist in windows powershell
       
