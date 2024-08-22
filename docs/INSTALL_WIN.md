@@ -57,7 +57,7 @@ conda activate gsplat
 
 ### 3. Activate the Visual Studio C++ environment
 
-The installation step using pip has a mechanism to automatically find the path to the visual studio compiler `cl.exe`, an thus one does not need to manually activate the visual studio environment to install `gsplat` with `pip`. However `gsplat` requires to be able to compile C++ code on the fly at runtime (just-in-time compilation) in some instances, which requires `cl.exe` to be on the path at runtime. This is the case for example when using 128  color channels. 
+The installation step using pip has a mechanism to automatically find the path to the visual studio compiler `cl.exe`, an thus one does not need to manually activate the visual studio environment to install `gsplat` with `pip`. However, depending on how the dependency `nerfacc` used in the tests is installed, you may still need to compile some C++ code on the fly at runtime (just-in-time compilation) to run the tests, which requires `cl.exe` to be on the path at runtime.
 
 In order to have `cl.exe` on the path you can:
 1. Navigate to the directory where vcvars64.bat is located. This path might vary depending on your installation. A common path is:
@@ -111,8 +111,10 @@ Note: If you an to run the tests or modify the code you will to install the pack
 You will need to clone the gsplat repository locally and install the gsplat package in edit mode using `pip install -e .` for the tests to run because some of the tests assets are not packaged in the package. You will also need to activate the visual C++ environment as described above before running the tests because some of the test use just-in-time compilation to compile code that has not been compiled during the package installation. 
 Some additional dependencies are required to run all the tests. They can be installed using 
 ```
-pip install pytest nerfacc git+https://github.com/fraunhoferhhi/PLAS.git imageio torchpq cupy-cuda11x==12.3
+pip install --no-binary=nerfacc pytest nerfacc git+https://github.com/fraunhoferhhi/PLAS.git imageio torchpq cupy-cuda11x==12.3
 ```
 You can then run the tests using `pytest tests`
 
-Note: the test ` tests/test_compression.py::test_png_compression` currently fails due to some problem in kmeans (`ValueError: Cannot take a larger sample than population when 'replace=False'`)
+Notes
+* We use `--no-binary=nerfacc` so that the `nerfacc` CUDA code gets compiled during the installation step. Without this argument the nerfacc CUDA code is compiled on the fly during the first import, which requires the visual studio folder executable `cl.exe` to be on the path.
+* the test ` tests/test_compression.py::test_png_compression` currently fails due to some problem in kmeans (`ValueError: Cannot take a larger sample than population when 'replace=False'`)
