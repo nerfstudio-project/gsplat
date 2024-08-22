@@ -210,8 +210,7 @@ class DefaultStrategy(Strategy):
             grads = info["means2d"].absgrad.clone()
         else:
             grads = info["means2d"].grad.clone()
-        grads[..., 0] *= info["width"] / 2.0 * info["n_cameras"]
-        grads[..., 1] *= info["height"] / 2.0 * info["n_cameras"]
+        grads *= max(info["width"], info["height"]) / 2.0 * info["n_cameras"]
 
         # initialize state on the first run
         n_gaussian = len(list(params.values())[0])
