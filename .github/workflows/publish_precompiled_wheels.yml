@@ -155,18 +155,6 @@ jobs:
         with:
           path: dist/*.whl
 
-  build_sdist:
-    name: Build source distribution
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v2
-    - name: Build sdist
-      run: BUILD_NO_CUDA=1 pipx run build --sdist
-    - uses: actions/upload-artifact@v3
-      with:
-        path: dist/*.tar.gz
-            
-
   upload_pypi:
     name: Upload to PyPi
     needs: [build_wheels, build_sdist]
