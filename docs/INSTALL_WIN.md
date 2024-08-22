@@ -41,7 +41,8 @@ variables:
 ``` 
 
 Then run  `conda env create -f environment.yml` to create the conda environment.
-
+Note: `pytorch=2.0.0` also works, but some of the tests require `pytorch=2.1.0` to run.
+ 
 ### 2. Activate your conda environment:
     
 Activate your environeent using:
@@ -63,9 +64,10 @@ conda activate gsplat
 
 We recommand install gsplat from the published source package and not the wheel by using
 ```
-pip install --no-binary=gsplat gsplat
+pip install --no-binary=gsplat gsplat --no-cache-dir
 ```
-the CUDA code will be compiled during the installation and the cvisual stdio compiler `cl.exe` does not need to be added to the path, because the installation process as an automatic way to find it.
+The CUDA code will be compiled during the installation and the cvisual stdio compiler `cl.exe` does not need to be added to the path, because the installation process as an automatic way to find it.
+We use `--no-cache-dir` to avoid using a potential wheel from `pypi.org` dowloaded previously that does not have the binaries.
 
 ### Installation using the wheel published on `pypi.org`
 
@@ -101,7 +103,8 @@ You will need to clone the gsplat repository locally and install the gsplat pack
 
 Some additional dependencies are required to run all the tests. They can be installed using 
 ```
-pip install --no-binary=nerfacc pytest nerfacc git+https://github.com/fraunhoferhhi/PLAS.git imageio torchpq cupy-cuda11x==12.3
+pip install --no-binary=nerfacc nerfacc --no-cache-dir
+pip install pytest nerfacc git+https://github.com/fraunhoferhhi/PLAS.git imageio torchpq cupy-cuda11x==12.3
 ```
 You can then run the tests using `pytest tests`
 
