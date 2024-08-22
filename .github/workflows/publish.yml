@@ -11,7 +11,7 @@ on: [push]
 
 jobs:
   build_wheels:
-    name: Build wheels on ${{ matrix.os }} for python ${{ matrix.python-version }} and cuda ${{ matrix.cuda-version }}
+    name: Build wheels on ${{ matrix.os }} for python ${{ matrix.python-version }} pytorch ${{ matrix.python-version }} and cuda ${{ matrix.cuda-version }}
     runs-on: ${{ matrix.os }}
     environment: production
     strategy:
@@ -22,18 +22,18 @@ jobs:
         cuda-version: ['cu113', 'cu115', 'cu116', 'cu117', 'cu118']
         exclude:
           - cuda-version: 'cu113'
-            python-version: '3.11'
-          - cuda-version: 'cu115'
+            python-version: '3.11'        
+          - cuda-version: 'cu113'
             torch-version: 1.13.0
-          - cuda-version: 'cu115'
+          - cuda-version: 'cu113'
             torch-version: 2.0.1
-          - cuda-version: 'cu115'
+          - cuda-version: 'cu113'
             torch-version: 2.1.2'
-          - cuda-version: 'cu115'
+          - cuda-version: 'cu113'
             torch-version: 2.2.2
-          - cuda-version: 'cu115'
+          - cuda-version: 'cu113'
             torch-version: 2.3.1
-          - cuda-version: 'cu115'
+          - cuda-version: 'cu113'
             torch-version: 2.4.0 
           - cuda-version: 'cu115'
             python-version: '3.11'
