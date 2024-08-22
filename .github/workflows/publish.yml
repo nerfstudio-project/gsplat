@@ -54,18 +54,20 @@ jobs:
         id: get-torch-version
         shell: bash
         run: |
-          if [[ "${{ matrix.cuda-version }}" == "cu117" || "${{ matrix.cuda-version }}" == "cu118" ]]; then
-            if [[ "${{ matrix.python-version }}" == "3.7" ]]; then
-                echo "torch_version=1.13.1" >> $GITHUB_ENV
+            if [[ "${{ matrix.cuda-version }}" == "cu117" || "${{ matrix.cuda-version }}" == "cu118" ]]; then
+                if [[ "${{ matrix.python-version }}" == "3.7" ]]; then
+                    echo "torch_version=1.13.1" >> $GITHUB_ENV
+                else
+                    echo "torch_version=2.0.0" >> $GITHUB_ENV
+                fi
+            elif [[ "${{ matrix.cuda-version }}" == "cu116" ]]; then
+                echo "torch_version=1.13.0" >> $GITHUB_ENV
+            elif [[ "${{ matrix.cuda-version }}" == "cu113" || "${{ matrix.cuda-version }}" == "cu115" ]]; then
+                echo "torch_version=1.11.0" >> $GITHUB_ENV
             else
-                echo "torch_version=2.0.0" >> $GITHUB_ENV
+                echo "No matching CUDA version found"
+                exit 1
             fi
-          elif [[ "${{ matrix.cuda-version }}" == "cu116" ]]; then
-            echo "torch_version=1.13.0" >> $GITHUB_ENV
-          elif [[ "${{ matrix.cuda-version }}" == "cu113" || "${{ matrix.cuda-version }}" == "cu115" ]]; then
-            echo "torch_version=1.11.0" >> $GITHUB_ENV
-          fi
-          echo $GITHUB_ENV
 
       - name: Display torch_version variable
         run: echo "The value of torch_version is $torch_version"
