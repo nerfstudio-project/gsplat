@@ -106,14 +106,14 @@ jobs:
           sed -i '/<!-- pypi-strip -->/,/<!-- \/pypi-strip -->/d' README.md
 
       - name: Build wheel
-        # architectures 8.x and 9.x (Ampere, Ada, Hopper) are not avaible in the current github action
+        # architectures 8.7 and higher do not seem to be support by the chsoen version of pytorch.
         # architectures 5.x give compilation errors "no suitable conversion function from "__half" to "int" exists"
         # architectures 6.x give compilation errors "namespace "cooperative_groups" has no member "labeled_partition""
         run: |          
           pip install wheel
           source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
           nvcc --list-gpu-arch
-          export TORCH_CUDA_ARCH_LIST=$(nvcc --list-gpu-arch | grep -Eo 'compute_[0-9]+' | awk -F'_' '{if ($2 >= 70) printf("%s.%s;", substr($2, 1, 1), substr($2, 2))}' | sed 's/;$//')
+          export TORCH_CUDA_ARCH_LIST="9.0"
           echo "filtered architecture list"
           echo TORCH_CUDA_ARCH_LIST
           python setup.py bdist_wheel --dist-dir=dist
