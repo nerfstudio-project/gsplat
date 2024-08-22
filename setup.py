@@ -28,23 +28,11 @@ def get_ext():
 
     return BuildExtension.with_options(no_python_abi_suffix=True, use_ninja=True)
 
-def get_filtered_cuda_arch_list(min_arch = 70):
-    from torch.cuda import get_arch_list
-    raw_arch_list = get_arch_list()  
-    print(raw_arch_list) 
-    filtered_arch_list = [arch for arch in raw_arch_list if arch.startswith("sm_") and int(arch.split("_")[1]) >= min_arch]
-    arch_list_str =";".join([arch[3:-1]+"."+arch[-1] for arch in filtered_arch_list])
-    print(arch_list_str)
-    return arch_list_str
-
-    
 
 def get_extensions():
     import torch
     from torch.__config__ import parallel_info
     from torch.utils.cpp_extension import CUDAExtension
-
-    os.environ["TORCH_CUDA_ARCH_LIST"] = f"{get_filtered_cuda_arch_list()}"    
 
     extensions_dir_v1 = osp.join("gsplat", "cuda_legacy", "csrc")
     sources_v1 = glob.glob(osp.join(extensions_dir_v1, "*.cu")) + glob.glob(
