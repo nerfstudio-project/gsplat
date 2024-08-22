@@ -1,4 +1,4 @@
-name: gsplat4
+name: gsplat9
 channels:
   - pytorch
   - defaults
@@ -10,6 +10,6 @@ dependencies:
   - cudnn==8.9.7.29
   - cuda-toolkit=11.8
   - pip:
-    - r requirements.txt
+    - -r requirements.txt
 variables:
    CUDA_PATH: ""
