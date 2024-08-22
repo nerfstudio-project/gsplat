@@ -1,0 +1,15 @@
+name: gsplat4
+channels:
+  - pytorch
+  - defaults
+  - nvidia/label/cuda-11.8.0
+  - conda-forge
+dependencies:
+  - python=3.10
+  - cuda-version==11.8 
+  - cudnn==8.9.7.29
+  - cuda-toolkit=11.8
+  - pip:
+    - r requirements.txt
+variables:
+   CUDA_PATH: ""

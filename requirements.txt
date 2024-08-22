@@ -1,0 +1,6 @@
+--no-cache-dir
+-f https://download.pytorch.org/whl/torch_stable.html
+torch==2.0.0+cu118
+gsplat
+numpy==1.26.4
+--no-binary==gsplat
