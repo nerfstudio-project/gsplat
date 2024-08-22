@@ -360,7 +360,10 @@
 <span class="sd">        refine_start_iter (int): Start refining GSs after this iteration. Default is 500.</span>
 <span class="sd">        refine_stop_iter (int): Stop refining GSs after this iteration. Default is 15_000.</span>
 <span class="sd">        reset_every (int): Reset opacities every this steps. Default is 3000.</span>
-<span class="sd">        refine_every (int): Reine GSs every this steps. Default is 100.</span>
+<span class="sd">        refine_every (int): Refine GSs every this steps. Default is 100.</span>
+<span class="sd">        pause_refine_after_reset (int): Pause refining GSs until this number of steps after</span>
+<span class="sd">          reset, Default is 0 (no pause at all) and one might want to set this number to the</span>
+<span class="sd">          number of images in training set.</span>
 <span class="sd">        absgrad (bool): Use absolute gradients for GS splitting. Default is False.</span>
 <span class="sd">        revised_opacity (bool): Whether to use revised opacity heuristic from</span>
 <span class="sd">          arXiv:2404.06109 (experimental). Default is False.</span>
@@ -394,6 +397,7 @@
     <span class="n">refine_stop_iter</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">15_000</span>
     <span class="n">reset_every</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">3000</span>
     <span class="n">refine_every</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">100</span>
+    <span class="n">pause_refine_after_reset</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span>
     <span class="n">absgrad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">revised_opacity</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">verbose</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
@@ -480,7 +484,11 @@
 
         <span class="bp">self</span><span class="o">.</span><span class="n">_update_state</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">state</span><span class="p">,</span> <span class="n">info</span><span class="p">,</span> <span class="n">packed</span><span class="o">=</span><span class="n">packed</span><span class="p">)</span>
 
-        <span class="k">if</span> <span class="n">step</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">refine_start_iter</span> <span class="ow">and</span> <span class="n">step</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">refine_every</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="n">step</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">refine_start_iter</span>
+            <span class="ow">and</span> <span class="n">step</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">refine_every</span> <span class="o">==</span> <span class="mi">0</span>
+            <span class="ow">and</span> <span class="n">step</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">reset_every</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">pause_refine_after_reset</span>
+        <span class="p">):</span>
             <span class="c1"># grow GSs</span>
             <span class="n">n_dupli</span><span class="p">,</span> <span class="n">n_split</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_grow_gs</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">optimizers</span><span class="p">,</span> <span class="n">state</span><span class="p">,</span> <span class="n">step</span><span class="p">)</span>
             <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">verbose</span><span class="p">:</span>
@@ -500,6 +508,8 @@
             <span class="c1"># reset running stats</span>
             <span class="n">state</span><span class="p">[</span><span class="s2">&quot;grad2d&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">zero_</span><span class="p">()</span>
             <span class="n">state</span><span class="p">[</span><span class="s2">&quot;count&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">zero_</span><span class="p">()</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">refine_scale2d_stop_iter</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">state</span><span class="p">[</span><span class="s2">&quot;radii&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">zero_</span><span class="p">()</span>
             <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">empty_cache</span><span class="p">()</span>
 
         <span class="k">if</span> <span class="n">step</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">reset_every</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
@@ -584,9 +594,9 @@
         <span class="n">n_dupli</span> <span class="o">=</span> <span class="n">is_dupli</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
 
         <span class="n">is_large</span> <span class="o">=</span> <span class="o">~</span><span class="n">is_small</span>
-        <span class="k">if</span> <span class="n">step</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">refine_scale2d_stop_iter</span><span class="p">:</span>
-            <span class="n">is_large</span> <span class="o">|=</span> <span class="n">state</span><span class="p">[</span><span class="s2">&quot;radii&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">grow_scale2d</span>
         <span class="n">is_split</span> <span class="o">=</span> <span class="n">is_grad_high</span> <span class="o">&amp;</span> <span class="n">is_large</span>
+        <span class="k">if</span> <span class="n">step</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">refine_scale2d_stop_iter</span><span class="p">:</span>
+            <span class="n">is_split</span> <span class="o">|=</span> <span class="n">state</span><span class="p">[</span><span class="s2">&quot;radii&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">grow_scale2d</span>
         <span class="n">n_split</span> <span class="o">=</span> <span class="n">is_split</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
 
         <span class="c1"># first duplicate</span>
