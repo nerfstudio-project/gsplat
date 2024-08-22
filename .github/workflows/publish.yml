@@ -59,6 +59,7 @@ jobs:
                 echo "torch_version=1.13.1" >> $GITHUB_ENV
             else
                 echo "torch_version=2.0.0" >> $GITHUB_ENV
+            fi
           elif [[ "${{ matrix.cuda-version }}" == "cu116" ]]; then
             echo "torch_version=1.13.0" >> $GITHUB_ENV
           elif [[ "${{ matrix.cuda-version }}" == "cu113" || "${{ matrix.cuda-version }}" == "cu115" ]]; then
