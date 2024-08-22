@@ -18,7 +18,7 @@ jobs:
       matrix:
         os: [windows-2019, ]
         python-version: ['3.10']
-        cuda-version: ['cu113']
+        cuda-version: ['cu117']
         exclude:
           - os: windows-2019
             python-version: '3.11'
