@@ -18,57 +18,57 @@ jobs:
       matrix:
         include:
           - os: windows-2019
-            python-version: 3.10
+            python-version: '3.10'
             torch-version: 2.0.1
             cuda-version: cu117
 
           - os: windows-2019
-            python-version: 3.10
+            python-version: '3.10'
             torch-version: 2.0.1
             cuda-version: cu118
 
           - os: windows-2019
-            python-version: 3.10
+            python-version: '3.10'
             torch-version: 2.1.2
             cuda-version: cu118
 
           - os: windows-2019
-            python-version: 3.10
+            python-version: '3.10'
             torch-version: 2.2.2
             cuda-version: cu118
 
           - os: windows-2019
-            python-version: 3.10
+            python-version: '3.10'
             torch-version: 2.3.1
             cuda-version: cu118
 
           - os: windows-2019
-            python-version: 3.10
+            python-version: '3.10'
             torch-version: 2.4.0
             cuda-version: cu118
 
           - os: windows-2019
-            python-version: 3.11
+            python-version: '3.11'
             torch-version: 2.0.1
             cuda-version: cu118
 
           - os: windows-2019
-            python-version: 3.11
+            python-version: '3.11'
             torch-version: 2.1.2
             cuda-version: cu118
 
           - os: windows-2019
-            python-version: 3.11
+            python-version: '3.11'
             torch-version: 2.2.2
             cuda-version: cu118
 
           - os: windows-2019
-            python-version: 3.11
+            python-version: '3.11'
             torch-version: 2.3.1
             cuda-version: cu118
 
           - os: windows-2019
-            python-version: 3.11
+            python-version: '3.11'
             torch-version: 2.4.0
             cuda-version: cu118
     steps:
