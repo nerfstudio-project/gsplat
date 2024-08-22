@@ -10,6 +10,27 @@ on: [push]
     # branches: [main]
 
 jobs:
+
+  create_release:
+    - name: Extract version from version.py
+      id: extract_version
+      run: |
+        VERSION=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' gsplat/version.py)
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+    - name: Create GitHub Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ env.VERSION }}
+        release_name: Release ${{ env.VERSION }}
+        body: |
+          Release notes for version ${{ env.VERSION }}.
+        draft: false
+        prerelease: false
+
   build_wheels:
     name: Build wheels on ${{ matrix.os }} for python ${{ matrix.python-version }} pytorch ${{ matrix.torch-version }} and cuda ${{ matrix.cuda-version }}
     runs-on: ${{ matrix.os }}
@@ -27,50 +48,50 @@ jobs:
             torch-version: 2.0.1
             cuda-version: cu118
 
-          - os: windows-2019
-            python-version: '3.10'
-            torch-version: 2.1.2
-            cuda-version: cu118
+          # - os: windows-2019
+          #   python-version: '3.10'
+          #   torch-version: 2.1.2
+          #   cuda-version: cu118
 
-          - os: windows-2019
-            python-version: '3.10'
-            torch-version: 2.2.2
-            cuda-version: cu118
+          # - os: windows-2019
+          #   python-version: '3.10'
+          #   torch-version: 2.2.2
+          #   cuda-version: cu118
 
-          - os: windows-2019
-            python-version: '3.10'
-            torch-version: 2.3.1
-            cuda-version: cu118
+          # - os: windows-2019
+          #   python-version: '3.10'
+          #   torch-version: 2.3.1
+          #   cuda-version: cu118
 
-          - os: windows-2019
-            python-version: '3.10'
-            torch-version: 2.4.0
-            cuda-version: cu118
+          # - os: windows-2019
+          #   python-version: '3.10'
+          #   torch-version: 2.4.0
+          #   cuda-version: cu118
 
-          - os: windows-2019
-            python-version: '3.11'
-            torch-version: 2.0.1
-            cuda-version: cu118
+          # - os: windows-2019
+          #   python-version: '3.11'
+          #   torch-version: 2.0.1
+          #   cuda-version: cu118
 
-          - os: windows-2019
-            python-version: '3.11'
-            torch-version: 2.1.2
-            cuda-version: cu118
+          # - os: windows-2019
+          #   python-version: '3.11'
+          #   torch-version: 2.1.2
+          #   cuda-version: cu118
 
-          - os: windows-2019
-            python-version: '3.11'
-            torch-version: 2.2.2
-            cuda-version: cu118
+          # - os: windows-2019
+          #   python-version: '3.11'
+          #   torch-version: 2.2.2
+          #   cuda-version: cu118
 
-          - os: windows-2019
-            python-version: '3.11'
-            torch-version: 2.3.1
-            cuda-version: cu118
+          # - os: windows-2019
+          #   python-version: '3.11'
+          #   torch-version: 2.3.1
+          #   cuda-version: cu118
 
-          - os: windows-2019
-            python-version: '3.11'
-            torch-version: 2.4.0
-            cuda-version: cu118
+          # - os: windows-2019
+          #   python-version: '3.11'
+          #   torch-version: 2.4.0
+          #   cuda-version: cu118
     steps:
       - uses: actions/checkout@v3
         with:
@@ -154,6 +175,35 @@ jobs:
       - uses: actions/upload-artifact@v3
         with:
           path: dist/*.whl
+
+      - name: Get wheel file name
+        id: get_wheel_name
+        run: echo "WHEEL_NAME=$(basename dist/*.whl)" >> $GITHUB_ENV
+
+      - name: Upload to GitHub Release
+        uses: actions/upload-release-asset@v2
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./dist/*.whl
+          asset_name: ${{ env.WHEEL_NAME }}
+          asset_content_type: application/zip
+
+  create_release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Create GitHub Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref_name }}
+        release_name: Release ${{ github.ref_name }}
+        body: |
+          Release notes for version ${{ github.ref_name }}.
+        draft: false
+        prerelease: false
 
   upload_pypi:
     name: Upload to PyPi
