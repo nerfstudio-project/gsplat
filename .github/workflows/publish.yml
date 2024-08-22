@@ -18,8 +18,8 @@ jobs:
       matrix:
         os: [windows-2019, ]
         python-version: ['3.7', '3.8', '3.9', '3.10', '3.11']
-        torch-version: [2.4.0]
-        cuda-version: ['cu113', 'cu115', 'cu116', 'cu117', 'cu118']
+        torch-version: [1.11.0, 1.12.1, 1.13.0, 2.0.1, 2.1.2, 2.2.2, 2.3.1, 2.4.0]
+        cuda-version: ['cu113']
         exclude:
           - cuda-version: 'cu113'
             python-version: '3.11'        
