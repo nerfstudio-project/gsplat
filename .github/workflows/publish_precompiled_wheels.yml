@@ -12,6 +12,11 @@ on: [push]
 jobs:
 
   create_release:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: 'recursive'
     - name: Extract version from version.py
       id: extract_version
       run: |
