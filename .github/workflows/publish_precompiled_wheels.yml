@@ -175,7 +175,7 @@ jobs:
         run: |          
           pip install wheel
           source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
-          python setup.py bdist_wheel --dist-dir=dist
+          BUILD_NO_CUDA=1 python setup.py bdist_wheel --dist-dir=dist
         shell: bash  # `source` does not exist in windows powershell
       
       - uses: actions/upload-artifact@v3
