@@ -11,7 +11,7 @@ on: [push]
 
 jobs:
   build_wheels:
-    name: Build wheels on ${{ matrix.os }} for python ${{ matrix.python-version }} and cuda { matrix.cuda-version }}
+    name: Build wheels on ${{ matrix.os }} for python ${{ matrix.python-version }} and cuda {{ matrix.cuda-version }}
     runs-on: ${{ matrix.os }}
     environment: production
     strategy:
