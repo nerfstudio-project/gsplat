@@ -1,4 +1,4 @@
-RESULT_DIR=results/benchmark-normal-distort
+RESULT_DIR=results/gsplat-packed
 
 for SCENE in bicycle bonsai counter garden kitchen room stump;
 do
@@ -15,8 +15,7 @@ do
         --data_dir data/360_v2/$SCENE/ \
         --model_type 2dgs \
         --result_dir $RESULT_DIR/$SCENE/ \
-        --normal_loss \
-        --dist_loss 
+        --packed
 
     # run eval and render
     for CKPT in $RESULT_DIR/$SCENE/ckpts/*;
@@ -26,8 +25,7 @@ do
             --model_type 2dgs \
             --result_dir $RESULT_DIR/$SCENE/ \
             --ckpt $CKPT \
-            --normal_loss \ 
-            --dist_loss 
+            --packed
 
     done
 done

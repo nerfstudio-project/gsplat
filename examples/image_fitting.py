@@ -2,7 +2,7 @@ import math
 import os
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Literal
 
 import numpy as np
 import torch
@@ -10,7 +10,7 @@ import tyro
 from PIL import Image
 from torch import Tensor, optim
 
-from gsplat import rasterization
+from gsplat.rendering import rasterization, rasterization_2dgs
 
 
 class SimpleTrainer:
@@ -79,6 +79,7 @@ class SimpleTrainer:
         iterations: int = 1000,
         lr: float = 0.01,
         save_imgs: bool = False,
+        model_type: Literal["3dgs", "2dgs"] = "3dgs",
     ):
         optimizer = optim.Adam(
             [self.rgbs, self.means, self.scales, self.opacities, self.quats], lr
@@ -94,9 +95,16 @@ class SimpleTrainer:
             ],
             device=self.device,
         )
+
+        if model_type == "3dgs":
+            rasterize_fnc = rasterization
+        elif model_type == "2dgs":
+            rasterize_fnc = rasterization_2dgs
+
         for iter in range(iterations):
             start = time.time()
-            renders, _, _ = rasterization(
+
+            renders, _ = rasterize_fnc(
                 self.means,
                 self.quats / self.quats.norm(dim=-1, keepdim=True),
                 self.scales,
@@ -108,7 +116,7 @@ class SimpleTrainer:
                 self.H,
                 packed=False,
             )
-            out_img = renders[0]
+            out_img = renders[0].squeeze(0)
             torch.cuda.synchronize()
             times[0] += time.time() - start
             loss = mse_loss(out_img, self.gt_image)
@@ -122,6 +130,8 @@ class SimpleTrainer:
 
             if save_imgs and iter % 5 == 0:
                 frames.append((out_img.detach().cpu().numpy() * 255).astype(np.uint8))
+            # break
+
         if save_imgs:
             # save them as a gif with PIL
             frames = [Image.fromarray(frame) for frame in frames]
@@ -158,6 +168,7 @@ def main(
     img_path: Optional[Path] = None,
     iterations: int = 1000,
     lr: float = 0.01,
+    model_type: Literal["3dgs", "2dgs"] = "3dgs",
 ) -> None:
     if img_path:
         gt_image = image_path_to_tensor(img_path)
@@ -172,6 +183,7 @@ def main(
         iterations=iterations,
         lr=lr,
         save_imgs=save_imgs,
+        model_type=model_type,
     )
 
 
