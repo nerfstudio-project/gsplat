@@ -157,7 +157,7 @@ jobs:
 
   upload_pypi:
     name: Upload to PyPi
-    needs: [build_wheels, build_sdist]
+    needs: [build_wheels]
     runs-on: ubuntu-latest
     steps:
     - uses: actions/download-artifact@v2
