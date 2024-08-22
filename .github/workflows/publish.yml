@@ -16,77 +16,61 @@ jobs:
     environment: production
     strategy:
       matrix:
-        os: [windows-2019, ]
-        python-version: ['3.10', '3.11']
-        torch-version: [2.0.1, 2.1.2, 2.2.2, 2.3.1, 2.4.0]
-        cuda-version: ['cu117','cu118']
-        exclude:
-          - cuda-version: 'cu113'
-            python-version: '3.11'        
-          - cuda-version: 'cu113'
-            torch-version: 1.13.0
-          - cuda-version: 'cu113'
+        include:
+          - os: windows-2019
+            python-version: 3.10
             torch-version: 2.0.1
-          - cuda-version: 'cu113'
-            torch-version: 2.1.2'
-          - cuda-version: 'cu113'
-            torch-version: 2.2.2
-          - cuda-version: 'cu113'
-            torch-version: 2.3.1
-          - cuda-version: 'cu113'
-            torch-version: 2.4.0 
-          - cuda-version: 'cu115'
-            python-version: '3.11'
-          - cuda-version: 'cu115'
-            torch-version: 1.12.1
-          - cuda-version: 'cu115'
-            torch-version: 1.13.0
-          - cuda-version: 'cu115'
+            cuda-version: cu117
+
+          - os: windows-2019
+            python-version: 3.10
             torch-version: 2.0.1
-          - cuda-version: 'cu115'
+            cuda-version: cu118
+
+          - os: windows-2019
+            python-version: 3.10
             torch-version: 2.1.2
-          - cuda-version: 'cu115'
+            cuda-version: cu118
+
+          - os: windows-2019
+            python-version: 3.10
             torch-version: 2.2.2
-          - cuda-version: 'cu115'
+            cuda-version: cu118
+
+          - os: windows-2019
+            python-version: 3.10
             torch-version: 2.3.1
-          - cuda-version: 'cu115'
-            torch-version: 2.4.0 
-          - cuda-version: 'cu116'
-            python-version: '3.11'
-          - cuda-version: 'cu116'
-            torch-version: 1.11.0
-          - cuda-version: 'cu116'
+            cuda-version: cu118
+
+          - os: windows-2019
+            python-version: 3.10
+            torch-version: 2.4.0
+            cuda-version: cu118
+
+          - os: windows-2019
+            python-version: 3.11
             torch-version: 2.0.1
-          - cuda-version: 'cu116'
-            torch-version: 2.2.2
-          - cuda-version: 'cu116'
-            torch-version: 2.3.1
-          - cuda-version: 'cu116'
-            torch-version: 2.4.0
-          - cuda-version: 'cu117'
-            python-version: '3.11'  
-          - cuda-version: 'cu117'
-            torch-version: 1.11.0
-          - cuda-version: 'cu117'
-            torch-version: 1.12.0
-          - cuda-version: 'cu117'
+            cuda-version: cu118
+
+          - os: windows-2019
+            python-version: 3.11
             torch-version: 2.1.2
-          - cuda-version: 'cu117'
+            cuda-version: cu118
+
+          - os: windows-2019
+            python-version: 3.11
             torch-version: 2.2.2
-          - cuda-version: 'cu117'
+            cuda-version: cu118
+
+          - os: windows-2019
+            python-version: 3.11
             torch-version: 2.3.1
-          - cuda-version: 'cu117'
+            cuda-version: cu118
+
+          - os: windows-2019
+            python-version: 3.11
             torch-version: 2.4.0
-          - cuda-version: 'cu118'
-            python-version: '3.7'
-          - cuda-version: 'cu118'
-            python-version: '3.7'
-          - cuda-version: 'cu118'
-            torch-version: 1.11.0
-          - cuda-version: 'cu118'
-            torch-version: 1.12.0
-          - cuda-version: 'cu118'
-            torch-version: 1.13.0
+            cuda-version: cu118
     steps:
       - uses: actions/checkout@v3
         with:
