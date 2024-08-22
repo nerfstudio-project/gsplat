@@ -40,6 +40,7 @@ jobs:
     name: Build wheels on ${{ matrix.os }} for python ${{ matrix.python-version }} pytorch ${{ matrix.torch-version }} and cuda ${{ matrix.cuda-version }}
     runs-on: ${{ matrix.os }}
     environment: production
+    needs: [create_release]
     strategy:
       matrix:
         include:
