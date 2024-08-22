@@ -99,6 +99,11 @@ jobs:
           #   torch-version: 2.4.0
           #   cuda-version: cu118
     steps:
+
+      - name: Print release urk
+        run: |
+          echo ${{ create_release.create_release.outputs.upload_url }} 
+
       - uses: actions/checkout@v3
         with:
           submodules: 'recursive'
@@ -175,7 +180,7 @@ jobs:
         run: |          
           pip install wheel
           source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
-          BUILD_NO_CUDA=1 python setup.py bdist_wheel --dist-dir=dist
+          python setup.py bdist_wheel --dist-dir=dist
         shell: bash  # `source` does not exist in windows powershell
       
       - uses: actions/upload-artifact@v3
@@ -189,7 +194,7 @@ jobs:
       - name: Upload to GitHub Release
         uses: actions/upload-release-asset@v1
         with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          upload_url: ${{ create_release.create_release.outputs.upload_url }}
           asset_path: ./dist/*.whl
           asset_name: ${{ env.WHEEL_NAME }}
           asset_content_type: application/zip
