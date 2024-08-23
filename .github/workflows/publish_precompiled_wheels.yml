@@ -209,7 +209,7 @@ jobs:
     steps:
     - uses: actions/download-artifact@v2
       with:
-        name: artifact
+        name: wheels
         path: dist
 
     - name: Publish package to Test PyPI
