@@ -155,7 +155,7 @@ jobs:
       
       - uses: actions/upload-artifact@v3
         with:
-          name: wheels
+          name: packages
           path: dist/*.whl
 
 
@@ -168,12 +168,13 @@ jobs:
       run: BUILD_NO_CUDA=1 pipx run build --sdist
     - uses: actions/upload-artifact@v3
       with:
+        name: packages
         path: dist/*.tar.gz
             
 
-  create_release_and_upload_wheels:
+  create_release_and_upload_packages:
     name: Uplodad to Github Release
-    needs: build_wheels
+    needs: [build_sdist,build_wheels]
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
@@ -198,14 +199,14 @@ jobs:
         draft: false
         prerelease: false
 
-    - name: Download wheels
+    - name: Download packages
       id: download_artifacts
       uses: actions/download-artifact@v3
       with:
-        name: wheels
+        name: packages
         path: dist
 
-    - name: Upload wheels to GitHub Release
+    - name: Upload packages to GitHub Release
       id: upload_assets
       run: |
         for file in $(ls ./dist/*.*); do
@@ -224,7 +225,7 @@ jobs:
     steps:
     - uses: actions/download-artifact@v2
       with:
-        name: wheels
+        name: packages
         path: dist
 
     - name: Publish package to Test PyPI
