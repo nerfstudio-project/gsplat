@@ -137,8 +137,8 @@ jobs:
           VERSION=`sed -n 's/^__version__ = "\(.*\)"/\1/p' gsplat/version.py`
           TORCH_VERSION=`echo "pt${{ matrix.torch-version }}" | sed "s/..$//" | sed "s/\.//g"`
           CUDA_VERSION=`echo ${{ matrix.cuda-version }}`
-          echo "New version name: $VERSION+$TORCH_VERSION+$CUDA_VERSION"
-          sed -i "s/$VERSION/$VERSION+$TORCH_VERSION+$CUDA_VERSION/" gsplat/version.py
+          echo "New version name: $VERSION+$TORCH_VERSION$CUDA_VERSION"
+          sed -i "s/$VERSION/$VERSION+$TORCH_VERSION$CUDA_VERSION/" gsplat/version.py
         shell:
           bash
 
