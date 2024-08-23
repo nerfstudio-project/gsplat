@@ -190,11 +190,12 @@ jobs:
       uses: actions/download-artifact@v3
       with:
         name: wheels
+        path: dist
 
     - name: Upload wheels to GitHub Release
       id: upload_assets
       run: |
-        for wheel in $(ls ./wheels/*.whl); do
+        for wheel in $(ls ./dist/*.whl); do
           curl -X POST \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -H "Content-Type: application/zip" \
