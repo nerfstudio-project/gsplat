@@ -30,6 +30,7 @@ __global__ void fully_fused_projection_bwd_kernel(
     const int32_t image_width,
     const int32_t image_height,
     const T eps2d,
+    const bool ortho,
     // fwd outputs
     const int32_t *__restrict__ radii,   // [C, N]
     const T *__restrict__ conics,        // [C, N, 3]
@@ -126,20 +127,38 @@ __global__ void fully_fused_projection_bwd_kernel(
     T fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
     mat3<T> v_covar_c(0.f);
     vec3<T> v_mean_c(0.f);
-    persp_proj_vjp<T>(
-        mean_c,
-        covar_c,
-        fx,
-        fy,
-        cx,
-        cy,
-        image_width,
-        image_height,
-        v_covar2d,
-        glm::make_vec2(v_means2d),
-        v_mean_c,
-        v_covar_c
-    );
+
+    if (ortho){
+        ortho_proj_vjp<T>(
+            mean_c,
+            covar_c,
+            fx,
+            fy,
+            cx,
+            cy,
+            image_width,
+            image_height,
+            v_covar2d,
+            glm::make_vec2(v_means2d),
+            v_mean_c,
+            v_covar_c
+        );
+    } else {
+        persp_proj_vjp<T>(
+            mean_c,
+            covar_c,
+            fx,
+            fy,
+            cx,
+            cy,
+            image_width,
+            image_height,
+            v_covar2d,
+            glm::make_vec2(v_means2d),
+            v_mean_c,
+            v_covar_c
+        );
+    }
 
     // add contribution from v_depths
     v_mean_c.z += v_depths[0];
@@ -237,6 +256,7 @@ fully_fused_projection_bwd_tensor(
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
+    const bool ortho,
     // fwd outputs
     const torch::Tensor &radii,                       // [C, N]
     const torch::Tensor &conics,                      // [C, N, 3]
@@ -305,6 +325,7 @@ fully_fused_projection_bwd_tensor(
                 image_width,
                 image_height,
                 eps2d,
+                ortho,
                 radii.data_ptr<int32_t>(),
                 conics.data_ptr<float>(),
                 compensations.has_value()

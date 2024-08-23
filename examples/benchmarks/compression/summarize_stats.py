@@ -2,23 +2,14 @@ import json
 import os
 import subprocess
 from collections import defaultdict
+from typing import List
 
 import numpy as np
 import tyro
 
 
-def main(results_dir: str = "results/benchmark_mcmc_0_36M_png_compression"):
-    scenes = [
-        "garden",
-        "bicycle",
-        "stump",
-        "bonsai",
-        "counter",
-        "kitchen",
-        "room",
-        "treehill",
-        "flowers",
-    ]
+def main(results_dir: str, scenes: List[str]):
+    print("scenes:", scenes)
     stage = "compress"
 
     summary = defaultdict(list)

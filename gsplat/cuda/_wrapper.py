@@ -1,4 +1,5 @@
 from typing import Callable, Optional, Tuple
+import warnings
 
 import torch
 from torch import Tensor
@@ -85,6 +86,38 @@ def persp_proj(
     height: int,
 ) -> Tuple[Tensor, Tensor]:
     """Perspective projection on Gaussians.
+    DEPRECATED: please use `proj` with `ortho=False` instead.
+
+    Args:
+        means: Gaussian means. [C, N, 3]
+        covars: Gaussian covariances. [C, N, 3, 3]
+        Ks: Camera intrinsics. [C, 3, 3]
+        width: Image width.
+        height: Image height.
+
+    Returns:
+        A tuple:
+
+        - **Projected means**. [C, N, 2]
+        - **Projected covariances**. [C, N, 2, 2]
+    """
+    warnings.warn(
+        "persp_proj is deprecated and will be removed in a future release. "
+        "Use proj with ortho=False instead.",
+        DeprecationWarning,
+    )
+    return proj(means, covars, Ks, width, height, ortho=False)
+
+
+def proj(
+    means: Tensor,  # [C, N, 3]
+    covars: Tensor,  # [C, N, 3, 3]
+    Ks: Tensor,  # [C, 3, 3]
+    width: int,
+    height: int,
+    ortho: bool,
+) -> Tuple[Tensor, Tensor]:
+    """Projection of Gaussians (perspective or orthographic).
 
     Args:
         means: Gaussian means. [C, N, 3]
@@ -106,7 +139,7 @@ def persp_proj(
     means = means.contiguous()
     covars = covars.contiguous()
     Ks = Ks.contiguous()
-    return _PerspProj.apply(means, covars, Ks, width, height)
+    return _Proj.apply(means, covars, Ks, width, height, ortho)
 
 
 def world_to_cam(
@@ -154,12 +187,13 @@ def fully_fused_projection(
     packed: bool = False,
     sparse_grad: bool = False,
     calc_compensations: bool = False,
+    ortho: bool = False,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Projects Gaussians to 2D.
 
     This function fuse the process of computing covariances
     (:func:`quat_scale_to_covar_preci()`), transforming to camera space (:func:`world_to_cam()`),
-    and perspective projection (:func:`persp_proj()`).
+    and projection (:func:`proj()`).
 
     .. note::
 
@@ -255,6 +289,7 @@ def fully_fused_projection(
             radius_clip,
             sparse_grad,
             calc_compensations,
+            ortho,
         )
     else:
         return _FullyFusedProjection.apply(
@@ -271,6 +306,7 @@ def fully_fused_projection(
             far_plane,
             radius_clip,
             calc_compensations,
+            ortho,
         )
 
 
@@ -619,7 +655,7 @@ class _QuatScaleToCovarPreci(torch.autograd.Function):
         return v_quats, v_scales, None, None, None
 
 
-class _PerspProj(torch.autograd.Function):
+class _Proj(torch.autograd.Function):
     """Perspective fully_fused_projection on Gaussians."""
 
     @staticmethod
@@ -630,13 +666,15 @@ class _PerspProj(torch.autograd.Function):
         Ks: Tensor,  # [C, 3, 3]
         width: int,
         height: int,
+        ortho: bool,
     ) -> Tuple[Tensor, Tensor]:
-        means2d, covars2d = _make_lazy_cuda_func("persp_proj_fwd")(
-            means, covars, Ks, width, height
+        means2d, covars2d = _make_lazy_cuda_func("proj_fwd")(
+            means, covars, Ks, width, height, ortho
         )
         ctx.save_for_backward(means, covars, Ks)
         ctx.width = width
         ctx.height = height
+        ctx.ortho = ortho
         return means2d, covars2d
 
     @staticmethod
@@ -644,16 +682,18 @@ class _PerspProj(torch.autograd.Function):
         means, covars, Ks = ctx.saved_tensors
         width = ctx.width
         height = ctx.height
-        v_means, v_covars = _make_lazy_cuda_func("persp_proj_bwd")(
+        ortho = ctx.ortho
+        v_means, v_covars = _make_lazy_cuda_func("proj_bwd")(
             means,
             covars,
             Ks,
             width,
             height,
+            ortho,
             v_means2d.contiguous(),
             v_covars2d.contiguous(),
         )
-        return v_means, v_covars, None, None, None
+        return v_means, v_covars, None, None, None, None
 
 
 class _WorldToCam(torch.autograd.Function):
@@ -713,6 +753,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         far_plane: float,
         radius_clip: float,
         calc_compensations: bool,
+        ortho: bool,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         # "covars" and {"quats", "scales"} are mutually exclusive
         radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
@@ -731,6 +772,7 @@ class _FullyFusedProjection(torch.autograd.Function):
             far_plane,
             radius_clip,
             calc_compensations,
+            ortho,
         )
         if not calc_compensations:
             compensations = None
@@ -740,6 +782,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         ctx.width = width
         ctx.height = height
         ctx.eps2d = eps2d
+        ctx.ortho = ortho
 
         return radii, means2d, depths, conics, compensations
 
@@ -759,6 +802,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         width = ctx.width
         height = ctx.height
         eps2d = ctx.eps2d
+        ortho = ctx.ortho
         if v_compensations is not None:
             v_compensations = v_compensations.contiguous()
         v_means, v_covars, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
@@ -773,6 +817,7 @@ class _FullyFusedProjection(torch.autograd.Function):
             width,
             height,
             eps2d,
+            ortho,
             radii,
             conics,
             compensations,
@@ -798,6 +843,7 @@ class _FullyFusedProjection(torch.autograd.Function):
             v_quats,
             v_scales,
             v_viewmats,
+            None,
             None,
             None,
             None,
@@ -959,6 +1005,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         radius_clip: float,
         sparse_grad: bool,
         calc_compensations: bool,
+        ortho: bool,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         (
             indptr,
@@ -983,6 +1030,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             far_plane,
             radius_clip,
             calc_compensations,
+            ortho,
         )
         if not calc_compensations:
             compensations = None
@@ -1002,6 +1050,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         ctx.height = height
         ctx.eps2d = eps2d
         ctx.sparse_grad = sparse_grad
+        ctx.ortho = ortho
 
         return camera_ids, gaussian_ids, radii, means2d, depths, conics, compensations
 
@@ -1032,6 +1081,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         height = ctx.height
         eps2d = ctx.eps2d
         sparse_grad = ctx.sparse_grad
+        ortho = ctx.ortho
 
         if v_compensations is not None:
             v_compensations = v_compensations.contiguous()
@@ -1047,6 +1097,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             width,
             height,
             eps2d,
+            ortho,
             camera_ids,
             gaussian_ids,
             conics,
@@ -1112,6 +1163,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             v_quats,
             v_scales,
             v_viewmats,
+            None,
             None,
             None,
             None,

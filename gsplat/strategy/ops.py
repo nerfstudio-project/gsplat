@@ -1,3 +1,4 @@
+import numpy as np
 from typing import Callable, Dict, List, Union
 
 import torch
@@ -7,6 +8,40 @@ from torch import Tensor
 from gsplat import quat_scale_to_covar_preci
 from gsplat.relocation import compute_relocation
 from gsplat.utils import normalized_quat_to_rotmat
+
+
+@torch.no_grad()
+def _multinomial_sample(weights: Tensor, n: int, replacement: bool = True) -> Tensor:
+    """Sample from a distribution using torch.multinomial or numpy.random.choice.
+
+    This function adaptively chooses between `torch.multinomial` and `numpy.random.choice`
+    based on the number of elements in `weights`. If the number of elements exceeds
+    the torch.multinomial limit (2^24), it falls back to using `numpy.random.choice`.
+
+    Args:
+        weights (Tensor): A 1D tensor of weights for each element.
+        n (int): The number of samples to draw.
+        replacement (bool): Whether to sample with replacement. Default is True.
+
+    Returns:
+        Tensor: A 1D tensor of sampled indices.
+    """
+    num_elements = weights.size(0)
+
+    if num_elements <= 2**24:
+        # Use torch.multinomial for elements within the limit
+        return torch.multinomial(weights, n, replacement=replacement)
+    else:
+        # Fallback to numpy.random.choice for larger element spaces
+        weights = weights / weights.sum()
+        weights_np = weights.detach().cpu().numpy()
+        sampled_idxs_np = np.random.choice(
+            num_elements, size=n, p=weights_np, replace=replacement
+        )
+        sampled_idxs = torch.from_numpy(sampled_idxs_np)
+
+        # Return the sampled indices on the original device
+        return sampled_idxs.to(weights.device)
 
 
 @torch.no_grad()
@@ -111,15 +146,15 @@ def split(
     )  # [2, N, 3]
 
     def param_fn(name: str, p: Tensor) -> Tensor:
+        repeats = [2] + [1] * (p.dim() - 1)
         if name == "means":
             p_split = (p[sel] + samples).reshape(-1, 3)  # [2N, 3]
         elif name == "scales":
             p_split = torch.log(scales / 1.6).repeat(2, 1)  # [2N, 3]
         elif name == "opacities" and revised_opacity:
             new_opacities = 1.0 - torch.sqrt(1.0 - torch.sigmoid(p[sel]))
-            p_split = torch.logit(new_opacities).repeat(2)  # [2N]
+            p_split = torch.logit(new_opacities).repeat(repeats)  # [2N]
         else:
-            repeats = [2] + [1] * (p.dim() - 1)
             p_split = p[sel].repeat(repeats)
         p_new = torch.cat([p[rest], p_split])
         p_new = torch.nn.Parameter(p_new)
@@ -216,6 +251,7 @@ def relocate(
         optimizers: A dictionary of optimizers, each corresponding to a parameter.
         mask: A boolean mask to indicates which Gaussians are dead.
     """
+    # support "opacities" with shape [N,] or [N, 1]
     opacities = torch.sigmoid(params["opacities"])
 
     dead_indices = mask.nonzero(as_tuple=True)[0]
@@ -224,8 +260,8 @@ def relocate(
 
     # Sample for new GSs
     eps = torch.finfo(torch.float32).eps
-    probs = opacities[alive_indices]
-    sampled_idxs = torch.multinomial(probs, n, replacement=True)
+    probs = opacities[alive_indices].flatten()  # ensure its shape is [N,]
+    sampled_idxs = _multinomial_sample(probs, n, replacement=True)
     sampled_idxs = alive_indices[sampled_idxs]
     new_opacities, new_scales = compute_relocation(
         opacities=opacities[sampled_idxs],
@@ -267,8 +303,8 @@ def sample_add(
     opacities = torch.sigmoid(params["opacities"])
 
     eps = torch.finfo(torch.float32).eps
-    probs = opacities
-    sampled_idxs = torch.multinomial(probs, n, replacement=True)
+    probs = opacities.flatten()
+    sampled_idxs = _multinomial_sample(probs, n, replacement=True)
     new_opacities, new_scales = compute_relocation(
         opacities=opacities[sampled_idxs],
         scales=torch.exp(params["scales"])[sampled_idxs],
@@ -305,7 +341,7 @@ def inject_noise_to_position(
     state: Dict[str, Tensor],
     scaler: float,
 ):
-    opacities = torch.sigmoid(params["opacities"])
+    opacities = torch.sigmoid(params["opacities"].flatten())
     scales = torch.exp(params["scales"])
     covars, _ = quat_scale_to_covar_preci(
         params["quats"],

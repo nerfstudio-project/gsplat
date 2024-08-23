@@ -10,7 +10,7 @@ Below are the basic functions that supports the rasterization.
 
 .. autofunction:: quat_scale_to_covar_preci
 
-.. autofunction:: persp_proj
+.. autofunction:: proj
 
 .. autofunction:: fully_fused_projection
 
