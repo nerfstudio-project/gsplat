@@ -11,40 +11,12 @@ on: [push]
 
 jobs:
 
-  create_release:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-      with:
-        submodules: 'recursive'
-    - name: Extract version from version.py
-      id: extract_version
-      run: |
-        VERSION=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' gsplat/version.py)
-        echo "VERSION=$VERSION" >> $GITHUB_ENV
 
-    - name: Create GitHub Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ env.VERSION }}
-        release_name: Release ${{ env.VERSION }}
-        body: |
-          Release notes for version ${{ env.VERSION }}.
-        draft: false
-        prerelease: false
-
-    # Expose step outputs as job outputs
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
 
   build_wheels:
     name: Build wheels on ${{ matrix.os }} for python ${{ matrix.python-version }} pytorch ${{ matrix.torch-version }} and cuda ${{ matrix.cuda-version }}
     runs-on: ${{ matrix.os }}
     environment: production
-    needs: create_release
     strategy:
       matrix:
         include:
@@ -104,9 +76,6 @@ jobs:
           #   cuda-version: cu118
     steps:
 
-      - name: Print release url
-        run: |
-          echo ${{ needs.create_release.outputs.upload_url }} 
 
       - uses: actions/checkout@v3
         with:
@@ -191,17 +160,52 @@ jobs:
         with:
           path: dist/*.whl
 
-      - name: Get wheel file name
-        id: get_wheel_name
-        run: echo "WHEEL_NAME=$(basename dist/*.whl)" >> $GITHUB_ENV
 
-      - name: Upload to GitHub Release
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ needs.create_release.outputs.upload_url }}
-          asset_path: ./dist/*.whl
-          asset_name: ${{ env.WHEEL_NAME }}
-          asset_content_type: application/zip
+
+
+
+  create_release_and_upload_wheels:
+    needs: build_wheels
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Extract version from version.py
+      id: extract_version
+      run: |
+        VERSION=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' gsplat/version.py)
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+    - name: Create GitHub Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ env.VERSION }}
+        release_name: Release ${{ env.VERSION }}
+        body: |
+          Release notes for version ${{ env.VERSION }}.
+        draft: false
+        prerelease: false
+
+    - name: Download wheels
+      id: download_artifacts
+      uses: actions/download-artifact@v3
+      with:
+        name: wheels
+
+    - name: Upload wheels to GitHub Release
+      id: upload_assets
+      run: |
+        for wheel in $(ls ./wheels/*.whl); do
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/zip" \
+            --data-binary @"$wheel" \
+            "${{ steps.create_release.outputs.upload_url }}?name=$(basename $wheel)"
+        done
 
   upload_pypi:
     name: Upload to PyPi
