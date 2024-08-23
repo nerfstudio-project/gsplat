@@ -25,7 +25,7 @@ from typing_extensions import assert_never
 from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
 
 from gsplat.distributed import cli
-from gsplat.rendering import rasterization, rasterization_2dgs, rasterization_2dgs_hold
+from gsplat.rendering import rasterization, rasterization_2dgs
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 
 
