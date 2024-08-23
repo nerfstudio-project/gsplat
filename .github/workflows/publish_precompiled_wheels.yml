@@ -147,9 +147,6 @@ jobs:
           sed -i '/<!-- pypi-strip -->/,/<!-- \/pypi-strip -->/d' README.md
 
       - name: Build wheel
-        # architectures 8.7 and higher do not seem to be support by the chsoen version of pytorch.
-        # architectures 5.x give compilation errors "no suitable conversion function from "__half" to "int" exists"
-        # architectures 6.x give compilation errors "namespace "cooperative_groups" has no member "labeled_partition""
         run: |          
           pip install wheel
           source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
@@ -158,9 +155,11 @@ jobs:
       
       - uses: actions/upload-artifact@v3
         with:
+          name: wheels
           path: dist/*.whl
 
   create_release_and_upload_wheels:
+    name: Uplodad to Github Release
     needs: build_wheels
     runs-on: ubuntu-latest
     steps:
