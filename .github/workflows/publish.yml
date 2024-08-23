@@ -212,7 +212,7 @@ jobs:
         for file in $(ls ./dist/*.*); do
           echo "Uploading $file..."
           filename=$(basename "$file")
-          encoded_filename=$(echo "$filename" | sed 's/+/%%2B/g')
+          encoded_filename=$(echo "$filename" | sed 's/+/%2B/g')
           curl -X POST \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -H "Content-Type: application/zip" \
