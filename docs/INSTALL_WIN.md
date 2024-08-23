@@ -64,3 +64,11 @@ You can for axmaple install the wheel with precompiled binaries for pytorch 2.0 
 ```
 pip install gsplat==1.2.0+pt20cu118 --index-url https://martinresearch.github.io/gsplat/whl
 ```
+or 
+```
+pip install gsplat==1.2.0 --index-url https://martinresearch.github.io/gsplat/whl/pt20cu118
+```
+Specify the pytorch and cuda version int the index url ahs the advantage that can obtain the lastest version
+```
+pip install gsplat --index-url https://martinresearch.github.io/gsplat/whl/pt20cu118
+```
