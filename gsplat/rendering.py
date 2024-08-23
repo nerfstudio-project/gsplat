@@ -1311,7 +1311,7 @@ def rasterization_2dgs(
         "camera_ids": camera_ids,
         "gaussian_ids": gaussian_ids,
         "radii": radii,
-        "means2d": densify,
+        "means2d": means2d,
         "depths": depths,
         "ray_transformations": ray_transformations,
         "opacities": opacities,
@@ -1327,6 +1327,7 @@ def rasterization_2dgs(
         "tile_size": tile_size,
         "n_cameras": C,
         "render_distort": render_distort,
+        "gradient_2dgs": densify,   # This holds the gradient used for densification for 2dgs
     }
 
     render_normals = render_normals @ torch.linalg.inv(viewmats)[0, :3, :3].T

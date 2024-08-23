@@ -311,6 +311,7 @@ class Runner:
             refine_every=cfg.refine_every,
             absgrad=cfg.absgrad,
             revised_opacity=cfg.revised_opacity,
+            key_for_gradient="gradient_2dgs",
         )
         self.strategy.check_sanity(self.splats, self.optimizers)
         self.strategy_state = self.strategy.initialize_state()
