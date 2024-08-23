@@ -37,21 +37,30 @@ Follow these steps to install `gsplat` on Windows.
     ./vcvarsall.bat x64 -vcvars_ver=14.29
     ```
 
-## Clone the Repository
+## Instsall using a clone of the Repository
 
-5. Clone the `gsplat` repository:
+1. Clone the `gsplat` repository:
     ```bash
     git clone --recursive https://github.com/nerfstudio-project/gsplat.git
     ```
 
-6. Change into the `gsplat` directory:
+2. Change into the `gsplat` directory:
     ```bash
     cd gsplat
     ```
 
-## Install `gsplat`
-
-7. Install `gsplat` using pip:
+3. Install `gsplat` using pip:
     ```bash
     pip install .
     ```
+
+The installed package does not come with precompiled binaries and the cuda code get compiled on the fly and the build file cached at the forst inport of gsplat.
+
+## Install using a precompiled wheels
+
+You can install wheels with precompiled binaries using packages listed here `https://martinresearch.github.io/gsplat/packages.html` 
+You can for axmaple install the wheel with precompiled binaries for pytorch 2.0 and cuda 11.8 using
+
+```
+pip install gsplat==1.2.0+pt20cu118 --extra-index-url=https://martinresearch.github.io/gsplat/packages.html
+```
