@@ -211,11 +211,13 @@ jobs:
       run: |
         for file in $(ls ./dist/*.*); do
           echo "Uploading $file..."
+          filename=$(basename "$file")
+          encoded_filename=$(echo "$filename" | sed 's/+/%%2B/g')
           curl -X POST \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -H "Content-Type: application/zip" \
             --data-binary @"$file" \
-            "${{ steps.create_release.outputs.upload_url }}=$(basename $file)"
+            "${{ steps.create_release.outputs.upload_url }}=$encoded_filename"
         done
 
   upload_pypi:
