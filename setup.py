@@ -127,11 +127,6 @@ setup(
     url=URL,
     download_url=f"{URL}/archive/gsplat-{__version__}.tar.gz",
     python_requires=">=3.7",
-    setup_requires=[
-        "ninja",
-        "numpy",
-        "torch",
-    ],
     install_requires=[
         "ninja",
         "numpy",
