@@ -36,6 +36,10 @@ jobs:
         draft: false
         prerelease: false
 
+    # Expose step outputs as job outputs
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+
   build_wheels:
     name: Build wheels on ${{ matrix.os }} for python ${{ matrix.python-version }} pytorch ${{ matrix.torch-version }} and cuda ${{ matrix.cuda-version }}
     runs-on: ${{ matrix.os }}
