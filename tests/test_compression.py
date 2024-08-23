@@ -19,7 +19,7 @@ def test_png_compression():
     torch.manual_seed(42)
 
     # Prepare Gaussians
-    N = 10000
+    N = 100000
     splats = torch.nn.ParameterDict(
         {
             "means": torch.randn(N, 3),
