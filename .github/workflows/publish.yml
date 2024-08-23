@@ -105,8 +105,10 @@ jobs:
           pip install --upgrade setuptools
           pip install ninja
 
-      - name: Display torch_version variable
-        run: echo "The value of torch_version is $torch_version"
+      - name: Install CUDA ${{ matrix.cuda-version }}
+        if: ${{ matrix.cuda-version != 'cpu' }}
+        run: |
+          bash .github/workflows/cuda/${{ runner.os }}.sh ${{ matrix.cuda-version }}
       
       - name: Install PyTorch 
         run: |
