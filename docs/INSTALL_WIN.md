@@ -58,9 +58,9 @@ The installed package does not come with precompiled binaries and the cuda code 
 
 ## Install using a precompiled wheels
 
-You can install wheels with precompiled binaries using packages listed here `https://martinresearch.github.io/gsplat/packages.html` 
+You can install wheels with precompiled binaries using packages listed here `https://martinresearch.github.io/gsplat/whl/gsplat` 
 You can for axmaple install the wheel with precompiled binaries for pytorch 2.0 and cuda 11.8 using
 
 ```
-pip install gsplat==1.2.0+pt20cu118 --extra-index-url=https://martinresearch.github.io/gsplat/packages.html
+pip install gsplat==1.2.0+pt20cu118 --index-url https://martinresearch.github.io/gsplat/whl
 ```
