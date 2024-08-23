@@ -1,7 +1,7 @@
 # This workflows will upload a Python Package using twine when a release is created
 # For more information see: https://help.github.com/en/actions/language-and-framework-guides/using-python-with-github-actions#publishing-to-package-registries
 
-name: Upload Precompiled Wheels
+name: Build and Release Wheels
 
 on: [push]
 #on:
@@ -158,6 +158,19 @@ jobs:
           name: wheels
           path: dist/*.whl
 
+
+  build_sdist:
+    name: Build source distribution
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Build sdist
+      run: BUILD_NO_CUDA=1 pipx run build --sdist
+    - uses: actions/upload-artifact@v3
+      with:
+        path: dist/*.tar.gz
+            
+
   create_release_and_upload_wheels:
     name: Uplodad to Github Release
     needs: build_wheels
@@ -195,13 +208,13 @@ jobs:
     - name: Upload wheels to GitHub Release
       id: upload_assets
       run: |
-        for wheel in $(ls ./dist/*.whl); do
-          echo "Uploading $wheel..."
+        for file in $(ls ./dist/*.*); do
+          echo "Uploading $file..."
           curl -X POST \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -H "Content-Type: application/zip" \
-            --data-binary @"$wheel" \
-            "${{ steps.create_release.outputs.upload_url }}=$(basename $wheel)"
+            --data-binary @"$file" \
+            "${{ steps.create_release.outputs.upload_url }}=$(basename $file)"
         done
 
   upload_pypi:
