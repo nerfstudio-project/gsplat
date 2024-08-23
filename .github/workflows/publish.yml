@@ -25,55 +25,55 @@ jobs:
             torch-version: 2.0.1
             cuda-version: cu117
 
-          # - os: windows-2019
-          #   python-version: '3.10'
-          #   torch-version: 2.0.1
-          #   cuda-version: cu118
+          - os: windows-2019
+            python-version: '3.10'
+            torch-version: 2.0.1
+            cuda-version: cu118
 
-          # - os: windows-2019
-          #   python-version: '3.10'
-          #   torch-version: 2.1.2
-          #   cuda-version: cu118
+          - os: windows-2019
+            python-version: '3.10'
+            torch-version: 2.1.2
+            cuda-version: cu118
 
-          # - os: windows-2019
-          #   python-version: '3.10'
-          #   torch-version: 2.2.2
-          #   cuda-version: cu118
+          - os: windows-2019
+            python-version: '3.10'
+            torch-version: 2.2.2
+            cuda-version: cu118
 
-          # - os: windows-2019
-          #   python-version: '3.10'
-          #   torch-version: 2.3.1
-          #   cuda-version: cu118
+          - os: windows-2019
+            python-version: '3.10'
+            torch-version: 2.3.1
+            cuda-version: cu118
 
-          # - os: windows-2019
-          #   python-version: '3.10'
-          #   torch-version: 2.4.0
-          #   cuda-version: cu118
+          - os: windows-2019
+            python-version: '3.10'
+            torch-version: 2.4.0
+            cuda-version: cu118
 
-          # - os: windows-2019
-          #   python-version: '3.11'
-          #   torch-version: 2.0.1
-          #   cuda-version: cu118
+          - os: windows-2019
+            python-version: '3.11'
+            torch-version: 2.0.1
+            cuda-version: cu118
 
-          # - os: windows-2019
-          #   python-version: '3.11'
-          #   torch-version: 2.1.2
-          #   cuda-version: cu118
+          - os: windows-2019
+            python-version: '3.11'
+            torch-version: 2.1.2
+            cuda-version: cu118
 
-          # - os: windows-2019
-          #   python-version: '3.11'
-          #   torch-version: 2.2.2
-          #   cuda-version: cu118
+          - os: windows-2019
+            python-version: '3.11'
+            torch-version: 2.2.2
+            cuda-version: cu118
 
-          # - os: windows-2019
-          #   python-version: '3.11'
-          #   torch-version: 2.3.1
-          #   cuda-version: cu118
+          - os: windows-2019
+            python-version: '3.11'
+            torch-version: 2.3.1
+            cuda-version: cu118
 
-          # - os: windows-2019
-          #   python-version: '3.11'
-          #   torch-version: 2.4.0
-          #   cuda-version: cu118
+          - os: windows-2019
+            python-version: '3.11'
+            torch-version: 2.4.0
+            cuda-version: cu118
     steps:
 
 
@@ -107,11 +107,6 @@ jobs:
 
       - name: Display torch_version variable
         run: echo "The value of torch_version is $torch_version"
-
-      # - name: Install CUDA ${{ matrix.cuda-version }}
-      #   if: ${{ matrix.cuda-version != 'cpu' }}
-      #   run: |
-      #     bash .github/workflows/cuda/${{ runner.os }}.sh ${{ matrix.cuda-version }}
       
       - name: Install PyTorch 
         run: |
@@ -150,7 +145,7 @@ jobs:
         run: |          
           pip install wheel
           source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
-          BUILD_NO_CUDA=1 python setup.py bdist_wheel --dist-dir=dist
+          python setup.py bdist_wheel --dist-dir=dist
         shell: bash  # `source` does not exist in windows powershell
       
       - uses: actions/upload-artifact@v3
