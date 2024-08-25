@@ -17,37 +17,10 @@ jobs:
         # cuda-version: ['cu113']
         os: [ubuntu-20.04, windows-2019]
         # support version based on: https://download.pytorch.org/whl/torch/
-        python-version: ['3.7', '3.8', '3.9', '3.10', '3.11']
-        torch-version: [1.11.0, 1.12.0, 1.13.0, 2.0.0]
-        cuda-version: ['cu113', 'cu115', 'cu116', 'cu117', 'cu118']
+        python-version: ['3.10']
+        torch-version: [2.0.0]
+        cuda-version: ['cu118']
         exclude:
-          - torch-version: 1.11.0
-            python-version: '3.11'
-          - torch-version: 1.11.0
-            cuda-version: 'cu116'
-          - torch-version: 1.11.0
-            cuda-version: 'cu117'
-          - torch-version: 1.11.0
-            cuda-version: 'cu118'
-          
-          - torch-version: 1.12.0
-            python-version: '3.11'
-          - torch-version: 1.12.0
-            cuda-version: 'cu115'
-          - torch-version: 1.12.0
-            cuda-version: 'cu117'
-          - torch-version: 1.12.0
-            cuda-version: 'cu118'
-          
-          - torch-version: 1.13.0
-            cuda-version: 'cu102'
-          - torch-version: 1.13.0
-            cuda-version: 'cu113'
-          - torch-version: 1.13.0
-            cuda-version: 'cu115'
-          - torch-version: 1.13.0
-            cuda-version: 'cu118'
-            
           - torch-version: 2.0.0
             python-version: '3.7'
           - torch-version: 2.0.0
@@ -77,6 +50,20 @@ jobs:
         with:
           submodules: 'recursive'
 
+      - name: Free up disk space
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          echo "Disk space before cleanup:"
+          df -h
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          sudo apt-get clean
+          echo "Disk space after cleanup:"
+          df -h
+          du -sh /usr/local/* /opt/* /usr/* | sort -hr
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v4
         with:
@@ -86,11 +73,6 @@ jobs:
         run: |
           pip install --upgrade setuptools
           pip install ninja
-
-      - name: Free up disk space
-        if: ${{ runner.os == 'Linux' }}
-        run: |
-          sudo rm -rf /usr/share/dotnet
 
       - name: Install CUDA ${{ matrix.cuda-version }}
         if: ${{ matrix.cuda-version != 'cpu' }}
@@ -129,7 +111,10 @@ jobs:
           BUILD_NO_CUDA=1 pip install .
 
       - name: Build wheel
-        run: |
+        # architectures 8.x and 9.x (Ampere, Ada, Hopper) are not avaible in the current github action
+        # architectures 5.x give compilation errors "no suitable conversion function from "__half" to "int" exists"
+        # architectures 6.x give compilation errors "namespace "cooperative_groups" has no member "labeled_partition""
+        run: |          
           pip install wheel
           source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
           python setup.py bdist_wheel --dist-dir=dist
