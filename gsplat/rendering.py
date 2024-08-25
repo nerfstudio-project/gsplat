@@ -775,94 +775,94 @@ def _rasterization(
     return render_colors, render_alphas, meta
 
 
-def rasterization_legacy_wrapper(
-    means: Tensor,  # [N, 3]
-    quats: Tensor,  # [N, 4]
-    scales: Tensor,  # [N, 3]
-    opacities: Tensor,  # [N]
-    colors: Tensor,  # [N, D] or [N, K, 3]
-    viewmats: Tensor,  # [C, 4, 4]
-    Ks: Tensor,  # [C, 3, 3]
-    width: int,
-    height: int,
-    near_plane: float = 0.01,
-    eps2d: float = 0.3,
-    sh_degree: Optional[int] = None,
-    tile_size: int = 16,
-    backgrounds: Optional[Tensor] = None,
-    **kwargs,
-) -> Tuple[Tensor, Tensor, Dict]:
-    """Wrapper for old version gsplat.
+# def rasterization_legacy_wrapper(
+#     means: Tensor,  # [N, 3]
+#     quats: Tensor,  # [N, 4]
+#     scales: Tensor,  # [N, 3]
+#     opacities: Tensor,  # [N]
+#     colors: Tensor,  # [N, D] or [N, K, 3]
+#     viewmats: Tensor,  # [C, 4, 4]
+#     Ks: Tensor,  # [C, 3, 3]
+#     width: int,
+#     height: int,
+#     near_plane: float = 0.01,
+#     eps2d: float = 0.3,
+#     sh_degree: Optional[int] = None,
+#     tile_size: int = 16,
+#     backgrounds: Optional[Tensor] = None,
+#     **kwargs,
+# ) -> Tuple[Tensor, Tensor, Dict]:
+#     """Wrapper for old version gsplat.
 
-    .. warning::
-        This function exists for comparision purpose only. So we skip collecting
-        the intermidiate variables, and only return an empty dict.
+#     .. warning::
+#         This function exists for comparision purpose only. So we skip collecting
+#         the intermidiate variables, and only return an empty dict.
 
-    """
-    from gsplat.cuda_legacy._wrapper import (
-        project_gaussians,
-        rasterize_gaussians,
-        spherical_harmonics,
-    )
+#     """
+#     from gsplat.cuda_legacy._wrapper import (
+#         project_gaussians,
+#         rasterize_gaussians,
+#         spherical_harmonics,
+#     )
 
-    assert eps2d == 0.3, "This is hard-coded in CUDA to be 0.3"
-    C = len(viewmats)
+#     assert eps2d == 0.3, "This is hard-coded in CUDA to be 0.3"
+#     C = len(viewmats)
 
-    render_colors, render_alphas = [], []
-    for cid in range(C):
-        fx, fy = Ks[cid, 0, 0], Ks[cid, 1, 1]
-        cx, cy = Ks[cid, 0, 2], Ks[cid, 1, 2]
-        viewmat = viewmats[cid]
+#     render_colors, render_alphas = [], []
+#     for cid in range(C):
+#         fx, fy = Ks[cid, 0, 0], Ks[cid, 1, 1]
+#         cx, cy = Ks[cid, 0, 2], Ks[cid, 1, 2]
+#         viewmat = viewmats[cid]
 
-        means2d, depths, radii, conics, _, num_tiles_hit, _ = project_gaussians(
-            means3d=means,
-            scales=scales,
-            glob_scale=1.0,
-            quats=quats,
-            viewmat=viewmat,
-            fx=fx,
-            fy=fy,
-            cx=cx,
-            cy=cy,
-            img_height=height,
-            img_width=width,
-            block_width=tile_size,
-            clip_thresh=near_plane,
-        )
+#         means2d, depths, radii, conics, _, num_tiles_hit, _ = project_gaussians(
+#             means3d=means,
+#             scales=scales,
+#             glob_scale=1.0,
+#             quats=quats,
+#             viewmat=viewmat,
+#             fx=fx,
+#             fy=fy,
+#             cx=cx,
+#             cy=cy,
+#             img_height=height,
+#             img_width=width,
+#             block_width=tile_size,
+#             clip_thresh=near_plane,
+#         )
 
-        if colors.dim() == 3:
-            c2w = viewmat.inverse()
-            viewdirs = means - c2w[:3, 3]
-            # viewdirs = F.normalize(viewdirs, dim=-1).detach()
-            if sh_degree is None:
-                sh_degree = int(math.sqrt(colors.shape[1]) - 1)
-            colors = spherical_harmonics(sh_degree, viewdirs, colors)  # [N, 3]
+#         if colors.dim() == 3:
+#             c2w = viewmat.inverse()
+#             viewdirs = means - c2w[:3, 3]
+#             # viewdirs = F.normalize(viewdirs, dim=-1).detach()
+#             if sh_degree is None:
+#                 sh_degree = int(math.sqrt(colors.shape[1]) - 1)
+#             colors = spherical_harmonics(sh_degree, viewdirs, colors)  # [N, 3]
 
-        background = (
-            backgrounds[cid]
-            if backgrounds is not None
-            else torch.zeros(colors.shape[-1], device=means.device)
-        )
+#         background = (
+#             backgrounds[cid]
+#             if backgrounds is not None
+#             else torch.zeros(colors.shape[-1], device=means.device)
+#         )
 
-        render_colors_, render_alphas_ = rasterize_gaussians(
-            xys=means2d,
-            depths=depths,
-            radii=radii,
-            conics=conics,
-            num_tiles_hit=num_tiles_hit,
-            colors=colors,
-            opacity=opacities[..., None],
-            img_height=height,
-            img_width=width,
-            block_width=tile_size,
-            background=background,
-            return_alpha=True,
-        )
-        render_colors.append(render_colors_)
-        render_alphas.append(render_alphas_[..., None])
-    render_colors = torch.stack(render_colors, dim=0)
-    render_alphas = torch.stack(render_alphas, dim=0)
-    return render_colors, render_alphas, {}
+#         render_colors_, render_alphas_ = rasterize_gaussians(
+#             xys=means2d,
+#             depths=depths,
+#             radii=radii,
+#             conics=conics,
+#             num_tiles_hit=num_tiles_hit,
+#             colors=colors,
+#             opacity=opacities[..., None],
+#             img_height=height,
+#             img_width=width,
+#             block_width=tile_size,
+#             background=background,
+#             return_alpha=True,
+#         )
+#         render_colors.append(render_colors_)
+#         render_alphas.append(render_alphas_[..., None])
+#     render_colors = torch.stack(render_colors, dim=0)
+#     render_alphas = torch.stack(render_alphas, dim=0)
+#     return render_colors, render_alphas, {}
 
 
 def rasterization_inria_wrapper(

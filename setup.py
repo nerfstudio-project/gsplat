@@ -34,12 +34,6 @@ def get_extensions():
     from torch.__config__ import parallel_info
     from torch.utils.cpp_extension import CUDAExtension
 
-    extensions_dir_v1 = osp.join("gsplat", "cuda_legacy", "csrc")
-    sources_v1 = glob.glob(osp.join(extensions_dir_v1, "*.cu")) + glob.glob(
-        osp.join(extensions_dir_v1, "*.cpp")
-    )
-    sources_v1 = [path for path in sources_v1 if "hip" not in path]
-
     extensions_dir_v2 = osp.join("gsplat", "cuda", "csrc")
     sources_v2 = glob.glob(osp.join(extensions_dir_v2, "*.cu")) + glob.glob(
         osp.join(extensions_dir_v2, "*.cpp")
@@ -97,15 +91,6 @@ def get_extensions():
 
     current_dir = pathlib.Path(__file__).parent.resolve()
     glm_path = os.path.join(current_dir, "gsplat", "cuda", "csrc", "third_party", "glm")
-    extension_v1 = CUDAExtension(
-        "gsplat.csrc_legacy",
-        sources_v1,
-        include_dirs=[extensions_dir_v2, glm_path],  # glm lives in v2.
-        define_macros=define_macros,
-        undef_macros=undef_macros,
-        extra_compile_args=extra_compile_args,
-        extra_link_args=extra_link_args,
-    )
     extension_v2 = CUDAExtension(
         "gsplat.csrc",
         sources_v2,
@@ -116,7 +101,7 @@ def get_extensions():
         extra_link_args=extra_link_args,
     )
 
-    return [extension_v1, extension_v2]
+    return [extension_v2]
 
 
 setup(
