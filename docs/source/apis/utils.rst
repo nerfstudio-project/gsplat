@@ -26,6 +26,4 @@ Below are the basic functions that supports the rasterization.
 
 .. autofunction:: accumulate
 
-.. autofunction:: rasterization_legacy_wrapper    
-
 .. autofunction:: rasterization_inria_wrapper
