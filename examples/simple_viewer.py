@@ -224,9 +224,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--port", type=int, default=8080, help="port for the viewer server"
     )
-    parser.add_argument(
-        "--backend", type=str, default="gsplat", help="gsplat, inria"
-    )
+    parser.add_argument("--backend", type=str, default="gsplat", help="gsplat, inria")
     args = parser.parse_args()
     assert args.scene_grid % 2 == 1, "scene_grid must be odd"
 
