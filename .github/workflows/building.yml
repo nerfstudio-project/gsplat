@@ -11,14 +11,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # os: [windows-2019]
-        # python-version: ['3.7']
-        # torch-version: [1.11.0]
-        # cuda-version: ['cu113']
         os: [ubuntu-20.04, windows-2019]
-        # support version based on: https://download.pytorch.org/whl/torch/
-        python-version: ['3.10']
-        torch-version: [2.4.0]
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
+        torch-version: ['2.0.0', '2.1.0', '2.2.0', '2.3.0', '2.4.0']
         cuda-version: ['cu118', 'cu121', 'cu124']
         exclude:
           - torch-version: 2.0.0
@@ -129,9 +124,7 @@ jobs:
         shell: bash
 
       - name: Build wheel
-        # architectures 8.x and 9.x (Ampere, Ada, Hopper) are not avaible in the current github action
-        # architectures 5.x give compilation errors "no suitable conversion function from "__half" to "int" exists"
-        # architectures 6.x give compilation errors "namespace "cooperative_groups" has no member "labeled_partition""
+        # build against architectures >= 7.0 (required by cooperative_groups::labeled_partition in gsplat)
         run: |          
           pip install wheel
           source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
