@@ -117,7 +117,7 @@ jobs:
         run: |          
           pip install wheel
           source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
-          MAX_JOBS=24 python setup.py bdist_wheel --dist-dir=dist
+          MAX_JOBS=2 python setup.py bdist_wheel --dist-dir=dist
         shell: bash  # `source` does not exist in windows powershell
 
       - name: Test wheel
