@@ -55,3 +55,13 @@ echo "Installing from ${CUDA_FILE}..."
 PowerShell -Command "Start-Process -FilePath \"${CUDA_FILE}\" -ArgumentList \"-s nvcc_${CUDA_SHORT} cuobjdump_${CUDA_SHORT} nvprune_${CUDA_SHORT} cupti_${CUDA_SHORT} cublas_dev_${CUDA_SHORT} cudart_${CUDA_SHORT} cufft_dev_${CUDA_SHORT} curand_dev_${CUDA_SHORT} cusolver_dev_${CUDA_SHORT} cusparse_dev_${CUDA_SHORT} thrust_${CUDA_SHORT} npp_dev_${CUDA_SHORT} nvrtc_dev_${CUDA_SHORT} nvml_dev_${CUDA_SHORT}\" -Wait -NoNewWindow"
 echo "Done!"
 rm -f "${CUDA_FILE}"
+
+echo Installing NvToolsExt...
+curl -k -L https://ossci-windows.s3.us-east-1.amazonaws.com/builder/NvToolsExt.7z --output /tmp/NvToolsExt.7z
+7z x /tmp/NvToolsExt.7z -o"/tmp/NvToolsExt"
+mkdir -p "/c/Program Files/NVIDIA Corporation/NvToolsExt/bin/x64"
+mkdir -p "/c/Program Files/NVIDIA Corporation/NvToolsExt/include"
+mkdir -p "/c/Program Files/NVIDIA Corporation/NvToolsExt/lib/x64"
+cp -r /tmp/NvToolsExt/bin/x64/* "/c/Program Files/NVIDIA Corporation/NvToolsExt/bin/x64"
+cp -r /tmp/NvToolsExt/include/* "/c/Program Files/NVIDIA Corporation/NvToolsExt/include"
+cp -r /tmp/NvToolsExt/lib/x64/* "/c/Program Files/NVIDIA Corporation/NvToolsExt/lib/x64"
