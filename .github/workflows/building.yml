@@ -1,20 +1,7 @@
 name: Building Wheels
 
 
-on:
-  workflow_call:
-    inputs:
-      environment:
-        description: 'The environment to deploy to'
-        type: string
-        default: 'production'
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: 'The environment to deploy to'
-        type: string
-        default: 'production'
-
+on: [workflow_call, workflow_dispatch]
 jobs:
   build_sdist:
     name: Build source distribution and no binary wheel
