@@ -15,7 +15,7 @@ jobs:
   # build wheels using action building.yml
   build_wheels:
     name: Call Composite Action
-    uses: ./.github/workflows/building
+    uses: ./.github/workflows/building.yml
             
 
   create_release_and_upload_packages:
