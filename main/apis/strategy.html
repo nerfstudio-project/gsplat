@@ -6,7 +6,7 @@
 <link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" /><link rel="next" title="Utils" href="utils.html" /><link rel="prev" title="Rasterization" href="rasterization.html" />
 
     <!-- Generated with Sphinx 7.4.7 and Furo 2024.08.06 -->
-        <title>Densification Strategy - gsplat documentation</title>
+        <title>Densification - gsplat documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=354aac6f" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=302659d7" />
@@ -261,9 +261,9 @@
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Python API</span></p>
 <ul class="current">
-<li class="toctree-l1"><a class="reference internal" href="compression.html">Storage Compression</a></li>
+<li class="toctree-l1"><a class="reference internal" href="compression.html">Compression</a></li>
 <li class="toctree-l1"><a class="reference internal" href="rasterization.html">Rasterization</a></li>
-<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Densification Strategy</a></li>
+<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Densification</a></li>
 <li class="toctree-l1"><a class="reference internal" href="utils.html">Utils</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tests</span></p>
@@ -316,8 +316,8 @@
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          <section id="densification-strategy">
-<h1>Densification Strategy<a class="headerlink" href="#densification-strategy" title="Link to this heading">¶</a></h1>
+          <section id="densification">
+<h1>Densification<a class="headerlink" href="#densification" title="Link to this heading">¶</a></h1>
 <p>In <cite>gsplat</cite>, we abstract out the densification and pruning process of the Gaussian
 training into a strategy. A strategy is a class that defines how the Gaussian parameters
 (along with their optimizers) should be updated (splitting, pruning, etc.) during the training.</p>
@@ -626,7 +626,7 @@ and optimizers is as expected.</p>
         <div class="toc-tree-container">
           <div class="toc-tree">
             <ul>
-<li><a class="reference internal" href="#">Densification Strategy</a><ul>
+<li><a class="reference internal" href="#">Densification</a><ul>
 <li><a class="reference internal" href="#gsplat.DefaultStrategy"><code class="docutils literal notranslate"><span class="pre">DefaultStrategy</span></code></a><ul>
 <li><a class="reference internal" href="#gsplat.DefaultStrategy.check_sanity"><code class="docutils literal notranslate"><span class="pre">DefaultStrategy.check_sanity()</span></code></a></li>
 <li><a class="reference internal" href="#gsplat.DefaultStrategy.initialize_state"><code class="docutils literal notranslate"><span class="pre">DefaultStrategy.initialize_state()</span></code></a></li>

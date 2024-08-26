@@ -6,7 +6,7 @@
 <link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" /><link rel="next" title="Rasterization" href="rasterization.html" /><link rel="prev" title="Data Conventions" href="../conventions/data_conventions.html" />
 
     <!-- Generated with Sphinx 7.4.7 and Furo 2024.08.06 -->
-        <title>Storage Compression - gsplat documentation</title>
+        <title>Compression - gsplat documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=354aac6f" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=302659d7" />
@@ -261,9 +261,9 @@
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Python API</span></p>
 <ul class="current">
-<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Storage Compression</a></li>
+<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Compression</a></li>
 <li class="toctree-l1"><a class="reference internal" href="rasterization.html">Rasterization</a></li>
-<li class="toctree-l1"><a class="reference internal" href="strategy.html">Densification Strategy</a></li>
+<li class="toctree-l1"><a class="reference internal" href="strategy.html">Densification</a></li>
 <li class="toctree-l1"><a class="reference internal" href="utils.html">Utils</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tests</span></p>
@@ -316,13 +316,13 @@
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          <section id="storage-compression">
-<h1>Storage Compression<a class="headerlink" href="#storage-compression" title="Link to this heading">¶</a></h1>
+          <section id="compression">
+<h1>Compression<a class="headerlink" href="#compression" title="Link to this heading">¶</a></h1>
 <p><cite>gsplat</cite> provides handy APIs for compressing and decompressing the Gaussian parameters,
 which can significantly reduce the storage / streaming cost. For example, using <a class="reference internal" href="#gsplat.PngCompression" title="gsplat.PngCompression"><code class="xref py py-class docutils literal notranslate"><span class="pre">PngCompression</span></code></a>,
 1 million Gaussians that are stored in 236 MB can be compressed to 16.5 MB, with only 0.5dB
 PSNR loss (29.18dB to 28.65dB).</p>
-<p>Similar to the <a class="reference internal" href="strategy.html"><span class="doc">Densification Strategy</span></a>, our compression APIs also has a specific expectation on
+<p>Similar to the <a class="reference internal" href="strategy.html"><span class="doc">Densification</span></a>, our compression APIs also has a specific expectation on
 the format of the Gaussian parameters. It is designed to work with the Gaussians defined
 as either a Dict of
 <a class="reference external" href="https://pytorch.org/docs/stable/tensors.html">torch.Tensor</a>
@@ -470,7 +470,7 @@ they will only be compressed using NPZ compression.</p>
         <div class="toc-tree-container">
           <div class="toc-tree">
             <ul>
-<li><a class="reference internal" href="#">Storage Compression</a><ul>
+<li><a class="reference internal" href="#">Compression</a><ul>
 <li><a class="reference internal" href="#gsplat.PngCompression"><code class="docutils literal notranslate"><span class="pre">PngCompression</span></code></a><ul>
 <li><a class="reference internal" href="#gsplat.PngCompression.compress"><code class="docutils literal notranslate"><span class="pre">PngCompression.compress()</span></code></a></li>
 <li><a class="reference internal" href="#gsplat.PngCompression.decompress"><code class="docutils literal notranslate"><span class="pre">PngCompression.decompress()</span></code></a></li>
