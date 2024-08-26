@@ -3,10 +3,10 @@
 
 name: Build and Release Wheels
 
-on: [push]
-#on:
-#  release:
-#    types: [created]
+
+on:
+  release:
+    types: [created]
     # branches: [main]
 
 jobs:
@@ -15,41 +15,26 @@ jobs:
   # build wheels using action building.yml
   build_wheels:
     name: Call Composite Action
-    uses: ./.github/actions/building
+    uses: ./.github/workflows/building
             
 
   create_release_and_upload_packages:
     name: Uplodad to Github Release
     needs: [build_sdist, build_wheels]
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10']
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
-
-    - name: Extract version from version.py
-      id: extract_version
-      run: |
-        VERSION=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' gsplat/version.py)
-        echo "VERSION=$VERSION" >> $GITHUB_ENV
-
-    - name: Create GitHub Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ env.VERSION }}
-        release_name: Release ${{ env.VERSION }}
-        body: |
-          Release notes for version ${{ env.VERSION }}.
-        draft: false
-        prerelease: false
 
     - name: Download packages
       id: download_artifacts
       uses: actions/download-artifact@v3
       with:
-        name: packages
+        name: compiled_wheels_python${{ matrix.python-version }}
         path: dist
 
     - name: Upload packages to GitHub Release
@@ -63,7 +48,7 @@ jobs:
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -H "Content-Type: application/zip" \
             --data-binary @"$file" \
-            "${{ steps.create_release.outputs.upload_url }}=$encoded_filename"
+            "${{ github.event.release.upload_url }}=$encoded_filename"
         done
 
   upload_pypi:
@@ -73,11 +58,7 @@ jobs:
     steps:
     - uses: actions/download-artifact@v2
       with:
-        name: source_package
-        path: dist
-    - uses: actions/download-artifact@v2
-      with:
-        name: no_binary_wheel
+        name: pypi_packages
         path: dist
     - name: Publish package to Test PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
