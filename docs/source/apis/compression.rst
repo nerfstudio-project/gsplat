@@ -1,4 +1,4 @@
-Storage Compression
+Compression
 ===================================
 
 .. currentmodule:: gsplat
