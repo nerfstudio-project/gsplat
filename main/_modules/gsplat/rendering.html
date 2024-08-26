@@ -1090,94 +1090,97 @@
     <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">meta</span>
 
 
-<span class="c1"># def rasterization_legacy_wrapper(</span>
-<span class="c1">#     means: Tensor,  # [N, 3]</span>
-<span class="c1">#     quats: Tensor,  # [N, 4]</span>
-<span class="c1">#     scales: Tensor,  # [N, 3]</span>
-<span class="c1">#     opacities: Tensor,  # [N]</span>
-<span class="c1">#     colors: Tensor,  # [N, D] or [N, K, 3]</span>
-<span class="c1">#     viewmats: Tensor,  # [C, 4, 4]</span>
-<span class="c1">#     Ks: Tensor,  # [C, 3, 3]</span>
-<span class="c1">#     width: int,</span>
-<span class="c1">#     height: int,</span>
-<span class="c1">#     near_plane: float = 0.01,</span>
-<span class="c1">#     eps2d: float = 0.3,</span>
-<span class="c1">#     sh_degree: Optional[int] = None,</span>
-<span class="c1">#     tile_size: int = 16,</span>
-<span class="c1">#     backgrounds: Optional[Tensor] = None,</span>
-<span class="c1">#     **kwargs,</span>
-<span class="c1"># ) -&gt; Tuple[Tensor, Tensor, Dict]:</span>
-<span class="c1">#     &quot;&quot;&quot;Wrapper for old version gsplat.</span>
+<div class="viewcode-block" id="rasterization_legacy_wrapper">
+<a class="viewcode-back" href="../../apis/utils.html#gsplat.rasterization_legacy_wrapper">[docs]</a>
+<span class="k">def</span> <span class="nf">rasterization_legacy_wrapper</span><span class="p">(</span>
+    <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
+    <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 4]</span>
+    <span class="n">scales</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
+    <span class="n">opacities</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N]</span>
+    <span class="n">colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, D] or [N, K, 3]</span>
+    <span class="n">viewmats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, 4, 4]</span>
+    <span class="n">Ks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, 3, 3]</span>
+    <span class="n">width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">near_plane</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.01</span><span class="p">,</span>
+    <span class="n">eps2d</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.3</span><span class="p">,</span>
+    <span class="n">sh_degree</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">16</span><span class="p">,</span>
+    <span class="n">backgrounds</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Dict</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Wrapper for old version gsplat.</span>
 
-<span class="c1">#     .. warning::</span>
-<span class="c1">#         This function exists for comparision purpose only. So we skip collecting</span>
-<span class="c1">#         the intermidiate variables, and only return an empty dict.</span>
+<span class="sd">    .. warning::</span>
+<span class="sd">        This function exists for comparision purpose only. So we skip collecting</span>
+<span class="sd">        the intermidiate variables, and only return an empty dict.</span>
 
-<span class="c1">#     &quot;&quot;&quot;</span>
-<span class="c1">#     from gsplat.cuda_legacy._wrapper import (</span>
-<span class="c1">#         project_gaussians,</span>
-<span class="c1">#         rasterize_gaussians,</span>
-<span class="c1">#         spherical_harmonics,</span>
-<span class="c1">#     )</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="kn">from</span> <span class="nn">gsplat.cuda_legacy._wrapper</span> <span class="kn">import</span> <span class="p">(</span>
+        <span class="n">project_gaussians</span><span class="p">,</span>
+        <span class="n">rasterize_gaussians</span><span class="p">,</span>
+        <span class="n">spherical_harmonics</span><span class="p">,</span>
+    <span class="p">)</span>
 
-<span class="c1">#     assert eps2d == 0.3, &quot;This is hard-coded in CUDA to be 0.3&quot;</span>
-<span class="c1">#     C = len(viewmats)</span>
+    <span class="k">assert</span> <span class="n">eps2d</span> <span class="o">==</span> <span class="mf">0.3</span><span class="p">,</span> <span class="s2">&quot;This is hard-coded in CUDA to be 0.3&quot;</span>
+    <span class="n">C</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">viewmats</span><span class="p">)</span>
 
-<span class="c1">#     render_colors, render_alphas = [], []</span>
-<span class="c1">#     for cid in range(C):</span>
-<span class="c1">#         fx, fy = Ks[cid, 0, 0], Ks[cid, 1, 1]</span>
-<span class="c1">#         cx, cy = Ks[cid, 0, 2], Ks[cid, 1, 2]</span>
-<span class="c1">#         viewmat = viewmats[cid]</span>
+    <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span> <span class="o">=</span> <span class="p">[],</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">cid</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">C</span><span class="p">):</span>
+        <span class="n">fx</span><span class="p">,</span> <span class="n">fy</span> <span class="o">=</span> <span class="n">Ks</span><span class="p">[</span><span class="n">cid</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">Ks</span><span class="p">[</span><span class="n">cid</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span>
+        <span class="n">cx</span><span class="p">,</span> <span class="n">cy</span> <span class="o">=</span> <span class="n">Ks</span><span class="p">[</span><span class="n">cid</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="n">Ks</span><span class="p">[</span><span class="n">cid</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span>
+        <span class="n">viewmat</span> <span class="o">=</span> <span class="n">viewmats</span><span class="p">[</span><span class="n">cid</span><span class="p">]</span>
 
-<span class="c1">#         means2d, depths, radii, conics, _, num_tiles_hit, _ = project_gaussians(</span>
-<span class="c1">#             means3d=means,</span>
-<span class="c1">#             scales=scales,</span>
-<span class="c1">#             glob_scale=1.0,</span>
-<span class="c1">#             quats=quats,</span>
-<span class="c1">#             viewmat=viewmat,</span>
-<span class="c1">#             fx=fx,</span>
-<span class="c1">#             fy=fy,</span>
-<span class="c1">#             cx=cx,</span>
-<span class="c1">#             cy=cy,</span>
-<span class="c1">#             img_height=height,</span>
-<span class="c1">#             img_width=width,</span>
-<span class="c1">#             block_width=tile_size,</span>
-<span class="c1">#             clip_thresh=near_plane,</span>
-<span class="c1">#         )</span>
+        <span class="n">means2d</span><span class="p">,</span> <span class="n">depths</span><span class="p">,</span> <span class="n">radii</span><span class="p">,</span> <span class="n">conics</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">num_tiles_hit</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">project_gaussians</span><span class="p">(</span>
+            <span class="n">means3d</span><span class="o">=</span><span class="n">means</span><span class="p">,</span>
+            <span class="n">scales</span><span class="o">=</span><span class="n">scales</span><span class="p">,</span>
+            <span class="n">glob_scale</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+            <span class="n">quats</span><span class="o">=</span><span class="n">quats</span><span class="p">,</span>
+            <span class="n">viewmat</span><span class="o">=</span><span class="n">viewmat</span><span class="p">,</span>
+            <span class="n">fx</span><span class="o">=</span><span class="n">fx</span><span class="p">,</span>
+            <span class="n">fy</span><span class="o">=</span><span class="n">fy</span><span class="p">,</span>
+            <span class="n">cx</span><span class="o">=</span><span class="n">cx</span><span class="p">,</span>
+            <span class="n">cy</span><span class="o">=</span><span class="n">cy</span><span class="p">,</span>
+            <span class="n">img_height</span><span class="o">=</span><span class="n">height</span><span class="p">,</span>
+            <span class="n">img_width</span><span class="o">=</span><span class="n">width</span><span class="p">,</span>
+            <span class="n">block_width</span><span class="o">=</span><span class="n">tile_size</span><span class="p">,</span>
+            <span class="n">clip_thresh</span><span class="o">=</span><span class="n">near_plane</span><span class="p">,</span>
+        <span class="p">)</span>
 
-<span class="c1">#         if colors.dim() == 3:</span>
-<span class="c1">#             c2w = viewmat.inverse()</span>
-<span class="c1">#             viewdirs = means - c2w[:3, 3]</span>
-<span class="c1">#             # viewdirs = F.normalize(viewdirs, dim=-1).detach()</span>
-<span class="c1">#             if sh_degree is None:</span>
-<span class="c1">#                 sh_degree = int(math.sqrt(colors.shape[1]) - 1)</span>
-<span class="c1">#             colors = spherical_harmonics(sh_degree, viewdirs, colors)  # [N, 3]</span>
+        <span class="k">if</span> <span class="n">colors</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="mi">3</span><span class="p">:</span>
+            <span class="n">c2w</span> <span class="o">=</span> <span class="n">viewmat</span><span class="o">.</span><span class="n">inverse</span><span class="p">()</span>
+            <span class="n">viewdirs</span> <span class="o">=</span> <span class="n">means</span> <span class="o">-</span> <span class="n">c2w</span><span class="p">[:</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
+            <span class="c1"># viewdirs = F.normalize(viewdirs, dim=-1).detach()</span>
+            <span class="k">if</span> <span class="n">sh_degree</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">sh_degree</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+            <span class="n">colors</span> <span class="o">=</span> <span class="n">spherical_harmonics</span><span class="p">(</span><span class="n">sh_degree</span><span class="p">,</span> <span class="n">viewdirs</span><span class="p">,</span> <span class="n">colors</span><span class="p">)</span>  <span class="c1"># [N, 3]</span>
 
-<span class="c1">#         background = (</span>
-<span class="c1">#             backgrounds[cid]</span>
-<span class="c1">#             if backgrounds is not None</span>
-<span class="c1">#             else torch.zeros(colors.shape[-1], device=means.device)</span>
-<span class="c1">#         )</span>
+        <span class="n">background</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">backgrounds</span><span class="p">[</span><span class="n">cid</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">backgrounds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="k">else</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">device</span><span class="o">=</span><span class="n">means</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+        <span class="p">)</span>
 
-<span class="c1">#         render_colors_, render_alphas_ = rasterize_gaussians(</span>
-<span class="c1">#             xys=means2d,</span>
-<span class="c1">#             depths=depths,</span>
-<span class="c1">#             radii=radii,</span>
-<span class="c1">#             conics=conics,</span>
-<span class="c1">#             num_tiles_hit=num_tiles_hit,</span>
-<span class="c1">#             colors=colors,</span>
-<span class="c1">#             opacity=opacities[..., None],</span>
-<span class="c1">#             img_height=height,</span>
-<span class="c1">#             img_width=width,</span>
-<span class="c1">#             block_width=tile_size,</span>
-<span class="c1">#             background=background,</span>
-<span class="c1">#             return_alpha=True,</span>
-<span class="c1">#         )</span>
-<span class="c1">#         render_colors.append(render_colors_)</span>
-<span class="c1">#         render_alphas.append(render_alphas_[..., None])</span>
-<span class="c1">#     render_colors = torch.stack(render_colors, dim=0)</span>
-<span class="c1">#     render_alphas = torch.stack(render_alphas, dim=0)</span>
-<span class="c1">#     return render_colors, render_alphas, {}</span>
+        <span class="n">render_colors_</span><span class="p">,</span> <span class="n">render_alphas_</span> <span class="o">=</span> <span class="n">rasterize_gaussians</span><span class="p">(</span>
+            <span class="n">xys</span><span class="o">=</span><span class="n">means2d</span><span class="p">,</span>
+            <span class="n">depths</span><span class="o">=</span><span class="n">depths</span><span class="p">,</span>
+            <span class="n">radii</span><span class="o">=</span><span class="n">radii</span><span class="p">,</span>
+            <span class="n">conics</span><span class="o">=</span><span class="n">conics</span><span class="p">,</span>
+            <span class="n">num_tiles_hit</span><span class="o">=</span><span class="n">num_tiles_hit</span><span class="p">,</span>
+            <span class="n">colors</span><span class="o">=</span><span class="n">colors</span><span class="p">,</span>
+            <span class="n">opacity</span><span class="o">=</span><span class="n">opacities</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">],</span>
+            <span class="n">img_height</span><span class="o">=</span><span class="n">height</span><span class="p">,</span>
+            <span class="n">img_width</span><span class="o">=</span><span class="n">width</span><span class="p">,</span>
+            <span class="n">block_width</span><span class="o">=</span><span class="n">tile_size</span><span class="p">,</span>
+            <span class="n">background</span><span class="o">=</span><span class="n">background</span><span class="p">,</span>
+            <span class="n">return_alpha</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">render_colors</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">render_colors_</span><span class="p">)</span>
+        <span class="n">render_alphas</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">render_alphas_</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">])</span>
+    <span class="n">render_colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span><span class="n">render_colors</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">render_alphas</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span><span class="n">render_alphas</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="p">{}</span></div>
+
 
 
 <div class="viewcode-block" id="rasterization_inria_wrapper">
