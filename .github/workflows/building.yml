@@ -19,36 +19,14 @@ jobs:
       run:  BUILD_NO_CUDA=1 python -m build
     - uses: actions/upload-artifact@v3
       with:
-        name: source_package
+        name: pypi_packages
         path: dist/*.tar.gz
     - uses: actions/upload-artifact@v3
       with:
-        name: no_binary_wheel
+        name: pypi_packages
         path: dist/*.whl
  
-          
-  build_no_binaries_wheels:
-    name: Build source distribution and no binary wheel
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v2
-    - name: Strip unsupported tags in README
-      run: |
-        sed -i '/<!-- pypi-strip -->/,/<!-- \/pypi-strip -->/d' README.md
-    - name: Build sdist
-      run: BUILD_NO_CUDA=1 pipx run build --sdist
-    - name: Build wheel with ne binaries
-      run:  BUILD_NO_CUDA=1 python -m build
-    - uses: actions/upload-artifact@v3
-      with:
-        name: source_package
-        path: dist/*.tar.gz
-    - uses: actions/upload-artifact@v3
-      with:
-        name: wheels
-        path: dist/*.whl
   
-
   build_wheels:
     runs-on: ${{ matrix.os }}
     environment: production
