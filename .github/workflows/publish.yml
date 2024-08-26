@@ -3,7 +3,9 @@
 
 name: Build and Release Wheels
 
-on: [workflow_dispatch]
+on:
+  release:
+    types: [created]
 
 jobs:
 
