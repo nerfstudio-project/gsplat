@@ -1,5 +1,4 @@
 #include "bindings.h"
-#include <torch/extension.h>
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("compute_sh_fwd", &gsplat::compute_sh_fwd_tensor);
