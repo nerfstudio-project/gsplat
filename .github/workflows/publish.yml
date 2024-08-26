@@ -16,7 +16,7 @@ jobs:
 
   create_release_and_upload_packages:
     name: Uplodad to Github Release
-    needs: [build_sdist, build_wheels]
+    needs: [build_wheels]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -49,7 +49,7 @@ jobs:
 
   upload_pypi:
     name: Upload to PyPi
-    needs: [build_sdist,build_wheels]
+    needs: [build_wheels]
     runs-on: ubuntu-latest
     steps:
     - uses: actions/download-artifact@v2
