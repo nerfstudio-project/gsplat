@@ -12,7 +12,7 @@ jobs:
   # build wheels using reusqble_building.yml
   build_wheels:
     name: Call reusable building workflow
-    uses: ./.github/workflows/reusable_building.yml  
+    uses: ./.github/workflows/building.yml  
 
   create_release_and_upload_packages:
     name: Uplodad to Github Release
