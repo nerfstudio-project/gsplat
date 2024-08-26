@@ -26,7 +26,7 @@ jobs:
         sed -i '/<!-- pypi-strip -->/,/<!-- \/pypi-strip -->/d' README.md
     - name: Build sdist
       run: BUILD_NO_CUDA=1 pipx run build --sdist
-    - name: Build wheel with ne binaries
+    - name: Build wheel with no binaries
       run:  BUILD_NO_CUDA=1 python setup.py bdist_wheel --dist-dir=dist
     - uses: actions/upload-artifact@v3
       with:
@@ -57,7 +57,6 @@ jobs:
             torch-version: 2.0.0
           - python-version: 3.12
             torch-version: 2.1.0
-
           - torch-version: 2.0.0
             cuda-version: 'cu113'
           - torch-version: 2.0.0
@@ -95,8 +94,7 @@ jobs:
           - torch-version: 2.4.0
             cuda-version: 'cu116'
           - torch-version: 2.4.0
-            cuda-version: 'cu117'
-          
+            cuda-version: 'cu117'          
           - os: windows-2019
             torch-version: 2.0.0
             cuda-version: 'cu121'
