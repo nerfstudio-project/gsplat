@@ -1,7 +1,15 @@
 name: Building Wheels
 
-runs:
-  using: "composite"
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'The environment to deploy to'
+        type: string
+        default: 'production'
+
+jobs:
   build_sdist:
     name: Build source distribution and no binary wheel
     runs-on: ubuntu-latest
