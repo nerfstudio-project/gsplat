@@ -15,7 +15,7 @@ jobs:
         # python-version: ['3.7']
         # torch-version: [1.11.0]
         # cuda-version: ['cu113']
-        os: [ubuntu-20.04, windows-2019]
+        os: [ubuntu-20.04]
         # support version based on: https://download.pytorch.org/whl/torch/
         python-version: ['3.10']
         torch-version: [2.0.0]
@@ -46,9 +46,10 @@ jobs:
 
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
-          submodules: 'recursive'
+          submodules: recursive
 
       - name: Free up disk space
         if: ${{ runner.os == 'Linux' }}
@@ -56,10 +57,6 @@ jobs:
           echo "Disk space before cleanup:"
           df -h
           sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf "/usr/local/share/boost"
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          sudo apt-get clean
           echo "Disk space after cleanup:"
           df -h
           du -sh /usr/local/* /opt/* /usr/* | sort -hr
@@ -86,45 +83,45 @@ jobs:
           python -c "import torch; print('CUDA:', torch.version.cuda)"
           python -c "import torch; print('CUDA Available:', torch.cuda.is_available())"
 
-      - name: Patch PyTorch static constexpr on Windows
-        if: ${{ runner.os == 'Windows' }}
-        run: |
-          Torch_DIR=`python -c 'import os; import torch; print(os.path.dirname(torch.__file__))'`
-          sed -i '31,38c\
-          TORCH_API void lazy_init_num_threads();' ${Torch_DIR}/include/ATen/Parallel.h
-        shell: bash
+      # - name: Patch PyTorch static constexpr on Windows
+      #   if: ${{ runner.os == 'Windows' }}
+      #   run: |
+      #     Torch_DIR=`python -c 'import os; import torch; print(os.path.dirname(torch.__file__))'`
+      #     sed -i '31,38c\
+      #     TORCH_API void lazy_init_num_threads();' ${Torch_DIR}/include/ATen/Parallel.h
+      #   shell: bash
 
-      - name: Set version
-        if: ${{ runner.os != 'macOS' }}
-        run: |
-          VERSION=`sed -n 's/^__version__ = "\(.*\)"/\1/p' gsplat/version.py`
-          TORCH_VERSION=`echo "pt${{ matrix.torch-version }}" | sed "s/..$//" | sed "s/\.//g"`
-          CUDA_VERSION=`echo ${{ matrix.cuda-version }}`
-          echo "New version name: $VERSION+$TORCH_VERSION$CUDA_VERSION"
-          sed -i "s/$VERSION/$VERSION+$TORCH_VERSION$CUDA_VERSION/" gsplat/version.py
-        shell:
-          bash
+      # - name: Set version
+      #   if: ${{ runner.os != 'macOS' }}
+      #   run: |
+      #     VERSION=`sed -n 's/^__version__ = "\(.*\)"/\1/p' gsplat/version.py`
+      #     TORCH_VERSION=`echo "pt${{ matrix.torch-version }}" | sed "s/..$//" | sed "s/\.//g"`
+      #     CUDA_VERSION=`echo ${{ matrix.cuda-version }}`
+      #     echo "New version name: $VERSION+$TORCH_VERSION$CUDA_VERSION"
+      #     sed -i "s/$VERSION/$VERSION+$TORCH_VERSION$CUDA_VERSION/" gsplat/version.py
+      #   shell:
+      #     bash
 
-      - name: Install main package for CPU
-        if: ${{ matrix.cuda-version == 'cpu' }}
-        run: |
-          BUILD_NO_CUDA=1 pip install .
+      # - name: Install main package for CPU
+      #   if: ${{ matrix.cuda-version == 'cpu' }}
+      #   run: |
+      #     BUILD_NO_CUDA=1 pip install .
 
-      - name: Build wheel
-        # architectures 8.x and 9.x (Ampere, Ada, Hopper) are not avaible in the current github action
-        # architectures 5.x give compilation errors "no suitable conversion function from "__half" to "int" exists"
-        # architectures 6.x give compilation errors "namespace "cooperative_groups" has no member "labeled_partition""
-        run: |          
-          pip install wheel
-          source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
-          MAX_JOBS=4 python setup.py bdist_wheel --dist-dir=dist
-        shell: bash  # `source` does not exist in windows powershell
+      # - name: Build wheel
+      #   # architectures 8.x and 9.x (Ampere, Ada, Hopper) are not avaible in the current github action
+      #   # architectures 5.x give compilation errors "no suitable conversion function from "__half" to "int" exists"
+      #   # architectures 6.x give compilation errors "namespace "cooperative_groups" has no member "labeled_partition""
+      #   run: |          
+      #     pip install wheel
+      #     source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
+      #     MAX_JOBS=4 python setup.py bdist_wheel --dist-dir=dist
+      #   shell: bash  # `source` does not exist in windows powershell
 
-      - name: Test wheel
-        run: |
-          cd dist
-          ls -lah
-          pip install *.whl
-          python -c "import gsplat; print('gsplat:', gsplat.__version__)"
-          cd ..
-        shell: bash  # `ls -lah` does not exist in windows powershell
+      # - name: Test wheel
+      #   run: |
+      #     cd dist
+      #     ls -lah
+      #     pip install *.whl
+      #     python -c "import gsplat; print('gsplat:', gsplat.__version__)"
+      #     cd ..
+      #   shell: bash  # `ls -lah` does not exist in windows powershell
