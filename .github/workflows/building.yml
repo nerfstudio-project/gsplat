@@ -51,6 +51,11 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
       - name: Free up disk space
         if: ${{ runner.os == 'Linux' }}
         run: |
@@ -59,21 +64,13 @@ jobs:
           sudo rm -rf /usr/share/dotnet
           echo "Disk space after cleanup:"
           df -h
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Upgrade pip
-        run: |
-          pip install --upgrade setuptools
-          pip install ninja
+        shell: bash
 
       - name: Install CUDA ${{ matrix.cuda-version }}
         if: ${{ matrix.cuda-version != 'cpu' }}
         run: |
           bash .github/workflows/cuda/${{ runner.os }}.sh ${{ matrix.cuda-version }}
+        shell: bash
 
       - name: Install PyTorch ${{ matrix.torch-version }}+${{ matrix.cuda-version }}
         run: |
@@ -81,6 +78,12 @@ jobs:
           python -c "import torch; print('PyTorch:', torch.__version__)"
           python -c "import torch; print('CUDA:', torch.version.cuda)"
           python -c "import torch; print('CUDA Available:', torch.cuda.is_available())"
+        shell: bash
+
+      # - name: Upgrade pip
+      #   run: |
+      #     pip install --upgrade setuptools
+      #     pip install ninja
 
       # - name: Patch PyTorch static constexpr on Windows
       #   if: ${{ runner.os == 'Windows' }}
