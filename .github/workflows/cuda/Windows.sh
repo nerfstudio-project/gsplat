@@ -8,6 +8,16 @@ curl -k -L "https://drive.google.com/u/0/uc?id=1injUyo3lnarMgWyRcXqKg4UGnN0ysmuq
 7z x "/tmp/gpu_driver_dlls.zip" -o"/c/Windows/System32"
 
 case ${1} in
+  cu124)
+    CUDA_SHORT=12.4
+    CUDA_URL=https://developer.download.nvidia.com/compute/cuda/${CUDA_SHORT}.1/local_installers
+    CUDA_FILE=cuda_${CUDA_SHORT}.1_551.78_windows.exe
+    ;;
+  cu121)
+    CUDA_SHORT=12.1
+    CUDA_URL=https://developer.download.nvidia.com/compute/cuda/${CUDA_SHORT}.1/local_installers
+    CUDA_FILE=cuda_${CUDA_SHORT}.1_531.14_windows.exe
+    ;;
   cu118)
     CUDA_SHORT=11.8
     CUDA_URL=https://developer.download.nvidia.com/compute/cuda/${CUDA_SHORT}.0/local_installers
