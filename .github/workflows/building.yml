@@ -27,7 +27,7 @@ jobs:
     - name: Build sdist
       run: BUILD_NO_CUDA=1 pipx run build --sdist
     - name: Build wheel with ne binaries
-      run:  BUILD_NO_CUDA=1 python -m build
+      run:  BUILD_NO_CUDA=1 python setup.py bdist_wheel --dist-dir=dist
     - uses: actions/upload-artifact@v3
       with:
         name: pypi_packages
