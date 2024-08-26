@@ -4,7 +4,52 @@ on: [workflow_dispatch]
 
 jobs:
 
-  wheel:
+  
+  build_sdist:
+    name: Build source distribution and no binary wheel
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Strip unsupported tags in README
+      run: |
+        sed -i '/<!-- pypi-strip -->/,/<!-- \/pypi-strip -->/d' README.md
+    - name: Build sdist
+      run: BUILD_NO_CUDA=1 pipx run build --sdist
+    - name: Build wheel with ne binaries
+      run:  BUILD_NO_CUDA=1 python -m build
+    - uses: actions/upload-artifact@v3
+      with:
+        name: source_package
+        path: dist/*.tar.gz
+    - uses: actions/upload-artifact@v3
+      with:
+        name: no_binary_wheel
+        path: dist/*.whl
+ 
+          
+  build_no_binaries_wheels:
+    name: Build source distribution and no binary wheel
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Strip unsupported tags in README
+      run: |
+        sed -i '/<!-- pypi-strip -->/,/<!-- \/pypi-strip -->/d' README.md
+    - name: Build sdist
+      run: BUILD_NO_CUDA=1 pipx run build --sdist
+    - name: Build wheel with ne binaries
+      run:  BUILD_NO_CUDA=1 python -m build
+    - uses: actions/upload-artifact@v3
+      with:
+        name: source_package
+        path: dist/*.tar.gz
+    - uses: actions/upload-artifact@v3
+      with:
+        name: wheels
+        path: dist/*.whl
+  
+
+  build_wheels:
     runs-on: ${{ matrix.os }}
     environment: production
 
@@ -64,26 +109,11 @@ jobs:
             torch-version: 2.0.0
             cuda-version: 'cu121'
 
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
-
-      - name: Free up disk space
-        if: ${{ runner.os == 'Linux' }}
-        run: |
-          echo "Disk space before cleanup:"
-          df -h
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf "/usr/local/share/boost"
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          sudo apt-get clean
-          echo "Disk space after cleanup:"
-          df -h
-          du -sh /usr/local/* /opt/* /usr/* | sort -hr
   
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v4
@@ -160,3 +190,8 @@ jobs:
           python -c "import gsplat; print('gsplat:', gsplat.__version__)"
           cd ..
         shell: bash  # `ls -lah` does not exist in windows powershell
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: compiled_wheels_python${{ matrix.python-version }}
+          path: dist/*.whl

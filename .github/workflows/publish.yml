@@ -12,166 +12,15 @@ on: [push]
 jobs:
 
 
-
+  # build wheels using action building.yml
   build_wheels:
-    name: Build wheels on ${{ matrix.os }} for python ${{ matrix.python-version }} pytorch ${{ matrix.torch-version }} and cuda ${{ matrix.cuda-version }}
-    runs-on: ${{ matrix.os }}
-    environment: production
-    strategy:
-      matrix:
-        include:
-          - os: windows-2019
-            python-version: '3.10'
-            torch-version: 2.0.1
-            cuda-version: cu117
-
-          - os: windows-2019
-            python-version: '3.10'
-            torch-version: 2.0.1
-            cuda-version: cu118
-
-          - os: windows-2019
-            python-version: '3.10'
-            torch-version: 2.1.2
-            cuda-version: cu118
-
-          - os: windows-2019
-            python-version: '3.10'
-            torch-version: 2.2.2
-            cuda-version: cu118
-
-          - os: windows-2019
-            python-version: '3.10'
-            torch-version: 2.3.1
-            cuda-version: cu118
-
-          - os: windows-2019
-            python-version: '3.10'
-            torch-version: 2.4.0
-            cuda-version: cu118
-
-          - os: windows-2019
-            python-version: '3.11'
-            torch-version: 2.0.1
-            cuda-version: cu118
-
-          - os: windows-2019
-            python-version: '3.11'
-            torch-version: 2.1.2
-            cuda-version: cu118
-
-          - os: windows-2019
-            python-version: '3.11'
-            torch-version: 2.2.2
-            cuda-version: cu118
-
-          - os: windows-2019
-            python-version: '3.11'
-            torch-version: 2.3.1
-            cuda-version: cu118
-
-          - os: windows-2019
-            python-version: '3.11'
-            torch-version: 2.4.0
-            cuda-version: cu118
-    steps:
-
-
-      - uses: actions/checkout@v3
-        with:
-          submodules: 'recursive'
-
-      - name: Free up disk space
-        if: ${{ runner.os == 'Linux' }}
-        run: |
-          echo "Disk space before cleanup:"
-          df -h
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf "/usr/local/share/boost"
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          sudo apt-get clean
-          echo "Disk space after cleanup:"
-          df -h
-          du -sh /usr/local/* /opt/* /usr/* | sort -hr
-                    
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Upgrade pip
-        run: |
-          pip install --upgrade setuptools
-          pip install ninja
-
-      - name: Install CUDA ${{ matrix.cuda-version }}
-        if: ${{ matrix.cuda-version != 'cpu' }}
-        run: |
-          bash .github/workflows/cuda/${{ runner.os }}.sh ${{ matrix.cuda-version }}
-      
-      - name: Install PyTorch 
-        run: |
-          pip install torch==${{ matrix.torch-version }} --extra-index-url https://download.pytorch.org/whl/${{ matrix.cuda-version }}
-          python -c "import torch; print('PyTorch:', torch.__version__)"
-          python -c "import torch; print('CUDA:', torch.version.cuda)"
-          python -c "import torch; print('CUDA Available:', torch.cuda.is_available())"
-
-      - name: Patch PyTorch static constexpr on Windows
-        if: ${{ runner.os == 'Windows' }}
-        run: |
-          Torch_DIR=`python -c 'import os; import torch; print(os.path.dirname(torch.__file__))'`
-          sed -i '31,38c\
-          TORCH_API void lazy_init_num_threads();' ${Torch_DIR}/include/ATen/Parallel.h
-        shell: bash
-
-      - name: Install dependencies
-        run: |
-          python -m pip install build twine
-
-      - name: Set version
-        run: |
-          VERSION=`sed -n 's/^__version__ = "\(.*\)"/\1/p' gsplat/version.py`
-          TORCH_VERSION=`echo "pt${{ matrix.torch-version }}" | sed "s/..$//" | sed "s/\.//g"`
-          CUDA_VERSION=`echo ${{ matrix.cuda-version }}`
-          echo "New version name: $VERSION+$TORCH_VERSION$CUDA_VERSION"
-          sed -i "s/$VERSION/$VERSION+$TORCH_VERSION$CUDA_VERSION/" gsplat/version.py
-        shell:
-          bash
-
-      - name: Strip unsupported tags in README
-        run: |
-          sed -i '/<!-- pypi-strip -->/,/<!-- \/pypi-strip -->/d' README.md
-
-      - name: Build wheel
-        run: |          
-          pip install wheel
-          source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
-          python setup.py bdist_wheel --dist-dir=dist
-        shell: bash  # `source` does not exist in windows powershell
-      
-      - uses: actions/upload-artifact@v3
-        with:
-          name: packages
-          path: dist/*.whl
-
-
-  build_sdist:
-    name: Build source distribution
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v2
-    - name: Build sdist
-      run: BUILD_NO_CUDA=1 pipx run build --sdist
-    - uses: actions/upload-artifact@v3
-      with:
-        name: packages
-        path: dist/*.tar.gz
+    name: Call Composite Action
+    uses: ./.github/actions/building
             
 
   create_release_and_upload_packages:
     name: Uplodad to Github Release
-    needs: [build_sdist,build_wheels]
+    needs: [build_sdist, build_wheels]
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
@@ -224,9 +73,12 @@ jobs:
     steps:
     - uses: actions/download-artifact@v2
       with:
-        name: packages
+        name: source_package
         path: dist
-
+    - uses: actions/download-artifact@v2
+      with:
+        name: no_binary_wheel
+        path: dist
     - name: Publish package to Test PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
