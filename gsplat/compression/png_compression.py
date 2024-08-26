@@ -19,8 +19,8 @@ class PngCompression:
 
     .. warning::
         This class requires the `imageio <https://pypi.org/project/imageio/>`_,
-        `plas <https://github.com/DeMoriarty/TorchPQ?tab=readme-ov-file#install>`_
-        and `torchpq <https://github.com/fraunhoferhhi/PLAS.git>`_ packages to be installed.
+        `plas <https://github.com/fraunhoferhhi/PLAS.git>`_
+        and `torchpq <https://github.com/DeMoriarty/TorchPQ?tab=readme-ov-file#install>`_ packages to be installed.
 
     .. warning::
         This class might throw away a few lowest opacities splats if the number of

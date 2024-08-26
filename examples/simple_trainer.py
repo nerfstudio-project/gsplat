@@ -34,8 +34,8 @@ from gsplat.strategy import DefaultStrategy, MCMCStrategy
 class Config:
     # Disable viewer
     disable_viewer: bool = False
-    # Path to the .pt file. If provide, it will skip training and render a video
-    ckpt: Optional[str] = None
+    # Path to the .pt files. If provide, it will skip training and run evaluation only.
+    ckpt: Optional[List[str]] = None
     # Name of compression strategy to use
     compression: Optional[Literal["png"]] = None
 
@@ -895,13 +895,17 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
 
     if cfg.ckpt is not None:
         # run eval only
-        ckpt = torch.load(cfg.ckpt, map_location=runner.device, weights_only=True)
+        ckpts = [
+            torch.load(file, map_location=runner.device, weights_only=True)
+            for file in cfg.ckpt
+        ]
         for k in runner.splats.keys():
-            runner.splats[k].data = ckpt["splats"][k]
-        runner.eval(step=ckpt["step"])
-        # runner.render_traj(step=ckpt["step"])
+            runner.splats[k].data = torch.cat([ckpt["splats"][k] for ckpt in ckpts])
+        step = ckpts[0]["step"]
+        runner.eval(step=step)
+        # runner.render_traj(step=step)
         if cfg.compression is not None:
-            runner.run_compression(step=ckpt["step"])
+            runner.run_compression(step=step)
     else:
         runner.train()
 
