@@ -1,10 +1,7 @@
 name: Building Wheels
 
-on: [workflow_dispatch]
-
-jobs:
-
-  
+runs:
+  using: "composite"
   build_sdist:
     name: Build source distribution and no binary wheel
     runs-on: ubuntu-latest

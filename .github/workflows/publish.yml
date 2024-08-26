@@ -3,20 +3,14 @@
 
 name: Build and Release Wheels
 
-
-on:
-  release:
-    types: [created]
-    # branches: [main]
+on: [workflow_dispatch]
 
 jobs:
-
 
   # build wheels using action building.yml
   build_wheels:
     name: Call Composite Action
-    uses: ./.github/workflows/building.yml
-            
+    uses: ./.github/actions/building
 
   create_release_and_upload_packages:
     name: Uplodad to Github Release

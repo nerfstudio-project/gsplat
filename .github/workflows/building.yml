@@ -1,12 +1,6 @@
 name: Building Wheels
 
-on:
-  workflow_call:
-    inputs:
-      environment:
-        description: 'The environment to deploy to'
-        required: true
-        type: string
+on: [workflow_dispatch]
 
 jobs:
  
