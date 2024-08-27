@@ -40,6 +40,7 @@ from gsplat.compression import PngCompression
 from gsplat.distributed import cli
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
+from gsplat.cuda._wrapper import SparseGaussianAdam
 
 
 @dataclass
@@ -247,8 +248,17 @@ def create_splats_with_optimizers(
     # Note that this would not make the training exactly equivalent, see
     # https://arxiv.org/pdf/2402.18824v1
     BS = batch_size * world_size
+    # optimizers = {
+    #     name: (torch.optim.SparseAdam if sparse_grad else torch.optim.Adam)(
+    #         [{"params": splats[name], "lr": lr * math.sqrt(BS), "name": name}],
+    #         eps=1e-15 / math.sqrt(BS),
+    #         # TODO: check betas logic when BS is larger than 10 betas[0] will be zero.
+    #         betas=(1 - BS * (1 - 0.9), 1 - BS * (1 - 0.999)),
+    #     )
+    #     for name, _, lr in params
+    # }
     optimizers = {
-        name: (torch.optim.SparseAdam if sparse_grad else torch.optim.Adam)(
+        name: SparseGaussianAdam(
             [{"params": splats[name], "lr": lr * math.sqrt(BS), "name": name}],
             eps=1e-15 / math.sqrt(BS),
             # TODO: check betas logic when BS is larger than 10 betas[0] will be zero.
@@ -741,7 +751,8 @@ class Runner:
 
             # optimize
             for optimizer in self.optimizers.values():
-                optimizer.step()
+                N = self.splats.means.shape[0]
+                optimizer.step(info["radii"] > 0, N)
                 optimizer.zero_grad(set_to_none=True)
             for optimizer in self.pose_optimizers:
                 optimizer.step()

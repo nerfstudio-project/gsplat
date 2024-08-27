@@ -316,6 +316,7 @@ std::tuple<torch::Tensor, torch::Tensor> compute_relocation_tensor(
     const int n_max
 );
 
+<<<<<<< HEAD
 //====== 2DGS ======//
 std::tuple<
     torch::Tensor,
@@ -487,6 +488,21 @@ fully_fused_projection_packed_bwd_2dgs_tensor(
     const bool viewmats_requires_grad,
     const bool sparse_grad
 );
+=======
+
+void adam_update(
+    torch::Tensor &param,
+    torch::Tensor &param_grad,
+    torch::Tensor &exp_avg,
+    torch::Tensor &exp_avg_sq,
+    torch::Tensor &tiles_touched,
+    const float lr,
+    const float b1,
+    const float b2,
+    const float eps,
+    const uint32_t N,
+    const uint32_t M);
+>>>>>>> 7fa96fb (gaussian sparse adam)
 
 } // namespace gsplat
 

@@ -15,6 +15,32 @@ def _make_lazy_cuda_func(name: str) -> Callable:
 
     return call_cuda
 
+def adam_update(
+    param: Tensor,
+    param_grad: Tensor,
+    exp_avg: Tensor,
+    exp_avg_sq: Tensor,
+    tiles_touched: Tensor,
+    lr: float,
+    b1: float,
+    b2: float,
+    eps: float,
+    N: int,
+    M: int
+) -> None:
+    _make_lazy_cuda_func("adam_update")(
+        param,
+        param_grad,
+        exp_avg,
+        exp_avg_sq,
+        tiles_touched,
+        lr,
+        b1,
+        b2,
+        eps,
+        N,
+        M
+    )
 
 def _make_lazy_cuda_obj(name: str) -> Any:
     # pylint: disable=import-outside-toplevel
@@ -1976,3 +2002,32 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             None,
             None,
         )
+class SparseGaussianAdam(torch.optim.Adam):
+    def __init__(self, params, eps, betas):
+        super().__init__(params=params, eps=eps, betas=betas)
+    
+    @torch.no_grad()
+    def step(self, visibility, N):
+        for group in self.param_groups:
+            lr = group["lr"]
+            eps = group["eps"]
+            beta1, beta2 = group["betas"]
+
+            assert len(group["params"]) == 1, "more than one tensor in group"
+            param = group["params"][0]
+            if param.grad is None:
+                continue
+
+            # Lazy state initialization
+            state = self.state[param]
+            if len(state) == 0:
+                state['step'] = torch.tensor(0.0, dtype=torch.float32)
+                state['exp_avg'] = torch.zeros_like(param, memory_format=torch.preserve_format)
+                state['exp_avg_sq'] = torch.zeros_like(param, memory_format=torch.preserve_format)
+
+
+            stored_state = self.state.get(param, None)
+            exp_avg = stored_state["exp_avg"]
+            exp_avg_sq = stored_state["exp_avg_sq"]
+            M = param.numel() // N
+            adam_update(param, param.grad, exp_avg, exp_avg_sq, visibility, lr, beta1, beta2, eps, N, M)
