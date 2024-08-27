@@ -44,8 +44,13 @@ __global__ void quat_scale_to_covar_preci_fwd_kernel(
     mat3<OpT> covar, preci;
     const vec4<OpT> quat = glm::make_vec4(quats);
     const vec3<OpT> scale = glm::make_vec3(scales);
+    mat3<OpT> rotmat;
     quat_scale_to_covar_preci(
-        quat, scale, covars ? &covar : nullptr, precis ? &preci : nullptr
+        quat,
+        scale,
+        rotmat,
+        covars ? &covar : nullptr,
+        precis ? &preci : nullptr
     );
 
     // write to outputs: glm is column-major but we want row-major

@@ -28,6 +28,7 @@ from gsplat.compression import PngCompression
 from gsplat.distributed import cli
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
+from gsplat.utils import depth_to_normal
 
 
 @dataclass
@@ -130,6 +131,13 @@ class Config:
     depth_loss: bool = False
     # Weight for depth loss
     depth_lambda: float = 1e-2
+
+    # Enable normal consistency loss. (experimental)
+    normal_loss: bool = False
+    # Weight for normal consistency loss
+    normal_lambda: float = 0.05
+    # Start applying normal consistency loss after this iteration
+    normal_start_iter: int = 7000
 
     # Dump information to tensorboard every this steps
     tb_every: int = 100
@@ -380,6 +388,13 @@ class Runner:
         else:
             raise ValueError(f"Unknown LPIPS network: {cfg.lpips_net}")
 
+        self.render_mode = "RGB"
+        if self.cfg.normal_loss:
+            self.render_mode = "RGB+N+ED"
+        else:
+            if self.cfg.depth_loss:
+                self.render_mode = "RGB+D"
+
         # Viewer
         if not self.cfg.disable_viewer:
             self.server = viser.ViserServer(port=cfg.port, verbose=False)
@@ -527,12 +542,16 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 image_ids=image_ids,
-                render_mode="RGB+ED" if cfg.depth_loss else "RGB",
+                render_mode=self.render_mode,
             )
-            if renders.shape[-1] == 4:
-                colors, depths = renders[..., 0:3], renders[..., 3:4]
+
+            if cfg.normal_loss:
+                colors, normals, depths = torch.split(renders, [3, 3, 1], dim=-1)
             else:
-                colors, depths = renders, None
+                if cfg.depth_loss:
+                    colors, depths = torch.split(renders, [3, 1], dim=-1)
+                else:
+                    colors = renders
 
             if cfg.random_bkgd:
                 bkgd = torch.rand(1, 3, device=device)
@@ -585,6 +604,13 @@ class Runner:
                     + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
                 )
 
+            if cfg.normal_loss and step > cfg.normal_start_iter:
+                # TODO: is detach necessary?
+                normals_surf = depth_to_normal(depths, camtoworlds, Ks)
+                normals_surf = normals_surf * alphas.detach()
+                normalloss = (1.0 - (normals * normals_surf).sum(dim=-1)).mean()
+                loss += normalloss * cfg.normal_lambda
+
             loss.backward()
 
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
@@ -614,6 +640,8 @@ class Runner:
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
+                if cfg.normal_loss and step > cfg.normal_start_iter:
+                    self.writer.add_scalar("train/normalloss", normalloss.item(), step)
                 if cfg.tb_save_image:
                     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
                     canvas = canvas.reshape(-1, *canvas.shape[2:])
@@ -740,7 +768,7 @@ class Runner:
 
             torch.cuda.synchronize()
             tic = time.time()
-            colors, _, _ = self.rasterize_splats(
+            renders, alphas, info = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -748,14 +776,34 @@ class Runner:
                 sh_degree=cfg.sh_degree,
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
-            )  # [1, H, W, 3]
+                render_mode=self.render_mode,
+            )  # [1, H, W, X]
+
+            normals, depths = None, None
+            if cfg.normal_loss:
+                colors, normals, depths = torch.split(renders, [3, 3, 1], dim=-1)
+            else:
+                if cfg.depth_loss:
+                    colors, depths = torch.split(renders, [3, 1], dim=-1)
+                else:
+                    colors = renders
+
             colors = torch.clamp(colors, 0.0, 1.0)
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
 
             if world_rank == 0:
                 # write images
-                canvas = torch.cat([pixels, colors], dim=2).squeeze(0).cpu().numpy()
+                canvas = torch.cat([pixels, colors], dim=2)
+                if depths is not None:
+                    depths = (depths - depths.min()) / (depths.max() - depths.min())
+                    depths = depths.repeat(1, 1, 1, 3)
+                    canvas = torch.cat([canvas, depths], dim=2)
+                if normals is not None:
+                    normals = (normals + 1) / 2
+                    canvas = torch.cat([canvas, normals], dim=2)
+                canvas = torch.clamp(canvas, 0.0, 1.0)
+                canvas = canvas.squeeze(0).cpu().numpy()
                 imageio.imwrite(
                     f"{self.render_dir}/{stage}_{i:04d}.png",
                     (canvas * 255).astype(np.uint8),

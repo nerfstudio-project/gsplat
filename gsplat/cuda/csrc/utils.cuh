@@ -63,11 +63,13 @@ template <typename T>
 inline __device__ void quat_scale_to_covar_preci(
     const vec4<T> quat,
     const vec3<T> scale,
+    // outputs
+    mat3<T> &R,
     // optional outputs
     mat3<T> *covar,
     mat3<T> *preci
 ) {
-    mat3<T> R = quat_to_rotmat<T>(quat);
+    R = quat_to_rotmat<T>(quat);
     if (covar != nullptr) {
         // C = R * S * S * Rt
         mat3<T> S =
@@ -101,6 +103,7 @@ inline __device__ void quat_scale_to_covar_vjp(
     // precompute
     const mat3<T> R,
     // grad outputs
+    const mat3<T> v_R,
     const mat3<T> v_covar,
     // grad inputs
     vec4<T> &v_quat,
@@ -120,10 +123,10 @@ inline __device__ void quat_scale_to_covar_vjp(
     // for D = M * Mt,
     // df/dM = df/dM + df/dMt = G * M + (Mt * G)t = G * M + Gt * M
     mat3<T> v_M = (v_covar + glm::transpose(v_covar)) * M;
-    mat3<T> v_R = v_M * S;
+    mat3<T> v_R_total = v_M * S + v_R;
 
     // grad for (quat, scale) from covar
-    quat_to_rotmat_vjp<T>(quat, v_R, v_quat);
+    quat_to_rotmat_vjp<T>(quat, v_R_total, v_quat);
 
     v_scale[0] +=
         R[0][0] * v_M[0][0] + R[0][1] * v_M[0][1] + R[0][2] * v_M[0][2];
@@ -141,6 +144,7 @@ inline __device__ void quat_scale_to_preci_vjp(
     // precompute
     const mat3<T> R,
     // grad outputs
+    const mat3<T> v_R,
     const mat3<T> v_preci,
     // grad inputs
     vec4<T> &v_quat,
@@ -160,10 +164,10 @@ inline __device__ void quat_scale_to_preci_vjp(
     // for D = M * Mt,
     // df/dM = df/dM + df/dMt = G * M + (Mt * G)t = G * M + Gt * M
     mat3<T> v_M = (v_preci + glm::transpose(v_preci)) * M;
-    mat3<T> v_R = v_M * S;
+    mat3<T> v_R_total = v_M * S + v_R;
 
     // grad for (quat, scale) from preci
-    quat_to_rotmat_vjp<T>(quat, v_R, v_quat);
+    quat_to_rotmat_vjp<T>(quat, v_R_total, v_quat);
 
     v_scale[0] +=
         -sx * sx *
@@ -244,11 +248,7 @@ inline __device__ void ortho_proj_vjp(
     // df/dx = fx * df/dpixx
     // df/dy = fy * df/dpixy
     // df/dz = 0
-    v_mean3d += vec3<T>(
-        fx * v_mean2d[0],
-        fy * v_mean2d[1],
-        0.f
-    );
+    v_mean3d += vec3<T>(fx * v_mean2d[0], fy * v_mean2d[1], 0.f);
 }
 
 template <typename T>

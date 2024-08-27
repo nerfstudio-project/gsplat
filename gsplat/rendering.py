@@ -3,6 +3,7 @@ from typing import Dict, Optional, Tuple
 
 import torch
 import torch.distributed
+import torch.nn.functional as F
 from torch import Tensor
 from typing_extensions import Literal
 
@@ -19,6 +20,7 @@ from .distributed import (
     all_to_all_int32,
     all_to_all_tensor_list,
 )
+from .utils import depth_to_normal, get_projection_matrix
 
 
 def rasterization(
@@ -39,7 +41,9 @@ def rasterization(
     packed: bool = True,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
-    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
+    render_mode: Literal[
+        "RGB", "D", "ED", "RGB+D", "RGB+ED", "RGB+N", "RGB+N+D", "RGB+N+ED"
+    ] = "RGB",
     sparse_grad: bool = False,
     absgrad: bool = False,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
@@ -77,6 +81,11 @@ def rasterization(
         shape [N, K, 3] or [C, N, K, 3], where K is the number of SH bases. In this case, it is expected
         that :math:`(\\textit{sh_degree} + 1) ^ 2 \\leq K`, where `sh_degree` controls the
         activated bases in the SH coefficients.
+
+    .. note::
+        **Normal Rendering**: This function supports rendering normal maps via `render_mode`.
+        The normal direction of a Gaussian is defined as the z-axis of its local coordinate system,
+        i.e., the direction of the Gaussian's third principal axis.
 
     .. note::
         **Depth Rendering**: This function supports colors or/and depths via `render_mode`.
@@ -157,8 +166,10 @@ def rasterization(
             (Note: other values are not tested)
         backgrounds: The background colors. [C, D]. Default is None.
         render_mode: The rendering mode. Supported modes are "RGB", "D", "ED", "RGB+D",
-            and "RGB+ED". "RGB" renders the colored image, "D" renders the accumulated depth, and
-            "ED" renders the expected depth. Default is "RGB".
+            "RGB+ED", "RGB+N", "RGB+N+D", "RGB+N+ED". "RGB" renders the 3-channel colored image.
+            "N" renders the 3-channel normal maps. "D" renders the 1-channel accumulated
+            depth maps and "ED" renders the 1-channel expected depth maps. "+" combines the
+            rendered maps together on the last dimension. Default is "RGB".
         sparse_grad: If true, the gradients for {means, quats, scales} will be stored in
             a COO sparse layout. This can be helpful for saving memory. Default is False.
         absgrad: If true, the absolute gradients of the projected 2D means
@@ -225,7 +236,16 @@ def rasterization(
     assert opacities.shape == (N,), opacities.shape
     assert viewmats.shape == (C, 4, 4), viewmats.shape
     assert Ks.shape == (C, 3, 3), Ks.shape
-    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
+    assert render_mode in [
+        "RGB",
+        "D",
+        "ED",
+        "RGB+D",
+        "RGB+ED",
+        "RGB+N",
+        "RGB+N+D",
+        "RGB+N+ED",
+    ], render_mode
 
     if sh_degree is None:
         # treat colors as post-activation values, should be in shape [N, D] or [C, N, D]
@@ -287,6 +307,7 @@ def rasterization(
         radius_clip=radius_clip,
         sparse_grad=sparse_grad,
         calc_compensations=(rasterize_mode == "antialiased"),
+        calc_normals=render_mode in ["RGB+N", "RGB+N+D", "RGB+N+ED"],
         ortho=ortho,
     )
 
@@ -298,13 +319,14 @@ def rasterization(
             radii,
             means2d,
             depths,
+            normals,
             conics,
             compensations,
         ) = proj_results
         opacities = opacities[gaussian_ids]  # [nnz]
     else:
         # The results are with shape [C, N, ...]. Only the elements with radii > 0 are valid.
-        radii, means2d, depths, conics, compensations = proj_results
+        radii, means2d, depths, normals, conics, compensations = proj_results
         opacities = opacities.repeat(C, 1)  # [C, N]
         camera_ids, gaussian_ids = None, None
 
@@ -465,6 +487,18 @@ def rasterization(
         colors = depths[..., None]
         if backgrounds is not None:
             backgrounds = torch.zeros(C, 1, device=backgrounds.device)
+    elif render_mode in ["RGB+N"]:
+        colors = torch.cat((colors, normals), dim=-1)
+        if backgrounds is not None:
+            backgrounds = torch.cat(
+                [backgrounds, torch.zeros(C, 3, device=backgrounds.device)], dim=-1
+            )
+    elif render_mode in ["RGB+N+D", "RGB+N+ED"]:
+        colors = torch.cat((colors, normals, depths[..., None]), dim=-1)
+        if backgrounds is not None:
+            backgrounds = torch.cat(
+                [backgrounds, torch.zeros(C, 4, device=backgrounds.device)], dim=-1
+            )
     else:  # RGB
         pass
 
@@ -546,15 +580,10 @@ def rasterization(
             packed=packed,
             absgrad=absgrad,
         )
-    if render_mode in ["ED", "RGB+ED"]:
-        # normalize the accumulated depth to get the expected depth
-        render_colors = torch.cat(
-            [
-                render_colors[..., :-1],
-                render_colors[..., -1:] / render_alphas.clamp(min=1e-10),
-            ],
-            dim=-1,
-        )
+
+    # normalize the accumulated depth to get the expected depth
+    if render_mode in ["ED", "RGB+ED", "RGB+N+ED"]:
+        render_colors[..., -1:] /= render_alphas.clamp(min=1e-10)
 
     return render_colors, render_alphas, meta
 
@@ -575,7 +604,9 @@ def _rasterization(
     sh_degree: Optional[int] = None,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
-    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
+    render_mode: Literal[
+        "RGB", "D", "ED", "RGB+D", "RGB+ED", "RGB+N", "RGB+N+D", "RGB+N+ED"
+    ] = "RGB",
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
     channel_chunk: int = 32,
     batch_per_iter: int = 100,
@@ -609,7 +640,16 @@ def _rasterization(
     assert opacities.shape == (N,), opacities.shape
     assert viewmats.shape == (C, 4, 4), viewmats.shape
     assert Ks.shape == (C, 3, 3), Ks.shape
-    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
+    assert render_mode in [
+        "RGB",
+        "D",
+        "ED",
+        "RGB+D",
+        "RGB+ED",
+        "RGB+N",
+        "RGB+N+D",
+        "RGB+N+ED",
+    ], render_mode
 
     if sh_degree is None:
         # treat colors as post-activation values, should be in shape [N, D] or [C, N, D]
@@ -628,10 +668,10 @@ def _rasterization(
 
     # Project Gaussians to 2D.
     # The results are with shape [C, N, ...]. Only the elements with radii > 0 are valid.
-    covars, _ = _quat_scale_to_covar_preci(quats, scales, True, False, triu=False)
-    radii, means2d, depths, conics, compensations = _fully_fused_projection(
+    radii, means2d, depths, normals, conics, compensations = _fully_fused_projection(
         means,
-        covars,
+        quats,
+        scales,
         viewmats,
         Ks,
         width,
@@ -640,6 +680,8 @@ def _rasterization(
         near_plane=near_plane,
         far_plane=far_plane,
         calc_compensations=(rasterize_mode == "antialiased"),
+        calc_normals=render_mode in ["RGB+N", "RGB+N+D", "RGB+N+ED"],
+        ortho=False,
     )
     opacities = opacities.repeat(C, 1)  # [C, N]
     camera_ids, gaussian_ids = None, None
@@ -699,6 +741,18 @@ def _rasterization(
         colors = depths[..., None]
         if backgrounds is not None:
             backgrounds = torch.zeros(C, 1, device=backgrounds.device)
+    elif render_mode in ["RGB+N"]:
+        colors = torch.cat((colors, normals), dim=-1)
+        if backgrounds is not None:
+            backgrounds = torch.cat(
+                [backgrounds, torch.zeros(C, 3, device=backgrounds.device)], dim=-1
+            )
+    elif render_mode in ["RGB+N+D", "RGB+N+ED"]:
+        colors = torch.cat((colors, normals, depths[..., None]), dim=-1)
+        if backgrounds is not None:
+            backgrounds = torch.cat(
+                [backgrounds, torch.zeros(C, 4, device=backgrounds.device)], dim=-1
+            )
     else:  # RGB
         pass
     if colors.shape[-1] > channel_chunk:
@@ -772,6 +826,10 @@ def _rasterization(
         "tile_size": tile_size,
         "n_cameras": C,
     }
+    # normalize the accumulated depth to get the expected depth
+    if render_mode in ["ED", "RGB+ED", "RGB+N+ED"]:
+        render_colors[..., -1:] /= render_alphas.clamp(min=1e-10)
+
     return render_colors, render_alphas, meta
 
 
@@ -899,32 +957,13 @@ def rasterization_inria_wrapper(
         GaussianRasterizer,
     )
 
-    def _getProjectionMatrix(znear, zfar, fovX, fovY, device="cuda"):
-        tanHalfFovY = math.tan((fovY / 2))
-        tanHalfFovX = math.tan((fovX / 2))
-
-        top = tanHalfFovY * znear
-        bottom = -top
-        right = tanHalfFovX * znear
-        left = -right
-
-        P = torch.zeros(4, 4, device=device)
-
-        z_sign = 1.0
-
-        P[0, 0] = 2.0 * znear / (right - left)
-        P[1, 1] = 2.0 * znear / (top - bottom)
-        P[0, 2] = (right + left) / (right - left)
-        P[1, 2] = (top + bottom) / (top - bottom)
-        P[3, 2] = z_sign
-        P[2, 2] = z_sign * zfar / (zfar - znear)
-        P[2, 3] = -(zfar * znear) / (zfar - znear)
-        return P
-
     assert eps2d == 0.3, "This is hard-coded in CUDA to be 0.3"
     C = len(viewmats)
     device = means.device
     channels = colors.shape[-1]
+
+    # rasterization from inria does not do normalization internally
+    quats = F.normalize(quats, dim=-1)  # [N, 4]
 
     render_colors = []
     for cid in range(C):
@@ -934,7 +973,7 @@ def rasterization_inria_wrapper(
         tanfovy = math.tan(FoVy * 0.5)
 
         world_view_transform = viewmats[cid].transpose(0, 1)
-        projection_matrix = _getProjectionMatrix(
+        projection_matrix = get_projection_matrix(
             znear=near_plane, zfar=far_plane, fovX=FoVx, fovY=FoVy, device=device
         ).transpose(0, 1)
         full_proj_transform = (
@@ -995,3 +1034,140 @@ def rasterization_inria_wrapper(
         render_colors.append(render_colors_)
     render_colors = torch.stack(render_colors, dim=0)
     return render_colors, None, {}
+
+
+def rasterization_2dgs_inria_wrapper(
+    means: Tensor,  # [N, 3]
+    quats: Tensor,  # [N, 4]
+    scales: Tensor,  # [N, 3]
+    opacities: Tensor,  # [N]
+    colors: Tensor,  # [N, D] or [N, K, 3]
+    viewmats: Tensor,  # [C, 4, 4]
+    Ks: Tensor,  # [C, 3, 3]
+    width: int,
+    height: int,
+    near_plane: float = 0.01,
+    far_plane: float = 100.0,
+    eps2d: float = 0.3,
+    sh_degree: Optional[int] = None,
+    backgrounds: Optional[Tensor] = None,
+    **kwargs,
+) -> Tuple[Tensor, Tensor, Dict]:
+    """Wrapper for 2DGS's rasterization backend which is based on Inria's backend.
+
+    Install the 2DGS rasterization backend from
+        https://github.com/hbb1/diff-surfel-rasterization
+    """
+    from diff_surfel_rasterization import (
+        GaussianRasterizationSettings,
+        GaussianRasterizer,
+    )
+
+    assert eps2d == 0.3, "This is hard-coded in CUDA to be 0.3"
+    C = len(viewmats)
+    device = means.device
+    channels = colors.shape[-1]
+
+    # rasterization from inria does not do normalization internally
+    quats = F.normalize(quats, dim=-1)  # [N, 4]
+    scales = scales[:, :2]  # [N, 2]
+
+    render_colors = []
+    for cid in range(C):
+        FoVx = 2 * math.atan(width / (2 * Ks[cid, 0, 0].item()))
+        FoVy = 2 * math.atan(height / (2 * Ks[cid, 1, 1].item()))
+        tanfovx = math.tan(FoVx * 0.5)
+        tanfovy = math.tan(FoVy * 0.5)
+
+        world_view_transform = viewmats[cid].transpose(0, 1)
+        projection_matrix = get_projection_matrix(
+            znear=near_plane, zfar=far_plane, fovX=FoVx, fovY=FoVy, device=device
+        ).transpose(0, 1)
+        full_proj_transform = (
+            world_view_transform.unsqueeze(0).bmm(projection_matrix.unsqueeze(0))
+        ).squeeze(0)
+        camera_center = world_view_transform.inverse()[3, :3]
+
+        background = (
+            backgrounds[cid]
+            if backgrounds is not None
+            else torch.zeros(3, device=device)
+        )
+
+        raster_settings = GaussianRasterizationSettings(
+            image_height=height,
+            image_width=width,
+            tanfovx=tanfovx,
+            tanfovy=tanfovy,
+            bg=background,
+            scale_modifier=1.0,
+            viewmatrix=world_view_transform,
+            projmatrix=full_proj_transform,
+            sh_degree=0 if sh_degree is None else sh_degree,
+            campos=camera_center,
+            prefiltered=False,
+            debug=False,
+        )
+
+        rasterizer = GaussianRasterizer(raster_settings=raster_settings)
+
+        means2D = torch.zeros_like(means, requires_grad=True, device=device)
+
+        render_colors_ = []
+        for i in range(0, channels, 3):
+            _colors = colors[..., i : i + 3]
+            if _colors.shape[-1] < 3:
+                pad = torch.zeros(
+                    _colors.shape[0], 3 - _colors.shape[-1], device=device
+                )
+                _colors = torch.cat([_colors, pad], dim=-1)
+            _render_colors_, _, allmap = rasterizer(
+                means3D=means,
+                means2D=means2D,
+                shs=_colors if colors.dim() == 3 else None,
+                colors_precomp=_colors if colors.dim() == 2 else None,
+                opacities=opacities[:, None],
+                scales=scales,
+                rotations=quats,
+                cov3D_precomp=None,
+            )
+            if _colors.shape[-1] < 3:
+                _render_colors_ = _render_colors_[:, :, : _colors.shape[-1]]
+            render_colors_.append(_render_colors_)
+        render_colors_ = torch.cat(render_colors_, dim=-1)
+
+        render_colors_ = render_colors_.permute(1, 2, 0)  # [H, W, 3]
+        render_colors.append(render_colors_)
+    render_colors = torch.stack(render_colors, dim=0)
+
+    # additional maps
+    allmap = allmap.permute(1, 2, 0).unsqueeze(0)  # [1, H, W, C]
+    render_depth_expected = allmap[..., 0:1]
+    render_alphas = allmap[..., 1:2]
+    render_normal = allmap[..., 2:5]
+    render_depth_median = allmap[..., 5:6]
+    render_dist = allmap[..., 6:7]
+
+    render_normal = render_normal @ (world_view_transform[:3, :3].T)
+    render_depth_expected = render_depth_expected / render_alphas
+    render_depth_expected = torch.nan_to_num(render_depth_expected, 0, 0)
+    render_depth_median = torch.nan_to_num(render_depth_median, 0, 0)
+
+    # render_depth is either median or expected by setting depth_ratio to 1 or 0
+    # for bounded scene, use median depth, i.e., depth_ratio = 1;
+    # for unbounded scene, use expected depth, i.e., depth_ratio = 0, to reduce disk aliasing.
+    depth_ratio = 0
+    render_depth = (
+        render_depth_expected * (1 - depth_ratio) + (depth_ratio) * render_depth_median
+    )
+
+    normals_surf = depth_to_normal(render_depth, torch.inverse(viewmats), Ks)
+    normals_surf = normals_surf * (render_alphas).detach()
+
+    render_colors = torch.cat([render_colors, render_depth], dim=-1)
+    meta = {
+        "normals_rend": render_normal,
+        "normals_surf": normals_surf,
+        "render_distloss": render_dist,
+    }
+    return render_colors, render_alphas, meta

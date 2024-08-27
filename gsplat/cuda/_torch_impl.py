@@ -6,14 +6,8 @@ import torch.nn.functional as F
 from torch import Tensor
 
 
-def _quat_scale_to_covar_preci(
-    quats: Tensor,  # [N, 4],
-    scales: Tensor,  # [N, 3],
-    compute_covar: bool = True,
-    compute_preci: bool = True,
-    triu: bool = False,
-) -> Tuple[Optional[Tensor], Optional[Tensor]]:
-    """PyTorch implementation of `gsplat.cuda._wrapper.quat_scale_to_covar_preci()`."""
+def _quat_to_rotmat(quats: Tensor) -> Tensor:
+    """Helper function to convert quaternions to rotation matrices."""
     quats = F.normalize(quats, p=2, dim=-1)
     w, x, y, z = torch.unbind(quats, dim=-1)
     R = torch.stack(
@@ -30,8 +24,19 @@ def _quat_scale_to_covar_preci(
         ],
         dim=-1,
     )
-
     R = R.reshape(quats.shape[:-1] + (3, 3))  # (..., 3, 3)
+    return R
+
+
+def _quat_scale_to_covar_preci(
+    quats: Tensor,  # [N, 4],
+    scales: Tensor,  # [N, 3],
+    compute_covar: bool = True,
+    compute_preci: bool = True,
+    triu: bool = False,
+) -> Tuple[Optional[Tensor], Optional[Tensor]]:
+    """PyTorch implementation of `gsplat.cuda._wrapper.quat_scale_to_covar_preci()`."""
+    R = _quat_to_rotmat(quats)
     # R.register_hook(lambda grad: print("grad R", grad))
 
     if compute_covar:
@@ -170,7 +175,8 @@ def _world_to_cam(
 
 def _fully_fused_projection(
     means: Tensor,  # [N, 3]
-    covars: Tensor,  # [N, 3, 3]
+    quats: Tensor,  # [N, 4]
+    scales: Tensor,  # [N, 3]
     viewmats: Tensor,  # [C, 4, 4]
     Ks: Tensor,  # [C, 3, 3]
     width: int,
@@ -179,6 +185,7 @@ def _fully_fused_projection(
     near_plane: float = 0.01,
     far_plane: float = 1e10,
     calc_compensations: bool = False,
+    calc_normals: bool = False,
     ortho: bool = False,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Optional[Tensor]]:
     """PyTorch implementation of `gsplat.cuda._wrapper.fully_fused_projection()`
@@ -188,6 +195,13 @@ def _fully_fused_projection(
         This is a minimal implementation of fully fused version, which has more
         arguments. Not all arguments are supported.
     """
+    covars, _ = _quat_scale_to_covar_preci(quats, scales, triu=False)  # [N, 3, 3]
+    if calc_normals:
+        normals = _quat_to_rotmat(quats)[..., 2]  # [N, 3]
+        normals = normals.repeat(viewmats.shape[0], 1, 1)  # [C, N, 3]
+    else:
+        normals = None
+
     means_c, covars_c = _world_to_cam(means, covars, viewmats)
 
     if ortho:
@@ -241,7 +255,7 @@ def _fully_fused_projection(
     radius[~inside] = 0.0
 
     radii = radius.int()
-    return radii, means2d, depths, conics, compensations
+    return radii, means2d, depths, normals, conics, compensations
 
 
 @torch.no_grad()

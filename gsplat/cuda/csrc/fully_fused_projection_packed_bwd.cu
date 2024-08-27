@@ -40,6 +40,7 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     // grad outputs
     const T *__restrict__ v_means2d,       // [nnz, 2]
     const T *__restrict__ v_depths,        // [nnz]
+    const T *__restrict__ v_normals,       // [nnz, 3] optional
     const T *__restrict__ v_conics,        // [nnz, 3]
     const T *__restrict__ v_compensations, // [nnz] optional
     const bool sparse_grad, // whether the outputs are in COO format [nnz, ...]
@@ -101,6 +102,7 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     mat3<T> covar;
     vec4<T> quat;
     vec3<T> scale;
+    mat3<T> rotmat;
     if (covars != nullptr) {
         // if a precomputed covariance is provided
         covars += gid * 6;
@@ -119,7 +121,7 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
         // if not then compute it from quaternions and scales
         quat = glm::make_vec4(quats + gid * 4);
         scale = glm::make_vec3(scales + gid * 3);
-        quat_scale_to_covar_preci<T>(quat, scale, &covar, nullptr);
+        quat_scale_to_covar_preci<T>(quat, scale, rotmat, &covar, nullptr);
     }
     vec3<T> mean_c;
     pos_world_to_cam(R, t, glm::make_vec3(means), mean_c);
@@ -129,7 +131,7 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     T fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
     mat3<T> v_covar_c(0.f);
     vec3<T> v_mean_c(0.f);
-    if (ortho){
+    if (ortho) {
         // vjp: orthographic projection
         ortho_proj_vjp<T>(
             mean_c,
@@ -195,11 +197,15 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
             v_covars[4] = v_covar[1][2] + v_covar[2][1];
             v_covars[5] = v_covar[2][2];
         } else {
-            mat3<T> rotmat = quat_to_rotmat<T>(quat);
             vec4<T> v_quat(0.f);
             vec3<T> v_scale(0.f);
+            mat3<T> v_rotmat(0.f);
+            // add contribution from v_normals
+            if (v_normals != nullptr) {
+                v_rotmat[2] += glm::make_vec3(v_normals + idx * 3);
+            }
             quat_scale_to_covar_vjp<T>(
-                quat, scale, rotmat, v_covar, v_quat, v_scale
+                quat, scale, rotmat, v_rotmat, v_covar, v_quat, v_scale
             );
             v_quats += idx * 4;
             v_scales += idx * 3;
@@ -240,11 +246,15 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
             }
         } else {
             // Directly output gradients w.r.t. the quaternion and scale
-            mat3<T> rotmat = quat_to_rotmat<T>(quat);
             vec4<T> v_quat(0.f);
             vec3<T> v_scale(0.f);
+            mat3<T> v_rotmat(0.f);
+            // add contribution from v_normals
+            if (v_normals != nullptr) {
+                v_rotmat[2] += glm::make_vec3(v_normals + idx * 3);
+            }
             quat_scale_to_covar_vjp<T>(
-                quat, scale, rotmat, v_covar, v_quat, v_scale
+                quat, scale, rotmat, v_rotmat, v_covar, v_quat, v_scale
             );
             warpSum(v_quat, warp_group_g);
             warpSum(v_scale, warp_group_g);
@@ -306,6 +316,7 @@ fully_fused_projection_packed_bwd_tensor(
     // grad outputs
     const torch::Tensor &v_means2d,                     // [nnz, 2]
     const torch::Tensor &v_depths,                      // [nnz]
+    const at::optional<torch::Tensor> &v_normals,       // [C, N, 3]
     const torch::Tensor &v_conics,                      // [nnz, 3]
     const at::optional<torch::Tensor> &v_compensations, // [nnz] optional
     const bool viewmats_requires_grad,
@@ -334,6 +345,12 @@ fully_fused_projection_packed_bwd_tensor(
     if (v_compensations.has_value()) {
         GSPLAT_CHECK_INPUT(v_compensations.value());
         assert(compensations.has_value());
+    }
+    if (v_normals.has_value()) {
+        GSPLAT_CHECK_INPUT(v_normals.value());
+        TORCH_CHECK(
+            quats.has_value(), "quats must be provided to calculate normals"
+        );
     }
 
     uint32_t N = means.size(0);    // number of gaussians
@@ -392,6 +409,8 @@ fully_fused_projection_packed_bwd_tensor(
                     : nullptr,
                 v_means2d.data_ptr<float>(),
                 v_depths.data_ptr<float>(),
+                v_normals.has_value() ? v_normals.value().data_ptr<float>()
+                                      : nullptr,
                 v_conics.data_ptr<float>(),
                 v_compensations.has_value()
                     ? v_compensations.value().data_ptr<float>()

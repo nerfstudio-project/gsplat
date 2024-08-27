@@ -50,6 +50,7 @@ __global__ void quat_scale_to_covar_preci_bwd_kernel(
 
     vec4<OpT> v_quat(0.f);
     vec3<OpT> v_scale(0.f);
+    mat3<OpT> v_rotmat(0.f);
     if (v_covars != nullptr) {
         // glm is column-major, input is row-major
         mat3<OpT> v_covar;
@@ -72,7 +73,7 @@ __global__ void quat_scale_to_covar_preci_bwd_kernel(
             v_covar = glm::transpose(v_covar_cast);
         }
         quat_scale_to_covar_vjp<OpT>(
-            quat, scale, rotmat, v_covar, v_quat, v_scale
+            quat, scale, rotmat, v_rotmat, v_covar, v_quat, v_scale
         );
     }
     if (v_precis != nullptr) {
@@ -97,7 +98,7 @@ __global__ void quat_scale_to_covar_preci_bwd_kernel(
             v_preci = glm::transpose(v_precis_cast);
         }
         quat_scale_to_preci_vjp<OpT>(
-            quat, scale, rotmat, v_preci, v_quat, v_scale
+            quat, scale, rotmat, v_rotmat, v_preci, v_quat, v_scale
         );
     }
 
