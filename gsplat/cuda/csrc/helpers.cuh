@@ -74,13 +74,6 @@ inline __device__ void warpMax(ScalarT &val, WarpT &warp) {
 }
 
 
-template <typename T>
-inline __device__ vec3<T> cross_product(vec3<T> a, vec3<T> b) {
-    return vec3<T>(
-        a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x
-    );
-}
-
 template <typename T> __forceinline__ __device__ T sum(vec3<T> a) {
     return a.x + a.y + a.z;
 }

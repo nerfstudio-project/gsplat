@@ -37,7 +37,7 @@ def depth_to_normal(
         Ks: Tensor, 
         near_plane: float, 
         far_plane: float
-): 
+) -> Tensor: 
     """
     Convert depth to surface normal 
 
@@ -77,7 +77,7 @@ def depth_to_normal(
     return normals
 
 # ref: https://github.com/hbb1/2d-gaussian-splatting/blob/61c7b417393d5e0c58b742ad5e2e5f9e9f240cc6/utils/point_utils.py#L26
-def _depths_to_points(depthmap, world_view_transform, full_proj_transform, fx, fy):
+def _depths_to_points(depthmap, world_view_transform, full_proj_transform, fx, fy) -> Tensor:
     c2w = (world_view_transform.T).inverse()
     H, W = depthmap.shape[:2]
 
@@ -101,7 +101,7 @@ def _depths_to_points(depthmap, world_view_transform, full_proj_transform, fx, f
     return points
 
 
-def _depth_to_normal(depth, world_view_transform, full_proj_transform, fx, fy):
+def _depth_to_normal(depth, world_view_transform, full_proj_transform, fx, fy) -> Tensor:
     points = _depths_to_points(
         depth,
         world_view_transform,
@@ -117,7 +117,7 @@ def _depth_to_normal(depth, world_view_transform, full_proj_transform, fx, fy):
     return output
 
 
-def _get_projection_matrix(znear, zfar, fovX, fovY, device="cuda"):
+def _get_projection_matrix(znear, zfar, fovX, fovY, device="cuda") -> Tensor:
     tanHalfFovY = math.tan((fovY / 2))
     tanHalfFovX = math.tan((fovX / 2))
 
