@@ -375,7 +375,7 @@ class Runner:
         width: int,
         height: int,
         **kwargs,
-    ) -> Tuple[Tensor, Tensor, Dict]:
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Dict]:
         means = self.splats["means"]  # [N, 3]
         # quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
         # rasterization does normalization internally

@@ -1022,7 +1022,7 @@ def rasterization_2dgs(
     rasterize_mode: Literal["classic"] = "classic",
     distloss: bool = False,
     depth_mode: Literal["expected", "median"] = "expected",
-) -> Tuple[Tuple, Dict]:
+) -> Tuple[Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor], Dict]:
     """Rasterize a set of 2D Gaussians (N) to a batch of image planes (C).
     
     This function provides a handful features for 3D Gaussian rasterization, which
