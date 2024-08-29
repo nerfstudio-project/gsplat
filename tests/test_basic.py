@@ -122,9 +122,10 @@ def test_world_to_cam(test_data):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_persp_proj(test_data):
-    from gsplat.cuda._torch_impl import _persp_proj
-    from gsplat.cuda._wrapper import persp_proj, quat_scale_to_covar_preci, world_to_cam
+@pytest.mark.parametrize("ortho", [True, False])
+def test_proj(test_data, ortho: bool):
+    from gsplat.cuda._torch_impl import _persp_proj, _ortho_proj
+    from gsplat.cuda._wrapper import proj, quat_scale_to_covar_preci, world_to_cam
 
     torch.manual_seed(42)
 
@@ -132,14 +133,19 @@ def test_persp_proj(test_data):
     viewmats = test_data["viewmats"]
     height = test_data["height"]
     width = test_data["width"]
+
     covars, _ = quat_scale_to_covar_preci(test_data["quats"], test_data["scales"])
     means, covars = world_to_cam(test_data["means"], covars, viewmats)
     means.requires_grad = True
     covars.requires_grad = True
 
     # forward
-    means2d, covars2d = persp_proj(means, covars, Ks, width, height)
-    _means2d, _covars2d = _persp_proj(means, covars, Ks, width, height)
+    means2d, covars2d = proj(means, covars, Ks, width, height, ortho)
+    if ortho:
+        _means2d, _covars2d = _ortho_proj(means, covars, Ks, width, height)
+    else:
+        _means2d, _covars2d = _persp_proj(means, covars, Ks, width, height)
+
     torch.testing.assert_close(means2d, _means2d, rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(covars2d, _covars2d, rtol=1e-1, atol=3e-2)
 
@@ -173,6 +179,7 @@ def test_projection(test_data, calc_compensations: bool):
     quats = test_data["quats"]
     scales = test_data["scales"]
     means = test_data["means"]
+
     viewmats.requires_grad = True
     quats.requires_grad = True
     scales.requires_grad = True
@@ -206,6 +213,7 @@ def test_projection(test_data, calc_compensations: bool):
         width,
         height,
         calc_compensations=calc_compensations,
+        ortho=ortho,
     )
 
     # radii is integer so we allow for 1 unit difference
@@ -253,6 +261,7 @@ def test_projection(test_data, calc_compensations: bool):
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("sparse_grad", [False, True])
 @pytest.mark.parametrize("calc_compensations", [False, True])
+@pytest.mark.parametrize("ortho", [True, False])
 def test_fully_fused_projection_packed(
     test_data, sparse_grad: bool, calc_compensations: bool
 ):
@@ -267,6 +276,7 @@ def test_fully_fused_projection_packed(
     quats = test_data["quats"]
     scales = test_data["scales"]
     means = test_data["means"]
+
     viewmats.requires_grad = True
     quats.requires_grad = True
     scales.requires_grad = True

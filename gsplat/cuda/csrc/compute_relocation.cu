@@ -1,9 +1,18 @@
 #include "bindings.h"
 
+namespace gsplat {
+
 // Equation (9) in "3D Gaussian Splatting as Markov Chain Monte Carlo"
-__global__ void compute_relocation_kernel(int N, float *opacities, float *scales,
-                                          int *ratios, float *binoms, int n_max,
-                                          float *new_opacities, float *new_scales) {
+__global__ void compute_relocation_kernel(
+    int N,
+    float *opacities,
+    float *scales,
+    int *ratios,
+    float *binoms,
+    int n_max,
+    float *new_opacities,
+    float *new_scales
+) {
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
     if (idx >= N)
         return;
@@ -28,26 +37,40 @@ __global__ void compute_relocation_kernel(int N, float *opacities, float *scales
         new_scales[idx * 3 + i] = coeff * scales[idx * 3 + i];
 }
 
-std::tuple<torch::Tensor, torch::Tensor>
-compute_relocation_tensor(torch::Tensor &opacities, torch::Tensor &scales,
-                          torch::Tensor &ratios, torch::Tensor &binoms,
-                          const int n_max) {
-    DEVICE_GUARD(opacities);
-    CHECK_INPUT(opacities);
-    CHECK_INPUT(scales);
-    CHECK_INPUT(ratios);
-    CHECK_INPUT(binoms);
+std::tuple<torch::Tensor, torch::Tensor> compute_relocation_tensor(
+    torch::Tensor &opacities,
+    torch::Tensor &scales,
+    torch::Tensor &ratios,
+    torch::Tensor &binoms,
+    const int n_max
+) {
+    GSPLAT_DEVICE_GUARD(opacities);
+    GSPLAT_CHECK_INPUT(opacities);
+    GSPLAT_CHECK_INPUT(scales);
+    GSPLAT_CHECK_INPUT(ratios);
+    GSPLAT_CHECK_INPUT(binoms);
     torch::Tensor new_opacities = torch::empty_like(opacities);
     torch::Tensor new_scales = torch::empty_like(scales);
 
     uint32_t N = opacities.size(0);
     if (N) {
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
-        compute_relocation_kernel<<<(N + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
-                                    stream>>>(
-            N, opacities.data_ptr<float>(), scales.data_ptr<float>(),
-            ratios.data_ptr<int>(), binoms.data_ptr<float>(), n_max,
-            new_opacities.data_ptr<float>(), new_scales.data_ptr<float>());
+        compute_relocation_kernel<<<
+            (N + GSPLAT_N_THREADS - 1) / GSPLAT_N_THREADS,
+            GSPLAT_N_THREADS,
+            0,
+            stream>>>(
+            N,
+            opacities.data_ptr<float>(),
+            scales.data_ptr<float>(),
+            ratios.data_ptr<int>(),
+            binoms.data_ptr<float>(),
+            n_max,
+            new_opacities.data_ptr<float>(),
+            new_scales.data_ptr<float>()
+        );
     }
     return std::make_tuple(new_opacities, new_scales);
 }
+
+} // namespace gsplat

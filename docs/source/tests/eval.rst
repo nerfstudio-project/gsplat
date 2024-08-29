@@ -3,23 +3,51 @@ Evaluation
 
 .. table:: Performance on `Mip-NeRF 360 Captures <https://jonbarron.info/mipnerf360/>`_ (Averaged Over 7 Scenes)
 
-    +------------+-------+-------+-------+------------------+------------+
-    |            | PSNR  | SSIM  | LPIPS | Train Mem        | Train Time |
-    +============+=======+=======+=======+==================+============+
-    | inria-7k   | 27.23 | 0.829 | 0.204 | 7.7 GB           | 4m05s      |
-    +------------+-------+-------+-------+------------------+------------+
-    | gsplat-7k  | 27.21 | 0.831 | 0.202 | **4.3GB**        | **5m35s**  |
-    +------------+-------+-------+-------+------------------+------------+
-    | inria-30k  | 28.95 | 0.870 | 0.138 | 9.0 GB           | 37m13s     |
-    +------------+-------+-------+-------+------------------+------------+
-    | gsplat-30k | 28.95 | 0.870 | 0.135 | **5.7 GB**       | **35m49s** |
-    +------------+-------+-------+-------+------------------+------------+
+    +---------------------+-------+-------+-------+------------------+------------+
+    |                     | PSNR  | SSIM  | LPIPS | Train Mem        | Train Time |
+    +=====================+=======+=======+=======+==================+============+
+    | inria-7k            | 27.23 | 0.829 | 0.204 | 7.7 GB           | 6m05s      |
+    +---------------------+-------+-------+-------+------------------+------------+
+    | gsplat-7k           | 27.21 | 0.831 | 0.202 | **4.3GB**        | **5m35s**  |
+    +---------------------+-------+-------+-------+------------------+------------+
+    | inria-30k           | 28.95 | 0.870 | 0.138 | 9.0 GB           | 37m13s     |
+    +---------------------+-------+-------+-------+------------------+------------+
+    | gsplat-30k (1 GPU)  | 28.95 | 0.870 | 0.135 | **5.7 GB**       | **35m49s** |
+    +---------------------+-------+-------+-------+------------------+------------+
+    | gsplat-30k (4 GPUs) | 28.91 | 0.871 | 0.135 | **2.0 GB**       | **11m28s** |
+    +---------------------+-------+-------+-------+------------------+------------+
 
-This repo comes with a standalone script (:code:`examples/simple_trainer.py`) that reproduces 
+This repo comes with a standalone script (:code:`examples/simple_trainer.py default`) that reproduces 
 the `Gaussian Splatting <https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/>`_ with
 exactly the same performance on PSNR, SSIM, LPIPS, and converged number of Gaussians. 
 Powered by `gsplat`'s efficient CUDA implementation, the training takes up to 
 **4x less GPU memory** with up to **15% less time** to finish than the official implementation.
+
+Feature Ablation
+----------------------------------------------
+Evaluation of features provided in `gsplat` on Mip-NeRF (averaged over 7 scenes). We ablate `gsplat` with default settings, with absgrad and mcmc densification strategies, and antialiased mode.
+Absgrad method uses `--grow_grad2d 0.0006` config. These results are obtained with an A100.
+
++-----------------------------+-------+-------+-------+----------+---------+------------+
+|                             | PSNR  | SSIM  | LPIPS | Num GSs  | Mem (GB)| Time (min) |
++=============================+=======+=======+=======+==========+=========+============+
+| gsplat (default settings)   | 29.00 | 0.87  | 0.14  | 3237318  | 5.62    | 19.39      |
++-----------------------------+-------+-------+-------+----------+---------+------------+
+| absgrad                     | 29.11 | 0.88  | 0.12  | 2465986  | 4.40    | 18.10      |
++-----------------------------+-------+-------+-------+----------+---------+------------+
+| antialiased                 | 29.03 | 0.87  | 0.14  | 3377807  | 5.87    | 19.52      |
++-----------------------------+-------+-------+-------+----------+---------+------------+
+| mcmc  (1 mill)              | 29.18 | 0.87  | 0.14  | 1000000  | 1.98    | 15.42      |
++-----------------------------+-------+-------+-------+----------+---------+------------+
+| mcmc  (2 mill)              | 29.53 | 0.88  | 0.13  | 2000000  | 3.43    | 21.79      |
++-----------------------------+-------+-------+-------+----------+---------+------------+
+| mcmc  (3 mill)              | 29.65 | 0.89  | 0.12  | 3000000  | 4.99    | 27.63      |
++-----------------------------+-------+-------+-------+----------+---------+------------+
+| absgrad & antialiased       | 29.14 | 0.88  | 0.13  | 2563156  | 4.57    | 18.43      |
++-----------------------------+-------+-------+-------+----------+---------+------------+
+| mcmc & antialiased          | 29.23 | 0.87  | 0.14  | 1000000  | 2.00    | 15.75      |
++-----------------------------+-------+-------+-------+----------+---------+------------+
+
 
 Trains Faster with Less GPU Memory
 ----------------------------------------------
@@ -105,7 +133,7 @@ is different from what's reported in the original paper that uses
 :code:`from lpipsPyTorch import lpips`.
 
 The evaluation of `gsplat-X` can be reproduced with the command 
-:code:`cd examples; bash benchmark.sh` 
+:code:`cd examples; bash benchmarks/basic.sh` 
 within the gsplat repo (commit 6acdce4). 
 
 The evaluation of `inria-X` can be 

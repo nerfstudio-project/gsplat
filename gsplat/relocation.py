@@ -1,5 +1,7 @@
+import math
 from typing import Tuple
 
+import torch
 from torch import Tensor
 
 from .cuda._wrapper import _make_lazy_cuda_func
@@ -31,6 +33,13 @@ def compute_relocation(
         **new_opacities**: The opacities of the new Gaussians. [N]
         **new_scales**: The scales of the Gaussians. [N, 3]
     """
+
+    N_MAX = 51
+    BINOMS = torch.zeros((N_MAX, N_MAX), device=opacities.device)
+    for n in range(N_MAX):
+        for k in range(n + 1):
+            BINOMS[n, k] = math.comb(n, k)
+
     N = opacities.shape[0]
     n_max, _ = binoms.shape
     assert scales.shape == (N, 3), scales.shape
