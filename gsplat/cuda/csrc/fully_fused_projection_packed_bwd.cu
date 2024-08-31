@@ -343,6 +343,7 @@ fully_fused_projection_packed_bwd_tensor(
     GSPLAT_CHECK_INPUT(conics);
     GSPLAT_CHECK_INPUT(v_means2d);
     GSPLAT_CHECK_INPUT(v_depths);
+    GSPLAT_CHECK_INPUT(v_normals);
     GSPLAT_CHECK_INPUT(v_conics);
     if (compensations.has_value()) {
         GSPLAT_CHECK_INPUT(compensations.value());
@@ -408,6 +409,7 @@ fully_fused_projection_packed_bwd_tensor(
                     : nullptr,
                 v_means2d.data_ptr<float>(),
                 v_depths.data_ptr<float>(),
+                v_normals.data_ptr<float>(),
                 v_conics.data_ptr<float>(),
                 v_compensations.has_value()
                     ? v_compensations.value().data_ptr<float>()

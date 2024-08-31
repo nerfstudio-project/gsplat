@@ -44,6 +44,7 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
     int32_t *__restrict__ radii,        // [nnz]
     T *__restrict__ means2d,            // [nnz, 2]
     T *__restrict__ depths,             // [nnz]
+    T *__restrict__ normals,            // [nnz, 3]
     T *__restrict__ conics,             // [nnz, 3]
     T *__restrict__ compensations       // [nnz] optional
 ) {
@@ -246,6 +247,7 @@ std::tuple<
     torch::Tensor,
     torch::Tensor,
     torch::Tensor,
+    torch::Tensor,
     torch::Tensor>
 fully_fused_projection_packed_fwd_tensor(
     const torch::Tensor &means,                // [N, 3]
@@ -319,6 +321,7 @@ fully_fused_projection_packed_fwd_tensor(
                 nullptr,
                 nullptr,
                 nullptr,
+                nullptr,
                 nullptr
             );
         block_accum = torch::cumsum(block_cnts, 0, torch::kInt32);
@@ -369,6 +372,7 @@ fully_fused_projection_packed_fwd_tensor(
                 radii.data_ptr<int32_t>(),
                 means2d.data_ptr<float>(),
                 depths.data_ptr<float>(),
+                normals.data_ptr<float>(),
                 conics.data_ptr<float>(),
                 calc_compensations ? compensations.data_ptr<float>() : nullptr
             );
@@ -383,6 +387,7 @@ fully_fused_projection_packed_fwd_tensor(
         radii,
         means2d,
         depths,
+        normals,
         conics,
         compensations
     );

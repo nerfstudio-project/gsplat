@@ -89,6 +89,7 @@ std::tuple<
     torch::Tensor,
     torch::Tensor,
     torch::Tensor,
+    torch::Tensor,
     torch::Tensor>
 fully_fused_projection_fwd_tensor(
     const torch::Tensor &means,                // [N, 3]
@@ -245,6 +246,7 @@ std::tuple<torch::Tensor, torch::Tensor> compute_sh_bwd_tensor(
  * Packed Version
  ****************************************************************************************/
 std::tuple<
+    torch::Tensor,
     torch::Tensor,
     torch::Tensor,
     torch::Tensor,

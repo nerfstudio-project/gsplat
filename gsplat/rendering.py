@@ -557,6 +557,25 @@ def rasterization(
             absgrad=absgrad,
         )
 
+    if render_mode in ["ED", "RGB+ED", "RGB+ED+N"]:
+        # normalize the accumulated depth to get the expected depth
+        render_colors[..., -1:] /= render_alphas.clamp(min=1e-10)
+    if render_mode in ["RGB+ED+N"]:
+        normals_rend = render_colors[..., -4:-1]
+        normals_surf = depth_to_normal(
+            render_colors[..., -1:],
+            viewmats,
+            Ks,
+            near_plane=near_plane,
+            far_plane=far_plane,
+        )
+        normals_surf = normals_surf * (render_alphas).detach()
+        meta.update(
+            {
+                "normals_rend": normals_rend,
+                "normals_surf": normals_surf,
+            }
+        )
     return render_colors, render_alphas, meta
 
 
