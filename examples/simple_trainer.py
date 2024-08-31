@@ -15,7 +15,7 @@ import tyro
 import viser
 import yaml
 from datasets.colmap import Dataset, Parser
-from datasets.traj import generate_interpolated_path
+from datasets.traj import generate_interpolated_path, generate_ellipse_path_z
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
@@ -38,6 +38,8 @@ class Config:
     ckpt: Optional[List[str]] = None
     # Name of compression strategy to use
     compression: Optional[Literal["png"]] = None
+    # Render trajectory path
+    render_traj_path: str = "interp"
 
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
@@ -63,7 +65,7 @@ class Config:
     # Number of training steps
     max_steps: int = 30_000
     # Steps to evaluate the model
-    eval_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    eval_steps: List[int] = field(default_factory=lambda: [1_000, 7_000, 30_000])
     # Steps to save the model
     save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
 
@@ -757,7 +759,7 @@ class Runner:
                 # write images
                 canvas = torch.cat([pixels, colors], dim=2).squeeze(0).cpu().numpy()
                 imageio.imwrite(
-                    f"{self.render_dir}/{stage}_{i:04d}.png",
+                    f"{self.render_dir}/{stage}_step{step}_{i:04d}.png",
                     (canvas * 255).astype(np.uint8),
                 )
 
@@ -800,25 +802,43 @@ class Runner:
         cfg = self.cfg
         device = self.device
 
-        camtoworlds = self.parser.camtoworlds[5:-5]
-        camtoworlds = generate_interpolated_path(camtoworlds, 1)  # [N, 3, 4]
-        camtoworlds = np.concatenate(
+        camtoworlds_all = self.parser.camtoworlds[5:-5]
+        if cfg.render_traj_path == "interp":
+            camtoworlds_all = generate_interpolated_path(
+                camtoworlds_all, 1
+            )  # [N, 3, 4]
+        elif cfg.render_traj_path == "ellipse":
+            height = camtoworlds_all[:, 2, 3].mean()
+            camtoworlds_all = generate_ellipse_path_z(
+                camtoworlds_all, height=height
+            )  # [N, 3, 4]
+        else:
+            raise ValueError(
+                f"Render trajectory type not supported: {cfg.render_traj_path}"
+            )
+
+        camtoworlds_all = np.concatenate(
             [
-                camtoworlds,
-                np.repeat(np.array([[[0.0, 0.0, 0.0, 1.0]]]), len(camtoworlds), axis=0),
+                camtoworlds_all,
+                np.repeat(
+                    np.array([[[0.0, 0.0, 0.0, 1.0]]]), len(camtoworlds_all), axis=0
+                ),
             ],
             axis=1,
         )  # [N, 4, 4]
 
-        camtoworlds = torch.from_numpy(camtoworlds).float().to(device)
+        camtoworlds_all = torch.from_numpy(camtoworlds_all).float().to(device)
         K = torch.from_numpy(list(self.parser.Ks_dict.values())[0]).float().to(device)
         width, height = list(self.parser.imsize_dict.values())[0]
 
         canvas_all = []
-        for i in tqdm.trange(len(camtoworlds), desc="Rendering trajectory"):
+        for i in tqdm.trange(len(camtoworlds_all), desc="Rendering trajectory"):
+            camtoworlds = camtoworlds_all[i : i + 1]
+            Ks = K[None]
+
             renders, _, _ = self.rasterize_splats(
-                camtoworlds=camtoworlds[i : i + 1],
-                Ks=K[None],
+                camtoworlds=camtoworlds,
+                Ks=Ks,
                 width=width,
                 height=height,
                 sh_degree=cfg.sh_degree,
