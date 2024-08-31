@@ -49,6 +49,7 @@ def rasterization(
     channel_chunk: int = 32,
     distributed: bool = False,
     ortho: bool = False,
+    covars: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -177,6 +178,8 @@ def rasterization(
             the function will collaboratively render the images for all ranks.
         ortho: Whether to use orthographic projection. In such case fx and fy become the scaling
             factors to convert projected coordinates into pixel space and cx, cy become offsets.
+        covars: Optional covariance matrices of the Gaussians. If provided, the `quats` and
+            `scales` will be ignored. [N, 3, 3], Default is None.
 
     Returns:
         A tuple:
@@ -223,8 +226,15 @@ def rasterization(
     C = viewmats.shape[0]
     device = means.device
     assert means.shape == (N, 3), means.shape
-    assert quats.shape == (N, 4), quats.shape
-    assert scales.shape == (N, 3), scales.shape
+    if covars is None:
+        assert quats.shape == (N, 4), quats.shape
+        assert scales.shape == (N, 3), scales.shape
+    else:
+        assert covars.shape == (N, 3, 3), covars.shape
+        quats, scales = None, None
+        # convert covars from 3x3 matrix to upper-triangular 6D vector
+        tri_indices = ([0, 0, 0, 1, 1, 2], [0, 1, 2, 1, 2, 2])
+        covars = covars[..., tri_indices[0], tri_indices[1]]
     assert opacities.shape == (N,), opacities.shape
     assert viewmats.shape == (C, 4, 4), viewmats.shape
     assert Ks.shape == (C, 3, 3), Ks.shape
@@ -276,7 +286,7 @@ def rasterization(
     # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
     proj_results = fully_fused_projection(
         means,
-        None,  # covars,
+        covars,
         quats,
         scales,
         viewmats,
