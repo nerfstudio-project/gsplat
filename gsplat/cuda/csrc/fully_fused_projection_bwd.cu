@@ -8,8 +8,9 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
-namespace cg = cooperative_groups;
+namespace gsplat {
 
+namespace cg = cooperative_groups;
 
 /****************************************************************************
  * Projection of Gaussians (Single Batch) Backward Pass
@@ -18,16 +19,20 @@ namespace cg = cooperative_groups;
 template <typename T>
 __global__ void fully_fused_projection_bwd_kernel(
     // fwd inputs
-    const uint32_t C, const uint32_t N,
+    const uint32_t C,
+    const uint32_t N,
     const T *__restrict__ means,    // [N, 3]
     const T *__restrict__ covars,   // [N, 6] optional
     const T *__restrict__ quats,    // [N, 4] optional
     const T *__restrict__ scales,   // [N, 3] optional
     const T *__restrict__ viewmats, // [C, 4, 4]
     const T *__restrict__ Ks,       // [C, 3, 3]
-    const int32_t image_width, const int32_t image_height, const T eps2d,
+    const int32_t image_width,
+    const int32_t image_height,
+    const T eps2d,
+    const bool ortho,
     // fwd outputs
-    const int32_t *__restrict__ radii,       // [C, N]
+    const int32_t *__restrict__ radii,   // [C, N]
     const T *__restrict__ conics,        // [C, N, 3]
     const T *__restrict__ compensations, // [C, N] optional
     // grad outputs
@@ -72,13 +77,22 @@ __global__ void fully_fused_projection_bwd_kernel(
         // vjp: compensation term
         const T compensation = compensations[idx];
         const T v_compensation = v_compensations[idx];
-        add_blur_vjp(eps2d, covar2d_inv, compensation, v_compensation, v_covar2d);
+        add_blur_vjp(
+            eps2d, covar2d_inv, compensation, v_compensation, v_covar2d
+        );
     }
 
     // transform Gaussian to camera space
-    mat3<T> R = mat3<T>(viewmats[0], viewmats[4], viewmats[8], // 1st column
-                        viewmats[1], viewmats[5], viewmats[9], // 2nd column
-                        viewmats[2], viewmats[6], viewmats[10] // 3rd column
+    mat3<T> R = mat3<T>(
+        viewmats[0],
+        viewmats[4],
+        viewmats[8], // 1st column
+        viewmats[1],
+        viewmats[5],
+        viewmats[9], // 2nd column
+        viewmats[2],
+        viewmats[6],
+        viewmats[10] // 3rd column
     );
     vec3<T> t = vec3<T>(viewmats[3], viewmats[7], viewmats[11]);
 
@@ -87,9 +101,16 @@ __global__ void fully_fused_projection_bwd_kernel(
     vec3<T> scale;
     if (covars != nullptr) {
         covars += gid * 6;
-        covar = mat3<T>(covars[0], covars[1], covars[2], // 1st column
-                        covars[1], covars[3], covars[4], // 2nd column
-                        covars[2], covars[4], covars[5]  // 3rd column
+        covar = mat3<T>(
+            covars[0],
+            covars[1],
+            covars[2], // 1st column
+            covars[1],
+            covars[3],
+            covars[4], // 2nd column
+            covars[2],
+            covars[4],
+            covars[5] // 3rd column
         );
     } else {
         // compute from quaternions and scales
@@ -106,8 +127,38 @@ __global__ void fully_fused_projection_bwd_kernel(
     T fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
     mat3<T> v_covar_c(0.f);
     vec3<T> v_mean_c(0.f);
-    persp_proj_vjp<T>(mean_c, covar_c, fx, fy, cx, cy, image_width, image_height,
-                   v_covar2d, glm::make_vec2(v_means2d), v_mean_c, v_covar_c);
+
+    if (ortho){
+        ortho_proj_vjp<T>(
+            mean_c,
+            covar_c,
+            fx,
+            fy,
+            cx,
+            cy,
+            image_width,
+            image_height,
+            v_covar2d,
+            glm::make_vec2(v_means2d),
+            v_mean_c,
+            v_covar_c
+        );
+    } else {
+        persp_proj_vjp<T>(
+            mean_c,
+            covar_c,
+            fx,
+            fy,
+            cx,
+            cy,
+            image_width,
+            image_height,
+            v_covar2d,
+            glm::make_vec2(v_means2d),
+            v_mean_c,
+            v_covar_c
+        );
+    }
 
     // add contribution from v_depths
     v_mean_c.z += v_depths[0];
@@ -117,7 +168,9 @@ __global__ void fully_fused_projection_bwd_kernel(
     mat3<T> v_covar(0.f);
     mat3<T> v_R(0.f);
     vec3<T> v_t(0.f);
-    pos_world_to_cam_vjp(R, t, glm::make_vec3(means), v_mean_c, v_R, v_t, v_mean);
+    pos_world_to_cam_vjp(
+        R, t, glm::make_vec3(means), v_mean_c, v_R, v_t, v_mean
+    );
     covar_world_to_cam_vjp(R, covar, v_covar_c, v_R, v_covar);
 
     // #if __CUDA_ARCH__ >= 700
@@ -128,7 +181,7 @@ __global__ void fully_fused_projection_bwd_kernel(
         warpSum(v_mean, warp_group_g);
         if (warp_group_g.thread_rank() == 0) {
             v_means += gid * 3;
-            PRAGMA_UNROLL
+            GSPLAT_PRAGMA_UNROLL
             for (uint32_t i = 0; i < 3; i++) {
                 gpuAtomicAdd(v_means + i, v_mean[i]);
             }
@@ -151,7 +204,9 @@ __global__ void fully_fused_projection_bwd_kernel(
         mat3<T> rotmat = quat_to_rotmat<T>(quat);
         vec4<T> v_quat(0.f);
         vec3<T> v_scale(0.f);
-        quat_scale_to_covar_vjp<T>(quat, scale, rotmat, v_covar, v_quat, v_scale);
+        quat_scale_to_covar_vjp<T>(
+            quat, scale, rotmat, v_covar, v_quat, v_scale
+        );
         warpSum(v_quat, warp_group_g);
         warpSum(v_scale, warp_group_g);
         if (warp_group_g.thread_rank() == 0) {
@@ -172,9 +227,9 @@ __global__ void fully_fused_projection_bwd_kernel(
         warpSum(v_t, warp_group_c);
         if (warp_group_c.thread_rank() == 0) {
             v_viewmats += cid * 16;
-            PRAGMA_UNROLL
+            GSPLAT_PRAGMA_UNROLL
             for (uint32_t i = 0; i < 3; i++) { // rows
-                PRAGMA_UNROLL
+                GSPLAT_PRAGMA_UNROLL
                 for (uint32_t j = 0; j < 3; j++) { // cols
                     gpuAtomicAdd(v_viewmats + i * 4 + j, v_R[j][i]);
                 }
@@ -184,7 +239,12 @@ __global__ void fully_fused_projection_bwd_kernel(
     }
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor>
 fully_fused_projection_bwd_tensor(
     // fwd inputs
     const torch::Tensor &means,                // [N, 3]
@@ -193,7 +253,10 @@ fully_fused_projection_bwd_tensor(
     const at::optional<torch::Tensor> &scales, // [N, 3] optional
     const torch::Tensor &viewmats,             // [C, 4, 4]
     const torch::Tensor &Ks,                   // [C, 3, 3]
-    const uint32_t image_width, const uint32_t image_height, const float eps2d,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float eps2d,
+    const bool ortho,
     // fwd outputs
     const torch::Tensor &radii,                       // [C, N]
     const torch::Tensor &conics,                      // [C, N, 3]
@@ -203,28 +266,29 @@ fully_fused_projection_bwd_tensor(
     const torch::Tensor &v_depths,                      // [C, N]
     const torch::Tensor &v_conics,                      // [C, N, 3]
     const at::optional<torch::Tensor> &v_compensations, // [C, N] optional
-    const bool viewmats_requires_grad) {
-    DEVICE_GUARD(means);
-    CHECK_INPUT(means);
+    const bool viewmats_requires_grad
+) {
+    GSPLAT_DEVICE_GUARD(means);
+    GSPLAT_CHECK_INPUT(means);
     if (covars.has_value()) {
-        CHECK_INPUT(covars.value());
+        GSPLAT_CHECK_INPUT(covars.value());
     } else {
         assert(quats.has_value() && scales.has_value());
-        CHECK_INPUT(quats.value());
-        CHECK_INPUT(scales.value());
+        GSPLAT_CHECK_INPUT(quats.value());
+        GSPLAT_CHECK_INPUT(scales.value());
     }
-    CHECK_INPUT(viewmats);
-    CHECK_INPUT(Ks);
-    CHECK_INPUT(radii);
-    CHECK_INPUT(conics);
-    CHECK_INPUT(v_means2d);
-    CHECK_INPUT(v_depths);
-    CHECK_INPUT(v_conics);
+    GSPLAT_CHECK_INPUT(viewmats);
+    GSPLAT_CHECK_INPUT(Ks);
+    GSPLAT_CHECK_INPUT(radii);
+    GSPLAT_CHECK_INPUT(conics);
+    GSPLAT_CHECK_INPUT(v_means2d);
+    GSPLAT_CHECK_INPUT(v_depths);
+    GSPLAT_CHECK_INPUT(v_conics);
     if (compensations.has_value()) {
-        CHECK_INPUT(compensations.value());
+        GSPLAT_CHECK_INPUT(compensations.value());
     }
     if (v_compensations.has_value()) {
-        CHECK_INPUT(v_compensations.value());
+        GSPLAT_CHECK_INPUT(v_compensations.value());
         assert(compensations.has_value());
     }
 
@@ -245,24 +309,42 @@ fully_fused_projection_bwd_tensor(
         v_viewmats = torch::zeros_like(viewmats);
     }
     if (C && N) {
-        fully_fused_projection_bwd_kernel<float><<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
-            C, N, means.data_ptr<float>(),
-            covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
-            covars.has_value() ? nullptr : quats.value().data_ptr<float>(),
-            covars.has_value() ? nullptr : scales.value().data_ptr<float>(),
-            viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
-            eps2d, radii.data_ptr<int32_t>(), conics.data_ptr<float>(),
-            compensations.has_value() ? compensations.value().data_ptr<float>()
-                                      : nullptr,
-            v_means2d.data_ptr<float>(), v_depths.data_ptr<float>(),
-            v_conics.data_ptr<float>(),
-            v_compensations.has_value() ? v_compensations.value().data_ptr<float>()
-                                        : nullptr,
-            v_means.data_ptr<float>(),
-            covars.has_value() ? v_covars.data_ptr<float>() : nullptr,
-            covars.has_value() ? nullptr : v_quats.data_ptr<float>(),
-            covars.has_value() ? nullptr : v_scales.data_ptr<float>(),
-            viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr);
+        fully_fused_projection_bwd_kernel<float>
+            <<<(C * N + GSPLAT_N_THREADS - 1) / GSPLAT_N_THREADS,
+               GSPLAT_N_THREADS,
+               0,
+               stream>>>(
+                C,
+                N,
+                means.data_ptr<float>(),
+                covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
+                covars.has_value() ? nullptr : quats.value().data_ptr<float>(),
+                covars.has_value() ? nullptr : scales.value().data_ptr<float>(),
+                viewmats.data_ptr<float>(),
+                Ks.data_ptr<float>(),
+                image_width,
+                image_height,
+                eps2d,
+                ortho,
+                radii.data_ptr<int32_t>(),
+                conics.data_ptr<float>(),
+                compensations.has_value()
+                    ? compensations.value().data_ptr<float>()
+                    : nullptr,
+                v_means2d.data_ptr<float>(),
+                v_depths.data_ptr<float>(),
+                v_conics.data_ptr<float>(),
+                v_compensations.has_value()
+                    ? v_compensations.value().data_ptr<float>()
+                    : nullptr,
+                v_means.data_ptr<float>(),
+                covars.has_value() ? v_covars.data_ptr<float>() : nullptr,
+                covars.has_value() ? nullptr : v_quats.data_ptr<float>(),
+                covars.has_value() ? nullptr : v_scales.data_ptr<float>(),
+                viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr
+            );
     }
     return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats);
 }
+
+} // namespace gsplat

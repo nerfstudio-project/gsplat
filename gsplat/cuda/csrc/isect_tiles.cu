@@ -5,6 +5,8 @@
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>
 
+namespace gsplat {
+
 namespace cg = cooperative_groups;
 
 /****************************************************************************
@@ -16,17 +18,20 @@ __global__ void isect_tiles(
     // if the data is [C, N, ...] or [nnz, ...] (packed)
     const bool packed,
     // parallelize over C * N, only used if packed is False
-    const uint32_t C, const uint32_t N,
+    const uint32_t C,
+    const uint32_t N,
     // parallelize over nnz, only used if packed is True
     const uint32_t nnz,
     const int64_t *__restrict__ camera_ids,   // [nnz] optional
     const int64_t *__restrict__ gaussian_ids, // [nnz] optional
     // data
-    const T *__restrict__ means2d,             // [C, N, 2] or [nnz, 2]
+    const T *__restrict__ means2d,                   // [C, N, 2] or [nnz, 2]
     const int32_t *__restrict__ radii,               // [C, N] or [nnz]
     const T *__restrict__ depths,                    // [C, N] or [nnz]
     const int64_t *__restrict__ cum_tiles_per_gauss, // [C, N] or [nnz]
-    const uint32_t tile_size, const uint32_t tile_width, const uint32_t tile_height,
+    const uint32_t tile_size,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
     const uint32_t tile_n_bits,
     int32_t *__restrict__ tiles_per_gauss, // [C, N] or [nnz]
     int64_t *__restrict__ isect_ids,       // [n_isects]
@@ -34,14 +39,14 @@ __global__ void isect_tiles(
 ) {
     // For now we'll upcast float16 and bfloat16 to float32
     using OpT = typename OpType<T>::type;
-    
+
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
     bool first_pass = cum_tiles_per_gauss == nullptr;
     if (idx >= (packed ? nnz : C * N)) {
         return;
     }
-    
+
     const OpT radius = radii[idx];
     if (radius <= 0) {
         if (first_pass) {
@@ -50,7 +55,7 @@ __global__ void isect_tiles(
         return;
     }
 
-    vec2<OpT> mean2d = glm::make_vec2(means2d + 2*idx);
+    vec2<OpT> mean2d = glm::make_vec2(means2d + 2 * idx);
 
     OpT tile_radius = radius / static_cast<OpT>(tile_size);
     OpT tile_x = mean2d.x / static_cast<OpT>(tile_size);
@@ -59,14 +64,16 @@ __global__ void isect_tiles(
     // tile_min is inclusive, tile_max is exclusive
     uint2 tile_min, tile_max;
     tile_min.x = min(max(0, (uint32_t)floor(tile_x - tile_radius)), tile_width);
-    tile_min.y = min(max(0, (uint32_t)floor(tile_y - tile_radius)), tile_height);
+    tile_min.y =
+        min(max(0, (uint32_t)floor(tile_y - tile_radius)), tile_height);
     tile_max.x = min(max(0, (uint32_t)ceil(tile_x + tile_radius)), tile_width);
     tile_max.y = min(max(0, (uint32_t)ceil(tile_y + tile_radius)), tile_height);
 
     if (first_pass) {
         // first pass only writes out tiles_per_gauss
-        tiles_per_gauss[idx] =
-            static_cast<int32_t>((tile_max.y - tile_min.y) * (tile_max.x - tile_min.x));
+        tiles_per_gauss[idx] = static_cast<int32_t>(
+            (tile_max.y - tile_min.y) * (tile_max.x - tile_min.x)
+        );
         return;
     }
 
@@ -97,24 +104,28 @@ __global__ void isect_tiles(
     }
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-isect_tiles_tensor(const torch::Tensor &means2d, // [C, N, 2] or [nnz, 2]
-                   const torch::Tensor &radii,   // [C, N] or [nnz]
-                   const torch::Tensor &depths,  // [C, N] or [nnz]
-                   const at::optional<torch::Tensor> &camera_ids,   // [nnz]
-                   const at::optional<torch::Tensor> &gaussian_ids, // [nnz]
-                   const uint32_t C, const uint32_t tile_size,
-                   const uint32_t tile_width, const uint32_t tile_height,
-                   const bool sort, const bool double_buffer) {
-    DEVICE_GUARD(means2d);
-    CHECK_INPUT(means2d);
-    CHECK_INPUT(radii);
-    CHECK_INPUT(depths);
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
+    const torch::Tensor &means2d,                    // [C, N, 2] or [nnz, 2]
+    const torch::Tensor &radii,                      // [C, N] or [nnz]
+    const torch::Tensor &depths,                     // [C, N] or [nnz]
+    const at::optional<torch::Tensor> &camera_ids,   // [nnz]
+    const at::optional<torch::Tensor> &gaussian_ids, // [nnz]
+    const uint32_t C,
+    const uint32_t tile_size,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
+    const bool sort,
+    const bool double_buffer
+) {
+    GSPLAT_DEVICE_GUARD(means2d);
+    GSPLAT_CHECK_INPUT(means2d);
+    GSPLAT_CHECK_INPUT(radii);
+    GSPLAT_CHECK_INPUT(depths);
     if (camera_ids.has_value()) {
-        CHECK_INPUT(camera_ids.value());
+        GSPLAT_CHECK_INPUT(camera_ids.value());
     }
     if (gaussian_ids.has_value()) {
-        CHECK_INPUT(gaussian_ids.value());
+        GSPLAT_CHECK_INPUT(gaussian_ids.value());
     }
     bool packed = means2d.dim() == 2;
 
@@ -124,8 +135,10 @@ isect_tiles_tensor(const torch::Tensor &means2d, // [C, N, 2] or [nnz, 2]
     if (packed) {
         nnz = means2d.size(0);
         total_elems = nnz;
-        TORCH_CHECK(camera_ids.has_value() && gaussian_ids.has_value(), 
-                    "When packed is set, camera_ids and gaussian_ids must be provided.");
+        TORCH_CHECK(
+            camera_ids.has_value() && gaussian_ids.has_value(),
+            "When packed is set, camera_ids and gaussian_ids must be provided."
+        );
         camera_ids_ptr = camera_ids.value().data_ptr<int64_t>();
         gaussian_ids_ptr = gaussian_ids.value().data_ptr<int64_t>();
     } else {
@@ -153,15 +166,37 @@ isect_tiles_tensor(const torch::Tensor &means2d, // [C, N, 2] or [nnz, 2]
     int64_t n_isects;
     torch::Tensor cum_tiles_per_gauss;
     if (total_elems) {
-        AT_DISPATCH_FLOATING_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16, means2d.scalar_type(), "isect_tiles_total_elems", [&]() {
-            isect_tiles<<<(total_elems + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
-                        stream>>>(
-                packed, C, N, nnz, camera_ids_ptr, gaussian_ids_ptr,
-                reinterpret_cast<scalar_t*>(means2d.data_ptr<scalar_t>()),
-                radii.data_ptr<int32_t>(), depths.data_ptr<scalar_t>(), nullptr, tile_size,
-                tile_width, tile_height, tile_n_bits, tiles_per_gauss.data_ptr<int32_t>(),
-                nullptr, nullptr);
-        });
+        AT_DISPATCH_FLOATING_TYPES_AND2(
+            at::ScalarType::Half,
+            at::ScalarType::BFloat16,
+            means2d.scalar_type(),
+            "isect_tiles_total_elems",
+            [&]() {
+                isect_tiles<<<
+                    (total_elems + GSPLAT_N_THREADS - 1) / GSPLAT_N_THREADS,
+                    GSPLAT_N_THREADS,
+                    0,
+                    stream>>>(
+                    packed,
+                    C,
+                    N,
+                    nnz,
+                    camera_ids_ptr,
+                    gaussian_ids_ptr,
+                    reinterpret_cast<scalar_t *>(means2d.data_ptr<scalar_t>()),
+                    radii.data_ptr<int32_t>(),
+                    depths.data_ptr<scalar_t>(),
+                    nullptr,
+                    tile_size,
+                    tile_width,
+                    tile_height,
+                    tile_n_bits,
+                    tiles_per_gauss.data_ptr<int32_t>(),
+                    nullptr,
+                    nullptr
+                );
+            }
+        );
         cum_tiles_per_gauss = torch::cumsum(tiles_per_gauss.view({-1}), 0);
         n_isects = cum_tiles_per_gauss[-1].item<int64_t>();
     } else {
@@ -174,16 +209,37 @@ isect_tiles_tensor(const torch::Tensor &means2d, // [C, N, 2] or [nnz, 2]
     torch::Tensor flatten_ids =
         torch::empty({n_isects}, depths.options().dtype(torch::kInt32));
     if (n_isects) {
-        AT_DISPATCH_FLOATING_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16, means2d.scalar_type(), "isect_tiles_n_isects", [&]() {
-            isect_tiles<<<(total_elems + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
-                        stream>>>(
-                packed, C, N, nnz, camera_ids_ptr, gaussian_ids_ptr,
-                reinterpret_cast<scalar_t*>(means2d.data_ptr<scalar_t>()),
-                radii.data_ptr<int32_t>(), depths.data_ptr<scalar_t>(),
-                cum_tiles_per_gauss.data_ptr<int64_t>(), tile_size, tile_width, tile_height,
-                tile_n_bits, nullptr, isect_ids.data_ptr<int64_t>(),
-                flatten_ids.data_ptr<int32_t>());
-        });
+        AT_DISPATCH_FLOATING_TYPES_AND2(
+            at::ScalarType::Half,
+            at::ScalarType::BFloat16,
+            means2d.scalar_type(),
+            "isect_tiles_n_isects",
+            [&]() {
+                isect_tiles<<<
+                    (total_elems + GSPLAT_N_THREADS - 1) / GSPLAT_N_THREADS,
+                    GSPLAT_N_THREADS,
+                    0,
+                    stream>>>(
+                    packed,
+                    C,
+                    N,
+                    nnz,
+                    camera_ids_ptr,
+                    gaussian_ids_ptr,
+                    reinterpret_cast<scalar_t *>(means2d.data_ptr<scalar_t>()),
+                    radii.data_ptr<int32_t>(),
+                    depths.data_ptr<scalar_t>(),
+                    cum_tiles_per_gauss.data_ptr<int64_t>(),
+                    tile_size,
+                    tile_width,
+                    tile_height,
+                    tile_n_bits,
+                    nullptr,
+                    isect_ids.data_ptr<int64_t>(),
+                    flatten_ids.data_ptr<int32_t>()
+                );
+            }
+        );
     }
 
     // optionally sort the Gaussians by isect_ids
@@ -195,12 +251,23 @@ isect_tiles_tensor(const torch::Tensor &means2d, // [C, N, 2] or [nnz, 2]
         // DoubleBuffer reduce the auxiliary memory usage from O(N+P) to O(P)
         if (double_buffer) {
             // Create a set of DoubleBuffers to wrap pairs of device pointers
-            cub::DoubleBuffer<int64_t> d_keys(isect_ids.data_ptr<int64_t>(),
-                                              isect_ids_sorted.data_ptr<int64_t>());
-            cub::DoubleBuffer<int32_t> d_values(flatten_ids.data_ptr<int32_t>(),
-                                                flatten_ids_sorted.data_ptr<int32_t>());
-            CUB_WRAPPER(cub::DeviceRadixSort::SortPairs, d_keys, d_values, n_isects, 0,
-                        32 + tile_n_bits + cam_n_bits, stream);
+            cub::DoubleBuffer<int64_t> d_keys(
+                isect_ids.data_ptr<int64_t>(),
+                isect_ids_sorted.data_ptr<int64_t>()
+            );
+            cub::DoubleBuffer<int32_t> d_values(
+                flatten_ids.data_ptr<int32_t>(),
+                flatten_ids_sorted.data_ptr<int32_t>()
+            );
+            GSPLAT_CUB_WRAPPER(
+                cub::DeviceRadixSort::SortPairs,
+                d_keys,
+                d_values,
+                n_isects,
+                0,
+                32 + tile_n_bits + cam_n_bits,
+                stream
+            );
             switch (d_keys.selector) {
             case 0: // sorted items are stored in isect_ids
                 isect_ids_sorted = isect_ids;
@@ -219,23 +286,33 @@ isect_tiles_tensor(const torch::Tensor &means2d, // [C, N, 2] or [nnz, 2]
             // printf("DoubleBuffer d_values selector: %d\n",
             // d_values.selector);
         } else {
-            CUB_WRAPPER(cub::DeviceRadixSort::SortPairs, isect_ids.data_ptr<int64_t>(),
-                        isect_ids_sorted.data_ptr<int64_t>(),
-                        flatten_ids.data_ptr<int32_t>(),
-                        flatten_ids_sorted.data_ptr<int32_t>(), n_isects, 0,
-                        32 + tile_n_bits + cam_n_bits, stream);
+            GSPLAT_CUB_WRAPPER(
+                cub::DeviceRadixSort::SortPairs,
+                isect_ids.data_ptr<int64_t>(),
+                isect_ids_sorted.data_ptr<int64_t>(),
+                flatten_ids.data_ptr<int32_t>(),
+                flatten_ids_sorted.data_ptr<int32_t>(),
+                n_isects,
+                0,
+                32 + tile_n_bits + cam_n_bits,
+                stream
+            );
         }
-        return std::make_tuple(tiles_per_gauss, isect_ids_sorted, flatten_ids_sorted);
+        return std::make_tuple(
+            tiles_per_gauss, isect_ids_sorted, flatten_ids_sorted
+        );
     } else {
         return std::make_tuple(tiles_per_gauss, isect_ids, flatten_ids);
     }
 }
 
-__global__ void isect_offset_encode(const uint32_t n_isects,
-                                    const int64_t *__restrict__ isect_ids,
-                                    const uint32_t C, const uint32_t n_tiles,
-                                    const uint32_t tile_n_bits,
-                                    int32_t *__restrict__ offsets // [C, n_tiles]
+__global__ void isect_offset_encode(
+    const uint32_t n_isects,
+    const int64_t *__restrict__ isect_ids,
+    const uint32_t C,
+    const uint32_t n_tiles,
+    const uint32_t tile_n_bits,
+    int32_t *__restrict__ offsets // [C, n_tiles]
 ) {
     // e.g., ids: [1, 1, 1, 3, 3], n_tiles = 6
     // counts: [0, 3, 0, 2, 0, 0]
@@ -277,25 +354,39 @@ __global__ void isect_offset_encode(const uint32_t n_isects,
     }
 }
 
-torch::Tensor isect_offset_encode_tensor(const torch::Tensor &isect_ids, // [n_isects]
-                                         const uint32_t C, const uint32_t tile_width,
-                                         const uint32_t tile_height) {
-    DEVICE_GUARD(isect_ids);
-    CHECK_INPUT(isect_ids);
+torch::Tensor isect_offset_encode_tensor(
+    const torch::Tensor &isect_ids, // [n_isects]
+    const uint32_t C,
+    const uint32_t tile_width,
+    const uint32_t tile_height
+) {
+    GSPLAT_DEVICE_GUARD(isect_ids);
+    GSPLAT_CHECK_INPUT(isect_ids);
 
     uint32_t n_isects = isect_ids.size(0);
-    torch::Tensor offsets = torch::empty({C, tile_height, tile_width},
-                                         isect_ids.options().dtype(torch::kInt32));
+    torch::Tensor offsets = torch::empty(
+        {C, tile_height, tile_width}, isect_ids.options().dtype(torch::kInt32)
+    );
     if (n_isects) {
         uint32_t n_tiles = tile_width * tile_height;
         uint32_t tile_n_bits = (uint32_t)floor(log2(n_tiles)) + 1;
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
-        isect_offset_encode<<<(n_isects + N_THREADS - 1) / N_THREADS, N_THREADS, 0,
-                              stream>>>(n_isects, isect_ids.data_ptr<int64_t>(), C,
-                                        n_tiles, tile_n_bits,
-                                        offsets.data_ptr<int32_t>());
+        isect_offset_encode<<<
+            (n_isects + GSPLAT_N_THREADS - 1) / GSPLAT_N_THREADS,
+            GSPLAT_N_THREADS,
+            0,
+            stream>>>(
+            n_isects,
+            isect_ids.data_ptr<int64_t>(),
+            C,
+            n_tiles,
+            tile_n_bits,
+            offsets.data_ptr<int32_t>()
+        );
     } else {
         offsets.fill_(0);
     }
     return offsets;
 }
+
+} // namespace gsplat

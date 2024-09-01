@@ -8,8 +8,9 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
-namespace cg = cooperative_groups;
+namespace gsplat {
 
+namespace cg = cooperative_groups;
 
 /****************************************************************************
  * Projection of Gaussians (Batched) Backward Pass
@@ -18,19 +19,24 @@ namespace cg = cooperative_groups;
 template <typename T>
 __global__ void fully_fused_projection_packed_bwd_kernel(
     // fwd inputs
-    const uint32_t C, const uint32_t N, const uint32_t nnz,
+    const uint32_t C,
+    const uint32_t N,
+    const uint32_t nnz,
     const T *__restrict__ means,    // [N, 3]
     const T *__restrict__ covars,   // [N, 6] Optional
     const T *__restrict__ quats,    // [N, 4] Optional
     const T *__restrict__ scales,   // [N, 3] Optional
     const T *__restrict__ viewmats, // [C, 4, 4]
     const T *__restrict__ Ks,       // [C, 3, 3]
-    const int32_t image_width, const int32_t image_height, const T eps2d,
+    const int32_t image_width,
+    const int32_t image_height,
+    const T eps2d,
+    const bool ortho,
     // fwd outputs
     const int64_t *__restrict__ camera_ids,   // [nnz]
     const int64_t *__restrict__ gaussian_ids, // [nnz]
-    const T *__restrict__ conics,         // [nnz, 3]
-    const T *__restrict__ compensations,  // [nnz] optional
+    const T *__restrict__ conics,             // [nnz, 3]
+    const T *__restrict__ compensations,      // [nnz] optional
     // grad outputs
     const T *__restrict__ v_means2d,       // [nnz, 2]
     const T *__restrict__ v_depths,        // [nnz]
@@ -74,13 +80,22 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
         // vjp: compensation term
         const T compensation = compensations[idx];
         const T v_compensation = v_compensations[idx];
-        add_blur_vjp(eps2d, covar2d_inv, compensation, v_compensation, v_covar2d);
+        add_blur_vjp(
+            eps2d, covar2d_inv, compensation, v_compensation, v_covar2d
+        );
     }
 
     // transform Gaussian to camera space
-    mat3<T> R = mat3<T>(viewmats[0], viewmats[4], viewmats[8], // 1st column
-                            viewmats[1], viewmats[5], viewmats[9], // 2nd column
-                            viewmats[2], viewmats[6], viewmats[10] // 3rd column
+    mat3<T> R = mat3<T>(
+        viewmats[0],
+        viewmats[4],
+        viewmats[8], // 1st column
+        viewmats[1],
+        viewmats[5],
+        viewmats[9], // 2nd column
+        viewmats[2],
+        viewmats[6],
+        viewmats[10] // 3rd column
     );
     vec3<T> t = vec3<T>(viewmats[3], viewmats[7], viewmats[11]);
     mat3<T> covar;
@@ -89,9 +104,16 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     if (covars != nullptr) {
         // if a precomputed covariance is provided
         covars += gid * 6;
-        covar = mat3<T>(covars[0], covars[1], covars[2], // 1st column
-                        covars[1], covars[3], covars[4], // 2nd column
-                        covars[2], covars[4], covars[5]  // 3rd column
+        covar = mat3<T>(
+            covars[0],
+            covars[1],
+            covars[2], // 1st column
+            covars[1],
+            covars[3],
+            covars[4], // 2nd column
+            covars[2],
+            covars[4],
+            covars[5] // 3rd column
         );
     } else {
         // if not then compute it from quaternions and scales
@@ -104,12 +126,42 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     mat3<T> covar_c;
     covar_world_to_cam(R, covar, covar_c);
 
-    // vjp: perspective projection
     T fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
     mat3<T> v_covar_c(0.f);
     vec3<T> v_mean_c(0.f);
-    persp_proj_vjp<T>(mean_c, covar_c, fx, fy, cx, cy, image_width, image_height,
-                          v_covar2d, glm::make_vec2(v_means2d), v_mean_c, v_covar_c);
+    if (ortho){
+        // vjp: orthographic projection
+        ortho_proj_vjp<T>(
+            mean_c,
+            covar_c,
+            fx,
+            fy,
+            cx,
+            cy,
+            image_width,
+            image_height,
+            v_covar2d,
+            glm::make_vec2(v_means2d),
+            v_mean_c,
+            v_covar_c
+        );
+    } else {
+        // vjp: perspective projection
+        persp_proj_vjp<T>(
+            mean_c,
+            covar_c,
+            fx,
+            fy,
+            cx,
+            cy,
+            image_width,
+            image_height,
+            v_covar2d,
+            glm::make_vec2(v_means2d),
+            v_mean_c,
+            v_covar_c
+        );
+    }
 
     // add contribution from v_depths
     v_mean_c.z += v_depths[0];
@@ -119,7 +171,9 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     mat3<T> v_covar(0.f);
     mat3<T> v_R(0.f);
     vec3<T> v_t(0.f);
-    pos_world_to_cam_vjp(R, t, glm::make_vec3(means), v_mean_c, v_R, v_t, v_mean);
+    pos_world_to_cam_vjp(
+        R, t, glm::make_vec3(means), v_mean_c, v_R, v_t, v_mean
+    );
     covar_world_to_cam_vjp(R, covar, v_covar_c, v_R, v_covar);
 
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
@@ -127,7 +181,7 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
         // write out results with sparse layout
         if (v_means != nullptr) {
             v_means += idx * 3;
-            PRAGMA_UNROLL
+            GSPLAT_PRAGMA_UNROLL
             for (uint32_t i = 0; i < 3; i++) {
                 v_means[i] = v_mean[i];
             }
@@ -144,7 +198,9 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
             mat3<T> rotmat = quat_to_rotmat<T>(quat);
             vec4<T> v_quat(0.f);
             vec3<T> v_scale(0.f);
-            quat_scale_to_covar_vjp<T>(quat, scale, rotmat, v_covar, v_quat, v_scale);
+            quat_scale_to_covar_vjp<T>(
+                quat, scale, rotmat, v_covar, v_quat, v_scale
+            );
             v_quats += idx * 4;
             v_scales += idx * 3;
             v_quats[0] = v_quat[0];
@@ -164,7 +220,7 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
             warpSum(v_mean, warp_group_g);
             if (warp_group_g.thread_rank() == 0) {
                 v_means += gid * 3;
-                PRAGMA_UNROLL
+                GSPLAT_PRAGMA_UNROLL
                 for (uint32_t i = 0; i < 3; i++) {
                     gpuAtomicAdd(v_means + i, v_mean[i]);
                 }
@@ -187,7 +243,9 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
             mat3<T> rotmat = quat_to_rotmat<T>(quat);
             vec4<T> v_quat(0.f);
             vec3<T> v_scale(0.f);
-            quat_scale_to_covar_vjp<T>(quat, scale, rotmat, v_covar, v_quat, v_scale);
+            quat_scale_to_covar_vjp<T>(
+                quat, scale, rotmat, v_covar, v_quat, v_scale
+            );
             warpSum(v_quat, warp_group_g);
             warpSum(v_scale, warp_group_g);
             if (warp_group_g.thread_rank() == 0) {
@@ -210,9 +268,9 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
         warpSum(v_t, warp_group_c);
         if (warp_group_c.thread_rank() == 0) {
             v_viewmats += cid * 16;
-            PRAGMA_UNROLL
+            GSPLAT_PRAGMA_UNROLL
             for (uint32_t i = 0; i < 3; i++) { // rows
-                PRAGMA_UNROLL
+                GSPLAT_PRAGMA_UNROLL
                 for (uint32_t j = 0; j < 3; j++) { // cols
                     gpuAtomicAdd(v_viewmats + i * 4 + j, v_R[j][i]);
                 }
@@ -222,7 +280,12 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     }
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor>
 fully_fused_projection_packed_bwd_tensor(
     // fwd inputs
     const torch::Tensor &means,                // [N, 3]
@@ -231,7 +294,10 @@ fully_fused_projection_packed_bwd_tensor(
     const at::optional<torch::Tensor> &scales, // [N, 3]
     const torch::Tensor &viewmats,             // [C, 4, 4]
     const torch::Tensor &Ks,                   // [C, 3, 3]
-    const uint32_t image_width, const uint32_t image_height, const float eps2d,
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float eps2d,
+    const bool ortho,
     // fwd outputs
     const torch::Tensor &camera_ids,                  // [nnz]
     const torch::Tensor &gaussian_ids,                // [nnz]
@@ -242,29 +308,31 @@ fully_fused_projection_packed_bwd_tensor(
     const torch::Tensor &v_depths,                      // [nnz]
     const torch::Tensor &v_conics,                      // [nnz, 3]
     const at::optional<torch::Tensor> &v_compensations, // [nnz] optional
-    const bool viewmats_requires_grad, const bool sparse_grad) {
-    DEVICE_GUARD(means);
-    CHECK_INPUT(means);
+    const bool viewmats_requires_grad,
+    const bool sparse_grad
+) {
+    GSPLAT_DEVICE_GUARD(means);
+    GSPLAT_CHECK_INPUT(means);
     if (covars.has_value()) {
-        CHECK_INPUT(covars.value());
+        GSPLAT_CHECK_INPUT(covars.value());
     } else {
         assert(quats.has_value() && scales.has_value());
-        CHECK_INPUT(quats.value());
-        CHECK_INPUT(scales.value());
+        GSPLAT_CHECK_INPUT(quats.value());
+        GSPLAT_CHECK_INPUT(scales.value());
     }
-    CHECK_INPUT(viewmats);
-    CHECK_INPUT(Ks);
-    CHECK_INPUT(camera_ids);
-    CHECK_INPUT(gaussian_ids);
-    CHECK_INPUT(conics);
-    CHECK_INPUT(v_means2d);
-    CHECK_INPUT(v_depths);
-    CHECK_INPUT(v_conics);
+    GSPLAT_CHECK_INPUT(viewmats);
+    GSPLAT_CHECK_INPUT(Ks);
+    GSPLAT_CHECK_INPUT(camera_ids);
+    GSPLAT_CHECK_INPUT(gaussian_ids);
+    GSPLAT_CHECK_INPUT(conics);
+    GSPLAT_CHECK_INPUT(v_means2d);
+    GSPLAT_CHECK_INPUT(v_depths);
+    GSPLAT_CHECK_INPUT(v_conics);
     if (compensations.has_value()) {
-        CHECK_INPUT(compensations.value());
+        GSPLAT_CHECK_INPUT(compensations.value());
     }
     if (v_compensations.has_value()) {
-        CHECK_INPUT(v_compensations.value());
+        GSPLAT_CHECK_INPUT(v_compensations.value());
         assert(compensations.has_value());
     }
 
@@ -298,25 +366,45 @@ fully_fused_projection_packed_bwd_tensor(
         }
     }
     if (nnz) {
-        fully_fused_projection_packed_bwd_kernel<float><<<(nnz + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
-            C, N, nnz, means.data_ptr<float>(),
-            covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
-            covars.has_value() ? nullptr : quats.value().data_ptr<float>(),
-            covars.has_value() ? nullptr : scales.value().data_ptr<float>(),
-            viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
-            eps2d, camera_ids.data_ptr<int64_t>(), gaussian_ids.data_ptr<int64_t>(),
-            conics.data_ptr<float>(),
-            compensations.has_value() ? compensations.value().data_ptr<float>()
-                                      : nullptr,
-            v_means2d.data_ptr<float>(), v_depths.data_ptr<float>(),
-            v_conics.data_ptr<float>(),
-            v_compensations.has_value() ? v_compensations.value().data_ptr<float>()
-                                        : nullptr,
-            sparse_grad, v_means.data_ptr<float>(),
-            covars.has_value() ? v_covars.data_ptr<float>() : nullptr,
-            covars.has_value() ? nullptr : v_quats.data_ptr<float>(),
-            covars.has_value() ? nullptr : v_scales.data_ptr<float>(),
-            viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr);
+        fully_fused_projection_packed_bwd_kernel<float>
+            <<<(nnz + GSPLAT_N_THREADS - 1) / GSPLAT_N_THREADS,
+               GSPLAT_N_THREADS,
+               0,
+               stream>>>(
+                C,
+                N,
+                nnz,
+                means.data_ptr<float>(),
+                covars.has_value() ? covars.value().data_ptr<float>() : nullptr,
+                covars.has_value() ? nullptr : quats.value().data_ptr<float>(),
+                covars.has_value() ? nullptr : scales.value().data_ptr<float>(),
+                viewmats.data_ptr<float>(),
+                Ks.data_ptr<float>(),
+                image_width,
+                image_height,
+                eps2d,
+                ortho,
+                camera_ids.data_ptr<int64_t>(),
+                gaussian_ids.data_ptr<int64_t>(),
+                conics.data_ptr<float>(),
+                compensations.has_value()
+                    ? compensations.value().data_ptr<float>()
+                    : nullptr,
+                v_means2d.data_ptr<float>(),
+                v_depths.data_ptr<float>(),
+                v_conics.data_ptr<float>(),
+                v_compensations.has_value()
+                    ? v_compensations.value().data_ptr<float>()
+                    : nullptr,
+                sparse_grad,
+                v_means.data_ptr<float>(),
+                covars.has_value() ? v_covars.data_ptr<float>() : nullptr,
+                covars.has_value() ? nullptr : v_quats.data_ptr<float>(),
+                covars.has_value() ? nullptr : v_scales.data_ptr<float>(),
+                viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr
+            );
     }
     return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats);
 }
+
+} // namespace gsplat

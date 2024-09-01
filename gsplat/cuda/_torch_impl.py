@@ -61,7 +61,7 @@ def _persp_proj(
     width: int,
     height: int,
 ) -> Tuple[Tensor, Tensor]:
-    """PyTorch implementation of prespective projection for 3D Gaussians.
+    """PyTorch implementation of perspective projection for 3D Gaussians.
 
     Args:
         means: Gaussian means in camera coordinate system. [C, N, 3].
@@ -83,13 +83,17 @@ def _persp_proj(
 
     fx = Ks[..., 0, 0, None]  # [C, 1]
     fy = Ks[..., 1, 1, None]  # [C, 1]
+    cx = Ks[..., 0, 2, None]  # [C, 1]
+    cy = Ks[..., 1, 2, None]  # [C, 1]
     tan_fovx = 0.5 * width / fx  # [C, 1]
     tan_fovy = 0.5 * height / fy  # [C, 1]
 
-    lim_x = 1.3 * tan_fovx
-    lim_y = 1.3 * tan_fovy
-    tx = tz * torch.clamp(tx / tz, min=-lim_x, max=lim_x)
-    ty = tz * torch.clamp(ty / tz, min=-lim_y, max=lim_y)
+    lim_x_pos = (width - cx) / fx + 0.3 * tan_fovx
+    lim_x_neg = cx / fx + 0.3 * tan_fovx
+    lim_y_pos = (height - cy) / fy + 0.3 * tan_fovy
+    lim_y_neg = cy / fy + 0.3 * tan_fovy
+    tx = tz * torch.clamp(tx / tz, min=-lim_x_neg, max=lim_x_pos)
+    ty = tz * torch.clamp(ty / tz, min=-lim_y_neg, max=lim_y_pos)
 
     O = torch.zeros((C, N), device=means.device, dtype=means.dtype)
     J = torch.stack(
@@ -99,6 +103,43 @@ def _persp_proj(
     cov2d = torch.einsum("...ij,...jk,...kl->...il", J, covars, J.transpose(-1, -2))
     means2d = torch.einsum("cij,cnj->cni", Ks[:, :2, :3], means)  # [C, N, 2]
     means2d = means2d / tz[..., None]  # [C, N, 2]
+    return means2d, cov2d  # [C, N, 2], [C, N, 2, 2]
+
+
+def _ortho_proj(
+    means: Tensor,  # [C, N, 3]
+    covars: Tensor,  # [C, N, 3, 3]
+    Ks: Tensor,  # [C, 3, 3]
+    width: int,
+    height: int,
+) -> Tuple[Tensor, Tensor]:
+    """PyTorch implementation of orthographic projection for 3D Gaussians.
+
+    Args:
+        means: Gaussian means in camera coordinate system. [C, N, 3].
+        covars: Gaussian covariances in camera coordinate system. [C, N, 3, 3].
+        Ks: Camera intrinsics. [C, 3, 3].
+        width: Image width.
+        height: Image height.
+
+    Returns:
+        A tuple:
+
+        - **means2d**: Projected means. [C, N, 2].
+        - **cov2d**: Projected covariances. [C, N, 2, 2].
+    """
+    C, N, _ = means.shape
+
+    fx = Ks[..., 0, 0, None]  # [C, 1]
+    fy = Ks[..., 1, 1, None]  # [C, 1]
+
+    O = torch.zeros((C, 1), device=means.device, dtype=means.dtype)
+    J = torch.stack([fx, O, O, O, fy, O], dim=-1).reshape(C, 1, 2, 3).repeat(1, N, 1, 1)
+
+    cov2d = torch.einsum("...ij,...jk,...kl->...il", J, covars, J.transpose(-1, -2))
+    means2d = (
+        means[..., :2] * Ks[:, None, [0, 1], [0, 1]] + Ks[:, None, [0, 1], [2, 2]]
+    )  # [C, N, 2]
     return means2d, cov2d  # [C, N, 2], [C, N, 2, 2]
 
 
@@ -138,6 +179,7 @@ def _fully_fused_projection(
     near_plane: float = 0.01,
     far_plane: float = 1e10,
     calc_compensations: bool = False,
+    ortho: bool = False,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Optional[Tensor]]:
     """PyTorch implementation of `gsplat.cuda._wrapper.fully_fused_projection()`
 
@@ -147,7 +189,12 @@ def _fully_fused_projection(
         arguments. Not all arguments are supported.
     """
     means_c, covars_c = _world_to_cam(means, covars, viewmats)
-    means2d, covars2d = _persp_proj(means_c, covars_c, Ks, width, height)
+
+    if ortho:
+        means2d, covars2d = _ortho_proj(means_c, covars_c, Ks, width, height)
+    else:
+        means2d, covars2d = _persp_proj(means_c, covars_c, Ks, width, height)
+
     det_orig = (
         covars2d[..., 0, 0] * covars2d[..., 1, 1]
         - covars2d[..., 0, 1] * covars2d[..., 1, 0]

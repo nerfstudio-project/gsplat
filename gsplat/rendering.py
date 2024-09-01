@@ -2,6 +2,7 @@ import math
 from typing import Dict, Optional, Tuple
 
 import torch
+import torch.distributed
 from torch import Tensor
 from typing_extensions import Literal
 
@@ -11,6 +12,12 @@ from .cuda._wrapper import (
     isect_tiles,
     rasterize_to_pixels,
     spherical_harmonics,
+)
+from .distributed import (
+    all_gather_int32,
+    all_gather_tensor_list,
+    all_to_all_int32,
+    all_to_all_tensor_list,
 )
 
 
@@ -37,12 +44,27 @@ def rasterization(
     absgrad: bool = False,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
     channel_chunk: int = 32,
+    distributed: bool = False,
+    ortho: bool = False,
+    covars: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
     This function provides a handful features for 3D Gaussian rasterization, which
     we detail in the following notes. A complete profiling of the these features
     can be found in the :ref:`profiling` page.
+
+    .. note::
+        **Multi-GPU Distributed Rasterization**: This function can be used in a multi-GPU
+        distributed scenario by setting `distributed` to True. When `distributed` is True,
+        a subset of total Gaussians could be passed into this function in each rank, and
+        the function will collaboratively render a set of images using Gaussians from all ranks. Note
+        to achieve balanced computation, it is recommended (not enforced) to have similar number of
+        Gaussians in each rank. But we do enforce that the number of cameras to be rendered
+        in each rank is the same. The function will return the rendered images
+        corresponds to the input cameras in each rank, and allows for gradients to flow back to the
+        Gaussians living in other ranks. For the details, please refer to the paper
+        `On Scaling Up 3D Gaussian Splatting Training <https://arxiv.org/abs/2406.18533>`_.
 
     .. note::
         **Batch Rasterization**: This function allows for rasterizing a set of 3D Gaussians
@@ -148,6 +170,13 @@ def rasterization(
         channel_chunk: The number of channels to render in one go. Default is 32.
             If the required rendering channels are larger than this value, the rendering
             will be done looply in chunks.
+        distributed: Whether to use distributed rendering. Default is False. If True,
+            The input Gaussians are expected to be a subset of scene in each rank, and
+            the function will collaboratively render the images for all ranks.
+        ortho: Whether to use orthographic projection. In such case fx and fy become the scaling
+            factors to convert projected coordinates into pixel space and cx, cy become offsets.
+        covars: Optional covariance matrices of the Gaussians. If provided, the `quats` and
+            `scales` will be ignored. [N, 3, 3], Default is None.
 
     Returns:
         A tuple:
@@ -188,12 +217,21 @@ def rasterization(
         'flatten_ids', 'isect_offsets', 'width', 'height', 'tile_size'])
 
     """
+    meta = {}
 
     N = means.shape[0]
     C = viewmats.shape[0]
+    device = means.device
     assert means.shape == (N, 3), means.shape
-    assert quats.shape == (N, 4), quats.shape
-    assert scales.shape == (N, 3), scales.shape
+    if covars is None:
+        assert quats.shape == (N, 4), quats.shape
+        assert scales.shape == (N, 3), scales.shape
+    else:
+        assert covars.shape == (N, 3, 3), covars.shape
+        quats, scales = None, None
+        # convert covars from 3x3 matrix to upper-triangular 6D vector
+        tri_indices = ([0, 0, 0, 1, 1, 2], [0, 1, 2, 1, 2, 2])
+        covars = covars[..., tri_indices[0], tri_indices[1]]
     assert opacities.shape == (N,), opacities.shape
     assert viewmats.shape == (C, 4, 4), viewmats.shape
     assert Ks.shape == (C, 3, 3), Ks.shape
@@ -204,6 +242,10 @@ def rasterization(
         assert (colors.dim() == 2 and colors.shape[0] == N) or (
             colors.dim() == 3 and colors.shape[:2] == (C, N)
         ), colors.shape
+        if distributed:
+            assert (
+                colors.dim() == 2
+            ), "Distributed mode only supports per-Gaussian colors."
     else:
         # treat colors as SH coefficients, should be in shape [N, K, 3] or [C, N, K, 3]
         # Allowing for activating partial SH bands
@@ -213,11 +255,35 @@ def rasterization(
             colors.dim() == 4 and colors.shape[:2] == (C, N) and colors.shape[3] == 3
         ), colors.shape
         assert (sh_degree + 1) ** 2 <= colors.shape[-2], colors.shape
+        if distributed:
+            assert (
+                colors.dim() == 3
+            ), "Distributed mode only supports per-Gaussian colors."
+
+    if absgrad:
+        assert not distributed, "AbsGrad is not supported in distributed mode."
+
+    # If in distributed mode, we distribute the projection computation over Gaussians
+    # and the rasterize computation over cameras. So first we gather the cameras
+    # from all ranks for projection.
+    if distributed:
+        world_rank = torch.distributed.get_rank()
+        world_size = torch.distributed.get_world_size()
+
+        # Gather the number of Gaussians in each rank.
+        N_world = all_gather_int32(world_size, N, device=device)
+
+        # Enforce that the number of cameras is the same across all ranks.
+        C_world = [C] * world_size
+        viewmats, Ks = all_gather_tensor_list(world_size, [viewmats, Ks])
+
+        # Silently change C from local #Cameras to global #Cameras.
+        C = len(viewmats)
 
     # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
     proj_results = fully_fused_projection(
         means,
-        None,  # covars,
+        covars,
         quats,
         scales,
         viewmats,
@@ -231,6 +297,7 @@ def rasterization(
         radius_clip=radius_clip,
         sparse_grad=sparse_grad,
         calc_compensations=(rasterize_mode == "antialiased"),
+        ortho=ortho,
     )
 
     if packed:
@@ -254,22 +321,19 @@ def rasterization(
     if compensations is not None:
         opacities = opacities * compensations
 
-    # Identify intersecting tiles
-    tile_width = math.ceil(width / float(tile_size))
-    tile_height = math.ceil(height / float(tile_size))
-    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
-        means2d,
-        radii,
-        depths,
-        tile_size,
-        tile_width,
-        tile_height,
-        packed=packed,
-        n_cameras=C,
-        camera_ids=camera_ids,
-        gaussian_ids=gaussian_ids,
+    meta.update(
+        {
+            # global camera_ids
+            "camera_ids": camera_ids,
+            # local gaussian_ids
+            "gaussian_ids": gaussian_ids,
+            "radii": radii,
+            "means2d": means2d,
+            "depths": depths,
+            "conics": conics,
+            "opacities": opacities,
+        }
     )
-    isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
 
     # Turn colors into [C, N, D] or [nnz, D] to pass into rasterize_to_pixels()
     if sh_degree is None:
@@ -305,7 +369,7 @@ def rasterization(
             dirs = means[None, :, :] - camtoworlds[:, None, :3, 3]  # [C, N, 3]
             masks = radii > 0  # [C, N]
             if colors.dim() == 3:
-                # Turn [N, K, 3] into [C, N, 3]
+                # Turn [N, K, 3] into [C, N, K, 3]
                 shs = colors.expand(C, -1, -1, -1)  # [C, N, K, 3]
             else:
                 # colors is already [C, N, K, 3]
@@ -313,6 +377,92 @@ def rasterization(
             colors = spherical_harmonics(sh_degree, dirs, shs, masks=masks)  # [C, N, 3]
         # make it apple-to-apple with Inria's CUDA Backend.
         colors = torch.clamp_min(colors + 0.5, 0.0)
+
+    # If in distributed mode, we need to scatter the GSs to the destination ranks, based
+    # on which cameras they are visible to, which we already figured out in the projection
+    # stage.
+    if distributed:
+        if packed:
+            # count how many elements need to be sent to each rank
+            cnts = torch.bincount(camera_ids, minlength=C)  # all cameras
+            cnts = cnts.split(C_world, dim=0)
+            cnts = [cuts.sum() for cuts in cnts]
+
+            # all to all communication across all ranks. After this step, each rank
+            # would have all the necessary GSs to render its own images.
+            collected_splits = all_to_all_int32(world_size, cnts, device=device)
+            (radii,) = all_to_all_tensor_list(
+                world_size, [radii], cnts, output_splits=collected_splits
+            )
+            (means2d, depths, conics, opacities, colors) = all_to_all_tensor_list(
+                world_size,
+                [means2d, depths, conics, opacities, colors],
+                cnts,
+                output_splits=collected_splits,
+            )
+
+            # before sending the data, we should turn the camera_ids from global to local.
+            # i.e. the camera_ids produced by the projection stage are over all cameras world-wide,
+            # so we need to turn them into camera_ids that are local to each rank.
+            offsets = torch.tensor(
+                [0] + C_world[:-1], device=camera_ids.device, dtype=camera_ids.dtype
+            )
+            offsets = torch.cumsum(offsets, dim=0)
+            offsets = offsets.repeat_interleave(torch.stack(cnts))
+            camera_ids = camera_ids - offsets
+
+            # and turn gaussian ids from local to global.
+            offsets = torch.tensor(
+                [0] + N_world[:-1],
+                device=gaussian_ids.device,
+                dtype=gaussian_ids.dtype,
+            )
+            offsets = torch.cumsum(offsets, dim=0)
+            offsets = offsets.repeat_interleave(torch.stack(cnts))
+            gaussian_ids = gaussian_ids + offsets
+
+            # all to all communication across all ranks.
+            (camera_ids, gaussian_ids) = all_to_all_tensor_list(
+                world_size,
+                [camera_ids, gaussian_ids],
+                cnts,
+                output_splits=collected_splits,
+            )
+
+            # Silently change C from global #Cameras to local #Cameras.
+            C = C_world[world_rank]
+
+        else:
+            # Silently change C from global #Cameras to local #Cameras.
+            C = C_world[world_rank]
+
+            # all to all communication across all ranks. After this step, each rank
+            # would have all the necessary GSs to render its own images.
+            (radii,) = all_to_all_tensor_list(
+                world_size,
+                [radii.flatten(0, 1)],
+                splits=[C_i * N for C_i in C_world],
+                output_splits=[C * N_i for N_i in N_world],
+            )
+            radii = radii.reshape(C, -1)
+
+            (means2d, depths, conics, opacities, colors) = all_to_all_tensor_list(
+                world_size,
+                [
+                    means2d.flatten(0, 1),
+                    depths.flatten(0, 1),
+                    conics.flatten(0, 1),
+                    opacities.flatten(0, 1),
+                    colors.flatten(0, 1),
+                ],
+                splits=[C_i * N for C_i in C_world],
+                output_splits=[C * N_i for N_i in N_world],
+            )
+            means2d = means2d.reshape(C, -1, 2)
+            depths = depths.reshape(C, -1)
+            conics = conics.reshape(C, -1, 3)
+            opacities = opacities.reshape(C, -1)
+            colors = colors.reshape(C, -1, colors.shape[-1])
 
     # Rasterize to pixels
     if render_mode in ["RGB+D", "RGB+ED"]:
@@ -327,6 +477,41 @@ def rasterization(
             backgrounds = torch.zeros(C, 1, device=backgrounds.device)
     else:  # RGB
         pass
+
+    # Identify intersecting tiles
+    tile_width = math.ceil(width / float(tile_size))
+    tile_height = math.ceil(height / float(tile_size))
+    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
+        means2d,
+        radii,
+        depths,
+        tile_size,
+        tile_width,
+        tile_height,
+        packed=packed,
+        n_cameras=C,
+        camera_ids=camera_ids,
+        gaussian_ids=gaussian_ids,
+    )
+    # print("rank", world_rank, "Before isect_offset_encode")
+    isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
+
+    meta.update(
+        {
+            "tile_width": tile_width,
+            "tile_height": tile_height,
+            "tiles_per_gauss": tiles_per_gauss,
+            "isect_ids": isect_ids,
+            "flatten_ids": flatten_ids,
+            "isect_offsets": isect_offsets,
+            "width": width,
+            "height": height,
+            "tile_size": tile_size,
+            "n_cameras": C,
+        }
+    )
+
+    # print("rank", world_rank, "Before rasterize_to_pixels")
     if colors.shape[-1] > channel_chunk:
         # slice into chunks
         n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk
@@ -381,25 +566,6 @@ def rasterization(
             dim=-1,
         )
 
-    meta = {
-        "camera_ids": camera_ids,
-        "gaussian_ids": gaussian_ids,
-        "radii": radii,
-        "means2d": means2d,
-        "depths": depths,
-        "conics": conics,
-        "opacities": opacities,
-        "tile_width": tile_width,
-        "tile_height": tile_height,
-        "tiles_per_gauss": tiles_per_gauss,
-        "isect_ids": isect_ids,
-        "flatten_ids": flatten_ids,
-        "isect_offsets": isect_offsets,
-        "width": width,
-        "height": height,
-        "tile_size": tile_size,
-        "n_cameras": C,
-    }
     return render_colors, render_alphas, meta
 
 
@@ -619,94 +785,94 @@ def _rasterization(
     return render_colors, render_alphas, meta
 
 
-def rasterization_legacy_wrapper(
-    means: Tensor,  # [N, 3]
-    quats: Tensor,  # [N, 4]
-    scales: Tensor,  # [N, 3]
-    opacities: Tensor,  # [N]
-    colors: Tensor,  # [N, D] or [N, K, 3]
-    viewmats: Tensor,  # [C, 4, 4]
-    Ks: Tensor,  # [C, 3, 3]
-    width: int,
-    height: int,
-    near_plane: float = 0.01,
-    eps2d: float = 0.3,
-    sh_degree: Optional[int] = None,
-    tile_size: int = 16,
-    backgrounds: Optional[Tensor] = None,
-    **kwargs,
-) -> Tuple[Tensor, Tensor, Dict]:
-    """Wrapper for old version gsplat.
+# def rasterization_legacy_wrapper(
+#     means: Tensor,  # [N, 3]
+#     quats: Tensor,  # [N, 4]
+#     scales: Tensor,  # [N, 3]
+#     opacities: Tensor,  # [N]
+#     colors: Tensor,  # [N, D] or [N, K, 3]
+#     viewmats: Tensor,  # [C, 4, 4]
+#     Ks: Tensor,  # [C, 3, 3]
+#     width: int,
+#     height: int,
+#     near_plane: float = 0.01,
+#     eps2d: float = 0.3,
+#     sh_degree: Optional[int] = None,
+#     tile_size: int = 16,
+#     backgrounds: Optional[Tensor] = None,
+#     **kwargs,
+# ) -> Tuple[Tensor, Tensor, Dict]:
+#     """Wrapper for old version gsplat.
 
-    .. warning::
-        This function exists for comparision purpose only. So we skip collecting
-        the intermidiate variables, and only return an empty dict.
+#     .. warning::
+#         This function exists for comparision purpose only. So we skip collecting
+#         the intermidiate variables, and only return an empty dict.
 
-    """
-    from gsplat.cuda_legacy._wrapper import (
-        project_gaussians,
-        rasterize_gaussians,
-        spherical_harmonics,
-    )
+#     """
+#     from gsplat.cuda_legacy._wrapper import (
+#         project_gaussians,
+#         rasterize_gaussians,
+#         spherical_harmonics,
+#     )
 
-    assert eps2d == 0.3, "This is hard-coded in CUDA to be 0.3"
-    C = len(viewmats)
+#     assert eps2d == 0.3, "This is hard-coded in CUDA to be 0.3"
+#     C = len(viewmats)
 
-    render_colors, render_alphas = [], []
-    for cid in range(C):
-        fx, fy = Ks[cid, 0, 0], Ks[cid, 1, 1]
-        cx, cy = Ks[cid, 0, 2], Ks[cid, 1, 2]
-        viewmat = viewmats[cid]
+#     render_colors, render_alphas = [], []
+#     for cid in range(C):
+#         fx, fy = Ks[cid, 0, 0], Ks[cid, 1, 1]
+#         cx, cy = Ks[cid, 0, 2], Ks[cid, 1, 2]
+#         viewmat = viewmats[cid]
 
-        means2d, depths, radii, conics, _, num_tiles_hit, _ = project_gaussians(
-            means3d=means,
-            scales=scales,
-            glob_scale=1.0,
-            quats=quats,
-            viewmat=viewmat,
-            fx=fx,
-            fy=fy,
-            cx=cx,
-            cy=cy,
-            img_height=height,
-            img_width=width,
-            block_width=tile_size,
-            clip_thresh=near_plane,
-        )
+#         means2d, depths, radii, conics, _, num_tiles_hit, _ = project_gaussians(
+#             means3d=means,
+#             scales=scales,
+#             glob_scale=1.0,
+#             quats=quats,
+#             viewmat=viewmat,
+#             fx=fx,
+#             fy=fy,
+#             cx=cx,
+#             cy=cy,
+#             img_height=height,
+#             img_width=width,
+#             block_width=tile_size,
+#             clip_thresh=near_plane,
+#         )
 
-        if colors.dim() == 3:
-            c2w = viewmat.inverse()
-            viewdirs = means - c2w[:3, 3]
-            # viewdirs = F.normalize(viewdirs, dim=-1).detach()
-            if sh_degree is None:
-                sh_degree = int(math.sqrt(colors.shape[1]) - 1)
-            colors = spherical_harmonics(sh_degree, viewdirs, colors)  # [N, 3]
+#         if colors.dim() == 3:
+#             c2w = viewmat.inverse()
+#             viewdirs = means - c2w[:3, 3]
+#             # viewdirs = F.normalize(viewdirs, dim=-1).detach()
+#             if sh_degree is None:
+#                 sh_degree = int(math.sqrt(colors.shape[1]) - 1)
+#             colors = spherical_harmonics(sh_degree, viewdirs, colors)  # [N, 3]
 
-        background = (
-            backgrounds[cid]
-            if backgrounds is not None
-            else torch.zeros(colors.shape[-1], device=means.device)
-        )
+#         background = (
+#             backgrounds[cid]
+#             if backgrounds is not None
+#             else torch.zeros(colors.shape[-1], device=means.device)
+#         )
 
-        render_colors_, render_alphas_ = rasterize_gaussians(
-            xys=means2d,
-            depths=depths,
-            radii=radii,
-            conics=conics,
-            num_tiles_hit=num_tiles_hit,
-            colors=colors,
-            opacity=opacities[..., None],
-            img_height=height,
-            img_width=width,
-            block_width=tile_size,
-            background=background,
-            return_alpha=True,
-        )
-        render_colors.append(render_colors_)
-        render_alphas.append(render_alphas_[..., None])
-    render_colors = torch.stack(render_colors, dim=0)
-    render_alphas = torch.stack(render_alphas, dim=0)
-    return render_colors, render_alphas, {}
+#         render_colors_, render_alphas_ = rasterize_gaussians(
+#             xys=means2d,
+#             depths=depths,
+#             radii=radii,
+#             conics=conics,
+#             num_tiles_hit=num_tiles_hit,
+#             colors=colors,
+#             opacity=opacities[..., None],
+#             img_height=height,
+#             img_width=width,
+#             block_width=tile_size,
+#             background=background,
+#             return_alpha=True,
+#         )
+#         render_colors.append(render_colors_)
+#         render_alphas.append(render_alphas_[..., None])
+#     render_colors = torch.stack(render_colors, dim=0)
+#     render_alphas = torch.stack(render_alphas, dim=0)
+#     return render_colors, render_alphas, {}
 
 
 def rasterization_inria_wrapper(

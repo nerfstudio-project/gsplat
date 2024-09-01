@@ -42,13 +42,13 @@ pip install -r requirements.txt
 # download mipnerf_360 benchmark data
 python datasets/download_dataset.py
 # run batch evaluation
-bash benchmark.sh
+bash benchmarks/basic.sh
 ```
 
 ## Examples
 
 We provide a set of examples to get you started! Below you can find the details about
-the examples (requires to install some exta dependences via `pip install -r examples/requirements.txt`)
+the examples (requires to install some exta dependencies via `pip install -r examples/requirements.txt`)
 
 - [Train a 3D Gaussian splatting model on a COLMAP capture.](https://docs.gsplat.studio/main/examples/colmap.html)
 - [Fit a 2D image with 3D Gaussians.](https://docs.gsplat.studio/main/examples/image.html)

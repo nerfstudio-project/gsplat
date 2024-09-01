@@ -30,8 +30,6 @@ class DefaultStrategy(Strategy):
     with `absgrad=True` as well so that the absolute gradients are computed.
 
     Args:
-        scene_scale (float): The scale of the scene for calibrating the scale-related
-          logic. Default is 1.0.
         prune_opa (float): GSs with opacity below this value will be pruned. Default is 0.005.
         grow_grad2d (float): GSs with image plane gradient above this value will be
           split/duplicated. Default is 0.0002.
@@ -48,7 +46,10 @@ class DefaultStrategy(Strategy):
         refine_start_iter (int): Start refining GSs after this iteration. Default is 500.
         refine_stop_iter (int): Stop refining GSs after this iteration. Default is 15_000.
         reset_every (int): Reset opacities every this steps. Default is 3000.
-        refine_every (int): Reine GSs every this steps. Default is 100.
+        refine_every (int): Refine GSs every this steps. Default is 100.
+        pause_refine_after_reset (int): Pause refining GSs until this number of steps after
+          reset, Default is 0 (no pause at all) and one might want to set this number to the
+          number of images in training set.
         absgrad (bool): Use absolute gradients for GS splitting. Default is False.
         revised_opacity (bool): Whether to use revised opacity heuristic from
           arXiv:2404.06109 (experimental). Default is False.
@@ -71,7 +72,6 @@ class DefaultStrategy(Strategy):
 
     """
 
-    scene_scale: float = 1.0
     prune_opa: float = 0.005
     grow_grad2d: float = 0.0002
     grow_scale3d: float = 0.01
@@ -83,11 +83,12 @@ class DefaultStrategy(Strategy):
     refine_stop_iter: int = 15_000
     reset_every: int = 3000
     refine_every: int = 100
+    pause_refine_after_reset: int = 0
     absgrad: bool = False
     revised_opacity: bool = False
     verbose: bool = False
 
-    def initialize_state(self) -> Dict[str, Any]:
+    def initialize_state(self, scene_scale: float = 1.0) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy.
 
         The returned state should be passed to the `step_pre_backward()` and
@@ -98,7 +99,7 @@ class DefaultStrategy(Strategy):
         # - grad2d: running accum of the norm of the image plane gradients for each GS.
         # - count: running accum of how many time each GS is visible.
         # - radii: the radii of the GSs (normalized by the image resolution).
-        state = {"grad2d": None, "count": None}
+        state = {"grad2d": None, "count": None, "scene_scale": scene_scale}
         if self.refine_scale2d_stop_iter > 0:
             state["radii"] = None
         return state
@@ -158,7 +159,11 @@ class DefaultStrategy(Strategy):
 
         self._update_state(params, state, info, packed=packed)
 
-        if step > self.refine_start_iter and step % self.refine_every == 0:
+        if (
+            step > self.refine_start_iter
+            and step % self.refine_every == 0
+            and step % self.reset_every >= self.pause_refine_after_reset
+        ):
             # grow GSs
             n_dupli, n_split = self._grow_gs(params, optimizers, state, step)
             if self.verbose:
@@ -178,6 +183,8 @@ class DefaultStrategy(Strategy):
             # reset running stats
             state["grad2d"].zero_()
             state["count"].zero_()
+            if self.refine_scale2d_stop_iter > 0:
+                state["radii"].zero_()
             torch.cuda.empty_cache()
 
         if step % self.reset_every == 0:
@@ -255,15 +262,15 @@ class DefaultStrategy(Strategy):
         is_grad_high = grads > self.grow_grad2d
         is_small = (
             torch.exp(params["scales"]).max(dim=-1).values
-            <= self.grow_scale3d * self.scene_scale
+            <= self.grow_scale3d * state["scene_scale"]
         )
         is_dupli = is_grad_high & is_small
         n_dupli = is_dupli.sum().item()
 
         is_large = ~is_small
-        if step < self.refine_scale2d_stop_iter:
-            is_large |= state["radii"] > self.grow_scale2d
         is_split = is_grad_high & is_large
+        if step < self.refine_scale2d_stop_iter:
+            is_split |= state["radii"] > self.grow_scale2d
         n_split = is_split.sum().item()
 
         # first duplicate
@@ -297,11 +304,11 @@ class DefaultStrategy(Strategy):
         state: Dict[str, Any],
         step: int,
     ) -> int:
-        is_prune = torch.sigmoid(params["opacities"]) < self.prune_opa
+        is_prune = torch.sigmoid(params["opacities"].flatten()) < self.prune_opa
         if step > self.reset_every:
             is_too_big = (
                 torch.exp(params["scales"]).max(dim=-1).values
-                > self.prune_scale3d * self.scene_scale
+                > self.prune_scale3d * state["scene_scale"]
             )
             # The official code also implements sreen-size pruning but
             # it's actually not being used due to a bug:

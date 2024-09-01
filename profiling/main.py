@@ -12,6 +12,7 @@ import torch
 from typing_extensions import Callable, Literal
 
 from gsplat._helper import load_test_data
+from gsplat.distributed import cli
 from gsplat.rendering import rasterization
 
 RESOLUTIONS = {
@@ -43,9 +44,11 @@ def main(
     scene_grid: int = 15,
     packed: bool = True,
     sparse_grad: bool = False,
-    backend: Literal["gsplat2", "gsplat", "inria"] = "gsplat2",
+    backend: Literal["gsplat", "inria"] = "gsplat",
     repeats: int = 100,
     memory_history: bool = False,
+    world_rank: int = 0,
+    world_size: int = 1,
 ):
     (
         means,
@@ -66,6 +69,13 @@ def main(
     # more channels
     colors = colors[:, :1].repeat(1, channels)
 
+    # distribute the gaussians
+    means = means[world_rank::world_size].contiguous()
+    quats = quats[world_rank::world_size].contiguous()
+    scales = scales[world_rank::world_size].contiguous()
+    opacities = opacities[world_rank::world_size].contiguous()
+    colors = colors[world_rank::world_size].contiguous()
+
     means.requires_grad = True
     quats.requires_grad = True
     scales.requires_grad = True
@@ -82,12 +92,8 @@ def main(
     if memory_history:
         torch.cuda.memory._record_memory_history()
 
-    if backend == "gsplat2":
+    if backend == "gsplat":
         rasterization_fn = rasterization
-    elif backend == "gsplat":
-        from gsplat import rasterization_legacy_wrapper
-
-        rasterization_fn = rasterization_legacy_wrapper
     elif backend == "inria":
         from gsplat import rasterization_inria_wrapper
 
@@ -112,6 +118,7 @@ def main(
         far_plane=100.0,
         radius_clip=3.0,
         sparse_grad=sparse_grad,
+        distributed=world_size > 1,
     )
     mem_toc_fwd = torch.cuda.max_memory_allocated() / 1024**3 - mem_tic
 
@@ -144,54 +151,8 @@ def main(
     }
 
 
-if __name__ == "__main__":
-    import argparse
-
+def worker(local_rank: int, world_rank: int, world_size: int, args):
     from tabulate import tabulate
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--backends",
-        nargs="+",
-        type=str,
-        default=["gsplat"],
-        help="gsplat, gsplat-legacy, inria",
-    )
-    parser.add_argument(
-        "--repeats",
-        type=int,
-        default=10,
-        help="Number of repeats for profiling",
-    )
-    parser.add_argument(
-        "--batch_size",
-        nargs="+",
-        type=int,
-        default=[1],
-        help="Batch size for profiling",
-    )
-    parser.add_argument(
-        "--scene_grid",
-        nargs="+",
-        type=int,
-        default=[1, 11, 21],
-        help="Scene grid size for profiling",
-    )
-    parser.add_argument(
-        "--channels",
-        nargs="+",
-        type=int,
-        default=[3],
-        help="Number of color channels for profiling",
-    )
-    parser.add_argument(
-        "--memory_history",
-        action="store_true",
-        help="Record memory history and dump a snapshot. Use https://pytorch.org/memory_viz to visualize.",
-    )
-    args = parser.parse_args()
-    if args.memory_history:
-        args.repeats = 1  # only run once for memory history
 
     # Tested on a NVIDIA TITAN RTX with (24 GB).
 
@@ -214,6 +175,8 @@ if __name__ == "__main__":
                         repeats=args.repeats,
                         # only care about memory for the packed version implementation
                         memory_history=args.memory_history,
+                        world_rank=world_rank,
+                        world_size=world_size,
                     )
                     collection.append(
                         [
@@ -243,6 +206,8 @@ if __name__ == "__main__":
                         packed=True,
                         sparse_grad=False,
                         repeats=args.repeats,
+                        world_rank=world_rank,
+                        world_size=world_size,
                     )
                     collection.append(
                         [
@@ -272,41 +237,14 @@ if __name__ == "__main__":
                         packed=False,
                         sparse_grad=False,
                         repeats=args.repeats,
+                        world_rank=world_rank,
+                        world_size=world_size,
                     )
                     collection.append(
                         [
                             "gsplat v1.0.0",
                             False,
                             False,
-                            # configs
-                            batch_size,
-                            channels,
-                            scene_grid,
-                            # stats
-                            # f"{stats['mem_fwd']:0.2f}",
-                            f"{stats['mem_all']:0.2f}",
-                            f"{1.0 / stats['time_fwd']:0.1f} x {(batch_size)}",
-                            f"{1.0 / stats['time_bwd']:0.1f} x {(batch_size)}",
-                        ]
-                    )
-                    torch.cuda.empty_cache()
-
-            if "gsplat-legacy" in args.backends:
-                print("gsplat-legacy")
-                for scene_grid in args.scene_grid:
-                    stats = main(
-                        batch_size=batch_size,
-                        channels=channels,
-                        reso="1080p",
-                        scene_grid=scene_grid,
-                        backend="gsplat",
-                        repeats=args.repeats,
-                    )
-                    collection.append(
-                        [
-                            "gsplat v0.1.11",
-                            "n/a",
-                            "n/a",
                             # configs
                             batch_size,
                             channels,
@@ -349,33 +287,84 @@ if __name__ == "__main__":
                     )
                     torch.cuda.empty_cache()
 
-    headers = [
-        "Backend",
-        "Packed",
-        "Sparse Grad",
-        # configs
-        "Batch Size",
-        "Channels",
-        "Scene Size",
-        # stats
-        # "Mem[fwd] (GB)",
-        "Mem (GB)",
-        "FPS[fwd]",
-        "FPS[bwd]",
-    ]
+    if world_rank == 0:
+        headers = [
+            "Backend",
+            "Packed",
+            "Sparse Grad",
+            # configs
+            "Batch Size",
+            "Channels",
+            "Scene Size",
+            # stats
+            # "Mem[fwd] (GB)",
+            "Mem (GB)",
+            "FPS[fwd]",
+            "FPS[bwd]",
+        ]
 
-    # pop config columns that has only one option
-    if len(args.scene_grid) == 1:
-        headers.pop(5)
-        for row in collection:
-            row.pop(5)
-    if len(args.channels) == 1:
-        headers.pop(4)
-        for row in collection:
-            row.pop(4)
-    if len(args.batch_size) == 1:
-        headers.pop(3)
-        for row in collection:
-            row.pop(3)
+        # pop config columns that has only one option
+        if len(args.scene_grid) == 1:
+            headers.pop(5)
+            for row in collection:
+                row.pop(5)
+        if len(args.channels) == 1:
+            headers.pop(4)
+            for row in collection:
+                row.pop(4)
+        if len(args.batch_size) == 1:
+            headers.pop(3)
+            for row in collection:
+                row.pop(3)
 
-    print(tabulate(collection, headers, tablefmt="rst"))
+        print(tabulate(collection, headers, tablefmt="rst"))
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--backends",
+        nargs="+",
+        type=str,
+        default=["gsplat"],
+        help="gsplat, inria",
+    )
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=10,
+        help="Number of repeats for profiling",
+    )
+    parser.add_argument(
+        "--batch_size",
+        nargs="+",
+        type=int,
+        default=[1],
+        help="Batch size for profiling",
+    )
+    parser.add_argument(
+        "--scene_grid",
+        nargs="+",
+        type=int,
+        default=[1, 11, 21],
+        help="Scene grid size for profiling",
+    )
+    parser.add_argument(
+        "--channels",
+        nargs="+",
+        type=int,
+        default=[3],
+        help="Number of color channels for profiling",
+    )
+    parser.add_argument(
+        "--memory_history",
+        action="store_true",
+        help="Record memory history and dump a snapshot. Use https://pytorch.org/memory_viz to visualize.",
+    )
+    args = parser.parse_args()
+    if args.memory_history:
+        args.repeats = 1  # only run once for memory history
+
+    cli(worker, args, verbose=True)
