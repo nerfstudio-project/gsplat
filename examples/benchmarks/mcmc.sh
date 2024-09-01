@@ -3,9 +3,14 @@
 # SCENE_LIST="garden bicycle stump bonsai counter kitchen room" # treehill flowers
 # RENDER_TRAJ_PATH="ellipse"
 
-SCENE_DIR="data/bilarf/bilarf_data/testscenes"
+# SCENE_DIR="data/bilarf/bilarf_data/testscenes"
+# RESULT_DIR="results/benchmark_bilarf"
+# SCENE_LIST="chinesearch lionpavilion pondbike statue strat building"
+# RENDER_TRAJ_PATH="spiral"
+
+SCENE_DIR="data/bilarf/bilarf_data/editscenes"
 RESULT_DIR="results/benchmark_bilarf"
-SCENE_LIST="chinesearch lionpavilion pondbike statue strat building"
+SCENE_LIST="rawnerf_windowlegovary rawnerf_sharpshadow scibldg"
 RENDER_TRAJ_PATH="spiral"
 
 CAP_MAX=1000000
