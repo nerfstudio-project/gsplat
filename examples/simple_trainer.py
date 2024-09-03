@@ -53,6 +53,8 @@ class Config:
     patch_size: Optional[int] = None
     # A global scaler that applies to the scene size related parameters
     global_scale: float = 1.0
+    # Normalize the world space
+    normalize_world_space: bool = True
 
     # Port for the viewer server
     port: int = 8080
@@ -283,7 +285,7 @@ class Runner:
         self.parser = Parser(
             data_dir=cfg.data_dir,
             factor=cfg.data_factor,
-            normalize=True,
+            normalize=cfg.normalize_world_space,
             test_every=cfg.test_every,
         )
         self.trainset = Dataset(
