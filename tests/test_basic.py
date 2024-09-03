@@ -239,11 +239,11 @@ def test_projection(test_data, fused: bool, calc_compensations: bool, ortho: boo
         )
 
     # backward
-    v_means2d = torch.randn_like(means2d) * radii[..., None]
-    v_depths = torch.randn_like(depths) * radii
-    v_conics = torch.randn_like(conics) * radii[..., None]
+    v_means2d = torch.randn_like(means2d) * valid[..., None]
+    v_depths = torch.randn_like(depths) * valid
+    v_conics = torch.randn_like(conics) * valid[..., None]
     if calc_compensations:
-        v_compensations = torch.randn_like(compensations) * radii
+        v_compensations = torch.randn_like(compensations) * valid
     v_viewmats, v_quats, v_scales, v_means = torch.autograd.grad(
         (means2d * v_means2d).sum()
         + (depths * v_depths).sum()
