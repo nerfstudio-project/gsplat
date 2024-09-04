@@ -237,6 +237,15 @@ def rasterization(
     assert Ks.shape == (C, 3, 3), Ks.shape
     assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
 
+    def reshape_view(C: int, world_view: torch.Tensor, N_world: list) -> torch.Tensor:
+        view_list = list(
+            map(
+                lambda x: x.split(int(x.shape[0] / C), dim=0),
+                world_view.split([C * N_i for N_i in N_world], dim=0),
+            )
+        )
+        return torch.stack([torch.cat(l, dim=0) for l in zip(*view_list)], dim=0)
+
     if sh_degree is None:
         # treat colors as post-activation values, should be in shape [N, D] or [C, N, D]
         assert (colors.dim() == 2 and colors.shape[0] == N) or (
@@ -444,7 +453,7 @@ def rasterization(
                 splits=[C_i * N for C_i in C_world],
                 output_splits=[C * N_i for N_i in N_world],
             )
-            radii = radii.reshape(C, -1)
+            radii = reshape_view(C, radii, N_world)
 
             (means2d, depths, conics, opacities, colors) = all_to_all_tensor_list(
                 world_size,
@@ -458,11 +467,11 @@ def rasterization(
                 splits=[C_i * N for C_i in C_world],
                 output_splits=[C * N_i for N_i in N_world],
             )
-            means2d = means2d.reshape(C, -1, 2)
-            depths = depths.reshape(C, -1)
-            conics = conics.reshape(C, -1, 3)
-            opacities = opacities.reshape(C, -1)
-            colors = colors.reshape(C, -1, colors.shape[-1])
+            means2d = reshape_view(C, means2d, N_world)
+            depths = reshape_view(C, depths, N_world)
+            conics = reshape_view(C, conics, N_world)
+            opacities = reshape_view(C, opacities, N_world)
+            colors = reshape_view(C, colors, N_world)
 
     # Rasterize to pixels
     if render_mode in ["RGB+D", "RGB+ED"]:
