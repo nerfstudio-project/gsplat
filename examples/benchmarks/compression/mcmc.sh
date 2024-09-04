@@ -18,6 +18,10 @@ CAP_MAX=1000000
 # RESULT_DIR="results/benchmark_mcmc_4M_png_compression"
 # CAP_MAX=4000000
 
+# Override default values if provided as arguments
+[ ! -z "$1" ] && RESULT_DIR="$1"
+[ ! -z "$2" ] && CAP_MAX="$2"
+
 
 for SCENE in $SCENE_LIST;
 do
