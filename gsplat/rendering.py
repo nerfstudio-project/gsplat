@@ -237,9 +237,14 @@ def rasterization(
     assert Ks.shape == (C, 3, 3), Ks.shape
     assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
 
-    def reshape_view(C:int, world_view:torch.Tensor, N_world: list)->torch.Tensor:
-        view_list = list(map(lambda x: x.split(int(x.shape[0] / C), dim = 0), world_view.split([C * N_i for N_i in N_world], dim=0)))
-        return torch.stack([torch.cat(l, dim=0) for l in zip(*view_list)], dim = 0)
+    def reshape_view(C: int, world_view: torch.Tensor, N_world: list) -> torch.Tensor:
+        view_list = list(
+            map(
+                lambda x: x.split(int(x.shape[0] / C), dim=0),
+                world_view.split([C * N_i for N_i in N_world], dim=0),
+            )
+        )
+        return torch.stack([torch.cat(l, dim=0) for l in zip(*view_list)], dim=0)
 
     if sh_degree is None:
         # treat colors as post-activation values, should be in shape [N, D] or [C, N, D]
