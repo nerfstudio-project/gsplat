@@ -864,7 +864,7 @@ class Runner:
 
         canvas_all = []
         for i in tqdm.trange(len(camtoworlds), desc="Rendering trajectory"):
-            renders, _, _, _, _, _, _ = self.rasterize_splats(
+            renders, _, _, surf_normals, _, _, _ = self.rasterize_splats(
                 camtoworlds=camtoworlds[i : i + 1],
                 Ks=K[None],
                 width=width,
@@ -878,6 +878,8 @@ class Runner:
             depths = renders[0, ..., 3:4]  # [H, W, 1]
             depths = (depths - depths.min()) / (depths.max() - depths.min())
 
+            import pdb
+            pdb.set_trace()
             # write images
             canvas = torch.cat(
                 [colors, depths.repeat(1, 1, 3)], dim=0 if width > height else 1

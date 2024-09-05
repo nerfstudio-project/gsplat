@@ -1,4 +1,4 @@
-RESULT_DIR=results/gsplat-packed
+RESULT_DIR=results/gsplat
 
 for SCENE in bicycle bonsai counter garden kitchen room stump;
 do
@@ -15,7 +15,6 @@ do
         --data_dir data/360_v2/$SCENE/ \
         --model_type 2dgs \
         --result_dir $RESULT_DIR/$SCENE/ \
-        --packed
 
     # run eval and render
     for CKPT in $RESULT_DIR/$SCENE/ckpts/*;
@@ -25,7 +24,6 @@ do
             --model_type 2dgs \
             --result_dir $RESULT_DIR/$SCENE/ \
             --ckpt $CKPT \
-            --packed
 
     done
 done

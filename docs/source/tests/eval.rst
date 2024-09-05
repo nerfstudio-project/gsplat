@@ -160,7 +160,7 @@ No Regularization
     +---------------------+-------+-------+-------+------------------+------------+
 
 With Normal Consistency and Distortion Regularization
-----------------------------------------------
+------------------------------------------------------
     +---------------------+-------+-------+-------+------------------+------------+
     |                     | PSNR  | SSIM  | LPIPS | Train Mem        | Train Time |
     +=====================+=======+=======+=======+==================+============+
@@ -179,10 +179,42 @@ Runtime and GPU Memory
 | gsplat-30k      |   6.89 |**2.19**| **1.93**|**4.48**| **2.14**|**2.30**|  6.00  |
 +-----------------+---------+--------+---------+--------+---------+--------+--------+
 
+ +-----------------+---------+--------+---------+--------+---------+--------+--------+
+| Train Time (s)  | Bicycle | Bonsai | Counter | Garden | Kitchen |  Room  | Stump  |
++=================+=========+========+=========+========+=========+========+========+
+| inria-30k       |   1463  |   1237 |   1318  |   1298 |    1422 |  1314  |  1252  |
++-----------------+---------+--------+---------+--------+---------+--------+--------+
+| gsplat-30k      | **1231**| **788**|  **803**| **985**| **828** | **789**|**1057**|
++-----------------+---------+--------+---------+--------+---------+--------+--------+
 
 
 Reproduced Metrics
 ----------------------------------------------
++------------+---------+--------+---------+--------+---------+-------+-------+
+| PSNR       | Bicycle | Bonsai | Counter | Garden | Kitchen |  Room | Stump |
++============+=========+========+=========+========+=========+=======+=======+
+| inria-30k  |   24.92 |  31.87 |   28.78 |  26.88 |   31.08 | 31.21 | 26.36 |
++------------+---------+--------+---------+--------+---------+-------+-------+
+| gsplat-30k |   24.97 |  31.94 |   28.76 |  26.95 |   31.08 | 31.27 | 26.37 |
++------------+---------+--------+---------+--------+---------+-------+-------+
+
++------------+---------+--------+---------+--------+---------+-------+-------+
+| SSIM       | Bicycle | Bonsai | Counter | Garden | Kitchen |  Room | Stump |
++============+=========+========+=========+========+=========+=======+=======+
+| inria-30k  | 0.741   | 0.937  | 0.899   | 0.847  | 0.921   | 0.914 | 0.760 |
++------------+---------+--------+---------+--------+---------+-------+-------+
+| gsplat-30k | 0.764   | 0.937  | 0.899   | 0.849  | 0.921   | 0.915 | 0.761 |
++------------+---------+--------+---------+--------+---------+-------+-------+
+
++------------+---------+--------+---------+--------+---------+-------+-------+
+| LPIPS      | Bicycle | Bonsai | Counter | Garden | Kitchen |  Room | Stump |
++============+=========+========+=========+========+=========+=======+=======+
+| inria-30k  | 0.199   | 0.136  | 0.164   | 0.093  | 0.101   | 0.172 | 0.168 |
++------------+---------+--------+---------+--------+---------+-------+-------+
+| gsplat-30k | 0.189   | 0.134  | 0.162   | 0.091  | 0.101   | 0.169 | 0.166 |
++------------+---------+--------+---------+--------+---------+-------+-------+
+
++-----------------+---------+--------+---------+--------+---------+-------+-------+
 | Number of GSs   | Bicycle | Bonsai | Counter | Garden | Kitchen |  Room | Stump |
 +=================+=========+========+=========+========+=========+=======+=======+
 | inria-30k       |   3.97M |  0.91M |   0.72M |  2.79M |   0.85M | 1.01M | 3.27M |
@@ -190,6 +222,17 @@ Reproduced Metrics
 | gsplat-30k      |   3.88M |  0.92M |   0.73M |  2.49M |   0.87M | 1.03M | 3.40M |
 +-----------------+---------+--------+---------+--------+---------+-------+-------+
 
-This repo comes with a standalone script (:code:`examples/simple_trainer.py default`) that reproduces 
-the `Gaussian Splatting <https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/>`_ with
-exactly the same performance on PSNR, SSIM, LPIPS, and converged number of Gaussians. 
+Note: Evaulations for 2DGS are conducted on a NVIDIA 4090 GPU. The LPIPS metric is evaluated
+using :code:`from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity`, which
+is different from what's reported in the original paper that uses 
+:code:`from lpipsPyTorch import lpips`.
+
+The evaluation of `gsplat-X` can be reproduced with the command 
+:code:`cd examples; bash benchmarks/basic_2dgs.sh` 
+within the gsplat repo (commit 48abf70). 
+
+The evaluation of `inria-X` can be 
+reproduced with our forked wersion of the official implementation at 
+`here <https://github.com/hbb1/diff-surfel-rasterization/commit/28c928a36ea19407cd9754d068bd9a9535216979>`_;
+you need to change the :code:`--model_type 2dgs` to :code:`--model_type 2dgs-inria` and 
+run command :code:`cd examples; bash benchmarks/basic_2dgs.sh` (commit 28c928a).
