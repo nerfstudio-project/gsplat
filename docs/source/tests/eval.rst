@@ -1,6 +1,9 @@
 Evaluation
 ===================================
 
+3DGS
+----------------------------------------------
+
 .. table:: Performance on `Mip-NeRF 360 Captures <https://jonbarron.info/mipnerf360/>`_ (Averaged Over 7 Scenes)
 
     +---------------------+-------+-------+-------+------------------+------------+
@@ -140,3 +143,6 @@ The evaluation of `inria-X` can be
 reproduced with our forked wersion of the official implementation at 
 `here <https://github.com/liruilong940607/gaussian-splatting/tree/benchmark>`_, 
 with the command :code:`python full_eval_m360.py` (commit 36546ce).
+
+2DGS
+----------------------------------------------
