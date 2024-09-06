@@ -222,7 +222,7 @@ Reproduced Metrics
 | gsplat-30k      |   3.88M |  0.92M |   0.73M |  2.49M |   0.87M | 1.03M | 3.40M |
 +-----------------+---------+--------+---------+--------+---------+-------+-------+
 
-Note: Evaulations for 2DGS are conducted on a NVIDIA 4090 GPU. The LPIPS metric is evaluated
+Note: Evaulations for 2DGS are conducted on a NVIDIA RTX 4090 GPU. The LPIPS metric is evaluated
 using :code:`from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity`, which
 is different from what's reported in the original paper that uses 
 :code:`from lpipsPyTorch import lpips`.

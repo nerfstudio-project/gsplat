@@ -297,6 +297,11 @@ class Runner:
         print("Model initialized. Number of GS:", len(self.splats["means"]))
         self.model_type = cfg.model_type
 
+        if self.model_type == "2dgs":
+            key_for_gradient = "gradient_2dgs"
+        else:
+            key_for_gradient = "means2d"
+            
         # Densification Strategy
         self.strategy = DefaultStrategy(
             verbose=True,
@@ -311,7 +316,7 @@ class Runner:
             refine_every=cfg.refine_every,
             absgrad=cfg.absgrad,
             revised_opacity=cfg.revised_opacity,
-            key_for_gradient="gradient_2dgs",
+            key_for_gradient=key_for_gradient,
         )
         self.strategy.check_sanity(self.splats, self.optimizers)
         self.strategy_state = self.strategy.initialize_state()
@@ -878,11 +883,11 @@ class Runner:
             depths = renders[0, ..., 3:4]  # [H, W, 1]
             depths = (depths - depths.min()) / (depths.max() - depths.min())
 
-            import pdb
-            pdb.set_trace()
+            surf_normals = (surf_normals - surf_normals.min()) / (surf_normals.max() - surf_normals.min())
+
             # write images
             canvas = torch.cat(
-                [colors, depths.repeat(1, 1, 3)], dim=0 if width > height else 1
+                [colors, depths], dim=1 if width > height else 1
             )
             canvas = (canvas.cpu().numpy() * 255).astype(np.uint8)
             canvas_all.append(canvas)

@@ -1062,7 +1062,7 @@ def rasterization_2dgs(
         with shape [C, N, ...], which is faster but might consume more memory.
 
     .. note::
-        **Sparse Gradients**: If `sparse_grad` is True, the gradients for {means, quats, scales}
+        **Sparse Gradients(Experimental)**: If `sparse_grad` is True, the gradients for {means, quats, scales}
         will be stored in a `COO sparse layout <https://pytorch.org/docs/stable/generated/torch.sparse_coo_tensor.html>`_.
         This can be helpful for saving memory
         for training when the scene is large and each iteration only activates a small portion
@@ -1121,6 +1121,8 @@ def rasterization_2dgs(
         channel_chunk: The number of channels to render in one go. Default is 32.
             If the required rendering channels are larger than this value, the rendering
             will be done looply in chunks.
+        dist_loss: If true, use distortion regularization to get better geometry detail.
+        depth_mode: render depth mode. Choose from expected depth and median depth.
             
     Returns:
         A tuple:
