@@ -9,13 +9,13 @@
 #include <ATen/Dispatch.h>
 #include <ATen/cuda/Atomic.cuh>
 
-#define PRAGMA_UNROLL _Pragma("unroll")
+namespace gsplat {
 
 namespace cg = cooperative_groups;
 
 template <uint32_t DIM, class T, class WarpT>
 inline __device__ void warpSum(T *val, WarpT &warp) {
-    PRAGMA_UNROLL
+    GSPLAT_PRAGMA_UNROLL
     for (uint32_t i = 0; i < DIM; i++) {
         val[i] = cg::reduce(warp, val[i], cg::plus<T>());
     }
@@ -73,9 +73,10 @@ inline __device__ void warpMax(ScalarT &val, WarpT &warp) {
     val = cg::reduce(warp, val, cg::greater<ScalarT>());
 }
 
-
 template <typename T> __forceinline__ __device__ T sum(vec3<T> a) {
     return a.x + a.y + a.z;
 }
+
+} // namespace gsplat
 
 #endif // GSPLAT_CUDA_HELPERS_H

@@ -6,6 +6,8 @@
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>
 
+namespace gsplat {
+
 namespace cg = cooperative_groups;
 
 /****************************************************************************
@@ -203,12 +205,12 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_2dgs_tens
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
     const torch::Tensor &flatten_ids   // [n_isects]
 ) {
-    DEVICE_GUARD(means2d);
-    CHECK_INPUT(means2d);
-    CHECK_INPUT(ray_Ms);
-    CHECK_INPUT(opacities);
-    CHECK_INPUT(tile_offsets);
-    CHECK_INPUT(flatten_ids);
+    GSPLAT_DEVICE_GUARD(means2d);
+    GSPLAT_CHECK_INPUT(means2d);
+    GSPLAT_CHECK_INPUT(ray_Ms);
+    GSPLAT_CHECK_INPUT(opacities);
+    GSPLAT_CHECK_INPUT(tile_offsets);
+    GSPLAT_CHECK_INPUT(flatten_ids);
 
     uint32_t C = means2d.size(0); // number of cameras
     uint32_t N = means2d.size(1); // number of gaussians
@@ -276,3 +278,4 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_2dgs_tens
     return std::make_tuple(gaussian_ids, pixel_ids);
 }
 
+} // namespace gsplat

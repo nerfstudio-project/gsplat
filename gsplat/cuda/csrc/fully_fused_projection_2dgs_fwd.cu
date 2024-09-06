@@ -8,6 +8,8 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
+namespace gsplat {
+
 namespace cg = cooperative_groups;
 
 /****************************************************************************
@@ -148,12 +150,12 @@ fully_fused_projection_fwd_2dgs_tensor(
     const torch::Tensor &Ks,                   // [C, 3, 3]
     const uint32_t image_width, const uint32_t image_height, const float eps2d,
     const float near_plane, const float far_plane, const float radius_clip) {
-    DEVICE_GUARD(means);
-    CHECK_INPUT(means);
-    CHECK_INPUT(quats);
-    CHECK_INPUT(scales);
-    CHECK_INPUT(viewmats);
-    CHECK_INPUT(Ks);
+    GSPLAT_DEVICE_GUARD(means);
+    GSPLAT_CHECK_INPUT(means);
+    GSPLAT_CHECK_INPUT(quats);
+    GSPLAT_CHECK_INPUT(scales);
+    GSPLAT_CHECK_INPUT(viewmats);
+    GSPLAT_CHECK_INPUT(Ks);
 
     uint32_t N = means.size(0);    // number of gaussians
     uint32_t C = viewmats.size(0); // number of cameras
@@ -167,7 +169,7 @@ fully_fused_projection_fwd_2dgs_tensor(
 
     if (C && N) {
         fully_fused_projection_fwd_2dgs_kernel<float>
-            <<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
+            <<<(C * N + GSPLAT_N_THREADS - 1) / GSPLAT_N_THREADS, GSPLAT_N_THREADS, 0, stream>>>(
                 C, N, means.data_ptr<float>(),
                 quats.data_ptr<float>(),
                 scales.data_ptr<float>(),
@@ -183,3 +185,5 @@ fully_fused_projection_fwd_2dgs_tensor(
     return std::make_tuple(radii, means2d, depths, ray_Ms, normals);
 
 }
+
+} // namespace gsplat

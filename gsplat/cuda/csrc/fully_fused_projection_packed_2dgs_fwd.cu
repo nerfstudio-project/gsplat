@@ -9,6 +9,8 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
+namespace gsplat {
+
 namespace cg = cooperative_groups;
 
 
@@ -138,7 +140,7 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
         // First pass: compute the block-wide sum
         int32_t aggregate;
         if (__syncthreads_or(thread_data)) {
-            typedef cub::BlockReduce<int32_t, N_THREADS> BlockReduce;
+            typedef cub::BlockReduce<int32_t, GSPLAT_N_THREADS> BlockReduce;
             __shared__ typename BlockReduce::TempStorage temp_storage;
             aggregate = BlockReduce(temp_storage).Sum(thread_data);
         } else {
@@ -150,7 +152,7 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
     } else {
         // Second pass: write out the indices of the non zero elements
         if (__syncthreads_or(thread_data)) {
-            typedef cub::BlockScan<int32_t, N_THREADS> BlockScan;
+            typedef cub::BlockScan<int32_t, GSPLAT_N_THREADS> BlockScan;
             __shared__ typename BlockScan::TempStorage temp_storage;
             BlockScan(temp_storage).ExclusiveSum(thread_data, thread_data);
         }
@@ -202,12 +204,12 @@ fully_fused_projection_packed_fwd_2dgs_tensor(
     const torch::Tensor &Ks,                   // [C, 3, 3]
     const uint32_t image_width, const uint32_t image_height,
     const float near_plane, const float far_plane, const float radius_clip) {
-    DEVICE_GUARD(means);
-    CHECK_INPUT(means);
-    CHECK_INPUT(quats);
-    CHECK_INPUT(scales);
-    CHECK_INPUT(viewmats);
-    CHECK_INPUT(Ks);
+    GSPLAT_DEVICE_GUARD(means);
+    GSPLAT_CHECK_INPUT(means);
+    GSPLAT_CHECK_INPUT(quats);
+    GSPLAT_CHECK_INPUT(scales);
+    GSPLAT_CHECK_INPUT(viewmats);
+    GSPLAT_CHECK_INPUT(Ks);
 
     uint32_t N = means.size(0);    // number of gaussians
     uint32_t C = viewmats.size(0); // number of cameras
@@ -216,9 +218,9 @@ fully_fused_projection_packed_fwd_2dgs_tensor(
 
     uint32_t nrows = C;
     uint32_t ncols = N;
-    uint32_t blocks_per_row = (ncols + N_THREADS - 1) / N_THREADS;
+    uint32_t blocks_per_row = (ncols + GSPLAT_N_THREADS - 1) / GSPLAT_N_THREADS;
 
-    dim3 threads = {N_THREADS, 1, 1};
+    dim3 threads = {GSPLAT_N_THREADS, 1, 1};
     // limit on the number of blocks: [2**31 - 1, 65535, 65535]
     dim3 blocks = {blocks_per_row, nrows, 1};
 
@@ -266,4 +268,6 @@ fully_fused_projection_packed_fwd_2dgs_tensor(
     }
 
     return std::make_tuple(indptr, camera_ids, gaussian_ids, radii, means2d, depths, ray_Ms, normals);
+}
+
 }

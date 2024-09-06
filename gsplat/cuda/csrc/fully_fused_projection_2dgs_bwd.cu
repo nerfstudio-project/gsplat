@@ -8,6 +8,8 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
+namespace gsplat {
+
 namespace cg = cooperative_groups;
 
 
@@ -113,7 +115,7 @@ namespace cg = cooperative_groups;
         warpSum(v_mean, warp_group_g);
         if (warp_group_g.thread_rank() == 0) {
             v_means += gid * 3;
-            PRAGMA_UNROLL
+            GSPLAT_PRAGMA_UNROLL
             for (uint32_t i = 0; i < 3; i++) {
                 gpuAtomicAdd(v_means + i, v_mean[i]);
             }
@@ -154,18 +156,18 @@ fully_fused_projection_bwd_2dgs_tensor(
     const torch::Tensor &v_normals,                     // [C, N, 3]
     const torch::Tensor &v_ray_Ms,                      // [C, N, 3, 3]
     const bool viewmats_requires_grad) {
-    DEVICE_GUARD(means);
-    CHECK_INPUT(means);
-    CHECK_INPUT(quats);
-    CHECK_INPUT(scales);
-    CHECK_INPUT(viewmats);
-    CHECK_INPUT(Ks);
-    CHECK_INPUT(radii);
-    CHECK_INPUT(ray_Ms);
-    CHECK_INPUT(v_means2d);
-    CHECK_INPUT(v_depths);
-    CHECK_INPUT(v_normals);
-    CHECK_INPUT(v_ray_Ms);
+    GSPLAT_DEVICE_GUARD(means);
+    GSPLAT_CHECK_INPUT(means);
+    GSPLAT_CHECK_INPUT(quats);
+    GSPLAT_CHECK_INPUT(scales);
+    GSPLAT_CHECK_INPUT(viewmats);
+    GSPLAT_CHECK_INPUT(Ks);
+    GSPLAT_CHECK_INPUT(radii);
+    GSPLAT_CHECK_INPUT(ray_Ms);
+    GSPLAT_CHECK_INPUT(v_means2d);
+    GSPLAT_CHECK_INPUT(v_depths);
+    GSPLAT_CHECK_INPUT(v_normals);
+    GSPLAT_CHECK_INPUT(v_ray_Ms);
 
     uint32_t N = means.size(0);    // number of gaussians
     uint32_t C = viewmats.size(0); // number of cameras
@@ -179,7 +181,7 @@ fully_fused_projection_bwd_2dgs_tensor(
         v_viewmats = torch::zeros_like(viewmats);
     }
     if (C && N) {
-        fully_fused_projection_bwd_2dgs_kernel<float><<<(C * N + N_THREADS - 1) / N_THREADS, N_THREADS, 0, stream>>>(
+        fully_fused_projection_bwd_2dgs_kernel<float><<<(C * N + GSPLAT_N_THREADS - 1) / GSPLAT_N_THREADS, GSPLAT_N_THREADS, 0, stream>>>(
             C, N, means.data_ptr<float>(),
             quats.data_ptr<float>(),
             scales.data_ptr<float>(),
@@ -195,3 +197,5 @@ fully_fused_projection_bwd_2dgs_tensor(
     }
     return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
 }
+
+} // namespace gsplat

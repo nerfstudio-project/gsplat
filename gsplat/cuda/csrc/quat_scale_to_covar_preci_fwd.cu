@@ -8,6 +8,8 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
+namespace gsplat {
+
 namespace cg = cooperative_groups;
 
 /****************************************************************************
@@ -15,14 +17,14 @@ namespace cg = cooperative_groups;
  ****************************************************************************/
 
 template <typename T>
-__global__ void
-quat_scale_to_covar_preci_fwd_kernel(const uint32_t N,
-                                     const T *__restrict__ quats,  // [N, 4]
-                                     const T *__restrict__ scales, // [N, 3]
-                                     const bool triu,
-                                     // outputs
-                                     T *__restrict__ covars, // [N, 3, 3] or [N, 6]
-                                     T *__restrict__ precis  // [N, 3, 3] or [N, 6]
+__global__ void quat_scale_to_covar_preci_fwd_kernel(
+    const uint32_t N,
+    const T *__restrict__ quats,  // [N, 4]
+    const T *__restrict__ scales, // [N, 3]
+    const bool triu,
+    // outputs
+    T *__restrict__ covars, // [N, 3, 3] or [N, 6]
+    T *__restrict__ precis  // [N, 3, 3] or [N, 6]
 ) {
 
     // For now we'll upcast float16 and bfloat16 to float32
@@ -42,8 +44,9 @@ quat_scale_to_covar_preci_fwd_kernel(const uint32_t N,
     mat3<OpT> covar, preci;
     const vec4<OpT> quat = glm::make_vec4(quats);
     const vec3<OpT> scale = glm::make_vec3(scales);
-    quat_scale_to_covar_preci(quat, scale, covars ? &covar : nullptr,
-                              precis ? &preci : nullptr);
+    quat_scale_to_covar_preci(
+        quat, scale, covars ? &covar : nullptr, precis ? &preci : nullptr
+    );
 
     // write to outputs: glm is column-major but we want row-major
     if (covars != nullptr) {
@@ -57,9 +60,9 @@ quat_scale_to_covar_preci_fwd_kernel(const uint32_t N,
             covars[5] = T(covar[2][2]);
         } else {
             covars += idx * 9;
-            PRAGMA_UNROLL
+            GSPLAT_PRAGMA_UNROLL
             for (uint32_t i = 0; i < 3; i++) { // rows
-                PRAGMA_UNROLL
+                GSPLAT_PRAGMA_UNROLL
                 for (uint32_t j = 0; j < 3; j++) { // cols
                     covars[i * 3 + j] = T(covar[j][i]);
                 }
@@ -77,9 +80,9 @@ quat_scale_to_covar_preci_fwd_kernel(const uint32_t N,
             precis[5] = T(preci[2][2]);
         } else {
             precis += idx * 9;
-            PRAGMA_UNROLL
+            GSPLAT_PRAGMA_UNROLL
             for (uint32_t i = 0; i < 3; i++) { // rows
-                PRAGMA_UNROLL
+                GSPLAT_PRAGMA_UNROLL
                 for (uint32_t j = 0; j < 3; j++) { // cols
                     precis[i * 3 + j] = T(preci[j][i]);
                 }
@@ -88,14 +91,16 @@ quat_scale_to_covar_preci_fwd_kernel(const uint32_t N,
     }
 }
 
-std::tuple<torch::Tensor, torch::Tensor>
-quat_scale_to_covar_preci_fwd_tensor(const torch::Tensor &quats,  // [N, 4]
-                                     const torch::Tensor &scales, // [N, 3]
-                                     const bool compute_covar, const bool compute_preci,
-                                     const bool triu) {
-    DEVICE_GUARD(quats);
-    CHECK_INPUT(quats);
-    CHECK_INPUT(scales);
+std::tuple<torch::Tensor, torch::Tensor> quat_scale_to_covar_preci_fwd_tensor(
+    const torch::Tensor &quats,  // [N, 4]
+    const torch::Tensor &scales, // [N, 3]
+    const bool compute_covar,
+    const bool compute_preci,
+    const bool triu
+) {
+    GSPLAT_DEVICE_GUARD(quats);
+    GSPLAT_CHECK_INPUT(quats);
+    GSPLAT_CHECK_INPUT(scales);
 
     uint32_t N = quats.size(0);
 
@@ -118,14 +123,27 @@ quat_scale_to_covar_preci_fwd_tensor(const torch::Tensor &quats,  // [N, 4]
     if (N) {
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
         AT_DISPATCH_FLOATING_TYPES_AND2(
-            at::ScalarType::Half, at::ScalarType::BFloat16, quats.scalar_type(),
-            "quat_scale_to_covar_preci_fwd", [&]() {
-                quat_scale_to_covar_preci_fwd_kernel<<<(N + N_THREADS - 1) / N_THREADS,
-                                                       N_THREADS, 0, stream>>>(
-                    N, quats.data_ptr<float>(), scales.data_ptr<float>(), triu,
+            at::ScalarType::Half,
+            at::ScalarType::BFloat16,
+            quats.scalar_type(),
+            "quat_scale_to_covar_preci_fwd",
+            [&]() {
+                quat_scale_to_covar_preci_fwd_kernel<<<
+                    (N + GSPLAT_N_THREADS - 1) / GSPLAT_N_THREADS,
+                    GSPLAT_N_THREADS,
+                    0,
+                    stream>>>(
+                    N,
+                    quats.data_ptr<float>(),
+                    scales.data_ptr<float>(),
+                    triu,
                     compute_covar ? covars.data_ptr<float>() : nullptr,
-                    compute_preci ? precis.data_ptr<float>() : nullptr);
-            });
+                    compute_preci ? precis.data_ptr<float>() : nullptr
+                );
+            }
+        );
     }
     return std::make_tuple(covars, precis);
 }
+
+} // namespace gsplat

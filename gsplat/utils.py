@@ -31,6 +31,13 @@ def normalized_quat_to_rotmat(quat: Tensor) -> Tensor:
     )
     return mat.reshape(quat.shape[:-1] + (3, 3))
 
+def log_transform(x):
+    return torch.sign(x) * torch.log1p(torch.abs(x))
+
+
+def inverse_log_transform(y):
+    return torch.sign(y) * (torch.expm1(torch.abs(y)))
+
 def depth_to_normal(
         depths: Tensor, 
         camtoworlds: Tensor, 
@@ -49,7 +56,7 @@ def depth_to_normal(
         far_plane: Far plane distance.
 
     Returns:
-        -**Surface normals**
+        Surface normals.
     """
     height, width = depths.shape[1:3]
     viewmats = torch.linalg.inv(camtoworlds)  # [C, 4, 4]

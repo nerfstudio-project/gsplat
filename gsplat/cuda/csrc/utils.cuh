@@ -8,6 +8,8 @@
 
 #define FILTER_INV_SQUARE 2.0f
 
+namespace gsplat {
+
 template <typename T>
 inline __device__ mat3<T> quat_to_rotmat(const vec4<T> quat) {
     T w = quat[0], x = quat[1], y = quat[2], z = quat[3];
@@ -174,6 +176,81 @@ inline __device__ void quat_scale_to_preci_vjp(
     v_scale[2] +=
         -sz * sz *
         (R[2][0] * v_M[2][0] + R[2][1] * v_M[2][1] + R[2][2] * v_M[2][2]);
+}
+
+template <typename T>
+inline __device__ void ortho_proj(
+    // inputs
+    const vec3<T> mean3d,
+    const mat3<T> cov3d,
+    const T fx,
+    const T fy,
+    const T cx,
+    const T cy,
+    const uint32_t width,
+    const uint32_t height,
+    // outputs
+    mat2<T> &cov2d,
+    vec2<T> &mean2d
+) {
+    T x = mean3d[0], y = mean3d[1], z = mean3d[2];
+
+    // mat3x2 is 3 columns x 2 rows.
+    mat3x2<T> J = mat3x2<T>(
+        fx,
+        0.f, // 1st column
+        0.f,
+        fy, // 2nd column
+        0.f,
+        0.f // 3rd column
+    );
+    cov2d = J * cov3d * glm::transpose(J);
+    mean2d = vec2<T>({fx * x + cx, fy * y + cy});
+}
+
+template <typename T>
+inline __device__ void ortho_proj_vjp(
+    // fwd inputs
+    const vec3<T> mean3d,
+    const mat3<T> cov3d,
+    const T fx,
+    const T fy,
+    const T cx,
+    const T cy,
+    const uint32_t width,
+    const uint32_t height,
+    // grad outputs
+    const mat2<T> v_cov2d,
+    const vec2<T> v_mean2d,
+    // grad inputs
+    vec3<T> &v_mean3d,
+    mat3<T> &v_cov3d
+) {
+    T x = mean3d[0], y = mean3d[1], z = mean3d[2];
+
+    // mat3x2 is 3 columns x 2 rows.
+    mat3x2<T> J = mat3x2<T>(
+        fx,
+        0.f, // 1st column
+        0.f,
+        fy, // 2nd column
+        0.f,
+        0.f // 3rd column
+    );
+
+    // cov = J * V * Jt; G = df/dcov = v_cov
+    // -> df/dV = Jt * G * J
+    // -> df/dJ = G * J * Vt + Gt * J * V
+    v_cov3d += glm::transpose(J) * v_cov2d * J;
+
+    // df/dx = fx * df/dpixx
+    // df/dy = fy * df/dpixy
+    // df/dz = 0
+    v_mean3d += vec3<T>(
+        fx * v_mean2d[0],
+        fy * v_mean2d[1],
+        0.f
+    );
 }
 
 template <typename T>
@@ -493,4 +570,8 @@ inline __device__ void compute_ray_Ms_aabb_vjp(
     v_mean += v_RS[2];
 }
 
+
+} // namespace gsplat
+
 #endif // GSPLAT_CUDA_UTILS_H
+

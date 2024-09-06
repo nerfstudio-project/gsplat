@@ -6,6 +6,8 @@
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>
 
+namespace gsplat {
+
 namespace cg = cooperative_groups;
 
 /****************************************************************************
@@ -123,13 +125,13 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
 
     // df/d_out for this pixel
     S v_render_c[COLOR_DIM];
-    PRAGMA_UNROLL
+    GSPLAT_PRAGMA_UNROLL
     for (uint32_t k = 0; k < COLOR_DIM; ++k) {
         v_render_c[k] = v_render_colors[pix_id * COLOR_DIM + k];
     }
     const S v_render_a = v_render_alphas[pix_id];
     S v_render_n[3];
-    PRAGMA_UNROLL
+    GSPLAT_PRAGMA_UNROLL
     for (uint32_t k = 0; k < 3; ++k) {
         v_render_n[k] = v_render_normals[pix_id * 3 + k];
     }
@@ -178,11 +180,11 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
             u_Ms_batch[tr] = {ray_Ms[g * 9], ray_Ms[g * 9 + 1], ray_Ms[g * 9 + 2]};
             v_Ms_batch[tr] = {ray_Ms[g * 9 + 3], ray_Ms[g * 9 + 4], ray_Ms[g * 9 + 5]};
             w_Ms_batch[tr] = {ray_Ms[g * 9 + 6], ray_Ms[g * 9 + 7], ray_Ms[g * 9 + 8]};
-            PRAGMA_UNROLL
+            GSPLAT_PRAGMA_UNROLL
             for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                 rgbs_batch[tr * COLOR_DIM + k] = colors[g * COLOR_DIM + k];
             }
-            PRAGMA_UNROLL
+            GSPLAT_PRAGMA_UNROLL
             for (uint32_t k = 0; k < 3; ++k) {
                 normals_batch[tr * 3 + k] = normals[g * 3 + k];
             }
@@ -261,7 +263,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 T *= ra;
                 // update v_rgb for this gaussian
                 const S fac = alpha * T;
-                PRAGMA_UNROLL
+                GSPLAT_PRAGMA_UNROLL
                 for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                     v_rgb_local[k] += fac * v_render_c[k];
                 }
@@ -273,7 +275,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 }
 
                 // update v_normal for this gaussian
-                PRAGMA_UNROLL
+                GSPLAT_PRAGMA_UNROLL
                 for (uint32_t k = 0; k < 3; ++k) {
                     v_normal_local[k] = fac * v_render_n[k];
                 }
@@ -288,7 +290,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 // contribution from background pixel
                 if (backgrounds != nullptr) {
                     S accum = 0.f;
-                    PRAGMA_UNROLL
+                    GSPLAT_PRAGMA_UNROLL
                     for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                         accum += backgrounds[k] * v_render_c[k];
                     }
@@ -347,12 +349,12 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                     v_opacity_local = vis * v_alpha;
                 }
 
-                PRAGMA_UNROLL
+                GSPLAT_PRAGMA_UNROLL
                 for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                     buffer[k] += rgbs_batch[t * COLOR_DIM + k] * fac;
                 }
 
-                PRAGMA_UNROLL
+                GSPLAT_PRAGMA_UNROLL
                 for (uint32_t k = 0; k < 3; ++k) {
                     buffer_normals[k] += normals_batch[t * 3 + k] * fac;
                 }
@@ -370,13 +372,13 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
             int32_t g = id_batch[t]; // flatten index in [C * N] or [nnz]
             if (warp.thread_rank() == 0) {
                 S *v_rgb_ptr = (S *)(v_colors) + COLOR_DIM * g;
-                PRAGMA_UNROLL
+                GSPLAT_PRAGMA_UNROLL
                 for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                     gpuAtomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
                 }
                 
                 S *v_normal_ptr = (S *)(v_normals) + 3 * g;
-                PRAGMA_UNROLL
+                GSPLAT_PRAGMA_UNROLL
                 for (uint32_t k = 0; k < 3; ++k) {
                     gpuAtomicAdd(v_normal_ptr + k, v_normal_local[k]);
                 }
@@ -448,29 +450,29 @@ call_kernel_with_dim(
     // options
     bool absgrad) {
     
-    DEVICE_GUARD(means2d);
-    CHECK_INPUT(means2d);
-    CHECK_INPUT(ray_Ms);
-    CHECK_INPUT(colors);
-    CHECK_INPUT(opacities);
-    CHECK_INPUT(normals);
-    CHECK_INPUT(densify);
-    CHECK_INPUT(tile_offsets);
-    CHECK_INPUT(flatten_ids);
-    CHECK_INPUT(render_colors);
-    CHECK_INPUT(render_alphas);
-    CHECK_INPUT(last_ids);
-    CHECK_INPUT(median_ids);
-    CHECK_INPUT(v_render_colors);
-    CHECK_INPUT(v_render_alphas);
-    CHECK_INPUT(v_render_normals);
-    CHECK_INPUT(v_render_distort);
-    CHECK_INPUT(v_render_median);
+    GSPLAT_DEVICE_GUARD(means2d);
+    GSPLAT_CHECK_INPUT(means2d);
+    GSPLAT_CHECK_INPUT(ray_Ms);
+    GSPLAT_CHECK_INPUT(colors);
+    GSPLAT_CHECK_INPUT(opacities);
+    GSPLAT_CHECK_INPUT(normals);
+    GSPLAT_CHECK_INPUT(densify);
+    GSPLAT_CHECK_INPUT(tile_offsets);
+    GSPLAT_CHECK_INPUT(flatten_ids);
+    GSPLAT_CHECK_INPUT(render_colors);
+    GSPLAT_CHECK_INPUT(render_alphas);
+    GSPLAT_CHECK_INPUT(last_ids);
+    GSPLAT_CHECK_INPUT(median_ids);
+    GSPLAT_CHECK_INPUT(v_render_colors);
+    GSPLAT_CHECK_INPUT(v_render_alphas);
+    GSPLAT_CHECK_INPUT(v_render_normals);
+    GSPLAT_CHECK_INPUT(v_render_distort);
+    GSPLAT_CHECK_INPUT(v_render_median);
     if (backgrounds.has_value()) {
-        CHECK_INPUT(backgrounds.value());
+        GSPLAT_CHECK_INPUT(backgrounds.value());
     }
     if (masks.has_value()) {
-        CHECK_INPUT(masks.value());
+        GSPLAT_CHECK_INPUT(masks.value());
     }
 
     bool packed = means2d.dim() == 2;
@@ -569,7 +571,7 @@ rasterize_to_pixels_bwd_2dgs_tensor(
     // options
     bool absgrad) {
     
-    CHECK_INPUT(colors);
+    GSPLAT_CHECK_INPUT(colors);
     uint32_t COLOR_DIM = colors.size(-1);
 
 #define __GS__CALL_(N)                                                                 \
@@ -605,3 +607,5 @@ rasterize_to_pixels_bwd_2dgs_tensor(
         AT_ERROR("Unsupported number of channels: ", COLOR_DIM);
     }
 }
+
+} // namespace gsplat
