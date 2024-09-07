@@ -814,7 +814,7 @@ def _rasterization(
 #     """Wrapper for old version gsplat.
 
 #     .. warning::
-#         This function exists for comparision purpose only. So we skip collecting
+#         This function exists for comparison purpose only. So we skip collecting
 #         the intermidiate variables, and only return an empty dict.
 
 #     """
@@ -904,7 +904,7 @@ def rasterization_inria_wrapper(
     """Wrapper for Inria's rasterization backend.
 
     .. warning::
-        This function exists for comparision purpose only. Only rendered image is
+        This function exists for comparison purpose only. Only rendered image is
         returned.
 
     .. warning::
