@@ -31,6 +31,7 @@ def normalized_quat_to_rotmat(quat: Tensor) -> Tensor:
     )
     return mat.reshape(quat.shape[:-1] + (3, 3))
 
+
 def log_transform(x):
     return torch.sign(x) * torch.log1p(torch.abs(x))
 
@@ -38,15 +39,12 @@ def log_transform(x):
 def inverse_log_transform(y):
     return torch.sign(y) * (torch.expm1(torch.abs(y)))
 
+
 def depth_to_normal(
-        depths: Tensor, 
-        camtoworlds: Tensor, 
-        Ks: Tensor, 
-        near_plane: float, 
-        far_plane: float
-) -> Tensor: 
+    depths: Tensor, camtoworlds: Tensor, Ks: Tensor, near_plane: float, far_plane: float
+) -> Tensor:
     """
-    Convert depth to surface normal 
+    Convert depth to surface normal
 
     Args:
         depths: Z-depth of the Gaussians.
@@ -83,8 +81,11 @@ def depth_to_normal(
     normals = torch.stack(normals, dim=0)
     return normals
 
+
 # ref: https://github.com/hbb1/2d-gaussian-splatting/blob/61c7b417393d5e0c58b742ad5e2e5f9e9f240cc6/utils/point_utils.py#L26
-def _depths_to_points(depthmap, world_view_transform, full_proj_transform, fx, fy) -> Tensor:
+def _depths_to_points(
+    depthmap, world_view_transform, full_proj_transform, fx, fy
+) -> Tensor:
     c2w = (world_view_transform.T).inverse()
     H, W = depthmap.shape[:2]
 
@@ -108,7 +109,9 @@ def _depths_to_points(depthmap, world_view_transform, full_proj_transform, fx, f
     return points
 
 
-def _depth_to_normal(depth, world_view_transform, full_proj_transform, fx, fy) -> Tensor:
+def _depth_to_normal(
+    depth, world_view_transform, full_proj_transform, fx, fy
+) -> Tensor:
     points = _depths_to_points(
         depth,
         world_view_transform,

@@ -246,11 +246,7 @@ inline __device__ void ortho_proj_vjp(
     // df/dx = fx * df/dpixx
     // df/dy = fy * df/dpixy
     // df/dz = 0
-    v_mean3d += vec3<T>(
-        fx * v_mean2d[0],
-        fy * v_mean2d[1],
-        0.f
-    );
+    v_mean3d += vec3<T>(fx * v_mean2d[0], fy * v_mean2d[1], 0.f);
 }
 
 template <typename T>
@@ -570,8 +566,6 @@ inline __device__ void compute_ray_Ms_aabb_vjp(
     v_mean += v_RS[2];
 }
 
-
 } // namespace gsplat
 
 #endif // GSPLAT_CUDA_UTILS_H
-

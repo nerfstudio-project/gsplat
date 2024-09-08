@@ -1,4 +1,4 @@
-Densification Strategy
+Densification
 ===================================
 
 .. currentmodule:: gsplat

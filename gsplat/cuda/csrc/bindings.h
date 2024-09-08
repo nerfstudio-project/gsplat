@@ -15,7 +15,7 @@
     GSPLAT_CHECK_CUDA(x);                                                      \
     GSPLAT_CHECK_CONTIGUOUS(x)
 #define GSPLAT_DEVICE_GUARD(_ten)                                              \
-    const at::cuda::OptionalCUDAGuard GSPLAT_DEVICE_GUARD(device_of(_ten));
+    const at::cuda::OptionalCUDAGuard device_guard(device_of(_ten));
 
 #define GSPLAT_PRAGMA_UNROLL _Pragma("unroll")
 
@@ -330,18 +330,14 @@ fully_fused_projection_fwd_2dgs_tensor(
     const float radius_clip
 );
 
-std::tuple<
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fully_fused_projection_bwd_2dgs_tensor(
     // fwd inputs
-    const torch::Tensor &means,          // [N, 3]
-    const torch::Tensor &quats,          // [N, 4]
-    const torch::Tensor &scales,         // [N, 3]
-    const torch::Tensor &viewmats,       // [C, 4, 4]
-    const torch::Tensor &Ks,             // [C, 3, 3]
+    const torch::Tensor &means,    // [N, 3]
+    const torch::Tensor &quats,    // [N, 4]
+    const torch::Tensor &scales,   // [N, 3]
+    const torch::Tensor &viewmats, // [C, 4, 4]
+    const torch::Tensor &Ks,       // [C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
@@ -407,7 +403,8 @@ rasterize_to_pixels_bwd_2dgs_tensor(
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
     const torch::Tensor &flatten_ids,  // [n_isects]
     // forward outputs
-    const torch::Tensor &render_colors, // [C, image_height, image_width, COLOR_DIM]
+    const torch::Tensor
+        &render_colors, // [C, image_height, image_width, COLOR_DIM]
     const torch::Tensor &render_alphas, // [C, image_height, image_width, 1]
     const torch::Tensor &last_ids,      // [C, image_height, image_width]
     const torch::Tensor &median_ids,    // [C, image_height, image_width]
@@ -487,4 +484,3 @@ fully_fused_projection_packed_bwd_2dgs_tensor(
 } // namespace gsplat
 
 #endif // GSPLAT_CUDA_BINDINGS_H
-

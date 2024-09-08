@@ -13,13 +13,9 @@ from .cuda._wrapper import (
     spherical_harmonics,
     world_to_cam,
 )
-from .rendering import (
-    rasterization,
-    rasterization_inria_wrapper,
-)
+from .rendering import rasterization, rasterization_2dgs, rasterization_inria_wrapper
 from .strategy import DefaultStrategy, MCMCStrategy, Strategy
 from .version import __version__
-
 
 all = [
     "PngCompression",

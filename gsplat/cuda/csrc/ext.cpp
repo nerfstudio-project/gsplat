@@ -50,14 +50,35 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("compute_relocation", &gsplat::compute_relocation_tensor);
 
     // 2DGS
-    m.def("fully_fused_projection_fwd_2dgs", &gsplat::fully_fused_projection_fwd_2dgs_tensor);
-    m.def("fully_fused_projection_bwd_2dgs", &gsplat::fully_fused_projection_bwd_2dgs_tensor);
+    m.def(
+        "fully_fused_projection_fwd_2dgs",
+        &gsplat::fully_fused_projection_fwd_2dgs_tensor
+    );
+    m.def(
+        "fully_fused_projection_bwd_2dgs",
+        &gsplat::fully_fused_projection_bwd_2dgs_tensor
+    );
 
-    m.def("fully_fused_projection_packed_fwd_2dgs", &gsplat::fully_fused_projection_packed_fwd_2dgs_tensor);
-    m.def("fully_fused_projection_packed_bwd_2dgs", &gsplat::fully_fused_projection_packed_bwd_2dgs_tensor);
+    m.def(
+        "fully_fused_projection_packed_fwd_2dgs",
+        &gsplat::fully_fused_projection_packed_fwd_2dgs_tensor
+    );
+    m.def(
+        "fully_fused_projection_packed_bwd_2dgs",
+        &gsplat::fully_fused_projection_packed_bwd_2dgs_tensor
+    );
 
-    m.def("rasterize_to_pixels_fwd_2dgs", &gsplat::rasterize_to_pixels_fwd_2dgs_tensor);
-    m.def("rasterize_to_pixels_bwd_2dgs", &gsplat::rasterize_to_pixels_bwd_2dgs_tensor);
+    m.def(
+        "rasterize_to_pixels_fwd_2dgs",
+        &gsplat::rasterize_to_pixels_fwd_2dgs_tensor
+    );
+    m.def(
+        "rasterize_to_pixels_bwd_2dgs",
+        &gsplat::rasterize_to_pixels_bwd_2dgs_tensor
+    );
 
-    m.def("rasterize_to_indices_in_range_2dgs", &gsplat::rasterize_to_indices_in_range_2dgs_tensor);
+    m.def(
+        "rasterize_to_indices_in_range_2dgs",
+        &gsplat::rasterize_to_indices_in_range_2dgs_tensor
+    );
 }

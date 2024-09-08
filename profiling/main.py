@@ -44,7 +44,7 @@ def main(
     scene_grid: int = 15,
     packed: bool = True,
     sparse_grad: bool = False,
-    backend: Literal["gsplat2", "gsplat", "inria"] = "gsplat2",
+    backend: Literal["gsplat", "inria"] = "gsplat",
     repeats: int = 100,
     memory_history: bool = False,
     world_rank: int = 0,
@@ -92,12 +92,8 @@ def main(
     if memory_history:
         torch.cuda.memory._record_memory_history()
 
-    if backend == "gsplat2":
+    if backend == "gsplat":
         rasterization_fn = rasterization
-    elif backend == "gsplat":
-        from gsplat import rasterization_legacy_wrapper
-
-        rasterization_fn = rasterization_legacy_wrapper
     elif backend == "inria":
         from gsplat import rasterization_inria_wrapper
 
@@ -262,35 +258,6 @@ def worker(local_rank: int, world_rank: int, world_size: int, args):
                     )
                     torch.cuda.empty_cache()
 
-            if "gsplat-legacy" in args.backends:
-                print("gsplat-legacy")
-                for scene_grid in args.scene_grid:
-                    stats = main(
-                        batch_size=batch_size,
-                        channels=channels,
-                        reso="1080p",
-                        scene_grid=scene_grid,
-                        backend="gsplat",
-                        repeats=args.repeats,
-                    )
-                    collection.append(
-                        [
-                            "gsplat v0.1.11",
-                            "n/a",
-                            "n/a",
-                            # configs
-                            batch_size,
-                            channels,
-                            scene_grid,
-                            # stats
-                            # f"{stats['mem_fwd']:0.2f}",
-                            f"{stats['mem_all']:0.2f}",
-                            f"{1.0 / stats['time_fwd']:0.1f} x {(batch_size)}",
-                            f"{1.0 / stats['time_bwd']:0.1f} x {(batch_size)}",
-                        ]
-                    )
-                    torch.cuda.empty_cache()
-
             if "inria" in args.backends:
                 print("inria")
                 for scene_grid in args.scene_grid:
@@ -362,7 +329,7 @@ if __name__ == "__main__":
         nargs="+",
         type=str,
         default=["gsplat"],
-        help="gsplat, gsplat-legacy, inria",
+        help="gsplat, inria",
     )
     parser.add_argument(
         "--repeats",

@@ -109,7 +109,7 @@ class MCMCStrategy(Strategy):
         info: Dict[str, Any],
         lr: float,
     ):
-        """Callback function to be executed before the `loss.backward()` call.
+        """Callback function to be executed after the `loss.backward()` call.
 
         Args:
             lr (float): Learning rate for "means" attribute of the GS.
@@ -151,7 +151,7 @@ class MCMCStrategy(Strategy):
         optimizers: Dict[str, torch.optim.Optimizer],
         binoms: Tensor,
     ) -> int:
-        opacities = torch.sigmoid(params["opacities"])
+        opacities = torch.sigmoid(params["opacities"].flatten())
         dead_mask = opacities <= self.min_opacity
         n_gs = dead_mask.sum().item()
         if n_gs > 0:

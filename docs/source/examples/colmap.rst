@@ -9,7 +9,7 @@ model for novel view synthesis, on a COLMAP processed capture. This script follo
 exact same logic with the `official implementation 
 <https://github.com/graphdeco-inria/gaussian-splatting>`_ and we have verified it to be 
 able to reproduce the metrics in the paper, with much better training speed and memory 
-footprint. See :doc:`../tests/eval` for more details on the comparision.
+footprint. See :doc:`../tests/eval` for more details on the comparison.
 
 Simply run the script under `examples/`:
 

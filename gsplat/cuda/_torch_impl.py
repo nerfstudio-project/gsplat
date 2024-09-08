@@ -74,7 +74,7 @@ def _persp_proj(
     width: int,
     height: int,
 ) -> Tuple[Tensor, Tensor]:
-    """PyTorch implementation of prespective projection for 3D Gaussians.
+    """PyTorch implementation of perspective projection for 3D Gaussians.
 
     Args:
         means: Gaussian means in camera coordinate system. [C, N, 3].
@@ -119,6 +119,43 @@ def _persp_proj(
     return means2d, cov2d  # [C, N, 2], [C, N, 2, 2]
 
 
+def _ortho_proj(
+    means: Tensor,  # [C, N, 3]
+    covars: Tensor,  # [C, N, 3, 3]
+    Ks: Tensor,  # [C, 3, 3]
+    width: int,
+    height: int,
+) -> Tuple[Tensor, Tensor]:
+    """PyTorch implementation of orthographic projection for 3D Gaussians.
+
+    Args:
+        means: Gaussian means in camera coordinate system. [C, N, 3].
+        covars: Gaussian covariances in camera coordinate system. [C, N, 3, 3].
+        Ks: Camera intrinsics. [C, 3, 3].
+        width: Image width.
+        height: Image height.
+
+    Returns:
+        A tuple:
+
+        - **means2d**: Projected means. [C, N, 2].
+        - **cov2d**: Projected covariances. [C, N, 2, 2].
+    """
+    C, N, _ = means.shape
+
+    fx = Ks[..., 0, 0, None]  # [C, 1]
+    fy = Ks[..., 1, 1, None]  # [C, 1]
+
+    O = torch.zeros((C, 1), device=means.device, dtype=means.dtype)
+    J = torch.stack([fx, O, O, O, fy, O], dim=-1).reshape(C, 1, 2, 3).repeat(1, N, 1, 1)
+
+    cov2d = torch.einsum("...ij,...jk,...kl->...il", J, covars, J.transpose(-1, -2))
+    means2d = (
+        means[..., :2] * Ks[:, None, [0, 1], [0, 1]] + Ks[:, None, [0, 1], [2, 2]]
+    )  # [C, N, 2]
+    return means2d, cov2d  # [C, N, 2], [C, N, 2, 2]
+
+
 def _world_to_cam(
     means: Tensor,  # [N, 3]
     covars: Tensor,  # [N, 3, 3]
@@ -155,6 +192,7 @@ def _fully_fused_projection(
     near_plane: float = 0.01,
     far_plane: float = 1e10,
     calc_compensations: bool = False,
+    ortho: bool = False,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Optional[Tensor]]:
     """PyTorch implementation of `gsplat.cuda._wrapper.fully_fused_projection()`
 
@@ -164,7 +202,12 @@ def _fully_fused_projection(
         arguments. Not all arguments are supported.
     """
     means_c, covars_c = _world_to_cam(means, covars, viewmats)
-    means2d, covars2d = _persp_proj(means_c, covars_c, Ks, width, height)
+
+    if ortho:
+        means2d, covars2d = _ortho_proj(means_c, covars_c, Ks, width, height)
+    else:
+        means2d, covars2d = _persp_proj(means_c, covars_c, Ks, width, height)
+
     det_orig = (
         covars2d[..., 0, 0] * covars2d[..., 1, 1]
         - covars2d[..., 0, 1] * covars2d[..., 1, 0]
