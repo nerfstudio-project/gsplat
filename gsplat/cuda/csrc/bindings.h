@@ -15,7 +15,7 @@
     GSPLAT_CHECK_CUDA(x);                                                      \
     GSPLAT_CHECK_CONTIGUOUS(x)
 #define GSPLAT_DEVICE_GUARD(_ten)                                              \
-    const at::cuda::OptionalCUDAGuard device_guard(device_of(_ten));
+    const at::cuda::OptionalCUDAGuard GSPLAT_DEVICE_GUARD(device_of(_ten));
 
 #define GSPLAT_PRAGMA_UNROLL _Pragma("unroll")
 
