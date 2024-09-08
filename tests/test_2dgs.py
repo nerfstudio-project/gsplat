@@ -70,7 +70,6 @@ def test_projection_2dgs(test_data):
         (0, 1, 3, 2)
     )  # TODO(WZ): Figure out why do we need to permute here
 
-
     radii, means2d, depths, ray_Ms, normals = fully_fused_projection_2dgs(
         means, quats, scales, viewmats, Ks, width, height
     )
@@ -114,10 +113,13 @@ def test_projection_2dgs(test_data):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-@pytest.mark.parametrize("sparse_grad", [
-    False, 
-    # True  No Sparse-grad for now
-])
+@pytest.mark.parametrize(
+    "sparse_grad",
+    [
+        False,
+        # True  No Sparse-grad for now
+    ],
+)
 def test_fully_fused_projection_packed_2dgs(
     test_data,
     sparse_grad: bool,
@@ -157,7 +159,6 @@ def test_fully_fused_projection_packed_2dgs(
         packed=True,
         sparse_grad=sparse_grad,
     )
-    
 
     _radii, _means2d, _depths, _ray_Ms, _normals = fully_fused_projection_2dgs(
         means,
@@ -278,7 +279,13 @@ def test_rasterize_to_pixels_2dgs(test_data):
     normals.requires_grad = True
     densify.requires_grad = True
 
-    render_colors, render_alphas, render_normals, _, render_median = rasterize_to_pixels_2dgs(
+    (
+        render_colors,
+        render_alphas,
+        render_normals,
+        _,
+        render_median,
+    ) = rasterize_to_pixels_2dgs(
         means2d,
         ray_Ms,
         colors,
@@ -293,7 +300,7 @@ def test_rasterize_to_pixels_2dgs(test_data):
         backgrounds=backgrounds,
         distloss=True,
     )
-    
+
     ray_Ms_torch = ray_Ms.transpose(-1, -2).clone()
     _render_colors, _render_alphas, _render_normals = _rasterize_to_pixels_2dgs(
         means2d,
@@ -370,8 +377,7 @@ def test_rasterize_to_pixels_2dgs(test_data):
     torch.testing.assert_close(render_colors, _render_colors)
     torch.testing.assert_close(render_alphas, _render_alphas)
     torch.testing.assert_close(render_normals, _render_normals)
-    
-    
+
     # assert close backward
     torch.testing.assert_close(v_means2d, _v_means2d, rtol=1e-3, atol=1e-3)
     torch.testing.assert_close(v_ray_Ms, _v_ray_Ms, rtol=1e-3, atol=1e-3)
@@ -379,6 +385,7 @@ def test_rasterize_to_pixels_2dgs(test_data):
     torch.testing.assert_close(v_opacities, _v_opacities, rtol=1e-3, atol=1e-3)
     torch.testing.assert_close(v_backgrounds, _v_backgrounds, rtol=1e-5, atol=1e-5)
     torch.testing.assert_close(v_normals, _v_normals, rtol=1e-3, atol=1e-3)
+
 
 if __name__ == "__main__":
     test_projection_2dgs(test_data())

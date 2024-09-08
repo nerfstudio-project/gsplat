@@ -1227,7 +1227,7 @@ def fully_fused_projection_2dgs(
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
     """Prepare Gaussians for rasterization
 
-    This function prepares ray-splat intersection matrices, computes 
+    This function prepares ray-splat intersection matrices, computes
     per splat bounding box and 2D means in image space.
 
     Args:
@@ -1500,7 +1500,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
         width = ctx.width
         height = ctx.height
         sparse_grad = ctx.sparse_grad
-        
+
         v_means, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
             "fully_fused_projection_packed_bwd_2dgs"
         )(
@@ -1610,8 +1610,8 @@ def rasterize_to_pixels_2dgs(
         backgrounds: Background colors. [C, channels]. Default: None.
         masks: Optional tile mask to skip rendering GS to masked tiles. [C, tile_height, tile_width]. Default: None.
         packed: If True, the input tensors are expected to be packed with shape [nnz, ...]. Default: False.
-        absgrad: If True, the backward pass will compute a `.absgrad` attribute for `means2d`. Default: False. 
-    
+        absgrad: If True, the backward pass will compute a `.absgrad` attribute for `means2d`. Default: False.
+
     Returns:
         A tuple:
 
@@ -1620,8 +1620,8 @@ def rasterize_to_pixels_2dgs(
         - **Rendered normals**.     [C, image_height, image_width, 3]
         - **Rendered distortion**.  [C, image_height, image_width, 1]
         - **Rendered median depth**.[C, image_height, image_width, 1]
-        
-        
+
+
     """
     C = isect_offsets.size(0)
     device = means2d.device
@@ -1818,7 +1818,13 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
 
         # doubel to float
         render_alphas = render_alphas.float()
-        return render_colors, render_alphas, render_normals, render_distort, render_median
+        return (
+            render_colors,
+            render_alphas,
+            render_normals,
+            render_distort,
+            render_median,
+        )
 
     @staticmethod
     def backward(
@@ -1829,7 +1835,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         v_render_distort: Tensor,
         v_render_median: Tensor,
     ):
-        
+
         (
             means2d,
             ray_Ms,
@@ -1894,7 +1900,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             )
         else:
             v_backgrounds = None
-        
+
         return (
             v_means2d,
             v_ray_Ms,

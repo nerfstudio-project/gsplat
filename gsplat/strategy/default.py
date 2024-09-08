@@ -55,10 +55,10 @@ class DefaultStrategy(Strategy):
         revised_opacity (bool): Whether to use revised opacity heuristic from
           arXiv:2404.06109 (experimental). Default is False.
         verbose (bool): Whether to print verbose information. Default is False.
-        key_for_gradient (str): Which variable uses for densification strategy. 
+        key_for_gradient (str): Which variable uses for densification strategy.
           3DGS uses "means2d" gradient and 2DGS uses a similar gradient which stores
-          in variable "gradient_2dgs". 
-        
+          in variable "gradient_2dgs".
+
     Examples:
 
         >>> from gsplat import DefaultStrategy, rasterization
@@ -207,7 +207,15 @@ class DefaultStrategy(Strategy):
         info: Dict[str, Any],
         packed: bool = False,
     ):
-        for key in ["means2d", "width", "height", "n_cameras", "radii", "gaussian_ids", self.key_for_gradient]:
+        for key in [
+            "means2d",
+            "width",
+            "height",
+            "n_cameras",
+            "radii",
+            "gaussian_ids",
+            self.key_for_gradient,
+        ]:
             assert key in info, f"{key} is required but missing."
 
         # normalize grads to [-1, 1] screen space
@@ -220,7 +228,7 @@ class DefaultStrategy(Strategy):
 
         # initialize state on the first run
         n_gaussian = len(list(params.values())[0])
-        
+
         if state["grad2d"] is None:
             state["grad2d"] = torch.zeros(n_gaussian, device=grads.device)
         if state["count"] is None:

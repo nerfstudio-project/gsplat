@@ -8,6 +8,7 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from matplotlib import colormaps
 
+
 class CameraOptModule(torch.nn.Module):
     """Camera pose optimization module."""
 
@@ -171,6 +172,7 @@ def colormap(img, cmap="jet"):
     plt.close()
     return img
 
+
 def apply_float_colormap(img: torch.Tensor, colormap: str = "turbo") -> torch.Tensor:
     """Convert single channel to a color img.
 
@@ -193,6 +195,7 @@ def apply_float_colormap(img: torch.Tensor, colormap: str = "turbo") -> torch.Te
         colormaps[colormap].colors,  # type: ignore
         device=img.device,
     )[img_long[..., 0]]
+
 
 def apply_depth_colormap(
     depth: torch.Tensor,
