@@ -1,45 +1,9 @@
-import struct
 from typing import Optional, Tuple
 
 import torch
-import torch.nn.functional as F
 from torch import Tensor
 
-
-def _quat_scale_to_RS_preci(
-    quats: Tensor,  # [N, 4],
-    scales: Tensor,  # [N, 3],
-    compute_covar: bool = True,
-    compute_preci: bool = True,
-) -> Tuple[Optional[Tensor], Optional[Tensor]]:
-    """PyTorch implementation of `gsplat.cuda._wrapper.quat_scale_to_covar_preci()`."""
-    quats = F.normalize(quats, p=2, dim=-1)
-    w, x, y, z = torch.unbind(quats, dim=-1)
-    R = torch.stack(
-        [
-            1 - 2 * (y**2 + z**2),
-            2 * (x * y - w * z),
-            2 * (x * z + w * y),
-            2 * (x * y + w * z),
-            1 - 2 * (x**2 + z**2),
-            2 * (y * z - w * x),
-            2 * (x * z - w * y),
-            2 * (y * z + w * x),
-            1 - 2 * (x**2 + y**2),
-        ],
-        dim=-1,
-    )
-
-    R = R.reshape(quats.shape[:-1] + (3, 3))  # (..., 3, 3)
-    # R.register_hook(lambda grad: print("grad R", grad))
-
-    M = None
-    if compute_covar:
-        M = R * scales[..., None, :]  # (..., 3, 3)
-    P = None
-    if compute_preci:
-        P = R * (1 / scales[..., None, :])  # (..., 3, 3)
-    return M, P
+from gsplat.cuda._torch_impl import _quat_scale_to_matrix
 
 
 def _fully_fused_projection_2dgs(
@@ -54,7 +18,7 @@ def _fully_fused_projection_2dgs(
     far_plane: float = 1e10,
     eps: float = 1e-6,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
-    """PyTorch implementation of `gsplat.cuda._wrapper.fully_fused_projection()`
+    """PyTorch implementation of `gsplat.cuda._wrapper.fully_fused_projection_2dgs()`
 
     .. note::
 
@@ -64,13 +28,10 @@ def _fully_fused_projection_2dgs(
     R_cw = viewmats[:, :3, :3]  # [C, 3, 3]
     t_cw = viewmats[:, :3, 3]  # [C, 3]
     means_c = torch.einsum("cij,nj->cni", R_cw, means) + t_cw[:, None, :]  # (C, N, 3)
-    RS_wl, _ = _quat_scale_to_RS_preci(
-        quats, scales, compute_covar=True, compute_preci=False
-    )
+    RS_wl = _quat_scale_to_matrix(quats, scales)
     RS_cl = torch.einsum("cij,njk->cnik", R_cw, RS_wl)  # [C, N, 3, 3]
 
     # compute normals
-
     normals = RS_cl[..., 2]  # [C, N, 3]
     C, N, _ = normals.shape
     cos = -normals.reshape((C * N, 1, 3)) @ means_c.reshape((C * N, 3, 1))
@@ -126,7 +87,8 @@ def accumulate_2dgs(
     image_width: int,
     image_height: int,
 ) -> Tuple[Tensor, Tensor]:
-    """ """
+    """Alpha compositing for 2DGS."""
+
     try:
         from nerfacc import accumulate_along_rays, render_weight_from_alpha
     except ImportError:
@@ -154,8 +116,6 @@ def accumulate_2dgs(
     alphas = torch.clamp_max(
         opacities[camera_ids, gaussian_ids] * torch.exp(-sigmas), 0.999
     )
-    # for s, a in zip(sigmas, alphas):
-    #     print(s, a)
 
     indices = camera_ids * image_height * image_width + pixel_ids
     total_pixels = C * image_height * image_width
@@ -196,7 +156,7 @@ def _rasterize_to_pixels_2dgs(
     backgrounds: Optional[Tensor] = None,  # [C, channels]
     batch_per_iter: int = 100,
 ):
-    """Pytorch implementation of `gsplat.cuda._wrapper.rasterize_to_pixels()`.
+    """Pytorch implementation of `gsplat.cuda._wrapper.rasterize_to_pixels_2dgs()`.
 
     This function rasterizes 2D Gaussians to pixels in a Pytorch-friendly way. It
     iteratively accumulates the renderings within each batch of Gaussians. The
@@ -221,6 +181,7 @@ def _rasterize_to_pixels_2dgs(
     from ._wrapper import rasterize_to_indices_in_range_2dgs
 
     C, N = means2d.shape[:2]
+    n_isects = len(flatten_ids)
     device = means2d.device
 
     render_colors = torch.zeros(
@@ -228,16 +189,14 @@ def _rasterize_to_pixels_2dgs(
     )
     render_alphas = torch.zeros((C, image_height, image_width, 1), device=device)
     render_normals = torch.zeros((C, image_height, image_width, 3), device=device)
-    # Split Gaussians into batches and iteratively accumulate the renderings
 
+    # Split Gaussians into batches and iteratively accumulate the renderings
     block_size = tile_size * tile_size
-    n_isects = flatten_ids.shape[0]
     isect_offsets_fl = torch.cat(
         [isect_offsets.flatten(), torch.tensor([n_isects], device=device)]
     )
     max_range = (isect_offsets_fl[1:] - isect_offsets_fl[:-1]).max().item()
-    num_batches = int((max_range + block_size - 1) // block_size)
-    
+    num_batches = (max_range + block_size - 1) // block_size
     for step in range(0, num_batches, batch_per_iter):
         transmittances = 1.0 - render_alphas[..., 0]
 
@@ -248,6 +207,11 @@ def _rasterize_to_pixels_2dgs(
             step + batch_per_iter,
             transmittances,
             means2d,
+            # Note(ruilong): why transform here? Can we avoid this and make the
+            # APIs more consistent?
+            # Note(ruilong): I like the name of `ray_transforms` better than `ray_Ms`,
+            # is the only difference between the two a transpose? Would be nice to
+            # make them consistent and reduce the two naming into one.
             ray_transforms.transpose(-1, -2),
             opacities,
             image_width,
@@ -256,7 +220,6 @@ def _rasterize_to_pixels_2dgs(
             isect_offsets,
             flatten_ids,
         )  # [M], [M]
-
         if len(gs_ids) == 0:
             break
 
