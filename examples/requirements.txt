@@ -17,3 +17,4 @@ tyro>=0.8.8
 Pillow
 tensorboard
 pyyaml
+matplotlib
