@@ -3,6 +3,7 @@ from typing import Dict, Optional, Tuple
 
 import torch
 import torch.distributed
+import torch.nn.functional as F
 from torch import Tensor
 from typing_extensions import Literal
 
@@ -21,9 +22,8 @@ from .distributed import (
     all_to_all_int32,
     all_to_all_tensor_list,
 )
-from .utils import _get_projection_matrix, depth_to_normal
+from .utils import depth_to_normal, get_projection_matrix
 
-import torch.nn.functional as F
 
 def rasterization(
     means: Tensor,  # [N, 3]
@@ -922,28 +922,6 @@ def rasterization_inria_wrapper(
         GaussianRasterizer,
     )
 
-    def _get_projection_matrix(znear, zfar, fovX, fovY, device="cuda"):
-        tanHalfFovY = math.tan((fovY / 2))
-        tanHalfFovX = math.tan((fovX / 2))
-
-        top = tanHalfFovY * znear
-        bottom = -top
-        right = tanHalfFovX * znear
-        left = -right
-
-        P = torch.zeros(4, 4, device=device)
-
-        z_sign = 1.0
-
-        P[0, 0] = 2.0 * znear / (right - left)
-        P[1, 1] = 2.0 * znear / (top - bottom)
-        P[0, 2] = (right + left) / (right - left)
-        P[1, 2] = (top + bottom) / (top - bottom)
-        P[3, 2] = z_sign
-        P[2, 2] = z_sign * zfar / (zfar - znear)
-        P[2, 3] = -(zfar * znear) / (zfar - znear)
-        return P
-
     assert eps2d == 0.3, "This is hard-coded in CUDA to be 0.3"
     C = len(viewmats)
     device = means.device
@@ -957,7 +935,7 @@ def rasterization_inria_wrapper(
         tanfovy = math.tan(FoVy * 0.5)
 
         world_view_transform = viewmats[cid].transpose(0, 1)
-        projection_matrix = _get_projection_matrix(
+        projection_matrix = get_projection_matrix(
             znear=near_plane, zfar=far_plane, fovX=FoVx, fovY=FoVy, device=device
         ).transpose(0, 1)
         full_proj_transform = (
@@ -1042,66 +1020,13 @@ def rasterization_2dgs(
     render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
     sparse_grad: bool = False,
     absgrad: bool = False,
-    rasterize_mode: Literal["classic"] = "classic",
     distloss: bool = False,
     depth_mode: Literal["expected", "median"] = "expected",
 ) -> Tuple[Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor], Dict]:
     """Rasterize a set of 2D Gaussians (N) to a batch of image planes (C).
-    
-    This function provides a handful features for 3D Gaussian rasterization, which
-    we detail in the following notes. A complete profiling of the these features
-    can be found in the :ref:`profiling` page.
-    
-    .. note::  
-        **Multi-GPU Distributed Rasterization**: TODO
-    
-    .. note::
-        **Batch Rasterization**: This function allows for rasterizing a set of 3D Gaussians
-        to a batch of images in one go, by simplly providing the batched `viewmats` and `Ks`.
 
-    .. note::
-        **Support N-D Features**: If `sh_degree` is None,
-        the `colors` is expected to be with shape [N, D] or [C, N, D], in which D is the channel of
-        the features to be rendered. The computation is slow when D > 32 at the moment.
-        If `sh_degree` is set, the `colors` is expected to be the SH coefficients with
-        shape [N, K, 3] or [C, N, K, 3], where K is the number of SH bases. In this case, it is expected
-        that :math:`(\\textit{sh_degree} + 1) ^ 2 \\leq K`, where `sh_degree` controls the
-        activated bases in the SH coefficients.
+    This function supports a handful of features, similar to the :func:`rasterization` function.
 
-    .. note::
-        **Depth Rendering**: This function supports colors or/and depths via `render_mode`.
-        The supported modes are "RGB", "D", "ED", "RGB+D", and "RGB+ED". "RGB" renders the
-        colored image that respects the `colors` argument. "D" renders the accumulated z-depth
-        :math:`\\sum_i w_i z_i`. "ED" renders the expected z-depth
-        :math:`\\frac{\\sum_i w_i z_i}{\\sum_i w_i}`. "RGB+D" and "RGB+ED" render both
-        the colored image and the depth, in which the depth is the last channel of the output.
-
-    .. note::
-        **Memory-Speed Trade-off**: The `packed` argument provides a trade-off between
-        memory footprint and runtime. If `packed` is True, the intermediate results are
-        packed into sparse tensors, which is more memory efficient but might be slightly
-        slower. This is especially helpful when the scene is large and each camera sees only
-        a small portion of the scene. If `packed` is False, the intermediate results are
-        with shape [C, N, ...], which is faster but might consume more memory.
-
-    .. note::
-        **Sparse Gradients(Experimental)**: If `sparse_grad` is True, the gradients for {means, quats, scales}
-        will be stored in a `COO sparse layout <https://pytorch.org/docs/stable/generated/torch.sparse_coo_tensor.html>`_.
-        This can be helpful for saving memory
-        for training when the scene is large and each iteration only activates a small portion
-        of the Gaussians. Usually a sparse optimizer is required to work with sparse gradients,
-        such as `torch.optim.SparseAdam <https://pytorch.org/docs/stable/generated/torch.optim.SparseAdam.html#sparseadam>`_.
-        This argument is only effective when `packed` is True.
-
-    .. note::
-        **Speed-up for Large Scenes**: The `radius_clip` argument is extremely helpful for
-        speeding up large scale scenes or scenes with large depth of fields. Gaussians with
-        2D radius smaller or equal than this value (in pixel unit) will be skipped during rasterization.
-        This will skip all the far-away Gaussians that are too small to be seen in the image.
-        But be warned that if there are close-up Gaussians that are also below this threshold, they will
-        also get skipped (which is rarely happened in practice). This is by default disabled by setting
-        `radius_clip` to 0.0.
-        
     .. warning::
         This function is currently not differentiable w.r.t. the camera intrinsics `Ks`.
 
@@ -1139,14 +1064,12 @@ def rasterization_2dgs(
         absgrad: If true, the absolute gradients of the projected 2D means
             will be computed during the backward pass, which could be accessed by
             `meta["means2d"].absgrad`. Default is False.
-        rasterize_mode: The rasterization mode. Supported modes are "classic" and
-            "antialiased". Default is "classic".
         channel_chunk: The number of channels to render in one go. Default is 32.
             If the required rendering channels are larger than this value, the rendering
             will be done looply in chunks.
-        dist_loss: If true, use distortion regularization to get better geometry detail.
+        distloss: If true, use distortion regularization to get better geometry detail.
         depth_mode: render depth mode. Choose from expected depth and median depth.
-            
+
     Returns:
         A tuple:
 
@@ -1158,17 +1081,17 @@ def rasterization_2dgs(
         **render_alphas**: The rendered alphas. [C, height, width, 1].
 
         **render_normals**: The rendered normals. [C, height, width, 3].
-        
+
         **render_normals_from_depth: surface normal from depth. [C, height, width, 3]
-        
+
         **render_distort**: The rendered distortions. [C, height, width, 1].
         L1 version, different from L2 version in 2DGS paper.
-        
+
         **render_median**: The rendered median depth. [C, height, width, 1].
-        
+
         **meta**: A dictionary of intermediate results of the rasterization.
 
-    
+
     """
 
     N = means.shape[0]
@@ -1200,7 +1123,6 @@ def rasterization_2dgs(
             colors.dim() == 3 and colors.shape[0] == N and colors.shape[2] == 3
         ), colors.shape
         assert (sh_degree + 1) ** 2 <= colors.shape[1], colors.shape
-
 
     # Compute Ray-Splat intersection transformation.
     proj_results = fully_fused_projection_2dgs(
@@ -1234,9 +1156,9 @@ def rasterization_2dgs(
         radii, means2d, depths, ray_transformations, normals = proj_results
         opacities = opacities.repeat(C, 1)
         camera_ids, gaussian_ids = None, None
-    
-    densify = (
-        torch.zeros_like(means2d, dtype=means.dtype, requires_grad=True, device="cuda")
+
+    densify = torch.zeros_like(
+        means2d, dtype=means.dtype, requires_grad=True, device="cuda"
     )
     # Identify intersecting tiles
     tile_width = math.ceil(width / float(tile_size))
@@ -1326,12 +1248,11 @@ def rasterization_2dgs(
             depth_for_normal = render_colors[..., -1:]
         elif depth_mode == "median":
             depth_for_normal = render_median
-        
+
         render_normals_from_depth = depth_to_normal(
-            depth_for_normal, torch.linalg.inv(viewmats), Ks, near_plane, far_plane  # c2w
+            depth_for_normal, torch.linalg.inv(viewmats), Ks
         ).squeeze(0)
 
-    
     meta = {
         "camera_ids": camera_ids,
         "gaussian_ids": gaussian_ids,
@@ -1352,7 +1273,7 @@ def rasterization_2dgs(
         "tile_size": tile_size,
         "n_cameras": C,
         "render_distort": render_distort,
-        "gradient_2dgs": densify,   # This holds the gradient used for densification for 2dgs
+        "gradient_2dgs": densify,  # This holds the gradient used for densification for 2dgs
     }
 
     render_normals = render_normals @ torch.linalg.inv(viewmats)[0, :3, :3].T
@@ -1365,7 +1286,6 @@ def rasterization_2dgs(
         render_distort,
         render_median,
     ), meta
-
 
 
 def rasterization_2dgs_inria_wrapper(
@@ -1413,7 +1333,7 @@ def rasterization_2dgs_inria_wrapper(
         tanfovy = math.tan(FoVy * 0.5)
 
         world_view_transform = viewmats[cid].transpose(0, 1)
-        projection_matrix = _get_projection_matrix(
+        projection_matrix = get_projection_matrix(
             znear=near_plane, zfar=far_plane, fovX=FoVx, fovY=FoVy, device=device
         ).transpose(0, 1)
         full_proj_transform = (
@@ -1493,13 +1413,7 @@ def rasterization_2dgs_inria_wrapper(
         render_depth_expected * (1 - depth_ratio) + (depth_ratio) * render_depth_median
     )
 
-    normals_surf = depth_to_normal(
-        render_depth,
-        viewmats,
-        Ks,
-        near_plane=near_plane,
-        far_plane=far_plane,
-    )
+    normals_surf = depth_to_normal(render_depth, viewmats, Ks)
     normals_surf = normals_surf * (render_alphas).detach()
 
     render_colors = torch.cat([render_colors, render_depth], dim=-1)

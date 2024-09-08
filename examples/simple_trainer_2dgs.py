@@ -3,7 +3,7 @@ import math
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple, Literal
+from typing import Dict, List, Literal, Optional, Tuple
 
 import imageio
 import nerfview
@@ -19,7 +19,15 @@ from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
-from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed, colormap, apply_depth_colormap
+from utils import (
+    AppearanceOptModule,
+    CameraOptModule,
+    apply_depth_colormap,
+    colormap,
+    knn,
+    rgb_to_sh,
+    set_random_seed,
+)
 
 from gsplat.rendering import rasterization_2dgs, rasterization_2dgs_inria_wrapper
 from gsplat.strategy import DefaultStrategy
@@ -301,7 +309,7 @@ class Runner:
             key_for_gradient = "gradient_2dgs"
         else:
             key_for_gradient = "means2d"
-            
+
         # Densification Strategy
         self.strategy = DefaultStrategy(
             verbose=True,
@@ -401,7 +409,7 @@ class Runner:
         else:
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
-        rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
+        assert self.cfg.antialiased is False, "Antialiased is not supported for 2DGS"
 
         if self.model_type == "2dgs":
             rasterize_fnc = rasterization_2dgs
@@ -421,7 +429,6 @@ class Runner:
             packed=self.cfg.packed,
             absgrad=self.cfg.absgrad,
             sparse_grad=self.cfg.sparse_grad,
-            rasterize_mode=rasterize_mode,
             **kwargs,
         )
 
@@ -770,14 +777,19 @@ class Runner:
             )
 
             # write median depths
-            render_median = (render_median - render_median.min()) / (render_median.max() - render_median.min())
-            # render_median = render_median.detach().cpu().squeeze(0).unsqueeze(-1).repeat(1, 1, 3).numpy()
-            render_median = render_median.detach().cpu().squeeze(0).repeat(1, 1, 3).numpy()
-            
-            imageio.imwrite(
-                f"{self.render_dir}/val_{i:04d}_median_depth_{step}.png", (render_median * 255).astype(np.uint8)
+            render_median = (render_median - render_median.min()) / (
+                render_median.max() - render_median.min()
             )
-    
+            # render_median = render_median.detach().cpu().squeeze(0).unsqueeze(-1).repeat(1, 1, 3).numpy()
+            render_median = (
+                render_median.detach().cpu().squeeze(0).repeat(1, 1, 3).numpy()
+            )
+
+            imageio.imwrite(
+                f"{self.render_dir}/val_{i:04d}_median_depth_{step}.png",
+                (render_median * 255).astype(np.uint8),
+            )
+
             # write normals
             normals = (normals * 0.5 + 0.5).squeeze(0).cpu().numpy()
             normals_output = (normals * 255).astype(np.uint8)
@@ -883,7 +895,9 @@ class Runner:
             depths = renders[0, ..., 3:4]  # [H, W, 1]
             depths = (depths - depths.min()) / (depths.max() - depths.min())
 
-            surf_normals = (surf_normals - surf_normals.min()) / (surf_normals.max() - surf_normals.min())
+            surf_normals = (surf_normals - surf_normals.min()) / (
+                surf_normals.max() - surf_normals.min()
+            )
 
             # write images
             canvas = torch.cat(
