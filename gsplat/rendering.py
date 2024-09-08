@@ -1082,7 +1082,7 @@ def rasterization_2dgs(
 
         **render_normals**: The rendered normals. [C, height, width, 3].
 
-        **render_normals_from_depth: surface normal from depth. [C, height, width, 3]
+        **render_normals_from_depth**: surface normal from depth. [C, height, width, 3]
 
         **render_distort**: The rendered distortions. [C, height, width, 1].
         L1 version, different from L2 version in 2DGS paper.
@@ -1278,6 +1278,8 @@ def rasterization_2dgs(
 
     render_normals = render_normals @ torch.linalg.inv(viewmats)[0, :3, :3].T
 
+    # Note(ruilong): To align with the rasterization function, this should return
+    # (render_colors, ..., meta) instead of (render_colors, render_alphas), meta.
     return (
         render_colors,
         render_alphas,

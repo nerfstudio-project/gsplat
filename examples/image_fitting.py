@@ -2,7 +2,7 @@ import math
 import os
 import time
 from pathlib import Path
-from typing import Optional, Literal
+from typing import Literal, Optional
 
 import numpy as np
 import torch
@@ -104,7 +104,7 @@ class SimpleTrainer:
         for iter in range(iterations):
             start = time.time()
 
-            renders, _ = rasterize_fnc(
+            renders = rasterize_fnc(
                 self.means,
                 self.quats / self.quats.norm(dim=-1, keepdim=True),
                 self.scales,
@@ -115,8 +115,8 @@ class SimpleTrainer:
                 self.W,
                 self.H,
                 packed=False,
-            )
-            out_img = renders[0].squeeze(0)
+            )[0]
+            out_img = renders[0]
             torch.cuda.synchronize()
             times[0] += time.time() - start
             loss = mse_loss(out_img, self.gt_image)
@@ -130,8 +130,6 @@ class SimpleTrainer:
 
             if save_imgs and iter % 5 == 0:
                 frames.append((out_img.detach().cpu().numpy() * 255).astype(np.uint8))
-            # break
-
         if save_imgs:
             # save them as a gif with PIL
             frames = [Image.fromarray(frame) for frame in frames]
