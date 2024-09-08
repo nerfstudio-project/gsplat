@@ -12,34 +12,35 @@ namespace gsplat {
 
 namespace cg = cooperative_groups;
 
-
 /****************************************************************************
  * Projection of Gaussians (Batched) Backward Pass
  ****************************************************************************/
- template <typename T>
- __global__ void fully_fused_projection_bwd_2dgs_kernel(
+template <typename T>
+__global__ void fully_fused_projection_bwd_2dgs_kernel(
     // fwd inputs
-    const uint32_t C, const uint32_t N,
+    const uint32_t C,
+    const uint32_t N,
     const T *__restrict__ means,    // [N, 3]
     const T *__restrict__ quats,    // [N, 4]
     const T *__restrict__ scales,   // [N, 3]
     const T *__restrict__ viewmats, // [C, 4, 4]
     const T *__restrict__ Ks,       // [C, 3, 3]
-    const int32_t image_width, const int32_t image_height,
+    const int32_t image_width,
+    const int32_t image_height,
     // fwd outputs
-    const int32_t *__restrict__ radii,  // [C, N]
-    const T *__restrict__ ray_Ms,       // [C, N, 3, 3]
+    const int32_t *__restrict__ radii, // [C, N]
+    const T *__restrict__ ray_Ms,      // [C, N, 3, 3]
     // grad outputs
-    const T *__restrict__ v_means2d,    // [C, N, 2]
-    const T *__restrict__ v_depths,     // [C, N]
-    const T *__restrict__ v_normals,    // [C, N, 3]
+    const T *__restrict__ v_means2d, // [C, N, 2]
+    const T *__restrict__ v_depths,  // [C, N]
+    const T *__restrict__ v_normals, // [C, N, 3]
     // grad inputs
-    T *__restrict__ v_ray_Ms,           // [C, N, 3, 3]
-    T *__restrict__ v_means,            // [N, 3]
-    T *__restrict__ v_quats,            // [N, 4]
-    T *__restrict__ v_scales,           // [N, 3]
-    T *__restrict__ v_viewmats         // [C, 4, 4]
- ) {
+    T *__restrict__ v_ray_Ms,  // [C, N, 3, 3]
+    T *__restrict__ v_means,   // [N, 3]
+    T *__restrict__ v_quats,   // [N, 4]
+    T *__restrict__ v_scales,  // [N, 3]
+    T *__restrict__ v_viewmats // [C, 4, 4]
+) {
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
     if (idx >= C * N || radii[idx] <= 0) {
@@ -61,9 +62,16 @@ namespace cg = cooperative_groups;
     v_ray_Ms += idx * 9;
 
     // transform Gaussian to camera space
-    mat3<T> R = mat3<T>(viewmats[0], viewmats[4], viewmats[8], // 1st column
-                        viewmats[1], viewmats[5], viewmats[9], // 2nd column
-                        viewmats[2], viewmats[6], viewmats[10] // 3rd column
+    mat3<T> R = mat3<T>(
+        viewmats[0],
+        viewmats[4],
+        viewmats[8], // 1st column
+        viewmats[1],
+        viewmats[5],
+        viewmats[9], // 2nd column
+        viewmats[2],
+        viewmats[6],
+        viewmats[10] // 3rd column
     );
     vec3<T> t = vec3<T>(viewmats[3], viewmats[7], viewmats[11]);
     vec3<T> mean_c;
@@ -72,16 +80,18 @@ namespace cg = cooperative_groups;
     vec4<T> quat = glm::make_vec4(quats + gid * 4);
     vec2<T> scale = glm::make_vec2(scales + gid * 3);
 
-    mat3<T> P = mat3<T>(
-        Ks[0], 0.0, Ks[2],
-        0.0, Ks[4], Ks[5],
-        0.0, 0.0, 1.0
-    );
-    
+    mat3<T> P = mat3<T>(Ks[0], 0.0, Ks[2], 0.0, Ks[4], Ks[5], 0.0, 0.0, 1.0);
+
     mat3<T> _v_ray_Ms = mat3<T>(
-        v_ray_Ms[0], v_ray_Ms[1], v_ray_Ms[2],
-        v_ray_Ms[3], v_ray_Ms[4], v_ray_Ms[5],
-        v_ray_Ms[6], v_ray_Ms[7], v_ray_Ms[8]
+        v_ray_Ms[0],
+        v_ray_Ms[1],
+        v_ray_Ms[2],
+        v_ray_Ms[3],
+        v_ray_Ms[4],
+        v_ray_Ms[5],
+        v_ray_Ms[6],
+        v_ray_Ms[7],
+        v_ray_Ms[8]
     );
 
     _v_ray_Ms[2][2] += v_depths[0];
@@ -135,27 +145,28 @@ namespace cg = cooperative_groups;
         gpuAtomicAdd(v_scales, v_scale[0]);
         gpuAtomicAdd(v_scales + 1, v_scale[1]);
     }
- }
-
+}
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 fully_fused_projection_bwd_2dgs_tensor(
     // fwd inputs
-    const torch::Tensor &means,                // [N, 3]
-    const torch::Tensor &quats,                // [N, 4]
-    const torch::Tensor &scales,               // [N, 2]
-    const torch::Tensor &viewmats,             // [C, 4, 4]
-    const torch::Tensor &Ks,                   // [C, 3, 3]
-    const uint32_t image_width, const uint32_t image_height, 
+    const torch::Tensor &means,    // [N, 3]
+    const torch::Tensor &quats,    // [N, 4]
+    const torch::Tensor &scales,   // [N, 2]
+    const torch::Tensor &viewmats, // [C, 4, 4]
+    const torch::Tensor &Ks,       // [C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
     // fwd outputs
-    const torch::Tensor &radii,                       // [C, N]
-    const torch::Tensor &ray_Ms,                      // [C, N, 3, 3]
+    const torch::Tensor &radii,  // [C, N]
+    const torch::Tensor &ray_Ms, // [C, N, 3, 3]
     // grad outputs
-    const torch::Tensor &v_means2d,                     // [C, N, 2]
-    const torch::Tensor &v_depths,                      // [C, N]
-    const torch::Tensor &v_normals,                     // [C, N, 3]
-    const torch::Tensor &v_ray_Ms,                      // [C, N, 3, 3]
-    const bool viewmats_requires_grad) {
+    const torch::Tensor &v_means2d, // [C, N, 2]
+    const torch::Tensor &v_depths,  // [C, N]
+    const torch::Tensor &v_normals, // [C, N, 3]
+    const torch::Tensor &v_ray_Ms,  // [C, N, 3, 3]
+    const bool viewmats_requires_grad
+) {
     GSPLAT_DEVICE_GUARD(means);
     GSPLAT_CHECK_INPUT(means);
     GSPLAT_CHECK_INPUT(quats);
@@ -181,19 +192,31 @@ fully_fused_projection_bwd_2dgs_tensor(
         v_viewmats = torch::zeros_like(viewmats);
     }
     if (C && N) {
-        fully_fused_projection_bwd_2dgs_kernel<float><<<(C * N + GSPLAT_N_THREADS - 1) / GSPLAT_N_THREADS, GSPLAT_N_THREADS, 0, stream>>>(
-            C, N, means.data_ptr<float>(),
-            quats.data_ptr<float>(),
-            scales.data_ptr<float>(),
-            viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
-            radii.data_ptr<int32_t>(), ray_Ms.data_ptr<float>(),
-            v_means2d.data_ptr<float>(), v_depths.data_ptr<float>(),
-            v_normals.data_ptr<float>(),
-            v_ray_Ms.data_ptr<float>(),
-            v_means.data_ptr<float>(),
-            v_quats.data_ptr<float>(),
-            v_scales.data_ptr<float>(),
-            viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr);
+        fully_fused_projection_bwd_2dgs_kernel<float>
+            <<<(C * N + GSPLAT_N_THREADS - 1) / GSPLAT_N_THREADS,
+               GSPLAT_N_THREADS,
+               0,
+               stream>>>(
+                C,
+                N,
+                means.data_ptr<float>(),
+                quats.data_ptr<float>(),
+                scales.data_ptr<float>(),
+                viewmats.data_ptr<float>(),
+                Ks.data_ptr<float>(),
+                image_width,
+                image_height,
+                radii.data_ptr<int32_t>(),
+                ray_Ms.data_ptr<float>(),
+                v_means2d.data_ptr<float>(),
+                v_depths.data_ptr<float>(),
+                v_normals.data_ptr<float>(),
+                v_ray_Ms.data_ptr<float>(),
+                v_means.data_ptr<float>(),
+                v_quats.data_ptr<float>(),
+                v_scales.data_ptr<float>(),
+                viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr
+            );
     }
     return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
 }

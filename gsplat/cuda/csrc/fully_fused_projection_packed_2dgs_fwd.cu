@@ -13,32 +13,36 @@ namespace gsplat {
 
 namespace cg = cooperative_groups;
 
-
 /****************************************************************************
  * Projection of Gaussians (Batched) Forward Pass 2DGS
  ****************************************************************************/
 
- template <typename T>
+template <typename T>
 __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
-    const uint32_t C, const uint32_t N,
+    const uint32_t C,
+    const uint32_t N,
     const T *__restrict__ means,    // [N, 3]
     const T *__restrict__ quats,    // [N, 4]
     const T *__restrict__ scales,   // [N, 3]
     const T *__restrict__ viewmats, // [C, 4, 4]
     const T *__restrict__ Ks,       // [C, 3, 3]
-    const int32_t image_width, const int32_t image_height,
-    const T near_plane, const T far_plane, const T radius_clip,
-    const int32_t *__restrict__ block_accum, // [C * blocks_per_row] packing helper
-    int32_t *__restrict__ block_cnts,        // [C * blocks_per_row] packing helper
+    const int32_t image_width,
+    const int32_t image_height,
+    const T near_plane,
+    const T far_plane,
+    const T radius_clip,
+    const int32_t
+        *__restrict__ block_accum,    // [C * blocks_per_row] packing helper
+    int32_t *__restrict__ block_cnts, // [C * blocks_per_row] packing helper
     // outputs
     int32_t *__restrict__ indptr,       // [C + 1]
     int64_t *__restrict__ camera_ids,   // [nnz]
     int64_t *__restrict__ gaussian_ids, // [nnz]
     int32_t *__restrict__ radii,        // [nnz]
-    T *__restrict__ means2d,        // [nnz, 2]
-    T *__restrict__ depths,         // [nnz]
-    T *__restrict__ ray_Ms,         // [nnz, 3, 3]
-    T *__restrict__ normals         // [nnz, 3]
+    T *__restrict__ means2d,            // [nnz, 2]
+    T *__restrict__ depths,             // [nnz]
+    T *__restrict__ ray_Ms,             // [nnz, 3, 3]
+    T *__restrict__ normals             // [nnz, 3]
 ) {
     int32_t blocks_per_row = gridDim.x;
 
@@ -59,9 +63,16 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
         viewmats += row_idx * 16;
 
         // glm is column-major but input is row-major
-        R = mat3<T>(viewmats[0], viewmats[4], viewmats[8], // 1st column
-                    viewmats[1], viewmats[5], viewmats[9], // 2nd column
-                    viewmats[2], viewmats[6], viewmats[10] // 3rd column
+        R = mat3<T>(
+            viewmats[0],
+            viewmats[4],
+            viewmats[8], // 1st column
+            viewmats[1],
+            viewmats[5],
+            viewmats[9], // 2nd column
+            viewmats[2],
+            viewmats[6],
+            viewmats[10] // 3rd column
         );
         vec3<T> t = vec3<T>(viewmats[3], viewmats[7], viewmats[11]);
 
@@ -77,24 +88,20 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
     T radius;
     vec3<T> normal;
     if (valid) {
-        // build ray transformation matrix and transform from world space to camera space
+        // build ray transformation matrix and transform from world space to
+        // camera space
         quats += col_idx * 4;
         scales += col_idx * 3;
 
-        mat3<T> RS_camera = R * quat_to_rotmat<T>(glm::make_vec4(quats)) * mat3<T>(scales[0], 0.0, 0.0, 0.0, scales[1], 0.0, 0.0, 0.0, 1.0);;
-        mat3<T> WH = mat3<T>(
-            RS_camera[0],
-            RS_camera[1],
-            mean_c
-        );
+        mat3<T> RS_camera =
+            R * quat_to_rotmat<T>(glm::make_vec4(quats)) *
+            mat3<T>(scales[0], 0.0, 0.0, 0.0, scales[1], 0.0, 0.0, 0.0, 1.0);
+        ;
+        mat3<T> WH = mat3<T>(RS_camera[0], RS_camera[1], mean_c);
 
-        mat3<T> world_2_pix = mat3<T>(
-            Ks[0], 0.0, Ks[2],
-            0.0, Ks[4], Ks[5],
-            0.0, 0.0, 1.0
-        );
+        mat3<T> world_2_pix =
+            mat3<T>(Ks[0], 0.0, Ks[2], 0.0, Ks[4], Ks[5], 0.0, 0.0, 1.0);
         M = glm::transpose(WH) * world_2_pix;
-
 
         // compute AABB
         const vec3<T> M0 = vec3<T>(M[0][0], M[0][1], M[0][2]);
@@ -104,18 +111,13 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
         const vec3<T> temp_point = vec3<T>(1.0f, 1.0f, -1.0f);
         const T distance = sum(temp_point * M2 * M2);
 
-        if (distance == 0.0f) valid = false;
+        if (distance == 0.0f)
+            valid = false;
 
         const vec3<T> f = (1 / distance) * temp_point;
-        mean2d = vec2<T>(
-            sum(f * M0 * M2),
-            sum(f * M1 * M2)
-        );
+        mean2d = vec2<T>(sum(f * M0 * M2), sum(f * M1 * M2));
 
-        const vec2<T> temp = {
-            sum(f * M0 * M0),
-            sum(f * M1 * M1)
-        };
+        const vec2<T> temp = {sum(f * M0 * M0), sum(f * M1 * M1)};
         const vec2<T> half_extend = mean2d * mean2d - temp;
         radius = ceil(3.f * sqrt(max(1e-4, max(half_extend.x, half_extend.y))));
 
@@ -190,20 +192,30 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
                 indptr[row_idx] = block_accum[block_idx - 1];
             }
         }
-
     }
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
-           torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor>
 fully_fused_projection_packed_fwd_2dgs_tensor(
-    const torch::Tensor &means,                // [N, 3]
-    const torch::Tensor &quats,                // [N, 3]
-    const torch::Tensor &scales,               // [N, 3]
-    const torch::Tensor &viewmats,             // [C, 4, 4]
-    const torch::Tensor &Ks,                   // [C, 3, 3]
-    const uint32_t image_width, const uint32_t image_height,
-    const float near_plane, const float far_plane, const float radius_clip) {
+    const torch::Tensor &means,    // [N, 3]
+    const torch::Tensor &quats,    // [N, 3]
+    const torch::Tensor &scales,   // [N, 3]
+    const torch::Tensor &viewmats, // [C, 4, 4]
+    const torch::Tensor &Ks,       // [C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float near_plane,
+    const float far_plane,
+    const float radius_clip
+) {
     GSPLAT_DEVICE_GUARD(means);
     GSPLAT_CHECK_INPUT(means);
     GSPLAT_CHECK_INPUT(quats);
@@ -229,45 +241,88 @@ fully_fused_projection_packed_fwd_2dgs_tensor(
     torch::Tensor block_accum;
     if (C && N) {
         torch::Tensor block_cnts = torch::empty({nrows * blocks_per_row}, opt);
-        fully_fused_projection_packed_fwd_2dgs_kernel<float><<<blocks, threads, 0, stream>>>(
-            C, N, means.data_ptr<float>(),
-            quats.data_ptr<float>(), scales.data_ptr<float>(),
-            viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
-            near_plane, far_plane, radius_clip, nullptr,
-            block_cnts.data_ptr<int32_t>(), nullptr, nullptr, nullptr, nullptr, nullptr,
-            nullptr, nullptr, nullptr);
+        fully_fused_projection_packed_fwd_2dgs_kernel<float>
+            <<<blocks, threads, 0, stream>>>(
+                C,
+                N,
+                means.data_ptr<float>(),
+                quats.data_ptr<float>(),
+                scales.data_ptr<float>(),
+                viewmats.data_ptr<float>(),
+                Ks.data_ptr<float>(),
+                image_width,
+                image_height,
+                near_plane,
+                far_plane,
+                radius_clip,
+                nullptr,
+                block_cnts.data_ptr<int32_t>(),
+                nullptr,
+                nullptr,
+                nullptr,
+                nullptr,
+                nullptr,
+                nullptr,
+                nullptr,
+                nullptr
+            );
         block_accum = torch::cumsum(block_cnts, 0, torch::kInt32);
         nnz = block_accum[-1].item<int32_t>();
     } else {
         nnz = 0;
     }
-    
+
     // second pass
     torch::Tensor indptr = torch::empty({C + 1}, opt);
     torch::Tensor camera_ids = torch::empty({nnz}, opt.dtype(torch::kInt64));
     torch::Tensor gaussian_ids = torch::empty({nnz}, opt.dtype(torch::kInt64));
-    torch::Tensor radii = torch::empty({nnz}, means.options().dtype(torch::kInt32));
+    torch::Tensor radii =
+        torch::empty({nnz}, means.options().dtype(torch::kInt32));
     torch::Tensor means2d = torch::empty({nnz, 2}, means.options());
     torch::Tensor depths = torch::empty({nnz}, means.options());
     torch::Tensor ray_Ms = torch::empty({nnz, 3, 3}, means.options());
     torch::Tensor normals = torch::empty({nnz, 3}, means.options());
 
     if (nnz) {
-        fully_fused_projection_packed_fwd_2dgs_kernel<float><<<blocks, threads, 0, stream>>>(
-            C, N, means.data_ptr<float>(),
-            quats.data_ptr<float>(),
-            scales.data_ptr<float>(),
-            viewmats.data_ptr<float>(), Ks.data_ptr<float>(), image_width, image_height,
-            near_plane, far_plane, radius_clip, block_accum.data_ptr<int32_t>(),
-            nullptr, indptr.data_ptr<int32_t>(), camera_ids.data_ptr<int64_t>(),
-            gaussian_ids.data_ptr<int64_t>(), radii.data_ptr<int32_t>(),
-            means2d.data_ptr<float>(), depths.data_ptr<float>(),
-            ray_Ms.data_ptr<float>(), normals.data_ptr<float>());
+        fully_fused_projection_packed_fwd_2dgs_kernel<float>
+            <<<blocks, threads, 0, stream>>>(
+                C,
+                N,
+                means.data_ptr<float>(),
+                quats.data_ptr<float>(),
+                scales.data_ptr<float>(),
+                viewmats.data_ptr<float>(),
+                Ks.data_ptr<float>(),
+                image_width,
+                image_height,
+                near_plane,
+                far_plane,
+                radius_clip,
+                block_accum.data_ptr<int32_t>(),
+                nullptr,
+                indptr.data_ptr<int32_t>(),
+                camera_ids.data_ptr<int64_t>(),
+                gaussian_ids.data_ptr<int64_t>(),
+                radii.data_ptr<int32_t>(),
+                means2d.data_ptr<float>(),
+                depths.data_ptr<float>(),
+                ray_Ms.data_ptr<float>(),
+                normals.data_ptr<float>()
+            );
     } else {
         indptr.fill_(0);
     }
 
-    return std::make_tuple(indptr, camera_ids, gaussian_ids, radii, means2d, depths, ray_Ms, normals);
+    return std::make_tuple(
+        indptr,
+        camera_ids,
+        gaussian_ids,
+        radii,
+        means2d,
+        depths,
+        ray_Ms,
+        normals
+    );
 }
 
-}
+} // namespace gsplat
