@@ -411,26 +411,6 @@ class Runner:
 
         assert self.cfg.antialiased is False, "Antialiased is not supported for 2DGS"
 
-        if self.model_type == "2dgs":
-            rasterize_fnc = rasterization_2dgs
-        elif self.model_type == "2dgs-inria":
-            rasterize_fnc = rasterization_2dgs_inria_wrapper
-
-        renders, info = rasterize_fnc(
-            means=means,
-            quats=quats,
-            scales=scales,
-            opacities=opacities,
-            colors=colors,
-            viewmats=torch.linalg.inv(camtoworlds),  # [C, 4, 4]
-            Ks=Ks,  # [C, 3, 3]
-            width=width,
-            height=height,
-            packed=self.cfg.packed,
-            absgrad=self.cfg.absgrad,
-            sparse_grad=self.cfg.sparse_grad,
-            **kwargs,
-        )
 
         if self.model_type == "2dgs":
             (
@@ -440,8 +420,38 @@ class Runner:
                 normals_from_depth,
                 render_distort,
                 render_median,
-            ) = renders
+                info,
+            ) = rasterization_2dgs(
+                means=means,
+                quats=quats,
+                scales=scales,
+                opacities=opacities,
+                colors=colors,
+                viewmats=torch.linalg.inv(camtoworlds),  # [C, 4, 4]
+                Ks=Ks,  # [C, 3, 3]
+                width=width,
+                height=height,
+                packed=self.cfg.packed,
+                absgrad=self.cfg.absgrad,
+                sparse_grad=self.cfg.sparse_grad,
+                **kwargs,
+            )
         elif self.model_type == "2dgs-inria":
+            render_colors, render_alphas, info = rasterization_2dgs_inria_wrapper(
+                means=means,
+                quats=quats,
+                scales=scales,
+                opacities=opacities,
+                colors=colors,
+                viewmats=torch.linalg.inv(camtoworlds),  # [C, 4, 4]
+                Ks=Ks,  # [C, 3, 3]
+                width=width,
+                height=height,
+                packed=self.cfg.packed,
+                absgrad=self.cfg.absgrad,
+                sparse_grad=self.cfg.sparse_grad,
+                **kwargs,
+            )
             render_colors, render_alphas = renders
             render_normals = info["normals_rend"]
             normals_from_depth = info["normals_surf"]

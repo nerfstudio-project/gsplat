@@ -1022,7 +1022,7 @@ def rasterization_2dgs(
     absgrad: bool = False,
     distloss: bool = False,
     depth_mode: Literal["expected", "median"] = "expected",
-) -> Tuple[Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor], Dict]:
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Dict]:
     """Rasterize a set of 2D Gaussians (N) to a batch of image planes (C).
 
     This function supports a handful of features, similar to the :func:`rasterization` function.
@@ -1278,16 +1278,14 @@ def rasterization_2dgs(
 
     render_normals = render_normals @ torch.linalg.inv(viewmats)[0, :3, :3].T
 
-    # Note(ruilong): To align with the rasterization function, this should return
-    # (render_colors, ..., meta) instead of (render_colors, render_alphas), meta.
-    return (
-        render_colors,
+    return (render_colors,
         render_alphas,
         render_normals,
         render_normals_from_depth,
         render_distort,
         render_median,
-    ), meta
+        meta
+    )
 
 
 def rasterization_2dgs_inria_wrapper(

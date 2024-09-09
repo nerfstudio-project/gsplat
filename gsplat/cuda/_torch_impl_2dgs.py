@@ -104,8 +104,8 @@ def accumulate_2dgs(
 
     M = ray_transforms[camera_ids, gaussian_ids]  # [M, 3, 3]
 
-    h_u = -M[..., :3, 0] + M[..., :3, 2] * pixel_ids_x[..., None]  # [M, 3]
-    h_v = -M[..., :3, 1] + M[..., :3, 2] * pixel_ids_y[..., None]  # [M, 3]
+    h_u = -M[..., 0, :3] + M[..., 2, :3] * pixel_ids_x[..., None]  # [M, 3]
+    h_v = -M[..., 1, :3] + M[..., 2, :3] * pixel_ids_y[..., None]  # [M, 3]
     tmp = torch.cross(h_u, h_v, dim=-1)
     us = tmp[..., 0] / tmp[..., 2]
     vs = tmp[..., 1] / tmp[..., 2]
@@ -207,12 +207,7 @@ def _rasterize_to_pixels_2dgs(
             step + batch_per_iter,
             transmittances,
             means2d,
-            # Note(ruilong): why transform here? Can we avoid this and make the
-            # APIs more consistent?
-            # Note(ruilong): I like the name of `ray_transforms` better than `ray_Ms`,
-            # is the only difference between the two a transpose? Would be nice to
-            # make them consistent and reduce the two naming into one.
-            ray_transforms.transpose(-1, -2),
+            ray_transforms,
             opacities,
             image_width,
             image_height,
@@ -226,7 +221,7 @@ def _rasterize_to_pixels_2dgs(
         # Accumulate the renderings within this batch of Gaussians.
         renders_step, accs_step, renders_normal_step = accumulate_2dgs(
             means2d,
-            ray_transforms,
+            ray_transforms, 
             opacities,
             colors,
             normals,
