@@ -188,6 +188,7 @@ def fully_fused_projection(
     sparse_grad: bool = False,
     calc_compensations: bool = False,
     ortho: bool = False,
+    fisheye: bool = False,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Projects Gaussians to 2D.
 
@@ -290,6 +291,7 @@ def fully_fused_projection(
             sparse_grad,
             calc_compensations,
             ortho,
+            # fisheye,
         )
     else:
         return _FullyFusedProjection.apply(
@@ -307,6 +309,7 @@ def fully_fused_projection(
             radius_clip,
             calc_compensations,
             ortho,
+            # fisheye,
         )
 
 
@@ -754,6 +757,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         radius_clip: float,
         calc_compensations: bool,
         ortho: bool,
+        # fisheye: bool,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         # "covars" and {"quats", "scales"} are mutually exclusive
         radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
@@ -783,6 +787,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         ctx.height = height
         ctx.eps2d = eps2d
         ctx.ortho = ortho
+        # ctx.fisheye = fisheye
 
         return radii, means2d, depths, conics, compensations
 
@@ -803,6 +808,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         height = ctx.height
         eps2d = ctx.eps2d
         ortho = ctx.ortho
+        # fisheye = ctx.fisheye
         if v_compensations is not None:
             v_compensations = v_compensations.contiguous()
         v_means, v_covars, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(

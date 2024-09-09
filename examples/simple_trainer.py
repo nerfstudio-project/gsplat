@@ -55,6 +55,8 @@ class Config:
     global_scale: float = 1.0
     # Normalize the world space
     normalize_world_space: bool = True
+    # Camera model
+    camera_model: str = "pinhole"
 
     # Port for the viewer server
     port: int = 8080
@@ -441,6 +443,7 @@ class Runner:
             sparse_grad=self.cfg.sparse_grad,
             rasterize_mode=rasterize_mode,
             distributed=self.world_size > 1,
+            camera_model=self.cfg.camera_model,
             **kwargs,
         )
         return render_colors, render_alphas, info
@@ -965,7 +968,7 @@ if __name__ == "__main__":
             Config(
                 init_opa=0.5,
                 init_scale=0.1,
-                opacity_reg=0.01,
+                opacity_reg=0.001,
                 scale_reg=0.01,
                 strategy=MCMCStrategy(verbose=True),
             ),
