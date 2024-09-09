@@ -15,14 +15,14 @@ do
     echo "Running $SCENE"
 
     # train without eval
-    CUDA_VISIBLE_DEVICES=0 python simple_trainer.py mcmc --data_factor $DATA_FACTOR \
+    CUDA_VISIBLE_DEVICES=0 python simple_trainer.py mcmc --disable_viewer --data_factor $DATA_FACTOR \
         --strategy.cap-max $CAP_MAX \
         --opacity_reg 0.001 \
         --camera_model $CAMERA_MODEL \
         --render_traj_path $RENDER_TRAJ_PATH \
         --data_dir $SCENE_DIR/$SCENE/ \
-        --result_dir $RESULT_DIR/$SCENE/ \
-        --ckpt "results/benchmark_zipnerf/undistort/$SCENE/ckpts/ckpt_29999_rank0.pt"
+        --result_dir $RESULT_DIR/$SCENE/
+        # --ckpt "results/benchmark_zipnerf/undistort/$SCENE/ckpts/ckpt_29999_rank0.pt"
 
     # run eval and render
     # for CKPT in $RESULT_DIR/$SCENE/ckpts/*;

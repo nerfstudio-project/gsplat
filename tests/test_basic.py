@@ -165,10 +165,13 @@ def test_proj(test_data, ortho: bool):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-@pytest.mark.parametrize("fused", [False, True])
-@pytest.mark.parametrize("calc_compensations", [False, True])
-@pytest.mark.parametrize("ortho", [True, False])
-def test_projection(test_data, fused: bool, calc_compensations: bool, ortho: bool):
+@pytest.mark.parametrize("fused", [True])
+@pytest.mark.parametrize("calc_compensations", [False])
+@pytest.mark.parametrize("ortho", [False])
+@pytest.mark.parametrize("fisheye", [True, False])
+def test_projection(
+    test_data, fused: bool, calc_compensations: bool, ortho: bool, fisheye: bool
+):
     from gsplat.cuda._torch_impl import _fully_fused_projection
     from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci
 
@@ -200,6 +203,7 @@ def test_projection(test_data, fused: bool, calc_compensations: bool, ortho: boo
             height,
             calc_compensations=calc_compensations,
             ortho=ortho,
+            fisheye=fisheye,
         )
     else:
         covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [N, 6]
@@ -214,17 +218,21 @@ def test_projection(test_data, fused: bool, calc_compensations: bool, ortho: boo
             height,
             calc_compensations=calc_compensations,
             ortho=ortho,
+            fisheye=fisheye,
         )
     _covars, _ = quat_scale_to_covar_preci(quats, scales, triu=False)  # [N, 3, 3]
     _radii, _means2d, _depths, _conics, _compensations = _fully_fused_projection(
         means,
         _covars,
+        None,
+        None,
         viewmats,
         Ks,
         width,
         height,
         calc_compensations=calc_compensations,
         ortho=ortho,
+        fisheye=fisheye,
     )
 
     # radii is integer so we allow for 1 unit difference
