@@ -106,6 +106,71 @@ def _persp_proj(
     return means2d, cov2d  # [C, N, 2], [C, N, 2, 2]
 
 
+def _fisheye_proj(
+    means: Tensor,  # [C, N, 3]
+    covars: Tensor,  # [C, N, 3, 3]
+    Ks: Tensor,  # [C, 3, 3]
+    width: int,
+    height: int,
+) -> Tuple[Tensor, Tensor]:
+    """PyTorch implementation of fisheye projection for 3D Gaussians.
+
+    Args:
+        means: Gaussian means in camera coordinate system. [C, N, 3].
+        covars: Gaussian covariances in camera coordinate system. [C, N, 3, 3].
+        Ks: Camera intrinsics. [C, 3, 3].
+        width: Image width.
+        height: Image height.
+
+    Returns:
+        A tuple:
+
+        - **means2d**: Projected means. [C, N, 2].
+        - **cov2d**: Projected covariances. [C, N, 2, 2].
+    """
+    C, N, _ = means.shape
+
+    x, y, z = torch.unbind(means, dim=-1)  # [C, N]
+
+    fx = Ks[..., 0, 0, None]  # [C, 1]
+    fy = Ks[..., 1, 1, None]  # [C, 1]
+    cx = Ks[..., 0, 2, None]  # [C, 1]
+    cy = Ks[..., 1, 2, None]  # [C, 1]
+
+    eps = 0.0000001
+    xy_len = (x**2 + y**2) ** 0.5 + eps
+    theta = torch.atan2(xy_len, z + eps)
+    means2d = torch.stack(
+        [
+            x * fx * theta / xy_len + cx,
+            y * fy * theta / xy_len + cy,
+        ],
+        dim=-1,
+    )
+
+    x2 = x * x + eps
+    y2 = y * y
+    xy = x * y
+    x2y2 = x2 + y2
+    x2y2z2_inv = 1.0 / (x2y2 + z * z)
+    b = torch.atan2(xy_len, z) / xy_len / x2y2
+    a = z * x2y2z2_inv / (x2y2)
+    J = torch.stack(
+        [
+            fx * (x2 * a + y2 * b),
+            fx * xy * (a - b),
+            -fx * x * x2y2z2_inv,
+            fy * xy * (a - b),
+            fy * (y2 * a + x2 * b),
+            -fy * y * x2y2z2_inv,
+        ],
+        dim=-1,
+    ).reshape(C, N, 2, 3)
+
+    cov2d = torch.einsum("...ij,...jk,...kl->...il", J, covars, J.transpose(-1, -2))
+    return means2d, cov2d  # [C, N, 2], [C, N, 2, 2]
+
+
 def _ortho_proj(
     means: Tensor,  # [C, N, 3]
     covars: Tensor,  # [C, N, 3, 3]
@@ -170,7 +235,9 @@ def _world_to_cam(
 
 def _fully_fused_projection(
     means: Tensor,  # [N, 3]
-    covars: Tensor,  # [N, 3, 3]
+    covars: Optional[Tensor],  # [N, 6] or None
+    quats: Optional[Tensor],  # [N, 4] or None
+    scales: Optional[Tensor],  # [N, 3] or None
     viewmats: Tensor,  # [C, 4, 4]
     Ks: Tensor,  # [C, 3, 3]
     width: int,
@@ -180,6 +247,8 @@ def _fully_fused_projection(
     far_plane: float = 1e10,
     calc_compensations: bool = False,
     ortho: bool = False,
+    fisheye: bool = False,
+    **kwargs,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Optional[Tensor]]:
     """PyTorch implementation of `gsplat.cuda._wrapper.fully_fused_projection()`
 
@@ -188,10 +257,17 @@ def _fully_fused_projection(
         This is a minimal implementation of fully fused version, which has more
         arguments. Not all arguments are supported.
     """
+    if covars is None:
+        covars = _quat_scale_to_covar_preci(
+            quats, scales, compute_covar=True, compute_preci=False
+        )[0]
+
     means_c, covars_c = _world_to_cam(means, covars, viewmats)
 
     if ortho:
         means2d, covars2d = _ortho_proj(means_c, covars_c, Ks, width, height)
+    elif fisheye:
+        means2d, covars2d = _fisheye_proj(means_c, covars_c, Ks, width, height)
     else:
         means2d, covars2d = _persp_proj(means_c, covars_c, Ks, width, height)
 
