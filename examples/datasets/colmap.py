@@ -97,9 +97,9 @@ class Parser:
             elif type_ == 5 or type_ == "OPENCV_FISHEYE":
                 params = np.array([cam.k1, cam.k2, cam.k3, cam.k4], dtype=np.float32)
                 camtype = "fisheye"
-            assert (
-                camtype == "perspective"
-            ), f"Only support perspective camera model, got {type_}"
+            # assert (
+            #     camtype == "perspective"
+            # ), f"Only support perspective camera model, got {type_}"
 
             params_dict[camera_id] = params
 
@@ -206,29 +206,29 @@ class Parser:
             self.imsize_dict[camera_id] = (int(width * s_width), int(height * s_height))
 
         # undistortion
-        self.mapx_dict = dict()
-        self.mapy_dict = dict()
-        self.roi_undist_dict = dict()
-        for camera_id in self.params_dict.keys():
-            params = self.params_dict[camera_id]
-            if len(params) == 0:
-                continue  # no distortion
-            assert camera_id in self.Ks_dict, f"Missing K for camera {camera_id}"
-            assert (
-                camera_id in self.params_dict
-            ), f"Missing params for camera {camera_id}"
-            K = self.Ks_dict[camera_id]
-            width, height = self.imsize_dict[camera_id]
-            K_undist, roi_undist = cv2.getOptimalNewCameraMatrix(
-                K, params, (width, height), 0
-            )
-            mapx, mapy = cv2.initUndistortRectifyMap(
-                K, params, None, K_undist, (width, height), cv2.CV_32FC1
-            )
-            self.Ks_dict[camera_id] = K_undist
-            self.mapx_dict[camera_id] = mapx
-            self.mapy_dict[camera_id] = mapy
-            self.roi_undist_dict[camera_id] = roi_undist
+        # self.mapx_dict = dict()
+        # self.mapy_dict = dict()
+        # self.roi_undist_dict = dict()
+        # for camera_id in self.params_dict.keys():
+        #     params = self.params_dict[camera_id]
+        #     if len(params) == 0:
+        #         continue  # no distortion
+        #     assert camera_id in self.Ks_dict, f"Missing K for camera {camera_id}"
+        #     assert (
+        #         camera_id in self.params_dict
+        #     ), f"Missing params for camera {camera_id}"
+        #     K = self.Ks_dict[camera_id]
+        #     width, height = self.imsize_dict[camera_id]
+        #     K_undist, roi_undist = cv2.getOptimalNewCameraMatrix(
+        #         K, params, (width, height), 0
+        #     )
+        #     mapx, mapy = cv2.initUndistortRectifyMap(
+        #         K, params, None, K_undist, (width, height), cv2.CV_32FC1
+        #     )
+        #     self.Ks_dict[camera_id] = K_undist
+        #     self.mapx_dict[camera_id] = mapx
+        #     self.mapy_dict[camera_id] = mapy
+        #     self.roi_undist_dict[camera_id] = roi_undist
 
         # size of the scene measured by cameras
         camera_locations = camtoworlds[:, :3, 3]
@@ -268,15 +268,15 @@ class Dataset:
         params = self.parser.params_dict[camera_id]
         camtoworlds = self.parser.camtoworlds[index]
 
-        if len(params) > 0:
-            # Images are distorted. Undistort them.
-            mapx, mapy = (
-                self.parser.mapx_dict[camera_id],
-                self.parser.mapy_dict[camera_id],
-            )
-            image = cv2.remap(image, mapx, mapy, cv2.INTER_LINEAR)
-            x, y, w, h = self.parser.roi_undist_dict[camera_id]
-            image = image[y : y + h, x : x + w]
+        # if len(params) > 0:
+        #     # Images are distorted. Undistort them.
+        #     mapx, mapy = (
+        #         self.parser.mapx_dict[camera_id],
+        #         self.parser.mapy_dict[camera_id],
+        #     )
+        #     image = cv2.remap(image, mapx, mapy, cv2.INTER_LINEAR)
+        #     x, y, w, h = self.parser.roi_undist_dict[camera_id]
+        #     image = image[y : y + h, x : x + w]
 
         if self.patch_size is not None:
             # Random crop.

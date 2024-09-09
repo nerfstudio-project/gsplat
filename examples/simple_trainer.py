@@ -69,7 +69,7 @@ class Config:
     # Number of training steps
     max_steps: int = 30_000
     # Steps to evaluate the model
-    eval_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    eval_steps: List[int] = field(default_factory=lambda: [3_000, 7_000, 30_000])
     # Steps to save the model
     save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
 
@@ -930,9 +930,9 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
             runner.splats[k].data = torch.cat([ckpt["splats"][k] for ckpt in ckpts])
         step = ckpts[0]["step"]
         runner.eval(step=step)
-        runner.render_traj(step=step)
-        if cfg.compression is not None:
-            runner.run_compression(step=step)
+        # runner.render_traj(step=step)
+        # if cfg.compression is not None:
+        #     runner.run_compression(step=step)
     else:
         runner.train()
 
@@ -968,7 +968,7 @@ if __name__ == "__main__":
             Config(
                 init_opa=0.5,
                 init_scale=0.1,
-                opacity_reg=0.001,
+                opacity_reg=0.01,
                 scale_reg=0.01,
                 strategy=MCMCStrategy(verbose=True),
             ),

@@ -33,6 +33,7 @@ __global__ void fully_fused_projection_fwd_kernel(
     const T far_plane,
     const T radius_clip,
     const bool ortho,
+    const bool fisheye,
     // outputs
     int32_t *__restrict__ radii,  // [C, N]
     T *__restrict__ means2d,      // [C, N, 2]
@@ -107,6 +108,19 @@ __global__ void fully_fused_projection_fwd_kernel(
 
     if (ortho){
         ortho_proj<T>(
+            mean_c,
+            covar_c,
+            Ks[0],
+            Ks[4],
+            Ks[2],
+            Ks[5],
+            image_width,
+            image_height,
+            covar2d,
+            mean2d
+        );
+    } else if (fisheye) {
+        fisheye_proj<T>(
             mean_c,
             covar_c,
             Ks[0],
@@ -196,7 +210,8 @@ fully_fused_projection_fwd_tensor(
     const float far_plane,
     const float radius_clip,
     const bool calc_compensations,
-    const bool ortho
+    const bool ortho,
+    const bool fisheye
 ) {
     GSPLAT_DEVICE_GUARD(means);
     GSPLAT_CHECK_INPUT(means);
@@ -245,6 +260,7 @@ fully_fused_projection_fwd_tensor(
                 far_plane,
                 radius_clip,
                 ortho,
+                fisheye,
                 radii.data_ptr<int32_t>(),
                 means2d.data_ptr<float>(),
                 depths.data_ptr<float>(),

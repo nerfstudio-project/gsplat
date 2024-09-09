@@ -374,6 +374,73 @@ inline __device__ void persp_proj_vjp(
 }
 
 template <typename T>
+inline __device__ void fisheye_proj(
+    // inputs
+    const vec3<T> mean3d,
+    const mat3<T> cov3d,
+    const T fx,
+    const T fy,
+    const T cx,
+    const T cy,
+    const uint32_t width,
+    const uint32_t height,
+    // outputs
+    mat2<T> &cov2d,
+    vec2<T> &mean2d
+) {
+    T x = mean3d[0], y = mean3d[1], z = mean3d[2];
+
+    float eps = 0.0000001f;
+    float xy_len = glm::length(glm::vec2({x, y})) + eps;
+    float theta = glm::atan(xy_len, z + eps);
+    if (abs(theta) > 3.14 * 0.403)
+        return;
+    mean2d = vec2<T>({
+        x * fx * theta / xy_len + cx, 
+        y * fy * theta / xy_len + cy
+    });
+
+    float x2 = x * x + eps;
+    float y2 = y * y;
+    float xy = x * y;
+    float x2y2 = x2 + y2 ;
+    float x2y2z2_inv = 1.f / (x2y2 + z * z);
+
+    float b = glm::atan(xy_len, z) / xy_len / x2y2;
+    float a = z * x2y2z2_inv / (x2y2);
+    mat3x2<T> J = mat3x2<T>(
+        fx * (x2 * a + y2 * b),
+        fy * xy  * (a - b), 
+        fx * xy * (a - b), 
+        fy * (y2 * a + x2 * b),   
+        - fx * x * x2y2z2_inv,
+        - fy * y * x2y2z2_inv
+    );
+    cov2d = J * cov3d * glm::transpose(J);
+}
+
+template <typename T>
+inline __device__ void fisheye_proj_vjp(
+    // fwd inputs
+    const vec3<T> mean3d,
+    const mat3<T> cov3d,
+    const T fx,
+    const T fy,
+    const T cx,
+    const T cy,
+    const uint32_t width,
+    const uint32_t height,
+    // grad outputs
+    const mat2<T> v_cov2d,
+    const vec2<T> v_mean2d,
+    // grad inputs
+    vec3<T> &v_mean3d,
+    mat3<T> &v_cov3d
+) {
+
+}
+
+template <typename T>
 inline __device__ void pos_world_to_cam(
     // [R, t] is the world-to-camera transformation
     const mat3<T> R,

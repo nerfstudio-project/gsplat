@@ -291,7 +291,6 @@ def fully_fused_projection(
             sparse_grad,
             calc_compensations,
             ortho,
-            # fisheye,
         )
     else:
         return _FullyFusedProjection.apply(
@@ -309,7 +308,7 @@ def fully_fused_projection(
             radius_clip,
             calc_compensations,
             ortho,
-            # fisheye,
+            fisheye,
         )
 
 
@@ -757,7 +756,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         radius_clip: float,
         calc_compensations: bool,
         ortho: bool,
-        # fisheye: bool,
+        fisheye: bool,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         # "covars" and {"quats", "scales"} are mutually exclusive
         radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
@@ -777,6 +776,7 @@ class _FullyFusedProjection(torch.autograd.Function):
             radius_clip,
             calc_compensations,
             ortho,
+            fisheye,
         )
         if not calc_compensations:
             compensations = None
@@ -787,7 +787,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         ctx.height = height
         ctx.eps2d = eps2d
         ctx.ortho = ortho
-        # ctx.fisheye = fisheye
+        ctx.fisheye = fisheye
 
         return radii, means2d, depths, conics, compensations
 
@@ -808,7 +808,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         height = ctx.height
         eps2d = ctx.eps2d
         ortho = ctx.ortho
-        # fisheye = ctx.fisheye
+        fisheye = ctx.fisheye
         if v_compensations is not None:
             v_compensations = v_compensations.contiguous()
         v_means, v_covars, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
@@ -824,6 +824,7 @@ class _FullyFusedProjection(torch.autograd.Function):
             height,
             eps2d,
             ortho,
+            fisheye,
             radii,
             conics,
             compensations,
@@ -849,6 +850,7 @@ class _FullyFusedProjection(torch.autograd.Function):
             v_quats,
             v_scales,
             v_viewmats,
+            None,
             None,
             None,
             None,
