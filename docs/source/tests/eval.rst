@@ -237,6 +237,6 @@ within the gsplat repo (commit 48abf70).
 
 The evaluation of `inria-X` can be 
 reproduced with our forked wersion of the official implementation at 
-`here <https://github.com/hbb1/diff-surfel-rasterization/commit/28c928a36ea19407cd9754d068bd9a9535216979>`_;
-you need to change the :code:`--model_type 2dgs` to :code:`--model_type 2dgs-inria` and 
-run command :code:`cd examples; bash benchmarks/basic_2dgs.sh` (commit 28c928a).
+`here <https://github.com/hbb1/diff-surfel-rasterization>`_;
+you need to change the :code:`--model_type 2dgs` to :code:`--model_type 2dgs-inria` in
+:code:`benchmars/basic_2dgs` and run command :code:`cd examples; bash benchmarks/basic_2dgs.sh` (commit 28c928a).

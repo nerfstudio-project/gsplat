@@ -64,14 +64,13 @@ and :math:`W \in \mathbb{R}^{4\times4}` is the transformation matrix from world 
 
 
 Splatting is done via ray-splat plane intersection. Each pixel is considered as a x-plane :math:`h_{x}=(-1, 0, 0, x)^{T}`
-and a y-plane :math:`h_{y}=(0, -1, 0, y)^{T}`, and the intersection between a splat and the pixel :math:(x, y) is defined 
-as the intersection bwtween x-plane, y-plane, and the splat's tangent plane. We first transform :math:`h_{x}` and :math:`h_{y}`
-to splat's tangent frame via the inverse transformation :math:`(WH)^{-1}`, where :math:`W \in R^{4\times4}` is the transformation matrix
-from world space to image space. Then as the intersection point should fall on :math:`h_{u}` and :math:`h_{v}`, and we have an efficient
+and a y-plane :math:`h_{y}=(0, -1, 0, y)^{T}`, and the intersection between a splat and the pixel :math:`p=(x, y)` is defined 
+as the intersection bwtween x-plane, y-plane, and the splat's tangent plane. We first transform :math:`h_{x}` to :math:`h_{u}` and :math:`h_{y}`
+to :math:`h_{v}` in splat's tangent frame via the inverse transformation :math:`(WH)^{-1}`. As the intersection point should fall on :math:`h_{u}` and :math:`h_{v}`, we have an efficient
 solution:
 
 .. math::
-    u(x) = \frac{h^{2}_{u}h^{4}_{v}-h^{4}_{u}h^{2}_{v}}{h^{1}_{u}h^{2}_{v}-h^{2}_{u}h^{1}_{v}}, 
-    v(x) = \frac{h^{4}_{u}h^{1}_{v}-h^{1}_{u}h^{4}_{v}}{h^{1}_{u}h^{2}_{v}-h^{2}_{u}h^{1}_{v}}
+    u(p) = \frac{h^{2}_{u}h^{4}_{v}-h^{4}_{u}h^{2}_{v}}{h^{1}_{u}h^{2}_{v}-h^{2}_{u}h^{1}_{v}}, 
+    v(p) = \frac{h^{4}_{u}h^{1}_{v}-h^{1}_{u}h^{4}_{v}}{h^{1}_{u}h^{2}_{v}-h^{2}_{u}h^{1}_{v}}
 
 .. autofunction:: rasterization_2dgs
