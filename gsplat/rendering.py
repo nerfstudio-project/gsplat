@@ -1059,7 +1059,7 @@ def rasterization_2dgs(
         render_mode: The rendering mode. Supported modes are "RGB", "D", "ED", "RGB+D",
             and "RGB+ED". "RGB" renders the colored image, "D" renders the accumulated depth, and
             "ED" renders the expected depth. Default is "RGB".
-        sparse_grad: If true, the gradients for {means, quats, scales} will be stored in
+        sparse_grad (Experimental): If true, the gradients for {means, quats, scales} will be stored in
             a COO sparse layout. This can be helpful for saving memory. Default is False.
         absgrad: If true, the absolute gradients of the projected 2D means
             will be computed during the backward pass, which could be accessed by
@@ -1082,7 +1082,7 @@ def rasterization_2dgs(
 
         **render_normals**: The rendered normals. [C, height, width, 3].
 
-        **render_normals_from_depth**: surface normal from depth. [C, height, width, 3]
+        **surf_normals**: surface normal from depth. [C, height, width, 3]
 
         **render_distort**: The rendered distortions. [C, height, width, 1].
         L1 version, different from L2 version in 2DGS paper.
@@ -1091,6 +1091,36 @@ def rasterization_2dgs(
 
         **meta**: A dictionary of intermediate results of the rasterization.
 
+    Examples:
+
+    .. code-block:: python
+
+        >>> # define Gaussians
+        >>> means = torch.randn((100, 3), device=device)
+        >>> quats = torch.randn((100, 4), device=device)
+        >>> scales = torch.rand((100, 3), device=device) * 0.1
+        >>> colors = torch.rand((100, 3), device=device)
+        >>> opacities = torch.rand((100,), device=device)
+        >>> # define cameras
+        >>> viewmats = torch.eye(4, device=device)[None, :, :]
+        >>> Ks = torch.tensor([
+        >>>    [300., 0., 150.], [0., 300., 100.], [0., 0., 1.]], device=device)[None, :, :]
+        >>> width, height = 300, 200
+        >>> # render
+        >>> colors, alphas, normals, surf_normals, distort, median_depth, meta = rasterization_2dgs(
+        >>>    means, quats, scales, opacities, colors, viewmats, Ks, width, height
+        >>> )
+        >>> print (colors.shape, alphas.shape)
+        torch.Size([1, 200, 300, 3]) torch.Size([1, 200, 300, 1])
+        >>> print (normals.shape, surf_normals.shape)
+        torch.Size([1, 200, 300, 3]) torch.Size([1, 200, 300, 3])
+        >>> print (distort.shape, median_depth.shape)
+        torch.Size([1, 200, 300, 1]) torch.Size([1, 200, 300, 1])
+        >>> print (meta.keys())
+        dict_keys(['camera_ids', 'gaussian_ids', 'radii', 'means2d', 'depths', 'ray_transforms',
+        'opacities', 'normals', 'tile_width', 'tile_height', 'tiles_per_gauss', 'isect_ids',
+        'flatten_ids', 'isect_offsets', 'width', 'height', 'tile_size', 'n_cameras', 'render_distort', 
+        'gradient_2dgs'])
 
     """
 
@@ -1148,12 +1178,12 @@ def rasterization_2dgs(
             radii,
             means2d,
             depths,
-            ray_transformations,
+            ray_transforms,
             normals,
         ) = proj_results
         opacities = opacities[gaussian_ids]
     else:
-        radii, means2d, depths, ray_transformations, normals = proj_results
+        radii, means2d, depths, ray_transforms, normals = proj_results
         opacities = opacities.repeat(C, 1)
         camera_ids, gaussian_ids = None, None
 
@@ -1217,7 +1247,7 @@ def rasterization_2dgs(
         render_median,
     ) = rasterize_to_pixels_2dgs(
         means2d,
-        ray_transformations,
+        ray_transforms,
         colors,
         opacities,
         normals,
@@ -1259,7 +1289,7 @@ def rasterization_2dgs(
         "radii": radii,
         "means2d": means2d,
         "depths": depths,
-        "ray_transformations": ray_transformations,
+        "ray_transforms": ray_transforms,
         "opacities": opacities,
         "normals": normals,
         "tile_width": tile_width,
