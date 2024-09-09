@@ -1242,7 +1242,7 @@ def fully_fused_projection_2dgs(
         far_plane: Far plane distance. Default: 200.
         radius_clip: Gaussians with projected radii smaller than this value will be ignored. Default: 0.0.
         packed: If True, the output tensors will be packed into a flattened tensor. Default: False.
-        sparse_grad: This is only effective when `packed` is True. If True, during backward the gradients
+        sparse_grad (Experimental): This is only effective when `packed` is True. If True, during backward the gradients
           of {`means`, `covars`, `quats`, `scales`} will be a sparse Tensor in COO layout. Default: False.
 
     Returns:
@@ -1259,11 +1259,11 @@ def fully_fused_projection_2dgs(
         - **normals**. The normals in camera spaces. [nnz, 3]
 
         If `packed` is False:
+        
         - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N].
         - **means**. Projected Gaussian means in 2D. [C, N, 2]
         - **depths**. The z-depth of the projected Gaussians. [C, N]
         - **ray_transforms**. transformation matrices that transforms xy-planes in pixel spaces into splat coordinates.
-                        (WH)^T in equation (9) in paper [C, N, 3, 3]
         - **normals**. The normals in camera spaces. [C, N, 3]
 
     """
@@ -1598,8 +1598,7 @@ def rasterize_to_pixels_2dgs(
 
     Args:
         means2d: Projected Gaussian means. [C, N, 2] if packed is False, [nnz, 2] if packed is True.
-        ray_transforms: transformation matrices that transforms xy-planes in pixel spaces into splat coordinates.
-                (WH)^T in equation (9) in paper [C, N, 3, 3].
+        ray_transforms: transformation matrices that transforms xy-planes in pixel spaces into splat coordinates. [C, N, 3, 3] if packed is False, [nnz, channels] if packed is True.
         colors: Gaussian colors or ND features. [C, N, channels] if packed is False, [nnz, channels] if packed is True.
         opacities: Gaussian opacities that support per-view values. [C, N] if packed is False, [nnz] if packed is True.
         normals: The normals in camera space. [C, N, 3] if packed is False, [nnz, 3] if packed is True.
@@ -1716,6 +1715,37 @@ def rasterize_to_indices_in_range_2dgs(
     isect_offsets: Tensor,
     flatten_ids: Tensor,
 ) -> Tuple[Tensor, Tensor, Tensor]:
+    """Rasterizes a batch of Gaussians to images but only returns the indices.
+
+    .. note::
+
+        This function supports iterative rasterization, in which each call of this function
+        will rasterize a batch of Gaussians from near to far, defined by `[range_start, range_end)`.
+        If a one-step full rasterization is desired, set `range_start` to 0 and `range_end` to a really
+        large number, e.g, 1e10.
+
+    Args:
+        range_start: The start batch of Gaussians to be rasterized (inclusive).
+        range_end: The end batch of Gaussians to be rasterized (exclusive).
+        transmittances: Currently transmittances. [C, image_height, image_width]
+        means2d: Projected Gaussian means. [C, N, 2]
+        ray_transforms: transformation matrices that transforms xy-planes in pixel spaces into splat coordinates. [C, N, 3, 3]
+        opacities: Gaussian opacities that support per-view values. [C, N]
+        image_width: Image width.
+        image_height: Image height.
+        tile_size: Tile size.
+        isect_offsets: Intersection offsets outputs from `isect_offset_encode()`. [C, tile_height, tile_width]
+        flatten_ids: The global flatten indices in [C * N] from  `isect_tiles()`. [n_isects]
+
+    Returns:
+        A tuple:
+
+        - **Gaussian ids**. Gaussian ids for the pixel intersection. A flattened list of shape [M].
+        - **Pixel ids**. pixel indices (row-major). A flattened list of shape [M].
+        - **Camera ids**. Camera indices. A flattened list of shape [M].
+    """
+    
+    
     C, N, _ = means2d.shape
     assert ray_transforms.shape == (C, N, 3, 3), ray_transforms.shape
     assert opacities.shape == (C, N), opacities.shape

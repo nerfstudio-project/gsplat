@@ -86,8 +86,34 @@ def accumulate_2dgs(
     camera_ids: Tensor,  # [M]
     image_width: int,
     image_height: int,
-) -> Tuple[Tensor, Tensor]:
-    """Alpha compositing for 2DGS."""
+) -> Tuple[Tensor, Tensor, Tensor]:
+    """Alpha compositing for 2DGS.
+    
+    .. warning::
+        This function requires the nerfacc package to be installed. Please install it using the following command pip install nerfacc.
+    
+    Args:
+        means2d: Gaussian means in 2D. [C, N, 2]
+        ray_transforms: transformation matrices that transform rays in pixel space into splat's local frame. [C, N, 3, 3]
+        opacities: Per-view Gaussian opacities (for example, when antialiasing is enabled, Gaussian in
+            each view would efficiently have different opacity). [C, N]
+        colors: Per-view Gaussian colors. Supports N-D features. [C, N, channels]
+        normals: Per-view Gaussian normals. [C, N, 3]
+        gaussian_ids: Collection of Gaussian indices to be rasterized. A flattened list of shape [M].
+        pixel_ids: Collection of pixel indices (row-major) to be rasterized. A flattened list of shape [M].
+        camera_ids: Collection of camera indices to be rasterized. A flattened list of shape [M].
+        image_width: Image width.
+        image_height: Image height.
+    
+    Returns:
+        A tuple:
+
+        **renders**: Accumulated colors. [C, image_height, image_width, channels]
+        
+        **alphas**: Accumulated opacities. [C, image_height, image_width, 1]
+        
+        **normals**: Accumulated opacities. [C, image_height, image_width, 3]
+    """
 
     try:
         from nerfacc import accumulate_along_rays, render_weight_from_alpha

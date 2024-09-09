@@ -1340,6 +1340,9 @@ def rasterization_2dgs_inria_wrapper(
 
     Install the 2DGS rasterization backend from
         https://github.com/hbb1/diff-surfel-rasterization
+    
+    Credit to Jeffrey Hu https://github.com/jefequien
+    
     """
     from diff_surfel_rasterization import (
         GaussianRasterizationSettings,
