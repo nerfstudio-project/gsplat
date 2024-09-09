@@ -29,13 +29,13 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     const int32_t image_height,
     // fwd outputs
     const int32_t *__restrict__ radii, // [C, N]
-    const T *__restrict__ ray_Ms,      // [C, N, 3, 3]
+    const T *__restrict__ ray_transforms,      // [C, N, 3, 3]
     // grad outputs
     const T *__restrict__ v_means2d, // [C, N, 2]
     const T *__restrict__ v_depths,  // [C, N]
     const T *__restrict__ v_normals, // [C, N, 3]
     // grad inputs
-    T *__restrict__ v_ray_Ms,  // [C, N, 3, 3]
+    T *__restrict__ v_ray_transforms,  // [C, N, 3, 3]
     T *__restrict__ v_means,   // [N, 3]
     T *__restrict__ v_quats,   // [N, 4]
     T *__restrict__ v_scales,  // [N, 3]
@@ -54,12 +54,12 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
     viewmats += cid * 16;
     Ks += cid * 9;
 
-    ray_Ms += idx * 9;
+    ray_transforms += idx * 9;
 
     v_means2d += idx * 2;
     v_depths += idx;
     v_normals += idx * 3;
-    v_ray_Ms += idx * 9;
+    v_ray_transforms += idx * 9;
 
     // transform Gaussian to camera space
     mat3<T> R = mat3<T>(
@@ -82,27 +82,27 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
 
     mat3<T> P = mat3<T>(Ks[0], 0.0, Ks[2], 0.0, Ks[4], Ks[5], 0.0, 0.0, 1.0);
 
-    mat3<T> _v_ray_Ms = mat3<T>(
-        v_ray_Ms[0],
-        v_ray_Ms[1],
-        v_ray_Ms[2],
-        v_ray_Ms[3],
-        v_ray_Ms[4],
-        v_ray_Ms[5],
-        v_ray_Ms[6],
-        v_ray_Ms[7],
-        v_ray_Ms[8]
+    mat3<T> _v_ray_transforms = mat3<T>(
+        v_ray_transforms[0],
+        v_ray_transforms[1],
+        v_ray_transforms[2],
+        v_ray_transforms[3],
+        v_ray_transforms[4],
+        v_ray_transforms[5],
+        v_ray_transforms[6],
+        v_ray_transforms[7],
+        v_ray_transforms[8]
     );
 
-    _v_ray_Ms[2][2] += v_depths[0];
+    _v_ray_transforms[2][2] += v_depths[0];
 
     vec3<T> v_normal = glm::make_vec3(v_normals);
 
     vec3<T> v_mean(0.f);
     vec2<T> v_scale(0.f);
     vec4<T> v_quat(0.f);
-    compute_ray_Ms_aabb_vjp(
-        ray_Ms,
+    compute_ray_transforms_aabb_vjp(
+        ray_transforms,
         v_means2d,
         v_normal,
         R,
@@ -111,7 +111,7 @@ __global__ void fully_fused_projection_bwd_2dgs_kernel(
         mean_c,
         quat,
         scale,
-        _v_ray_Ms,
+        _v_ray_transforms,
         v_quat,
         v_scale,
         v_mean
@@ -159,12 +159,12 @@ fully_fused_projection_bwd_2dgs_tensor(
     const uint32_t image_height,
     // fwd outputs
     const torch::Tensor &radii,  // [C, N]
-    const torch::Tensor &ray_Ms, // [C, N, 3, 3]
+    const torch::Tensor &ray_transforms, // [C, N, 3, 3]
     // grad outputs
     const torch::Tensor &v_means2d, // [C, N, 2]
     const torch::Tensor &v_depths,  // [C, N]
     const torch::Tensor &v_normals, // [C, N, 3]
-    const torch::Tensor &v_ray_Ms,  // [C, N, 3, 3]
+    const torch::Tensor &v_ray_transforms,  // [C, N, 3, 3]
     const bool viewmats_requires_grad
 ) {
     GSPLAT_DEVICE_GUARD(means);
@@ -174,11 +174,11 @@ fully_fused_projection_bwd_2dgs_tensor(
     GSPLAT_CHECK_INPUT(viewmats);
     GSPLAT_CHECK_INPUT(Ks);
     GSPLAT_CHECK_INPUT(radii);
-    GSPLAT_CHECK_INPUT(ray_Ms);
+    GSPLAT_CHECK_INPUT(ray_transforms);
     GSPLAT_CHECK_INPUT(v_means2d);
     GSPLAT_CHECK_INPUT(v_depths);
     GSPLAT_CHECK_INPUT(v_normals);
-    GSPLAT_CHECK_INPUT(v_ray_Ms);
+    GSPLAT_CHECK_INPUT(v_ray_transforms);
 
     uint32_t N = means.size(0);    // number of gaussians
     uint32_t C = viewmats.size(0); // number of cameras
@@ -207,11 +207,11 @@ fully_fused_projection_bwd_2dgs_tensor(
                 image_width,
                 image_height,
                 radii.data_ptr<int32_t>(),
-                ray_Ms.data_ptr<float>(),
+                ray_transforms.data_ptr<float>(),
                 v_means2d.data_ptr<float>(),
                 v_depths.data_ptr<float>(),
                 v_normals.data_ptr<float>(),
-                v_ray_Ms.data_ptr<float>(),
+                v_ray_transforms.data_ptr<float>(),
                 v_means.data_ptr<float>(),
                 v_quats.data_ptr<float>(),
                 v_scales.data_ptr<float>(),

@@ -41,7 +41,7 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
     int32_t *__restrict__ radii,        // [nnz]
     T *__restrict__ means2d,            // [nnz, 2]
     T *__restrict__ depths,             // [nnz]
-    T *__restrict__ ray_Ms,             // [nnz, 3, 3]
+    T *__restrict__ ray_transforms,             // [nnz, 3, 3]
     T *__restrict__ normals             // [nnz, 3]
 ) {
     int32_t blocks_per_row = gridDim.x;
@@ -170,15 +170,15 @@ __global__ void fully_fused_projection_packed_fwd_2dgs_kernel(
             means2d[thread_data * 2] = mean2d.x;
             means2d[thread_data * 2 + 1] = mean2d.y;
             depths[thread_data] = mean_c.z;
-            ray_Ms[thread_data * 9] = M[0][0];
-            ray_Ms[thread_data * 9 + 1] = M[0][1];
-            ray_Ms[thread_data * 9 + 2] = M[0][2];
-            ray_Ms[thread_data * 9 + 3] = M[1][0];
-            ray_Ms[thread_data * 9 + 4] = M[1][1];
-            ray_Ms[thread_data * 9 + 5] = M[1][2];
-            ray_Ms[thread_data * 9 + 6] = M[2][0];
-            ray_Ms[thread_data * 9 + 7] = M[2][1];
-            ray_Ms[thread_data * 9 + 8] = M[2][2];
+            ray_transforms[thread_data * 9] = M[0][0];
+            ray_transforms[thread_data * 9 + 1] = M[0][1];
+            ray_transforms[thread_data * 9 + 2] = M[0][2];
+            ray_transforms[thread_data * 9 + 3] = M[1][0];
+            ray_transforms[thread_data * 9 + 4] = M[1][1];
+            ray_transforms[thread_data * 9 + 5] = M[1][2];
+            ray_transforms[thread_data * 9 + 6] = M[2][0];
+            ray_transforms[thread_data * 9 + 7] = M[2][1];
+            ray_transforms[thread_data * 9 + 8] = M[2][2];
             normals[thread_data * 3] = normal.x;
             normals[thread_data * 3 + 1] = normal.y;
             normals[thread_data * 3 + 2] = normal.z;
@@ -280,7 +280,7 @@ fully_fused_projection_packed_fwd_2dgs_tensor(
         torch::empty({nnz}, means.options().dtype(torch::kInt32));
     torch::Tensor means2d = torch::empty({nnz, 2}, means.options());
     torch::Tensor depths = torch::empty({nnz}, means.options());
-    torch::Tensor ray_Ms = torch::empty({nnz, 3, 3}, means.options());
+    torch::Tensor ray_transforms = torch::empty({nnz, 3, 3}, means.options());
     torch::Tensor normals = torch::empty({nnz, 3}, means.options());
 
     if (nnz) {
@@ -306,7 +306,7 @@ fully_fused_projection_packed_fwd_2dgs_tensor(
                 radii.data_ptr<int32_t>(),
                 means2d.data_ptr<float>(),
                 depths.data_ptr<float>(),
-                ray_Ms.data_ptr<float>(),
+                ray_transforms.data_ptr<float>(),
                 normals.data_ptr<float>()
             );
     } else {
@@ -320,7 +320,7 @@ fully_fused_projection_packed_fwd_2dgs_tensor(
         radii,
         means2d,
         depths,
-        ray_Ms,
+        ray_transforms,
         normals
     );
 }

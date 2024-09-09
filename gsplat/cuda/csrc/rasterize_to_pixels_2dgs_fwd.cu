@@ -21,7 +21,7 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
     const uint32_t n_isects,
     const bool packed,
     const vec2<S> *__restrict__ means2d,
-    const S *__restrict__ ray_Ms,
+    const S *__restrict__ ray_transforms,
     const S *__restrict__ colors,      // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
     const S *__restrict__ opacities,   // [C, N] or [nnz]
     const S *__restrict__ normals,     // [C, N, 3] or [nnz, 3]
@@ -153,13 +153,13 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
             const S opac = opacities[g];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             u_Ms_batch[tr] = {
-                ray_Ms[g * 9], ray_Ms[g * 9 + 1], ray_Ms[g * 9 + 2]
+                ray_transforms[g * 9], ray_transforms[g * 9 + 1], ray_transforms[g * 9 + 2]
             };
             v_Ms_batch[tr] = {
-                ray_Ms[g * 9 + 3], ray_Ms[g * 9 + 4], ray_Ms[g * 9 + 5]
+                ray_transforms[g * 9 + 3], ray_transforms[g * 9 + 4], ray_transforms[g * 9 + 5]
             };
             w_Ms_batch[tr] = {
-                ray_Ms[g * 9 + 6], ray_Ms[g * 9 + 7], ray_Ms[g * 9 + 8]
+                ray_transforms[g * 9 + 6], ray_transforms[g * 9 + 7], ray_transforms[g * 9 + 8]
             };
         }
 
@@ -285,7 +285,7 @@ std::tuple<
 call_kernel_with_dim(
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2] or [nnz, 2]
-    const torch::Tensor &ray_Ms,    // [C, N, 3, 3] or [nnz, 3, 3]
+    const torch::Tensor &ray_transforms,    // [C, N, 3, 3] or [nnz, 3, 3]
     const torch::Tensor &colors,    // [C, N, channels] or [nnz, channels]
     const torch::Tensor &opacities, // [C, N]  or [nnz]
     const torch::Tensor &normals,   // [C, N, 3]
@@ -301,7 +301,7 @@ call_kernel_with_dim(
 ) {
     GSPLAT_DEVICE_GUARD(means2d);
     GSPLAT_CHECK_INPUT(means2d);
-    GSPLAT_CHECK_INPUT(ray_Ms);
+    GSPLAT_CHECK_INPUT(ray_transforms);
     GSPLAT_CHECK_INPUT(colors);
     GSPLAT_CHECK_INPUT(opacities);
     GSPLAT_CHECK_INPUT(normals);
@@ -382,7 +382,7 @@ call_kernel_with_dim(
             n_isects,
             packed,
             reinterpret_cast<vec2<float> *>(means2d.data_ptr<float>()),
-            ray_Ms.data_ptr<float>(),
+            ray_transforms.data_ptr<float>(),
             colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
             normals.data_ptr<float>(),
@@ -427,7 +427,7 @@ std::tuple<
 rasterize_to_pixels_fwd_2dgs_tensor(
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2] or [nnz, 2]
-    const torch::Tensor &ray_Ms,    // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &ray_transforms,    // [C, N, 3] or [nnz, 3]
     const torch::Tensor &colors,    // [C, N, channels] or [nnz, channels]
     const torch::Tensor &opacities, // [C, N]  or [nnz]
     const torch::Tensor &normals,   // [C, N, 3] or [nnz, 3]
@@ -448,7 +448,7 @@ rasterize_to_pixels_fwd_2dgs_tensor(
     case N:                                                                    \
         return call_kernel_with_dim<N>(                                        \
             means2d,                                                           \
-            ray_Ms,                                                            \
+            ray_transforms,                                                            \
             colors,                                                            \
             opacities,                                                         \
             normals,                                                           \

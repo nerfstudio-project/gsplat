@@ -34,7 +34,7 @@ __global__ void fully_fused_projection_fwd_2dgs_kernel(
     int32_t *__restrict__ radii, // [C, N]
     T *__restrict__ means2d,     // [C, N, 2]
     T *__restrict__ depths,      // [C, N]
-    T *__restrict__ ray_Ms,      // [C, N, 3, 3]
+    T *__restrict__ ray_transforms,      // [C, N, 3, 3]
     T *__restrict__ normals      // [C, N, 3]
 ) {
     // parallelize over C * N.
@@ -128,15 +128,15 @@ __global__ void fully_fused_projection_fwd_2dgs_kernel(
     means2d[idx * 2] = mean2d.x;
     means2d[idx * 2 + 1] = mean2d.y;
     depths[idx] = mean_c.z;
-    ray_Ms[idx * 9] = M0.x;
-    ray_Ms[idx * 9 + 1] = M0.y;
-    ray_Ms[idx * 9 + 2] = M0.z;
-    ray_Ms[idx * 9 + 3] = M1.x;
-    ray_Ms[idx * 9 + 4] = M1.y;
-    ray_Ms[idx * 9 + 5] = M1.z;
-    ray_Ms[idx * 9 + 6] = M2.x;
-    ray_Ms[idx * 9 + 7] = M2.y;
-    ray_Ms[idx * 9 + 8] = M2.z;
+    ray_transforms[idx * 9] = M0.x;
+    ray_transforms[idx * 9 + 1] = M0.y;
+    ray_transforms[idx * 9 + 2] = M0.z;
+    ray_transforms[idx * 9 + 3] = M1.x;
+    ray_transforms[idx * 9 + 4] = M1.y;
+    ray_transforms[idx * 9 + 5] = M1.z;
+    ray_transforms[idx * 9 + 6] = M2.x;
+    ray_transforms[idx * 9 + 7] = M2.y;
+    ray_transforms[idx * 9 + 8] = M2.z;
     normals[idx * 3] = normal.x;
     normals[idx * 3 + 1] = normal.y;
     normals[idx * 3 + 2] = normal.z;
@@ -176,7 +176,7 @@ fully_fused_projection_fwd_2dgs_tensor(
         torch::empty({C, N}, means.options().dtype(torch::kInt32));
     torch::Tensor means2d = torch::empty({C, N, 2}, means.options());
     torch::Tensor depths = torch::empty({C, N}, means.options());
-    torch::Tensor ray_Ms = torch::empty({C, N, 3, 3}, means.options());
+    torch::Tensor ray_transforms = torch::empty({C, N, 3, 3}, means.options());
     torch::Tensor normals = torch::empty({C, N, 3}, means.options());
 
     if (C && N) {
@@ -200,11 +200,11 @@ fully_fused_projection_fwd_2dgs_tensor(
                 radii.data_ptr<int32_t>(),
                 means2d.data_ptr<float>(),
                 depths.data_ptr<float>(),
-                ray_Ms.data_ptr<float>(),
+                ray_transforms.data_ptr<float>(),
                 normals.data_ptr<float>()
             );
     }
-    return std::make_tuple(radii, means2d, depths, ray_Ms, normals);
+    return std::make_tuple(radii, means2d, depths, ray_transforms, normals);
 }
 
 } // namespace gsplat

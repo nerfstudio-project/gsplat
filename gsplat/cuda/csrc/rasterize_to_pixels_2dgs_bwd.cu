@@ -21,7 +21,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
     const bool packed,
     // fwd inputs
     const vec2<S> *__restrict__ means2d, // [C, N, 2] or [nnz, 2]
-    const S *__restrict__ ray_Ms,        // [C, N, 3] or [nnz, 3]
+    const S *__restrict__ ray_transforms,        // [C, N, 3] or [nnz, 3]
     const S *__restrict__ colors,      // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
     const S *__restrict__ normals,     // [C, N, 3] or [nnz, 3]
     const S *__restrict__ opacities,   // [C, N] or [nnz]
@@ -50,7 +50,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
     // grad inputs
     vec2<S> *__restrict__ v_means2d_abs, // [C, N, 2] or [nnz, 2]
     vec2<S> *__restrict__ v_means2d,     // [C, N, 2] or [nnz, 2]
-    S *__restrict__ v_ray_Ms,            // [C, N, 3, 3] or [nnz, 3, 3]
+    S *__restrict__ v_ray_transforms,            // [C, N, 3, 3] or [nnz, 3, 3]
     S *__restrict__ v_colors,    // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
     S *__restrict__ v_opacities, // [C, N] or [nnz]
     S *__restrict__ v_normals,   // [C, N, 3] or [nnz, 3]
@@ -190,13 +190,13 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
             const S opac = opacities[g];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             u_Ms_batch[tr] = {
-                ray_Ms[g * 9], ray_Ms[g * 9 + 1], ray_Ms[g * 9 + 2]
+                ray_transforms[g * 9], ray_transforms[g * 9 + 1], ray_transforms[g * 9 + 2]
             };
             v_Ms_batch[tr] = {
-                ray_Ms[g * 9 + 3], ray_Ms[g * 9 + 4], ray_Ms[g * 9 + 5]
+                ray_transforms[g * 9 + 3], ray_transforms[g * 9 + 4], ray_transforms[g * 9 + 5]
             };
             w_Ms_batch[tr] = {
-                ray_Ms[g * 9 + 6], ray_Ms[g * 9 + 7], ray_Ms[g * 9 + 8]
+                ray_transforms[g * 9 + 6], ray_transforms[g * 9 + 7], ray_transforms[g * 9 + 8]
             };
             GSPLAT_PRAGMA_UNROLL
             for (uint32_t k = 0; k < COLOR_DIM; ++k) {
@@ -411,16 +411,16 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                     gpuAtomicAdd(v_normal_ptr + k, v_normal_local[k]);
                 }
 
-                S *v_ray_Ms_ptr = (S *)(v_ray_Ms) + 9 * g;
-                gpuAtomicAdd(v_ray_Ms_ptr, v_u_M_local.x);
-                gpuAtomicAdd(v_ray_Ms_ptr + 1, v_u_M_local.y);
-                gpuAtomicAdd(v_ray_Ms_ptr + 2, v_u_M_local.z);
-                gpuAtomicAdd(v_ray_Ms_ptr + 3, v_v_M_local.x);
-                gpuAtomicAdd(v_ray_Ms_ptr + 4, v_v_M_local.y);
-                gpuAtomicAdd(v_ray_Ms_ptr + 5, v_v_M_local.z);
-                gpuAtomicAdd(v_ray_Ms_ptr + 6, v_w_M_local.x);
-                gpuAtomicAdd(v_ray_Ms_ptr + 7, v_w_M_local.y);
-                gpuAtomicAdd(v_ray_Ms_ptr + 8, v_w_M_local.z);
+                S *v_ray_transforms_ptr = (S *)(v_ray_transforms) + 9 * g;
+                gpuAtomicAdd(v_ray_transforms_ptr, v_u_M_local.x);
+                gpuAtomicAdd(v_ray_transforms_ptr + 1, v_u_M_local.y);
+                gpuAtomicAdd(v_ray_transforms_ptr + 2, v_u_M_local.z);
+                gpuAtomicAdd(v_ray_transforms_ptr + 3, v_v_M_local.x);
+                gpuAtomicAdd(v_ray_transforms_ptr + 4, v_v_M_local.y);
+                gpuAtomicAdd(v_ray_transforms_ptr + 5, v_v_M_local.z);
+                gpuAtomicAdd(v_ray_transforms_ptr + 6, v_w_M_local.x);
+                gpuAtomicAdd(v_ray_transforms_ptr + 7, v_w_M_local.y);
+                gpuAtomicAdd(v_ray_transforms_ptr + 8, v_w_M_local.z);
 
                 S *v_xy_ptr = (S *)(v_means2d) + 2 * g;
                 gpuAtomicAdd(v_xy_ptr, v_xy_local.x);
@@ -437,10 +437,10 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
 
             if (valid) {
                 S *v_densify_ptr = (S *)(v_densify) + 2 * g;
-                S *v_ray_Ms_ptr = (S *)(v_ray_Ms) + 9 * g;
+                S *v_ray_transforms_ptr = (S *)(v_ray_transforms) + 9 * g;
                 S depth = w_M.z;
-                v_densify_ptr[0] = v_ray_Ms_ptr[2] * depth;
-                v_densify_ptr[1] = v_ray_Ms_ptr[5] * depth;
+                v_densify_ptr[0] = v_ray_transforms_ptr[2] * depth;
+                v_densify_ptr[1] = v_ray_transforms_ptr[5] * depth;
             }
         }
     }
@@ -458,7 +458,7 @@ std::tuple<
 call_kernel_with_dim(
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2] or [nnz, 2]
-    const torch::Tensor &ray_Ms,    // [C, N, 3, 3] or [nnz, 3, 3]
+    const torch::Tensor &ray_transforms,    // [C, N, 3, 3] or [nnz, 3, 3]
     const torch::Tensor &colors,    // [C, N, 3] or [nnz, 3]
     const torch::Tensor &opacities, // [C, N] or [nnz]
     const torch::Tensor &normals,   // [C, N, 3] or [nnz, 3]
@@ -490,7 +490,7 @@ call_kernel_with_dim(
 
     GSPLAT_DEVICE_GUARD(means2d);
     GSPLAT_CHECK_INPUT(means2d);
-    GSPLAT_CHECK_INPUT(ray_Ms);
+    GSPLAT_CHECK_INPUT(ray_transforms);
     GSPLAT_CHECK_INPUT(colors);
     GSPLAT_CHECK_INPUT(opacities);
     GSPLAT_CHECK_INPUT(normals);
@@ -528,7 +528,7 @@ call_kernel_with_dim(
     dim3 blocks = {C, tile_height, tile_width};
 
     torch::Tensor v_means2d = torch::zeros_like(means2d);
-    torch::Tensor v_ray_Ms = torch::zeros_like(ray_Ms);
+    torch::Tensor v_ray_transforms = torch::zeros_like(ray_transforms);
     torch::Tensor v_colors = torch::zeros_like(colors);
     torch::Tensor v_normals = torch::zeros_like(normals);
     torch::Tensor v_opacities = torch::zeros_like(opacities);
@@ -564,7 +564,7 @@ call_kernel_with_dim(
                 n_isects,
                 packed,
                 reinterpret_cast<vec2<float> *>(means2d.data_ptr<float>()),
-                ray_Ms.data_ptr<float>(),
+                ray_transforms.data_ptr<float>(),
                 colors.data_ptr<float>(),
                 normals.data_ptr<float>(),
                 opacities.data_ptr<float>(),
@@ -592,7 +592,7 @@ call_kernel_with_dim(
                           )
                         : nullptr,
                 reinterpret_cast<vec2<float> *>(v_means2d.data_ptr<float>()),
-                v_ray_Ms.data_ptr<float>(),
+                v_ray_transforms.data_ptr<float>(),
                 v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>(),
                 v_normals.data_ptr<float>(),
@@ -603,7 +603,7 @@ call_kernel_with_dim(
     return std::make_tuple(
         v_means2d_abs,
         v_means2d,
-        v_ray_Ms,
+        v_ray_transforms,
         v_colors,
         v_opacities,
         v_normals,
@@ -622,7 +622,7 @@ std::tuple<
 rasterize_to_pixels_bwd_2dgs_tensor(
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2] or [nnz, 2]
-    const torch::Tensor &ray_Ms,    // [C, N, 3, 3] or [nnz, 3, 3]
+    const torch::Tensor &ray_transforms,    // [C, N, 3, 3] or [nnz, 3, 3]
     const torch::Tensor &colors,    // [C, N, 3] or [nnz, 3]
     const torch::Tensor &opacities, // [C, N] or [nnz]
     const torch::Tensor &normals,   // [C, N, 3] or [nnz, 3]
@@ -659,7 +659,7 @@ rasterize_to_pixels_bwd_2dgs_tensor(
     case N:                                                                    \
         return call_kernel_with_dim<N>(                                        \
             means2d,                                                           \
-            ray_Ms,                                                            \
+            ray_transforms,                                                            \
             colors,                                                            \
             opacities,                                                         \
             normals,                                                           \

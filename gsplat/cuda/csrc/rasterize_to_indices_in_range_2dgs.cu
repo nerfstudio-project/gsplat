@@ -22,7 +22,7 @@ __global__ void rasterize_to_indices_in_range_kernel(
     const uint32_t N,
     const uint32_t n_isects,
     const vec2<T> *__restrict__ means2d, // [C, N, 2]
-    const T *__restrict__ ray_Ms,        // [C, N, 3, 3]
+    const T *__restrict__ ray_transforms,        // [C, N, 3, 3]
     const T *__restrict__ opacities,     // [C, N]
     const uint32_t image_width,
     const uint32_t image_height,
@@ -133,13 +133,13 @@ __global__ void rasterize_to_indices_in_range_kernel(
             const T opac = opacities[g];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             u_Ms_batch[tr] = {
-                ray_Ms[g * 9], ray_Ms[g * 9 + 1], ray_Ms[g * 9 + 2]
+                ray_transforms[g * 9], ray_transforms[g * 9 + 1], ray_transforms[g * 9 + 2]
             };
             v_Ms_batch[tr] = {
-                ray_Ms[g * 9 + 3], ray_Ms[g * 9 + 4], ray_Ms[g * 9 + 5]
+                ray_transforms[g * 9 + 3], ray_transforms[g * 9 + 4], ray_transforms[g * 9 + 5]
             };
             w_Ms_batch[tr] = {
-                ray_Ms[g * 9 + 6], ray_Ms[g * 9 + 7], ray_Ms[g * 9 + 8]
+                ray_transforms[g * 9 + 6], ray_transforms[g * 9 + 7], ray_transforms[g * 9 + 8]
             };
         }
 
@@ -218,7 +218,7 @@ rasterize_to_indices_in_range_2dgs_tensor(
     const torch::Tensor transmittances, // [C, image_height, image_width]
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2]
-    const torch::Tensor &ray_Ms,    // [C, N, 3, 3]
+    const torch::Tensor &ray_transforms,    // [C, N, 3, 3]
     const torch::Tensor &opacities, // [C, N]
     // image size
     const uint32_t image_width,
@@ -230,7 +230,7 @@ rasterize_to_indices_in_range_2dgs_tensor(
 ) {
     GSPLAT_DEVICE_GUARD(means2d);
     GSPLAT_CHECK_INPUT(means2d);
-    GSPLAT_CHECK_INPUT(ray_Ms);
+    GSPLAT_CHECK_INPUT(ray_transforms);
     GSPLAT_CHECK_INPUT(opacities);
     GSPLAT_CHECK_INPUT(tile_offsets);
     GSPLAT_CHECK_INPUT(flatten_ids);
@@ -279,7 +279,7 @@ rasterize_to_indices_in_range_2dgs_tensor(
                 N,
                 n_isects,
                 reinterpret_cast<vec2<float> *>(means2d.data_ptr<float>()),
-                ray_Ms.data_ptr<float>(),
+                ray_transforms.data_ptr<float>(),
                 opacities.data_ptr<float>(),
                 image_width,
                 image_height,
@@ -317,7 +317,7 @@ rasterize_to_indices_in_range_2dgs_tensor(
                 N,
                 n_isects,
                 reinterpret_cast<vec2<float> *>(means2d.data_ptr<float>()),
-                ray_Ms.data_ptr<float>(),
+                ray_transforms.data_ptr<float>(),
                 opacities.data_ptr<float>(),
                 image_width,
                 image_height,

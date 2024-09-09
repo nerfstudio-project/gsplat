@@ -342,12 +342,12 @@ fully_fused_projection_bwd_2dgs_tensor(
     const uint32_t image_height,
     // fwd outputs
     const torch::Tensor &radii,  // [C, N]
-    const torch::Tensor &ray_Ms, // [C, N, 3, 3]
+    const torch::Tensor &ray_transforms, // [C, N, 3, 3]
     // grad outputs
     const torch::Tensor &v_means2d, // [C, N, 2]
     const torch::Tensor &v_depths,  // [C, N]
     const torch::Tensor &v_normals, // [C, N, 3]
-    const torch::Tensor &v_ray_Ms,  // [C, N, 3, 3]
+    const torch::Tensor &v_ray_transforms,  // [C, N, 3, 3]
     const bool viewmats_requires_grad
 );
 
@@ -362,7 +362,7 @@ std::tuple<
 rasterize_to_pixels_fwd_2dgs_tensor(
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2] or [nnz, 2]
-    const torch::Tensor &ray_Ms,    // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &ray_transforms,    // [C, N, 3] or [nnz, 3]
     const torch::Tensor &colors,    // [C, N, channels] or [nnz, channels]
     const torch::Tensor &opacities, // [C, N]  or [nnz]
     const torch::Tensor &normals,   // [C, N, 3] or [nnz, 3]
@@ -388,7 +388,7 @@ std::tuple<
 rasterize_to_pixels_bwd_2dgs_tensor(
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2] or [nnz, 2]
-    const torch::Tensor &ray_Ms,    // [C, N, 3, 3] or [nnz, 3, 3]
+    const torch::Tensor &ray_transforms,    // [C, N, 3, 3] or [nnz, 3, 3]
     const torch::Tensor &colors,    // [C, N, 3] or [nnz, 3]
     const torch::Tensor &opacities, // [C, N] or [nnz]
     const torch::Tensor &normals,   // [C, N, 3] or [nnz, 3],
@@ -425,7 +425,7 @@ rasterize_to_indices_in_range_2dgs_tensor(
     const torch::Tensor transmittances, // [C, image_height, image_width]
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2]
-    const torch::Tensor &ray_Ms,    // [C, N, 3, 3]
+    const torch::Tensor &ray_transforms,    // [C, N, 3, 3]
     const torch::Tensor &opacities, // [C, N]
     // image size
     const uint32_t image_width,
@@ -471,12 +471,12 @@ fully_fused_projection_packed_bwd_2dgs_tensor(
     // fwd outputs
     const torch::Tensor &camera_ids,   // [nnz]
     const torch::Tensor &gaussian_ids, // [nnz]
-    const torch::Tensor &ray_Ms,       // [nnz, 3, 3]
+    const torch::Tensor &ray_transforms,       // [nnz, 3, 3]
     // grad outputs
     const torch::Tensor &v_means2d, // [nnz, 2]
     const torch::Tensor &v_depths,  // [nnz]
     const torch::Tensor &v_normals, // [nnz, 3]
-    const torch::Tensor &v_ray_Ms,  // [nnz, 3, 3]
+    const torch::Tensor &v_ray_transforms,  // [nnz, 3, 3]
     const bool viewmats_requires_grad,
     const bool sparse_grad
 );
