@@ -1,5 +1,6 @@
 import os
-from typing import Any, Dict, List, Optional, assert_never
+from typing import Any, Dict, List, Optional
+from typing_extensions import assert_never
 
 import cv2
 import imageio.v2 as imageio
