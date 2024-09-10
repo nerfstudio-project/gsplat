@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, assert_never
 
 import cv2
 import imageio.v2 as imageio
@@ -97,9 +97,9 @@ class Parser:
             elif type_ == 5 or type_ == "OPENCV_FISHEYE":
                 params = np.array([cam.k1, cam.k2, cam.k3, cam.k4], dtype=np.float32)
                 camtype = "fisheye"
-            # assert (
-            #     camtype == "perspective"
-            # ), f"Only support perspective camera model, got {type_}"
+            assert (
+                camtype == "perspective" or camtype == "fisheye"
+            ), f"Only perspective and fisheye cameras are supported, got {type_}"
 
             params_dict[camera_id] = params
 
@@ -252,7 +252,6 @@ class Parser:
                         y2 = fy * y1 * r + height // 2
                         mapx[j, i] = x2
                         mapy[j, i] = y2
-
                 # Compute ROI
                 x_min = np.nonzero(mapx < 0)[1].max()
                 x_max = np.nonzero(mapx > width)[1].min()
@@ -264,6 +263,9 @@ class Parser:
                 K_undist = K.copy()
                 K_undist[0, 2] -= x_min
                 K_undist[1, 2] -= y_min
+            else:
+                assert_never(camtype)
+
             self.Ks_dict[camera_id] = K_undist
             self.mapx_dict[camera_id] = mapx
             self.mapy_dict[camera_id] = mapy

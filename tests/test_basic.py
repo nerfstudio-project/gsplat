@@ -165,10 +165,10 @@ def test_proj(test_data, ortho: bool):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-@pytest.mark.parametrize("fused", [True])
-@pytest.mark.parametrize("calc_compensations", [False])
+@pytest.mark.parametrize("fused", [False, True])
+@pytest.mark.parametrize("calc_compensations", [False, True])
 @pytest.mark.parametrize("ortho", [False])
-@pytest.mark.parametrize("fisheye", [True])
+@pytest.mark.parametrize("fisheye", [True, False])
 def test_projection(
     test_data, fused: bool, calc_compensations: bool, ortho: bool, fisheye: bool
 ):
@@ -177,8 +177,8 @@ def test_projection(
 
     torch.manual_seed(42)
 
-    Ks = test_data["Ks"][:1, ...]
-    viewmats = test_data["viewmats"][:1, ...]
+    Ks = test_data["Ks"]
+    viewmats = test_data["viewmats"]
     height = test_data["height"]
     width = test_data["width"]
     quats = test_data["quats"]
