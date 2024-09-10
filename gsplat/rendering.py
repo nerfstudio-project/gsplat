@@ -6,7 +6,6 @@ import torch.distributed
 from torch import Tensor
 from typing_extensions import Literal
 
-from .cuda._torch_impl import _fully_fused_projection
 from .cuda._wrapper import (
     fully_fused_projection,
     isect_offset_encode,
@@ -292,7 +291,7 @@ def rasterization(
         C = len(viewmats)
 
     # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
-    proj_results = _fully_fused_projection(
+    proj_results = fully_fused_projection(
         means,
         covars,
         quats,
