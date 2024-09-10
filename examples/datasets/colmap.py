@@ -259,8 +259,6 @@ class Parser:
                 y_min = np.nonzero(mapy < 0)[0].max()
                 y_max = np.nonzero(mapy > height)[0].min()
                 roi_undist = [x_min, y_min, x_max - x_min, y_max - y_min]
-                K[0, 2] -= x_min
-                K[1, 2] -= y_min
                 K_undist = K.copy()
                 K_undist[0, 2] -= x_min
                 K_undist[1, 2] -= y_min
