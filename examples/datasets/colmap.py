@@ -228,26 +228,38 @@ class Parser:
                     K, params, None, K_undist, (width, height), cv2.CV_32FC1
                 )
             elif camtype == "fisheye":
+                fx = K[0, 0]
+                fy = K[1, 1]
+                cx = K[0, 2]
+                cy = K[1, 2]
+                mapx = np.zeros((height, width), dtype=np.float32)
+                mapy = np.zeros((height, width), dtype=np.float32)
+                for i in range(0, width):
+                    for j in range(0, height):
+                        x = float(i)
+                        y = float(j)
+                        x1 = (x - cx) / fx
+                        y1 = (y - cy) / fy
+                        theta = np.sqrt(x1**2 + y1**2)
+                        r = (
+                            1.0
+                            + params[0] * theta**2
+                            + params[1] * theta**4
+                            + params[2] * theta**6
+                            + params[3] * theta**8
+                        )
+                        x2 = fx * x1 * r + width // 2
+                        y2 = fy * y1 * r + height // 2
+                        mapx[j, i] = x2
+                        mapy[j, i] = y2
+
+                x_crop, y_crop = (100, 70)  # Hardcoded ROI crop
+                roi_undist = np.array(
+                    [x_crop, y_crop, int(width - 2 * x_crop), int(height - 2 * y_crop)]
+                )
                 K_undist = K.copy()
-                roi_undist = np.array([0, 0, width, height])
-                mapx = None
-                mapy = None
-                # print(K, params)
-                # print(width, height)
-                # mapx = np.zeros((width, height), dtype=np.float32)
-                # mapy = np.zeros((width, height), dtype=np.float32)
-                # for i in range(0, width):
-                #     for j in range(0, height):
-                #         x = float(i)
-                #         y = float(j)
-                #         x1 = (x - cx) / fx
-                #         y1 = (y - cy) / fy
-                #         theta = np.sqrt(x1**2 + y1**2)
-                #         r = (1.0 + params[0] * theta**2 + params[1] * theta**4 + params[2] * theta**6 + params[3] * theta**8)
-                #         x2 = fx * x1 * r + width // 2
-                #         y2 = fy * y1 * r + height // 2
-                #         mapx[i, j] = x2
-                #         mapy[i, j] = y2
+                K_undist[0, 2] -= x_crop
+                K_undist[1, 2] -= y_crop
             self.Ks_dict[camera_id] = K_undist
             self.mapx_dict[camera_id] = mapx
             self.mapy_dict[camera_id] = mapy
@@ -297,8 +309,7 @@ class Dataset:
                 self.parser.mapx_dict[camera_id],
                 self.parser.mapy_dict[camera_id],
             )
-            if mapx is not None and mapy is not None:
-                image = cv2.remap(image, mapx, mapy, cv2.INTER_LINEAR)
+            image = cv2.remap(image, mapx, mapy, cv2.INTER_LINEAR)
             x, y, w, h = self.parser.roi_undist_dict[camera_id]
             image = image[y : y + h, x : x + w]
 
