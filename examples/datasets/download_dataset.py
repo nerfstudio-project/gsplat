@@ -34,9 +34,9 @@ class DownloadData:
 
         # download
         download_command = [
-            "wget",
-            "-P",
-            str(self.save_dir / dataset_rename_map[dataset]),
+            "curl",
+            "-o",
+            str(self.save_dir / dataset_rename_map[dataset] / file_name),
             urls[dataset],
         ]
         try:
@@ -47,12 +47,21 @@ class DownloadData:
 
         # if .zip
         if Path(urls[dataset]).suffix == ".zip":
-            extract_command = [
-                "unzip",
-                self.save_dir / dataset_rename_map[dataset] / file_name,
-                "-d",
-                self.save_dir / dataset_rename_map[dataset],
-            ]
+            if os.name == "nt":  # Windows doesn't have 'unzip' but 'tar' works
+                extract_command = [
+                    "tar",
+                    "-xvf",
+                    self.save_dir / dataset_rename_map[dataset] / file_name,
+                    "-C",
+                    self.save_dir / dataset_rename_map[dataset],
+                ]
+            else:
+                extract_command = [
+                    "unzip",
+                    self.save_dir / dataset_rename_map[dataset] / file_name,
+                    "-d",
+                    self.save_dir / dataset_rename_map[dataset],
+                ]
         # if .tar
         else:
             extract_command = [
