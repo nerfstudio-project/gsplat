@@ -1,3 +1,6 @@
 [submodule "gsplat/cuda/csrc/third_party/glm"]
 	path = gsplat/cuda/csrc/third_party/glm
 	url = https://github.com/g-truc/glm.git
+[submodule "third_party/fused-ssim"]
+	path = third_party/fused-ssim
+	url = git@github.com:rahul-goel/fused-ssim.git
