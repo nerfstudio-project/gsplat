@@ -526,33 +526,33 @@ inline __device__ void fisheye_proj_vjp(
 	float dJ_dz11 = dJ_dy12;
 	float dJ_dz12 = 2.f * fy * y * z * inv1;
 
-    float dL_dtx_raw = dJ_dx00 * v_J[0][0] + dJ_dx01 * v_J[0][1] + dJ_dx02 * v_J[2][0] + dJ_dx10 * v_J[0][1] + dJ_dx11 * v_J[1][1] + dJ_dx12 * v_J[2][1];
-    float dL_dty_raw = dJ_dy00 * v_J[0][0] + dJ_dy01 * v_J[0][1] + dJ_dy02 * v_J[2][0] + dJ_dy10 * v_J[0][1] + dJ_dy11 * v_J[1][1] + dJ_dy12 * v_J[2][1];
-    float dL_dtz_raw = dJ_dz00 * v_J[0][0] + dJ_dz01 * v_J[0][1] + dJ_dz02 * v_J[2][0] + dJ_dz10 * v_J[0][1] + dJ_dz11 * v_J[1][1] + dJ_dz12 * v_J[2][1];
-    const float x_grad_mul = x * rz < -lim_x_neg || x * rz > lim_x_pos ? 0 : 1;
-    const float y_grad_mul = y * rz < -lim_y_neg || y * rz > lim_y_pos ? 0 : 1;
-    v_mean3d.x += x_grad_mul * dL_dtx_raw;
-    v_mean3d.y += y_grad_mul * dL_dty_raw;
-    v_mean3d.z += dL_dtz_raw;
-
-    // // fov clipping
-    // if (x * rz <= lim_x_pos && x * rz >= -lim_x_neg) {
-    //     // v_mean3d.x += -fx * rz2 * v_J[2][0];
-    //     v_mean3d.x += dL_dtx_raw;
-    // } else {
-    //     // v_mean3d.z += -fx * rz2 * v_J[2][0] * rz * tx;
-    //     v_mean3d.z += dL_dtx_raw * rz * tx;
-    // }
-    // if (y * rz <= lim_y_pos && y * rz >= -lim_y_neg) {
-    //     // v_mean3d.y += -fy * rz2 * v_J[2][1];
-    //     v_mean3d.y += dL_dty_raw;
-    // } else {
-    //     v_mean3d.z += dL_dty_raw * rz * ty;
-    // }
-    // // v_mean3d.z += -fx * rz2 * v_J[0][0] - fy * rz2 * v_J[1][1] +
-    // //               2.f * fx * tx * rz2 * rz * v_J[2][0] +
-    // //               2.f * fy * ty * rz2 * rz * v_J[2][1];
+    float dL_dtx_raw = dJ_dx00 * v_J[0][0] + dJ_dx01 * v_J[1][0] + dJ_dx02 * v_J[2][0] + dJ_dx10 * v_J[0][1] + dJ_dx11 * v_J[1][1] + dJ_dx12 * v_J[2][1];
+    float dL_dty_raw = dJ_dy00 * v_J[0][0] + dJ_dy01 * v_J[1][0] + dJ_dy02 * v_J[2][0] + dJ_dy10 * v_J[0][1] + dJ_dy11 * v_J[1][1] + dJ_dy12 * v_J[2][1];
+    float dL_dtz_raw = dJ_dz00 * v_J[0][0] + dJ_dz01 * v_J[1][0] + dJ_dz02 * v_J[2][0] + dJ_dz10 * v_J[0][1] + dJ_dz11 * v_J[1][1] + dJ_dz12 * v_J[2][1];
+    // const float x_grad_mul = x * rz < -lim_x_neg || x * rz > lim_x_pos ? 0 : 1;
+    // const float y_grad_mul = y * rz < -lim_y_neg || y * rz > lim_y_pos ? 0 : 1;
+    // v_mean3d.x += x_grad_mul * dL_dtx_raw;
+    // v_mean3d.y += y_grad_mul * dL_dty_raw;
     // v_mean3d.z += dL_dtz_raw;
+
+    // fov clipping
+    if (x * rz <= lim_x_pos && x * rz >= -lim_x_neg) {
+        // v_mean3d.x += -fx * rz2 * v_J[2][0];
+        v_mean3d.x += dL_dtx_raw;
+    } else {
+        // v_mean3d.z += -fx * rz2 * v_J[2][0] * rz * tx;
+        // v_mean3d.z += dL_dtx_raw * rz * tx;
+    }
+    if (y * rz <= lim_y_pos && y * rz >= -lim_y_neg) {
+        // v_mean3d.y += -fy * rz2 * v_J[2][1];
+        v_mean3d.y += dL_dty_raw;
+    } else {
+        // v_mean3d.z += dL_dty_raw * rz * ty;
+    }
+    // v_mean3d.z += -fx * rz2 * v_J[0][0] - fy * rz2 * v_J[1][1] +
+    //               2.f * fx * tx * rz2 * rz * v_J[2][0] +
+    //               2.f * fy * ty * rz2 * rz * v_J[2][1];
+    v_mean3d.z += dL_dtz_raw;
 }
 
 template <typename T>
