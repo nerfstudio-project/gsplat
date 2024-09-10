@@ -248,7 +248,6 @@ def _fully_fused_projection(
     calc_compensations: bool = False,
     ortho: bool = False,
     fisheye: bool = False,
-    **kwargs,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Optional[Tensor]]:
     """PyTorch implementation of `gsplat.cuda._wrapper.fully_fused_projection()`
 
