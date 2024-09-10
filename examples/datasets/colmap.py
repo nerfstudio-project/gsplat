@@ -253,13 +253,17 @@ class Parser:
                         mapx[j, i] = x2
                         mapy[j, i] = y2
 
-                x_crop, y_crop = (100, 70)  # Hardcoded ROI crop
-                roi_undist = np.array(
-                    [x_crop, y_crop, int(width - 2 * x_crop), int(height - 2 * y_crop)]
-                )
+                # Compute ROI
+                x_min = np.nonzero(mapx < 0)[1].max()
+                x_max = np.nonzero(mapx > width)[1].min()
+                y_min = np.nonzero(mapy < 0)[0].max()
+                y_max = np.nonzero(mapy > height)[0].min()
+                roi_undist = [x_min, y_min, x_max - x_min, y_max - y_min]
+                K[0, 2] -= x_min
+                K[1, 2] -= y_min
                 K_undist = K.copy()
-                K_undist[0, 2] -= x_crop
-                K_undist[1, 2] -= y_crop
+                K_undist[0, 2] -= x_min
+                K_undist[1, 2] -= y_min
             self.Ks_dict[camera_id] = K_undist
             self.mapx_dict[camera_id] = mapx
             self.mapy_dict[camera_id] = mapy

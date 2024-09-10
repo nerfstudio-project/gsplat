@@ -56,7 +56,7 @@ class Config:
     # Normalize the world space
     normalize_world_space: bool = True
     # Camera model
-    camera_model: str = "pinhole"
+    camera_model: Literal["pinhole", "fisheye"] = "pinhole"
 
     # Port for the viewer server
     port: int = 8080
@@ -926,7 +926,7 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
             runner.splats[k].data = torch.cat([ckpt["splats"][k] for ckpt in ckpts])
         step = ckpts[0]["step"]
         runner.eval(step=step)
-        # runner.render_traj(step=step)
+        runner.render_traj(step=step)
         if cfg.compression is not None:
             runner.run_compression(step=step)
     else:
