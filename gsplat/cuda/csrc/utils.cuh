@@ -439,17 +439,17 @@ inline __device__ void fisheye_proj_vjp(
 ) {
     T x = mean3d[0], y = mean3d[1], z = mean3d[2];
 
-    T tan_fovx = 0.5f * width / fx;
-    T tan_fovy = 0.5f * height / fy;
-    T lim_x_pos = (width - cx) / fx + 0.3f * tan_fovx;
-    T lim_x_neg = cx / fx + 0.3f * tan_fovx;
-    T lim_y_pos = (height - cy) / fy + 0.3f * tan_fovy;
-    T lim_y_neg = cy / fy + 0.3f * tan_fovy;
+    // T tan_fovx = 0.5f * width / fx;
+    // T tan_fovy = 0.5f * height / fy;
+    // T lim_x_pos = (width - cx) / fx + 0.3f * tan_fovx;
+    // T lim_x_neg = cx / fx + 0.3f * tan_fovx;
+    // T lim_y_pos = (height - cy) / fy + 0.3f * tan_fovy;
+    // T lim_y_neg = cy / fy + 0.3f * tan_fovy;
 
-    T rz = 1.f / z;
-    T rz2 = rz * rz;
-    T tx = z * min(lim_x_pos, max(-lim_x_neg, x * rz));
-    T ty = z * min(lim_y_pos, max(-lim_y_neg, y * rz));
+    // T rz = 1.f / z;
+    // T rz2 = rz * rz;
+    // T tx = z * min(lim_x_pos, max(-lim_x_neg, x * rz));
+    // T ty = z * min(lim_y_pos, max(-lim_y_neg, y * rz));
 
     const float eps = 0.0000001f;
     float x2 = x * x + eps;
