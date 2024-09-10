@@ -393,8 +393,6 @@ inline __device__ void fisheye_proj(
     float eps = 0.0000001f;
     float xy_len = glm::length(glm::vec2({x, y})) + eps;
     float theta = glm::atan(xy_len, z + eps);
-    if (abs(theta) > 3.14 * 0.403)
-        return;
     mean2d = vec2<T>({
         x * fx * theta / xy_len + cx, 
         y * fy * theta / xy_len + cy

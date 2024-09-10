@@ -97,9 +97,9 @@ class Parser:
             elif type_ == 5 or type_ == "OPENCV_FISHEYE":
                 params = np.array([cam.k1, cam.k2, cam.k3, cam.k4], dtype=np.float32)
                 camtype = "fisheye"
-            assert (
-                camtype == "perspective"
-            ), f"Only support perspective camera model, got {type_}"
+            # assert (
+            #     camtype == "perspective"
+            # ), f"Only support perspective camera model, got {type_}"
 
             params_dict[camera_id] = params
 
