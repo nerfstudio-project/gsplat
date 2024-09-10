@@ -206,29 +206,52 @@ class Parser:
             self.imsize_dict[camera_id] = (int(width * s_width), int(height * s_height))
 
         # undistortion
-        # self.mapx_dict = dict()
-        # self.mapy_dict = dict()
-        # self.roi_undist_dict = dict()
-        # for camera_id in self.params_dict.keys():
-        #     params = self.params_dict[camera_id]
-        #     if len(params) == 0:
-        #         continue  # no distortion
-        #     assert camera_id in self.Ks_dict, f"Missing K for camera {camera_id}"
-        #     assert (
-        #         camera_id in self.params_dict
-        #     ), f"Missing params for camera {camera_id}"
-        #     K = self.Ks_dict[camera_id]
-        #     width, height = self.imsize_dict[camera_id]
-        #     K_undist, roi_undist = cv2.getOptimalNewCameraMatrix(
-        #         K, params, (width, height), 0
-        #     )
-        #     mapx, mapy = cv2.initUndistortRectifyMap(
-        #         K, params, None, K_undist, (width, height), cv2.CV_32FC1
-        #     )
-        #     self.Ks_dict[camera_id] = K_undist
-        #     self.mapx_dict[camera_id] = mapx
-        #     self.mapy_dict[camera_id] = mapy
-        #     self.roi_undist_dict[camera_id] = roi_undist
+        self.mapx_dict = dict()
+        self.mapy_dict = dict()
+        self.roi_undist_dict = dict()
+        for camera_id in self.params_dict.keys():
+            params = self.params_dict[camera_id]
+            if len(params) == 0:
+                continue  # no distortion
+            assert camera_id in self.Ks_dict, f"Missing K for camera {camera_id}"
+            assert (
+                camera_id in self.params_dict
+            ), f"Missing params for camera {camera_id}"
+            K = self.Ks_dict[camera_id]
+            width, height = self.imsize_dict[camera_id]
+
+            if camtype == "perspective":
+                K_undist, roi_undist = cv2.getOptimalNewCameraMatrix(
+                    K, params, (width, height), 0
+                )
+                mapx, mapy = cv2.initUndistortRectifyMap(
+                    K, params, None, K_undist, (width, height), cv2.CV_32FC1
+                )
+            elif camtype == "fisheye":
+                K_undist = K.copy()
+                roi_undist = np.array([0, 0, width, height])
+                mapx = None
+                mapy = None
+                # print(K, params)
+                # print(width, height)
+                # mapx = np.zeros((width, height), dtype=np.float32)
+                # mapy = np.zeros((width, height), dtype=np.float32)
+                # for i in range(0, width):
+                #     for j in range(0, height):
+                #         x = float(i)
+                #         y = float(j)
+                #         x1 = (x - cx) / fx
+                #         y1 = (y - cy) / fy
+                #         theta = np.sqrt(x1**2 + y1**2)
+                #         r = (1.0 + params[0] * theta**2 + params[1] * theta**4 + params[2] * theta**6 + params[3] * theta**8)
+                #         x2 = fx * x1 * r + width // 2
+                #         y2 = fy * y1 * r + height // 2
+                #         mapx[i, j] = x2
+                #         mapy[i, j] = y2
+            self.Ks_dict[camera_id] = K_undist
+            self.mapx_dict[camera_id] = mapx
+            self.mapy_dict[camera_id] = mapy
+            self.roi_undist_dict[camera_id] = roi_undist
 
         # size of the scene measured by cameras
         camera_locations = camtoworlds[:, :3, 3]
@@ -268,15 +291,16 @@ class Dataset:
         params = self.parser.params_dict[camera_id]
         camtoworlds = self.parser.camtoworlds[index]
 
-        # if len(params) > 0:
-        #     # Images are distorted. Undistort them.
-        #     mapx, mapy = (
-        #         self.parser.mapx_dict[camera_id],
-        #         self.parser.mapy_dict[camera_id],
-        #     )
-        #     image = cv2.remap(image, mapx, mapy, cv2.INTER_LINEAR)
-        #     x, y, w, h = self.parser.roi_undist_dict[camera_id]
-        #     image = image[y : y + h, x : x + w]
+        if len(params) > 0:
+            # Images are distorted. Undistort them.
+            mapx, mapy = (
+                self.parser.mapx_dict[camera_id],
+                self.parser.mapy_dict[camera_id],
+            )
+            if mapx is not None and mapy is not None:
+                image = cv2.remap(image, mapx, mapy, cv2.INTER_LINEAR)
+            x, y, w, h = self.parser.roi_undist_dict[camera_id]
+            image = image[y : y + h, x : x + w]
 
         if self.patch_size is not None:
             # Random crop.
