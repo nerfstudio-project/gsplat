@@ -224,8 +224,6 @@ def test_projection(
     _radii, _means2d, _depths, _conics, _compensations = _fully_fused_projection(
         means,
         _covars,
-        None,
-        None,
         viewmats,
         Ks,
         width,

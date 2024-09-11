@@ -444,7 +444,7 @@ class Runner:
             sparse_grad=self.cfg.sparse_grad,
             rasterize_mode=rasterize_mode,
             distributed=self.world_size > 1,
-            camera_model=self.cfg.camera_model,
+            fisheye=self.cfg.camera_model == "fisheye",
             **kwargs,
         )
         if masks is not None:

@@ -235,9 +235,7 @@ def _world_to_cam(
 
 def _fully_fused_projection(
     means: Tensor,  # [N, 3]
-    covars: Optional[Tensor],  # [N, 6] or None
-    quats: Optional[Tensor],  # [N, 4] or None
-    scales: Optional[Tensor],  # [N, 3] or None
+    covars: Tensor,  # [N, 3, 3]
     viewmats: Tensor,  # [C, 4, 4]
     Ks: Tensor,  # [C, 3, 3]
     width: int,
@@ -256,11 +254,6 @@ def _fully_fused_projection(
         This is a minimal implementation of fully fused version, which has more
         arguments. Not all arguments are supported.
     """
-    if covars is None:
-        covars = _quat_scale_to_covar_preci(
-            quats, scales, compute_covar=True, compute_preci=False
-        )[0]
-
     means_c, covars_c = _world_to_cam(means, covars, viewmats)
 
     if ortho:
