@@ -59,6 +59,7 @@ class Parser:
         Ks_dict = dict()
         params_dict = dict()
         imsize_dict = dict()  # width, height
+        mask_dict = dict()
         bottom = np.array([0, 0, 0, 1]).reshape(1, 4)
         for k in imdata:
             im = imdata[k]
@@ -187,6 +188,7 @@ class Parser:
         self.Ks_dict = Ks_dict  # Dict of camera_id -> K
         self.params_dict = params_dict  # Dict of camera_id -> params
         self.imsize_dict = imsize_dict  # Dict of camera_id -> (width, height)
+        self.mask_dict = mask_dict  # Dict of camera_id -> mask
         self.points = points  # np.ndarray, (num_points, 3)
         self.points_err = points_err  # np.ndarray, (num_points,)
         self.points_rgb = points_rgb  # np.ndarray, (num_points, 3)
@@ -253,23 +255,32 @@ class Parser:
                         y2 = fy * y1 * r + height // 2
                         mapx[j, i] = x2
                         mapy[j, i] = y2
-                # Compute ROI
-                x_min = np.nonzero(mapx < 0)[1].max()
-                x_max = np.nonzero(mapx > width)[1].min()
-                y_min = np.nonzero(mapy < 0)[0].max()
-                y_max = np.nonzero(mapy > height)[0].min()
-                roi_undist = [x_min, y_min, x_max - x_min, y_max - y_min]
+
                 K_undist = K.copy()
-                K_undist[0, 2] -= x_min
-                K_undist[1, 2] -= y_min
+                roi_undist = [0, 0, width, height]
+                mask = np.logical_and(
+                    np.logical_and(mapx > 0, mapy > 0),
+                    np.logical_and(mapx < width - 1, mapy < height - 1),
+                )
+
+                # # Compute ROI
+                # x_min = np.nonzero(mapx < 0)[1].max()
+                # x_max = np.nonzero(mapx > width)[1].min()
+                # y_min = np.nonzero(mapy < 0)[0].max()
+                # y_max = np.nonzero(mapy > height)[0].min()
+                # roi_undist = [x_min, y_min, x_max - x_min, y_max - y_min]
+                # K_undist = K.copy()
+                # K_undist[0, 2] -= x_min
+                # K_undist[1, 2] -= y_min
             else:
                 assert_never(camtype)
 
-            self.Ks_dict[camera_id] = K_undist
             self.mapx_dict[camera_id] = mapx
             self.mapy_dict[camera_id] = mapy
+            self.Ks_dict[camera_id] = K_undist
             self.roi_undist_dict[camera_id] = roi_undist
-            self.imsize_dict[camera_id] = (x_max - x_min, y_max - y_min)
+            self.imsize_dict[camera_id] = (roi_undist[2], roi_undist[3])
+            self.mask_dict[camera_id] = mask
 
         # size of the scene measured by cameras
         camera_locations = camtoworlds[:, :3, 3]
@@ -308,6 +319,7 @@ class Dataset:
         K = self.parser.Ks_dict[camera_id].copy()  # undistorted K
         params = self.parser.params_dict[camera_id]
         camtoworlds = self.parser.camtoworlds[index]
+        mask = self.parser.mask_dict[camera_id]
 
         if len(params) > 0:
             # Images are distorted. Undistort them.
@@ -333,6 +345,7 @@ class Dataset:
             "camtoworld": torch.from_numpy(camtoworlds).float(),
             "image": torch.from_numpy(image).float(),
             "image_id": item,  # the index of the image in the dataset
+            "mask": torch.from_numpy(mask).bool(),
         }
 
         if self.load_depths:

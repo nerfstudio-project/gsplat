@@ -41,6 +41,12 @@ def main():
 
     mapx, mapy = init_fisheye_remap(K, params, width, height)
 
+    mask = np.logical_and(
+        np.logical_and(mapx > 0, mapy > 0),
+        np.logical_and(mapx < width - 1, mapy < height - 1),
+    )
+    imageio.imwrite("./results/test_remap_mask.png", mask.astype(np.uint8) * 255)
+
     x_min = np.nonzero(mapx < 0)[1].max()
     x_max = np.nonzero(mapx > width)[1].min()
     y_min = np.nonzero(mapy < 0)[0].max()
@@ -53,6 +59,13 @@ def main():
         ..., :3
     ]
     image = cv2.remap(image, mapx, mapy, cv2.INTER_LINEAR)
+
+    mask2 = image.max(axis=2) != 0
+    imageio.imwrite("./results/test_remap_mask2.png", mask2.astype(np.uint8) * 255)
+    mask3 = mask2 ^ mask
+    imageio.imwrite("./results/test_remap_mask3.png", mask3.astype(np.uint8) * 255)
+    print(mask.sum(), mask2.sum(), mask3.sum())
+    # print((mask2.astype(int) - mask.astype(int)).sum())
     imageio.imwrite("./results/test_remap.png", image)
     x, y, w, h = roi_undist
     image = image[y : y + h, x : x + w]

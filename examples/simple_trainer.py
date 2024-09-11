@@ -401,6 +401,7 @@ class Runner:
         Ks: Tensor,
         width: int,
         height: int,
+        masks: Optional[Tensor] = None,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         means = self.splats["means"]  # [N, 3]
@@ -446,6 +447,8 @@ class Runner:
             camera_model=self.cfg.camera_model,
             **kwargs,
         )
+        if masks is not None:
+            render_colors[~masks] = 0
         return render_colors, render_alphas, info
 
     def train(self):
@@ -509,6 +512,9 @@ class Runner:
                 pixels.shape[0] * pixels.shape[1] * pixels.shape[2]
             )
             image_ids = data["image_id"].to(device)
+            masks = (
+                data["mask"].to(device) if data["mask"] is not None else None
+            )  # [1, H, W]
             if cfg.depth_loss:
                 points = data["points"].to(device)  # [1, M, 2]
                 depths_gt = data["depths"].to(device)  # [1, M]
@@ -535,6 +541,7 @@ class Runner:
                 far_plane=cfg.far_plane,
                 image_ids=image_ids,
                 render_mode="RGB+ED" if cfg.depth_loss else "RGB",
+                masks=masks,
             )
             if renders.shape[-1] == 4:
                 colors, depths = renders[..., 0:3], renders[..., 3:4]
@@ -743,6 +750,7 @@ class Runner:
             camtoworlds = data["camtoworld"].to(device)
             Ks = data["K"].to(device)
             pixels = data["image"].to(device) / 255.0
+            masks = data["mask"].to(device) if data["mask"] is not None else None
             height, width = pixels.shape[1:3]
 
             torch.cuda.synchronize()
@@ -755,6 +763,7 @@ class Runner:
                 sh_degree=cfg.sh_degree,
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
+                masks=masks,
             )  # [1, H, W, 3]
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
