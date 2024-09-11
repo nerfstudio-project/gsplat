@@ -512,9 +512,7 @@ class Runner:
                 pixels.shape[0] * pixels.shape[1] * pixels.shape[2]
             )
             image_ids = data["image_id"].to(device)
-            masks = (
-                data["mask"].to(device) if data["mask"] is not None else None
-            )  # [1, H, W]
+            masks = data["mask"].to(device) if "mask" in data else None  # [1, H, W]
             if cfg.depth_loss:
                 points = data["points"].to(device)  # [1, M, 2]
                 depths_gt = data["depths"].to(device)  # [1, M]
@@ -750,7 +748,7 @@ class Runner:
             camtoworlds = data["camtoworld"].to(device)
             Ks = data["K"].to(device)
             pixels = data["image"].to(device) / 255.0
-            masks = data["mask"].to(device) if data["mask"] is not None else None
+            masks = data["mask"].to(device) if "mask" in data else None
             height, width = pixels.shape[1:3]
 
             torch.cuda.synchronize()

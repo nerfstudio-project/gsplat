@@ -107,7 +107,7 @@ class Parser:
 
             # image size
             imsize_dict[camera_id] = (cam.width // factor, cam.height // factor)
-
+            mask_dict[camera_id] = None
         print(
             f"[Parser] {len(imdata)} images, taken by {len(set(camera_ids))} cameras."
         )
@@ -230,6 +230,7 @@ class Parser:
                 mapx, mapy = cv2.initUndistortRectifyMap(
                     K, params, None, K_undist, (width, height), cv2.CV_32FC1
                 )
+                mask = None
             elif camtype == "fisheye":
                 fx = K[0, 0]
                 fy = K[1, 1]
@@ -341,8 +342,9 @@ class Dataset:
             "camtoworld": torch.from_numpy(camtoworlds).float(),
             "image": torch.from_numpy(image).float(),
             "image_id": item,  # the index of the image in the dataset
-            "mask": torch.from_numpy(mask).bool(),
         }
+        if mask is not None:
+            data["mask"] = torch.from_numpy(mask).bool()
 
         if self.load_depths:
             # projected points to image plane to get depths
