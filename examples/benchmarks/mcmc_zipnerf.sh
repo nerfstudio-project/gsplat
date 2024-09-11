@@ -3,7 +3,7 @@
 # CAMERA_MODEL="pinhole"
 
 SCENE_DIR="data/zipnerf/fisheye"
-RESULT_DIR="results/benchmark_zipnerf/fisheye"
+RESULT_DIR="results/benchmark_zipnerf/fisheye_2m"
 CAMERA_MODEL="fisheye"
 SCENE_LIST="berlin london nyc alameda"
 RENDER_TRAJ_PATH="interp"

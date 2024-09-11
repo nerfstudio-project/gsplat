@@ -269,6 +269,7 @@ class Parser:
             self.mapx_dict[camera_id] = mapx
             self.mapy_dict[camera_id] = mapy
             self.roi_undist_dict[camera_id] = roi_undist
+            self.imsize_dict[camera_id] = (x_max - x_min, y_max - y_min)
 
         # size of the scene measured by cameras
         camera_locations = camtoworlds[:, :3, 3]
