@@ -386,20 +386,20 @@ inline __device__ void fisheye_proj(
 ) {
     T x = mean3d[0], y = mean3d[1], z = mean3d[2];
 
-    float eps = 0.0000001f;
-    float xy_len = glm::length(glm::vec2({x, y})) + eps;
-    float theta = glm::atan(xy_len, z + eps);
+    T eps = 0.0000001f;
+    T xy_len = glm::length(glm::vec2({x, y})) + eps;
+    T theta = glm::atan(xy_len, z + eps);
     mean2d =
         vec2<T>({x * fx * theta / xy_len + cx, y * fy * theta / xy_len + cy});
 
-    float x2 = x * x + eps;
-    float y2 = y * y;
-    float xy = x * y;
-    float x2y2 = x2 + y2;
-    float x2y2z2_inv = 1.f / (x2y2 + z * z);
+    T x2 = x * x + eps;
+    T y2 = y * y;
+    T xy = x * y;
+    T x2y2 = x2 + y2;
+    T x2y2z2_inv = 1.f / (x2y2 + z * z);
 
-    float b = glm::atan(xy_len, z) / xy_len / x2y2;
-    float a = z * x2y2z2_inv / (x2y2);
+    T b = glm::atan(xy_len, z) / xy_len / x2y2;
+    T a = z * x2y2z2_inv / (x2y2);
     mat3x2<T> J = mat3x2<T>(
         fx * (x2 * a + y2 * b),
         fy * xy * (a - b),
@@ -431,25 +431,25 @@ inline __device__ void fisheye_proj_vjp(
 ) {
     T x = mean3d[0], y = mean3d[1], z = mean3d[2];
 
-    const float eps = 0.0000001f;
-    float x2 = x * x + eps;
-    float y2 = y * y;
-    float xy = x * y;
-    float x2y2 = x2 + y2;
-    float len_xy = length(glm::vec2({x, y})) + eps;
-    const float x2y2z2 = x2y2 + z * z;
-    float x2y2z2_inv = 1.f / x2y2z2;
-    float b = glm::atan(len_xy, z) / len_xy / x2y2;
-    float a = z * x2y2z2_inv / (x2y2);
+    const T eps = 0.0000001f;
+    T x2 = x * x + eps;
+    T y2 = y * y;
+    T xy = x * y;
+    T x2y2 = x2 + y2;
+    T len_xy = length(glm::vec2({x, y})) + eps;
+    const T x2y2z2 = x2y2 + z * z;
+    T x2y2z2_inv = 1.f / x2y2z2;
+    T b = glm::atan(len_xy, z) / len_xy / x2y2;
+    T a = z * x2y2z2_inv / (x2y2);
     v_mean3d += vec3<T>(
         fx * (x2 * a + y2 * b) * v_mean2d[0] + fy * xy * (a - b) * v_mean2d[1],
         fx * xy * (a - b) * v_mean2d[0] + fy * (y2 * a + x2 * b) * v_mean2d[1],
         -fx * x * x2y2z2_inv * v_mean2d[0] - fy * y * x2y2z2_inv * v_mean2d[1]
     );
 
-    const float theta = glm::atan(len_xy, z);
-    const float J_b = theta / len_xy / x2y2;
-    const float J_a = z * x2y2z2_inv / (x2y2);
+    const T theta = glm::atan(len_xy, z);
+    const T J_b = theta / len_xy / x2y2;
+    const T J_a = z * x2y2z2_inv / (x2y2);
     // mat3x2 is 3 columns x 2 rows.
     mat3x2<T> J = mat3x2<T>(
         fx * (x2 * J_a + y2 * J_b),
@@ -461,58 +461,53 @@ inline __device__ void fisheye_proj_vjp(
     );
     v_cov3d += glm::transpose(J) * v_cov2d * J;
 
-    // df/dx = -fx * rz2 * df/dJ_02
-    // df/dy = -fy * rz2 * df/dJ_12
-    // df/dz = -fx * rz2 * df/dJ_00 - fy * rz2 * df/dJ_11
-    //         + 2 * fx * tx * rz3 * df/dJ_02 + 2 * fy * ty * rz3
     mat3x2<T> v_J = v_cov2d * J * glm::transpose(cov3d) +
                     glm::transpose(v_cov2d) * J * cov3d;
+    T l4 = x2y2z2 * x2y2z2;
 
-    float l4 = x2y2z2 * x2y2z2;
+    T E = -l4 * x2y2 * theta + x2y2z2 * x2y2 * len_xy * z;
+    T F = 3 * l4 * theta - 3 * x2y2z2 * len_xy * z - 2 * x2y2 * len_xy * z;
 
-    float E = -l4 * x2y2 * theta + x2y2z2 * x2y2 * len_xy * z;
-    float F = 3 * l4 * theta - 3 * x2y2z2 * len_xy * z - 2 * x2y2 * len_xy * z;
+    T A = x * (3 * E + x2 * F);
+    T B = y * (E + x2 * F);
+    T C = x * (E + y2 * F);
+    T D = y * (3 * E + y2 * F);
 
-    float A = x * (3 * E + x2 * F);
-    float B = y * (E + x2 * F);
-    float C = x * (E + y2 * F);
-    float D = y * (3 * E + y2 * F);
+    T S1 = x2 - y2 - z * z;
+    T S2 = y2 - x2 - z * z;
+    T inv1 = x2y2z2_inv * x2y2z2_inv;
+    T inv2 = inv1 / (x2y2 * x2y2 * len_xy);
 
-    float S1 = x2 - y2 - z * z;
-    float S2 = y2 - x2 - z * z;
-    float inv1 = x2y2z2_inv * x2y2z2_inv;
-    float inv2 = inv1 / (x2y2 * x2y2 * len_xy);
+    T dJ_dx00 = fx * A * inv2;
+    T dJ_dx01 = fx * B * inv2;
+    T dJ_dx02 = fx * S1 * inv1;
+    T dJ_dx10 = fy * B * inv2;
+    T dJ_dx11 = fy * C * inv2;
+    T dJ_dx12 = 2.f * fy * xy * inv1;
 
-    float dJ_dx00 = fx * A * inv2;
-    float dJ_dx01 = fx * B * inv2;
-    float dJ_dx02 = fx * S1 * inv1;
-    float dJ_dx10 = fy * B * inv2;
-    float dJ_dx11 = fy * C * inv2;
-    float dJ_dx12 = 2.f * fy * xy * inv1;
+    T dJ_dy00 = dJ_dx01;
+    T dJ_dy01 = fx * C * inv2;
+    T dJ_dy02 = 2.f * fx * xy * inv1;
+    T dJ_dy10 = dJ_dx11;
+    T dJ_dy11 = fy * D * inv2;
+    T dJ_dy12 = fy * S2 * inv1;
 
-    float dJ_dy00 = dJ_dx01;
-    float dJ_dy01 = fx * C * inv2;
-    float dJ_dy02 = 2.f * fx * xy * inv1;
-    float dJ_dy10 = dJ_dx11;
-    float dJ_dy11 = fy * D * inv2;
-    float dJ_dy12 = fy * S2 * inv1;
+    T dJ_dz00 = dJ_dx02;
+    T dJ_dz01 = dJ_dy02;
+    T dJ_dz02 = 2.f * fx * x * z * inv1;
+    T dJ_dz10 = dJ_dx12;
+    T dJ_dz11 = dJ_dy12;
+    T dJ_dz12 = 2.f * fy * y * z * inv1;
 
-    float dJ_dz00 = dJ_dx02;
-    float dJ_dz01 = dJ_dy02;
-    float dJ_dz02 = 2.f * fx * x * z * inv1;
-    float dJ_dz10 = dJ_dx12;
-    float dJ_dz11 = dJ_dy12;
-    float dJ_dz12 = 2.f * fy * y * z * inv1;
-
-    float dL_dtx_raw = dJ_dx00 * v_J[0][0] + dJ_dx01 * v_J[1][0] +
-                       dJ_dx02 * v_J[2][0] + dJ_dx10 * v_J[0][1] +
-                       dJ_dx11 * v_J[1][1] + dJ_dx12 * v_J[2][1];
-    float dL_dty_raw = dJ_dy00 * v_J[0][0] + dJ_dy01 * v_J[1][0] +
-                       dJ_dy02 * v_J[2][0] + dJ_dy10 * v_J[0][1] +
-                       dJ_dy11 * v_J[1][1] + dJ_dy12 * v_J[2][1];
-    float dL_dtz_raw = dJ_dz00 * v_J[0][0] + dJ_dz01 * v_J[1][0] +
-                       dJ_dz02 * v_J[2][0] + dJ_dz10 * v_J[0][1] +
-                       dJ_dz11 * v_J[1][1] + dJ_dz12 * v_J[2][1];
+    T dL_dtx_raw = dJ_dx00 * v_J[0][0] + dJ_dx01 * v_J[1][0] +
+                   dJ_dx02 * v_J[2][0] + dJ_dx10 * v_J[0][1] +
+                   dJ_dx11 * v_J[1][1] + dJ_dx12 * v_J[2][1];
+    T dL_dty_raw = dJ_dy00 * v_J[0][0] + dJ_dy01 * v_J[1][0] +
+                   dJ_dy02 * v_J[2][0] + dJ_dy10 * v_J[0][1] +
+                   dJ_dy11 * v_J[1][1] + dJ_dy12 * v_J[2][1];
+    T dL_dtz_raw = dJ_dz00 * v_J[0][0] + dJ_dz01 * v_J[1][0] +
+                   dJ_dz02 * v_J[2][0] + dJ_dz10 * v_J[0][1] +
+                   dJ_dz11 * v_J[1][1] + dJ_dz12 * v_J[2][1];
     v_mean3d.x += dL_dtx_raw;
     v_mean3d.y += dL_dty_raw;
     v_mean3d.z += dL_dtz_raw;
