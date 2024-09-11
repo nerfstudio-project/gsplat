@@ -262,16 +262,6 @@ class Parser:
                     np.logical_and(mapx > 0, mapy > 0),
                     np.logical_and(mapx < width - 1, mapy < height - 1),
                 )
-
-                # # Compute ROI
-                # x_min = np.nonzero(mapx < 0)[1].max()
-                # x_max = np.nonzero(mapx > width)[1].min()
-                # y_min = np.nonzero(mapy < 0)[0].max()
-                # y_max = np.nonzero(mapy > height)[0].min()
-                # roi_undist = [x_min, y_min, x_max - x_min, y_max - y_min]
-                # K_undist = K.copy()
-                # K_undist[0, 2] -= x_min
-                # K_undist[1, 2] -= y_min
             else:
                 assert_never(camtype)
 
