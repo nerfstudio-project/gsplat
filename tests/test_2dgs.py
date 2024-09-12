@@ -80,7 +80,9 @@ def test_projection_2dgs(test_data):
     torch.testing.assert_close(radii, _radii, rtol=0, atol=1)
     torch.testing.assert_close(means2d[valid], _means2d[valid], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(depths[valid], _depths[valid], rtol=1e-4, atol=1e-4)
-    torch.testing.assert_close(ray_transforms[valid], _ray_transforms[valid], rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(
+        ray_transforms[valid], _ray_transforms[valid], rtol=1e-4, atol=1e-4
+    )
     torch.testing.assert_close(normals[valid], _normals[valid], rtol=1e-4, atol=1e-4)
 
     # backward
@@ -191,7 +193,9 @@ def test_fully_fused_projection_packed_2dgs(
     torch.testing.assert_close(__radii[sel], _radii[sel], rtol=0, atol=1)
     torch.testing.assert_close(__means2d[sel], _means2d[sel], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(__depths[sel], _depths[sel], rtol=1e-4, atol=1e-4)
-    torch.testing.assert_close(__ray_transforms[sel], _ray_transforms[sel], rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(
+        __ray_transforms[sel], _ray_transforms[sel], rtol=1e-4, atol=1e-4
+    )
     torch.testing.assert_close(__normals[sel], _normals[sel], rtol=1e-4, atol=1e-4)
 
     # backward
@@ -380,7 +384,9 @@ def test_rasterize_to_pixels_2dgs(test_data):
 
     # assert close backward
     torch.testing.assert_close(v_means2d, _v_means2d, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_ray_transforms, _v_ray_transforms, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(
+        v_ray_transforms, _v_ray_transforms, rtol=1e-3, atol=1e-3
+    )
     torch.testing.assert_close(v_colors, _v_colors, rtol=1e-3, atol=1e-3)
     torch.testing.assert_close(v_opacities, _v_opacities, rtol=1e-3, atol=1e-3)
     torch.testing.assert_close(v_backgrounds, _v_backgrounds, rtol=1e-5, atol=1e-5)

@@ -88,10 +88,10 @@ def accumulate_2dgs(
     image_height: int,
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """Alpha compositing for 2DGS.
-    
+
     .. warning::
         This function requires the nerfacc package to be installed. Please install it using the following command pip install nerfacc.
-    
+
     Args:
         means2d: Gaussian means in 2D. [C, N, 2]
         ray_transforms: transformation matrices that transform rays in pixel space into splat's local frame. [C, N, 3, 3]
@@ -104,14 +104,14 @@ def accumulate_2dgs(
         camera_ids: Collection of camera indices to be rasterized. A flattened list of shape [M].
         image_width: Image width.
         image_height: Image height.
-    
+
     Returns:
         A tuple:
 
         **renders**: Accumulated colors. [C, image_height, image_width, channels]
-        
+
         **alphas**: Accumulated opacities. [C, image_height, image_width, 1]
-        
+
         **normals**: Accumulated opacities. [C, image_height, image_width, 3]
     """
 
@@ -247,7 +247,7 @@ def _rasterize_to_pixels_2dgs(
         # Accumulate the renderings within this batch of Gaussians.
         renders_step, accs_step, renders_normal_step = accumulate_2dgs(
             means2d,
-            ray_transforms, 
+            ray_transforms,
             opacities,
             colors,
             normals,

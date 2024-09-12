@@ -1119,7 +1119,7 @@ def rasterization_2dgs(
         >>> print (meta.keys())
         dict_keys(['camera_ids', 'gaussian_ids', 'radii', 'means2d', 'depths', 'ray_transforms',
         'opacities', 'normals', 'tile_width', 'tile_height', 'tiles_per_gauss', 'isect_ids',
-        'flatten_ids', 'isect_offsets', 'width', 'height', 'tile_size', 'n_cameras', 'render_distort', 
+        'flatten_ids', 'isect_offsets', 'width', 'height', 'tile_size', 'n_cameras', 'render_distort',
         'gradient_2dgs'])
 
     """
@@ -1308,13 +1308,14 @@ def rasterization_2dgs(
 
     render_normals = render_normals @ torch.linalg.inv(viewmats)[0, :3, :3].T
 
-    return (render_colors,
+    return (
+        render_colors,
         render_alphas,
         render_normals,
         render_normals_from_depth,
         render_distort,
         render_median,
-        meta
+        meta,
     )
 
 
@@ -1340,9 +1341,9 @@ def rasterization_2dgs_inria_wrapper(
 
     Install the 2DGS rasterization backend from
         https://github.com/hbb1/diff-surfel-rasterization
-    
+
     Credit to Jeffrey Hu https://github.com/jefequien
-    
+
     """
     from diff_surfel_rasterization import (
         GaussianRasterizationSettings,

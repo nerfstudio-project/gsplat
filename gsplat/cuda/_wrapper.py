@@ -1259,7 +1259,7 @@ def fully_fused_projection_2dgs(
         - **normals**. The normals in camera spaces. [nnz, 3]
 
         If `packed` is False:
-        
+
         - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N].
         - **means**. Projected Gaussian means in 2D. [C, N, 2]
         - **depths**. The z-depth of the projected Gaussians. [C, N]
@@ -1744,8 +1744,7 @@ def rasterize_to_indices_in_range_2dgs(
         - **Pixel ids**. pixel indices (row-major). A flattened list of shape [M].
         - **Camera ids**. Camera indices. A flattened list of shape [M].
     """
-    
-    
+
     C, N, _ = means2d.shape
     assert ray_transforms.shape == (C, N, 3, 3), ray_transforms.shape
     assert opacities.shape == (C, N), opacities.shape

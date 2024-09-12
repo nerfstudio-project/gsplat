@@ -17,7 +17,12 @@ from .cuda._wrapper import (
     rasterize_to_pixels_2dgs,
     rasterize_to_indices_in_range_2dgs,
 )
-from .rendering import rasterization, rasterization_2dgs, rasterization_inria_wrapper, rasterization_2dgs_inria_wrapper
+from .rendering import (
+    rasterization,
+    rasterization_2dgs,
+    rasterization_inria_wrapper,
+    rasterization_2dgs_inria_wrapper,
+)
 from .strategy import DefaultStrategy, MCMCStrategy, Strategy
 from .version import __version__
 
@@ -43,6 +48,5 @@ all = [
     "rasterize_to_pixels_2dgs",
     "rasterize_to_indices_in_range_2dgs",
     "accumulate_2dgs",
-    "rasterization_2dgs_inria_wrapper"
-    "__version__",
+    "rasterization_2dgs_inria_wrapper" "__version__",
 ]

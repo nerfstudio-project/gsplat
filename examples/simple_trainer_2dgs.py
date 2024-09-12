@@ -411,7 +411,6 @@ class Runner:
 
         assert self.cfg.antialiased is False, "Antialiased is not supported for 2DGS"
 
-
         if self.model_type == "2dgs":
             (
                 render_colors,
