@@ -317,6 +317,7 @@
 
 <span class="kn">from</span> <span class="nn">.base</span> <span class="kn">import</span> <span class="n">Strategy</span>
 <span class="kn">from</span> <span class="nn">.ops</span> <span class="kn">import</span> <span class="n">duplicate</span><span class="p">,</span> <span class="n">remove</span><span class="p">,</span> <span class="n">reset_opa</span><span class="p">,</span> <span class="n">split</span>
+<span class="kn">from</span> <span class="nn">typing_extensions</span> <span class="kn">import</span> <span class="n">Literal</span>
 
 
 <div class="viewcode-block" id="DefaultStrategy">
@@ -368,6 +369,9 @@
 <span class="sd">        revised_opacity (bool): Whether to use revised opacity heuristic from</span>
 <span class="sd">          arXiv:2404.06109 (experimental). Default is False.</span>
 <span class="sd">        verbose (bool): Whether to print verbose information. Default is False.</span>
+<span class="sd">        key_for_gradient (str): Which variable uses for densification strategy.</span>
+<span class="sd">          3DGS uses &quot;means2d&quot; gradient and 2DGS uses a similar gradient which stores</span>
+<span class="sd">          in variable &quot;gradient_2dgs&quot;.</span>
 
 <span class="sd">    Examples:</span>
 
@@ -401,6 +405,7 @@
     <span class="n">absgrad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">revised_opacity</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">verbose</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="n">key_for_gradient</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;means2d&quot;</span><span class="p">,</span> <span class="s2">&quot;gradient_2dgs&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;means2d&quot;</span>
 
 <div class="viewcode-block" id="DefaultStrategy.initialize_state">
 <a class="viewcode-back" href="../../../apis/strategy.html#gsplat.DefaultStrategy.initialize_state">[docs]</a>
@@ -462,9 +467,9 @@
     <span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Callback function to be executed before the `loss.backward()` call.&quot;&quot;&quot;</span>
         <span class="k">assert</span> <span class="p">(</span>
-            <span class="s2">&quot;means2d&quot;</span> <span class="ow">in</span> <span class="n">info</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">key_for_gradient</span> <span class="ow">in</span> <span class="n">info</span>
         <span class="p">),</span> <span class="s2">&quot;The 2D means of the Gaussians is required but missing.&quot;</span>
-        <span class="n">info</span><span class="p">[</span><span class="s2">&quot;means2d&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">retain_grad</span><span class="p">()</span></div>
+        <span class="n">info</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">key_for_gradient</span><span class="p">]</span><span class="o">.</span><span class="n">retain_grad</span><span class="p">()</span></div>
 
 
 <div class="viewcode-block" id="DefaultStrategy.step_post_backward">
@@ -528,19 +533,27 @@
         <span class="n">info</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
         <span class="n">packed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="p">):</span>
-        <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;means2d&quot;</span><span class="p">,</span> <span class="s2">&quot;width&quot;</span><span class="p">,</span> <span class="s2">&quot;height&quot;</span><span class="p">,</span> <span class="s2">&quot;n_cameras&quot;</span><span class="p">,</span> <span class="s2">&quot;radii&quot;</span><span class="p">,</span> <span class="s2">&quot;gaussian_ids&quot;</span><span class="p">]:</span>
+        <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="p">[</span>
+            <span class="s2">&quot;width&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;height&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;n_cameras&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;radii&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;gaussian_ids&quot;</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">key_for_gradient</span><span class="p">,</span>
+        <span class="p">]:</span>
             <span class="k">assert</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">info</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">key</span><span class="si">}</span><span class="s2"> is required but missing.&quot;</span>
 
         <span class="c1"># normalize grads to [-1, 1] screen space</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">absgrad</span><span class="p">:</span>
-            <span class="n">grads</span> <span class="o">=</span> <span class="n">info</span><span class="p">[</span><span class="s2">&quot;means2d&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">absgrad</span><span class="o">.</span><span class="n">clone</span><span class="p">()</span>
+            <span class="n">grads</span> <span class="o">=</span> <span class="n">info</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">key_for_gradient</span><span class="p">]</span><span class="o">.</span><span class="n">absgrad</span><span class="o">.</span><span class="n">clone</span><span class="p">()</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="n">grads</span> <span class="o">=</span> <span class="n">info</span><span class="p">[</span><span class="s2">&quot;means2d&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">grad</span><span class="o">.</span><span class="n">clone</span><span class="p">()</span>
+            <span class="n">grads</span> <span class="o">=</span> <span class="n">info</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">key_for_gradient</span><span class="p">]</span><span class="o">.</span><span class="n">grad</span><span class="o">.</span><span class="n">clone</span><span class="p">()</span>
         <span class="n">grads</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">*=</span> <span class="n">info</span><span class="p">[</span><span class="s2">&quot;width&quot;</span><span class="p">]</span> <span class="o">/</span> <span class="mf">2.0</span> <span class="o">*</span> <span class="n">info</span><span class="p">[</span><span class="s2">&quot;n_cameras&quot;</span><span class="p">]</span>
         <span class="n">grads</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span> <span class="o">*=</span> <span class="n">info</span><span class="p">[</span><span class="s2">&quot;height&quot;</span><span class="p">]</span> <span class="o">/</span> <span class="mf">2.0</span> <span class="o">*</span> <span class="n">info</span><span class="p">[</span><span class="s2">&quot;n_cameras&quot;</span><span class="p">]</span>
 
         <span class="c1"># initialize state on the first run</span>
         <span class="n">n_gaussian</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">params</span><span class="o">.</span><span class="n">values</span><span class="p">())[</span><span class="mi">0</span><span class="p">])</span>
+
         <span class="k">if</span> <span class="n">state</span><span class="p">[</span><span class="s2">&quot;grad2d&quot;</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">state</span><span class="p">[</span><span class="s2">&quot;grad2d&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">n_gaussian</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">grads</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">state</span><span class="p">[</span><span class="s2">&quot;count&quot;</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>

@@ -318,14 +318,8 @@
 <span class="kn">from</span> <span class="nn">torch</span> <span class="kn">import</span> <span class="n">Tensor</span>
 
 
-<span class="k">def</span> <span class="nf">_quat_scale_to_covar_preci</span><span class="p">(</span>
-    <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 4],</span>
-    <span class="n">scales</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3],</span>
-    <span class="n">compute_covar</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-    <span class="n">compute_preci</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-    <span class="n">triu</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;PyTorch implementation of `gsplat.cuda._wrapper.quat_scale_to_covar_preci()`.&quot;&quot;&quot;</span>
+<span class="k">def</span> <span class="nf">_quat_to_rotmat</span><span class="p">(</span><span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Convert quaternion to rotation matrix.&quot;&quot;&quot;</span>
     <span class="n">quats</span> <span class="o">=</span> <span class="n">F</span><span class="o">.</span><span class="n">normalize</span><span class="p">(</span><span class="n">quats</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
     <span class="n">w</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">z</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">unbind</span><span class="p">(</span><span class="n">quats</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
     <span class="n">R</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span>
@@ -342,9 +336,28 @@
         <span class="p">],</span>
         <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span>
     <span class="p">)</span>
+    <span class="k">return</span> <span class="n">R</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">quats</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span>
 
-    <span class="n">R</span> <span class="o">=</span> <span class="n">R</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">quats</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span>  <span class="c1"># (..., 3, 3)</span>
-    <span class="c1"># R.register_hook(lambda grad: print(&quot;grad R&quot;, grad))</span>
+
+<span class="k">def</span> <span class="nf">_quat_scale_to_matrix</span><span class="p">(</span>
+    <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 4],</span>
+    <span class="n">scales</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3],</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Convert quaternion and scale to a 3x3 matrix (R * S).&quot;&quot;&quot;</span>
+    <span class="n">R</span> <span class="o">=</span> <span class="n">_quat_to_rotmat</span><span class="p">(</span><span class="n">quats</span><span class="p">)</span>  <span class="c1"># (..., 3, 3)</span>
+    <span class="n">M</span> <span class="o">=</span> <span class="n">R</span> <span class="o">*</span> <span class="n">scales</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>  <span class="c1"># (..., 3, 3)</span>
+    <span class="k">return</span> <span class="n">M</span>
+
+
+<span class="k">def</span> <span class="nf">_quat_scale_to_covar_preci</span><span class="p">(</span>
+    <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 4],</span>
+    <span class="n">scales</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3],</span>
+    <span class="n">compute_covar</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">compute_preci</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">triu</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;PyTorch implementation of `gsplat.cuda._wrapper.quat_scale_to_covar_preci()`.&quot;&quot;&quot;</span>
+    <span class="n">R</span> <span class="o">=</span> <span class="n">_quat_to_rotmat</span><span class="p">(</span><span class="n">quats</span><span class="p">)</span>  <span class="c1"># (..., 3, 3)</span>
 
     <span class="k">if</span> <span class="n">compute_covar</span><span class="p">:</span>
         <span class="n">M</span> <span class="o">=</span> <span class="n">R</span> <span class="o">*</span> <span class="n">scales</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>  <span class="c1"># (..., 3, 3)</span>

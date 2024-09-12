@@ -319,6 +319,8 @@
           <section id="utils">
 <h1>Utils<a class="headerlink" href="#utils" title="Link to this heading">¶</a></h1>
 <p>Below are the basic functions that supports the rasterization.</p>
+<section id="dgs">
+<h2>3DGS<a class="headerlink" href="#dgs" title="Link to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="gsplat.spherical_harmonics">
 <span class="sig-name descname"><span class="pre">spherical_harmonics</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">degrees_to_use</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)"><span class="pre">int</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">dirs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">coeffs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">masks</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.12)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Tensor</span></span></span><a class="reference internal" href="../_modules/gsplat/cuda/_wrapper.html#spherical_harmonics"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.spherical_harmonics" title="Link to this definition">¶</a></dt>
@@ -692,6 +694,187 @@ the respect to the original LICENSE at:
 </dd></dl>
 
 </section>
+<section id="id1">
+<h2>2DGS<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="gsplat.fully_fused_projection_2dgs">
+<span class="sig-name descname"><span class="pre">fully_fused_projection_2dgs</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">means</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">quats</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scales</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">viewmats</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">Ks</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)"><span class="pre">int</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">height</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)"><span class="pre">int</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">eps2d</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.12)"><span class="pre">float</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.3</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">near_plane</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.12)"><span class="pre">float</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.01</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">far_plane</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.12)"><span class="pre">float</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">10000000000.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">radius_clip</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.12)"><span class="pre">float</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">packed</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sparse_grad</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Tuple" title="(in Python v3.12)"><span class="pre">Tuple</span></a><span class="p"><span class="pre">[</span></span><span class="pre">Tensor</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="../_modules/gsplat/cuda/_wrapper.html#fully_fused_projection_2dgs"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.fully_fused_projection_2dgs" title="Link to this definition">¶</a></dt>
+<dd><p>Prepare Gaussians for rasterization</p>
+<p>This function prepares ray-splat intersection matrices, computes
+per splat bounding box and 2D means in image space.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>means</strong> – Gaussian means. [N, 3]</p></li>
+<li><p><strong>quats</strong> – Quaternions (No need to be normalized). [N, 4].</p></li>
+<li><p><strong>scales</strong> – Scales. [N, 3].</p></li>
+<li><p><strong>viewmats</strong> – Camera-to-world matrices. [C, 4, 4]</p></li>
+<li><p><strong>Ks</strong> – Camera intrinsics. [C, 3, 3]</p></li>
+<li><p><strong>width</strong> – Image width.</p></li>
+<li><p><strong>height</strong> – Image height.</p></li>
+<li><p><strong>near_plane</strong> – Near plane distance. Default: 0.01.</p></li>
+<li><p><strong>far_plane</strong> – Far plane distance. Default: 200.</p></li>
+<li><p><strong>radius_clip</strong> – Gaussians with projected radii smaller than this value will be ignored. Default: 0.0.</p></li>
+<li><p><strong>packed</strong> – If True, the output tensors will be packed into a flattened tensor. Default: False.</p></li>
+<li><p><strong>sparse_grad</strong> (<em>Experimental</em>) – This is only effective when <cite>packed</cite> is True. If True, during backward the gradients
+of {<cite>means</cite>, <cite>covars</cite>, <cite>quats</cite>, <cite>scales</cite>} will be a sparse Tensor in COO layout. Default: False.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><p>If <cite>packed</cite> is True:</p>
+<ul class="simple">
+<li><p><strong>camera_ids</strong>. The row indices of the projected Gaussians. Int32 tensor of shape [nnz].</p></li>
+<li><p><strong>gaussian_ids</strong>. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].</p></li>
+<li><p><strong>radii</strong>. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz].</p></li>
+<li><p><strong>means</strong>. Projected Gaussian means in 2D. [nnz, 2]</p></li>
+<li><p><strong>depths</strong>. The z-depth of the projected Gaussians. [nnz]</p></li>
+<li><p><strong>ray_transforms</strong>. transformation matrices that transforms xy-planes in pixel spaces into splat coordinates (WH)^T in equation (9) in paper [nnz, 3, 3]</p></li>
+<li><p><strong>normals</strong>. The normals in camera spaces. [nnz, 3]</p></li>
+</ul>
+<p>If <cite>packed</cite> is False:</p>
+<ul class="simple">
+<li><p><strong>radii</strong>. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N].</p></li>
+<li><p><strong>means</strong>. Projected Gaussian means in 2D. [C, N, 2]</p></li>
+<li><p><strong>depths</strong>. The z-depth of the projected Gaussians. [C, N]</p></li>
+<li><p><strong>ray_transforms</strong>. transformation matrices that transforms xy-planes in pixel spaces into splat coordinates.</p></li>
+<li><p><strong>normals</strong>. The normals in camera spaces. [C, N, 3]</p></li>
+</ul>
+</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>A tuple</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="gsplat.rasterize_to_pixels_2dgs">
+<span class="sig-name descname"><span class="pre">rasterize_to_pixels_2dgs</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">means2d</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ray_transforms</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">colors</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">opacities</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">normals</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">densify</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">image_width</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)"><span class="pre">int</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">image_height</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)"><span class="pre">int</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">tile_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)"><span class="pre">int</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">isect_offsets</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">flatten_ids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">backgrounds</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.12)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">masks</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.12)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">packed</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">absgrad</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">distloss</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Tuple" title="(in Python v3.12)"><span class="pre">Tuple</span></a><span class="p"><span class="pre">[</span></span><span class="pre">Tensor</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="../_modules/gsplat/cuda/_wrapper.html#rasterize_to_pixels_2dgs"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.rasterize_to_pixels_2dgs" title="Link to this definition">¶</a></dt>
+<dd><p>Rasterize Gaussians to pixels.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>means2d</strong> – Projected Gaussian means. [C, N, 2] if packed is False, [nnz, 2] if packed is True.</p></li>
+<li><p><strong>ray_transforms</strong> – transformation matrices that transforms xy-planes in pixel spaces into splat coordinates. [C, N, 3, 3] if packed is False, [nnz, channels] if packed is True.</p></li>
+<li><p><strong>colors</strong> – Gaussian colors or ND features. [C, N, channels] if packed is False, [nnz, channels] if packed is True.</p></li>
+<li><p><strong>opacities</strong> – Gaussian opacities that support per-view values. [C, N] if packed is False, [nnz] if packed is True.</p></li>
+<li><p><strong>normals</strong> – The normals in camera space. [C, N, 3] if packed is False, [nnz, 3] if packed is True.</p></li>
+<li><p><strong>densify</strong> – Dummy variable to keep track of gradient for densification. [C, N, 2] if packed, [nnz, 3] if packed is True.</p></li>
+<li><p><strong>tile_size</strong> – Tile size.</p></li>
+<li><p><strong>isect_offsets</strong> – Intersection offsets outputs from <cite>isect_offset_encode()</cite>. [C, tile_height, tile_width]</p></li>
+<li><p><strong>flatten_ids</strong> – The global flatten indices in [C * N] or [nnz] from  <cite>isect_tiles()</cite>. [n_isects]</p></li>
+<li><p><strong>backgrounds</strong> – Background colors. [C, channels]. Default: None.</p></li>
+<li><p><strong>masks</strong> – Optional tile mask to skip rendering GS to masked tiles. [C, tile_height, tile_width]. Default: None.</p></li>
+<li><p><strong>packed</strong> – If True, the input tensors are expected to be packed with shape [nnz, …]. Default: False.</p></li>
+<li><p><strong>absgrad</strong> – If True, the backward pass will compute a <cite>.absgrad</cite> attribute for <cite>means2d</cite>. Default: False.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><ul class="simple">
+<li><p><strong>Rendered colors</strong>.      [C, image_height, image_width, channels]</p></li>
+<li><p><strong>Rendered alphas</strong>.      [C, image_height, image_width, 1]</p></li>
+<li><p><strong>Rendered normals</strong>.     [C, image_height, image_width, 3]</p></li>
+<li><p><strong>Rendered distortion</strong>.  [C, image_height, image_width, 1]</p></li>
+<li><p><strong>Rendered median depth</strong>.[C, image_height, image_width, 1]</p></li>
+</ul>
+</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>A tuple</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="gsplat.rasterize_to_indices_in_range_2dgs">
+<span class="sig-name descname"><span class="pre">rasterize_to_indices_in_range_2dgs</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">range_start</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)"><span class="pre">int</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">range_end</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)"><span class="pre">int</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">transmittances</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">means2d</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ray_transforms</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">opacities</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">image_width</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)"><span class="pre">int</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">image_height</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)"><span class="pre">int</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">tile_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)"><span class="pre">int</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">isect_offsets</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">flatten_ids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Tuple" title="(in Python v3.12)"><span class="pre">Tuple</span></a><span class="p"><span class="pre">[</span></span><span class="pre">Tensor</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="../_modules/gsplat/cuda/_wrapper.html#rasterize_to_indices_in_range_2dgs"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.rasterize_to_indices_in_range_2dgs" title="Link to this definition">¶</a></dt>
+<dd><p>Rasterizes a batch of Gaussians to images but only returns the indices.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This function supports iterative rasterization, in which each call of this function
+will rasterize a batch of Gaussians from near to far, defined by <cite>[range_start, range_end)</cite>.
+If a one-step full rasterization is desired, set <cite>range_start</cite> to 0 and <cite>range_end</cite> to a really
+large number, e.g, 1e10.</p>
+</div>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>range_start</strong> – The start batch of Gaussians to be rasterized (inclusive).</p></li>
+<li><p><strong>range_end</strong> – The end batch of Gaussians to be rasterized (exclusive).</p></li>
+<li><p><strong>transmittances</strong> – Currently transmittances. [C, image_height, image_width]</p></li>
+<li><p><strong>means2d</strong> – Projected Gaussian means. [C, N, 2]</p></li>
+<li><p><strong>ray_transforms</strong> – transformation matrices that transforms xy-planes in pixel spaces into splat coordinates. [C, N, 3, 3]</p></li>
+<li><p><strong>opacities</strong> – Gaussian opacities that support per-view values. [C, N]</p></li>
+<li><p><strong>image_width</strong> – Image width.</p></li>
+<li><p><strong>image_height</strong> – Image height.</p></li>
+<li><p><strong>tile_size</strong> – Tile size.</p></li>
+<li><p><strong>isect_offsets</strong> – Intersection offsets outputs from <cite>isect_offset_encode()</cite>. [C, tile_height, tile_width]</p></li>
+<li><p><strong>flatten_ids</strong> – The global flatten indices in [C * N] from  <cite>isect_tiles()</cite>. [n_isects]</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><ul class="simple">
+<li><p><strong>Gaussian ids</strong>. Gaussian ids for the pixel intersection. A flattened list of shape [M].</p></li>
+<li><p><strong>Pixel ids</strong>. pixel indices (row-major). A flattened list of shape [M].</p></li>
+<li><p><strong>Camera ids</strong>. Camera indices. A flattened list of shape [M].</p></li>
+</ul>
+</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>A tuple</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="gsplat.accumulate_2dgs">
+<span class="sig-name descname"><span class="pre">accumulate_2dgs</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">means2d</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ray_transforms</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">opacities</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">colors</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">normals</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gaussian_ids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pixel_ids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">camera_ids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">image_width</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)"><span class="pre">int</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">image_height</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)"><span class="pre">int</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Tuple" title="(in Python v3.12)"><span class="pre">Tuple</span></a><span class="p"><span class="pre">[</span></span><span class="pre">Tensor</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="../_modules/gsplat/cuda/_torch_impl_2dgs.html#accumulate_2dgs"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.accumulate_2dgs" title="Link to this definition">¶</a></dt>
+<dd><p>Alpha compositing for 2DGS.</p>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>This function requires the nerfacc package to be installed. Please install it using the following command pip install nerfacc.</p>
+</div>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>means2d</strong> – Gaussian means in 2D. [C, N, 2]</p></li>
+<li><p><strong>ray_transforms</strong> – transformation matrices that transform rays in pixel space into splat’s local frame. [C, N, 3, 3]</p></li>
+<li><p><strong>opacities</strong> – Per-view Gaussian opacities (for example, when antialiasing is enabled, Gaussian in
+each view would efficiently have different opacity). [C, N]</p></li>
+<li><p><strong>colors</strong> – Per-view Gaussian colors. Supports N-D features. [C, N, channels]</p></li>
+<li><p><strong>normals</strong> – Per-view Gaussian normals. [C, N, 3]</p></li>
+<li><p><strong>gaussian_ids</strong> – Collection of Gaussian indices to be rasterized. A flattened list of shape [M].</p></li>
+<li><p><strong>pixel_ids</strong> – Collection of pixel indices (row-major) to be rasterized. A flattened list of shape [M].</p></li>
+<li><p><strong>camera_ids</strong> – Collection of camera indices to be rasterized. A flattened list of shape [M].</p></li>
+<li><p><strong>image_width</strong> – Image width.</p></li>
+<li><p><strong>image_height</strong> – Image height.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><p><strong>renders</strong>: Accumulated colors. [C, image_height, image_width, channels]</p>
+<p><strong>alphas</strong>: Accumulated opacities. [C, image_height, image_width, 1]</p>
+<p><strong>normals</strong>: Accumulated opacities. [C, image_height, image_width, 3]</p>
+</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>A tuple</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="gsplat.rasterization_2dgs_inria_wrapper">
+<span class="sig-name descname"><span class="pre">rasterization_2dgs_inria_wrapper</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">means</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">quats</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scales</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">opacities</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">colors</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">viewmats</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">Ks</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)"><span class="pre">int</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">height</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)"><span class="pre">int</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">near_plane</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.12)"><span class="pre">float</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.01</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">far_plane</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.12)"><span class="pre">float</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">100.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">eps2d</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.12)"><span class="pre">float</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.3</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sh_degree</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)"><span class="pre">int</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.12)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">backgrounds</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.12)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">depth_ratio</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Tuple" title="(in Python v3.12)"><span class="pre">Tuple</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Tuple" title="(in Python v3.12)"><span class="pre">Tuple</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)"><span class="pre">Dict</span></a><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="../_modules/gsplat/rendering.html#rasterization_2dgs_inria_wrapper"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.rasterization_2dgs_inria_wrapper" title="Link to this definition">¶</a></dt>
+<dd><p>Wrapper for 2DGS’s rasterization backend which is based on Inria’s backend.</p>
+<dl class="simple">
+<dt>Install the 2DGS rasterization backend from</dt><dd><p><a class="reference external" href="https://github.com/hbb1/diff-surfel-rasterization">https://github.com/hbb1/diff-surfel-rasterization</a></p>
+</dd>
+</dl>
+<p>Credit to Jeffrey Hu <a class="reference external" href="https://github.com/jefequien">https://github.com/jefequien</a></p>
+</dd></dl>
+
+</section>
+</section>
 
         </article>
       </div>
@@ -749,6 +932,7 @@ the respect to the original LICENSE at:
           <div class="toc-tree">
             <ul>
 <li><a class="reference internal" href="#">Utils</a><ul>
+<li><a class="reference internal" href="#dgs">3DGS</a><ul>
 <li><a class="reference internal" href="#gsplat.spherical_harmonics"><code class="docutils literal notranslate"><span class="pre">spherical_harmonics()</span></code></a></li>
 <li><a class="reference internal" href="#gsplat.quat_scale_to_covar_preci"><code class="docutils literal notranslate"><span class="pre">quat_scale_to_covar_preci()</span></code></a></li>
 <li><a class="reference internal" href="#gsplat.proj"><code class="docutils literal notranslate"><span class="pre">proj()</span></code></a></li>
@@ -760,6 +944,16 @@ the respect to the original LICENSE at:
 <li><a class="reference internal" href="#gsplat.rasterize_to_indices_in_range"><code class="docutils literal notranslate"><span class="pre">rasterize_to_indices_in_range()</span></code></a></li>
 <li><a class="reference internal" href="#gsplat.accumulate"><code class="docutils literal notranslate"><span class="pre">accumulate()</span></code></a></li>
 <li><a class="reference internal" href="#gsplat.rasterization_inria_wrapper"><code class="docutils literal notranslate"><span class="pre">rasterization_inria_wrapper()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id1">2DGS</a><ul>
+<li><a class="reference internal" href="#gsplat.fully_fused_projection_2dgs"><code class="docutils literal notranslate"><span class="pre">fully_fused_projection_2dgs()</span></code></a></li>
+<li><a class="reference internal" href="#gsplat.rasterize_to_pixels_2dgs"><code class="docutils literal notranslate"><span class="pre">rasterize_to_pixels_2dgs()</span></code></a></li>
+<li><a class="reference internal" href="#gsplat.rasterize_to_indices_in_range_2dgs"><code class="docutils literal notranslate"><span class="pre">rasterize_to_indices_in_range_2dgs()</span></code></a></li>
+<li><a class="reference internal" href="#gsplat.accumulate_2dgs"><code class="docutils literal notranslate"><span class="pre">accumulate_2dgs()</span></code></a></li>
+<li><a class="reference internal" href="#gsplat.rasterization_2dgs_inria_wrapper"><code class="docutils literal notranslate"><span class="pre">rasterization_2dgs_inria_wrapper()</span></code></a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>

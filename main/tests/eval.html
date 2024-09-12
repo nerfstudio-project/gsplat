@@ -318,9 +318,11 @@
         <article role="main" id="furo-main-content">
           <section id="evaluation">
 <h1>Evaluation<a class="headerlink" href="#evaluation" title="Link to this heading">¶</a></h1>
-<div class="table-wrapper docutils container" id="id1">
-<table class="docutils align-default" id="id1">
-<caption><span class="caption-text">Performance on <a class="reference external" href="https://jonbarron.info/mipnerf360/">Mip-NeRF 360 Captures</a> (Averaged Over 7 Scenes)</span><a class="headerlink" href="#id1" title="Link to this table">¶</a></caption>
+<section id="dgs">
+<h2>3DGS<a class="headerlink" href="#dgs" title="Link to this heading">¶</a></h2>
+<div class="table-wrapper docutils container" id="id4">
+<table class="docutils align-default" id="id4">
+<caption><span class="caption-text">Performance on <a class="reference external" href="https://jonbarron.info/mipnerf360/">Mip-NeRF 360 Captures</a> (Averaged Over 7 Scenes)</span><a class="headerlink" href="#id4" title="Link to this table">¶</a></caption>
 <thead>
 <tr class="row-odd"><th class="head"></th>
 <th class="head"><p>PSNR</p></th>
@@ -374,6 +376,7 @@ the <a class="reference external" href="https://repo-sam.inria.fr/fungraph/3d-ga
 exactly the same performance on PSNR, SSIM, LPIPS, and converged number of Gaussians.
 Powered by <cite>gsplat</cite>’s efficient CUDA implementation, the training takes up to
 <strong>4x less GPU memory</strong> with up to <strong>15% less time</strong> to finish than the official implementation.</p>
+</section>
 <section id="feature-ablation">
 <h2>Feature Ablation<a class="headerlink" href="#feature-ablation" title="Link to this heading">¶</a></h2>
 <p>Evaluation of features provided in <cite>gsplat</cite> on Mip-NeRF (averaged over 7 scenes). We ablate <cite>gsplat</cite> with default settings, with absgrad and mcmc densification strategies, and antialiased mode.
@@ -794,6 +797,301 @@ reproduced with our forked wersion of the official implementation at
 <a class="reference external" href="https://github.com/liruilong940607/gaussian-splatting/tree/benchmark">here</a>,
 with the command <code class="code docutils literal notranslate"><span class="pre">python</span> <span class="pre">full_eval_m360.py</span></code> (commit 36546ce).</p>
 </section>
+<section id="id1">
+<h2>2DGS<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
+</section>
+<section id="no-regularization">
+<h2>No Regularization<a class="headerlink" href="#no-regularization" title="Link to this heading">¶</a></h2>
+<div class="table-wrapper docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"></th>
+<th class="head"><p>PSNR</p></th>
+<th class="head"><p>SSIM</p></th>
+<th class="head"><p>LPIPS</p></th>
+<th class="head"><p>Train Mem</p></th>
+<th class="head"><p>Train Time</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>inria-30k</p></td>
+<td><p>28.73</p></td>
+<td><p>0.860</p></td>
+<td><p>0.148</p></td>
+<td><p>3.73 GB</p></td>
+<td><p>22m16s</p></td>
+</tr>
+<tr class="row-odd"><td><p>gsplat-30k</p></td>
+<td><p>28.76</p></td>
+<td><p>0.867</p></td>
+<td><p>0.145</p></td>
+<td><p><strong>3.70 GB</strong></p></td>
+<td><p><strong>15m44s</strong></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="with-normal-consistency-and-distortion-regularization">
+<h2>With Normal Consistency and Distortion Regularization<a class="headerlink" href="#with-normal-consistency-and-distortion-regularization" title="Link to this heading">¶</a></h2>
+<div class="table-wrapper docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"></th>
+<th class="head"><p>PSNR</p></th>
+<th class="head"><p>SSIM</p></th>
+<th class="head"><p>LPIPS</p></th>
+<th class="head"><p>Train Mem</p></th>
+<th class="head"><p>Train Time</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>inria-30k</p></td>
+<td><p>28.05</p></td>
+<td><p>0.848</p></td>
+<td><p>0.186</p></td>
+<td><p>3.76 GB</p></td>
+<td><p>22m06s</p></td>
+</tr>
+<tr class="row-odd"><td><p>gsplat-30k</p></td>
+<td><p>27.80</p></td>
+<td><p>0.842</p></td>
+<td><p>0.169</p></td>
+<td><p><strong>3.61 GB</strong></p></td>
+<td><p><strong>16m44s</strong></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="runtime-and-gpu-memory">
+<h2>Runtime and GPU Memory<a class="headerlink" href="#runtime-and-gpu-memory" title="Link to this heading">¶</a></h2>
+<div class="table-wrapper docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Train Mem (GB)</p></th>
+<th class="head"><p>Bicycle</p></th>
+<th class="head"><p>Bonsai</p></th>
+<th class="head"><p>Counter</p></th>
+<th class="head"><p>Garden</p></th>
+<th class="head"><p>Kitchen</p></th>
+<th class="head"><p>Room</p></th>
+<th class="head"><p>Stump</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>inria-30k</p></td>
+<td><p><strong>6.74</strong></p></td>
+<td><p>2.27</p></td>
+<td><p>2.06</p></td>
+<td><p>4.79</p></td>
+<td><p>2.25</p></td>
+<td><p>2.40</p></td>
+<td><p><strong>5.58</strong></p></td>
+</tr>
+<tr class="row-odd"><td><p>gsplat-30k</p></td>
+<td><p>6.89</p></td>
+<td><p><strong>2.19</strong></p></td>
+<td><p><strong>1.93</strong></p></td>
+<td><p><strong>4.48</strong></p></td>
+<td><p><strong>2.14</strong></p></td>
+<td><p><strong>2.30</strong></p></td>
+<td><p>6.00</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="table-wrapper docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Train Time (s)</p></th>
+<th class="head"><p>Bicycle</p></th>
+<th class="head"><p>Bonsai</p></th>
+<th class="head"><p>Counter</p></th>
+<th class="head"><p>Garden</p></th>
+<th class="head"><p>Kitchen</p></th>
+<th class="head"><p>Room</p></th>
+<th class="head"><p>Stump</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>inria-30k</p></td>
+<td><p>1463</p></td>
+<td><p>1237</p></td>
+<td><p>1318</p></td>
+<td><p>1298</p></td>
+<td><p>1422</p></td>
+<td><p>1314</p></td>
+<td><p>1252</p></td>
+</tr>
+<tr class="row-odd"><td><p>gsplat-30k</p></td>
+<td><p><strong>1231</strong></p></td>
+<td><p><strong>788</strong></p></td>
+<td><p><strong>803</strong></p></td>
+<td><p><strong>985</strong></p></td>
+<td><p><strong>828</strong></p></td>
+<td><p><strong>789</strong></p></td>
+<td><p><strong>1057</strong></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id2">
+<h2>Reproduced Metrics<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h2>
+<div class="table-wrapper docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>PSNR</p></th>
+<th class="head"><p>Bicycle</p></th>
+<th class="head"><p>Bonsai</p></th>
+<th class="head"><p>Counter</p></th>
+<th class="head"><p>Garden</p></th>
+<th class="head"><p>Kitchen</p></th>
+<th class="head"><p>Room</p></th>
+<th class="head"><p>Stump</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>inria-30k</p></td>
+<td><p>24.92</p></td>
+<td><p>31.87</p></td>
+<td><p>28.78</p></td>
+<td><p>26.88</p></td>
+<td><p>31.08</p></td>
+<td><p>31.21</p></td>
+<td><p>26.36</p></td>
+</tr>
+<tr class="row-odd"><td><p>gsplat-30k</p></td>
+<td><p>24.97</p></td>
+<td><p>31.94</p></td>
+<td><p>28.76</p></td>
+<td><p>26.95</p></td>
+<td><p>31.08</p></td>
+<td><p>31.27</p></td>
+<td><p>26.37</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="table-wrapper docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>SSIM</p></th>
+<th class="head"><p>Bicycle</p></th>
+<th class="head"><p>Bonsai</p></th>
+<th class="head"><p>Counter</p></th>
+<th class="head"><p>Garden</p></th>
+<th class="head"><p>Kitchen</p></th>
+<th class="head"><p>Room</p></th>
+<th class="head"><p>Stump</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>inria-30k</p></td>
+<td><p>0.741</p></td>
+<td><p>0.937</p></td>
+<td><p>0.899</p></td>
+<td><p>0.847</p></td>
+<td><p>0.921</p></td>
+<td><p>0.914</p></td>
+<td><p>0.760</p></td>
+</tr>
+<tr class="row-odd"><td><p>gsplat-30k</p></td>
+<td><p>0.764</p></td>
+<td><p>0.937</p></td>
+<td><p>0.899</p></td>
+<td><p>0.849</p></td>
+<td><p>0.921</p></td>
+<td><p>0.915</p></td>
+<td><p>0.761</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="table-wrapper docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>LPIPS</p></th>
+<th class="head"><p>Bicycle</p></th>
+<th class="head"><p>Bonsai</p></th>
+<th class="head"><p>Counter</p></th>
+<th class="head"><p>Garden</p></th>
+<th class="head"><p>Kitchen</p></th>
+<th class="head"><p>Room</p></th>
+<th class="head"><p>Stump</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>inria-30k</p></td>
+<td><p>0.199</p></td>
+<td><p>0.136</p></td>
+<td><p>0.164</p></td>
+<td><p>0.093</p></td>
+<td><p>0.101</p></td>
+<td><p>0.172</p></td>
+<td><p>0.168</p></td>
+</tr>
+<tr class="row-odd"><td><p>gsplat-30k</p></td>
+<td><p>0.189</p></td>
+<td><p>0.134</p></td>
+<td><p>0.162</p></td>
+<td><p>0.091</p></td>
+<td><p>0.101</p></td>
+<td><p>0.169</p></td>
+<td><p>0.166</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="table-wrapper docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Number of GSs</p></th>
+<th class="head"><p>Bicycle</p></th>
+<th class="head"><p>Bonsai</p></th>
+<th class="head"><p>Counter</p></th>
+<th class="head"><p>Garden</p></th>
+<th class="head"><p>Kitchen</p></th>
+<th class="head"><p>Room</p></th>
+<th class="head"><p>Stump</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>inria-30k</p></td>
+<td><p>3.97M</p></td>
+<td><p>0.91M</p></td>
+<td><p>0.72M</p></td>
+<td><p>2.79M</p></td>
+<td><p>0.85M</p></td>
+<td><p>1.01M</p></td>
+<td><p>3.27M</p></td>
+</tr>
+<tr class="row-odd"><td><p>gsplat-30k</p></td>
+<td><p>3.88M</p></td>
+<td><p>0.92M</p></td>
+<td><p>0.73M</p></td>
+<td><p>2.49M</p></td>
+<td><p>0.87M</p></td>
+<td><p>1.03M</p></td>
+<td><p>3.40M</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Note: Evaulations for 2DGS are conducted on a NVIDIA RTX 4090 GPU. The LPIPS metric is evaluated
+using <code class="code docutils literal notranslate"><span class="pre">from</span> <span class="pre">torchmetrics.image.lpip</span> <span class="pre">import</span> <span class="pre">LearnedPerceptualImagePatchSimilarity</span></code>, which
+is different from what’s reported in the original paper that uses
+<code class="code docutils literal notranslate"><span class="pre">from</span> <span class="pre">lpipsPyTorch</span> <span class="pre">import</span> <span class="pre">lpips</span></code>.</p>
+<p>The evaluation of <cite>gsplat-X</cite> can be reproduced with the command
+<code class="code docutils literal notranslate"><span class="pre">cd</span> <span class="pre">examples;</span> <span class="pre">bash</span> <span class="pre">benchmarks/basic_2dgs.sh</span></code>
+within the gsplat repo (commit 48abf70).</p>
+<p>The evaluation of <cite>inria-X</cite> can be
+reproduced with our forked wersion of the official implementation at
+<a class="reference external" href="https://github.com/hbb1/diff-surfel-rasterization">here</a>;
+you need to change the <code class="code docutils literal notranslate"><span class="pre">--model_type</span> <span class="pre">2dgs</span></code> to <code class="code docutils literal notranslate"><span class="pre">--model_type</span> <span class="pre">2dgs-inria</span></code> in
+<code class="code docutils literal notranslate"><span class="pre">benchmars/basic_2dgs</span></code> and run command <code class="code docutils literal notranslate"><span class="pre">cd</span> <span class="pre">examples;</span> <span class="pre">bash</span> <span class="pre">benchmarks/basic_2dgs.sh</span></code> (commit 28c928a).</p>
+</section>
 </section>
 
         </article>
@@ -852,9 +1150,15 @@ with the command <code class="code docutils literal notranslate"><span class="pr
           <div class="toc-tree">
             <ul>
 <li><a class="reference internal" href="#">Evaluation</a><ul>
+<li><a class="reference internal" href="#dgs">3DGS</a></li>
 <li><a class="reference internal" href="#feature-ablation">Feature Ablation</a></li>
 <li><a class="reference internal" href="#trains-faster-with-less-gpu-memory">Trains Faster with Less GPU Memory</a></li>
 <li><a class="reference internal" href="#reproduced-metrics">Reproduced Metrics</a></li>
+<li><a class="reference internal" href="#id1">2DGS</a></li>
+<li><a class="reference internal" href="#no-regularization">No Regularization</a></li>
+<li><a class="reference internal" href="#with-normal-consistency-and-distortion-regularization">With Normal Consistency and Distortion Regularization</a></li>
+<li><a class="reference internal" href="#runtime-and-gpu-memory">Runtime and GPU Memory</a></li>
+<li><a class="reference internal" href="#id2">Reproduced Metrics</a></li>
 </ul>
 </li>
 </ul>
