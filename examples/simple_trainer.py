@@ -137,10 +137,12 @@ class Config:
     # Regularization for appearance optimization as weight decay
     app_opt_reg: float = 1e-6
 
-    # Enable exposure optimization. (experimental)
-    exp_opt: bool = False
+    # Enable bilateral grid. (experimental)
+    use_bilateral_grid: bool = False
     # Weight for total variation loss
-    exp_tv_lambda: float = 10.0
+    bilateral_grid_tv_lambda: float = 10.0
+    # Shape of the bilateral grid (X, Y, W)
+    bilateral_grid_shape: Tuple[int, int, int] = (16, 16, 8)
 
     # Enable depth loss. (experimental)
     depth_loss: bool = False
@@ -380,12 +382,17 @@ class Runner:
             if world_size > 1:
                 self.app_module = DDP(self.app_module)
 
-        self.exp_optimizers = []
-        if cfg.exp_opt:
-            self.exp_grids = BilateralGrid(len(self.trainset)).to(self.device)
-            self.exp_optimizers = [
+        self.bilateral_grid_optimizers = []
+        if cfg.use_bilateral_grid:
+            self.bilateral_grids = BilateralGrid(
+                len(self.trainset),
+                grid_X=cfg.bilateral_grid_shape[0],
+                grid_Y=cfg.bilateral_grid_shape[1],
+                grid_W=cfg.bilateral_grid_shape[2],
+            ).to(self.device)
+            self.bilateral_grid_optimizers = [
                 torch.optim.Adam(
-                    self.exp_grids.parameters(),
+                    self.bilateral_grids.parameters(),
                     lr=0.001 * math.sqrt(cfg.batch_size),
                     betas=[0.9, 0.99],
                     eps=1e-15,
@@ -496,10 +503,10 @@ class Runner:
                     self.pose_optimizers[0], gamma=0.01 ** (1.0 / max_steps)
                 )
             )
-        if cfg.exp_opt:
+        if cfg.use_bilateral_grid:
             schedulers.append(
                 torch.optim.lr_scheduler.ExponentialLR(
-                    self.exp_optimizers[0], gamma=0.01 ** (1.0 / max_steps)
+                    self.bilateral_grid_optimizers[0], gamma=0.01 ** (1.0 / max_steps)
                 )
             )
 
@@ -568,7 +575,7 @@ class Runner:
             else:
                 colors, depths = renders, None
 
-            if cfg.exp_opt:
+            if cfg.use_bilateral_grid:
                 grid_x, grid_y = torch.meshgrid(
                     torch.arange(width, device="cuda").float(),
                     torch.arange(height, device="cuda").float(),
@@ -578,7 +585,7 @@ class Runner:
                 pix_xy = pix_xy.reshape(1, height, width, 2) + 0.5
                 pix_xy[..., 0] /= width
                 pix_xy[..., 1] /= height
-                colors = slice(self.exp_grids, pix_xy, colors, image_ids)["rgb"]
+                colors = slice(self.bilateral_grids, pix_xy, colors, image_ids)["rgb"]
 
             if cfg.random_bkgd:
                 bkgd = torch.rand(1, 3, device=device)
@@ -617,9 +624,9 @@ class Runner:
                 disp_gt = 1.0 / depths_gt  # [1, M]
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
-            if cfg.exp_opt:
-                tvloss = self.exp_grids.tv_loss()
-                loss += cfg.exp_tv_lambda * tvloss
+            if cfg.use_bilateral_grid:
+                tvloss = self.bilateral_grids.tv_loss()
+                loss += cfg.bilateral_grid_tv_lambda * tvloss
 
             # regularizations
             if cfg.opacity_reg > 0.0:
@@ -663,7 +670,7 @@ class Runner:
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
-                if cfg.exp_opt:
+                if cfg.use_bilateral_grid:
                     self.writer.add_scalar("train/tvloss", tvloss.item(), step)
                 if cfg.tb_save_image:
                     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
@@ -746,7 +753,7 @@ class Runner:
             for optimizer in self.app_optimizers:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
-            for optimizer in self.exp_optimizers:
+            for optimizer in self.bilateral_grid_optimizers:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
             for scheduler in schedulers:
