@@ -17,8 +17,6 @@ from .cuda._wrapper import (
     rasterize_to_pixels_2dgs,
     spherical_harmonics,
 )
-from .util.normal_utils import depth_to_normal
-from .util.camera_utils import getProjectionMatrix
 from .distributed import (
     all_gather_int32,
     all_gather_tensor_list,
@@ -587,10 +585,8 @@ def rasterization(
         normals_rend = render_colors[..., -4:-1]
         normals_surf = depth_to_normal(
             render_colors[..., -1:],
-            viewmats,
+            camtoworlds,
             Ks,
-            near_plane=near_plane,
-            far_plane=far_plane,
         )
         normals_surf = normals_surf * (render_alphas).detach()
         meta.update(
@@ -828,10 +824,8 @@ def _rasterization(
         normals_rend = render_colors[..., -4:-1]
         normals_surf = depth_to_normal(
             render_colors[..., -1:],
-            viewmats,
+            camtoworlds,
             Ks,
-            near_plane=near_plane,
-            far_plane=far_plane,
         )
         normals_surf = normals_surf * (render_alphas).detach()
         meta.update(

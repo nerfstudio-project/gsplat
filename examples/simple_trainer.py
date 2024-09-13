@@ -860,9 +860,6 @@ class Runner:
                 canvas_list.extend([normals_rend * 0.5 + 0.5])
                 canvas_list.extend([normals_surf * 0.5 + 0.5])
 
-            colors = torch.clamp(colors, 0.0, 1.0)
-            canvas_list = [pixels, colors]
-
             if world_rank == 0:
                 # write images
                 canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()

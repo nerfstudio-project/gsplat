@@ -431,6 +431,7 @@ def test_rasterize_to_pixels(test_data, channels: int):
         fully_fused_projection,
         isect_offset_encode,
         isect_tiles,
+        quat_scale_to_covar_preci,
         rasterize_to_pixels,
     )
 
@@ -448,9 +449,11 @@ def test_rasterize_to_pixels(test_data, channels: int):
     colors = torch.randn(C, len(means), channels, device=device)
     backgrounds = torch.rand((C, colors.shape[-1]), device=device)
 
+    covars, _ = quat_scale_to_covar_preci(quats, scales, compute_preci=False, triu=True)
+
     # Project Gaussians to 2D
     radii, means2d, depths, normals, conics, compensations = fully_fused_projection(
-        means, None, quats, scales, viewmats, Ks, width, height
+        means, covars, None, None, viewmats, Ks, width, height
     )
     opacities = opacities.repeat(C, 1)
 
@@ -504,7 +507,7 @@ def test_rasterize_to_pixels(test_data, channels: int):
     v_means2d, v_conics, v_colors, v_opacities, v_backgrounds = torch.autograd.grad(
         (render_colors * v_render_colors).sum()
         + (render_alphas * v_render_alphas).sum(),
-        (means2d, conics, colors, opacities, backgrounds),
+        (means2d, normals, conics, colors, opacities, backgrounds),
     )
     (
         _v_means2d,
@@ -515,7 +518,7 @@ def test_rasterize_to_pixels(test_data, channels: int):
     ) = torch.autograd.grad(
         (_render_colors * v_render_colors).sum()
         + (_render_alphas * v_render_alphas).sum(),
-        (means2d, conics, colors, opacities, backgrounds),
+        (means2d, normals, conics, colors, opacities, backgrounds),
     )
     torch.testing.assert_close(v_means2d, _v_means2d, rtol=5e-3, atol=5e-3)
     torch.testing.assert_close(v_conics, _v_conics, rtol=1e-3, atol=1e-3)
