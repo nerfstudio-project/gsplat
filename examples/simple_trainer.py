@@ -396,7 +396,7 @@ class Runner:
             self.bil_grid_optimizers = [
                 torch.optim.Adam(
                     self.bil_grids.parameters(),
-                    lr=0.001 * math.sqrt(cfg.batch_size),
+                    lr=2e-3 * math.sqrt(cfg.batch_size),
                     betas=[0.9, 0.99],
                     eps=1e-15,
                 ),
@@ -507,9 +507,19 @@ class Runner:
                 )
             )
         if cfg.use_bilateral_grid:
+            # bilateral grid has a learning rate schedule. Linear warmup for 1000 steps.
             schedulers.append(
-                torch.optim.lr_scheduler.ExponentialLR(
-                    self.bil_grid_optimizers[0], gamma=0.01 ** (1.0 / max_steps)
+                torch.optim.lr_scheduler.ChainedScheduler(
+                    [
+                        torch.optim.lr_scheduler.LinearLR(
+                            self.bil_grid_optimizers[0],
+                            start_factor=0.01,
+                            total_iters=1000,
+                        ),
+                        torch.optim.lr_scheduler.ExponentialLR(
+                            self.bil_grid_optimizers[0], gamma=0.01 ** (1.0 / max_steps)
+                        ),
+                    ]
                 )
             )
 
