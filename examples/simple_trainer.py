@@ -3,6 +3,7 @@ import math
 import os
 import time
 from dataclasses import dataclass, field
+from collections import defaultdict
 from typing import Dict, List, Optional, Tuple, Union
 
 import imageio
@@ -15,7 +16,11 @@ import tyro
 import viser
 import yaml
 from datasets.colmap import Dataset, Parser
-from datasets.traj import generate_ellipse_path_z, generate_interpolated_path
+from datasets.traj import (
+    generate_interpolated_path,
+    generate_ellipse_path_z,
+    generate_spiral_path,
+)
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
@@ -24,6 +29,12 @@ from fused_ssim import fused_ssim
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from typing_extensions import Literal, assert_never
 from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
+from lib_bilagrid import (
+    BilateralGrid,
+    slice,
+    color_correct,
+    total_variation_loss,
+)
 
 from gsplat.compression import PngCompression
 from gsplat.distributed import cli
@@ -130,6 +141,11 @@ class Config:
     app_opt_lr: float = 1e-3
     # Regularization for appearance optimization as weight decay
     app_opt_reg: float = 1e-6
+
+    # Enable bilateral grid. (experimental)
+    use_bilateral_grid: bool = False
+    # Shape of the bilateral grid (X, Y, W)
+    bilateral_grid_shape: Tuple[int, int, int] = (16, 16, 8)
 
     # Enable depth loss. (experimental)
     depth_loss: bool = False
@@ -369,6 +385,22 @@ class Runner:
             if world_size > 1:
                 self.app_module = DDP(self.app_module)
 
+        self.bil_grid_optimizers = []
+        if cfg.use_bilateral_grid:
+            self.bil_grids = BilateralGrid(
+                len(self.trainset),
+                grid_X=cfg.bilateral_grid_shape[0],
+                grid_Y=cfg.bilateral_grid_shape[1],
+                grid_W=cfg.bilateral_grid_shape[2],
+            ).to(self.device)
+            self.bil_grid_optimizers = [
+                torch.optim.Adam(
+                    self.bil_grids.parameters(),
+                    lr=2e-3 * math.sqrt(cfg.batch_size),
+                    eps=1e-15,
+                ),
+            ]
+
         # Losses & Metrics.
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
         self.psnr = PeakSignalNoiseRatio(data_range=1.0).to(self.device)
@@ -473,6 +505,22 @@ class Runner:
                     self.pose_optimizers[0], gamma=0.01 ** (1.0 / max_steps)
                 )
             )
+        if cfg.use_bilateral_grid:
+            # bilateral grid has a learning rate schedule. Linear warmup for 1000 steps.
+            schedulers.append(
+                torch.optim.lr_scheduler.ChainedScheduler(
+                    [
+                        torch.optim.lr_scheduler.LinearLR(
+                            self.bil_grid_optimizers[0],
+                            start_factor=0.01,
+                            total_iters=1000,
+                        ),
+                        torch.optim.lr_scheduler.ExponentialLR(
+                            self.bil_grid_optimizers[0], gamma=0.01 ** (1.0 / max_steps)
+                        ),
+                    ]
+                )
+            )
 
         trainloader = torch.utils.data.DataLoader(
             self.trainset,
@@ -539,6 +587,15 @@ class Runner:
             else:
                 colors, depths = renders, None
 
+            if cfg.use_bilateral_grid:
+                grid_y, grid_x = torch.meshgrid(
+                    (torch.arange(height, device=self.device) + 0.5) / height,
+                    (torch.arange(width, device=self.device) + 0.5) / width,
+                    indexing="ij",
+                )
+                grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
+                colors = slice(self.bil_grids, grid_xy, colors, image_ids)["rgb"]
+
             if cfg.random_bkgd:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
@@ -576,6 +633,9 @@ class Runner:
                 disp_gt = 1.0 / depths_gt  # [1, M]
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
+            if cfg.use_bilateral_grid:
+                tvloss = 10 * total_variation_loss(self.bil_grids.grids)
+                loss += tvloss
 
             # regularizations
             if cfg.opacity_reg > 0.0:
@@ -619,6 +679,8 @@ class Runner:
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
+                if cfg.use_bilateral_grid:
+                    self.writer.add_scalar("train/tvloss", tvloss.item(), step)
                 if cfg.tb_save_image:
                     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
                     canvas = canvas.reshape(-1, *canvas.shape[2:])
@@ -700,6 +762,9 @@ class Runner:
             for optimizer in self.app_optimizers:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
+            for optimizer in self.bil_grid_optimizers:
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
             for scheduler in schedulers:
                 scheduler.step()
 
@@ -736,7 +801,7 @@ class Runner:
             self.valset, batch_size=1, shuffle=False, num_workers=1
         )
         ellipse_time = 0
-        metrics = {"psnr": [], "ssim": [], "lpips": []}
+        metrics = defaultdict(list)
         for i, data in enumerate(valloader):
             camtoworlds = data["camtoworld"].to(device)
             Ks = data["K"].to(device)
@@ -769,31 +834,32 @@ class Runner:
                     canvas,
                 )
 
-                pixels = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
-                colors = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
-                metrics["psnr"].append(self.psnr(colors, pixels))
-                metrics["ssim"].append(self.ssim(colors, pixels))
-                metrics["lpips"].append(self.lpips(colors, pixels))
+                pixels_p = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
+                colors_p = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
+                metrics["psnr"].append(self.psnr(colors_p, pixels_p))
+                metrics["ssim"].append(self.ssim(colors_p, pixels_p))
+                metrics["lpips"].append(self.lpips(colors_p, pixels_p))
+                if cfg.use_bilateral_grid:
+                    cc_colors = color_correct(colors, pixels)
+                    cc_colors_p = cc_colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
+                    metrics["cc_psnr"].append(self.psnr(cc_colors_p, pixels_p))
 
         if world_rank == 0:
             ellipse_time /= len(valloader)
 
-            psnr = torch.stack(metrics["psnr"]).mean()
-            ssim = torch.stack(metrics["ssim"]).mean()
-            lpips = torch.stack(metrics["lpips"]).mean()
+            stats = {k: torch.stack(v).mean().item() for k, v in metrics.items()}
+            stats.update(
+                {
+                    "ellipse_time": ellipse_time,
+                    "num_GS": len(self.splats["means"]),
+                }
+            )
             print(
-                f"PSNR: {psnr.item():.3f}, SSIM: {ssim.item():.4f}, LPIPS: {lpips.item():.3f} "
-                f"Time: {ellipse_time:.3f}s/image "
-                f"Number of GS: {len(self.splats['means'])}"
+                f"PSNR: {stats['psnr']:.3f}, SSIM: {stats['ssim']:.4f}, LPIPS: {stats['lpips']:.3f} "
+                f"Time: {stats['ellipse_time']:.3f}s/image "
+                f"Number of GS: {stats['num_GS']}"
             )
             # save stats as json
-            stats = {
-                "psnr": psnr.item(),
-                "ssim": ssim.item(),
-                "lpips": lpips.item(),
-                "ellipse_time": ellipse_time,
-                "num_GS": len(self.splats["means"]),
-            }
             with open(f"{self.stats_dir}/{stage}_step{step:04d}.json", "w") as f:
                 json.dump(stats, f)
             # save stats to tensorboard
@@ -818,6 +884,12 @@ class Runner:
             camtoworlds_all = generate_ellipse_path_z(
                 camtoworlds_all, height=height
             )  # [N, 3, 4]
+        elif cfg.render_traj_path == "spiral":
+            camtoworlds_all = generate_spiral_path(
+                camtoworlds_all,
+                bounds=self.parser.bounds * self.scene_scale,
+                spiral_scale_r=self.parser.extconf["spiral_radius_scale"],
+            )
         else:
             raise ValueError(
                 f"Render trajectory type not supported: {cfg.render_traj_path}"

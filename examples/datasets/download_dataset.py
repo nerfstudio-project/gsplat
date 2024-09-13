@@ -9,13 +9,25 @@ from typing import Literal
 import tyro
 
 # dataset names
-dataset_names = Literal["mipnerf360"]
+dataset_names = Literal[
+    "mipnerf360",
+    "mipnerf360_extra",
+    "bilarf_data",
+]
 
 # dataset urls
-urls = {"mipnerf360": "http://storage.googleapis.com/gresearch/refraw360/360_v2.zip"}
+urls = {
+    "mipnerf360": "http://storage.googleapis.com/gresearch/refraw360/360_v2.zip",
+    "mipnerf360_extra": "https://storage.googleapis.com/gresearch/refraw360/360_extra_scenes.zip",
+    "bilarf_data": "https://huggingface.co/datasets/Yuehao/bilarf_data/resolve/main/bilarf_data.zip",
+}
 
 # rename maps
-dataset_rename_map = {"mipnerf360": "360_v2"}
+dataset_rename_map = {
+    "mipnerf360": "360_v2",
+    "mipnerf360_extra": "360_v2",
+    "bilarf_data": "bilarf",
+}
 
 
 @dataclass
