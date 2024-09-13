@@ -7,6 +7,7 @@ from torch import Tensor
 
 
 def _quat_to_rotmat(quats: Tensor) -> Tensor:
+    """Convert quaternion to rotation matrix."""
     quats = F.normalize(quats, p=2, dim=-1)
     w, x, y, z = torch.unbind(quats, dim=-1)
     R = torch.stack(
@@ -23,8 +24,17 @@ def _quat_to_rotmat(quats: Tensor) -> Tensor:
         ],
         dim=-1,
     )
-    R = R.reshape(quats.shape[:-1] + (3, 3))  # (..., 3, 3)
-    return R
+    return R.reshape(quats.shape[:-1] + (3, 3))
+
+
+def _quat_scale_to_matrix(
+    quats: Tensor,  # [N, 4],
+    scales: Tensor,  # [N, 3],
+) -> Tensor:
+    """Convert quaternion and scale to a 3x3 matrix (R * S)."""
+    R = _quat_to_rotmat(quats)  # (..., 3, 3)
+    M = R * scales[..., None, :]  # (..., 3, 3)
+    return M
 
 
 def _quat_scale_to_covar_preci(
@@ -35,8 +45,7 @@ def _quat_scale_to_covar_preci(
     triu: bool = False,
 ) -> Tuple[Optional[Tensor], Optional[Tensor]]:
     """PyTorch implementation of `gsplat.cuda._wrapper.quat_scale_to_covar_preci()`."""
-    R = _quat_to_rotmat(quats)
-    # R.register_hook(lambda grad: print("grad R", grad))
+    R = _quat_to_rotmat(quats)  # (..., 3, 3)
 
     if compute_covar:
         M = R * scales[..., None, :]  # (..., 3, 3)
