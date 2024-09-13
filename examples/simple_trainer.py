@@ -3,6 +3,7 @@ import math
 import os
 import time
 from dataclasses import dataclass, field
+from collections import defaultdict
 from typing import Dict, List, Optional, Tuple, Union
 
 import imageio
@@ -395,7 +396,8 @@ class Runner:
             self.bil_grid_optimizers = [
                 torch.optim.Adam(
                     self.bil_grids.parameters(),
-                    lr=2e-3 * math.sqrt(cfg.batch_size),
+                    lr=0.001 * math.sqrt(cfg.batch_size),
+                    betas=[0.9, 0.99],
                     eps=1e-15,
                 ),
             ]
@@ -578,8 +580,8 @@ class Runner:
 
             if cfg.use_bilateral_grid:
                 grid_y, grid_x = torch.meshgrid(
-                    torch.linspace(0, 1.0, height, device=self.device),
-                    torch.linspace(0, 1.0, width, device=self.device),
+                    (torch.arange(height, device=self.device) + 0.5) / height,
+                    (torch.arange(width, device=self.device) + 0.5) / width,
                     indexing="ij",
                 )
                 grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
@@ -790,7 +792,7 @@ class Runner:
             self.valset, batch_size=1, shuffle=False, num_workers=1
         )
         ellipse_time = 0
-        metrics = {"psnr": [], "cc_psnr": [], "ssim": [], "lpips": []}
+        metrics = defaultdict(list)
         for i, data in enumerate(valloader):
             camtoworlds = data["camtoworld"].to(device)
             Ks = data["K"].to(device)
@@ -823,37 +825,32 @@ class Runner:
                     canvas,
                 )
 
-                cc_colors = color_correct(colors, pixels)
-
-                pixels = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
-                colors = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
-                cc_colors = cc_colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
-                metrics["psnr"].append(self.psnr(colors, pixels))
-                metrics["cc_psnr"].append(self.psnr(cc_colors, pixels))
-                metrics["ssim"].append(self.ssim(colors, pixels))
-                metrics["lpips"].append(self.lpips(colors, pixels))
+                pixels_p = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
+                colors_p = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
+                metrics["psnr"].append(self.psnr(colors_p, pixels_p))
+                metrics["ssim"].append(self.ssim(colors_p, pixels_p))
+                metrics["lpips"].append(self.lpips(colors_p, pixels_p))
+                if cfg.use_bilateral_grid:
+                    cc_colors = color_correct(colors, pixels)
+                    cc_colors_p = cc_colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
+                    metrics["cc_psnr"].append(self.psnr(cc_colors_p, pixels_p))
 
         if world_rank == 0:
             ellipse_time /= len(valloader)
 
-            psnr = torch.stack(metrics["psnr"]).mean()
-            cc_psnr = torch.stack(metrics["cc_psnr"]).mean()
-            ssim = torch.stack(metrics["ssim"]).mean()
-            lpips = torch.stack(metrics["lpips"]).mean()
+            stats = {k: torch.stack(v).mean().item() for k, v in metrics.items()}
+            stats.update(
+                {
+                    "ellipse_time": ellipse_time,
+                    "num_GS": len(self.splats["means"]),
+                }
+            )
             print(
-                f"PSNR: {psnr.item():.3f}, CC PSNR: {cc_psnr.item():.3f}, SSIM: {ssim.item():.4f}, LPIPS: {lpips.item():.3f} "
-                f"Time: {ellipse_time:.3f}s/image "
-                f"Number of GS: {len(self.splats['means'])}"
+                f"PSNR: {stats['psnr']:.3f}, SSIM: {stats['ssim']:.4f}, LPIPS: {stats['lpips']:.3f} "
+                f"Time: {stats['ellipse_time']:.3f}s/image "
+                f"Number of GS: {stats['num_GS']}"
             )
             # save stats as json
-            stats = {
-                "psnr": psnr.item(),
-                "cc_psnr": cc_psnr.item(),
-                "ssim": ssim.item(),
-                "lpips": lpips.item(),
-                "ellipse_time": ellipse_time,
-                "num_GS": len(self.splats["means"]),
-            }
             with open(f"{self.stats_dir}/{stage}_step{step:04d}.json", "w") as f:
                 json.dump(stats, f)
             # save stats to tensorboard
