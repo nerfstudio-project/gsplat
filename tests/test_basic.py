@@ -165,9 +165,10 @@ def test_proj(test_data, ortho: bool):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.parametrize("fused", [True])
 @pytest.mark.parametrize("calc_compensations", [False, True])
 @pytest.mark.parametrize("ortho", [True, False])
-def test_projection(test_data, calc_compensations: bool, ortho: bool):
+def test_projection(test_data, fused: bool, calc_compensations: bool, ortho: bool):
     from gsplat.cuda._torch_impl import _fully_fused_projection, _quat_to_rotmat
     from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci
 
@@ -187,18 +188,33 @@ def test_projection(test_data, calc_compensations: bool, ortho: bool):
     means.requires_grad = True
 
     # forward
-    radii, means2d, depths, normals, conics, compensations = fully_fused_projection(
-        means,
-        None,
-        quats,
-        scales,
-        viewmats,
-        Ks,
-        width,
-        height,
-        calc_compensations=calc_compensations,
-        ortho=ortho,
-    )
+    if fused:
+        radii, means2d, depths, normals, conics, compensations = fully_fused_projection(
+            means,
+            None,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            width,
+            height,
+            calc_compensations=calc_compensations,
+            ortho=ortho,
+        )
+    else:
+        covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [N, 6]
+        radii, means2d, depths, normals, conics, compensations = fully_fused_projection(
+            means,
+            covars,
+            None,
+            None,
+            viewmats,
+            Ks,
+            width,
+            height,
+            calc_compensations=calc_compensations,
+            ortho=ortho,
+        )
     (
         _radii,
         _means2d,
@@ -261,13 +277,14 @@ def test_projection(test_data, calc_compensations: bool, ortho: bool):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.parametrize("fused", [True])
 @pytest.mark.parametrize("sparse_grad", [False, True])
 @pytest.mark.parametrize("calc_compensations", [False, True])
 @pytest.mark.parametrize("ortho", [True, False])
 def test_fully_fused_projection_packed(
-    test_data, sparse_grad: bool, calc_compensations: bool, ortho: bool
+    test_data, fused: bool, sparse_grad: bool, calc_compensations: bool, ortho: bool
 ):
-    from gsplat.cuda._wrapper import fully_fused_projection
+    from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci
 
     torch.manual_seed(42)
 
@@ -285,47 +302,95 @@ def test_fully_fused_projection_packed(
     means.requires_grad = True
 
     # forward
-    (
-        camera_ids,
-        gaussian_ids,
-        radii,
-        means2d,
-        depths,
-        normals,
-        conics,
-        compensations,
-    ) = fully_fused_projection(
-        means,
-        None,
-        quats,
-        scales,
-        viewmats,
-        Ks,
-        width,
-        height,
-        packed=True,
-        sparse_grad=sparse_grad,
-        calc_compensations=calc_compensations,
-    )
-    (
-        _radii,
-        _means2d,
-        _depths,
-        _normals,
-        _conics,
-        _compensations,
-    ) = fully_fused_projection(
-        means,
-        None,
-        quats,
-        scales,
-        viewmats,
-        Ks,
-        width,
-        height,
-        packed=False,
-        calc_compensations=calc_compensations,
-    )
+    if fused:
+        (
+            camera_ids,
+            gaussian_ids,
+            radii,
+            means2d,
+            depths,
+            normals,
+            conics,
+            compensations,
+        ) = fully_fused_projection(
+            means,
+            None,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            width,
+            height,
+            packed=True,
+            sparse_grad=sparse_grad,
+            calc_compensations=calc_compensations,
+            ortho=ortho,
+        )
+        (
+            _radii,
+            _means2d,
+            _depths,
+            _normals,
+            _conics,
+            _compensations,
+        ) = fully_fused_projection(
+            means,
+            None,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            width,
+            height,
+            packed=False,
+            calc_compensations=calc_compensations,
+            ortho=ortho,
+        )
+    else:
+        covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [N, 6]
+        (
+            camera_ids,
+            gaussian_ids,
+            radii,
+            means2d,
+            depths,
+            normals,
+            conics,
+            compensations,
+        ) = fully_fused_projection(
+            means,
+            covars,
+            None,
+            None,
+            viewmats,
+            Ks,
+            width,
+            height,
+            packed=True,
+            sparse_grad=sparse_grad,
+            calc_compensations=calc_compensations,
+            ortho=ortho,
+        )
+        (
+            _radii,
+            _means2d,
+            _depths,
+            _normals,
+            _conics,
+            _compensations,
+        ) = fully_fused_projection(
+            means,
+            covars,
+            None,
+            None,
+            viewmats,
+            Ks,
+            width,
+            height,
+            packed=False,
+            calc_compensations=calc_compensations,
+            ortho=ortho,
+        )
 
     # recover packed tensors to full matrices for testing
     __radii = torch.sparse_coo_tensor(
