@@ -321,9 +321,6 @@ class Dataset:
             points_proj = (K @ points_cam.T).T
             points = points_proj[:, :2] / points_proj[:, 2:3]  # (M, 2)
             depths = points_cam[:, 2]  # (M,)
-            if self.patch_size is not None:
-                points[:, 0] -= x
-                points[:, 1] -= y
             # filter out points outside the image
             selector = (
                 (points[:, 0] >= 0)
