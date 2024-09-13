@@ -169,7 +169,7 @@ def test_proj(test_data, ortho: bool):
 @pytest.mark.parametrize("calc_compensations", [False, True])
 @pytest.mark.parametrize("ortho", [True, False])
 def test_projection(test_data, fused: bool, calc_compensations: bool, ortho: bool):
-    from gsplat.cuda._torch_impl import _fully_fused_projection, _quat_to_rotmat
+    from gsplat.cuda._torch_impl import _fully_fused_projection
     from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci
 
     torch.manual_seed(42)
