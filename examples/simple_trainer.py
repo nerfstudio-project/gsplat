@@ -144,7 +144,7 @@ class Config:
     # Enable bilateral grid. (experimental)
     use_bilateral_grid: bool = False
     # Shape of the bilateral grid (X, Y, W)
-    bil_grid_shape: Tuple[int, int, int] = (16, 16, 8)
+    bilateral_grid_shape: Tuple[int, int, int] = (16, 16, 8)
 
     # Enable depth loss. (experimental)
     depth_loss: bool = False
@@ -388,15 +388,14 @@ class Runner:
         if cfg.use_bilateral_grid:
             self.bil_grids = BilateralGrid(
                 len(self.trainset),
-                grid_X=cfg.bil_grid_shape[0],
-                grid_Y=cfg.bil_grid_shape[1],
-                grid_W=cfg.bil_grid_shape[2],
+                grid_X=cfg.bilateral_grid_shape[0],
+                grid_Y=cfg.bilateral_grid_shape[1],
+                grid_W=cfg.bilateral_grid_shape[2],
             ).to(self.device)
             self.bil_grid_optimizers = [
                 torch.optim.Adam(
                     self.bil_grids.parameters(),
-                    lr=0.001 * math.sqrt(cfg.batch_size),
-                    betas=[0.9, 0.99],
+                    lr=2e-3 * math.sqrt(cfg.batch_size),
                     eps=1e-15,
                 ),
             ]
