@@ -29,17 +29,17 @@ from fused_ssim import fused_ssim
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from typing_extensions import Literal, assert_never
 from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
-
-from gsplat.compression import PngCompression
-from gsplat.distributed import cli
-from gsplat.rendering import rasterization
-from gsplat.strategy import DefaultStrategy, MCMCStrategy
-from gsplat.util.lib_bilagrid import (
+from lib_bilagrid import (
     BilateralGrid,
     slice,
     color_correct,
     total_variation_loss,
 )
+
+from gsplat.compression import PngCompression
+from gsplat.distributed import cli
+from gsplat.rendering import rasterization
+from gsplat.strategy import DefaultStrategy, MCMCStrategy
 
 
 @dataclass
@@ -397,7 +397,6 @@ class Runner:
                 torch.optim.Adam(
                     self.bil_grids.parameters(),
                     lr=2e-3 * math.sqrt(cfg.batch_size),
-                    betas=[0.9, 0.99],
                     eps=1e-15,
                 ),
             ]
