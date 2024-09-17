@@ -270,7 +270,8 @@ fully_fused_projection_packed_fwd_tensor(
     const float far_plane,
     const float radius_clip,
     const bool calc_compensations,
-    const bool ortho
+    const bool ortho,
+    const bool fisheye
 );
 
 std::tuple<
@@ -291,6 +292,7 @@ fully_fused_projection_packed_bwd_tensor(
     const uint32_t image_height,
     const float eps2d,
     const bool ortho,
+    const bool fisheye,
     // fwd outputs
     const torch::Tensor &camera_ids,                  // [nnz]
     const torch::Tensor &gaussian_ids,                // [nnz]

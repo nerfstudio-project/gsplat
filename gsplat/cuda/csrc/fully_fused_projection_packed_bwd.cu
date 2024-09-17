@@ -32,6 +32,7 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     const int32_t image_height,
     const T eps2d,
     const bool ortho,
+    const bool fisheye,
     // fwd outputs
     const int64_t *__restrict__ camera_ids,   // [nnz]
     const int64_t *__restrict__ gaussian_ids, // [nnz]
@@ -132,6 +133,22 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
     if (ortho){
         // vjp: orthographic projection
         ortho_proj_vjp<T>(
+            mean_c,
+            covar_c,
+            fx,
+            fy,
+            cx,
+            cy,
+            image_width,
+            image_height,
+            v_covar2d,
+            glm::make_vec2(v_means2d),
+            v_mean_c,
+            v_covar_c
+        );
+    } else if (fisheye) {
+        // vjp: fisheye projection
+        fisheye_proj_vjp<T>(
             mean_c,
             covar_c,
             fx,
@@ -298,6 +315,7 @@ fully_fused_projection_packed_bwd_tensor(
     const uint32_t image_height,
     const float eps2d,
     const bool ortho,
+    const bool fisheye,
     // fwd outputs
     const torch::Tensor &camera_ids,                  // [nnz]
     const torch::Tensor &gaussian_ids,                // [nnz]
@@ -384,6 +402,7 @@ fully_fused_projection_packed_bwd_tensor(
                 image_height,
                 eps2d,
                 ortho,
+                fisheye,
                 camera_ids.data_ptr<int64_t>(),
                 gaussian_ids.data_ptr<int64_t>(),
                 conics.data_ptr<float>(),

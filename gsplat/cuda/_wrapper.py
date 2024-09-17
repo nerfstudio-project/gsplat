@@ -1042,6 +1042,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             radius_clip,
             calc_compensations,
             camera_model == "ortho",
+            camera_model == "fisheye",
         )
         if not calc_compensations:
             compensations = None
@@ -1109,6 +1110,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             height,
             eps2d,
             camera_model == "ortho",
+            camera_model == "fisheye",
             camera_ids,
             gaussian_ids,
             conics,

@@ -279,7 +279,7 @@ def test_projection(
 @pytest.mark.parametrize("fused", [False, True])
 @pytest.mark.parametrize("sparse_grad", [False, True])
 @pytest.mark.parametrize("calc_compensations", [False, True])
-@pytest.mark.parametrize("camera_model", ["pinhole", "ortho"])
+@pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
 def test_fully_fused_projection_packed(
     test_data,
     fused: bool,
