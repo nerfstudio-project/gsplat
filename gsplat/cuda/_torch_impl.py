@@ -1,5 +1,6 @@
 import struct
 from typing import Optional, Tuple
+from typing_extensions import Literal, assert_never
 
 import torch
 import torch.nn.functional as F
@@ -257,8 +258,7 @@ def _fully_fused_projection(
     near_plane: float = 0.01,
     far_plane: float = 1e10,
     calc_compensations: bool = False,
-    ortho: bool = False,
-    fisheye: bool = False,
+    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Optional[Tensor]]:
     """PyTorch implementation of `gsplat.cuda._wrapper.fully_fused_projection()`
 
@@ -269,12 +269,14 @@ def _fully_fused_projection(
     """
     means_c, covars_c = _world_to_cam(means, covars, viewmats)
 
-    if ortho:
+    if camera_model == "ortho":
         means2d, covars2d = _ortho_proj(means_c, covars_c, Ks, width, height)
-    elif fisheye:
+    elif camera_model == "fisheye":
         means2d, covars2d = _fisheye_proj(means_c, covars_c, Ks, width, height)
-    else:
+    elif camera_model == "pinhole":
         means2d, covars2d = _persp_proj(means_c, covars_c, Ks, width, height)
+    else:
+        assert_never(camera_model)
 
     det_orig = (
         covars2d[..., 0, 0] * covars2d[..., 1, 1]

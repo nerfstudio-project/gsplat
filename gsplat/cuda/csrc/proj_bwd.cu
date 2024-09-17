@@ -26,6 +26,7 @@ __global__ void proj_bwd_kernel(
     const uint32_t width,
     const uint32_t height,
     const bool ortho,
+    const bool fisheye,
     const T *__restrict__ v_means2d,  // [C, N, 2]
     const T *__restrict__ v_covars2d, // [C, N, 2, 2]
     T *__restrict__ v_means,          // [C, N, 3]
@@ -62,6 +63,21 @@ __global__ void proj_bwd_kernel(
 
     if (ortho){
         ortho_proj_vjp<OpT>(
+            mean,
+            covar,
+            fx,
+            fy,
+            cx,
+            cy,
+            width,
+            height,
+            glm::transpose(v_covar2d),
+            v_mean2d,
+            v_mean,
+            v_covar
+        );
+    } else if (fisheye) {
+        fisheye_proj_vjp<OpT>(
             mean,
             covar,
             fx,
@@ -114,6 +130,7 @@ std::tuple<torch::Tensor, torch::Tensor> proj_bwd_tensor(
     const uint32_t width,
     const uint32_t height,
     const bool ortho,
+    const bool fisheye,
     const torch::Tensor &v_means2d, // [C, N, 2]
     const torch::Tensor &v_covars2d // [C, N, 2, 2]
 ) {
@@ -151,6 +168,7 @@ std::tuple<torch::Tensor, torch::Tensor> proj_bwd_tensor(
                         width,
                         height,
                         ortho,
+                        fisheye,
                         v_means2d.data_ptr<scalar_t>(),
                         v_covars2d.data_ptr<scalar_t>(),
                         v_means.data_ptr<scalar_t>(),

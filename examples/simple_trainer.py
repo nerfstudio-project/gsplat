@@ -68,7 +68,7 @@ class Config:
     # Normalize the world space
     normalize_world_space: bool = True
     # Camera model
-    camera_model: Literal["pinhole", "fisheye"] = "pinhole"
+    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole"
 
     # Port for the viewer server
     port: int = 8080
@@ -477,7 +477,7 @@ class Runner:
             sparse_grad=self.cfg.sparse_grad,
             rasterize_mode=rasterize_mode,
             distributed=self.world_size > 1,
-            fisheye=self.cfg.camera_model == "fisheye",
+            camera_model=self.cfg.camera_model,
             **kwargs,
         )
         if masks is not None:

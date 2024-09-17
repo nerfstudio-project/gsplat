@@ -53,7 +53,8 @@ std::tuple<torch::Tensor, torch::Tensor> proj_fwd_tensor(
     const torch::Tensor &Ks,     // [C, 3, 3]
     const uint32_t width,
     const uint32_t height,
-    const bool ortho
+    const bool ortho,
+    const bool fisheye
 );
 
 std::tuple<torch::Tensor, torch::Tensor> proj_bwd_tensor(
@@ -63,6 +64,7 @@ std::tuple<torch::Tensor, torch::Tensor> proj_bwd_tensor(
     const uint32_t width,
     const uint32_t height,
     const bool ortho,
+    const bool fisheye,
     const torch::Tensor &v_means2d, // [C, N, 2]
     const torch::Tensor &v_covars2d // [C, N, 2, 2]
 );

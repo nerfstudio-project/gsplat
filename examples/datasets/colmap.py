@@ -252,7 +252,9 @@ class Parser:
                 cx = K[0, 2]
                 cy = K[1, 2]
                 grid_x, grid_y = np.meshgrid(
-                    np.arange(width, dtype=np.float32), np.arange(height, dtype=np.float32), indexing="xy"
+                    np.arange(width, dtype=np.float32),
+                    np.arange(height, dtype=np.float32),
+                    indexing="xy",
                 )
                 x1 = (grid_x - cx) / fx
                 y1 = (grid_y - cy) / fy

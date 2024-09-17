@@ -26,6 +26,7 @@ __global__ void proj_fwd_kernel(
     const uint32_t width,
     const uint32_t height,
     const bool ortho,
+    const bool fisheye,
     T *__restrict__ means2d, // [C, N, 2]
     T *__restrict__ covars2d // [C, N, 2, 2]
 ) {
@@ -55,6 +56,8 @@ __global__ void proj_fwd_kernel(
 
     if (ortho)
         ortho_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
+    else if (fisheye)
+        fisheye_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
     else
         persp_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
 
@@ -78,7 +81,8 @@ std::tuple<torch::Tensor, torch::Tensor> proj_fwd_tensor(
     const torch::Tensor &Ks,     // [C, 3, 3]
     const uint32_t width,
     const uint32_t height,
-    const bool ortho
+    const bool ortho,
+    const bool fisheye
 ) {
     GSPLAT_DEVICE_GUARD(means);
     GSPLAT_CHECK_INPUT(means);
@@ -112,6 +116,7 @@ std::tuple<torch::Tensor, torch::Tensor> proj_fwd_tensor(
                         width,
                         height,
                         ortho,
+                        fisheye,
                         means2d.data_ptr<scalar_t>(),
                         covars2d.data_ptr<scalar_t>()
                     );
