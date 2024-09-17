@@ -1447,7 +1447,7 @@ def rasterization_2dgs_inria_wrapper(
         render_depth_expected * (1 - depth_ratio) + (depth_ratio) * render_depth_median
     )
 
-    normals_surf = depth_to_normal(render_depth, viewmats, Ks)
+    normals_surf = depth_to_normal(render_depth, torch.linalg.inv(viewmats), Ks)
     normals_surf = normals_surf * (render_alphas).detach()
 
     render_colors = torch.cat([render_colors, render_depth], dim=-1)
