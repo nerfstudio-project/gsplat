@@ -251,26 +251,21 @@ class Parser:
                 fy = K[1, 1]
                 cx = K[0, 2]
                 cy = K[1, 2]
-                mapx = np.zeros((height, width), dtype=np.float32)
-                mapy = np.zeros((height, width), dtype=np.float32)
-                for i in range(0, width):
-                    for j in range(0, height):
-                        x = float(i)
-                        y = float(j)
-                        x1 = (x - cx) / fx
-                        y1 = (y - cy) / fy
-                        theta = np.sqrt(x1**2 + y1**2)
-                        r = (
-                            1.0
-                            + params[0] * theta**2
-                            + params[1] * theta**4
-                            + params[2] * theta**6
-                            + params[3] * theta**8
-                        )
-                        x2 = fx * x1 * r + width // 2
-                        y2 = fy * y1 * r + height // 2
-                        mapx[j, i] = x2
-                        mapy[j, i] = y2
+                grid_x, grid_y = np.meshgrid(
+                    np.arange(width, dtype=np.float32), np.arange(height, dtype=np.float32), indexing="xy"
+                )
+                x1 = (grid_x - cx) / fx
+                y1 = (grid_y - cy) / fy
+                theta = np.sqrt(x1**2 + y1**2)
+                r = (
+                    1.0
+                    + params[0] * theta**2
+                    + params[1] * theta**4
+                    + params[2] * theta**6
+                    + params[3] * theta**8
+                )
+                mapx = fx * x1 * r + width // 2
+                mapy = fy * y1 * r + height // 2
 
                 mask = np.logical_and(
                     np.logical_and(mapx > 0, mapy > 0),
