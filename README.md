@@ -75,7 +75,7 @@ We also have made the mathematical supplement, with conventions and derivations,
 
 ```
 @article{ye2024gsplatopensourcelibrarygaussian,
-    title={gsplat: An Open-Source Library for Gaussian Splatting}, 
+    title={gsplat: An Open-Source Library for {Gaussian} Splatting}, 
     author={Vickie Ye and Ruilong Li and Justin Kerr and Matias Turkulainen and Brent Yi and Zhuoyang Pan and Otto Seiskari and Jianbo Ye and Jeffrey Hu and Matthew Tancik and Angjoo Kanazawa},
     year={2024},
     eprint={2409.06765},
