@@ -13,6 +13,8 @@ dataset_names = Literal[
     "mipnerf360",
     "mipnerf360_extra",
     "bilarf_data",
+    "alameda",
+    "alameda_undistorted",
 ]
 
 # dataset urls
@@ -20,6 +22,8 @@ urls = {
     "mipnerf360": "http://storage.googleapis.com/gresearch/refraw360/360_v2.zip",
     "mipnerf360_extra": "https://storage.googleapis.com/gresearch/refraw360/360_extra_scenes.zip",
     "bilarf_data": "https://huggingface.co/datasets/Yuehao/bilarf_data/resolve/main/bilarf_data.zip",
+    "alameda": "https://storage.googleapis.com/gresearch/refraw360/zipnerf/alameda.zip",
+    "alameda_undistorted": "https://storage.googleapis.com/gresearch/refraw360/zipnerf-undistorted/alameda.zip",
 }
 
 # rename maps
@@ -27,6 +31,8 @@ dataset_rename_map = {
     "mipnerf360": "360_v2",
     "mipnerf360_extra": "360_v2",
     "bilarf_data": "bilarf",
+    "alameda": "zipnerf/alameda",
+    "alameda_undistorted": "zipnerf_undistorted/alameda",
 }
 
 

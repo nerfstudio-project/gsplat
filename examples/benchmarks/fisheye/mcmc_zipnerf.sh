@@ -1,5 +1,5 @@
 SCENE_DIR="data/zipnerf"
-SCENE_LIST="berlin london nyc alameda"
+SCENE_LIST="alameda berlin london nyc"
 DATA_FACTOR=4
 RENDER_TRAJ_PATH="ellipse"
 
@@ -21,5 +21,4 @@ do
         --camera_model fisheye \
         --data_dir $SCENE_DIR/$SCENE/ \
         --result_dir $RESULT_DIR/$SCENE/
-
 done

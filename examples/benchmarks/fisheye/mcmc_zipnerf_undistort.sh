@@ -1,12 +1,12 @@
-SCENE_DIR="data/zipnerf_undistort"
-SCENE_LIST="berlin london nyc alameda"
+SCENE_DIR="data/zipnerf_undistorted"
+SCENE_LIST="alameda berlin london nyc"
 DATA_FACTOR=4
 RENDER_TRAJ_PATH="ellipse"
 
-RESULT_DIR="results/benchmark_mcmc_2M_zipnerf_undistort"
+RESULT_DIR="results/benchmark_mcmc_2M_zipnerf_undistorted"
 CAP_MAX=2000000
 
-# RESULT_DIR="results/benchmark_mcmc_4M_zipnerf_undistort"
+# RESULT_DIR="results/benchmark_mcmc_4M_zipnerf_undistorted"
 # CAP_MAX=4000000
 
 for SCENE in $SCENE_LIST;
@@ -21,5 +21,4 @@ do
         --camera_model pinhole \
         --data_dir $SCENE_DIR/$SCENE/ \
         --result_dir $RESULT_DIR/$SCENE/
-
 done
