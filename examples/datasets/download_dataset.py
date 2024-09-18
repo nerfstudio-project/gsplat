@@ -22,18 +22,18 @@ urls = {
     "mipnerf360": "http://storage.googleapis.com/gresearch/refraw360/360_v2.zip",
     "mipnerf360_extra": "https://storage.googleapis.com/gresearch/refraw360/360_extra_scenes.zip",
     "bilarf_data": "https://huggingface.co/datasets/Yuehao/bilarf_data/resolve/main/bilarf_data.zip",
-    "zipnerf": {
-        "berlin": "https://storage.googleapis.com/gresearch/refraw360/zipnerf/berlin.zip",
-        "london": "https://storage.googleapis.com/gresearch/refraw360/zipnerf/london.zip",
-        "nyc": "https://storage.googleapis.com/gresearch/refraw360/zipnerf/nyc.zip",
-        "alameda": "https://storage.googleapis.com/gresearch/refraw360/zipnerf/alameda.zip",
-    },
-    "zipnerf_undistorted": {
-        "berlin": "https://storage.googleapis.com/gresearch/refraw360/zipnerf-undistorted/berlin.zip",
-        "london": "https://storage.googleapis.com/gresearch/refraw360/zipnerf-undistorted/london.zip",
-        "nyc": "https://storage.googleapis.com/gresearch/refraw360/zipnerf-undistorted/nyc.zip",
-        "alameda": "https://storage.googleapis.com/gresearch/refraw360/zipnerf-undistorted/alameda.zip",
-    },
+    "zipnerf": [
+        "https://storage.googleapis.com/gresearch/refraw360/zipnerf/berlin.zip",
+        "https://storage.googleapis.com/gresearch/refraw360/zipnerf/london.zip",
+        "https://storage.googleapis.com/gresearch/refraw360/zipnerf/nyc.zip",
+        "https://storage.googleapis.com/gresearch/refraw360/zipnerf/alameda.zip",
+    ],
+    "zipnerf_undistorted": [
+        "https://storage.googleapis.com/gresearch/refraw360/zipnerf-undistorted/berlin.zip",
+        "https://storage.googleapis.com/gresearch/refraw360/zipnerf-undistorted/london.zip",
+        "https://storage.googleapis.com/gresearch/refraw360/zipnerf-undistorted/nyc.zip",
+        "https://storage.googleapis.com/gresearch/refraw360/zipnerf-undistorted/alameda.zip",
+    ],
 }
 
 # rename maps
@@ -56,10 +56,10 @@ class DownloadData:
         self.dataset_download(self.dataset)
 
     def dataset_download(self, dataset: dataset_names):
-        if isinstance(urls[dataset], dict):
-            for name, url in urls[dataset].items():
+        if isinstance(urls[dataset], list):
+            for url in urls[dataset]:
                 url_file_name = Path(url).name
-                extract_path = self.save_dir / dataset_rename_map[dataset] / name
+                extract_path = self.save_dir / dataset_rename_map[dataset]
                 download_path = extract_path / url_file_name
                 download_and_extract(url, download_path, extract_path)
         else:
