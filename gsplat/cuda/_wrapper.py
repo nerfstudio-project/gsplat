@@ -679,7 +679,9 @@ class _Proj(torch.autograd.Function):
         height: int,
         camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
     ) -> Tuple[Tensor, Tensor]:
-        camera_model = _make_lazy_cuda_obj(f"CameraModelType.{camera_model.upper()}")
+        camera_model_type = _make_lazy_cuda_obj(
+            f"CameraModelType.{camera_model.upper()}"
+        )
 
         means2d, covars2d = _make_lazy_cuda_func("proj_fwd")(
             means,
@@ -687,12 +689,12 @@ class _Proj(torch.autograd.Function):
             Ks,
             width,
             height,
-            camera_model,
+            camera_model_type,
         )
         ctx.save_for_backward(means, covars, Ks)
         ctx.width = width
         ctx.height = height
-        ctx.camera_model = camera_model
+        ctx.camera_model_type = camera_model_type
         return means2d, covars2d
 
     @staticmethod
@@ -700,14 +702,14 @@ class _Proj(torch.autograd.Function):
         means, covars, Ks = ctx.saved_tensors
         width = ctx.width
         height = ctx.height
-        camera_model = ctx.camera_model
+        camera_model_type = ctx.camera_model_type
         v_means, v_covars = _make_lazy_cuda_func("proj_bwd")(
             means,
             covars,
             Ks,
             width,
             height,
-            camera_model,
+            camera_model_type,
             v_means2d.contiguous(),
             v_covars2d.contiguous(),
         )
@@ -773,6 +775,10 @@ class _FullyFusedProjection(torch.autograd.Function):
         calc_compensations: bool,
         camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        camera_model_type = _make_lazy_cuda_obj(
+            f"CameraModelType.{camera_model.upper()}"
+        )
+
         # "covars" and {"quats", "scales"} are mutually exclusive
         radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
             "fully_fused_projection_fwd"
@@ -790,8 +796,7 @@ class _FullyFusedProjection(torch.autograd.Function):
             far_plane,
             radius_clip,
             calc_compensations,
-            camera_model == "ortho",
-            camera_model == "fisheye",
+            camera_model_type,
         )
         if not calc_compensations:
             compensations = None
@@ -801,7 +806,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         ctx.width = width
         ctx.height = height
         ctx.eps2d = eps2d
-        ctx.camera_model = camera_model
+        ctx.camera_model_type = camera_model_type
 
         return radii, means2d, depths, conics, compensations
 
@@ -821,7 +826,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         width = ctx.width
         height = ctx.height
         eps2d = ctx.eps2d
-        camera_model = ctx.camera_model
+        camera_model_type = ctx.camera_model_type
         if v_compensations is not None:
             v_compensations = v_compensations.contiguous()
         v_means, v_covars, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
@@ -836,8 +841,7 @@ class _FullyFusedProjection(torch.autograd.Function):
             width,
             height,
             eps2d,
-            camera_model == "ortho",
-            camera_model == "fisheye",
+            camera_model_type,
             radii,
             conics,
             compensations,
@@ -1028,6 +1032,10 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         calc_compensations: bool,
         camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        camera_model_type = _make_lazy_cuda_obj(
+            f"CameraModelType.{camera_model.upper()}"
+        )
+
         (
             indptr,
             camera_ids,
@@ -1051,8 +1059,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             far_plane,
             radius_clip,
             calc_compensations,
-            camera_model == "ortho",
-            camera_model == "fisheye",
+            camera_model_type,
         )
         if not calc_compensations:
             compensations = None
@@ -1072,7 +1079,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         ctx.height = height
         ctx.eps2d = eps2d
         ctx.sparse_grad = sparse_grad
-        ctx.camera_model = camera_model
+        ctx.camera_model_type = camera_model_type
 
         return camera_ids, gaussian_ids, radii, means2d, depths, conics, compensations
 
@@ -1103,7 +1110,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         height = ctx.height
         eps2d = ctx.eps2d
         sparse_grad = ctx.sparse_grad
-        camera_model = ctx.camera_model
+        camera_model_type = ctx.camera_model_type
 
         if v_compensations is not None:
             v_compensations = v_compensations.contiguous()
@@ -1119,8 +1126,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             width,
             height,
             eps2d,
-            camera_model == "ortho",
-            camera_model == "fisheye",
+            camera_model_type,
             camera_ids,
             gaussian_ids,
             conics,
