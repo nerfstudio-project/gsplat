@@ -582,7 +582,7 @@ def rasterization(
     return render_colors, render_alphas, meta
 
 
-def filter_visible_gaussians(
+def view_to_visible_anchors(
     means: Tensor,  # [N, 3]
     quats: Tensor,  # [N, 4]
     scales: Tensor,  # [N, 3]

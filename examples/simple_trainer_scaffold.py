@@ -38,7 +38,7 @@ from lib_bilagrid import (
 
 from gsplat.compression import PngCompression
 from gsplat.distributed import cli
-from gsplat.rendering import rasterization, filter_visible_gaussians
+from gsplat.rendering import rasterization, view_to_visible_anchors
 from gsplat.strategy import ScaffoldStrategy
 
 
@@ -162,6 +162,7 @@ class Config:
         strategy = self.strategy
         strategy.refine_start_iter = int(strategy.refine_start_iter * factor)
         strategy.refine_stop_iter = int(strategy.refine_stop_iter * factor)
+        strategy.voxel_size = self.voxel_size
         # strategy.reset_every = int(strategy.reset_every * factor)
         # strategy.refine_every = int(strategy.refine_every * factor)
 
@@ -199,7 +200,7 @@ def create_splats_with_optimizers(
     N = points.shape[0]
     quats = torch.rand((N, 4))  # [N, 4]
 
-    features = torch.zeros((N, strategy.mean_feat_dim))
+    features = torch.zeros((N, strategy.feat_dim))
     offsets = torch.zeros((N, strategy.n_feat_offsets, 3))
 
     params = [
@@ -334,7 +335,7 @@ class Runner:
         if cfg.app_opt:
             assert feature_dim is not None
             self.app_module = AppearanceOptModule(
-                len(self.trainset), feature_dim, cfg.app_embed_dim, cfg.sh_degree
+                len(self.trainset), feature_dim, cfg.app_embed_dim, None
             ).to(self.device)
             # initialize the last layer to be zero so that the initial output is zero.
             torch.nn.init.zeros_(self.app_module.color_head[-1].weight)
@@ -394,7 +395,7 @@ class Runner:
                 mode="training",
             )
 
-    def get_visibility_mask(
+    def get_visible_anchor_mask(
             self,
             camtoworlds: Tensor,
             Ks: Tensor,
@@ -408,7 +409,7 @@ class Runner:
         quats = self.splats["quats"]  # [N, 4]
         scales = torch.exp(self.splats["scales"])[:, :3]  # [N, 3]
 
-        visibility_mask = filter_visible_gaussians(
+        visible_anchor_mask = view_to_visible_anchors(
             means=anchors,
             quats=quats,
             scales=scales,
@@ -420,18 +421,18 @@ class Runner:
             rasterize_mode=rasterize_mode,
         )
 
-        return visibility_mask
+        return visible_anchor_mask
 
-    def get_neural_gaussians(self, cam_pos, selection=None):
+    def get_neural_gaussians(self, cam_pos, visible_anchor_mask=None):
 
         # If no visibility mask is provided, we select all anchors including their offsets
-        if selection is None:
-            selection = torch.ones(self.splats["anchors"].shape[0], dtype=torch.bool, device=self.device)
+        if visible_anchor_mask is None:
+            visible_anchor_mask = torch.ones(self.splats["anchors"].shape[0], dtype=torch.bool, device=self.device)
 
-        selected_features = self.splats["features"][selection]  # [M, c]
-        selected_anchors = self.splats["anchors"][selection]  # [M, 3]
-        selected_offsets = self.splats["offsets"][selection]  # [M, k, 3]
-        selected_scales = torch.exp(self.splats["scales"][selection])  # [M, 6]
+        selected_features = self.splats["features"][visible_anchor_mask]  # [M, c]
+        selected_anchors = self.splats["anchors"][visible_anchor_mask]  # [M, 3]
+        selected_offsets = self.splats["offsets"][visible_anchor_mask]  # [M, k, 3]
+        selected_scales = torch.exp(self.splats["scales"][visible_anchor_mask])  # [M, 6]
 
         # See formula (5) in Scaffold-GS
         view_dir = selected_anchors - cam_pos  # [M, 3]
@@ -445,7 +446,7 @@ class Runner:
         # Apply MLPs (they output per-offset features concatenated along the last dimension)
         neural_opacity = self.cfg.strategy.opacities_mlp(feature_view_dir)  # [M, k*1]
         neural_opacity = neural_opacity.view(-1, 1)  # [M*k, 1]
-        pos_opacity_mask = (neural_opacity > 0.0).view(-1)  # [M*k]
+        neural_selection_mask = (neural_opacity > 0.0).view(-1)  # [M*k]
 
         # Get color and reshape
         neural_colors = self.cfg.strategy.colors_mlp(feature_view_dir)  # [M, k*3]
@@ -461,12 +462,12 @@ class Runner:
         anchors_repeated = selected_anchors.unsqueeze(1).repeat(1, k, 1).view(-1, 3)  # [M*k, 3]
 
         # Apply positive opacity mask
-        selected_opacity = neural_opacity[pos_opacity_mask].squeeze(-1)  # [m]
-        selected_colors = neural_colors[pos_opacity_mask]  # [m, 3]
-        selected_scale_rot = neural_scale_rot[pos_opacity_mask]  # [m, 7]
-        selected_offsets = selected_offsets[pos_opacity_mask]  # [m, 3]
-        scales_repeated = scales_repeated[pos_opacity_mask]  # [m, 6]
-        anchors_repeated = anchors_repeated[pos_opacity_mask]  # [m, 3]
+        selected_opacity = neural_opacity[neural_selection_mask].squeeze(-1)  # [m]
+        selected_colors = neural_colors[neural_selection_mask]  # [m, 3]
+        selected_scale_rot = neural_scale_rot[neural_selection_mask]  # [m, 7]
+        selected_offsets = selected_offsets[neural_selection_mask]  # [m, 3]
+        scales_repeated = scales_repeated[neural_selection_mask]  # [m, 6]
+        anchors_repeated = anchors_repeated[neural_selection_mask]  # [m, 3]
 
         # Compute scales and rotations
         scales = scales_repeated[:, 3:] * torch.sigmoid(selected_scale_rot[:, :3])  # [m, 3]
@@ -474,9 +475,9 @@ class Runner:
 
         # Compute offsets and anchors
         offsets = selected_offsets * scales_repeated[:, :3]  # [m, 3]
-        anchors = anchors_repeated + offsets  # [m, 3]
+        means = anchors_repeated + offsets  # [m, 3]
 
-        return anchors, selected_colors, selected_opacity, scales, rotation, neural_opacity, pos_opacity_mask
+        return means, selected_colors, selected_opacity, scales, rotation, neural_opacity, neural_selection_mask
 
     def rasterize_splats(
         self,
@@ -487,7 +488,8 @@ class Runner:
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict, Tensor]:
 
-        visibility_mask = self.get_visibility_mask(camtoworlds=camtoworlds,
+        # We select only the visible anchors for faster inference
+        visible_anchor_mask = self.get_visible_anchor_mask(camtoworlds=camtoworlds,
                                                    Ks=Ks,
                                                    width=width,
                                                    height=height,
@@ -495,15 +497,15 @@ class Runner:
                                                    rasterize_mode = "antialiased" if self.cfg.antialiased else "classic",
                                                    )
 
-        anchors, color_mlp, opacities, scales, quats, neural_opacity, selection_mask = self.get_neural_gaussians(camtoworlds[:, :3, 3], selection=visibility_mask)
+        # Get all the gaussians per voxel spawned from the anchors
+        means, color_mlp, opacities, scales, quats, neural_opacity, neural_selection_mask = self.get_neural_gaussians(camtoworlds[:, :3, 3], visible_anchor_mask=visible_anchor_mask)
 
         image_ids = kwargs.pop("image_ids", None)
         if self.cfg.app_opt:
             colors = self.app_module(
                 features=self.splats["features"],
                 embed_ids=image_ids,
-                dirs=anchors[None, :, :] - camtoworlds[:, None, :3, 3],
-                sh_degree=kwargs.pop("sh_degree", self.cfg.sh_degree),
+                dirs=means[None, :, :] - camtoworlds[:, None, :3, 3],
             )
             colors = colors + color_mlp
             colors = torch.sigmoid(colors)
@@ -512,7 +514,7 @@ class Runner:
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
         render_colors, render_alphas, info = rasterization(
-            means=anchors,
+            means=means,
             quats=quats,
             scales=scales,
             opacities=opacities,
@@ -527,6 +529,13 @@ class Runner:
             rasterize_mode=rasterize_mode,
             distributed=self.world_size > 1,
             **kwargs,
+        )
+        info.update(
+            {
+                "visible_anchor_mask": visible_anchor_mask,
+                "neural_selection_mask": neural_selection_mask,
+                "neural_opacities": neural_opacity,
+            }
         )
         return render_colors, render_alphas, info, scales
 
@@ -755,14 +764,14 @@ class Runner:
                 )
 
             # For now no post steps
-            # self.cfg.strategy.step_post_backward(
-            #     params=self.splats,
-            #     optimizers=self.optimizers,
-            #     state=self.strategy_state,
-            #     step=step,
-            #     info=info,
-            #     packed=cfg.packed,
-            # )
+            self.cfg.strategy.step_post_backward(
+                params=self.splats,
+                optimizers=self.optimizers,
+                state=self.strategy_state,
+                step=step,
+                info=info,
+                packed=cfg.packed,
+            )
 
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:
@@ -842,7 +851,7 @@ class Runner:
                 Ks=Ks,
                 width=width,
                 height=height,
-                sh_degree=cfg.sh_degree,
+                sh_degree=None,
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
             )  # [1, H, W, 3]
@@ -946,7 +955,7 @@ class Runner:
                 Ks=Ks,
                 width=width,
                 height=height,
-                sh_degree=cfg.sh_degree,
+                sh_degree=None,
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 render_mode="RGB+ED",

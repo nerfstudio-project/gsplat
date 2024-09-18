@@ -4,6 +4,7 @@ from typing import Callable, Dict, List, Union
 import torch
 import torch.nn.functional as F
 from torch import Tensor
+from torch_scatter import scatter_max
 
 from gsplat import quat_scale_to_covar_preci
 from gsplat.relocation import compute_relocation
@@ -361,3 +362,93 @@ def inject_noise_to_position(
     )
     noise = torch.einsum("bij,bj->bi", covars, noise)
     params["means"].add_(noise)
+
+
+@torch.no_grad()
+def grow_anchors(
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+        optimizers: Dict[str, torch.optim.Optimizer],
+        state: Dict[str, Tensor],
+        anchors: torch.Tensor,
+        gradient_mask: torch.Tensor,
+        remove_duplicates_mask: torch.Tensor,
+        inv_idx: torch.Tensor,
+        voxel_size: float,
+        n_feat_offsets: int,
+        feat_dim: int,
+):
+    """Inplace add new Gaussians (anchors) to the parameters.
+
+    Args:
+        params: A dictionary of parameters.
+        optimizers: A dictionary of optimizers, each corresponding to a parameter.
+        state: A dictionary of extra state tensors.
+        anchors: Positions of new anchors to be added.
+        gradient_mask: A mask to select gradients.
+        remove_duplicates_mask: A mask to remove duplicates.
+        inv_idx: Indices for inverse mapping.
+        voxel_size: The size of the voxel.
+        n_feat_offsets: Number of feature offsets.
+        feat_dim: Dimension of features.
+    """
+    device = anchors.device
+    num_new = anchors.size(0)
+
+    # Scale anchors
+    anchors = anchors * voxel_size  # [N_new, 3]
+
+    # Initialize new parameters
+    log_voxel_size = torch.log(torch.tensor(voxel_size, device=device))
+    scaling = log_voxel_size.expand(num_new, anchors.size(1) * 2)  # [N_new, 6]
+
+    rotation = torch.zeros((num_new, 4), device=device)
+    rotation[:, 0] = 1.0  # Identity quaternion
+
+    # Prepare new features
+    existing_features = params["features"]  # [N_existing, feat_dim]
+    repeated_features = existing_features.repeat_interleave(n_feat_offsets, dim=0)  # [N_existing * n_feat_offsets, feat_dim]
+
+    selected_features = repeated_features[gradient_mask]  # [N_selected, feat_dim]
+
+    # Use inverse_indices to aggregate features
+    scattered_features, _ = scatter_max(
+        selected_features,
+        inv_idx.unsqueeze(1).expand(-1, feat_dim),
+        dim=0
+    )
+    feat = scattered_features[remove_duplicates_mask]  # [N_new, feat_dim]
+
+    # Initialize new offsets
+    offsets = torch.zeros((num_new, n_feat_offsets, 3), device=device)  # [N_new, n_feat_offsets, 3]
+
+    def param_fn(name: str, p: Tensor) -> Tensor:
+        if name == "anchors":
+            p_new = torch.cat([p, anchors], dim=0)
+        elif name == "scales":
+            p_new = torch.cat([p, scaling], dim=0)
+        elif name == "quats":
+            p_new = torch.cat([p, rotation], dim=0)
+        elif name == "features":
+            p_new = torch.cat([p, feat], dim=0)
+        elif name == "offsets":
+            p_new = torch.cat([p, offsets], dim=0)
+        else:
+            raise ValueError(f"Parameter '{name}' not recognized.")
+        return torch.nn.Parameter(p_new)
+
+    def optimizer_fn(key: str, v: Tensor) -> Tensor:
+        # Extend optimizer state tensors with zeros
+        zeros = torch.zeros((num_new, *v.shape[1:]), device=device)
+        v_new = torch.cat([v, zeros], dim=0)
+        return v_new
+
+    # Update parameters and optimizer states
+    names = ["anchors", "scales", "quats", "features", "offsets"]
+    _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers, names)
+
+    # Update the extra running state
+    for k, v in state.items():
+        if isinstance(v, torch.Tensor):
+            zeros = torch.zeros((num_new * n_feat_offsets, *v.shape[1:]), device=device)
+            state[k] = torch.cat([v, zeros], dim=0)
+
