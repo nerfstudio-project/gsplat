@@ -1,5 +1,5 @@
 SCENE_DIR="data/zipnerf"
-SCENE_LIST="alameda berlin london nyc"
+SCENE_LIST="berlin london nyc alameda"
 DATA_FACTOR=4
 RENDER_TRAJ_PATH="ellipse"
 

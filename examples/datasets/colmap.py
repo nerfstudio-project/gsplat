@@ -269,6 +269,7 @@ class Parser:
                 mapx = fx * x1 * r + width // 2
                 mapy = fy * y1 * r + height // 2
 
+                # Use mask to define ROI
                 mask = np.logical_and(
                     np.logical_and(mapx > 0, mapy > 0),
                     np.logical_and(mapx < width - 1, mapy < height - 1),
