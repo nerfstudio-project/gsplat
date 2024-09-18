@@ -1,4 +1,4 @@
-from typing import Callable, Optional, Tuple
+from typing import Callable, Optional, Tuple, Any
 import warnings
 from typing_extensions import Literal
 
@@ -14,6 +14,16 @@ def _make_lazy_cuda_func(name: str) -> Callable:
         return getattr(_C, name)(*args, **kwargs)
 
     return call_cuda
+
+
+def _make_lazy_cuda_obj(name: str) -> Any:
+    # pylint: disable=import-outside-toplevel
+    from ._backend import _C
+
+    obj = _C
+    for name_split in name.split("."):
+        obj = getattr(_C, name_split)
+    return obj
 
 
 def spherical_harmonics(
@@ -669,14 +679,15 @@ class _Proj(torch.autograd.Function):
         height: int,
         camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
     ) -> Tuple[Tensor, Tensor]:
+        camera_model = _make_lazy_cuda_obj(f"CameraModelType.{camera_model.upper()}")
+
         means2d, covars2d = _make_lazy_cuda_func("proj_fwd")(
             means,
             covars,
             Ks,
             width,
             height,
-            camera_model == "ortho",
-            camera_model == "fisheye",
+            camera_model,
         )
         ctx.save_for_backward(means, covars, Ks)
         ctx.width = width
@@ -696,8 +707,7 @@ class _Proj(torch.autograd.Function):
             Ks,
             width,
             height,
-            camera_model == "ortho",
-            camera_model == "fisheye",
+            camera_model,
             v_means2d.contiguous(),
             v_covars2d.contiguous(),
         )

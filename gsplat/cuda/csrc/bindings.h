@@ -31,6 +31,13 @@
 
 namespace gsplat {
 
+enum CameraModelType
+{
+    PINHOLE = 0,
+    ORTHO = 1,
+    FISHEYE = 2,
+};
+
 std::tuple<torch::Tensor, torch::Tensor> quat_scale_to_covar_preci_fwd_tensor(
     const torch::Tensor &quats,  // [N, 4]
     const torch::Tensor &scales, // [N, 3]
@@ -53,8 +60,7 @@ std::tuple<torch::Tensor, torch::Tensor> proj_fwd_tensor(
     const torch::Tensor &Ks,     // [C, 3, 3]
     const uint32_t width,
     const uint32_t height,
-    const bool ortho,
-    const bool fisheye
+    const CameraModelType camera_model
 );
 
 std::tuple<torch::Tensor, torch::Tensor> proj_bwd_tensor(
@@ -63,8 +69,7 @@ std::tuple<torch::Tensor, torch::Tensor> proj_bwd_tensor(
     const torch::Tensor &Ks,     // [C, 3, 3]
     const uint32_t width,
     const uint32_t height,
-    const bool ortho,
-    const bool fisheye,
+    const CameraModelType camera_model,
     const torch::Tensor &v_means2d, // [C, N, 2]
     const torch::Tensor &v_covars2d // [C, N, 2, 2]
 );

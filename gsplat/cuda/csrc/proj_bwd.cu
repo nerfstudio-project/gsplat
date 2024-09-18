@@ -25,8 +25,7 @@ __global__ void proj_bwd_kernel(
     const T *__restrict__ Ks,     // [C, 3, 3]
     const uint32_t width,
     const uint32_t height,
-    const bool ortho,
-    const bool fisheye,
+    const CameraModelType camera_model,
     const T *__restrict__ v_means2d,  // [C, N, 2]
     const T *__restrict__ v_covars2d, // [C, N, 2, 2]
     T *__restrict__ v_means,          // [C, N, 3]
@@ -61,51 +60,55 @@ __global__ void proj_bwd_kernel(
     const vec2<OpT> v_mean2d = glm::make_vec2(v_means2d);
     const mat2<OpT> v_covar2d = glm::make_mat2(v_covars2d);
 
-    if (ortho){
-        ortho_proj_vjp<OpT>(
-            mean,
-            covar,
-            fx,
-            fy,
-            cx,
-            cy,
-            width,
-            height,
-            glm::transpose(v_covar2d),
-            v_mean2d,
-            v_mean,
-            v_covar
-        );
-    } else if (fisheye) {
-        fisheye_proj_vjp<OpT>(
-            mean,
-            covar,
-            fx,
-            fy,
-            cx,
-            cy,
-            width,
-            height,
-            glm::transpose(v_covar2d),
-            v_mean2d,
-            v_mean,
-            v_covar
-        );
-    } else {
-        persp_proj_vjp<OpT>(
-            mean,
-            covar,
-            fx,
-            fy,
-            cx,
-            cy,
-            width,
-            height,
-            glm::transpose(v_covar2d),
-            v_mean2d,
-            v_mean,
-            v_covar
-        );
+    switch (camera_model) {
+        case CameraModelType::PINHOLE: // perspective projection
+            persp_proj_vjp<OpT>(
+                mean,
+                covar,
+                fx,
+                fy,
+                cx,
+                cy,
+                width,
+                height,
+                glm::transpose(v_covar2d),
+                v_mean2d,
+                v_mean,
+                v_covar
+            );
+            break;
+        case CameraModelType::ORTHO: // orthographic projection
+            ortho_proj_vjp<OpT>(
+                mean,
+                covar,
+                fx,
+                fy,
+                cx,
+                cy,
+                width,
+                height,
+                glm::transpose(v_covar2d),
+                v_mean2d,
+                v_mean,
+                v_covar
+            );
+            break;
+        case CameraModelType::FISHEYE: // fisheye projection
+            fisheye_proj_vjp<OpT>(
+                mean,
+                covar,
+                fx,
+                fy,
+                cx,
+                cy,
+                width,
+                height,
+                glm::transpose(v_covar2d),
+                v_mean2d,
+                v_mean,
+                v_covar
+            );
+            break;
     }
 
     // write to outputs: glm is column-major but we want row-major
@@ -129,8 +132,7 @@ std::tuple<torch::Tensor, torch::Tensor> proj_bwd_tensor(
     const torch::Tensor &Ks,     // [C, 3, 3]
     const uint32_t width,
     const uint32_t height,
-    const bool ortho,
-    const bool fisheye,
+    const CameraModelType camera_model,
     const torch::Tensor &v_means2d, // [C, N, 2]
     const torch::Tensor &v_covars2d // [C, N, 2, 2]
 ) {
@@ -167,8 +169,7 @@ std::tuple<torch::Tensor, torch::Tensor> proj_bwd_tensor(
                         Ks.data_ptr<scalar_t>(),
                         width,
                         height,
-                        ortho,
-                        fisheye,
+                        camera_model,
                         v_means2d.data_ptr<scalar_t>(),
                         v_covars2d.data_ptr<scalar_t>(),
                         v_means.data_ptr<scalar_t>(),
