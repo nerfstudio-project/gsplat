@@ -17,6 +17,7 @@ do
     CUDA_VISIBLE_DEVICES=0 python simple_trainer.py mcmc --disable_viewer --data_factor $DATA_FACTOR \
         --strategy.cap-max $CAP_MAX \
         --opacity_reg 0.001 \
+        --use_bilateral_grid \
         --render_traj_path $RENDER_TRAJ_PATH \
         --camera_model pinhole \
         --data_dir $SCENE_DIR/$SCENE/ \
