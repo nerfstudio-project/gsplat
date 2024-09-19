@@ -181,13 +181,16 @@ def remove(
     optimizers: Dict[str, torch.optim.Optimizer],
     state: Dict[str, Tensor],
     mask: Tensor,
+    names: Union[List[str], None] = None,
 ):
     """Inplace remove the Gaussian with the given mask.
 
     Args:
         params: A dictionary of parameters.
         optimizers: A dictionary of optimizers, each corresponding to a parameter.
+        state: A dictionary of extra state tensors.
         mask: A boolean mask to remove the Gaussians.
+        names: A list of key names to update. If None, update all. Default: None.
     """
     sel = torch.where(~mask)[0]
 
@@ -198,7 +201,7 @@ def remove(
         return v[sel]
 
     # update the parameters and the state in the optimizers
-    _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
+    _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers, names)
     # update the extra running state
     for k, v in state.items():
         if isinstance(v, torch.Tensor):
@@ -360,7 +363,6 @@ def inject_noise_to_position(
         * (op_sigmoid(1 - opacities)).unsqueeze(-1)
         * scaler
     )
-    noise = torch.einsum("bij,bj->bi", covars, noise)
     params["means"].add_(noise)
 
 
@@ -449,6 +451,9 @@ def grow_anchors(
     # Update the extra running state
     for k, v in state.items():
         if isinstance(v, torch.Tensor):
-            zeros = torch.zeros((num_new * n_feat_offsets, *v.shape[1:]), device=device)
+            if k == "anchor_count" or k == "anchor_opacity":
+                zeros = torch.zeros((num_new, *v.shape[1:]), device=device)
+            else:
+                zeros = torch.zeros((num_new * n_feat_offsets, *v.shape[1:]), device=device)
             state[k] = torch.cat([v, zeros], dim=0)
 
