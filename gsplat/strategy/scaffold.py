@@ -1,10 +1,9 @@
 from dataclasses import dataclass
-from typing import Any, Dict, Tuple, Union
-
+from typing import Any, Dict, Union
 import torch
 
 from .base import Strategy
-from .ops import duplicate, remove, grow_anchors
+from .ops import remove_anchors, grow_anchors
 
 
 @dataclass
@@ -41,8 +40,6 @@ class ScaffoldStrategy(Strategy):
           value will be pruned. Default is 0.1.
         prune_scale2d (float): GSs with 2d scale (normalized by image resolution) above
           this value will be pruned. Default is 0.15.
-        refine_scale2d_stop_iter (int): Stop refining GSs based on 2d scale after this
-          iteration. Default is 0. Set to a positive value to enable this feature.
         refine_start_iter (int): Start refining GSs after this iteration. Default is 500.
         refine_stop_iter (int): Stop refining GSs after this iteration. Default is 15_000.
         refine_every (int): Refine GSs every this steps. Default is 100.
@@ -77,8 +74,7 @@ class ScaffoldStrategy(Strategy):
     grow_scale2d: float = 0.05
     prune_scale3d: float = 0.1
     prune_scale2d: float = 0.15
-    refine_scale2d_stop_iter: int = 0
-    refine_start_iter: int = 500
+    refine_start_iter: int = 1500
     max_voxel_levels: int = 3
     voxel_size: float = 0.001
     refine_stop_iter: int = 15_000
@@ -96,24 +92,25 @@ class ScaffoldStrategy(Strategy):
     revised_opacity: bool = False
     verbose: bool = True
 
+    view_distance = 1
     colors_mlp: torch.nn.Sequential = torch.nn.Sequential(
-        torch.nn.Linear(feat_dim + 3, feat_dim),
+        torch.nn.Linear(feat_dim + 3 + 1, feat_dim),
         torch.nn.ReLU(True),
         torch.nn.Linear(feat_dim, 3 * n_feat_offsets),
-        torch.nn.Sigmoid()
+        torch.nn.Sigmoid(),
     ).cuda()
 
     opacities_mlp: torch.nn.Sequential = torch.nn.Sequential(
-        torch.nn.Linear(feat_dim + 3, feat_dim),
+        torch.nn.Linear(feat_dim + 3 + 1, feat_dim),
         torch.nn.ReLU(True),
         torch.nn.Linear(feat_dim, n_feat_offsets),
-        torch.nn.Tanh()
+        torch.nn.Tanh(),
     ).cuda()
 
     scale_rot_mlp: torch.nn.Sequential = torch.nn.Sequential(
-        torch.nn.Linear(feat_dim + 3, feat_dim),
+        torch.nn.Linear(feat_dim + 3 + 1, feat_dim),
         torch.nn.ReLU(True),
-        torch.nn.Linear(feat_dim, 7 * n_feat_offsets)
+        torch.nn.Linear(feat_dim, 7 * n_feat_offsets),
     ).cuda()
 
     def initialize_state(self, scene_scale: float = 1.0) -> Dict[str, Any]:
@@ -126,14 +123,13 @@ class ScaffoldStrategy(Strategy):
         # put them on the correct device.
         # - grad2d: running accum of the norm of the image plane gradients for each GS.
         # - count: running accum of how many time each GS is visible.
-        # - radii: the radii of the GSs (normalized by the image resolution).
-        state = {"grad2d": None,
-                 "count": None,
-                 "anchor_count": None,
-                 "anchor_opacity": None,
-                 "scene_scale": scene_scale}
-        if self.refine_scale2d_stop_iter > 0:
-            state["radii"] = None
+        state = {
+            "grad2d": None,
+            "count": None,
+            "anchor_count": None,
+            "anchor_opacity": None,
+            "scene_scale": scene_scale,
+        }
         return state
 
     def check_sanity(
@@ -159,16 +155,20 @@ class ScaffoldStrategy(Strategy):
 
         super().check_sanity(params, optimizers)
         # The following keys are required for this strategy.
-        expected_params = ["anchors",
-                           "features",
-                           "offsets",
-                           "scales",
-                           "quats",
-                           "opacities_mlp",
-                           "colors_mlp",
-                           "scale_rot_mlp"]
+        expected_params = [
+            "anchors",
+            "features",
+            "offsets",
+            "scales",
+            "quats",
+            "opacities_mlp",
+            "colors_mlp",
+            "scale_rot_mlp",
+        ]
 
-        assert len(expected_params) == len(params), "expected params and actual params don't match"
+        assert len(expected_params) == len(
+            params
+        ), "expected params and actual params don't match"
         for key in expected_params:
             assert key in params, f"{key} is required in params but missing."
 
@@ -199,28 +199,44 @@ class ScaffoldStrategy(Strategy):
         if step >= self.refine_stop_iter:
             return
 
-        self._update_state(params, state, info, packed=packed)
+        if step > 500:
+            self._update_state(params, state, info, packed=packed)
 
-        if (
-            step > self.refine_start_iter
-            and step % self.refine_every == 0
-        ):
+        if step > self.refine_start_iter and step % self.refine_every == 0:
             # grow GSs
-            new_anchors = self._anchor_growing(params, optimizers, state, step)
+            print(f"init anchors: {len(params['anchors'])}")
+            new_anchors = self._anchor_growing(params, optimizers, state)
             if self.verbose:
                 print(
                     f"Step {step}: {new_anchors} anchors grown."
                     f"Now having {len(params['anchors'])} anchors."
                 )
 
-            # prune GSs
-            is_prune = (state["anchor_opacity"] < self.prune_opa * state["anchor_count"]).squeeze()
-            is_prune = torch.logical_and(is_prune, state["anchor_count"] > self.refine_every * self.pruning_thresholds)
+            # prune anchors
+            low_opacity_mask = (
+                state["anchor_opacity"] < self.prune_opa * state["anchor_count"]
+            ).squeeze()
+            anchor_mask = (
+                state["anchor_count"] > self.pruning_thresholds * self.refine_every
+            )  # [N, 1]
+            is_prune = torch.logical_and(low_opacity_mask, anchor_mask)
+
+            indices = anchor_mask.nonzero(as_tuple=False).squeeze()
+            # Efficiently set the specified indices to zero
+            state["anchor_count"].index_fill_(0, indices, 0)
+            state["anchor_opacity"].index_fill_(0, indices, 0)
 
             n_prune = is_prune.sum().item()
             if n_prune > 0:
                 names = ["anchors", "scales", "quats", "features", "offsets"]
-                remove(params=params, optimizers=optimizers, state=state, mask=is_prune, names=names)
+                remove_anchors(
+                    params=params,
+                    optimizers=optimizers,
+                    n_feat_offsets=self.n_feat_offsets,
+                    state=state,
+                    mask=is_prune,
+                    names=names,
+                )
 
             if self.verbose:
                 print(
@@ -228,28 +244,14 @@ class ScaffoldStrategy(Strategy):
                     f"Now having {len(params['anchors'])} anchors."
                 )
 
-            # reset running stats
-            state["grad2d"].zero_()
-            state["count"].zero_()
-            state["anchor_count"].zero_()
-            state["anchor_opacity"].zero_()
-            device = params["anchors"].device
-            n_gaussian = params["anchors"].shape[0]
-            state["grad2d"] = torch.zeros(n_gaussian * self.n_feat_offsets, device=device)
-            state["count"] = torch.zeros(n_gaussian * self.n_feat_offsets, device=device)
-            state["anchor_count"] = torch.zeros(n_gaussian, device=device)
-            state["anchor_opacity"] = torch.zeros(n_gaussian, device=device)
-
-            if self.refine_scale2d_stop_iter > 0:
-                state["radii"].zero_()
             torch.cuda.empty_cache()
 
     def _update_state(
-            self,
-            params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-            state: Dict[str, Any],
-            info: Dict[str, Any],
-            packed: bool = False,
+        self,
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+        state: Dict[str, Any],
+        info: Dict[str, Any],
+        packed: bool = False,
     ):
         # Ensure required keys are present
         required_keys = ["width", "height", "n_cameras", "radii", "gaussian_ids"]
@@ -257,8 +259,9 @@ class ScaffoldStrategy(Strategy):
             assert key in info, f"{key} is required but missing."
 
         # Normalize gradients to [-1, 1] screen space
+        factor = 0.5 * info["n_cameras"]
         scale_factors = torch.tensor(
-            [info["width"] / 2.0 * info["n_cameras"], info["height"] / 2.0 * info["n_cameras"]],
+            [info["width"] * factor, info["height"] * factor],
             device=info["means2d"].device,
         )
 
@@ -271,51 +274,38 @@ class ScaffoldStrategy(Strategy):
         n_gaussian = params["anchors"].shape[0]
         device = grads.device
         if state["grad2d"] is None:
-            state["grad2d"] = torch.zeros(n_gaussian * self.n_feat_offsets, device=device)
+            state["grad2d"] = torch.zeros(
+                n_gaussian * self.n_feat_offsets, device=device
+            )
         if state["count"] is None:
-            state["count"] = torch.zeros(n_gaussian * self.n_feat_offsets, device=device)
+            state["count"] = torch.zeros(
+                n_gaussian * self.n_feat_offsets, device=device
+            )
         if state["anchor_count"] is None:
             state["anchor_count"] = torch.zeros(n_gaussian, device=device)
         if state["anchor_opacity"] is None:
             state["anchor_opacity"] = torch.zeros(n_gaussian, device=device)
-        if self.refine_scale2d_stop_iter > 0 and state["radii"] is None:
-            state["radii"] = torch.zeros(n_gaussian * self.n_feat_offsets, device=device)
 
-        # Update the running state
-        if packed:
-            # grads is [nnz, 2]
-            gs_ids = info["gaussian_ids"]  # [nnz]
-            radii = info["radii"]  # [nnz]
-        else:
-            # grads is [C, N, 2]
-            sel = info["radii"] > 0.0  # [C, N]
-            gs_ids = sel.nonzero(as_tuple=False)[:, 1]  # [nnz]
-            grads = grads[sel]  # [nnz, 2]
-            radii = info["radii"][sel]  # [nnz]
-
-        # Compute valid_mask efficiently
-        visible_anchor_mask = info["visible_anchor_mask"]
         neural_selection_mask = info["neural_selection_mask"]
 
-        # Compute anchor indices
-        anchor_indices = gs_ids // self.n_feat_offsets
+        # Update the running state
+        sel = info["radii"] > 0.0  # [C, N]
+        neural_ids = neural_selection_mask.nonzero(as_tuple=False).squeeze(-1)
+        grads = grads[sel].norm(dim=-1)  # [nnz, 2]
+        sel = sel.squeeze(0)
 
-        # Determine valid gs_ids based on visibility and selection masks
-        valid_mask = (
-                visible_anchor_mask[anchor_indices] & neural_selection_mask[gs_ids]
-        )
-
-        # Filter gs_ids and grads based on valid_mask
-        valid_gs_ids = gs_ids[valid_mask]
-        valid_grads_norm = grads[valid_mask].norm(dim=-1)
+        valid_ids = neural_ids[sel]
 
         # Update state using index_add_
-        state["grad2d"].index_add_(0, valid_gs_ids, valid_grads_norm)
+        state["grad2d"].index_add_(0, valid_ids, grads)
         state["count"].index_add_(
-            0, valid_gs_ids, torch.ones_like(valid_gs_ids, dtype=torch.float32)
+            0,
+            valid_ids,
+            torch.ones((valid_ids.shape[0]), dtype=torch.float32, device=device),
         )
 
         # Update anchor opacity and count
+        visible_anchor_mask = info["visible_anchor_mask"]
         anchor_ids = visible_anchor_mask.nonzero(as_tuple=False).squeeze(-1)
         neural_opacities = (
             info["neural_opacities"]
@@ -330,23 +320,13 @@ class ScaffoldStrategy(Strategy):
             0, anchor_ids, torch.ones_like(anchor_ids, dtype=torch.float32)
         )
 
-        # Update radii if required
-        if self.refine_scale2d_stop_iter > 0:
-            # Normalize radii to [0, 1] screen space
-            normalized_radii = radii / float(max(info["width"], info["height"]))
-            # Update radii using torch.maximum
-            state["radii"][gs_ids] = torch.maximum(
-                state["radii"][gs_ids], normalized_radii
-            )
-
     @torch.no_grad()
     def _anchor_growing(
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
         state: Dict[str, Any],
-        step: int,
-    ) -> Tuple[int]:
+    ) -> int:
         """
         Implements the Anchor Growing algorithm as described in Algorithm 1 of the
         GS-Scaffold appendix:
@@ -362,12 +342,10 @@ class ScaffoldStrategy(Strategy):
                 A dictionary of optimizers associated with the model's parameters.
             state (Dict[str, Any]):
                 A dictionary containing the current state of the training process.
-            step (int):
-                The current step or iteration of the training process.
 
         Returns:
-            Tuple[int]:
-                A tuple containing the updated step value after anchor growing.
+            int:
+                Number of growned anchors.
         """
 
         count = state["count"]
@@ -375,105 +353,136 @@ class ScaffoldStrategy(Strategy):
         grads[grads.isnan()] = 0.0
         device = grads.device
 
-        # is_grad_high = (grads > self.grow_grad2d).squeeze(-1)
-        # is_small = (n
-        #     torch.exp(params["scales"]).max(dim=-1).values
-        #     <= self.grow_scale3d * state["scene_scale"]
-        # )
-        # is_dupli = is_grad_high & is_small
-        # n_dupli = is_dupli.sum().item()
-
-        n_init_features = params["features"].shape[0] * self.n_feat_offsets
+        n_init_features = state["count"].shape[0]
         n_added_anchors = 0
 
         # Algorithm 1: Anchor Growing
         # Step 1: Initialization
-        m = 1 # Iteration count (levels)
+        m = 1  # Iteration count (levels)
         M = self.max_voxel_levels
         tau_g = self.grow_grad2d
         epsilon_g = self.voxel_size
         new_anchors: torch.tensor
 
-        growing_treshold = state["count"] > self.refine_every * self.growing_thresholds
+        growing_threshold_mask = (
+            state["count"] > self.refine_every * self.growing_thresholds
+        )
         # Step 2: Iterate while m <= M
         while m <= M:
-            n_feature_diff = params["features"].shape[0] * self.n_feat_offsets - n_init_features
-            # Check if anchor candidates have grown 
-            if n_feature_diff == 0 and (m-1) > 0:
+            n_feature_diff = state["count"].shape[0] - n_init_features
+            # Check if anchor candidates have grown
+            if n_feature_diff == 0 and m > 1:
                 break
 
             # Step 3: Update threshold and voxel size
-            tau = tau_g * 2 ** (m - 1)
+            tau = tau_g * (2 ** (m - 1))
             current_voxel_size = (16 // (4 ** (m - 1))) * epsilon_g
 
             # Step 4: Mask from grad threshold. Select neural gaussians (Select candidates)
             gradient_mask = grads >= tau
-            #
-            gradient_mask = torch.logical_and(gradient_mask, growing_treshold)
-            gradient_mask = torch.cat([gradient_mask, torch.zeros(n_feature_diff, dtype=torch.bool, device=device)], dim=0)
-            neural_gaussians = params["anchors"].unsqueeze(dim=1) + params["offsets"] * torch.exp(params["scales"])[:,:3].unsqueeze(dim=1)
-            selected_neural_gaussians = neural_gaussians.view([-1,3])[gradient_mask]
+            gradient_mask = torch.logical_and(gradient_mask, growing_threshold_mask)
+
+            # Drop-out: Helps prevent too massive anchor growth.
+            rand_mask = torch.rand_like(gradient_mask.float()) > (0.4**m)
+            rand_mask = rand_mask.cuda()
+            gradient_mask = torch.logical_and(gradient_mask, rand_mask)
+            gradient_mask = torch.cat(
+                [
+                    gradient_mask,
+                    torch.zeros(n_feature_diff, dtype=torch.bool, device=device),
+                ],
+                dim=0,
+            )
+
+            # Compute neural gaussians
+            neural_gaussians = params["anchors"].unsqueeze(dim=1) + params[
+                "offsets"
+            ] * torch.exp(params["scales"][:, :3]).unsqueeze(dim=1)
+            selected_neural_gaussians = neural_gaussians.view([-1, 3])[gradient_mask]
 
             # Step 5: Merge same positions
-            selected_grid_coords = torch.round(selected_neural_gaussians / current_voxel_size).int()
-            selected_grid_coords_unique, inv_idx = torch.unique(selected_grid_coords, return_inverse=True, dim=0)
-
-            # Step 6: Random elimination
-            # TODO: implement rand elimination (necessary)?
+            selected_grid_coords = torch.round(
+                selected_neural_gaussians / current_voxel_size
+            ).int()
+            selected_grid_coords_unique, inv_idx = torch.unique(
+                selected_grid_coords, return_inverse=True, dim=0
+            )
 
             # Get the grid coordinates of the current anchors
-            grid_anchor_coords = torch.round(params["anchors"] / current_voxel_size).int()
+            grid_anchor_coords = torch.round(
+                params["anchors"] / current_voxel_size
+            ).int()
 
-            # Step 7: Remove occupied by comparing the unique coordinates to current anchors
-            remove_occupied_pos_mask = ~(
-                (selected_grid_coords_unique.unsqueeze(1) == grid_anchor_coords).all(-1).any(-1).view(-1))
+            # Step 6: Remove occupied by comparing the unique coordinates to current anchors
+            def coords_to_indices(coords, N):
+                """
+                Maps quantized multi-dimensional coordinates to unique 1D indices without using torch.matmul.
+
+                Args:
+                    coords (torch.Tensor): Tensor of shape [num_points, D], where D is the dimensionality.
+                    N (int): A large enough number to ensure uniqueness of indices.
+
+                Returns:
+                    torch.Tensor: Tensor of unique indices corresponding to the coordinates.
+                """
+                D = coords.shape[1]
+                device = coords.device
+                dtype = coords.dtype  # Keep the original data type
+
+                # Compute N_powers as integers
+                N_powers = N ** torch.arange(D - 1, -1, -1, device=device, dtype=dtype)
+
+                # Perform element-wise multiplication and sum along the last dimension
+                indices = (coords * N_powers).sum(dim=1)
+
+                return indices
+
+            #  Quantize the coordinates
+            decimal_places = 6  # precision
+            scale = 10**decimal_places
+
+            # Quantize the coordinates by scaling and converting to integers
+            selected_coords_quant = (selected_grid_coords_unique * scale).long()
+            anchor_coords_quant = (grid_anchor_coords * scale).long()
+
+            # Compute the maximum coordinate value
+            max_coord_value = (
+                torch.max(torch.cat([selected_coords_quant, anchor_coords_quant])) + 1
+            )
+            N = max_coord_value.item()
+
+            # Compute unique indices for both coordinate sets
+            indices_selected = coords_to_indices(selected_coords_quant, N)
+            indices_anchor = coords_to_indices(anchor_coords_quant, N)
+
+            remove_occupied_pos_mask = ~torch.isin(indices_selected, indices_anchor)
 
             # New anchor candidates are those unique coordinates that are not duplicates
             new_anchors = selected_grid_coords_unique[remove_occupied_pos_mask]
 
             if new_anchors.shape[0] > 0:
-                grow_anchors(params=params,
-                             optimizers=optimizers,
-                             state=state,
-                             anchors=new_anchors,
-                             gradient_mask=gradient_mask,
-                             remove_duplicates_mask=remove_occupied_pos_mask,
-                             inv_idx=inv_idx,
-                             voxel_size=current_voxel_size,
-                             n_feat_offsets=self.n_feat_offsets,
-                             feat_dim=self.feat_dim)
+                grow_anchors(
+                    params=params,
+                    optimizers=optimizers,
+                    state=state,
+                    anchors=new_anchors,
+                    gradient_mask=gradient_mask,
+                    remove_duplicates_mask=remove_occupied_pos_mask,
+                    inv_idx=inv_idx,
+                    voxel_size=current_voxel_size,
+                    n_feat_offsets=self.n_feat_offsets,
+                    feat_dim=self.feat_dim,
+                )
 
             n_added_anchors += new_anchors.shape[0]
             m += 1
 
+        indices = torch.arange(n_init_features, device=growing_threshold_mask.device)[
+            growing_threshold_mask
+        ]
+
+        if indices.numel() > 0:
+            state["count"].index_fill_(0, indices, 0)
+            state["grad2d"].index_fill_(0, indices, 0)
+
         return n_added_anchors
-
-    @torch.no_grad()
-    def _prune_gs(
-        self,
-        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-        optimizers: Dict[str, torch.optim.Optimizer],
-        state: Dict[str, Any],
-        step: int,
-    ) -> int:
-        is_prune = torch.sigmoid(params["opacities"].flatten()) < self.prune_opa
-        if step > self.reset_every:
-            is_too_big = (
-                torch.exp(params["scales"]).max(dim=-1).values
-                > self.prune_scale3d * state["scene_scale"]
-            )
-            # The official code also implements sreen-size pruning but
-            # it's actually not being used due to a bug:
-            # https://github.com/graphdeco-inria/gaussian-splatting/issues/123
-            # We implement it here for completeness but set `refine_scale2d_stop_iter`
-            # to 0 by default to disable it.
-            if step < self.refine_scale2d_stop_iter:
-                is_too_big |= state["radii"] > self.prune_scale2d
-
-            is_prune = is_prune | is_too_big
-
-        n_prune = is_prune.sum().item()
-        if n_prune > 0:
-            remove(params=params, optimizers=optimizers, state=state, mask=is_prune)
-
-        return n_prune
