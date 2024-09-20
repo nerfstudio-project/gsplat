@@ -1,8 +1,27 @@
 # Installing `gsplat` on Windows
 
-Follow these steps to install `gsplat` on Windows.
 
-## Prerequisites
+## Install using a pre-compiled wheels 
+
+You can also install gsplat from python wheels containing pre-compiled binaries for a specific pytorch and cuda version. These wheels are stored in the github releases and can be found using simple index pages under https://docs.gsplat.studio/wheels. 
+You obtain the wheel from this simple index page for a specific pytorch an and cuda version by appending these the version number after a + sign (part referred a *local version*). For example, to install gsplat for pytorch 2.0 and cuda 11.8 you can use
+```
+pip install gsplat==1.2.0+pt20cu118 --index-url https://docs.gsplat.studio/wheels
+```
+Alternatively, you can specify the pytorch and cuda version in the index url using for example
+```
+pip install gsplat --index-url https://docs.gsplat.studio/wheels/pt20cu118
+```
+This has the advantage that you do not have to pin a specific version of the package and as a result get automatically the latest package version.
+
+
+## Install from source
+
+You can install gsplat by compiling the wheel. In this way it will build the CUDA code during installation. This can be done using either the source package from pypi.org the wheel from pypi.org  or using a clone of the repository. In all case visual sutdio needs to be install and activated.
+
+### Visual studio setup
+
+Setting up and activating Visual Studio can be done through these steps:
 
 1. Install Visual Studio Build Tools. If MSVC 143 does not work, you may also need to install MSVC 142 for Visual Studio 2019. And your CUDA environment should be set up properly.
 
@@ -37,8 +56,25 @@ Follow these steps to install `gsplat` on Windows.
     ./vcvarsall.bat x64 -vcvars_ver=14.29
     ```
 
-## Instsall using a clone of the Repository
+### Install using the source package published on `pypi.org`
 
+You can install gsplat from the published source package (and not the wheel) by activating Visual Studio (see above) and then using
+```
+pip install --no-binary=gsplat gsplat --no-cache-dir
+```
+The CUDA code will be compiled during the installation and the cvisual stdio compiler `cl.exe` does not need to be added to the path, because the installation process as an automatic way to find it.
+We use `--no-cache-dir` to avoid the potential risk of havinf pip use a wheel file from `pypi.org` that would have be downloaded previously and that does not have the binaries.
+
+### Install using the wheel published on `pypi.org`
+
+You can install the `gsplat` using using the wheel published on `pypi.org` by  activating Visual Studio (see above) and then using 
+```
+pip install gsplat
+```
+The wheel that does not contain the compiled CUDA binaries. The CUDA code is not compiled during the installation when using wheels, and will be compiled at the first import of `gsplat` wich requires the visual studion executable `cl.exe` to be on the path (see pre-requisite seciont above). 
+
+### Install using the clone of the Repository
+This can be done through these steps:
 1. Clone the `gsplat` repository:
     ```bash
     git clone --recursive https://github.com/nerfstudio-project/gsplat.git
@@ -48,27 +84,8 @@ Follow these steps to install `gsplat` on Windows.
     ```bash
     cd gsplat
     ```
-
-3. Install `gsplat` using pip:
+3. Activate visual Studio
+4. Install `gsplat` using pip:
     ```bash
     pip install .
     ```
-
-The installed package does not come with precompiled binaries and the cuda code get compiled on the fly and the build file cached at the forst inport of gsplat.
-
-## Install using a precompiled wheels
-
-You can install wheels with precompiled binaries using packages listed here `https://martinresearch.github.io/gsplat/whl/gsplat` 
-You can for axmaple install the wheel with precompiled binaries for pytorch 2.0 and cuda 11.8 using
-
-```
-pip install gsplat==1.2.0+pt20cu118 --index-url https://martinresearch.github.io/gsplat/whl
-```
-or 
-```
-pip install gsplat==1.2.0 --index-url https://martinresearch.github.io/gsplat/whl/pt20cu118
-```
-Specify the pytorch and cuda version int the index url ahs the advantage that can obtain the lastest version
-```
-pip install gsplat --index-url https://martinresearch.github.io/gsplat/whl/pt20cu118
-```

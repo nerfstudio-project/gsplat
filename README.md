@@ -24,11 +24,23 @@ The easiest way is to install from PyPI. In this way it will build the CUDA code
 pip install gsplat
 ```
 
-Or install from source. In this way it will build the CUDA code during installation.
+Alternatively, you can install gsplat from python wheels containing pre-compiled binaries for a specific pytorch and cuda version. These wheels are stored in the github releases and can be found using simple index pages under https://docs.gsplat.studio/wheels. 
+You obtain the wheel from this simple index page for a specific pytorch an and cuda version by appending these the version number after a + sign (part referred a *local version*). For example, to install gsplat for pytorch 2.0 and cuda 11.8 you can use
+```
+pip install gsplat==1.2.0+pt20cu118 --index-url https://docs.gsplat.studio/wheels
+```
+Alternatively, you can specify the pytorch and cuda version in the index url using for example
+```
+pip install gsplat --index-url https://docs.gsplat.studio/wheels/pt20cu118
+```
+This has the advantage that you do not have to pin a specific version of the package and as a result get automatically the latest package version.
+
+Alternatively you can install gsplat from source. In this way it will build the CUDA code during installation.
 
 ```bash
 pip install git+https://github.com/nerfstudio-project/gsplat.git
 ```
+
 
 To install gsplat on Windows, please check [this instruction](docs/INSTALL_WIN.md).
 

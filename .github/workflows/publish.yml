@@ -47,6 +47,23 @@ jobs:
             --data-binary @"$file" \
             "${{ github.event.release.upload_url }}=$encoded_filename"
         done
+    
+  generate_simple_index_pages:
+    name: Generate Simple Index Pages
+    needs: [create_release_and_upload_packages]
+    runs-on: ubuntu-latest
+    steps:
+    - name: Generate Simple Index Pages
+      run: python .github/workflows/generate_simple_index_pages.py --outdir ./wheels
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  
+
+    - name: Deploy to GitHub Pages
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./wheels  # Directory where the simple index pages are located
+        destination_dir: wheels  # The 'wh' folder in the GitHub Pages root
 
   upload_pypi:
     name: Upload to PyPi
@@ -70,3 +87,8 @@ jobs:
         PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
       run: |         
         twine upload --username __token__ --password $PYPI_TOKEN dist/*
+
+              - name: Install dependencies
+        run: |
+          python -m pip install requests jinja2
+
