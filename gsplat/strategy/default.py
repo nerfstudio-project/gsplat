@@ -5,6 +5,7 @@ import torch
 
 from .base import Strategy
 from .ops import duplicate, remove, reset_opa, split
+from typing_extensions import Literal
 
 
 @dataclass
@@ -54,6 +55,9 @@ class DefaultStrategy(Strategy):
         revised_opacity (bool): Whether to use revised opacity heuristic from
           arXiv:2404.06109 (experimental). Default is False.
         verbose (bool): Whether to print verbose information. Default is False.
+        key_for_gradient (str): Which variable uses for densification strategy.
+          3DGS uses "means2d" gradient and 2DGS uses a similar gradient which stores
+          in variable "gradient_2dgs".
 
     Examples:
 
@@ -87,6 +91,7 @@ class DefaultStrategy(Strategy):
     absgrad: bool = False
     revised_opacity: bool = False
     verbose: bool = False
+    key_for_gradient: Literal["means2d", "gradient_2dgs"] = "means2d"
 
     def initialize_state(self, scene_scale: float = 1.0) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy.
@@ -140,9 +145,9 @@ class DefaultStrategy(Strategy):
     ):
         """Callback function to be executed before the `loss.backward()` call."""
         assert (
-            "means2d" in info
+            self.key_for_gradient in info
         ), "The 2D means of the Gaussians is required but missing."
-        info["means2d"].retain_grad()
+        info[self.key_for_gradient].retain_grad()
 
     def step_post_backward(
         self,
@@ -202,19 +207,27 @@ class DefaultStrategy(Strategy):
         info: Dict[str, Any],
         packed: bool = False,
     ):
-        for key in ["means2d", "width", "height", "n_cameras", "radii", "gaussian_ids"]:
+        for key in [
+            "width",
+            "height",
+            "n_cameras",
+            "radii",
+            "gaussian_ids",
+            self.key_for_gradient,
+        ]:
             assert key in info, f"{key} is required but missing."
 
         # normalize grads to [-1, 1] screen space
         if self.absgrad:
-            grads = info["means2d"].absgrad.clone()
+            grads = info[self.key_for_gradient].absgrad.clone()
         else:
-            grads = info["means2d"].grad.clone()
+            grads = info[self.key_for_gradient].grad.clone()
         grads[..., 0] *= info["width"] / 2.0 * info["n_cameras"]
         grads[..., 1] *= info["height"] / 2.0 * info["n_cameras"]
 
         # initialize state on the first run
         n_gaussian = len(list(params.values())[0])
+
         if state["grad2d"] is None:
             state["grad2d"] = torch.zeros(n_gaussian, device=grads.device)
         if state["count"] is None:

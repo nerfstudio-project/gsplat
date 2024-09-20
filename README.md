@@ -83,16 +83,18 @@ This project is developed by the following wonderful contributors (unordered):
 - [Zhuoyang Pan](https://panzhy.com/) (ShanghaiTech University): Core developer.
 - [Jianbo Ye](http://www.jianboye.org/) (Amazon): Core developer.
 
-We also have made the mathematical supplement, with conventions and derivations, available [here](https://arxiv.org/abs/2312.02121). If you find this library useful in your projects or papers, please consider citing:
+We also have made the mathematical supplement, with conventions and derivations, available [here](https://arxiv.org/abs/2409.06765). If you find this library useful in your projects or papers, please consider citing:
 
 ```
-@misc{ye2023mathematical,
-    title={Mathematical Supplement for the $\texttt{gsplat}$ Library}, 
-    author={Vickie Ye and Angjoo Kanazawa},
-    year={2023},
-    eprint={2312.02121},
+@article{ye2024gsplatopensourcelibrarygaussian,
+    title={gsplat: An Open-Source Library for {Gaussian} Splatting}, 
+    author={Vickie Ye and Ruilong Li and Justin Kerr and Matias Turkulainen and Brent Yi and Zhuoyang Pan and Otto Seiskari and Jianbo Ye and Jeffrey Hu and Matthew Tancik and Angjoo Kanazawa},
+    year={2024},
+    eprint={2409.06765},
+    journal={arXiv preprint arXiv:2409.06765},
     archivePrefix={arXiv},
-    primaryClass={cs.MS}
+    primaryClass={cs.CV},
+    url={https://arxiv.org/abs/2409.06765}, 
 }
 ```
 

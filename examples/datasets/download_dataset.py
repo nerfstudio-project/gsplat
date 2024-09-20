@@ -9,13 +9,25 @@ from typing import Literal
 import tyro
 
 # dataset names
-dataset_names = Literal["mipnerf360"]
+dataset_names = Literal[
+    "mipnerf360",
+    "mipnerf360_extra",
+    "bilarf_data",
+]
 
 # dataset urls
-urls = {"mipnerf360": "http://storage.googleapis.com/gresearch/refraw360/360_v2.zip"}
+urls = {
+    "mipnerf360": "http://storage.googleapis.com/gresearch/refraw360/360_v2.zip",
+    "mipnerf360_extra": "https://storage.googleapis.com/gresearch/refraw360/360_extra_scenes.zip",
+    "bilarf_data": "https://huggingface.co/datasets/Yuehao/bilarf_data/resolve/main/bilarf_data.zip",
+}
 
 # rename maps
-dataset_rename_map = {"mipnerf360": "360_v2"}
+dataset_rename_map = {
+    "mipnerf360": "360_v2",
+    "mipnerf360_extra": "360_v2",
+    "bilarf_data": "bilarf",
+}
 
 
 @dataclass
@@ -34,9 +46,9 @@ class DownloadData:
 
         # download
         download_command = [
-            "wget",
-            "-P",
-            str(self.save_dir / dataset_rename_map[dataset]),
+            "curl",
+            "-o",
+            str(self.save_dir / dataset_rename_map[dataset] / file_name),
             urls[dataset],
         ]
         try:
@@ -47,12 +59,21 @@ class DownloadData:
 
         # if .zip
         if Path(urls[dataset]).suffix == ".zip":
-            extract_command = [
-                "unzip",
-                self.save_dir / dataset_rename_map[dataset] / file_name,
-                "-d",
-                self.save_dir / dataset_rename_map[dataset],
-            ]
+            if os.name == "nt":  # Windows doesn't have 'unzip' but 'tar' works
+                extract_command = [
+                    "tar",
+                    "-xvf",
+                    self.save_dir / dataset_rename_map[dataset] / file_name,
+                    "-C",
+                    self.save_dir / dataset_rename_map[dataset],
+                ]
+            else:
+                extract_command = [
+                    "unzip",
+                    self.save_dir / dataset_rename_map[dataset] / file_name,
+                    "-d",
+                    self.save_dir / dataset_rename_map[dataset],
+                ]
         # if .tar
         else:
             extract_command = [

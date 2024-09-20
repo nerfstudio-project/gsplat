@@ -73,6 +73,10 @@ inline __device__ void warpMax(ScalarT &val, WarpT &warp) {
     val = cg::reduce(warp, val, cg::greater<ScalarT>());
 }
 
+template <typename T> __forceinline__ __device__ T sum(vec3<T> a) {
+    return a.x + a.y + a.z;
+}
+
 } // namespace gsplat
 
 #endif // GSPLAT_CUDA_HELPERS_H
