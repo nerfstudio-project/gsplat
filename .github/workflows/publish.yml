@@ -9,7 +9,7 @@ on:
 
 jobs:
 
-  # build wheels using reusqble_building.yml
+  # Build the wheels using reusable_building.yml
   build_wheels:
     name: Call reusable building workflow
     uses: ./.github/workflows/building.yml  
