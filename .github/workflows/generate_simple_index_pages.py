@@ -15,7 +15,9 @@ def list_python_wheels():
     response = requests.get(releases_url)
 
     if response.status_code != 200:
-        raise Exception(f"Failed to fetch releases: {response.status_code} {response.text}")
+        raise Exception(
+            f"Failed to fetch releases: {response.status_code} {response.text}"
+        )
 
     releases = response.json()
 
@@ -27,25 +29,29 @@ def list_python_wheels():
         for asset in assets:
             filename = asset["name"]
             if filename.endswith(".whl"):
-                pattern = r'^(?P<name>[\w\d_.]+)-(?P<version>[\d.]+)(?P<local>\+[\w\d.]+)?-(?P<python_tag>[\w]+)-(?P<abi_tag>[\w]+)-(?P<platform_tag>[\w]+)\.whl'
-    
+                pattern = r"^(?P<name>[\w\d_.]+)-(?P<version>[\d.]+)(?P<local>\+[\w\d.]+)?-(?P<python_tag>[\w]+)-(?P<abi_tag>[\w]+)-(?P<platform_tag>[\w]+)\.whl"
+
                 match = re.match(pattern, filename)
-    
+
                 if match:
-                    local_version = match.group('local')
+                    local_version = match.group("local")
                     if local_version:
-                        local_version = local_version.lstrip('+')  # Return the local version without the '+' sign
+                        local_version = local_version.lstrip(
+                            "+"
+                        )  # Return the local version without the '+' sign
                     else:
                         local_version = None
                 else:
                     raise ValueError(f"Invalid wheel filename: {filename}")
-                wheel_files.append({
-                    "release_name": release["name"],
-                    "wheel_name": asset["name"],
-                    "download_url": asset["browser_download_url"],
-                    "package_name":  match.group('name'),
-                    "local_version": local_version,
-                })
+                wheel_files.append(
+                    {
+                        "release_name": release["name"],
+                        "wheel_name": asset["name"],
+                        "download_url": asset["browser_download_url"],
+                        "package_name": match.group("name"),
+                        "local_version": local_version,
+                    }
+                )
 
     return wheel_files
 
@@ -84,13 +90,15 @@ def generate_simple_index_htmls(wheels, outdir):
     # group the wheels by package name
     packages = {}
     for wheel in wheels:
-        package_name = wheel['package_name']
+        package_name = wheel["package_name"]
         if package_name not in packages:
             packages[package_name] = []
         packages[package_name].append(wheel)
-    
+
     # Render the HTML the list the package names
-    html_content = template_packages.render(package_names=[str(k) for k in packages.keys()])
+    html_content = template_packages.render(
+        package_names=[str(k) for k in packages.keys()]
+    )
     os.makedirs(outdir, exist_ok=True)
     with open(os.path.join(outdir, "index.html"), "w") as file:
         file.write(html_content)
@@ -102,13 +110,15 @@ def generate_simple_index_htmls(wheels, outdir):
         with open(os.path.join(outdir, package_name, "index.html"), "w") as file:
             file.write(html_page)
 
- 
+
 def generate_all_pages():
     wheels = list_python_wheels()
     if wheels:
         print("Python Wheels found in releases:")
         for wheel in wheels:
-            print(f"Release: {wheel['release_name']}, Wheel: {wheel['wheel_name']}, URL: {wheel['download_url']}")
+            print(
+                f"Release: {wheel['release_name']}, Wheel: {wheel['wheel_name']}, URL: {wheel['download_url']}"
+            )
     else:
         print("No Python wheels found in the releases.")
 
@@ -118,22 +128,25 @@ def generate_all_pages():
     # group wheels per local version
     wheels_per_local_version = {}
     for wheel in wheels:
-        local_version = wheel['local_version']
+        local_version = wheel["local_version"]
         if local_version not in wheels_per_local_version:
             wheels_per_local_version[local_version] = []
         wheels_per_local_version[local_version].append(wheel)
-    
+
     # create a subdirectory for each local version
     for local_version, wheels in wheels_per_local_version.items():
         os.makedirs(os.path.join(args.outdir, local_version), exist_ok=True)
-        generate_simple_index_htmls(wheels, outdir=os.path.join(args.outdir, local_version))
+        generate_simple_index_htmls(
+            wheels, outdir=os.path.join(args.outdir, local_version)
+        )
+
 
 if __name__ == "__main__":
-    argparser = argparse.ArgumentParser(description="Generate Python Wheels Index Pages")
-    argparser.add_argument("--outdir", help="Output directory for the index pages", default=".")
+    argparser = argparse.ArgumentParser(
+        description="Generate Python Wheels Index Pages"
+    )
+    argparser.add_argument(
+        "--outdir", help="Output directory for the index pages", default="."
+    )
     args = argparser.parse_args()
     generate_all_pages()
-
-
-
-
