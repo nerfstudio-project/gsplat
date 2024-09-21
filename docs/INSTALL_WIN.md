@@ -1,9 +1,8 @@
 # Installing `gsplat` on Windows
 
-
 ## Install using a pre-compiled wheels 
 
-You can also install gsplat from python wheels containing pre-compiled binaries for a specific pytorch and cuda version. These wheels are stored in the github releases and can be found using simple index pages under https://docs.gsplat.studio/wheels. 
+You can install gsplat from python wheels containing pre-compiled binaries for a specific pytorch and cuda version. These wheels are stored in the github releases and can be found using simple index pages under https://docs.gsplat.studio/wheels. 
 You obtain the wheel from this simple index page for a specific pytorch an and cuda version by appending these the version number after a + sign (part referred a *local version*). For example, to install gsplat for pytorch 2.0 and cuda 11.8 you can use
 ```
 pip install gsplat==1.2.0+pt20cu118 --index-url https://docs.gsplat.studio/wheels
@@ -17,13 +16,14 @@ This has the advantage that you do not have to pin a specific version of the pac
 
 ## Install from source
 
-You can install gsplat by compiling the wheel. In this way it will build the CUDA code during installation. This can be done using either the source package from pypi.org the wheel from pypi.org  or using a clone of the repository. In all case visual sutdio needs to be install and activated.
+You can install gsplat by compiling the wheel. In this way it will build the CUDA code during installation. This can be done using either the source package from pypi.org the wheel from pypi.org or using a clone of the repository. In all case Visual Studio needs to be install and activated.
 
 ### Visual studio setup
 
 Setting up and activating Visual Studio can be done through these steps:
 
 1. Install Visual Studio Build Tools. If MSVC 143 does not work, you may also need to install MSVC 142 for Visual Studio 2019. And your CUDA environment should be set up properly.
+
 
 2. Activate your conda environment:
     ```bash
@@ -62,16 +62,17 @@ You can install gsplat from the published source package (and not the wheel) by 
 ```
 pip install --no-binary=gsplat gsplat --no-cache-dir
 ```
-The CUDA code will be compiled during the installation and the cvisual stdio compiler `cl.exe` does not need to be added to the path, because the installation process as an automatic way to find it.
-We use `--no-cache-dir` to avoid the potential risk of havinf pip use a wheel file from `pypi.org` that would have be downloaded previously and that does not have the binaries.
+The CUDA code will be compiled during the installation and the Visual Studio compiler `cl.exe` does not need to be added to the path, because the installation process as an automatic way to find it.
+We use `--no-cache-dir` to avoid the potential risk of getting pip using a wheel file from `pypi.org` that would have be downloaded previously and that does not have the binaries.
 
 ### Install using the wheel published on `pypi.org`
 
-You can install the `gsplat` using using the wheel published on `pypi.org` by  activating Visual Studio (see above) and then using 
+Setting up and activating Visual Studio can be done through these steps:
+You can install the `gsplat` using the wheel published on `pypi.org` by activating Visual Studio (see above) and then using 
 ```
 pip install gsplat
 ```
-The wheel that does not contain the compiled CUDA binaries. The CUDA code is not compiled during the installation when using wheels, and will be compiled at the first import of `gsplat` wich requires the visual studion executable `cl.exe` to be on the path (see pre-requisite seciont above). 
+The wheel that does not contain the compiled CUDA binaries. The CUDA code is not compiled during the installation when using wheels and will be compiled at the first import of `gsplat` which requires the Visual Studio executable `cl.exe` to be on the path (see pre-requisite section above). 
 
 ### Install using the clone of the Repository
 This can be done through these steps:
