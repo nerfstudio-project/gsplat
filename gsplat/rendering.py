@@ -51,6 +51,8 @@ def rasterization(
     distributed: bool = False,
     ortho: bool = False,
     covars: Optional[Tensor] = None,
+    tscales: Optional[Tensor] = None,
+    tquats: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -312,6 +314,38 @@ def rasterization(
         calc_compensations=(rasterize_mode == "antialiased"),
         ortho=ortho,
     )
+
+    # ------------------------------------------------------------
+    # Formulate the tet vertices in world space.
+    from gsplat.cuda._torch_impl import _quat_scale_to_matrix
+
+    tvertices = torch.tensor(
+        [
+            [math.sqrt(8 / 9), 0, -1 / 3],
+            [-math.sqrt(2 / 9), math.sqrt(2 / 3), -1 / 3],
+            [-math.sqrt(2 / 9), -math.sqrt(2 / 3), -1 / 3],
+            [0, 0, 1],
+        ],
+        device=means.device,
+        dtype=means.dtype,
+    )  # [4, 3]
+    rotmats = _quat_scale_to_matrix(tquats, tscales[:, None])  # [N, 3, 3]
+    tvertices = torch.einsum("nij,kj->nki", rotmats, tvertices)  # [N, 4, 3]
+    tvertices = tvertices + means[:, None, :]  # [N, 4, 3]
+
+    # Transform the tet to camera space.
+    R = viewmats[:, :3, :3]  # [C, 3, 3]
+    t = viewmats[:, :3, 3]  # [C, 3]
+    tvertices_c = (
+        torch.einsum("cij,nkj->cnki", R, tvertices) + t[:, None, None, :]
+    )  # [C, N, 4, 3]
+
+    # Project the tet to 2D.
+    tvertices2d = torch.einsum(
+        "cij,cnkj->cnki", Ks[:, :2, :3], tvertices_c
+    )  # [C, N, 4, 2]
+    tvertices2d = tvertices2d / tvertices_c[..., 2:3]  # [C, N, 4, 2]
+    # ------------------------------------------------------------
 
     if packed:
         # The results are packed into shape [nnz, ...]. All elements are valid.

@@ -2,8 +2,8 @@ import json
 import math
 import os
 import time
-from dataclasses import dataclass, field
 from collections import defaultdict
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Union
 
 import imageio
@@ -17,24 +17,19 @@ import viser
 import yaml
 from datasets.colmap import Dataset, Parser
 from datasets.traj import (
-    generate_interpolated_path,
     generate_ellipse_path_z,
+    generate_interpolated_path,
     generate_spiral_path,
 )
+from fused_ssim import fused_ssim
+from lib_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
-from fused_ssim import fused_ssim
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from typing_extensions import Literal, assert_never
 from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
-from lib_bilagrid import (
-    BilateralGrid,
-    slice,
-    color_correct,
-    total_variation_loss,
-)
 
 from gsplat.compression import PngCompression
 from gsplat.distributed import cli
@@ -218,12 +213,17 @@ def create_splats_with_optimizers(
     quats = torch.rand((N, 4))  # [N, 4]
     opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
 
+    tscales = torch.log(dist_avg * init_scale * 3.0)  # 3 sigma [N,]
+    tquats = torch.rand((N, 4))  # [N, 4]
+
     params = [
         # name, value, lr
         ("means", torch.nn.Parameter(points), 1.6e-4 * scene_scale),
         ("scales", torch.nn.Parameter(scales), 5e-3),
         ("quats", torch.nn.Parameter(quats), 1e-3),
         ("opacities", torch.nn.Parameter(opacities), 5e-2),
+        ("tscales", torch.nn.Parameter(tscales), 5e-3),
+        ("tquats", torch.nn.Parameter(tquats), 1e-3),
     ]
 
     if feature_dim is None:
@@ -440,6 +440,8 @@ class Runner:
         quats = self.splats["quats"]  # [N, 4]
         scales = torch.exp(self.splats["scales"])  # [N, 3]
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
+        tscales = torch.exp(self.splats["tscales"])  # [N,]
+        tquats = self.splats["tquats"]  # [N, 4]
 
         image_ids = kwargs.pop("image_ids", None)
         if self.cfg.app_opt:
@@ -474,6 +476,8 @@ class Runner:
             sparse_grad=self.cfg.sparse_grad,
             rasterize_mode=rasterize_mode,
             distributed=self.world_size > 1,
+            tscales=tscales,
+            tquats=tquats,
             **kwargs,
         )
         return render_colors, render_alphas, info
