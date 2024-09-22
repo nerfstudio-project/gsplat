@@ -1263,8 +1263,6 @@ class _SphericalHarmonics(torch.autograd.Function):
             v_dirs = None
         return None, v_dirs, v_coeffs, None
 
-<<<<<<< HEAD
-
 ###### 2DGS ######
 def fully_fused_projection_2dgs(
     means: Tensor,  # [N, 3]
@@ -2003,10 +2001,8 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             None,
             None,
         )
-class SparseGaussianAdam(torch.optim.Adam):
-=======
+
 class SelectiveAdam(torch.optim.Adam):
->>>>>>> 4aef74b (update)
     def __init__(self, params, eps, betas):
         super().__init__(params=params, eps=eps, betas=betas)
     
