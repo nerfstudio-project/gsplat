@@ -15,7 +15,7 @@ def _make_lazy_cuda_func(name: str) -> Callable:
 
     return call_cuda
 
-def adam_update(
+def selective_adam_update(
     param: Tensor,
     param_grad: Tensor,
     exp_avg: Tensor,
@@ -28,7 +28,7 @@ def adam_update(
     N: int,
     M: int
 ) -> None:
-    _make_lazy_cuda_func("adam_update")(
+    _make_lazy_cuda_func("selective_adam_update")(
         param,
         param_grad,
         exp_avg,
@@ -1263,6 +1263,7 @@ class _SphericalHarmonics(torch.autograd.Function):
             v_dirs = None
         return None, v_dirs, v_coeffs, None
 
+<<<<<<< HEAD
 
 ###### 2DGS ######
 def fully_fused_projection_2dgs(
@@ -2003,6 +2004,9 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             None,
         )
 class SparseGaussianAdam(torch.optim.Adam):
+=======
+class SelectiveAdam(torch.optim.Adam):
+>>>>>>> 4aef74b (update)
     def __init__(self, params, eps, betas):
         super().__init__(params=params, eps=eps, betas=betas)
     
@@ -2030,4 +2034,5 @@ class SparseGaussianAdam(torch.optim.Adam):
             exp_avg = stored_state["exp_avg"]
             exp_avg_sq = stored_state["exp_avg_sq"]
             M = param.numel() // N
-            adam_update(param, param.grad, exp_avg, exp_avg_sq, visibility, lr, beta1, beta2, eps, N, M)
+
+            selective_adam_update(param, param.grad, exp_avg, exp_avg_sq, visibility, lr, beta1, beta2, eps, N, M)

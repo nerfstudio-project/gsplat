@@ -88,5 +88,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         &gsplat::rasterize_to_indices_in_range_2dgs_tensor
     );
 
-    m.def("adam_update", &gsplat::adam_update);
+    m.def("selective_adam_update", &gsplat::selective_adam_update);
 }

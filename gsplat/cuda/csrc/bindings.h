@@ -490,7 +490,7 @@ fully_fused_projection_packed_bwd_2dgs_tensor(
 );
 =======
 
-void adam_update(
+void selective_adam_update(
     torch::Tensor &param,
     torch::Tensor &param_grad,
     torch::Tensor &exp_avg,

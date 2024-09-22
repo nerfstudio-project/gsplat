@@ -13,7 +13,7 @@ namespace gsplat {
 namespace cg = cooperative_groups;
 
 template<typename T>
-__global__ void adam_update_kernel(
+__global__ void selective_adam_update_kernel(
     T* __restrict__ param,
     const T* __restrict__ param_grad,
     T* __restrict__ exp_avg,
@@ -43,7 +43,7 @@ __global__ void adam_update_kernel(
     }
 }
 
-void adam_update(
+void selective_adam_update(
     torch::Tensor &param,
     torch::Tensor &param_grad,
     torch::Tensor &exp_avg,
@@ -65,7 +65,7 @@ void adam_update(
 
     const uint32_t cnt = N * M;
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
-    adam_update_kernel<float><<<(cnt + 255) / 256, 256, 0, stream>>>(
+    selective_adam_update_kernel<float><<<(cnt + 255) / 256, 256, 0, stream>>>(
         param.data_ptr<float>(),
         param_grad.data_ptr<float>(),
         exp_avg.data_ptr<float>(),
