@@ -269,7 +269,7 @@ def relocate(
     sampled_idxs = alive_indices[sampled_idxs]
     new_opacities, new_scales = compute_relocation(
         opacities=opacities[sampled_idxs],
-        scales=torch.exp(params["scales"][:,:3])[sampled_idxs],
+        scales=torch.exp(params["scales"][:, :3])[sampled_idxs],
         ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
         binoms=binoms,
     )
@@ -279,7 +279,7 @@ def relocate(
         if name == "opacities":
             p[sampled_idxs] = torch.logit(new_opacities)
         elif name == "scales":
-            p[sampled_idxs][:,:3] = torch.log(new_scales)
+            p[sampled_idxs][:, :3] = torch.log(new_scales)
         p[dead_indices] = p[sampled_idxs]
         return torch.nn.Parameter(p)
 
@@ -423,7 +423,10 @@ def grow_anchors(
 
     def inverse_sigmoid(x):
         return torch.log(x / (1 - x))
-    opacities = inverse_sigmoid(0.1 * torch.ones((anchors.shape[0], 1), dtype=torch.float, device="cuda"))
+
+    opacities = inverse_sigmoid(
+        0.1 * torch.ones((anchors.shape[0], 1), dtype=torch.float, device="cuda")
+    )
     # Initialize new offsets
     offsets = torch.zeros(
         (num_new, n_feat_offsets, 3), device=device

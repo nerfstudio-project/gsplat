@@ -55,7 +55,7 @@ class Config:
 
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "/home/paja/.cache/nerfbaselines/datasets/mipnerf360/garden"
-    #data_dir: str = "/home/paja/data/bike_aliked"
+    # data_dir: str = "/home/paja/data/bike_aliked"
     # Downsample factor for the dataset
     data_factor: int = 2
     # Directory to save results

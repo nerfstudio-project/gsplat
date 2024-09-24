@@ -503,13 +503,14 @@ class ScaffoldStrategy(Strategy):
             state["grad2d"].index_fill_(0, indices, 0)
 
         return n_added_anchors
+
     @torch.no_grad()
     def _relocate_gs(
-            self,
-            params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-            optimizers: Dict[str, torch.optim.Optimizer],
-            binoms: torch.Tensor,
-            state: Dict[str, Any],
+        self,
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+        optimizers: Dict[str, torch.optim.Optimizer],
+        binoms: torch.Tensor,
+        state: Dict[str, Any],
     ) -> int:
         dead_mask = (
             state["anchor_opacity"] < self.prune_opa * state["anchor_count"]
@@ -528,10 +529,10 @@ class ScaffoldStrategy(Strategy):
 
     @torch.no_grad()
     def _add_new_gs(
-            self,
-            params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-            optimizers: Dict[str, torch.optim.Optimizer],
-            binoms: torch.Tensor,
+        self,
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+        optimizers: Dict[str, torch.optim.Optimizer],
+        binoms: torch.Tensor,
     ) -> int:
         current_n_points = len(params["anchors"])
         n_target = min(self.cap_max, int(1.05 * current_n_points))
