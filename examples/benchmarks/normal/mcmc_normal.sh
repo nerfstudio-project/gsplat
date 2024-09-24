@@ -1,5 +1,5 @@
 SCENE_DIR="data/360_v2"
-SCENE_LIST="garden bicycle stump bonsai counter kitchen room" # treehill flowers
+SCENE_LIST="garden bicycle stump bonsai counter kitchen room treehill flowers"
 
 RESULT_DIR="results/benchmark_normal"
 RENDER_TRAJ_PATH="ellipse"
@@ -20,3 +20,6 @@ do
         --data_dir $SCENE_DIR/$SCENE/ \
         --result_dir $RESULT_DIR/$SCENE/
 done
+
+echo "Summarizing results"
+python benchmarks/summarize_stats.py --results_dir $RESULT_DIR --scenes $SCENE_LIST --stage val
