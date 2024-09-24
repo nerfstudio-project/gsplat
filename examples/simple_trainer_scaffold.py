@@ -51,13 +51,13 @@ class Config:
     # Name of compression strategy to use
     compression: Optional[Literal["png"]] = None
     # Render trajectory path
-    render_traj_path: str = "interp"
+    render_traj_path: str = "ellipse"
 
     # Path to the Mip-NeRF 360 dataset
-    # data_dir: str = "/home/paja/.cache/nerfbaselines/datasets/mipnerf360/garden"
-    data_dir: str = "/home/paja/data/bike_aliked"
+    data_dir: str = "/home/paja/.cache/nerfbaselines/datasets/mipnerf360/garden"
+    #data_dir: str = "/home/paja/data/bike_aliked"
     # Downsample factor for the dataset
-    data_factor: int = 1
+    data_factor: int = 2
     # Directory to save results
     result_dir: str = "results"
     # Every N images there is a test image
@@ -198,6 +198,7 @@ def create_splats_with_optimizers(
     features = torch.zeros((N, strategy.feat_dim))
     offsets = torch.zeros((N, strategy.n_feat_offsets, 3))
 
+    opacities = torch.logit(torch.full((N, 1), init_opacity))  # [N,]
     params = [
         # name, value, lr
         ("anchors", torch.nn.Parameter(points), 0),
@@ -205,6 +206,7 @@ def create_splats_with_optimizers(
         ("quats", torch.nn.Parameter(quats), 0.002),
         ("opacities_mlp", strategy.opacities_mlp.parameters(), 0.002),
         ("features", torch.nn.Parameter(features), 0.0075),
+        ("opacities", torch.nn.Parameter(opacities), 5e-2),
         ("offsets", torch.nn.Parameter(offsets), 0.01 * scene_scale),
         ("colors_mlp", strategy.colors_mlp.parameters(), 0.008),
         ("scale_rot_mlp", strategy.scale_rot_mlp.parameters(), 0.004),
@@ -822,9 +824,9 @@ class Runner:
                 scheduler.step()
 
             # eval the full set
-            # if step in [i - 1 for i in cfg.eval_steps]:
-            #     self.eval(step)
-            #     self.render_traj(step)
+            if step in [i - 1 for i in cfg.eval_steps]:
+                self.eval(step)
+                self.render_traj(step)
 
             # run compression
             if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:
@@ -990,7 +992,7 @@ class Runner:
         # save to video
         video_dir = f"{cfg.result_dir}/videos"
         os.makedirs(video_dir, exist_ok=True)
-        writer = imageio.get_writer(f"{video_dir}/traj_{step}.mp4", fps=30)
+        writer = imageio.get_writer(f"{video_dir}/traj_{step}.mp4", fps=24)
         for canvas in canvas_all:
             writer.append_data(canvas)
         writer.close()

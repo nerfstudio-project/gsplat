@@ -4,6 +4,8 @@ import torch
 
 from .base import Strategy
 from .ops import remove_anchors, grow_anchors
+from .ops import relocate, sample_add
+import math
 
 
 @dataclass
@@ -75,6 +77,7 @@ class ScaffoldStrategy(Strategy):
     prune_scale3d: float = 0.1
     prune_scale2d: float = 0.15
     refine_start_iter: int = 1500
+    cap_max: int = 1_000_000
     max_voxel_levels: int = 3
     voxel_size: float = 0.001
     refine_stop_iter: int = 15_000
@@ -123,7 +126,14 @@ class ScaffoldStrategy(Strategy):
         # put them on the correct device.
         # - grad2d: running accum of the norm of the image plane gradients for each GS.
         # - count: running accum of how many time each GS is visible.
+
+        n_max = 51
+        binoms = torch.zeros((n_max, n_max))
+        for n in range(n_max):
+            for k in range(n + 1):
+                binoms[n, k] = math.comb(n, k)
         state = {
+            "binoms": binoms,
             "grad2d": None,
             "count": None,
             "anchor_count": None,
@@ -161,6 +171,7 @@ class ScaffoldStrategy(Strategy):
             "offsets",
             "scales",
             "quats",
+            "opacities",
             "opacities_mlp",
             "colors_mlp",
             "scale_rot_mlp",
@@ -196,15 +207,19 @@ class ScaffoldStrategy(Strategy):
         packed: bool = False,
     ):
         """Callback function to be executed after the `loss.backward()` call."""
+
         if step >= self.refine_stop_iter:
             return
+
+        # move to the correct device
+        state["binoms"] = state["binoms"].to(params["anchors"].device)
+        binoms = state["binoms"]
 
         if step > 500:
             self._update_state(params, state, info, packed=packed)
 
         if step > self.refine_start_iter and step % self.refine_every == 0:
             # grow GSs
-            print(f"init anchors: {len(params['anchors'])}")
             new_anchors = self._anchor_growing(params, optimizers, state)
             if self.verbose:
                 print(
@@ -212,37 +227,39 @@ class ScaffoldStrategy(Strategy):
                     f"Now having {len(params['anchors'])} anchors."
                 )
 
-            # prune anchors
-            low_opacity_mask = (
-                state["anchor_opacity"] < self.prune_opa * state["anchor_count"]
-            ).squeeze()
-            anchor_mask = (
-                state["anchor_count"] > self.pruning_thresholds * self.refine_every
-            )  # [N, 1]
-            is_prune = torch.logical_and(low_opacity_mask, anchor_mask)
-
-            indices = anchor_mask.nonzero(as_tuple=False).squeeze()
-            # Efficiently set the specified indices to zero
-            state["anchor_count"].index_fill_(0, indices, 0)
-            state["anchor_opacity"].index_fill_(0, indices, 0)
-
-            n_prune = is_prune.sum().item()
-            if n_prune > 0:
-                names = ["anchors", "scales", "quats", "features", "offsets"]
-                remove_anchors(
-                    params=params,
-                    optimizers=optimizers,
-                    n_feat_offsets=self.n_feat_offsets,
-                    state=state,
-                    mask=is_prune,
-                    names=names,
-                )
-
-            if self.verbose:
-                print(
-                    f"Step {step}: {n_prune} anchors pruned. "
-                    f"Now having {len(params['anchors'])} anchors."
-                )
+            n_relocated_gs = self._relocate_gs(params, optimizers, binoms, state)
+            print(f"Relocated anchors {n_relocated_gs}")
+            # # prune anchors
+            # low_opacity_mask = (
+            #     state["anchor_opacity"] < self.prune_opa * state["anchor_count"]
+            # ).squeeze()
+            # anchor_mask = (
+            #     state["anchor_count"] > self.pruning_thresholds * self.refine_every
+            # )  # [N, 1]
+            # is_prune = torch.logical_and(low_opacity_mask, anchor_mask)
+            #
+            # indices = anchor_mask.nonzero(as_tuple=False).squeeze()
+            # # Efficiently set the specified indices to zero
+            # state["anchor_count"].index_fill_(0, indices, 0)
+            # state["anchor_opacity"].index_fill_(0, indices, 0)
+            #
+            # n_prune = is_prune.sum().item()
+            # if n_prune > 0:
+            #     names = ["anchors", "scales", "quats", "features", "offsets", "opacities"]
+            #     remove_anchors(
+            #         params=params,
+            #         optimizers=optimizers,
+            #         n_feat_offsets=self.n_feat_offsets,
+            #         state=state,
+            #         mask=is_prune,
+            #         names=names,
+            #     )
+            #
+            # if self.verbose:
+            #     print(
+            #         f"Step {step}: {low_opacity_mask.sum().item()} anchors pruned. "
+            #         f"Now having {len(params['anchors'])} anchors."
+            #     )
 
             torch.cuda.empty_cache()
 
@@ -486,3 +503,46 @@ class ScaffoldStrategy(Strategy):
             state["grad2d"].index_fill_(0, indices, 0)
 
         return n_added_anchors
+    @torch.no_grad()
+    def _relocate_gs(
+            self,
+            params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+            optimizers: Dict[str, torch.optim.Optimizer],
+            binoms: torch.Tensor,
+            state: Dict[str, Any],
+    ) -> int:
+        dead_mask = (
+            state["anchor_opacity"] < self.prune_opa * state["anchor_count"]
+        ).squeeze()
+        n_gs = dead_mask.sum().item()
+        if n_gs > 0:
+            relocate(
+                params=params,
+                optimizers=optimizers,
+                state=state,
+                mask=dead_mask,
+                binoms=binoms,
+                min_opacity=self.prune_opa,
+            )
+        return n_gs
+
+    @torch.no_grad()
+    def _add_new_gs(
+            self,
+            params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+            optimizers: Dict[str, torch.optim.Optimizer],
+            binoms: torch.Tensor,
+    ) -> int:
+        current_n_points = len(params["anchors"])
+        n_target = min(self.cap_max, int(1.05 * current_n_points))
+        n_gs = max(0, n_target - current_n_points)
+        if n_gs > 0:
+            sample_add(
+                params=params,
+                optimizers=optimizers,
+                state={},
+                n=n_gs,
+                binoms=binoms,
+                min_opacity=self.min_opacity,
+            )
+        return n_gs

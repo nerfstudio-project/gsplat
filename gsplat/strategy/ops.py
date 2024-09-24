@@ -269,7 +269,7 @@ def relocate(
     sampled_idxs = alive_indices[sampled_idxs]
     new_opacities, new_scales = compute_relocation(
         opacities=opacities[sampled_idxs],
-        scales=torch.exp(params["scales"])[sampled_idxs],
+        scales=torch.exp(params["scales"][:,:3])[sampled_idxs],
         ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
         binoms=binoms,
     )
@@ -279,7 +279,7 @@ def relocate(
         if name == "opacities":
             p[sampled_idxs] = torch.logit(new_opacities)
         elif name == "scales":
-            p[sampled_idxs] = torch.log(new_scales)
+            p[sampled_idxs][:,:3] = torch.log(new_scales)
         p[dead_indices] = p[sampled_idxs]
         return torch.nn.Parameter(p)
 
@@ -288,11 +288,13 @@ def relocate(
         return v
 
     # update the parameters and the state in the optimizers
-    _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
+    names = ["anchors", "scales", "quats", "features", "offsets", "opacities"]
+    _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers, names)
     # update the extra running state
     for k, v in state.items():
         if isinstance(v, torch.Tensor):
-            v[sampled_idxs] = 0
+            if k == "anchor_count" or k == "anchor_opacity":
+                v[sampled_idxs] = 0
 
 
 @torch.no_grad()
@@ -419,6 +421,9 @@ def grow_anchors(
     )
     feat = scattered_features[remove_duplicates_mask]  # [N_new, feat_dim]
 
+    def inverse_sigmoid(x):
+        return torch.log(x / (1 - x))
+    opacities = inverse_sigmoid(0.1 * torch.ones((anchors.shape[0], 1), dtype=torch.float, device="cuda"))
     # Initialize new offsets
     offsets = torch.zeros(
         (num_new, n_feat_offsets, 3), device=device
@@ -435,6 +440,8 @@ def grow_anchors(
             p_new = torch.cat([p, feat], dim=0)
         elif name == "offsets":
             p_new = torch.cat([p, offsets], dim=0)
+        elif name == "opacities":
+            p_new = torch.cat([p, opacities], dim=0)
         else:
             raise ValueError(f"Parameter '{name}' not recognized.")
         return torch.nn.Parameter(p_new)
@@ -446,7 +453,7 @@ def grow_anchors(
         return v_new
 
     # Update parameters and optimizer states
-    names = ["anchors", "scales", "quats", "features", "offsets"]
+    names = ["anchors", "scales", "quats", "features", "offsets", "opacities"]
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers, names)
 
     # Update the extra running state
