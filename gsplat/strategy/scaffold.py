@@ -226,9 +226,7 @@ class ScaffoldStrategy(Strategy):
                     f"Now having {len(params['anchors'])} anchors."
                 )
 
-            n_relocated_gs = self._relocate_gs(params, optimizers, binoms, state)
-            print(f"Relocated anchors {n_relocated_gs}")
-            # # prune anchors
+            #if step % 1000 == 0:
             # low_opacity_mask = (
             #     state["anchor_opacity"] < self.prune_opa * state["anchor_count"]
             # ).squeeze()
@@ -237,7 +235,7 @@ class ScaffoldStrategy(Strategy):
             # )  # [N, 1]
             # is_prune = torch.logical_and(low_opacity_mask, anchor_mask)
             #
-            # indices = anchor_mask.nonzero(as_tuple=False).squeeze()
+            # indices = is_prune.nonzero(as_tuple=False).squeeze()
             # # Efficiently set the specified indices to zero
             # state["anchor_count"].index_fill_(0, indices, 0)
             # state["anchor_opacity"].index_fill_(0, indices, 0)
@@ -256,9 +254,13 @@ class ScaffoldStrategy(Strategy):
             #
             # if self.verbose:
             #     print(
-            #         f"Step {step}: {low_opacity_mask.sum().item()} anchors pruned. "
+            #         f"Step {step}: {n_prune} anchors pruned. "
             #         f"Now having {len(params['anchors'])} anchors."
             #     )
+            # else:
+            n_relocated_gs = self._relocate_gs(params, optimizers, binoms, state)
+            if self.verbose:
+                print(f"Relocated anchors {n_relocated_gs}")
 
             torch.cuda.empty_cache()
 
@@ -399,7 +401,7 @@ class ScaffoldStrategy(Strategy):
             gradient_mask = torch.logical_and(gradient_mask, growing_threshold_mask)
 
             # Drop-out: Helps prevent too massive anchor growth.
-            rand_mask = torch.rand_like(gradient_mask.float()) > (0.4**m)
+            rand_mask = torch.rand_like(gradient_mask.float()) > (0.5**m)
             rand_mask = rand_mask.cuda()
             gradient_mask = torch.logical_and(gradient_mask, rand_mask)
             gradient_mask = torch.cat(
@@ -523,26 +525,5 @@ class ScaffoldStrategy(Strategy):
                 mask=dead_mask,
                 binoms=binoms,
                 min_opacity=self.prune_opa,
-            )
-        return n_gs
-
-    @torch.no_grad()
-    def _add_new_gs(
-        self,
-        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-        optimizers: Dict[str, torch.optim.Optimizer],
-        binoms: torch.Tensor,
-    ) -> int:
-        current_n_points = len(params["anchors"])
-        n_target = min(self.cap_max, int(1.05 * current_n_points))
-        n_gs = max(0, n_target - current_n_points)
-        if n_gs > 0:
-            sample_add(
-                params=params,
-                optimizers=optimizers,
-                state={},
-                n=n_gs,
-                binoms=binoms,
-                min_opacity=self.min_opacity,
             )
         return n_gs

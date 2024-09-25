@@ -159,8 +159,6 @@ class Config:
         strategy.refine_start_iter = int(strategy.refine_start_iter * factor)
         strategy.refine_stop_iter = int(strategy.refine_stop_iter * factor)
         strategy.voxel_size = self.voxel_size
-        # strategy.reset_every = int(strategy.reset_every * factor)
-        # strategy.refine_every = int(strategy.refine_every * factor)
 
 
 def create_splats_with_optimizers(
@@ -201,7 +199,7 @@ def create_splats_with_optimizers(
     opacities = torch.logit(torch.full((N, 1), init_opacity))  # [N,]
     params = [
         # name, value, lr
-        ("anchors", torch.nn.Parameter(points), 0),
+        ("anchors", torch.nn.Parameter(points), 0.0001),
         ("scales", torch.nn.Parameter(scales), 0.007),
         ("quats", torch.nn.Parameter(quats), 0.002),
         ("opacities_mlp", strategy.opacities_mlp.parameters(), 0.002),
@@ -419,6 +417,7 @@ class Runner:
         selected_features = self.splats["features"][visible_anchor_mask]  # [M, c]
         selected_anchors = self.splats["anchors"][visible_anchor_mask]  # [M, 3]
         selected_offsets = self.splats["offsets"][visible_anchor_mask]  # [M, k, 3]
+        selected_quats = self.splats["quats"][visible_anchor_mask]  # [M, 4]
         selected_scales = torch.exp(
             self.splats["scales"][visible_anchor_mask]
         )  # [M, 6]
@@ -458,6 +457,9 @@ class Runner:
         anchors_repeated = (
             selected_anchors.unsqueeze(1).repeat(1, k, 1).view(-1, 3)
         )  # [M*k, 3]
+        quats_repeated = (
+            selected_quats.unsqueeze(1).repeat(1, k, 1).view(-1, 4)
+        )  # [M*k, 3]
 
         # Apply positive opacity mask
         selected_opacity = neural_opacity[neural_selection_mask].squeeze(-1)  # [M]
@@ -466,12 +468,29 @@ class Runner:
         selected_offsets = selected_offsets[neural_selection_mask]  # [M, 3]
         scales_repeated = scales_repeated[neural_selection_mask]  # [M, 6]
         anchors_repeated = anchors_repeated[neural_selection_mask]  # [M, 3]
+        quats_repeated = quats_repeated[neural_selection_mask]  # [M, 3]
+
 
         # Compute scales and rotations
         scales = scales_repeated[:, 3:] * torch.sigmoid(
             selected_scale_rot[:, :3]
         )  # [M, 3]
-        rotation = torch.nn.functional.normalize(selected_scale_rot[:, 3:7])  # [M, 4]
+        def quaternion_multiply(q1, q2):
+            # Extract individual components of the quaternions
+            w1, x1, y1, z1 = q1[:, 0], q1[:, 1], q1[:, 2], q1[:, 3]
+            w2, x2, y2, z2 = q2[:, 0], q2[:, 1], q2[:, 2], q2[:, 3]
+
+            # Perform the quaternion multiplication
+            w = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
+            x = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
+            y = w1 * y2 + y1 * w2 + z1 * x2 - x1 * z2
+            z = w1 * z2 + z1 * w2 + x1 * y2 - y1 * x2
+
+            # Stack the result back into shape (N, 4)
+            return torch.stack((w, x, y, z), dim=-1)
+
+        # The rasterizer takes care of the normalization
+        rotation = quaternion_multiply(quats_repeated,selected_scale_rot[:, 3:7])
 
         # Compute offsets and anchors
         offsets = selected_offsets * scales_repeated[:, :3]  # [M, 3]

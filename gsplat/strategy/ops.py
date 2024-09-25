@@ -461,7 +461,7 @@ def grow_anchors(
 
     # Update the extra running state
     for k, v in state.items():
-        if isinstance(v, torch.Tensor):
+        if isinstance(v, torch.Tensor) and k != "binoms":
             if k == "anchor_count" or k == "anchor_opacity":
                 zeros = torch.zeros((num_new, *v.shape[1:]), device=device)
             else:
@@ -502,7 +502,7 @@ def remove_anchors(
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers, names)
     # update the extra running state
     for k, v in state.items():
-        if isinstance(v, torch.Tensor):
+        if isinstance(v, torch.Tensor) and k != "binoms":
             if k in ["anchor_count", "anchor_opacity"]:
                 state[k] = v[sel]
             else:
