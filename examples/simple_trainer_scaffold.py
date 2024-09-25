@@ -437,7 +437,7 @@ class Runner:
         k = self.cfg.strategy.n_feat_offsets  # Number of offsets per anchor
 
         # Apply MLPs (they output per-offset features concatenated along the last dimension)
-        neural_opacity = self.cfg.strategy.opacities_mlp(feature_view_dir)  # [M, k*1]
+        neural_opacity = self.cfg.strategy.opacities_mlp(selected_features)  # [M, k*1]
         neural_opacity = neural_opacity.view(-1, 1)  # [M*k, 1]
         neural_selection_mask = (neural_opacity > 0.0).view(-1)  # [M*k]
 
@@ -446,7 +446,7 @@ class Runner:
         neural_colors = neural_colors.view(-1, 3)  # [M*k, 3]
 
         # Get scale and rotation and reshape
-        neural_scale_rot = self.cfg.strategy.scale_rot_mlp(feature_view_dir)  # [M, k*7]
+        neural_scale_rot = self.cfg.strategy.scale_rot_mlp(selected_features)  # [M, k*7]
         neural_scale_rot = neural_scale_rot.view(-1, 7)  # [M*k, 7]
 
         # Reshape selected_offsets, scales, and anchors

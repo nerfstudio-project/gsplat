@@ -103,14 +103,14 @@ class ScaffoldStrategy(Strategy):
     ).cuda()
 
     opacities_mlp: torch.nn.Sequential = torch.nn.Sequential(
-        torch.nn.Linear(feat_dim + 3, feat_dim),
+        torch.nn.Linear(feat_dim, feat_dim),
         torch.nn.ReLU(True),
         torch.nn.Linear(feat_dim, n_feat_offsets),
         torch.nn.Tanh(),
     ).cuda()
 
     scale_rot_mlp: torch.nn.Sequential = torch.nn.Sequential(
-        torch.nn.Linear(feat_dim + 3, feat_dim),
+        torch.nn.Linear(feat_dim, feat_dim),
         torch.nn.ReLU(True),
         torch.nn.Linear(feat_dim, 7 * n_feat_offsets),
     ).cuda()
