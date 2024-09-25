@@ -4,7 +4,7 @@ import torch
 
 from .base import Strategy
 from .ops import remove_anchors, grow_anchors
-from .ops import relocate, sample_add
+from .ops import relocate
 import math
 
 
@@ -49,8 +49,6 @@ class ScaffoldStrategy(Strategy):
           reset, Default is 0 (no pause at all) and one might want to set this number to the
           number of images in training set.
         absgrad (bool): Use absolute gradients for GS splitting. Default is False.
-        revised_opacity (bool): Whether to use revised opacity heuristic from
-          arXiv:2404.06109 (experimental). Default is False.
         verbose (bool): Whether to print verbose information. Default is False.
 
     Examples:
@@ -71,17 +69,16 @@ class ScaffoldStrategy(Strategy):
     """
 
     prune_opa: float = 0.005
-    grow_grad2d: float = 0.0002
+    grow_grad2d: float = 1.28e-4
     grow_scale3d: float = 0.01
     grow_scale2d: float = 0.05
     prune_scale3d: float = 0.1
     prune_scale2d: float = 0.15
-    refine_start_iter: int = 1500
-    cap_max: int = 1_000_000
+    refine_start_iter: int = 800
     max_voxel_levels: int = 3
     voxel_size: float = 0.001
     refine_stop_iter: int = 15_000
-    feat_dim: int = 32
+    feat_dim: int = 128
     n_feat_offsets: int = 10
     refine_every: int = 100
 
@@ -92,7 +89,6 @@ class ScaffoldStrategy(Strategy):
 
     pause_refine_after_reset: int = 0
     absgrad: bool = False
-    revised_opacity: bool = False
     verbose: bool = True
 
     colors_mlp: torch.nn.Sequential = torch.nn.Sequential(
@@ -103,14 +99,14 @@ class ScaffoldStrategy(Strategy):
     ).cuda()
 
     opacities_mlp: torch.nn.Sequential = torch.nn.Sequential(
-        torch.nn.Linear(feat_dim, feat_dim),
+        torch.nn.Linear(feat_dim + 3, feat_dim),
         torch.nn.ReLU(True),
         torch.nn.Linear(feat_dim, n_feat_offsets),
         torch.nn.Tanh(),
     ).cuda()
 
     scale_rot_mlp: torch.nn.Sequential = torch.nn.Sequential(
-        torch.nn.Linear(feat_dim, feat_dim),
+        torch.nn.Linear(feat_dim + 3, feat_dim),
         torch.nn.ReLU(True),
         torch.nn.Linear(feat_dim, 7 * n_feat_offsets),
     ).cuda()
@@ -262,6 +258,18 @@ class ScaffoldStrategy(Strategy):
             if self.verbose:
                 print(f"Relocated anchors {n_relocated_gs}")
 
+            # def op_sigmoid(x, k=100, x0=0.995):
+            #     return 1 / (1 + torch.exp(-k * (x - x0)))
+            #
+            # opacities = torch.sigmoid(params["opacities"])
+            # noise = (
+            #         torch.randn_like(params["offsets"])
+            #         * (op_sigmoid(1 - opacities)).unsqueeze(-1)
+            #
+            #         * 5e5 * 0.00001
+            # )
+            #
+            # params["offsets"] = params["offsets"] + noise
             torch.cuda.empty_cache()
 
     def _update_state(
@@ -401,9 +409,9 @@ class ScaffoldStrategy(Strategy):
             gradient_mask = torch.logical_and(gradient_mask, growing_threshold_mask)
 
             # Drop-out: Helps prevent too massive anchor growth.
-            rand_mask = torch.rand_like(gradient_mask.float()) > (0.5**m)
-            rand_mask = rand_mask.cuda()
-            gradient_mask = torch.logical_and(gradient_mask, rand_mask)
+            # rand_mask = torch.rand_like(gradient_mask.float()) > (0.5**m)
+            # rand_mask = rand_mask.cuda()
+            # gradient_mask = torch.logical_and(gradient_mask, rand_mask)
             gradient_mask = torch.cat(
                 [
                     gradient_mask,

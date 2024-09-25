@@ -54,10 +54,11 @@ class Config:
     render_traj_path: str = "ellipse"
 
     # Path to the Mip-NeRF 360 dataset
-    data_dir: str = "/home/paja/.cache/nerfbaselines/datasets/tanksandtemples/truck/"
-    # data_dir: str = "/home/paja/data/bike_aliked"
+    #data_dir: str = "/home/paja/.cache/nerfbaselines/datasets/tanksandtemples/truck/"
+    data_dir: str = "/home/paja/.cache/nerfbaselines/datasets/mipnerf360/garden/"
+    #data_dir: str = "/home/paja/data/bike_aliked"
     # Downsample factor for the dataset
-    data_factor: int = 1
+    data_factor: int = 4
     # Directory to save results
     result_dir: str = "results"
     # Every N images there is a test image
@@ -207,7 +208,7 @@ def create_splats_with_optimizers(
         ("opacities", torch.nn.Parameter(opacities), 5e-2),
         ("offsets", torch.nn.Parameter(offsets), 0.01 * scene_scale),
         ("colors_mlp", strategy.colors_mlp.parameters(), 0.008),
-        ("scale_rot_mlp", strategy.scale_rot_mlp.parameters(), 0.004),
+        ("scale_rot_mlp", strategy.scale_rot_mlp.parameters(), 0.0004),
     ]
 
     splats = torch.nn.ParameterDict({n: v for n, v, _ in params}).to(device)
@@ -437,7 +438,7 @@ class Runner:
         k = self.cfg.strategy.n_feat_offsets  # Number of offsets per anchor
 
         # Apply MLPs (they output per-offset features concatenated along the last dimension)
-        neural_opacity = self.cfg.strategy.opacities_mlp(selected_features)  # [M, k*1]
+        neural_opacity = self.cfg.strategy.opacities_mlp(feature_view_dir)  # [M, k*1]
         neural_opacity = neural_opacity.view(-1, 1)  # [M*k, 1]
         neural_selection_mask = (neural_opacity > 0.0).view(-1)  # [M*k]
 
@@ -446,7 +447,7 @@ class Runner:
         neural_colors = neural_colors.view(-1, 3)  # [M*k, 3]
 
         # Get scale and rotation and reshape
-        neural_scale_rot = self.cfg.strategy.scale_rot_mlp(selected_features)  # [M, k*7]
+        neural_scale_rot = self.cfg.strategy.scale_rot_mlp(feature_view_dir)  # [M, k*7]
         neural_scale_rot = neural_scale_rot.view(-1, 7)  # [M*k, 7]
 
         # Reshape selected_offsets, scales, and anchors
@@ -720,6 +721,18 @@ class Runner:
             loss = l1loss * (1.0 - cfg.ssim_lambda)
             loss += ssimloss * cfg.ssim_lambda
             loss += info["scales"].prod(dim=1).mean() * cfg.scale_reg
+
+            # Apply sigmoid to normalize values to [0, 1]
+            # sigmoid_opacities = torch.sigmoid(info["opacities"])
+            #
+            # # Custom loss to penalize values not close to 0 or 1
+            # def binarization_loss(x):
+            #     return (x * (1 - x)).mean()
+            #
+            # # Calculate the binarization loss
+            # opa_loss = binarization_loss(sigmoid_opacities)
+            # loss += 0.01 * opa_loss
+
             if cfg.depth_loss:
                 # query depths from depth map
                 points = torch.stack(
@@ -846,7 +859,7 @@ class Runner:
             # eval the full set
             if step in [i - 1 for i in cfg.eval_steps]:
                 self.eval(step)
-                self.render_traj(step)
+            #     self.render_traj(step)
 
             # run compression
             if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:
