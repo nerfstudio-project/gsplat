@@ -95,23 +95,22 @@ class ScaffoldStrategy(Strategy):
     revised_opacity: bool = False
     verbose: bool = True
 
-    view_distance = 1
     colors_mlp: torch.nn.Sequential = torch.nn.Sequential(
-        torch.nn.Linear(feat_dim + 3 + 1, feat_dim),
+        torch.nn.Linear(feat_dim + 3, feat_dim),
         torch.nn.ReLU(True),
         torch.nn.Linear(feat_dim, 3 * n_feat_offsets),
         torch.nn.Sigmoid(),
     ).cuda()
 
     opacities_mlp: torch.nn.Sequential = torch.nn.Sequential(
-        torch.nn.Linear(feat_dim + 3 + 1, feat_dim),
+        torch.nn.Linear(feat_dim + 3, feat_dim),
         torch.nn.ReLU(True),
         torch.nn.Linear(feat_dim, n_feat_offsets),
         torch.nn.Tanh(),
     ).cuda()
 
     scale_rot_mlp: torch.nn.Sequential = torch.nn.Sequential(
-        torch.nn.Linear(feat_dim + 3 + 1, feat_dim),
+        torch.nn.Linear(feat_dim + 3, feat_dim),
         torch.nn.ReLU(True),
         torch.nn.Linear(feat_dim, 7 * n_feat_offsets),
     ).cuda()

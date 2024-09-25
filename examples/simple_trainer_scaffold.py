@@ -54,10 +54,10 @@ class Config:
     render_traj_path: str = "ellipse"
 
     # Path to the Mip-NeRF 360 dataset
-    data_dir: str = "/home/paja/.cache/nerfbaselines/datasets/mipnerf360/garden"
+    data_dir: str = "/home/paja/.cache/nerfbaselines/datasets/tanksandtemples/truck/"
     # data_dir: str = "/home/paja/data/bike_aliked"
     # Downsample factor for the dataset
-    data_factor: int = 2
+    data_factor: int = 1
     # Directory to save results
     result_dir: str = "results"
     # Every N images there is a test image
@@ -430,11 +430,9 @@ class Runner:
         length = view_dir.norm(dim=1, keepdim=True)
         view_dir_normalized = view_dir / length  # [M, 3]
 
-        view_length = torch.cat([view_dir_normalized, length], dim=1)
-
         # See formula (9) and the appendix for the rest
         feature_view_dir = torch.cat(
-            [selected_features, view_length], dim=1
+            [selected_features, view_dir_normalized], dim=1
         )  # [M, c+3]
 
         k = self.cfg.strategy.n_feat_offsets  # Number of offsets per anchor
@@ -578,6 +576,9 @@ class Runner:
             ),
             torch.optim.lr_scheduler.ExponentialLR(
                 self.optimizers["colors_mlp"], gamma=0.00625 ** (1.0 / max_steps)
+            ),
+            torch.optim.lr_scheduler.ExponentialLR(
+                self.optimizers["scale_rot_mlp"], gamma=1.0
             ),
         ]
         if cfg.pose_opt:
