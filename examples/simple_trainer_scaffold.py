@@ -113,7 +113,7 @@ class Config:
     random_bkgd: bool = False
 
     # Scale regularization
-    scale_reg: float = 0.01
+    scale_reg: float = 0.001
 
     # Enable camera optimization.
     pose_opt: bool = False
