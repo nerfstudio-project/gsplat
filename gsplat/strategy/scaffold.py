@@ -75,6 +75,7 @@ class ScaffoldStrategy(Strategy):
     prune_scale3d: float = 0.1
     prune_scale2d: float = 0.15
     refine_start_iter: int = 800
+    absgrad: bool = False
     max_voxel_levels: int = 3
     voxel_size: float = 0.001
     refine_stop_iter: int = 15_000
@@ -222,7 +223,7 @@ class ScaffoldStrategy(Strategy):
                     f"Now having {len(params['anchors'])} anchors."
                 )
 
-            #if step % 1000 == 0:
+            # if step % 1000 == 0:
             # low_opacity_mask = (
             #     state["anchor_opacity"] < self.prune_opa * state["anchor_count"]
             # ).squeeze()

@@ -409,7 +409,11 @@ def grow_anchors(
 
     # Prepare new features
     existing_features = params["features"]  # [N_existing, feat_dim]
-    repeated_features = existing_features.unsqueeze(1).expand(-1, n_feat_offsets, -1).reshape(-1, existing_features.shape[1]) # [N_existing * n_feat_offsets, feat_dim]
+    repeated_features = (
+        existing_features.unsqueeze(1)
+        .expand(-1, n_feat_offsets, -1)
+        .reshape(-1, existing_features.shape[1])
+    )  # [N_existing * n_feat_offsets, feat_dim]
 
     selected_features = repeated_features[gradient_mask]  # [N_selected, feat_dim]
 

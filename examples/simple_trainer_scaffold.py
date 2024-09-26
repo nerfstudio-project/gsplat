@@ -54,9 +54,9 @@ class Config:
     render_traj_path: str = "ellipse"
 
     # Path to the Mip-NeRF 360 dataset
+    data_dir: str = "examples/data/360_v2/garden"
     #data_dir: str = "/home/paja/.cache/nerfbaselines/datasets/tanksandtemples/truck/"
-    data_dir: str = "/home/paja/.cache/nerfbaselines/datasets/mipnerf360/garden/"
-    #data_dir: str = "/home/paja/data/bike_aliked"
+    # data_dir: str = "/home/paja/data/bike_aliked"
     # Downsample factor for the dataset
     data_factor: int = 4
     # Directory to save results
@@ -471,11 +471,11 @@ class Runner:
         anchors_repeated = anchors_repeated[neural_selection_mask]  # [M, 3]
         quats_repeated = quats_repeated[neural_selection_mask]  # [M, 3]
 
-
         # Compute scales and rotations
         scales = scales_repeated[:, 3:] * torch.sigmoid(
             selected_scale_rot[:, :3]
         )  # [M, 3]
+
         def quaternion_multiply(q1, q2):
             # Extract individual components of the quaternions
             w1, x1, y1, z1 = q1[:, 0], q1[:, 1], q1[:, 2], q1[:, 3]
@@ -491,7 +491,7 @@ class Runner:
             return torch.stack((w, x, y, z), dim=-1)
 
         # The rasterizer takes care of the normalization
-        rotation = quaternion_multiply(quats_repeated,selected_scale_rot[:, 3:7])
+        rotation = quaternion_multiply(quats_repeated, selected_scale_rot[:, 3:7])
 
         # Compute offsets and anchors
         offsets = selected_offsets * scales_repeated[:, :3]  # [M, 3]
