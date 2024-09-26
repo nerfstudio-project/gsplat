@@ -15,7 +15,7 @@ jobs:
       run: BUILD_NO_CUDA=1 pipx run build --sdist
     - name: Build wheel with no binaries
       run:  BUILD_NO_CUDA=1 python setup.py bdist_wheel --dist-dir=dist
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@v3
       with:
         name: pypi_packages
         path: dist/*.tar.gz
@@ -90,7 +90,7 @@ jobs:
           submodules: recursive
   
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -165,7 +165,9 @@ jobs:
           cd ..
         shell: bash  # `ls -lah` does not exist in windows powershell
 
-      - uses: actions/upload-artifact@v4
+        # v4 does not allow writing into the same folder, so stick with v3
+        # https://github.com/actions/upload-artifact/issues/478
+      - uses: actions/upload-artifact@v3
         with:
           name: compiled_wheels_python${{ matrix.python-version }}
           path: dist/*.whl
