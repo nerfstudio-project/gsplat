@@ -310,8 +310,9 @@
         </div>
         <article role="main" id="furo-main-content">
           <h1>Source code for gsplat.cuda._wrapper</h1><div class="highlight"><pre>
-<span></span><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span>
+<span></span><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">Any</span>
 <span class="kn">import</span> <span class="nn">warnings</span>
+<span class="kn">from</span> <span class="nn">typing_extensions</span> <span class="kn">import</span> <span class="n">Literal</span>
 
 <span class="kn">import</span> <span class="nn">torch</span>
 <span class="kn">from</span> <span class="nn">torch</span> <span class="kn">import</span> <span class="n">Tensor</span>
@@ -325,6 +326,16 @@
         <span class="k">return</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">_C</span><span class="p">,</span> <span class="n">name</span><span class="p">)(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
 
     <span class="k">return</span> <span class="n">call_cuda</span>
+
+
+<span class="k">def</span> <span class="nf">_make_lazy_cuda_obj</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+    <span class="c1"># pylint: disable=import-outside-toplevel</span>
+    <span class="kn">from</span> <span class="nn">._backend</span> <span class="kn">import</span> <span class="n">_C</span>
+
+    <span class="n">obj</span> <span class="o">=</span> <span class="n">_C</span>
+    <span class="k">for</span> <span class="n">name_split</span> <span class="ow">in</span> <span class="n">name</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;.&quot;</span><span class="p">):</span>
+        <span class="n">obj</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">_C</span><span class="p">,</span> <span class="n">name_split</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">obj</span>
 
 
 <div class="viewcode-block" id="spherical_harmonics">
@@ -435,7 +446,7 @@
     <span class="n">Ks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, 3, 3]</span>
     <span class="n">width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-    <span class="n">ortho</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Projection of Gaussians (perspective or orthographic).</span>
 
@@ -459,7 +470,7 @@
     <span class="n">means</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="n">covars</span> <span class="o">=</span> <span class="n">covars</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="n">Ks</span> <span class="o">=</span> <span class="n">Ks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
-    <span class="k">return</span> <span class="n">_Proj</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">Ks</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">height</span><span class="p">,</span> <span class="n">ortho</span><span class="p">)</span></div>
+    <span class="k">return</span> <span class="n">_Proj</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">Ks</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">height</span><span class="p">,</span> <span class="n">camera_model</span><span class="p">)</span></div>
 
 
 
@@ -513,7 +524,7 @@
     <span class="n">packed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">sparse_grad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">calc_compensations</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-    <span class="n">ortho</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Projects Gaussians to 2D.</span>
 
@@ -615,7 +626,7 @@
             <span class="n">radius_clip</span><span class="p">,</span>
             <span class="n">sparse_grad</span><span class="p">,</span>
             <span class="n">calc_compensations</span><span class="p">,</span>
-            <span class="n">ortho</span><span class="p">,</span>
+            <span class="n">camera_model</span><span class="p">,</span>
         <span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">_FullyFusedProjection</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span>
@@ -632,7 +643,7 @@
             <span class="n">far_plane</span><span class="p">,</span>
             <span class="n">radius_clip</span><span class="p">,</span>
             <span class="n">calc_compensations</span><span class="p">,</span>
-            <span class="n">ortho</span><span class="p">,</span>
+            <span class="n">camera_model</span><span class="p">,</span>
         <span class="p">)</span></div>
 
 
@@ -1005,15 +1016,24 @@
         <span class="n">Ks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, 3, 3]</span>
         <span class="n">width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
         <span class="n">height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-        <span class="n">ortho</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+        <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+        <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="p">)</span>
+
         <span class="n">means2d</span><span class="p">,</span> <span class="n">covars2d</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;proj_fwd&quot;</span><span class="p">)(</span>
-            <span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">Ks</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">height</span><span class="p">,</span> <span class="n">ortho</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">covars</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">width</span><span class="p">,</span>
+            <span class="n">height</span><span class="p">,</span>
+            <span class="n">camera_model_type</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">save_for_backward</span><span class="p">(</span><span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">Ks</span><span class="p">)</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">width</span> <span class="o">=</span> <span class="n">width</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">height</span> <span class="o">=</span> <span class="n">height</span>
-        <span class="n">ctx</span><span class="o">.</span><span class="n">ortho</span> <span class="o">=</span> <span class="n">ortho</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">camera_model_type</span>
         <span class="k">return</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">covars2d</span>
 
     <span class="nd">@staticmethod</span>
@@ -1021,14 +1041,14 @@
         <span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">Ks</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
         <span class="n">width</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">width</span>
         <span class="n">height</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">height</span>
-        <span class="n">ortho</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">ortho</span>
+        <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">camera_model_type</span>
         <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;proj_bwd&quot;</span><span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">covars</span><span class="p">,</span>
             <span class="n">Ks</span><span class="p">,</span>
             <span class="n">width</span><span class="p">,</span>
             <span class="n">height</span><span class="p">,</span>
-            <span class="n">ortho</span><span class="p">,</span>
+            <span class="n">camera_model_type</span><span class="p">,</span>
             <span class="n">v_means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
             <span class="n">v_covars2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="p">)</span>
@@ -1092,8 +1112,12 @@
         <span class="n">far_plane</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
         <span class="n">radius_clip</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
         <span class="n">calc_compensations</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
-        <span class="n">ortho</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+        <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+        <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="p">)</span>
+
         <span class="c1"># &quot;covars&quot; and {&quot;quats&quot;, &quot;scales&quot;} are mutually exclusive</span>
         <span class="n">radii</span><span class="p">,</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">depths</span><span class="p">,</span> <span class="n">conics</span><span class="p">,</span> <span class="n">compensations</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
             <span class="s2">&quot;fully_fused_projection_fwd&quot;</span>
@@ -1111,7 +1135,7 @@
             <span class="n">far_plane</span><span class="p">,</span>
             <span class="n">radius_clip</span><span class="p">,</span>
             <span class="n">calc_compensations</span><span class="p">,</span>
-            <span class="n">ortho</span><span class="p">,</span>
+            <span class="n">camera_model_type</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="n">calc_compensations</span><span class="p">:</span>
             <span class="n">compensations</span> <span class="o">=</span> <span class="kc">None</span>
@@ -1121,7 +1145,7 @@
         <span class="n">ctx</span><span class="o">.</span><span class="n">width</span> <span class="o">=</span> <span class="n">width</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">height</span> <span class="o">=</span> <span class="n">height</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">eps2d</span> <span class="o">=</span> <span class="n">eps2d</span>
-        <span class="n">ctx</span><span class="o">.</span><span class="n">ortho</span> <span class="o">=</span> <span class="n">ortho</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">camera_model_type</span>
 
         <span class="k">return</span> <span class="n">radii</span><span class="p">,</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">depths</span><span class="p">,</span> <span class="n">conics</span><span class="p">,</span> <span class="n">compensations</span>
 
@@ -1141,7 +1165,7 @@
         <span class="n">width</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">width</span>
         <span class="n">height</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">height</span>
         <span class="n">eps2d</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">eps2d</span>
-        <span class="n">ortho</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">ortho</span>
+        <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">camera_model_type</span>
         <span class="k">if</span> <span class="n">v_compensations</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">v_compensations</span> <span class="o">=</span> <span class="n">v_compensations</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
         <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span><span class="p">,</span> <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span><span class="p">,</span> <span class="n">v_viewmats</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
@@ -1156,7 +1180,7 @@
             <span class="n">width</span><span class="p">,</span>
             <span class="n">height</span><span class="p">,</span>
             <span class="n">eps2d</span><span class="p">,</span>
-            <span class="n">ortho</span><span class="p">,</span>
+            <span class="n">camera_model_type</span><span class="p">,</span>
             <span class="n">radii</span><span class="p">,</span>
             <span class="n">conics</span><span class="p">,</span>
             <span class="n">compensations</span><span class="p">,</span>
@@ -1182,6 +1206,7 @@
             <span class="n">v_quats</span><span class="p">,</span>
             <span class="n">v_scales</span><span class="p">,</span>
             <span class="n">v_viewmats</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>
             <span class="kc">None</span><span class="p">,</span>
             <span class="kc">None</span><span class="p">,</span>
             <span class="kc">None</span><span class="p">,</span>
@@ -1344,8 +1369,12 @@
         <span class="n">radius_clip</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
         <span class="n">sparse_grad</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
         <span class="n">calc_compensations</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
-        <span class="n">ortho</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+        <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+        <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="p">)</span>
+
         <span class="p">(</span>
             <span class="n">indptr</span><span class="p">,</span>
             <span class="n">camera_ids</span><span class="p">,</span>
@@ -1369,7 +1398,7 @@
             <span class="n">far_plane</span><span class="p">,</span>
             <span class="n">radius_clip</span><span class="p">,</span>
             <span class="n">calc_compensations</span><span class="p">,</span>
-            <span class="n">ortho</span><span class="p">,</span>
+            <span class="n">camera_model_type</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="n">calc_compensations</span><span class="p">:</span>
             <span class="n">compensations</span> <span class="o">=</span> <span class="kc">None</span>
@@ -1389,7 +1418,7 @@
         <span class="n">ctx</span><span class="o">.</span><span class="n">height</span> <span class="o">=</span> <span class="n">height</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">eps2d</span> <span class="o">=</span> <span class="n">eps2d</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">sparse_grad</span> <span class="o">=</span> <span class="n">sparse_grad</span>
-        <span class="n">ctx</span><span class="o">.</span><span class="n">ortho</span> <span class="o">=</span> <span class="n">ortho</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">camera_model_type</span>
 
         <span class="k">return</span> <span class="n">camera_ids</span><span class="p">,</span> <span class="n">gaussian_ids</span><span class="p">,</span> <span class="n">radii</span><span class="p">,</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">depths</span><span class="p">,</span> <span class="n">conics</span><span class="p">,</span> <span class="n">compensations</span>
 
@@ -1420,7 +1449,7 @@
         <span class="n">height</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">height</span>
         <span class="n">eps2d</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">eps2d</span>
         <span class="n">sparse_grad</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">sparse_grad</span>
-        <span class="n">ortho</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">ortho</span>
+        <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">camera_model_type</span>
 
         <span class="k">if</span> <span class="n">v_compensations</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">v_compensations</span> <span class="o">=</span> <span class="n">v_compensations</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
@@ -1436,7 +1465,7 @@
             <span class="n">width</span><span class="p">,</span>
             <span class="n">height</span><span class="p">,</span>
             <span class="n">eps2d</span><span class="p">,</span>
-            <span class="n">ortho</span><span class="p">,</span>
+            <span class="n">camera_model_type</span><span class="p">,</span>
             <span class="n">camera_ids</span><span class="p">,</span>
             <span class="n">gaussian_ids</span><span class="p">,</span>
             <span class="n">conics</span><span class="p">,</span>
