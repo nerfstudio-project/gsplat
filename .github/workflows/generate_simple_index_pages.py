@@ -129,7 +129,7 @@ def generate_all_pages():
     wheels_per_local_version = {}
     for wheel in wheels:
         local_version = wheel["local_version"]
-        if local_version not in wheels_per_local_version:
+        if local_version is not None and local_version not in wheels_per_local_version:
             wheels_per_local_version[local_version] = []
         wheels_per_local_version[local_version].append(wheel)
 
