@@ -151,6 +151,7 @@ jobs:
       - name: Build wheel
         # build against architectures >= 7.0 (required by cooperative_groups::labeled_partition in gsplat)
         run: |          
+          sudo apt install ninja-build
           pip install wheel
           source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
           MAX_JOBS=2 python setup.py bdist_wheel --dist-dir=dist
