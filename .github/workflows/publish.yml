@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Generate Simple Index Pages
-      run: python .github/workflows/generate_simple_index_pages.py --outdir ./wheels
+      run: python .github/workflows/generate_simple_index_pages.py --outdir ./whl
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  
 
@@ -62,8 +62,8 @@ jobs:
       uses: peaceiris/actions-gh-pages@v3
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: ./wheels  # Directory where the simple index pages are located
-        destination_dir: wheels  # The 'wh' folder in the GitHub Pages root
+        publish_dir: ./whl  # Directory where the simple index pages are located
+        destination_dir: whl  # The 'wh' folder in the GitHub Pages root
 
   upload_pypi:
     name: Upload to PyPi
