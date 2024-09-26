@@ -6,6 +6,7 @@ pytest <THIS_PY_FILE> -s
 ```
 """
 
+from typing_extensions import Literal, assert_never
 import math
 
 import pytest
@@ -122,9 +123,9 @@ def test_world_to_cam(test_data):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-@pytest.mark.parametrize("ortho", [True, False])
-def test_proj(test_data, ortho: bool):
-    from gsplat.cuda._torch_impl import _persp_proj, _ortho_proj
+@pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
+def test_proj(test_data, camera_model: Literal["pinhole", "ortho", "fisheye"]):
+    from gsplat.cuda._torch_impl import _persp_proj, _ortho_proj, _fisheye_proj
     from gsplat.cuda._wrapper import proj, quat_scale_to_covar_preci, world_to_cam
 
     torch.manual_seed(42)
@@ -140,11 +141,15 @@ def test_proj(test_data, ortho: bool):
     covars.requires_grad = True
 
     # forward
-    means2d, covars2d = proj(means, covars, Ks, width, height, ortho)
-    if ortho:
+    means2d, covars2d = proj(means, covars, Ks, width, height, camera_model)
+    if camera_model == "ortho":
         _means2d, _covars2d = _ortho_proj(means, covars, Ks, width, height)
-    else:
+    elif camera_model == "fisheye":
+        _means2d, _covars2d = _fisheye_proj(means, covars, Ks, width, height)
+    elif camera_model == "pinhole":
         _means2d, _covars2d = _persp_proj(means, covars, Ks, width, height)
+    else:
+        assert_never(camera_model)
 
     torch.testing.assert_close(means2d, _means2d, rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(covars2d, _covars2d, rtol=1e-1, atol=3e-2)
@@ -165,10 +170,15 @@ def test_proj(test_data, ortho: bool):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
 @pytest.mark.parametrize("fused", [False, True])
-@pytest.mark.parametrize("calc_compensations", [False, True])
-@pytest.mark.parametrize("ortho", [True, False])
-def test_projection(test_data, fused: bool, calc_compensations: bool, ortho: bool):
+@pytest.mark.parametrize("calc_compensations", [True, False])
+def test_projection(
+    test_data,
+    fused: bool,
+    calc_compensations: bool,
+    camera_model: Literal["pinhole", "ortho", "fisheye"],
+):
     from gsplat.cuda._torch_impl import _fully_fused_projection
     from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci
 
@@ -199,7 +209,7 @@ def test_projection(test_data, fused: bool, calc_compensations: bool, ortho: boo
             width,
             height,
             calc_compensations=calc_compensations,
-            ortho=ortho,
+            camera_model=camera_model,
         )
     else:
         covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [N, 6]
@@ -213,7 +223,7 @@ def test_projection(test_data, fused: bool, calc_compensations: bool, ortho: boo
             width,
             height,
             calc_compensations=calc_compensations,
-            ortho=ortho,
+            camera_model=camera_model,
         )
     _covars, _ = quat_scale_to_covar_preci(quats, scales, triu=False)  # [N, 3, 3]
     _radii, _means2d, _depths, _conics, _compensations = _fully_fused_projection(
@@ -224,7 +234,7 @@ def test_projection(test_data, fused: bool, calc_compensations: bool, ortho: boo
         width,
         height,
         calc_compensations=calc_compensations,
-        ortho=ortho,
+        camera_model=camera_model,
     )
 
     # radii is integer so we allow for 1 unit difference
@@ -269,9 +279,13 @@ def test_projection(test_data, fused: bool, calc_compensations: bool, ortho: boo
 @pytest.mark.parametrize("fused", [False, True])
 @pytest.mark.parametrize("sparse_grad", [False, True])
 @pytest.mark.parametrize("calc_compensations", [False, True])
-@pytest.mark.parametrize("ortho", [True, False])
+@pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
 def test_fully_fused_projection_packed(
-    test_data, fused: bool, sparse_grad: bool, calc_compensations: bool, ortho: bool
+    test_data,
+    fused: bool,
+    sparse_grad: bool,
+    calc_compensations: bool,
+    camera_model: Literal["pinhole", "ortho", "fisheye"],
 ):
     from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci
 
@@ -312,7 +326,7 @@ def test_fully_fused_projection_packed(
             packed=True,
             sparse_grad=sparse_grad,
             calc_compensations=calc_compensations,
-            ortho=ortho,
+            camera_model=camera_model,
         )
         _radii, _means2d, _depths, _conics, _compensations = fully_fused_projection(
             means,
@@ -325,7 +339,7 @@ def test_fully_fused_projection_packed(
             height,
             packed=False,
             calc_compensations=calc_compensations,
-            ortho=ortho,
+            camera_model=camera_model,
         )
     else:
         covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [N, 6]
@@ -349,7 +363,7 @@ def test_fully_fused_projection_packed(
             packed=True,
             sparse_grad=sparse_grad,
             calc_compensations=calc_compensations,
-            ortho=ortho,
+            camera_model=camera_model,
         )
         _radii, _means2d, _depths, _conics, _compensations = fully_fused_projection(
             means,
@@ -362,7 +376,7 @@ def test_fully_fused_projection_packed(
             height,
             packed=False,
             calc_compensations=calc_compensations,
-            ortho=ortho,
+            camera_model=camera_model,
         )
 
     # recover packed tensors to full matrices for testing
