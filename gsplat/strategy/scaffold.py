@@ -79,8 +79,6 @@ class ScaffoldStrategy(Strategy):
     max_voxel_levels: int = 3
     voxel_size: float = 0.001
     refine_stop_iter: int = 15_000
-    feat_dim: int = 128
-    n_feat_offsets: int = 10
     refine_every: int = 100
 
     # 3.3 Observation Thresholds (compare paper)
@@ -92,27 +90,9 @@ class ScaffoldStrategy(Strategy):
     absgrad: bool = False
     verbose: bool = True
 
-    colors_mlp: torch.nn.Sequential = torch.nn.Sequential(
-        torch.nn.Linear(feat_dim + 3, feat_dim),
-        torch.nn.ReLU(True),
-        torch.nn.Linear(feat_dim, 3 * n_feat_offsets),
-        torch.nn.Sigmoid(),
-    ).cuda()
-
-    opacities_mlp: torch.nn.Sequential = torch.nn.Sequential(
-        torch.nn.Linear(feat_dim + 3, feat_dim),
-        torch.nn.ReLU(True),
-        torch.nn.Linear(feat_dim, n_feat_offsets),
-        torch.nn.Tanh(),
-    ).cuda()
-
-    scale_rot_mlp: torch.nn.Sequential = torch.nn.Sequential(
-        torch.nn.Linear(feat_dim + 3, feat_dim),
-        torch.nn.ReLU(True),
-        torch.nn.Linear(feat_dim, 7 * n_feat_offsets),
-    ).cuda()
-
-    def initialize_state(self, scene_scale: float = 1.0) -> Dict[str, Any]:
+    def initialize_state(
+        self, scene_scale: float = 1.0, feat_dim=128, n_feat_offsets=10
+    ) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy.
 
         The returned state should be passed to the `step_pre_backward()` and
@@ -135,6 +115,8 @@ class ScaffoldStrategy(Strategy):
             "anchor_count": None,
             "anchor_opacity": None,
             "scene_scale": scene_scale,
+            "feat_dim": feat_dim,
+            "n_feat_offsets": n_feat_offsets,
         }
         return state
 
@@ -168,9 +150,6 @@ class ScaffoldStrategy(Strategy):
             "scales",
             "quats",
             "opacities",
-            "opacities_mlp",
-            "colors_mlp",
-            "scale_rot_mlp",
         ]
 
         assert len(expected_params) == len(
@@ -239,14 +218,12 @@ class ScaffoldStrategy(Strategy):
             #
             # n_prune = is_prune.sum().item()
             # if n_prune > 0:
-            #     names = ["anchors", "scales", "quats", "features", "offsets", "opacities"]
             #     remove_anchors(
             #         params=params,
             #         optimizers=optimizers,
             #         n_feat_offsets=self.n_feat_offsets,
             #         state=state,
             #         mask=is_prune,
-            #         names=names,
             #     )
             #
             # if self.verbose:
@@ -302,11 +279,11 @@ class ScaffoldStrategy(Strategy):
         device = grads.device
         if state["grad2d"] is None:
             state["grad2d"] = torch.zeros(
-                n_gaussian * self.n_feat_offsets, device=device
+                n_gaussian * state["n_feat_offsets"], device=device
             )
         if state["count"] is None:
             state["count"] = torch.zeros(
-                n_gaussian * self.n_feat_offsets, device=device
+                n_gaussian * state["n_feat_offsets"], device=device
             )
         if state["anchor_count"] is None:
             state["anchor_count"] = torch.zeros(n_gaussian, device=device)
@@ -337,7 +314,7 @@ class ScaffoldStrategy(Strategy):
         neural_opacities = (
             info["neural_opacities"]
             .detach()
-            .view(-1, self.n_feat_offsets)
+            .view(-1, state["n_feat_offsets"])
             .clamp_min_(0)
             .sum(dim=1)
         )
@@ -497,8 +474,8 @@ class ScaffoldStrategy(Strategy):
                     remove_duplicates_mask=remove_occupied_pos_mask,
                     inv_idx=inv_idx,
                     voxel_size=current_voxel_size,
-                    n_feat_offsets=self.n_feat_offsets,
-                    feat_dim=self.feat_dim,
+                    n_feat_offsets=state["n_feat_offsets"],
+                    feat_dim=state["feat_dim"],
                 )
 
             n_added_anchors += new_anchors.shape[0]

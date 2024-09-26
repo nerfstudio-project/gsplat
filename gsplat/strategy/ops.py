@@ -288,8 +288,7 @@ def relocate(
         return v
 
     # update the parameters and the state in the optimizers
-    names = ["anchors", "scales", "quats", "features", "offsets", "opacities"]
-    _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers, names)
+    _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
     # update the extra running state
     for k, v in state.items():
         if isinstance(v, torch.Tensor):
@@ -458,8 +457,7 @@ def grow_anchors(
         return v_new
 
     # Update parameters and optimizer states
-    names = ["anchors", "scales", "quats", "features", "offsets", "opacities"]
-    _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers, names)
+    _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
 
     # Update the extra running state
     for k, v in state.items():
