@@ -19,10 +19,6 @@ jobs:
       with:
         name: pypi_packages
         path: dist/*.tar.gz
-    - uses: actions/upload-artifact@v4
-      with:
-        name: pypi_packages
-        path: dist/*.whl
  
   
   build_wheels:
