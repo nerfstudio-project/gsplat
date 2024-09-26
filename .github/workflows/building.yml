@@ -1,4 +1,4 @@
-name: Building Wheels
+name: Build Wheels
 
 
 on: [workflow_call, workflow_dispatch]
@@ -7,7 +7,7 @@ jobs:
     name: Build source distribution and no binary wheel
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - name: Strip unsupported tags in README
       run: |
         sed -i '/<!-- pypi-strip -->/,/<!-- \/pypi-strip -->/d' README.md
@@ -15,11 +15,11 @@ jobs:
       run: BUILD_NO_CUDA=1 pipx run build --sdist
     - name: Build wheel with no binaries
       run:  BUILD_NO_CUDA=1 python setup.py bdist_wheel --dist-dir=dist
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v4
       with:
         name: pypi_packages
         path: dist/*.tar.gz
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v4
       with:
         name: pypi_packages
         path: dist/*.whl
@@ -169,7 +169,7 @@ jobs:
           cd ..
         shell: bash  # `ls -lah` does not exist in windows powershell
 
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: compiled_wheels_python${{ matrix.python-version }}
           path: dist/*.whl
