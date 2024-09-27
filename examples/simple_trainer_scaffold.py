@@ -54,9 +54,9 @@ class Config:
     render_traj_path: str = "ellipse"
 
     # Path to the Mip-NeRF 360 dataset
-    data_dir: str = "examples/data/360_v2/room"
+    data_dir: str = "examples/data/360_v2/garden"
     # Downsample factor for the dataset
-    data_factor: int = 2
+    data_factor: int = 4
     # Directory to save results
     result_dir: str = "results"
     # Every N images there is a test image

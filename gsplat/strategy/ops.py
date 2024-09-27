@@ -284,15 +284,20 @@ def relocate(
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
         v[sampled_idxs] = 0
+        v[dead_indices] = 0
         return v
 
     # update the parameters and the state in the optimizers
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
     # update the extra running state
     for k, v in state.items():
-        if isinstance(v, torch.Tensor):
+        if isinstance(v, torch.Tensor) and k != "binoms":
             if k == "anchor_count" or k == "anchor_opacity":
                 v[sampled_idxs] = 0
+                v[dead_indices] = 0
+            else:
+                v.view(-1, state["n_feat_offsets"])[sampled_idxs] = 0
+                v.view(-1, state["n_feat_offsets"])[dead_indices] = 0
 
 
 @torch.no_grad()
