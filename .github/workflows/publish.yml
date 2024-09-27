@@ -7,6 +7,9 @@ on:
   release:
     types: [created]
 
+permissions:
+  contents: write
+
 jobs:
 
   # Build the wheels using reusable_building.yml
@@ -68,6 +71,8 @@ jobs:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: ./whl  # Directory where the simple index pages are located
         destination_dir: whl  # The 'wh' folder in the GitHub Pages root
+        keep_files: false  # This will only erase the destination subdirectory.
+        cname: docs.gsplat.studio
 
   upload_pypi:
     name: Upload to PyPi
@@ -80,6 +85,11 @@ jobs:
         name: pypi_packages
         path: dist
  
+    - name: Install dependencies
+      run: |
+          python -m pip install build twine
+      shell: bash
+
     # - name: Publish package to Test PyPI
     #   uses: pypa/gh-action-pypi-publish@release/v1
     #   with:
@@ -91,3 +101,4 @@ jobs:
         PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
       run: |         
         twine upload --username __token__ --password $PYPI_TOKEN dist/*
+      shell: bash
