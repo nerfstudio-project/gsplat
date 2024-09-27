@@ -4,7 +4,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from collections import defaultdict
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple
 
 import imageio
 import nerfview
@@ -39,7 +39,6 @@ from lib_bilagrid import (
     total_variation_loss,
 )
 
-from gsplat.compression import PngCompression
 from gsplat.distributed import cli
 from gsplat.rendering import rasterization, view_to_visible_anchors
 from gsplat.strategy import ScaffoldStrategy
@@ -50,9 +49,12 @@ class Config:
     # Disable viewer
     disable_viewer: bool = False
     # Path to the .pt files. If provide, it will skip training and run evaluation only.
-    ckpt: Optional[List[str]] = None
-    # Name of compression strategy to use
-    compression: Optional[Literal["png"]] = None
+    # ckpt: Optional[List[str]] = None
+    ckpt: Optional[List[str]] = field(
+        default_factory=lambda: [
+            "/home/paja/projects/gsplat_fork/results/ckpts/ckpt_1999_rank0.pt"
+        ]
+    )
     # Render trajectory path
     render_traj_path: str = "ellipse"
 
@@ -90,7 +92,7 @@ class Config:
     # Steps to evaluate the model
     eval_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
     # Steps to save the model
-    save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    save_steps: List[int] = field(default_factory=lambda: [2_000, 30_000])
 
     # voxel size for Scaffold-GS
     voxel_size = 0.001
@@ -377,13 +379,6 @@ class Runner:
             feat_dim=cfg.feat_dim,
             n_feat_offsets=cfg.n_feat_offsets,
         )
-        # Compression Strategy
-        self.compression_method = None
-        if cfg.compression is not None:
-            if cfg.compression == "png":
-                self.compression_method = PngCompression()
-            else:
-                raise ValueError(f"Unknown compression strategy: {cfg.compression}")
 
         self.pose_optimizers = []
         if cfg.pose_opt:
@@ -896,7 +891,16 @@ class Runner:
                     json.dump(stats, f)
                 data = {
                     "step": step,
-                    "splats": self.splats["gauss_params"].state_dict(),
+                    "feat_dim": self.cfg.feat_dim,
+                    "n_feat_offsets": self.cfg.n_feat_offsets,
+                    "gauss_params": self.splats["gauss_params"].state_dict(),
+                    "opacities_mlp": self.splats["decoders"][
+                        "opacities_mlp"
+                    ].state_dict(),
+                    "colors_mlp": self.splats["decoders"]["colors_mlp"].state_dict(),
+                    "scale_rot_mlp": self.splats["decoders"][
+                        "scale_rot_mlp"
+                    ].state_dict(),
                 }
                 if cfg.pose_opt:
                     if world_size > 1:
@@ -962,10 +966,6 @@ class Runner:
                 self.eval(step)
             #     self.render_traj(step)
 
-            # run compression
-            if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:
-                self.run_compression(step=step)
-
             if not cfg.disable_viewer:
                 self.viewer.lock.release()
                 num_train_steps_per_sec = 1.0 / (time.time() - tic)
@@ -978,9 +978,16 @@ class Runner:
                 self.viewer.update(step, num_train_rays_per_step)
 
     @torch.no_grad()
-    def eval(self, step: int, stage: str = "val"):
+    def eval(self, step: int, n_feat_offsets: int, feat_dim: int, stage: str = "val"):
         """Entry for evaluation."""
         print("Running evaluation...")
+        assert (
+            n_feat_offsets == self.cfg.n_feat_offsets
+        ), f"Feature offset count changed, should be {n_feat_offsets}"
+        assert (
+            feat_dim == self.cfg.feat_dim
+        ), f"Feature dim changed, should be {feat_dim}"
+
         cfg = self.cfg
         device = self.device
         world_rank = self.world_rank
@@ -1133,23 +1140,6 @@ class Runner:
         print(f"Video saved to {video_dir}/traj_{step}.mp4")
 
     @torch.no_grad()
-    def run_compression(self, step: int):
-        """Entry for running compression."""
-        print("Running compression...")
-        world_rank = self.world_rank
-
-        compress_dir = f"{cfg.result_dir}/compression/rank{world_rank}"
-        os.makedirs(compress_dir, exist_ok=True)
-
-        self.compression_method.compress(compress_dir, self.splats["gauss_params"])
-
-        # evaluate compression
-        splats_c = self.compression_method.decompress(compress_dir)
-        for k in splats_c.keys():
-            self.splats["gauss_params"][k].data = splats_c[k].to(self.device)
-        self.eval(step=step, stage="compress")
-
-    @torch.no_grad()
     def _viewer_render_fn(
         self, camera_state: nerfview.CameraState, img_wh: Tuple[int, int]
     ):
@@ -1185,15 +1175,18 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
             torch.load(file, map_location=runner.device, weights_only=True)
             for file in cfg.ckpt
         ]
+
         for k in runner.splats["gauss_params"].keys():
             runner.splats["gauss_params"][k].data = torch.cat(
-                [ckpt["splats"][k] for ckpt in ckpts]
+                [ckpt["gauss_params"][k] for ckpt in ckpts]
             )
+        for k in runner.splats["decoders"].keys():
+            runner.splats["decoders"][k].load_state_dict(ckpts[0][k])
         step = ckpts[0]["step"]
-        runner.eval(step=step)
+        n_feat_offsets = ckpts[0]["n_feat_offsets"]
+        feat_dim = ckpts[0]["feat_dim"]
+        runner.eval(step=step, n_feat_offsets=n_feat_offsets, feat_dim=feat_dim)
         runner.render_traj(step=step)
-        if cfg.compression is not None:
-            runner.run_compression(step=step)
     else:
         runner.train()
 
@@ -1217,17 +1210,5 @@ if __name__ == "__main__":
 
     cfg = tyro.cli(Config)
     cfg.adjust_steps(cfg.steps_scaler)
-
-    # try import extra dependencies
-    if cfg.compression == "png":
-        try:
-            import plas
-            import torchpq
-        except:
-            raise ImportError(
-                "To use PNG compression, you need to install "
-                "torchpq (instruction at https://github.com/DeMoriarty/TorchPQ?tab=readme-ov-file#install) "
-                "and plas (via 'pip install git+https://github.com/fraunhoferhhi/PLAS.git') "
-            )
 
     cli(main, cfg, verbose=True)

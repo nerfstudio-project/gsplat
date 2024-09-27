@@ -34,14 +34,6 @@ class ScaffoldStrategy(Strategy):
         prune_opa (float): GSs with opacity below this value will be pruned. Default is 0.005.
         grow_grad2d (float): GSs with image plane gradient above this value will be
           split/duplicated. Default is 0.0002.
-        grow_scale3d (float): GSs with 3d scale (normalized by scene_scale) below this
-          value will be duplicated. Above will be split. Default is 0.01.
-        grow_scale2d (float): GSs with 2d scale (normalized by image resolution) above
-          this value will be split. Default is 0.05.
-        prune_scale3d (float): GSs with 3d scale (normalized by scene_scale) above this
-          value will be pruned. Default is 0.1.
-        prune_scale2d (float): GSs with 2d scale (normalized by image resolution) above
-          this value will be pruned. Default is 0.15.
         refine_start_iter (int): Start refining GSs after this iteration. Default is 500.
         refine_stop_iter (int): Stop refining GSs after this iteration. Default is 15_000.
         refine_every (int): Refine GSs every this steps. Default is 100.
@@ -70,10 +62,6 @@ class ScaffoldStrategy(Strategy):
 
     prune_opa: float = 0.005
     grow_grad2d: float = 1.28e-4
-    grow_scale3d: float = 0.01
-    grow_scale2d: float = 0.05
-    prune_scale3d: float = 0.1
-    prune_scale2d: float = 0.15
     refine_start_iter: int = 800
     absgrad: bool = False
     max_voxel_levels: int = 3
@@ -87,8 +75,9 @@ class ScaffoldStrategy(Strategy):
     growing_thresholds: float = 0.4
 
     pause_refine_after_reset: int = 0
-    absgrad: bool = False
     verbose: bool = True
+    drop_out: bool = False
+    pruning: bool = False
 
     def initialize_state(
         self, scene_scale: float = 1.0, feat_dim=128, n_feat_offsets=10
@@ -198,56 +187,42 @@ class ScaffoldStrategy(Strategy):
             new_anchors = self._anchor_growing(params, optimizers, state)
             if self.verbose:
                 print(
-                    f"Step {step}: {new_anchors} anchors grown."
-                    f"Now having {len(params['anchors'])} anchors."
+                    f"Step {step}: {new_anchors} anchors grown. Now having {len(params['anchors'])} anchors."
                 )
 
-            # if step % 1000 == 0:
-            # low_opacity_mask = (
-            #     state["anchor_opacity"] < self.prune_opa * state["anchor_count"]
-            # ).squeeze()
-            # anchor_mask = (
-            #     state["anchor_count"] > self.pruning_thresholds * self.refine_every
-            # )  # [N, 1]
-            # is_prune = torch.logical_and(low_opacity_mask, anchor_mask)
-            #
-            # indices = is_prune.nonzero(as_tuple=False).squeeze()
-            # # Efficiently set the specified indices to zero
-            # state["anchor_count"].index_fill_(0, indices, 0)
-            # state["anchor_opacity"].index_fill_(0, indices, 0)
-            #
-            # n_prune = is_prune.sum().item()
-            # if n_prune > 0:
-            #     remove_anchors(
-            #         params=params,
-            #         optimizers=optimizers,
-            #         n_feat_offsets=self.n_feat_offsets,
-            #         state=state,
-            #         mask=is_prune,
-            #     )
-            #
-            # if self.verbose:
-            #     print(
-            #         f"Step {step}: {n_prune} anchors pruned. "
-            #         f"Now having {len(params['anchors'])} anchors."
-            #     )
-            # else:
-            n_relocated_gs = self._relocate_gs(params, optimizers, binoms, state)
-            if self.verbose:
-                print(f"Relocated anchors {n_relocated_gs}")
+            if self.pruning:
+                low_opacity_mask = (
+                    state["anchor_opacity"] < self.prune_opa * state["anchor_count"]
+                ).squeeze()
+                anchor_mask = (
+                    state["anchor_count"] > self.pruning_thresholds * self.refine_every
+                )  # [N, 1]
+                is_prune = torch.logical_and(low_opacity_mask, anchor_mask)
 
-            # def op_sigmoid(x, k=100, x0=0.995):
-            #     return 1 / (1 + torch.exp(-k * (x - x0)))
-            #
-            # opacities = torch.sigmoid(params["opacities"])
-            # noise = (
-            #         torch.randn_like(params["offsets"])
-            #         * (op_sigmoid(1 - opacities)).unsqueeze(-1)
-            #
-            #         * 5e5 * 0.00001
-            # )
-            #
-            # params["offsets"] = params["offsets"] + noise
+                indices = is_prune.nonzero(as_tuple=False).squeeze()
+                # Efficiently set the specified indices to zero
+                state["anchor_count"].index_fill_(0, indices, 0)
+                state["anchor_opacity"].index_fill_(0, indices, 0)
+
+                n_prune = is_prune.sum().item()
+                if n_prune > 0:
+                    remove_anchors(
+                        params=params,
+                        optimizers=optimizers,
+                        n_feat_offsets=state["n_feat_offsets"],
+                        state=state,
+                        mask=is_prune,
+                    )
+
+                if self.verbose:
+                    print(
+                        f"Step {step}: {n_prune} anchors pruned. Now having {len(params['anchors'])} anchors."
+                    )
+            else:
+                n_relocated_gs = self._relocate_gs(params, optimizers, binoms, state)
+                if self.verbose:
+                    print(f"Relocated anchors {n_relocated_gs}")
+
             torch.cuda.empty_cache()
 
     def _update_state(
@@ -387,9 +362,11 @@ class ScaffoldStrategy(Strategy):
             gradient_mask = torch.logical_and(gradient_mask, growing_threshold_mask)
 
             # Drop-out: Helps prevent too massive anchor growth.
-            # rand_mask = torch.rand_like(gradient_mask.float()) > (0.5**m)
-            # rand_mask = rand_mask.cuda()
-            # gradient_mask = torch.logical_and(gradient_mask, rand_mask)
+            if self.drop_out:
+                rand_mask = torch.rand_like(gradient_mask.float()) > (0.5**m)
+                rand_mask = rand_mask.cuda()
+                gradient_mask = torch.logical_and(gradient_mask, rand_mask)
+
             gradient_mask = torch.cat(
                 [
                     gradient_mask,
