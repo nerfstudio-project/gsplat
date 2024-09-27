@@ -177,8 +177,8 @@ def rasterization(
         distributed: Whether to use distributed rendering. Default is False. If True,
             The input Gaussians are expected to be a subset of scene in each rank, and
             the function will collaboratively render the images for all ranks.
-        ortho: Whether to use orthographic projection. In such case fx and fy become the scaling
-            factors to convert projected coordinates into pixel space and cx, cy become offsets.
+        camera_model: The camera model to use. Supported models are "pinhole", "ortho",
+            and "fisheye". Default is "pinhole".
         covars: Optional covariance matrices of the Gaussians. If provided, the `quats` and
             `scales` will be ignored. [N, 3, 3], Default is None.
 
