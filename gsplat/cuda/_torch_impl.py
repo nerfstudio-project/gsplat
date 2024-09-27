@@ -1,5 +1,6 @@
 import struct
 from typing import Optional, Tuple
+from typing_extensions import Literal, assert_never
 
 import torch
 import torch.nn.functional as F
@@ -119,6 +120,71 @@ def _persp_proj(
     return means2d, cov2d  # [C, N, 2], [C, N, 2, 2]
 
 
+def _fisheye_proj(
+    means: Tensor,  # [C, N, 3]
+    covars: Tensor,  # [C, N, 3, 3]
+    Ks: Tensor,  # [C, 3, 3]
+    width: int,
+    height: int,
+) -> Tuple[Tensor, Tensor]:
+    """PyTorch implementation of fisheye projection for 3D Gaussians.
+
+    Args:
+        means: Gaussian means in camera coordinate system. [C, N, 3].
+        covars: Gaussian covariances in camera coordinate system. [C, N, 3, 3].
+        Ks: Camera intrinsics. [C, 3, 3].
+        width: Image width.
+        height: Image height.
+
+    Returns:
+        A tuple:
+
+        - **means2d**: Projected means. [C, N, 2].
+        - **cov2d**: Projected covariances. [C, N, 2, 2].
+    """
+    C, N, _ = means.shape
+
+    x, y, z = torch.unbind(means, dim=-1)  # [C, N]
+
+    fx = Ks[..., 0, 0, None]  # [C, 1]
+    fy = Ks[..., 1, 1, None]  # [C, 1]
+    cx = Ks[..., 0, 2, None]  # [C, 1]
+    cy = Ks[..., 1, 2, None]  # [C, 1]
+
+    eps = 0.0000001
+    xy_len = (x**2 + y**2) ** 0.5 + eps
+    theta = torch.atan2(xy_len, z + eps)
+    means2d = torch.stack(
+        [
+            x * fx * theta / xy_len + cx,
+            y * fy * theta / xy_len + cy,
+        ],
+        dim=-1,
+    )
+
+    x2 = x * x + eps
+    y2 = y * y
+    xy = x * y
+    x2y2 = x2 + y2
+    x2y2z2_inv = 1.0 / (x2y2 + z * z)
+    b = torch.atan2(xy_len, z) / xy_len / x2y2
+    a = z * x2y2z2_inv / (x2y2)
+    J = torch.stack(
+        [
+            fx * (x2 * a + y2 * b),
+            fx * xy * (a - b),
+            -fx * x * x2y2z2_inv,
+            fy * xy * (a - b),
+            fy * (y2 * a + x2 * b),
+            -fy * y * x2y2z2_inv,
+        ],
+        dim=-1,
+    ).reshape(C, N, 2, 3)
+
+    cov2d = torch.einsum("...ij,...jk,...kl->...il", J, covars, J.transpose(-1, -2))
+    return means2d, cov2d  # [C, N, 2], [C, N, 2, 2]
+
+
 def _ortho_proj(
     means: Tensor,  # [C, N, 3]
     covars: Tensor,  # [C, N, 3, 3]
@@ -193,7 +259,7 @@ def _fully_fused_projection(
     near_plane: float = 0.01,
     far_plane: float = 1e10,
     calc_compensations: bool = False,
-    ortho: bool = False,
+    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Optional[Tensor]]:
     """PyTorch implementation of `gsplat.cuda._wrapper.fully_fused_projection()`
 
@@ -208,10 +274,14 @@ def _fully_fused_projection(
 
     means_c, covars_c = _world_to_cam(means, covars, viewmats)
 
-    if ortho:
+    if camera_model == "ortho":
         means2d, covars2d = _ortho_proj(means_c, covars_c, Ks, width, height)
-    else:
+    elif camera_model == "fisheye":
+        means2d, covars2d = _fisheye_proj(means_c, covars_c, Ks, width, height)
+    elif camera_model == "pinhole":
         means2d, covars2d = _persp_proj(means_c, covars_c, Ks, width, height)
+    else:
+        assert_never(camera_model)
 
     det_orig = (
         covars2d[..., 0, 0] * covars2d[..., 1, 1]

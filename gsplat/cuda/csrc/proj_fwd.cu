@@ -25,7 +25,7 @@ __global__ void proj_fwd_kernel(
     const T *__restrict__ Ks,     // [C, 3, 3]
     const uint32_t width,
     const uint32_t height,
-    const bool ortho,
+    const CameraModelType camera_model,
     T *__restrict__ means2d, // [C, N, 2]
     T *__restrict__ covars2d // [C, N, 2, 2]
 ) {
@@ -53,10 +53,17 @@ __global__ void proj_fwd_kernel(
     const vec3<OpT> mean = glm::make_vec3(means);
     const mat3<OpT> covar = glm::make_mat3(covars);
 
-    if (ortho)
-        ortho_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
-    else
-        persp_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
+    switch (camera_model) {
+        case CameraModelType::PINHOLE: // perspective projection
+            persp_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
+            break;
+        case CameraModelType::ORTHO: // orthographic projection
+            ortho_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
+            break;
+        case CameraModelType::FISHEYE: // fisheye projection
+            fisheye_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
+            break;
+    }
 
     // write to outputs: glm is column-major but we want row-major
     GSPLAT_PRAGMA_UNROLL
@@ -78,7 +85,7 @@ std::tuple<torch::Tensor, torch::Tensor> proj_fwd_tensor(
     const torch::Tensor &Ks,     // [C, 3, 3]
     const uint32_t width,
     const uint32_t height,
-    const bool ortho
+    const CameraModelType camera_model
 ) {
     GSPLAT_DEVICE_GUARD(means);
     GSPLAT_CHECK_INPUT(means);
@@ -111,7 +118,7 @@ std::tuple<torch::Tensor, torch::Tensor> proj_fwd_tensor(
                         Ks.data_ptr<scalar_t>(),
                         width,
                         height,
-                        ortho,
+                        camera_model,
                         means2d.data_ptr<scalar_t>(),
                         covars2d.data_ptr<scalar_t>()
                     );

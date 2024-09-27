@@ -31,6 +31,13 @@
 
 namespace gsplat {
 
+enum CameraModelType
+{
+    PINHOLE = 0,
+    ORTHO = 1,
+    FISHEYE = 2,
+};
+
 std::tuple<torch::Tensor, torch::Tensor> quat_scale_to_covar_preci_fwd_tensor(
     const torch::Tensor &quats,  // [N, 4]
     const torch::Tensor &scales, // [N, 3]
@@ -53,7 +60,7 @@ std::tuple<torch::Tensor, torch::Tensor> proj_fwd_tensor(
     const torch::Tensor &Ks,     // [C, 3, 3]
     const uint32_t width,
     const uint32_t height,
-    const bool ortho
+    const CameraModelType camera_model
 );
 
 std::tuple<torch::Tensor, torch::Tensor> proj_bwd_tensor(
@@ -62,7 +69,7 @@ std::tuple<torch::Tensor, torch::Tensor> proj_bwd_tensor(
     const torch::Tensor &Ks,     // [C, 3, 3]
     const uint32_t width,
     const uint32_t height,
-    const bool ortho,
+    const CameraModelType camera_model,
     const torch::Tensor &v_means2d, // [C, N, 2]
     const torch::Tensor &v_covars2d // [C, N, 2, 2]
 );
@@ -105,7 +112,7 @@ fully_fused_projection_fwd_tensor(
     const float far_plane,
     const float radius_clip,
     const bool calc_compensations,
-    const bool ortho
+    const CameraModelType camera_model
 );
 
 std::tuple<
@@ -125,7 +132,7 @@ fully_fused_projection_bwd_tensor(
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
-    const bool ortho,
+    const CameraModelType camera_model,
     // fwd outputs
     const torch::Tensor &radii,                       // [C, N]
     const torch::Tensor &conics,                      // [C, N, 3]
@@ -269,7 +276,7 @@ fully_fused_projection_packed_fwd_tensor(
     const float far_plane,
     const float radius_clip,
     const bool calc_compensations,
-    const bool ortho
+    const CameraModelType camera_model
 );
 
 std::tuple<
@@ -289,7 +296,7 @@ fully_fused_projection_packed_bwd_tensor(
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
-    const bool ortho,
+    const CameraModelType camera_model,
     // fwd outputs
     const torch::Tensor &camera_ids,                  // [nnz]
     const torch::Tensor &gaussian_ids,                // [nnz]

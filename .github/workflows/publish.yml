@@ -1,36 +1,110 @@
 # This workflows will upload a Python Package using twine when a release is created
 # For more information see: https://help.github.com/en/actions/language-and-framework-guides/using-python-with-github-actions#publishing-to-package-registries
 
-name: Upload Python Package
+name: Build and Release Wheels
 
 on:
   release:
     types: [created]
-    branches: [main]
+
+permissions:
+  contents: write
 
 jobs:
-  deploy:
+
+  # Build the wheels using reusable_building.yml
+  build_wheels:
+    name: Call reusable building workflow
+    uses: ./.github/workflows/building.yml  
+
+  create_release_and_upload_packages:
+    name: Uplodad to Github Release
+    needs: [build_wheels]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10']
+    steps:
+
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Download packages
+      id: download_artifacts
+      uses: actions/download-artifact@v3
+      with:
+        name: compiled_wheels_python${{ matrix.python-version }}
+        path: dist
+
+    - name: Upload packages to GitHub Release
+      id: upload_assets
+      run: |
+        for file in $(ls ./dist/*.*); do
+          echo "Uploading $file..."
+          filename=$(basename "$file")
+          encoded_filename=$(echo "$filename" | sed 's/+/%2B/g')
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/zip" \
+            --data-binary @"$file" \
+            "${{ github.event.release.upload_url }}=$encoded_filename"
+        done
+    
+  generate_simple_index_pages:
+    name: Generate Simple Index Pages
+    needs: [create_release_and_upload_packages]
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Generate Simple Index Pages
+      run: python .github/workflows/generate_simple_index_pages.py --outdir ./whl
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  
+
+    - name: Deploy to GitHub Pages
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./whl  # Directory where the simple index pages are located
+        destination_dir: whl  # The 'wh' folder in the GitHub Pages root
+        keep_files: false  # This will only erase the destination subdirectory.
+        cname: docs.gsplat.studio
+
+  upload_pypi:
+    name: Upload to PyPi
+    needs: [build_wheels]
     runs-on: ubuntu-latest
     environment: production
-
     steps:
-      - uses: actions/checkout@v3
-        with:
-          submodules: 'recursive'
-          
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.7'
-      - name: Install dependencies
-        run: |
+
+    - uses: actions/download-artifact@v3
+      with:
+        name: pypi_packages
+        path: dist
+ 
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.7'
+      
+    - name: Install dependencies
+      run: |
           python -m pip install build twine
-      - name: Strip unsupported tags in README
-        run: |
-          sed -i '/<!-- pypi-strip -->/,/<!-- \/pypi-strip -->/d' README.md
-      - name: Build and publish
-        env:
-          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
-        run: |
-          BUILD_NO_CUDA=1 python -m build
-          twine upload --username __token__ --password $PYPI_TOKEN dist/*
+      shell: bash
+
+    # - name: Publish package to Test PyPI
+    #   uses: pypa/gh-action-pypi-publish@release/v1
+    #   with:
+    #     password: ${{ secrets.TEST_PYPI_API_TOKEN }}
+    #     repository-url: https://test.pypi.org/legacy/
+
+    - name: Publish package to PyPI
+      env:
+        PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+      run: |         
+        twine upload --username __token__ --password $PYPI_TOKEN dist/*
+      shell: bash

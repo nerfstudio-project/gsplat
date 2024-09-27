@@ -67,6 +67,8 @@ class Config:
     global_scale: float = 1.0
     # Normalize the world space
     normalize_world_space: bool = True
+    # Camera model
+    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole"
 
     # Port for the viewer server
     port: int = 8080
@@ -445,6 +447,7 @@ class Runner:
         Ks: Tensor,
         width: int,
         height: int,
+        masks: Optional[Tensor] = None,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         means = self.splats["means"]  # [N, 3]
@@ -487,8 +490,11 @@ class Runner:
             sparse_grad=self.cfg.sparse_grad,
             rasterize_mode=rasterize_mode,
             distributed=self.world_size > 1,
+            camera_model=self.cfg.camera_model,
             **kwargs,
         )
+        if masks is not None:
+            render_colors[~masks] = 0
         return render_colors, render_alphas, info
 
     def train(self):
@@ -568,6 +574,7 @@ class Runner:
                 pixels.shape[0] * pixels.shape[1] * pixels.shape[2]
             )
             image_ids = data["image_id"].to(device)
+            masks = data["mask"].to(device) if "mask" in data else None  # [1, H, W]
             if cfg.depth_loss:
                 points = data["points"].to(device)  # [1, M, 2]
                 depths_gt = data["depths"].to(device)  # [1, M]
@@ -594,6 +601,7 @@ class Runner:
                 far_plane=cfg.far_plane,
                 image_ids=image_ids,
                 render_mode=self.render_mode,
+                masks=masks,
             )
             colors = renders[..., :3]
 
@@ -831,6 +839,7 @@ class Runner:
             camtoworlds = data["camtoworld"].to(device)
             Ks = data["K"].to(device)
             pixels = data["image"].to(device) / 255.0
+            masks = data["mask"].to(device) if "mask" in data else None
             height, width = pixels.shape[1:3]
 
             torch.cuda.synchronize()
@@ -844,6 +853,7 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 render_mode=self.render_mode,
+                masks=masks,
             )  # [1, H, W, 3]
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
@@ -944,7 +954,10 @@ class Runner:
         K = torch.from_numpy(list(self.parser.Ks_dict.values())[0]).float().to(device)
         width, height = list(self.parser.imsize_dict.values())[0]
 
-        canvas_all = []
+        # save to video
+        video_dir = f"{cfg.result_dir}/videos"
+        os.makedirs(video_dir, exist_ok=True)
+        writer = imageio.get_writer(f"{video_dir}/traj_{step}.mp4", fps=30)
         for i in tqdm.trange(len(camtoworlds_all), desc="Rendering trajectory"):
             camtoworlds = camtoworlds_all[i : i + 1]
             Ks = K[None]
@@ -975,13 +988,6 @@ class Runner:
             # write images
             canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()
             canvas = (canvas * 255).astype(np.uint8)
-            canvas_all.append(canvas)
-
-        # save to video
-        video_dir = f"{cfg.result_dir}/videos"
-        os.makedirs(video_dir, exist_ok=True)
-        writer = imageio.get_writer(f"{video_dir}/traj_{step}.mp4", fps=30)
-        for canvas in canvas_all:
             writer.append_data(canvas)
         writer.close()
         print(f"Video saved to {video_dir}/traj_{step}.mp4")
