@@ -29,7 +29,7 @@ jobs:
 
     - name: Download packages
       id: download_artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: compiled_wheels_python${{ matrix.python-version }}
         path: dist
@@ -53,6 +53,10 @@ jobs:
     needs: [create_release_and_upload_packages]
     runs-on: ubuntu-latest
     steps:
+
+    - name: Checkout code
+      uses: actions/checkout@v3
+
     - name: Generate Simple Index Pages
       run: python .github/workflows/generate_simple_index_pages.py --outdir ./whl
       env:
@@ -71,7 +75,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
 
-    - uses: actions/download-artifact@v2
+    - uses: actions/download-artifact@v4
       with:
         name: pypi_packages
         path: dist
