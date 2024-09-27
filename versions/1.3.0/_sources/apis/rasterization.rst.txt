@@ -1,6 +1,9 @@
 Rasterization
 ===================================
 
+3DGS
+------
+
 .. currentmodule:: gsplat
 
 Given a set of 3D gaussians parametrized by means :math:`\mu \in \mathbb{R}^3`, covariances 
@@ -39,3 +42,35 @@ Where :math:`[W | t]` is the world-to-camera transformation matrix, and :math:`f
 are the focal lengths of the camera.
 
 .. autofunction:: rasterization
+
+2DGS
+------
+
+Given a set of 2D gaussians parametrized by means :math:`\mu \in \mathbb{R}^3`, two principal tangent vectors 
+embedded as the first two columns of a rotation matrix :math:`R \in \mathbb{R}^{3\times3}`, and a scale matrix :math:`S \in R^{3\times3}`
+representing the scaling along the two principal tangential directions, we first transforms pixels into splats' local tangent frame 
+by :math:`(WH)^{-1} \in \mathbb{R}^{4\times4}` and compute weights via ray-splat intersection. Then we follow the sort and rendering similar to 3DGS.  
+
+Note that H is the  transformation from splat's local tangent plane :math:`\{u, v\}` into world space
+
+.. math:: 
+    
+    H = \begin{bmatrix}
+        RS & \mu \\
+        0 & 1
+    \end{bmatrix}
+
+and :math:`W \in \mathbb{R}^{4\times4}` is the transformation matrix from world space to image space.
+
+
+Splatting is done via ray-splat plane intersection. Each pixel is considered as a x-plane :math:`h_{x}=(-1, 0, 0, x)^{T}`
+and a y-plane :math:`h_{y}=(0, -1, 0, y)^{T}`, and the intersection between a splat and the pixel :math:`p=(x, y)` is defined 
+as the intersection bwtween x-plane, y-plane, and the splat's tangent plane. We first transform :math:`h_{x}` to :math:`h_{u}` and :math:`h_{y}`
+to :math:`h_{v}` in splat's tangent frame via the inverse transformation :math:`(WH)^{-1}`. As the intersection point should fall on :math:`h_{u}` and :math:`h_{v}`, we have an efficient
+solution:
+
+.. math::
+    u(p) = \frac{h^{2}_{u}h^{4}_{v}-h^{4}_{u}h^{2}_{v}}{h^{1}_{u}h^{2}_{v}-h^{2}_{u}h^{1}_{v}}, 
+    v(p) = \frac{h^{4}_{u}h^{1}_{v}-h^{1}_{u}h^{4}_{v}}{h^{1}_{u}h^{2}_{v}-h^{2}_{u}h^{1}_{v}}
+
+.. autofunction:: rasterization_2dgs

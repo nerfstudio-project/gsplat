@@ -6,7 +6,7 @@
 <link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" /><link rel="next" title="Rasterization" href="rasterization.html" /><link rel="prev" title="Data Conventions" href="../conventions/data_conventions.html" />
 
     <!-- Generated with Sphinx 7.4.7 and Furo 2024.08.06 -->
-        <title>Storage Compression - gsplat documentation</title>
+        <title>Compression - gsplat documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=354aac6f" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=302659d7" />
@@ -261,9 +261,9 @@
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Python API</span></p>
 <ul class="current">
-<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Storage Compression</a></li>
+<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Compression</a></li>
 <li class="toctree-l1"><a class="reference internal" href="rasterization.html">Rasterization</a></li>
-<li class="toctree-l1"><a class="reference internal" href="strategy.html">Densification Strategy</a></li>
+<li class="toctree-l1"><a class="reference internal" href="strategy.html">Densification</a></li>
 <li class="toctree-l1"><a class="reference internal" href="utils.html">Utils</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tests</span></p>
@@ -316,14 +316,14 @@
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          <section id="storage-compression">
-<h1>Storage Compression<a class="headerlink" href="#storage-compression" title="Link to this heading">¶</a></h1>
+          <section id="compression">
+<h1>Compression<a class="headerlink" href="#compression" title="Link to this heading">¶</a></h1>
 <p><cite>gsplat</cite> provides handy APIs for compressing and decompressing the Gaussian parameters,
 which can significantly reduce the storage / streaming cost. For example, using <a class="reference internal" href="#gsplat.PngCompression" title="gsplat.PngCompression"><code class="xref py py-class docutils literal notranslate"><span class="pre">PngCompression</span></code></a>,
-1 million Gaussians that are stored in 236 MB can be compressed to 16.5 MB, which only 0.5dB
+1 million Gaussians that are stored in 236 MB can be compressed to 16.5 MB, with only 0.5dB
 PSNR loss (29.18dB to 28.65dB).</p>
-<p>Similar to the <a class="reference internal" href="strategy.html"><span class="doc">Densification Strategy</span></a>, our compression APIs also has a specific expectation on
-the format of the Gaussian parameters. It is designed to work with the Guassians defined
+<p>Similar to the <a class="reference internal" href="strategy.html"><span class="doc">Densification</span></a>, our compression APIs also has a specific expectation on
+the format of the Gaussian parameters. It is designed to work with the Gaussians defined
 as either a Dict of
 <a class="reference external" href="https://pytorch.org/docs/stable/tensors.html">torch.Tensor</a>
 with at least the following keys: {“means”, “scales”, “quats”, “opacities”, “sh0”, “shN”}.
@@ -332,7 +332,7 @@ On top of these attributes, an arbitrary number of extra attributes are supporte
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">gsplat</span> <span class="kn">import</span> <span class="n">PngCompression</span>
 
 <span class="n">splats</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
-    <span class="s2">&quot;means&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="s2">&quot;scales&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">),</span> <span class="s2">&quot;quats&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="s2">&quot;opacities&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">),</span>
+    <span class="s2">&quot;means&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="s2">&quot;scales&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="s2">&quot;quats&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="s2">&quot;opacities&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">),</span>
     <span class="s2">&quot;sh0&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="s2">&quot;shN&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">24</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="s2">&quot;features1&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">128</span><span class="p">),</span> <span class="s2">&quot;features2&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span>
 <span class="p">}</span>
 
@@ -343,7 +343,7 @@ On top of these attributes, an arbitrary number of extra attributes are supporte
 <span class="n">splats_c</span> <span class="o">=</span> <span class="n">compression_method</span><span class="o">.</span><span class="n">decompress</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>Below is the APIs for the compression approaches we supported in <cite>gsplat</cite>:</p>
+<p>Below is the API for the compression approaches we support in <cite>gsplat</cite>:</p>
 <dl class="py class">
 <dt class="sig sig-object py" id="gsplat.PngCompression">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">PngCompression</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">use_sort</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">verbose</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/gsplat/compression/png_compression.html#PngCompression"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#gsplat.PngCompression" title="Link to this definition">¶</a></dt>
@@ -352,8 +352,8 @@ K-means clustering to compress the spherical harmonic coefficents.</p>
 <div class="admonition warning">
 <p class="admonition-title">Warning</p>
 <p>This class requires the <a class="reference external" href="https://pypi.org/project/imageio/">imageio</a>,
-<a class="reference external" href="https://github.com/DeMoriarty/TorchPQ?tab=readme-ov-file#install">plas</a>
-and <a class="reference external" href="https://github.com/fraunhoferhhi/PLAS.git">torchpq</a> packages to be installed.</p>
+<a class="reference external" href="https://github.com/fraunhoferhhi/PLAS.git">plas</a>
+and <a class="reference external" href="https://github.com/DeMoriarty/TorchPQ?tab=readme-ov-file#install">torchpq</a> packages to be installed.</p>
 </div>
 <div class="admonition warning">
 <p class="admonition-title">Warning</p>
@@ -470,7 +470,7 @@ they will only be compressed using NPZ compression.</p>
         <div class="toc-tree-container">
           <div class="toc-tree">
             <ul>
-<li><a class="reference internal" href="#">Storage Compression</a><ul>
+<li><a class="reference internal" href="#">Compression</a><ul>
 <li><a class="reference internal" href="#gsplat.PngCompression"><code class="docutils literal notranslate"><span class="pre">PngCompression</span></code></a><ul>
 <li><a class="reference internal" href="#gsplat.PngCompression.compress"><code class="docutils literal notranslate"><span class="pre">PngCompression.compress()</span></code></a></li>
 <li><a class="reference internal" href="#gsplat.PngCompression.decompress"><code class="docutils literal notranslate"><span class="pre">PngCompression.decompress()</span></code></a></li>

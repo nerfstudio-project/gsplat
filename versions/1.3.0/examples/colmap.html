@@ -261,9 +261,9 @@
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Python API</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="../apis/compression.html">Storage Compression</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../apis/compression.html">Compression</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../apis/rasterization.html">Rasterization</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../apis/strategy.html">Densification Strategy</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../apis/strategy.html">Densification</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../apis/utils.html">Utils</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tests</span></p>
@@ -323,7 +323,7 @@
 model for novel view synthesis, on a COLMAP processed capture. This script follows the
 exact same logic with the <a class="reference external" href="https://github.com/graphdeco-inria/gaussian-splatting">official implementation</a> and we have verified it to be
 able to reproduce the metrics in the paper, with much better training speed and memory
-footprint. See <a class="reference internal" href="../tests/eval.html"><span class="doc">Evaluation</span></a> for more details on the comparision.</p>
+footprint. See <a class="reference internal" href="../tests/eval.html"><span class="doc">Evaluation</span></a> for more details on the comparison.</p>
 <p>Simply run the script under <cite>examples/</cite>:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CUDA_VISIBLE_DEVICES</span><span class="o">=</span><span class="m">0</span><span class="w"> </span>python<span class="w"> </span>simple_trainer.py<span class="w"> </span>default<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--data_dir<span class="w"> </span>data/360_v2/garden/<span class="w"> </span>--data_factor<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>

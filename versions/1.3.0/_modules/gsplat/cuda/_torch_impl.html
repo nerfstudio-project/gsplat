@@ -260,9 +260,9 @@
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Python API</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="../../../apis/compression.html">Storage Compression</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../apis/compression.html">Compression</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../apis/rasterization.html">Rasterization</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../../apis/strategy.html">Densification Strategy</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../apis/strategy.html">Densification</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../apis/utils.html">Utils</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tests</span></p>
@@ -312,20 +312,15 @@
           <h1>Source code for gsplat.cuda._torch_impl</h1><div class="highlight"><pre>
 <span></span><span class="kn">import</span> <span class="nn">struct</span>
 <span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span>
+<span class="kn">from</span> <span class="nn">typing_extensions</span> <span class="kn">import</span> <span class="n">Literal</span><span class="p">,</span> <span class="n">assert_never</span>
 
 <span class="kn">import</span> <span class="nn">torch</span>
 <span class="kn">import</span> <span class="nn">torch.nn.functional</span> <span class="k">as</span> <span class="nn">F</span>
 <span class="kn">from</span> <span class="nn">torch</span> <span class="kn">import</span> <span class="n">Tensor</span>
 
 
-<span class="k">def</span> <span class="nf">_quat_scale_to_covar_preci</span><span class="p">(</span>
-    <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 4],</span>
-    <span class="n">scales</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3],</span>
-    <span class="n">compute_covar</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-    <span class="n">compute_preci</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-    <span class="n">triu</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;PyTorch implementation of `gsplat.cuda._wrapper.quat_scale_to_covar_preci()`.&quot;&quot;&quot;</span>
+<span class="k">def</span> <span class="nf">_quat_to_rotmat</span><span class="p">(</span><span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Convert quaternion to rotation matrix.&quot;&quot;&quot;</span>
     <span class="n">quats</span> <span class="o">=</span> <span class="n">F</span><span class="o">.</span><span class="n">normalize</span><span class="p">(</span><span class="n">quats</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
     <span class="n">w</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">z</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">unbind</span><span class="p">(</span><span class="n">quats</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
     <span class="n">R</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span>
@@ -342,9 +337,28 @@
         <span class="p">],</span>
         <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span>
     <span class="p">)</span>
+    <span class="k">return</span> <span class="n">R</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">quats</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span>
 
-    <span class="n">R</span> <span class="o">=</span> <span class="n">R</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">quats</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span>  <span class="c1"># (..., 3, 3)</span>
-    <span class="c1"># R.register_hook(lambda grad: print(&quot;grad R&quot;, grad))</span>
+
+<span class="k">def</span> <span class="nf">_quat_scale_to_matrix</span><span class="p">(</span>
+    <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 4],</span>
+    <span class="n">scales</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3],</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Convert quaternion and scale to a 3x3 matrix (R * S).&quot;&quot;&quot;</span>
+    <span class="n">R</span> <span class="o">=</span> <span class="n">_quat_to_rotmat</span><span class="p">(</span><span class="n">quats</span><span class="p">)</span>  <span class="c1"># (..., 3, 3)</span>
+    <span class="n">M</span> <span class="o">=</span> <span class="n">R</span> <span class="o">*</span> <span class="n">scales</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>  <span class="c1"># (..., 3, 3)</span>
+    <span class="k">return</span> <span class="n">M</span>
+
+
+<span class="k">def</span> <span class="nf">_quat_scale_to_covar_preci</span><span class="p">(</span>
+    <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 4],</span>
+    <span class="n">scales</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3],</span>
+    <span class="n">compute_covar</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">compute_preci</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">triu</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;PyTorch implementation of `gsplat.cuda._wrapper.quat_scale_to_covar_preci()`.&quot;&quot;&quot;</span>
+    <span class="n">R</span> <span class="o">=</span> <span class="n">_quat_to_rotmat</span><span class="p">(</span><span class="n">quats</span><span class="p">)</span>  <span class="c1"># (..., 3, 3)</span>
 
     <span class="k">if</span> <span class="n">compute_covar</span><span class="p">:</span>
         <span class="n">M</span> <span class="o">=</span> <span class="n">R</span> <span class="o">*</span> <span class="n">scales</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>  <span class="c1"># (..., 3, 3)</span>
@@ -415,6 +429,71 @@
     <span class="n">cov2d</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">einsum</span><span class="p">(</span><span class="s2">&quot;...ij,...jk,...kl-&gt;...il&quot;</span><span class="p">,</span> <span class="n">J</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">J</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">))</span>
     <span class="n">means2d</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">einsum</span><span class="p">(</span><span class="s2">&quot;cij,cnj-&gt;cni&quot;</span><span class="p">,</span> <span class="n">Ks</span><span class="p">[:,</span> <span class="p">:</span><span class="mi">2</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">],</span> <span class="n">means</span><span class="p">)</span>  <span class="c1"># [C, N, 2]</span>
     <span class="n">means2d</span> <span class="o">=</span> <span class="n">means2d</span> <span class="o">/</span> <span class="n">tz</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span>  <span class="c1"># [C, N, 2]</span>
+    <span class="k">return</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">cov2d</span>  <span class="c1"># [C, N, 2], [C, N, 2, 2]</span>
+
+
+<span class="k">def</span> <span class="nf">_fisheye_proj</span><span class="p">(</span>
+    <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 3]</span>
+    <span class="n">covars</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 3, 3]</span>
+    <span class="n">Ks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, 3, 3]</span>
+    <span class="n">width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;PyTorch implementation of fisheye projection for 3D Gaussians.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        means: Gaussian means in camera coordinate system. [C, N, 3].</span>
+<span class="sd">        covars: Gaussian covariances in camera coordinate system. [C, N, 3, 3].</span>
+<span class="sd">        Ks: Camera intrinsics. [C, 3, 3].</span>
+<span class="sd">        width: Image width.</span>
+<span class="sd">        height: Image height.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A tuple:</span>
+
+<span class="sd">        - **means2d**: Projected means. [C, N, 2].</span>
+<span class="sd">        - **cov2d**: Projected covariances. [C, N, 2, 2].</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span>
+
+    <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">z</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">unbind</span><span class="p">(</span><span class="n">means</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>  <span class="c1"># [C, N]</span>
+
+    <span class="n">fx</span> <span class="o">=</span> <span class="n">Ks</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span>  <span class="c1"># [C, 1]</span>
+    <span class="n">fy</span> <span class="o">=</span> <span class="n">Ks</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span>  <span class="c1"># [C, 1]</span>
+    <span class="n">cx</span> <span class="o">=</span> <span class="n">Ks</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span>  <span class="c1"># [C, 1]</span>
+    <span class="n">cy</span> <span class="o">=</span> <span class="n">Ks</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span>  <span class="c1"># [C, 1]</span>
+
+    <span class="n">eps</span> <span class="o">=</span> <span class="mf">0.0000001</span>
+    <span class="n">xy_len</span> <span class="o">=</span> <span class="p">(</span><span class="n">x</span><span class="o">**</span><span class="mi">2</span> <span class="o">+</span> <span class="n">y</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span> <span class="o">**</span> <span class="mf">0.5</span> <span class="o">+</span> <span class="n">eps</span>
+    <span class="n">theta</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">atan2</span><span class="p">(</span><span class="n">xy_len</span><span class="p">,</span> <span class="n">z</span> <span class="o">+</span> <span class="n">eps</span><span class="p">)</span>
+    <span class="n">means2d</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span>
+        <span class="p">[</span>
+            <span class="n">x</span> <span class="o">*</span> <span class="n">fx</span> <span class="o">*</span> <span class="n">theta</span> <span class="o">/</span> <span class="n">xy_len</span> <span class="o">+</span> <span class="n">cx</span><span class="p">,</span>
+            <span class="n">y</span> <span class="o">*</span> <span class="n">fy</span> <span class="o">*</span> <span class="n">theta</span> <span class="o">/</span> <span class="n">xy_len</span> <span class="o">+</span> <span class="n">cy</span><span class="p">,</span>
+        <span class="p">],</span>
+        <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="n">x2</span> <span class="o">=</span> <span class="n">x</span> <span class="o">*</span> <span class="n">x</span> <span class="o">+</span> <span class="n">eps</span>
+    <span class="n">y2</span> <span class="o">=</span> <span class="n">y</span> <span class="o">*</span> <span class="n">y</span>
+    <span class="n">xy</span> <span class="o">=</span> <span class="n">x</span> <span class="o">*</span> <span class="n">y</span>
+    <span class="n">x2y2</span> <span class="o">=</span> <span class="n">x2</span> <span class="o">+</span> <span class="n">y2</span>
+    <span class="n">x2y2z2_inv</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="p">(</span><span class="n">x2y2</span> <span class="o">+</span> <span class="n">z</span> <span class="o">*</span> <span class="n">z</span><span class="p">)</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">atan2</span><span class="p">(</span><span class="n">xy_len</span><span class="p">,</span> <span class="n">z</span><span class="p">)</span> <span class="o">/</span> <span class="n">xy_len</span> <span class="o">/</span> <span class="n">x2y2</span>
+    <span class="n">a</span> <span class="o">=</span> <span class="n">z</span> <span class="o">*</span> <span class="n">x2y2z2_inv</span> <span class="o">/</span> <span class="p">(</span><span class="n">x2y2</span><span class="p">)</span>
+    <span class="n">J</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span>
+        <span class="p">[</span>
+            <span class="n">fx</span> <span class="o">*</span> <span class="p">(</span><span class="n">x2</span> <span class="o">*</span> <span class="n">a</span> <span class="o">+</span> <span class="n">y2</span> <span class="o">*</span> <span class="n">b</span><span class="p">),</span>
+            <span class="n">fx</span> <span class="o">*</span> <span class="n">xy</span> <span class="o">*</span> <span class="p">(</span><span class="n">a</span> <span class="o">-</span> <span class="n">b</span><span class="p">),</span>
+            <span class="o">-</span><span class="n">fx</span> <span class="o">*</span> <span class="n">x</span> <span class="o">*</span> <span class="n">x2y2z2_inv</span><span class="p">,</span>
+            <span class="n">fy</span> <span class="o">*</span> <span class="n">xy</span> <span class="o">*</span> <span class="p">(</span><span class="n">a</span> <span class="o">-</span> <span class="n">b</span><span class="p">),</span>
+            <span class="n">fy</span> <span class="o">*</span> <span class="p">(</span><span class="n">y2</span> <span class="o">*</span> <span class="n">a</span> <span class="o">+</span> <span class="n">x2</span> <span class="o">*</span> <span class="n">b</span><span class="p">),</span>
+            <span class="o">-</span><span class="n">fy</span> <span class="o">*</span> <span class="n">y</span> <span class="o">*</span> <span class="n">x2y2z2_inv</span><span class="p">,</span>
+        <span class="p">],</span>
+        <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span>
+    <span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
+
+    <span class="n">cov2d</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">einsum</span><span class="p">(</span><span class="s2">&quot;...ij,...jk,...kl-&gt;...il&quot;</span><span class="p">,</span> <span class="n">J</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">J</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">))</span>
     <span class="k">return</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">cov2d</span>  <span class="c1"># [C, N, 2], [C, N, 2, 2]</span>
 
 
@@ -491,7 +570,7 @@
     <span class="n">near_plane</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.01</span><span class="p">,</span>
     <span class="n">far_plane</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e10</span><span class="p">,</span>
     <span class="n">calc_compensations</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-    <span class="n">ortho</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;PyTorch implementation of `gsplat.cuda._wrapper.fully_fused_projection()`</span>
 
@@ -502,10 +581,14 @@
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="n">means_c</span><span class="p">,</span> <span class="n">covars_c</span> <span class="o">=</span> <span class="n">_world_to_cam</span><span class="p">(</span><span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">viewmats</span><span class="p">)</span>
 
-    <span class="k">if</span> <span class="n">ortho</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">camera_model</span> <span class="o">==</span> <span class="s2">&quot;ortho&quot;</span><span class="p">:</span>
         <span class="n">means2d</span><span class="p">,</span> <span class="n">covars2d</span> <span class="o">=</span> <span class="n">_ortho_proj</span><span class="p">(</span><span class="n">means_c</span><span class="p">,</span> <span class="n">covars_c</span><span class="p">,</span> <span class="n">Ks</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">height</span><span class="p">)</span>
-    <span class="k">else</span><span class="p">:</span>
+    <span class="k">elif</span> <span class="n">camera_model</span> <span class="o">==</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">:</span>
+        <span class="n">means2d</span><span class="p">,</span> <span class="n">covars2d</span> <span class="o">=</span> <span class="n">_fisheye_proj</span><span class="p">(</span><span class="n">means_c</span><span class="p">,</span> <span class="n">covars_c</span><span class="p">,</span> <span class="n">Ks</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">height</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">camera_model</span> <span class="o">==</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">:</span>
         <span class="n">means2d</span><span class="p">,</span> <span class="n">covars2d</span> <span class="o">=</span> <span class="n">_persp_proj</span><span class="p">(</span><span class="n">means_c</span><span class="p">,</span> <span class="n">covars_c</span><span class="p">,</span> <span class="n">Ks</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">height</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">assert_never</span><span class="p">(</span><span class="n">camera_model</span><span class="p">)</span>
 
     <span class="n">det_orig</span> <span class="o">=</span> <span class="p">(</span>
         <span class="n">covars2d</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="n">covars2d</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span>
