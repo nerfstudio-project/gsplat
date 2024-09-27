@@ -49,12 +49,12 @@ class Config:
     # Disable viewer
     disable_viewer: bool = False
     # Path to the .pt files. If provide, it will skip training and run evaluation only.
-    # ckpt: Optional[List[str]] = None
-    ckpt: Optional[List[str]] = field(
-        default_factory=lambda: [
-            "/home/paja/projects/gsplat_fork/results/ckpts/ckpt_1999_rank0.pt"
-        ]
-    )
+    ckpt: Optional[List[str]] = None
+    # ckpt: Optional[List[str]] = field(
+    #     default_factory=lambda: [
+    #         "/home/paja/projects/gsplat_fork/results/ckpts/ckpt_1999_rank0.pt"
+    #     ]
+    # )
     # Render trajectory path
     render_traj_path: str = "ellipse"
 
@@ -729,7 +729,6 @@ class Runner:
                 sh_degree=None,
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
-                image_ids=image_ids,
                 render_mode="RGB+ED" if cfg.depth_loss else "RGB",
             )
             if renders.shape[-1] == 4:
