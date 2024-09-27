@@ -118,7 +118,8 @@ setup(
         "jaxtyping",
         "rich>=12",
         "torch",
-        "torch_scatter" "typing_extensions; python_version<'3.8'",
+        "torch_scatter",
+        "typing_extensions; python_version<'3.8'",
     ],
     extras_require={
         # dev dependencies. Install them by `pip install gsplat[dev]`
