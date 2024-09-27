@@ -50,20 +50,13 @@ class Config:
     disable_viewer: bool = False
     # Path to the .pt files. If provide, it will skip training and run evaluation only.
     ckpt: Optional[List[str]] = None
-    # ckpt: Optional[List[str]] = field(
-    #     default_factory=lambda: [
-    #         "/home/paja/projects/gsplat_fork/results/ckpts/ckpt_1999_rank0.pt"
-    #     ]
-    # )
     # Render trajectory path
     render_traj_path: str = "ellipse"
 
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "examples/data/360_v2/room"
-    # data_dir: str = "/home/paja/.cache/nerfbaselines/datasets/tanksandtemples/truck/"
-    # data_dir: str = "/home/paja/data/bike_aliked"
     # Downsample factor for the dataset
-    data_factor: int = 4
+    data_factor: int = 2
     # Directory to save results
     result_dir: str = "results"
     # Every N images there is a test image
@@ -765,17 +758,6 @@ class Runner:
             loss = l1loss * (1.0 - cfg.ssim_lambda)
             loss += ssimloss * cfg.ssim_lambda
             loss += info["scales"].prod(dim=1).mean() * cfg.scale_reg
-
-            # Apply sigmoid to normalize values to [0, 1]
-            # sigmoid_opacities = torch.sigmoid(info["opacities"])
-            #
-            # # Custom loss to penalize values not close to 0 or 1
-            # def binarization_loss(x):
-            #     return (x * (1 - x)).mean()
-            #
-            # # Calculate the binarization loss
-            # opa_loss = binarization_loss(sigmoid_opacities)
-            # loss += 0.01 * opa_loss
 
             if cfg.depth_loss:
                 # query depths from depth map
