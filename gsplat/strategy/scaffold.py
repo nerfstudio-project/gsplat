@@ -16,10 +16,8 @@ class ScaffoldStrategy(Strategy):
 
     The strategy will:
 
-    - Periodically duplicate GSs with high image plane gradients and small scales.
-    - Periodically split GSs with high image plane gradients and large scales.
-    - Periodically prune GSs with low opacity.
-    - Periodically reset GSs to a lower opacity.
+    - Periodically grows anchors with high image plane gradients.
+    - Periodically teleport anchors with low opacity to a place that has high opacity.
 
     If `absgrad=True`, it will use the absolute gradients instead of average gradients
     for GS duplicating & splitting, following the AbsGS paper:
@@ -31,24 +29,26 @@ class ScaffoldStrategy(Strategy):
     with `absgrad=True` as well so that the absolute gradients are computed.
 
     Args:
-        prune_opa (float): GSs with opacity below this value will be pruned. Default is 0.005.
-        grow_grad2d (float): GSs with image plane gradient above this value will be
-          split/duplicated. Default is 0.0002.
-        refine_start_iter (int): Start refining GSs after this iteration. Default is 500.
-        refine_stop_iter (int): Stop refining GSs after this iteration. Default is 15_000.
-        refine_every (int): Refine GSs every this steps. Default is 100.
-        pause_refine_after_reset (int): Pause refining GSs until this number of steps after
-          reset, Default is 0 (no pause at all) and one might want to set this number to the
-          number of images in training set.
-        absgrad (bool): Use absolute gradients for GS splitting. Default is False.
-        verbose (bool): Whether to print verbose information. Default is False.
+        prune_opa (float): Threshold for pruning GSs with opacity below this value. Default is 0.005.
+        grow_grad2d (float): Threshold for splitting/duplicating GSs based on image plane gradient. Default is 0.0002.
+        refine_start_iter (int): Iteration to start refining GSs. Default is 500.
+        refine_stop_iter (int): Iteration to stop refining GSs. Default is 15,000.
+        refine_every (int): Frequency (in steps) at which GSs are refined. Default is 100.
+        absgrad (bool): Whether to use absolute gradients for GS splitting. Default is False.
+        verbose (bool): If True, prints detailed information during refinement. Default is False.
+        max_voxel_levels (int): Maximum levels for voxel splitting during GS growth. Default is 3.
+        voxel_size (float): Base size of the voxel used in GS growth. Default is 0.001.
+        pruning_thresholds (float): Threshold for pruning based on refinement steps. Default is 0.8.
+        growing_thresholds (float): Threshold for GS growth based on refinement steps. Default is 0.4.
+        drop_out (bool): If True, applies dropout during GS growth to prevent overgrowth. Default is False.
+        pruning (bool): If True, enables pruning of GSs during refinement. Default is False.
 
     Examples:
 
-        >>> from gsplat import DefaultStrategy, rasterization
+        >>> from gsplat import ScaffoldStrategy, rasterization
         >>> params: Dict[str, torch.nn.Parameter] | torch.nn.ParameterDict = ...
         >>> optimizers: Dict[str, torch.optim.Optimizer] = ...
-        >>> strategy = DefaultStrategy()
+        >>> strategy = ScaffoldStrategy()
         >>> strategy.check_sanity(params, optimizers)
         >>> strategy_state = strategy.initialize_state()
         >>> for step in range(1000):
@@ -74,7 +74,6 @@ class ScaffoldStrategy(Strategy):
     pruning_thresholds: float = 0.8
     growing_thresholds: float = 0.4
 
-    pause_refine_after_reset: int = 0
     verbose: bool = True
     drop_out: bool = False
     pruning: bool = False
