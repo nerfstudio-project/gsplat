@@ -31,7 +31,7 @@ from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMe
 from fused_ssim import fused_ssim
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from typing_extensions import Literal
-from utils import AppearanceOptModule, CameraOptModule, knn, set_random_seed
+from utils import CameraOptModule, knn, set_random_seed
 from lib_bilagrid import (
     BilateralGrid,
     slice,
