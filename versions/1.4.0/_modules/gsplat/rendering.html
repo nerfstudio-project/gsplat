@@ -491,8 +491,8 @@
 <span class="sd">        distributed: Whether to use distributed rendering. Default is False. If True,</span>
 <span class="sd">            The input Gaussians are expected to be a subset of scene in each rank, and</span>
 <span class="sd">            the function will collaboratively render the images for all ranks.</span>
-<span class="sd">        ortho: Whether to use orthographic projection. In such case fx and fy become the scaling</span>
-<span class="sd">            factors to convert projected coordinates into pixel space and cx, cy become offsets.</span>
+<span class="sd">        camera_model: The camera model to use. Supported models are &quot;pinhole&quot;, &quot;ortho&quot;,</span>
+<span class="sd">            and &quot;fisheye&quot;. Default is &quot;pinhole&quot;.</span>
 <span class="sd">        covars: Optional covariance matrices of the Gaussians. If provided, the `quats` and</span>
 <span class="sd">            `scales` will be ignored. [N, 3, 3], Default is None.</span>
 
