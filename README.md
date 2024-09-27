@@ -73,7 +73,7 @@ This project is developed by the following wonderful contributors (unordered):
 - [Zhuoyang Pan](https://panzhy.com/) (ShanghaiTech University): Core developer.
 - [Jianbo Ye](http://www.jianboye.org/) (Amazon): Core developer.
 
-We also have made the mathematical supplement, with conventions and derivations, available [here](https://arxiv.org/abs/2409.06765). If you find this library useful in your projects or papers, please consider citing:
+We also have a white paper with about the project with benchmarking and mathematical supplement with conventions and derivations, available [here](https://arxiv.org/abs/2409.06765). If you find this library useful in your projects or papers, please consider citing:
 
 ```
 @article{ye2024gsplatopensourcelibrarygaussian,
