@@ -15,25 +15,11 @@ gsplat is an open-source library for CUDA accelerated rasterization of gaussians
 
 **Dependence**: Please install [Pytorch](https://pytorch.org/get-started/locally/) first.
 
-
-
-
 The easiest way is to install from PyPI. In this way it will build the CUDA code **on the first run** (JIT).
 
 ```bash
 pip install gsplat
 ```
-
-Alternatively, you can install gsplat from python wheels containing pre-compiled binaries for a specific pytorch and cuda version. These wheels are stored in the github releases and can be found using simple index pages under https://docs.gsplat.studio/whl. 
-You could obtain the wheel from this simple index page for a specific pytorch an and cuda version by appending these the version number after a + sign (part referred a *local version*). For example, to install gsplat for pytorch 2.0 and cuda 11.8 you can use
-```
-pip install gsplat==1.4.0+pt20cu118 --index-url https://docs.gsplat.studio/whl
-```
-Alternatively, you can specify the pytorch and cuda version in the index url using for example
-```
-pip install gsplat --index-url https://docs.gsplat.studio/whl/pt20cu118
-```
-This has the advantage that you do not have to pin a specific version of the package and as a result get automatically the latest package version.
 
 Alternatively you can install gsplat from source. In this way it will build the CUDA code during installation.
 
@@ -41,6 +27,11 @@ Alternatively you can install gsplat from source. In this way it will build the 
 pip install git+https://github.com/nerfstudio-project/gsplat.git
 ```
 
+We also provide [pre-compiled wheels](https://docs.gsplat.studio/whl) for certain python-torch-CUDA combinations (please check first which versions are supported). Note this way you would have to manually install [gsplat's dependencies](https://github.com/nerfstudio-project/gsplat/blob/6022cf45a19ee307803aaf1f19d407befad2a033/setup.py#L115). For example, to install gsplat for pytorch 2.0 and cuda 11.8 you can run
+```
+pip install ninja numpy jaxtyping rich
+pip install gsplat --index-url https://docs.gsplat.studio/whl/pt20cu118
+```
 
 To install gsplat on Windows, please check [this instruction](docs/INSTALL_WIN.md).
 
