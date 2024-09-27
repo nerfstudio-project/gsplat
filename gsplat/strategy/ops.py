@@ -4,7 +4,6 @@ from typing import Callable, Dict, List, Union
 import torch
 import torch.nn.functional as F
 from torch import Tensor
-from torch_scatter import scatter_max
 
 from gsplat import quat_scale_to_covar_preci
 from gsplat.relocation import compute_relocation
@@ -417,8 +416,8 @@ def grow_anchors(
     selected_features = repeated_features[gradient_mask]  # [N_selected, feat_dim]
 
     # Use inverse_indices to aggregate features
-    scattered_features, _ = scatter_max(
-        selected_features, inv_idx.unsqueeze(1).expand(-1, feat_dim), dim=0
+    scattered_features = torch.segment_reduce(
+        data=selected_features, reduce="amax", lengths=torch.bincount(inv_idx)
     )
     feat = scattered_features[remove_duplicates_mask]  # [N_new, feat_dim]
 

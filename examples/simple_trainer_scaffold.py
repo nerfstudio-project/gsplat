@@ -910,8 +910,12 @@ class Runner:
 
             # eval the full set
             if step in [i - 1 for i in cfg.eval_steps]:
-                self.eval(step)
-            #     self.render_traj(step)
+                self.eval(
+                    step,
+                    n_feat_offsets=self.cfg.n_feat_offsets,
+                    feat_dim=self.cfg.feat_dim,
+                )
+                self.render_traj(step)
 
             if not cfg.disable_viewer:
                 self.viewer.lock.release()
