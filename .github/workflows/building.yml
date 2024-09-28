@@ -1,10 +1,27 @@
-name: Building Wheels
+name: Build Wheels
 
-on: [workflow_dispatch]
 
+on: [workflow_call, workflow_dispatch]
 jobs:
-
-  wheel:
+  build_sdist:
+    name: Build source distribution and no binary wheel
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Strip unsupported tags in README
+      run: |
+        sed -i '/<!-- pypi-strip -->/,/<!-- \/pypi-strip -->/d' README.md
+    - name: Build sdist
+      run: BUILD_NO_CUDA=1 pipx run build --sdist
+    - name: Build wheel with no binaries
+      run:  BUILD_NO_CUDA=1 python setup.py bdist_wheel --dist-dir=dist
+    - uses: actions/upload-artifact@v3
+      with:
+        name: pypi_packages
+        path: dist/*.tar.gz
+ 
+  
+  build_wheels:
     runs-on: ${{ matrix.os }}
     environment: production
 
@@ -12,15 +29,18 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-20.04, windows-2019]
-        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
+        python-version: ['3.10']
         torch-version: ['2.0.0', '2.1.0', '2.2.0', '2.3.0', '2.4.0']
         cuda-version: ['cu118', 'cu121', 'cu124']
+        # python-version: ['3.8']
+        # torch-version: ['2.0.0']
+        # cuda-version: ['cu118']
+
         exclude:
           - python-version: 3.12
             torch-version: 2.0.0
           - python-version: 3.12
             torch-version: 2.1.0
-
           - torch-version: 2.0.0
             cuda-version: 'cu113'
           - torch-version: 2.0.0
@@ -58,21 +78,19 @@ jobs:
           - torch-version: 2.4.0
             cuda-version: 'cu116'
           - torch-version: 2.4.0
-            cuda-version: 'cu117'
-          
+            cuda-version: 'cu117'          
           - os: windows-2019
             torch-version: 2.0.0
             cuda-version: 'cu121'
-
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
-
+  
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -146,3 +164,10 @@ jobs:
           python -c "import gsplat; print('gsplat:', gsplat.__version__)"
           cd ..
         shell: bash  # `ls -lah` does not exist in windows powershell
+
+        # v4 does not allow writing into the same folder, so stick with v3
+        # https://github.com/actions/upload-artifact/issues/478
+      - uses: actions/upload-artifact@v3
+        with:
+          name: compiled_wheels_python${{ matrix.python-version }}
+          path: dist/*.whl

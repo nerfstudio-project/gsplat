@@ -30,7 +30,7 @@ __global__ void fully_fused_projection_bwd_kernel(
     const int32_t image_width,
     const int32_t image_height,
     const T eps2d,
-    const bool ortho,
+    const CameraModelType camera_model,
     // fwd outputs
     const int32_t *__restrict__ radii,   // [C, N]
     const T *__restrict__ conics,        // [C, N, 3]
@@ -128,36 +128,55 @@ __global__ void fully_fused_projection_bwd_kernel(
     mat3<T> v_covar_c(0.f);
     vec3<T> v_mean_c(0.f);
 
-    if (ortho){
-        ortho_proj_vjp<T>(
-            mean_c,
-            covar_c,
-            fx,
-            fy,
-            cx,
-            cy,
-            image_width,
-            image_height,
-            v_covar2d,
-            glm::make_vec2(v_means2d),
-            v_mean_c,
-            v_covar_c
-        );
-    } else {
-        persp_proj_vjp<T>(
-            mean_c,
-            covar_c,
-            fx,
-            fy,
-            cx,
-            cy,
-            image_width,
-            image_height,
-            v_covar2d,
-            glm::make_vec2(v_means2d),
-            v_mean_c,
-            v_covar_c
-        );
+    switch (camera_model) {
+        case CameraModelType::PINHOLE: // perspective projection
+            persp_proj_vjp<T>(
+                mean_c,
+                covar_c,
+                fx,
+                fy,
+                cx,
+                cy,
+                image_width,
+                image_height,
+                v_covar2d,
+                glm::make_vec2(v_means2d),
+                v_mean_c,
+                v_covar_c
+            );
+            break;
+        case CameraModelType::ORTHO: // orthographic projection
+            ortho_proj_vjp<T>(
+                mean_c,
+                covar_c,
+                fx,
+                fy,
+                cx,
+                cy,
+                image_width,
+                image_height,
+                v_covar2d,
+                glm::make_vec2(v_means2d),
+                v_mean_c,
+                v_covar_c
+            );
+            break;
+        case CameraModelType::FISHEYE: // fisheye projection
+            fisheye_proj_vjp<T>(
+                mean_c,
+                covar_c,
+                fx,
+                fy,
+                cx,
+                cy,
+                image_width,
+                image_height,
+                v_covar2d,
+                glm::make_vec2(v_means2d),
+                v_mean_c,
+                v_covar_c
+            );
+            break;
     }
 
     // add contribution from v_depths
@@ -256,7 +275,7 @@ fully_fused_projection_bwd_tensor(
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
-    const bool ortho,
+    const CameraModelType camera_model,
     // fwd outputs
     const torch::Tensor &radii,                       // [C, N]
     const torch::Tensor &conics,                      // [C, N, 3]
@@ -325,7 +344,7 @@ fully_fused_projection_bwd_tensor(
                 image_width,
                 image_height,
                 eps2d,
-                ortho,
+                camera_model,
                 radii.data_ptr<int32_t>(),
                 conics.data_ptr<float>(),
                 compensations.has_value()

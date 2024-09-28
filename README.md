@@ -24,11 +24,23 @@ The easiest way is to install from PyPI. In this way it will build the CUDA code
 pip install gsplat
 ```
 
-Or install from source. In this way it will build the CUDA code during installation.
+Alternatively, you can install gsplat from python wheels containing pre-compiled binaries for a specific pytorch and cuda version. These wheels are stored in the github releases and can be found using simple index pages under https://docs.gsplat.studio/whl. 
+You obtain the wheel from this simple index page for a specific pytorch an and cuda version by appending these the version number after a + sign (part referred a *local version*). For example, to install gsplat for pytorch 2.0 and cuda 11.8 you can use
+```
+pip install gsplat==1.2.0+pt20cu118 --index-url https://docs.gsplat.studio/whl
+```
+Alternatively, you can specify the pytorch and cuda version in the index url using for example
+```
+pip install gsplat --index-url https://docs.gsplat.studio/whl/pt20cu118
+```
+This has the advantage that you do not have to pin a specific version of the package and as a result get automatically the latest package version.
+
+Alternatively you can install gsplat from source. In this way it will build the CUDA code during installation.
 
 ```bash
 pip install git+https://github.com/nerfstudio-project/gsplat.git
 ```
+
 
 To install gsplat on Windows, please check [this instruction](docs/INSTALL_WIN.md).
 
@@ -37,12 +49,11 @@ To install gsplat on Windows, please check [this instruction](docs/INSTALL_WIN.m
 This repo comes with a standalone script that reproduces the official Gaussian Splatting with exactly the same performance on PSNR, SSIM, LPIPS, and converged number of Gaussians. Powered by gsplat’s efficient CUDA implementation, the training takes up to **4x less GPU memory** with up to **15% less time** to finish than the official implementation. Full report can be found [here](https://docs.gsplat.studio/main/tests/eval.html).
 
 ```bash
-# under examples/
-pip install -r requirements.txt
+pip install -r examples/requirements.txt
 # download mipnerf_360 benchmark data
-python datasets/download_dataset.py
+python examples/datasets/download_dataset.py
 # run batch evaluation
-bash benchmarks/basic.sh
+bash examples/benchmarks/basic.sh
 ```
 
 ## Examples
@@ -75,7 +86,7 @@ We also have made the mathematical supplement, with conventions and derivations,
 
 ```
 @article{ye2024gsplatopensourcelibrarygaussian,
-    title={gsplat: An Open-Source Library for Gaussian Splatting}, 
+    title={gsplat: An Open-Source Library for {Gaussian} Splatting}, 
     author={Vickie Ye and Ruilong Li and Justin Kerr and Matias Turkulainen and Brent Yi and Zhuoyang Pan and Otto Seiskari and Jianbo Ye and Jeffrey Hu and Matthew Tancik and Angjoo Kanazawa},
     year={2024},
     eprint={2409.06765},

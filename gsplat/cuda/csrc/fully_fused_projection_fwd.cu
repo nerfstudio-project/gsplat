@@ -32,7 +32,7 @@ __global__ void fully_fused_projection_fwd_kernel(
     const T near_plane,
     const T far_plane,
     const T radius_clip,
-    const bool ortho,
+    const CameraModelType camera_model,
     // outputs
     int32_t *__restrict__ radii,  // [C, N]
     T *__restrict__ means2d,      // [C, N, 2]
@@ -105,32 +105,49 @@ __global__ void fully_fused_projection_fwd_kernel(
     mat2<T> covar2d;
     vec2<T> mean2d;
 
-    if (ortho){
-        ortho_proj<T>(
-            mean_c,
-            covar_c,
-            Ks[0],
-            Ks[4],
-            Ks[2],
-            Ks[5],
-            image_width,
-            image_height,
-            covar2d,
-            mean2d
-        );
-    } else {
-        persp_proj<T>(
-            mean_c,
-            covar_c,
-            Ks[0],
-            Ks[4],
-            Ks[2],
-            Ks[5],
-            image_width,
-            image_height,
-            covar2d,
-            mean2d
-        );
+    switch (camera_model) {
+        case CameraModelType::PINHOLE: // perspective projection
+            persp_proj<T>(
+                mean_c,
+                covar_c,
+                Ks[0],
+                Ks[4],
+                Ks[2],
+                Ks[5],
+                image_width,
+                image_height,
+                covar2d,
+                mean2d
+            );
+            break;
+        case CameraModelType::ORTHO: // orthographic projection
+            ortho_proj<T>(
+                mean_c,
+                covar_c,
+                Ks[0],
+                Ks[4],
+                Ks[2],
+                Ks[5],
+                image_width,
+                image_height,
+                covar2d,
+                mean2d
+            );
+            break;
+        case CameraModelType::FISHEYE: // fisheye projection
+            fisheye_proj<T>(
+                mean_c,
+                covar_c,
+                Ks[0],
+                Ks[4],
+                Ks[2],
+                Ks[5],
+                image_width,
+                image_height,
+                covar2d,
+                mean2d
+            );
+            break;
     }
 
     T compensation;
@@ -196,7 +213,7 @@ fully_fused_projection_fwd_tensor(
     const float far_plane,
     const float radius_clip,
     const bool calc_compensations,
-    const bool ortho
+    const CameraModelType camera_model
 ) {
     GSPLAT_DEVICE_GUARD(means);
     GSPLAT_CHECK_INPUT(means);
@@ -244,7 +261,7 @@ fully_fused_projection_fwd_tensor(
                 near_plane,
                 far_plane,
                 radius_clip,
-                ortho,
+                camera_model,
                 radii.data_ptr<int32_t>(),
                 means2d.data_ptr<float>(),
                 depths.data_ptr<float>(),
