@@ -191,8 +191,8 @@ def save_ply(splats: torch.nn.ParameterDict, dir: str):
     scales = numpy_data["scales"]
     quats = numpy_data["quats"]
     opacities = numpy_data["opacities"]
-    sh0 = numpy_data["sh0"].reshape(means.shape[0], -1)
-    shN = numpy_data["shN"].reshape(means.shape[0], -1)
+    sh0 = numpy_data["sh0"].transpose(0, 2, 1).reshape(means.shape[0], -1).copy()
+    shN = numpy_data["shN"].transpose(0, 2, 1).reshape(means.shape[0], -1).copy()
 
     ply_data = {
         "positions": o3d.core.Tensor(means, dtype=o3d.core.Dtype.Float32),
