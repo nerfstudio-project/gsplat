@@ -597,7 +597,7 @@ def view_to_visible_anchors(
     sh_degree: Optional[int] = None,
     packed: bool = True,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
-    ortho: bool = False,
+    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
     covars: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
@@ -773,7 +773,7 @@ def view_to_visible_anchors(
         radius_clip=radius_clip,
         sparse_grad=False,
         calc_compensations=(rasterize_mode == "antialiased"),
-        ortho=ortho,
+        camera_model=camera_model,
     )
 
     if packed:
