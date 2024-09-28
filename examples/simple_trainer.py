@@ -2,6 +2,7 @@ import json
 import math
 import os
 import time
+import open3d as o3d
 from dataclasses import dataclass, field
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple, Union
@@ -181,6 +182,45 @@ class Config:
             assert_never(strategy)
 
 
+def save_ply(splats: torch.nn.ParameterDict, dir: str):
+    # Convert all tensors to numpy arrays in one go
+    print(f"Saving ply to {dir}")
+    numpy_data = {k: v.detach().cpu().numpy() for k, v in splats.items()}
+
+    means = numpy_data["means"]
+    scales = numpy_data["scales"]
+    quats = numpy_data["quats"]
+    opacities = numpy_data["opacities"]
+    sh0 = numpy_data["sh0"].reshape(means.shape[0], -1)
+    shN = numpy_data["shN"].reshape(means.shape[0], -1)
+
+    ply_data = {
+        "positions": o3d.core.Tensor(means, dtype=o3d.core.Dtype.Float32),
+        "normals": o3d.core.Tensor(np.zeros_like(means), dtype=o3d.core.Dtype.Float32),
+        "opacity": o3d.core.Tensor(
+            opacities.reshape(-1, 1), dtype=o3d.core.Dtype.Float32
+        ),
+    }
+
+    # Add sh0 and shN data
+    for i, data in enumerate([sh0, shN]):
+        prefix = "f_dc" if i == 0 else "f_rest"
+        for j in range(data.shape[1]):
+            ply_data[f"{prefix}_{j}"] = o3d.core.Tensor(
+                data[:, j : j + 1], dtype=o3d.core.Dtype.Float32
+            )
+
+    # Add scales and quats data
+    for name, data in [("scale", scales), ("rot", quats)]:
+        for i in range(data.shape[1]):
+            ply_data[f"{name}_{i}"] = o3d.core.Tensor(
+                data[:, i : i + 1], dtype=o3d.core.Dtype.Float32
+            )
+
+    pcd = o3d.t.geometry.PointCloud(ply_data)
+    o3d.t.io.write_point_cloud(str(dir), pcd)
+
+
 def create_splats_with_optimizers(
     parser: Parser,
     init_type: str = "sfm",
@@ -283,6 +323,8 @@ class Runner:
         os.makedirs(self.stats_dir, exist_ok=True)
         self.render_dir = f"{cfg.result_dir}/renders"
         os.makedirs(self.render_dir, exist_ok=True)
+        self.ply_dir = f"{cfg.result_dir}/ply"
+        os.makedirs(self.ply_dir, exist_ok=True)
 
         # Tensorboard
         self.writer = SummaryWriter(log_dir=f"{cfg.result_dir}/tb")
@@ -723,6 +765,7 @@ class Runner:
                 torch.save(
                     data, f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt"
                 )
+                save_ply(self.splats, f"{self.ply_dir}/point_cloud.ply")
 
             if isinstance(self.cfg.strategy, DefaultStrategy):
                 self.cfg.strategy.step_post_backward(
