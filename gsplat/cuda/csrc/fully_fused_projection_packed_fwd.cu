@@ -34,7 +34,7 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
     const T radius_clip,
     const int32_t
         *__restrict__ block_accum,    // [C * blocks_per_row] packing helper
-    const bool ortho,
+    const CameraModelType camera_model,
     // outputs
     int32_t *__restrict__ block_cnts, // [C * blocks_per_row] packing helper
     int32_t *__restrict__ indptr,       // [C + 1]
@@ -120,36 +120,50 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
         covar_world_to_cam(R, covar, covar_c);
         
         Ks += row_idx * 9;
-        if (ortho){
-            // orthographic projection
-            ortho_proj<T>(
-                mean_c,
-                covar_c,
-                Ks[0],
-                Ks[4],
-                Ks[2],
-                Ks[5],
-                image_width,
-                image_height,
-                covar2d,
-                mean2d
-            );
-        } else {
-            // perspective projection
-            persp_proj<T>(
-                mean_c,
-                covar_c,
-                Ks[0],
-                Ks[4],
-                Ks[2],
-                Ks[5],
-                image_width,
-                image_height,
-                covar2d,
-                mean2d
-            );
+        switch (camera_model) {
+            case CameraModelType::PINHOLE: // perspective projection
+                persp_proj<T>(
+                    mean_c,
+                    covar_c,
+                    Ks[0],
+                    Ks[4],
+                    Ks[2],
+                    Ks[5],
+                    image_width,
+                    image_height,
+                    covar2d,
+                    mean2d
+                );
+                break;
+            case CameraModelType::ORTHO: // orthographic projection
+                ortho_proj<T>(
+                    mean_c,
+                    covar_c,
+                    Ks[0],
+                    Ks[4],
+                    Ks[2],
+                    Ks[5],
+                    image_width,
+                    image_height,
+                    covar2d,
+                    mean2d
+                );
+                break;
+            case CameraModelType::FISHEYE: // fisheye projection
+                fisheye_proj<T>(
+                    mean_c,
+                    covar_c,
+                    Ks[0],
+                    Ks[4],
+                    Ks[2],
+                    Ks[5],
+                    image_width,
+                    image_height,
+                    covar2d,
+                    mean2d
+                );
+                break;
         }
-
 
         det = add_blur(eps2d, covar2d, compensation);
         if (det <= 0.f) {
@@ -255,7 +269,7 @@ fully_fused_projection_packed_fwd_tensor(
     const float far_plane,
     const float radius_clip,
     const bool calc_compensations,
-    const bool ortho
+    const CameraModelType camera_model
 ) {
     GSPLAT_DEVICE_GUARD(means);
     GSPLAT_CHECK_INPUT(means);
@@ -304,7 +318,7 @@ fully_fused_projection_packed_fwd_tensor(
                 far_plane,
                 radius_clip,
                 nullptr,
-                ortho,
+                camera_model,
                 block_cnts.data_ptr<int32_t>(),
                 nullptr,
                 nullptr,
@@ -354,7 +368,7 @@ fully_fused_projection_packed_fwd_tensor(
                 far_plane,
                 radius_clip,
                 block_accum.data_ptr<int32_t>(),
-                ortho,
+                camera_model,
                 nullptr,
                 indptr.data_ptr<int32_t>(),
                 camera_ids.data_ptr<int64_t>(),
