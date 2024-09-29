@@ -21,9 +21,9 @@ __global__ void fully_fused_projection_fwd_2dgs_kernel(
     const uint32_t C,
     const uint32_t N,
     const T *__restrict__ means,    // [N, 3]:  Gaussian means. (i.e. source points)
-    const T *__restrict__ quats,    // [N, 4]:  Quaternions (No need to be normalized): This is the rotation component (for 2D?)
-    const T *__restrict__ scales,   // [N, 3]:  Scales. [N, 3] scales for x, y, z ?
-    const T *__restrict__ viewmats, // [C, 4, 4]:  Camera-to-World coordinate mat (? why not W2C)
+    const T *__restrict__ quats,    // [N, 4]:  Quaternions (No need to be normalized): This is the rotation component (for 2D)
+    const T *__restrict__ scales,   // [N, 3]:  Scales. [N, 3] scales for x, y, z
+    const T *__restrict__ viewmats, // [C, 4, 4]:  Camera-to-World coordinate mat
                                     // [R t]
                                     // [0 1]
     const T *__restrict__ Ks,       // [C, 3, 3]:  Projective transformation matrix
@@ -110,9 +110,7 @@ __global__ void fully_fused_projection_fwd_2dgs_kernel(
      * q_cam = RS_camera * q_uv + mean_c
      *
      * Like with homogeneous coordinates. if we encode incoming 2d points as [u,v,1], we can have:
-     * q_cam = [RS_camera[0,1] | mean_c] * [u,v,-1] where the final -1 subtracts mean_c to the result of the matrix multiplication
-     * The reason that -1 is used is because, mean_c is the origin of UV space v.r.t camera space, thus, to find representation of
-     * points in camera space, we need to subtract mean_c from the result of the matrix multiplication (contravariance principle)
+     * q_cam = [RS_camera[0,1] | mean_c] * [u,v,1] 
      * ===============================================
     */
 
@@ -218,7 +216,7 @@ __global__ void fully_fused_projection_fwd_2dgs_kernel(
     normal *= multipler;
 
     // write to outputs
-    radii[idx] = (int32_t)radius;  // integer ?
+    radii[idx] = (int32_t)radius;
     means2d[idx * 2] = mean2d.x;
     means2d[idx * 2 + 1] = mean2d.y;
     depths[idx] = mean_c.z;

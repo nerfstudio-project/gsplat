@@ -281,12 +281,12 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
             // point of interseciton in uv space
             const S gauss_weight_3d = s.x * s.x + s.y * s.y;
             
-            // splattan gaussian ?
+            // projected gaussian kernel
             const vec2<S> d = {xy_opac.x - px, xy_opac.y - py};
             // #define FILTER_INV_SQUARE 2.0f
             const S gauss_weight_2d = FILTER_INV_SQUARE * (d.x * d.x + d.y * d.y);
             
-            // this is kind of restrict the 2d gaussian kernel within a 3d gaussian blob support?
+            // merge ray-intersection kernel and 2d gaussian kernel
             const S gauss_weight = min(gauss_weight_3d, gauss_weight_2d);
 
 
