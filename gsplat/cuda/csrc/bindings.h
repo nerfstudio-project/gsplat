@@ -488,6 +488,12 @@ fully_fused_projection_packed_bwd_2dgs_tensor(
     const bool sparse_grad
 );
 
+std::vector<torch::Tensor> ray_tetra_intersection_fwd_tensor(
+    const torch::Tensor &rays_o,  // [N, 3]
+    const torch::Tensor &rays_d,  // [N, 3]
+    const torch::Tensor &vertices  // [N, 4, 3]
+);
+
 } // namespace gsplat
 
 #endif // GSPLAT_CUDA_BINDINGS_H

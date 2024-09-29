@@ -33,7 +33,7 @@ from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_rand
 
 from gsplat.compression import PngCompression
 from gsplat.distributed import cli
-from gsplat.rendering import rasterization
+from gsplat.rendering import _rasterization, rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 
 
@@ -460,7 +460,7 @@ class Runner:
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
-        render_colors, render_alphas, info = rasterization(
+        render_colors, render_alphas, info = _rasterization(
             means=means,
             quats=quats,
             scales=scales,
@@ -480,8 +480,8 @@ class Runner:
             rasterize_mode=rasterize_mode,
             distributed=self.world_size > 1,
             camera_model=self.cfg.camera_model,
-            tscales=tscales,
-            tquats=tquats,
+            # tscales=tscales,
+            # tquats=tquats,
             **kwargs,
         )
         if masks is not None:

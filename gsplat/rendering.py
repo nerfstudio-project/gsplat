@@ -636,6 +636,9 @@ def _rasterization(
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
     channel_chunk: int = 32,
     batch_per_iter: int = 100,
+    tquats: Optional[Tensor] = None,
+    tscales: Optional[Tensor] = None,
+    **kwargs,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """A version of rasterization() that utilies on PyTorch's autograd.
 
@@ -685,7 +688,7 @@ def _rasterization(
 
     # Project Gaussians to 2D.
     # The results are with shape [C, N, ...]. Only the elements with radii > 0 are valid.
-    covars, _ = _quat_scale_to_covar_preci(quats, scales, True, False, triu=False)
+    covars, precis = _quat_scale_to_covar_preci(quats, scales, True, True, triu=False)
     radii, means2d, depths, conics, compensations = _fully_fused_projection(
         means,
         covars,
@@ -781,6 +784,12 @@ def _rasterization(
                 flatten_ids,
                 backgrounds=backgrounds_chunk,
                 batch_per_iter=batch_per_iter,
+                # --- enable culling ---
+                tquats=tquats,
+                tscales=tscales,
+                means=means,
+                viewmats=viewmats,
+                Ks=Ks,
             )
             render_colors.append(render_colors_)
             render_alphas.append(render_alphas_)
@@ -799,6 +808,13 @@ def _rasterization(
             flatten_ids,
             backgrounds=backgrounds,
             batch_per_iter=batch_per_iter,
+            # --- enable culling ---
+            tquats=tquats,
+            tscales=tscales,
+            precis=precis,
+            means=means,
+            viewmats=viewmats,
+            Ks=Ks,
         )
     if render_mode in ["ED", "RGB+ED"]:
         # normalize the accumulated depth to get the expected depth

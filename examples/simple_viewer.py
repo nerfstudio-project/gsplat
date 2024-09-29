@@ -21,7 +21,7 @@ import viser
 
 from gsplat._helper import load_test_data
 from gsplat.distributed import cli
-from gsplat.rendering import rasterization
+from gsplat.rendering import _rasterization, rasterization
 
 
 def main(local_rank: int, world_rank, world_size: int, args):
@@ -61,30 +61,36 @@ def main(local_rank: int, world_rank, world_size: int, args):
         N = len(means)
         print("rank", world_rank, "Number of Gaussians:", N, "Number of Cameras:", C)
 
+        # tetra
+        tquats = torch.rand((N, 4), device=means.device, dtype=means.dtype)
+        tscales = torch.ones(N, device=means.device, dtype=means.dtype) * 0.3
+
         # batched render
         for _ in tqdm.trange(1):
-            render_colors, render_alphas, meta = rasterization(
-                means,  # [N, 3]
-                quats,  # [N, 4]
-                scales,  # [N, 3]
-                opacities,  # [N]
-                colors,  # [N, 3]
+            render_colors, render_alphas, meta = _rasterization(
+                means[3:4],  # [N, 3]
+                quats[3:4],  # [N, 4]
+                scales[3:4] * 10,  # [N, 3]
+                opacities[3:4] * 0 + 1,  # [N]
+                colors[3:4],  # [N, 3]
                 viewmats,  # [C, 4, 4]
                 Ks,  # [C, 3, 3]
                 width,
                 height,
-                render_mode="RGB+D",
-                packed=False,
-                distributed=world_size > 1,
+                render_mode="RGB",
+                # packed=False,
+                # distributed=world_size > 1,
+                tquats=tquats,
+                tscales=tscales,
             )
         C = render_colors.shape[0]
-        assert render_colors.shape == (C, height, width, 4)
+        assert render_colors.shape == (C, height, width, 3)
         assert render_alphas.shape == (C, height, width, 1)
         render_colors.sum().backward()
 
         render_rgbs = render_colors[..., 0:3]
-        render_depths = render_colors[..., 3:4]
-        render_depths = render_depths / render_depths.max()
+        # render_depths = render_colors[..., 3:4]
+        # render_depths = render_depths / render_depths.max()
 
         # dump batch images
         os.makedirs(args.output_dir, exist_ok=True)
@@ -92,7 +98,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
             torch.cat(
                 [
                     render_rgbs.reshape(C * height, width, 3),
-                    render_depths.reshape(C * height, width, 1).expand(-1, -1, 3),
+                    # render_depths.reshape(C * height, width, 1).expand(-1, -1, 3),
                     render_alphas.reshape(C * height, width, 1).expand(-1, -1, 3),
                 ],
                 dim=1,

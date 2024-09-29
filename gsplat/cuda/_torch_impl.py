@@ -1,10 +1,10 @@
 import struct
 from typing import Optional, Tuple
-from typing_extensions import Literal, assert_never
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor
+from typing_extensions import Literal, assert_never
 
 
 def _quat_to_rotmat(quats: Tensor) -> Tensor:
@@ -439,6 +439,13 @@ def accumulate(
     camera_ids: Tensor,  # [M]
     image_width: int,
     image_height: int,
+    # --- enable culling ---
+    tquats: Optional[Tensor] = None,  # [N, 4]
+    tscales: Optional[Tensor] = None,  # [N]
+    precis: Optional[Tensor] = None,  # [C, N, 6]
+    means: Optional[Tensor] = None,  # [N, 3]
+    viewmats: Optional[Tensor] = None,  # [C, 4, 4]
+    Ks: Optional[Tensor] = None,  # [C, 3, 3]
 ) -> Tuple[Tensor, Tensor]:
     """Alpah compositing of 2D Gaussians in Pure Pytorch.
 
@@ -500,6 +507,72 @@ def accumulate(
         opacities[camera_ids, gaussian_ids] * torch.exp(-sigmas), 0.999
     )
 
+    if tquats is not None:
+        # ------------------------------------------------------------
+        # Formulate the tet vertices in world space.
+        import math
+
+        from gsplat.cuda._torch_impl import _quat_scale_to_matrix
+        from gsplat.cuda._wrapper import _make_lazy_cuda_func
+
+        tvertices = torch.tensor(
+            [
+                [math.sqrt(8 / 9), 0, -1 / 3],
+                [-math.sqrt(2 / 9), math.sqrt(2 / 3), -1 / 3],
+                [-math.sqrt(2 / 9), -math.sqrt(2 / 3), -1 / 3],
+                [0, 0, 1],
+            ],
+            device=means.device,
+            dtype=means.dtype,
+        )  # [4, 3]
+        tquats = tquats[gaussian_ids]  # [M, 4]
+        tscales = tscales[gaussian_ids]  # [M]
+
+        rotmats = _quat_scale_to_matrix(tquats, tscales[:, None])  # [M, 3, 3]
+        tvertices = torch.einsum("nij,kj->nki", rotmats, tvertices)  # [M, 4, 3]
+        tvertices = tvertices + means[gaussian_ids, None, :]  # [M, 4, 3]
+
+        # ------------------------------------------------------------
+        # Ray tetra intersection
+        Ks = Ks[camera_ids]  # [M, 3, 3]
+        camtoworlds = torch.linalg.inv(viewmats)[camera_ids]  # [M, 4, 4]
+        means = means[gaussian_ids]  # [M, 3]
+        invV = precis[gaussian_ids]  # [M, 3, 3]
+
+        # generate rays
+        uvs = torch.stack(
+            [
+                (pixel_coords[:, 0] - Ks[:, 0, 2]) / Ks[:, 0, 0],
+                (pixel_coords[:, 1] - Ks[:, 1, 2]) / Ks[:, 1, 1],
+            ],
+            dim=-1,
+        )  # [M, 2]
+        camera_dirs = F.pad(uvs, (0, 1), value=1.0)  # [M, 3]
+
+        # [M, 3]
+        viewdirs = (camera_dirs[:, None, :] * camtoworlds[:, :3, :3]).sum(dim=-1)
+        viewdirs = F.normalize(viewdirs, dim=-1)
+        origins = camtoworlds[:, :3, -1]
+
+        faces, bary1, bary2, isect_t1, isect_t2 = _make_lazy_cuda_func(
+            "ray_tetra_intersection_fwd"
+        )(origins.contiguous(), viewdirs.contiguous(), tvertices.contiguous())
+        tmins, tmaxs = isect_t1, isect_t2
+
+        # ------------------------------------------------------------
+        # analytical integral of the Gaussian over a line segment [tmin, tmax]
+        aa = torch.einsum("mi,mij,mj->m", viewdirs, invV, viewdirs)
+        bb = torch.einsum("mi,mij,mj->m", viewdirs, invV, means - origins)
+        beta1 = torch.sqrt(aa * 0.5)
+        beta2 = bb / aa
+        ratio = 0.5 * (
+            torch.erf(beta1 * (tmaxs - beta2)) - torch.erf(beta1 * (tmins - beta2))
+        )
+        assert not torch.isnan(ratio).any(), invV[torch.isnan(ratio)]
+        # alphas = alphas * ratio
+        alphas = 1.0 - (1.0 - alphas) ** ratio
+        # ------------------------------------------------------------
+
     indices = camera_ids * image_height * image_width + pixel_ids
     total_pixels = C * image_height * image_width
 
@@ -531,6 +604,13 @@ def _rasterize_to_pixels(
     flatten_ids: Tensor,  # [n_isects]
     backgrounds: Optional[Tensor] = None,  # [C, channels]
     batch_per_iter: int = 100,
+    # --- enable culling ---
+    tquats: Optional[Tensor] = None,  # [N, 4]
+    tscales: Optional[Tensor] = None,  # [N]
+    precis: Optional[Tensor] = None,
+    means: Optional[Tensor] = None,
+    viewmats: Optional[Tensor] = None,
+    Ks: Optional[Tensor] = None,
 ):
     """Pytorch implementation of `gsplat.cuda._wrapper.rasterize_to_pixels()`.
 
@@ -604,6 +684,13 @@ def _rasterize_to_pixels(
             camera_ids,
             image_width,
             image_height,
+            # --- enable culling ---
+            tquats=tquats,
+            tscales=tscales,
+            precis=precis,
+            means=means,
+            viewmats=viewmats,
+            Ks=Ks,
         )
         render_colors = render_colors + renders_step * transmittances[..., None]
         render_alphas = render_alphas + accs_step * transmittances[..., None]

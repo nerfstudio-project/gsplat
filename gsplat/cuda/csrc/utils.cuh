@@ -11,6 +11,11 @@
 namespace gsplat {
 
 template <typename T>
+__device__ __host__ inline int sign(T x) {
+    return (x > 0) - (x < 0);
+}
+
+template <typename T>
 inline __device__ mat3<T> quat_to_rotmat(const vec4<T> quat) {
     T w = quat[0], x = quat[1], y = quat[2], z = quat[3];
     // normalize
@@ -708,6 +713,142 @@ inline __device__ void compute_ray_transforms_aabb_vjp(
     v_scale[1] += (T)glm::dot(v_RS[1], R[1]);
 
     v_mean += v_RS[2];
+}
+
+// Function to check ray-triangle intersection using Möller–Trumbore algorithm
+template <typename T>
+inline __device__ bool ray_triangle_intersection(
+    // ray origin and direction
+    const vec3<T> ray_o,
+    const vec3<T> ray_d,
+    // triangle vertices
+    const vec3<T> v0,
+    const vec3<T> v1,
+    const vec3<T> v2,
+    // output intersection point
+    T &t1 // entry face t values
+) {
+    const T EPSILON = 0.0000001f;
+    vec3<T> edge1 = v1 - v0;
+    vec3<T> edge2 = v2 - v0;
+    vec3<T> h = glm::cross(ray_d, edge2);
+    T a = glm::dot(edge1, h);
+
+    if (a > -EPSILON && a < EPSILON)
+    {
+        // printf("exit because of parallel\n");
+        return false; // This means the ray is parallel to the triangle
+    }
+
+    T f = 1.0f / a;
+    vec3<T> s = ray_o - v0;
+    T u = f * glm::dot(s, h);
+
+    if (u < 0.0f || u > 1.0f)
+    {
+        // printf("exit because of u < 0.0f || u > 1.0f\n");
+        return false;
+    }
+
+    vec3<T> q = glm::cross(s, edge1);
+    T v = f * glm::dot(ray_d, q);
+
+    if (v < 0.0f || u + v > 1.0f)
+    {
+        // printf("exit because of v < 0.0f || u + v > 1.0f\n");
+        return false;
+    }
+    // printf("u: %f, v: %f\n", u, v);
+
+    // Compute the distance to the intersection point
+    T t = f * glm::dot(edge2, q);
+
+    // vec3<T> intersection = ray_o + t * ray_d;
+    // printf("intersection: %f, %f, %f, t: %f, u: %f, v: %f\n", intersection.x, intersection.y, intersection.z, t, u, v);
+
+    if (t > EPSILON)
+    {
+        t1 = t;
+        return true; // There is a ray intersection
+    }
+    else
+    {
+        // printf("exit because of t <= EPSILON, t = %f\n", t);
+        return false; // There is a line intersection, but not a ray intersection
+    }
+}
+
+template <typename T>
+inline __device__ bool ray_tetra_intersection(
+    // ray origin and direction
+    const vec3<T> ray_o,
+    const vec3<T> ray_d,
+    // tetrahedron vertices
+    const vec3<T> v0,
+    const vec3<T> v1,
+    const vec3<T> v2,
+    const vec3<T> v3,
+    // output intersection point
+    vec2<int> &faces, // entry and exit faces
+    vec2<T> &barycentric1, // entry face barycentric coordinates
+    vec2<T> &barycentric2, // exit face barycentric coordinates
+    T &t1, // entry face t values
+    T &t2  // exit face t values
+) {
+    T t_entry = 1e10f;  // Initialize to a very small value (entry point)
+    T t_exit = -1e10f;    // Initialize to a very large value (exit point)
+    bool intersected = false;
+
+    // Test intersection with each of the four triangular faces
+    T t_temp;
+    if (ray_triangle_intersection(ray_o, ray_d, v0, v1, v2, t_temp))
+    {
+        intersected = true;
+        if (t_temp > t_exit)
+            t_exit = t_temp; // Closest intersection along the exit direction
+        if (t_temp < t_entry)
+            t_entry = t_temp; // Farthest intersection along the entry direction
+        // printf("intersected 1!, t_temp: %f\n", t_temp);
+    }
+    if (ray_triangle_intersection(ray_o, ray_d, v1, v2, v3, t_temp))
+    {
+        intersected = true;
+        if (t_temp > t_exit)
+            t_exit = t_temp; // Closest intersection along the exit direction
+        if (t_temp < t_entry)
+            t_entry = t_temp; // Farthest intersection along the entry direction
+        // printf("intersected 2!, t_temp: %f\n", t_temp);
+    }
+    if (ray_triangle_intersection(ray_o, ray_d, v2, v3, v0, t_temp))
+    {
+        intersected = true;
+        if (t_temp > t_exit)
+            t_exit = t_temp; // Closest intersection along the exit direction
+        if (t_temp < t_entry)
+            t_entry = t_temp; // Farthest intersection along the entry direction
+        // printf("intersected 3!, t_temp: %f\n", t_temp);
+    }
+    if (ray_triangle_intersection(ray_o, ray_d, v3, v0, v1, t_temp))
+    {
+        intersected = true;
+        if (t_temp > t_exit)
+            t_exit = t_temp; // Closest intersection along the exit direction
+        if (t_temp < t_entry)
+            t_entry = t_temp; // Farthest intersection along the entry direction
+        // printf("intersected 4!, t_temp: %f\n", t_temp);
+    }
+
+    // If there is an intersection, update t_min and t_max with the entry and exit points
+    if (intersected) {
+        t1 = t_entry;
+        t2 = t_exit;
+        // printf("intersected!, t1: %f, t2: %f\n", t1, t2);
+        return true;
+    }
+
+    t1 = 0;
+    t2 = 0;
+    return false; // No intersection or invalid entry/exit
 }
 
 } // namespace gsplat
