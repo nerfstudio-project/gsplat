@@ -215,9 +215,9 @@ def create_splats_with_optimizers(
     quats = torch.rand((N, 4))  # [N, 4]
     opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
 
-    # TODO: initialize too big will dimish gradients. too small will cut too much of GS.
-    # whats the best way to initialize?
-    tscales = torch.log(dist_avg * init_scale * 3.0)  # 3 sigma [N,]
+    # 6 sigma as the distance from the center (centroid) to a vertex, equals to
+    # 3 sigma from the center to a face of the tetrahedron.
+    tscales = torch.log(dist_avg * init_scale * 6.0)  # 6 sigma [N,]
     tquats = torch.rand((N, 4))  # [N, 4]
 
     params = [
@@ -226,8 +226,6 @@ def create_splats_with_optimizers(
         ("scales", torch.nn.Parameter(scales), 5e-3),
         ("quats", torch.nn.Parameter(quats), 1e-3),
         ("opacities", torch.nn.Parameter(opacities), 5e-2),
-        # TODO: lr for tscales and tquats are not tuned.
-        # TODO: if set this to lr 0 and tscales to * 100, it will nan after a while.
         ("tscales", torch.nn.Parameter(tscales), 5e-3),
         ("tquats", torch.nn.Parameter(tquats), 1e-3),
     ]
@@ -484,8 +482,8 @@ class Runner:
             rasterize_mode=rasterize_mode,
             distributed=self.world_size > 1,
             camera_model=self.cfg.camera_model,
-            tscales=tscales,
-            tquats=tquats,
+            # tscales=tscales,
+            # tquats=tquats,
             **kwargs,
         )
         if masks is not None:
