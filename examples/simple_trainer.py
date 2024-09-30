@@ -752,8 +752,12 @@ class Runner:
                     )
 
             if cfg.visible_adam:
-                visibility_mask = info["radii"] > 0
                 gaussian_cnt = self.splats.means.shape[0]
+                if cfg.packed:
+                    visibility_mask = torch.zeros_like(self.splats["opacities"], dtype=bool)
+                    visibility_mask.scatter_(0, info["gaussian_ids"], 1)
+                else:
+                    visibility_mask = (info["radii"] > 0).any(0)
 
             # optimize
             for optimizer in self.optimizers.values():
