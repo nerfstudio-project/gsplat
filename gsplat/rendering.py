@@ -1306,7 +1306,9 @@ def rasterization_2dgs(
         "gradient_2dgs": densify,  # This holds the gradient used for densification for 2dgs
     }
 
-    render_normals = torch.einsum("...ij,...hwj->...hwi", torch.linalg.inv(viewmats)[..., :3, :3], render_normals)
+    render_normals = torch.einsum(
+        "...ij,...hwj->...hwi", torch.linalg.inv(viewmats)[..., :3, :3], render_normals
+    )
 
     return (
         render_colors,
