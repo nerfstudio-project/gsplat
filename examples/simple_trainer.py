@@ -482,8 +482,8 @@ class Runner:
             rasterize_mode=rasterize_mode,
             distributed=self.world_size > 1,
             camera_model=self.cfg.camera_model,
-            # tscales=tscales,
-            # tquats=tquats,
+            tscales=tscales,
+            tquats=tquats,
             **kwargs,
         )
         if masks is not None:
