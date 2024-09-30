@@ -72,6 +72,10 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
     render_colors += camera_id * image_height * image_width * COLOR_DIM;  // get the global offset of the pixel w.r.t the camera
     render_alphas += camera_id * image_height * image_width;  // get the global offset of the pixel w.r.t the camera
     last_ids += camera_id * image_height * image_width;  // get the global offset of the pixel w.r.t the camera
+    render_normals += camera_id * image_height * image_width * 3;
+    render_distort += camera_id * image_height * image_width;
+    render_median += camera_id * image_height * image_width;
+    median_ids += camera_id * image_height * image_width;
 
     // get the global offset of the background and mask
     if (backgrounds != nullptr) {
