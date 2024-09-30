@@ -40,7 +40,7 @@ from gsplat.compression import PngCompression
 from gsplat.distributed import cli
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
-from gsplat.cuda._wrapper import SelectiveAdam
+from gsplat.optimizers import SelectiveAdam
 
 
 @dataclass
@@ -754,7 +754,9 @@ class Runner:
             if cfg.visible_adam:
                 gaussian_cnt = self.splats.means.shape[0]
                 if cfg.packed:
-                    visibility_mask = torch.zeros_like(self.splats["opacities"], dtype=bool)
+                    visibility_mask = torch.zeros_like(
+                        self.splats["opacities"], dtype=bool
+                    )
                     visibility_mask.scatter_(0, info["gaussian_ids"], 1)
                 else:
                     visibility_mask = (info["radii"] > 0).any(0)
