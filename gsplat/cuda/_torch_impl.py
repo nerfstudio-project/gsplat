@@ -7,6 +7,90 @@ from torch import Tensor
 from typing_extensions import Literal, assert_never
 
 
+def _ray_triangle_intersection(rays_o, rays_d, v0, v1, v2):
+    """
+    Calculate the intersection of rays with triangles using the Möller–Trumbore algorithm.
+
+    Args:
+    - rays_o (Tensor): The origins of the rays. Shape: (N, 3).
+    - rays_d (Tensor): The direction vectors of the rays. Shape: (N, 3).
+    - v0 (Tensor): First vertex of the triangles. Shape: (N, 3).
+    - v1 (Tensor): Second vertex of the triangles. Shape: (N, 3).
+    - v2 (Tensor): Third vertex of the triangles. Shape: (N, 3).
+
+    Returns:
+    - intersects (Tensor): Boolean tensor indicating which rays intersect the triangles. Shape: (N,).
+    - barycentric_coords (Tensor): Barycentric coordinates of the intersection points. Shape: (N, 3).
+    - t (Tensor): Distance from the ray origin to the intersection points. Shape: (N,).
+    """
+    # Calculate edges of the triangle
+    edge1 = v1 - v0  # Shape: (N, 3)
+    edge2 = v2 - v0  # Shape: (N, 3)
+
+    # Calculate determinant and direction vectors
+    h = torch.cross(rays_d, edge2, dim=1)  # Shape: (N, 3)
+    a = torch.sum(edge1 * h, dim=1)  # Shape: (N,)
+
+    # If the determinant is close to 0, the ray is parallel to the triangle
+    eps = 1e-8
+    intersects = a.abs() > eps
+
+    # Calculate distance to intersection point
+    f = 1.0 / torch.where(intersects, a, torch.full_like(a, 1.0))
+    s = rays_o - v0  # Shape: (N, 3)
+    u = f * torch.sum(s * h, dim=1)  # Shape: (N,)
+
+    # Check if the intersection is within the triangle
+    intersects = intersects & (u >= -eps) & (u <= 1.0 + eps)
+
+    q = torch.cross(s, edge1, dim=1)  # Shape: (N, 3)
+    v = f * torch.sum(rays_d * q, dim=1)  # Shape: (N,)
+    intersects = intersects & (v >= -eps) & ((u + v) <= 1.0 + eps)
+
+    # Calculate the intersection point distance along the ray
+    t = f * torch.sum(edge2 * q, dim=1)  # Shape: (N,)
+
+    # Calculate barycentric coordinates
+    # w = 1 - u - v
+    # barycentric_coords = torch.stack([u, v, w], dim=-1)  # Shape: (N, 3)
+
+    # Only keep positive t values (intersect in front of the origin)
+    # intersects = intersects & (t > 0)
+
+    return intersects, t, u, v
+
+
+def _ray_tetra_intersection(rays_o, rays_d, v0, v1, v2, v3):
+    t_entry = torch.full_like(v0[:, 0], fill_value=1e10)
+    t_exit = torch.full_like(v0[:, 0], fill_value=-1e10)
+    hits = torch.zeros_like(v0[:, 0], dtype=torch.bool)
+
+    intersects, t, u, v = _ray_triangle_intersection(rays_o, rays_d, v0, v1, v2)
+    t_entry = torch.where(intersects & (t < t_entry), t, t_entry)
+    t_exit = torch.where(intersects & (t > t_exit), t, t_exit)
+    hits = hits | intersects
+
+    intersects, t, u, v = _ray_triangle_intersection(rays_o, rays_d, v0, v2, v3)
+    t_entry = torch.where(intersects & (t < t_entry), t, t_entry)
+    t_exit = torch.where(intersects & (t > t_exit), t, t_exit)
+    hits = hits | intersects
+
+    intersects, t, u, v = _ray_triangle_intersection(rays_o, rays_d, v0, v3, v1)
+    t_entry = torch.where(intersects & (t < t_entry), t, t_entry)
+    t_exit = torch.where(intersects & (t > t_exit), t, t_exit)
+    hits = hits | intersects
+
+    intersects, t, u, v = _ray_triangle_intersection(rays_o, rays_d, v1, v2, v3)
+    t_entry = torch.where(intersects & (t < t_entry), t, t_entry)
+    t_exit = torch.where(intersects & (t > t_exit), t, t_exit)
+    hits = hits | intersects
+
+    t_entry = torch.where(hits, t_entry, torch.zeros_like(t_entry))
+    t_exit = torch.where(hits, t_exit, torch.zeros_like(t_exit))
+
+    return hits, t_entry, t_exit, u, v
+
+
 def _quat_to_rotmat(quats: Tensor) -> Tensor:
     """Convert quaternion to rotation matrix."""
     quats = F.normalize(quats, p=2, dim=-1)
@@ -554,9 +638,20 @@ def accumulate(
         viewdirs = F.normalize(viewdirs, dim=-1)
         origins = camtoworlds[:, :3, -1]
 
-        faces, bary1, bary2, isect_t1, isect_t2 = _make_lazy_cuda_func(
-            "ray_tetra_intersection_fwd"
-        )(origins.contiguous(), viewdirs.contiguous(), tvertices.contiguous())
+        # faces, bary1, bary2, isect_t1, isect_t2 = _make_lazy_cuda_func(
+        #     "ray_tetra_intersection_fwd"
+        # )(origins.contiguous(), viewdirs.contiguous(), tvertices.contiguous())
+        # tmins, tmaxs = isect_t1, isect_t2
+        # print(isect_t1.shape, isect_t2.shape)
+
+        hits, isect_t1, isect_t2, u, v = _ray_tetra_intersection(
+            origins,
+            viewdirs,
+            tvertices[:, 0],
+            tvertices[:, 1],
+            tvertices[:, 2],
+            tvertices[:, 3],
+        )
         tmins, tmaxs = isect_t1, isect_t2
 
         # ------------------------------------------------------------
@@ -564,7 +659,7 @@ def accumulate(
         aa = torch.einsum("mi,mij,mj->m", viewdirs, invV, viewdirs)
         bb = torch.einsum("mi,mij,mj->m", viewdirs, invV, means - origins)
         beta1 = torch.sqrt(aa * 0.5)
-        beta2 = bb / aa
+        beta2 = bb / (aa + 1e-8)
         ratio = 0.5 * (
             torch.erf(beta1 * (tmaxs - beta2)) - torch.erf(beta1 * (tmins - beta2))
         )

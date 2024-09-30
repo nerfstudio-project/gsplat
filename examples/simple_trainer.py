@@ -215,7 +215,7 @@ def create_splats_with_optimizers(
     quats = torch.rand((N, 4))  # [N, 4]
     opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
 
-    tscales = torch.log(dist_avg * init_scale * 3.0)  # 3 sigma [N,]
+    tscales = torch.log(dist_avg * init_scale * 3.0 * 1000.0)  # 3 sigma [N,]
     tquats = torch.rand((N, 4))  # [N, 4]
 
     params = [
@@ -224,8 +224,8 @@ def create_splats_with_optimizers(
         ("scales", torch.nn.Parameter(scales), 5e-3),
         ("quats", torch.nn.Parameter(quats), 1e-3),
         ("opacities", torch.nn.Parameter(opacities), 5e-2),
-        ("tscales", torch.nn.Parameter(tscales), 5e-3),
-        ("tquats", torch.nn.Parameter(tquats), 1e-3),
+        ("tscales", torch.nn.Parameter(tscales), 5e-3 * 0.0),
+        ("tquats", torch.nn.Parameter(tquats), 1e-3 * 0.0),
     ]
 
     if feature_dim is None:
@@ -480,8 +480,8 @@ class Runner:
             rasterize_mode=rasterize_mode,
             distributed=self.world_size > 1,
             camera_model=self.cfg.camera_model,
-            # tscales=tscales,
-            # tquats=tquats,
+            tscales=tscales,
+            tquats=tquats,
             **kwargs,
         )
         if masks is not None:
