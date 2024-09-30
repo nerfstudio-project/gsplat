@@ -1626,7 +1626,9 @@
         <span class="s2">&quot;gradient_2dgs&quot;</span><span class="p">:</span> <span class="n">densify</span><span class="p">,</span>  <span class="c1"># This holds the gradient used for densification for 2dgs</span>
     <span class="p">}</span>
 
-    <span class="n">render_normals</span> <span class="o">=</span> <span class="n">render_normals</span> <span class="o">@</span> <span class="n">torch</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">inv</span><span class="p">(</span><span class="n">viewmats</span><span class="p">)[</span><span class="mi">0</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">]</span><span class="o">.</span><span class="n">T</span>
+    <span class="n">render_normals</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">einsum</span><span class="p">(</span>
+        <span class="s2">&quot;...ij,...hwj-&gt;...hwi&quot;</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">inv</span><span class="p">(</span><span class="n">viewmats</span><span class="p">)[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">],</span> <span class="n">render_normals</span>
+    <span class="p">)</span>
 
     <span class="k">return</span> <span class="p">(</span>
         <span class="n">render_colors</span><span class="p">,</span>
