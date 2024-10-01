@@ -217,7 +217,7 @@ def create_splats_with_optimizers(
 
     # 6 sigma as the distance from the center (centroid) to a vertex, equals to
     # 3 sigma from the center to a face of the tetrahedron.
-    tscales = torch.log(dist_avg * init_scale * 6.0)  # 6 sigma [N,]
+    tscales = torch.log(dist_avg * init_scale * 3.0)  # 6 sigma [N,]
     tquats = torch.rand((N, 4))  # [N, 4]
 
     params = [
