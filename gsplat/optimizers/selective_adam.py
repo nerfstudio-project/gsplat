@@ -16,6 +16,8 @@ class SelectiveAdam(torch.optim.Adam):
     leverages the `selective_adam_update` function from a CUDA backend for
     optimized sparse updates.
 
+    This is one of the two optimizers mentioned in the Taming3DGS paper.
+
     Args:
         params (iterable): Iterable of parameters to optimize or dicts defining parameter groups.
         eps (float): Term added to the denominator to improve numerical stability (default: 1e-8).
