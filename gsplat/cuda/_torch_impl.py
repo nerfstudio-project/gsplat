@@ -48,7 +48,9 @@ def _ray_triangle_intersection(o, d, v0, v1, v2):
 
     # Calculate the intersection point distance along the ray
     t = f * torch.sum(e2 * q, dim=1)  # [N]
-    hit = hit & (t >= EPSILON)
+
+    # Do not check this. we want it to return line instead of ray intersection
+    # hit = hit & (t >= EPSILON)
     return hit, t
 
 

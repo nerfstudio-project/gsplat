@@ -760,8 +760,10 @@ inline __device__ bool ray_triangle_intersection(
     // t = f * dot(e2, q)
     T dot_e2_q = glm::dot(e2, q);
     t = f * dot_e2_q;
-    if (t > EPSILON) return true;
-    return false; // There is a line intersection, but not a ray intersection
+
+    return true;
+    // if (t > EPSILON) return true;
+    // return false; // There is a line intersection, but not a ray intersection
 }
 
 template <typename T>
