@@ -4,6 +4,41 @@ from ..cuda._wrapper import selective_adam_update
 
 
 class SelectiveAdam(torch.optim.Adam):
+    """
+    A custom optimizer that extends the standard Adam optimizer by
+    incorporating selective updates.
+
+    This class is useful for situations where only a subset of parameters
+    should be updated at each step, such as in sparse models or in cases where
+    parameter visibility is controlled by an external mask.
+
+    Additionally, the operations are fused into a single kernel. This optimizer
+    leverages the `selective_adam_update` function from a CUDA backend for
+    optimized sparse updates.
+
+    Args:
+        params (iterable): Iterable of parameters to optimize or dicts defining parameter groups.
+        eps (float): Term added to the denominator to improve numerical stability (default: 1e-8).
+        betas (Tuple[float, float]): Coefficients used for computing running averages of gradient and its square (default: (0.9, 0.999)).
+
+    Examples:
+
+        >>> N = 100
+        >>> param = torch.randn(N, requires_grad=True)
+        >>> optimizer = SelectiveAdam([param], eps=1e-8, betas=(0.9, 0.999))
+        >>> visibility_mask = torch.cat([torch.ones(50), torch.zeros(50)])  # Visible first half, hidden second half
+
+        >>> # Forward pass
+        >>> loss = torch.sum(param ** 2)
+
+        >>> # Backward pass
+        >>> loss.backward()
+
+        >>> # Optimization step with selective updates
+        >>> optimizer.step(visibility=visibility_mask, N=N)
+
+    """
+
     def __init__(self, params, eps, betas):
         super().__init__(params=params, eps=eps, betas=betas)
 
