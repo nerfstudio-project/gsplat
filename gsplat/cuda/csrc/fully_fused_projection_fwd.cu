@@ -26,6 +26,10 @@ __global__ void fully_fused_projection_fwd_kernel(
     const T *__restrict__ scales,   // [N, 3] optional
     const T *__restrict__ viewmats, // [C, 4, 4]
     const T *__restrict__ Ks,       // [C, 3, 3]
+    //--------------culling parameters--------------//
+    const T *__restrict__ tquats,   // [N, 4] optional
+    const T *__restrict__ tscales,  // [N] optional
+    //----------------------------------------------//
     const int32_t image_width,
     const int32_t image_height,
     const T eps2d,
@@ -98,18 +102,45 @@ __global__ void fully_fused_projection_fwd_kernel(
             glm::make_vec4(quats), glm::make_vec3(scales), &covar, nullptr
         );
     }
+
+    // ------------------tet culling----------------//
+    bool tet_cull = false;
+    vec3<T> tverts_c[4];
+    if (tquats != nullptr && tscales != nullptr) {
+        tet_cull = true;
+        tquats += gid * 4;
+        tscales += gid;
+        mat3<T> trotmat = quat_to_rotmat<T>(glm::make_vec4(tquats));
+        vec3<T> tverts[4] = {
+            {sqrt(8 / 9), 0, -1 / 3},
+            {-sqrt(2 / 9), sqrt(2 / 3), -1 / 3},
+            {-sqrt(2 / 9), -sqrt(2 / 3), -1 / 3},
+            {0, 0, 1}
+        };
+
+        // transform vertices from world space to camera space
+        GSPLAT_PRAGMA_UNROLL
+        for (int i = 0; i < 4; ++i) {
+            tverts[i] = trotmat * tverts[i] * tscales[0] + glm::make_vec3(means);
+            pos_world_to_cam(R, t, tverts[i], tverts_c[i]);
+        }
+    }
+    //----------------------------------------------//
     mat3<T> covar_c;
     covar_world_to_cam(R, covar, covar_c);
 
     // perspective projection
     mat2<T> covar2d;
     vec2<T> mean2d;
+    vec2<T> tverts2d_0, tverts2d_1, tverts2d_2, tverts2d_3;
 
     switch (camera_model) {
         case CameraModelType::PINHOLE: // perspective projection
-            persp_proj<T>(
+            persp_proj_with_tet<T>(
                 mean_c,
                 covar_c,
+                tverts_c,
+                tet_cull,
                 Ks[0],
                 Ks[4],
                 Ks[2],
@@ -117,13 +148,19 @@ __global__ void fully_fused_projection_fwd_kernel(
                 image_width,
                 image_height,
                 covar2d,
-                mean2d
+                mean2d,
+                tverts2d_0,
+                tverts2d_1,
+                tverts2d_2,
+                tverts2d_3
             );
             break;
         case CameraModelType::ORTHO: // orthographic projection
-            ortho_proj<T>(
+            ortho_proj_with_tet<T>(
                 mean_c,
                 covar_c,
+                tverts_c,
+                tet_cull,
                 Ks[0],
                 Ks[4],
                 Ks[2],
@@ -131,13 +168,19 @@ __global__ void fully_fused_projection_fwd_kernel(
                 image_width,
                 image_height,
                 covar2d,
-                mean2d
+                mean2d,
+                tverts2d_0,
+                tverts2d_1,
+                tverts2d_2,
+                tverts2d_3
             );
             break;
         case CameraModelType::FISHEYE: // fisheye projection
-            fisheye_proj<T>(
+            fisheye_proj_with_tet<T>(
                 mean_c,
                 covar_c,
+                tverts_c,
+                tet_cull,
                 Ks[0],
                 Ks[4],
                 Ks[2],
@@ -145,7 +188,11 @@ __global__ void fully_fused_projection_fwd_kernel(
                 image_width,
                 image_height,
                 covar2d,
-                mean2d
+                mean2d,
+                tverts2d_0,
+                tverts2d_1,
+                tverts2d_2,
+                tverts2d_3
             );
             break;
     }
@@ -167,6 +214,17 @@ __global__ void fully_fused_projection_fwd_kernel(
     T radius = ceil(3.f * sqrt(v1));
     // T v2 = b - sqrt(max(0.1f, b * b - det));
     // T radius = ceil(3.f * sqrt(max(v1, v2)));
+
+    // ----------------tet culling----------------//
+    if (tet_cull) {
+        T tradius = 0.f;
+        tradius = max(tradius, glm::length(tverts2d_0 - mean2d));
+        tradius = max(tradius, glm::length(tverts2d_1 - mean2d));
+        tradius = max(tradius, glm::length(tverts2d_2 - mean2d));
+        tradius = max(tradius, glm::length(tverts2d_3 - mean2d));
+        radius = min(radius, tradius);
+    }
+    //----------------------------------------------//
 
     if (radius <= radius_clip) {
         radii[idx] = 0;
@@ -206,6 +264,8 @@ fully_fused_projection_fwd_tensor(
     const at::optional<torch::Tensor> &scales, // [N, 3] optional
     const torch::Tensor &viewmats,             // [C, 4, 4]
     const torch::Tensor &Ks,                   // [C, 3, 3]
+    const at::optional<torch::Tensor> &tquats, // [N, 4] optional
+    const at::optional<torch::Tensor> &tscales, // [N] optional
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
@@ -255,6 +315,8 @@ fully_fused_projection_fwd_tensor(
                 scales.has_value() ? scales.value().data_ptr<float>() : nullptr,
                 viewmats.data_ptr<float>(),
                 Ks.data_ptr<float>(),
+                tquats.has_value() ? tquats.value().data_ptr<float>() : nullptr,
+                tscales.has_value() ? tscales.value().data_ptr<float>() : nullptr,
                 image_width,
                 image_height,
                 eps2d,

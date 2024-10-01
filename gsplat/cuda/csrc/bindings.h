@@ -104,6 +104,8 @@ fully_fused_projection_fwd_tensor(
     const at::optional<torch::Tensor> &scales, // [N, 3] optional
     const torch::Tensor &viewmats,             // [C, 4, 4]
     const torch::Tensor &Ks,                   // [C, 3, 3]
+    const at::optional<torch::Tensor> &tquats, // [N, 4] optional
+    const at::optional<torch::Tensor> &tscales,// [N] optional
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
@@ -128,6 +130,8 @@ fully_fused_projection_bwd_tensor(
     const at::optional<torch::Tensor> &scales, // [N, 3] optional
     const torch::Tensor &viewmats,             // [C, 4, 4]
     const torch::Tensor &Ks,                   // [C, 3, 3]
+    const at::optional<torch::Tensor> &tquats, // [N, 4] optional
+    const at::optional<torch::Tensor> &tscales,// [N] optional
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,

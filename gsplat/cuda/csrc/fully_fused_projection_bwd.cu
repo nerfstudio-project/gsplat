@@ -27,6 +27,10 @@ __global__ void fully_fused_projection_bwd_kernel(
     const T *__restrict__ scales,   // [N, 3] optional
     const T *__restrict__ viewmats, // [C, 4, 4]
     const T *__restrict__ Ks,       // [C, 3, 3]
+    //--------------culling parameters--------------//
+    const T *__restrict__ tquats,   // [N, 4] optional
+    const T *__restrict__ tscales,  // [N] optional
+    //----------------------------------------------//
     const int32_t image_width,
     const int32_t image_height,
     const T eps2d,
@@ -272,6 +276,8 @@ fully_fused_projection_bwd_tensor(
     const at::optional<torch::Tensor> &scales, // [N, 3] optional
     const torch::Tensor &viewmats,             // [C, 4, 4]
     const torch::Tensor &Ks,                   // [C, 3, 3]
+    const at::optional<torch::Tensor> &tquats,  // [N, 4] optional
+    const at::optional<torch::Tensor> &tscales, // [N] optional
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
@@ -341,6 +347,8 @@ fully_fused_projection_bwd_tensor(
                 covars.has_value() ? nullptr : scales.value().data_ptr<float>(),
                 viewmats.data_ptr<float>(),
                 Ks.data_ptr<float>(),
+                tquats.has_value() ? tquats.value().data_ptr<float>() : nullptr,
+                tscales.has_value() ? tscales.value().data_ptr<float>() : nullptr,
                 image_width,
                 image_height,
                 eps2d,

@@ -214,6 +214,49 @@ inline __device__ void ortho_proj(
 }
 
 template <typename T>
+inline __device__ void ortho_proj_with_tet(
+    // inputs
+    const vec3<T> mean3d,
+    const mat3<T> cov3d,
+    const vec3<T> tverts_c[4],
+    const bool tet_cull,
+    const T fx,
+    const T fy,
+    const T cx,
+    const T cy,
+    const uint32_t width,
+    const uint32_t height,
+    // outputs
+    mat2<T> &cov2d,
+    vec2<T> &mean2d,
+    // TODO: there should be a better way to do this
+    vec2<T> &tverts2d_0,
+    vec2<T> &tverts2d_1,
+    vec2<T> &tverts2d_2,
+    vec2<T> &tverts2d_3
+) {
+    T x = mean3d[0], y = mean3d[1], z = mean3d[2];
+
+    // mat3x2 is 3 columns x 2 rows.
+    mat3x2<T> J = mat3x2<T>(
+        fx,
+        0.f, // 1st column
+        0.f,
+        fy, // 2nd column
+        0.f,
+        0.f // 3rd column
+    );
+    cov2d = J * cov3d * glm::transpose(J);
+    mean2d = vec2<T>({fx * x + cx, fy * y + cy});
+    if (tet_cull) {
+        tverts2d_0 = vec2<T>({fx * tverts_c[0].x + cx, fy * tverts_c[0].y + cy});
+        tverts2d_1 = vec2<T>({fx * tverts_c[1].x + cx, fy * tverts_c[1].y + cy});
+        tverts2d_2 = vec2<T>({fx * tverts_c[2].x + cx, fy * tverts_c[2].y + cy});
+        tverts2d_3 = vec2<T>({fx * tverts_c[3].x + cx, fy * tverts_c[3].y + cy});
+    }
+}
+
+template <typename T>
 inline __device__ void ortho_proj_vjp(
     // fwd inputs
     const vec3<T> mean3d,
@@ -294,6 +337,61 @@ inline __device__ void persp_proj(
     );
     cov2d = J * cov3d * glm::transpose(J);
     mean2d = vec2<T>({fx * x * rz + cx, fy * y * rz + cy});
+}
+
+template <typename T>
+inline __device__ void persp_proj_with_tet(
+    // inputs
+    const vec3<T> mean3d,
+    const mat3<T> cov3d,
+    const vec3<T> tverts_c[4],
+    const bool tet_cull,
+    const T fx,
+    const T fy,
+    const T cx,
+    const T cy,
+    const uint32_t width,
+    const uint32_t height,
+    // outputs
+    mat2<T> &cov2d,
+    vec2<T> &mean2d,
+    // TODO: there should be a better way to do this
+    vec2<T> &tverts2d_0,
+    vec2<T> &tverts2d_1,
+    vec2<T> &tverts2d_2,
+    vec2<T> &tverts2d_3
+) {
+    T x = mean3d[0], y = mean3d[1], z = mean3d[2];
+
+    T tan_fovx = 0.5f * width / fx;
+    T tan_fovy = 0.5f * height / fy;
+    T lim_x_pos = (width - cx) / fx + 0.3f * tan_fovx;
+    T lim_x_neg = cx / fx + 0.3f * tan_fovx;
+    T lim_y_pos = (height - cy) / fy + 0.3f * tan_fovy;
+    T lim_y_neg = cy / fy + 0.3f * tan_fovy;
+
+    T rz = 1.f / z;
+    T rz2 = rz * rz;
+    T tx = z * min(lim_x_pos, max(-lim_x_neg, x * rz));
+    T ty = z * min(lim_y_pos, max(-lim_y_neg, y * rz));
+
+    // mat3x2 is 3 columns x 2 rows.
+    mat3x2<T> J = mat3x2<T>(
+        fx * rz,
+        0.f, // 1st column
+        0.f,
+        fy * rz, // 2nd column
+        -fx * tx * rz2,
+        -fy * ty * rz2 // 3rd column
+    );
+    cov2d = J * cov3d * glm::transpose(J);
+    mean2d = vec2<T>({fx * x * rz + cx, fy * y * rz + cy});
+    if (tet_cull) {
+        tverts2d_0 = vec2<T>({fx * tverts_c[0].x / tverts_c[0].z + cx, fy * tverts_c[0].y / tverts_c[0].z + cy});
+        tverts2d_1 = vec2<T>({fx * tverts_c[1].x / tverts_c[1].z + cx, fy * tverts_c[1].y / tverts_c[1].z + cy});
+        tverts2d_2 = vec2<T>({fx * tverts_c[2].x / tverts_c[2].z + cx, fy * tverts_c[2].y / tverts_c[2].z + cy});
+        tverts2d_3 = vec2<T>({fx * tverts_c[3].x / tverts_c[3].z + cx, fy * tverts_c[3].y / tverts_c[3].z + cy});
+    }
 }
 
 template <typename T>
@@ -398,6 +496,69 @@ inline __device__ void fisheye_proj(
     T theta = glm::atan(xy_len, z + eps);
     mean2d =
         vec2<T>({x * fx * theta / xy_len + cx, y * fy * theta / xy_len + cy});
+
+    T x2 = x * x + eps;
+    T y2 = y * y;
+    T xy = x * y;
+    T x2y2 = x2 + y2;
+    T x2y2z2_inv = 1.f / (x2y2 + z * z);
+
+    T b = glm::atan(xy_len, z) / xy_len / x2y2;
+    T a = z * x2y2z2_inv / (x2y2);
+    mat3x2<T> J = mat3x2<T>(
+        fx * (x2 * a + y2 * b),
+        fy * xy * (a - b),
+        fx * xy * (a - b),
+        fy * (y2 * a + x2 * b),
+        -fx * x * x2y2z2_inv,
+        -fy * y * x2y2z2_inv
+    );
+    cov2d = J * cov3d * glm::transpose(J);
+}
+
+template <typename T>
+inline __device__ void fisheye_proj_with_tet(
+    // inputs
+    const vec3<T> mean3d,
+    const mat3<T> cov3d,
+    const vec3<T> tverts_c[4],
+    const bool tet_cull,
+    const T fx,
+    const T fy,
+    const T cx,
+    const T cy,
+    const uint32_t width,
+    const uint32_t height,
+    // outputs
+    mat2<T> &cov2d,
+    vec2<T> &mean2d,
+    // TODO: there should be a better way to do this
+    vec2<T> &tverts2d_0,
+    vec2<T> &tverts2d_1,
+    vec2<T> &tverts2d_2,
+    vec2<T> &tverts2d_3
+) {
+    T x = mean3d[0], y = mean3d[1], z = mean3d[2];
+
+    T eps = 0.0000001f;
+    T xy_len = glm::length(glm::vec2({x, y})) + eps;
+    T theta = glm::atan(xy_len, z + eps);
+    mean2d =
+        vec2<T>({x * fx * theta / xy_len + cx, y * fy * theta / xy_len + cy});
+    if (tet_cull) {
+        T txy_len[4] = {glm::length(glm::vec2({tverts_c[0].x, tverts_c[0].y})) + eps,
+                        glm::length(glm::vec2({tverts_c[1].x, tverts_c[1].y})) + eps,
+                        glm::length(glm::vec2({tverts_c[2].x, tverts_c[2].y})) + eps,
+                        glm::length(glm::vec2({tverts_c[3].x, tverts_c[3].y})) + eps};
+        T ttheta[4] = {glm::atan(txy_len[0], tverts_c[0].z + eps),
+                        glm::atan(txy_len[1], tverts_c[1].z + eps),
+                        glm::atan(txy_len[2], tverts_c[2].z + eps),
+                        glm::atan(txy_len[3], tverts_c[3].z + eps)};
+        tverts2d_0 = vec2<T>({tverts_c[0].x * fx * ttheta[0] / txy_len[0] + cx, tverts_c[0].y * fy * ttheta[0] / txy_len[0] + cy});
+        tverts2d_1 = vec2<T>({tverts_c[1].x * fx * ttheta[1] / txy_len[1] + cx, tverts_c[1].y * fy * ttheta[1] / txy_len[1] + cy});
+        tverts2d_2 = vec2<T>({tverts_c[2].x * fx * ttheta[2] / txy_len[2] + cx, tverts_c[2].y * fy * ttheta[2] / txy_len[2] + cy});
+        tverts2d_3 = vec2<T>({tverts_c[3].x * fx * ttheta[3] / txy_len[3] + cx, tverts_c[3].y * fy * ttheta[3] / txy_len[3] + cy});
+    }
 
     T x2 = x * x + eps;
     T y2 = y * y;

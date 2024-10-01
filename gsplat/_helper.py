@@ -16,7 +16,7 @@ def load_test_data(
     assert scene_grid % 2 == 1, "scene_grid must be odd"
 
     if data_path is None:
-        data_path = os.path.join(os.path.dirname(__file__), "../assets/test_garden.npz")
+        data_path = os.path.join(os.path.dirname(__file__), "/home/junchenliu/gsplat/assets/test_garden.npz")
     data = np.load(data_path)
     height, width = data["height"].item(), data["width"].item()
     viewmats = torch.from_numpy(data["viewmats"]).float().to(device)

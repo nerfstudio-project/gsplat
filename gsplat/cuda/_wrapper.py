@@ -189,6 +189,8 @@ def fully_fused_projection(
     scales: Optional[Tensor],  # [N, 3] or None
     viewmats: Tensor,  # [C, 4, 4]
     Ks: Tensor,  # [C, 3, 3]
+    tquats: Optional[Tensor],  # [N, 4] or None
+    tscales: Optional[Tensor],  # [N] or None
     width: int,
     height: int,
     eps2d: float = 0.3,
@@ -279,6 +281,12 @@ def fully_fused_projection(
         assert scales.size() == (N, 3), scales.size()
         quats = quats.contiguous()
         scales = scales.contiguous()
+    if tquats is not None:
+        assert tquats.size() == (N, 4), tquats.size()
+        tquats = tquats.contiguous()
+    if tscales is not None:
+        assert tscales.size() == (N,), tscales.size()
+        tscales = tscales.contiguous()
     if sparse_grad:
         assert packed, "sparse_grad is only supported when packed is True"
 
@@ -292,6 +300,8 @@ def fully_fused_projection(
             scales,
             viewmats,
             Ks,
+            tquats,
+            tscales,
             width,
             height,
             eps2d,
@@ -310,6 +320,8 @@ def fully_fused_projection(
             scales,
             viewmats,
             Ks,
+            tquats,
+            tscales,
             width,
             height,
             eps2d,
@@ -766,6 +778,8 @@ class _FullyFusedProjection(torch.autograd.Function):
         scales: Tensor,  # [N, 3] or None
         viewmats: Tensor,  # [C, 4, 4]
         Ks: Tensor,  # [C, 3, 3]
+        tquats: Tensor,  # [N, 4] or None
+        tscales: Tensor,  # [N] or None
         width: int,
         height: int,
         eps2d: float,
@@ -789,6 +803,8 @@ class _FullyFusedProjection(torch.autograd.Function):
             scales,
             viewmats,
             Ks,
+            tquats,
+            tscales,
             width,
             height,
             eps2d,
@@ -801,7 +817,17 @@ class _FullyFusedProjection(torch.autograd.Function):
         if not calc_compensations:
             compensations = None
         ctx.save_for_backward(
-            means, covars, quats, scales, viewmats, Ks, radii, conics, compensations
+            means,
+            covars,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            tquats,
+            tscales,
+            radii,
+            conics,
+            compensations,
         )
         ctx.width = width
         ctx.height = height
@@ -819,6 +845,8 @@ class _FullyFusedProjection(torch.autograd.Function):
             scales,
             viewmats,
             Ks,
+            tquats,
+            tscales,
             radii,
             conics,
             compensations,
@@ -838,6 +866,8 @@ class _FullyFusedProjection(torch.autograd.Function):
             scales,
             viewmats,
             Ks,
+            tquats,
+            tscales,
             width,
             height,
             eps2d,
