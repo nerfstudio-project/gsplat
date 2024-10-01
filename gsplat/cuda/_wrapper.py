@@ -1976,3 +1976,59 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             None,
             None,
         )
+        
+###### TET ######
+
+def ray_tetra_intersection(
+    rays_o: Tensor,     # [N, 3]
+    rays_d: Tensor,     # [N, 3]
+    vertices: Tensor,   # [N, 4, 3]
+) -> Tuple[Tensor, Tensor]:
+    """Ray tetrahedron intersection
+    (This function only have gradient w.r.t. vertices)
+    
+    Args:
+        rays_o: Ray origins. [N, 3]
+        rays_d: Ray directions. [N, 3]
+        vertices: Tetrahedron vertices. [N, 4, 3]
+    
+    Returns:
+        A tuple:
+        
+        - **Entry face ids**. Entry face ids. [N]
+        - **Exit face ids**. Exit face ids. [N]
+        - **Entry t values**. Entry t values. [N]
+        - **Exit t values**. Exit t values. [N]
+    """
+    N = rays_o.shape[0]
+    assert rays_o.shape == (N, 3), rays_o.shape
+    assert rays_d.shape == (N, 3), rays_d.shape
+    assert vertices.shape == (N, 4, 3), vertices.shape
+    rays_o = rays_o.contiguous()
+    rays_d = rays_d.contiguous()
+    vertices = vertices.contiguous()
+    return _RayTetraIntersection.apply(rays_o, rays_d, vertices)
+
+class _RayTetraIntersection(torch.autograd.Function):
+    """Ray tetrahedron intersection"""
+
+    @staticmethod
+    def forward(
+        ctx,
+        rays_o: Tensor,     # [N, 3]
+        rays_d: Tensor,     # [N, 3]
+        vertices: Tensor,   # [N, 4, 3]
+    ) -> Tuple[Tensor, Tensor]:
+        entry_face_ids, exit_face_ids, t_entrys, t_exits = _make_lazy_cuda_func("ray_tetra_intersection_fwd")(
+            rays_o, rays_d, vertices
+        )
+        ctx.save_for_backward(rays_o, rays_d, vertices)
+        return entry_face_ids, exit_face_ids, t_entrys, t_exits
+
+    @staticmethod
+    def backward(ctx, v_entry_face_ids: Tensor, v_exit_face_ids: Tensor, v_t_entrys: Tensor, v_t_exits: Tensor):
+        rays_o, rays_d, vertices = ctx.saved_tensors
+        v_vertices = _make_lazy_cuda_func("ray_tetra_intersection_bwd")(
+            rays_o, rays_d, vertices, v_t_entrys, v_t_exits
+        )[0]
+        return None, None, v_vertices

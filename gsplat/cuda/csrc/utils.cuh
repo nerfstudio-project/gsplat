@@ -719,136 +719,301 @@ inline __device__ void compute_ray_transforms_aabb_vjp(
 template <typename T>
 inline __device__ bool ray_triangle_intersection(
     // ray origin and direction
-    const vec3<T> ray_o,
-    const vec3<T> ray_d,
+    const vec3<T> o,
+    const vec3<T> d,
     // triangle vertices
     const vec3<T> v0,
     const vec3<T> v1,
     const vec3<T> v2,
-    // output intersection point
-    T &t1 // entry face t values
+    // output intersection t value
+    T &t
 ) {
-    const T EPSILON = 0.0000001f;
-    vec3<T> edge1 = v1 - v0;
-    vec3<T> edge2 = v2 - v0;
-    vec3<T> h = glm::cross(ray_d, edge2);
-    T a = glm::dot(edge1, h);
+    const T EPSILON = 0.00000001f;
+    t = 0.0f;
+    // e1 = v1 - v0
+    // e2 = v2 - v0
+    vec3<T> e1 = v1 - v0;
+    vec3<T> e2 = v2 - v0;
 
-    if (a > -EPSILON && a < EPSILON)
-    {
-        // printf("exit because of parallel\n");
-        return false; // This means the ray is parallel to the triangle
-    }
+    // h = cross(d, e2)
+    // a = dot(e1, h)
+    vec3<T> h = glm::cross(d, e2);
+    T a = glm::dot(e1, h);
+    if (a > -EPSILON && a < EPSILON) return false; // parallel to the triangle
 
+    // f = 1 / a
+    // s = o - v0
+    // u = f * dot(s, h)
     T f = 1.0f / a;
-    vec3<T> s = ray_o - v0;
-    T u = f * glm::dot(s, h);
+    vec3<T> s = o - v0;
+    T dot_s_h = glm::dot(s, h);
+    T u = f * dot_s_h;
+    if (u < 0.0f || u > 1.0f) return false; // outside the triangle
 
-    if (u < 0.0f || u > 1.0f)
-    {
-        // printf("exit because of u < 0.0f || u > 1.0f\n");
-        return false;
-    }
+    // q = cross(s, e1)
+    // v = f * dot(d, q)
+    vec3<T> q = glm::cross(s, e1);
+    T dot_d_q = glm::dot(d, q);
+    T v = f * dot_d_q;
+    if (v < 0.0f || u + v > 1.0f) return false; // outside the triangle
 
-    vec3<T> q = glm::cross(s, edge1);
-    T v = f * glm::dot(ray_d, q);
+    // t = f * dot(e2, q)
+    T dot_e2_q = glm::dot(e2, q);
+    t = f * dot_e2_q;
+    if (t > EPSILON) return true;
+    return false; // There is a line intersection, but not a ray intersection
+}
 
-    if (v < 0.0f || u + v > 1.0f)
-    {
-        // printf("exit because of v < 0.0f || u + v > 1.0f\n");
-        return false;
-    }
-    // printf("u: %f, v: %f\n", u, v);
+template <typename T>
+inline __device__ void ray_triangle_intersection_vjp(
+    // fwd inputs
+    const vec3<T> o,
+    const vec3<T> d,
+    const vec3<T> v0,
+    const vec3<T> v1,
+    const vec3<T> v2,
+    // grad outputs
+    const T &v_t,
+    // grad inputs (only backpropagate to triangle vertices)
+    vec3<T> &v_v0,
+    vec3<T> &v_v1,
+    vec3<T> &v_v2
+) {
+    v_v0 = vec3<T>(0.f);
+    v_v1 = vec3<T>(0.f);
+    v_v2 = vec3<T>(0.f);
 
-    // Compute the distance to the intersection point
-    T t = f * glm::dot(edge2, q);
+    // we call this function only when there is a ray-triangle intersection
+    // so the forward is only used to compute intermediate variables
+    vec3<T> e1 = v1 - v0;
+    vec3<T> e2 = v2 - v0;
+    vec3<T> h = glm::cross(d, e2);
+    T a = glm::dot(e1, h);
+    T f = 1.0f / a;
+    vec3<T> s = o - v0;
+    T dot_s_h = glm::dot(s, h);
+    T u = f * dot_s_h;
+    vec3<T> q = glm::cross(s, e1);
+    T dot_d_q = glm::dot(d, q);
+    T v = f * dot_d_q;
+    T dot_e2_q = glm::dot(e2, q);
+    T t = f * dot_e2_q;
 
-    // vec3<T> intersection = ray_o + t * ray_d;
-    // printf("intersection: %f, %f, %f, t: %f, u: %f, v: %f\n", intersection.x, intersection.y, intersection.z, t, u, v);
+    vec3<T> v_e1, v_e2, v_h, v_s, v_q;
+    T v_a, v_f;
 
-    if (t > EPSILON)
-    {
-        t1 = t;
-        return true; // There is a ray intersection
-    }
-    else
-    {
-        // printf("exit because of t <= EPSILON, t = %f\n", t);
-        return false; // There is a line intersection, but not a ray intersection
-    }
+    // t = f * dot(e2, q), 
+    v_f = v_t * dot_e2_q;
+    v_e2 = v_t * q * f;
+    v_q = v_t * e2 * f;
+    
+    // v = f * dot(d, q), v is leaf variable
+    // q = cross(s, e1)
+    v_s = glm::cross(e1, v_q);
+    v_e1 = glm::cross(v_q, s);
+
+    // u = f * dot(s, h), u is leaf variable
+    // s = o - v0
+    // v_o += v_s;
+    v_v0 -= v_s;
+
+    // f = 1 / a
+    v_a = -v_f / (a * a);
+
+    // a = dot(e1, h)
+    v_e1 += v_a * h;
+    v_h = v_a * e1;
+
+    // h = cross(d, e2)
+    // v_d += glm::cross(e2, v_h);
+    v_e2 += glm::cross(v_h, d);
+
+    // e2 = v2 - v0
+    v_v2 += v_e2;
+    v_v0 -= v_e2;
+    
+    // e1 = v1 - v0
+    v_v1 += v_e1;
+    v_v0 -= v_e1;
 }
 
 template <typename T>
 inline __device__ bool ray_tetra_intersection(
     // ray origin and direction
-    const vec3<T> ray_o,
-    const vec3<T> ray_d,
+    const vec3<T> o,
+    const vec3<T> d,
     // tetrahedron vertices
     const vec3<T> v0,
     const vec3<T> v1,
     const vec3<T> v2,
     const vec3<T> v3,
-    // output intersection point
-    vec2<int> &faces, // entry and exit faces
-    vec2<T> &barycentric1, // entry face barycentric coordinates
-    vec2<T> &barycentric2, // exit face barycentric coordinates
-    T &t1, // entry face t values
-    T &t2  // exit face t values
+    // output intersection face indices and t values
+    int32_t &entry_face_idx, // entry face index
+    int32_t &exit_face_idx, // exit face index
+    T &t_entry, // entry face t value
+    T &t_exit  // exit face t value
 ) {
-    T t_entry = 1e10f;  // Initialize to a very small value (entry point)
-    T t_exit = -1e10f;    // Initialize to a very large value (exit point)
-    bool intersected = false;
+    entry_face_idx = -1;
+    exit_face_idx = -1;
+    t_entry = 1e10f;
+    t_exit = -1e10f;
 
-    // Test intersection with each of the four triangular faces
-    T t_temp;
-    if (ray_triangle_intersection(ray_o, ray_d, v0, v1, v2, t_temp))
-    {
-        intersected = true;
-        if (t_temp > t_exit)
-            t_exit = t_temp; // Closest intersection along the exit direction
-        if (t_temp < t_entry)
-            t_entry = t_temp; // Farthest intersection along the entry direction
-        // printf("intersected 1!, t_temp: %f\n", t_temp);
+    // Test intersection with each of the four faces
+    T t_isct;
+    vec3<T> faces[4][3] = {
+        {v0, v1, v2}, // Face 0
+        {v1, v2, v3}, // Face 1
+        {v2, v3, v0}, // Face 2
+        {v3, v0, v1}  // Face 3
+    };
+
+    GSPLAT_PRAGMA_UNROLL
+    for (int i = 0; i < 4; ++i) {
+        bool intersected_face = ray_triangle_intersection(
+            o,
+            d,
+            faces[i][0],
+            faces[i][1],
+            faces[i][2],
+            t_isct
+        );
+        if (intersected_face) {
+            if (t_isct < t_entry) {
+                entry_face_idx = i;
+                t_entry = t_isct;
+            }
+            if (t_isct > t_exit) {
+                exit_face_idx = i;
+                t_exit = t_isct;
+            }
+        }
     }
-    if (ray_triangle_intersection(ray_o, ray_d, v1, v2, v3, t_temp))
-    {
-        intersected = true;
-        if (t_temp > t_exit)
-            t_exit = t_temp; // Closest intersection along the exit direction
-        if (t_temp < t_entry)
-            t_entry = t_temp; // Farthest intersection along the entry direction
-        // printf("intersected 2!, t_temp: %f\n", t_temp);
-    }
-    if (ray_triangle_intersection(ray_o, ray_d, v2, v3, v0, t_temp))
-    {
-        intersected = true;
-        if (t_temp > t_exit)
-            t_exit = t_temp; // Closest intersection along the exit direction
-        if (t_temp < t_entry)
-            t_entry = t_temp; // Farthest intersection along the entry direction
-        // printf("intersected 3!, t_temp: %f\n", t_temp);
-    }
-    if (ray_triangle_intersection(ray_o, ray_d, v3, v0, v1, t_temp))
-    {
-        intersected = true;
-        if (t_temp > t_exit)
-            t_exit = t_temp; // Closest intersection along the exit direction
-        if (t_temp < t_entry)
-            t_entry = t_temp; // Farthest intersection along the entry direction
-        // printf("intersected 4!, t_temp: %f\n", t_temp);
+    if (entry_face_idx < 0 && exit_face_idx < 0) return false;
+    return true;
+}
+
+template <typename T>
+inline __device__ void ray_tetra_intersection_vjp(
+    // fwd inputs
+    const vec3<T> o,
+    const vec3<T> d,
+    const vec3<T> v0,
+    const vec3<T> v1,
+    const vec3<T> v2,
+    const vec3<T> v3,
+    // grad outputs
+    const T &v_t_entry,
+    const T &v_t_exit,
+    // grad inputs (only backpropagate to tetrahedron vertices)
+    vec3<T> &v_v0,
+    vec3<T> &v_v1,
+    vec3<T> &v_v2,
+    vec3<T> &v_v3
+) {
+    if (v_t_entry == 0 && v_t_exit == 0) return;
+
+    v_v0 = vec3<T>(0.f);
+    v_v1 = vec3<T>(0.f);
+    v_v2 = vec3<T>(0.f);
+    v_v3 = vec3<T>(0.f);
+
+    // run forward pass to get intersection face indices
+    int32_t entry_face_idx = -1;
+    int32_t exit_face_idx = -1;
+    T t_entry = 1e10f;
+    T t_exit = -1e10f;
+    bool hit = ray_tetra_intersection(
+        o,
+        d,
+        v0,
+        v1,
+        v2,
+        v3,
+        entry_face_idx,
+        exit_face_idx,
+        t_entry,
+        t_exit
+    );
+    if (!hit) return;
+
+    vec3<T> faces[4][3] = {
+        {v0, v1, v2}, // Face 0
+        {v1, v2, v3}, // Face 1
+        {v2, v3, v0}, // Face 2
+        {v3, v0, v1}  // Face 3
+    };
+
+    // backpropagate to the tetrahedron vertices
+
+    vec3<T> v_entry_faces[3] = {vec3<T>(0.f), vec3<T>(0.f), vec3<T>(0.f)};
+    ray_triangle_intersection_vjp(
+        o,
+        d,
+        faces[entry_face_idx][0],
+        faces[entry_face_idx][1],
+        faces[entry_face_idx][2],
+        v_t_entry,
+        v_entry_faces[0],
+        v_entry_faces[1],
+        v_entry_faces[2]
+    );
+    switch (entry_face_idx) {
+        case 0:
+            v_v0 += v_entry_faces[0];
+            v_v1 += v_entry_faces[1];
+            v_v2 += v_entry_faces[2];
+            break;
+        case 1:
+            v_v1 += v_entry_faces[0];
+            v_v2 += v_entry_faces[1];
+            v_v3 += v_entry_faces[2];
+            break;
+        case 2:
+            v_v2 += v_entry_faces[0];
+            v_v3 += v_entry_faces[1];
+            v_v0 += v_entry_faces[2];
+            break;
+        case 3:
+            v_v3 += v_entry_faces[0];
+            v_v0 += v_entry_faces[1];
+            v_v1 += v_entry_faces[2];
+            break;
     }
 
-    // If there is an intersection, update t_min and t_max with the entry and exit points
-    if (intersected) {
-        t1 = t_entry;
-        t2 = t_exit;
-        // printf("intersected!, t1: %f, t2: %f\n", t1, t2);
-        return true;
+    vec3<T> v_exit_faces[3] = {vec3<T>(0.f), vec3<T>(0.f), vec3<T>(0.f)};
+    ray_triangle_intersection_vjp(
+        o,
+        d,
+        faces[exit_face_idx][0],
+        faces[exit_face_idx][1],
+        faces[exit_face_idx][2],
+        v_t_exit,
+        v_exit_faces[0],
+        v_exit_faces[1],
+        v_exit_faces[2]
+    );
+    switch (exit_face_idx) {
+        case 0:
+            v_v0 += v_exit_faces[0];
+            v_v1 += v_exit_faces[1];
+            v_v2 += v_exit_faces[2];
+            break;
+        case 1:
+            v_v1 += v_exit_faces[0];
+            v_v2 += v_exit_faces[1];
+            v_v3 += v_exit_faces[2];
+            break;
+        case 2:
+            v_v2 += v_exit_faces[0];
+            v_v3 += v_exit_faces[1];
+            v_v0 += v_exit_faces[2];
+            break;
+        case 3:
+            v_v3 += v_exit_faces[0];
+            v_v0 += v_exit_faces[1];
+            v_v1 += v_exit_faces[2];
+            break;
     }
-
-    t1 = 0;
-    t2 = 0;
-    return false; // No intersection or invalid entry/exit
 }
 
 } // namespace gsplat
