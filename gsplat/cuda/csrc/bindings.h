@@ -489,9 +489,17 @@ fully_fused_projection_packed_bwd_2dgs_tensor(
 );
 
 std::vector<torch::Tensor> ray_tetra_intersection_fwd_tensor(
-    const torch::Tensor &rays_o,  // [N, 3]
-    const torch::Tensor &rays_d,  // [N, 3]
+    const torch::Tensor &rays_o,   // [N, 3]
+    const torch::Tensor &rays_d,   // [N, 3]
     const torch::Tensor &vertices  // [N, 4, 3]
+);
+
+std::tuple<torch::Tensor> ray_tetra_intersection_bwd_tensor(
+    const torch::Tensor &rays_o,     // [N, 3]
+    const torch::Tensor &rays_d,     // [N, 3]
+    const torch::Tensor &vertices,   // [N, 4, 3]
+    const torch::Tensor &v_t_entrys, // [N]
+    const torch::Tensor &v_t_exits  // [N]
 );
 
 } // namespace gsplat

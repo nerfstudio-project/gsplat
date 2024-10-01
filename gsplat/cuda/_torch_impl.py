@@ -7,88 +7,87 @@ from torch import Tensor
 from typing_extensions import Literal, assert_never
 
 
-def _ray_triangle_intersection(rays_o, rays_d, v0, v1, v2):
+def _ray_triangle_intersection(o, d, v0, v1, v2):
     """
     Calculate the intersection of rays with triangles using the Möller–Trumbore algorithm.
 
     Args:
-    - rays_o (Tensor): The origins of the rays. Shape: (N, 3).
-    - rays_d (Tensor): The direction vectors of the rays. Shape: (N, 3).
+    - o (Tensor): The origins of the rays. Shape: (N, 3).
+    - d (Tensor): The direction vectors of the rays. Shape: (N, 3).
     - v0 (Tensor): First vertex of the triangles. Shape: (N, 3).
     - v1 (Tensor): Second vertex of the triangles. Shape: (N, 3).
     - v2 (Tensor): Third vertex of the triangles. Shape: (N, 3).
 
     Returns:
-    - intersects (Tensor): Boolean tensor indicating which rays intersect the triangles. Shape: (N,).
-    - barycentric_coords (Tensor): Barycentric coordinates of the intersection points. Shape: (N, 3).
+    - hit (Tensor): Boolean tensor indicating which rays intersect the triangles. Shape: (N,).
     - t (Tensor): Distance from the ray origin to the intersection points. Shape: (N,).
     """
+    EPSILON = 1e-8
+
     # Calculate edges of the triangle
-    edge1 = v1 - v0  # Shape: (N, 3)
-    edge2 = v2 - v0  # Shape: (N, 3)
+    e1 = v1 - v0  # [N, 3]
+    e2 = v2 - v0  # [N, 3]
 
     # Calculate determinant and direction vectors
-    h = torch.cross(rays_d, edge2, dim=1)  # Shape: (N, 3)
-    a = torch.sum(edge1 * h, dim=1)  # Shape: (N,)
-
-    # If the determinant is close to 0, the ray is parallel to the triangle
-    eps = 1e-8
-    intersects = a.abs() > eps
+    h = torch.cross(d, e2, dim=1)  # [N, 3]
+    a = torch.sum(e1 * h, dim=1)  # [N]
+    
+    # Ray is parallel to the triangle
+    hit = a.abs() >= EPSILON
 
     # Calculate distance to intersection point
-    f = 1.0 / torch.where(intersects, a, torch.full_like(a, 1.0))
-    s = rays_o - v0  # Shape: (N, 3)
-    u = f * torch.sum(s * h, dim=1)  # Shape: (N,)
-
+    f = 1.0 / torch.where(hit, a, torch.full_like(a, 1.0))
+    s = o - v0  # [N, 3]
+    u = f * torch.sum(s * h, dim=1)  # [N]
     # Check if the intersection is within the triangle
-    intersects = intersects & (u >= -eps) & (u <= 1.0 + eps)
+    hit = hit & (u >= 0.0) & (u <= 1.0)
 
-    q = torch.cross(s, edge1, dim=1)  # Shape: (N, 3)
-    v = f * torch.sum(rays_d * q, dim=1)  # Shape: (N,)
-    intersects = intersects & (v >= -eps) & ((u + v) <= 1.0 + eps)
+    q = torch.cross(s, e1, dim=1)  # [N, 3]
+    v = f * torch.sum(d * q, dim=1)  # [N]
+    hit = hit & (v >= 0.0) & ((u + v) <= 1.0)
 
     # Calculate the intersection point distance along the ray
-    t = f * torch.sum(edge2 * q, dim=1)  # Shape: (N,)
-
-    # Calculate barycentric coordinates
-    # w = 1 - u - v
-    # barycentric_coords = torch.stack([u, v, w], dim=-1)  # Shape: (N, 3)
-
-    # Only keep positive t values (intersect in front of the origin)
-    # intersects = intersects & (t > 0)
-
-    return intersects, t, u, v
+    t = f * torch.sum(e2 * q, dim=1)  # [N]
+    hit = hit & (t >= EPSILON)
+    return hit, t
 
 
-def _ray_tetra_intersection(rays_o, rays_d, v0, v1, v2, v3):
-    t_entry = torch.full_like(v0[:, 0], fill_value=1e10)
-    t_exit = torch.full_like(v0[:, 0], fill_value=-1e10)
-    hits = torch.zeros_like(v0[:, 0], dtype=torch.bool)
+def _ray_tetra_intersection(rays_o, rays_d, vertices):
+    """
+    Calculate the intersection of rays with a tetrahedron.
 
-    intersects, t, u, v = _ray_triangle_intersection(rays_o, rays_d, v0, v1, v2)
-    t_entry = torch.where(intersects & (t < t_entry), t, t_entry)
-    t_exit = torch.where(intersects & (t > t_exit), t, t_exit)
-    hits = hits | intersects
+    Args:
+    - rays_o (Tensor): The origins of the rays. Shape: (N, 3).
+    - rays_d (Tensor): The direction vectors of the rays. Shape: (N, 3).
+    - vertices (Tensor): The vertices of the tetrahedron. Shape: (N, 4, 3).
 
-    intersects, t, u, v = _ray_triangle_intersection(rays_o, rays_d, v0, v2, v3)
-    t_entry = torch.where(intersects & (t < t_entry), t, t_entry)
-    t_exit = torch.where(intersects & (t > t_exit), t, t_exit)
-    hits = hits | intersects
+    Returns:
+    - entry_face_ids (Tensor): Indices of the entry faces. Shape: (N,).
+    - exit_face_ids (Tensor): Indices of the exit faces. Shape: (N,).
+    - t_entrys (Tensor): Distance from the ray origin to the entry points. Shape: (N,).
+    - t_exits (Tensor): Distance from the ray origin to the exit points. Shape: (N,).
+    """
+    N = rays_o.shape[0]
+    assert rays_o.shape == (N, 3), rays_o.shape
+    assert rays_d.shape == (N, 3), rays_d.shape
+    assert vertices.shape == (N, 4, 3), vertices.shape
 
-    intersects, t, u, v = _ray_triangle_intersection(rays_o, rays_d, v0, v3, v1)
-    t_entry = torch.where(intersects & (t < t_entry), t, t_entry)
-    t_exit = torch.where(intersects & (t > t_exit), t, t_exit)
-    hits = hits | intersects
-
-    intersects, t, u, v = _ray_triangle_intersection(rays_o, rays_d, v1, v2, v3)
-    t_entry = torch.where(intersects & (t < t_entry), t, t_entry)
-    t_exit = torch.where(intersects & (t > t_exit), t, t_exit)
-    hits = hits | intersects
-
-    t_entry = torch.where(hits, t_entry, torch.zeros_like(t_entry))
-    t_exit = torch.where(hits, t_exit, torch.zeros_like(t_exit))
-
-    return hits, t_entry, t_exit, u, v
+    v0, v1, v2, v3 = torch.unbind(vertices, dim=1)
+    entry_face_ids = torch.full_like(v0[:, 0], fill_value=-1, dtype=torch.int32)
+    exit_face_ids = torch.full_like(v0[:, 0], fill_value=-1, dtype=torch.int32)
+    t_entrys = torch.full_like(v0[:, 0], fill_value=1e10, dtype=rays_o.dtype)
+    t_exits = torch.full_like(v0[:, 0], fill_value=-1e10, dtype=rays_o.dtype)
+    
+    faces = [[v0, v1, v2], [v1, v2, v3], [v2, v3, v0], [v3, v0, v1]]
+    for i in range(4):
+        hit, t_isct = _ray_triangle_intersection(rays_o, rays_d, faces[i][0], faces[i][1], faces[i][2])
+        is_entry = hit & (t_isct < t_entrys)
+        is_exit = hit & (t_isct > t_exits)
+        entry_face_ids[is_entry] = i
+        exit_face_ids[is_exit] = i
+        t_entrys[is_entry] = t_isct[is_entry]
+        t_exits[is_exit] = t_isct[is_exit]
+    return entry_face_ids, exit_face_ids, t_entrys, t_exits
 
 
 def _quat_to_rotmat(quats: Tensor) -> Tensor:

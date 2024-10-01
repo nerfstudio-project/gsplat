@@ -16,6 +16,7 @@ from .cuda._wrapper import (
     fully_fused_projection_2dgs,
     rasterize_to_pixels_2dgs,
     rasterize_to_indices_in_range_2dgs,
+    ray_tetra_intersection,
 )
 from .rendering import (
     rasterization,
@@ -48,5 +49,7 @@ all = [
     "rasterize_to_pixels_2dgs",
     "rasterize_to_indices_in_range_2dgs",
     "accumulate_2dgs",
-    "rasterization_2dgs_inria_wrapper" "__version__",
+    "rasterization_2dgs_inria_wrapper",
+    "ray_tetra_intersection",
+    "__version__",
 ]
