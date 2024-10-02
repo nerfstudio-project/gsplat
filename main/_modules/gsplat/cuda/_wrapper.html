@@ -328,6 +328,24 @@
     <span class="k">return</span> <span class="n">call_cuda</span>
 
 
+<span class="k">def</span> <span class="nf">selective_adam_update</span><span class="p">(</span>
+    <span class="n">param</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
+    <span class="n">param_grad</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
+    <span class="n">exp_avg</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
+    <span class="n">exp_avg_sq</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
+    <span class="n">tiles_touched</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
+    <span class="n">lr</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">b1</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">b2</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">N</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">M</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;selective_adam_update&quot;</span><span class="p">)(</span>
+        <span class="n">param</span><span class="p">,</span> <span class="n">param_grad</span><span class="p">,</span> <span class="n">exp_avg</span><span class="p">,</span> <span class="n">exp_avg_sq</span><span class="p">,</span> <span class="n">tiles_touched</span><span class="p">,</span> <span class="n">lr</span><span class="p">,</span> <span class="n">b1</span><span class="p">,</span> <span class="n">b2</span><span class="p">,</span> <span class="n">eps</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">M</span>
+    <span class="p">)</span>
+
+
 <span class="k">def</span> <span class="nf">_make_lazy_cuda_obj</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
     <span class="c1"># pylint: disable=import-outside-toplevel</span>
     <span class="kn">from</span> <span class="nn">._backend</span> <span class="kn">import</span> <span class="n">_C</span>
