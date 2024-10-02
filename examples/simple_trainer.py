@@ -764,7 +764,7 @@ class Runner:
             # optimize
             for optimizer in self.optimizers.values():
                 if cfg.visible_adam:
-                    optimizer.step(visibility_mask, gaussian_cnt)
+                    optimizer.step(visibility_mask)
                 else:
                     optimizer.step()
                 optimizer.zero_grad(set_to_none=True)

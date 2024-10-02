@@ -37,7 +37,7 @@ class SelectiveAdam(torch.optim.Adam):
         >>> loss.backward()
 
         >>> # Optimization step with selective updates
-        >>> optimizer.step(visibility=visibility_mask, N=N)
+        >>> optimizer.step(visibility=visibility_mask)
 
     """
 
@@ -45,7 +45,8 @@ class SelectiveAdam(torch.optim.Adam):
         super().__init__(params=params, eps=eps, betas=betas)
 
     @torch.no_grad()
-    def step(self, visibility, N):
+    def step(self, visibility):
+        N = visibility.numel()
         for group in self.param_groups:
             lr = group["lr"]
             eps = group["eps"]
