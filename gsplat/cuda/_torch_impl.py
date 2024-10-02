@@ -335,6 +335,8 @@ def _fully_fused_projection(
     covars: Tensor,  # [N, 3, 3]
     viewmats: Tensor,  # [C, 4, 4]
     Ks: Tensor,  # [C, 3, 3]
+    tquats: Optional[Tensor],  # [N, 4]
+    tscales: Optional[Tensor],  # [N]
     width: int,
     height: int,
     eps2d: float = 0.3,
@@ -350,6 +352,29 @@ def _fully_fused_projection(
         This is a minimal implementation of fully fused version, which has more
         arguments. Not all arguments are supported.
     """
+    tet_cull = False
+    if tquats is not None and tscales is not None:
+        tet_cull = True
+        trotmat = _quat_to_rotmat(tquats)  # [N, 3, 3]
+        tverts = torch.tensor([[sqrt(8 / 9), 0, -1 / 3],
+                               [-sqrt(2 / 9), sqrt(2 / 3), -1 / 3],
+                               [-sqrt(2 / 9), -sqrt(2 / 3), -1 / 3],
+                               [0, 0, 1]], device=tquats.device, dtype=tquats.dtype)  # [4, 3]
+        mats = _quat_scale_to_matrix(tquats, tscales[:, None])  # [N, 3, 3]
+        tverts = torch.einsum("nij,kj->nki", mats, tverts)  # [N, 4, 3]
+        tverts = tverts + means[None, :, :]  # [N, 4, 3]
+        R = viewmats[:, :3, :3]  # [C, 3, 3]
+        t = viewmats[:, :3, 3]  # [C, 3]
+        tverts_c = torch.einsum("cij,nkj->cnki", R, tverts) + t[:, None, None, :]  # [C, N, 4, 3]
+        if camera_model == "ortho":
+            tverts2d = tverts_c[..., :2] * Ks[:, None, None, [0, 1], [0, 1]] + Ks[:, None, None, [0, 1], [2, 2]]
+        elif camera_model == "fisheye":
+            raise NotImplementedError
+        elif camera_model == "pinhole":
+            tverts2d = torch.einsum("cij,cnki->cnki", Ks[:, :2, :3], tverts_c)  # [C, N, 4, 2]
+        else:
+            assert_never(camera_model)
+
     means_c, covars_c = _world_to_cam(means, covars, viewmats)
 
     if camera_model == "ortho":
@@ -389,11 +414,15 @@ def _fully_fused_projection(
 
     depths = means_c[..., 2]  # [C, N]
 
-    b = (covars2d[..., 0, 0] + covars2d[..., 1, 1]) / 2  # (...,)
-    v1 = b + torch.sqrt(torch.clamp(b**2 - det, min=0.01))  # (...,)
-    radius = torch.ceil(3.0 * torch.sqrt(v1))  # (...,)
+    b = (covars2d[..., 0, 0] + covars2d[..., 1, 1]) / 2  # [C, N]
+    v1 = b + torch.sqrt(torch.clamp(b**2 - det, min=0.01))  # [C, N]
+    radius = torch.ceil(3.0 * torch.sqrt(v1))  # [C, N]
     # v2 = b - torch.sqrt(torch.clamp(b**2 - det, min=0.01))  # (...,)
     # radius = torch.ceil(3.0 * torch.sqrt(torch.max(v1, v2)))  # (...,)
+    
+    if tet_cull:
+        tradius = torch.max(torch.linalg.norm(tverts2d - means2d[:, :, None, :], dim=-1), dim=-1).values
+        radius = torch.min(radius, tradius)
 
     valid = (det > 0) & (depths > near_plane) & (depths < far_plane)
     radius[~valid] = 0.0

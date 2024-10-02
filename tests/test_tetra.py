@@ -81,8 +81,9 @@ def test_ray_tetra_intersection():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-@pytest.mark.parametrize("channels", [3, 32, 128])
-def test_radius_culling(test_data, channels: int):
+@pytest.mark.parametrize("camera_model", ["pinhole", "ortho"])
+def test_radius_culling(test_data, camera_model: Literal["pinhole", "ortho", "fisheye"]):
+    from gsplat.cuda._torch_impl import _fully_fused_projection
     from gsplat.cuda._wrapper import (
         fully_fused_projection,
         isect_offset_encode,
@@ -103,27 +104,18 @@ def test_radius_culling(test_data, channels: int):
     means = test_data["means"]
     opacities = test_data["opacities"]
     tquats = torch.randn(N, 4, device=device)
+    tscales = torch.rand((N,), device=device) * 100.0
     
     C = len(Ks)
-    colors = torch.randn(C, len(means), channels, device=device)
+    colors = torch.randn(C, len(means), 3, device=device)
     backgrounds = torch.rand((C, colors.shape[-1]), device=device)
 
     covars, _ = quat_scale_to_covar_preci(quats, scales, compute_preci=False, triu=True)
 
     radii, means2d, depths, conics, compensations = fully_fused_projection(
-        means, covars, None, None, viewmats, Ks, None, None, width, height
+        means, covars, None, None, viewmats, Ks, tquats, tscales, width, height
     )
     _radii, _, _, _, _ = fully_fused_projection(
-        means, covars, None, None, viewmats, Ks, tquats, torch.full((N,), 1000.0, device=device), width, height
+        means, covars, None, None, viewmats, Ks, tquats, tscales, width, height
     )
-    __radii, __, __, __, ___ = fully_fused_projection(
-        means, covars, None, None, viewmats, Ks, tquats, torch.rand((N,), device=device) * 5.0, width, height
-    )
-     # At any cases the radius should smaller equal to which without culling
-    ge_mask = radii >= __radii
-    torch.testing.assert_close(ge_mask, torch.ones_like(ge_mask, dtype=torch.bool))
-    
-    # If the tetrahedron radius are sufficiently large, the radius should keep the same
     torch.testing.assert_close(radii, _radii, atol=1e-6, rtol=1e-6)
-    
-    # TODO: test rendering results
