@@ -1,10 +1,10 @@
 #include "bindings.h"
 #include "helpers.cuh"
 #include "types.cuh"
-#include "utils.cuh"
 #include <cooperative_groups.h>
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>
+#include "2dgs.cuh"
 
 namespace gsplat {
 

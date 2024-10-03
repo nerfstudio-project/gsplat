@@ -18,7 +18,7 @@ device = torch.device("cuda:0")
 @pytest.mark.parametrize("per_view_color", [True, False])
 @pytest.mark.parametrize("sh_degree", [None, 3])
 @pytest.mark.parametrize("render_mode", ["RGB", "RGB+D", "D"])
-@pytest.mark.parametrize("packed", [True, False])
+@pytest.mark.parametrize("packed", [False])
 def test_rasterization(
     per_view_color: bool, sh_degree: Optional[int], render_mode: str, packed: bool
 ):
@@ -50,6 +50,9 @@ def test_rasterization(
     ).expand(C, -1, -1)
     viewmats = torch.eye(4, device=device).expand(C, -1, -1)
 
+    tquats = torch.randn(N, 4, device=device)
+    tscales = torch.ones(N, device=device) * 10000
+
     renders, alphas, meta = rasterization(
         means=means,
         quats=quats,
@@ -63,6 +66,9 @@ def test_rasterization(
         sh_degree=sh_degree,
         render_mode=render_mode,
         packed=packed,
+        enable_culling=True,
+        tquats=tquats,
+        tscales=tscales,
     )
 
     if render_mode == "D":

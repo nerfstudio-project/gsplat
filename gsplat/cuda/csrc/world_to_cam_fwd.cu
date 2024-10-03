@@ -1,12 +1,13 @@
 #include "bindings.h"
-#include "helpers.cuh"
-#include "utils.cuh"
+#include "types.cuh"
 
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 #include <cub/cub.cuh>
 #include <cuda.h>
 #include <cuda_runtime.h>
+
+#include "transform.cuh" // pos_world_to_cam, covar_world_to_cam
 
 namespace gsplat {
 

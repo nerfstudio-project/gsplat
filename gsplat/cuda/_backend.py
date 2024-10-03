@@ -89,8 +89,8 @@ except ImportError:
         current_dir = os.path.dirname(os.path.abspath(__file__))
         glm_path = os.path.join(current_dir, "csrc", "third_party", "glm")
 
-        extra_include_paths = [os.path.join(PATH, "csrc/"), glm_path]
-        extra_cflags = ["-O3"]
+        extra_include_paths = [os.path.join(PATH, "include/"), glm_path]
+        extra_cflags = ["-fvisibility=hidden"]
         if NO_FAST_MATH:
             extra_cuda_cflags = ["-O3"]
         else:

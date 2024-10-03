@@ -3,7 +3,6 @@
 
 #include "bindings.h"
 #include "types.cuh"
-#include "utils.cuh"
 
 #include <cuda_runtime.h>
 
@@ -14,7 +13,7 @@ namespace gsplat {
 // Sloan, JCGT 2013 See https://jcgt.org/published/0002/02/06/ for reference
 // implementation
 template <typename T>
-inline __device__ void sh_coeffs_to_color_fast(
+__device__ void sh_coeffs_to_color_fast(
     const uint32_t degree, // degree of SH to be evaluated
     const uint32_t c,      // color channel
     const vec3<T> &dir,    // [3]
@@ -105,7 +104,7 @@ inline __device__ void sh_coeffs_to_color_fast(
 }
 
 template <typename T>
-inline __device__ void sh_coeffs_to_color_fast_vjp(
+__device__ void sh_coeffs_to_color_fast_vjp(
     const uint32_t degree, // degree of SH to be evaluated
     const uint32_t c,      // color channel
     const vec3<T> &dir,    // [3]

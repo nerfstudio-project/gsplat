@@ -1,6 +1,7 @@
 #include "bindings.h"
 #include "spherical_harmonics.cuh"
 #include "types.cuh"
+#include "helpers.cuh"
 
 #include <cooperative_groups.h>
 #include <cuda_runtime.h>

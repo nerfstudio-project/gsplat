@@ -1,9 +1,9 @@
-from typing import Callable, Optional, Tuple, Any
 import warnings
-from typing_extensions import Literal
+from typing import Any, Callable, Optional, Tuple
 
 import torch
 from torch import Tensor
+from typing_extensions import Literal
 
 
 def _make_lazy_cuda_func(name: str) -> Callable:
@@ -425,6 +425,14 @@ def rasterize_to_pixels(
     tile_size: int,
     isect_offsets: Tensor,  # [C, tile_height, tile_width]
     flatten_ids: Tensor,  # [n_isects]
+    # --- culling ---
+    enable_culling: bool = False,
+    camtoworlds: Optional[Tensor] = None,  # [C, 4, 4]
+    Ks: Optional[Tensor] = None,  # [C, 3, 3]
+    means3d: Optional[Tensor] = None,  # [N, 3]
+    precis: Optional[Tensor] = None,  # [N, 6]
+    tvertices: Optional[Tensor] = None,  # [N, 4, 3]
+    # --- culling ---
     backgrounds: Optional[Tensor] = None,  # [C, channels]
     masks: Optional[Tensor] = None,  # [C, tile_height, tile_width]
     packed: bool = False,
@@ -474,6 +482,19 @@ def rasterize_to_pixels(
     if masks is not None:
         assert masks.shape == isect_offsets.shape, masks.shape
         masks = masks.contiguous()
+
+    if enable_culling:
+        assert not packed, "Culling is not supported when packed is True"
+        assert camtoworlds.shape == (C, 4, 4), camtoworlds.shape
+        assert Ks.shape == (C, 3, 3), Ks.shape
+        assert means3d.shape == (N, 3), means3d.shape
+        assert precis.shape == (N, 6), precis.shape
+        assert tvertices.shape == (N, 4, 3), tvertices.shape
+        camtoworlds = camtoworlds.contiguous()
+        Ks = Ks.contiguous()
+        means3d = means3d.contiguous()
+        precis = precis.contiguous()
+        tvertices = tvertices.contiguous()
 
     # Pad the channels to the nearest supported number if necessary
     channels = colors.shape[-1]
@@ -542,6 +563,14 @@ def rasterize_to_pixels(
         tile_size,
         isect_offsets.contiguous(),
         flatten_ids.contiguous(),
+        # --- culling ---
+        enable_culling,
+        camtoworlds,
+        Ks,
+        means3d,
+        precis,
+        tvertices,
+        # --- culling ---
         absgrad,
     )
 
@@ -897,6 +926,14 @@ class _RasterizeToPixels(torch.autograd.Function):
         tile_size: int,
         isect_offsets: Tensor,  # [C, tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
+        # --- culling ---
+        enable_culling: bool,
+        camtoworlds: Tensor,  # [C, 4, 4]
+        Ks: Tensor,  # [C, 3, 3]
+        means3d: Tensor,  # [N, 3]
+        precis: Tensor,  # [N, 6]
+        tvertices: Tensor,  # [N, 4, 3]
+        # --- culling ---
         absgrad: bool,
     ) -> Tuple[Tensor, Tensor]:
         render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
@@ -913,6 +950,14 @@ class _RasterizeToPixels(torch.autograd.Function):
             tile_size,
             isect_offsets,
             flatten_ids,
+            # --- culling ---
+            enable_culling,
+            camtoworlds,
+            Ks,
+            means3d,
+            precis,
+            tvertices,
+            # --- culling ---
         )
 
         ctx.save_for_backward(
@@ -924,6 +969,13 @@ class _RasterizeToPixels(torch.autograd.Function):
             masks,
             isect_offsets,
             flatten_ids,
+            # --- culling ---
+            camtoworlds,
+            Ks,
+            means3d,
+            precis,
+            tvertices,
+            # --- culling ---
             render_alphas,
             last_ids,
         )
@@ -931,6 +983,7 @@ class _RasterizeToPixels(torch.autograd.Function):
         ctx.height = height
         ctx.tile_size = tile_size
         ctx.absgrad = absgrad
+        ctx.enable_culling = enable_culling
 
         # double to float
         render_alphas = render_alphas.float()
@@ -951,6 +1004,13 @@ class _RasterizeToPixels(torch.autograd.Function):
             masks,
             isect_offsets,
             flatten_ids,
+            # --- culling ---
+            camtoworlds,
+            Ks,
+            means3d,
+            precis,
+            tvertices,
+            # --- culling ---
             render_alphas,
             last_ids,
         ) = ctx.saved_tensors
@@ -958,6 +1018,7 @@ class _RasterizeToPixels(torch.autograd.Function):
         height = ctx.height
         tile_size = ctx.tile_size
         absgrad = ctx.absgrad
+        enable_culling = ctx.enable_culling
 
         (
             v_means2d_abs,
@@ -1006,6 +1067,14 @@ class _RasterizeToPixels(torch.autograd.Function):
             None,
             None,
             None,
+            # --- culling ---
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            # --- culling ---
             None,
         )
 
@@ -1976,25 +2045,27 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             None,
             None,
         )
-        
+
+
 ###### TET ######
 
+
 def ray_tetra_intersection(
-    rays_o: Tensor,     # [N, 3]
-    rays_d: Tensor,     # [N, 3]
-    vertices: Tensor,   # [N, 4, 3]
+    rays_o: Tensor,  # [N, 3]
+    rays_d: Tensor,  # [N, 3]
+    vertices: Tensor,  # [N, 4, 3]
 ) -> Tuple[Tensor, Tensor]:
     """Ray tetrahedron intersection
     (This function only have gradient w.r.t. vertices)
-    
+
     Args:
         rays_o: Ray origins. [N, 3]
         rays_d: Ray directions. [N, 3]
         vertices: Tetrahedron vertices. [N, 4, 3]
-    
+
     Returns:
         A tuple:
-        
+
         - **Entry face ids**. Entry face ids. [N]
         - **Exit face ids**. Exit face ids. [N]
         - **Entry t values**. Entry t values. [N]
@@ -2009,24 +2080,31 @@ def ray_tetra_intersection(
     vertices = vertices.contiguous()
     return _RayTetraIntersection.apply(rays_o, rays_d, vertices)
 
+
 class _RayTetraIntersection(torch.autograd.Function):
     """Ray tetrahedron intersection"""
 
     @staticmethod
     def forward(
         ctx,
-        rays_o: Tensor,     # [N, 3]
-        rays_d: Tensor,     # [N, 3]
-        vertices: Tensor,   # [N, 4, 3]
+        rays_o: Tensor,  # [N, 3]
+        rays_d: Tensor,  # [N, 3]
+        vertices: Tensor,  # [N, 4, 3]
     ) -> Tuple[Tensor, Tensor]:
-        entry_face_ids, exit_face_ids, t_entrys, t_exits = _make_lazy_cuda_func("ray_tetra_intersection_fwd")(
-            rays_o, rays_d, vertices
-        )
+        entry_face_ids, exit_face_ids, t_entrys, t_exits = _make_lazy_cuda_func(
+            "ray_tetra_intersection_fwd"
+        )(rays_o, rays_d, vertices)
         ctx.save_for_backward(rays_o, rays_d, vertices)
         return entry_face_ids, exit_face_ids, t_entrys, t_exits
 
     @staticmethod
-    def backward(ctx, v_entry_face_ids: Tensor, v_exit_face_ids: Tensor, v_t_entrys: Tensor, v_t_exits: Tensor):
+    def backward(
+        ctx,
+        v_entry_face_ids: Tensor,
+        v_exit_face_ids: Tensor,
+        v_t_entrys: Tensor,
+        v_t_exits: Tensor,
+    ):
         rays_o, rays_d, vertices = ctx.saved_tensors
         v_vertices = _make_lazy_cuda_func("ray_tetra_intersection_bwd")(
             rays_o, rays_d, vertices, v_t_entrys, v_t_exits

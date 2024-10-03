@@ -180,7 +180,15 @@ rasterize_to_pixels_fwd_tensor(
     const uint32_t tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
-    const torch::Tensor &flatten_ids   // [n_isects]
+    const torch::Tensor &flatten_ids,  // [n_isects]
+    // --- culling ---
+    const bool enable_culling,
+    const at::optional<torch::Tensor>  &camtoworlds, // [C, 4, 4]
+    const at::optional<torch::Tensor>  &Ks,          // [C, 3, 3]
+    const at::optional<torch::Tensor>  &means3d,     // [N, 3]
+    const at::optional<torch::Tensor>  &precis,      // [N, 6]
+    const at::optional<torch::Tensor>  &tvertices    // [N, 4, 3]
+    // --- culling ---
 );
 
 std::tuple<

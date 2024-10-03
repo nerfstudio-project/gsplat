@@ -1,5 +1,4 @@
 #include "bindings.h"
-#include "helpers.cuh"
 #include "utils.cuh"
 
 #include <cooperative_groups.h>
@@ -7,6 +6,10 @@
 #include <cub/cub.cuh>
 #include <cuda.h>
 #include <cuda_runtime.h>
+
+#include "quat_scale_to_covar_preci.cuh" // quat_scale_to_covar_preci
+#include "proj.cuh" // ortho_proj, persp_proj, fisheye_proj
+#include "transform.cuh" // pos_world_to_cam, covar_world_to_cam
 
 namespace gsplat {
 

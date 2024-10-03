@@ -1,9 +1,10 @@
 #include "bindings.h"
-#include "helpers.cuh"
 #include "types.cuh"
 #include <cooperative_groups.h>
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>
+
+#include "tetra.cuh" // ray_tetra_intersection
 
 namespace gsplat {
 
@@ -32,6 +33,14 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
+    // --- culling ---
+    const bool enable_culling,
+    const float *__restrict__ camtoworlds, // [C, 4, 4]
+    const float *__restrict__ Ks,          // [C, 3, 3]
+    const float *__restrict__ means3d,     // [N, 3]
+    const float *__restrict__ precis,      // [N, 6]
+    const float *__restrict__ tvertices,   // [N, 4, 3]
+    // --- culling ---
     S *__restrict__ render_colors, // [C, image_height, image_width, COLOR_DIM]
     S *__restrict__ render_alphas, // [C, image_height, image_width, 1]
     int32_t *__restrict__ last_ids // [C, image_height, image_width]
@@ -76,6 +85,25 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         return;
     }
 
+    // ---- culling ----
+    vec3<S> ray_d, ray_o;
+    if (enable_culling && inside) {
+        const float *camtoworld = camtoworlds + 16 * camera_id;
+        const float *K = Ks + 9 * camera_id;
+        float u = (px - K[2]) / K[0];
+        float v = (py - K[5]) / K[4];
+        float inv_len = rsqrtf(u * u + v * v + 1.f);
+        ray_d = vec3<S>(u * inv_len, v * inv_len, inv_len);  // camera space
+        ray_d = vec3<S>(camtoworld[0] * ray_d.x + camtoworld[1] * ray_d.y +
+                             camtoworld[2] * ray_d.z,
+                             camtoworld[4] * ray_d.x + camtoworld[5] * ray_d.y +
+                             camtoworld[6] * ray_d.z,
+                             camtoworld[8] * ray_d.x + camtoworld[9] * ray_d.y +
+                             camtoworld[10] * ray_d.z); // world space
+        ray_o = vec3<S>(camtoworld[3], camtoworld[7], camtoworld[11]);
+    }
+    // ---- culling ----
+
     // have all threads in tile process the same gaussians in batches
     // first collect gaussians between range.x and range.y in batches
     // which gaussians to look through in this tile
@@ -95,6 +123,14 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     vec3<S> *conic_batch =
         reinterpret_cast<vec3<float> *>(&xy_opacity_batch[block_size]
         ); // [block_size]
+    // ---- culling ----
+    vec3<S> *mean3d_batch =
+        reinterpret_cast<vec3<float> *>(&conic_batch[block_size]); // [block_size]
+    S *preci_batch =
+        reinterpret_cast<S *>(&mean3d_batch[block_size]); // [block_size * 6]
+    S *tvertices_batch =
+        reinterpret_cast<S *>(&preci_batch[block_size * 6]); // [block_size * 4 * 3]
+    // ---- culling ----
 
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
@@ -128,6 +164,24 @@ __global__ void rasterize_to_pixels_fwd_kernel(
             const S opac = opacities[g];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             conic_batch[tr] = conics[g];
+            // ---- culling ----
+            if (enable_culling) {
+                // TODO: assuming non-packed for now
+                int32_t gaussian_id = g % N;
+                mean3d_batch[tr] = vec3<S>{
+                    means3d[gaussian_id * 3], means3d[gaussian_id * 3 + 1], means3d[gaussian_id * 3 + 2]};
+                const float *preci_ptr = precis + gaussian_id * 6;
+                GSPLAT_PRAGMA_UNROLL
+                for (uint32_t k = 0; k < 6; ++k) {
+                    preci_batch[tr * 6 + k] = preci_ptr[k];
+                }
+                const float *tvertice_ptr = tvertices + gaussian_id * 12;
+                GSPLAT_PRAGMA_UNROLL
+                for (uint32_t k = 0; k < 12; ++k) {
+                    tvertices_batch[tr * 12 + k] = tvertice_ptr[k];
+                }
+            }
+            // ---- culling ----
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -147,6 +201,46 @@ __global__ void rasterize_to_pixels_fwd_kernel(
             if (sigma < 0.f || alpha < 1.f / 255.f) {
                 continue;
             }
+
+            // // ---- culling ----
+            // if (enable_culling) {
+            //     // calculate intersection
+            //     T t_entry, t_exit;
+            //     int32_t entry_face_idx, exit_face_idx;
+            //     bool hit = ray_tetra_intersection(
+            //         // inputs
+            //         rays_o,
+            //         rays_d,
+            //         glm::make_vec3(vertices),
+            //         glm::make_vec3(vertices + 3),
+            //         glm::make_vec3(vertices + 6),
+            //         glm::make_vec3(vertices + 9),
+            //         // outputs
+            //         entry_face_idx,
+            //         exit_face_idx,
+            //         t_entry,
+            //         t_exit
+            //     );
+
+            //     // doing integral
+            //     float ratio = 0.0f;
+            //     int32_t pack_id = id_batch[t];
+            //     const float *preci_ptr = precis + pack_id * 6;
+            //     glm::mat3 preci3x3 =
+            //         glm::mat3(preci_ptr[0], preci_ptr[1], preci_ptr[2],
+            //                     preci_ptr[1], preci_ptr[3], preci_ptr[4],
+            //                     preci_ptr[2], preci_ptr[4], preci_ptr[5]);
+            //     ratio = integral(ray_o, ray_d, tmin, tmax,
+            //                     glm::vec3(means3d[pack_id].x, means3d[pack_id].y,
+            //                             means3d[pack_id].z),
+            //                     preci3x3);
+            //     // alpha *= ratio;
+            //     alpha = 1.0f - powf(1.0f - alpha, ratio); // this produces smaller diff
+            //     if (alpha < 1.f / 255.f) {
+            //         continue;
+            //     }
+            // }
+            // // ---- culling ----
 
             const S next_T = T * (1.0f - alpha);
             if (next_T <= 1e-4) { // this pixel is done: exclusive
@@ -200,7 +294,15 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
     const uint32_t tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
-    const torch::Tensor &flatten_ids   // [n_isects]
+    const torch::Tensor &flatten_ids,  // [n_isects]
+    // --- culling ---
+    const bool enable_culling,
+    const at::optional<torch::Tensor>  &camtoworlds, // [C, 4, 4]
+    const at::optional<torch::Tensor>  &Ks,          // [C, 3, 3]
+    const at::optional<torch::Tensor>  &means3d,     // [N, 3]
+    const at::optional<torch::Tensor>  &precis,      // [N, 6]
+    const at::optional<torch::Tensor>  &tvertices    // [N, 4, 3]
+    // --- culling ---
 ) {
     GSPLAT_DEVICE_GUARD(means2d);
     GSPLAT_CHECK_INPUT(means2d);
@@ -214,6 +316,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
     }
     if (masks.has_value()) {
         GSPLAT_CHECK_INPUT(masks.value());
+    }
+    if (enable_culling) {
+        GSPLAT_CHECK_INPUT(camtoworlds.value());
+        GSPLAT_CHECK_INPUT(Ks.value());
+        GSPLAT_CHECK_INPUT(means3d.value());
+        GSPLAT_CHECK_INPUT(precis.value());
+        GSPLAT_CHECK_INPUT(tvertices.value());
     }
     bool packed = means2d.dim() == 2;
 
@@ -242,9 +351,14 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
     );
 
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
-    const uint32_t shared_mem =
+    uint32_t shared_mem =
         tile_size * tile_size *
         (sizeof(int32_t) + sizeof(vec3<float>) + sizeof(vec3<float>));
+
+    if (enable_culling) {
+        shared_mem += tile_size * tile_size *
+        (sizeof(vec3<float>) + sizeof(float) * 6 + sizeof(float) * 12);
+    }
 
     // TODO: an optimization can be done by passing the actual number of
     // channels into the kernel functions and avoid necessary global memory
@@ -280,6 +394,14 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
             tile_height,
             tile_offsets.data_ptr<int32_t>(),
             flatten_ids.data_ptr<int32_t>(),
+            // --- culling ---
+            enable_culling,
+            camtoworlds.has_value() ? camtoworlds.value().data_ptr<float>() : nullptr,
+            Ks.has_value() ? Ks.value().data_ptr<float>() : nullptr,
+            means3d.has_value() ? means3d.value().data_ptr<float>() : nullptr,
+            precis.has_value() ? precis.value().data_ptr<float>() : nullptr,
+            tvertices.has_value() ? tvertices.value().data_ptr<float>() : nullptr,
+            // --- culling ---
             renders.data_ptr<float>(),
             alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>()
@@ -303,7 +425,15 @@ rasterize_to_pixels_fwd_tensor(
     const uint32_t tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
-    const torch::Tensor &flatten_ids   // [n_isects]
+    const torch::Tensor &flatten_ids,  // [n_isects]
+    // --- culling ---
+    const bool enable_culling,
+    const at::optional<torch::Tensor>  &camtoworlds, // [C, 4, 4]
+    const at::optional<torch::Tensor>  &Ks,          // [C, 3, 3]
+    const at::optional<torch::Tensor>  &means3d,     // [N, 3]
+    const at::optional<torch::Tensor>  &precis,      // [N, 6]
+    const at::optional<torch::Tensor>  &tvertices    // [N, 4, 3]
+    // --- culling ---
 ) {
     GSPLAT_CHECK_INPUT(colors);
     uint32_t channels = colors.size(-1);
@@ -321,7 +451,13 @@ rasterize_to_pixels_fwd_tensor(
             image_height,                                                      \
             tile_size,                                                         \
             tile_offsets,                                                      \
-            flatten_ids                                                        \
+            flatten_ids,                                                       \
+            enable_culling,                                                    \
+            camtoworlds,                                                       \
+            Ks,                                                                \
+            means3d,                                                           \
+            precis,                                                            \
+            tvertices                                                          \
         );
 
     // TODO: an optimization can be done by passing the actual number of

@@ -1,5 +1,4 @@
 #include "bindings.h"
-#include "helpers.cuh"
 #include "types.cuh"
 #include <cooperative_groups.h>
 #include <cub/cub.cuh>

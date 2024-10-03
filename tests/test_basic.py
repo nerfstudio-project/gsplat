@@ -6,11 +6,11 @@ pytest <THIS_PY_FILE> -s
 ```
 """
 
-from typing_extensions import Literal, assert_never
 import math
 
 import pytest
 import torch
+from typing_extensions import Literal, assert_never
 
 from gsplat._helper import load_test_data
 
@@ -125,7 +125,7 @@ def test_world_to_cam(test_data):
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
 def test_proj(test_data, camera_model: Literal["pinhole", "ortho", "fisheye"]):
-    from gsplat.cuda._torch_impl import _persp_proj, _ortho_proj, _fisheye_proj
+    from gsplat.cuda._torch_impl import _fisheye_proj, _ortho_proj, _persp_proj
     from gsplat.cuda._wrapper import proj, quat_scale_to_covar_preci, world_to_cam
 
     torch.manual_seed(42)
@@ -494,7 +494,7 @@ def test_rasterize_to_pixels(test_data, channels: int):
     colors = torch.randn(C, len(means), channels, device=device)
     backgrounds = torch.rand((C, colors.shape[-1]), device=device)
 
-    covars, _ = quat_scale_to_covar_preci(quats, scales, compute_preci=False, triu=True)
+    covars, precis = quat_scale_to_covar_preci(quats, scales, compute_preci=True, triu=True)
 
     # Project Gaussians to 2D
     radii, means2d, depths, conics, compensations = fully_fused_projection(

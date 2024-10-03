@@ -8,6 +8,11 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
+#include "quat.cuh" // quat_to_rotmat
+#include "quat_scale_to_covar_preci.cuh" // quat_scale_to_covar_preci, quat_scale_to_covar_vjp
+#include "proj.cuh" // ortho_proj_vjp, persp_proj_vjp, fisheye_proj_vjp
+#include "transform.cuh" // pos_world_to_cam, pos_world_to_cam_vjp, covar_world_to_cam, covar_world_to_cam_vjp
+
 namespace gsplat {
 
 namespace cg = cooperative_groups;

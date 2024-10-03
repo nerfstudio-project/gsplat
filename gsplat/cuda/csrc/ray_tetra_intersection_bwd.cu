@@ -1,12 +1,12 @@
 #include "bindings.h"
-#include "helpers.cuh"
-#include "utils.cuh"
+#include "types.cuh"
 
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
 
+#include "tetra.cuh"
 
 namespace gsplat {
 

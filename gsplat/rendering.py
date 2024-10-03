@@ -12,6 +12,7 @@ from .cuda._wrapper import (
     fully_fused_projection_2dgs,
     isect_offset_encode,
     isect_tiles,
+    quat_scale_to_covar_preci,
     rasterize_to_pixels,
     rasterize_to_pixels_2dgs,
     spherical_harmonics,
@@ -51,6 +52,8 @@ def rasterization(
     distributed: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
     covars: Optional[Tensor] = None,
+    # --- culling ---
+    enable_culling: bool = False,
     tscales: Optional[Tensor] = None,
     tquats: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor, Dict]:
@@ -295,12 +298,14 @@ def rasterization(
         # Silently change C from local #Cameras to global #Cameras.
         C = len(viewmats)
 
+    covars, precis = quat_scale_to_covar_preci(quats, scales, True, True, triu=True)
+
     # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
     proj_results = fully_fused_projection(
         means,
         covars,
-        quats,
-        scales,
+        None,
+        None,
         viewmats,
         Ks,
         width,
@@ -317,34 +322,24 @@ def rasterization(
 
     # ------------------------------------------------------------
     # Formulate the tet vertices in world space.
-    from gsplat.cuda._torch_impl import _quat_scale_to_matrix
+    if enable_culling:
+        from gsplat.cuda._torch_impl import _quat_scale_to_matrix
 
-    tvertices = torch.tensor(
-        [
-            [math.sqrt(8 / 9), 0, -1 / 3],
-            [-math.sqrt(2 / 9), math.sqrt(2 / 3), -1 / 3],
-            [-math.sqrt(2 / 9), -math.sqrt(2 / 3), -1 / 3],
-            [0, 0, 1],
-        ],
-        device=means.device,
-        dtype=means.dtype,
-    )  # [4, 3]
-    rotmats = _quat_scale_to_matrix(tquats, tscales[:, None])  # [N, 3, 3]
-    tvertices = torch.einsum("nij,kj->nki", rotmats, tvertices)  # [N, 4, 3]
-    tvertices = tvertices + means[:, None, :]  # [N, 4, 3]
-
-    # Transform the tet to camera space.
-    R = viewmats[:, :3, :3]  # [C, 3, 3]
-    t = viewmats[:, :3, 3]  # [C, 3]
-    tvertices_c = (
-        torch.einsum("cij,nkj->cnki", R, tvertices) + t[:, None, None, :]
-    )  # [C, N, 4, 3]
-
-    # Project the tet to 2D.
-    tvertices2d = torch.einsum(
-        "cij,cnkj->cnki", Ks[:, :2, :3], tvertices_c
-    )  # [C, N, 4, 2]
-    tvertices2d = tvertices2d / tvertices_c[..., 2:3]  # [C, N, 4, 2]
+        tvertices = torch.tensor(
+            [
+                [math.sqrt(8 / 9), 0, -1 / 3],
+                [-math.sqrt(2 / 9), math.sqrt(2 / 3), -1 / 3],
+                [-math.sqrt(2 / 9), -math.sqrt(2 / 3), -1 / 3],
+                [0, 0, 1],
+            ],
+            device=means.device,
+            dtype=means.dtype,
+        )  # [4, 3]
+        rotmats = _quat_scale_to_matrix(tquats, tscales[:, None])  # [N, 3, 3]
+        tvertices = torch.einsum("nij,kj->nki", rotmats, tvertices)  # [N, 4, 3]
+        tvertices = tvertices + means[:, None, :]  # [N, 4, 3]
+    else:
+        tvertices = None
     # ------------------------------------------------------------
 
     if packed:
@@ -382,6 +377,8 @@ def rasterization(
         }
     )
 
+    camtoworlds = torch.inverse(viewmats)  # [C, 4, 4]
+
     # Turn colors into [C, N, D] or [nnz, D] to pass into rasterize_to_pixels()
     if sh_degree is None:
         # Colors are post-activation values, with shape [N, D] or [C, N, D]
@@ -401,7 +398,6 @@ def rasterization(
                 pass
     else:
         # Colors are SH coefficients, with shape [N, K, 3] or [C, N, K, 3]
-        camtoworlds = torch.inverse(viewmats)  # [C, 4, 4]
         if packed:
             dirs = means[gaussian_ids, :] - camtoworlds[camera_ids, :3, 3]  # [nnz, 3]
             masks = radii > 0  # [nnz]
@@ -580,6 +576,14 @@ def rasterization(
                 tile_size,
                 isect_offsets,
                 flatten_ids,
+                # --- culling ---
+                enable_culling=enable_culling,
+                camtoworlds=camtoworlds,
+                Ks=Ks,
+                means3d=means,
+                precis=precis,
+                tvertices=tvertices,
+                # --- culling ---
                 backgrounds=backgrounds_chunk,
                 packed=packed,
                 absgrad=absgrad,
@@ -599,6 +603,14 @@ def rasterization(
             tile_size,
             isect_offsets,
             flatten_ids,
+            # --- culling ---
+            enable_culling=enable_culling,
+            camtoworlds=camtoworlds,
+            Ks=Ks,
+            means3d=means,
+            precis=precis,
+            tvertices=tvertices,
+            # --- culling ---
             backgrounds=backgrounds,
             packed=packed,
             absgrad=absgrad,

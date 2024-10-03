@@ -1,12 +1,12 @@
 #include "bindings.h"
-#include "helpers.cuh"
-#include "utils.cuh"
 
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 #include <cub/cub.cuh>
 #include <cuda.h>
 #include <cuda_runtime.h>
+
+#include "quat_scale_to_covar_preci.cuh" // quat_scale_to_covar_preci
 
 namespace gsplat {
 
