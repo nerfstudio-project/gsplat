@@ -47,6 +47,7 @@ def load_extension(
             extra_ldflags=extra_ldflags,
             extra_include_paths=extra_include_paths,
             build_directory=build_directory,
+            verbose=True,
         )
     except OSError:
         # The module should be already compiled

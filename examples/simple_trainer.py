@@ -462,7 +462,7 @@ class Runner:
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
-        render_colors, render_alphas, info = _rasterization(
+        render_colors, render_alphas, info = rasterization(
             means=means,
             quats=quats,
             scales=scales,
