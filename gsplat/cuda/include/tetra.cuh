@@ -23,38 +23,25 @@ __device__ bool ray_triangle_intersection(
     // output intersection t value
     T &t
 ) {
-    const T EPSILON = 0.00000001f;
-    t = 0.0f;
-    // e1 = v1 - v0
-    // e2 = v2 - v0
+    const T EPSILON = 1e-8f;
     vec3<T> e1 = v1 - v0;
     vec3<T> e2 = v2 - v0;
 
-    // h = cross(d, e2)
-    // a = dot(e1, h)
     vec3<T> h = glm::cross(d, e2);
     T a = glm::dot(e1, h);
     if (a > -EPSILON && a < EPSILON) return false; // parallel to the triangle
 
-    // f = 1 / a
-    // s = o - v0
-    // u = f * dot(s, h)
     T f = 1.0f / a;
     vec3<T> s = o - v0;
-    T dot_s_h = glm::dot(s, h);
-    T u = f * dot_s_h;
+    T u = f * glm::dot(s, h);
     if (u < 0.0f || u > 1.0f) return false; // outside the triangle
 
-    // q = cross(s, e1)
-    // v = f * dot(d, q)
     vec3<T> q = glm::cross(s, e1);
-    T dot_d_q = glm::dot(d, q);
-    T v = f * dot_d_q;
+    T v = f * glm::dot(d, q);
     if (v < 0.0f || u + v > 1.0f) return false; // outside the triangle
 
-    // t = f * dot(e2, q)
-    T dot_e2_q = glm::dot(e2, q);
-    t = f * dot_e2_q;
+    t = f * glm::dot(e2, q);
+    // printf("t: %f u: %f v: %f\n", t, u, v);
 
     return true;
     // if (t > EPSILON) return true;
@@ -241,7 +228,6 @@ __device__ void ray_tetra_intersection_vjp(
     };
 
     // backpropagate to the tetrahedron vertices
-
     vec3<T> v_entry_faces[3] = {vec3<T>(0.f), vec3<T>(0.f), vec3<T>(0.f)};
     ray_triangle_intersection_vjp(
         o,
@@ -311,6 +297,26 @@ __device__ void ray_tetra_intersection_vjp(
             v_v1 += v_exit_faces[2];
             break;
     }
+}
+
+template <typename S>
+inline __device__ S integral(
+    // ray
+    const vec3<S> ray_o, const vec3<S> ray_d, const S tmin, const S tmax,
+    // gaussian
+    const vec3<S> mean3d, const mat3<S> precision) {
+    vec3<S> mu = mean3d - ray_o;
+    S aa = glm::dot(ray_d, precision * ray_d);
+    S ratio;
+    if (aa > 1e-6f) { // numerical issue
+        S bb = glm::dot(ray_d, precision * mu);
+        S beta1 = sqrtf(aa * 0.5f);
+        S beta2 = bb / aa;
+        ratio = 0.5f * (erff(beta1 * (tmax - beta2)) - erff(beta1 * (tmin - beta2)));
+    } else {
+        ratio = 0.f;
+    }
+    return ratio;
 }
 
 } // namespace gsplat

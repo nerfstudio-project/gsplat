@@ -592,6 +592,14 @@ def rasterize_to_indices_in_range(
     tile_size: int,
     isect_offsets: Tensor,  # [C, tile_height, tile_width]
     flatten_ids: Tensor,  # [n_isects]
+    # --- culling ---
+    enable_culling: bool = False,
+    camtoworlds: Optional[Tensor] = None,  # [C, 4, 4]
+    Ks: Optional[Tensor] = None,  # [C, 3, 3]
+    means3d: Optional[Tensor] = None,  # [N, 3]
+    precis: Optional[Tensor] = None,  # [N, 6]
+    tvertices: Optional[Tensor] = None,  # [N, 4, 3]
+    # --- culling ---
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """Rasterizes a batch of Gaussians to images but only returns the indices.
 
@@ -636,6 +644,13 @@ def rasterize_to_indices_in_range(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
+    if enable_culling:
+        camtoworlds = camtoworlds.contiguous()
+        Ks = Ks.contiguous()
+        means3d = means3d.contiguous()
+        precis = precis.contiguous()
+        tvertices = tvertices.contiguous()
+
     out_gauss_ids, out_indices = _make_lazy_cuda_func("rasterize_to_indices_in_range")(
         range_start,
         range_end,
@@ -648,6 +663,14 @@ def rasterize_to_indices_in_range(
         tile_size,
         isect_offsets.contiguous(),
         flatten_ids.contiguous(),
+        # --- culling ---
+        enable_culling,
+        camtoworlds,
+        Ks,
+        means3d,
+        precis,
+        tvertices,
+        # --- culling ---
     )
     out_pixel_ids = out_indices % (image_width * image_height)
     out_camera_ids = out_indices // (image_width * image_height)
@@ -1038,6 +1061,14 @@ class _RasterizeToPixels(torch.autograd.Function):
             tile_size,
             isect_offsets,
             flatten_ids,
+            # --- culling ---
+            enable_culling,
+            camtoworlds,
+            Ks,
+            means3d,
+            precis,
+            tvertices,
+            # --- culling ---
             render_alphas,
             last_ids,
             v_render_colors.contiguous(),

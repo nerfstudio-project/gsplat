@@ -81,6 +81,7 @@ def _ray_tetra_intersection(rays_o, rays_d, vertices):
     t_exits = torch.full_like(v0[:, 0], fill_value=-1e10, dtype=rays_o.dtype)
     
     faces = [[v0, v1, v2], [v1, v2, v3], [v2, v3, v0], [v3, v0, v1]]
+    is_hit = torch.zeros(N, dtype=torch.bool, device=rays_o.device)
     for i in range(4):
         hit, t_isct = _ray_triangle_intersection(rays_o, rays_d, faces[i][0], faces[i][1], faces[i][2])
         is_entry = hit & (t_isct < t_entrys)
@@ -89,7 +90,8 @@ def _ray_tetra_intersection(rays_o, rays_d, vertices):
         exit_face_ids[is_exit] = i
         t_entrys[is_entry] = t_isct[is_entry]
         t_exits[is_exit] = t_isct[is_exit]
-    return entry_face_ids, exit_face_ids, t_entrys, t_exits
+        is_hit = is_hit | hit
+    return entry_face_ids, exit_face_ids, t_entrys, t_exits, is_hit
 
 
 def _quat_to_rotmat(quats: Tensor) -> Tensor:
@@ -525,12 +527,13 @@ def accumulate(
     image_width: int,
     image_height: int,
     # --- enable culling ---
-    tquats: Optional[Tensor] = None,  # [N, 4]
-    tscales: Optional[Tensor] = None,  # [N]
-    precis: Optional[Tensor] = None,  # [C, N, 6]
-    means: Optional[Tensor] = None,  # [N, 3]
-    viewmats: Optional[Tensor] = None,  # [C, 4, 4]
+    enable_culling: bool = False,
+    camtoworlds: Optional[Tensor] = None,  # [C, 4, 4]
     Ks: Optional[Tensor] = None,  # [C, 3, 3]
+    means3d: Optional[Tensor] = None,  # [N, 3]
+    precis: Optional[Tensor] = None,  # [N, 6]
+    tvertices: Optional[Tensor] = None,  # [N, 4, 3]
+    # --- enable culling ---
 ) -> Tuple[Tensor, Tensor]:
     """Alpah compositing of 2D Gaussians in Pure Pytorch.
 
@@ -592,36 +595,23 @@ def accumulate(
         opacities[camera_ids, gaussian_ids] * torch.exp(-sigmas), 0.999
     )
 
-    if tquats is not None:
+    if enable_culling:
         # ------------------------------------------------------------
-        # Formulate the tet vertices in world space.
-        import math
 
-        from gsplat.cuda._torch_impl import _quat_scale_to_matrix
-        from gsplat.cuda._wrapper import _make_lazy_cuda_func
-
-        tvertices = torch.tensor(
-            [
-                [math.sqrt(8 / 9), 0, -1 / 3],
-                [-math.sqrt(2 / 9), math.sqrt(2 / 3), -1 / 3],
-                [-math.sqrt(2 / 9), -math.sqrt(2 / 3), -1 / 3],
-                [0, 0, 1],
-            ],
-            device=means.device,
-            dtype=means.dtype,
-        )  # [4, 3]
-        tquats = tquats[gaussian_ids]  # [M, 4]
-        tscales = tscales[gaussian_ids]  # [M]
-
-        rotmats = _quat_scale_to_matrix(tquats, tscales[:, None])  # [M, 3, 3]
-        tvertices = torch.einsum("nij,kj->nki", rotmats, tvertices)  # [M, 4, 3]
-        tvertices = tvertices + means[gaussian_ids, None, :]  # [M, 4, 3]
-
-        # ------------------------------------------------------------
         # Ray tetra intersection
+        tvertices = tvertices[gaussian_ids]  # [M, 4, 3]
         Ks = Ks[camera_ids]  # [M, 3, 3]
-        camtoworlds = torch.linalg.inv(viewmats)[camera_ids]  # [M, 4, 4]
-        means = means[gaussian_ids]  # [M, 3]
+        camtoworlds = camtoworlds[camera_ids]  # [M, 4, 4]
+        means = means3d[gaussian_ids]  # [M, 3]
+        if precis.shape[-1] == 6:
+            precis = torch.cat(
+                [
+                    precis[..., [0, 1, 2]],
+                    precis[..., [1, 3, 4]],
+                    precis[..., [2, 4, 5]],
+                ],
+                dim=-1,
+            ).reshape(-1, 3, 3)
         invV = precis[gaussian_ids]  # [M, 3, 3]
 
         # generate rays
@@ -639,19 +629,11 @@ def accumulate(
         viewdirs = F.normalize(viewdirs, dim=-1)
         origins = camtoworlds[:, :3, -1]
 
-        # faces, bary1, bary2, isect_t1, isect_t2 = _make_lazy_cuda_func(
-        #     "ray_tetra_intersection_fwd"
-        # )(origins.contiguous(), viewdirs.contiguous(), tvertices.contiguous())
-        # tmins, tmaxs = isect_t1, isect_t2
-        # print(isect_t1.shape, isect_t2.shape)
 
-        hits, isect_t1, isect_t2, u, v = _ray_tetra_intersection(
+        _, _, isect_t1, isect_t2, hit = _ray_tetra_intersection(
             origins,
             viewdirs,
-            tvertices[:, 0],
-            tvertices[:, 1],
-            tvertices[:, 2],
-            tvertices[:, 3],
+            tvertices,
         )
         tmins, tmaxs = isect_t1, isect_t2
 
@@ -660,10 +642,10 @@ def accumulate(
         aa = torch.einsum("mi,mij,mj->m", viewdirs, invV, viewdirs)
         bb = torch.einsum("mi,mij,mj->m", viewdirs, invV, means - origins)
         beta1 = torch.sqrt(aa * 0.5)
-        beta2 = bb / (aa + 1e-8)
+        beta2 = torch.where(aa > 1e-6, bb / aa, torch.zeros_like(bb))
         ratio = 0.5 * (
             torch.erf(beta1 * (tmaxs - beta2)) - torch.erf(beta1 * (tmins - beta2))
-        )
+        ) * hit * (aa > 1e-6)
         assert not torch.isnan(ratio).any(), invV[torch.isnan(ratio)]
         # alphas = alphas * ratio
         alphas = 1.0 - (1.0 - alphas) ** ratio
@@ -701,12 +683,13 @@ def _rasterize_to_pixels(
     backgrounds: Optional[Tensor] = None,  # [C, channels]
     batch_per_iter: int = 100,
     # --- enable culling ---
-    tquats: Optional[Tensor] = None,  # [N, 4]
-    tscales: Optional[Tensor] = None,  # [N]
-    precis: Optional[Tensor] = None,
-    means: Optional[Tensor] = None,
-    viewmats: Optional[Tensor] = None,
-    Ks: Optional[Tensor] = None,
+    enable_culling: bool = False,
+    camtoworlds: Optional[Tensor] = None,  # [C, 4, 4]
+    Ks: Optional[Tensor] = None,  # [C, 3, 3]
+    means3d: Optional[Tensor] = None,  # [N, 3]
+    precis: Optional[Tensor] = None,  # [N, 6]
+    tvertices: Optional[Tensor] = None,  # [N, 4, 3]
+    # --- enable culling ---
 ):
     """Pytorch implementation of `gsplat.cuda._wrapper.rasterize_to_pixels()`.
 
@@ -765,6 +748,14 @@ def _rasterize_to_pixels(
             tile_size,
             isect_offsets,
             flatten_ids,
+            # --- culling ---
+            enable_culling=enable_culling,
+            camtoworlds=camtoworlds,
+            Ks=Ks,
+            means3d=means3d,
+            precis=precis,
+            tvertices=tvertices,
+            # --- culling ---
         )  # [M], [M]
         if len(gs_ids) == 0:
             break
@@ -781,12 +772,13 @@ def _rasterize_to_pixels(
             image_width,
             image_height,
             # --- enable culling ---
-            tquats=tquats,
-            tscales=tscales,
-            precis=precis,
-            means=means,
-            viewmats=viewmats,
+            enable_culling=enable_culling,
+            camtoworlds=camtoworlds,
             Ks=Ks,
+            means3d=means3d,
+            precis=precis,
+            tvertices=tvertices,
+            # --- enable culling ---
         )
         render_colors = render_colors + renders_step * transmittances[..., None]
         render_alphas = render_alphas + accs_step * transmittances[..., None]

@@ -202,45 +202,60 @@ __global__ void rasterize_to_pixels_fwd_kernel(
                 continue;
             }
 
-            // // ---- culling ----
-            // if (enable_culling) {
-            //     // calculate intersection
-            //     T t_entry, t_exit;
-            //     int32_t entry_face_idx, exit_face_idx;
-            //     bool hit = ray_tetra_intersection(
-            //         // inputs
-            //         rays_o,
-            //         rays_d,
-            //         glm::make_vec3(vertices),
-            //         glm::make_vec3(vertices + 3),
-            //         glm::make_vec3(vertices + 6),
-            //         glm::make_vec3(vertices + 9),
-            //         // outputs
-            //         entry_face_idx,
-            //         exit_face_idx,
-            //         t_entry,
-            //         t_exit
-            //     );
 
-            //     // doing integral
-            //     float ratio = 0.0f;
-            //     int32_t pack_id = id_batch[t];
-            //     const float *preci_ptr = precis + pack_id * 6;
-            //     glm::mat3 preci3x3 =
-            //         glm::mat3(preci_ptr[0], preci_ptr[1], preci_ptr[2],
-            //                     preci_ptr[1], preci_ptr[3], preci_ptr[4],
-            //                     preci_ptr[2], preci_ptr[4], preci_ptr[5]);
-            //     ratio = integral(ray_o, ray_d, tmin, tmax,
-            //                     glm::vec3(means3d[pack_id].x, means3d[pack_id].y,
-            //                             means3d[pack_id].z),
-            //                     preci3x3);
-            //     // alpha *= ratio;
-            //     alpha = 1.0f - powf(1.0f - alpha, ratio); // this produces smaller diff
-            //     if (alpha < 1.f / 255.f) {
-            //         continue;
-            //     }
-            // }
-            // // ---- culling ----
+            // ---- culling ----
+            if (enable_culling) {
+                // calculate intersection
+                vec3<S> v0 = vec3<S>(
+                    tvertices_batch[t * 12], 
+                    tvertices_batch[t * 12 + 1], 
+                    tvertices_batch[t * 12 + 2]);
+                vec3<S> v1 = vec3<S>(
+                    tvertices_batch[t * 12 + 3], 
+                    tvertices_batch[t * 12 + 4], 
+                    tvertices_batch[t * 12 + 5]);
+                vec3<S> v2 = vec3<S>(
+                    tvertices_batch[t * 12 + 6], 
+                    tvertices_batch[t * 12 + 7], 
+                    tvertices_batch[t * 12 + 8]);
+                vec3<S> v3 = vec3<S>(
+                    tvertices_batch[t * 12 + 9], 
+                    tvertices_batch[t * 12 + 10], 
+                    tvertices_batch[t * 12 + 11]);
+
+                S tmin, tmax;
+                int32_t entry_face_idx, exit_face_idx;
+                bool hit = ray_tetra_intersection(
+                    // inputs
+                    ray_o, ray_d,
+                    v0, v1, v2, v3,
+                    // outputs
+                    entry_face_idx,
+                    exit_face_idx,
+                    tmin,
+                    tmax
+                );
+
+                if (!hit) {
+                    continue;
+                }
+
+                // doing integral
+                float ratio = 0.0f;
+                vec3<S> mean3d = mean3d_batch[t];
+                mat3<S> preci3x3 = mat3<S>(
+                    preci_batch[t * 6], preci_batch[t * 6 + 1], preci_batch[t * 6 + 2],
+                    preci_batch[t * 6 + 1], preci_batch[t * 6 + 3], preci_batch[t * 6 + 4],
+                    preci_batch[t * 6 + 2], preci_batch[t * 6 + 4], preci_batch[t * 6 + 5]);
+                ratio = integral(ray_o, ray_d, tmin, tmax, mean3d, preci3x3);
+                // alpha *= ratio;
+                alpha = 1.0f - powf(1.0f - alpha, ratio); // this produces smaller diff
+                if (alpha < 1.f / 255.f) {
+                    continue;
+                }
+
+            }
+            // ---- culling ----
 
             const S next_T = T * (1.0f - alpha);
             if (next_T <= 1e-4) { // this pixel is done: exclusive

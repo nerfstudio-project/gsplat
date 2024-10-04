@@ -4,6 +4,8 @@
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>
 
+#include "tetra.cuh" // ray_tetra_intersection
+
 namespace gsplat {
 
 namespace cg = cooperative_groups;
@@ -29,6 +31,14 @@ __global__ void rasterize_to_indices_in_range_kernel(
     const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
+    // --- culling ---
+    const bool enable_culling,
+    const float *__restrict__ camtoworlds, // [C, 4, 4]
+    const float *__restrict__ Ks,          // [C, 3, 3]
+    const float *__restrict__ means3d,     // [N, 3]
+    const float *__restrict__ precis,      // [N, 6]
+    const float *__restrict__ tvertices,   // [N, 4, 3]
+    // --- culling ---
     const T *__restrict__ transmittances,     // [C, image_height, image_width]
     const int32_t *__restrict__ chunk_starts, // [C, image_height, image_width]
     int32_t *__restrict__ chunk_cnts,         // [C, image_height, image_width]
@@ -65,6 +75,25 @@ __global__ void rasterize_to_indices_in_range_kernel(
         base = chunk_starts[pix_id];
     }
 
+    // ---- culling ----
+    vec3<T> ray_d, ray_o;
+    if (enable_culling && inside) {
+        const float *camtoworld = camtoworlds + 16 * camera_id;
+        const float *K = Ks + 9 * camera_id;
+        float u = (px - K[2]) / K[0];
+        float v = (py - K[5]) / K[4];
+        float inv_len = rsqrtf(u * u + v * v + 1.f);
+        ray_d = vec3<T>(u * inv_len, v * inv_len, inv_len);  // camera space
+        ray_d = vec3<T>(camtoworld[0] * ray_d.x + camtoworld[1] * ray_d.y +
+                             camtoworld[2] * ray_d.z,
+                             camtoworld[4] * ray_d.x + camtoworld[5] * ray_d.y +
+                             camtoworld[6] * ray_d.z,
+                             camtoworld[8] * ray_d.x + camtoworld[9] * ray_d.y +
+                             camtoworld[10] * ray_d.z); // world space
+        ray_o = vec3<T>(camtoworld[3], camtoworld[7], camtoworld[11]);
+    }
+    // ---- culling ----
+
     // have all threads in tile process the same gaussians in batches
     // first collect gaussians between range.x and range.y in batches
     // which gaussians to look through in this tile
@@ -90,6 +119,14 @@ __global__ void rasterize_to_indices_in_range_kernel(
     vec3<T> *conic_batch =
         reinterpret_cast<vec3<float> *>(&xy_opacity_batch[block_size]
         ); // [block_size]
+    // ---- culling ----
+    vec3<T> *mean3d_batch =
+        reinterpret_cast<vec3<float> *>(&conic_batch[block_size]); // [block_size]
+    T *preci_batch =
+        reinterpret_cast<T *>(&mean3d_batch[block_size]); // [block_size * 6]
+    T *tvertices_batch =
+        reinterpret_cast<T *>(&preci_batch[block_size * 6]); // [block_size * 4 * 3]
+    // ---- culling ----
 
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
@@ -125,6 +162,24 @@ __global__ void rasterize_to_indices_in_range_kernel(
             const T opac = opacities[g];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             conic_batch[tr] = conics[g];
+            // ---- culling ----
+            if (enable_culling) {
+                // TODO: assuming non-packed for now
+                int32_t gaussian_id = g % N;
+                mean3d_batch[tr] = vec3<T>{
+                    means3d[gaussian_id * 3], means3d[gaussian_id * 3 + 1], means3d[gaussian_id * 3 + 2]};
+                const float *preci_ptr = precis + gaussian_id * 6;
+                GSPLAT_PRAGMA_UNROLL
+                for (uint32_t k = 0; k < 6; ++k) {
+                    preci_batch[tr * 6 + k] = preci_ptr[k];
+                }
+                const float *tvertice_ptr = tvertices + gaussian_id * 12;
+                GSPLAT_PRAGMA_UNROLL
+                for (uint32_t k = 0; k < 12; ++k) {
+                    tvertices_batch[tr * 12 + k] = tvertice_ptr[k];
+                }
+            }
+            // ---- culling ----
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -145,6 +200,59 @@ __global__ void rasterize_to_indices_in_range_kernel(
             if (sigma < 0.f || alpha < 1.f / 255.f) {
                 continue;
             }
+
+            // ---- culling ----
+            if (enable_culling) {
+                // calculate intersection
+                vec3<T> v0 = vec3<T>(
+                    tvertices_batch[t * 12], 
+                    tvertices_batch[t * 12 + 1], 
+                    tvertices_batch[t * 12 + 2]);
+                vec3<T> v1 = vec3<T>(
+                    tvertices_batch[t * 12 + 3], 
+                    tvertices_batch[t * 12 + 4], 
+                    tvertices_batch[t * 12 + 5]);
+                vec3<T> v2 = vec3<T>(
+                    tvertices_batch[t * 12 + 6], 
+                    tvertices_batch[t * 12 + 7], 
+                    tvertices_batch[t * 12 + 8]);
+                vec3<T> v3 = vec3<T>(
+                    tvertices_batch[t * 12 + 9], 
+                    tvertices_batch[t * 12 + 10], 
+                    tvertices_batch[t * 12 + 11]);
+
+                T tmin, tmax;
+                int32_t entry_face_idx, exit_face_idx;
+                bool hit = ray_tetra_intersection(
+                    // inputs
+                    ray_o, ray_d,
+                    v0, v1, v2, v3,
+                    // outputs
+                    entry_face_idx,
+                    exit_face_idx,
+                    tmin,
+                    tmax
+                );
+
+                if (!hit) {
+                    continue;
+                }
+
+                // doing integral
+                float ratio = 0.0f;
+                vec3<T> mean3d = mean3d_batch[t];
+                mat3<T> preci3x3 = mat3<T>(
+                    preci_batch[t * 6], preci_batch[t * 6 + 1], preci_batch[t * 6 + 2],
+                    preci_batch[t * 6 + 1], preci_batch[t * 6 + 3], preci_batch[t * 6 + 4],
+                    preci_batch[t * 6 + 2], preci_batch[t * 6 + 4], preci_batch[t * 6 + 5]);
+                ratio = integral(ray_o, ray_d, tmin, tmax, mean3d, preci3x3);
+                // alpha *= ratio;
+                alpha = 1.0f - powf(1.0f - alpha, ratio); // this produces smaller diff
+                if (alpha < 1.f / 255.f) {
+                    continue;
+                }
+            }
+            // ---- culling ----
 
             next_trans = trans * (1.0f - alpha);
             if (next_trans <= 1e-4) { // this pixel is done: exclusive
@@ -189,7 +297,15 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
     const uint32_t tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
-    const torch::Tensor &flatten_ids   // [n_isects]
+    const torch::Tensor &flatten_ids,   // [n_isects]
+    // --- culling ---
+    const bool enable_culling,
+    const at::optional<torch::Tensor>  &camtoworlds, // [C, 4, 4]
+    const at::optional<torch::Tensor>  &Ks,          // [C, 3, 3]
+    const at::optional<torch::Tensor>  &means3d,     // [N, 3]
+    const at::optional<torch::Tensor>  &precis,      // [N, 6]
+    const at::optional<torch::Tensor>  &tvertices    // [N, 4, 3]
+    // --- culling ---
 ) {
     GSPLAT_DEVICE_GUARD(means2d);
     GSPLAT_CHECK_INPUT(means2d);
@@ -197,6 +313,14 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
     GSPLAT_CHECK_INPUT(opacities);
     GSPLAT_CHECK_INPUT(tile_offsets);
     GSPLAT_CHECK_INPUT(flatten_ids);
+
+    if (enable_culling) {
+        GSPLAT_CHECK_INPUT(camtoworlds.value());
+        GSPLAT_CHECK_INPUT(Ks.value());
+        GSPLAT_CHECK_INPUT(means3d.value());
+        GSPLAT_CHECK_INPUT(precis.value());
+        GSPLAT_CHECK_INPUT(tvertices.value());
+    }
 
     uint32_t C = means2d.size(0); // number of cameras
     uint32_t N = means2d.size(1); // number of gaussians
@@ -210,9 +334,15 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
     dim3 blocks = {C, tile_height, tile_width};
 
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
-    const uint32_t shared_mem =
+    uint32_t shared_mem =
         tile_size * tile_size *
         (sizeof(int32_t) + sizeof(vec3<float>) + sizeof(vec3<float>));
+
+    if (enable_culling) {
+        shared_mem += tile_size * tile_size *
+        (sizeof(vec3<float>) + sizeof(float) * 6 + sizeof(float) * 12);
+    }
+
     if (cudaFuncSetAttribute(
             rasterize_to_indices_in_range_kernel<float>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -250,6 +380,14 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
                 tile_height,
                 tile_offsets.data_ptr<int32_t>(),
                 flatten_ids.data_ptr<int32_t>(),
+                // --- culling ---
+                enable_culling,
+                camtoworlds.has_value() ? camtoworlds.value().data_ptr<float>() : nullptr,
+                Ks.has_value() ? Ks.value().data_ptr<float>() : nullptr,
+                means3d.has_value() ? means3d.value().data_ptr<float>() : nullptr,
+                precis.has_value() ? precis.value().data_ptr<float>() : nullptr,
+                tvertices.has_value() ? tvertices.value().data_ptr<float>() : nullptr,
+                // --- culling ---
                 transmittances.data_ptr<float>(),
                 nullptr,
                 chunk_cnts.data_ptr<int32_t>(),
@@ -288,6 +426,14 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
                 tile_height,
                 tile_offsets.data_ptr<int32_t>(),
                 flatten_ids.data_ptr<int32_t>(),
+                // --- culling ---
+                enable_culling,
+                camtoworlds.has_value() ? camtoworlds.value().data_ptr<float>() : nullptr,
+                Ks.has_value() ? Ks.value().data_ptr<float>() : nullptr,
+                means3d.has_value() ? means3d.value().data_ptr<float>() : nullptr,
+                precis.has_value() ? precis.value().data_ptr<float>() : nullptr,
+                tvertices.has_value() ? tvertices.value().data_ptr<float>() : nullptr,
+                // --- culling ---
                 transmittances.data_ptr<float>(),
                 chunk_starts.data_ptr<int32_t>(),
                 nullptr,
