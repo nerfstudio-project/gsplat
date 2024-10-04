@@ -156,6 +156,9 @@ class Config:
 
     lpips_net: Literal["vgg", "alex"] = "alex"
 
+    # Tetra
+    enable_culling: bool = True
+
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
         self.save_steps = [int(i * factor) for i in self.save_steps]
@@ -445,8 +448,11 @@ class Runner:
         quats = self.splats["quats"]  # [N, 4]
         scales = torch.exp(self.splats["scales"])  # [N, 3]
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
-        tscales = torch.exp(self.splats["tscales"])  # [N,]
-        tquats = self.splats["tquats"]  # [N, 4]
+        if self.cfg.enable_culling:
+            tscales = torch.exp(self.splats["tscales"]).detach()  # [N,]
+            tquats = self.splats["tquats"].detach()  # [N, 4]
+        else:
+            tscales = tquats = None
 
         image_ids = kwargs.pop("image_ids", None)
         if self.cfg.app_opt:
@@ -482,6 +488,7 @@ class Runner:
             rasterize_mode=rasterize_mode,
             distributed=self.world_size > 1,
             camera_model=self.cfg.camera_model,
+            enable_culling=self.cfg.enable_culling,
             tscales=tscales,
             tquats=tquats,
             **kwargs,
