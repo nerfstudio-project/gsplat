@@ -5,6 +5,10 @@
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>
 
+#include "tetra.cuh" // ray_tetra_intersection
+
+#define INV_SQRT_PI 0.564189583547756286948079451560772585844050629329f
+
 namespace gsplat {
 
 namespace cg = cooperative_groups;
@@ -12,6 +16,59 @@ namespace cg = cooperative_groups;
 /****************************************************************************
  * Rasterization to Pixels Backward Pass
  ****************************************************************************/
+
+template <typename S>
+inline __device__ void integral_vjp(
+    // fwd inputs
+    const vec3<S> ray_o, const vec3<S> ray_d, const S tmin, const S tmax,
+    const vec3<S> mean3d, const mat3<S> precision,
+    // grad outputs
+    const S v_ratio,
+    // grad inputs
+    vec3<S> &v_mean3d, mat3<S> &v_precision) {
+    vec3<S> mu = mean3d - ray_o;
+    S aa = glm::dot(ray_d, precision * ray_d);
+    if (aa <= 1e-6f) { // numerical issue
+        v_mean3d = glm::vec3(0.f);
+        v_precision = glm::mat3(0.f);
+        return;
+    }
+
+    S raa = 1.f / aa;
+    S raa2 = raa * raa;
+    S bb = glm::dot(ray_d, precision * mu);
+    S beta1 = sqrtf(aa * 0.5f);
+    S beta2 = bb * raa;
+
+    // d_erf/d_x = 2/sqrt(pi) * exp(-x^2)
+    // v_beta1 = (
+    //     INV_SQRT_PI * exp(-(beta1 * (tmax - beta2)) ** 2) * (tmax - beta2) * v_ratio
+    //     - INV_SQRT_PI * exp(-(beta1 * (tmin - beta2)) ** 2) * (tmin - beta2) *
+    //     v_ratio
+    // )
+    // v_beta2 = (
+    //     - INV_SQRT_PI * exp(-(beta1 * (tmax - beta2)) ** 2) * beta1 * v_ratio
+    //     + INV_SQRT_PI * exp(-(beta1 * (tmin - beta2)) ** 2) * beta1 * v_ratio
+    // )
+    S tmax_beta2 = tmax - beta2;
+    S tmin_beta2 = tmin - beta2;
+    S x1 = beta1 * tmax_beta2;
+    S x2 = beta1 * tmin_beta2;
+    S helper_max = __expf(-x1 * x1) * v_ratio;
+    S helper_min = __expf(-x2 * x2) * v_ratio;
+    S v_beta1 = INV_SQRT_PI * (helper_max * tmax_beta2 - helper_min * tmin_beta2);
+    S v_beta2 = INV_SQRT_PI * (helper_min * beta1 - helper_max * beta1);
+    S v_bb = v_beta2 * raa;
+    S v_aa = 0.25f / beta1 * v_beta1 - bb * raa2 * v_beta2;
+
+    // Y = M * X
+    // df/dX = M^T * df/dY
+    // df/dM = X * df/dY
+    v_mean3d = v_bb * glm::transpose(precision) * ray_d;
+    v_precision =
+        v_aa * glm::outerProduct(ray_d, ray_d) + v_bb * glm::outerProduct(ray_d, mu);
+}
+
 
 template <uint32_t COLOR_DIM, typename S>
 __global__ void rasterize_to_pixels_bwd_kernel(
@@ -33,6 +90,14 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
+    // --- culling ---
+    const bool enable_culling,
+    const float *__restrict__ camtoworlds, // [C, 4, 4]
+    const float *__restrict__ Ks,          // [C, 3, 3]
+    const float *__restrict__ means3d,     // [N, 3]
+    const float *__restrict__ precis,      // [N, 6]
+    const float *__restrict__ tvertices,   // [N, 4, 3]
+    // --- culling ---
     // fwd outputs
     const S *__restrict__ render_alphas,  // [C, image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [C, image_height, image_width]
@@ -81,6 +146,25 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     // keep not rasterizing threads around for reading data
     bool inside = (i < image_height && j < image_width);
 
+    // ---- culling ----
+    vec3<S> ray_d, ray_o;
+    if (enable_culling && inside) {
+        const float *camtoworld = camtoworlds + 16 * camera_id;
+        const float *K = Ks + 9 * camera_id;
+        float u = (px - K[2]) / K[0];
+        float v = (py - K[5]) / K[4];
+        float inv_len = rsqrtf(u * u + v * v + 1.f);
+        ray_d = vec3<S>(u * inv_len, v * inv_len, inv_len);  // camera space
+        ray_d = vec3<S>(camtoworld[0] * ray_d.x + camtoworld[1] * ray_d.y +
+                             camtoworld[2] * ray_d.z,
+                             camtoworld[4] * ray_d.x + camtoworld[5] * ray_d.y +
+                             camtoworld[6] * ray_d.z,
+                             camtoworld[8] * ray_d.x + camtoworld[9] * ray_d.y +
+                             camtoworld[10] * ray_d.z); // world space
+        ray_o = vec3<S>(camtoworld[3], camtoworld[7], camtoworld[11]);
+    }
+    // ---- culling ----
+
     // have all threads in tile process the same gaussians in batches
     // first collect gaussians between range.x and range.y in batches
     // which gaussians to look through in this tile
@@ -101,6 +185,14 @@ __global__ void rasterize_to_pixels_bwd_kernel(
         reinterpret_cast<vec3<float> *>(&xy_opacity_batch[block_size]
         );                                         // [block_size]
     S *rgbs_batch = (S *)&conic_batch[block_size]; // [block_size * COLOR_DIM]
+    // ---- culling ----
+    vec3<S> *mean3d_batch =
+        reinterpret_cast<vec3<float> *>(&rgbs_batch[block_size * COLOR_DIM]); // [block_size]
+    S *preci_batch =
+        reinterpret_cast<S *>(&mean3d_batch[block_size]); // [block_size * 6]
+    S *tvertices_batch =
+        reinterpret_cast<S *>(&preci_batch[block_size * 6]); // [block_size * 4 * 3]
+    // ---- culling ----
 
     // this is the T AFTER the last gaussian in this pixel
     S T_final = 1.0f - render_alphas[pix_id];
@@ -147,6 +239,24 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                 rgbs_batch[tr * COLOR_DIM + k] = colors[g * COLOR_DIM + k];
             }
+            // ---- culling ----
+            if (enable_culling) {
+                // TODO: assuming non-packed for now
+                int32_t gaussian_id = g % N;
+                mean3d_batch[tr] = vec3<S>{
+                    means3d[gaussian_id * 3], means3d[gaussian_id * 3 + 1], means3d[gaussian_id * 3 + 2]};
+                const float *preci_ptr = precis + gaussian_id * 6;
+                GSPLAT_PRAGMA_UNROLL
+                for (uint32_t k = 0; k < 6; ++k) {
+                    preci_batch[tr * 6 + k] = preci_ptr[k];
+                }
+                const float *tvertice_ptr = tvertices + gaussian_id * 12;
+                GSPLAT_PRAGMA_UNROLL
+                for (uint32_t k = 0; k < 12; ++k) {
+                    tvertices_batch[tr * 12 + k] = tvertice_ptr[k];
+                }
+            }
+            // ---- culling ----
         }
         // wait for other threads to collect the gaussians in batch
         block.sync();
@@ -163,6 +273,14 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             vec2<S> delta;
             vec3<S> conic;
             S vis;
+            // ---- culling ----
+            bool hit;
+            S tmin, tmax;
+            S ratio;
+            S alpha_no_cull;
+            vec3<S> mean3d;
+            mat3<S> preci3x3;
+            // ---- culling ----
 
             if (valid) {
                 conic = conic_batch[t];
@@ -179,6 +297,58 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 }
             }
 
+            // ---- culling ----
+            if (enable_culling) {
+                // calculate intersection
+                vec3<S> v0 = vec3<S>(
+                    tvertices_batch[t * 12], 
+                    tvertices_batch[t * 12 + 1], 
+                    tvertices_batch[t * 12 + 2]);
+                vec3<S> v1 = vec3<S>(
+                    tvertices_batch[t * 12 + 3], 
+                    tvertices_batch[t * 12 + 4], 
+                    tvertices_batch[t * 12 + 5]);
+                vec3<S> v2 = vec3<S>(
+                    tvertices_batch[t * 12 + 6], 
+                    tvertices_batch[t * 12 + 7], 
+                    tvertices_batch[t * 12 + 8]);
+                vec3<S> v3 = vec3<S>(
+                    tvertices_batch[t * 12 + 9], 
+                    tvertices_batch[t * 12 + 10], 
+                    tvertices_batch[t * 12 + 11]);
+
+                int32_t entry_face_idx, exit_face_idx;
+                hit = ray_tetra_intersection(
+                    // inputs
+                    ray_o, ray_d,
+                    v0, v1, v2, v3,
+                    // outputs
+                    entry_face_idx,
+                    exit_face_idx,
+                    tmin,
+                    tmax
+                );
+
+                if (!hit) {
+                    ratio = 0.0f;
+                } else {
+                    // doing integral
+                    mean3d = mean3d_batch[t];
+                    preci3x3 = mat3<S>(
+                        preci_batch[t * 6], preci_batch[t * 6 + 1], preci_batch[t * 6 + 2],
+                        preci_batch[t * 6 + 1], preci_batch[t * 6 + 3], preci_batch[t * 6 + 4],
+                        preci_batch[t * 6 + 2], preci_batch[t * 6 + 4], preci_batch[t * 6 + 5]);
+                    ratio = integral(ray_o, ray_d, tmin, tmax, mean3d, preci3x3);
+                }
+                alpha_no_cull = alpha;
+                // alpha *= ratio;
+                alpha = 1.0f - powf(1.0f - alpha, ratio); // this produces smaller diff
+                if (alpha < 1.f / 255.f) {
+                    valid = false;
+                }
+            }
+            // ---- culling ----
+
             // if all threads are inactive in this warp, skip this loop
             if (!warp.any(valid)) {
                 continue;
@@ -188,6 +358,10 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             vec2<S> v_xy_local = {0.f, 0.f};
             vec2<S> v_xy_abs_local = {0.f, 0.f};
             S v_opacity_local = 0.f;
+            // ---- culling ----
+            vec3<S> v_means3d_local = {0.f, 0.f, 0.f};
+            S v_percis_local[6] = {0.f};
+            // ---- culling ----
             // initialize everything to 0, only set if the lane is valid
             if (valid) {
                 // compute the current T for this gaussian
@@ -217,6 +391,33 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                     }
                     v_alpha += -T_final * ra * accum;
                 }
+
+                // ---- culling ----
+                if (enable_culling) {
+                    if (hit) {
+                        // b = 1.0f - powf(1.0f - a, r);
+                        // df/da = df/db * r * (1.0f - b) / (1.0f - a)
+                        // df/dr = df/db * - powf(1.0f - a, r) * ln(1.0f - a)
+                        S v_ratio = v_alpha * -powf(1.0f - alpha_no_cull, ratio) *
+                                        __logf(1.0f - alpha_no_cull);
+                        v_alpha *= ratio * (1.0f - alpha) / (1.0f - alpha_no_cull);
+
+                        vec3<S> v_mean3d(0.f);
+                        mat3<S> v_precision(0.f);
+                        integral_vjp(ray_o, ray_d, tmin, tmax, mean3d, preci3x3, 
+                                     v_ratio, v_mean3d, v_precision);
+                        v_means3d_local = v_mean3d;
+                        v_percis_local[0] = v_precision[0][0];
+                        v_percis_local[1] = v_precision[0][1] + v_precision[1][0];
+                        v_percis_local[2] = v_precision[0][2] + v_precision[2][0];
+                        v_percis_local[3] = v_precision[1][1];
+                        v_percis_local[4] = v_precision[1][2] + v_precision[2][1];
+                        v_percis_local[5] = v_precision[2][2];
+                    } else {
+                        v_alpha = 0.f;
+                    }
+                }
+                // ---- culling ----
 
                 if (opac * vis <= 0.999f) {
                     const S v_sigma = -opac * vis * v_alpha;
@@ -298,6 +499,14 @@ call_kernel_with_dim(
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
     const torch::Tensor &flatten_ids,  // [n_isects]
+    // --- culling ---
+    const bool enable_culling,
+    const at::optional<torch::Tensor>  &camtoworlds, // [C, 4, 4]
+    const at::optional<torch::Tensor>  &Ks,          // [C, 3, 3]
+    const at::optional<torch::Tensor>  &means3d,     // [N, 3]
+    const at::optional<torch::Tensor>  &precis,      // [N, 6]
+    const at::optional<torch::Tensor>  &tvertices,    // [N, 4, 3]
+    // --- culling ---
     // forward outputs
     const torch::Tensor &render_alphas, // [C, image_height, image_width, 1]
     const torch::Tensor &last_ids,      // [C, image_height, image_width]
@@ -325,6 +534,13 @@ call_kernel_with_dim(
     if (masks.has_value()) {
         GSPLAT_CHECK_INPUT(masks.value());
     }
+    if (enable_culling) {
+        GSPLAT_CHECK_INPUT(camtoworlds.value());
+        GSPLAT_CHECK_INPUT(Ks.value());
+        GSPLAT_CHECK_INPUT(means3d.value());
+        GSPLAT_CHECK_INPUT(precis.value());
+        GSPLAT_CHECK_INPUT(tvertices.value());
+    }
 
     bool packed = means2d.dim() == 2;
 
@@ -350,10 +566,16 @@ call_kernel_with_dim(
     }
 
     if (n_isects) {
-        const uint32_t shared_mem =
+        uint32_t shared_mem =
             tile_size * tile_size *
             (sizeof(int32_t) + sizeof(vec3<float>) + sizeof(vec3<float>) +
              sizeof(float) * COLOR_DIM);
+    
+        if (enable_culling) {
+            shared_mem += tile_size * tile_size *
+            (sizeof(vec3<float>) + sizeof(float) * 6 + sizeof(float) * 12);
+        }
+
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
         if (cudaFuncSetAttribute(
@@ -387,6 +609,14 @@ call_kernel_with_dim(
                 tile_height,
                 tile_offsets.data_ptr<int32_t>(),
                 flatten_ids.data_ptr<int32_t>(),
+                // --- culling ---
+                enable_culling,
+                camtoworlds.has_value() ? camtoworlds.value().data_ptr<float>() : nullptr,
+                Ks.has_value() ? Ks.value().data_ptr<float>() : nullptr,
+                means3d.has_value() ? means3d.value().data_ptr<float>() : nullptr,
+                precis.has_value() ? precis.value().data_ptr<float>() : nullptr,
+                tvertices.has_value() ? tvertices.value().data_ptr<float>() : nullptr,
+                // --- culling ---
                 render_alphas.data_ptr<float>(),
                 last_ids.data_ptr<int32_t>(),
                 v_render_colors.data_ptr<float>(),
@@ -428,6 +658,14 @@ rasterize_to_pixels_bwd_tensor(
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
     const torch::Tensor &flatten_ids,  // [n_isects]
+    // --- culling ---
+    const bool enable_culling,
+    const at::optional<torch::Tensor>  &camtoworlds, // [C, 4, 4]
+    const at::optional<torch::Tensor>  &Ks,          // [C, 3, 3]
+    const at::optional<torch::Tensor>  &means3d,     // [N, 3]
+    const at::optional<torch::Tensor>  &precis,      // [N, 6]
+    const at::optional<torch::Tensor>  &tvertices,    // [N, 4, 3]
+    // --- culling ---
     // forward outputs
     const torch::Tensor &render_alphas, // [C, image_height, image_width, 1]
     const torch::Tensor &last_ids,      // [C, image_height, image_width]
@@ -455,6 +693,12 @@ rasterize_to_pixels_bwd_tensor(
             tile_size,                                                         \
             tile_offsets,                                                      \
             flatten_ids,                                                       \
+            enable_culling,                                                    \
+            camtoworlds,                                                       \
+            Ks,                                                                \
+            means3d,                                                           \
+            precis,                                                            \
+            tvertices,                                                         \
             render_alphas,                                                     \
             last_ids,                                                          \
             v_render_colors,                                                   \
