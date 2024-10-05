@@ -158,6 +158,7 @@ class Config:
 
     # Tetra
     enable_culling: bool = True
+    opt_vert: bool = False # optimize tet vertices directly
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -180,6 +181,7 @@ class Config:
 
 
 def create_splats_with_optimizers(
+    cfg: Config,
     parser: Parser,
     init_type: str = "sfm",
     init_num_pts: int = 100_000,
@@ -218,20 +220,42 @@ def create_splats_with_optimizers(
     quats = torch.rand((N, 4))  # [N, 4]
     opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
 
-    # 6 sigma as the distance from the center (centroid) to a vertex, equals to
-    # 3 sigma from the center to a face of the tetrahedron.
-    tscales = torch.log(dist_avg * init_scale * 3.0)  # 6 sigma [N,]
-    tquats = torch.rand((N, 4))  # [N, 4]
-
     params = [
         # name, value, lr
         ("means", torch.nn.Parameter(points), 1.6e-4 * scene_scale),
         ("scales", torch.nn.Parameter(scales), 5e-3),
         ("quats", torch.nn.Parameter(quats), 1e-3),
         ("opacities", torch.nn.Parameter(opacities), 5e-2),
-        ("tscales", torch.nn.Parameter(tscales), 1e-2),
-        ("tquats", torch.nn.Parameter(tquats), 1e-1),
     ]
+
+    if cfg.enable_culling:
+        # 6 sigma as the distance from the center (centroid) to a vertex, equals to
+        # 3 sigma from the center to a face of the tetrahedron.
+        tscales = torch.log(dist_avg * init_scale * 3.0)  # 6 sigma [N,]
+        tquats = torch.rand((N, 4))  # [N, 4]
+
+        if cfg.opt_vert:            
+            from gsplat.cuda._torch_impl import _quat_scale_to_matrix
+            tvertices = torch.tensor(
+                [
+                    [math.sqrt(8 / 9), 0, -1 / 3],
+                    [-math.sqrt(2 / 9), math.sqrt(2 / 3), -1 / 3],
+                    [-math.sqrt(2 / 9), -math.sqrt(2 / 3), -1 / 3],
+                    [0, 0, 1],
+                ],
+            )  # [4, 3]
+            rotmats = _quat_scale_to_matrix(tquats, torch.exp(tscales)[:, None])  # [N, 3, 3]
+            tvertices = torch.einsum("nij,kj->nki", rotmats, tvertices)  # [N, 4, 3]
+
+            # Local space tvertices
+            params += [
+                ("tvertices", torch.nn.Parameter(tvertices), 1e-4 * scene_scale),
+            ]
+        else:
+            params += [
+                ("tscales", torch.nn.Parameter(tscales), 1e-2),
+                ("tquats", torch.nn.Parameter(tquats), 1e-1),
+            ]
 
     if feature_dim is None:
         # color is SH coefficients.
@@ -312,6 +336,7 @@ class Runner:
         # Model
         feature_dim = 32 if cfg.app_opt else None
         self.splats, self.optimizers = create_splats_with_optimizers(
+            self.cfg,
             self.parser,
             init_type=cfg.init_type,
             init_num_pts=cfg.init_num_pts,
@@ -449,10 +474,15 @@ class Runner:
         scales = torch.exp(self.splats["scales"])  # [N, 3]
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
         if self.cfg.enable_culling:
-            tscales = torch.exp(self.splats["tscales"])  # [N,]
-            tquats = self.splats["tquats"]  # [N, 4]
+            if self.cfg.opt_vert:
+                tscales = tquats = None
+                tvertices = self.splats["tvertices"]  # [N, 4, 3]
+            else:
+                tscales = torch.exp(self.splats["tscales"])  # [N,]
+                tquats = self.splats["tquats"]  # [N, 4]
+                tvertices = None
         else:
-            tscales = tquats = None
+            tscales = tquats = tvertices = None
 
         image_ids = kwargs.pop("image_ids", None)
         if self.cfg.app_opt:
@@ -491,6 +521,7 @@ class Runner:
             enable_culling=self.cfg.enable_culling,
             tscales=tscales,
             tquats=tquats,
+            tvertices=tvertices,
             **kwargs,
         )
         if masks is not None:
@@ -515,6 +546,9 @@ class Runner:
             # means has a learning rate schedule, that end at 0.01 of the initial value
             torch.optim.lr_scheduler.ExponentialLR(
                 self.optimizers["means"], gamma=0.01 ** (1.0 / max_steps)
+            ),
+            torch.optim.lr_scheduler.ExponentialLR(
+                self.optimizers["tvertices"], gamma=0.01 ** (1.0 / max_steps)
             ),
         ]
         if cfg.pose_opt:
@@ -674,7 +708,8 @@ class Runner:
             loss.backward()
 
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
-            desc += f"ts: {torch.exp(self.splats['tscales']).mean().item():.3f}| "
+            # desc += f"ts: {torch.exp(self.splats['tscales']).mean().item():.3f}| "
+            desc += f"ts: {torch.linalg.norm(self.splats['tvertices'], dim=-1).mean().item():.3f}| "
             if cfg.depth_loss:
                 desc += f"depth loss={depthloss.item():.6f}| "
             if cfg.pose_opt and cfg.pose_noise:

@@ -157,6 +157,8 @@ def split(
         elif name == "tscales":
             tscales = torch.exp(p[sel])
             p_split = torch.log(tscales / 1.6).repeat(repeats)  # [2N, 3] 
+        elif name == "tvertices":
+            p_split = (p / 1.6).repeat(repeats)  # [2N, 3] 
         else:
             p_split = p[sel].repeat(repeats)
         p_new = torch.cat([p[rest], p_split])
