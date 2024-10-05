@@ -28,7 +28,13 @@ from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMe
 from fused_ssim import fused_ssim
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from typing_extensions import Literal, assert_never
-from utils import AppearanceOptModule, BlurOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
+from utils import (
+    AppearanceOptModule,
+    CameraOptModule,
+    knn,
+    rgb_to_sh,
+    set_random_seed,
+)
 from lib_bilagrid import (
     BilateralGrid,
     slice,
@@ -43,6 +49,7 @@ from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 from gsplat.optimizers import SelectiveAdam
 from gsplat.utils import log_transform
+
 
 @dataclass
 class Config:
@@ -147,7 +154,7 @@ class Config:
     app_opt_lr: float = 1e-3
     # Regularization for appearance optimization as weight decay
     app_opt_reg: float = 1e-6
-    
+
     # Enable blur optimization. (experimental)
     blur_opt: bool = False
     # Learning rate for blur optimization
@@ -236,7 +243,6 @@ def create_splats_with_optimizers(
         ("scales", torch.nn.Parameter(scales), 5e-3),
         ("quats", torch.nn.Parameter(quats), 1e-3),
         ("opacities", torch.nn.Parameter(opacities), 5e-2),
-        ("f", torch.nn.Parameter(torch.rand(N, 32)), 7.5e-3),
     ]
 
     if feature_dim is None:
@@ -405,14 +411,12 @@ class Runner:
             ]
             if world_size > 1:
                 self.app_module = DDP(self.app_module)
-                
+
         self.blur_optimizers = []
         if cfg.blur_opt:
-            # self.blur_module = BlurOptModule(cfg.sh_degree).to(self.device)
             self.blur_module = GTnet()
             self.blur_optimizers = [
                 torch.optim.Adam(
-                    # self.blur_module.mlp.parameters(),
                     self.blur_module.parameters(),
                     lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size),
                 ),
@@ -492,28 +496,27 @@ class Runner:
         if self.cfg.blur_opt and not is_eval:
             scales = torch.exp(self.splats["scales"])
             quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
-            
+
             means_ = means.detach()
             scales_ = scales.detach()
             quats_ = quats.detach()
             viewdir_ = camtoworlds[0, :3, 3].repeat(means.shape[0], 1)
-            
-            # means_log_ = log_transform(means_)
-            # viewdir_ = means_ - camtoworlds[0, :3, 3]
-            # viewdir_ = F.normalize(viewdir_, dim=-1)
-            
             scales_delta, rotations_delta = self.blur_module(
                 means_,
                 scales_,
                 quats_,
                 viewdir_,
-                # means[None, :, :] - camtoworlds[:, None, :3, 3],
-                # sh_degree=self.cfg.sh_degree,
             )
+
             lambda_s = 0.01
-            scales_delta = torch.clamp(lambda_s * scales_delta + (1-lambda_s), min=1.0, max=1.1)
-            rotations_delta = torch.clamp(lambda_s * rotations_delta + (1-lambda_s), min=1.0, max=1.1)
-            
+            max_clamp = 1.1
+            scales_delta = torch.clamp(
+                lambda_s * scales_delta + (1.0 - lambda_s), min=1.0, max=max_clamp
+            )
+            rotations_delta = torch.clamp(
+                lambda_s * rotations_delta + (1 - lambda_s), min=1.0, max=max_clamp
+            )
+
             scales = scales * scales_delta
             quats = quats * rotations_delta
         else:
@@ -901,7 +904,7 @@ class Runner:
                 self.trainset, batch_size=1, shuffle=False, num_workers=1
             )
             is_eval = False
-            
+
         ellipse_time = 0
         metrics = defaultdict(list)
         for i, data in enumerate(valloader):
