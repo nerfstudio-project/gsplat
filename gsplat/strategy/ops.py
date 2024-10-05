@@ -1,6 +1,6 @@
-import numpy as np
 from typing import Callable, Dict, List, Union
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import Tensor
@@ -154,6 +154,9 @@ def split(
         elif name == "opacities" and revised_opacity:
             new_opacities = 1.0 - torch.sqrt(1.0 - torch.sigmoid(p[sel]))
             p_split = torch.logit(new_opacities).repeat(repeats)  # [2N]
+        elif name == "tscales":
+            tscales = torch.exp(p[sel])
+            p_split = torch.log(tscales / 1.6).repeat(repeats)  # [2N, 3] 
         else:
             p_split = p[sel].repeat(repeats)
         p_new = torch.cat([p[rest], p_split])

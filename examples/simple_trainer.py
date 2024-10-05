@@ -229,8 +229,8 @@ def create_splats_with_optimizers(
         ("scales", torch.nn.Parameter(scales), 5e-3),
         ("quats", torch.nn.Parameter(quats), 1e-3),
         ("opacities", torch.nn.Parameter(opacities), 5e-2),
-        ("tscales", torch.nn.Parameter(tscales), 5e-3),
-        ("tquats", torch.nn.Parameter(tquats), 1e-3),
+        ("tscales", torch.nn.Parameter(tscales), 1e-2),
+        ("tquats", torch.nn.Parameter(tquats), 1e-1),
     ]
 
     if feature_dim is None:
@@ -449,8 +449,8 @@ class Runner:
         scales = torch.exp(self.splats["scales"])  # [N, 3]
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
         if self.cfg.enable_culling:
-            tscales = torch.exp(self.splats["tscales"]).detach()  # [N,]
-            tquats = self.splats["tquats"].detach()  # [N, 4]
+            tscales = torch.exp(self.splats["tscales"])  # [N,]
+            tquats = self.splats["tquats"]  # [N, 4]
         else:
             tscales = tquats = None
 
@@ -674,6 +674,7 @@ class Runner:
             loss.backward()
 
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
+            desc += f"ts: {torch.exp(self.splats['tscales']).mean().item():.3f}| "
             if cfg.depth_loss:
                 desc += f"depth loss={depthloss.item():.6f}| "
             if cfg.pose_opt and cfg.pose_noise:
