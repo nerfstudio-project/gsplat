@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass, field
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple, Union
+import json
 
 import imageio
 import nerfview
@@ -55,7 +56,7 @@ class Config:
     render_traj_path: str = "interp"
 
     # Path to the Mip-NeRF 360 dataset
-    data_dir: str = "sample/"
+    data_dir: str = "/home/ubuntu/360-gaussian-splatting/kungsgatanparken"
     # Downsample factor for the dataset
     data_factor: int = 4
     # Directory to save results
@@ -106,7 +107,7 @@ class Config:
     # Near plane clipping distance
     near_plane: float = 0.01
     # Far plane clipping distance
-    far_plane: float = 1e10
+    far_plane: float = 100
 
     # Strategy for GS densification
     strategy: Union[DefaultStrategy, MCMCStrategy] = field(
@@ -183,7 +184,12 @@ class Config:
         else:
             assert_never(strategy)
 
-
+def load_reconstructions(data_dir):
+    reconstructions_file = os.path.join(data_dir, 'reconstruction.json')
+    with open(reconstructions_file, 'r') as f:
+        reconstructions = json.load(f)
+    return reconstructions
+            
 def create_splats_with_optimizers(
     parser: Parser,
     init_type: str = "sfm",
@@ -300,10 +306,9 @@ class Runner:
 
         # Load data: Training data should contain initial points and colors.
         self.parser = Parser(
-            data_dir=cfg.data_dir,
+            reconstructions=load_reconstructions(cfg.data_dir),
             factor=cfg.data_factor,
-            normalize=cfg.normalize_world_space,
-            test_every=cfg.test_every,
+            normalize=cfg.normalize_world_space
         )
         self.trainset = Dataset(
             self.parser,
@@ -312,9 +317,8 @@ class Runner:
             load_depths=cfg.depth_loss,
         )
         self.valset = Dataset(self.parser, split="val")
-        self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
+        self.scene_scale = 1.0#self.parser.scene_scale * 1.1 * cfg.global_scale
         print("Scene scale:", self.scene_scale)
-
         # Model
         feature_dim = 32 if cfg.app_opt else None
         self.splats, self.optimizers = create_splats_with_optimizers(

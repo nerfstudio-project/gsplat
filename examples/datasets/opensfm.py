@@ -126,9 +126,10 @@ class Parser:
         self._parse_reconstructions(reconstructions)
 
     def _parse_reconstructions(self, reconstructions: List[Dict]):
-        """Parse reconstructions data to extract camera information and extrinsics."""
+        """Parse reconstructions data to extract camera information, extrinsics, and 3D points."""
         self.cameras, self.images = read_opensfm(reconstructions)
-
+        self.points3D, self.colors, self.errors = read_opensfm_points3D(reconstructions)
+        
         # Extract extrinsic matrices in world-to-camera format.
         w2c_mats = []
         camera_ids = []
@@ -180,6 +181,9 @@ class Parser:
         self.params_dict = params_dict  # Dict of camera_id -> params
         self.imsize_dict = imsize_dict  # Dict of camera_id -> (width, height)
         self.transform = transform  # np.ndarray, (4, 4)
+        self.points = self.points3D  # np.ndarray, (num_points, 3)
+        self.points_rgb = self.colors  # np.ndarray, (num_points, 3)
+        self.points_err = self.errors  # np.ndarray, (num_points, 1)
 
 
 class Dataset:
@@ -300,5 +304,44 @@ def read_opensfm(reconstructions):
             point3D_ids = np.array([0, 0])
             images[image_id] = Image(id=image_id, qvec=qvec, tvec=tvec, camera_id=camera_id, name=image_name, xys=xys, point3D_ids=point3D_ids, diff_ref=diff_ref)
             i += 1
-    
+    print("Number of cameras: ", len(cameras))
+    print("Number of images: ", len(images))    
     return cameras, images
+
+def read_opensfm_points3D(reconstructions):
+    xyzs = None
+    rgbs = None
+    errors = None
+    num_points = 0
+    for reconstruction in reconstructions:
+        num_points = num_points + len(reconstruction["points"])
+
+    xyzs = np.empty((num_points, 3))
+    rgbs = np.empty((num_points, 3))
+    errors = np.empty((num_points, 1))
+    count = 0
+    reference_lat_0 = reconstructions[0]["reference_lla"]["latitude"]
+    reference_lon_0 = reconstructions[0]["reference_lla"]["longitude"]
+    reference_alt_0 = reconstructions[0]["reference_lla"]["altitude"]
+    e2u_zone=int(divmod(reference_lon_0, 6)[0])+31
+    e2u_conv=Proj(proj='utm', zone=e2u_zone, ellps='WGS84')
+    reference_x_0, reference_y_0 = e2u_conv(reference_lon_0, reference_lat_0)
+    if reference_lat_0<0:
+        reference_y=reference_y+10000000
+    for reconstruction in reconstructions:
+        reference_lat = reconstruction["reference_lla"]["latitude"]
+        reference_lon = reconstruction["reference_lla"]["longitude"]
+        reference_alt = reconstruction["reference_lla"]["altitude"]
+        reference_x, reference_y = e2u_conv(reference_lon, reference_lat)
+        for i in (reconstruction["points"]):
+            color = (reconstruction["points"][i]["color"])
+            coordinates = (reconstruction["points"][i]["coordinates"])
+            xyz = np.array([coordinates[0] + reference_x - reference_x_0, coordinates[1] + reference_y - reference_y_0, coordinates[2] - reference_alt + reference_alt_0])
+            rgb = np.array([color[0], color[1], color[2]])
+            error = np.array(0)
+            xyzs[count] = xyz
+            rgbs[count] = rgb
+            errors[count] = error
+            count += 1
+    print("Number of points: ", num_points)
+    return xyzs, rgbs, errors
