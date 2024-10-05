@@ -25,7 +25,7 @@ inline __device__ void integral_vjp(
     // grad outputs
     const S v_ratio,
     // grad inputs
-    vec3<S> &v_mean3d, mat3<S> &v_precision) {
+    vec3<S> &v_mean3d, mat3<S> &v_precision, S &v_tmin, S &v_tmax) {
     vec3<S> mu = mean3d - ray_o;
     S aa = glm::dot(ray_d, precision * ray_d);
     if (aa <= 1e-6f) { // numerical issue
@@ -61,6 +61,9 @@ inline __device__ void integral_vjp(
     S v_bb = v_beta2 * raa;
     S v_aa = 0.25f / beta1 * v_beta1 - bb * raa2 * v_beta2;
 
+    v_tmax = INV_SQRT_PI * helper_max * beta1;
+    v_tmin = - INV_SQRT_PI * helper_min * beta1;
+
     // Y = M * X
     // df/dX = M^T * df/dY
     // df/dM = X * df/dY
@@ -92,11 +95,11 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
     // --- culling ---
     const bool enable_culling,
-    const float *__restrict__ camtoworlds, // [C, 4, 4]
-    const float *__restrict__ Ks,          // [C, 3, 3]
-    const float *__restrict__ means3d,     // [N, 3]
-    const float *__restrict__ precis,      // [N, 6]
-    const float *__restrict__ tvertices,   // [N, 4, 3]
+    const S *__restrict__ camtoworlds, // [C, 4, 4]
+    const S *__restrict__ Ks,          // [C, 3, 3]
+    const S *__restrict__ means3d,     // [N, 3]
+    const S *__restrict__ precis,      // [N, 6]
+    const S *__restrict__ tvertices,   // [N, 4, 3]
     // --- culling ---
     // fwd outputs
     const S *__restrict__ render_alphas,  // [C, image_height, image_width, 1]
@@ -110,7 +113,11 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     vec2<S> *__restrict__ v_means2d,     // [C, N, 2] or [nnz, 2]
     vec3<S> *__restrict__ v_conics,      // [C, N, 3] or [nnz, 3]
     S *__restrict__ v_colors,   // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
-    S *__restrict__ v_opacities // [C, N] or [nnz]
+    S *__restrict__ v_opacities, // [C, N] or [nnz]
+    // --- culling ---
+    vec3<S> *__restrict__ v_means3d, // [N, 3]
+    S *__restrict__ v_precis,  // [N, 6]
+    S *__restrict__ v_tvertices // [N, 4, 3]
 ) {
     auto block = cg::this_thread_block();
     uint32_t camera_id = block.group_index().x;
@@ -280,6 +287,8 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             S alpha_no_cull;
             vec3<S> mean3d;
             mat3<S> preci3x3;
+            vec3<S> v0, v1, v2, v3;
+            int32_t entry_face_idx, exit_face_idx;
             // ---- culling ----
 
             if (valid) {
@@ -300,24 +309,23 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             // ---- culling ----
             if (enable_culling) {
                 // calculate intersection
-                vec3<S> v0 = vec3<S>(
+                v0 = vec3<S>(
                     tvertices_batch[t * 12], 
                     tvertices_batch[t * 12 + 1], 
                     tvertices_batch[t * 12 + 2]);
-                vec3<S> v1 = vec3<S>(
+                v1 = vec3<S>(
                     tvertices_batch[t * 12 + 3], 
                     tvertices_batch[t * 12 + 4], 
                     tvertices_batch[t * 12 + 5]);
-                vec3<S> v2 = vec3<S>(
+                v2 = vec3<S>(
                     tvertices_batch[t * 12 + 6], 
                     tvertices_batch[t * 12 + 7], 
                     tvertices_batch[t * 12 + 8]);
-                vec3<S> v3 = vec3<S>(
+                v3 = vec3<S>(
                     tvertices_batch[t * 12 + 9], 
                     tvertices_batch[t * 12 + 10], 
                     tvertices_batch[t * 12 + 11]);
 
-                int32_t entry_face_idx, exit_face_idx;
                 hit = ray_tetra_intersection(
                     // inputs
                     ray_o, ray_d,
@@ -330,7 +338,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 );
 
                 if (!hit) {
-                    ratio = 0.0f;
+                    valid = false;
                 } else {
                     // doing integral
                     mean3d = mean3d_batch[t];
@@ -339,12 +347,12 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                         preci_batch[t * 6 + 1], preci_batch[t * 6 + 3], preci_batch[t * 6 + 4],
                         preci_batch[t * 6 + 2], preci_batch[t * 6 + 4], preci_batch[t * 6 + 5]);
                     ratio = integral(ray_o, ray_d, tmin, tmax, mean3d, preci3x3);
-                }
-                alpha_no_cull = alpha;
-                // alpha *= ratio;
-                alpha = 1.0f - powf(1.0f - alpha, ratio); // this produces smaller diff
-                if (alpha < 1.f / 255.f) {
-                    valid = false;
+                    alpha_no_cull = alpha;
+                    // alpha *= ratio;
+                    alpha = 1.0f - powf(1.0f - alpha, ratio); // this produces smaller diff
+                    if (alpha < 1.f / 255.f) {
+                        valid = false;
+                    }
                 }
             }
             // ---- culling ----
@@ -361,6 +369,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             // ---- culling ----
             vec3<S> v_means3d_local = {0.f, 0.f, 0.f};
             S v_percis_local[6] = {0.f};
+            S v_tvertices_local[12] = {0.f};
             // ---- culling ----
             // initialize everything to 0, only set if the lane is valid
             if (valid) {
@@ -394,28 +403,46 @@ __global__ void rasterize_to_pixels_bwd_kernel(
 
                 // ---- culling ----
                 if (enable_culling) {
-                    if (hit) {
-                        // b = 1.0f - powf(1.0f - a, r);
-                        // df/da = df/db * r * (1.0f - b) / (1.0f - a)
-                        // df/dr = df/db * - powf(1.0f - a, r) * ln(1.0f - a)
-                        S v_ratio = v_alpha * -powf(1.0f - alpha_no_cull, ratio) *
-                                        __logf(1.0f - alpha_no_cull);
-                        v_alpha *= ratio * (1.0f - alpha) / (1.0f - alpha_no_cull);
+                    // b = 1.0f - powf(1.0f - a, r);
+                    // df/da = df/db * r * (1.0f - b) / (1.0f - a)
+                    // df/dr = df/db * - powf(1.0f - a, r) * ln(1.0f - a)
+                    S v_ratio = v_alpha * -powf(1.0f - alpha_no_cull, ratio) *
+                                    __logf(1.0f - alpha_no_cull);
+                    v_alpha *= ratio * (1.0f - alpha) / (1.0f - alpha_no_cull);
 
-                        vec3<S> v_mean3d(0.f);
-                        mat3<S> v_precision(0.f);
-                        integral_vjp(ray_o, ray_d, tmin, tmax, mean3d, preci3x3, 
-                                     v_ratio, v_mean3d, v_precision);
-                        v_means3d_local = v_mean3d;
-                        v_percis_local[0] = v_precision[0][0];
-                        v_percis_local[1] = v_precision[0][1] + v_precision[1][0];
-                        v_percis_local[2] = v_precision[0][2] + v_precision[2][0];
-                        v_percis_local[3] = v_precision[1][1];
-                        v_percis_local[4] = v_precision[1][2] + v_precision[2][1];
-                        v_percis_local[5] = v_precision[2][2];
-                    } else {
-                        v_alpha = 0.f;
-                    }
+                    vec3<S> v_mean3d(0.f);
+                    mat3<S> v_precision(0.f);
+                    S v_tmin, v_tmax;
+                    integral_vjp(ray_o, ray_d, tmin, tmax, mean3d, preci3x3, 
+                                    v_ratio, v_mean3d, v_precision, v_tmin, v_tmax);
+                    v_means3d_local = v_mean3d;
+                    v_percis_local[0] = v_precision[0][0];
+                    v_percis_local[1] = v_precision[0][1] + v_precision[1][0];
+                    v_percis_local[2] = v_precision[0][2] + v_precision[2][0];
+                    v_percis_local[3] = v_precision[1][1];
+                    v_percis_local[4] = v_precision[1][2] + v_precision[2][1];
+                    v_percis_local[5] = v_precision[2][2];
+
+                    vec3<S> v_v0(0.f), v_v1(0.f), v_v2(0.f), v_v3(0.f);
+                    ray_tetra_intersection_vjp_shortcut(
+                        ray_o, ray_d, v0, v1, v2, v3,
+                        entry_face_idx, exit_face_idx,
+                        v_tmin, v_tmax,
+                        v_v0, v_v1, v_v2, v_v3
+                    );
+
+                    v_tvertices_local[0] = v_v0.x;
+                    v_tvertices_local[1] = v_v0.y;
+                    v_tvertices_local[2] = v_v0.z;
+                    v_tvertices_local[3] = v_v1.x;
+                    v_tvertices_local[4] = v_v1.y;
+                    v_tvertices_local[5] = v_v1.z;
+                    v_tvertices_local[6] = v_v2.x;
+                    v_tvertices_local[7] = v_v2.y;
+                    v_tvertices_local[8] = v_v2.z;
+                    v_tvertices_local[9] = v_v3.x;
+                    v_tvertices_local[10] = v_v3.y;
+                    v_tvertices_local[11] = v_v3.z;
                 }
                 // ---- culling ----
 
@@ -448,6 +475,12 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 warpSum<decltype(warp), S>(v_xy_abs_local, warp);
             }
             warpSum<decltype(warp), S>(v_opacity_local, warp);
+            if (enable_culling) {
+                warpSum<decltype(warp), S>(v_means3d_local, warp);
+                warpSum<6, S>(v_percis_local, warp);
+                warpSum<12, S>(v_tvertices_local, warp);
+            }
+            
             if (warp.thread_rank() == 0) {
                 int32_t g = id_batch[t]; // flatten index in [C * N] or [nnz]
                 S *v_rgb_ptr = (S *)(v_colors) + COLOR_DIM * g;
@@ -472,6 +505,28 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 }
 
                 gpuAtomicAdd(v_opacities + g, v_opacity_local);
+
+                // ---- culling ----
+                if (enable_culling) {
+                    int32_t gaussian_id = g % N;
+                    
+                    S *v_tvertices_ptr = (S *)(v_tvertices) + 12 * gaussian_id;
+                    GSPLAT_PRAGMA_UNROLL
+                    for (uint32_t k = 0; k < 12; ++k) {
+                        gpuAtomicAdd(v_tvertices_ptr + k, v_tvertices_local[k]);
+                    }
+                    
+                    S *v_means3d_ptr = (S *)(v_means3d) + 3 * gaussian_id;
+                    gpuAtomicAdd(v_means3d_ptr, v_means3d_local.x);
+                    gpuAtomicAdd(v_means3d_ptr + 1, v_means3d_local.y);
+                    gpuAtomicAdd(v_means3d_ptr + 2, v_means3d_local.z);
+
+                    S *v_precis_ptr = (S *)(v_precis) + 6 * gaussian_id;
+                    GSPLAT_PRAGMA_UNROLL
+                    for (uint32_t k = 0; k < 6; ++k) {
+                        gpuAtomicAdd(v_precis_ptr + k, v_percis_local[k]);
+                    }
+                }
             }
         }
     }
@@ -479,6 +534,9 @@ __global__ void rasterize_to_pixels_bwd_kernel(
 
 template <uint32_t CDIM>
 std::tuple<
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
     torch::Tensor,
     torch::Tensor,
     torch::Tensor,
@@ -565,6 +623,13 @@ call_kernel_with_dim(
         v_means2d_abs = torch::zeros_like(means2d);
     }
 
+    torch::Tensor v_tvertices, v_means3d, v_precis;
+    if (enable_culling) {
+        v_means3d = torch::zeros_like(means3d.value());
+        v_precis = torch::zeros_like(precis.value());
+        v_tvertices = torch::zeros_like(tvertices.value());
+    }
+
     if (n_isects) {
         uint32_t shared_mem =
             tile_size * tile_size *
@@ -628,16 +693,24 @@ call_kernel_with_dim(
                 reinterpret_cast<vec2<float> *>(v_means2d.data_ptr<float>()),
                 reinterpret_cast<vec3<float> *>(v_conics.data_ptr<float>()),
                 v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>()
+                v_opacities.data_ptr<float>(),
+                // --- culling ---
+                enable_culling ? reinterpret_cast<vec3<float> *>(v_means3d.data_ptr<float>()) : nullptr,
+                enable_culling ? v_precis.data_ptr<float>() : nullptr,
+                enable_culling ? v_tvertices.data_ptr<float>() : nullptr
             );
     }
 
     return std::make_tuple(
-        v_means2d_abs, v_means2d, v_conics, v_colors, v_opacities
+        v_means2d_abs, v_means2d, v_conics, v_colors, v_opacities, 
+        v_means3d, v_precis, v_tvertices
     );
 }
 
 std::tuple<
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
     torch::Tensor,
     torch::Tensor,
     torch::Tensor,

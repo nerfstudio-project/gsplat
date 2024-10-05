@@ -196,6 +196,9 @@ std::tuple<
     torch::Tensor,
     torch::Tensor,
     torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
     torch::Tensor>
 rasterize_to_pixels_bwd_tensor(
     // Gaussian parameters

@@ -1049,6 +1049,9 @@ class _RasterizeToPixels(torch.autograd.Function):
             v_conics,
             v_colors,
             v_opacities,
+            v_means3d,
+            v_precis,
+            v_tvertices,
         ) = _make_lazy_cuda_func("rasterize_to_pixels_bwd")(
             means2d,
             conics,
@@ -1102,9 +1105,9 @@ class _RasterizeToPixels(torch.autograd.Function):
             None,
             None,
             None,
-            None,
-            None,
-            None,
+            v_means3d,
+            v_precis,
+            v_tvertices,
             # --- culling ---
             None,
         )

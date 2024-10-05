@@ -594,6 +594,7 @@ def accumulate(
     alphas = torch.clamp_max(
         opacities[camera_ids, gaussian_ids] * torch.exp(-sigmas), 0.999
     )
+    alphas = torch.where(alphas >= 1. / 255., alphas, torch.zeros_like(alphas))
 
     if enable_culling:
         # ------------------------------------------------------------
@@ -623,12 +624,11 @@ def accumulate(
             dim=-1,
         )  # [M, 2]
         camera_dirs = F.pad(uvs, (0, 1), value=1.0)  # [M, 3]
+        camera_dirs = F.normalize(camera_dirs, dim=-1)
 
         # [M, 3]
         viewdirs = (camera_dirs[:, None, :] * camtoworlds[:, :3, :3]).sum(dim=-1)
-        viewdirs = F.normalize(viewdirs, dim=-1)
         origins = camtoworlds[:, :3, -1]
-
 
         _, _, isect_t1, isect_t2, hit = _ray_tetra_intersection(
             origins,
@@ -649,6 +649,7 @@ def accumulate(
         assert not torch.isnan(ratio).any(), invV[torch.isnan(ratio)]
         # alphas = alphas * ratio
         alphas = 1.0 - (1.0 - alphas) ** ratio
+        alphas = torch.where(alphas >= 1./255., alphas, torch.zeros_like(alphas))
         # ------------------------------------------------------------
 
     indices = camera_ids * image_height * image_width + pixel_ids
@@ -666,6 +667,9 @@ def accumulate(
     alphas = accumulate_along_rays(
         weights, None, ray_indices=indices, n_rays=total_pixels
     ).reshape(C, image_height, image_width, 1)
+
+    # print ("renders in py:", renders[2, 195, 180])
+    # print ("alphas in py:", alphas[2, 195, 180])
 
     return renders, alphas
 

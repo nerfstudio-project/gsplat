@@ -299,6 +299,108 @@ __device__ void ray_tetra_intersection_vjp(
     }
 }
 
+
+template <typename T>
+__device__ void ray_tetra_intersection_vjp_shortcut(
+    // fwd inputs
+    const vec3<T> o,
+    const vec3<T> d,
+    const vec3<T> v0,
+    const vec3<T> v1,
+    const vec3<T> v2,
+    const vec3<T> v3,
+    const int32_t entry_face_idx,
+    const int32_t exit_face_idx,
+    // grad outputs
+    const T &v_t_entry,
+    const T &v_t_exit,
+    // grad inputs (only backpropagate to tetrahedron vertices)
+    vec3<T> &v_v0,
+    vec3<T> &v_v1,
+    vec3<T> &v_v2,
+    vec3<T> &v_v3
+) {
+    if (v_t_entry == 0 && v_t_exit == 0) return;
+
+    vec3<T> faces[4][3] = {
+        {v0, v1, v2}, // Face 0
+        {v1, v2, v3}, // Face 1
+        {v2, v3, v0}, // Face 2
+        {v3, v0, v1}  // Face 3
+    };
+
+    // backpropagate to the tetrahedron vertices
+    vec3<T> v_entry_faces[3] = {vec3<T>(0.f), vec3<T>(0.f), vec3<T>(0.f)};
+    ray_triangle_intersection_vjp(
+        o,
+        d,
+        faces[entry_face_idx][0],
+        faces[entry_face_idx][1],
+        faces[entry_face_idx][2],
+        v_t_entry,
+        v_entry_faces[0],
+        v_entry_faces[1],
+        v_entry_faces[2]
+    );
+    switch (entry_face_idx) {
+        case 0:
+            v_v0 += v_entry_faces[0];
+            v_v1 += v_entry_faces[1];
+            v_v2 += v_entry_faces[2];
+            break;
+        case 1:
+            v_v1 += v_entry_faces[0];
+            v_v2 += v_entry_faces[1];
+            v_v3 += v_entry_faces[2];
+            break;
+        case 2:
+            v_v2 += v_entry_faces[0];
+            v_v3 += v_entry_faces[1];
+            v_v0 += v_entry_faces[2];
+            break;
+        case 3:
+            v_v3 += v_entry_faces[0];
+            v_v0 += v_entry_faces[1];
+            v_v1 += v_entry_faces[2];
+            break;
+    }
+
+    vec3<T> v_exit_faces[3] = {vec3<T>(0.f), vec3<T>(0.f), vec3<T>(0.f)};
+    ray_triangle_intersection_vjp(
+        o,
+        d,
+        faces[exit_face_idx][0],
+        faces[exit_face_idx][1],
+        faces[exit_face_idx][2],
+        v_t_exit,
+        v_exit_faces[0],
+        v_exit_faces[1],
+        v_exit_faces[2]
+    );
+    switch (exit_face_idx) {
+        case 0:
+            v_v0 += v_exit_faces[0];
+            v_v1 += v_exit_faces[1];
+            v_v2 += v_exit_faces[2];
+            break;
+        case 1:
+            v_v1 += v_exit_faces[0];
+            v_v2 += v_exit_faces[1];
+            v_v3 += v_exit_faces[2];
+            break;
+        case 2:
+            v_v2 += v_exit_faces[0];
+            v_v3 += v_exit_faces[1];
+            v_v0 += v_exit_faces[2];
+            break;
+        case 3:
+            v_v3 += v_exit_faces[0];
+            v_v0 += v_exit_faces[1];
+            v_v1 += v_exit_faces[2];
+            break;
+    }
+}
+
 template <typename S>
 inline __device__ S integral(
     // ray
