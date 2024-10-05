@@ -28,13 +28,7 @@ from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMe
 from fused_ssim import fused_ssim
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from typing_extensions import Literal, assert_never
-from utils import (
-    AppearanceOptModule,
-    CameraOptModule,
-    knn,
-    rgb_to_sh,
-    set_random_seed,
-)
+from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
 from lib_bilagrid import (
     BilateralGrid,
     slice,
@@ -48,7 +42,6 @@ from gsplat.distributed import cli
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 from gsplat.optimizers import SelectiveAdam
-from gsplat.utils import log_transform
 
 
 @dataclass
@@ -472,12 +465,14 @@ class Runner:
         width: int,
         height: int,
         masks: Optional[Tensor] = None,
-        is_eval: bool = False,
+        is_train: bool = False,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         means = self.splats["means"]  # [N, 3]
         # quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
         # rasterization does normalization internally
+        quats = self.splats["quats"]  # [N, 4]
+        scales = torch.exp(self.splats["scales"])  # [N, 3]
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
 
         image_ids = kwargs.pop("image_ids", None)
@@ -493,9 +488,9 @@ class Runner:
         else:
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
-        if self.cfg.blur_opt and not is_eval:
-            scales = torch.exp(self.splats["scales"])
+        if self.cfg.blur_opt and is_train:
             quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
+            scales = torch.exp(self.splats["scales"])
 
             means_ = means.detach()
             scales_ = scales.detach()
@@ -507,7 +502,6 @@ class Runner:
                 quats_,
                 viewdir_,
             )
-
             lambda_s = 0.01
             max_clamp = 1.1
             scales_delta = torch.clamp(
@@ -519,9 +513,6 @@ class Runner:
 
             scales = scales * scales_delta
             quats = quats * rotations_delta
-        else:
-            quats = self.splats["quats"]  # [N, 4]
-            scales = torch.exp(self.splats["scales"])  # [N, 3]
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
         render_colors, render_alphas, info = rasterization(
@@ -655,6 +646,7 @@ class Runner:
                 image_ids=image_ids,
                 render_mode="RGB+ED" if cfg.depth_loss else "RGB",
                 masks=masks,
+                is_train=True,
             )
             if renders.shape[-1] == 4:
                 colors, depths = renders[..., 0:3], renders[..., 3:4]
@@ -866,10 +858,10 @@ class Runner:
 
             # eval the full set
             if step in [i - 1 for i in cfg.eval_steps]:
+                self.eval(step, stage="train")
                 self.eval(step)
-                self.eval(step, stage="debug")
+                self.render_traj(step, stage="train")
                 self.render_traj(step)
-                self.render_traj(step, stage="debug")
 
             # run compression
             if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:
@@ -895,19 +887,18 @@ class Runner:
         world_rank = self.world_rank
         world_size = self.world_size
 
-        valloader = torch.utils.data.DataLoader(
-            self.valset, batch_size=1, shuffle=False, num_workers=1
-        )
-        is_eval = True
-        if stage == "debug":
-            valloader = torch.utils.data.DataLoader(
+        if stage == "train":
+            dataloader = torch.utils.data.DataLoader(
                 self.trainset, batch_size=1, shuffle=False, num_workers=1
             )
-            is_eval = False
+        else:
+            dataloader = torch.utils.data.DataLoader(
+                self.valset, batch_size=1, shuffle=False, num_workers=1
+            )
 
         ellipse_time = 0
         metrics = defaultdict(list)
-        for i, data in enumerate(valloader):
+        for i, data in enumerate(dataloader):
             camtoworlds = data["camtoworld"].to(device)
             Ks = data["K"].to(device)
             pixels = data["image"].to(device) / 255.0
@@ -925,7 +916,7 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 masks=masks,
-                is_eval=is_eval,
+                is_train=stage == "train",
             )  # [1, H, W, 3]
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
@@ -953,7 +944,7 @@ class Runner:
                     metrics["cc_psnr"].append(self.psnr(cc_colors_p, pixels_p))
 
         if world_rank == 0:
-            ellipse_time /= len(valloader)
+            ellipse_time /= len(dataloader)
 
             stats = {k: torch.stack(v).mean().item() for k, v in metrics.items()}
             stats.update(
@@ -1034,7 +1025,7 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 render_mode="RGB+ED",
-                is_eval=stage == "val",
+                is_train=stage == "train",
             )  # [1, H, W, 4]
             colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)  # [1, H, W, 3]
             depths = renders[..., 3:4]  # [1, H, W, 1]
