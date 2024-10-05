@@ -2,7 +2,9 @@ import os
 import numpy as np
 import collections
 import math
+import json
 from pyproj import Proj
+import imageio
 from typing import Dict, List, Any, Optional
 import torch
 from .normalize import (
@@ -115,14 +117,20 @@ class Parser:
 
     def __init__(
         self,
-        reconstructions: List[Dict],
+        data_dir: str,
         factor: int = 1,
         normalize: bool = False,
+        test_every: int = 8,
     ):
+        self.data_dir = data_dir
         self.factor = factor
         self.normalize = normalize
-        
+        self.test_every = test_every
+
         # Extract data from reconstructions.
+
+        reconstructions = self.load_reconstructions(data_dir)
+
         self._parse_reconstructions(reconstructions)
 
     def _parse_reconstructions(self, reconstructions: List[Dict]):
@@ -185,6 +193,11 @@ class Parser:
         self.points_rgb = self.colors  # np.ndarray, (num_points, 3)
         self.points_err = self.errors  # np.ndarray, (num_points, 1)
 
+    def load_reconstructions(self, data_dir):
+        reconstructions_file = os.path.join(data_dir, 'reconstruction.json')
+        with open(reconstructions_file, 'r') as f:
+            reconstructions = json.load(f)
+        return reconstructions
 
 class Dataset:
     """A simple dataset class for OpensfmLoaderParser."""
@@ -200,11 +213,11 @@ class Dataset:
         self.split = split
         self.patch_size = patch_size
         self.load_depths = load_depths
-        indices = np.arange(len(self.parser.images))
+        indices = np.arange(len(self.parser.images))  # Use images from parser
         if split == "train":
-            self.indices = indices[indices % 8 != 0]
+            self.indices = indices[indices % self.parser.test_every != 0]
         else:
-            self.indices = indices[indices % 8 == 0]
+            self.indices = indices[indices % self.parser.test_every == 0]
 
     def __len__(self):
         return len(self.indices)
@@ -217,8 +230,28 @@ class Dataset:
         camtoworld = self.parser.camtoworlds[index]
 
         # Load image (dummy implementation, replace with actual image loading logic if available)
-        width, height = self.parser.imsize_dict[camera_id]
-        image = np.zeros((height, width, 3), dtype=np.uint8)  # Placeholder for actual image loading
+        image_path = os.path.join(self.parser.data_dir, "images/" + img.name)  # Update with actual image path
+        image = imageio.imread(image_path)[..., :3]
+
+        # Undistort if necessary
+        params = self.parser.params_dict[camera_id]
+        if len(params) > 0:
+            mapx, mapy = (
+                self.parser.mapx_dict[camera_id],
+                self.parser.mapy_dict[camera_id],
+            )
+            image = cv2.remap(image, mapx, mapy, cv2.INTER_LINEAR)
+            x, y, w, h = self.parser.roi_undist_dict[camera_id]
+            image = image[y : y + h, x : x + w]
+
+        if self.patch_size is not None:
+            # Random crop
+            h, w = image.shape[:2]
+            x = np.random.randint(0, max(w - self.patch_size, 1))
+            y = np.random.randint(0, max(h - self.patch_size, 1))
+            image = image[y : y + self.patch_size, x : x + self.patch_size]
+            K[0, 2] -= x
+            K[1, 2] -= y
 
         data = {
             "K": torch.from_numpy(K).float(),
@@ -229,7 +262,7 @@ class Dataset:
 
         if self.load_depths:
             # Load depth data (dummy implementation, replace with actual depth loading logic if available)
-            depths = np.zeros((height, width), dtype=np.float32)  # Placeholder for actual depth loading
+            depths = np.zeros((image.shape[0], image.shape[1]), dtype=np.float32)  # Placeholder for actual depth loading
             data["depths"] = torch.from_numpy(depths).float()
 
         return data
@@ -304,8 +337,6 @@ def read_opensfm(reconstructions):
             point3D_ids = np.array([0, 0])
             images[image_id] = Image(id=image_id, qvec=qvec, tvec=tvec, camera_id=camera_id, name=image_name, xys=xys, point3D_ids=point3D_ids, diff_ref=diff_ref)
             i += 1
-    print("Number of cameras: ", len(cameras))
-    print("Number of images: ", len(images))    
     return cameras, images
 
 def read_opensfm_points3D(reconstructions):
@@ -343,5 +374,4 @@ def read_opensfm_points3D(reconstructions):
             rgbs[count] = rgb
             errors[count] = error
             count += 1
-    print("Number of points: ", num_points)
     return xyzs, rgbs, errors

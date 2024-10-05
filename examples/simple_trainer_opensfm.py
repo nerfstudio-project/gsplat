@@ -5,7 +5,6 @@ import time
 from dataclasses import dataclass, field
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple, Union
-import json
 
 import imageio
 import nerfview
@@ -184,12 +183,6 @@ class Config:
         else:
             assert_never(strategy)
 
-def load_reconstructions(data_dir):
-    reconstructions_file = os.path.join(data_dir, 'reconstruction.json')
-    with open(reconstructions_file, 'r') as f:
-        reconstructions = json.load(f)
-    return reconstructions
-            
 def create_splats_with_optimizers(
     parser: Parser,
     init_type: str = "sfm",
@@ -306,7 +299,7 @@ class Runner:
 
         # Load data: Training data should contain initial points and colors.
         self.parser = Parser(
-            reconstructions=load_reconstructions(cfg.data_dir),
+            data_dir=cfg.data_dir,
             factor=cfg.data_factor,
             normalize=cfg.normalize_world_space
         )
