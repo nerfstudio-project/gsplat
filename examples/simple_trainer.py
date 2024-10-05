@@ -28,20 +28,21 @@ from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMe
 from fused_ssim import fused_ssim
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from typing_extensions import Literal, assert_never
-from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
+from utils import AppearanceOptModule, BlurOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
 from lib_bilagrid import (
     BilateralGrid,
     slice,
     color_correct,
     total_variation_loss,
 )
+from blur_kernel import GTnet
 
 from gsplat.compression import PngCompression
 from gsplat.distributed import cli
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 from gsplat.optimizers import SelectiveAdam
-
+from gsplat.utils import log_transform
 
 @dataclass
 class Config:
@@ -146,6 +147,11 @@ class Config:
     app_opt_lr: float = 1e-3
     # Regularization for appearance optimization as weight decay
     app_opt_reg: float = 1e-6
+    
+    # Enable blur optimization. (experimental)
+    blur_opt: bool = False
+    # Learning rate for blur optimization
+    blur_opt_lr: float = 1e-3
 
     # Enable bilateral grid. (experimental)
     use_bilateral_grid: bool = False
@@ -230,6 +236,7 @@ def create_splats_with_optimizers(
         ("scales", torch.nn.Parameter(scales), 5e-3),
         ("quats", torch.nn.Parameter(quats), 1e-3),
         ("opacities", torch.nn.Parameter(opacities), 5e-2),
+        ("f", torch.nn.Parameter(torch.rand(N, 32)), 7.5e-3),
     ]
 
     if feature_dim is None:
@@ -398,6 +405,20 @@ class Runner:
             ]
             if world_size > 1:
                 self.app_module = DDP(self.app_module)
+                
+        self.blur_optimizers = []
+        if cfg.blur_opt:
+            # self.blur_module = BlurOptModule(cfg.sh_degree).to(self.device)
+            self.blur_module = GTnet()
+            self.blur_optimizers = [
+                torch.optim.Adam(
+                    # self.blur_module.mlp.parameters(),
+                    self.blur_module.parameters(),
+                    lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size),
+                ),
+            ]
+            if world_size > 1:
+                self.blur_module = DDP(self.blur_module)
 
         self.bil_grid_optimizers = []
         if cfg.use_bilateral_grid:
@@ -447,13 +468,12 @@ class Runner:
         width: int,
         height: int,
         masks: Optional[Tensor] = None,
+        is_eval: bool = False,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         means = self.splats["means"]  # [N, 3]
         # quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
         # rasterization does normalization internally
-        quats = self.splats["quats"]  # [N, 4]
-        scales = torch.exp(self.splats["scales"])  # [N, 3]
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
 
         image_ids = kwargs.pop("image_ids", None)
@@ -468,6 +488,37 @@ class Runner:
             colors = torch.sigmoid(colors)
         else:
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
+
+        if self.cfg.blur_opt and not is_eval:
+            scales = torch.exp(self.splats["scales"])
+            quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
+            
+            means_ = means.detach()
+            scales_ = scales.detach()
+            quats_ = quats.detach()
+            viewdir_ = camtoworlds[0, :3, 3].repeat(means.shape[0], 1)
+            
+            # means_log_ = log_transform(means_)
+            # viewdir_ = means_ - camtoworlds[0, :3, 3]
+            # viewdir_ = F.normalize(viewdir_, dim=-1)
+            
+            scales_delta, rotations_delta = self.blur_module(
+                means_,
+                scales_,
+                quats_,
+                viewdir_,
+                # means[None, :, :] - camtoworlds[:, None, :3, 3],
+                # sh_degree=self.cfg.sh_degree,
+            )
+            lambda_s = 0.01
+            scales_delta = torch.clamp(lambda_s * scales_delta + (1-lambda_s), min=1.0, max=1.1)
+            rotations_delta = torch.clamp(lambda_s * rotations_delta + (1-lambda_s), min=1.0, max=1.1)
+            
+            scales = scales * scales_delta
+            quats = quats * rotations_delta
+        else:
+            quats = self.splats["quats"]  # [N, 4]
+            scales = torch.exp(self.splats["scales"])  # [N, 3]
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
         render_colors, render_alphas, info = rasterization(
@@ -732,6 +783,11 @@ class Runner:
                         data["app_module"] = self.app_module.module.state_dict()
                     else:
                         data["app_module"] = self.app_module.state_dict()
+                if cfg.blur_opt:
+                    if world_size > 1:
+                        data["blur_module"] = self.blur_module.module.state_dict()
+                    else:
+                        data["blur_module"] = self.blur_module.state_dict()
                 torch.save(
                     data, f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt"
                 )
@@ -774,6 +830,9 @@ class Runner:
             for optimizer in self.app_optimizers:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
+            for optimizer in self.blur_optimizers:
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
             for optimizer in self.bil_grid_optimizers:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
@@ -805,7 +864,9 @@ class Runner:
             # eval the full set
             if step in [i - 1 for i in cfg.eval_steps]:
                 self.eval(step)
+                self.eval(step, stage="debug")
                 self.render_traj(step)
+                self.render_traj(step, stage="debug")
 
             # run compression
             if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:
@@ -834,6 +895,13 @@ class Runner:
         valloader = torch.utils.data.DataLoader(
             self.valset, batch_size=1, shuffle=False, num_workers=1
         )
+        is_eval = True
+        if stage == "debug":
+            valloader = torch.utils.data.DataLoader(
+                self.trainset, batch_size=1, shuffle=False, num_workers=1
+            )
+            is_eval = False
+            
         ellipse_time = 0
         metrics = defaultdict(list)
         for i, data in enumerate(valloader):
@@ -854,6 +922,7 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 masks=masks,
+                is_eval=is_eval,
             )  # [1, H, W, 3]
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
@@ -904,7 +973,7 @@ class Runner:
             self.writer.flush()
 
     @torch.no_grad()
-    def render_traj(self, step: int):
+    def render_traj(self, step: int, stage: str = "val"):
         """Entry for trajectory rendering."""
         print("Running trajectory rendering...")
         cfg = self.cfg
@@ -948,7 +1017,7 @@ class Runner:
         # save to video
         video_dir = f"{cfg.result_dir}/videos"
         os.makedirs(video_dir, exist_ok=True)
-        writer = imageio.get_writer(f"{video_dir}/traj_{step}.mp4", fps=30)
+        writer = imageio.get_writer(f"{video_dir}/traj_{stage}_{step}.mp4", fps=30)
         for i in tqdm.trange(len(camtoworlds_all), desc="Rendering trajectory"):
             camtoworlds = camtoworlds_all[i : i + 1]
             Ks = K[None]
@@ -962,6 +1031,7 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 render_mode="RGB+ED",
+                is_eval=stage == "val",
             )  # [1, H, W, 4]
             colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)  # [1, H, W, 3]
             depths = renders[..., 3:4]  # [1, H, W, 1]
@@ -973,7 +1043,7 @@ class Runner:
             canvas = (canvas * 255).astype(np.uint8)
             writer.append_data(canvas)
         writer.close()
-        print(f"Video saved to {video_dir}/traj_{step}.mp4")
+        print(f"Video saved to {video_dir}/traj_{stage}_{step}.mp4")
 
     @torch.no_grad()
     def run_compression(self, step: int):

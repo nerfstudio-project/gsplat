@@ -40,6 +40,11 @@ class Parser:
         self.factor = factor
         self.normalize = normalize
         self.test_every = test_every
+        li = os.listdir(data_dir)
+        for l in li:
+            if l.startswith("hold"):
+                self.test_every = int(l.split("=")[-1])
+                break
 
         colmap_dir = os.path.join(data_dir, "sparse/0/")
         if not os.path.exists(colmap_dir):
@@ -134,7 +139,7 @@ class Parser:
 
         # Load extended metadata. Used by Bilarf dataset.
         self.extconf = {
-            "spiral_radius_scale": 1.0,
+            "spiral_radius_scale": 0.1,
             "no_factor_suffix": False,
         }
         extconf_file = os.path.join(data_dir, "ext_metadata.json")

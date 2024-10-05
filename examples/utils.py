@@ -114,6 +114,60 @@ class AppearanceOptModule(torch.nn.Module):
         return colors
 
 
+class BlurOptModule(torch.nn.Module):
+    """Blur optimization module."""
+
+    def __init__(
+        self,
+        sh_degree: int = 3,
+        mlp_width: int = 64,
+        mlp_depth: int = 2,
+    ):
+        super().__init__()
+        self.sh_degree = sh_degree
+        layers = []
+        layers.append(
+            torch.nn.Linear((sh_degree + 1) ** 2 + 4 + 3, mlp_width)
+        )
+        layers.append(torch.nn.ReLU(inplace=True))
+        for _ in range(mlp_depth - 1):
+            layers.append(torch.nn.Linear(mlp_width, mlp_width))
+            layers.append(torch.nn.ReLU(inplace=True))
+        layers.append(torch.nn.Linear(mlp_width, 7))
+        self.mlp = torch.nn.Sequential(*layers)
+
+    def forward(
+        self, features, quats, scales, dirs: Tensor, sh_degree: int
+    ) -> Tensor:
+        """Adjust blur based on MLP.
+
+        Args:
+            features: (N, feature_dim)
+            embed_ids: (C,)
+            dirs: (C, N, 3)
+
+        Returns:
+            colors: (C, N, 3)
+        """
+        from gsplat.cuda._torch_impl import _eval_sh_bases_fast
+
+        C, N = dirs.shape[:2]
+        # View directions
+        dirs = F.normalize(dirs, dim=-1)  # [C, N, 3]
+        num_bases_to_use = (sh_degree + 1) ** 2
+        num_bases = (self.sh_degree + 1) ** 2
+        sh_bases = torch.zeros(C, N, num_bases, device=quats.device)  # [C, N, K]
+        sh_bases[:, :, :num_bases_to_use] = _eval_sh_bases_fast(num_bases_to_use, dirs)
+        
+        h = torch.cat([sh_bases[0], quats, scales], dim=-1)
+        x = 0.01 * self.mlp(h) + (1 + 0.01)
+        print(x.min(), x.mean(), x.max())
+        x = torch.clip(x, 1.0, 2.0)
+        quats_s = x[..., :4]
+        scales_s = x[..., 4:]
+        return quats_s, scales_s
+
+
 def rotation_6d_to_matrix(d6: Tensor) -> Tensor:
     """
     Converts 6D rotation representation by Zhou et al. [1] to rotation matrix
