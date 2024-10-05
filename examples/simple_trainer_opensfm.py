@@ -15,7 +15,7 @@ import tqdm
 import tyro
 import viser
 import yaml
-from datasets.colmap import Dataset, Parser
+from datasets.opensfm import Dataset, Parser
 from datasets.traj import (
     generate_interpolated_path,
     generate_ellipse_path_z,
@@ -55,11 +55,11 @@ class Config:
     render_traj_path: str = "interp"
 
     # Path to the Mip-NeRF 360 dataset
-    data_dir: str = "data/360_v2/garden"
+    data_dir: str = "sample/"
     # Downsample factor for the dataset
     data_factor: int = 4
     # Directory to save results
-    result_dir: str = "results/garden"
+    result_dir: str = "results/"
     # Every N images there is a test image
     test_every: int = 8
     # Random crop size for training  (experimental)
@@ -69,7 +69,7 @@ class Config:
     # Normalize the world space
     normalize_world_space: bool = True
     # Camera model
-    camera_model: Literal["pinhole", "ortho", "fisheye", "spherical"] = "pinhole"
+    camera_model: Literal["pinhole", "ortho", "fisheye", "spherical"] = "spherical"
 
     # Port for the viewer server
     port: int = 8080

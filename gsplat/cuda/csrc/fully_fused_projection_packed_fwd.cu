@@ -163,6 +163,20 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
                     mean2d
                 );
                 break;
+            case CameraModelType::SPHERICAL: // spherical projection
+                spherical_proj<T>(
+                    mean_c,
+                    covar_c,
+                    Ks[0],
+                    Ks[4],
+                    Ks[2],
+                    Ks[5],
+                    image_width,
+                    image_height,
+                    covar2d,
+                    mean2d
+                );
+                break;
         }
 
         det = add_blur(eps2d, covar2d, compensation);

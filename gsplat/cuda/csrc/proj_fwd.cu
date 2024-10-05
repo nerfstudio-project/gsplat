@@ -63,6 +63,9 @@ __global__ void proj_fwd_kernel(
         case CameraModelType::FISHEYE: // fisheye projection
             fisheye_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
             break;
+        case CameraModelType::SPHERICAL: // spherical projection
+            spherical_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
+            break;
     }
 
     // write to outputs: glm is column-major but we want row-major

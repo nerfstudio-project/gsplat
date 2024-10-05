@@ -5,6 +5,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .value("PINHOLE", gsplat::CameraModelType::PINHOLE)
         .value("ORTHO", gsplat::CameraModelType::ORTHO)
         .value("FISHEYE", gsplat::CameraModelType::FISHEYE)
+        .value("SPHERICAL", gsplat::CameraModelType::SPHERICAL)
         .export_values();
 
     m.def("compute_sh_fwd", &gsplat::compute_sh_fwd_tensor);
