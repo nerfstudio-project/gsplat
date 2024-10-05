@@ -653,8 +653,10 @@ def _rasterization(
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
     channel_chunk: int = 32,
     batch_per_iter: int = 100,
-    tquats: Optional[Tensor] = None,
-    tscales: Optional[Tensor] = None,
+    # --- enable culling ---
+    enable_culling: bool = False,
+    tvertices: Optional[Tensor] = None,  # [N, 4, 3]
+    # --- enable culling ---
     **kwargs,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """A version of rasterization() that utilies on PyTorch's autograd.
@@ -802,11 +804,13 @@ def _rasterization(
                 backgrounds=backgrounds_chunk,
                 batch_per_iter=batch_per_iter,
                 # --- enable culling ---
-                tquats=tquats,
-                tscales=tscales,
-                means=means,
-                viewmats=viewmats,
+                enable_culling=enable_culling,
+                camtoworlds=camtoworlds,
                 Ks=Ks,
+                means3d=means,
+                precis=precis,
+                tvertices=tvertices,
+                # --- enable culling ---
             )
             render_colors.append(render_colors_)
             render_alphas.append(render_alphas_)
@@ -826,12 +830,13 @@ def _rasterization(
             backgrounds=backgrounds,
             batch_per_iter=batch_per_iter,
             # --- enable culling ---
-            tquats=tquats,
-            tscales=tscales,
-            precis=precis,
-            means=means,
-            viewmats=viewmats,
+            enable_culling=enable_culling,
+            camtoworlds=camtoworlds,
             Ks=Ks,
+            means3d=means,
+            precis=precis,
+            tvertices=tvertices,
+            # --- enable culling ---
         )
     if render_mode in ["ED", "RGB+ED"]:
         # normalize the accumulated depth to get the expected depth
