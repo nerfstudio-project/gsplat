@@ -496,7 +496,7 @@ class Runner:
             scales_ = scales.detach()
             quats_ = quats.detach()
             viewdir_ = camtoworlds[0, :3, 3].repeat(means.shape[0], 1)
-            scales_delta, rotations_delta = self.blur_module(
+            scales_delta, rotations_delta, _ = self.blur_module(
                 means_,
                 scales_,
                 quats_,
@@ -510,7 +510,6 @@ class Runner:
             rotations_delta = torch.clamp(
                 lambda_s * rotations_delta + (1 - lambda_s), min=1.0, max=max_clamp
             )
-
             scales = scales * scales_delta
             quats = quats * rotations_delta
 

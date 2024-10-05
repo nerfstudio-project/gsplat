@@ -75,8 +75,19 @@ def init_linear_weights(m):
 
 
 class GTnet(nn.Module):
-    def __init__(self, res_pos=3, res_view=10, num_hidden=3, width=64):
+    def __init__(
+        self,
+        res_pos=3,
+        res_view=10,
+        num_hidden=3,
+        width=64,
+        pos_delta=False,
+        num_moments=4,
+    ):
         super().__init__()
+        self.pos_delta = pos_delta
+        self.num_moments = num_moments
+
         self.embed_pos, self.embed_pos_cnl = get_embedder(res_pos, 3)
         self.embed_view, self.embed_view_cnl = get_embedder(res_view, 3)
         in_cnl = (
@@ -93,14 +104,22 @@ class GTnet(nn.Module):
             nn.ReLU(),
             *hiddens,
         ).to("cuda")
-        self.s = nn.Linear(width, 3).to("cuda")
-        self.r = nn.Linear(width, 4).to("cuda")
+        if not pos_delta:  # Defocus
+            self.s = nn.Linear(width, 3).to("cuda")
+            self.r = nn.Linear(width, 4).to("cuda")
+        else:  # Motion
+            self.s = nn.Linear(width, 3 * (num_moments + 1)).to("cuda")
+            self.r = nn.Linear(width, 4 * (num_moments + 1)).to("cuda")
+            self.p = nn.Linear(width, 3 * num_moments).to("cuda")
 
         self.linears.apply(init_linear_weights)
         self.s.apply(init_linear_weights)
         self.r.apply(init_linear_weights)
+        if pos_delta:
+            self.p.apply(init_linear_weights)
 
     def forward(self, pos, scales, rotations, viewdirs):
+        pos_delta = None
         pos = self.embed_pos(pos)
         viewdirs = self.embed_view(viewdirs)
 
@@ -109,4 +128,8 @@ class GTnet(nn.Module):
 
         scales_delta = self.s(x1)
         rotations_delta = self.r(x1)
-        return scales_delta, rotations_delta
+
+        if self.pos_delta:
+            pos_delta = self.p(x1)
+
+        return scales_delta, rotations_delta, pos_delta
