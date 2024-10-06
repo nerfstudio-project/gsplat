@@ -141,7 +141,7 @@ class Parser:
         """Parse reconstructions data to extract camera information, extrinsics, and 3D points."""
         self.cameras, self.images = read_opensfm(reconstructions)
         self.points3D, self.colors, self.errors = read_opensfm_points3D(reconstructions)
-        self.points3D = self.points3D.astype(np.float32)
+        points = self.points3D.astype(np.float32)
         self.colors = self.colors.astype(np.uint8)
         self.errors = self.errors.astype(np.float32)
 
@@ -201,10 +201,12 @@ class Parser:
         if self.normalize:
             T1 = similarity_from_cameras(camtoworlds)
             camtoworlds = transform_cameras(T1, camtoworlds)
+            points = transform_points(T1, points)
 
-            points = np.array([img.diff_ref for img in self.images.values()])
             T2 = align_principle_axes(points)
             camtoworlds = transform_cameras(T2, camtoworlds)
+            points = transform_points(T2, points)
+
             transform = T2 @ T1
         else:
             transform = np.eye(4)
@@ -217,7 +219,7 @@ class Parser:
         self.params_dict = params_dict  # Dict of camera_id -> params
         self.imsize_dict = imsize_dict  # Dict of camera_id -> (width, height)
         self.mask_dict = mask_dict  # Dict of camera_id -> mask
-        self.points = self.points3D  # np.ndarray, (num_points, 3)
+        self.points = points  # np.ndarray, (num_points, 3)
         self.points_rgb = self.colors  # np.ndarray, (num_points, 3)
         self.points_err = self.errors  # np.ndarray, (num_points, 1)
         self.point_indices = point_indices  # Dict[str, np.ndarray], image_name -> [M,]
