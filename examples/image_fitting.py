@@ -90,6 +90,7 @@ class SimpleTrainer:
         iterations: int = 1000,
         lr: float = 0.01,
         save_imgs: bool = False,
+        save_path: str = None,
         model_type: Literal["3dgs", "2dgs"] = "3dgs",
     ):
         losses = []
@@ -168,6 +169,12 @@ class SimpleTrainer:
             print(
             f"Per step(s):\nRasterization: {times[0]/iterations:.5f}, Backward: {times[1]/iterations:.5f}"
         )
+
+        if save_path:
+            final_img = (out_img.detach().cpu().numpy() * 255).astype(np.uint8)
+            import matplotlib.pyplot as plt
+            plt.imsave(save_path, final_img)
+            
         return losses
 
 
