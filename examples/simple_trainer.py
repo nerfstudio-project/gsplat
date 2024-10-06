@@ -159,6 +159,8 @@ class Config:
     # Tetra
     enable_culling: bool = True
     opt_vert: bool = False # optimize tet vertices directly
+    t_init_s: float = 3.0 # initial scale of tet
+    t_lr_v: float = 1e-4 # learning rate for tet vertices
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -231,7 +233,7 @@ def create_splats_with_optimizers(
     if cfg.enable_culling:
         # 6 sigma as the distance from the center (centroid) to a vertex, equals to
         # 3 sigma from the center to a face of the tetrahedron.
-        tscales = torch.log(dist_avg * init_scale * 3.0)  # 6 sigma [N,]
+        tscales = torch.log(dist_avg * init_scale * cfg.t_init_s)  # 6 sigma [N,]
         tquats = torch.rand((N, 4))  # [N, 4]
 
         if cfg.opt_vert:            
@@ -250,7 +252,7 @@ def create_splats_with_optimizers(
             # Local space tvertices
             params += [
                 # 1e-2 is too large. 1e-4 seems nice
-                ("tvertices", torch.nn.Parameter(tvertices), 1e-4 * scene_scale),
+                ("tvertices", torch.nn.Parameter(tvertices), cfg.t_lr_v * scene_scale),
             ]
         else:
             params += [
