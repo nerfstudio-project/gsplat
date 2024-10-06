@@ -1,9 +1,13 @@
 import os
 import numpy as np
 import collections
+from typing_extensions import assert_never
+
 import math
 import json
 from pyproj import Proj
+
+import cv2
 import imageio
 from typing import Dict, List, Any, Optional
 import torch
@@ -137,13 +141,18 @@ class Parser:
         """Parse reconstructions data to extract camera information, extrinsics, and 3D points."""
         self.cameras, self.images = read_opensfm(reconstructions)
         self.points3D, self.colors, self.errors = read_opensfm_points3D(reconstructions)
-        
+        self.points3D = self.points3D.astype(np.float32)
+        self.colors = self.colors.astype(np.uint8)
+        self.errors = self.errors.astype(np.float32)
+
         # Extract extrinsic matrices in world-to-camera format.
         w2c_mats = []
         camera_ids = []
         Ks_dict = dict()
         params_dict = dict()
         imsize_dict = dict()
+        mask_dict = dict()
+        point_indices = {img.name: img.point3D_ids for img in self.images.values()}
         bottom = np.array([0, 0, 0, 1]).reshape(1, 4)
 
         for img in self.images.values():
@@ -153,18 +162,36 @@ class Parser:
             w2c = np.concatenate([np.concatenate([rot, trans], 1), bottom], axis=0)
             w2c_mats.append(w2c)
 
+            # support different camera intrinsics
+            camera_id = img.camera_id
+            camera_ids.append(camera_id)
+
             # Camera intrinsics
             cam = self.cameras[img.camera_id]
-            fx, fy, cx, cy = cam.params[0], cam.params[0], cam.params[1], cam.params[2]
-            K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
-            K[:2, :] /= self.factor
-            Ks_dict[img.camera_id] = K
+            type_ = cam.model
+            if type_ == 0 or type_ == "SIMPLE_PINHOLE":
+                params = np.empty(0, dtype=np.float32)
+                camtype = "perspective"
+                fx, fy, cx, cy = cam.params[0], cam.params[0], cam.params[1], cam.params[2]
+                K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
+                K[:2, :] /= self.factor
+                Ks_dict[img.camera_id] = K
 
-            # Distortion parameters
-            params_dict[img.camera_id] = cam.params[3:]
-            imsize_dict[img.camera_id] = (cam.width // self.factor, cam.height // self.factor)
-            camera_ids.append(img.camera_id)
-        
+                # Distortion parameters
+                params_dict[img.camera_id] = np.append(cam.params[3:5], np.array([0, 0]))
+                imsize_dict[img.camera_id] = (cam.width // self.factor, cam.height // self.factor)
+                mask_dict[camera_id] = None
+                camera_ids.append(img.camera_id)
+            elif type_ == 5 or type_ == "SPHERICAL":
+                params = np.empty(0, dtype=np.float32)
+                camtype = "spherical"
+                K = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+                Ks_dict[img.camera_id] = K
+                params_dict[img.camera_id] = params
+                imsize_dict[img.camera_id] = (cam.width, cam.height)
+                mask_dict[camera_id] = None
+                camera_ids.append(img.camera_id)
+
         w2c_mats = np.stack(w2c_mats, axis=0)
         
         # Convert extrinsics to camera-to-world.
@@ -183,15 +210,93 @@ class Parser:
             transform = np.eye(4)
 
         # Set instance variables.
+
         self.camtoworlds = camtoworlds  # np.ndarray, (num_images, 4, 4)
         self.camera_ids = camera_ids  # List[int], (num_images,)
         self.Ks_dict = Ks_dict  # Dict of camera_id -> K
         self.params_dict = params_dict  # Dict of camera_id -> params
         self.imsize_dict = imsize_dict  # Dict of camera_id -> (width, height)
-        self.transform = transform  # np.ndarray, (4, 4)
+        self.mask_dict = mask_dict  # Dict of camera_id -> mask
         self.points = self.points3D  # np.ndarray, (num_points, 3)
         self.points_rgb = self.colors  # np.ndarray, (num_points, 3)
         self.points_err = self.errors  # np.ndarray, (num_points, 1)
+        self.point_indices = point_indices  # Dict[str, np.ndarray], image_name -> [M,]
+        self.transform = transform  # np.ndarray, (4, 4)
+
+        # undistortion
+        self.mapx_dict = dict()
+        self.mapy_dict = dict()
+        self.roi_undist_dict = dict()
+        for camera_id in self.params_dict.keys():
+            params = self.params_dict[camera_id]
+            if len(params) == 0:
+                continue  # no distortion
+            assert camera_id in self.Ks_dict, f"Missing K for camera {camera_id}"
+            assert (
+                camera_id in self.params_dict
+            ), f"Missing params for camera {camera_id}"
+            K = self.Ks_dict[camera_id]
+            width, height = self.imsize_dict[camera_id]
+
+            if camtype == "perspective":
+                K_undist, roi_undist = cv2.getOptimalNewCameraMatrix(
+                    K, params, (width, height), 0
+                )
+                mapx, mapy = cv2.initUndistortRectifyMap(
+                    K, params, None, K_undist, (width, height), cv2.CV_32FC1
+                )
+                mask = None
+            elif camtype == "fisheye":
+                fx = K[0, 0]
+                fy = K[1, 1]
+                cx = K[0, 2]
+                cy = K[1, 2]
+                grid_x, grid_y = np.meshgrid(
+                    np.arange(width, dtype=np.float32),
+                    np.arange(height, dtype=np.float32),
+                    indexing="xy",
+                )
+                x1 = (grid_x - cx) / fx
+                y1 = (grid_y - cy) / fy
+                theta = np.sqrt(x1**2 + y1**2)
+                r = (
+                    1.0
+                    + params[0] * theta**2
+                    + params[1] * theta**4
+                    + params[2] * theta**6
+                    + params[3] * theta**8
+                )
+                mapx = fx * x1 * r + width // 2
+                mapy = fy * y1 * r + height // 2
+
+                # Use mask to define ROI
+                mask = np.logical_and(
+                    np.logical_and(mapx > 0, mapy > 0),
+                    np.logical_and(mapx < width - 1, mapy < height - 1),
+                )
+                y_indices, x_indices = np.nonzero(mask)
+                y_min, y_max = y_indices.min(), y_indices.max() + 1
+                x_min, x_max = x_indices.min(), x_indices.max() + 1
+                mask = mask[y_min:y_max, x_min:x_max]
+                K_undist = K.copy()
+                K_undist[0, 2] -= x_min
+                K_undist[1, 2] -= y_min
+                roi_undist = [x_min, y_min, x_max - x_min, y_max - y_min]
+            else:
+                assert_never(camtype)
+
+            self.mapx_dict[camera_id] = mapx
+            self.mapy_dict[camera_id] = mapy
+            self.Ks_dict[camera_id] = K_undist
+            self.roi_undist_dict[camera_id] = roi_undist
+            self.imsize_dict[camera_id] = (roi_undist[2], roi_undist[3])
+            self.mask_dict[camera_id] = mask
+
+        # size of the scene measured by cameras
+        camera_locations = camtoworlds[:, :3, 3]
+        scene_center = np.mean(camera_locations, axis=0)
+        dists = np.linalg.norm(camera_locations - scene_center, axis=1)
+        self.scene_scale = np.max(dists)
 
     def load_reconstructions(self, data_dir):
         reconstructions_file = os.path.join(data_dir, 'reconstruction.json')
@@ -229,7 +334,6 @@ class Dataset:
         K = self.parser.Ks_dict[camera_id].copy()  # undistorted K
         camtoworld = self.parser.camtoworlds[index]
 
-        # Load image (dummy implementation, replace with actual image loading logic if available)
         image_path = os.path.join(self.parser.data_dir, "images/" + img.name)  # Update with actual image path
         image = imageio.imread(image_path)[..., :3]
 
@@ -266,7 +370,6 @@ class Dataset:
             data["depths"] = torch.from_numpy(depths).float()
 
         return data
-
 
 def read_opensfm(reconstructions):
     """Extracts camera and image information from OpenSfM reconstructions."""
@@ -306,13 +409,12 @@ def read_opensfm(reconstructions):
                 f = reconstruction["cameras"][camera]["focal"] * width
                 k1 = reconstruction["cameras"][camera]["k1"]
                 k2 = reconstruction["cameras"][camera]["k2"]
-                params = np.array([f, width / 2, width / 2, k1, k2])
+                params = np.array([f, width / 2, height / 2, k1, k2])
                 camera_id = cam_id
                 cameras[camera_id] = Camera(id=camera_id, model=model, width=width, height=height, params=params, panorama=False)
                 camera_names[camera_name] = camera_id
                 cam_id += 1
         
-        # Parse images.
         reference_lat = reconstruction["reference_lla"]["latitude"]
         reference_lon = reconstruction["reference_lla"]["longitude"]
         reference_alt = reconstruction["reference_lla"]["altitude"]
