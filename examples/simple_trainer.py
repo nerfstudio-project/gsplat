@@ -249,6 +249,7 @@ def create_splats_with_optimizers(
 
             # Local space tvertices
             params += [
+                # 1e-2 is too large. 1e-4 seems nice
                 ("tvertices", torch.nn.Parameter(tvertices), 1e-4 * scene_scale),
             ]
         else:
@@ -476,7 +477,7 @@ class Runner:
         if self.cfg.enable_culling:
             if self.cfg.opt_vert:
                 tscales = tquats = None
-                tvertices = self.splats["tvertices"]  # [N, 4, 3]
+                tvertices = self.splats["tvertices"] + self.splats["means"][:, None, :]  # [N, 4, 3]
             else:
                 tscales = torch.exp(self.splats["tscales"])  # [N,]
                 tquats = self.splats["tquats"]  # [N, 4]
@@ -547,10 +548,13 @@ class Runner:
             torch.optim.lr_scheduler.ExponentialLR(
                 self.optimizers["means"], gamma=0.01 ** (1.0 / max_steps)
             ),
-            torch.optim.lr_scheduler.ExponentialLR(
-                self.optimizers["tvertices"], gamma=0.01 ** (1.0 / max_steps)
-            ),
         ]
+        if cfg.enable_culling:
+            schedulers.append(
+                torch.optim.lr_scheduler.ExponentialLR(
+                    self.optimizers["tvertices"], gamma=0.01 ** (1.0 / max_steps)
+                ),
+            )
         if cfg.pose_opt:
             # pose optimization has a learning rate schedule
             schedulers.append(
@@ -708,8 +712,11 @@ class Runner:
             loss.backward()
 
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
-            # desc += f"ts: {torch.exp(self.splats['tscales']).mean().item():.3f}| "
-            desc += f"ts: {torch.linalg.norm(self.splats['tvertices'], dim=-1).mean().item():.3f}| "
+            if cfg.enable_culling:
+                if cfg.opt_vert:
+                    desc += f"ts: {torch.linalg.norm(self.splats['tvertices'], dim=-1).mean().item():.3f}| "
+                else:
+                    desc += f"ts: {torch.exp(self.splats['tscales']).mean().item():.3f}| "
             if cfg.depth_loss:
                 desc += f"depth loss={depthloss.item():.6f}| "
             if cfg.pose_opt and cfg.pose_noise:
