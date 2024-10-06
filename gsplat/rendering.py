@@ -341,8 +341,7 @@ def rasterization(
             tvertices = torch.einsum("nij,kj->nki", rotmats, tvertices)  # [N, 4, 3]
             tvertices = tvertices + means[:, None, :]  # [N, 4, 3]
         else:
-            # The input tvertices are in local space
-            tvertices = tvertices + means[:, None, :]  # [N, 4, 3]
+            pass
     else:
         tvertices = None
     # ------------------------------------------------------------
@@ -707,7 +706,8 @@ def _rasterization(
 
     # Project Gaussians to 2D.
     # The results are with shape [C, N, ...]. Only the elements with radii > 0 are valid.
-    covars, precis = _quat_scale_to_covar_preci(quats, scales, True, True, triu=False)
+    covars, _ = _quat_scale_to_covar_preci(quats, scales, True, False, triu=False)
+    _, precis = _quat_scale_to_covar_preci(quats, scales, False, True, triu=True)
     radii, means2d, depths, conics, compensations = _fully_fused_projection(
         means,
         covars,

@@ -22,7 +22,7 @@ def _ray_triangle_intersection(o, d, v0, v1, v2):
     - hit (Tensor): Boolean tensor indicating which rays intersect the triangles. Shape: (N,).
     - t (Tensor): Distance from the ray origin to the intersection points. Shape: (N,).
     """
-    EPSILON = 1e-8
+    EPSILON = 1e-6
 
     # Calculate edges of the triangle
     e1 = v1 - v0  # [N, 3]
@@ -40,11 +40,11 @@ def _ray_triangle_intersection(o, d, v0, v1, v2):
     s = o - v0  # [N, 3]
     u = f * torch.sum(s * h, dim=1)  # [N]
     # Check if the intersection is within the triangle
-    hit = hit & (u >= 0.0) & (u <= 1.0)
+    hit = hit & (u >= - EPSILON) & (u <= 1.0 + EPSILON)
 
     q = torch.cross(s, e1, dim=1)  # [N, 3]
     v = f * torch.sum(d * q, dim=1)  # [N]
-    hit = hit & (v >= 0.0) & ((u + v) <= 1.0)
+    hit = hit & (v >= - EPSILON) & ((u + v) <= 1.0 + EPSILON)
 
     # Calculate the intersection point distance along the ray
     t = f * torch.sum(e2 * q, dim=1)  # [N]
@@ -628,8 +628,7 @@ def accumulate(
 
         # [M, 3]
         viewdirs = (camera_dirs[:, None, :] * camtoworlds[:, :3, :3]).sum(dim=-1)
-        origins = camtoworlds[:, :3, -1]
-
+        origins = camtoworlds[:, :3, -1]        
         _, _, isect_t1, isect_t2, hit = _ray_tetra_intersection(
             origins,
             viewdirs,
@@ -646,6 +645,40 @@ def accumulate(
         ratio = 0.5 * (
             torch.erf(beta1 * (tmaxs - beta2)) - torch.erf(beta1 * (tmins - beta2))
         ) * hit * (aa > 1e-6)
+
+        # idx = 9816657
+
+        # scales = scales[gaussian_ids]
+        # import time
+
+        # import numpy as np
+        # import viser
+        # server = viser.ViserServer(port=8090, verbose=False)
+        # server.scene.add_icosphere(
+        #     name="gs",
+        #     radius=scales[idx, 0].item(),
+        #     color=[1.0, 1.0, 1.0],
+        #     position=means[idx].detach().cpu().numpy(),
+        # )
+
+        # server.scene.add_mesh_simple(
+        #     name="tet",
+        #     vertices=tvertices[idx].detach().cpu().numpy(),
+        #     faces=np.array([[0, 1, 2], [0, 1, 3], [1, 2, 3], [0, 2, 3]]),
+        #     color=[1.0, 0.0, 0.0],
+        #     wireframe=True,
+        # )
+
+        # server.scene.add_spline_catmull_rom(
+        #     name="ray",
+        #     positions=(
+        #         tuple(origins[idx].tolist()),
+        #         tuple((origins[idx] + 100 * viewdirs[idx]).tolist()),
+        #     ),
+        # )
+        # time.sleep(100000000)
+        # import pdb; pdb.set_trace()
+
         assert not torch.isnan(ratio).any(), invV[torch.isnan(ratio)]
         # alphas = alphas * ratio
         alphas = 1.0 - (1.0 - alphas) ** ratio
