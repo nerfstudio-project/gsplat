@@ -11,7 +11,18 @@ from PIL import Image
 from torch import Tensor, optim
 
 from gsplat import rasterization, rasterization_2dgs
+import random
 
+def seed_everything(seed: int):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    np.random.seed(seed)
+    random.seed(seed)
+
+seed_everything(42)
 
 class SimpleTrainer:
     """Trains random gaussians to fit an image."""
@@ -81,6 +92,7 @@ class SimpleTrainer:
         save_imgs: bool = False,
         model_type: Literal["3dgs", "2dgs"] = "3dgs",
     ):
+        losses = []
         optimizer = optim.Adam(
             [self.rgbs, self.means, self.scales, self.opacities, self.quats], lr
         )
@@ -100,9 +112,12 @@ class SimpleTrainer:
             rasterize_fnc = rasterization
         elif model_type == "2dgs":
             rasterize_fnc = rasterization_2dgs
-
-        for iter in range(iterations):
+        verbose=False
+        from tqdm import tqdm
+        pbar = tqdm(range(iterations))
+        for iter in pbar:
             start = time.time()
+            
 
             renders = rasterize_fnc(
                 self.means,
@@ -120,13 +135,17 @@ class SimpleTrainer:
             torch.cuda.synchronize()
             times[0] += time.time() - start
             loss = mse_loss(out_img, self.gt_image)
+            if iter == 0:
+                init_loss = loss
             optimizer.zero_grad()
             start = time.time()
             loss.backward()
             torch.cuda.synchronize()
             times[1] += time.time() - start
             optimizer.step()
-            print(f"Iteration {iter + 1}/{iterations}, Loss: {loss.item()}")
+            losses.append(loss.item())
+            if verbose:
+                print(f"Iteration {iter + 1}/{iterations}, Loss: {loss.item()}")
 
             if save_imgs and iter % 5 == 0:
                 frames.append((out_img.detach().cpu().numpy() * 255).astype(np.uint8))
@@ -143,10 +162,13 @@ class SimpleTrainer:
                 duration=5,
                 loop=0,
             )
-        print(f"Total(s):\nRasterization: {times[0]:.3f}, Backward: {times[1]:.3f}")
-        print(
+        
+        if verbose:
+            print(f"Total(s):\nRasterization: {times[0]:.3f}, Backward: {times[1]:.3f}")
+            print(
             f"Per step(s):\nRasterization: {times[0]/iterations:.5f}, Backward: {times[1]/iterations:.5f}"
         )
+        return losses
 
 
 def image_path_to_tensor(image_path: Path):
