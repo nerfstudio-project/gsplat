@@ -185,7 +185,7 @@ class Config:
             assert_never(strategy)
 
 
-def save_ply(splats: torch.nn.ParameterDict, dir: str):
+def save_ply(splats: torch.nn.ParameterDict, dir: str, colors: torch.Tensor = None):
     # Convert all tensors to numpy arrays in one go
     print(f"Saving ply to {dir}")
     numpy_data = {k: v.detach().cpu().numpy() for k, v in splats.items()}
@@ -194,9 +194,6 @@ def save_ply(splats: torch.nn.ParameterDict, dir: str):
     scales = numpy_data["scales"]
     quats = numpy_data["quats"]
     opacities = numpy_data["opacities"]
-    sh0 = numpy_data["sh0"].transpose(0, 2, 1).reshape(means.shape[0], -1).copy()
-    shN = numpy_data["shN"].transpose(0, 2, 1).reshape(means.shape[0], -1).copy()
-
     ply_data = {
         "positions": o3d.core.Tensor(means, dtype=o3d.core.Dtype.Float32),
         "normals": o3d.core.Tensor(np.zeros_like(means), dtype=o3d.core.Dtype.Float32),
@@ -205,13 +202,25 @@ def save_ply(splats: torch.nn.ParameterDict, dir: str):
         ),
     }
 
-    # Add sh0 and shN data
-    for i, data in enumerate([sh0, shN]):
-        prefix = "f_dc" if i == 0 else "f_rest"
-        for j in range(data.shape[1]):
-            ply_data[f"{prefix}_{j}"] = o3d.core.Tensor(
-                data[:, j : j + 1], dtype=o3d.core.Dtype.Float32
+    if colors is not None:
+        color = colors.detach().cpu().numpy().copy()  #
+        for j in range(color.shape[1]):
+            # Needs to be converted to shs as that's what all viewers take.
+            ply_data[f"f_dc_{j}"] = o3d.core.Tensor(
+                (color[:, j : j + 1] - 0.5) / 0.2820947917738781,
+                dtype=o3d.core.Dtype.Float32,
             )
+    else:
+        sh0 = numpy_data["sh0"].transpose(0, 2, 1).reshape(means.shape[0], -1).copy()
+        shN = numpy_data["shN"].transpose(0, 2, 1).reshape(means.shape[0], -1).copy()
+
+        # Add sh0 and shN data
+        for i, data in enumerate([sh0, shN]):
+            prefix = "f_dc" if i == 0 else "f_rest"
+            for j in range(data.shape[1]):
+                ply_data[f"{prefix}_{j}"] = o3d.core.Tensor(
+                    data[:, j : j + 1], dtype=o3d.core.Dtype.Float32
+                )
 
     # Add scales and quats data
     for name, data in [("scale", scales), ("rot", quats)]:
@@ -221,7 +230,9 @@ def save_ply(splats: torch.nn.ParameterDict, dir: str):
             )
 
     pcd = o3d.t.geometry.PointCloud(ply_data)
-    o3d.t.io.write_point_cloud(str(dir), pcd)
+
+    success = o3d.t.io.write_point_cloud(dir, pcd)
+    assert success, "Could not save ply file."
 
 
 def create_splats_with_optimizers(
@@ -769,7 +780,19 @@ class Runner:
                     data, f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt"
                 )
             if step in [i - 1 for i in cfg.ply_steps] or step == max_steps - 1:
-                save_ply(self.splats, f"{self.ply_dir}/point_cloud_{step}.ply")
+                rgb = None
+                if self.cfg.app_opt:
+                    # eval at origin to bake the appeareance into the colors
+                    rgb = self.app_module(
+                        features=self.splats["features"],
+                        embed_ids=None,
+                        dirs=torch.zeros_like(self.splats["means"][None, :, :]),
+                        sh_degree=sh_degree_to_use,
+                    )
+                    rgb = rgb + self.splats["colors"]
+                    rgb = torch.sigmoid(rgb).squeeze(0)
+
+                save_ply(self.splats, f"{self.ply_dir}/point_cloud_{step}.ply", rgb)
 
             if isinstance(self.cfg.strategy, DefaultStrategy):
                 self.cfg.strategy.step_post_backward(
