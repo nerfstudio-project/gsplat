@@ -459,6 +459,44 @@ class Runner:
                 render_fn=self._viewer_render_fn,
                 mode="training",
             )
+            server_bt_draw_tetra = self.server.gui.add_button(
+                "Draw Tetrahedron",
+                icon=viser.Icon.OCTAHEDRON,
+                hint="Draw the tetrahedron for the current GS.",
+            )
+            @server_bt_draw_tetra.on_click
+            def _(event: viser.GuiEvent) -> None:
+                self.draw_tetra()
+
+    def draw_tetra(self, indices=None):
+        if indices is None:
+            indices = ...
+
+        means = self.splats["means"][indices]  # [N, 3]
+        quats = self.splats["quats"][indices]  # [N, 4]
+        scales = torch.exp(self.splats["scales"][indices])  # [N, 3]
+        tvertices = self.splats["tvertices"][indices] # [N, 4, 3]
+
+        # project to unit sphere (on gs 1 sigma surface in local space)
+        tdists = torch.linalg.norm(tvertices, dim=-1)  # [N, 4]
+        tvertices = tvertices / tdists[:, :, None]  # [N, 4, 3]
+        # rotate to the world space and put it on the 6 sigma surface
+        rotmats = _quat_scale_to_matrix(quats, scales * self.cfg.t_init_s)  # [N, 3, 3]
+        tvertices = torch.einsum("nij,nkj->nki", rotmats, tvertices)  # [N, 4, 3]
+        tvertices = tvertices + means[:, None, :]  # [N, 4, 3]
+
+        offsets = np.arange(0, tvertices.shape[0]) * 4
+        faces = np.array([[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]])
+        faces = faces[None, :, :] + offsets[:, None, None]
+        verts = tvertices.detach().cpu().numpy().reshape(-1, 3)
+
+        self.server.scene.add_mesh_simple(
+            "tetra",
+            vertices=verts,
+            faces=faces,
+            wireframe=True,
+        )
+
 
     def rasterize_splats(
         self,
@@ -730,7 +768,8 @@ class Runner:
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
             if cfg.enable_culling:
                 if cfg.opt_vert:
-                    desc += f"ts: {torch.linalg.norm(self.splats['tvertices'], dim=-1).mean().item():.3f}| "
+                    v = self.splats['tvertices']
+                    desc += f"ts: {torch.linalg.norm(v, dim=-1).mean().item():.3f}| {v[10, 0].tolist()} | {torch.linalg.norm(v.grad, dim=-1).mean().item():.6f}"
                 else:
                     desc += f"ts: {torch.exp(self.splats['tscales']).mean().item():.3f}| "
             if cfg.depth_loss:
@@ -1057,6 +1096,8 @@ class Runner:
             sh_degree=self.cfg.sh_degree,  # active all SH degrees
             radius_clip=3.0,  # skip GSs that have small image radius (in pixels)
         )  # [1, H, W, 3]
+
+        self.draw_tetra(np.arange(len(self.splats["means"]), step=100).tolist())
         return render_colors[0].cpu().numpy()
 
 
