@@ -68,7 +68,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
                 quats,  # [N, 4]
                 scales,  # [N, 3]
                 opacities,  # [N]
-                colors,  # [N, 3]
+                colors,  # [N, S, 3]
                 viewmats,  # [C, 4, 4]
                 Ks,  # [C, 3, 3]
                 width,
@@ -181,7 +181,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
             quats,  # [N, 4]
             scales,  # [N, 3]
             opacities,  # [N]
-            colors,  # [N, 3]
+            colors,  # [N, S, 3]
             viewmat[None],  # [1, 4, 4]
             K[None],  # [1, 3, 3]
             width,
