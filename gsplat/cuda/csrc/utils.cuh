@@ -541,16 +541,16 @@ inline __device__ void spherical_proj(
     T normalized_latitude = latitude / (M_PI / 2.0);
     T normalized_longitude = longitude / M_PI;
 
-    mean2d = vec2<T>(normalized_longitude, normalized_latitude);
-    
+    mean2d = vec2<T>(normalized_longitude * width + width / 2, normalized_latitude * height + height / 2);
+
     // mat3x2 is 3 columns x 2 rows.
     mat3x2<T> J = mat3x2<T>(
-        width / (2.f * M_PI) * z / (x * x + y * y), // 1st column
+        width / (2.f * M_PI) * z / (x * x + z * z),
+        -height / M_PI * (x * y) / (r * r * sqrt(x * x + z * z)), // 1st column
         0.f,
+        height / M_PI * sqrt(x * x + z * z) / (r * r), // 2st column
         -width / (2.f * M_PI) * x / (x * x + z * z),
-        -height / M_PI * (x * y) / (r * r + sqrt(x * x + z * z)), // 2nd column
-        height / M_PI * (x * y) * sqrt(x * x + z * z) / (r * r),
-        -height / M_PI * (z * y) / (r * r + sqrt(x * x + z * z))
+        -height / M_PI * (z * y) / (r * r + sqrt(x * x + z * z)) // 1st column
     );
 
     cov2d = J * cov3d * glm::transpose(J);
@@ -589,12 +589,12 @@ inline __device__ void spherical_proj_vjp(
 
     // mat3x2 is 3 columns x 2 rows.
     mat3x2<T> J = mat3x2<T>(
-        width / (2.f * M_PI) * z / (x * x + y * y), // 1st column
+        width / (2.f * M_PI) * z / (x * x + z * z),
+        -height / M_PI * (x * y) / (r * r * sqrt(x * x + z * z)), // 1st column
         0.f,
+        height / M_PI * sqrt(x * x + z * z) / (r * r), // 2st column
         -width / (2.f * M_PI) * x / (x * x + z * z),
-        -height / M_PI * (x * y) / (r * r + sqrt(x * x + z * z)), // 2nd column
-        height / M_PI * (x * y) * sqrt(x * x + z * z) / (r * r),
-        -height / M_PI * (z * y) / (r * r + sqrt(x * x + z * z))
+        -height / M_PI * (z * y) / (r * r + sqrt(x * x + z * z)) // 1st column
     );
 
     v_cov3d += glm::transpose(J) * v_cov2d * J;

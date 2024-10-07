@@ -221,6 +221,7 @@ def _ortho_proj(
     )  # [C, N, 2]
     return means2d, cov2d  # [C, N, 2], [C, N, 2, 2]
 
+
 def _spherical_proj(
     means: Tensor,  # [C, N, 3]
     covars: Tensor,  # [C, N, 3, 3]
@@ -254,17 +255,17 @@ def _spherical_proj(
     normalized_latitude = latitude / (torch.pi / 2.0)
     normalized_longitude = longitude / torch.pi
 
-    means2d = torch.stack([normalized_longitude, normalized_latitude], dim=-1)
+    means2d = torch.stack([(normalized_longitude * width + width / 2) / tr, (normalized_latitude * height + height / 2) / tr], dim=-1)
 
     O = torch.zeros((C, N), device=means.device, dtype=means.dtype)
     J = torch.stack(
         [
-            width / (2 * torch.pi) * tz / (tx**2 + tz**2),
+            width / tr / (2 * torch.pi) * tz / (tx**2 + tz**2),
             O,
-            -width / (2 * torch.pi) * tx / (tx**2 + tz**2),
-            -height / torch.pi * (tx * ty) / (tr**2 * torch.sqrt(tx**2 + tz**2)),
-            height / torch.pi * torch.sqrt(tx**2 + tz**2) / tr**2,
-            -height / torch.pi * (tz * ty) / (tr**2 * torch.sqrt(tx**2 + tz**2)),
+            -width / tr / (2 * torch.pi) * tx / (tx**2 + tz**2),
+            -height / tr / torch.pi * (tx * ty) / (tr**2 * torch.sqrt(tx**2 + tz**2)),
+            height / tr / torch.pi * torch.sqrt(tx**2 + tz**2) / tr**2,
+            -height / tr / torch.pi * (tz * ty) / (tr**2 * torch.sqrt(tx**2 + tz**2)),
         ],
         dim=-1,
     ).reshape(C, N, 2, 3)
