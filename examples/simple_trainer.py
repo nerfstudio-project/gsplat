@@ -1096,8 +1096,9 @@ class Runner:
             sh_degree=self.cfg.sh_degree,  # active all SH degrees
             radius_clip=3.0,  # skip GSs that have small image radius (in pixels)
         )  # [1, H, W, 3]
-
-        self.draw_tetra(np.arange(len(self.splats["means"]), step=100).tolist())
+        
+        if self.cfg.enable_culling and self.cfg.opt_vert:
+            self.draw_tetra(np.arange(len(self.splats["means"]), step=100).tolist())
         return render_colors[0].cpu().numpy()
 
 
