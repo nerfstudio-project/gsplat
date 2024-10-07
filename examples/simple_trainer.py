@@ -2,7 +2,7 @@ import json
 import math
 import os
 import time
-import open3d as o3d
+import struct
 from dataclasses import dataclass, field
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple, Union
@@ -194,45 +194,59 @@ def save_ply(splats: torch.nn.ParameterDict, dir: str, colors: torch.Tensor = No
     scales = numpy_data["scales"]
     quats = numpy_data["quats"]
     opacities = numpy_data["opacities"]
-    ply_data = {
-        "positions": o3d.core.Tensor(means, dtype=o3d.core.Dtype.Float32),
-        "normals": o3d.core.Tensor(np.zeros_like(means), dtype=o3d.core.Dtype.Float32),
-        "opacity": o3d.core.Tensor(
-            opacities.reshape(-1, 1), dtype=o3d.core.Dtype.Float32
-        ),
-    }
 
-    if colors is not None:
-        color = colors.detach().cpu().numpy().copy()  #
-        for j in range(color.shape[1]):
-            # Needs to be converted to shs as that's what all viewers take.
-            ply_data[f"f_dc_{j}"] = o3d.core.Tensor(
-                (color[:, j : j + 1] - 0.5) / 0.2820947917738781,
-                dtype=o3d.core.Dtype.Float32,
-            )
-    else:
-        sh0 = numpy_data["sh0"].transpose(0, 2, 1).reshape(means.shape[0], -1).copy()
-        shN = numpy_data["shN"].transpose(0, 2, 1).reshape(means.shape[0], -1).copy()
+    num_points = means.shape[0]
 
-        # Add sh0 and shN data
-        for i, data in enumerate([sh0, shN]):
-            prefix = "f_dc" if i == 0 else "f_rest"
-            for j in range(data.shape[1]):
-                ply_data[f"{prefix}_{j}"] = o3d.core.Tensor(
-                    data[:, j : j + 1], dtype=o3d.core.Dtype.Float32
-                )
+    with open(dir, "wb") as f:
+        # Write PLY header
+        f.write(b"ply\n")
+        f.write(b"format binary_little_endian 1.0\n")
+        f.write(f"element vertex {num_points}\n".encode())
+        f.write(b"property float x\n")
+        f.write(b"property float y\n")
+        f.write(b"property float z\n")
+        f.write(b"property float nx\n")
+        f.write(b"property float ny\n")
+        f.write(b"property float nz\n")
+        f.write(b"property float opacity\n")
 
-    # Add scales and quats data
-    for name, data in [("scale", scales), ("rot", quats)]:
-        for i in range(data.shape[1]):
-            ply_data[f"{name}_{i}"] = o3d.core.Tensor(
-                data[:, i : i + 1], dtype=o3d.core.Dtype.Float32
-            )
+        if colors is not None:
+            for j in range(colors.shape[1]):
+                f.write(f"property float f_dc_{j}\n".encode())
+        else:
+            sh0 = numpy_data["sh0"].transpose(0, 2, 1).reshape(means.shape[0], -1)
+            shN = numpy_data["shN"].transpose(0, 2, 1).reshape(means.shape[0], -1)
+            for i, data in enumerate([sh0, shN]):
+                prefix = "f_dc" if i == 0 else "f_rest"
+                for j in range(data.shape[1]):
+                    f.write(f"property float {prefix}_{j}\n".encode())
 
-    pcd = o3d.t.geometry.PointCloud(ply_data)
+        for i in range(scales.shape[1]):
+            f.write(f"property float scale_{i}\n".encode())
+        for i in range(quats.shape[1]):
+            f.write(f"property float rot_{i}\n".encode())
 
-    success = o3d.t.io.write_point_cloud(dir, pcd)
-    assert success, "Could not save ply file."
+        f.write(b"end_header\n")
+
+        # Write vertex data
+        for i in range(num_points):
+            f.write(struct.pack("<fff", *means[i]))  # x, y, z
+            f.write(struct.pack("<fff", 0, 0, 0))  # nx, ny, nz (zeros)
+            f.write(struct.pack("<f", opacities[i]))  # opacity
+
+            if colors is not None:
+                color = colors.detach().cpu().numpy()
+                for j in range(color.shape[1]):
+                    f_dc = (color[i, j] - 0.5) / 0.2820947917738781
+                    f.write(struct.pack("<f", f_dc))
+            else:
+                for data in [sh0, shN]:
+                    for j in range(data.shape[1]):
+                        f.write(struct.pack("<f", data[i, j]))
+
+            for data in [scales, quats]:
+                for j in range(data.shape[1]):
+                    f.write(struct.pack("<f", data[i, j]))
 
 
 def create_splats_with_optimizers(
