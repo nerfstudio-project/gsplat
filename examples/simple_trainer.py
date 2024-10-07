@@ -32,6 +32,7 @@ from typing_extensions import Literal, assert_never
 from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
 
 from gsplat.compression import PngCompression
+from gsplat.cuda._torch_impl import _quat_scale_to_matrix
 from gsplat.distributed import cli
 from gsplat.rendering import _rasterization, rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
@@ -159,8 +160,8 @@ class Config:
     # Tetra
     enable_culling: bool = True
     opt_vert: bool = False # optimize tet vertices directly
-    t_init_s: float = 3.0 # initial scale of tet
-    t_lr_v: float = 1e-4 # learning rate for tet vertices
+    t_init_s: float = 6.0 # initial scale of tet
+    t_lr_v: float = 1e-3 # learning rate for tet vertices
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -231,13 +232,7 @@ def create_splats_with_optimizers(
     ]
 
     if cfg.enable_culling:
-        # 6 sigma as the distance from the center (centroid) to a vertex, equals to
-        # 3 sigma from the center to a face of the tetrahedron.
-        tscales = torch.log(dist_avg * init_scale * cfg.t_init_s)  # 6 sigma [N,]
-        tquats = torch.rand((N, 4))  # [N, 4]
-
         if cfg.opt_vert:            
-            from gsplat.cuda._torch_impl import _quat_scale_to_matrix
             tvertices = torch.tensor(
                 [
                     [math.sqrt(8 / 9), 0, -1 / 3],
@@ -245,9 +240,8 @@ def create_splats_with_optimizers(
                     [-math.sqrt(2 / 9), -math.sqrt(2 / 3), -1 / 3],
                     [0, 0, 1],
                 ],
-            )  # [4, 3]
-            rotmats = _quat_scale_to_matrix(tquats, torch.exp(tscales)[:, None])  # [N, 3, 3]
-            tvertices = torch.einsum("nij,kj->nki", rotmats, tvertices)  # [N, 4, 3]
+            ) * 2.0  # [4, 3] 2 sigma surface
+            tvertices = tvertices[None, :, :].repeat(N, 1, 1)
 
             # Local space tvertices
             params += [
@@ -255,6 +249,11 @@ def create_splats_with_optimizers(
                 ("tvertices", torch.nn.Parameter(tvertices), cfg.t_lr_v * scene_scale),
             ]
         else:
+            # 6 sigma as the distance from the center (centroid) to a vertex, equals to
+            # 3 sigma from the center to a face of the tetrahedron.
+            tscales = torch.log(dist_avg * init_scale * cfg.t_init_s)  # 6 sigma [N,]
+            tquats = torch.rand((N, 4))  # [N, 4]
+
             params += [
                 ("tscales", torch.nn.Parameter(tscales), 1e-2),
                 ("tquats", torch.nn.Parameter(tquats), 1e-1),
@@ -479,7 +478,22 @@ class Runner:
         if self.cfg.enable_culling:
             if self.cfg.opt_vert:
                 tscales = tquats = None
-                tvertices = self.splats["tvertices"] + self.splats["means"][:, None, :]  # [N, 4, 3]
+                tvertices = self.splats["tvertices"] # [N, 4, 3]
+                # tcenters = tvertices.mean(dim=1, keepdim=True)  # [N, 1, 3]
+                # tdists = torch.linalg.norm(tvertices - tcenters, dim=-1).mean(dim=1)  # [N,]
+                # tvertices = (tvertices - tcenters) / tdists[:, None, None]  # normalize
+                # tvertices = tvertices * torch.exp(self.splats["scales"])[:, None, :] * 6.0
+                # tvertices = tvertices + self.splats["means"][:, None, :]  # [N, 4, 3]
+                # tvertices = tvertices.detach()
+
+                # project to unit sphere (on gs 1 sigma surface in local space)
+                tdists = torch.linalg.norm(tvertices, dim=-1)  # [N, 4]
+                tvertices = tvertices / tdists[:, :, None]  # [N, 4, 3]
+                # rotate to the world space and put it on the 6 sigma surface
+                rotmats = _quat_scale_to_matrix(quats, scales * self.cfg.t_init_s)  # [N, 3, 3]
+                tvertices = torch.einsum("nij,nkj->nki", rotmats, tvertices)  # [N, 4, 3]
+                tvertices = tvertices + means[:, None, :]  # [N, 4, 3]
+
             else:
                 tscales = torch.exp(self.splats["tscales"])  # [N,]
                 tquats = self.splats["tquats"]  # [N, 4]
