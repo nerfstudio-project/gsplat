@@ -339,6 +339,11 @@ class Dataset:
         image_path = os.path.join(self.parser.data_dir, "images/" + img.name)  # Update with actual image path
         image = imageio.imread(image_path)[..., :3]
 
+        # Resize image according to the factor
+        if self.parser.factor > 1:
+            new_size = (image.shape[1] // self.parser.factor, image.shape[0] // self.parser.factor)
+            image = cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
+
         # Undistort if necessary
         params = self.parser.params_dict[camera_id]
         if len(params) > 0:
