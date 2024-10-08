@@ -4,7 +4,102 @@ from typing import Optional, Tuple
 import torch
 import torch.nn.functional as F
 from torch import Tensor
+import math
 from typing_extensions import Literal, assert_never
+
+
+def integral_opacity_numerical(
+    means: torch.Tensor,  # [M, 3]
+    precis: torch.Tensor,  # [M, 3, 3]
+    densities: torch.Tensor,  # [M]
+    origins: torch.Tensor,  # [M, 3]
+    viewdirs: torch.Tensor,  # [M, 3]
+    tmins: torch.Tensor,  # [M]
+    tmaxs: torch.Tensor,  # [M]
+    N: int = 1000000,  # Number of integration steps
+) -> torch.Tensor:
+    """
+    Numerically compute the opacity by discretizing the integral over [tmins, tmaxs].
+    """
+    M = means.shape[0]
+    device = means.device
+
+    d = origins - means  # [M, 3]
+    t_vals = torch.linspace(0.0, 1.0, N, device=device).unsqueeze(-1)  # [N, 1]
+    tmins = tmins.unsqueeze(0)  # [1, M]
+    tmaxs = tmaxs.unsqueeze(0)  # [1, M]
+    ts = tmins + t_vals * (tmaxs - tmins)  # [N, M]
+    delta_t = (tmaxs - tmins) / (N - 1)  # [1, M]
+
+    x_hat = d.unsqueeze(0) + viewdirs.unsqueeze(0) * ts.unsqueeze(-1)  # [N, M, 3]
+    exp_term = torch.einsum("nmi,mij,nmj->nm", x_hat, precis, x_hat)  # [N, M]
+    sigma_t = densities.unsqueeze(0) * torch.exp(-0.5 * exp_term)  # [N, M]
+    # integral = torch.sum(sigma_t * delta_t, dim=0)  # [M]
+    integral = torch.sum((sigma_t[:-1] + sigma_t[1:]) / 2 * delta_t, dim=0)  # [M]
+
+    opacities = 1.0 - torch.exp(-integral)  # [M]
+    return opacities
+
+
+def integral_opacity(
+    means: Tensor,  # [M, 3]
+    precis: Tensor,  # [M, 3, 3]
+    densities: Tensor,  # [M]
+    origins: Tensor,  # [M, 3]
+    viewdirs: Tensor,  # [M, 3]
+    inf: bool = True,  # if True, integrate from -\inf to \inf
+    tmins: Tensor = None,  # [M]
+    tmaxs: Tensor = None,  # [M]
+) -> Tensor:
+    assert inf or (
+        tmins is not None and tmaxs is not None
+    ), "tmins and tmaxs must be provided if inf is False."
+    M = means.shape[0]
+    assert precis.shape == (M, 3, 3), precis.shape
+    assert densities.shape == (M,), densities.shape
+    assert origins.shape == (M, 3), origins.shape
+    assert viewdirs.shape == (M, 3), viewdirs.shape
+    if tmins is not None:
+        assert tmins.shape == (M,), tmins.shape
+    if tmaxs is not None:
+        assert tmaxs.shape == (M,), tmaxs.shape
+    assert not torch.any(densities < 0), "Densities must be non-negative."
+
+    # ----------------------------------------------------------------------------------
+    # Use density based gaussian = density * exp(-1/2 * (x - \mu)^T \Sigma^-1 (x - \mu))
+    # ray = o + r * t go through segment [t0, t1], compute the opacity
+    # d = o - \mu
+    # rr = r^T Sigma^-1 r
+    # dd = d^T Sigma^-1 d
+    # b = -\frac{dr}{rr}
+    # c = dd - \frac{dr^2}{rr}
+    # transmittance = \exp(-density * \exp(-1/2 * c) * \sqrt{2 \pi / rr} *
+    #     (erf(\sqrt{rr / 2} * (t1 - b)) - erf(\sqrt{rr / 2} * (t0 - b)))
+    # opacity = 1 - transmittance
+    # ----------------------------------------------------------------------------------
+
+    # integral form -\inf to \inf, transmittance = \exp(density * \exp(-1/2 * c) * \sqrt{2 \pi / rr} * 2)
+    rr = torch.einsum("mi,mij,mj->m", viewdirs, precis, viewdirs)  # [M]
+    dr = torch.einsum("mi,mij,mj->m", means - origins, precis, viewdirs)  # [M]
+    dd = torch.einsum("mi,mij,mj->m", means - origins, precis, means - origins)  # [M]
+    bb = -dr / rr  # [M]
+    cc = dd - dr * dr / rr  # [M]
+    if inf:
+        transmittance = torch.exp(
+            -densities * torch.exp(-0.5 * cc) * torch.sqrt(0.5 * math.pi / rr) * 2
+        )  # [M]
+    else:
+        transmittance = torch.exp(
+            -densities
+            * torch.exp(-0.5 * cc)
+            * torch.sqrt(0.5 * math.pi / rr)
+            * (
+                torch.erf(torch.sqrt(rr / 2) * (tmaxs - bb))
+                - torch.erf(torch.sqrt(rr / 2) * (tmins - bb))
+            )
+        )
+    opacities = 1.0 - transmittance  # [M]
+    return opacities
 
 
 def _ray_triangle_intersection(o, d, v0, v1, v2):
@@ -31,7 +126,7 @@ def _ray_triangle_intersection(o, d, v0, v1, v2):
     # Calculate determinant and direction vectors
     h = torch.cross(d, e2, dim=1)  # [N, 3]
     a = torch.sum(e1 * h, dim=1)  # [N]
-    
+
     # Ray is parallel to the triangle
     hit = a.abs() >= EPSILON
 
@@ -40,11 +135,11 @@ def _ray_triangle_intersection(o, d, v0, v1, v2):
     s = o - v0  # [N, 3]
     u = f * torch.sum(s * h, dim=1)  # [N]
     # Check if the intersection is within the triangle
-    hit = hit & (u >= - EPSILON) & (u <= 1.0 + EPSILON)
+    hit = hit & (u >= -EPSILON) & (u <= 1.0 + EPSILON)
 
     q = torch.cross(s, e1, dim=1)  # [N, 3]
     v = f * torch.sum(d * q, dim=1)  # [N]
-    hit = hit & (v >= - EPSILON) & ((u + v) <= 1.0 + EPSILON)
+    hit = hit & (v >= -EPSILON) & ((u + v) <= 1.0 + EPSILON)
 
     # Calculate the intersection point distance along the ray
     t = f * torch.sum(e2 * q, dim=1)  # [N]
@@ -79,11 +174,13 @@ def _ray_tetra_intersection(rays_o, rays_d, vertices):
     exit_face_ids = torch.full_like(v0[:, 0], fill_value=-1, dtype=torch.int32)
     t_entrys = torch.full_like(v0[:, 0], fill_value=1e10, dtype=rays_o.dtype)
     t_exits = torch.full_like(v0[:, 0], fill_value=-1e10, dtype=rays_o.dtype)
-    
+
     faces = [[v0, v1, v2], [v1, v2, v3], [v2, v3, v0], [v3, v0, v1]]
     is_hit = torch.zeros(N, dtype=torch.bool, device=rays_o.device)
     for i in range(4):
-        hit, t_isct = _ray_triangle_intersection(rays_o, rays_d, faces[i][0], faces[i][1], faces[i][2])
+        hit, t_isct = _ray_triangle_intersection(
+            rays_o, rays_d, faces[i][0], faces[i][1], faces[i][2]
+        )
         is_entry = hit & (t_isct < t_entrys)
         is_exit = hit & (t_isct > t_exits)
         entry_face_ids[is_entry] = i
@@ -519,7 +616,7 @@ def _isect_offset_encode(
 def accumulate(
     means2d: Tensor,  # [C, N, 2]
     conics: Tensor,  # [C, N, 3]
-    opacities: Tensor,  # [C, N]
+    densities: Tensor,  # [C, N]
     colors: Tensor,  # [C, N, channels]
     gaussian_ids: Tensor,  # [M]
     pixel_ids: Tensor,  # [M]
@@ -558,8 +655,7 @@ def accumulate(
     Args:
         means2d: Gaussian means in 2D. [C, N, 2]
         conics: Inverse of the 2D Gaussian covariance, Only upper triangle values. [C, N, 3]
-        opacities: Per-view Gaussian opacities (for example, when antialiasing is
-            enabled, Gaussian in each view would efficiently have different opacity). [C, N]
+        densities: Gaussian densities. [C, N]
         colors: Per-view Gaussian colors. Supports N-D features. [C, N, channels]
         gaussian_ids: Collection of Gaussian indices to be rasterized. A flattened list of shape [M].
         pixel_ids: Collection of pixel indices (row-major) to be rasterized. A flattened list of shape [M].
@@ -581,20 +677,53 @@ def accumulate(
 
     C, N = means2d.shape[:2]
     channels = colors.shape[-1]
+    assert not enable_culling
 
     pixel_ids_x = pixel_ids % image_width
     pixel_ids_y = pixel_ids // image_width
     pixel_coords = torch.stack([pixel_ids_x, pixel_ids_y], dim=-1) + 0.5  # [M, 2]
-    deltas = pixel_coords - means2d[camera_ids, gaussian_ids]  # [M, 2]
-    c = conics[camera_ids, gaussian_ids]  # [M, 3]
-    sigmas = (
-        0.5 * (c[:, 0] * deltas[:, 0] ** 2 + c[:, 2] * deltas[:, 1] ** 2)
-        + c[:, 1] * deltas[:, 0] * deltas[:, 1]
-    )  # [M]
-    alphas = torch.clamp_max(
-        opacities[camera_ids, gaussian_ids] * torch.exp(-sigmas), 0.999
+
+    Ks = Ks[camera_ids]  # [M, 3, 3]
+    camtoworlds = camtoworlds[camera_ids]  # [M, 4, 4]
+    means = means3d[gaussian_ids]  # [M, 3]
+    densities = densities[camera_ids, gaussian_ids]  # [M]
+
+    if precis.shape[-1] == 6:
+        precis = torch.cat(
+            [
+                precis[..., [0, 1, 2]],
+                precis[..., [1, 3, 4]],
+                precis[..., [2, 4, 5]],
+            ],
+            dim=-1,
+        ).reshape(-1, 3, 3)
+    invV = precis[gaussian_ids]  # [M, 3, 3]
+
+    # generate rays
+    uvs = torch.stack(
+        [
+            (pixel_coords[:, 0] - Ks[:, 0, 2]) / Ks[:, 0, 0],
+            (pixel_coords[:, 1] - Ks[:, 1, 2]) / Ks[:, 1, 1],
+        ],
+        dim=-1,
+    )  # [M, 2]
+    camera_dirs = F.pad(uvs, (0, 1), value=1.0)  # [M, 3]
+    camera_dirs = F.normalize(camera_dirs, dim=-1)
+
+    # [M, 3]
+    viewdirs = (camera_dirs[:, None, :] * camtoworlds[:, :3, :3]).sum(dim=-1)
+    origins = camtoworlds[:, :3, -1]
+    opacities = integral_opacity(
+        means=means,
+        precis=invV,
+        densities=densities,
+        origins=origins,
+        viewdirs=viewdirs,
+        inf=True,
     )
-    alphas = torch.where(alphas >= 1. / 255., alphas, torch.zeros_like(alphas))
+
+    alphas = torch.clamp_max(opacities, 0.999)
+    alphas = torch.where(alphas >= 1.0 / 255.0, alphas, torch.zeros_like(alphas))
 
     if enable_culling:
         # ------------------------------------------------------------
@@ -628,7 +757,7 @@ def accumulate(
 
         # [M, 3]
         viewdirs = (camera_dirs[:, None, :] * camtoworlds[:, :3, :3]).sum(dim=-1)
-        origins = camtoworlds[:, :3, -1]        
+        origins = camtoworlds[:, :3, -1]
         _, _, isect_t1, isect_t2, hit = _ray_tetra_intersection(
             origins,
             viewdirs,
@@ -642,9 +771,12 @@ def accumulate(
         bb = torch.einsum("mi,mij,mj->m", viewdirs, invV, means - origins)
         beta1 = torch.sqrt(aa * 0.5)
         beta2 = torch.where(aa > 1e-6, bb / aa, torch.zeros_like(bb))
-        ratio = 0.5 * (
-            torch.erf(beta1 * (tmaxs - beta2)) - torch.erf(beta1 * (tmins - beta2))
-        ) * hit * (aa > 1e-6)
+        ratio = (
+            0.5
+            * (torch.erf(beta1 * (tmaxs - beta2)) - torch.erf(beta1 * (tmins - beta2)))
+            * hit
+            * (aa > 1e-6)
+        )
 
         # idx = 9816657
 
@@ -682,7 +814,7 @@ def accumulate(
         assert not torch.isnan(ratio).any(), invV[torch.isnan(ratio)]
         # alphas = alphas * ratio
         alphas = 1.0 - (1.0 - alphas) ** ratio
-        alphas = torch.where(alphas >= 1./255., alphas, torch.zeros_like(alphas))
+        alphas = torch.where(alphas >= 1.0 / 255.0, alphas, torch.zeros_like(alphas))
         # ------------------------------------------------------------
 
     indices = camera_ids * image_height * image_width + pixel_ids
@@ -711,7 +843,7 @@ def _rasterize_to_pixels(
     means2d: Tensor,  # [C, N, 2]
     conics: Tensor,  # [C, N, 3]
     colors: Tensor,  # [C, N, channels]
-    opacities: Tensor,  # [C, N]
+    densities: Tensor,  # [C, N]
     image_width: int,
     image_height: int,
     tile_size: int,
