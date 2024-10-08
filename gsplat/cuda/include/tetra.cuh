@@ -1,33 +1,12 @@
 #ifndef GSPLAT_CUDA_TETRA_CUH
 #define GSPLAT_CUDA_TETRA_CUH
 
+#include <stdio.h>
 #include "types.cuh"
 
 #define PI 3.14159265358979323846
 
 namespace gsplat {
-
-template <typename S>
-inline __device__ S integral_opacity(
-    const S density,
-    // ray
-    const vec3<S> ray_o, const vec3<S> ray_d,
-    // gaussian
-    const vec3<S> mean3d, const mat3<S> precision) {
-    vec3<S> mu = mean3d - ray_o;
-    S rr = glm::dot(ray_d, precision * ray_d);
-
-    S opacity = 0.0f;
-    if (rr > 1e-6f) { // numerical issue
-        S dr = glm::dot(mu, precision * ray_d);
-        S dd = glm::dot(mu, precision * mu);
-        S bb = -dr / rr;
-        S cc = dd - dr * dr / rr;
-        S _integral = 2.0f * __expf(-0.5f * cc) * sqrtf(0.5f * PI / rr);
-        opacity = 1.0 - __expf(-density * _integral);
-    }
-    return opacity;
-}
 
 
 template <typename T>
@@ -444,6 +423,79 @@ inline __device__ S integral(
         ratio = 0.f;
     }
     return ratio;
+}
+
+template <typename S>
+inline __device__ S integral_opacity(
+    const S density,
+    // ray
+    const vec3<S> ray_o, const vec3<S> ray_d,
+    // gaussian
+    const vec3<S> mean3d, const mat3<S> precision, bool verbose=false) {
+    if (density == 0.0f) return 0.0f;
+
+    vec3<S> mu = mean3d - ray_o;
+    S rr = glm::dot(ray_d, precision * ray_d);
+
+    S opacity = 0.0f;
+    if (rr > 1e-6f) { // numerical issue
+        S rr_inv = 1.0f / rr;
+        S dr = glm::dot(mu, precision * ray_d);
+        S dd = glm::dot(mu, precision * mu);
+        // S bb = -dr / rr;
+        S cc = dd - dr * dr * rr_inv;
+        S _integral = 2.0f * __expf(-0.5f * cc) * sqrtf(0.5f * PI * rr_inv);
+        opacity = 1.0 - __expf(-density * _integral);
+        if (verbose || isnan(opacity)) {
+            printf("density: %f, rr: %f, dr: %f, dd: %f, cc: %f, integral: %f, opacity: %f\n", density, rr, dr, dd, cc, _integral, opacity);
+        }
+    }
+    return opacity;
+}
+
+
+template <typename S>
+inline __device__ void integral_opacity_vjp(
+    const S density,
+    // ray
+    const vec3<S> ray_o, const vec3<S> ray_d,
+    // gaussian
+    const vec3<S> mean3d, const mat3<S> precision,
+    // grad input
+    const S v_opacity,
+    // grad output
+    vec3<S> &v_mean3d, mat3<S> &v_precision, S &v_density) {
+    if (density == 0.0f) return;
+
+    vec3<S> mu = mean3d - ray_o;
+    S rr = glm::dot(ray_d, precision * ray_d);
+
+    if (rr > 1e-6f) { // numerical issue
+        S rr_inv = 1.0f / rr;
+        S dr = glm::dot(mu, precision * ray_d);
+        S dd = glm::dot(mu, precision * mu);
+        // S bb = -dr * rr_inv;
+        S cc = dd - dr * dr * rr_inv;
+        S _integral = 2.0f * __expf(-0.5f * cc) * sqrtf(0.5f * PI * rr_inv);
+        S opacity = 1.0 - __expf(-density * _integral);
+
+        v_density += v_opacity * _integral * (1.0 - opacity);
+        
+        S v_integral = v_opacity * density * (1.0 - opacity);
+        S v_cc = -0.5f * _integral * v_integral;
+        S v_rr = v_cc * rr_inv;
+        
+        S v_dd = v_cc;
+        S v_dr = - 2.0f * dr * rr_inv * v_cc;
+        v_rr += dr * dr * rr_inv * rr_inv * v_cc;
+
+        v_mean3d += precision * ray_d * v_dr; // from dr
+        v_mean3d += 2.0f * precision * mu * v_dd; // from dd
+        // printf("v_rr: %f, v_dr: %f, v_dd: %f, v_cc: %f\n", v_rr, v_dr, v_dd, v_cc);
+        v_precision += glm::outerProduct(ray_d, ray_d) * v_rr; // from rr
+        v_precision += glm::outerProduct(mu, ray_d) * v_dr; // from dr
+        v_precision += glm::outerProduct(mu, mu) * v_dd; // from dd
+    }
 }
 
 } // namespace gsplat

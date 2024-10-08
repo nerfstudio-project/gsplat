@@ -533,6 +533,23 @@ std::tuple<torch::Tensor> ray_tetra_intersection_bwd_tensor(
     const torch::Tensor &v_t_exits  // [N]
 );
 
+torch::Tensor density_to_opacity_fwd_tensor(
+    const torch::Tensor &densities,
+    const torch::Tensor &rays_o,
+    const torch::Tensor &rays_d,
+    const torch::Tensor &means,
+    const torch::Tensor &precisions
+);
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> density_to_opacity_bwd_tensor(
+    const torch::Tensor &densities,
+    const torch::Tensor &rays_o,
+    const torch::Tensor &rays_d,
+    const torch::Tensor &means,
+    const torch::Tensor &precisions,
+    const torch::Tensor &v_opacities
+);
+
 } // namespace gsplat
 
 #endif // GSPLAT_CUDA_BINDINGS_H

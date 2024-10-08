@@ -91,4 +91,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // tetra
     m.def("ray_tetra_intersection_fwd", &gsplat::ray_tetra_intersection_fwd_tensor);
     m.def("ray_tetra_intersection_bwd", &gsplat::ray_tetra_intersection_bwd_tensor);
+
+    // density
+    m.def("density_to_opacity_fwd", &gsplat::density_to_opacity_fwd_tensor);
+    m.def("density_to_opacity_bwd", &gsplat::density_to_opacity_bwd_tensor);
 }

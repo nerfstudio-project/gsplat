@@ -168,8 +168,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
             } else {
                 const S opac = opacities[g];
                 xy_opacity_batch[tr] = {xy.x, xy.y, opac};                
+                conic_batch[tr] = conics[g];
             }
-            conic_batch[tr] = conics[g];
             // ---- culling ----
             // TODO: assuming non-packed for now
             int32_t gaussian_id = g % N;
@@ -196,13 +196,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         // process gaussians in the current batch for this pixel
         uint32_t batch_size = min(block_size, range_end - batch_start);
         for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
-            const vec3<S> conic = conic_batch[t];
             const vec3<S> xy_opac = xy_opacity_batch[t];
             const S opac = xy_opac.z; // might be density or opacity
-            const vec2<S> delta = {xy_opac.x - px, xy_opac.y - py};
-            const S sigma = 0.5f * (conic.x * delta.x * delta.x +
-                                    conic.z * delta.y * delta.y) +
-                            conic.y * delta.x * delta.y;
             
             S alpha;
             if (densities != nullptr) {
@@ -215,13 +210,21 @@ __global__ void rasterize_to_pixels_fwd_kernel(
                 alpha = integral_opacity(opac, ray_o, ray_d, mean3d, preci3x3);
                 alpha = min(0.999f, alpha);
             } else {
+                const vec3<S> conic = conic_batch[t];
+                const vec2<S> delta = {xy_opac.x - px, xy_opac.y - py};
+                const S sigma = 0.5f * (conic.x * delta.x * delta.x +
+                                        conic.z * delta.y * delta.y) +
+                                conic.y * delta.x * delta.y;
                 alpha = min(0.999f, opac * __expf(-sigma));
+                if (sigma < 0.f) {
+                    continue;
+                }
+                        
             }
 
-            if (sigma < 0.f || alpha < 1.f / 255.f) {
+            if (alpha < 1.f / 255.f) {
                 continue;
             }
-
 
             // ---- culling ----
             if (enable_culling) {

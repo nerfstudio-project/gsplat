@@ -17,47 +17,6 @@ namespace cg = cooperative_groups;
  * Rasterization to Pixels Backward Pass
  ****************************************************************************/
 
-template <typename S>
-inline __device__ void integral_opacity_vjp(
-    const S density,
-    // ray
-    const vec3<S> ray_o, const vec3<S> ray_d,
-    // gaussian
-    const vec3<S> mean3d, const mat3<S> precision,
-    // grad input
-    const S v_opacity,
-    // grad output
-    vec3<S> &v_mean3d, mat3<S> &v_precision, S &v_density) {
-    vec3<S> mu = mean3d - ray_o;
-    S rr = glm::dot(ray_d, precision * ray_d);
-
-    if (rr > 1e-6f) { // numerical issue
-        S rr_inv = 1.0f / rr;
-        S dr = glm::dot(mu, precision * ray_d);
-        S dd = glm::dot(mu, precision * mu);
-        // S bb = -dr * rr_inv;
-        S cc = dd - dr * dr * rr_inv;
-        S _integral = 2.0f * __expf(-0.5f * cc) * sqrtf(0.5f * PI / rr);
-        S opacity = 1.0 - __expf(-density * _integral);
-
-        v_density += v_opacity * _integral * (1.0 - opacity);
-        
-        S v_integral = v_opacity * density * (1.0 - opacity);
-        S v_cc = -0.5f * _integral * v_integral;
-        S v_rr = -_integral * rr_inv * v_integral;
-        
-        S v_dd = v_cc;
-        S v_dr = - 2.0f * dr * rr_inv * v_cc;
-        v_rr += dr * dr * rr_inv * rr_inv * v_cc;
-
-        v_mean3d += precision * ray_d * v_dr; // from dr
-        v_mean3d += 2.0f * precision * mu * v_dd; // from dd
-        v_precision += glm::outerProduct(ray_d, ray_d) * v_rr; // from rr
-        v_precision += glm::outerProduct(mu, ray_d) * v_dr; // from dr
-        v_precision += glm::outerProduct(mu, mu) * v_dd; // from dd
-    }
-}
-
 
 template <typename S>
 inline __device__ void integral_vjp(
