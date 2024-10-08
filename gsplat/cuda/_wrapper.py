@@ -491,7 +491,7 @@ def rasterize_to_pixels(
         assert means3d.shape == (N, 3), means3d.shape
         assert precis.shape == (N, 6), precis.shape
         assert tvertices.shape == (N, 4, 3), tvertices.shape
-    
+
     if camtoworlds is not None:
         camtoworlds = camtoworlds.contiguous()
     if Ks is not None:
@@ -611,6 +611,7 @@ def rasterize_to_indices_in_range(
     precis: Optional[Tensor] = None,  # [N, 6]
     tvertices: Optional[Tensor] = None,  # [N, 4, 3]
     # --- culling ---
+    densities: Optional[Tensor] = None,  # [C, N]
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """Rasterizes a batch of Gaussians to images but only returns the indices.
 
@@ -644,7 +645,12 @@ def rasterize_to_indices_in_range(
 
     C, N, _ = means2d.shape
     assert conics.shape == (C, N, 3), conics.shape
-    assert opacities.shape == (C, N), opacities.shape
+    if densities is None:
+        assert opacities.shape == (C, N), opacities.shape
+        opacities = opacities.contiguous()
+    else:
+        assert densities.shape == (C, N), densities.shape
+        densities = densities.contiguous()
     assert isect_offsets.shape[0] == C, isect_offsets.shape
 
     tile_height, tile_width = isect_offsets.shape[1:3]
@@ -672,7 +678,7 @@ def rasterize_to_indices_in_range(
         transmittances.contiguous(),
         means2d.contiguous(),
         conics.contiguous(),
-        opacities.contiguous(),
+        opacities.contiguous() if densities is None else torch.Tensor(),
         image_width,
         image_height,
         tile_size,
@@ -686,6 +692,7 @@ def rasterize_to_indices_in_range(
         precis,
         tvertices,
         # --- culling ---
+        densities,
     )
     out_pixel_ids = out_indices % (image_width * image_height)
     out_camera_ids = out_indices // (image_width * image_height)

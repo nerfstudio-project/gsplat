@@ -257,8 +257,9 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
     const at::optional<torch::Tensor>  &Ks,          // [C, 3, 3]
     const at::optional<torch::Tensor>  &means3d,     // [N, 3]
     const at::optional<torch::Tensor>  &precis,      // [N, 6]
-    const at::optional<torch::Tensor>  &tvertices    // [N, 4, 3]
+    const at::optional<torch::Tensor>  &tvertices,    // [N, 4, 3]
     // --- culling ---
+    const at::optional<torch::Tensor>  &densities   // [C, N]
 );
 
 torch::Tensor compute_sh_fwd_tensor(

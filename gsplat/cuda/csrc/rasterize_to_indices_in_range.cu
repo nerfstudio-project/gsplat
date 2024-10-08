@@ -23,7 +23,7 @@ __global__ void rasterize_to_indices_in_range_kernel(
     const uint32_t n_isects,
     const vec2<T> *__restrict__ means2d, // [C, N, 2]
     const vec3<T> *__restrict__ conics,  // [C, N, 3]
-    const T *__restrict__ opacities,     // [C, N]
+    const T *__restrict__ opacities,     // [C, N] optional
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
@@ -43,7 +43,8 @@ __global__ void rasterize_to_indices_in_range_kernel(
     const int32_t *__restrict__ chunk_starts, // [C, image_height, image_width]
     int32_t *__restrict__ chunk_cnts,         // [C, image_height, image_width]
     int64_t *__restrict__ gaussian_ids,       // [n_elems]
-    int64_t *__restrict__ pixel_ids           // [n_elems]
+    int64_t *__restrict__ pixel_ids,           // [n_elems]
+    const T *__restrict__ densities            // [C, N]
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
@@ -77,7 +78,7 @@ __global__ void rasterize_to_indices_in_range_kernel(
 
     // ---- culling ----
     vec3<T> ray_d, ray_o;
-    if (enable_culling && inside) {
+    if (inside) {
         const float *camtoworld = camtoworlds + 16 * camera_id;
         const float *K = Ks + 9 * camera_id;
         float u = (px - K[2]) / K[0];
@@ -159,20 +160,25 @@ __global__ void rasterize_to_indices_in_range_kernel(
             int32_t g = flatten_ids[idx];
             id_batch[tr] = g;
             const vec2<T> xy = means2d[g];
-            const T opac = opacities[g];
-            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
+            if (densities != nullptr) {
+                const T densi = densities[g];
+                xy_opacity_batch[tr] = {xy.x, xy.y, densi};
+            } else {
+                const T opac = opacities[g];
+                xy_opacity_batch[tr] = {xy.x, xy.y, opac};
+            }
             conic_batch[tr] = conics[g];
             // ---- culling ----
+            // TODO: assuming non-packed for now
+            int32_t gaussian_id = g % N;
+            mean3d_batch[tr] = vec3<T>{
+                means3d[gaussian_id * 3], means3d[gaussian_id * 3 + 1], means3d[gaussian_id * 3 + 2]};
+            const float *preci_ptr = precis + gaussian_id * 6;
+            GSPLAT_PRAGMA_UNROLL
+            for (uint32_t k = 0; k < 6; ++k) {
+                preci_batch[tr * 6 + k] = preci_ptr[k];
+            }
             if (enable_culling) {
-                // TODO: assuming non-packed for now
-                int32_t gaussian_id = g % N;
-                mean3d_batch[tr] = vec3<T>{
-                    means3d[gaussian_id * 3], means3d[gaussian_id * 3 + 1], means3d[gaussian_id * 3 + 2]};
-                const float *preci_ptr = precis + gaussian_id * 6;
-                GSPLAT_PRAGMA_UNROLL
-                for (uint32_t k = 0; k < 6; ++k) {
-                    preci_batch[tr * 6 + k] = preci_ptr[k];
-                }
                 const float *tvertice_ptr = tvertices + gaussian_id * 12;
                 GSPLAT_PRAGMA_UNROLL
                 for (uint32_t k = 0; k < 12; ++k) {
@@ -190,12 +196,25 @@ __global__ void rasterize_to_indices_in_range_kernel(
         for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
             const vec3<T> conic = conic_batch[t];
             const vec3<T> xy_opac = xy_opacity_batch[t];
-            const T opac = xy_opac.z;
+            const T opac = xy_opac.z; // might be density or opacity
             const vec2<T> delta = {xy_opac.x - px, xy_opac.y - py};
             const T sigma = 0.5f * (conic.x * delta.x * delta.x +
                                     conic.z * delta.y * delta.y) +
                             conic.y * delta.x * delta.y;
-            T alpha = min(0.999f, opac * __expf(-sigma));
+            
+            T alpha;
+            if (densities != nullptr) {
+                vec3<T> mean3d = mean3d_batch[t];
+                mat3<T> preci3x3 = mat3<T>(
+                    preci_batch[t * 6], preci_batch[t * 6 + 1], preci_batch[t * 6 + 2],
+                    preci_batch[t * 6 + 1], preci_batch[t * 6 + 3], preci_batch[t * 6 + 4],
+                    preci_batch[t * 6 + 2], preci_batch[t * 6 + 4], preci_batch[t * 6 + 5]);
+                // opac is actually density
+                alpha = integral_opacity(opac, ray_o, ray_d, mean3d, preci3x3);
+                alpha = min(0.999f, alpha);
+            } else {
+                alpha = min(0.999f, opac * __expf(-sigma));
+            }
 
             if (sigma < 0.f || alpha < 1.f / 255.f) {
                 continue;
@@ -304,23 +323,24 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
     const at::optional<torch::Tensor>  &Ks,          // [C, 3, 3]
     const at::optional<torch::Tensor>  &means3d,     // [N, 3]
     const at::optional<torch::Tensor>  &precis,      // [N, 6]
-    const at::optional<torch::Tensor>  &tvertices    // [N, 4, 3]
+    const at::optional<torch::Tensor>  &tvertices,    // [N, 4, 3]
     // --- culling ---
+    const at::optional<torch::Tensor>  &densities   // [C, N]
 ) {
     GSPLAT_DEVICE_GUARD(means2d);
     GSPLAT_CHECK_INPUT(means2d);
     GSPLAT_CHECK_INPUT(conics);
-    GSPLAT_CHECK_INPUT(opacities);
+    // GSPLAT_CHECK_INPUT(opacities);
     GSPLAT_CHECK_INPUT(tile_offsets);
     GSPLAT_CHECK_INPUT(flatten_ids);
 
     if (enable_culling) {
-        GSPLAT_CHECK_INPUT(camtoworlds.value());
-        GSPLAT_CHECK_INPUT(Ks.value());
-        GSPLAT_CHECK_INPUT(means3d.value());
-        GSPLAT_CHECK_INPUT(precis.value());
         GSPLAT_CHECK_INPUT(tvertices.value());
     }
+    GSPLAT_CHECK_INPUT(camtoworlds.value());
+    GSPLAT_CHECK_INPUT(Ks.value());
+    GSPLAT_CHECK_INPUT(means3d.value());
+    GSPLAT_CHECK_INPUT(precis.value());
 
     uint32_t C = means2d.size(0); // number of cameras
     uint32_t N = means2d.size(1); // number of gaussians
@@ -341,6 +361,10 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
     if (enable_culling) {
         shared_mem += tile_size * tile_size *
         (sizeof(vec3<float>) + sizeof(float) * 6 + sizeof(float) * 12);
+    } else {
+        // No vertices
+        shared_mem += tile_size * tile_size * 
+        (sizeof(vec3<float>) + sizeof(float) * 6);
     }
 
     if (cudaFuncSetAttribute(
@@ -372,7 +396,7 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
                 n_isects,
                 reinterpret_cast<vec2<float> *>(means2d.data_ptr<float>()),
                 reinterpret_cast<vec3<float> *>(conics.data_ptr<float>()),
-                opacities.data_ptr<float>(),
+                densities.has_value() ? nullptr : opacities.data_ptr<float>(),
                 image_width,
                 image_height,
                 tile_size,
@@ -392,7 +416,8 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
                 nullptr,
                 chunk_cnts.data_ptr<int32_t>(),
                 nullptr,
-                nullptr
+                nullptr,
+                densities.has_value() ? densities.value().data_ptr<float>() : nullptr
             );
 
         torch::Tensor cumsum =
@@ -418,7 +443,7 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
                 n_isects,
                 reinterpret_cast<vec2<float> *>(means2d.data_ptr<float>()),
                 reinterpret_cast<vec3<float> *>(conics.data_ptr<float>()),
-                opacities.data_ptr<float>(),
+                densities.has_value() ? nullptr : opacities.data_ptr<float>(),
                 image_width,
                 image_height,
                 tile_size,
@@ -438,7 +463,8 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
                 chunk_starts.data_ptr<int32_t>(),
                 nullptr,
                 gaussian_ids.data_ptr<int64_t>(),
-                pixel_ids.data_ptr<int64_t>()
+                pixel_ids.data_ptr<int64_t>(),
+                densities.has_value() ? densities.value().data_ptr<float>() : nullptr
             );
     }
     return std::make_tuple(gaussian_ids, pixel_ids);
