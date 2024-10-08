@@ -16,6 +16,7 @@ from gsplat._helper import load_test_data
 
 device = torch.device("cuda:0")
 
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.fixture
 def test_data():
@@ -136,7 +137,9 @@ def test_rasterize_to_pixels(test_data, channels: int):
     opacities.requires_grad = True
     backgrounds.requires_grad = True
 
-    covars, precis = quat_scale_to_covar_preci(quats, scales, compute_preci=True, triu=True)
+    covars, precis = quat_scale_to_covar_preci(
+        quats, scales, compute_preci=True, triu=True
+    )
 
     # Project Gaussians to 2D
     radii, means2d, depths, conics, compensations = fully_fused_projection(
@@ -223,14 +226,21 @@ def test_rasterize_to_pixels(test_data, channels: int):
     v_render_colors = torch.randn_like(render_colors)
     v_render_alphas = torch.randn_like(render_alphas)
 
-    v_means, v_quats, v_scales, v_colors, v_opacities, v_backgrounds = torch.autograd.grad(
-        (render_colors * v_render_colors).sum()
-        + (render_alphas * v_render_alphas).sum(),
-        (means, quats, scales, colors, opacities, backgrounds),
-        retain_graph=True,
+    v_means, v_quats, v_scales, v_colors, v_opacities, v_backgrounds = (
+        torch.autograd.grad(
+            (render_colors * v_render_colors).sum()
+            + (render_alphas * v_render_alphas).sum(),
+            (means, quats, scales, colors, opacities, backgrounds),
+            retain_graph=True,
+        )
     )
     (
-        _v_means, _v_quats, _v_scales, _v_colors, _v_opacities, _v_backgrounds,
+        _v_means,
+        _v_quats,
+        _v_scales,
+        _v_colors,
+        _v_opacities,
+        _v_backgrounds,
     ) = torch.autograd.grad(
         (_render_colors * v_render_colors).sum()
         + (_render_alphas * v_render_alphas).sum(),
@@ -244,3 +254,63 @@ def test_rasterize_to_pixels(test_data, channels: int):
     # torch.testing.assert_close(v_colors, _v_colors, rtol=1e-3, atol=1e-3)
     # torch.testing.assert_close(v_opacities, _v_opacities, rtol=2e-3, atol=2e-3)
     # torch.testing.assert_close(v_backgrounds, _v_backgrounds, rtol=1e-3, atol=1e-3)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def test_opacity_integral(test_data):
+    from gsplat import quat_scale_to_covar_preci
+    from gsplat.cuda._torch_impl import integral_opacity, integral_opacity_numerical
+    import torch.nn.functional as F
+
+    torch.manual_seed(42)
+    N = 100
+    Ks = test_data["Ks"][:N]
+    viewmats = test_data["viewmats"][:N]
+    height = test_data["height"]
+    width = test_data["width"]
+    quats = test_data["quats"][:N]
+    scales = test_data["scales"][:N] * 100.0
+    means = test_data["means"][:N]
+    C = len(Ks)
+    # gaussian attributes
+    _, precis = quat_scale_to_covar_preci(
+        quats, scales, compute_covar=False, compute_preci=True, triu=False
+    )
+    densities = torch.rand(N, device=device)
+    # ray attributes
+    camera_ids = torch.randint(0, C, (N,), device=device)
+    pixel_ids = torch.randint(0, width * height, (N,), device=device)
+    pixel_ids_x = pixel_ids % width
+    pixel_ids_y = pixel_ids // width
+    pixel_coords = torch.stack([pixel_ids_x, pixel_ids_y], dim=-1) + 0.5  # [N, 2]
+    camtoworlds = torch.linalg.inv(viewmats)[camera_ids]  # [N, 4, 4]
+    Ks = Ks[camera_ids]  # [N, 3, 3]
+    uvs = torch.stack(
+        [
+            (pixel_coords[:, 0] - Ks[:, 0, 2]) / Ks[:, 0, 0],
+            (pixel_coords[:, 1] - Ks[:, 1, 2]) / Ks[:, 1, 1],
+        ],
+        dim=-1,
+    )  # [N, 2]
+    camera_dirs = F.pad(uvs, (0, 1), value=1.0)  # [N, 3]
+    camera_dirs = F.normalize(camera_dirs, dim=-1)
+    viewdirs = (camera_dirs[:, None, :] * camtoworlds[:, :3, :3]).sum(dim=-1)  # [N, 3]
+    origins = camtoworlds[:, :3, -1]  # [N, 3]
+    # analytical vs numerical integration
+    tmaxs = torch.rand(N, device=device) * 1e3
+    tmins = -torch.rand(N, device=device) * 1e3
+    opacities = integral_opacity(
+        means, precis, densities, origins, viewdirs, inf=False, tmins=tmins, tmaxs=tmaxs
+    )
+    _opacities = integral_opacity_numerical(
+        means, precis, densities, origins, viewdirs, tmins=tmins, tmaxs=tmaxs
+    )
+    torch.testing.assert_close(opacities, _opacities, rtol=1e-3, atol=1e-3)
+    # test inf integral
+    tmins = torch.full((N,), -1e5, device=device)
+    tmaxs = torch.full((N,), 1e5, device=device)
+    opacities = integral_opacity(
+        means, precis, densities, origins, viewdirs, inf=False, tmins=tmins, tmaxs=tmaxs
+    )
+    _opacities = integral_opacity(means, precis, densities, origins, viewdirs, inf=True)
+    torch.testing.assert_close(opacities, _opacities, rtol=1e-6, atol=1e-6)

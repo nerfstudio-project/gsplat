@@ -369,9 +369,9 @@ def rasterization(
         # The results are with shape [C, N, ...]. Only the elements with radii > 0 are valid.
         radii, means2d, depths, conics, compensations = proj_results
         if densities is None:
-            opacities = opacities.repeat(C, 1) # [C, N]
+            opacities = opacities.repeat(C, 1)  # [C, N]
         else:
-            densities = densities.repeat(C, 1) # [C, N]
+            densities = densities.repeat(C, 1)  # [C, N]
         camera_ids, gaussian_ids = None, None
 
     if compensations is not None:
@@ -670,6 +670,7 @@ def _rasterization(
     enable_culling: bool = False,
     tvertices: Optional[Tensor] = None,  # [N, 4, 3]
     # --- enable culling ---
+    densities: Optional[Tensor] = None,  # [N,]
     **kwargs,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """A version of rasterization() that utilies on PyTorch's autograd.
@@ -698,7 +699,10 @@ def _rasterization(
     assert means.shape == (N, 3), means.shape
     assert quats.shape == (N, 4), quats.shape
     assert scales.shape == (N, 3), scales.shape
-    assert opacities.shape == (N,), opacities.shape
+    if densities is None:
+        assert opacities.shape == (N,), opacities.shape
+    else:
+        assert densities.shape == (N,), densities.shape
     assert viewmats.shape == (C, 4, 4), viewmats.shape
     assert Ks.shape == (C, 3, 3), Ks.shape
     assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
@@ -734,7 +738,11 @@ def _rasterization(
         far_plane=far_plane,
         calc_compensations=(rasterize_mode == "antialiased"),
     )
-    opacities = opacities.repeat(C, 1)  # [C, N]
+    if densities is None:
+        opacities = opacities.repeat(C, 1)  # [C, N]
+    else:
+        densities = densities.repeat(C, 1)  # [C, N]
+    
     camera_ids, gaussian_ids = None, None
 
     if compensations is not None:
@@ -825,6 +833,7 @@ def _rasterization(
                 precis=precis,
                 tvertices=tvertices,
                 # --- enable culling ---
+                densities=densities,
             )
             render_colors.append(render_colors_)
             render_alphas.append(render_alphas_)
@@ -851,6 +860,7 @@ def _rasterization(
             precis=precis,
             tvertices=tvertices,
             # --- enable culling ---
+            densities=densities,
         )
     if render_mode in ["ED", "RGB+ED"]:
         # normalize the accumulated depth to get the expected depth
@@ -870,6 +880,7 @@ def _rasterization(
         "depths": depths,
         "conics": conics,
         "opacities": opacities,
+        "densities": densities,
         "tile_width": tile_width,
         "tile_height": tile_height,
         "tiles_per_gauss": tiles_per_gauss,

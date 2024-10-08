@@ -158,10 +158,10 @@ class Config:
     lpips_net: Literal["vgg", "alex"] = "alex"
 
     # Tetra
-    enable_culling: bool = True
-    opt_vert: bool = False # optimize tet vertices directly
-    t_init_s: float = 6.0 # initial scale of tet
-    t_lr_v: float = 1e-3 # learning rate for tet vertices
+    enable_culling: bool = False
+    opt_vert: bool = False  # optimize tet vertices directly
+    t_init_s: float = 6.0  # initial scale of tet
+    t_lr_v: float = 1e-3  # learning rate for tet vertices
 
     # Density
     use_density: bool = False
@@ -224,7 +224,7 @@ def create_splats_with_optimizers(
 
     N = points.shape[0]
     quats = torch.rand((N, 4))  # [N, 4]
-    
+
     params = [
         # name, value, lr
         ("means", torch.nn.Parameter(points), 1.6e-4 * scene_scale),
@@ -233,22 +233,25 @@ def create_splats_with_optimizers(
     ]
 
     if cfg.use_density:
-        densities = - torch.log(1.0 - torch.full((N,), init_opacity)) * 10 # [N,]
+        densities = -torch.log(1.0 - torch.full((N,), init_opacity)) * 10  # [N,]
         params.append(("densities", torch.nn.Parameter(densities), 5e-2))
     else:
         opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
         params.append(("opacities", torch.nn.Parameter(opacities), 5e-2))
 
     if cfg.enable_culling:
-        if cfg.opt_vert:            
-            tvertices = torch.tensor(
-                [
-                    [math.sqrt(8 / 9), 0, -1 / 3],
-                    [-math.sqrt(2 / 9), math.sqrt(2 / 3), -1 / 3],
-                    [-math.sqrt(2 / 9), -math.sqrt(2 / 3), -1 / 3],
-                    [0, 0, 1],
-                ],
-            ) * 2.0  # [4, 3] 2 sigma surface
+        if cfg.opt_vert:
+            tvertices = (
+                torch.tensor(
+                    [
+                        [math.sqrt(8 / 9), 0, -1 / 3],
+                        [-math.sqrt(2 / 9), math.sqrt(2 / 3), -1 / 3],
+                        [-math.sqrt(2 / 9), -math.sqrt(2 / 3), -1 / 3],
+                        [0, 0, 1],
+                    ],
+                )
+                * 2.0
+            )  # [4, 3] 2 sigma surface
             tvertices = tvertices[None, :, :].repeat(N, 1, 1)
 
             # Local space tvertices
@@ -472,6 +475,7 @@ class Runner:
                 icon=viser.Icon.OCTAHEDRON,
                 hint="Draw the tetrahedron for the current GS.",
             )
+
             @server_bt_draw_tetra.on_click
             def _(event: viser.GuiEvent) -> None:
                 self.draw_tetra()
@@ -483,7 +487,7 @@ class Runner:
         means = self.splats["means"][indices]  # [N, 3]
         quats = self.splats["quats"][indices]  # [N, 4]
         scales = torch.exp(self.splats["scales"][indices])  # [N, 3]
-        tvertices = self.splats["tvertices"][indices] # [N, 4, 3]
+        tvertices = self.splats["tvertices"][indices]  # [N, 4, 3]
 
         # project to unit sphere (on gs 1 sigma surface in local space)
         tdists = torch.linalg.norm(tvertices, dim=-1)  # [N, 4]
@@ -504,7 +508,6 @@ class Runner:
             faces=faces,
             wireframe=True,
         )
-
 
     def rasterize_splats(
         self,
@@ -529,7 +532,7 @@ class Runner:
         if self.cfg.enable_culling:
             if self.cfg.opt_vert:
                 tscales = tquats = None
-                tvertices = self.splats["tvertices"] # [N, 4, 3]
+                tvertices = self.splats["tvertices"]  # [N, 4, 3]
                 # tcenters = tvertices.mean(dim=1, keepdim=True)  # [N, 1, 3]
                 # tdists = torch.linalg.norm(tvertices - tcenters, dim=-1).mean(dim=1)  # [N,]
                 # tvertices = (tvertices - tcenters) / tdists[:, None, None]  # normalize
@@ -541,8 +544,12 @@ class Runner:
                 tdists = torch.linalg.norm(tvertices, dim=-1)  # [N, 4]
                 tvertices = tvertices / tdists[:, :, None]  # [N, 4, 3]
                 # rotate to the world space and put it on the 6 sigma surface
-                rotmats = _quat_scale_to_matrix(quats, scales * self.cfg.t_init_s)  # [N, 3, 3]
-                tvertices = torch.einsum("nij,nkj->nki", rotmats, tvertices)  # [N, 4, 3]
+                rotmats = _quat_scale_to_matrix(
+                    quats, scales * self.cfg.t_init_s
+                )  # [N, 3, 3]
+                tvertices = torch.einsum(
+                    "nij,nkj->nki", rotmats, tvertices
+                )  # [N, 4, 3]
                 tvertices = tvertices + means[:, None, :]  # [N, 4, 3]
 
             else:
@@ -566,7 +573,7 @@ class Runner:
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
-        render_colors, render_alphas, info = rasterization(
+        render_colors, render_alphas, info = _rasterization(
             means=means,
             quats=quats,
             scales=scales,
@@ -783,10 +790,12 @@ class Runner:
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
             if cfg.enable_culling:
                 if cfg.opt_vert:
-                    v = self.splats['tvertices']
+                    v = self.splats["tvertices"]
                     desc += f"ts: {torch.linalg.norm(v, dim=-1).mean().item():.3f}| {v[10, 0].tolist()} | {torch.linalg.norm(v.grad, dim=-1).mean().item():.6f}"
                 else:
-                    desc += f"ts: {torch.exp(self.splats['tscales']).mean().item():.3f}| "
+                    desc += (
+                        f"ts: {torch.exp(self.splats['tscales']).mean().item():.3f}| "
+                    )
             if cfg.depth_loss:
                 desc += f"depth loss={depthloss.item():.6f}| "
             if cfg.pose_opt and cfg.pose_noise:
@@ -1111,7 +1120,7 @@ class Runner:
             sh_degree=self.cfg.sh_degree,  # active all SH degrees
             radius_clip=3.0,  # skip GSs that have small image radius (in pixels)
         )  # [1, H, W, 3]
-        
+
         if self.cfg.enable_culling and self.cfg.opt_vert:
             self.draw_tetra(np.arange(len(self.splats["means"]), step=100).tolist())
         return render_colors[0].cpu().numpy()
