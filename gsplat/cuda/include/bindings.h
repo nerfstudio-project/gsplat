@@ -240,7 +240,7 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2]
     const torch::Tensor &conics,    // [C, N, 3]
-    const torch::Tensor &opacities, // [N]
+    const torch::Tensor &densities, // [N]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,

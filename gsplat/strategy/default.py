@@ -4,7 +4,7 @@ from typing import Any, Dict, Tuple, Union
 import torch
 
 from .base import Strategy
-from .ops import duplicate, remove, reset_opa, split
+from .ops import duplicate, remove, reset_density, split
 from typing_extensions import Literal
 
 
@@ -76,7 +76,7 @@ class DefaultStrategy(Strategy):
 
     """
 
-    prune_opa: float = 0.005
+    prune_density: float = 0.2  # TODO: try other values
     grow_grad2d: float = 0.0002
     grow_scale3d: float = 0.01
     grow_scale2d: float = 0.05
@@ -119,7 +119,7 @@ class DefaultStrategy(Strategy):
         Check if:
             * `params` and `optimizers` have the same keys.
             * Each optimizer has exactly one param_group, corresponding to each parameter.
-            * The following keys are present: {"means", "scales", "quats", "opacities"}.
+            * The following keys are present: {"means", "scales", "quats", "densities"}.
 
         Raises:
             AssertionError: If any of the above conditions is not met.
@@ -130,9 +130,10 @@ class DefaultStrategy(Strategy):
             and optimizers is as expected.
         """
 
+        assert not self.revised_opacity
         super().check_sanity(params, optimizers)
         # The following keys are required for this strategy.
-        for key in ["means", "scales", "quats", "opacities"]:
+        for key in ["means", "scales", "quats", "densities"]:
             assert key in params, f"{key} is required in params but missing."
 
     def step_pre_backward(
@@ -193,11 +194,11 @@ class DefaultStrategy(Strategy):
             torch.cuda.empty_cache()
 
         if step % self.reset_every == 0:
-            reset_opa(
+            reset_density(
                 params=params,
                 optimizers=optimizers,
                 state=state,
-                value=self.prune_opa * 2.0,
+                value=self.prune_density * 2.0,
             )
 
     def _update_state(
@@ -317,7 +318,8 @@ class DefaultStrategy(Strategy):
         state: Dict[str, Any],
         step: int,
     ) -> int:
-        is_prune = torch.sigmoid(params["opacities"].flatten()) < self.prune_opa
+        # TODO: try other functions
+        is_prune = torch.relu(params["densities"]) < self.prune_density
         if step > self.reset_every:
             is_too_big = (
                 torch.exp(params["scales"]).max(dim=-1).values

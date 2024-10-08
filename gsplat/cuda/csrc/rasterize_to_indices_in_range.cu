@@ -23,7 +23,7 @@ __global__ void rasterize_to_indices_in_range_kernel(
     const uint32_t n_isects,
     const vec2<T> *__restrict__ means2d, // [C, N, 2]
     const vec3<T> *__restrict__ conics,  // [C, N, 3]
-    const T *__restrict__ opacities,     // [C, N]
+    const T *__restrict__ densities,     // [C, N]
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
@@ -159,7 +159,35 @@ __global__ void rasterize_to_indices_in_range_kernel(
             int32_t g = flatten_ids[idx];
             id_batch[tr] = g;
             const vec2<T> xy = means2d[g];
-            const T opac = opacities[g];
+
+            // ray attributes
+            const float *camtoworld = camtoworlds + 16 * camera_id;
+            const float *K = Ks + 9 * camera_id;
+            float u = (px - K[2]) / K[0];
+            float v = (py - K[5]) / K[4];
+            float inv_len = rsqrtf(u * u + v * v + 1.f);
+            ray_d = vec3<T>(u * inv_len, v * inv_len, inv_len);  // camera space
+            ray_d = vec3<T>(camtoworld[0] * ray_d.x + camtoworld[1] * ray_d.y +
+                                camtoworld[2] * ray_d.z,
+                                camtoworld[4] * ray_d.x + camtoworld[5] * ray_d.y +
+                                camtoworld[6] * ray_d.z,
+                                camtoworld[8] * ray_d.x + camtoworld[9] * ray_d.y +
+                                camtoworld[10] * ray_d.z); // world space
+            ray_o = vec3<T>(camtoworld[3], camtoworld[7], camtoworld[11]);
+            
+            // gaussian attributes
+            vec3<T> mean3d = vec3<T>(
+                means3d[g * 3], means3d[g * 3 + 1], means3d[g * 3 + 2]);
+            mat3<T> preci3x3 = mat3<T>(
+                precis[g * 6], precis[g * 6 + 1], precis[g * 6 + 2],
+                precis[g * 6 + 1], precis[g * 6 + 3], precis[g * 6 + 4],
+                precis[g * 6 + 2], precis[g * 6 + 4], precis[g * 6 + 5]);
+            T density = densities[g];
+            
+            T opac = integral_opacity(
+                ray_o, ray_d, 0.f, INFINITY, true, 
+                mean3d, preci3x3, density);
+
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             conic_batch[tr] = conics[g];
             // ---- culling ----
@@ -290,7 +318,7 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2]
     const torch::Tensor &conics,    // [C, N, 3]
-    const torch::Tensor &opacities, // [C, N]
+    const torch::Tensor &densities, // [C, N]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -310,7 +338,7 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
     GSPLAT_DEVICE_GUARD(means2d);
     GSPLAT_CHECK_INPUT(means2d);
     GSPLAT_CHECK_INPUT(conics);
-    GSPLAT_CHECK_INPUT(opacities);
+    GSPLAT_CHECK_INPUT(densities);
     GSPLAT_CHECK_INPUT(tile_offsets);
     GSPLAT_CHECK_INPUT(flatten_ids);
 
@@ -372,7 +400,7 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
                 n_isects,
                 reinterpret_cast<vec2<float> *>(means2d.data_ptr<float>()),
                 reinterpret_cast<vec3<float> *>(conics.data_ptr<float>()),
-                opacities.data_ptr<float>(),
+                densities.data_ptr<float>(),
                 image_width,
                 image_height,
                 tile_size,
@@ -418,7 +446,7 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
                 n_isects,
                 reinterpret_cast<vec2<float> *>(means2d.data_ptr<float>()),
                 reinterpret_cast<vec3<float> *>(conics.data_ptr<float>()),
-                opacities.data_ptr<float>(),
+                densities.data_ptr<float>(),
                 image_width,
                 image_height,
                 tile_size,

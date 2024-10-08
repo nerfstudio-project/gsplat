@@ -421,6 +421,28 @@ inline __device__ S integral(
     return ratio;
 }
 
+template <typename S>
+inline __device__ S integral_opacity(
+    // ray
+    const vec3<S> ray_o, const vec3<S> ray_d, const S tmin, const S tmax, bool inf,
+    // gaussian
+    const vec3<S> mean3d, const mat3<S> precision, const S density) {
+    vec3<S> d = mean3d - ray_o;
+    S rr = glm::dot(ray_d, precision * ray_d);
+    S dr = glm::dot(ray_d, precision * d);
+    S dd = glm::dot(d, precision * d);
+    S bb = -dr / rr;
+    S cc = dd - dr * dr / rr;
+    S transmittance;
+    if (inf) {
+        transmittance = exp(-density * exp(-0.5f * cc) * sqrtf(0.5f * M_PI / rr) * 2.f);
+    } else {
+        transmittance = exp(-density * exp(-0.5f * cc) * sqrtf(0.5f * M_PI / rr) *
+            (erff(sqrtf(rr / 2.f) * (tmax - bb)) - erff(sqrtf(rr / 2.f) * (tmin - bb))));
+    }
+    return 1.f - transmittance;
+}
+
 } // namespace gsplat
 
 #endif // GSPLAT_CUDA_TETRA_CUH

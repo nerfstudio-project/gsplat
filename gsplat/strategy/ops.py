@@ -156,13 +156,13 @@ def split(
             p_split = torch.logit(new_opacities).repeat(repeats)  # [2N]
         elif name == "tscales":
             tscales = torch.exp(p[sel])
-            p_split = torch.log(tscales / 1.6).repeat(repeats)  # [2N, 3] 
+            p_split = torch.log(tscales / 1.6).repeat(repeats)  # [2N, 3]
         # elif name == "tvertices":
         #     assert p.dim() == 3 and p.shape[-2:] == (4, 3)
         #     p_split = p[sel]
         #     p_center = p_split.mean(dim=1, keepdim=True)
         #     p_split = (p_split - p_center) / 1.6 + p_center # centering
-        #     p_split = p_split.repeat(repeats)  # [2N, 4, 3] 
+        #     p_split = p_split.repeat(repeats)  # [2N, 4, 3]
         else:
             p_split = p[sel].repeat(repeats)
         p_new = torch.cat([p[rest], p_split])
@@ -214,13 +214,13 @@ def remove(
 
 
 @torch.no_grad()
-def reset_opa(
+def reset_density(
     params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
     optimizers: Dict[str, torch.optim.Optimizer],
     state: Dict[str, Tensor],
     value: float,
 ):
-    """Inplace reset the opacities to the given post-sigmoid value.
+    """Inplace reset the densities to the given post-sigmoid value.
 
     Args:
         params: A dictionary of parameters.
@@ -229,9 +229,10 @@ def reset_opa(
     """
 
     def param_fn(name: str, p: Tensor) -> Tensor:
-        if name == "opacities":
-            opacities = torch.clamp(p, max=torch.logit(torch.tensor(value)).item())
-            return torch.nn.Parameter(opacities)
+        if name == "densities":
+            # TODO: try other functions
+            densities = torch.clamp(p, max=torch.tensor(value).item())
+            return torch.nn.Parameter(densities)
         else:
             raise ValueError(f"Unexpected parameter name: {name}")
 

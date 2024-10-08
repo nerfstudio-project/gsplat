@@ -91,8 +91,8 @@ class Config:
     sh_degree: int = 3
     # Turn on another SH degree every this steps
     sh_degree_interval: int = 1000
-    # Initial opacity of GS
-    init_opa: float = 0.1
+    # Initial density of GS
+    init_density: float = 0.1  # TODO: try more
     # Initial scale of GS
     init_scale: float = 1.0
     # Weight for SSIM loss
@@ -158,10 +158,10 @@ class Config:
     lpips_net: Literal["vgg", "alex"] = "alex"
 
     # Tetra
-    enable_culling: bool = True
-    opt_vert: bool = False # optimize tet vertices directly
-    t_init_s: float = 6.0 # initial scale of tet
-    t_lr_v: float = 1e-3 # learning rate for tet vertices
+    enable_culling: bool = False
+    opt_vert: bool = False  # optimize tet vertices directly
+    t_init_s: float = 6.0  # initial scale of tet
+    t_lr_v: float = 1e-3  # learning rate for tet vertices
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -189,7 +189,7 @@ def create_splats_with_optimizers(
     init_type: str = "sfm",
     init_num_pts: int = 100_000,
     init_extent: float = 3.0,
-    init_opacity: float = 0.1,
+    init_density: float = 0.1,
     init_scale: float = 1.0,
     scene_scale: float = 1.0,
     sh_degree: int = 3,
@@ -221,26 +221,31 @@ def create_splats_with_optimizers(
 
     N = points.shape[0]
     quats = torch.rand((N, 4))  # [N, 4]
-    opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
+    # densities = torch.logit(torch.full((N,), init_density))  # [N,]
+    # TODO: try other activation functions, e.g. softplus, exp, etc.
+    densities = torch.relu(torch.full((N,), init_density))  # [N,]
 
     params = [
         # name, value, lr
         ("means", torch.nn.Parameter(points), 1.6e-4 * scene_scale),
         ("scales", torch.nn.Parameter(scales), 5e-3),
         ("quats", torch.nn.Parameter(quats), 1e-3),
-        ("opacities", torch.nn.Parameter(opacities), 5e-2),
+        ("densities", torch.nn.Parameter(densities), 5e-2),  # TODO: try other lr
     ]
 
     if cfg.enable_culling:
-        if cfg.opt_vert:            
-            tvertices = torch.tensor(
-                [
-                    [math.sqrt(8 / 9), 0, -1 / 3],
-                    [-math.sqrt(2 / 9), math.sqrt(2 / 3), -1 / 3],
-                    [-math.sqrt(2 / 9), -math.sqrt(2 / 3), -1 / 3],
-                    [0, 0, 1],
-                ],
-            ) * 2.0  # [4, 3] 2 sigma surface
+        if cfg.opt_vert:
+            tvertices = (
+                torch.tensor(
+                    [
+                        [math.sqrt(8 / 9), 0, -1 / 3],
+                        [-math.sqrt(2 / 9), math.sqrt(2 / 3), -1 / 3],
+                        [-math.sqrt(2 / 9), -math.sqrt(2 / 3), -1 / 3],
+                        [0, 0, 1],
+                    ],
+                )
+                * 2.0
+            )  # [4, 3] 2 sigma surface
             tvertices = tvertices[None, :, :].repeat(N, 1, 1)
 
             # Local space tvertices
@@ -343,7 +348,7 @@ class Runner:
             init_type=cfg.init_type,
             init_num_pts=cfg.init_num_pts,
             init_extent=cfg.init_extent,
-            init_opacity=cfg.init_opa,
+            init_density=cfg.init_density,
             init_scale=cfg.init_scale,
             scene_scale=self.scene_scale,
             sh_degree=cfg.sh_degree,
@@ -474,11 +479,13 @@ class Runner:
         # rasterization does normalization internally
         quats = self.splats["quats"]  # [N, 4]
         scales = torch.exp(self.splats["scales"])  # [N, 3]
-        opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
+        densities = torch.relu(
+            self.splats["densities"]
+        )  # [N,]    # TODO: try other activation functions
         if self.cfg.enable_culling:
             if self.cfg.opt_vert:
                 tscales = tquats = None
-                tvertices = self.splats["tvertices"] # [N, 4, 3]
+                tvertices = self.splats["tvertices"]  # [N, 4, 3]
                 # tcenters = tvertices.mean(dim=1, keepdim=True)  # [N, 1, 3]
                 # tdists = torch.linalg.norm(tvertices - tcenters, dim=-1).mean(dim=1)  # [N,]
                 # tvertices = (tvertices - tcenters) / tdists[:, None, None]  # normalize
@@ -490,8 +497,12 @@ class Runner:
                 tdists = torch.linalg.norm(tvertices, dim=-1)  # [N, 4]
                 tvertices = tvertices / tdists[:, :, None]  # [N, 4, 3]
                 # rotate to the world space and put it on the 6 sigma surface
-                rotmats = _quat_scale_to_matrix(quats, scales * self.cfg.t_init_s)  # [N, 3, 3]
-                tvertices = torch.einsum("nij,nkj->nki", rotmats, tvertices)  # [N, 4, 3]
+                rotmats = _quat_scale_to_matrix(
+                    quats, scales * self.cfg.t_init_s
+                )  # [N, 3, 3]
+                tvertices = torch.einsum(
+                    "nij,nkj->nki", rotmats, tvertices
+                )  # [N, 4, 3]
                 tvertices = tvertices + means[:, None, :]  # [N, 4, 3]
 
             else:
@@ -515,11 +526,11 @@ class Runner:
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
-        render_colors, render_alphas, info = rasterization(
+        render_colors, render_alphas, info = _rasterization(
             means=means,
             quats=quats,
             scales=scales,
-            opacities=opacities,
+            densities=densities,
             colors=colors,
             viewmats=torch.linalg.inv(camtoworlds),  # [C, 4, 4]
             Ks=Ks,  # [C, 3, 3]
@@ -732,7 +743,9 @@ class Runner:
                 if cfg.opt_vert:
                     desc += f"ts: {torch.linalg.norm(self.splats['tvertices'], dim=-1).mean().item():.3f}| "
                 else:
-                    desc += f"ts: {torch.exp(self.splats['tscales']).mean().item():.3f}| "
+                    desc += (
+                        f"ts: {torch.exp(self.splats['tscales']).mean().item():.3f}| "
+                    )
             if cfg.depth_loss:
                 desc += f"depth loss={depthloss.item():.6f}| "
             if cfg.pose_opt and cfg.pose_noise:
@@ -1114,7 +1127,6 @@ if __name__ == "__main__":
         "mcmc": (
             "Gaussian splatting training using densification from the paper '3D Gaussian Splatting as Markov Chain Monte Carlo'.",
             Config(
-                init_opa=0.5,
                 init_scale=0.1,
                 opacity_reg=0.01,
                 scale_reg=0.01,

@@ -586,7 +586,7 @@ def rasterize_to_indices_in_range(
     transmittances: Tensor,  # [C, image_height, image_width]
     means2d: Tensor,  # [C, N, 2]
     conics: Tensor,  # [C, N, 3]
-    opacities: Tensor,  # [C, N]
+    densities: Tensor,  # [C, N]
     image_width: int,
     image_height: int,
     tile_size: int,
@@ -616,7 +616,7 @@ def rasterize_to_indices_in_range(
         transmittances: Currently transmittances. [C, image_height, image_width]
         means2d: Projected Gaussian means. [C, N, 2]
         conics: Inverse of the projected covariances with only upper triangle values. [C, N, 3]
-        opacities: Gaussian opacities that support per-view values. [C, N]
+        densities: Gaussian densities. [C, N]
         image_width: Image width.
         image_height: Image height.
         tile_size: Tile size.
@@ -633,8 +633,9 @@ def rasterize_to_indices_in_range(
 
     C, N, _ = means2d.shape
     assert conics.shape == (C, N, 3), conics.shape
-    assert opacities.shape == (C, N), opacities.shape
+    assert densities.shape == (C, N), densities.shape
     assert isect_offsets.shape[0] == C, isect_offsets.shape
+    assert not enable_culling
 
     tile_height, tile_width = isect_offsets.shape[1:3]
     assert (
@@ -657,7 +658,7 @@ def rasterize_to_indices_in_range(
         transmittances.contiguous(),
         means2d.contiguous(),
         conics.contiguous(),
-        opacities.contiguous(),
+        densities.contiguous(),
         image_width,
         image_height,
         tile_size,

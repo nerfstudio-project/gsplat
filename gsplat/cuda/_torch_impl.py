@@ -911,7 +911,7 @@ def _rasterize_to_pixels(
             transmittances,
             means2d,
             conics,
-            opacities,
+            densities,
             image_width,
             image_height,
             tile_size,
@@ -933,7 +933,7 @@ def _rasterize_to_pixels(
         renders_step, accs_step = accumulate(
             means2d,
             conics,
-            opacities,
+            densities,
             colors,
             gs_ids,
             pixel_ids,

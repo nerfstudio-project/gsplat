@@ -636,7 +636,7 @@ def _rasterization(
     means: Tensor,  # [N, 3]
     quats: Tensor,  # [N, 4]
     scales: Tensor,  # [N, 3]
-    opacities: Tensor,  # [N]
+    densities: Tensor,  # [N]
     colors: Tensor,  # [(C,) N, D] or [(C,) N, K, 3]
     viewmats: Tensor,  # [C, 4, 4]
     Ks: Tensor,  # [C, 3, 3]
@@ -684,7 +684,7 @@ def _rasterization(
     assert means.shape == (N, 3), means.shape
     assert quats.shape == (N, 4), quats.shape
     assert scales.shape == (N, 3), scales.shape
-    assert opacities.shape == (N,), opacities.shape
+    assert densities.shape == (N,), densities.shape
     assert viewmats.shape == (C, 4, 4), viewmats.shape
     assert Ks.shape == (C, 3, 3), Ks.shape
     assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
@@ -720,11 +720,12 @@ def _rasterization(
         far_plane=far_plane,
         calc_compensations=(rasterize_mode == "antialiased"),
     )
-    opacities = opacities.repeat(C, 1)  # [C, N]
+    densities = densities.repeat(C, 1)  # [C, N]
     camera_ids, gaussian_ids = None, None
 
+    assert compensations is None
     if compensations is not None:
-        opacities = opacities * compensations
+        densities = densities * compensations
 
     # Identify intersecting tiles
     tile_width = math.ceil(width / float(tile_size))
@@ -795,7 +796,7 @@ def _rasterization(
                 means2d,
                 conics,
                 colors_chunk,
-                opacities,
+                densities,
                 width,
                 height,
                 tile_size,
@@ -821,7 +822,7 @@ def _rasterization(
             means2d,
             conics,
             colors,
-            opacities,
+            densities,
             width,
             height,
             tile_size,
@@ -855,7 +856,7 @@ def _rasterization(
         "means2d": means2d,
         "depths": depths,
         "conics": conics,
-        "opacities": opacities,
+        "densities": densities,
         "tile_width": tile_width,
         "tile_height": tile_height,
         "tiles_per_gauss": tiles_per_gauss,
