@@ -119,30 +119,30 @@ class MCMCStrategy(Strategy):
 
         binoms = state["binoms"]
 
-        if (
-            step < self.refine_stop_iter
-            and step > self.refine_start_iter
-            and step % self.refine_every == 0
-        ):
-            # teleport GSs
-            n_relocated_gs = self._relocate_gs(params, optimizers, binoms)
-            if self.verbose:
-                print(f"Step {step}: Relocated {n_relocated_gs} GSs.")
+        # if (
+        #     step < self.refine_stop_iter
+        #     and step > self.refine_start_iter
+        #     and step % self.refine_every == 0
+        # ):
+        #     # teleport GSs
+        #     n_relocated_gs = self._relocate_gs(params, optimizers, binoms)
+        #     if self.verbose:
+        #         print(f"Step {step}: Relocated {n_relocated_gs} GSs.")
 
-            # add new GSs
-            n_new_gs = self._add_new_gs(params, optimizers, binoms)
-            if self.verbose:
-                print(
-                    f"Step {step}: Added {n_new_gs} GSs. "
-                    f"Now having {len(params['means'])} GSs."
-                )
+        #     # add new GSs
+        #     n_new_gs = self._add_new_gs(params, optimizers, binoms)
+        #     if self.verbose:
+        #         print(
+        #             f"Step {step}: Added {n_new_gs} GSs. "
+        #             f"Now having {len(params['means'])} GSs."
+        #         )
 
-            torch.cuda.empty_cache()
+        #     torch.cuda.empty_cache()
 
-        # add noise to GSs
-        inject_noise_to_position(
-            params=params, optimizers=optimizers, state={}, scaler=lr * self.noise_lr
-        )
+        # # add noise to GSs
+        # inject_noise_to_position(
+        #     params=params, optimizers=optimizers, state={}, scaler=lr * self.noise_lr
+        # )
 
     @torch.no_grad()
     def _relocate_gs(

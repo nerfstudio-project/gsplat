@@ -163,6 +163,9 @@ class Config:
     t_init_s: float = 6.0 # initial scale of tet
     t_lr_v: float = 1e-3 # learning rate for tet vertices
 
+    # Density
+    use_density: bool = False
+
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
         self.save_steps = [int(i * factor) for i in self.save_steps]
@@ -221,15 +224,20 @@ def create_splats_with_optimizers(
 
     N = points.shape[0]
     quats = torch.rand((N, 4))  # [N, 4]
-    opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
-
+    
     params = [
         # name, value, lr
         ("means", torch.nn.Parameter(points), 1.6e-4 * scene_scale),
         ("scales", torch.nn.Parameter(scales), 5e-3),
         ("quats", torch.nn.Parameter(quats), 1e-3),
-        ("opacities", torch.nn.Parameter(opacities), 5e-2),
     ]
+
+    if cfg.use_density:
+        densities = - torch.log(1.0 - torch.full((N,), init_opacity)) * 10 # [N,]
+        params.append(("densities", torch.nn.Parameter(densities), 5e-2))
+    else:
+        opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
+        params.append(("opacities", torch.nn.Parameter(opacities), 5e-2))
 
     if cfg.enable_culling:
         if cfg.opt_vert:            
@@ -357,7 +365,7 @@ class Runner:
         print("Model initialized. Number of GS:", len(self.splats["means"]))
 
         # Densification Strategy
-        self.cfg.strategy.check_sanity(self.splats, self.optimizers)
+        # self.cfg.strategy.check_sanity(self.splats, self.optimizers)
 
         if isinstance(self.cfg.strategy, DefaultStrategy):
             self.strategy_state = self.cfg.strategy.initialize_state(
@@ -512,7 +520,12 @@ class Runner:
         # rasterization does normalization internally
         quats = self.splats["quats"]  # [N, 4]
         scales = torch.exp(self.splats["scales"])  # [N, 3]
-        opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
+        if self.cfg.use_density:
+            densities = torch.relu(self.splats["densities"])  # [N,]
+            opacities = None
+        else:
+            densities = None
+            opacities = torch.sigmoid(self.splats["opacities"])
         if self.cfg.enable_culling:
             if self.cfg.opt_vert:
                 tscales = tquats = None
@@ -577,6 +590,7 @@ class Runner:
             tscales=tscales,
             tquats=tquats,
             tvertices=tvertices,
+            densities=densities,
             **kwargs,
         )
         if masks is not None:
@@ -752,6 +766,7 @@ class Runner:
 
             # regularizations
             if cfg.opacity_reg > 0.0:
+                assert not cfg.use_density
                 loss = (
                     loss
                     + cfg.opacity_reg

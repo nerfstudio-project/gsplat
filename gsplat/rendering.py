@@ -57,6 +57,7 @@ def rasterization(
     tscales: Optional[Tensor] = None,
     tquats: Optional[Tensor] = None,
     tvertices: Optional[Tensor] = None,
+    densities: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -242,7 +243,10 @@ def rasterization(
         # convert covars from 3x3 matrix to upper-triangular 6D vector
         tri_indices = ([0, 0, 0, 1, 1, 2], [0, 1, 2, 1, 2, 2])
         covars = covars[..., tri_indices[0], tri_indices[1]]
-    assert opacities.shape == (N,), opacities.shape
+    if densities is None:
+        assert opacities.shape == (N,), opacities.shape
+    else:
+        assert densities.shape == (N,), densities.shape
     assert viewmats.shape == (C, 4, 4), viewmats.shape
     assert Ks.shape == (C, 3, 3), Ks.shape
     assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
@@ -357,14 +361,21 @@ def rasterization(
             conics,
             compensations,
         ) = proj_results
-        opacities = opacities[gaussian_ids]  # [nnz]
+        if densities is None:
+            opacities = opacities[gaussian_ids]  # [nnz]
+        else:
+            densities = densities[gaussian_ids]  # [nnz]
     else:
         # The results are with shape [C, N, ...]. Only the elements with radii > 0 are valid.
         radii, means2d, depths, conics, compensations = proj_results
-        opacities = opacities.repeat(C, 1)  # [C, N]
+        if densities is None:
+            opacities = opacities.repeat(C, 1) # [C, N]
+        else:
+            densities = densities.repeat(C, 1) # [C, N]
         camera_ids, gaussian_ids = None, None
 
     if compensations is not None:
+        assert densities is None, "Densities are not supported with compensations."
         opacities = opacities * compensations
 
     meta.update(
@@ -378,6 +389,7 @@ def rasterization(
             "depths": depths,
             "conics": conics,
             "opacities": opacities,
+            "densities": densities,
         }
     )
 
@@ -429,6 +441,7 @@ def rasterization(
     # on which cameras they are visible to, which we already figured out in the projection
     # stage.
     if distributed:
+        assert densities is None, "Distributed mode does not support densities."
         if packed:
             # count how many elements need to be sent to each rank
             cnts = torch.bincount(camera_ids, minlength=C)  # all cameras
@@ -618,6 +631,7 @@ def rasterization(
             backgrounds=backgrounds,
             packed=packed,
             absgrad=absgrad,
+            densities=densities,
         )
     if render_mode in ["ED", "RGB+ED"]:
         # normalize the accumulated depth to get the expected depth

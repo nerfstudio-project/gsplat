@@ -18,6 +18,48 @@ namespace cg = cooperative_groups;
  ****************************************************************************/
 
 template <typename S>
+inline __device__ void integral_opacity_vjp(
+    const S density,
+    // ray
+    const vec3<S> ray_o, const vec3<S> ray_d,
+    // gaussian
+    const vec3<S> mean3d, const mat3<S> precision,
+    // grad input
+    const S v_opacity,
+    // grad output
+    vec3<S> &v_mean3d, mat3<S> &v_precision, S &v_density) {
+    vec3<S> mu = mean3d - ray_o;
+    S rr = glm::dot(ray_d, precision * ray_d);
+
+    if (rr > 1e-6f) { // numerical issue
+        S rr_inv = 1.0f / rr;
+        S dr = glm::dot(mu, precision * ray_d);
+        S dd = glm::dot(mu, precision * mu);
+        // S bb = -dr * rr_inv;
+        S cc = dd - dr * dr * rr_inv;
+        S _integral = 2.0f * __expf(-0.5f * cc) * sqrtf(0.5f * PI / rr);
+        S opacity = 1.0 - __expf(-density * _integral);
+
+        v_density += v_opacity * _integral * (1.0 - opacity);
+        
+        S v_integral = v_opacity * density * (1.0 - opacity);
+        S v_cc = -0.5f * _integral * v_integral;
+        S v_rr = -_integral * rr_inv * v_integral;
+        
+        S v_dd = v_cc;
+        S v_dr = - 2.0f * dr * rr_inv * v_cc;
+        v_rr += dr * dr * rr_inv * rr_inv * v_cc;
+
+        v_mean3d += precision * ray_d * v_dr; // from dr
+        v_mean3d += 2.0f * precision * mu * v_dd; // from dd
+        v_precision += glm::outerProduct(ray_d, ray_d) * v_rr; // from rr
+        v_precision += glm::outerProduct(mu, ray_d) * v_dr; // from dr
+        v_precision += glm::outerProduct(mu, mu) * v_dd; // from dd
+    }
+}
+
+
+template <typename S>
 inline __device__ void integral_vjp(
     // fwd inputs
     const vec3<S> ray_o, const vec3<S> ray_d, const S tmin, const S tmax,
@@ -83,7 +125,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     const vec2<S> *__restrict__ means2d, // [C, N, 2] or [nnz, 2]
     const vec3<S> *__restrict__ conics,  // [C, N, 3] or [nnz, 3]
     const S *__restrict__ colors,      // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
-    const S *__restrict__ opacities,   // [C, N] or [nnz]
+    const S *__restrict__ opacities,   // [C, N] or [nnz] optional
     const S *__restrict__ backgrounds, // [C, COLOR_DIM] or [nnz, COLOR_DIM]
     const bool *__restrict__ masks,    // [C, tile_height, tile_width]
     const uint32_t image_width,
@@ -114,10 +156,12 @@ __global__ void rasterize_to_pixels_bwd_kernel(
     vec3<S> *__restrict__ v_conics,      // [C, N, 3] or [nnz, 3]
     S *__restrict__ v_colors,   // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
     S *__restrict__ v_opacities, // [C, N] or [nnz]
+    S *__restrict__ v_densities, // [C, N] or [nnz]
     // --- culling ---
     vec3<S> *__restrict__ v_means3d, // [N, 3]
     S *__restrict__ v_precis,  // [N, 6]
-    S *__restrict__ v_tvertices // [N, 4, 3]
+    S *__restrict__ v_tvertices,// [N, 4, 3]
+    const S *__restrict__ densities // [C, N]
 ) {
     auto block = cg::this_thread_block();
     uint32_t camera_id = block.group_index().x;
@@ -155,7 +199,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
 
     // ---- culling ----
     vec3<S> ray_d, ray_o;
-    if (enable_culling && inside) {
+    if (inside) {
         const float *camtoworld = camtoworlds + 16 * camera_id;
         const float *K = Ks + 9 * camera_id;
         float u = (px - K[2]) / K[0];
@@ -239,24 +283,29 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
             id_batch[tr] = g;
             const vec2<S> xy = means2d[g];
-            const S opac = opacities[g];
-            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
+            if (densities != nullptr) {
+                const S densi = densities[g];
+                xy_opacity_batch[tr] = {xy.x, xy.y, densi};
+            } else {
+                const S opac = opacities[g];
+                xy_opacity_batch[tr] = {xy.x, xy.y, opac};                
+            }
             conic_batch[tr] = conics[g];
             GSPLAT_PRAGMA_UNROLL
             for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                 rgbs_batch[tr * COLOR_DIM + k] = colors[g * COLOR_DIM + k];
             }
             // ---- culling ----
+            // TODO: assuming non-packed for now
+            int32_t gaussian_id = g % N;
+            mean3d_batch[tr] = vec3<S>{
+                means3d[gaussian_id * 3], means3d[gaussian_id * 3 + 1], means3d[gaussian_id * 3 + 2]};
+            const float *preci_ptr = precis + gaussian_id * 6;
+            GSPLAT_PRAGMA_UNROLL
+            for (uint32_t k = 0; k < 6; ++k) {
+                preci_batch[tr * 6 + k] = preci_ptr[k];
+            }
             if (enable_culling) {
-                // TODO: assuming non-packed for now
-                int32_t gaussian_id = g % N;
-                mean3d_batch[tr] = vec3<S>{
-                    means3d[gaussian_id * 3], means3d[gaussian_id * 3 + 1], means3d[gaussian_id * 3 + 2]};
-                const float *preci_ptr = precis + gaussian_id * 6;
-                GSPLAT_PRAGMA_UNROLL
-                for (uint32_t k = 0; k < 6; ++k) {
-                    preci_batch[tr * 6 + k] = preci_ptr[k];
-                }
                 const float *tvertice_ptr = tvertices + gaussian_id * 12;
                 GSPLAT_PRAGMA_UNROLL
                 for (uint32_t k = 0; k < 12; ++k) {
@@ -280,6 +329,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             vec2<S> delta;
             vec3<S> conic;
             S vis;
+            S sigma;
             // ---- culling ----
             bool hit;
             S tmin, tmax;
@@ -294,14 +344,29 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             if (valid) {
                 conic = conic_batch[t];
                 vec3<S> xy_opac = xy_opacity_batch[t];
-                opac = xy_opac.z;
-                delta = {xy_opac.x - px, xy_opac.y - py};
-                S sigma = 0.5f * (conic.x * delta.x * delta.x +
-                                  conic.z * delta.y * delta.y) +
-                          conic.y * delta.x * delta.y;
-                vis = __expf(-sigma);
-                alpha = min(0.999f, opac * vis);
-                if (sigma < 0.f || alpha < 1.f / 255.f) {
+                opac = xy_opac.z; // density or opacity
+                
+                if (densities != nullptr) {
+                    mean3d = mean3d_batch[t];
+                    preci3x3 = mat3<S>(
+                        preci_batch[t * 6], preci_batch[t * 6 + 1], preci_batch[t * 6 + 2],
+                        preci_batch[t * 6 + 1], preci_batch[t * 6 + 3], preci_batch[t * 6 + 4],
+                        preci_batch[t * 6 + 2], preci_batch[t * 6 + 4], preci_batch[t * 6 + 5]);
+                    // opac is actually density
+                    vis = integral_opacity(opac, ray_o, ray_d, mean3d, preci3x3);
+                } else {
+                    delta = {xy_opac.x - px, xy_opac.y - py};
+                    sigma = 0.5f * (conic.x * delta.x * delta.x +
+                                    conic.z * delta.y * delta.y) +
+                            conic.y * delta.x * delta.y;
+                    vis = opac * __expf(-sigma);
+                    if (sigma < 0.f) {
+                        valid = false;
+                    }
+                }
+                alpha = min(0.999f, vis);
+
+                if (alpha < 1.f / 255.f) {
                     valid = false;
                 }
             }
@@ -366,6 +431,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
             vec2<S> v_xy_local = {0.f, 0.f};
             vec2<S> v_xy_abs_local = {0.f, 0.f};
             S v_opacity_local = 0.f;
+            S v_density_local = 0.f;
             // ---- culling ----
             vec3<S> v_means3d_local = {0.f, 0.f, 0.f};
             S v_percis_local[6] = {0.f};
@@ -446,21 +512,39 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 }
                 // ---- culling ----
 
-                if (opac * vis <= 0.999f) {
-                    const S v_sigma = -opac * vis * v_alpha;
-                    v_conic_local = {
-                        0.5f * v_sigma * delta.x * delta.x,
-                        v_sigma * delta.x * delta.y,
-                        0.5f * v_sigma * delta.y * delta.y
-                    };
-                    v_xy_local = {
-                        v_sigma * (conic.x * delta.x + conic.y * delta.y),
-                        v_sigma * (conic.y * delta.x + conic.z * delta.y)
-                    };
-                    if (v_means2d_abs != nullptr) {
-                        v_xy_abs_local = {abs(v_xy_local.x), abs(v_xy_local.y)};
+                if (vis <= 0.999f) {
+                    if (densities != nullptr) {
+                        vec3<S> v_mean3d(0.f);
+                        mat3<S> v_precision(0.f);
+                        S v_density = 0.f;
+                        integral_opacity_vjp(
+                            opac, ray_o, ray_d, mean3d, preci3x3, 
+                            v_alpha, v_mean3d, v_precision, v_density);
+
+                        v_means3d_local = v_mean3d;
+                        v_percis_local[0] = v_precision[0][0];
+                        v_percis_local[1] = v_precision[0][1] + v_precision[1][0];
+                        v_percis_local[2] = v_precision[0][2] + v_precision[2][0];
+                        v_percis_local[3] = v_precision[1][1];
+                        v_percis_local[4] = v_precision[1][2] + v_precision[2][1];
+                        v_percis_local[5] = v_precision[2][2];
+                        v_density_local = v_density;
+                    } else {
+                        v_opacity_local = __expf(-sigma) * v_alpha;
+                        S v_sigma = -vis * v_alpha;
+                        v_conic_local = {
+                            0.5f * v_sigma * delta.x * delta.x,
+                            v_sigma * delta.x * delta.y,
+                            0.5f * v_sigma * delta.y * delta.y
+                        };
+                        v_xy_local = {
+                            v_sigma * (conic.x * delta.x + conic.y * delta.y),
+                            v_sigma * (conic.y * delta.x + conic.z * delta.y)
+                        };
+                        if (v_means2d_abs != nullptr) {
+                            v_xy_abs_local = {abs(v_xy_local.x), abs(v_xy_local.y)};
+                        }
                     }
-                    v_opacity_local = vis * v_alpha;
                 }
 
                 GSPLAT_PRAGMA_UNROLL
@@ -469,15 +553,19 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 }
             }
             warpSum<COLOR_DIM, S>(v_rgb_local, warp);
-            warpSum<decltype(warp), S>(v_conic_local, warp);
-            warpSum<decltype(warp), S>(v_xy_local, warp);
-            if (v_means2d_abs != nullptr) {
-                warpSum<decltype(warp), S>(v_xy_abs_local, warp);
+            if (densities != nullptr) {
+                warpSum<decltype(warp), S>(v_density_local, warp);
+            } else {
+                warpSum<decltype(warp), S>(v_conic_local, warp);
+                warpSum<decltype(warp), S>(v_xy_local, warp);
+                if (v_means2d_abs != nullptr) {
+                    warpSum<decltype(warp), S>(v_xy_abs_local, warp);
+                }
+                warpSum<decltype(warp), S>(v_opacity_local, warp);
             }
-            warpSum<decltype(warp), S>(v_opacity_local, warp);
+            warpSum<decltype(warp), S>(v_means3d_local, warp);
+            warpSum<6, S>(v_percis_local, warp);
             if (enable_culling) {
-                warpSum<decltype(warp), S>(v_means3d_local, warp);
-                warpSum<6, S>(v_percis_local, warp);
                 warpSum<12, S>(v_tvertices_local, warp);
             }
             
@@ -489,43 +577,46 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                     gpuAtomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
                 }
 
-                S *v_conic_ptr = (S *)(v_conics) + 3 * g;
-                gpuAtomicAdd(v_conic_ptr, v_conic_local.x);
-                gpuAtomicAdd(v_conic_ptr + 1, v_conic_local.y);
-                gpuAtomicAdd(v_conic_ptr + 2, v_conic_local.z);
+                if (densities != nullptr) {
+                    gpuAtomicAdd(v_densities + g, v_density_local);
+                } else {                    
+                    S *v_conic_ptr = (S *)(v_conics) + 3 * g;
+                    gpuAtomicAdd(v_conic_ptr, v_conic_local.x);
+                    gpuAtomicAdd(v_conic_ptr + 1, v_conic_local.y);
+                    gpuAtomicAdd(v_conic_ptr + 2, v_conic_local.z);
 
-                S *v_xy_ptr = (S *)(v_means2d) + 2 * g;
-                gpuAtomicAdd(v_xy_ptr, v_xy_local.x);
-                gpuAtomicAdd(v_xy_ptr + 1, v_xy_local.y);
+                    S *v_xy_ptr = (S *)(v_means2d) + 2 * g;
+                    gpuAtomicAdd(v_xy_ptr, v_xy_local.x);
+                    gpuAtomicAdd(v_xy_ptr + 1, v_xy_local.y);
 
-                if (v_means2d_abs != nullptr) {
-                    S *v_xy_abs_ptr = (S *)(v_means2d_abs) + 2 * g;
-                    gpuAtomicAdd(v_xy_abs_ptr, v_xy_abs_local.x);
-                    gpuAtomicAdd(v_xy_abs_ptr + 1, v_xy_abs_local.y);
+                    if (v_means2d_abs != nullptr) {
+                        S *v_xy_abs_ptr = (S *)(v_means2d_abs) + 2 * g;
+                        gpuAtomicAdd(v_xy_abs_ptr, v_xy_abs_local.x);
+                        gpuAtomicAdd(v_xy_abs_ptr + 1, v_xy_abs_local.y);
+                    }
+
+                    gpuAtomicAdd(v_opacities + g, v_opacity_local);
                 }
 
-                gpuAtomicAdd(v_opacities + g, v_opacity_local);
+                int32_t gaussian_id = g % N;
+                S *v_means3d_ptr = (S *)(v_means3d) + 3 * gaussian_id;
+                gpuAtomicAdd(v_means3d_ptr, v_means3d_local.x);
+                gpuAtomicAdd(v_means3d_ptr + 1, v_means3d_local.y);
+                gpuAtomicAdd(v_means3d_ptr + 2, v_means3d_local.z);
+
+                S *v_precis_ptr = (S *)(v_precis) + 6 * gaussian_id;
+                GSPLAT_PRAGMA_UNROLL
+                for (uint32_t k = 0; k < 6; ++k) {
+                    gpuAtomicAdd(v_precis_ptr + k, v_percis_local[k]);
+                }
 
                 // ---- culling ----
-                if (enable_culling) {
-                    int32_t gaussian_id = g % N;
-                    
+                if (enable_culling) {                    
                     S *v_tvertices_ptr = (S *)(v_tvertices) + 12 * gaussian_id;
                     GSPLAT_PRAGMA_UNROLL
                     for (uint32_t k = 0; k < 12; ++k) {
                         gpuAtomicAdd(v_tvertices_ptr + k, v_tvertices_local[k]);
-                    }
-                    
-                    S *v_means3d_ptr = (S *)(v_means3d) + 3 * gaussian_id;
-                    gpuAtomicAdd(v_means3d_ptr, v_means3d_local.x);
-                    gpuAtomicAdd(v_means3d_ptr + 1, v_means3d_local.y);
-                    gpuAtomicAdd(v_means3d_ptr + 2, v_means3d_local.z);
-
-                    S *v_precis_ptr = (S *)(v_precis) + 6 * gaussian_id;
-                    GSPLAT_PRAGMA_UNROLL
-                    for (uint32_t k = 0; k < 6; ++k) {
-                        gpuAtomicAdd(v_precis_ptr + k, v_percis_local[k]);
-                    }
+                    }                    
                 }
             }
         }
@@ -534,6 +625,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
 
 template <uint32_t CDIM>
 std::tuple<
+    torch::Tensor,
     torch::Tensor,
     torch::Tensor,
     torch::Tensor,
@@ -572,14 +664,15 @@ call_kernel_with_dim(
     const torch::Tensor &v_render_colors, // [C, image_height, image_width, 3]
     const torch::Tensor &v_render_alphas, // [C, image_height, image_width, 1]
     // options
-    bool absgrad
+    bool absgrad,
+    const at::optional<torch::Tensor> &densities
 ) {
 
     GSPLAT_DEVICE_GUARD(means2d);
     GSPLAT_CHECK_INPUT(means2d);
     GSPLAT_CHECK_INPUT(conics);
     GSPLAT_CHECK_INPUT(colors);
-    GSPLAT_CHECK_INPUT(opacities);
+    // GSPLAT_CHECK_INPUT(opacities);
     GSPLAT_CHECK_INPUT(tile_offsets);
     GSPLAT_CHECK_INPUT(flatten_ids);
     GSPLAT_CHECK_INPUT(render_alphas);
@@ -593,12 +686,12 @@ call_kernel_with_dim(
         GSPLAT_CHECK_INPUT(masks.value());
     }
     if (enable_culling) {
-        GSPLAT_CHECK_INPUT(camtoworlds.value());
-        GSPLAT_CHECK_INPUT(Ks.value());
-        GSPLAT_CHECK_INPUT(means3d.value());
-        GSPLAT_CHECK_INPUT(precis.value());
         GSPLAT_CHECK_INPUT(tvertices.value());
     }
+    GSPLAT_CHECK_INPUT(camtoworlds.value());
+    GSPLAT_CHECK_INPUT(Ks.value());
+    GSPLAT_CHECK_INPUT(means3d.value());
+    GSPLAT_CHECK_INPUT(precis.value());
 
     bool packed = means2d.dim() == 2;
 
@@ -617,7 +710,7 @@ call_kernel_with_dim(
     torch::Tensor v_means2d = torch::zeros_like(means2d);
     torch::Tensor v_conics = torch::zeros_like(conics);
     torch::Tensor v_colors = torch::zeros_like(colors);
-    torch::Tensor v_opacities = torch::zeros_like(opacities);
+    torch::Tensor v_opacities, v_densities;
     torch::Tensor v_means2d_abs;
     if (absgrad) {
         v_means2d_abs = torch::zeros_like(means2d);
@@ -625,9 +718,15 @@ call_kernel_with_dim(
 
     torch::Tensor v_tvertices, v_means3d, v_precis;
     if (enable_culling) {
-        v_means3d = torch::zeros_like(means3d.value());
-        v_precis = torch::zeros_like(precis.value());
         v_tvertices = torch::zeros_like(tvertices.value());
+    }
+    v_means3d = torch::zeros_like(means3d.value());
+    v_precis = torch::zeros_like(precis.value());
+    
+    if (densities.has_value()) {
+        v_densities = torch::zeros_like(densities.value());
+    } else {
+        v_opacities = torch::zeros_like(opacities);
     }
 
     if (n_isects) {
@@ -639,6 +738,10 @@ call_kernel_with_dim(
         if (enable_culling) {
             shared_mem += tile_size * tile_size *
             (sizeof(vec3<float>) + sizeof(float) * 6 + sizeof(float) * 12);
+        } else {
+            // No tvertices
+            shared_mem += tile_size * tile_size *
+            (sizeof(vec3<float>) + sizeof(float) * 6);
         }
 
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
@@ -663,7 +766,7 @@ call_kernel_with_dim(
                 reinterpret_cast<vec2<float> *>(means2d.data_ptr<float>()),
                 reinterpret_cast<vec3<float> *>(conics.data_ptr<float>()),
                 colors.data_ptr<float>(),
-                opacities.data_ptr<float>(),
+                densities.has_value() ? nullptr : opacities.data_ptr<float>(),
                 backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
                                         : nullptr,
                 masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
@@ -693,21 +796,25 @@ call_kernel_with_dim(
                 reinterpret_cast<vec2<float> *>(v_means2d.data_ptr<float>()),
                 reinterpret_cast<vec3<float> *>(v_conics.data_ptr<float>()),
                 v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>(),
+                densities.has_value() ? nullptr : v_opacities.data_ptr<float>(),
+                densities.has_value() ? v_densities.data_ptr<float>() : nullptr,
                 // --- culling ---
-                enable_culling ? reinterpret_cast<vec3<float> *>(v_means3d.data_ptr<float>()) : nullptr,
-                enable_culling ? v_precis.data_ptr<float>() : nullptr,
-                enable_culling ? v_tvertices.data_ptr<float>() : nullptr
+                reinterpret_cast<vec3<float> *>(v_means3d.data_ptr<float>()),
+                v_precis.data_ptr<float>(),
+                enable_culling ? v_tvertices.data_ptr<float>() : nullptr,
+                // --- culling ---
+                densities.has_value() ? densities.value().data_ptr<float>() : nullptr
             );
     }
 
     return std::make_tuple(
         v_means2d_abs, v_means2d, v_conics, v_colors, v_opacities, 
-        v_means3d, v_precis, v_tvertices
+        v_means3d, v_precis, v_tvertices, v_densities
     );
 }
 
 std::tuple<
+    torch::Tensor,
     torch::Tensor,
     torch::Tensor,
     torch::Tensor,
@@ -746,7 +853,8 @@ rasterize_to_pixels_bwd_tensor(
     const torch::Tensor &v_render_colors, // [C, image_height, image_width, 3]
     const torch::Tensor &v_render_alphas, // [C, image_height, image_width, 1]
     // options
-    bool absgrad
+    bool absgrad,
+    const at::optional<torch::Tensor> &densities
 ) {
 
     GSPLAT_CHECK_INPUT(colors);
@@ -776,7 +884,8 @@ rasterize_to_pixels_bwd_tensor(
             last_ids,                                                          \
             v_render_colors,                                                   \
             v_render_alphas,                                                   \
-            absgrad                                                            \
+            absgrad,                                                           \
+            densities                                                          \
         );
 
     switch (COLOR_DIM) {

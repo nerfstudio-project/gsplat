@@ -23,7 +23,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     const vec2<S> *__restrict__ means2d, // [C, N, 2] or [nnz, 2]
     const vec3<S> *__restrict__ conics,  // [C, N, 3] or [nnz, 3]
     const S *__restrict__ colors,      // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
-    const S *__restrict__ opacities,   // [C, N] or [nnz]
+    const S *__restrict__ opacities,   // [C, N] or [nnz] optional
     const S *__restrict__ backgrounds, // [C, COLOR_DIM]
     const bool *__restrict__ masks,    // [C, tile_height, tile_width]
     const uint32_t image_width,
@@ -43,7 +43,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     // --- culling ---
     S *__restrict__ render_colors, // [C, image_height, image_width, COLOR_DIM]
     S *__restrict__ render_alphas, // [C, image_height, image_width, 1]
-    int32_t *__restrict__ last_ids // [C, image_height, image_width]
+    int32_t *__restrict__ last_ids, // [C, image_height, image_width]
+    const S *__restrict__ densities // [C, N]
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
@@ -87,7 +88,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
 
     // ---- culling ----
     vec3<S> ray_d, ray_o;
-    if (enable_culling && inside) {
+    if (inside) {
         const float *camtoworld = camtoworlds + 16 * camera_id;
         const float *K = Ks + 9 * camera_id;
         float u = (px - K[2]) / K[0];
@@ -161,20 +162,25 @@ __global__ void rasterize_to_pixels_fwd_kernel(
             int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
             id_batch[tr] = g;
             const vec2<S> xy = means2d[g];
-            const S opac = opacities[g];
-            xy_opacity_batch[tr] = {xy.x, xy.y, opac};
+            if (densities != nullptr) {
+                const S densi = densities[g];
+                xy_opacity_batch[tr] = {xy.x, xy.y, densi};
+            } else {
+                const S opac = opacities[g];
+                xy_opacity_batch[tr] = {xy.x, xy.y, opac};                
+            }
             conic_batch[tr] = conics[g];
             // ---- culling ----
+            // TODO: assuming non-packed for now
+            int32_t gaussian_id = g % N;
+            mean3d_batch[tr] = vec3<S>{
+                means3d[gaussian_id * 3], means3d[gaussian_id * 3 + 1], means3d[gaussian_id * 3 + 2]};
+            const float *preci_ptr = precis + gaussian_id * 6;
+            GSPLAT_PRAGMA_UNROLL
+            for (uint32_t k = 0; k < 6; ++k) {
+                preci_batch[tr * 6 + k] = preci_ptr[k];
+            }
             if (enable_culling) {
-                // TODO: assuming non-packed for now
-                int32_t gaussian_id = g % N;
-                mean3d_batch[tr] = vec3<S>{
-                    means3d[gaussian_id * 3], means3d[gaussian_id * 3 + 1], means3d[gaussian_id * 3 + 2]};
-                const float *preci_ptr = precis + gaussian_id * 6;
-                GSPLAT_PRAGMA_UNROLL
-                for (uint32_t k = 0; k < 6; ++k) {
-                    preci_batch[tr * 6 + k] = preci_ptr[k];
-                }
                 const float *tvertice_ptr = tvertices + gaussian_id * 12;
                 GSPLAT_PRAGMA_UNROLL
                 for (uint32_t k = 0; k < 12; ++k) {
@@ -192,12 +198,26 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
             const vec3<S> conic = conic_batch[t];
             const vec3<S> xy_opac = xy_opacity_batch[t];
-            const S opac = xy_opac.z;
+            const S opac = xy_opac.z; // might be density or opacity
             const vec2<S> delta = {xy_opac.x - px, xy_opac.y - py};
             const S sigma = 0.5f * (conic.x * delta.x * delta.x +
                                     conic.z * delta.y * delta.y) +
                             conic.y * delta.x * delta.y;
-            S alpha = min(0.999f, opac * __expf(-sigma));
+            
+            S alpha;
+            if (densities != nullptr) {
+                vec3<S> mean3d = mean3d_batch[t];
+                mat3<S> preci3x3 = mat3<S>(
+                    preci_batch[t * 6], preci_batch[t * 6 + 1], preci_batch[t * 6 + 2],
+                    preci_batch[t * 6 + 1], preci_batch[t * 6 + 3], preci_batch[t * 6 + 4],
+                    preci_batch[t * 6 + 2], preci_batch[t * 6 + 4], preci_batch[t * 6 + 5]);
+                // opac is actually density
+                alpha = integral_opacity(opac, ray_o, ray_d, mean3d, preci3x3);
+                alpha = min(0.999f, alpha);
+            } else {
+                alpha = min(0.999f, opac * __expf(-sigma));
+            }
+
             if (sigma < 0.f || alpha < 1.f / 255.f) {
                 continue;
             }
@@ -316,14 +336,15 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
     const at::optional<torch::Tensor>  &Ks,          // [C, 3, 3]
     const at::optional<torch::Tensor>  &means3d,     // [N, 3]
     const at::optional<torch::Tensor>  &precis,      // [N, 6]
-    const at::optional<torch::Tensor>  &tvertices    // [N, 4, 3]
+    const at::optional<torch::Tensor>  &tvertices,   // [N, 4, 3]
     // --- culling ---
+    const at::optional<torch::Tensor>  &densities    // [C, N]
 ) {
     GSPLAT_DEVICE_GUARD(means2d);
     GSPLAT_CHECK_INPUT(means2d);
     GSPLAT_CHECK_INPUT(conics);
     GSPLAT_CHECK_INPUT(colors);
-    GSPLAT_CHECK_INPUT(opacities);
+    // GSPLAT_CHECK_INPUT(opacities);
     GSPLAT_CHECK_INPUT(tile_offsets);
     GSPLAT_CHECK_INPUT(flatten_ids);
     if (backgrounds.has_value()) {
@@ -333,12 +354,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
         GSPLAT_CHECK_INPUT(masks.value());
     }
     if (enable_culling) {
-        GSPLAT_CHECK_INPUT(camtoworlds.value());
-        GSPLAT_CHECK_INPUT(Ks.value());
-        GSPLAT_CHECK_INPUT(means3d.value());
-        GSPLAT_CHECK_INPUT(precis.value());
         GSPLAT_CHECK_INPUT(tvertices.value());
     }
+    GSPLAT_CHECK_INPUT(camtoworlds.value());
+    GSPLAT_CHECK_INPUT(Ks.value());
+    GSPLAT_CHECK_INPUT(means3d.value());
+    GSPLAT_CHECK_INPUT(precis.value());
+
     bool packed = means2d.dim() == 2;
 
     uint32_t C = tile_offsets.size(0);         // number of cameras
@@ -373,6 +395,10 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
     if (enable_culling) {
         shared_mem += tile_size * tile_size *
         (sizeof(vec3<float>) + sizeof(float) * 6 + sizeof(float) * 12);
+    } else {
+        // No tvertices
+        shared_mem += tile_size * tile_size *
+        (sizeof(vec3<float>) + sizeof(float) * 6);
     }
 
     // TODO: an optimization can be done by passing the actual number of
@@ -398,7 +424,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
             reinterpret_cast<vec2<float> *>(means2d.data_ptr<float>()),
             reinterpret_cast<vec3<float> *>(conics.data_ptr<float>()),
             colors.data_ptr<float>(),
-            opacities.data_ptr<float>(),
+            densities.has_value() ? nullptr : opacities.data_ptr<float>(),
             backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
                                     : nullptr,
             masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
@@ -419,7 +445,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
             // --- culling ---
             renders.data_ptr<float>(),
             alphas.data_ptr<float>(),
-            last_ids.data_ptr<int32_t>()
+            last_ids.data_ptr<int32_t>(),
+            densities.has_value() ? densities.value().data_ptr<float>() : nullptr
         );
 
     return std::make_tuple(renders, alphas, last_ids);
@@ -447,8 +474,9 @@ rasterize_to_pixels_fwd_tensor(
     const at::optional<torch::Tensor>  &Ks,          // [C, 3, 3]
     const at::optional<torch::Tensor>  &means3d,     // [N, 3]
     const at::optional<torch::Tensor>  &precis,      // [N, 6]
-    const at::optional<torch::Tensor>  &tvertices    // [N, 4, 3]
+    const at::optional<torch::Tensor>  &tvertices,   // [N, 4, 3]
     // --- culling ---
+    const at::optional<torch::Tensor>  &densities    // [C, N]
 ) {
     GSPLAT_CHECK_INPUT(colors);
     uint32_t channels = colors.size(-1);
@@ -472,7 +500,8 @@ rasterize_to_pixels_fwd_tensor(
             Ks,                                                                \
             means3d,                                                           \
             precis,                                                            \
-            tvertices                                                          \
+            tvertices,                                                         \
+            densities                                                          \
         );
 
     // TODO: an optimization can be done by passing the actual number of

@@ -187,11 +187,13 @@ rasterize_to_pixels_fwd_tensor(
     const at::optional<torch::Tensor>  &Ks,          // [C, 3, 3]
     const at::optional<torch::Tensor>  &means3d,     // [N, 3]
     const at::optional<torch::Tensor>  &precis,      // [N, 6]
-    const at::optional<torch::Tensor>  &tvertices    // [N, 4, 3]
+    const at::optional<torch::Tensor>  &tvertices,   // [N, 4, 3]
     // --- culling ---
+    const at::optional<torch::Tensor>  &densities    // [C, N]
 );
 
 std::tuple<
+    torch::Tensor,
     torch::Tensor,
     torch::Tensor,
     torch::Tensor,
@@ -230,7 +232,8 @@ rasterize_to_pixels_bwd_tensor(
     const torch::Tensor &v_render_colors, // [C, image_height, image_width, 3]
     const torch::Tensor &v_render_alphas, // [C, image_height, image_width, 1]
     // options
-    bool absgrad
+    bool absgrad,
+    const at::optional<torch::Tensor>  &densities    // [C, N]
 );
 
 std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(

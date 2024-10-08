@@ -437,6 +437,7 @@ def rasterize_to_pixels(
     masks: Optional[Tensor] = None,  # [C, tile_height, tile_width]
     packed: bool = False,
     absgrad: bool = False,
+    densities: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
@@ -469,13 +470,13 @@ def rasterize_to_pixels(
         assert means2d.shape == (nnz, 2), means2d.shape
         assert conics.shape == (nnz, 3), conics.shape
         assert colors.shape[0] == nnz, colors.shape
-        assert opacities.shape == (nnz,), opacities.shape
+        # assert opacities.shape == (nnz,), opacities.shape
     else:
         N = means2d.size(1)
         assert means2d.shape == (C, N, 2), means2d.shape
         assert conics.shape == (C, N, 3), conics.shape
         assert colors.shape[:2] == (C, N), colors.shape
-        assert opacities.shape == (C, N), opacities.shape
+        # assert opacities.shape == (C, N), opacities.shape
     if backgrounds is not None:
         assert backgrounds.shape == (C, colors.shape[-1]), backgrounds.shape
         backgrounds = backgrounds.contiguous()
@@ -490,11 +491,20 @@ def rasterize_to_pixels(
         assert means3d.shape == (N, 3), means3d.shape
         assert precis.shape == (N, 6), precis.shape
         assert tvertices.shape == (N, 4, 3), tvertices.shape
+    
+    if camtoworlds is not None:
         camtoworlds = camtoworlds.contiguous()
+    if Ks is not None:
         Ks = Ks.contiguous()
+    if means3d is not None:
         means3d = means3d.contiguous()
+    if precis is not None:
         precis = precis.contiguous()
+    if tvertices is not None:
         tvertices = tvertices.contiguous()
+    if densities is not None:
+        assert densities.shape == (C, N), densities.shape
+        densities = densities.contiguous()
 
     # Pad the channels to the nearest supported number if necessary
     channels = colors.shape[-1]
@@ -555,7 +565,7 @@ def rasterize_to_pixels(
         means2d.contiguous(),
         conics.contiguous(),
         colors.contiguous(),
-        opacities.contiguous(),
+        opacities.contiguous() if densities is None else torch.Tensor(),
         backgrounds,
         masks,
         image_width,
@@ -572,6 +582,7 @@ def rasterize_to_pixels(
         tvertices,
         # --- culling ---
         absgrad,
+        densities,
     )
 
     if padded_channels > 0:
@@ -644,11 +655,15 @@ def rasterize_to_indices_in_range(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-    if enable_culling:
+    if camtoworlds is not None:
         camtoworlds = camtoworlds.contiguous()
+    if Ks is not None:
         Ks = Ks.contiguous()
+    if means3d is not None:
         means3d = means3d.contiguous()
+    if precis is not None:
         precis = precis.contiguous()
+    if tvertices is not None:
         tvertices = tvertices.contiguous()
 
     out_gauss_ids, out_indices = _make_lazy_cuda_func("rasterize_to_indices_in_range")(
@@ -958,6 +973,7 @@ class _RasterizeToPixels(torch.autograd.Function):
         tvertices: Tensor,  # [N, 4, 3]
         # --- culling ---
         absgrad: bool,
+        densities: Tensor,
     ) -> Tuple[Tensor, Tensor]:
         render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
             "rasterize_to_pixels_fwd"
@@ -981,6 +997,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             precis,
             tvertices,
             # --- culling ---
+            densities,
         )
 
         ctx.save_for_backward(
@@ -1001,6 +1018,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             # --- culling ---
             render_alphas,
             last_ids,
+            densities,
         )
         ctx.width = width
         ctx.height = height
@@ -1036,6 +1054,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             # --- culling ---
             render_alphas,
             last_ids,
+            densities,
         ) = ctx.saved_tensors
         width = ctx.width
         height = ctx.height
@@ -1052,6 +1071,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             v_means3d,
             v_precis,
             v_tvertices,
+            v_densities,
         ) = _make_lazy_cuda_func("rasterize_to_pixels_bwd")(
             means2d,
             conics,
@@ -1077,6 +1097,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             v_render_colors.contiguous(),
             v_render_alphas.contiguous(),
             absgrad,
+            densities,
         )
 
         if absgrad:
@@ -1088,6 +1109,11 @@ class _RasterizeToPixels(torch.autograd.Function):
             )
         else:
             v_backgrounds = None
+
+        if densities is None:
+            v_densities = None
+        else:
+            v_opacities = None
 
         return (
             v_means2d,
@@ -1110,6 +1136,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             v_tvertices,
             # --- culling ---
             None,
+            v_densities,
         )
 
 
