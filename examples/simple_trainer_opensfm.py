@@ -55,7 +55,7 @@ class Config:
     render_traj_path: str = "interp"
 
     # Path to the Mip-NeRF 360 dataset
-    data_dir: str = "/home/ubuntu/360-gaussian-splatting/kungsgatanparken"
+    data_dir: str = "/home/ubuntu/360-gaussian-splatting/sample"
     # Downsample factor for the dataset
     data_factor: int = 4
     # Directory to save results
@@ -67,7 +67,7 @@ class Config:
     # A global scaler that applies to the scene size related parameters
     global_scale: float = 1.0
     # Normalize the world space
-    normalize_world_space: bool = True
+    normalize_world_space: bool = False
     # Camera model
     camera_model: Literal["pinhole", "ortho", "fisheye", "spherical"] = "spherical"
 
@@ -106,7 +106,7 @@ class Config:
     # Near plane clipping distance
     near_plane: float = 0.01
     # Far plane clipping distance
-    far_plane: float = 100
+    far_plane: float = 1e8
 
     # Strategy for GS densification
     strategy: Union[DefaultStrategy, MCMCStrategy] = field(
@@ -310,7 +310,7 @@ class Runner:
             load_depths=cfg.depth_loss,
         )
         self.valset = Dataset(self.parser, split="val")
-        self.scene_scale = 1.0#self.parser.scene_scale * 1.1 * cfg.global_scale
+        self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
         print("Scene scale:", self.scene_scale)
         # Model
         feature_dim = 32 if cfg.app_opt else None
@@ -683,7 +683,7 @@ class Runner:
             #     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
             #     canvas = canvas.reshape(-1, *canvas.shape[2:])
             #     imageio.imwrite(
-            #         f"{self.render_dir}/train_rank{self.world_rank}.png",
+            #         f"{self.render_dir}/train_rank{self.world_rank}_{step}.png",
             #         (canvas * 255).astype(np.uint8),
             #     )
 

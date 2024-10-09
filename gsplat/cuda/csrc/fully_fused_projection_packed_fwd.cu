@@ -80,8 +80,16 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
 
         // transform Gaussian center to camera space
         pos_world_to_cam(R, t, glm::make_vec3(means), mean_c);
-        if (mean_c.z < near_plane || mean_c.z > far_plane) {
-            valid = false;
+        if(camera_model != CameraModelType::SPHERICAL){
+            if (mean_c.z < near_plane || mean_c.z > far_plane) {
+                valid = false;
+            }
+        }
+        else{
+            float r = sqrt(mean_c.x * mean_c.x + mean_c.y * mean_c.y + mean_c.z * mean_c.z);
+            if (r < near_plane || r > far_plane) {
+                valid = false;
+            }
         }
     }
 

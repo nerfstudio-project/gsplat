@@ -536,21 +536,21 @@ inline __device__ void spherical_proj(
     T r = sqrt(x * x + y * y + z * z);
 
     T longitude = atan2(x, z);
-    T latitude = atan2(y, sqrt(x * x + z * z));
+    T latitude = asin(y / r);
 
     T normalized_latitude = latitude / (M_PI / 2.0);
     T normalized_longitude = longitude / M_PI;
 
-    mean2d = vec2<T>(normalized_longitude * width + width / 2, normalized_latitude * height + height / 2);
+    mean2d = vec2<T>((normalized_longitude + 1) * width / 2, (normalized_latitude + 1) * height / 2);
 
     // mat3x2 is 3 columns x 2 rows.
     mat3x2<T> J = mat3x2<T>(
-        width / (2.f * M_PI) * z / (x * x + z * z),
-        -height / M_PI * (x * y) / (r * r * sqrt(x * x + z * z)), // 1st column
+        z / (x * x + z * z),
+        -(x * y) / (r * r * sqrt(x * x + z * z)), // 1st column
         0.f,
-        height / M_PI * sqrt(x * x + z * z) / (r * r), // 2st column
-        -width / (2.f * M_PI) * x / (x * x + z * z),
-        -height / M_PI * (z * y) / (r * r + sqrt(x * x + z * z)) // 1st column
+        sqrt(x * x + z * z) / (r * r), // 2st column
+        - x / (x * x + z * z),
+        -(z * y) / (r * r + sqrt(x * x + z * z)) // 1st column
     );
 
     cov2d = J * cov3d * glm::transpose(J);
@@ -582,19 +582,19 @@ inline __device__ void spherical_proj_vjp(
     T xz_norm = sqrt(x * x + z * z + 1e-8f);
 
     T longitude = atan2(x, z);
-    T latitude = atan2(y, xz_norm);
+    T latitude = asin(y / r);
 
     T normalized_longitude = longitude / M_PI;
     T normalized_latitude = latitude / (M_PI / 2.0);
 
     // mat3x2 is 3 columns x 2 rows.
     mat3x2<T> J = mat3x2<T>(
-        width / (2.f * M_PI) * z / (x * x + z * z),
-        -height / M_PI * (x * y) / (r * r * sqrt(x * x + z * z)), // 1st column
+        z / (x * x + z * z),
+        -(x * y) / (r * r * sqrt(x * x + z * z)), // 1st column
         0.f,
-        height / M_PI * sqrt(x * x + z * z) / (r * r), // 2st column
-        -width / (2.f * M_PI) * x / (x * x + z * z),
-        -height / M_PI * (z * y) / (r * r + sqrt(x * x + z * z)) // 1st column
+        sqrt(x * x + z * z) / (r * r), // 2st column
+        - x / (x * x + z * z),
+        -(z * y) / (r * r + sqrt(x * x + z * z)) // 1st column
     );
 
     v_cov3d += glm::transpose(J) * v_cov2d * J;
@@ -611,46 +611,6 @@ inline __device__ void spherical_proj_vjp(
         -width / (2.f * M_PI) * x / (x * x + z * z) * v_mean2d[0] +
         -height / M_PI * (z * y) / (r * r + xz_norm) * v_mean2d[1]
     );
-
-    // df/dx = d(J) / dx
-    // df/dy = d(J) / dy
-    // df/dz = d(J) / dz
-    mat3x2<T> v_J = v_cov2d * J * glm::transpose(cov3d) +
-                    glm::transpose(v_cov2d) * J * cov3d;
-
-    T dJ_dx00 = width / (2.f * M_PI) * (z * z - x * x) / ((x * x + z * z) * (x * x + z * z));
-    T dJ_dx01 = 0.f;
-    T dJ_dx02 = -width / (2.f * M_PI) * (2 * x * z) / ((x * x + z * z) * (x * x + z * z));
-    T dJ_dx10 = height / M_PI * (y * (r * r + xz_norm) - x * y * xz_norm) / (r * r * (r * r + xz_norm) * (r * r + xz_norm));
-    T dJ_dx11 = height / M_PI * (x * y * xz_norm) / (r * r * (r * r + xz_norm));
-    T dJ_dx12 = -height / M_PI * (y * (r * r + xz_norm) - x * y * xz_norm) / (r * r * (r * r + xz_norm) * (r * r + xz_norm));
-
-    T dJ_dy00 = 0.f;
-    T dJ_dy01 = height / M_PI * (x * y * xz_norm) / (r * r * (r * r + xz_norm));
-    T dJ_dy02 = -height / M_PI * (z * y * xz_norm) / (r * r * (r * r + xz_norm));
-    T dJ_dy10 = height / M_PI * (x * y * xz_norm) / (r * r * (r * r + xz_norm));
-    T dJ_dy11 = height / M_PI * (y * y * xz_norm) / (r * r * (r * r + xz_norm));
-    T dJ_dy12 = -height / M_PI * (z * y * xz_norm) / (r * r * (r * r + xz_norm));
-
-    T dJ_dz00 = -width / (2.f * M_PI) * (2 * x * z) / ((x * x + z * z) * (x * x + z * z));
-    T dJ_dz01 = 0.f;
-    T dJ_dz02 = width / (2.f * M_PI) * (x * x - z * z) / ((x * x + z * z) * (x * x + z * z));
-    T dJ_dz10 = -height / M_PI * (z * y * xz_norm) / (r * r * (r * r + xz_norm));
-    T dJ_dz11 = height / M_PI * (x * y * xz_norm) / (r * r * (r * r + xz_norm));
-    T dJ_dz12 = -height / M_PI * (z * y * xz_norm) / (r * r * (r * r + xz_norm));
-
-    T dL_dtx_raw = dJ_dx00 * v_J[0][0] + dJ_dx01 * v_J[1][0] +
-                   dJ_dx02 * v_J[2][0] + dJ_dx10 * v_J[0][1] +
-                   dJ_dx11 * v_J[1][1] + dJ_dx12 * v_J[2][1];
-    T dL_dty_raw = dJ_dy00 * v_J[0][0] + dJ_dy01 * v_J[1][0] +
-                   dJ_dy02 * v_J[2][0] + dJ_dy10 * v_J[0][1] +
-                   dJ_dy11 * v_J[1][1] + dJ_dy12 * v_J[2][1];
-    T dL_dtz_raw = dJ_dz00 * v_J[0][0] + dJ_dz01 * v_J[1][0] +
-                   dJ_dz02 * v_J[2][0] + dJ_dz10 * v_J[0][1] +
-                   dJ_dz11 * v_J[1][1] + dJ_dz12 * v_J[2][1];
-    v_mean3d.x += dL_dtx_raw;
-    v_mean3d.y += dL_dty_raw;
-    v_mean3d.z += dL_dtz_raw;
 }
 
 template <typename T>

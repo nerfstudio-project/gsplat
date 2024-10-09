@@ -70,11 +70,19 @@ __global__ void fully_fused_projection_fwd_kernel(
     // transform Gaussian center to camera space
     vec3<T> mean_c;
     pos_world_to_cam(R, t, glm::make_vec3(means), mean_c);
-    if (mean_c.z < near_plane || mean_c.z > far_plane) {
-        radii[idx] = 0;
-        return;
+    if(camera_model != CameraModelType::SPHERICAL){
+        if (mean_c.z < near_plane || mean_c.z > far_plane) {
+            radii[idx] = 0;
+            return;
+        }
     }
-
+    else{
+        float r = sqrt(mean_c.x * mean_c.x + mean_c.y * mean_c.y + mean_c.z * mean_c.z);
+        if (r < near_plane || r > far_plane) {
+            radii[idx] = 0;
+            return;
+        }
+    }
     // transform Gaussian covariance to camera space
     mat3<T> covar;
     if (covars != nullptr) {

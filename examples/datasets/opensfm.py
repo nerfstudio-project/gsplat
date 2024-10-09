@@ -147,6 +147,8 @@ class Parser:
 
         # Extract extrinsic matrices in world-to-camera format.
         w2c_mats = []
+        image_names = []
+        image_paths = []
         camera_ids = []
         Ks_dict = dict()
         params_dict = dict()
@@ -161,6 +163,8 @@ class Parser:
             trans = img.tvec.reshape(3, 1)
             w2c = np.concatenate([np.concatenate([rot, trans], 1), bottom], axis=0)
             w2c_mats.append(w2c)
+            image_names.append(img.name)
+            image_paths.append(os.path.join(self.data_dir + "/images/", img.name))
 
             # support different camera intrinsics
             camera_id = img.camera_id
@@ -176,24 +180,20 @@ class Parser:
                 K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
                 K[:2, :] /= self.factor
                 Ks_dict[img.camera_id] = K
-
-                # Distortion parameters
                 params_dict[img.camera_id] = np.append(cam.params[3:5], np.array([0, 0]))
                 imsize_dict[img.camera_id] = (cam.width // self.factor, cam.height // self.factor)
                 mask_dict[camera_id] = None
-                camera_ids.append(img.camera_id)
             elif type_ == 5 or type_ == "SPHERICAL":
                 params = np.empty(0, dtype=np.float32)
                 camtype = "spherical"
-                K = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+                K = np.array([[cam.width // 8, 0, 0], [0, cam.height // 4, 0], [cam.width // 2, cam.height // 2, 1]])
                 Ks_dict[img.camera_id] = K
                 params_dict[img.camera_id] = params
-                imsize_dict[img.camera_id] = (cam.width, cam.height)
+                imsize_dict[img.camera_id] = (cam.width // self.factor, cam.height // self.factor)
                 mask_dict[camera_id] = None
-                camera_ids.append(img.camera_id)
 
         w2c_mats = np.stack(w2c_mats, axis=0)
-        
+
         # Convert extrinsics to camera-to-world.
         camtoworlds = np.linalg.inv(w2c_mats)
 
@@ -214,6 +214,9 @@ class Parser:
         # Set instance variables.
 
         self.camtoworlds = camtoworlds  # np.ndarray, (num_images, 4, 4)
+        self.image_names = image_names  # List[str], (num_images,)
+
+        self.image_paths = image_paths  # List[str], (num_images,)
         self.camera_ids = camera_ids  # List[int], (num_images,)
         self.Ks_dict = Ks_dict  # Dict of camera_id -> K
         self.params_dict = params_dict  # Dict of camera_id -> params
@@ -295,7 +298,7 @@ class Parser:
             self.mask_dict[camera_id] = mask
 
         # size of the scene measured by cameras
-        camera_locations = camtoworlds[:, :3, 3]
+        camera_locations = np.array(camtoworlds)[:, :3, 3]
         scene_center = np.mean(camera_locations, axis=0)
         dists = np.linalg.norm(camera_locations - scene_center, axis=1)
         self.scene_scale = np.max(dists)
@@ -332,12 +335,12 @@ class Dataset:
     def __getitem__(self, item: int) -> Dict[str, Any]:
         index = self.indices[item]
         img = self.parser.images[index]
+        img_name = self.parser.images[index].name
         camera_id = img.camera_id
         K = self.parser.Ks_dict[camera_id].copy()  # undistorted K
         camtoworld = self.parser.camtoworlds[index]
 
-        image_path = os.path.join(self.parser.data_dir, "images/" + img.name)  # Update with actual image path
-        image = imageio.imread(image_path)[..., :3]
+        image = imageio.imread(self.parser.image_paths[index])[..., :3]
 
         # Resize image according to the factor
         if self.parser.factor > 1:
@@ -405,8 +408,7 @@ def read_opensfm(reconstructions):
                 model = "SPHERICAL"
                 width = reconstruction["cameras"][camera]["width"]
                 height = reconstruction["cameras"][camera]["height"]
-                f = width / 4 / 2
-                params = np.array([f, width, height])
+                params = np.array([0])
                 cameras[camera_id] = Camera(id=camera_id, model=model, width=width, height=height, params=params, panorama=True)
                 camera_names[camera_name] = camera_id
             elif reconstruction["cameras"][camera]['projection_type'] == "perspective":
@@ -427,8 +429,7 @@ def read_opensfm(reconstructions):
         reference_alt = reconstruction["reference_lla"]["altitude"]
         reference_x, reference_y = e2u_conv(reference_lon, reference_lat)
         if reference_lat < 0:
-            reference_y += 10000000
-        
+            reference_y += 10000000        
         for shot in reconstruction["shots"]:
             translation = reconstruction["shots"][shot]["translation"]
             rotation = reconstruction["shots"][shot]["rotation"]

@@ -260,12 +260,12 @@ def _spherical_proj(
     O = torch.zeros((C, N), device=means.device, dtype=means.dtype)
     J = torch.stack(
         [
-            width / tr / (2 * torch.pi) * tz / (tx**2 + tz**2),
+            width / (2 * torch.pi) * tz / (tx**2 + tz**2),
             O,
-            -width / tr / (2 * torch.pi) * tx / (tx**2 + tz**2),
-            -height / tr / torch.pi * (tx * ty) / (tr**2 * torch.sqrt(tx**2 + tz**2)),
-            height / tr / torch.pi * torch.sqrt(tx**2 + tz**2) / tr**2,
-            -height / tr / torch.pi * (tz * ty) / (tr**2 * torch.sqrt(tx**2 + tz**2)),
+            -width / (2 * torch.pi) * tx / (tx**2 + tz**2),
+            -height / torch.pi * (tx * ty) / (tr**2 * torch.sqrt(tx**2 + tz**2)),
+            height / torch.pi * torch.sqrt(tx**2 + tz**2) / tr**2,
+            -height / torch.pi * (tz * ty) / (tr**2 * torch.sqrt(tx**2 + tz**2)),
         ],
         dim=-1,
     ).reshape(C, N, 2, 3)
