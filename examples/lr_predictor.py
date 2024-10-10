@@ -1,8 +1,14 @@
 import math
 import os
+import json
+import matplotlib.pyplot as plt
 import time
+from collections import defaultdict
+from tqdm import tqdm
 from pathlib import Path
 from typing import Literal, Optional
+from scipy.signal import butter, filtfilt
+import time
 
 import numpy as np
 import torch.nn as nn
@@ -15,6 +21,8 @@ from gsplat import rasterization, rasterization_2dgs
 
 from image_fitting import SimpleTrainer
 import random
+
+
 
 def seed_everything(seed: int):
     torch.manual_seed(seed)
@@ -41,11 +49,16 @@ class PredictLR(nn.Module):
 
     def select_action(self):
         log_probs = self.forward()
-        action = torch.multinomial(log_probs.exp(), 1)
-        return action, log_probs[action]
+        lr_idx = torch.multinomial(log_probs.exp(), 1)
+        return self.lrs[lr_idx], log_probs[lr_idx]
 
-    def get_lr(self, action):
-        return self.lrs[action.item()]
+    
+    def get_best_lr(self):
+        return self.lrs[self.logits.argmax().item()]
+    
+    def get_best_lr_prob(self):
+        return self.forward().exp().max().item()
+    
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 lr_predictor = PredictLR().to(device)
@@ -66,15 +79,14 @@ gt_image = torch.ones((height, width, 3)) * 1.0
 gt_image[: height // 2, : width // 2, :] = torch.tensor([1.0, 0.0, 0.0])
 gt_image[height // 2 :, width // 2 :, :] = torch.tensor([0.0, 0.0, 1.0])
 
-# [(lr, final_loss)]
 buffer_size = 10
 num_epochs = 2
 num_updates = int(1e4)
 lr_losses = {}
-import json
+
 
 if not os.path.exists(f"lr_losses_{training_iterations}.json"):
-        
+    print("generating trajectories")
     for lr in lr_predictor.lrs:
         print("*" * 50)
         print(f'currently training with lr={lr}')
@@ -95,64 +107,77 @@ else:
     with open(f"lr_losses_{training_iterations}.json", 'r') as f:
         lr_losses = json.load(f)
 
-
-from collections import defaultdict
 lr_probs = defaultdict(list)
 reinforce_losses = []
 rewards_history = []
 
-from tqdm import tqdm
+print("training lr predictor")
 pbar = tqdm(range(num_updates), desc="best LR prob")
+
+rollout_times = []
+update_times = []
+log_probs = torch.empty(buffer_size, device=device)
+rewards = torch.empty(buffer_size, device=device)
 for update in pbar:
+
+    time_start = time.time()
     # Collect rollout
     log_probs = []
     rewards = []
 
-    for _ in range(buffer_size):
-        lr_idx, log_prob = lr_predictor.select_action()
-        lr = lr_predictor.get_lr(lr_idx)
+    # Pre-allocate tensors
+    log_probs = torch.empty(buffer_size, device=device)
+    rewards = torch.empty(buffer_size, device=device)
+
+    for i in range(buffer_size):
+        lr, log_prob = lr_predictor.select_action()
         losses = lr_losses[str(lr)]
 
         final_loss, initial_loss = losses[-1], losses[0]
-        # print(final_loss, initial_loss)
         loss_reduction = final_loss - initial_loss
-        loss_reduction = loss_reduction
-        # loss_reduction = loss_reduction.detach().cpu().numpy()
         reward = -loss_reduction
         
-        log_probs.append(log_prob)
-        rewards.append(reward)
+        log_probs[i] = log_prob
+        rewards[i] = reward
 
-    # print(f"rewards: {rewards}")
-    log_probs = torch.stack(log_probs)
-    rewards = torch.tensor(rewards, device=device)
+    time_rollouts = time.time()
+    rollout_times.append(time_rollouts - time_start)
 
     # Calculate policy gradient loss
-    policy_loss = -torch.mean(log_probs * rewards)
+    policy_loss = -(log_probs * rewards).mean()
     reinforce_losses.append(policy_loss.item())
-    rewards_history.append(torch.mean(rewards).item())
-    pbar.set_description(f"best LR {lr_predictor.lrs[lr_predictor.logits.argmax().item()]} with prob: {lr_predictor.forward().exp().max().item():.4f}")
+    rewards_history.append(rewards.mean().item())
+
+    pbar.set_description(f"best LR {lr_predictor.get_best_lr()} with prob: {lr_predictor.get_best_lr_prob():.4f}")
+
     # Update the network
     optimizer.zero_grad()
     policy_loss.backward()
     optimizer.step()
     verbose = False
+
+    time_end = time.time()
+    update_times.append(time_end - time_start)
+
+    if update % 50:
+        print(f"avg rollout time: {np.mean(rollout_times)}, avg update time: {np.mean(update_times)}")
+        
     if update % log_iter == 0 and verbose:
         # Optionally, print some statistics
         print("=" * 100)
         print(f"started at loss = {initial_loss}, finished at loss = {final_loss} (difference of {-1 * loss_reduction})for lr idx {lr_idx} (lr {lr})")
         print(f"Update {update}, Avg Reward: {rewards.mean().item()}")
-        print(f'best LR: {lr_predictor.lrs[lr_predictor.logits.argmax().item()]}')
+        print(f'best LR: {lr_predictor.get_best_lr()}')
         print(f'softmax: {lr_predictor.forward().exp()}')
-        print(f'best index: {lr_predictor.logits.argmax().item()}')
-        
+        # print(f'best index: {lr_predictor.logits.argmax().item()}')
+        print(f'best lr: {lr_predictor.get_best_lr()}')
     for prob, lr in zip(lr_predictor.forward().exp(), lr_predictor.lrs):
         lr_probs[str(lr)].append(prob.detach().cpu().numpy())
 
-import matplotlib.pyplot as plt
+
 
 updates = list(range(num_updates))
-optimal_lr = lr_predictor.lrs[lr_predictor.logits.argmax().item()]
+optimal_lr = lr_predictor.get_best_lr()
 
 optimal_lr_probs = lr_probs[str(optimal_lr)]
 plt.plot(updates, optimal_lr_probs, label=f'Optimal LR: {optimal_lr}')
@@ -164,7 +189,7 @@ plt.legend()
 plt.savefig(f'lr_probs_{training_iterations}.png')
 
 # Plot REINFORCE losses
-from scipy.signal import butter, filtfilt
+
 
 def lowpass_filter(data, cutoff=0.1, fs=1.0, order=5):
     nyquist = 0.5 * fs
@@ -173,7 +198,10 @@ def lowpass_filter(data, cutoff=0.1, fs=1.0, order=5):
     y = filtfilt(b, a, data)
     return y
 
-filtered_reinforce_losses = lowpass_filter(reinforce_losses)
+window_size = 100
+box_filter = np.ones(window_size) / window_size
+
+filtered_reinforce_losses = np.convolve(reinforce_losses, box_filter, mode='same')
 
 plt.figure()
 plt.plot(range(num_updates), reinforce_losses, label='REINFORCE Loss')
@@ -182,6 +210,13 @@ plt.ylabel('Loss')
 plt.title('REINFORCE Loss over Updates')
 plt.legend()
 plt.savefig(f'reinforce_losses_{training_iterations}.png')
+
+plt.plot(range(num_updates), filtered_reinforce_losses, label='filtered REINFORCE Loss')
+plt.xlabel('Updates')
+plt.ylabel('Loss')
+plt.title('REINFORCE Loss over Updates')
+plt.legend()
+plt.savefig(f'filtered_reinforce_losses_{training_iterations}.png')
 
 # Plot rewards
 plt.figure()
@@ -192,6 +227,7 @@ plt.title('Average Reward over Updates')
 plt.legend()
 plt.savefig(f'rewards_{training_iterations}.png')
 
+print("executing training run with optimal lr")
 # Launch a training job with the optimal LR for 2000 points
 # num_points = 100000
 save_img = True
@@ -210,3 +246,4 @@ if save_img:
     plt.title('Average Reward over Points')
     plt.legend()
     plt.savefig(f'rewards_{training_iterations}_2000_points.png')
+
