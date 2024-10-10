@@ -174,10 +174,6 @@ __global__ void fully_fused_projection_fwd_kernel(
 
     T compensation;
     T det = add_blur(eps2d, covar2d, compensation);
-    if (det <= 0.f) {
-        radii[idx] = 0;
-        return;
-    }
 
     // compute the inverse of the 2d covariance
     mat2<T> covar2d_inv;
@@ -196,17 +192,24 @@ __global__ void fully_fused_projection_fwd_kernel(
     }
 
     // mask out gaussians outside the image region
-    if (mean2d.x + radius <= 0 || mean2d.x - radius >= image_width ||
-        mean2d.y + radius <= 0 || mean2d.y - radius >= image_height) {
-        radii[idx] = 0;
-        return;
+    if(camera_model != CameraModelType::SPHERICAL)
+    {
+        if (mean2d.x + radius <= 0 || mean2d.x - radius >= image_width ||
+            mean2d.y + radius <= 0 || mean2d.y - radius >= image_height) {
+            radii[idx] = 0;
+            return;
+        }
     }
 
     // write to outputs
     radii[idx] = (int32_t)radius;
     means2d[idx * 2] = mean2d.x;
     means2d[idx * 2 + 1] = mean2d.y;
-    depths[idx] = mean_c.z;
+    if (camera_model == CameraModelType::SPHERICAL) {
+        depths[idx] = sqrt(mean_c.x * mean_c.x + mean_c.y * mean_c.y + mean_c.z * mean_c.z);
+    } else {
+        depths[idx] = mean_c.z;
+    }
     conics[idx * 3] = covar2d_inv[0][0];
     conics[idx * 3 + 1] = covar2d_inv[0][1];
     conics[idx * 3 + 2] = covar2d_inv[1][1];

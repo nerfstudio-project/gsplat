@@ -210,9 +210,11 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
         }
 
         // mask out gaussians outside the image region
-        if (mean2d.x + radius <= 0 || mean2d.x - radius >= image_width ||
-            mean2d.y + radius <= 0 || mean2d.y - radius >= image_height) {
-            valid = false;
+        if(camera_model != CameraModelType::SPHERICAL){
+            if (mean2d.x + radius <= 0 || mean2d.x - radius >= image_width ||
+                mean2d.y + radius <= 0 || mean2d.y - radius >= image_height) {
+                valid = false;
+            }
         }
     }
 
