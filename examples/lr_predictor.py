@@ -34,8 +34,19 @@ def seed_everything(seed: int):
     random.seed(seed)
 
 seed_everything(42)
+# choosing lr
+# - based on this image, choose a lr
+# primitive initialization
+class Critic(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.network = nn.Linear(1, 1)
 
-class PredictLR(nn.Module):
+    def forward(self, action: int, state=None):
+        return self.network(action)
+    
+
+class Actor(nn.Module):
     def __init__(self):
         super().__init__()
         self.logits = nn.Parameter(torch.zeros(10))
@@ -58,10 +69,17 @@ class PredictLR(nn.Module):
     
     def get_best_lr_prob(self):
         return self.forward().exp().max().item()
-    
+
+def image_path_to_tensor(image_path: Path):
+    import torchvision.transforms as transforms
+
+    img = Image.open(image_path)
+    transform = transforms.ToTensor()
+    img_tensor = transform(img).permute(1, 2, 0)[..., :3]
+    return img_tensor 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-lr_predictor = PredictLR().to(device)
+lr_predictor = Actor().to(device)
 
 optimizer = optim.Adam(lr_predictor.parameters(), lr=0.01)
 
@@ -74,18 +92,22 @@ training_iterations: int = 1000
 lr: float = 0.01
 model_type: Literal["3dgs", "2dgs"] = "3dgs"
 
-gt_image = torch.ones((height, width, 3)) * 1.0
-# make top left and bottom right red, blue
-gt_image[: height // 2, : width // 2, :] = torch.tensor([1.0, 0.0, 0.0])
-gt_image[height // 2 :, width // 2 :, :] = torch.tensor([0.0, 0.0, 1.0])
+im_path = 'images/adam.jpg'
+if not im_path:    
+    gt_image = torch.ones((height, width, 3)) * 1.0
+    # make top left and bottom right red, blue
+    gt_image[: height // 2, : width // 2, :] = torch.tensor([1.0, 0.0, 0.0])
+    gt_image[height // 2 :, width // 2 :, :] = torch.tensor([0.0, 0.0, 1.0])
+else:
+    gt_image = image_path_to_tensor(im_path)
 
 buffer_size = 10
 num_epochs = 2
 num_updates = int(1e4)
 lr_losses = {}
 
-
-if not os.path.exists(f"lr_losses_{training_iterations}.json"):
+if True:
+# if not os.path.exists(f"lr_losses_{training_iterations}.json"):
     print("generating trajectories")
     for lr in lr_predictor.lrs:
         print("*" * 50)
