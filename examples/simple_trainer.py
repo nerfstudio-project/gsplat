@@ -83,7 +83,7 @@ class Config:
     # Number of training steps
     max_steps: int = 30_000
     # Steps to evaluate the model
-    eval_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    eval_steps: List[int] = field(default_factory=lambda: [7_000, 15_000, 30_000])
     # Steps to save the model
     save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
 
@@ -229,21 +229,25 @@ def create_splats_with_optimizers(
     N = points.shape[0]
     quats = torch.rand((N, 4))  # [N, 4]
     opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
+    embeds = 0.1 * torch.randn(N, 50, 1)  # [N, 3]
 
     params = [
         # name, value, lr
-        ("means", torch.nn.Parameter(points), 1.6e-4 * scene_scale),
-        ("scales", torch.nn.Parameter(scales), 5e-3),
-        ("quats", torch.nn.Parameter(quats), 1e-3),
-        ("opacities", torch.nn.Parameter(opacities), 5e-2),
+        ("means", torch.nn.Parameter(points), 1.6e-4 * scene_scale, 0.0),
+        ("scales", torch.nn.Parameter(scales), 5e-3, 0.0),
+        ("quats", torch.nn.Parameter(quats), 1e-3, 0.0),
+        ("opacities", torch.nn.Parameter(opacities), 5e-2, 0.0),
+        # ("embeds", torch.nn.Parameter(0.01 * torch.randn(N, 27, 1)), 1e-3, 0),
+        # ("embeds", torch.nn.Parameter(torch.zeros(N, 100, 1)), 1e-3, 0),
+        ("embeds", torch.nn.Parameter(embeds), 1e-3, 0),
     ]
 
     if feature_dim is None:
         # color is SH coefficients.
         colors = torch.zeros((N, (sh_degree + 1) ** 2, 3))  # [N, K, 3]
         colors[:, 0, :] = rgb_to_sh(rgbs)
-        params.append(("sh0", torch.nn.Parameter(colors[:, :1, :]), 2.5e-3))
-        params.append(("shN", torch.nn.Parameter(colors[:, 1:, :]), 2.5e-3 / 20))
+        params.append(("sh0", torch.nn.Parameter(colors[:, :1, :]), 2.5e-3, 0.0))
+        params.append(("shN", torch.nn.Parameter(colors[:, 1:, :]), 2.5e-3 / 20, 0.0))
     else:
         # features will be used for appearance and view-dependent shading
         features = torch.rand(N, feature_dim)  # [N, feature_dim]
@@ -251,7 +255,7 @@ def create_splats_with_optimizers(
         colors = torch.logit(rgbs)  # [N, 3]
         params.append(("colors", torch.nn.Parameter(colors), 2.5e-3))
 
-    splats = torch.nn.ParameterDict({n: v for n, v, _ in params}).to(device)
+    splats = torch.nn.ParameterDict({n: v for n, v, _, _ in params}).to(device)
     # Scale learning rate based on batch size, reference:
     # https://www.cs.princeton.edu/~smalladi/blog/2024/01/22/SDEs-ScalingRules/
     # Note that this would not make the training exactly equivalent, see
@@ -270,8 +274,9 @@ def create_splats_with_optimizers(
             eps=1e-15 / math.sqrt(BS),
             # TODO: check betas logic when BS is larger than 10 betas[0] will be zero.
             betas=(1 - BS * (1 - 0.9), 1 - BS * (1 - 0.999)),
+            weight_decay=weight_decay,
         )
-        for name, _, lr in params
+        for name, _, lr, weight_decay in params
     }
     return splats, optimizers
 
@@ -490,34 +495,80 @@ class Runner:
 
         if self.cfg.blur_opt and is_train:
             quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
-            scales = torch.exp(self.splats["scales"])
+            # scales = torch.exp(self.splats["scales"])
+            
+            # t = (10 - 1) * (image_ids[0] / (31 - 1 + 0.0001))
+            # i = t.int()
+            # r = t - i
+            # scales_delta = (1 - r) * self.splats["embeds"][:, i, :3] + r * self.splats["embeds"][:, i + 1, :3]
+            
+            scales_delta = self.splats["embeds"][:, image_ids[0], :1]
+            # scales_delta = torch.clamp(scales_delta, min=0.0)
+            # scales_delta = torch.abs(scales_delta)
+            # rotations_delta = self.splats["embeds"][:, image_ids[0], 3:]
+            
+            # d = means[:, :] - camtoworlds[:, :3, 3]
+            # z = d[:, 2]
+            # a = 0.2 * torch.sigmoid(self.splats["embeds"][:, image_ids[0], 0])
+            # f = self.splats["embeds"][:, image_ids[0], 1]
+            # scales_delta = a * (f - z)
+            # scales_delta = scales_delta[:, None]
+            
+            # a = self.splats["embeds"][:, 0, 0]
+            # b = self.splats["embeds"][:, 0, 1]
+            # r = torch.sigmoid(self.splats["embeds"][:, image_ids[0], 2])
+            # scales_delta = a * r + b * (1 - r)
+            # scales_delta = scales_delta[:, None]
+            
+            # if image_ids[0] == 0:
+            #     scales_delta = 0.0 * scales_delta
+            
+            print("scales", self.splats["scales"].min().item(), self.splats["scales"].max().item(), self.splats["scales"].mean().item())
+            print("deltas", scales_delta.min().item(), scales_delta.max().item(), scales_delta.mean().item())
+            
 
-            means_ = means.detach()
-            scales_ = scales.detach()
-            quats_ = quats.detach()
-            viewdir_ = camtoworlds[0, :3, 3].repeat(means.shape[0], 1)
-            scales_delta, rotations_delta, _ = self.blur_module(
-                means_,
-                scales_,
-                quats_,
-                viewdir_,
-            )
-            lambda_s = 0.01
-            max_clamp = 1.1
-            scales_delta = torch.clamp(
-                lambda_s * scales_delta + (1.0 - lambda_s), min=1.0, max=max_clamp
-            )
-            rotations_delta = torch.clamp(
-                lambda_s * rotations_delta + (1 - lambda_s), min=1.0, max=max_clamp
-            )
-            scales = scales * scales_delta
-            quats = quats * rotations_delta
+            # defocus_mask = self.splats["embeds"][:, 0, 0] > 0
+            # print(self.splats["embeds"][:, 0, 0].max().item(), defocus_mask.sum().item())
+            # defocus_mask = self.splats["embeds"][:, 1, 0] > 0
+            # print(self.splats["embeds"][:, 1, 0].max().item(), defocus_mask.sum().item())
+            
+            
+            
+            # scales_delta = torch.clamp(scales_delta, min=-0.5, max=0.5)
+            # rotations_delta = torch.clamp(rotations_delta, min=0.0, max=0.2)
+            
+            # scales_delta = torch.abs(scales_delta)
+            # scales_delta = torch.clamp(scales_delta, max=1.0)
+
+            # means_ = means.detach()
+            # scales_ = scales.detach()
+            # quats_ = quats.detach()
+            # viewdir_ = camtoworlds[0, :3, 3].repeat(means.shape[0], 1)
+            # scales_delta, rotations_delta, _ = self.blur_module(
+            #     means_,
+            #     scales_,
+            #     quats_,
+            #     viewdir_,
+            # )
+            # lambda_s = 0.01
+            # max_clamp = 1.05
+            # scales_delta = torch.clamp(
+            #     lambda_s * scales_delta + (1.0 - lambda_s), min=1.0, max=max_clamp
+            # )
+            # rotations_delta = torch.clamp(
+            #     lambda_s * rotations_delta + (1.0 - lambda_s), min=1.0, max=max_clamp
+            # )
+            # scales = scales * (scales_delta + 1)
+            # quats = quats * (rotations_delta + 1)
+            
+            scales = torch.exp(self.splats["scales"] + scales_delta)
+            
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
         render_colors, render_alphas, info = rasterization(
             means=means,
             quats=quats,
-            scales=scales,
+            scales=scales * 1.2,
             opacities=opacities,
             colors=colors,
             viewmats=torch.linalg.inv(camtoworlds),  # [C, 4, 4]
@@ -714,7 +765,21 @@ class Runner:
                     loss
                     + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
                 )
-
+                
+                # delta_loss = torch.abs(scales_delta).mean()
+                # print(delta_loss)
+                # loss += 0.1 * delta_loss
+                # loss += 1000.0 * cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"] + scales_delta) - torch.exp(self.splats["scales"])).mean()
+            
+            # mask = self.splats["embeds"] > 0
+            # embed_reg = -0.8 * self.splats["embeds"][~mask].mean() + 0.2 * self.splats["embeds"][mask].mean() 
+            
+            embed_reg = torch.abs(self.splats["embeds"]).mean()
+            # embed_reg = torch.sqrt(torch.abs(self.splats["embeds"])).mean()
+            # embed_reg = torch.log(1 + torch.abs(self.splats["embeds"])).mean()
+            print(embed_reg)
+            loss += 1.0 * embed_reg
+            
             loss.backward()
 
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
@@ -859,7 +924,6 @@ class Runner:
             if step in [i - 1 for i in cfg.eval_steps]:
                 self.eval(step, stage="train")
                 self.eval(step)
-                self.render_traj(step, stage="train")
                 self.render_traj(step)
 
             # run compression
@@ -901,6 +965,7 @@ class Runner:
             camtoworlds = data["camtoworld"].to(device)
             Ks = data["K"].to(device)
             pixels = data["image"].to(device) / 255.0
+            image_ids = data["image_id"].to(device)
             masks = data["mask"].to(device) if "mask" in data else None
             height, width = pixels.shape[1:3]
 
@@ -914,6 +979,7 @@ class Runner:
                 sh_degree=cfg.sh_degree,
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
+                image_ids=image_ids,
                 masks=masks,
                 is_train=stage == "train",
             )  # [1, H, W, 3]

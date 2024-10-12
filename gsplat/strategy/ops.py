@@ -361,3 +361,4 @@ def inject_noise_to_position(
     )
     noise = torch.einsum("bij,bj->bi", covars, noise)
     params["means"].add_(noise)
+    

@@ -10,7 +10,7 @@ import tyro
 
 def main(results_dir: str, scenes: List[str]):
     print("scenes:", scenes)
-    stage = "compress"
+    stage = "val"
 
     summary = defaultdict(list)
     for scene in scenes:
@@ -33,8 +33,11 @@ def main(results_dir: str, scenes: List[str]):
                 summary[k].append(v)
 
     for k, v in summary.items():
-        print(k, np.mean(v))
+        summary[k] = np.mean(v)
+    summary["scenes"] = scenes
 
+    with open(os.path.join(results_dir, f"{stage}_summary.json"), "w") as f:
+        json.dump(summary, f, indent=2)
 
 if __name__ == "__main__":
     tyro.cli(main)
