@@ -430,7 +430,7 @@ def read_opensfm(reconstructions):
         reference_x, reference_y = e2u_conv(reference_lon, reference_lat)
         if reference_lat < 0:
             reference_y += 10000000        
-        for shot in reconstruction["shots"]:
+        for j, shot in enumerate(reconstruction["shots"]):
             translation = reconstruction["shots"][shot]["translation"]
             rotation = reconstruction["shots"][shot]["rotation"]
             qvec = angle_axis_to_quaternion(rotation)
@@ -441,12 +441,11 @@ def read_opensfm(reconstructions):
             diff_ref = np.array([diff_ref_x, diff_ref_y, diff_ref_alt])
             camera_name = reconstruction["shots"][shot]["camera"]
             camera_id = camera_names.get(camera_name, 0)
-            image_id = i
+            image_id = j
             image_name = shot
             xys = np.array([0, 0])
             point3D_ids = np.array([0, 0])
             images[image_id] = Image(id=image_id, qvec=qvec, tvec=tvec, camera_id=camera_id, name=image_name, xys=xys, point3D_ids=point3D_ids, diff_ref=diff_ref)
-            i += 1
     return cameras, images
 
 def read_opensfm_points3D(reconstructions):
