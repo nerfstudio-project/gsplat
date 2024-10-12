@@ -49,13 +49,14 @@ class Config:
     disable_viewer: bool = False
     # Path to the .pt files. If provide, it will skip training and run evaluation only.
     ckpt: Optional[List[str]] = None
+
     # Name of compression strategy to use
     compression: Optional[Literal["png"]] = None
     # Render trajectory path
     render_traj_path: str = "interp"
 
     # Path to the Mip-NeRF 360 dataset
-    data_dir: str = "/home/ubuntu/360-gaussian-splatting/sample"
+    data_dir: str = "data_dir"
     # Downsample factor for the dataset
     data_factor: int = 4
     # Directory to save results
@@ -67,7 +68,7 @@ class Config:
     # A global scaler that applies to the scene size related parameters
     global_scale: float = 1.0
     # Normalize the world space
-    normalize_world_space: bool = False
+    normalize_world_space: bool = True
     # Camera model
     camera_model: Literal["pinhole", "ortho", "fisheye", "spherical"] = "spherical"
 
