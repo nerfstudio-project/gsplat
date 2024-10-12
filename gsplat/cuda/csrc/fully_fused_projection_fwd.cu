@@ -205,10 +205,11 @@ __global__ void fully_fused_projection_fwd_kernel(
     radii[idx] = (int32_t)radius;
     means2d[idx * 2] = mean2d.x;
     means2d[idx * 2 + 1] = mean2d.y;
-    if (camera_model == CameraModelType::SPHERICAL) {
+    if (camera_model != CameraModelType::SPHERICAL) {
+        depths[idx] = mean_c.z;
         depths[idx] = sqrt(mean_c.x * mean_c.x + mean_c.y * mean_c.y + mean_c.z * mean_c.z);
     } else {
-        depths[idx] = mean_c.z;
+        depths[idx] = sqrt(mean_c.x * mean_c.x + mean_c.y * mean_c.y + mean_c.z * mean_c.z);
     }
     conics[idx * 3] = covar2d_inv[0][0];
     conics[idx * 3 + 1] = covar2d_inv[0][1];
