@@ -39,5 +39,6 @@ def main(results_dir: str, scenes: List[str]):
     with open(os.path.join(results_dir, f"{stage}_summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
 
+
 if __name__ == "__main__":
     tyro.cli(main)

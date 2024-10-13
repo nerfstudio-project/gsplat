@@ -143,11 +143,6 @@ class MCMCStrategy(Strategy):
         inject_noise_to_position(
             params=params, optimizers=optimizers, state={}, scaler=lr * self.noise_lr
         )
-            
-        # with torch.no_grad():
-        #     deltas_min, _ = params["embeds"].min(dim=1)
-        #     params["scales"] += deltas_min.repeat(1, 3)
-        #     params["embeds"] -= deltas_min[:, :, None].repeat(1, 100, 1)
 
     @torch.no_grad()
     def _relocate_gs(

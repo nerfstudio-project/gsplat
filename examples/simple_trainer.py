@@ -233,19 +233,19 @@ def create_splats_with_optimizers(
 
     params = [
         # name, value, lr
-        ("means", torch.nn.Parameter(points), 1.6e-4 * scene_scale, 0.0),
-        ("scales", torch.nn.Parameter(scales), 5e-3, 0.0),
-        ("quats", torch.nn.Parameter(quats), 1e-3, 0.0),
-        ("opacities", torch.nn.Parameter(opacities), 5e-2, 0.0),
-        ("embeds", torch.nn.Parameter(embeds), 1e-3, 0),
+        ("means", torch.nn.Parameter(points), 1.6e-4 * scene_scale),
+        ("scales", torch.nn.Parameter(scales), 5e-3),
+        ("quats", torch.nn.Parameter(quats), 1e-3),
+        ("opacities", torch.nn.Parameter(opacities), 5e-2),
+        ("embeds", torch.nn.Parameter(embeds), 1e-3),
     ]
 
     if feature_dim is None:
         # color is SH coefficients.
         colors = torch.zeros((N, (sh_degree + 1) ** 2, 3))  # [N, K, 3]
         colors[:, 0, :] = rgb_to_sh(rgbs)
-        params.append(("sh0", torch.nn.Parameter(colors[:, :1, :]), 2.5e-3, 0.0))
-        params.append(("shN", torch.nn.Parameter(colors[:, 1:, :]), 2.5e-3 / 20, 0.0))
+        params.append(("sh0", torch.nn.Parameter(colors[:, :1, :]), 2.5e-3))
+        params.append(("shN", torch.nn.Parameter(colors[:, 1:, :]), 2.5e-3 / 20))
     else:
         # features will be used for appearance and view-dependent shading
         features = torch.rand(N, feature_dim)  # [N, feature_dim]
@@ -253,7 +253,7 @@ def create_splats_with_optimizers(
         colors = torch.logit(rgbs)  # [N, 3]
         params.append(("colors", torch.nn.Parameter(colors), 2.5e-3))
 
-    splats = torch.nn.ParameterDict({n: v for n, v, _, _ in params}).to(device)
+    splats = torch.nn.ParameterDict({n: v for n, v, _ in params}).to(device)
     # Scale learning rate based on batch size, reference:
     # https://www.cs.princeton.edu/~smalladi/blog/2024/01/22/SDEs-ScalingRules/
     # Note that this would not make the training exactly equivalent, see
@@ -272,9 +272,8 @@ def create_splats_with_optimizers(
             eps=1e-15 / math.sqrt(BS),
             # TODO: check betas logic when BS is larger than 10 betas[0] will be zero.
             betas=(1 - BS * (1 - 0.9), 1 - BS * (1 - 0.999)),
-            weight_decay=weight_decay,
         )
-        for name, _, lr, weight_decay in params
+        for name, _, lr in params
     }
     return splats, optimizers
 
@@ -498,9 +497,11 @@ class Runner:
             if image_ids[0] == 0:
                 scales_delta = 0.0 * scales_delta
                 rotations_delta = 0.0 * rotations_delta
-                
+
             scales = torch.exp(self.splats["scales"] + scales_delta)
-            quats = F.normalize(self.splats["quats"] + rotations_delta, dim=-1)  # [N, 4]
+            quats = F.normalize(
+                self.splats["quats"] + rotations_delta, dim=-1
+            )  # [N, 4]
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
         render_colors, render_alphas, info = rasterization(
@@ -703,7 +704,7 @@ class Runner:
                     loss
                     + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
                 )
-                
+
                 # embed_reg = torch.abs(self.splats["embeds"]).mean()
                 embed_reg = torch.log(1 + torch.abs(self.splats["embeds"])).mean()
                 loss += 10.0 * embed_reg
