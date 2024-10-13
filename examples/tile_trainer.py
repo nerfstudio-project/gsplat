@@ -31,7 +31,7 @@ class TileTrainer:
     def __init__(
         self,
         gt_image: Tensor,
-        tile_weights: List[float] = [1, 0, 0, 0],
+        tile_weights: List[float] = [.1, .4, .4, .1],
         num_points: int = 2000,
     ):
         assert sum(tile_weights) == 1.0
@@ -58,8 +58,8 @@ class TileTrainer:
             n_points_added = 0
             self.means = torch.zeros(self.num_points, 3, device=self.device)
             start_idx = 0
-            start_x = -1 / self.num_tiles_x
-            start_y = 1 / self.num_tiles_y
+            start_x = -1
+            start_y = 1
             tile_width_x = 2 / self.num_tiles_x
             tile_width_y = 2 / self.num_tiles_y
             i = 0
@@ -69,18 +69,67 @@ class TileTrainer:
                     n_points_added += num_points_in_tile
                     i += 1
 
-                    center_x = start_x + c * tile_width_x
-                    center_y = start_y - r * tile_width_y
+                    center_x = start_x + (c + 0.5) * tile_width_x
+                    center_y = start_y - (r + 0.5) * tile_width_y
 
-                    bd = 2 / self.num_tiles_x
+                    bd = tile_width_x
                     means = bd * (torch.rand(num_points_in_tile, 3, device=self.device) - 0.5)
                     means[:, 0] += center_x
                     means[:, 1] += center_y
                     self.means[start_idx:start_idx + num_points_in_tile] = means
-                    print(f'num points added for tile of center ({center_x}, {center_y} and weight {self.tile_weights[i-1]}): {num_points_in_tile}')
+                    print(f'num points added for tile of center ({center_x:.2f}, {center_y:.2f}) and weight {self.tile_weights[i-1]}: {num_points_in_tile}')
                 
                     start_idx += num_points_in_tile
+        import matplotlib.pyplot as plt
 
+        means_np = self.means.detach().cpu().numpy()
+        gt_image_np = self.gt_image.detach().cpu().numpy()
+
+        # Create the plot
+        fig, ax = plt.subplots()
+
+        # Display the image
+        ax.imshow(gt_image_np)
+
+        # Scale and shift the points to match image coordinates
+        scaled_x = (means_np[:, 0] + 1) * self.W / 2
+        scaled_y = (-means_np[:, 1] + 1) * self.H / 2
+
+        # Determine colors for each tile based on the indices
+        colors = []
+        start_idx = 0
+        i = 0
+        for r in range(self.num_tiles_y):
+            for c in range(self.num_tiles_x):
+                num_points_in_tile = int(self.num_points * self.tile_weights[i])
+                end_idx = start_idx + num_points_in_tile
+                if r == 0 and c == 0:
+                    colors.extend(['red'] * num_points_in_tile)  # Bottom-left
+                elif r == 0 and c == self.num_tiles_x - 1:
+                    colors.extend(['yellow'] * num_points_in_tile)  # Bottom-right
+                elif r == self.num_tiles_y - 1 and c == 0:
+                    colors.extend(['green'] * num_points_in_tile)  # Top-left
+                elif r == self.num_tiles_y - 1 and c == self.num_tiles_x - 1:
+                    colors.extend(['blue'] * num_points_in_tile)  # Top-right
+                else:
+                    colors.extend(['gray'] * num_points_in_tile)  # Other tiles
+                start_idx = end_idx
+                i += 1
+
+        # Plot the scaled points with different colors for each tile
+        ax.scatter(scaled_x, scaled_y, c=colors, s=1, alpha=0.5)
+
+        # Set the axis limits to match the image dimensions
+        ax.set_xlim(0, self.W)
+        ax.set_ylim(self.H, 0)  # Reverse Y-axis to match image coordinates
+
+        # Save the plot
+        out_dir = os.path.join(os.getcwd(), "results4")
+        os.makedirs(out_dir, exist_ok=True)
+        plt.savefig(f"{out_dir}/temp.png", dpi=300, bbox_inches='tight')
+        plt.close()
+
+        
         assert n_points_added == self.num_points
         self.scales = torch.rand(self.num_points, 3, device=self.device)
         d = 3
@@ -188,7 +237,7 @@ class TileTrainer:
             # save them as a gif with PIL
             frames = [Image.fromarray(frame) for frame in frames]
             # out_dir = os.path.join(os.getcwd(), "results")
-            out_dir = './results2'
+            out_dir = './results3'
             os.makedirs(out_dir, exist_ok=True)
             frames[0].save(
                 f"{out_dir}/training.gif",
@@ -204,13 +253,13 @@ class TileTrainer:
             print(
             f"Per step(s):\nRasterization: {times[0]/iterations:.5f}, Backward: {times[1]/iterations:.5f}"
         )
-
+        
         if save_path:
             final_img = (out_img.detach().cpu().numpy() * 255).astype(np.uint8)
             import matplotlib.pyplot as plt
             plt.imsave(save_path, final_img)
-            
-        return losses
+        final_img = (out_img.detach().cpu().numpy() * 255).astype(np.uint8)
+        return losses, final_img
 
 
 def image_path_to_tensor(image_path: Path):
@@ -225,7 +274,7 @@ def image_path_to_tensor(image_path: Path):
 def main(
     height: int = 256,
     width: int = 256,
-    num_points: int = 100000,
+    num_points: int = 10000,
     save_imgs: bool = True,
     img_path: Optional[Path] = None,
     iterations: int = 1000,
@@ -244,12 +293,18 @@ def main(
         gt_image[height // 2 :, width // 2 :, :] = torch.tensor([0.0, 0.0, 1.0])
 
     trainer = TileTrainer(gt_image=gt_image, num_points=num_points)
-    trainer.train(
+    losses, final_img = trainer.train(
         iterations=iterations,
         lr=lr,
         save_imgs=save_imgs,
         model_type=model_type,
     )
+    print(f'final loss: {losses[-1]}, loss reduction of {losses[0] - losses[-1]}')
+    weights_str = "_".join(map(str, trainer.tile_weights))
+    loss_reduction = losses[0] - losses[-1]
+    save_image_path = f"{weights_str}_{loss_reduction:.2f}_loss.png"
+    import matplotlib.pyplot as plt
+    plt.imsave(save_image_path, final_img)
 
 
 if __name__ == "__main__":
