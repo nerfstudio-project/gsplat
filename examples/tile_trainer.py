@@ -31,10 +31,10 @@ class TileTrainer:
     def __init__(
         self,
         gt_image: Tensor,
-        tile_weights: List[float] = [1, 0, 0, 0],
+        tile_weights: List[float] = [0.25, 0.25, 0.25, 0.25],
         num_points: int = 2000,
     ):
-        assert sum(tile_weights) == 1.0
+        assert np.isclose(sum(tile_weights), 1.0)
         self.tile_weights = tile_weights
         self.num_tiles = len(tile_weights) if self.tile_weights is not None else 1
         self.num_tiles_x = self.num_tiles_y = int(self.num_tiles ** .5)
@@ -58,8 +58,8 @@ class TileTrainer:
             n_points_added = 0
             self.means = torch.zeros(self.num_points, 3, device=self.device)
             start_idx = 0
-            start_x = -1 / self.num_tiles_x
-            start_y = 1 / self.num_tiles_y
+            start_x = (-1 + 1 / self.num_tiles_x) * 8
+            start_y = (-1 + 1 / self.num_tiles_y) * 8
             tile_width_x = 2 / self.num_tiles_x
             tile_width_y = 2 / self.num_tiles_y
             i = 0
@@ -69,8 +69,8 @@ class TileTrainer:
                     n_points_added += num_points_in_tile
                     i += 1
 
-                    center_x = start_x + c * tile_width_x
-                    center_y = start_y - r * tile_width_y
+                    center_x = start_x + c * tile_width_x * 8
+                    center_y = start_y + r * tile_width_y * 8
 
                     bd = 2 / self.num_tiles_x
                     means = bd * (torch.rand(num_points_in_tile, 3, device=self.device) - 0.5)
@@ -184,6 +184,9 @@ class TileTrainer:
 
             if save_imgs and iter % 5 == 0:
                 frames.append((out_img.detach().cpu().numpy() * 255).astype(np.uint8))
+            if iter == 0:
+                frame = Image.fromarray(frames[0])
+                frame.save("./results2/frame0.png")
         if save_imgs:
             # save them as a gif with PIL
             frames = [Image.fromarray(frame) for frame in frames]
@@ -243,11 +246,17 @@ def main(
         gt_image[: height // 2, : width // 2, :] = torch.tensor([1.0, 0.0, 0.0])
         gt_image[height // 2 :, width // 2 :, :] = torch.tensor([0.0, 0.0, 1.0])
 
-    trainer = TileTrainer(gt_image=gt_image, num_points=num_points)
+    n = 4
+    weights = [1/n] * n
+    trainer = TileTrainer(
+        gt_image=gt_image,
+        num_points=num_points,
+        tile_weights=weights
+    )
     trainer.train(
         iterations=iterations,
         lr=lr,
-        save_imgs=save_imgs,
+        save_imgs=True,
         model_type=model_type,
     )
 
