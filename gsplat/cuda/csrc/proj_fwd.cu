@@ -64,7 +64,7 @@ __global__ void proj_fwd_kernel(
             fisheye_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
             break;
         case CameraModelType::SPHERICAL: // spherical projection
-            spherical_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
+            spherical_proj(mean, covar, width, height, covar2d, mean2d);
             break;
     }
 

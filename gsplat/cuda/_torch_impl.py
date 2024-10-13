@@ -225,7 +225,6 @@ def _ortho_proj(
 def _spherical_proj(
     means: Tensor,  # [C, N, 3]
     covars: Tensor,  # [C, N, 3, 3]
-    Ks: Tensor,  # [C, 3, 3]
     width: int,
     height: int,
 ) -> Tuple[Tensor, Tensor]:
@@ -234,7 +233,6 @@ def _spherical_proj(
     Args:
         means: Gaussian means in camera coordinate system. [C, N, 3].
         covars: Gaussian covariances in camera coordinate system. [C, N, 3, 3].
-        Ks: Camera intrinsics. [C, 3, 3].
         width: Image width.
         height: Image height.
 
@@ -329,7 +327,7 @@ def _fully_fused_projection(
     elif camera_model == "pinhole":
         means2d, covars2d = _persp_proj(means_c, covars_c, Ks, width, height)
     elif camera_model == "spherical":
-        means2d, covars2d = _spherical_proj(means_c, covars_c, Ks, width, height)
+        means2d, covars2d = _spherical_proj(means_c, covars_c, width, height)
     else:
         assert_never(camera_model)
 

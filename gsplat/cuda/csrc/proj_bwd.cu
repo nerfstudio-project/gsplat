@@ -113,10 +113,6 @@ __global__ void proj_bwd_kernel(
             spherical_proj_vjp<OpT>(
                 mean,
                 covar,
-                fx,
-                fy,
-                cx,
-                cy,
                 width,
                 height,
                 glm::transpose(v_covar2d),

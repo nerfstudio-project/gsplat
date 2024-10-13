@@ -182,10 +182,6 @@ __global__ void fully_fused_projection_packed_bwd_kernel(
             spherical_proj_vjp<T>(
                 mean_c,
                 covar_c,
-                fx,
-                fy,
-                cx,
-                cy,
                 image_width,
                 image_height,
                 v_covar2d,

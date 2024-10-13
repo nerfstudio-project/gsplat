@@ -160,10 +160,6 @@ __global__ void fully_fused_projection_fwd_kernel(
             spherical_proj<T>(
                 mean_c,
                 covar_c,
-                Ks[0],
-                Ks[4],
-                Ks[2],
-                Ks[5],
                 image_width,
                 image_height,
                 covar2d,

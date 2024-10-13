@@ -521,10 +521,6 @@ inline __device__ void spherical_proj(
     // inputs
     const vec3<T> mean3d,
     const mat3<T> cov3d,
-    const T fx,
-    const T fy,
-    const T cx,
-    const T cy,
     const uint32_t width,
     const uint32_t height,
     // outputs
@@ -565,10 +561,6 @@ inline __device__ void spherical_proj_vjp(
     // fwd inputs
     const vec3<T> mean3d,
     const mat3<T> cov3d,
-    const T fx,
-    const T fy,
-    const T cx,
-    const T cy,
     const uint32_t width,
     const uint32_t height,
     // grad outputs
