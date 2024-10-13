@@ -77,6 +77,7 @@ def init_linear_weights(m):
 class GTnet(nn.Module):
     def __init__(
         self,
+        n,
         res_pos=3,
         res_view=10,
         num_hidden=3,
@@ -85,6 +86,7 @@ class GTnet(nn.Module):
         num_moments=4,
     ):
         super().__init__()
+        self.focals = torch.nn.Parameter(0.1 * torch.ones(n))
         self.pos_delta = pos_delta
         self.num_moments = num_moments
 
