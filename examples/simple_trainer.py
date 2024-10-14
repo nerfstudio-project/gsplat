@@ -153,7 +153,7 @@ class Config:
     # Enable blur optimization. (experimental)
     blur_opt: bool = False
     # Learning rate for blur optimization
-    blur_opt_lr: float = 1e-3
+    blur_opt_lr: float = 1e-2
 
     # Enable bilateral grid. (experimental)
     use_bilateral_grid: bool = False
@@ -497,7 +497,7 @@ class Runner:
             rotations_delta = self.splats["embeds"][:, image_ids[0], 3:]
             scales_delta = torch.clamp(scales_delta, min=0.0, max=0.1)
             rotations_delta = torch.clamp(rotations_delta, min=-0.05, max=0.05)
-            
+
             # means_ = log_transform(means.detach())
             # scales_ = self.splats["scales"].detach()
             # quats_ = F.normalize(self.splats["quats"], dim=-1).detach()
@@ -518,7 +518,7 @@ class Runner:
             scales = torch.exp(self.splats["scales"] + scales_delta)
             quats = F.normalize(self.splats["quats"], dim=-1) + rotations_delta
             quats = F.normalize(quats, dim=-1)
-            
+
             # if image_ids[0] == 0:
             #     scales_delta = 0.0 * scales_delta
             #     rotations_delta = 0.0 * rotations_delta
@@ -548,7 +548,7 @@ class Runner:
         )
         if masks is not None:
             render_colors[~masks] = 0
-        
+
         # if self.cfg.blur_opt and is_train:
         #     info["scales_delta"] = scales_delta
         return render_colors, render_alphas, info
@@ -688,13 +688,21 @@ class Runner:
                     image_ids=image_ids,
                     render_mode="RGB+ED" if cfg.depth_loss else "RGB",
                     masks=masks,
-                    blur=True
+                    blur=True,
                 )
                 blur_mask = self.blur_module.blur_masks[image_ids[0]][None, ...]
-                blur_mask = torchvision.transforms.functional.gaussian_blur(blur_mask, kernel_size=15)
-                blur_mask = F.interpolate(blur_mask, scale_factor=10, mode='bilinear', align_corners=False)
-                blur_mask = torch.sigmoid(10 * blur_mask)[0, ...][..., None]
-                print(blur_mask.min().item(), blur_mask.max().item(), blur_mask.mean().item())
+                blur_mask = torchvision.transforms.functional.gaussian_blur(
+                    blur_mask, kernel_size=5
+                )
+                blur_mask = F.interpolate(
+                    blur_mask, scale_factor=20, mode="bilinear", align_corners=False
+                )
+                blur_mask = torch.sigmoid(blur_mask)[0, ...][..., None]
+                print(
+                    blur_mask.min().item(),
+                    blur_mask.max().item(),
+                    blur_mask.mean().item(),
+                )
                 colors = (1 - blur_mask) * colors + blur_mask * renders_blur[..., 0:3]
 
             self.cfg.strategy.step_pre_backward(
@@ -748,7 +756,7 @@ class Runner:
                 )
                 # mask_reg = torch.sigmoid(10 * self.blur_module.blur_masks).mean()
                 # loss += 0.01 * mask_reg
-                
+
                 # delta_reg = torch.abs(info["scales_delta"]).mean()
                 # loss += 0.01 * delta_reg
 
@@ -964,12 +972,16 @@ class Runner:
             canvas_list = [pixels, colors]
             if stage == "train":
                 blur_mask = self.blur_module.blur_masks[image_ids[0]][None, ...]
-                blur_mask = torchvision.transforms.functional.gaussian_blur(blur_mask, kernel_size=15)
-                blur_mask = F.interpolate(blur_mask, scale_factor=10, mode='bilinear', align_corners=False)
-                blur_mask = torch.sigmoid(10 * blur_mask)[0, ...][..., None]
+                blur_mask = torchvision.transforms.functional.gaussian_blur(
+                    blur_mask, kernel_size=5
+                )
+                blur_mask = F.interpolate(
+                    blur_mask, scale_factor=20, mode="bilinear", align_corners=False
+                )
+                blur_mask = torch.sigmoid(blur_mask)[0, ...][..., None]
                 blur_mask_color = blur_mask.repeat(1, 1, 1, 3)
                 canvas_list.append(blur_mask_color)
-                
+
                 colors_blur, _, _ = self.rasterize_splats(
                     camtoworlds=camtoworlds,
                     Ks=Ks,
@@ -984,7 +996,7 @@ class Runner:
                 )  # [1, H, W, 3]
                 colors_blur = torch.clamp(colors_blur, 0.0, 1.0)
                 canvas_list.append(colors_blur)
-                
+
                 colors_mix = (1 - blur_mask) * colors + blur_mask * colors_blur
                 colors_mix = torch.clamp(colors_mix, 0.0, 1.0)
                 canvas_list.append(colors_mix)

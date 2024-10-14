@@ -87,8 +87,8 @@ class GTnet(nn.Module):
         num_moments=4,
     ):
         super().__init__()
-        self.blur_masks = torch.nn.Parameter(-0.5 * torch.ones(n, 1, 40, 60))
-        
+        self.blur_masks = torch.nn.Parameter(-1.0 * torch.ones(n, 1, 20, 30))
+
         self.pos_delta = pos_delta
         self.num_moments = num_moments
 
