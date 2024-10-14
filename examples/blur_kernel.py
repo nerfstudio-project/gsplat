@@ -12,6 +12,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
+import torch.nn.functional as F
 
 
 class Embedder:
@@ -86,7 +87,8 @@ class GTnet(nn.Module):
         num_moments=4,
     ):
         super().__init__()
-        self.focals = torch.nn.Parameter(0.1 * torch.ones(n))
+        self.blur_masks = torch.nn.Parameter(-0.5 * torch.ones(n, 1, 40, 60))
+        
         self.pos_delta = pos_delta
         self.num_moments = num_moments
 
