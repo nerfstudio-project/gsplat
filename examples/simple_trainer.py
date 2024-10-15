@@ -85,7 +85,9 @@ class Config:
     # Number of training steps
     max_steps: int = 30_000
     # Steps to evaluate the model
-    eval_steps: List[int] = field(default_factory=lambda: [7_000, 15_000, 30_000])
+    eval_steps: List[int] = field(
+        default_factory=lambda: [2_000, 7_000, 15_000, 30_000]
+    )
     # Steps to save the model
     save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
 
@@ -153,7 +155,9 @@ class Config:
     # Enable blur optimization. (experimental)
     blur_opt: bool = False
     # Learning rate for blur optimization
-    blur_opt_lr: float = 1e-2
+    blur_opt_lr: float = 1e-3
+    # Regularization for blur optimization as weight decay
+    blur_opt_reg: float = 1e-4
 
     # Enable bilateral grid. (experimental)
     use_bilateral_grid: bool = False
@@ -416,6 +420,7 @@ class Runner:
                 torch.optim.Adam(
                     self.blur_module.parameters(),
                     lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size),
+                    weight_decay=cfg.blur_opt_reg,
                 ),
             ]
             if world_size > 1:
@@ -656,7 +661,7 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 image_ids=image_ids,
-                render_mode="RGB+ED" if cfg.depth_loss else "RGB",
+                render_mode="RGB+ED",  # if cfg.depth_loss else "RGB",
                 masks=masks,
             )
             if renders.shape[-1] == 4:
@@ -690,14 +695,31 @@ class Runner:
                     masks=masks,
                     blur=True,
                 )
-                blur_mask = self.blur_module.blur_masks[image_ids[0]][None, ...]
-                blur_mask = torchvision.transforms.functional.gaussian_blur(
-                    blur_mask, kernel_size=5
+
+                grid_y, grid_x = torch.meshgrid(
+                    (torch.arange(height, device=self.device) + 0.5) / height,
+                    (torch.arange(width, device=self.device) + 0.5) / width,
+                    indexing="ij",
                 )
-                blur_mask = F.interpolate(
-                    blur_mask, scale_factor=20, mode="bilinear", align_corners=False
-                )
-                blur_mask = torch.sigmoid(blur_mask)[0, ...][..., None]
+                grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
+                x = grid_xy.reshape(-1, 2)
+                x = torch.cat([x, depths.reshape(x.shape[0], 1)], dim=-1)
+                mlp_out = self.blur_module.depth_mlps[image_ids[0]](x)
+                mlp_out = mlp_out - mlp_out.mean()
+                print(mlp_out.min(), mlp_out.max(), mlp_out.mean())
+                blur_mask = torch.sigmoid(mlp_out)
+                blur_mask = blur_mask.reshape(depths.shape)
+
+                # blur_mask = blur_mask - blur_mask.mean() + 0.5
+
+                # blur_mask = self.blur_module.blur_masks[image_ids[0]][None, ...]
+                # blur_mask = torchvision.transforms.functional.gaussian_blur(
+                #     blur_mask, kernel_size=3
+                # )
+                # blur_mask = F.interpolate(
+                #     blur_mask, scale_factor=8, mode="bilinear", align_corners=False
+                # )
+                # blur_mask = torch.sigmoid(blur_mask)[0, ...][..., None]
                 print(
                     blur_mask.min().item(),
                     blur_mask.max().item(),
@@ -754,8 +776,9 @@ class Runner:
                     loss
                     + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
                 )
-                # mask_reg = torch.sigmoid(10 * self.blur_module.blur_masks).mean()
-                # loss += 0.01 * mask_reg
+
+                # mlp_reg = torch.abs().mean()
+                # loss += 0.0001 * mlp_reg
 
                 # delta_reg = torch.abs(info["scales_delta"]).mean()
                 # loss += 0.01 * delta_reg
@@ -954,7 +977,7 @@ class Runner:
 
             torch.cuda.synchronize()
             tic = time.time()
-            colors, _, _ = self.rasterize_splats(
+            renders, _, _ = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -963,22 +986,44 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 image_ids=image_ids,
+                render_mode="RGB+ED",  # if cfg.depth_loss else "RGB",
                 masks=masks,
             )  # [1, H, W, 3]
+            if renders.shape[-1] == 4:
+                colors, depths = renders[..., 0:3], renders[..., 3:4]
+            else:
+                colors, depths = renders, None
+
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
 
             colors = torch.clamp(colors, 0.0, 1.0)
             canvas_list = [pixels, colors]
             if stage == "train":
-                blur_mask = self.blur_module.blur_masks[image_ids[0]][None, ...]
-                blur_mask = torchvision.transforms.functional.gaussian_blur(
-                    blur_mask, kernel_size=5
+                grid_y, grid_x = torch.meshgrid(
+                    (torch.arange(height, device=self.device) + 0.5) / height,
+                    (torch.arange(width, device=self.device) + 0.5) / width,
+                    indexing="ij",
                 )
-                blur_mask = F.interpolate(
-                    blur_mask, scale_factor=20, mode="bilinear", align_corners=False
-                )
-                blur_mask = torch.sigmoid(blur_mask)[0, ...][..., None]
+                grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
+                x = grid_xy.reshape(-1, 2)
+                x = torch.cat([x, depths.reshape(x.shape[0], 1)], dim=-1)
+                mlp_out = self.blur_module.depth_mlps[image_ids[0]](x)
+                mlp_out = mlp_out - mlp_out.mean()
+                blur_mask = torch.sigmoid(mlp_out)
+                blur_mask = blur_mask.reshape(depths.shape)
+
+                # blur_mask = blur_mask - blur_mask.mean() + 0.5
+
+                # blur_mask = self.blur_module.blur_masks[image_ids[0]][None, ...]
+                # blur_mask = torchvision.transforms.functional.gaussian_blur(
+                #     blur_mask, kernel_size=3
+                # )
+                # blur_mask = F.interpolate(
+                #     blur_mask, scale_factor=8, mode="bilinear", align_corners=False
+                # )
+                # blur_mask = torch.sigmoid(blur_mask)[0, ...][..., None]
+
                 blur_mask_color = blur_mask.repeat(1, 1, 1, 3)
                 canvas_list.append(blur_mask_color)
 

@@ -87,7 +87,24 @@ class GTnet(nn.Module):
         num_moments=4,
     ):
         super().__init__()
-        self.blur_masks = torch.nn.Parameter(-1.0 * torch.ones(n, 1, 20, 30))
+        self.blur_masks = torch.nn.Parameter(
+            -1.0 * torch.ones(n, 1, 400 // 8, 600 // 8)
+        )
+        # self.image_feats = torch.nn.Parameter(torch.rand(n, 4))
+        self.depth_mlps = nn.ModuleList()
+        for _ in range(n):
+            mlp = nn.Sequential(
+                nn.Linear(3, 64, bias=False),
+                nn.ReLU(),
+                nn.Linear(64, 64, bias=False),
+                nn.ReLU(),
+                nn.Linear(64, 64, bias=False),
+                nn.ReLU(),
+                nn.Linear(64, 64, bias=False),
+                nn.ReLU(),
+                nn.Linear(64, 1, bias=False),
+            ).to("cuda")
+            self.depth_mlps.append(mlp)
 
         self.pos_delta = pos_delta
         self.num_moments = num_moments
