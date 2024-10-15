@@ -94,7 +94,7 @@ class GTnet(nn.Module):
         self.depth_mlps = nn.ModuleList()
         for _ in range(n):
             mlp = nn.Sequential(
-                nn.Linear(3, 64, bias=False),
+                nn.Linear(1, 64, bias=False),
                 nn.ReLU(),
                 nn.Linear(64, 64, bias=False),
                 nn.ReLU(),

@@ -702,15 +702,10 @@ class Runner:
                     indexing="ij",
                 )
                 grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
-                x = grid_xy.reshape(-1, 2)
-                x = torch.cat([x, depths.reshape(x.shape[0], 1)], dim=-1)
-                mlp_out = self.blur_module.depth_mlps[image_ids[0]](x)
-                mlp_out = mlp_out - mlp_out.mean()
-                print(mlp_out.min(), mlp_out.max(), mlp_out.mean())
+                # x = torch.cat([colors, depths, grid_xy], dim=-1)
+                mlp_out = self.blur_module.depth_mlps[image_ids[0]](depths)
+                mlp_out = mlp_out - torch.quantile(mlp_out, 0.25)
                 blur_mask = torch.sigmoid(mlp_out)
-                blur_mask = blur_mask.reshape(depths.shape)
-
-                # blur_mask = blur_mask - blur_mask.mean() + 0.5
 
                 # blur_mask = self.blur_module.blur_masks[image_ids[0]][None, ...]
                 # blur_mask = torchvision.transforms.functional.gaussian_blur(
@@ -1006,13 +1001,12 @@ class Runner:
                     indexing="ij",
                 )
                 grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
-                x = grid_xy.reshape(-1, 2)
-                x = torch.cat([x, depths.reshape(x.shape[0], 1)], dim=-1)
-                mlp_out = self.blur_module.depth_mlps[image_ids[0]](x)
-                mlp_out = mlp_out - mlp_out.mean()
+                # x = torch.cat([colors, depths, grid_xy], dim=-1)
+                mlp_out = self.blur_module.depth_mlps[image_ids[0]](depths)
+                mlp_out = mlp_out - torch.quantile(mlp_out, 0.25)
                 blur_mask = torch.sigmoid(mlp_out)
-                blur_mask = blur_mask.reshape(depths.shape)
 
+                # blur_mask = blur_mask.reshape(depths.shape)
                 # blur_mask = blur_mask - blur_mask.mean() + 0.5
 
                 # blur_mask = self.blur_module.blur_masks[image_ids[0]][None, ...]
