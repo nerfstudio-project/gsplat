@@ -703,8 +703,10 @@ class Runner:
                 )
                 grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
                 x = torch.cat([grid_xy, depths], dim=-1)
-                x_embed = self.blur_module.embed_depth(x)
-                mlp_out = self.blur_module.depth_mlps[image_ids[0]](x_embed)
+                x = self.blur_module.embed_depth(x)
+                x_img = self.blur_module.image_feats[image_ids[0]][None, None, None, :].repeat(1, height, width, 1)
+                x = torch.cat([x, x_img], dim=-1)
+                mlp_out = self.blur_module.depth_mlp(x)
                 blur_mask = torch.sigmoid(mlp_out)
 
                 # blur_mask = self.blur_module.blur_masks[image_ids[0]][None, ...]
@@ -772,20 +774,14 @@ class Runner:
                     + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
                 )
 
-                # mlp_reg = torch.abs().mean()
-                # loss += 0.0001 * mlp_reg
-
-                mask_mean = torch.abs(blur_mask).mean()
+                mask_mean = torch.mean(blur_mask)
                 mask_std = torch.std(blur_mask)
                 print(mask_mean, mask_std)
                 lambda_mean = 0.001
                 lambda_std = 0.001
-                if step >= 2000:
-                    lambda_mean = 0.001
-                    lambda_std = 0.01
                 loss += (
                     lambda_mean * (mask_mean - 0.5) ** 2
-                    + lambda_std * (mask_std - 0.4) ** 2
+                    + lambda_std * (mask_std - 0.5) ** 2
                 )
 
                 # delta_reg = torch.abs(info["scales_delta"]).mean()
@@ -1015,8 +1011,10 @@ class Runner:
                 )
                 grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
                 x = torch.cat([grid_xy, depths], dim=-1)
-                x_embed = self.blur_module.embed_depth(x)
-                mlp_out = self.blur_module.depth_mlps[image_ids[0]](x_embed)
+                x = self.blur_module.embed_depth(x)
+                x_img = self.blur_module.image_feats[image_ids[0]][None, None, None, :].repeat(1, height, width, 1)
+                x = torch.cat([x, x_img], dim=-1)
+                mlp_out = self.blur_module.depth_mlp(x)
                 blur_mask = torch.sigmoid(mlp_out)
 
                 # blur_mask = blur_mask.reshape(depths.shape)
