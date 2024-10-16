@@ -88,7 +88,8 @@ class GTnet(nn.Module):
     ):
         super().__init__()
         self.focals = torch.nn.Embedding(n, 1)
-        self.embed_depth, self.embed_depth_cnl = get_embedder(3, 3)
+        self.focals.weight.data = torch.linspace(-1, 1, n)[:, None]
+        self.embed_depth, self.embed_depth_cnl = get_embedder(10, 1)
         self.depth_mlp = nn.Sequential(
             nn.Linear(self.embed_depth_cnl + 1, 64, bias=False),
             nn.ReLU(),

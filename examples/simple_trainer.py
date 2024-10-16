@@ -418,7 +418,7 @@ class Runner:
             self.blur_optimizers = [
                 torch.optim.Adam(
                     self.blur_module.focals.parameters(),
-                    lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size) * 10.0,
+                    lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size),
                     weight_decay=cfg.blur_opt_reg,
                 ),
                 torch.optim.Adam(
@@ -673,14 +673,7 @@ class Runner:
                     masks=masks,
                     blur=True,
                 )
-                grid_y, grid_x = torch.meshgrid(
-                    (torch.arange(height, device=self.device) + 0.5) / height,
-                    (torch.arange(width, device=self.device) + 0.5) / width,
-                    indexing="ij",
-                )
-                grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
-                x = torch.cat([grid_xy, depths], dim=-1)
-                x = self.blur_module.embed_depth(x)
+                x = self.blur_module.embed_depth(depths)
                 x_img = self.blur_module.focals(image_ids[0])[
                     None, None, None, :
                 ].repeat(1, height, width, 1)
@@ -739,9 +732,16 @@ class Runner:
                     + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
                 )
             if cfg.blur_opt:
+                if step < 2000:
+                    lambda_mean = 0.01
+                    lambda_std = 0.001
+                else:
+                    lambda_mean = 0.0
+                    lambda_std = 0.0
+                print(lambda_mean, lambda_std, blur_mask.mean().item(), blur_mask.std().item())
                 loss += (
-                    0.01 * (torch.mean(blur_mask) - 0.5) ** 2
-                    + 0.001 * (torch.std(blur_mask) - 0.5) ** 2
+                    lambda_mean * (torch.mean(blur_mask) - 0.5) ** 2
+                    + lambda_std * (torch.std(blur_mask) - 0.5) ** 2
                 )
             loss.backward()
 
@@ -957,14 +957,7 @@ class Runner:
             colors = torch.clamp(colors, 0.0, 1.0)
             canvas_list = [pixels, colors]
             if stage == "train":
-                grid_y, grid_x = torch.meshgrid(
-                    (torch.arange(height, device=self.device) + 0.5) / height,
-                    (torch.arange(width, device=self.device) + 0.5) / width,
-                    indexing="ij",
-                )
-                grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
-                x = torch.cat([grid_xy, depths], dim=-1)
-                x = self.blur_module.embed_depth(x)
+                x = self.blur_module.embed_depth(depths)
                 x_img = self.blur_module.focals(image_ids[0])[
                     None, None, None, :
                 ].repeat(1, height, width, 1)
