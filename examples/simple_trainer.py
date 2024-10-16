@@ -731,12 +731,6 @@ class Runner:
             if cfg.blur_opt:
                 lambda_mean = 0.01
                 lambda_std = 0.001
-                print(
-                    lambda_mean,
-                    lambda_std,
-                    blur_mask.mean().item(),
-                    blur_mask.std().item(),
-                )
                 loss += (
                     lambda_mean * (torch.mean(blur_mask) - 0.5) ** 2
                     + lambda_std * (torch.std(blur_mask) - 0.5) ** 2

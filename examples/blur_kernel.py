@@ -92,7 +92,7 @@ class GTnet(nn.Module):
 
         self.embed_pos, self.embed_pos_cnl = get_embedder(3, 3)
         self.embed_view, self.embed_view_cnl = get_embedder(10, 3)
-        self.linears = _create_mlp_torch(
+        self.linears = _create_mlp_tcnn(
             in_dim=self.embed_pos_cnl + self.embed_view_cnl + 7,
             num_layers=5,
             layer_width=64,
@@ -114,10 +114,11 @@ class GTnet(nn.Module):
         return blur_mask
 
     def forward_deltas(self, pos, scales, rotations, viewdirs):
+        pos = log_transform(pos)
         pos_embed = self.embed_pos(pos)
         viewdirs_embed = self.embed_view(viewdirs)
         x = torch.cat([pos_embed, viewdirs_embed, scales, rotations], dim=-1)
-        x = self.linears(x)
-        scales_delta = x[:, :3]
-        rotations_delta = x[:, 3:]
+        mlp_out = self.linears(x).float()
+        scales_delta = mlp_out[:, :3]
+        rotations_delta = mlp_out[:, 3:]
         return scales_delta, rotations_delta
