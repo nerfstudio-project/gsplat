@@ -106,5 +106,6 @@ jobs:
       env:
         PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
       run: |         
+        BUILD_NO_CUDA=1 python -m build
         twine upload --username __token__ --password $PYPI_TOKEN dist/*
       shell: bash
