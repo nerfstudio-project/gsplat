@@ -11,7 +11,6 @@ import nerfview
 import numpy as np
 import torch
 import torch.nn.functional as F
-import torchvision
 import tqdm
 import tyro
 import viser
@@ -695,7 +694,6 @@ class Runner:
                     masks=masks,
                     blur=True,
                 )
-
                 grid_y, grid_x = torch.meshgrid(
                     (torch.arange(height, device=self.device) + 0.5) / height,
                     (torch.arange(width, device=self.device) + 0.5) / width,
@@ -704,24 +702,12 @@ class Runner:
                 grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
                 x = torch.cat([grid_xy, depths], dim=-1)
                 x = self.blur_module.embed_depth(x)
-                x_img = self.blur_module.image_feats[image_ids[0]][None, None, None, :].repeat(1, height, width, 1)
+                x_img = self.blur_module.image_feats[image_ids[0]][
+                    None, None, None, :
+                ].repeat(1, height, width, 1)
                 x = torch.cat([x, x_img], dim=-1)
                 mlp_out = self.blur_module.depth_mlp(x)
                 blur_mask = torch.sigmoid(mlp_out)
-
-                # blur_mask = self.blur_module.blur_masks[image_ids[0]][None, ...]
-                # blur_mask = torchvision.transforms.functional.gaussian_blur(
-                #     blur_mask, kernel_size=3
-                # )
-                # blur_mask = F.interpolate(
-                #     blur_mask, scale_factor=8, mode="bilinear", align_corners=False
-                # )
-                # blur_mask = torch.sigmoid(blur_mask)[0, ...][..., None]
-                print(
-                    blur_mask.min().item(),
-                    blur_mask.max().item(),
-                    blur_mask.mean().item(),
-                )
                 colors = (1 - blur_mask) * colors + blur_mask * renders_blur[..., 0:3]
 
             self.cfg.strategy.step_pre_backward(
@@ -1012,25 +998,13 @@ class Runner:
                 grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
                 x = torch.cat([grid_xy, depths], dim=-1)
                 x = self.blur_module.embed_depth(x)
-                x_img = self.blur_module.image_feats[image_ids[0]][None, None, None, :].repeat(1, height, width, 1)
+                x_img = self.blur_module.image_feats[image_ids[0]][
+                    None, None, None, :
+                ].repeat(1, height, width, 1)
                 x = torch.cat([x, x_img], dim=-1)
                 mlp_out = self.blur_module.depth_mlp(x)
                 blur_mask = torch.sigmoid(mlp_out)
-
-                # blur_mask = blur_mask.reshape(depths.shape)
-                # blur_mask = blur_mask - blur_mask.mean() + 0.5
-
-                # blur_mask = self.blur_module.blur_masks[image_ids[0]][None, ...]
-                # blur_mask = torchvision.transforms.functional.gaussian_blur(
-                #     blur_mask, kernel_size=3
-                # )
-                # blur_mask = F.interpolate(
-                #     blur_mask, scale_factor=8, mode="bilinear", align_corners=False
-                # )
-                # blur_mask = torch.sigmoid(blur_mask)[0, ...][..., None]
-
-                blur_mask_color = blur_mask.repeat(1, 1, 1, 3)
-                canvas_list.append(blur_mask_color)
+                canvas_list.append(blur_mask.repeat(1, 1, 1, 3))
 
                 colors_blur, _, _ = self.rasterize_splats(
                     camtoworlds=camtoworlds,
