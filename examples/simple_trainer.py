@@ -418,7 +418,7 @@ class Runner:
             self.blur_optimizers = [
                 torch.optim.Adam(
                     self.blur_module.focals.parameters(),
-                    lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size),
+                    lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size) * 10,
                     weight_decay=cfg.blur_opt_reg,
                 ),
                 torch.optim.Adam(
@@ -736,9 +736,14 @@ class Runner:
                     lambda_mean = 0.01
                     lambda_std = 0.001
                 else:
-                    lambda_mean = 0.0
-                    lambda_std = 0.0
-                print(lambda_mean, lambda_std, blur_mask.mean().item(), blur_mask.std().item())
+                    lambda_mean = 0.001
+                    lambda_std = 0.001
+                print(
+                    lambda_mean,
+                    lambda_std,
+                    blur_mask.mean().item(),
+                    blur_mask.std().item(),
+                )
                 loss += (
                     lambda_mean * (torch.mean(blur_mask) - 0.5) ** 2
                     + lambda_std * (torch.std(blur_mask) - 0.5) ** 2
