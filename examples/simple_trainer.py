@@ -296,6 +296,9 @@ class Runner:
         self.local_rank = local_rank
         self.world_size = world_size
         self.device = f"cuda:{local_rank}"
+        self.render_mode = "RGB"
+        if cfg.depth_loss or cfg.blur_opt:
+            self.render_mode = "RGB+ED"
 
         # Where to dump results.
         os.makedirs(cfg.result_dir, exist_ok=True)
@@ -417,12 +420,7 @@ class Runner:
             self.blur_module = GTnet(len(self.trainset)).to(self.device)
             self.blur_optimizers = [
                 torch.optim.Adam(
-                    self.blur_module.focals.parameters(),
-                    lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size),
-                    weight_decay=cfg.blur_opt_reg,
-                ),
-                torch.optim.Adam(
-                    self.blur_module.depth_mlp.parameters(),
+                    self.blur_module.parameters(),
                     lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size),
                     weight_decay=cfg.blur_opt_reg,
                 ),
@@ -482,10 +480,6 @@ class Runner:
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         means = self.splats["means"]  # [N, 3]
-        # quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
-        # rasterization does normalization internally
-        quats = self.splats["quats"]  # [N, 4]
-        scales = torch.exp(self.splats["scales"])  # [N, 3]
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
 
         image_ids = kwargs.pop("image_ids", None)
@@ -501,14 +495,26 @@ class Runner:
         else:
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
-        if blur:
-            scales_delta = self.splats["embeds"][:, image_ids[0], :3]
-            rotations_delta = self.splats["embeds"][:, image_ids[0], 3:]
+        if self.cfg.blur_opt and blur:
+            means_ = means.detach()
+            scales_ = self.splats["scales"].detach()
+            quats_ = self.splats["quats"].detach()
+            viewdir_ = camtoworlds[0, :3, 3].repeat(means.shape[0], 1)
+            scales_delta, rotations_delta, _ = self.blur_module.forward_deltas(
+                means_,
+                scales_,
+                quats_,
+                viewdir_,
+            )
+            # scales_delta = self.splats["embeds"][:, image_ids[0], :3]
+            # rotations_delta = self.splats["embeds"][:, image_ids[0], 3:]
             scales_delta = torch.clamp(scales_delta, min=0.0, max=0.1)
             rotations_delta = torch.clamp(rotations_delta, min=-0.05, max=0.05)
             scales = torch.exp(self.splats["scales"] + scales_delta)
             quats = F.normalize(self.splats["quats"], dim=-1) + rotations_delta
-            quats = F.normalize(quats, dim=-1)
+        else:
+            scales = torch.exp(self.splats["scales"])  # [N, 3]
+            quats = self.splats["quats"]  # [N, 4]
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
         render_colors, render_alphas, info = rasterization(
@@ -640,7 +646,7 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 image_ids=image_ids,
-                render_mode="RGB+ED",  # if cfg.depth_loss else "RGB",
+                render_mode=self.render_mode,
                 masks=masks,
             )
             if renders.shape[-1] == 4:
@@ -670,7 +676,7 @@ class Runner:
                     near_plane=cfg.near_plane,
                     far_plane=cfg.far_plane,
                     image_ids=image_ids,
-                    render_mode="RGB+ED" if cfg.depth_loss else "RGB",
+                    render_mode="RGB",
                     masks=masks,
                     blur=True,
                 )
@@ -909,14 +915,10 @@ class Runner:
         world_rank = self.world_rank
         world_size = self.world_size
 
-        if stage == "train":
-            dataloader = torch.utils.data.DataLoader(
-                self.trainset, batch_size=1, shuffle=False, num_workers=1
-            )
-        else:
-            dataloader = torch.utils.data.DataLoader(
-                self.valset, batch_size=1, shuffle=False, num_workers=1
-            )
+        dataset = self.trainset if stage == "train" else self.valset
+        dataloader = torch.utils.data.DataLoader(
+            dataset, batch_size=1, shuffle=False, num_workers=1
+        )
 
         ellipse_time = 0
         metrics = defaultdict(list)
@@ -939,7 +941,7 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 image_ids=image_ids,
-                render_mode="RGB+ED",  # if cfg.depth_loss else "RGB",
+                render_mode=self.render_mode,
                 masks=masks,
             )  # [1, H, W, 3]
             if renders.shape[-1] == 4:
@@ -952,11 +954,8 @@ class Runner:
 
             colors = torch.clamp(colors, 0.0, 1.0)
             canvas_list = [pixels, colors]
-            if stage == "train":
-                blur_mask = self.blur_module(depths, image_ids)
-                canvas_list.append(blur_mask.repeat(1, 1, 1, 3))
-
-                colors_blur, _, _ = self.rasterize_splats(
+            if self.cfg.blur_opt and stage == "train":
+                renders_blur, _, _ = self.rasterize_splats(
                     camtoworlds=camtoworlds,
                     Ks=Ks,
                     width=width,
@@ -965,16 +964,16 @@ class Runner:
                     near_plane=cfg.near_plane,
                     far_plane=cfg.far_plane,
                     image_ids=image_ids,
+                    render_mode="RGB",
                     masks=masks,
                     blur=True,
-                )  # [1, H, W, 3]
-                colors_blur = torch.clamp(colors_blur, 0.0, 1.0)
-                canvas_list.append(colors_blur)
-
-                colors_mix = (1 - blur_mask) * colors + blur_mask * colors_blur
-                colors_mix = torch.clamp(colors_mix, 0.0, 1.0)
-                canvas_list.append(colors_mix)
-                colors = colors_mix
+                )
+                canvas_list.append(torch.clamp(renders_blur[..., 0:3], 0.0, 1.0))
+                blur_mask = self.blur_module(depths, image_ids)
+                canvas_list.append(blur_mask.repeat(1, 1, 1, 3))
+                colors = (1 - blur_mask) * colors + blur_mask * renders_blur[..., 0:3]
+                colors = torch.clamp(colors, 0.0, 1.0)
+                canvas_list.append(colors)
 
             if world_rank == 0:
                 # write images

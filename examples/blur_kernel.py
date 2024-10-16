@@ -99,38 +99,35 @@ class GTnet(nn.Module):
             out_dim=1,
         )
 
-        # self.pos_delta = pos_delta
-        # self.num_moments = num_moments
+        self.pos_delta = pos_delta
+        self.num_moments = num_moments
+        self.embed_pos, self.embed_pos_cnl = get_embedder(res_pos, 3)
+        self.embed_view, self.embed_view_cnl = get_embedder(res_view, 3)
+        in_cnl = (
+            self.embed_pos_cnl + self.embed_view_cnl + 7
+        )  # 7 for scales and rotations
+        hiddens = [
+            nn.Linear(width, width) if i % 2 == 0 else nn.ReLU()
+            for i in range((num_hidden - 1) * 2)
+        ]
+        self.linears = nn.Sequential(
+            nn.Linear(in_cnl, width),
+            nn.ReLU(),
+            *hiddens,
+        ).to("cuda")
+        if not pos_delta:  # Defocus
+            self.s = nn.Linear(width, 3).to("cuda")
+            self.r = nn.Linear(width, 4).to("cuda")
+        else:  # Motion
+            self.s = nn.Linear(width, 3 * (num_moments + 1)).to("cuda")
+            self.r = nn.Linear(width, 4 * (num_moments + 1)).to("cuda")
+            self.p = nn.Linear(width, 3 * num_moments).to("cuda")
 
-        # self.embed_pos, self.embed_pos_cnl = get_embedder(res_pos, 3)
-        # self.embed_view, self.embed_view_cnl = get_embedder(res_view, 3)
-        # in_cnl = (
-        #     self.embed_pos_cnl + self.embed_view_cnl + 7
-        # )  # 7 for scales and rotations
-
-        # hiddens = [
-        #     nn.Linear(width, width) if i % 2 == 0 else nn.ReLU()
-        #     for i in range((num_hidden - 1) * 2)
-        # ]
-
-        # self.linears = nn.Sequential(
-        #     nn.Linear(in_cnl, width),
-        #     nn.ReLU(),
-        #     *hiddens,
-        # ).to("cuda")
-        # if not pos_delta:  # Defocus
-        #     self.s = nn.Linear(width, 3).to("cuda")
-        #     self.r = nn.Linear(width, 4).to("cuda")
-        # else:  # Motion
-        #     self.s = nn.Linear(width, 3 * (num_moments + 1)).to("cuda")
-        #     self.r = nn.Linear(width, 4 * (num_moments + 1)).to("cuda")
-        #     self.p = nn.Linear(width, 3 * num_moments).to("cuda")
-
-        # self.linears.apply(init_linear_weights)
-        # self.s.apply(init_linear_weights)
-        # self.r.apply(init_linear_weights)
-        # if pos_delta:
-        #     self.p.apply(init_linear_weights)
+        self.linears.apply(init_linear_weights)
+        self.s.apply(init_linear_weights)
+        self.r.apply(init_linear_weights)
+        if pos_delta:
+            self.p.apply(init_linear_weights)
 
     def forward(self, depths, image_ids):
         height, width = depths.shape[1:3]
@@ -140,24 +137,24 @@ class GTnet(nn.Module):
             1, height, width, 1
         )
         x = torch.cat([depths_emb, focals_emb], dim=-1)
-        x = x.reshape(-1, x.shape[-1]).half().float()
-        blur_mask = self.depth_mlp(x).float()
-        # blur_mask = torch.sigmoid(mlp_out)
+        x = x.reshape(-1, x.shape[-1])
+        mlp_out = self.depth_mlp(x)
+        blur_mask = torch.sigmoid(mlp_out)
         blur_mask = blur_mask.reshape(1, height, width, 1)
         return blur_mask
 
-    # def forward(self, pos, scales, rotations, viewdirs):
-    #     pos_delta = None
-    #     pos = self.embed_pos(pos)
-    #     viewdirs = self.embed_view(viewdirs)
+    def forward_deltas(self, pos, scales, rotations, viewdirs):
+        pos_delta = None
+        pos = self.embed_pos(pos)
+        viewdirs = self.embed_view(viewdirs)
 
-    #     x = torch.cat([pos, viewdirs, scales, rotations], dim=-1)
-    #     x1 = self.linears(x)
+        x = torch.cat([pos, viewdirs, scales, rotations], dim=-1)
+        x1 = self.linears(x)
 
-    #     scales_delta = self.s(x1)
-    #     rotations_delta = self.r(x1)
+        scales_delta = self.s(x1)
+        rotations_delta = self.r(x1)
 
-    #     if self.pos_delta:
-    #         pos_delta = self.p(x1)
+        if self.pos_delta:
+            pos_delta = self.p(x1)
 
-    #     return scales_delta, rotations_delta, pos_delta
+        return scales_delta, rotations_delta, pos_delta

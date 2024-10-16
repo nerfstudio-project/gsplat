@@ -96,37 +96,21 @@ def _create_mlp_tcnn(
     """Create a fully-connected neural network with tiny-cuda-nn."""
     network_config = get_tcnn_network_config(
         activation=nn.ReLU(),
-        out_activation=nn.Sigmoid(),
+        out_activation=None,
         layer_width=layer_width,
         num_layers=num_layers,
     )
-    print(network_config)
     tcnn_encoding = tcnn.Network(
         n_input_dims=in_dim,
         n_output_dims=out_dim,
         network_config=network_config,
     )
 
-    mlp_torch = _create_mlp_torch(in_dim, num_layers, layer_width, out_dim)
-    print(mlp_torch)
-    output_layer = mlp_torch[8].weight.data
-    output_layer = nn.functional.pad(output_layer, pad=(0, 0, 0, 16 - (out_dim % 16)))
-    params = torch.cat(
-        [
-            mlp_torch[0].weight.data.flatten(),
-            mlp_torch[2].weight.data.flatten(),
-            mlp_torch[4].weight.data.flatten(),
-            mlp_torch[6].weight.data.flatten(),
-            output_layer.flatten(),
-        ]
-    ).half()
-    tcnn_encoding.params.data[...] = params
-
-    # if initialize_last_layer_zeros:
-    #     # tcnn always pads the output layer's width to a multiple of 16
-    #     params = tcnn_encoding.state_dict()["params"]
-    #     params[-1 * (layer_width * 16 * (out_dim // 16 + 1)) :] = 0
-    #     tcnn_encoding.load_state_dict({"params": params})
+    if initialize_last_layer_zeros:
+        # tcnn always pads the output layer's width to a multiple of 16
+        params = tcnn_encoding.state_dict()["params"]
+        params[-1 * (layer_width * 16 * (out_dim // 16 + 1)) :] = 0
+        tcnn_encoding.load_state_dict({"params": params})
     return tcnn_encoding
 
 
@@ -145,8 +129,6 @@ def _create_mlp_torch(
         layers.append(nn.Linear(layer_in, layer_out, bias=False))
         if i != num_layers - 1:
             layers.append(nn.ReLU())
-        else:
-            layers.append(nn.Sigmoid())
         layer_in = layer_width
 
     if initialize_last_layer_zeros:
