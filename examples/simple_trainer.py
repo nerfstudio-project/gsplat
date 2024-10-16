@@ -418,12 +418,13 @@ class Runner:
             self.blur_optimizers = [
                 torch.optim.Adam(
                     self.blur_module.focals.parameters(),
-                    lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size) * 10,
+                    lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size),
                     weight_decay=cfg.blur_opt_reg,
                 ),
                 torch.optim.Adam(
                     self.blur_module.depth_mlp.parameters(),
                     lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size),
+                    weight_decay=cfg.blur_opt_reg,
                 ),
             ]
             if world_size > 1:
@@ -673,13 +674,7 @@ class Runner:
                     masks=masks,
                     blur=True,
                 )
-                x = self.blur_module.embed_depth(depths)
-                x_img = self.blur_module.focals(image_ids[0])[
-                    None, None, None, :
-                ].repeat(1, height, width, 1)
-                x = torch.cat([x, x_img], dim=-1)
-                mlp_out = self.blur_module.depth_mlp(x)
-                blur_mask = torch.sigmoid(mlp_out)
+                blur_mask = self.blur_module(depths, image_ids)
                 colors = (1 - blur_mask) * colors + blur_mask * renders_blur[..., 0:3]
 
             self.cfg.strategy.step_pre_backward(
@@ -732,12 +727,8 @@ class Runner:
                     + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
                 )
             if cfg.blur_opt:
-                if step < 2000:
-                    lambda_mean = 0.01
-                    lambda_std = 0.001
-                else:
-                    lambda_mean = 0.001
-                    lambda_std = 0.001
+                lambda_mean = 0.01
+                lambda_std = 0.001
                 print(
                     lambda_mean,
                     lambda_std,
@@ -962,13 +953,7 @@ class Runner:
             colors = torch.clamp(colors, 0.0, 1.0)
             canvas_list = [pixels, colors]
             if stage == "train":
-                x = self.blur_module.embed_depth(depths)
-                x_img = self.blur_module.focals(image_ids[0])[
-                    None, None, None, :
-                ].repeat(1, height, width, 1)
-                x = torch.cat([x, x_img], dim=-1)
-                mlp_out = self.blur_module.depth_mlp(x)
-                blur_mask = torch.sigmoid(mlp_out)
+                blur_mask = self.blur_module(depths, image_ids)
                 canvas_list.append(blur_mask.repeat(1, 1, 1, 3))
 
                 colors_blur, _, _ = self.rasterize_splats(
