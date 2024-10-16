@@ -91,10 +91,11 @@ class GTnet(nn.Module):
             -1.0 * torch.ones(n, 1, 400 // 8, 600 // 8)
         )
         # self.image_feats = torch.nn.Parameter(torch.rand(n, 4))
+        self.embed_depth, self.embed_depth_cnl = get_embedder(3, 3)
         self.depth_mlps = nn.ModuleList()
         for _ in range(n):
             mlp = nn.Sequential(
-                nn.Linear(1, 64, bias=False),
+                nn.Linear(self.embed_depth_cnl, 64, bias=False),
                 nn.ReLU(),
                 nn.Linear(64, 64, bias=False),
                 nn.ReLU(),

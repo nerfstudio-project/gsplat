@@ -157,7 +157,7 @@ class Config:
     # Learning rate for blur optimization
     blur_opt_lr: float = 1e-3
     # Regularization for blur optimization as weight decay
-    blur_opt_reg: float = 1e-4
+    blur_opt_reg: float = 1e-6
 
     # Enable bilateral grid. (experimental)
     use_bilateral_grid: bool = False
@@ -702,9 +702,9 @@ class Runner:
                     indexing="ij",
                 )
                 grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
-                # x = torch.cat([colors, depths, grid_xy], dim=-1)
-                mlp_out = self.blur_module.depth_mlps[image_ids[0]](depths)
-                mlp_out = mlp_out - torch.quantile(mlp_out, 0.25)
+                x = torch.cat([grid_xy, depths], dim=-1)
+                x_embed = self.blur_module.embed_depth(x)
+                mlp_out = self.blur_module.depth_mlps[image_ids[0]](x_embed)
                 blur_mask = torch.sigmoid(mlp_out)
 
                 # blur_mask = self.blur_module.blur_masks[image_ids[0]][None, ...]
@@ -774,6 +774,19 @@ class Runner:
 
                 # mlp_reg = torch.abs().mean()
                 # loss += 0.0001 * mlp_reg
+
+                mask_mean = torch.abs(blur_mask).mean()
+                mask_std = torch.std(blur_mask)
+                print(mask_mean, mask_std)
+                lambda_mean = 0.001
+                lambda_std = 0.001
+                if step >= 2000:
+                    lambda_mean = 0.001
+                    lambda_std = 0.01
+                loss += (
+                    lambda_mean * (mask_mean - 0.5) ** 2
+                    + lambda_std * (mask_std - 0.4) ** 2
+                )
 
                 # delta_reg = torch.abs(info["scales_delta"]).mean()
                 # loss += 0.01 * delta_reg
@@ -1001,9 +1014,9 @@ class Runner:
                     indexing="ij",
                 )
                 grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
-                # x = torch.cat([colors, depths, grid_xy], dim=-1)
-                mlp_out = self.blur_module.depth_mlps[image_ids[0]](depths)
-                mlp_out = mlp_out - torch.quantile(mlp_out, 0.25)
+                x = torch.cat([grid_xy, depths], dim=-1)
+                x_embed = self.blur_module.embed_depth(x)
+                mlp_out = self.blur_module.depth_mlps[image_ids[0]](x_embed)
                 blur_mask = torch.sigmoid(mlp_out)
 
                 # blur_mask = blur_mask.reshape(depths.shape)
