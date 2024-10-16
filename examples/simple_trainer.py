@@ -208,7 +208,6 @@ def save_ply(splats: torch.nn.ParameterDict, dir: str, colors: torch.Tensor = No
         f.write(b"property float nx\n")
         f.write(b"property float ny\n")
         f.write(b"property float nz\n")
-        f.write(b"property float opacity\n")
 
         if colors is not None:
             for j in range(colors.shape[1]):
@@ -221,6 +220,8 @@ def save_ply(splats: torch.nn.ParameterDict, dir: str, colors: torch.Tensor = No
                 for j in range(data.shape[1]):
                     f.write(f"property float {prefix}_{j}\n".encode())
 
+        f.write(b"property float opacity\n")
+
         for i in range(scales.shape[1]):
             f.write(f"property float scale_{i}\n".encode())
         for i in range(quats.shape[1]):
@@ -232,7 +233,6 @@ def save_ply(splats: torch.nn.ParameterDict, dir: str, colors: torch.Tensor = No
         for i in range(num_points):
             f.write(struct.pack("<fff", *means[i]))  # x, y, z
             f.write(struct.pack("<fff", 0, 0, 0))  # nx, ny, nz (zeros)
-            f.write(struct.pack("<f", opacities[i]))  # opacity
 
             if colors is not None:
                 color = colors.detach().cpu().numpy()
@@ -243,6 +243,8 @@ def save_ply(splats: torch.nn.ParameterDict, dir: str, colors: torch.Tensor = No
                 for data in [sh0, shN]:
                     for j in range(data.shape[1]):
                         f.write(struct.pack("<f", data[i, j]))
+
+            f.write(struct.pack("<f", opacities[i]))  # opacity
 
             for data in [scales, quats]:
                 for j in range(data.shape[1]):
