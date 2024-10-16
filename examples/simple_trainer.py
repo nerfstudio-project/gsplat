@@ -501,31 +501,9 @@ class Runner:
             rotations_delta = self.splats["embeds"][:, image_ids[0], 3:]
             scales_delta = torch.clamp(scales_delta, min=0.0, max=0.1)
             rotations_delta = torch.clamp(rotations_delta, min=-0.05, max=0.05)
-
-            # means_ = log_transform(means.detach())
-            # scales_ = self.splats["scales"].detach()
-            # quats_ = F.normalize(self.splats["quats"], dim=-1).detach()
-            # viewdir_ = 0.1 * camtoworlds[0, :3, 3].repeat(means.shape[0], 1)
-            # scales_delta, rotations_delta, _ = self.blur_module(
-            #     means_,
-            #     scales_,
-            #     quats_,
-            #     viewdir_,
-            # )
-            # scales_delta = 0.0001 * scales_delta
-            # rotations_delta = 0.0001 * rotations_delta
-            # scales_delta = torch.clamp(scales_delta, min=0.0, max=0.1)
-            # rotations_delta = torch.clamp(rotations_delta, min=-0.05, max=0.05)
-
-            # print("scales_delta", scales_delta.min().item(), scales_delta.max().item(), scales_delta.mean().item())
-            # print("rotations_delta", rotations_delta.min().item(), rotations_delta.max().item(), rotations_delta.mean().item())
             scales = torch.exp(self.splats["scales"] + scales_delta)
             quats = F.normalize(self.splats["quats"], dim=-1) + rotations_delta
             quats = F.normalize(quats, dim=-1)
-
-            # if image_ids[0] == 0:
-            #     scales_delta = 0.0 * scales_delta
-            #     rotations_delta = 0.0 * rotations_delta
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
         render_colors, render_alphas, info = rasterization(
@@ -552,9 +530,6 @@ class Runner:
         )
         if masks is not None:
             render_colors[~masks] = 0
-
-        # if self.cfg.blur_opt and is_train:
-        #     info["scales_delta"] = scales_delta
         return render_colors, render_alphas, info
 
     def train(self):
@@ -759,23 +734,11 @@ class Runner:
                     loss
                     + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
                 )
-
-                mask_mean = torch.mean(blur_mask)
-                mask_std = torch.std(blur_mask)
-                print(mask_mean, mask_std)
-                lambda_mean = 0.001
-                lambda_std = 0.001
+            if cfg.blur_opt:
                 loss += (
-                    lambda_mean * (mask_mean - 0.5) ** 2
-                    + lambda_std * (mask_std - 0.5) ** 2
+                    0.001 * (torch.mean(blur_mask) - 0.5) ** 2
+                    + 0.001 * (torch.std(blur_mask) - 0.5) ** 2
                 )
-
-                # delta_reg = torch.abs(info["scales_delta"]).mean()
-                # loss += 0.01 * delta_reg
-
-                # embed_reg = torch.abs(self.splats["embeds"]).mean()
-                # # embed_reg = torch.log(1 + torch.abs(self.splats["embeds"])).mean()
-                # loss += 10.0 * embed_reg
             loss.backward()
 
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
