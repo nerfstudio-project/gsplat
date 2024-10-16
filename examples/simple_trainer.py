@@ -234,7 +234,7 @@ def create_splats_with_optimizers(
     N = points.shape[0]
     quats = torch.rand((N, 4))  # [N, 4]
     opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
-    embeds = 0.1 * torch.randn(N, 50, 7)
+    # embeds = 0.1 * torch.randn(N, 50, 7)
 
     params = [
         # name, value, lr
@@ -242,7 +242,7 @@ def create_splats_with_optimizers(
         ("scales", torch.nn.Parameter(scales), 5e-3),
         ("quats", torch.nn.Parameter(quats), 1e-3),
         ("opacities", torch.nn.Parameter(opacities), 5e-2),
-        ("embeds", torch.nn.Parameter(embeds), 1e-3),
+        # ("embeds", torch.nn.Parameter(embeds), 1e-3),
     ]
 
     if feature_dim is None:
@@ -496,15 +496,11 @@ class Runner:
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
         if self.cfg.blur_opt and blur:
-            means_ = means.detach()
-            scales_ = self.splats["scales"].detach()
-            quats_ = self.splats["quats"].detach()
-            viewdir_ = camtoworlds[0, :3, 3].repeat(means.shape[0], 1)
-            scales_delta, rotations_delta, _ = self.blur_module.forward_deltas(
-                means_,
-                scales_,
-                quats_,
-                viewdir_,
+            scales_delta, rotations_delta = self.blur_module.forward_deltas(
+                self.splats["means"],
+                self.splats["scales"],
+                self.splats["quats"],
+                camtoworlds[0, :3, 3].repeat(self.splats["means"].shape[0], 1),
             )
             # scales_delta = self.splats["embeds"][:, image_ids[0], :3]
             # rotations_delta = self.splats["embeds"][:, image_ids[0], 3:]
