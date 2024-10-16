@@ -417,9 +417,13 @@ class Runner:
             self.blur_module = GTnet(len(self.trainset)).to(self.device)
             self.blur_optimizers = [
                 torch.optim.Adam(
-                    self.blur_module.parameters(),
-                    lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size),
+                    self.blur_module.focals.parameters(),
+                    lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size) * 10.0,
                     weight_decay=cfg.blur_opt_reg,
+                ),
+                torch.optim.Adam(
+                    self.blur_module.depth_mlp.parameters(),
+                    lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size),
                 ),
             ]
             if world_size > 1:
@@ -677,7 +681,7 @@ class Runner:
                 grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
                 x = torch.cat([grid_xy, depths], dim=-1)
                 x = self.blur_module.embed_depth(x)
-                x_img = self.blur_module.image_feats[image_ids[0]][
+                x_img = self.blur_module.focals(image_ids[0])[
                     None, None, None, :
                 ].repeat(1, height, width, 1)
                 x = torch.cat([x, x_img], dim=-1)
@@ -736,7 +740,7 @@ class Runner:
                 )
             if cfg.blur_opt:
                 loss += (
-                    0.001 * (torch.mean(blur_mask) - 0.5) ** 2
+                    0.01 * (torch.mean(blur_mask) - 0.5) ** 2
                     + 0.001 * (torch.std(blur_mask) - 0.5) ** 2
                 )
             loss.backward()
@@ -961,7 +965,7 @@ class Runner:
                 grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
                 x = torch.cat([grid_xy, depths], dim=-1)
                 x = self.blur_module.embed_depth(x)
-                x_img = self.blur_module.image_feats[image_ids[0]][
+                x_img = self.blur_module.focals(image_ids[0])[
                     None, None, None, :
                 ].repeat(1, height, width, 1)
                 x = torch.cat([x, x_img], dim=-1)

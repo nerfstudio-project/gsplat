@@ -87,10 +87,10 @@ class GTnet(nn.Module):
         num_moments=4,
     ):
         super().__init__()
-        self.image_feats = torch.eye(n).cuda()
+        self.focals = torch.nn.Embedding(n, 1)
         self.embed_depth, self.embed_depth_cnl = get_embedder(3, 3)
         self.depth_mlp = nn.Sequential(
-            nn.Linear(self.embed_depth_cnl + n, 64, bias=False),
+            nn.Linear(self.embed_depth_cnl + 1, 64, bias=False),
             nn.ReLU(),
             nn.Linear(64, 64, bias=False),
             nn.ReLU(),
@@ -99,7 +99,7 @@ class GTnet(nn.Module):
             nn.Linear(64, 64, bias=False),
             nn.ReLU(),
             nn.Linear(64, 1, bias=False),
-        ).to("cuda")
+        )
 
         self.pos_delta = pos_delta
         self.num_moments = num_moments
