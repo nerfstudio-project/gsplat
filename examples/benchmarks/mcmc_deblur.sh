@@ -1,5 +1,6 @@
 SCENE_DIR="data/deblur_dataset/real_defocus_blur"
-SCENE_LIST="defocuscake defocuscaps defocuscisco defocuscoral defocuscupcake defocuscups defocusdaisy defocussausage defocusseal defocustools"
+# SCENE_LIST="defocuscake defocuscaps defocuscisco defocuscoral defocuscupcake defocuscups defocusdaisy defocussausage defocusseal defocustools"
+SCENE_LIST="defocuscupcake"
 
 DATA_FACTOR=4
 RENDER_TRAJ_PATH="spiral"

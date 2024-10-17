@@ -70,7 +70,7 @@ class BlurOptModule(nn.Module):
         self.embeds = torch.nn.Embedding(n, embed_dim)
         self.embeds.weight.data = torch.linspace(-1, 1, n)[:, None]
 
-        self.depth_encoder = get_encoder(14, 1)
+        self.depth_encoder = get_encoder(7, 1)
         self.means_encoder = get_encoder(3, 3)
         self.blur_mask_mlp = _create_mlp_torch(
             in_dim=embed_dim + self.depth_encoder.out_dim,
@@ -86,7 +86,8 @@ class BlurOptModule(nn.Module):
         )
 
     def predict_mask(self, image_ids: Tensor, depths: Tensor):
-        depths_emb = self.depth_encoder.encode(depths.reshape(-1, 1))
+        depths_log = log_transform(depths)
+        depths_emb = self.depth_encoder.encode(depths_log.reshape(-1, 1))
         images_emb = self.embeds(image_ids).repeat(depths_emb.shape[0], 1)
         mlp_out = self.blur_mask_mlp(torch.cat([images_emb, depths_emb], dim=-1))
         blur_mask = torch.sigmoid(mlp_out)
