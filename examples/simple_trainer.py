@@ -35,7 +35,7 @@ from lib_bilagrid import (
     color_correct,
     total_variation_loss,
 )
-from blur_kernel import GTnet
+from blur_kernel import BlurOptModule
 
 from gsplat.compression import PngCompression
 from gsplat.distributed import cli
@@ -234,7 +234,6 @@ def create_splats_with_optimizers(
     N = points.shape[0]
     quats = torch.rand((N, 4))  # [N, 4]
     opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
-    # embeds = 0.1 * torch.randn(N, 50, 7)
 
     params = [
         # name, value, lr
@@ -242,7 +241,6 @@ def create_splats_with_optimizers(
         ("scales", torch.nn.Parameter(scales), 5e-3),
         ("quats", torch.nn.Parameter(quats), 1e-3),
         ("opacities", torch.nn.Parameter(opacities), 5e-2),
-        # ("embeds", torch.nn.Parameter(embeds), 1e-3),
     ]
 
     if feature_dim is None:
@@ -417,7 +415,7 @@ class Runner:
 
         self.blur_optimizers = []
         if cfg.blur_opt:
-            self.blur_module = GTnet(len(self.trainset)).to(self.device)
+            self.blur_module = BlurOptModule(len(self.trainset)).to(self.device)
             self.blur_optimizers = [
                 torch.optim.Adam(
                     self.blur_module.parameters(),
@@ -496,16 +494,12 @@ class Runner:
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
         if self.cfg.blur_opt and blur:
-            scales_delta, rotations_delta = self.blur_module.forward_deltas(
+            scales_delta, rotations_delta = self.blur_module.predict_deltas(
+                image_ids,
                 self.splats["means"],
                 self.splats["scales"],
                 self.splats["quats"],
-                camtoworlds[0, :3, 3].repeat(self.splats["means"].shape[0], 1),
             )
-            # scales_delta = self.splats["embeds"][:, image_ids[0], :3]
-            # rotations_delta = self.splats["embeds"][:, image_ids[0], 3:]
-            scales_delta = torch.clamp(scales_delta, min=0.0, max=0.1)
-            rotations_delta = torch.clamp(rotations_delta, min=-0.05, max=0.05)
             scales = torch.exp(self.splats["scales"] + scales_delta)
             quats = F.normalize(self.splats["quats"], dim=-1) + rotations_delta
         else:
@@ -676,7 +670,7 @@ class Runner:
                     masks=masks,
                     blur=True,
                 )
-                blur_mask = self.blur_module(depths, image_ids)
+                blur_mask = self.blur_module.predict_mask(image_ids, depths)
                 colors = (1 - blur_mask) * colors + blur_mask * renders_blur[..., 0:3]
 
             self.cfg.strategy.step_pre_backward(
@@ -959,7 +953,7 @@ class Runner:
                     blur=True,
                 )
                 canvas_list.append(torch.clamp(renders_blur[..., 0:3], 0.0, 1.0))
-                blur_mask = self.blur_module(depths, image_ids)
+                blur_mask = self.blur_module.predict_mask(image_ids, depths)
                 canvas_list.append(blur_mask.repeat(1, 1, 1, 3))
                 colors = (1 - blur_mask) * colors + blur_mask * renders_blur[..., 0:3]
                 colors = torch.clamp(colors, 0.0, 1.0)
