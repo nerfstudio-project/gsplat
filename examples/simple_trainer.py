@@ -419,11 +419,6 @@ class Runner:
             self.blur_module = BlurOptModule(len(self.trainset)).to(self.device)
             self.blur_optimizers = [
                 torch.optim.Adam(
-                    self.blur_module.embeds.parameters(),
-                    lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size) * 10.0,
-                    weight_decay=cfg.blur_opt_reg,
-                ),
-                torch.optim.Adam(
                     self.blur_module.parameters(),
                     lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size),
                     weight_decay=cfg.blur_opt_reg,

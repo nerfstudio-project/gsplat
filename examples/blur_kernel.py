@@ -68,6 +68,8 @@ class BlurOptModule(nn.Module):
     def __init__(self, n: int, embed_dim: int = 1):
         super().__init__()
         self.embeds = torch.nn.Embedding(n, embed_dim)
+        # Initialize focal lengths in first channel
+        self.embeds.weight.data[:, 0] = torch.linspace(-1, 1, n)
 
         self.depth_encoder = get_encoder(7, 1)
         self.means_encoder = get_encoder(3, 3)
