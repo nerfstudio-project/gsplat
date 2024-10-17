@@ -11,6 +11,7 @@
 
 import torch
 import torch.nn as nn
+from torch import Tensor
 from examples.mlp import create_mlp, _create_mlp_torch, _create_mlp_tcnn
 from gsplat.utils import log_transform
 
@@ -62,43 +63,53 @@ def get_encoder(multires, i=0):
 
 
 class BlurOptModule(nn.Module):
-    def __init__(self, n):
+    """Blur optimization module."""
+
+    def __init__(self, n: int, embed_dim: int = 1):
         super().__init__()
-        self.embeds = torch.nn.Embedding(n, 1)
+        self.embeds = torch.nn.Embedding(n, embed_dim)
         self.embeds.weight.data = torch.linspace(-1, 1, n)[:, None]
 
         self.depth_encoder = get_encoder(14, 1)
         self.means_encoder = get_encoder(3, 3)
         self.blur_mask_mlp = _create_mlp_torch(
-            in_dim=self.depth_encoder.out_dim + 1,
+            in_dim=embed_dim + self.depth_encoder.out_dim,
             num_layers=5,
             layer_width=64,
             out_dim=1,
         )
         self.blur_deltas_mlp = _create_mlp_tcnn(
-            in_dim=self.means_encoder.out_dim + 8,
+            in_dim=embed_dim + self.means_encoder.out_dim + 7,
             num_layers=5,
             layer_width=64,
             out_dim=7,
         )
 
-    def predict_mask(self, image_ids, depths):
+    def predict_mask(self, image_ids: Tensor, depths: Tensor):
         depths_emb = self.depth_encoder.encode(depths.reshape(-1, 1))
         images_emb = self.embeds(image_ids).repeat(depths_emb.shape[0], 1)
-        x = torch.cat([images_emb, depths_emb], dim=-1)
-        mlp_out = self.blur_mask_mlp(x)
+        mlp_out = self.blur_mask_mlp(torch.cat([images_emb, depths_emb], dim=-1))
         blur_mask = torch.sigmoid(mlp_out)
         blur_mask = blur_mask.reshape(depths.shape)
         return blur_mask
 
-    def predict_deltas(self, image_ids, means, scales, quats):
+    def predict_deltas(
+        self, image_ids: Tensor, means: Tensor, scales: Tensor, quats: Tensor
+    ):
         means_log = log_transform(means)
-        means_embed = self.means_encoder.encode(means_log)
+        means_emb = self.means_encoder.encode(means_log)
         images_emb = self.embeds(image_ids).repeat(means.shape[0], 1)
-        x = torch.cat([images_emb, means_embed, scales, quats], dim=-1)
-        mlp_out = self.blur_deltas_mlp(x).float()
+        mlp_out = self.blur_deltas_mlp(
+            torch.cat([images_emb, means_emb, scales, quats], dim=-1)
+        ).float()
         scales_delta = mlp_out[:, :3]
         rotations_delta = mlp_out[:, 3:]
         scales_delta = torch.clamp(scales_delta, min=0.0, max=0.1)
         rotations_delta = torch.clamp(rotations_delta, min=-0.05, max=0.05)
         return scales_delta, rotations_delta
+
+    def mask_reg_loss(self, blur_mask: Tensor):
+        """Mask regularization loss."""
+        meanloss = (torch.mean(blur_mask) - 0.5) ** 2
+        stdloss = (torch.std(blur_mask) - 0.5) ** 2
+        return meanloss + 0.1 * stdloss

@@ -157,6 +157,8 @@ class Config:
     blur_opt_lr: float = 1e-3
     # Regularization for blur optimization as weight decay
     blur_opt_reg: float = 1e-6
+    # Regularization for blur mask
+    blur_mask_reg: float = 0.01
 
     # Enable bilateral grid. (experimental)
     use_bilateral_grid: bool = False
@@ -657,6 +659,7 @@ class Runner:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
             if cfg.blur_opt:
+                blur_mask = self.blur_module.predict_mask(image_ids, depths)
                 renders_blur, _, _ = self.rasterize_splats(
                     camtoworlds=camtoworlds,
                     Ks=Ks,
@@ -670,7 +673,6 @@ class Runner:
                     masks=masks,
                     blur=True,
                 )
-                blur_mask = self.blur_module.predict_mask(image_ids, depths)
                 colors = (1 - blur_mask) * colors + blur_mask * renders_blur[..., 0:3]
 
             self.cfg.strategy.step_pre_backward(
@@ -709,6 +711,8 @@ class Runner:
             if cfg.use_bilateral_grid:
                 tvloss = 10 * total_variation_loss(self.bil_grids.grids)
                 loss += tvloss
+            if cfg.blur_opt:
+                loss += cfg.blur_mask_reg * self.blur_module.mask_reg_loss(blur_mask)
 
             # regularizations
             if cfg.opacity_reg > 0.0:
@@ -721,13 +725,6 @@ class Runner:
                 loss = (
                     loss
                     + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
-                )
-            if cfg.blur_opt:
-                lambda_mean = 0.01
-                lambda_std = 0.001
-                loss += (
-                    lambda_mean * (torch.mean(blur_mask) - 0.5) ** 2
-                    + lambda_std * (torch.std(blur_mask) - 0.5) ** 2
                 )
             loss.backward()
 
@@ -939,6 +936,8 @@ class Runner:
             colors = torch.clamp(colors, 0.0, 1.0)
             canvas_list = [pixels, colors]
             if self.cfg.blur_opt and stage == "train":
+                blur_mask = self.blur_module.predict_mask(image_ids, depths)
+                canvas_list.append(blur_mask.repeat(1, 1, 1, 3))
                 renders_blur, _, _ = self.rasterize_splats(
                     camtoworlds=camtoworlds,
                     Ks=Ks,
@@ -953,8 +952,6 @@ class Runner:
                     blur=True,
                 )
                 canvas_list.append(torch.clamp(renders_blur[..., 0:3], 0.0, 1.0))
-                blur_mask = self.blur_module.predict_mask(image_ids, depths)
-                canvas_list.append(blur_mask.repeat(1, 1, 1, 3))
                 colors = (1 - blur_mask) * colors + blur_mask * renders_blur[..., 0:3]
                 colors = torch.clamp(colors, 0.0, 1.0)
                 canvas_list.append(colors)
