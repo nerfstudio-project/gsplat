@@ -157,7 +157,7 @@ class Config:
     # Regularization for blur optimization as weight decay
     blur_opt_reg: float = 1e-6
     # Regularization for blur mask
-    blur_mask_reg: float = 0.01
+    blur_mask_reg: float = 0.001
 
     # Enable bilateral grid. (experimental)
     use_bilateral_grid: bool = False
@@ -419,6 +419,11 @@ class Runner:
             self.blur_module = BlurOptModule(len(self.trainset)).to(self.device)
             self.blur_optimizers = [
                 torch.optim.Adam(
+                    self.blur_module.embeds.parameters(),
+                    lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size) * 10.0,
+                    weight_decay=cfg.blur_opt_reg,
+                ),
+                torch.optim.Adam(
                     self.blur_module.parameters(),
                     lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size),
                     weight_decay=cfg.blur_opt_reg,
@@ -495,14 +500,15 @@ class Runner:
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
         if self.cfg.blur_opt and blur:
-            scales_delta, rotations_delta = self.blur_module.predict_deltas(
+            quats = F.normalize(self.splats["quats"], dim=-1)
+            scales_delta, quats_delta = self.blur_module.predict_deltas(
                 image_ids,
                 self.splats["means"],
                 self.splats["scales"],
-                self.splats["quats"],
+                quats,
             )
             scales = torch.exp(self.splats["scales"] + scales_delta)
-            quats = F.normalize(self.splats["quats"], dim=-1) + rotations_delta
+            quats += quats_delta
         else:
             scales = torch.exp(self.splats["scales"])  # [N, 3]
             quats = self.splats["quats"]  # [N, 4]
@@ -711,7 +717,9 @@ class Runner:
                 tvloss = 10 * total_variation_loss(self.bil_grids.grids)
                 loss += tvloss
             if cfg.blur_opt:
-                loss += cfg.blur_mask_reg * self.blur_module.mask_reg_loss(blur_mask)
+                loss += cfg.blur_mask_reg * self.blur_module.mask_reg_loss(
+                    blur_mask, step
+                )
 
             # regularizations
             if cfg.opacity_reg > 0.0:
