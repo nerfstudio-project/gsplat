@@ -12,7 +12,7 @@
 import torch
 import torch.nn as nn
 from torch import Tensor
-from examples.mlp import create_mlp, _create_mlp_torch, _create_mlp_tcnn
+from examples.mlp import create_mlp, _create_mlp_tcnn
 from gsplat.utils import log_transform
 
 
@@ -72,7 +72,7 @@ class BlurOptModule(nn.Module):
 
         self.depth_encoder = get_encoder(10, 1)
         self.means_encoder = get_encoder(3, 3)
-        self.blur_mask_mlp = _create_mlp_torch(
+        self.blur_mask_mlp = _create_mlp_tcnn(
             in_dim=embed_dim + self.depth_encoder.out_dim,
             num_layers=5,
             layer_width=64,
@@ -110,23 +110,14 @@ class BlurOptModule(nn.Module):
         ).float()
         scales_delta = mlp_out[:, :3]
         quats_delta = mlp_out[:, 3:]
-        if step < self.num_warmup_steps:
-            scales_delta = torch.clamp(scales_delta, min=0.0, max=0.1)
-            quats_delta = torch.clamp(quats_delta, min=0.0, max=0.0)
-        else:
-            scales_delta = torch.clamp(scales_delta, min=0.0, max=0.1)
-            quats_delta = torch.clamp(quats_delta, min=-0.05, max=0.05)
+        scales_delta = torch.clamp(scales_delta, min=0.0, max=0.1)
+        quats_delta = torch.clamp(quats_delta, min=0.0, max=0.1)
         return scales_delta, quats_delta
 
     def mask_reg_loss(self, blur_mask: Tensor, step: int):
         """Mask regularization loss."""
+        lambda_mean = 10.0
+        lambda_std = 0.0
         meanloss = (torch.mean(blur_mask) - 0.0) ** 2
-        # meanloss = torch.mean(blur_mask)
         stdloss = (torch.std(blur_mask) - 0.5) ** 2
-        if step < self.num_warmup_steps:
-            lambda_mean = 1.0
-            lambda_std = 1.0
-        else:
-            lambda_mean = 10.0
-            lambda_std = 1.0
         return lambda_mean * meanloss + lambda_std * stdloss
