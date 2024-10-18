@@ -419,7 +419,17 @@ class Runner:
             self.blur_module = BlurOptModule(len(self.trainset)).to(self.device)
             self.blur_optimizers = [
                 torch.optim.Adam(
-                    self.blur_module.parameters(),
+                    self.blur_module.embeds.parameters(),
+                    lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size) * 10.0,
+                    weight_decay=cfg.blur_opt_reg,
+                ),
+                torch.optim.Adam(
+                    self.blur_module.blur_mask_mlp.parameters(),
+                    lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size),
+                    weight_decay=cfg.blur_opt_reg,
+                ),
+                torch.optim.Adam(
+                    self.blur_module.blur_deltas_mlp.parameters(),
                     lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size),
                     weight_decay=cfg.blur_opt_reg,
                 ),
@@ -476,6 +486,7 @@ class Runner:
         height: int,
         masks: Optional[Tensor] = None,
         blur: bool = False,
+        step: int = 0,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         means = self.splats["means"]  # [N, 3]
@@ -501,6 +512,7 @@ class Runner:
                 self.splats["means"],
                 self.splats["scales"],
                 quats,
+                step,
             )
             scales = torch.exp(self.splats["scales"] + scales_delta)
             quats += quats_delta
@@ -672,6 +684,7 @@ class Runner:
                     render_mode="RGB",
                     masks=masks,
                     blur=True,
+                    step=step,
                 )
                 colors = (1 - blur_mask) * colors + blur_mask * renders_blur[..., 0:3]
 
@@ -874,6 +887,9 @@ class Runner:
                 self.eval(step)
                 self.render_traj(step)
 
+            if step == 7001:
+                break
+
             # run compression
             if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:
                 self.run_compression(step=step)
@@ -952,6 +968,7 @@ class Runner:
                     render_mode="RGB",
                     masks=masks,
                     blur=True,
+                    step=step,
                 )
                 canvas_list.append(torch.clamp(renders_blur[..., 0:3], 0.0, 1.0))
                 colors = (1 - blur_mask) * colors + blur_mask * renders_blur[..., 0:3]

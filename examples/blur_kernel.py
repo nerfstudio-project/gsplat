@@ -65,11 +65,10 @@ def get_encoder(multires, i=0):
 class BlurOptModule(nn.Module):
     """Blur optimization module."""
 
-    def __init__(self, n: int, embed_dim: int = 1):
+    def __init__(self, n: int, embed_dim: int = 4):
         super().__init__()
+        self.num_warmup_steps = 2000
         self.embeds = torch.nn.Embedding(n, embed_dim)
-        # Initialize focal lengths in first channel
-        self.embeds.weight.data[:, 0] = torch.linspace(-1, 1, n)
 
         self.depth_encoder = get_encoder(7, 1)
         self.means_encoder = get_encoder(3, 3)
@@ -96,7 +95,12 @@ class BlurOptModule(nn.Module):
         return blur_mask
 
     def predict_deltas(
-        self, image_ids: Tensor, means: Tensor, scales: Tensor, quats: Tensor
+        self,
+        image_ids: Tensor,
+        means: Tensor,
+        scales: Tensor,
+        quats: Tensor,
+        step: int,
     ):
         means_log = log_transform(means)
         means_emb = self.means_encoder.encode(means_log)
@@ -106,13 +110,22 @@ class BlurOptModule(nn.Module):
         ).float()
         scales_delta = mlp_out[:, :3]
         quats_delta = mlp_out[:, 3:]
-        scales_delta = torch.clamp(scales_delta, min=0.0, max=0.1)
-        quats_delta = torch.clamp(quats_delta, min=-0.05, max=0.05)
+        if step < self.num_warmup_steps:
+            scales_delta = torch.clamp(scales_delta, min=0.0, max=0.1)
+            quats_delta = torch.clamp(quats_delta, min=0.0, max=0.0)
+        else:
+            scales_delta = torch.clamp(scales_delta, min=0.0, max=0.1)
+            quats_delta = torch.clamp(quats_delta, min=-0.05, max=0.05)
         return scales_delta, quats_delta
 
     def mask_reg_loss(self, blur_mask: Tensor, step: int):
         """Mask regularization loss."""
-        meanloss = (torch.mean(blur_mask) - 0.5) ** 2
+        meanloss = (torch.mean(blur_mask) - 0.0) ** 2
         stdloss = (torch.std(blur_mask) - 0.5) ** 2
-        lambda_mean = 10.0 if step < 2000 else 1.0
-        return lambda_mean * meanloss + stdloss
+        if step < self.num_warmup_steps:
+            lambda_mean = 1.0
+            lambda_std = 1.0
+        else:
+            lambda_mean = 1.0
+            lambda_std = 1.0
+        return lambda_mean * meanloss + lambda_std * stdloss
