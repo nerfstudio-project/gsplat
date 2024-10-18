@@ -153,7 +153,7 @@ class Config:
     # Enable blur optimization. (experimental)
     blur_opt: bool = False
     # Learning rate for blur optimization
-    blur_opt_lr: float = 1e-3
+    blur_opt_lr: float = 1e-4
     # Regularization for blur optimization as weight decay
     blur_opt_reg: float = 1e-6
     # Regularization for blur mask
@@ -886,9 +886,6 @@ class Runner:
                 self.eval(step, stage="train")
                 self.eval(step)
                 self.render_traj(step)
-
-            if step == 7001:
-                break
 
             # run compression
             if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:

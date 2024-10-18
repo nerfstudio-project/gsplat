@@ -120,12 +120,13 @@ class BlurOptModule(nn.Module):
 
     def mask_reg_loss(self, blur_mask: Tensor, step: int):
         """Mask regularization loss."""
-        meanloss = (torch.mean(blur_mask) - 0.2) ** 2
+        meanloss = (torch.mean(blur_mask) - 0.0) ** 2
+        # meanloss = torch.mean(blur_mask)
         stdloss = (torch.std(blur_mask) - 0.5) ** 2
         if step < self.num_warmup_steps:
-            lambda_mean = 10.0
+            lambda_mean = 1.0
             lambda_std = 1.0
         else:
-            lambda_mean = 1.0
+            lambda_mean = 10.0
             lambda_std = 1.0
         return lambda_mean * meanloss + lambda_std * stdloss
