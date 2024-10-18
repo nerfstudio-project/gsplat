@@ -46,7 +46,7 @@ def _multinomial_sample(weights: Tensor, n: int, replacement: bool = True) -> Te
 
 @torch.no_grad()
 def _update_param_with_optimizer(
-    param_fn: Callable[[str, Tensor], Tensor],
+    param_fn: Callable[[str, Tensor, bool], Tensor],
     optimizer_fn: Callable[[str, Tensor], Tensor],
     params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
     optimizers: Dict[str, torch.optim.Optimizer],
@@ -68,19 +68,22 @@ def _update_param_with_optimizer(
         names = list(params.keys())
 
     for name in names:
+        param = params[name]
+        new_param = param_fn(name, param, param.requires_grad)
+        params[name] = new_param
+        if name not in optimizers:
+            assert not param.requires_grad
+            continue
         optimizer = optimizers[name]
-        for i, param_group in enumerate(optimizer.param_groups):
-            p = param_group["params"][0]
-            p_state = optimizer.state[p]
-            del optimizer.state[p]
-            for key in p_state.keys():
+        for i in range(len(optimizer.param_groups)):
+            param_state = optimizer.state[param]
+            del optimizer.state[param]
+            for key in param_state.keys():
                 if key != "step":
-                    v = p_state[key]
-                    p_state[key] = optimizer_fn(key, v)
-            p_new = param_fn(name, p)
-            optimizer.param_groups[i]["params"] = [p_new]
-            optimizer.state[p_new] = p_state
-            params[name] = p_new
+                    v = param_state[key]
+                    param_state[key] = optimizer_fn(key, v)
+            optimizer.param_groups[i]["params"] = [new_param]
+            optimizer.state[new_param] = param_state
 
 
 @torch.no_grad()
@@ -100,8 +103,8 @@ def duplicate(
     device = mask.device
     sel = torch.where(mask)[0]
 
-    def param_fn(name: str, p: Tensor) -> Tensor:
-        return torch.nn.Parameter(torch.cat([p, p[sel]]))
+    def param_fn(name: str, p: Tensor, requires_grad: bool) -> Tensor:
+        return torch.nn.Parameter(torch.cat([p, p[sel]]), requires_grad=requires_grad)
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
         return torch.cat([v, torch.zeros((len(sel), *v.shape[1:]), device=device)])
@@ -145,7 +148,7 @@ def split(
         torch.randn(2, len(scales), 3, device=device),
     )  # [2, N, 3]
 
-    def param_fn(name: str, p: Tensor) -> Tensor:
+    def param_fn(name: str, p: Tensor, requires_grad: bool) -> Tensor:
         repeats = [2] + [1] * (p.dim() - 1)
         if name == "means":
             p_split = (p[sel] + samples).reshape(-1, 3)  # [2N, 3]
@@ -157,7 +160,7 @@ def split(
         else:
             p_split = p[sel].repeat(repeats)
         p_new = torch.cat([p[rest], p_split])
-        p_new = torch.nn.Parameter(p_new)
+        p_new = torch.nn.Parameter(p_new, requires_grad=requires_grad)
         return p_new
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
@@ -190,8 +193,8 @@ def remove(
     """
     sel = torch.where(~mask)[0]
 
-    def param_fn(name: str, p: Tensor) -> Tensor:
-        return torch.nn.Parameter(p[sel])
+    def param_fn(name: str, p: Tensor, requires_grad: bool) -> Tensor:
+        return torch.nn.Parameter(p[sel], requires_grad=requires_grad)
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
         return v[sel]
@@ -219,10 +222,10 @@ def reset_opa(
         value: The value to reset the opacities
     """
 
-    def param_fn(name: str, p: Tensor) -> Tensor:
+    def param_fn(name: str, p: Tensor, requires_grad: bool) -> Tensor:
         if name == "opacities":
             opacities = torch.clamp(p, max=torch.logit(torch.tensor(value)).item())
-            return torch.nn.Parameter(opacities)
+            return torch.nn.Parameter(opacities, requires_grad=requires_grad)
         else:
             raise ValueError(f"Unexpected parameter name: {name}")
 
@@ -271,13 +274,13 @@ def relocate(
     )
     new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
 
-    def param_fn(name: str, p: Tensor) -> Tensor:
+    def param_fn(name: str, p: Tensor, requires_grad: bool) -> Tensor:
         if name == "opacities":
             p[sampled_idxs] = torch.logit(new_opacities)
         elif name == "scales":
             p[sampled_idxs] = torch.log(new_scales)
         p[dead_indices] = p[sampled_idxs]
-        return torch.nn.Parameter(p)
+        return torch.nn.Parameter(p, requires_grad=requires_grad)
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
         v[sampled_idxs] = 0
@@ -313,13 +316,13 @@ def sample_add(
     )
     new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
 
-    def param_fn(name: str, p: Tensor) -> Tensor:
+    def param_fn(name: str, p: Tensor, requires_grad: bool) -> Tensor:
         if name == "opacities":
             p[sampled_idxs] = torch.logit(new_opacities)
         elif name == "scales":
             p[sampled_idxs] = torch.log(new_scales)
         p = torch.cat([p, p[sampled_idxs]])
-        return torch.nn.Parameter(p)
+        return torch.nn.Parameter(p, requires_grad=requires_grad)
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
         v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
