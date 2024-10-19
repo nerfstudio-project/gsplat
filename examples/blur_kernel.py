@@ -99,7 +99,6 @@ class BlurOptModule(nn.Module):
         means: Tensor,
         scales: Tensor,
         quats: Tensor,
-        step: int,
     ):
         means_log = log_transform(means)
         means_emb = self.means_encoder.encode(means_log)
@@ -113,8 +112,8 @@ class BlurOptModule(nn.Module):
         quats_delta = torch.clamp(quats_delta, min=0.0, max=0.1)
         return scales_delta, quats_delta
 
-    def mask_reg_loss(self, blur_mask: Tensor, step: int):
-        """Mask regularization loss."""
-        lambda_mean = 10.0
-        meanloss = (torch.mean(blur_mask) - 0.0) ** 2
-        return lambda_mean * meanloss
+    def mask_variation_loss(self, blur_mask: Tensor):
+        """Mask variation loss."""
+        x = blur_mask.mean()
+        meanloss = (1 / (1 - x)) - x - 1
+        return meanloss

@@ -151,7 +151,7 @@ class Config:
     # Enable blur optimization. (experimental)
     blur_opt: bool = False
     # Learning rate for blur optimization
-    blur_opt_lr: float = 1e-4
+    blur_opt_lr: float = 1e-3
     # Regularization for blur optimization as weight decay
     blur_opt_reg: float = 1e-6
     # Regularization for blur mask
@@ -510,7 +510,6 @@ class Runner:
                 self.splats["means"],
                 self.splats["scales"],
                 quats,
-                step,
             )
             scales = torch.exp(self.splats["scales"] + scales_delta)
             quats += quats_delta
@@ -723,8 +722,8 @@ class Runner:
                 tvloss = 10 * total_variation_loss(self.bil_grids.grids)
                 loss += tvloss
             if cfg.blur_opt:
-                loss += cfg.blur_mask_reg * self.blur_module.mask_reg_loss(
-                    blur_mask, step
+                loss += cfg.blur_mask_reg * self.blur_module.mask_variation_loss(
+                    blur_mask
                 )
 
             # regularizations
