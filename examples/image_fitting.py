@@ -170,12 +170,13 @@ class SimpleTrainer:
             f"Per step(s):\nRasterization: {times[0]/iterations:.5f}, Backward: {times[1]/iterations:.5f}"
         )
 
+        final_img = (out_img.detach().cpu().numpy() * 255).astype(np.uint8)
         if save_path:
-            final_img = (out_img.detach().cpu().numpy() * 255).astype(np.uint8)
+            
             import matplotlib.pyplot as plt
             plt.imsave(save_path, final_img)
             
-        return losses
+        return losses, final_img
 
 
 def image_path_to_tensor(image_path: Path):
