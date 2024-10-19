@@ -5,27 +5,56 @@ import os
 from abc import ABC, abstractmethod
 from examples.image_fitting import SimpleTrainer
 from src.ppo.base_env import Env
+from PIL import Image
+from torchvision import transforms
+
+def preprocess(img_path: str) -> torch.tensor:
+    input_image = Image.open(img_path)
+    
+    preprocess = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+    input_tensor = preprocess(input_image)
+    return input_tensor
+
 
 class LREnv(Env):
     """
     A test environment where the agent's actions are used to simulate 
     the process of training a neural network.
     """
-    def __init__(self, img, num_points: int, iterations: int,
-                 observation_shape: tuple, action_shape: tuple,
-                 device='cuda'):
+    def __init__(
+        self, 
+        img_path: str,
+        num_points: int, 
+        iterations: int,
+        # TODO: remove observation_shape?
+        observation_shape: tuple, 
+        action_shape: tuple,
+        device='cuda',
+        img_encoder: str = 'dino'
+    ):
         # Environment state would be the 2d image
         # action: tile weights
         # 
         self.max_steps = 1
-        self.img = img.to(device)
         self.num_points = num_points
         self.iterations = iterations
         self.lrs = [10**-i for i in range(10)]
         self.device = device
-        
+        # self.observation_shape = img.shape
         self.action_shape = action_shape
-        self.observation_shape = observation_shape
+
+        if img_encoder == 'dino':
+            self.img_encoder = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14')
+            self.observation_shape = (self.img_encoder.embed_dim,)
+            print("Using DINO large distilled as encoder")
+        
+        with torch.no_grad():
+            preprocessed = preprocess(img_path)
+            self.img = self.img_encoder(preprocessed.unsqueeze(0)).to(device) # TODO: maybe squeeze?
 
         # compute losses for each LR
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -35,7 +64,7 @@ class LREnv(Env):
         if os.path.exists(losses_json_path):
             with open(losses_json_path, 'r') as f:
                 self.lr_losses = json.load(f)
-        else: 
+        else:
             lr_losses = {}
             for lr in self.lrs:
                 print("*" * 50)
@@ -71,7 +100,7 @@ class LREnv(Env):
         Reset the environment to an initial state.
         """
         
-        return self.img
+        return self.get_observation()
 
     def step(self, action: int):
         """

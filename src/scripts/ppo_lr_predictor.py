@@ -20,21 +20,25 @@ if not im_path:
     # make top left and bottom right red, blue
     gt_image[: height // 2, : width // 2, :] = torch.tensor([1.0, 0.0, 0.0])
     gt_image[height // 2 :, width // 2 :, :] = torch.tensor([0.0, 0.0, 1.0])
+    # save the image
+    plt.imsave('src/data/simple.jpg', gt_image.numpy())
 else:
     gt_image = image_path_to_tensor(im_path)
 
+
 # Initialize environment and policy
 env = LREnv(
-    img=gt_image,
+    img_path='src/data/simple.jpg',
     num_points=1000,
     iterations=100,
     observation_shape=(height, width, 3),
     action_shape=(1,),
-    device=device
+    device=device,
+    img_encoder='dino'
 )
-
-actor = LRActor()
-critic = LRCritic()
+print(env.observation_shape)
+actor = LRActor(input_dim=env.observation_shape[0])
+critic = LRCritic(input_dim=env.observation_shape[0])
 policy = Policy(
     actor=actor,
     critic=critic,
@@ -43,20 +47,19 @@ policy = Policy(
     critic_lr=1e-2
 )
 
-log_callback = lambda policy: print(f"actor logits: {policy.actor.logits} \n"
-                                    f"actor probs: {policy.actor(None)} \n"
-                                    f"critic values: {policy.critic.constant_value} \n"
-                                    f"best lr: {policy.actor.get_best_lr()}")
+log_callback = lambda policy: print(f"actor probs: {policy.actor(env.img)} \n"
+                                    f"critic values: {policy.critic(env.img)} \n"
+                                    f"best lr: {policy.actor.get_best_lr(env.img)}")
 
 num_updates = 100
-buffer_size = 100
+buffer_size = 10
 ppo = PPO(
     policy=policy,
     env=env,
     n_epochs=5,
     batch_size=buffer_size//2,
     buffer_size=buffer_size,
-    log_interval=10,
+    log_interval=1,
     device=device,
     entropy_coeff=0.0,
     shuffle=True,
