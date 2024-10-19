@@ -16,6 +16,24 @@ def _make_lazy_cuda_func(name: str) -> Callable:
     return call_cuda
 
 
+def selective_adam_update(
+    param: Tensor,
+    param_grad: Tensor,
+    exp_avg: Tensor,
+    exp_avg_sq: Tensor,
+    tiles_touched: Tensor,
+    lr: float,
+    b1: float,
+    b2: float,
+    eps: float,
+    N: int,
+    M: int,
+) -> None:
+    _make_lazy_cuda_func("selective_adam_update")(
+        param, param_grad, exp_avg, exp_avg_sq, tiles_touched, lr, b1, b2, eps, N, M
+    )
+
+
 def _make_lazy_cuda_obj(name: str) -> Any:
     # pylint: disable=import-outside-toplevel
     from ._backend import _C

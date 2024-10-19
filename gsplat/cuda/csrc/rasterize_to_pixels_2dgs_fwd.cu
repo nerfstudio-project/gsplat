@@ -14,48 +14,70 @@ namespace cg = cooperative_groups;
  * Rasterization to Pixels Forward Pass 2DGS
  ****************************************************************************/
 
+ /**
+  *
+  */
 template <uint32_t COLOR_DIM, typename S>
 __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
-    const uint32_t C,
-    const uint32_t N,
-    const uint32_t n_isects,
-    const bool packed,
-    const vec2<S> *__restrict__ means2d,
-    const S *__restrict__ ray_transforms,
-    const S *__restrict__ colors,      // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
-    const S *__restrict__ opacities,   // [C, N] or [nnz]
-    const S *__restrict__ normals,     // [C, N, 3] or [nnz, 3]
-    const S *__restrict__ backgrounds, // [C, COLOR_DIM]
-    const bool *__restrict__ masks,    // [C, tile_height, tile_width]
+    const uint32_t C,    // number of cameras
+    const uint32_t N,    // number of gaussians
+    const uint32_t n_isects,  // number of ray-primitive intersections.
+    const bool packed,       // whether the input tensors are packed
+    const vec2<S> *__restrict__ means2d,   // Projected Gaussian means. [C, N, 2] if packed is False, [nnz, 2] if packed is True.
+    const S *__restrict__ ray_transforms,  // transformation matrices that transforms xy-planes in pixel spaces into splat coordinates. [C, N, 3, 3] if packed is False, [nnz, channels] if packed is True.
+                                           // This is (KWH)^{-1} in the paper (takes screen [x,y] and map to [u,v])
+    const S *__restrict__ colors,      // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]  // Gaussian colors or ND features.
+    const S *__restrict__ opacities,   // [C, N] or [nnz]                        // Gaussian opacities that support per-view values.
+    const S *__restrict__ normals,     // [C, N, 3] or [nnz, 3]                  // The normals in camera space.
+    const S *__restrict__ backgrounds, // [C, COLOR_DIM]                         // Background colors on camera basis
+    const bool *__restrict__ masks,    // [C, tile_height, tile_width]            // Optional tile mask to skip rendering GS to masked tiles.
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
     const uint32_t tile_width,
     const uint32_t tile_height,
-    const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
-    const int32_t *__restrict__ flatten_ids,  // [n_isects]
+    const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]    // Intersection offsets outputs from `isect_offset_encode()`, this is the result of a prefix sum, and
+                                                                                 // gives the interval that our gaussians are gonna use.
+    const int32_t *__restrict__ flatten_ids,  // [n_isects]                      // The global flatten indices in [C * N] or [nnz] from  `isect_tiles()`.
+    
+    
+    // outputs
     S *__restrict__ render_colors,  // [C, image_height, image_width, COLOR_DIM]
     S *__restrict__ render_alphas,  // [C, image_height, image_width, 1]
     S *__restrict__ render_normals, // [C, image_height, image_width, 3]
-    S *__restrict__ render_distort, // [C, image_height, image_width, 1]
-    S *__restrict__ render_median,  // [C, image_height, image_width, 1]
-    int32_t *__restrict__ last_ids, // [C, image_height, image_width]
-    int32_t *__restrict__ median_ids // [C, image_height, image_width]
+    S *__restrict__ render_distort, // [C, image_height, image_width, 1]  // Stores the per-pixel distortion error proposed in Mip-NeRF 360.
+    S *__restrict__ render_median,  // [C, image_height, image_width, 1]  // Stores the median depth contribution for each pixel "set to the depth of the Gaussian that brings the accumulated opacity over 0.5."
+    int32_t *__restrict__ last_ids, // [C, image_height, image_width]     // Stores the index of the last Gaussian that contributed to each pixel.
+    int32_t *__restrict__ median_ids // [C, image_height, image_width]    // Stores the index of the Gaussian that contributes to the median depth for each pixel (bring over 0.5).
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
 
+    /**
+     * ==============================
+     * Thread and block setup:
+     * This sets up the thread and block indices, determining which camera, tile, and pixel each thread will process.
+     * The grid structure is assigend as:
+     * C * tile_height * tile_width blocks (3d grid), each block is a tile.
+     * Each thread is responsible for one pixel. (blockSize = tile_size * tile_size)
+     * ==============================
+     */
     auto block = cg::this_thread_block();
     int32_t camera_id = block.group_index().x;
-    int32_t tile_id =
-        block.group_index().y * tile_width + block.group_index().z;
+    int32_t tile_id = block.group_index().y * tile_width + block.group_index().z;
     uint32_t i = block.group_index().y * tile_size + block.thread_index().y;
     uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
 
-    tile_offsets += camera_id * tile_height * tile_width;
-    render_colors += camera_id * image_height * image_width * COLOR_DIM;
-    render_alphas += camera_id * image_height * image_width;
-    last_ids += camera_id * image_height * image_width;
+    tile_offsets += camera_id * tile_height * tile_width;  // get the global offset of the tile w.r.t the camera
+    render_colors += camera_id * image_height * image_width * COLOR_DIM;  // get the global offset of the pixel w.r.t the camera
+    render_alphas += camera_id * image_height * image_width;  // get the global offset of the pixel w.r.t the camera
+    last_ids += camera_id * image_height * image_width;  // get the global offset of the pixel w.r.t the camera
+    render_normals += camera_id * image_height * image_width * 3;
+    render_distort += camera_id * image_height * image_width;
+    render_median += camera_id * image_height * image_width;
+    median_ids += camera_id * image_height * image_width;
+
+    // get the global offset of the background and mask
     if (backgrounds != nullptr) {
         backgrounds += camera_id * COLOR_DIM;
     }
@@ -63,6 +85,7 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
         masks += camera_id * tile_height * tile_width;
     }
 
+    // find the center of the pixel
     S px = (S)j + 0.5f;
     S py = (S)i + 0.5f;
     int32_t pix_id = i * image_width + j;
@@ -85,33 +108,46 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
     // have all threads in tile process the same gaussians in batches
     // first collect gaussians between range.x and range.y in batches
     // which gaussians to look through in this tile
+
+    // print 
     int32_t range_start = tile_offsets[tile_id];
     int32_t range_end =
+        // see if this is the last tile in the camera
         (camera_id == C - 1) && (tile_id == tile_width * tile_height - 1)
             ? n_isects
             : tile_offsets[tile_id + 1];
     const uint32_t block_size = block.size();
-    uint32_t num_batches =
-        (range_end - range_start + block_size - 1) / block_size;
+    uint32_t num_batches = (range_end - range_start + block_size - 1) / block_size;
 
+
+    /**
+     * ==============================
+     * Register computing variables:
+     * For each pixel, we need to find its uv intersection with the gaussian primitives.
+     * then we retrieve the kernel's parameters and kernel weights 
+     * do the splatting rendering equation.
+     * ==============================
+     */
+    // Shared memory layout:
+    // This memory is laid out as follows:
+    // | gaussian indices | x : y : alpha | u | v | w |
     extern __shared__ int s[];
     int32_t *id_batch = (int32_t *)s; // [block_size]
+
+    // stores the concatination for projected primitive source (x, y) and opacity alpha
     vec3<S> *xy_opacity_batch =
         reinterpret_cast<vec3<float> *>(&id_batch[block_size]); // [block_size]
-    vec3<S> *u_Ms_batch =
-        reinterpret_cast<vec3<float> *>(&xy_opacity_batch[block_size]
-        ); // [block_size]
-    vec3<S> *v_Ms_batch =
-        reinterpret_cast<vec3<float> *>(&u_Ms_batch[block_size]
-        ); // [block_size]
-    vec3<S> *w_Ms_batch =
-        reinterpret_cast<vec3<float> *>(&v_Ms_batch[block_size]
-        ); // [block_size]
+
+    // these are row vectors of the ray transformation matrices for the current batch of gaussians
+    vec3<S> *u_Ms_batch = reinterpret_cast<vec3<float> *>(&xy_opacity_batch[block_size]); // [block_size]
+    vec3<S> *v_Ms_batch = reinterpret_cast<vec3<float> *>(&u_Ms_batch[block_size]); // [block_size]
+    vec3<S> *w_Ms_batch = reinterpret_cast<vec3<float> *>(&v_Ms_batch[block_size]); // [block_size]
 
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
     // numerical precision so we use double for it. However double make bwd 1.5x
     // slower so we stick with float for now.
+    // The coefficient for volumetric rendering for our responsible pixel.
     S T = 1.0f;
     // index of most recent gaussian to write to this thread's pixel
     uint32_t cur_idx = 0;
@@ -119,7 +155,7 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing its
     // designated pixel
-    uint32_t tr = block.thread_rank();
+    uint32_t tr = block.thread_rank();  
 
     // Per-pixel distortion error proposed in Mip-NeRF 360.
     // Implemented reference:
@@ -130,6 +166,14 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
     // keep track of median depth contribution
     S median_depth = 0.f;
     uint32_t median_idx = 0.f;
+
+    /**
+     * ==============================
+     * Per-pixel rendering: (2DGS Differntiable Rasterizer Forward Pass)
+     * This section is responsible for rendering a single pixel.
+     * It processes batches of gaussians and accumulates the pixel color and normal.
+     * ==============================
+     */
 
     // TODO (WZ): merge pix_out and normal_out to
     //  S pix_out[COLOR_DIM + 3] = {0.f}
@@ -146,6 +190,11 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
         // index of gaussian to load
         uint32_t batch_start = range_start + block_size * b;
         uint32_t idx = batch_start + tr;
+
+        // only threads within the range of the tile will fetch gaussians
+        /**
+         * Launch this block with each thread responsible for one gaussian.
+         */
         if (idx < range_end) {
             int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
             id_batch[tr] = g;
@@ -166,6 +215,50 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
         // wait for other threads to collect the gaussians in batch
         block.sync();
 
+        /**
+         * ==================================================
+         * Forward rasterization pass:
+         * ==================================================
+         * 
+         * GSplat computes rasterization point of intersection as:
+         * 1. Generate 2 homogeneous plane parameter vectors as sets of points in UV space
+         * 2. Find the set of points that satisfy both conditions with the cross product
+         * 3. Find where this solution set intersects with UV plane using projective flattening
+         * 
+         * For each gaussian G_i and pixel q_xy:
+         * 
+         * 1. Compute homogeneous plane parameters:
+         *    h_u = p_x * M_w - M_u
+         *    h_v = p_y * M_w - M_v
+         *    where M_u, M_v, M_w are rows of the KWH transform
+         *
+         * Note: this works because:
+         *    for any vector q_uv [u, v, 1], applying co-vector h_u will yield the following expression: 
+         *    h_u * [u, v, 1]^T = P_x * (M_w * q_uv) - M_u * q_uv
+         *                      = P_x * q_ray.z - q_ray.x * q_ray.z
+         *    - where P_x is the x-coordinate of the ray origin
+         *    Thus: h_u  defines a set of q_uv where q_uv's projected x coordinate in ray space is P_x
+         *    which aligns with the homogeneous plane definition in original 2DGS paper (similar for h_v)
+         *
+         * 2. Compute intersection:
+         *    zeta = h_u × h_v
+         *    This cross product is the only solution that satisfies both homogeneous plane equations (dot product == 0)
+         * 
+         * 3. Project to UV space:
+         *    s_uv = [zeta_1/zeta_3, zeta_2/zeta_3]
+         *    - since UV space is essentially another ray space, and arbitrary scale of q_uv will not change the result of dot product over orthogonality
+         *    - thus, the result is the point of intersection in UV space
+         * 
+         * 4. Evaluate gaussian kernel:
+         *    G_i = exp(-(s_u^2 + s_v^2)/2)
+         * 
+         * 5. Accumulate color:
+         *    p_xy += alpha_i * c_i * G_i * prod(1 - alpha_j * G_j)
+         * 
+         * This method efficiently computes the point of intersection and 
+         * evaluates the gaussian kernel in UV space.
+         * Note: in some cases, we use the minimum of ray-intersection kernels and 2D projected gaussian kernels
+         */
         // process gaussians in the current batch for this pixel
         uint32_t batch_size = min(block_size, range_end - batch_start);
         for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
@@ -177,6 +270,7 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
             const vec3<S> v_M = v_Ms_batch[t];
             const vec3<S> w_M = w_Ms_batch[t];
 
+            // h_u and h_v are the homogeneous plane representations (they are contravariant to the points on the primitive plane)
             const vec3<S> h_u = px * w_M - u_M;
             const vec3<S> h_v = py * w_M - v_M;
 
@@ -184,17 +278,27 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
             if (ray_cross.z == 0.0)
                 continue;
 
-            const vec2<S> s =
-                vec2<S>(ray_cross.x / ray_cross.z, ray_cross.y / ray_cross.z);
+            const vec2<S> s = vec2<S>(ray_cross.x / ray_cross.z, ray_cross.y / ray_cross.z);
 
+            // IMPORTANT: This is where the gaussian kernel is evaluated!!!!!
+
+            // point of interseciton in uv space
             const S gauss_weight_3d = s.x * s.x + s.y * s.y;
+            
+            // projected gaussian kernel
             const vec2<S> d = {xy_opac.x - px, xy_opac.y - py};
-            const S gauss_weight_2d =
-                FILTER_INV_SQUARE * (d.x * d.x + d.y * d.y);
+            // #define FILTER_INV_SQUARE 2.0f
+            const S gauss_weight_2d = FILTER_INV_SQUARE * (d.x * d.x + d.y * d.y);
+            
+            // merge ray-intersection kernel and 2d gaussian kernel
             const S gauss_weight = min(gauss_weight_3d, gauss_weight_2d);
 
+
             const S sigma = 0.5f * gauss_weight;
+            // evaluation of the gaussian exponential term
             S alpha = min(0.999f, opac * __expf(-sigma));
+
+            // ignore transparent gaussians
             if (sigma < 0.f || alpha < 1.f / 255.f) {
                 continue;
             }
@@ -205,6 +309,7 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
                 break;
             }
 
+            // run volumetric rendering..
             int32_t g = id_batch[t];
             const S vis = alpha * T;
             const S *c_ptr = colors + g * COLOR_DIM;
@@ -324,6 +429,7 @@ call_kernel_with_dim(
 
     // Each block covers a tile on the image. In total there are
     // C * tile_height * tile_width blocks.
+    // we assign one pixel to one thread.
     dim3 threads = {tile_size, tile_size, 1};
     dim3 blocks = {C, tile_height, tile_width};
 

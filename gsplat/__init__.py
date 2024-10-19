@@ -48,5 +48,6 @@ all = [
     "rasterize_to_pixels_2dgs",
     "rasterize_to_indices_in_range_2dgs",
     "accumulate_2dgs",
-    "rasterization_2dgs_inria_wrapper" "__version__",
+    "rasterization_2dgs_inria_wrapper",
+    "__version__",
 ]
