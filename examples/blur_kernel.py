@@ -67,7 +67,6 @@ class BlurOptModule(nn.Module):
 
     def __init__(self, n: int, embed_dim: int = 4):
         super().__init__()
-        self.num_warmup_steps = 2000
         self.embeds = torch.nn.Embedding(n, embed_dim)
 
         self.depth_encoder = get_encoder(10, 1)
@@ -117,7 +116,5 @@ class BlurOptModule(nn.Module):
     def mask_reg_loss(self, blur_mask: Tensor, step: int):
         """Mask regularization loss."""
         lambda_mean = 10.0
-        lambda_std = 0.0
         meanloss = (torch.mean(blur_mask) - 0.0) ** 2
-        stdloss = (torch.std(blur_mask) - 0.5) ** 2
-        return lambda_mean * meanloss + lambda_std * stdloss
+        return lambda_mean * meanloss
