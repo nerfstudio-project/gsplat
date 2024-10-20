@@ -151,11 +151,11 @@ class Config:
     # Enable blur optimization. (experimental)
     blur_opt: bool = False
     # Learning rate for blur optimization
-    blur_opt_lr: float = 1e-3
+    blur_opt_lr: float = 1e-4
     # Regularization for blur optimization as weight decay
     blur_opt_reg: float = 1e-6
     # Regularization for blur mask
-    blur_mask_reg: float = 0.001
+    blur_mask_reg: float = 0.002
 
     # Enable bilateral grid. (experimental)
     use_bilateral_grid: bool = False

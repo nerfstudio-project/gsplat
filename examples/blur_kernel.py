@@ -115,5 +115,5 @@ class BlurOptModule(nn.Module):
     def mask_variation_loss(self, blur_mask: Tensor):
         """Mask variation loss."""
         x = blur_mask.mean()
-        meanloss = (1 / (1 - x)) - x - 1
+        meanloss = 1 / (1 - x) + (0.01 / x) - 1.21
         return meanloss
