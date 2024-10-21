@@ -23,7 +23,7 @@ class LRCritic(Critic):
         batch_size = obs.shape[0] if len(obs.shape) > 3 else 1
         # obs = obs.view(batch_size, -1)  # Flatten input to (batch_size, features)
         
-        return self.network(obs)
+        return self.network(obs) * 0
     
 class LRActor(Actor):
     def __init__(self, input_dim: int, h_dim: int = 64):

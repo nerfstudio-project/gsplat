@@ -47,11 +47,12 @@ policy = Policy(
     critic_lr=1e-2
 )
 
+print("initial: ")
 log_callback = lambda policy: print(f"actor probs: {policy.actor(env.img)} \n"
                                     f"critic values: {policy.critic(env.img)} \n"
                                     f"best lr: {policy.actor.get_best_lr(env.img)}")
 
-num_updates = 100
+num_updates = 10
 buffer_size = 10
 ppo = PPO(
     policy=policy,

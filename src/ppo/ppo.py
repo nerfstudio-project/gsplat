@@ -97,6 +97,7 @@ class PPO:
 
             next_obs, reward, done = self.env.step(action)
 
+            print(f"action: {action}, log_prob: {log_prob}, value: {value}, reward: {reward}, done: {done}")
             self.rollout_buffer.add(
                 obs, action, reward, log_prob, value, done
             )
