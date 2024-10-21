@@ -68,6 +68,7 @@ class BlurOptModule(nn.Module):
     def __init__(self, n: int, embed_dim: int = 4):
         super().__init__()
         self.embeds = torch.nn.Embedding(n, embed_dim)
+        self.embeds.weight.data.fill_(0)
 
         self.depth_encoder = get_encoder(10, 1)
         self.means_encoder = get_encoder(3, 3)
@@ -115,5 +116,5 @@ class BlurOptModule(nn.Module):
     def mask_variation_loss(self, blur_mask: Tensor):
         """Mask variation loss."""
         x = blur_mask.mean()
-        meanloss = 1 / (1 - x) + (0.01 / x) - 1.21
+        meanloss = (1 / (1 - x) - 1) + (0.01 / x)
         return meanloss

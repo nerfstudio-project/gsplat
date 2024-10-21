@@ -151,7 +151,7 @@ class Config:
     # Enable blur optimization. (experimental)
     blur_opt: bool = False
     # Learning rate for blur optimization
-    blur_opt_lr: float = 1e-4
+    blur_opt_lr: float = 1e-3
     # Regularization for blur optimization as weight decay
     blur_opt_reg: float = 1e-6
     # Regularization for blur mask
