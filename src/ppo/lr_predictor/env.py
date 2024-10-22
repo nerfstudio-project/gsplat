@@ -7,6 +7,7 @@ from examples.image_fitting import SimpleTrainer
 from src.ppo.base_env import Env
 from PIL import Image
 from torchvision import transforms
+from src.utils import image_path_to_tensor
 
 def preprocess(img_path: str) -> torch.tensor:
     input_image = Image.open(img_path)
@@ -33,6 +34,7 @@ class LREnv(Env):
         # TODO: remove observation_shape?
         observation_shape: tuple, 
         action_shape: tuple,
+        n_trials: int = 5,
         device='cuda',
         img_encoder: str = 'dino'
     ):
@@ -42,7 +44,10 @@ class LREnv(Env):
         self.max_steps = 1
         self.num_points = num_points
         self.iterations = iterations
-        self.lrs = [10**-i for i in range(10)]
+        # self.lrs = [0.007 + i*0.001 for i in range(10)] #(1, 0.1, 0.01,)
+        self.lrs = [0.009 + i*0.001 for i in range(10)] #(1, 0.1, 0.01,)
+        self.lrs = [round(lr, 5) for lr in self.lrs]
+
         self.device = device
         # self.observation_shape = img.shape
         self.action_shape = action_shape
@@ -58,43 +63,66 @@ class LREnv(Env):
 
         # compute losses for each LR
         current_dir = os.path.dirname(os.path.abspath(__file__))
+        img_name = img_path.split('/')[-1].split('.')[0]
+        
         losses_json_path = os.path.join(
-            current_dir, f"lr_losses_{self.iterations}_iterations{self.num_points}_points.json"
+            current_dir, f"lr_losses_{self.iterations}_iterations{self.num_points}_points_{n_trials}_trials_{img_name}.json"
         )
-        if os.path.exists(losses_json_path):
+        
+        self.original_image = image_path_to_tensor(img_path)
+        
+        # if os.path.exists(losses_json_path):
+        if False:
             with open(losses_json_path, 'r') as f:
                 self.lr_losses = json.load(f)
+                self.lr_losses = {str(float(lr)) : losses for lr, losses in self.lr_losses.items()}
         else:
-            lr_losses = {}
+            
+            lr_losses = {str(round(lr, 5)): [] for lr in self.lrs}
             for lr in self.lrs:
-                print("*" * 50)
-                print(f'currently training with lr={lr}')
-                trainer = SimpleTrainer(gt_image=self.img, num_points=num_points)
-                losses, _ = trainer.train(
-                    iterations=self.iterations,
-                    lr=lr,
-                    save_imgs=False,
-                    model_type='3dgs',
-                )
-                lr_losses[str(lr)] = losses
+                for trial_num in range(n_trials):
+                    print("*" * 50)
+                    print(f'currently training with lr={lr}, trial {trial_num}')
+                    trainer = SimpleTrainer(gt_image=self.original_image, num_points=num_points)
+                    losses, _ = trainer.train(
+                        iterations=self.iterations,
+                        lr=lr,
+                        save_imgs=False,
+                        model_type='3dgs',
+                    )
+                    losses[0] = 1.0
+                    lr_losses[str(round(lr, 5))].append(losses) 
 
+            # take mean over trials            
+            
+            # lr_loses_means = {}
+            # for lr, losses in lr_losses.items():
+            #     lr_mean = np.mean(np.array(losses), axis=0)
+            #     lr_mean_list = lr_mean.tolist()
+
+            lr_losses_means = {lr: np.mean(np.array(losses), axis=0).tolist() for lr, losses in lr_losses.items()}
+            
             # Write the lr_losses to a JSON file
             output_filename = losses_json_path
             with open(output_filename, 'w') as f:
-                json.dump(lr_losses, f)
-            self.lr_losses = lr_losses
+                json.dump(lr_losses_means, f)
+            self.lr_losses = lr_losses_means
         
-        # map from idx to lr_losses
-        self.lr_losses_idx_map = {i: self.lr_losses[str(lr)] for i, lr in enumerate(self.lrs)}
+            # map from idx to lr_losses
+        self.lr_losses_idx_map = {i: self.lr_losses[str(round(lr, 5))] for i, lr in enumerate(self.lrs)}
         
         actions = [i for i in range(len(self.lrs))]
         batch_losses = torch.stack(
             [torch.tensor(self.lr_losses_idx_map[int(idx)], device=self.device) for idx in actions]
         )
-        reward = batch_losses[:, 0] - batch_losses[:, -1]
+        mse_err = batch_losses[:, 0] - batch_losses[:, -1]
+        psnr = 10 * torch.log10(1 /  batch_losses[:, -1])
         
-        print(f"initial reward: {reward}")
-                
+        print(f"initial mse_err: {mse_err}, initial psnr: {psnr}")
+
+        
+
+
     def reset(self):
         """
         Reset the environment to an initial state.
@@ -124,13 +152,14 @@ class LREnv(Env):
         )
 
         # Compute reward as losses[0] - losses[-1] for each action in batch (vectorized)
-        reward = batch_losses[:, 0] - batch_losses[:, -1]
+        # mse_diff = batch_losses[:, 0] - batch_losses[:, -1]
+        reward_psnr = 10 * torch.log10(1 / batch_losses[:, -1])
 
         # torch bool
         done = torch.as_tensor(True, device=self.device, dtype=torch.bool)
         
         # print(f"for action: {action}, reward: {reward}, using lr: {self.lrs[int(action.item())]}")
-        return self.get_observation(), reward, done
+        return self.get_observation(), reward_psnr, done
 
     def get_observation(self):
         """

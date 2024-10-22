@@ -23,13 +23,16 @@ class LRCritic(Critic):
         batch_size = obs.shape[0] if len(obs.shape) > 3 else 1
         # obs = obs.view(batch_size, -1)  # Flatten input to (batch_size, features)
         
-        return self.network(obs) * 0
+        return self.network(obs)
     
 class LRActor(Actor):
-    def __init__(self, input_dim: int, h_dim: int = 64):
+    def __init__(self, lrs: list[float] = None, input_dim: int = 1024, h_dim: int = 64):
         super().__init__()
-        self.lrs = Tensor([10**-i for i in range(10)])
-
+        if lrs:
+            self.lrs = lrs
+        else:
+            self.lrs = Tensor([10**-i for i in range(10)])
+        
         self.layers = [
             nn.Linear(input_dim, h_dim),
             nn.ReLU(),
@@ -40,6 +43,13 @@ class LRActor(Actor):
         
     def forward(self, obs: Tensor):
         return self.network(obs)
+    # def __init__(self, input_dim: int = 1024, h_dim: int = 64):
+    #     super().__init__()
+    #     self.logits = nn.Parameter(torch.zeros(10))
+    #     self.lrs = Tensor([10**-i for i in range(10)])
+
+    # def forward(self, obs: Tensor):
+    #     return F.softmax(self.logits, dim=-1)
 
     def actor_distribution(self, obs: Tensor):
         return dist.Categorical(logits=self.forward(obs))

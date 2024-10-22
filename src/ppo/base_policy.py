@@ -128,6 +128,7 @@ class Policy(nn.Module):
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         self.actor_optimizer.step()
+        # print(f"Did optimizer step with actor loss: {actor_loss}")
 
         # Critic update
         self.critic_optimizer.zero_grad()

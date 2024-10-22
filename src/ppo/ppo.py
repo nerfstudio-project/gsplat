@@ -97,7 +97,7 @@ class PPO:
 
             next_obs, reward, done = self.env.step(action)
 
-            print(f"action: {action}, log_prob: {log_prob}, value: {value}, reward: {reward}, done: {done}")
+            # print(f"action: {action}, log_prob: {log_prob}, value: {value}, reward: {reward}, done: {done}")
             self.rollout_buffer.add(
                 obs, action, reward, log_prob, value, done
             )
@@ -131,7 +131,7 @@ class PPO:
         rewards = batch_data['rewards']
         
         # Normalize advantages if required (for better numerical stability)
-        if self.normalize_advantages:
+        if self.normalize_advantages and len(advantages) != 1:
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         # Evaluate the policy with the current obs and actions
@@ -139,7 +139,10 @@ class PPO:
 
         # Calculate the ratio of new and old action probabilities
         ratios = torch.exp(log_probs_new - old_log_probs)
-
+        # print("=" * 100)
+        # print(f"ratios: {ratios}")
+        # print(f"advantages: {advantages}")
+        # print("=" * 100)
         # Compute the surrogate objectives (clipped vs unclipped)
         surr1 = ratios * advantages
         surr2 = torch.clamp(ratios, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * advantages

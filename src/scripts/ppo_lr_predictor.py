@@ -28,23 +28,23 @@ else:
 
 # Initialize environment and policy
 env = LREnv(
-    img_path='src/data/simple.jpg',
-    num_points=1000,
-    iterations=100,
+    img_path='src/data/adam.jpg',
+    num_points=100000,
+    iterations=1000,
     observation_shape=(height, width, 3),
     action_shape=(1,),
     device=device,
     img_encoder='dino'
 )
 print(env.observation_shape)
-actor = LRActor(input_dim=env.observation_shape[0])
+actor = LRActor(lrs=env.lrs, input_dim=env.observation_shape[0])
 critic = LRCritic(input_dim=env.observation_shape[0])
 policy = Policy(
     actor=actor,
     critic=critic,
     device=device,
-    actor_lr=1e-2,
-    critic_lr=1e-2
+    actor_lr=3e-4,
+    critic_lr=3e-4
 )
 
 print("initial: ")
@@ -52,13 +52,13 @@ log_callback = lambda policy: print(f"actor probs: {policy.actor(env.img)} \n"
                                     f"critic values: {policy.critic(env.img)} \n"
                                     f"best lr: {policy.actor.get_best_lr(env.img)}")
 
-num_updates = 10
-buffer_size = 10
+num_updates = 100
+buffer_size = 100
 ppo = PPO(
     policy=policy,
     env=env,
     n_epochs=5,
-    batch_size=buffer_size//2,
+    batch_size=buffer_size,
     buffer_size=buffer_size,
     log_interval=1,
     device=device,

@@ -76,6 +76,7 @@ class RolloutBuffer:
         last_gae_lam = 0
         last_values = last_values.to(self.device)
 
+        # print(f"in compute adv: rewards: {self.rewards}, values: {self.values}, dones: {dones}")
         for step in reversed(range(self.buffer_size)):
             if step == self.buffer_size - 1:
                 next_non_terminal = (~dones).float().to(self.device)
@@ -86,8 +87,9 @@ class RolloutBuffer:
 
             delta = self.rewards[step] + self.gamma * next_values * next_non_terminal - self.values[step]
             last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam
+            # print(f"delta: {delta}, last_gae_lam: {last_gae_lam}")
             self.advantages[step] = last_gae_lam
-
+        # print(f"final advantages: {self.advantages}")
         self.returns = self.advantages + self.values
 
     def get(self, batch_size=None, shuffle=False):
