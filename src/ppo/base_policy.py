@@ -85,8 +85,8 @@ class Policy(nn.Module):
         self.actor = actor.to(device)
         self.critic = critic.to(device)
 
-        print(f"actor: {self.actor}")
-        print(f"critic: {self.critic}")
+        # print(f"actor: {self.actor}")
+        # print(f"critic: {self.critic}")
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=actor_lr)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=critic_lr)
 

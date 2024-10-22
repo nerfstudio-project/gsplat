@@ -36,7 +36,7 @@ env = LREnv(
     device=device,
     img_encoder='dino'
 )
-print(env.observation_shape)
+print(f"observatino space: {env.observation_shape}")
 actor = LRActor(lrs=env.lrs, input_dim=env.observation_shape[0])
 critic = LRCritic(input_dim=env.observation_shape[0])
 policy = Policy(
@@ -47,9 +47,8 @@ policy = Policy(
     critic_lr=3e-4
 )
 
-print("initial: ")
+print(f"initial: actor probs: {policy.actor(env.img)}")
 log_callback = lambda policy: print(f"actor probs: {policy.actor(env.img)} \n"
-                                    f"critic values: {policy.critic(env.img)} \n"
                                     f"best lr: {policy.actor.get_best_lr(env.img)}")
 
 num_updates = 100
@@ -65,81 +64,10 @@ ppo = PPO(
     entropy_coeff=0.0,
     shuffle=True,
     normalize_advantages=True,
-    log_callback=log_callback
+    log_callback=log_callback,
+    plots_path='src/results/plot.png'
 )
 
 ppo.train(total_timesteps=num_updates*buffer_size)
 
 print("done training")
-
-# updates = list(range(num_updates))
-# optimal_lr = lr_predictor.get_best_lr()
-
-# optimal_lr_probs = lr_probs[str(optimal_lr)]
-# plt.plot(updates, optimal_lr_probs, label=f'Optimal LR: {optimal_lr}')
-# plt.xlabel('Updates')
-# plt.ylabel('Probability')
-# plt.title('Updates vs Probability of Optimal Learning Rate')
-# plt.legend()
-# # plt.show()
-# plt.savefig(f'lr_probs_{training_iterations}.png')
-
-# # Plot REINFORCE losses
-
-
-# def lowpass_filter(data, cutoff=0.1, fs=1.0, order=5):
-#     nyquist = 0.5 * fs
-#     normal_cutoff = cutoff / nyquist
-#     b, a = butter(order, normal_cutoff, btype='low', analog=False)
-#     y = filtfilt(b, a, data)
-#     return y
-
-# window_size = 100
-# box_filter = np.ones(window_size) / window_size
-
-# filtered_reinforce_losses = np.convolve(reinforce_losses, box_filter, mode='same')
-
-# plt.figure()
-# plt.plot(range(num_updates), reinforce_losses, label='REINFORCE Loss')
-# plt.xlabel('Updates')
-# plt.ylabel('Loss')
-# plt.title('REINFORCE Loss over Updates')
-# plt.legend()
-# plt.savefig(f'reinforce_losses_{training_iterations}.png')
-
-# plt.plot(range(num_updates), filtered_reinforce_losses, label='filtered REINFORCE Loss')
-# plt.xlabel('Updates')
-# plt.ylabel('Loss')
-# plt.title('REINFORCE Loss over Updates')
-# plt.legend()
-# plt.savefig(f'filtered_reinforce_losses_{training_iterations}.png')
-
-# # Plot rewards
-# plt.figure()
-# plt.plot(range(num_updates), rewards_history, label='Average Reward')
-# plt.xlabel('Updates')
-# plt.ylabel('Reward')
-# plt.title('Average Reward over Updates')
-# plt.legend()
-# plt.savefig(f'rewards_{training_iterations}.png')
-
-# print("executing training run with optimal lr")
-# # Launch a training job with the optimal LR for 2000 points
-# # num_points = 100000
-# save_img = True
-# training_iterations = 1000
-# trainer = SimpleTrainer(gt_image=gt_image, num_points=num_points)
-# # Assuming we have a function `train` that takes learning rate and number of points as arguments
-# save_path = f'results/{optimal_lr}_lr_{training_iterations}_iterations_{num_points}_points.png'
-# trainer.train(iterations=training_iterations, lr=optimal_lr, save_path=save_path)
-
-# # Save the training results if save_img is True
-# if save_img:
-#     plt.figure()
-#     plt.plot(range(num_updates), rewards_history[:num_updates], label='Average Reward')
-#     plt.xlabel('Points')
-#     plt.ylabel('Reward')
-#     plt.title('Average Reward over Points')
-#     plt.legend()
-#     plt.savefig(f'rewards_{training_iterations}_2000_points.png')
-

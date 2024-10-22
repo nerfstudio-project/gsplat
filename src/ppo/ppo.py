@@ -3,6 +3,7 @@ import time
 from tqdm import tqdm
 from typing import Literal, Optional
 import time
+import matplotlib.pyplot as plt
 
 import numpy as np
 import torch.nn as nn
@@ -28,6 +29,7 @@ class PPO:
                  log_interval=10, 
                  shuffle=False,
                  log_callback=None,
+                 plots_path=None,
                  **kwargs
                  ):
         """
@@ -77,11 +79,15 @@ class PPO:
             "i_so_far": 0, 
             "actor_losses": [],
             "critic_losses": [],
+            "avg_rewards": [],
+            "avg_critic_values": [],
+            "avg_advantages": [],
             "entropy": [],
             "timesteps": [] 
         }
         self.log_interval = log_interval
         self.log_callback = log_callback
+        self.plots_path = plots_path
 
     def collect_rollout(self):
         """
@@ -130,23 +136,29 @@ class PPO:
         advantages = batch_data['advantages']
         rewards = batch_data['rewards']
         
+        # print("=" * 100)
         # Normalize advantages if required (for better numerical stability)
         if self.normalize_advantages and len(advantages) != 1:
-            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+            # print(f"adv mean: {advantages.mean()}, adv std: {advantages.std()}")
+            if advantages.std() > 1e-7:
+                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-7)
+            else:
+                # If std is too small, just center?
+                advantages = advantages - advantages.mean()
 
         # Evaluate the policy with the current obs and actions
         values_new, log_probs_new, entropy = self.policy.evaluate_actions(obs, actions)
 
         # Calculate the ratio of new and old action probabilities
         ratios = torch.exp(log_probs_new - old_log_probs)
-        # print("=" * 100)
         # print(f"ratios: {ratios}")
         # print(f"advantages: {advantages}")
-        # print("=" * 100)
+
         # Compute the surrogate objectives (clipped vs unclipped)
         surr1 = ratios * advantages
         surr2 = torch.clamp(ratios, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * advantages
         # print(f"log_probs_new: {log_probs_new}")
+        # print(f"old_log_probs: {old_log_probs}")
         # actor_loss = -(log_probs_new * rewards).mean()
         # Actor loss: Minimize the worst-case surrogate
         actor_loss = -torch.min(surr1, surr2).mean()
@@ -156,9 +168,10 @@ class PPO:
         actor_loss -= self.entropy_coeff * entropy.mean()
 
         # print(f"actions: {actions}")
-        # print(f"advantage: {advantages}")
         # print(f"returns: {returns}")
         # print(f"rewards: {rewards}")
+        # print("=" * 100)
+
         # print(f"actor_loss: {actor_loss}")
         # print(f"values_new: {values_new}")
         # Critic loss: Minimize MSE between predicted and actual returns
@@ -181,6 +194,10 @@ class PPO:
                 self.logger["actor_losses"].append(actor_loss.item())
                 self.logger["critic_losses"].append(critic_loss.item())
                 self.logger["entropy"].append(entropy.item())
+
+        self.logger["avg_rewards"].append(self.rollout_buffer.rewards.mean().item())
+        self.logger["avg_advantages"].append(self.rollout_buffer.advantages.mean().item())
+        self.logger["avg_critic_values"].append(self.rollout_buffer.values.mean().item())
         
     def train(self, total_timesteps):
         """
@@ -202,6 +219,9 @@ class PPO:
 
             if i_so_far % self.log_interval == 0:
                 self._log_summary()
+        
+        if self.plots_path:
+            self.plot_training_progress()
 
     def _log_summary(self):
         """
@@ -209,9 +229,57 @@ class PPO:
         """
         print(f"Iteration {len(self.logger['timesteps'])}:")
         print(f"  Timesteps so far: {self.logger['t_so_far']}")
-        print(f"  Actor Loss: {self.logger['actor_losses'][-1]:.4f}")
+        print(f"  Actor Loss: {self.logger['actor_losses'][-1]:.6f}")
         print(f"  Critic Loss: {self.logger['critic_losses'][-1]:.4f}")
         print(f"  Entropy: {self.logger['entropy'][-1]:.4f}")
+        print(f"  Avg Rewards: {self.logger['avg_rewards'][-1]:.4f}")
+        print(f"  Avg Advantages: {self.logger['avg_advantages'][-1]:.4f}")
+        print(f"  Avg Critic Values: {self.logger['avg_critic_values'][-1]:.4f}")
         if self.log_callback:
             self.log_callback(self.policy)
         print("=" * 50)
+    
+    def plot_training_progress(self):
+        # Use logging data to plot (actor loss, critic loss, rewards, avg critic values, avg advantages, and entropy)
+        plt.figure(figsize=(18, 12))
+        
+        plt.subplot(3, 2, 1)
+        plt.plot(self.logger['actor_losses'], label='Actor Loss')
+        plt.xlabel('Timesteps')
+        plt.ylabel('Loss')
+        plt.title('Actor Loss')
+        
+        plt.subplot(3, 2, 2)
+        plt.plot(self.logger['critic_losses'], label='Critic Loss')
+        plt.xlabel('Timesteps')
+        plt.ylabel('Loss')
+        plt.title('Critic Loss')
+        
+        plt.subplot(3, 2, 3)
+        plt.plot(self.logger['avg_rewards'], label='Avg Rewards')
+        plt.xlabel('Timesteps')
+        plt.ylabel('Rewards')
+        plt.title('Average Rewards')
+        
+        plt.subplot(3, 2, 4)
+        plt.plot(self.logger['avg_critic_values'], label='Avg Critic Values')
+        plt.xlabel('Timesteps')
+        plt.ylabel('Values')
+        plt.title('Average Critic Values')
+        
+        plt.subplot(3, 2, 5)
+        plt.plot(self.logger['avg_advantages'], label='Avg Advantages')
+        plt.xlabel('Timesteps')
+        plt.ylabel('Advantages')
+        plt.title('Average Advantages')
+        
+        plt.subplot(3, 2, 6)
+        plt.plot(self.logger['entropy'], label='Entropy')
+        plt.xlabel('Timesteps')
+        plt.ylabel('Entropy')
+        plt.title('Entropy')
+        
+        # Save the plot to a file using attributes
+        plt.tight_layout()
+        plt.savefig(self.plots_path)
+        

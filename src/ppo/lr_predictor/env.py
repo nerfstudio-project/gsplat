@@ -45,7 +45,7 @@ class LREnv(Env):
         self.num_points = num_points
         self.iterations = iterations
         # self.lrs = [0.007 + i*0.001 for i in range(10)] #(1, 0.1, 0.01,)
-        self.lrs = [0.009 + i*0.001 for i in range(10)] #(1, 0.1, 0.01,)
+        self.lrs = [0.005 + i*0.001 for i in range(20)] #(1, 0.1, 0.01,)
         self.lrs = [round(lr, 5) for lr in self.lrs]
 
         self.device = device
@@ -72,13 +72,13 @@ class LREnv(Env):
         self.original_image = image_path_to_tensor(img_path)
         
         # if os.path.exists(losses_json_path):
-        if False:
+        if True:
             with open(losses_json_path, 'r') as f:
                 self.lr_losses = json.load(f)
                 self.lr_losses = {str(float(lr)) : losses for lr, losses in self.lr_losses.items()}
         else:
             
-            lr_losses = {str(round(lr, 5)): [] for lr in self.lrs}
+            lr_losses = {str(lr): [] for lr in self.lrs}
             for lr in self.lrs:
                 for trial_num in range(n_trials):
                     print("*" * 50)
@@ -91,14 +91,9 @@ class LREnv(Env):
                         model_type='3dgs',
                     )
                     losses[0] = 1.0
-                    lr_losses[str(round(lr, 5))].append(losses) 
-
-            # take mean over trials            
-            
-            # lr_loses_means = {}
-            # for lr, losses in lr_losses.items():
-            #     lr_mean = np.mean(np.array(losses), axis=0)
-            #     lr_mean_list = lr_mean.tolist()
+                    losses = np.array(losses)
+                    print(f"achieved final loss: {losses[-1]}, psnr: {10 * np.log10(1 / losses[-1])}")
+                    lr_losses[str(lr)].append(losses) 
 
             lr_losses_means = {lr: np.mean(np.array(losses), axis=0).tolist() for lr, losses in lr_losses.items()}
             
@@ -108,26 +103,21 @@ class LREnv(Env):
                 json.dump(lr_losses_means, f)
             self.lr_losses = lr_losses_means
         
-            # map from idx to lr_losses
-        self.lr_losses_idx_map = {i: self.lr_losses[str(round(lr, 5))] for i, lr in enumerate(self.lrs)}
-        
-        actions = [i for i in range(len(self.lrs))]
-        batch_losses = torch.stack(
-            [torch.tensor(self.lr_losses_idx_map[int(idx)], device=self.device) for idx in actions]
-        )
+        # tensor of losses where at index i, the losses for lr=lrs[i] are stored
+        self.lr_losses_tensor = torch.tensor(
+            [self.lr_losses[str(lr)] for lr in self.lrs], device=self.device
+        ).to(self.device)
+                
+        batch_losses = self.lr_losses_tensor
         mse_err = batch_losses[:, 0] - batch_losses[:, -1]
         psnr = 10 * torch.log10(1 /  batch_losses[:, -1])
         
-        print(f"initial mse_err: {mse_err}, initial psnr: {psnr}")
-
-        
-
+        print(f"initial mse_err: {mse_err},\n initial psnr: {psnr}")
 
     def reset(self):
         """
         Reset the environment to an initial state.
         """
-        
         return self.get_observation()
 
     def step(self, action: int):
@@ -146,14 +136,15 @@ class LREnv(Env):
         # unsqueeze action if 0-d tensor
         if len(action.shape) == 0:
             action = action.unsqueeze(-1)
-        # Convert actions to indices and lookup losses
-        batch_losses = torch.stack(
-            [torch.tensor(self.lr_losses_idx_map[int(idx)], device=self.device) for idx in action]
-        )
+            
+        # Convert actions to int to use as indices
+        actions_int = action.long()
+        batch_losses = self.lr_losses_tensor[actions_int]
 
-        # Compute reward as losses[0] - losses[-1] for each action in batch (vectorized)
         # mse_diff = batch_losses[:, 0] - batch_losses[:, -1]
+        # Using PSNR as reward (TODO: normalize for critic?)
         reward_psnr = 10 * torch.log10(1 / batch_losses[:, -1])
+        # print(f"batch_losses: {reward_psnr} for action: {action}")
 
         # torch bool
         done = torch.as_tensor(True, device=self.device, dtype=torch.bool)

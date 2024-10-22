@@ -33,6 +33,7 @@ class LRActor(Actor):
         else:
             self.lrs = Tensor([10**-i for i in range(10)])
         
+        print(f"Actor using learning rates: {self.lrs}")
         self.layers = [
             nn.Linear(input_dim, h_dim),
             nn.ReLU(),
@@ -52,7 +53,8 @@ class LRActor(Actor):
     #     return F.softmax(self.logits, dim=-1)
 
     def actor_distribution(self, obs: Tensor):
-        return dist.Categorical(logits=self.forward(obs))
+        # print(f"logits will be {self.forward(obs)[0]}")
+        return dist.Categorical(self.forward(obs))
     
     def select_action(self, obs: Tensor):
         actor_dist = self.actor_distribution(obs)
@@ -65,7 +67,9 @@ class LRActor(Actor):
     
     def evaluate_actions(self, obs: Tensor, action: Tensor):
         actor_dist = self.actor_distribution(obs)
-        return actor_dist.log_prob(action), actor_dist.entropy()
+        # print(f"Evaluating actions: obs shape: {obs.shape}, action shape: {action.shape}, log_prob shape: {actor_dist.log_prob(action.squeeze(-1)).shape}")        
+        # print(f"action: {action}, dist logits: {actor_dist.logits[0]}, entropy: {entropy[0]}")
+        return actor_dist.log_prob(action.squeeze(-1)).unsqueeze(-1), actor_dist.entropy()
         
     def get_best_lr(self, obs: Tensor):
         logits = self.forward(obs)
