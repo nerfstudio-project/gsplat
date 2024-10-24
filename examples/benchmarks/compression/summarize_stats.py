@@ -8,9 +8,8 @@ import numpy as np
 import tyro
 
 
-def main(results_dir: str, scenes: List[str]):
+def main(results_dir: str, scenes: List[str], stage: str = "compress"):
     print("scenes:", scenes)
-    stage = "val"
 
     summary = defaultdict(list)
     for scene in scenes:

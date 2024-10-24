@@ -943,7 +943,7 @@ class Runner:
                     near_plane=cfg.near_plane,
                     far_plane=cfg.far_plane,
                     image_ids=image_ids,
-                    render_mode="RGB+ED",
+                    render_mode="RGB",
                     masks=masks,
                     blur=True,
                 )

@@ -21,11 +21,5 @@ do
         --result_dir $RESULT_DIR/$SCENE
 done
 
-# Zip the compressed files and summarize the stats
-if command -v zip &> /dev/null
-then
-    echo "Zipping results"
-    python benchmarks/compression/summarize_stats.py --results_dir $RESULT_DIR --scenes $SCENE_LIST
-else
-    echo "zip command not found, skipping zipping"
-fi
+# Summarize the stats
+python benchmarks/compression/summarize_stats.py --results_dir $RESULT_DIR --scenes $SCENE_LIST --stage val
