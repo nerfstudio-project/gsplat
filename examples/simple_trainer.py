@@ -495,7 +495,7 @@ class Runner:
                 image_ids=image_ids,
                 means=self.splats["means"],
                 scales=self.splats["scales"],
-                quats=F.normalize(self.splats["quats"], dim=-1),
+                quats=self.splats["quats"],
             )
         else:
             scales = torch.exp(self.splats["scales"])  # [N, 3]

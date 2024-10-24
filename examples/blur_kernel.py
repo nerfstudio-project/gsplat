@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torch import Tensor
+import torch.nn.functional as F
 from examples.mlp import create_mlp
 from gsplat.utils import log_transform
 
@@ -11,10 +12,11 @@ class BlurOptModule(nn.Module):
     def __init__(self, n: int, embed_dim: int = 4):
         super().__init__()
         self.embeds = torch.nn.Embedding(n, embed_dim)
-        self.depth_encoder = get_encoder(7, 1)
         self.means_encoder = get_encoder(3, 3)
+        self.depths_encoder = get_encoder(3, 1)
+        self.grid_encoder = get_encoder(1, 2)
         self.blur_mask_mlp = create_mlp(
-            in_dim=embed_dim + self.depth_encoder.out_dim,
+            in_dim=embed_dim + self.depths_encoder.out_dim + self.grid_encoder.out_dim,
             num_layers=5,
             layer_width=64,
             out_dim=1,
@@ -36,7 +38,9 @@ class BlurOptModule(nn.Module):
         scales: Tensor,
         quats: Tensor,
     ):
+        quats = F.normalize(quats, dim=-1)
         means_log = log_transform(means)
+
         means_emb = self.means_encoder.encode(means_log)
         images_emb = self.embeds(image_ids).repeat(means.shape[0], 1)
         mlp_out = self.blur_deltas_mlp(
@@ -49,15 +53,24 @@ class BlurOptModule(nn.Module):
         return scales, quats
 
     def predict_mask(self, image_ids: Tensor, depths: Tensor):
-        depths_emb = self.depth_encoder.encode(log_transform(depths))
+        height, width = depths.shape[1:3]
+        grid_y, grid_x = torch.meshgrid(
+            (torch.arange(height, device=depths.device) + 0.5) / height,
+            (torch.arange(width, device=depths.device) + 0.5) / width,
+            indexing="ij",
+        )
+        grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
+        grid_emb = self.grid_encoder.encode(grid_xy)
+
+        depths_emb = self.depths_encoder.encode(log_transform(depths))
         images_emb = self.embeds(image_ids).repeat(*depths_emb.shape[:-1], 1)
-        mlp_in = torch.cat([images_emb, depths_emb], dim=-1)
+        mlp_in = torch.cat([images_emb, grid_emb, depths_emb], dim=-1)
         mlp_out = self.blur_mask_mlp(mlp_in.reshape(-1, mlp_in.shape[-1]))
         blur_mask = torch.sigmoid(mlp_out)
         blur_mask = blur_mask.reshape(depths.shape)
         return blur_mask
 
-    def mask_variation_loss(self, blur_mask: Tensor, eps: float = 1e-6):
+    def mask_variation_loss(self, blur_mask: Tensor, eps: float = 1e-2):
         """Mask variation loss."""
         x = blur_mask.mean()
         meanloss = (1 / (1 - x + eps) - 1) + (0.1 / (x + eps))
