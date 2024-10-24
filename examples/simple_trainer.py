@@ -152,8 +152,6 @@ class Config:
     blur_opt: bool = False
     # Learning rate for blur optimization
     blur_opt_lr: float = 1e-3
-    # Regularization for blur optimization as weight decay
-    blur_opt_reg: float = 0.0
     # Regularization for blur mask
     blur_mask_reg: float = 0.001
 
@@ -419,7 +417,6 @@ class Runner:
                 torch.optim.Adam(
                     self.blur_module.parameters(),
                     lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size),
-                    weight_decay=cfg.blur_opt_reg,
                 ),
             ]
             if world_size > 1:
@@ -474,7 +471,6 @@ class Runner:
         height: int,
         masks: Optional[Tensor] = None,
         blur: bool = False,
-        step: int = 0,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         means = self.splats["means"]  # [N, 3]
@@ -500,7 +496,6 @@ class Runner:
                 self.splats["means"],
                 self.splats["scales"],
                 quats,
-                step,
             )
             scales = torch.exp(self.splats["scales"] + scales_delta)
             quats += quats_delta
@@ -640,7 +635,6 @@ class Runner:
                 image_ids=image_ids,
                 render_mode=self.render_mode,
                 masks=masks,
-                step=step,
             )
             if renders.shape[-1] == 4:
                 colors, depths = renders[..., 0:3], renders[..., 3:4]
@@ -669,18 +663,13 @@ class Runner:
                     near_plane=cfg.near_plane,
                     far_plane=cfg.far_plane,
                     image_ids=image_ids,
-                    render_mode="RGB+ED",
+                    render_mode="RGB",
                     masks=masks,
                     blur=True,
-                    step=step,
                 )
-                blur_mask = self.blur_module.predict_mask(
-                    image_ids,
-                    renders[..., 0:3],
-                    renders[..., 3:4],
-                    step=step,
-                )
-                colors = (1 - blur_mask) * colors + blur_mask * renders_blur[..., 0:3]
+                colors_blur = renders_blur[..., 0:3]
+                blur_mask = self.blur_module.predict_mask(image_ids, depths)
+                colors = (1 - blur_mask) * colors + blur_mask * colors_blur
 
             self.cfg.strategy.step_pre_backward(
                 params=self.splats,
@@ -957,17 +946,12 @@ class Runner:
                     render_mode="RGB+ED",
                     masks=masks,
                     blur=True,
-                    step=step,
                 )
-                blur_mask = self.blur_module.predict_mask(
-                    image_ids,
-                    renders[..., 0:3],
-                    renders[..., 3:4],
-                    step=step,
-                )
+                colors_blur = renders_blur[..., 0:3]
+                blur_mask = self.blur_module.predict_mask(image_ids, depths)
                 canvas_list.append(blur_mask.repeat(1, 1, 1, 3))
-                canvas_list.append(torch.clamp(renders_blur[..., 0:3], 0.0, 1.0))
-                colors = (1 - blur_mask) * colors + blur_mask * renders_blur[..., 0:3]
+                canvas_list.append(torch.clamp(colors_blur, 0.0, 1.0))
+                colors = (1 - blur_mask) * colors + blur_mask * colors_blur
                 colors = torch.clamp(colors, 0.0, 1.0)
                 canvas_list.append(colors)
 
