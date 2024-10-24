@@ -1,0 +1,1409 @@
+Using DINO large distilled as encoder
+initial mse_err: tensor([0.9930, 0.9934, 0.9936, 0.9938, 0.9938, 0.9945, 0.9947, 0.9948, 0.9948,
+        0.9952, 0.9948, 0.9952, 0.9952, 0.9955, 0.9958, 0.9957, 0.9955, 0.9957,
+        0.9954, 0.9954], device='cuda:0'),
+ initial psnr: tensor([21.5243, 21.7872, 21.9467, 22.1013, 22.1092, 22.5694, 22.7326, 22.8722,
+        22.8682, 23.1612, 22.8544, 23.1549, 23.1910, 23.4613, 23.7775, 23.6657,
+        23.4378, 23.7128, 23.3293, 23.4058], device='cuda:0')
+observatino space: (1024,)
+Actor using learning rates: [0.005, 0.006, 0.007, 0.008, 0.009, 0.01, 0.011, 0.012, 0.013, 0.014, 0.015, 0.016, 0.017, 0.018, 0.019, 0.02, 0.021, 0.022, 0.023, 0.024]
+initial: actor probs: tensor([[0.0450, 0.0462, 0.0502, 0.0706, 0.0507, 0.0495, 0.0306, 0.0411, 0.0623,
+         0.0468, 0.0474, 0.0559, 0.0396, 0.0743, 0.0378, 0.0455, 0.0415, 0.0365,
+         0.0527, 0.0758]], device='cuda:0', grad_fn=<SoftmaxBackward0>)
+Iteration 1:
+  Timesteps so far: 0
+  Actor Loss: -0.140393
+  Critic Loss: 468.9014
+  Entropy: 2.7978
+  Avg Rewards: 23.0542
+  Avg Advantages: 23.6080
+  Avg Critic Values: -0.5538
+actor probs: tensor([[0.0171, 0.0173, 0.0266, 0.0428, 0.0183, 0.0362, 0.0109, 0.0196, 0.0361,
+         0.0606, 0.0413, 0.0474, 0.0509, 0.1603, 0.0190, 0.1166, 0.0521, 0.0606,
+         0.0818, 0.0845]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.018
+==================================================
+Iteration 2:
+  Timesteps so far: 0
+  Actor Loss: -0.108562
+  Critic Loss: 412.1897
+  Entropy: 2.5130
+  Avg Rewards: 23.1334
+  Avg Advantages: 21.4281
+  Avg Critic Values: 1.7054
+actor probs: tensor([[0.0079, 0.0067, 0.0159, 0.0239, 0.0093, 0.0224, 0.0050, 0.0107, 0.0294,
+         0.0433, 0.0256, 0.0286, 0.0372, 0.2458, 0.0103, 0.1600, 0.0488, 0.0824,
+         0.0835, 0.1034]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.018
+==================================================
+Iteration 3:
+  Timesteps so far: 0
+  Actor Loss: -0.120122
+  Critic Loss: 361.3133
+  Entropy: 2.1529
+  Avg Rewards: 23.3068
+  Avg Advantages: 20.1793
+  Avg Critic Values: 3.1275
+actor probs: tensor([[0.0031, 0.0024, 0.0073, 0.0135, 0.0033, 0.0110, 0.0017, 0.0036, 0.0183,
+         0.0242, 0.0163, 0.0125, 0.0231, 0.3322, 0.0046, 0.2047, 0.0361, 0.0999,
+         0.0756, 0.1068]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.018
+==================================================
+Iteration 4:
+  Timesteps so far: 0
+  Actor Loss: -0.122536
+  Critic Loss: 311.2530
+  Entropy: 1.8802
+  Avg Rewards: 23.4612
+  Avg Advantages: 18.8585
+  Avg Critic Values: 4.6027
+actor probs: tensor([[0.0013, 0.0010, 0.0040, 0.0073, 0.0013, 0.0058, 0.0006, 0.0013, 0.0122,
+         0.0132, 0.0099, 0.0057, 0.0136, 0.3475, 0.0026, 0.2661, 0.0245, 0.1417,
+         0.0486, 0.0918]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.018
+==================================================
+Iteration 5:
+  Timesteps so far: 0
+  Actor Loss: -0.105193
+  Critic Loss: 258.6856
+  Entropy: 1.6678
+  Avg Rewards: 23.4644
+  Avg Advantages: 17.3350
+  Avg Critic Values: 6.1294
+actor probs: tensor([[5.2525e-04, 4.6609e-04, 2.0617e-03, 3.3949e-03, 5.4228e-04, 3.0785e-03,
+         2.3891e-04, 6.0673e-04, 8.1725e-03, 6.8468e-03, 5.8991e-03, 2.9510e-03,
+         7.7051e-03, 2.9505e-01, 1.4329e-03, 3.5269e-01, 1.5440e-02, 1.9839e-01,
+         2.8974e-02, 6.5530e-02]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.02
+==================================================
+Iteration 6:
+  Timesteps so far: 0
+  Actor Loss: -0.182570
+  Critic Loss: 212.4005
+  Entropy: 1.4553
+  Avg Rewards: 23.5560
+  Avg Advantages: 15.8557
+  Avg Critic Values: 7.7003
+actor probs: tensor([[2.6141e-04, 2.9923e-04, 1.2367e-03, 1.5558e-03, 2.6549e-04, 2.0995e-03,
+         1.0655e-04, 3.7290e-04, 5.7596e-03, 3.6976e-03, 4.4419e-03, 1.6629e-03,
+         4.6631e-03, 1.6628e-01, 9.2440e-04, 4.4924e-01, 8.5590e-03, 2.9572e-01,
+         1.4588e-02, 3.8263e-02]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.02
+==================================================
+Iteration 7:
+  Timesteps so far: 0
+  Actor Loss: -0.130068
+  Critic Loss: 169.7350
+  Entropy: 1.1891
+  Avg Rewards: 23.6355
+  Avg Advantages: 14.3294
+  Avg Critic Values: 9.3061
+actor probs: tensor([[1.3795e-04, 2.2682e-04, 7.3640e-04, 6.9209e-04, 1.4147e-04, 1.4353e-03,
+         5.2196e-05, 2.5970e-04, 3.9206e-03, 2.1681e-03, 3.9301e-03, 9.7299e-04,
+         2.5674e-03, 6.7820e-02, 5.9375e-04, 4.6163e-01, 4.2700e-03, 4.2320e-01,
+         7.0694e-03, 1.8180e-02]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.02
+==================================================
+Iteration 8:
+  Timesteps so far: 0
+  Actor Loss: -0.085511
+  Critic Loss: 130.0111
+  Entropy: 0.9559
+  Avg Rewards: 23.6425
+  Avg Advantages: 12.7082
+  Avg Critic Values: 10.9343
+actor probs: tensor([[6.9010e-05, 1.5646e-04, 3.9734e-04, 2.9772e-04, 7.2236e-05, 9.7793e-04,
+         2.3171e-05, 1.6177e-04, 2.0037e-03, 1.2389e-03, 3.1575e-03, 5.0195e-04,
+         1.2112e-03, 2.5518e-02, 3.2300e-04, 3.8632e-01, 2.1965e-03, 5.6481e-01,
+         3.1541e-03, 7.4132e-03]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 9:
+  Timesteps so far: 0
+  Actor Loss: -0.099667
+  Critic Loss: 96.3881
+  Entropy: 0.6619
+  Avg Rewards: 23.6784
+  Avg Advantages: 11.1117
+  Avg Critic Values: 12.5667
+actor probs: tensor([[3.1167e-05, 9.3072e-05, 1.7890e-04, 1.0753e-04, 3.8075e-05, 5.5480e-04,
+         9.4181e-06, 8.9830e-05, 9.1397e-04, 5.7508e-04, 2.2109e-03, 1.8519e-04,
+         4.2772e-04, 7.8818e-03, 1.4249e-04, 1.8179e-01, 1.1723e-03, 8.0043e-01,
+         1.1400e-03, 2.0223e-03]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 10:
+  Timesteps so far: 0
+  Actor Loss: -0.057363
+  Critic Loss: 68.0021
+  Entropy: 0.3370
+  Avg Rewards: 23.6884
+  Avg Advantages: 9.5072
+  Avg Critic Values: 14.1812
+actor probs: tensor([[1.2541e-05, 4.7243e-05, 7.1348e-05, 3.6838e-05, 1.8122e-05, 2.9161e-04,
+         3.3171e-06, 4.1008e-05, 3.0878e-04, 2.4110e-04, 1.2246e-03, 5.7673e-05,
+         1.4592e-04, 2.3480e-03, 5.2166e-05, 6.4873e-02, 6.0636e-04, 9.2871e-01,
+         3.9078e-04, 5.2090e-04]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 11:
+  Timesteps so far: 0
+  Actor Loss: -0.048254
+  Critic Loss: 45.5912
+  Entropy: 0.1399
+  Avg Rewards: 23.7110
+  Avg Advantages: 7.9587
+  Avg Critic Values: 15.7523
+actor probs: tensor([[5.3476e-06, 2.4821e-05, 2.9744e-05, 1.3218e-05, 9.7995e-06, 1.4533e-04,
+         1.3333e-06, 2.0335e-05, 1.1861e-04, 1.0098e-04, 6.6982e-04, 1.8650e-05,
+         5.4318e-05, 7.1780e-04, 2.0359e-05, 1.9526e-02, 3.2999e-04, 9.7791e-01,
+         1.4576e-04, 1.3847e-04]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 12:
+  Timesteps so far: 0
+  Actor Loss: -0.041714
+  Critic Loss: 28.4308
+  Entropy: 0.0557
+  Avg Rewards: 23.7110
+  Avg Advantages: 6.4594
+  Avg Critic Values: 17.2515
+actor probs: tensor([[2.5089e-06, 1.4011e-05, 1.3621e-05, 5.2638e-06, 5.9762e-06, 7.4772e-05,
+         6.1622e-07, 1.1161e-05, 5.2575e-05, 4.5388e-05, 3.8496e-04, 6.7068e-06,
+         2.2903e-05, 2.4300e-04, 8.8359e-06, 5.8972e-03, 1.9412e-04, 9.9291e-01,
+         6.1409e-05, 4.1382e-05]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 13:
+  Timesteps so far: 0
+  Actor Loss: -0.028350
+  Critic Loss: 16.3127
+  Entropy: 0.0261
+  Avg Rewards: 23.7119
+  Avg Advantages: 5.0632
+  Avg Critic Values: 18.6487
+actor probs: tensor([[1.3560e-06, 8.6454e-06, 6.9671e-06, 2.4281e-06, 3.9249e-06, 4.2788e-05,
+         3.1896e-07, 7.0735e-06, 3.0775e-05, 2.3084e-05, 2.3296e-04, 3.1691e-06,
+         1.2242e-05, 1.1017e-04, 4.7940e-06, 2.3130e-03, 1.2162e-04, 9.9703e-01,
+         3.2785e-05, 1.6767e-05]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 14:
+  Timesteps so far: 0
+  Actor Loss: -0.028096
+  Critic Loss: 8.3961
+  Entropy: 0.0121
+  Avg Rewards: 23.7119
+  Avg Advantages: 3.7976
+  Avg Critic Values: 19.9143
+actor probs: tensor([[7.0967e-07, 5.1898e-06, 3.4494e-06, 1.0851e-06, 2.6214e-06, 2.3113e-05,
+         1.6401e-07, 4.4320e-06, 1.8165e-05, 1.1226e-05, 1.3687e-04, 1.4422e-06,
+         6.4564e-06, 4.7992e-05, 2.5273e-06, 8.1198e-04, 7.5709e-05, 9.9882e-01,
+         1.7295e-05, 6.4437e-06]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 15:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 3.7267
+  Entropy: 0.0073
+  Avg Rewards: 23.7128
+  Avg Advantages: 2.6906
+  Avg Critic Values: 21.0223
+actor probs: tensor([[4.4528e-07, 3.5300e-06, 2.2621e-06, 6.7362e-07, 2.0451e-06, 1.4260e-05,
+         1.0823e-07, 3.3478e-06, 1.3843e-05, 7.4323e-06, 1.0032e-04, 9.2224e-07,
+         4.2176e-06, 2.9543e-05, 1.6566e-06, 4.4900e-04, 5.3944e-05, 9.9930e-01,
+         1.2035e-05, 3.6541e-06]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 16:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 1.3151
+  Entropy: 0.0054
+  Avg Rewards: 23.7128
+  Avg Advantages: 1.7588
+  Avg Critic Values: 21.9540
+actor probs: tensor([[3.3305e-07, 2.7749e-06, 1.7552e-06, 5.0414e-07, 1.7564e-06, 1.0541e-05,
+         8.3887e-08, 2.8354e-06, 1.1793e-05, 5.8211e-06, 8.3364e-05, 7.0561e-07,
+         3.2442e-06, 2.2017e-05, 1.2792e-06, 3.1507e-04, 4.3523e-05, 9.9948e-01,
+         9.6881e-06, 2.5992e-06]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 17:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.2998
+  Entropy: 0.0045
+  Avg Rewards: 23.7128
+  Avg Advantages: 1.0124
+  Avg Critic Values: 22.7005
+actor probs: tensor([[2.7884e-07, 2.3947e-06, 1.5028e-06, 4.2223e-07, 1.5998e-06, 8.7617e-06,
+         7.1775e-08, 2.5608e-06, 1.0688e-05, 5.0123e-06, 7.4421e-05, 5.9898e-07,
+         2.7629e-06, 1.8392e-05, 1.0920e-06, 2.5357e-04, 3.8161e-05, 9.9957e-01,
+         8.4828e-06, 2.1103e-06]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 18:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0147
+  Entropy: 0.0041
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.4490
+  Avg Critic Values: 23.2638
+actor probs: tensor([[2.4854e-07, 2.1776e-06, 1.3731e-06, 3.7980e-07, 1.5153e-06, 7.8084e-06,
+         6.4915e-08, 2.3939e-06, 1.0017e-05, 4.5933e-06, 6.9299e-05, 5.3912e-07,
+         2.5172e-06, 1.6608e-05, 9.9671e-07, 2.2310e-04, 3.5432e-05, 9.9961e-01,
+         7.8577e-06, 1.8672e-06]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 19:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0232
+  Entropy: 0.0038
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0553
+  Avg Critic Values: 23.6575
+actor probs: tensor([[2.3162e-07, 2.0543e-06, 1.3002e-06, 3.5615e-07, 1.4664e-06, 7.2784e-06,
+         6.1040e-08, 2.2967e-06, 9.6247e-06, 4.3569e-06, 6.6343e-05, 5.0545e-07,
+         2.3793e-06, 1.5617e-05, 9.4322e-07, 2.0644e-04, 3.3882e-05, 9.9964e-01,
+         7.5025e-06, 1.7339e-06]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 20:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0910
+  Entropy: 0.0037
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.1913
+  Avg Critic Values: 23.9042
+actor probs: tensor([[2.2192e-07, 1.9829e-06, 1.2578e-06, 3.4251e-07, 1.4375e-06, 6.9742e-06,
+         5.8800e-08, 2.2396e-06, 9.3941e-06, 4.2192e-06, 6.4609e-05, 4.8603e-07,
+         2.2993e-06, 1.5045e-05, 9.1213e-07, 1.9693e-04, 3.2974e-05, 9.9965e-01,
+         7.2945e-06, 1.6575e-06]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 21:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.1271
+  Entropy: 0.0036
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.3192
+  Avg Critic Values: 24.0321
+actor probs: tensor([[2.1623e-07, 1.9408e-06, 1.2327e-06, 3.3450e-07, 1.4202e-06, 6.7960e-06,
+         5.7482e-08, 2.2056e-06, 9.2570e-06, 4.1379e-06, 6.3580e-05, 4.7463e-07,
+         2.2521e-06, 1.4708e-05, 8.9379e-07, 1.9137e-04, 3.2435e-05, 9.9966e-01,
+         7.1712e-06, 1.6129e-06]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 22:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.1199
+  Entropy: 0.0035
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.3587
+  Avg Critic Values: 24.0716
+actor probs: tensor([[2.1286e-07, 1.9157e-06, 1.2178e-06, 3.2974e-07, 1.4098e-06, 6.6903e-06,
+         5.6698e-08, 2.1853e-06, 9.1748e-06, 4.0894e-06, 6.2964e-05, 4.6785e-07,
+         2.2240e-06, 1.4507e-05, 8.8285e-07, 1.8809e-04, 3.2113e-05, 9.9966e-01,
+         7.0975e-06, 1.5865e-06]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 23:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0881
+  Entropy: 0.0035
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.3387
+  Avg Critic Values: 24.0516
+actor probs: tensor([[2.1084e-07, 1.9007e-06, 1.2089e-06, 3.2689e-07, 1.4036e-06, 6.6272e-06,
+         5.6229e-08, 2.1731e-06, 9.1255e-06, 4.0603e-06, 6.2595e-05, 4.6379e-07,
+         2.2071e-06, 1.4387e-05, 8.7630e-07, 1.8612e-04, 3.1920e-05, 9.9967e-01,
+         7.0534e-06, 1.5707e-06]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 24:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0526
+  Entropy: 0.0035
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.2843
+  Avg Critic Values: 23.9971
+actor probs: tensor([[2.0963e-07, 1.8917e-06, 1.2035e-06, 3.2518e-07, 1.3998e-06, 6.5893e-06,
+         5.5948e-08, 2.1658e-06, 9.0958e-06, 4.0428e-06, 6.2373e-05, 4.6136e-07,
+         2.1970e-06, 1.4315e-05, 8.7237e-07, 1.8495e-04, 3.1803e-05, 9.9967e-01,
+         7.0268e-06, 1.5612e-06]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 25:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0252
+  Entropy: 0.0035
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.2151
+  Avg Critic Values: 23.9279
+actor probs: tensor([[2.0891e-07, 1.8863e-06, 1.2003e-06, 3.2415e-07, 1.3975e-06, 6.5665e-06,
+         5.5779e-08, 2.1614e-06, 9.0780e-06, 4.0323e-06, 6.2239e-05, 4.5990e-07,
+         2.1909e-06, 1.4272e-05, 8.7000e-07, 1.8424e-04, 3.1733e-05, 9.9967e-01,
+         7.0108e-06, 1.5555e-06]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 26:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0091
+  Entropy: 0.0035
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.1454
+  Avg Critic Values: 23.8583
+actor probs: tensor([[2.0847e-07, 1.8830e-06, 1.1983e-06, 3.2353e-07, 1.3962e-06, 6.5529e-06,
+         5.5677e-08, 2.1587e-06, 9.0672e-06, 4.0260e-06, 6.2158e-05, 4.5902e-07,
+         2.1873e-06, 1.4246e-05, 8.6858e-07, 1.8382e-04, 3.1691e-05, 9.9967e-01,
+         7.0012e-06, 1.5521e-06]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 27:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0020
+  Entropy: 0.0035
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.0842
+  Avg Critic Values: 23.7970
+actor probs: tensor([[2.0821e-07, 1.8811e-06, 1.1971e-06, 3.2316e-07, 1.3954e-06, 6.5446e-06,
+         5.5615e-08, 2.1571e-06, 9.0607e-06, 4.0222e-06, 6.2110e-05, 4.5849e-07,
+         2.1851e-06, 1.4230e-05, 8.6772e-07, 1.8356e-04, 3.1666e-05, 9.9967e-01,
+         6.9953e-06, 1.5501e-06]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 28:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0001
+  Entropy: 0.0035
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.0359
+  Avg Critic Values: 23.7488
+actor probs: tensor([[2.0805e-07, 1.8799e-06, 1.1964e-06, 3.2294e-07, 1.3949e-06, 6.5397e-06,
+         5.5579e-08, 2.1562e-06, 9.0568e-06, 4.0199e-06, 6.2081e-05, 4.5817e-07,
+         2.1837e-06, 1.4221e-05, 8.6721e-07, 1.8341e-04, 3.1651e-05, 9.9967e-01,
+         6.9919e-06, 1.5488e-06]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 29:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0002
+  Entropy: 0.0035
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.0020
+  Avg Critic Values: 23.7148
+actor probs: tensor([[2.0795e-07, 1.8792e-06, 1.1960e-06, 3.2280e-07, 1.3946e-06, 6.5367e-06,
+         5.5556e-08, 2.1556e-06, 9.0545e-06, 4.0185e-06, 6.2063e-05, 4.5798e-07,
+         2.1829e-06, 1.4215e-05, 8.6690e-07, 1.8332e-04, 3.1641e-05, 9.9967e-01,
+         6.9898e-06, 1.5481e-06]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 30:
+  Timesteps so far: 0
+  Actor Loss: -0.019810
+  Critic Loss: 0.0007
+  Entropy: 0.0025
+  Avg Rewards: 23.7124
+  Avg Advantages: 0.0182
+  Avg Critic Values: 23.6942
+actor probs: tensor([[1.2280e-07, 1.2161e-06, 8.0013e-07, 2.0127e-07, 1.1120e-06, 3.8572e-06,
+         3.5473e-08, 1.5976e-06, 6.8493e-06, 2.7222e-06, 4.4978e-05, 2.8377e-07,
+         1.4654e-06, 9.0310e-06, 5.7324e-07, 9.9112e-05, 2.2849e-05, 9.9980e-01,
+         5.0480e-06, 9.0132e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 31:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0009
+  Entropy: 0.0017
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0285
+  Avg Critic Values: 23.6843
+actor probs: tensor([[8.1149e-08, 8.6245e-07, 5.8095e-07, 1.3837e-07, 9.2657e-07, 2.5466e-06,
+         2.4878e-08, 1.2599e-06, 5.4782e-06, 1.9961e-06, 3.4876e-05, 1.9468e-07,
+         1.0713e-06, 6.3151e-06, 4.1249e-07, 6.1019e-05, 1.7669e-05, 9.9986e-01,
+         3.9064e-06, 5.9016e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 32:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0008
+  Entropy: 0.0014
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0303
+  Avg Critic Values: 23.6825
+actor probs: tensor([[6.4431e-08, 7.0620e-07, 4.7148e-07, 1.0939e-07, 8.1532e-07, 2.0126e-06,
+         2.0147e-08, 1.0979e-06, 4.7275e-06, 1.6323e-06, 3.0218e-05, 1.5768e-07,
+         9.0468e-07, 5.1502e-06, 3.3331e-07, 4.6787e-05, 1.5314e-05, 9.9989e-01,
+         3.4059e-06, 4.7365e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 33:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0005
+  Entropy: 0.0012
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0269
+  Avg Critic Values: 23.6859
+actor probs: tensor([[5.6071e-08, 6.2605e-07, 4.1574e-07, 9.4945e-08, 7.5471e-07, 1.7466e-06,
+         1.7742e-08, 1.0104e-06, 4.3252e-06, 1.4459e-06, 2.7714e-05, 1.3887e-07,
+         8.1700e-07, 4.5547e-06, 2.9314e-07, 3.9853e-05, 1.4048e-05, 9.9990e-01,
+         3.1354e-06, 4.1487e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 34:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0002
+  Entropy: 0.0011
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0208
+  Avg Critic Values: 23.6920
+actor probs: tensor([[5.1575e-08, 5.8229e-07, 3.8544e-07, 8.7195e-08, 7.2040e-07, 1.6038e-06,
+         1.6436e-08, 9.6115e-07, 4.0997e-06, 1.3441e-06, 2.6307e-05, 1.2865e-07,
+         7.6839e-07, 4.2301e-06, 2.7135e-07, 3.6183e-05, 1.3336e-05, 9.9991e-01,
+         2.9830e-06, 3.8309e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 35:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0001
+  Entropy: 0.0011
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0140
+  Avg Critic Values: 23.6988
+actor probs: tensor([[4.9050e-08, 5.5748e-07, 3.6831e-07, 8.2847e-08, 7.0053e-07, 1.5238e-06,
+         1.5698e-08, 9.3269e-07, 3.9699e-06, 1.2865e-06, 2.5496e-05, 1.2288e-07,
+         7.4058e-07, 4.0464e-06, 2.5905e-07, 3.4141e-05, 1.2926e-05, 9.9991e-01,
+         2.8949e-06, 3.6518e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 36:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0011
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0078
+  Avg Critic Values: 23.7051
+actor probs: tensor([[4.7594e-08, 5.4311e-07, 3.5840e-07, 8.0343e-08, 6.8887e-07, 1.4777e-06,
+         1.5271e-08, 9.1601e-07, 3.8939e-06, 1.2531e-06, 2.5021e-05, 1.1954e-07,
+         7.2437e-07, 3.9400e-06, 2.5193e-07, 3.2971e-05, 1.2686e-05, 9.9991e-01,
+         2.8433e-06, 3.5484e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 37:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0011
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0028
+  Avg Critic Values: 23.7101
+actor probs: tensor([[4.6742e-08, 5.3466e-07, 3.5258e-07, 7.8877e-08, 6.8196e-07, 1.4507e-06,
+         1.5021e-08, 9.0614e-07, 3.8491e-06, 1.2335e-06, 2.4741e-05, 1.1758e-07,
+         7.1482e-07, 3.8775e-06, 2.4776e-07, 3.2288e-05, 1.2544e-05, 9.9991e-01,
+         2.8128e-06, 3.4878e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 38:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.0006
+  Avg Critic Values: 23.7135
+actor probs: tensor([[4.6238e-08, 5.2966e-07, 3.4914e-07, 7.8012e-08, 6.7785e-07, 1.4347e-06,
+         1.4873e-08, 9.0028e-07, 3.8224e-06, 1.2219e-06, 2.4574e-05, 1.1642e-07,
+         7.0915e-07, 3.8405e-06, 2.4529e-07, 3.1885e-05, 1.2459e-05, 9.9991e-01,
+         2.7947e-06, 3.4519e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 39:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.0026
+  Avg Critic Values: 23.7154
+actor probs: tensor([[4.5939e-08, 5.2669e-07, 3.4709e-07, 7.7498e-08, 6.7540e-07, 1.4253e-06,
+         1.4785e-08, 8.9678e-07, 3.8066e-06, 1.2150e-06, 2.4475e-05, 1.1574e-07,
+         7.0578e-07, 3.8185e-06, 2.4382e-07, 3.1647e-05, 1.2409e-05, 9.9991e-01,
+         2.7839e-06, 3.4306e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 40:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.0033
+  Avg Critic Values: 23.7162
+actor probs: tensor([[4.5761e-08, 5.2491e-07, 3.4587e-07, 7.7191e-08, 6.7394e-07, 1.4196e-06,
+         1.4732e-08, 8.9469e-07, 3.7971e-06, 1.2108e-06, 2.4415e-05, 1.1532e-07,
+         7.0376e-07, 3.8054e-06, 2.4295e-07, 3.1504e-05, 1.2379e-05, 9.9991e-01,
+         2.7774e-06, 3.4179e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 41:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.0032
+  Avg Critic Values: 23.7161
+actor probs: tensor([[4.5654e-08, 5.2386e-07, 3.4514e-07, 7.7009e-08, 6.7307e-07, 1.4163e-06,
+         1.4701e-08, 8.9345e-07, 3.7914e-06, 1.2084e-06, 2.4380e-05, 1.1508e-07,
+         7.0256e-07, 3.7976e-06, 2.4243e-07, 3.1420e-05, 1.2361e-05, 9.9991e-01,
+         2.7735e-06, 3.4104e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 42:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.0026
+  Avg Critic Values: 23.7155
+actor probs: tensor([[4.5591e-08, 5.2322e-07, 3.4471e-07, 7.6899e-08, 6.7254e-07, 1.4142e-06,
+         1.4682e-08, 8.9270e-07, 3.7880e-06, 1.2069e-06, 2.4359e-05, 1.1493e-07,
+         7.0185e-07, 3.7929e-06, 2.4211e-07, 3.1369e-05, 1.2350e-05, 9.9992e-01,
+         2.7712e-06, 3.4058e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 43:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.0018
+  Avg Critic Values: 23.7146
+actor probs: tensor([[4.5553e-08, 5.2285e-07, 3.4445e-07, 7.6834e-08, 6.7223e-07, 1.4130e-06,
+         1.4671e-08, 8.9226e-07, 3.7860e-06, 1.2060e-06, 2.4346e-05, 1.1485e-07,
+         7.0142e-07, 3.7901e-06, 2.4193e-07, 3.1339e-05, 1.2344e-05, 9.9992e-01,
+         2.7699e-06, 3.4031e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 44:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.0010
+  Avg Critic Values: 23.7138
+actor probs: tensor([[4.5530e-08, 5.2262e-07, 3.4429e-07, 7.6795e-08, 6.7204e-07, 1.4123e-06,
+         1.4664e-08, 8.9199e-07, 3.7848e-06, 1.2055e-06, 2.4338e-05, 1.1479e-07,
+         7.0116e-07, 3.7885e-06, 2.4182e-07, 3.1321e-05, 1.2340e-05, 9.9992e-01,
+         2.7690e-06, 3.4015e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 45:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.0003
+  Avg Critic Values: 23.7132
+actor probs: tensor([[4.5517e-08, 5.2248e-07, 3.4420e-07, 7.6772e-08, 6.7193e-07, 1.4119e-06,
+         1.4660e-08, 8.9183e-07, 3.7841e-06, 1.2052e-06, 2.4334e-05, 1.1476e-07,
+         7.0101e-07, 3.7875e-06, 2.4175e-07, 3.1310e-05, 1.2338e-05, 9.9992e-01,
+         2.7685e-06, 3.4005e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 46:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0001
+  Avg Critic Values: 23.7127
+actor probs: tensor([[4.5509e-08, 5.2240e-07, 3.4415e-07, 7.6758e-08, 6.7187e-07, 1.4116e-06,
+         1.4658e-08, 8.9174e-07, 3.7836e-06, 1.2050e-06, 2.4331e-05, 1.1474e-07,
+         7.0091e-07, 3.7869e-06, 2.4171e-07, 3.1303e-05, 1.2337e-05, 9.9992e-01,
+         2.7682e-06, 3.4000e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 47:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0004
+  Avg Critic Values: 23.7125
+actor probs: tensor([[4.5504e-08, 5.2236e-07, 3.4411e-07, 7.6750e-08, 6.7183e-07, 1.4115e-06,
+         1.4657e-08, 8.9168e-07, 3.7834e-06, 1.2049e-06, 2.4330e-05, 1.1473e-07,
+         7.0086e-07, 3.7865e-06, 2.4169e-07, 3.1299e-05, 1.2336e-05, 9.9992e-01,
+         2.7681e-06, 3.3996e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 48:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0004
+  Avg Critic Values: 23.7124
+actor probs: tensor([[4.5501e-08, 5.2233e-07, 3.4409e-07, 7.6745e-08, 6.7180e-07, 1.4114e-06,
+         1.4656e-08, 8.9165e-07, 3.7832e-06, 1.2048e-06, 2.4329e-05, 1.1473e-07,
+         7.0083e-07, 3.7863e-06, 2.4167e-07, 3.1297e-05, 1.2335e-05, 9.9992e-01,
+         2.7680e-06, 3.3994e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 49:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0004
+  Avg Critic Values: 23.7124
+actor probs: tensor([[4.5499e-08, 5.2231e-07, 3.4408e-07, 7.6742e-08, 6.7179e-07, 1.4113e-06,
+         1.4655e-08, 8.9162e-07, 3.7831e-06, 1.2048e-06, 2.4328e-05, 1.1472e-07,
+         7.0081e-07, 3.7862e-06, 2.4166e-07, 3.1296e-05, 1.2335e-05, 9.9992e-01,
+         2.7679e-06, 3.3993e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 50:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0003
+  Avg Critic Values: 23.7125
+actor probs: tensor([[4.5498e-08, 5.2230e-07, 3.4407e-07, 7.6740e-08, 6.7178e-07, 1.4113e-06,
+         1.4655e-08, 8.9161e-07, 3.7831e-06, 1.2048e-06, 2.4328e-05, 1.1472e-07,
+         7.0080e-07, 3.7861e-06, 2.4166e-07, 3.1295e-05, 1.2335e-05, 9.9992e-01,
+         2.7679e-06, 3.3992e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 51:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0002
+  Avg Critic Values: 23.7126
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6739e-08, 6.7178e-07, 1.4113e-06,
+         1.4655e-08, 8.9161e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0079e-07, 3.7860e-06, 2.4166e-07, 3.1295e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3992e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 52:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0001
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0079e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3992e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 53:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0079e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3992e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 54:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.0000
+  Avg Critic Values: 23.7129
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 55:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.0001
+  Avg Critic Values: 23.7129
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 56:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.0001
+  Avg Critic Values: 23.7129
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 57:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.0001
+  Avg Critic Values: 23.7129
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 58:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.0000
+  Avg Critic Values: 23.7129
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 59:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.0000
+  Avg Critic Values: 23.7129
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 60:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: -0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 61:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 62:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 63:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 64:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 65:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 66:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 67:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 68:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 69:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 70:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 71:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 72:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 73:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 74:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 75:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 76:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 77:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 78:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 79:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 80:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 81:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 82:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 83:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 84:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 85:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 86:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 87:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 88:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 89:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 90:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 91:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 92:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 93:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 94:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 95:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 96:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 97:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 98:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 99:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+Iteration 100:
+  Timesteps so far: 0
+  Actor Loss: -0.000000
+  Critic Loss: 0.0000
+  Entropy: 0.0010
+  Avg Rewards: 23.7128
+  Avg Advantages: 0.0000
+  Avg Critic Values: 23.7128
+actor probs: tensor([[4.5497e-08, 5.2229e-07, 3.4407e-07, 7.6738e-08, 6.7177e-07, 1.4113e-06,
+         1.4655e-08, 8.9160e-07, 3.7830e-06, 1.2048e-06, 2.4327e-05, 1.1472e-07,
+         7.0078e-07, 3.7860e-06, 2.4165e-07, 3.1294e-05, 1.2335e-05, 9.9992e-01,
+         2.7678e-06, 3.3991e-07]], device='cuda:0', grad_fn=<SoftmaxBackward0>) 
+best lr: 0.022
+==================================================
+done training

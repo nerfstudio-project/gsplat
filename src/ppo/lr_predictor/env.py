@@ -28,7 +28,7 @@ class LREnv(Env):
     """
     def __init__(
         self, 
-        img_path: str,
+        dataset_path: str,
         num_points: int, 
         iterations: int,
         # TODO: remove observation_shape?
@@ -57,46 +57,69 @@ class LREnv(Env):
             self.observation_shape = (self.img_encoder.embed_dim,)
             print("Using DINO large distilled as encoder")
         
-        with torch.no_grad():
-            preprocessed = preprocess(img_path)
-            self.img = self.img_encoder(preprocessed.unsqueeze(0)).to(device) # TODO: maybe squeeze?
-
-        # compute losses for each LR
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        img_name = img_path.split('/')[-1].split('.')[0]
+        self.num_images = 0
+        self.encoded_images = []
+        self.orig_images = []
+        self.img_names = []
         
+        for img_name in os.listdir(dataset_path):
+            self.num_images += 1
+            full_path = os.path.join(dataset_path, img_name)
+            orig_img = image_path_to_tensor(full_path)
+            self.orig_images.append(orig_img)
+            self.img_names.append(full_path)
+
+            with torch.no_grad():
+                preprocessed = preprocess(full_path)
+                encoded_img = self.img_encoder(preprocessed.unsqueeze(0)).to(device)
+
+            self.encoded_images.append(encoded_img)
+            
+        
+        self.encoded_images = torch.stack(self.encoded_images)
+        self.original_images = torch.stack(self.orig_images)
+
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        dataset_name = dataset_path.split('/')[-1]
         losses_json_path = os.path.join(
-            current_dir, f"lr_losses_{self.iterations}_iterations{self.num_points}_points_{n_trials}_trials_{img_name}.json"
+            current_dir, f"{dataset_name}_lr_losses_{self.iterations}_iterations{self.num_points}_points_{n_trials}_trials_{img_name}.json"
         )
         
-        self.original_image = image_path_to_tensor(img_path)
-        
-        # if os.path.exists(losses_json_path):
-        if True:
+        # compute losses for each LR        
+        if os.path.exists(losses_json_path):
+        # if True:
             with open(losses_json_path, 'r') as f:
                 self.lr_losses = json.load(f)
-                self.lr_losses = {str(float(lr)) : losses for lr, losses in self.lr_losses.items()}
+                # self.lr_losses = {str(float(lr)) : losses for lr, losses in self.lr_losses.items()}
+                self.lr_losses = None
         else:
-            
-            lr_losses = {str(lr): [] for lr in self.lrs}
-            for lr in self.lrs:
-                for trial_num in range(n_trials):
-                    print("*" * 50)
-                    print(f'currently training with lr={lr}, trial {trial_num}')
-                    trainer = SimpleTrainer(gt_image=self.original_image, num_points=num_points)
-                    losses, _ = trainer.train(
-                        iterations=self.iterations,
-                        lr=lr,
-                        save_imgs=False,
-                        model_type='3dgs',
-                    )
-                    losses[0] = 1.0
-                    losses = np.array(losses)
-                    print(f"achieved final loss: {losses[-1]}, psnr: {10 * np.log10(1 / losses[-1])}")
-                    lr_losses[str(lr)].append(losses) 
 
-            lr_losses_means = {lr: np.mean(np.array(losses), axis=0).tolist() for lr, losses in lr_losses.items()}
-            
+            # img_name to dict {lr: [trials]}
+            img_to_lr_dict = {}
+            for (i, img_tensor) in enumerate(self.original_images):
+                original_img_tensor = self.original_images[i]
+                print(f"precomputing image {i+1}/{self.num_images}")
+                lr_losses = {str(lr): [] for lr in self.lrs}
+                for lr in self.lrs:
+                    for trial_num in range(n_trials):
+                        print("*" * 50)
+                        print(f'currently training with lr={lr}, trial {trial_num}')
+                        trainer = SimpleTrainer(gt_image=self.original_image, num_points=num_points)
+                        losses, _ = trainer.train(
+                            iterations=self.iterations,
+                            lr=lr,
+                            save_imgs=False,
+                            model_type='3dgs',
+                        )
+                        losses[0] = 1.0
+                        losses = np.array(losses)
+                        print(f"achieved final loss: {losses[-1]}, psnr: {10 * np.log10(1 / losses[-1])}")
+                        lr_losses[str(lr)].append(losses) 
+                
+                lr_losses_means = {lr: np.mean(np.array(losses), axis=0).tolist() for lr, losses in lr_losses.items()}
+                
+                img_to_lr_dict[i] = [imglr_losses_means]
+                
             # Write the lr_losses to a JSON file
             output_filename = losses_json_path
             with open(output_filename, 'w') as f:

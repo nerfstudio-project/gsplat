@@ -28,7 +28,7 @@ else:
 
 # Initialize environment and policy
 env = LREnv(
-    img_path='src/data/adam.jpg',
+    dataset_path='src/data/small_mipnerf',
     num_points=100000,
     iterations=1000,
     observation_shape=(height, width, 3),
