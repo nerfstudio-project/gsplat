@@ -83,7 +83,9 @@ class PPO:
             "avg_critic_values": [],
             "avg_advantages": [],
             "entropy": [],
-            "timesteps": [] 
+            "surr_loss": [],
+            "timesteps": [],
+            "num_match": []
         }
         self.log_interval = log_interval
         self.log_callback = log_callback
@@ -162,11 +164,14 @@ class PPO:
         # actor_loss = -(log_probs_new * rewards).mean()
         # Actor loss: Minimize the worst-case surrogate
         actor_loss = -torch.min(surr1, surr2).mean()
+        self.logger["surr_loss"].append(actor_loss.item())
+        
         # print(f"actor loss before: {actor_loss}")
         # print(f"surr1: {surr1}, surr2: {surr2}")
         # print(f"ratios: {ratios}")
-        actor_loss -= self.entropy_coeff * entropy.mean()
-
+        entropy_loss = -self.entropy_coeff * entropy.mean()
+        actor_loss -= entropy_loss
+        
         # print(f"actions: {actions}")
         # print(f"returns: {returns}")
         # print(f"rewards: {rewards}")
@@ -175,6 +180,7 @@ class PPO:
         # print(f"actor_loss: {actor_loss}")
         # print(f"values_new: {values_new}")
         # Critic loss: Minimize MSE between predicted and actual returns
+        # print(f"values_new: {values_new}, returns: {returns}")
         critic_loss = nn.MSELoss()(values_new, returns)
 
         return actor_loss, critic_loss, entropy.mean()
@@ -230,54 +236,71 @@ class PPO:
         print(f"Iteration {len(self.logger['timesteps'])}:")
         print(f"  Timesteps so far: {self.logger['t_so_far']}")
         print(f"  Actor Loss: {self.logger['actor_losses'][-1]:.6f}")
-        print(f"  Critic Loss: {self.logger['critic_losses'][-1]:.4f}")
         print(f"  Entropy: {self.logger['entropy'][-1]:.4f}")
+        print(f"  Surrogate Loss: {self.logger['surr_loss'][-1]:.4f}")
+        print(f"  Critic Loss: {self.logger['critic_losses'][-1]:.4f}")
         print(f"  Avg Rewards: {self.logger['avg_rewards'][-1]:.4f}")
         print(f"  Avg Advantages: {self.logger['avg_advantages'][-1]:.4f}")
         print(f"  Avg Critic Values: {self.logger['avg_critic_values'][-1]:.4f}")
         if self.log_callback:
-            self.log_callback(self.policy)
+            num_match = self.log_callback(self.policy)
+            self.logger["num_match"].append(num_match)
+            print(f"  Num Match: {num_match}")
         print("=" * 50)
     
     def plot_training_progress(self):
         # Use logging data to plot (actor loss, critic loss, rewards, avg critic values, avg advantages, and entropy)
-        plt.figure(figsize=(18, 12))
+        plt.figure(figsize=(24, 14))
         
-        plt.subplot(3, 2, 1)
+        plt.subplot(4, 2, 1)
         plt.plot(self.logger['actor_losses'], label='Actor Loss')
         plt.xlabel('Timesteps')
         plt.ylabel('Loss')
         plt.title('Actor Loss')
         
-        plt.subplot(3, 2, 2)
+        plt.subplot(4, 2, 2)
         plt.plot(self.logger['critic_losses'], label='Critic Loss')
         plt.xlabel('Timesteps')
         plt.ylabel('Loss')
         plt.title('Critic Loss')
         
-        plt.subplot(3, 2, 3)
+        plt.subplot(4, 2, 3)
         plt.plot(self.logger['avg_rewards'], label='Avg Rewards')
         plt.xlabel('Timesteps')
         plt.ylabel('Rewards')
         plt.title('Average Rewards')
         
-        plt.subplot(3, 2, 4)
+        plt.subplot(4, 2, 4)
         plt.plot(self.logger['avg_critic_values'], label='Avg Critic Values')
         plt.xlabel('Timesteps')
         plt.ylabel('Values')
         plt.title('Average Critic Values')
         
-        plt.subplot(3, 2, 5)
+        plt.subplot(4, 2, 5)
         plt.plot(self.logger['avg_advantages'], label='Avg Advantages')
         plt.xlabel('Timesteps')
         plt.ylabel('Advantages')
         plt.title('Average Advantages')
+
+        # make y scale integers
+        plt.subplot(4, 2, 6)
+        plt.plot(self.logger['num_match'], label='Num Match')
+        plt.xlabel('Timesteps')
+        plt.ylabel('Num Match')
+        plt.title('Number of Matches')
+        plt.gca().yaxis.set_major_locator(plt.MaxNLocator(integer=True))
         
-        plt.subplot(3, 2, 6)
+        plt.subplot(4, 2, 7)
         plt.plot(self.logger['entropy'], label='Entropy')
         plt.xlabel('Timesteps')
         plt.ylabel('Entropy')
         plt.title('Entropy')
+        
+        plt.subplot(4, 2, 8)
+        plt.plot(self.logger['surr_loss'], label='PG Loss')
+        plt.xlabel('Timesteps')
+        plt.ylabel('PG Loss')
+        plt.title('PG')
         
         # Save the plot to a file using attributes
         plt.tight_layout()

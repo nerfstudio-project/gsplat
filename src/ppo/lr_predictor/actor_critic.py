@@ -8,7 +8,7 @@ from src.ppo.base_policy import Actor, Critic
 
 
 class LRCritic(Critic):
-    def __init__(self, input_dim: int = 1024, h_dim: int = 64):
+    def __init__(self, env, input_dim: int = 1024, h_dim: int = 64):
         super().__init__()
         # should map obs (image) to value
         self.layers = [
@@ -17,16 +17,20 @@ class LRCritic(Critic):
             nn.Linear(h_dim, 1),
         ]
         self.network = nn.Sequential(*self.layers)
+        self.env = env
 
     def forward(self, obs: Tensor):
         # Ensure obs is properly reshaped for the network
         batch_size = obs.shape[0] if len(obs.shape) > 3 else 1
         # obs = obs.view(batch_size, -1)  # Flatten input to (batch_size, features)
         
-        return self.network(obs)
-    
+        # return self.network(obs)
+
+        # For debugging, simply return mean of psnr's over diff lr for this img
+        return self.env.get_mean_reward()
+
 class LRActor(Actor):
-    def __init__(self, lrs: list[float] = None, input_dim: int = 1024, h_dim: int = 64):
+    def __init__(self, lrs: list[float] = None, input_dim: int = 1024, h_dim: int = 64, env=None):
         super().__init__()
         if lrs:
             self.lrs = lrs

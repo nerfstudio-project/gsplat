@@ -130,10 +130,10 @@ class Policy(nn.Module):
         self.actor_optimizer.step()
         # print(f"Did optimizer step with actor loss: {actor_loss}")
 
-        # Critic update
-        self.critic_optimizer.zero_grad()
-        critic_loss.backward()
-        self.critic_optimizer.step()
+        # # Critic update
+        # self.critic_optimizer.zero_grad()
+        # critic_loss.backward()
+        # self.critic_optimizer.step()
 
     def predict_values(self, obs):
         """
