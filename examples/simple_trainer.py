@@ -152,8 +152,10 @@ class Config:
     blur_opt: bool = False
     # Learning rate for blur optimization
     blur_opt_lr: float = 1e-3
-    # Regularization for blur mask
-    blur_mask_reg: float = 0.001
+    # Regularization for blur mask mean
+    blur_mean_reg: float = 0.001
+    # Regularization for blur mask smoothness
+    blur_smoothness_reg: float = 0.0
 
     # Enable bilateral grid. (experimental)
     use_bilateral_grid: bool = False
@@ -661,12 +663,15 @@ class Runner:
                     near_plane=cfg.near_plane,
                     far_plane=cfg.far_plane,
                     image_ids=image_ids,
-                    render_mode="RGB",
+                    render_mode="RGB+ED",
                     masks=masks,
                     blur=True,
                 )
-                colors_blur = renders_blur[..., 0:3]
-                blur_mask = self.blur_module.predict_mask(image_ids, depths)
+                colors_blur, depths_blur = (
+                    renders_blur[..., 0:3],
+                    renders_blur[..., 3:4],
+                )
+                blur_mask = self.blur_module.predict_mask(image_ids, depths_blur)
                 colors = (1 - blur_mask) * colors + blur_mask * colors_blur
 
             self.cfg.strategy.step_pre_backward(
@@ -706,7 +711,10 @@ class Runner:
                 tvloss = 10 * total_variation_loss(self.bil_grids.grids)
                 loss += tvloss
             if cfg.blur_opt:
-                loss += cfg.blur_mask_reg * self.blur_module.mask_variation_loss(
+                loss += cfg.blur_mean_reg * self.blur_module.mask_mean_loss(
+                    blur_mask, step
+                )
+                loss += cfg.blur_smoothness_reg * self.blur_module.mask_smoothness_loss(
                     blur_mask
                 )
 
@@ -932,8 +940,6 @@ class Runner:
             colors = torch.clamp(colors, 0.0, 1.0)
             canvas_list = [pixels, colors]
             if self.cfg.blur_opt and stage == "train":
-                blur_mask = self.blur_module.predict_mask(image_ids, depths)
-                canvas_list.append(blur_mask.repeat(1, 1, 1, 3))
                 renders_blur, _, _ = self.rasterize_splats(
                     camtoworlds=camtoworlds,
                     Ks=Ks,
@@ -943,11 +949,16 @@ class Runner:
                     near_plane=cfg.near_plane,
                     far_plane=cfg.far_plane,
                     image_ids=image_ids,
-                    render_mode="RGB",
+                    render_mode="RGB+ED",
                     masks=masks,
                     blur=True,
                 )
-                colors_blur = renders_blur[..., 0:3]
+                colors_blur, depths_blur = (
+                    renders_blur[..., 0:3],
+                    renders_blur[..., 3:4],
+                )
+                blur_mask = self.blur_module.predict_mask(image_ids, depths_blur)
+                canvas_list.append(blur_mask.repeat(1, 1, 1, 3))
                 canvas_list.append(torch.clamp(colors_blur, 0.0, 1.0))
                 colors = (1 - blur_mask) * colors + blur_mask * colors_blur
                 colors = torch.clamp(colors, 0.0, 1.0)

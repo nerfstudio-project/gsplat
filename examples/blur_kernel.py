@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 import torch.nn.functional as F
+from kornia.filters import median_blur
 from examples.mlp import create_mlp
 from gsplat.utils import log_transform
 
@@ -65,16 +66,26 @@ class BlurOptModule(nn.Module):
         depths_emb = self.depths_encoder.encode(log_transform(depths))
         images_emb = self.embeds(image_ids).repeat(*depths_emb.shape[:-1], 1)
         mlp_in = torch.cat([images_emb, grid_emb, depths_emb], dim=-1)
-        mlp_out = self.blur_mask_mlp(mlp_in.reshape(-1, mlp_in.shape[-1]))
+        mlp_out = self.blur_mask_mlp(mlp_in.reshape(-1, mlp_in.shape[-1])).reshape(
+            depths.shape
+        )
         blur_mask = torch.sigmoid(mlp_out)
-        blur_mask = blur_mask.reshape(depths.shape)
         return blur_mask
 
-    def mask_variation_loss(self, blur_mask: Tensor, eps: float = 1e-2):
-        """Mask variation loss."""
+    def mask_mean_loss(self, blur_mask: Tensor, step: int, eps: float = 1e-2):
+        """Mask mean loss."""
         x = blur_mask.mean()
-        meanloss = (1 / (1 - x + eps) - 1) + (0.1 / (x + eps))
+        a = 0.9
+        meanloss = a * (1 / (1 - x + eps) - 1) + (1 - a) * (1 / (x + eps) - 1)
         return meanloss
+
+    def mask_smoothness_loss(self, blur_mask: Tensor):
+        """Mask smoothness loss."""
+        blurred_xy = median_blur(blur_mask.permute(0, 3, 1, 2), (5, 5)).permute(
+            0, 2, 3, 1
+        )
+        smoothloss = F.huber_loss(blur_mask, blurred_xy)
+        return smoothloss
 
 
 def get_encoder(num_freqs: int, input_dims: int):
