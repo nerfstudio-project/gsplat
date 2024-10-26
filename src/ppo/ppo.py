@@ -169,7 +169,7 @@ class PPO:
         # print(f"actor loss before: {actor_loss}")
         # print(f"surr1: {surr1}, surr2: {surr2}")
         # print(f"ratios: {ratios}")
-        entropy_loss = -self.entropy_coeff * entropy.mean()
+        entropy_loss = self.entropy_coeff * entropy.mean()
         actor_loss -= entropy_loss
         
         # print(f"actions: {actions}")

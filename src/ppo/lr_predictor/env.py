@@ -34,7 +34,7 @@ class LREnv(Env):
         self.n_trials = n_trials
         self.iterations = iterations
         # self.lrs = [0.007 + i*0.001 for i in range(10)] #(1, 0.1, 0.01,)
-        self.lrs = [0.005 + i*0.001 for i in range(30)] #(1, 0.1, 0.01,)
+        self.lrs = [0.005 + i*0.001 for i in range(40)] #(1, 0.1, 0.01,)
         self.lrs = [round(lr, 5) for lr in self.lrs]
 
         self.device = device

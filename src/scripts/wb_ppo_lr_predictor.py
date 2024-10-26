@@ -1,4 +1,4 @@
-
+#!/secondary/home/aayushg/miniconda3/envs/gsplat/bin/ python3
 import matplotlib.pyplot as plt
 import torch
 import wandb
@@ -49,9 +49,9 @@ def eval_policy(policy, env):
 class PPOConfig:
     n_epochs: int = 5
     batch_size: int = 64
-    buffer_size: int = 128
-    num_updates: int = 250
-    entropy_coeff: float = 0.0
+    buffer_size: int = 64*8
+    num_updates: int = 300
+    entropy_coeff: float = 0.01
     log_interval: int = 1
     actor_lr: float = 3e-4
     critic_lr: float = 3e-4
@@ -89,6 +89,8 @@ class WandbCallback:
 
 def setup_wandb_sweep():
     sweep_config = {
+        'program': 'src/scripts/wb_ppo_lr_predictor.py',  # Add this line
+        'command': ['/secondary/home/aayushg/miniconda3/envs/gsplat/bin/python3', '${program}', '--run_sweep_agent'],  # Updated this line
         'method': 'grid',
         'parameters': {
             'n_epochs': {'values': [3, 5, 7]},
@@ -135,7 +137,7 @@ def train(config: PPOConfig, is_sweep: bool = False) -> None:
         dataset_path='src/data/small_mipnerf',
         num_points=100000,
         iterations=2000,
-        observation_shape=(256, 256, 3),  # Assuming these are your dimensions
+        observation_shape=(256, 256, 3),
         action_shape=(1,),
         device=config.device,
         img_encoder='dino'
@@ -188,29 +190,46 @@ def train_with_wandb(config: PPOConfig, is_sweep: bool = False, project_name: st
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--sweep', action='store_true', help='Run hyperparameter sweep')
+    parser.add_argument('--create_sweep_only', action='store_true', help='Only create sweep, do not run agent')
+    parser.add_argument('--run_sweep_agent', action='store_true', help='Run as sweep agent')
     parser.add_argument('--device', type=str, default='cuda', help='Device to run on')
     args = parser.parse_args()
 
-    # Base config (used for single runs or as default for sweeps)
     config = PPOConfig(device=args.device)
-
-    if args.sweep:
-        print("Running hyperparameter sweep...")
+    project = "ppo_lr_predictor"
+    entity = "rl_gsplat"
+    if args.create_sweep_only:
+        # Just create and print sweep ID
         wandb_config, total_combinations = setup_wandb_sweep()
         sweep_id = wandb.sweep(
             wandb_config,
-            project="ppo_lr_predictor",
-            entity="rl_gsplat"
+            project=project,
+            entity=entity
         )
-        print(f"*******Sweep ID: {sweep_id}**********")
-
+        print(f"*******Sweep ID: {entity}/{project}/{sweep_id} **********")
         return
+
+    if args.run_sweep_agent:
+        # Run as an agent for an existing sweep
+        train_with_wandb(config, is_sweep=True)
+        return
+
+    if args.sweep:
+        # Create sweep and run agent in same process
+        wandb_config, total_combinations = setup_wandb_sweep()
+        sweep_id = wandb.sweep(
+            wandb_config,
+            project=project,
+            entity=entity
+        )
+        print(f"*******Sweep ID: {entity}/{project}/{sweep_id} **********")
         wandb.agent(
             sweep_id,
             lambda: train_with_wandb(config, is_sweep=True),
-            count=total_combinations  # Adjust number of runs as needed
+            count=total_combinations
         )
     else:
+        # Regular single run
         print("Running single training run with fixed parameters...")
         train_with_wandb(config, is_sweep=False)
 
