@@ -43,9 +43,10 @@ class LREnv(Env):
 
         if img_encoder == 'dino':
             self.img_encoder = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14')
-            self.observation_shape = (self.img_encoder.embed_dim,)
+            self.encoded_img_shape = (self.img_encoder.embed_dim,)
             print("Using DINO large distilled as encoder")
-        
+        self.observation_shape = (1,) # Just img index
+
         self.num_images = 0
         self.encoded_images = []
         self.orig_images = []
@@ -160,7 +161,7 @@ class LREnv(Env):
         self.sample_new_img()
 
     def sample_new_img(self):
-        self.current_img_idx = np.random.randint(0, self.num_images)
+        self.current_img_idx = torch.tensor(np.random.randint(0, self.num_images), device=self.device)
 
     def reset(self):
         """
@@ -203,9 +204,17 @@ class LREnv(Env):
 
     def get_observation(self):
         """
-        Return the current state
+        Return the current state (img_idx)
         """
-        return self.encoded_images[self.current_img_idx]
+        return self.current_img_idx
     
-    def get_mean_reward(self):
-        return self.psnr_stats['mean'][self.current_img_idx]
+    def get_encoded_images(self, img_idx: torch.tensor):
+        imgs = self.encoded_images[img_idx]
+        if len(imgs.shape) == 4:
+            imgs = imgs.squeeze(1)
+        if len(imgs.shape) == 3:
+            imgs = imgs.squeeze(1)
+        return imgs
+    
+    def get_mean_reward(self, img_idx: torch.tensor):
+        return self.psnr_stats['mean'][img_idx]

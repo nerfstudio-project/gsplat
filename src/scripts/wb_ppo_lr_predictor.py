@@ -32,13 +32,11 @@ def eval_policy(policy, env):
     policy.critic.eval()
     num_match = 0
     with torch.no_grad():
-        for i in range(env.num_images):
-            embed = env.encoded_images[i]
-            obs = embed.to(device)
-            lr = policy.actor.get_best_lr(obs)
-            idx = int((lr - env.lrs[0]) / (env.lrs[1] - env.lrs[0]))
-            value = policy.critic(obs)
-            num_match += int(lr == env.best_lr[i])
+        img_idx_tensor = torch.arange(env.num_images, device=device)
+        lr = policy.actor.get_best_lr(img_idx_tensor)
+        value = policy.critic(img_idx_tensor)
+
+        num_match += (lr == env.best_lr[:env.num_images]).sum().item()          
             # print(f"img idx {i}: best: {env.best_lr[i]:8.4f}; pred: lr {lr:8.4f}, idx {idx}, value: {value.item():8.3f}")
     policy.actor.train()
     policy.critic.train()
@@ -48,8 +46,8 @@ def eval_policy(policy, env):
 @dataclass
 class PPOConfig:
     n_epochs: int = 5
-    batch_size: int = 64
-    buffer_size: int = 64*8
+    batch_size: int = 32
+    buffer_size: int = 32*4
     num_updates: int = 300
     entropy_coeff: float = 0.01
     log_interval: int = 1
@@ -143,8 +141,15 @@ def train(config: PPOConfig, is_sweep: bool = False) -> None:
         img_encoder='dino'
     )
 
-    actor = LRActor(lrs=env.lrs, input_dim=env.observation_shape[0])
-    critic = LRCritic(env=env, input_dim=env.observation_shape[0])
+    actor = LRActor(
+        env=env,
+        lrs=env.lrs,
+        input_dim=env.encoded_img_shape[0]
+    )
+    critic = LRCritic(
+        env=env,
+        input_dim=env.encoded_img_shape[0]
+    )
     policy = Policy(
         actor=actor,
         critic=critic,

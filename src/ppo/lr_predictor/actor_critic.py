@@ -5,10 +5,11 @@ import torch.nn.functional as F
 from torch import Tensor, optim
 import torch.distributions as dist
 from src.ppo.base_policy import Actor, Critic
+from src.ppo.base_env import Env
 
 
 class LRCritic(Critic):
-    def __init__(self, env, input_dim: int = 1024, h_dim: int = 64):
+    def __init__(self, env: Env, input_dim: int = 1024, h_dim: int = 64):
         super().__init__()
         # should map obs (image) to value
         self.layers = [
@@ -20,6 +21,7 @@ class LRCritic(Critic):
         self.env = env
 
     def forward(self, obs: Tensor):
+        obs = obs.to(torch.int)
         # Ensure obs is properly reshaped for the network
         batch_size = obs.shape[0] if len(obs.shape) > 3 else 1
         # obs = obs.view(batch_size, -1)  # Flatten input to (batch_size, features)
@@ -27,15 +29,17 @@ class LRCritic(Critic):
         # return self.network(obs)
 
         # For debugging, simply return mean of psnr's over diff lr for this img
-        return self.env.get_mean_reward()
+        values = self.env.get_mean_reward(obs)
+        return values
 
 class LRActor(Actor):
-    def __init__(self, lrs: list[float] = None, input_dim: int = 1024, h_dim: int = 64, env=None):
+    def __init__(self, env: Env, lrs: list[float] = None, input_dim: int = 1024, h_dim: int = 64):
         super().__init__()
         if lrs:
-            self.lrs = lrs
+            self.lrs = Tensor(lrs)
         else:
             self.lrs = Tensor([10**-i for i in range(10)])
+        self.lrs = self.lrs.to(device=env.device)
         
         print(f"Actor using learning rates: {self.lrs}")
         self.layers = [
@@ -45,16 +49,14 @@ class LRActor(Actor):
             nn.Softmax(dim=-1)
         ]
         self.network = nn.Sequential(*self.layers)
+        self.env = env
         
     def forward(self, obs: Tensor):
-        return self.network(obs)
-    # def __init__(self, input_dim: int = 1024, h_dim: int = 64):
-    #     super().__init__()
-    #     self.logits = nn.Parameter(torch.zeros(10))
-    #     self.lrs = Tensor([10**-i for i in range(10)])
-
-    # def forward(self, obs: Tensor):
-    #     return F.softmax(self.logits, dim=-1)
+        # convert from torch float to int
+        obs = obs.to(torch.int)
+        
+        enc_images = self.env.get_encoded_images(obs) # get imgs from idx
+        return self.network(enc_images)
 
     def actor_distribution(self, obs: Tensor):
         # print(f"logits will be {self.forward(obs)[0]}")
@@ -77,7 +79,9 @@ class LRActor(Actor):
         
     def get_best_lr(self, obs: Tensor):
         logits = self.forward(obs)
-        return self.lrs[logits.argmax().item()]
+        best_lr_idx = logits.argmax(dim=-1)
+
+        return self.lrs[best_lr_idx]
     
     # def get_best_lr_prob(self):
     #     return self.forward().max().item()

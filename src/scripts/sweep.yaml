@@ -14,9 +14,9 @@ parameters:
   num_updates:
     values: [250, 350, 500, 600] # [200, 300, 400, 500]
   entropy_coeff:
-    values: [0.1] #0.0, 0.01, 0.05, 0.1
+    values: [0.0, 0.01, 0.05, 0.1] #0.0, 0.01, 0.05, 0.1
   actor_lr:
-    values: [0.0001, 0.0003, 0.001]
+    values: [0.001] #0.0001, 0.0003, 0.001
   critic_lr:
     values: [0.0001]
 metric:

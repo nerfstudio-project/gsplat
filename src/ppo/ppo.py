@@ -150,7 +150,7 @@ class PPO:
 
         # Evaluate the policy with the current obs and actions
         values_new, log_probs_new, entropy = self.policy.evaluate_actions(obs, actions)
-
+        
         # Calculate the ratio of new and old action probabilities
         ratios = torch.exp(log_probs_new - old_log_probs)
         # print(f"ratios: {ratios}")
