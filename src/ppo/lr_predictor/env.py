@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import json
+import warnings
 import os
 from collections import defaultdict
 from examples.image_fitting import SimpleTrainer
@@ -16,13 +17,14 @@ class LREnv(Env):
     """
     def __init__(
         self, 
+        lrs: list[float],
         dataset_path: str,
         num_points: int, 
-        iterations: int,
+        num_iterations: int,
         # TODO: remove observation_shape?
         observation_shape: tuple, 
         action_shape: tuple,
-        n_trials: int = 10,
+        num_trials: int = 1,
         device='cuda',
         img_encoder: str = 'dino'
     ):
@@ -31,10 +33,10 @@ class LREnv(Env):
         # 
         self.max_steps = 1
         self.num_points = num_points
-        self.n_trials = n_trials
-        self.iterations = iterations
-        # self.lrs = [0.007 + i*0.001 for i in range(10)] #(1, 0.1, 0.01,)
-        self.lrs = [0.005 + i*0.001 for i in range(40)] #(1, 0.1, 0.01,)
+        self.num_trials = num_trials
+        self.num_iterations = num_iterations
+        
+        self.lrs = lrs
         self.lrs = [round(lr, 5) for lr in self.lrs]
 
         self.device = device
@@ -42,7 +44,9 @@ class LREnv(Env):
         self.action_shape = action_shape
 
         if img_encoder == 'dino':
-            self.img_encoder = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14')
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                self.img_encoder = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14')
             self.encoded_img_shape = (self.img_encoder.embed_dim,)
             print("Using DINO large distilled as encoder")
         self.observation_shape = (1,) # Just img index
@@ -65,7 +69,7 @@ class LREnv(Env):
 
             self.encoded_images.append(encoded_img)
         print("=" * 100)    
-        print(f'num images: {self.num_images}\n num_trials: {self.n_trials}\n num_points: {self.num_points}\n iterations: {self.iterations}, num learning rates: {len(self.lrs)}')
+        print(f'num images: {self.num_images}\n num_trials: {self.num_trials}\n num_points: {self.num_points}\n num_iterations: {self.num_iterations}, num learning rates: {len(self.lrs)}')
         print("=" * 100)    
         self.encoded_images = torch.stack(self.encoded_images)
         self.original_images = torch.stack(self.orig_images)
@@ -76,7 +80,7 @@ class LREnv(Env):
             current_dir, f"{dataset_name}_lr_losses_final.json"
         )
         
-        self.num_images = 8
+        # self.num_images = 8
         
         # compute losses for each LR        
         if os.path.exists(losses_json_path):
@@ -89,12 +93,12 @@ class LREnv(Env):
                 print(f"precomputing image {i+1}/{self.num_images}")
                 lr_losses = {str(lr): [] for lr in self.lrs}
                 for lr in self.lrs:
-                    for trial_num in range(self.n_trials):
+                    for trial_num in range(self.num_trials):
                         print("*" * 50)
                         print(f'currently training with lr={lr}, trial {trial_num}')
                         trainer = SimpleTrainer(gt_image=original_img, num_points=num_points)
                         losses, _ = trainer.train(
-                            iterations=self.iterations,
+                            iterations=self.num_iterations,
                             lr=lr,
                             save_imgs=False,
                             model_type='3dgs',
@@ -133,6 +137,7 @@ class LREnv(Env):
         self.lr_losses_tensor = torch.stack(lr_losses_list)
         
         self.psnr = 10 * torch.log10(1 / self.lr_losses_tensor[:, :, -1])
+        self.psnr = (self.psnr - 14.0) / 9.0
         
         self.psnr_stats = {
             "mean": self.psnr.mean(dim=1),

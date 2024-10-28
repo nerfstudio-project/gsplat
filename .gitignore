@@ -127,3 +127,4 @@ results
 !examples/benchmarks/compression/results/
 
 wandb/
+temp/

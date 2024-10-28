@@ -36,7 +36,8 @@ def eval_policy(policy, env):
         lr = policy.actor.get_best_lr(img_idx_tensor)
         value = policy.critic(img_idx_tensor)
 
-        num_match += (lr == env.best_lr[:env.num_images]).sum().item()          
+        num_match += (lr == env.best_lr[:env.num_images]).sum().item()
+        # print(f"best: {env.best_lr[:env.num_images]}; pred: lr {lr}")         
             # print(f"img idx {i}: best: {env.best_lr[i]:8.4f}; pred: lr {lr:8.4f}, idx {idx}, value: {value.item():8.3f}")
     policy.actor.train()
     policy.critic.train()
@@ -46,14 +47,16 @@ def eval_policy(policy, env):
 @dataclass
 class PPOConfig:
     n_epochs: int = 5
-    batch_size: int = 32
-    buffer_size: int = 32*4
+    batch_size: int = 128
+    buffer_size: int = 512
     num_updates: int = 300
-    entropy_coeff: float = 0.01
+    entropy_coeff: float = 0.2
     log_interval: int = 1
     actor_lr: float = 3e-4
     critic_lr: float = 3e-4
+    clip_epsilon: float = 0.18
     device: str = 'cuda'
+    dataset_path: str = 'src/data/small_mipnerf'
 
 class WandbCallback:
     def __init__(self, policy, env, ppo, is_sweep: bool = False):
@@ -97,7 +100,8 @@ def setup_wandb_sweep():
             'num_updates': {'values': [200, 300, 400, 500]},
             'entropy_coeff': {'values': [0.0, 0.01, 0.05, 0.1]},
             'actor_lr': {'values': [1e-4, 3e-4, 1e-3]},
-            'critic_lr': {'values': [1e-4]} # no effect as critic is not trained (debug)
+            'critic_lr': {'values': [1e-4]}, # no effect as critic is not trained (debug)
+            'clip_epsilon': {'values': [0.15, 0.18, 0.2]}
             # 'critic_lr': {'values': [1e-4, 3e-4, 1e-3]}
         },
         'metric': {
@@ -126,13 +130,14 @@ def train(config: PPOConfig, is_sweep: bool = False) -> None:
             entropy_coeff=wandb.config.entropy_coeff,
             actor_lr=wandb.config.actor_lr,
             critic_lr=wandb.config.critic_lr,
+            clip_epsilon=wandb.config.clip_epsilon,
             device=config.device
         )
         wandb.config.update({"buffer_size": buffer_size}, allow_val_change=True)
         
     # Initialize environment and models
     env = LREnv(
-        dataset_path='src/data/small_mipnerf',
+        dataset_path=config.dataset_path,
         num_points=100000,
         iterations=2000,
         observation_shape=(256, 256, 3),
@@ -168,6 +173,7 @@ def train(config: PPOConfig, is_sweep: bool = False) -> None:
         log_interval=config.log_interval,
         device=config.device,
         entropy_coeff=config.entropy_coeff,
+        clip_epsilon=config.clip_epsilon,
         shuffle=True,
         normalize_advantages=True,
         plots_path=f'src/results/plot_{wandb.run.id}.png'

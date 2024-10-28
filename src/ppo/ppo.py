@@ -48,8 +48,7 @@ class PPO:
         """
         self.policy = policy.to(device)
         self.env = env
-        
-        assert env.device == device, "Policy and environment devices must match."
+        assert env.device == device or device == 'cuda', f"Policy device ({device}) and environment device ({env.device}) must match."
 
         # PPO Hyperparameters
         self.clip_epsilon = clip_epsilon
@@ -159,6 +158,7 @@ class PPO:
         # Compute the surrogate objectives (clipped vs unclipped)
         surr1 = ratios * advantages
         surr2 = torch.clamp(ratios, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * advantages
+        # print(f"ratios: {ratios}")
         # print(f"log_probs_new: {log_probs_new}")
         # print(f"old_log_probs: {old_log_probs}")
         # actor_loss = -(log_probs_new * rewards).mean()
@@ -233,7 +233,7 @@ class PPO:
         """
         Print a summary of the current training progress.
         """
-        print(f"Iteration {len(self.logger['timesteps'])}:")
+        print(f"Update {len(self.logger['timesteps'])}:")
         print(f"  Timesteps so far: {self.logger['t_so_far']}")
         print(f"  Actor Loss: {self.logger['actor_losses'][-1]:.6f}")
         print(f"  Entropy: {self.logger['entropy'][-1]:.4f}")
@@ -242,6 +242,7 @@ class PPO:
         print(f"  Avg Rewards: {self.logger['avg_rewards'][-1]:.4f}")
         print(f"  Avg Advantages: {self.logger['avg_advantages'][-1]:.4f}")
         print(f"  Avg Critic Values: {self.logger['avg_critic_values'][-1]:.4f}")
+
         if self.log_callback:
             num_match = self.log_callback(self.policy)
             self.logger["num_match"].append(num_match)
@@ -303,6 +304,29 @@ class PPO:
         plt.title('PG')
         
         # Save the plot to a file using attributes
-        plt.tight_layout()
-        plt.savefig(self.plots_path)
+        # plt.tight_layout()
+        # plt.savefig(self.plots_path)
         
+
+    def save_policy(self, path="policy_checkpoint.pth"):
+        checkpoint = {
+            'actor_state_dict': self.policy.actor.state_dict(),
+            'critic_state_dict': self.policy.critic.state_dict(),
+            'actor_optimizer_state_dict': self.policy.actor_optimizer.state_dict(),
+            'critic_optimizer_state_dict': self.policy.critic_optimizer.state_dict(),
+        }
+        torch.save(checkpoint, path)
+        print(f"Policy saved to {path}")
+
+    def load_policy(self, path="policy_checkpoint.pth", device='cuda'):
+        checkpoint = torch.load(path, map_location=device)
+        
+        # Load actor and critic state dictionaries
+        self.policy.actor.load_state_dict(checkpoint['actor_state_dict'])
+        self.policy.critic.load_state_dict(checkpoint['critic_state_dict'])
+
+        # Load optimizers' state dictionaries
+        self.policy.actor_optimizer.load_state_dict(checkpoint['actor_optimizer_state_dict'])
+        self.policy.critic_optimizer.load_state_dict(checkpoint['critic_optimizer_state_dict'])
+
+        print(f"Policy loaded from {path} onto {device}")

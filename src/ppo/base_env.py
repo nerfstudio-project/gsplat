@@ -7,6 +7,7 @@ class Env(ABC):
         self.num_steps = 100
         self.observation_shape = observation_shape
         self.action_shape = act_shape
+        self.eval_mode = 'train'
         super().__init__()
         
     @abstractmethod

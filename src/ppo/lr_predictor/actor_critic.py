@@ -20,17 +20,19 @@ class LRCritic(Critic):
         self.network = nn.Sequential(*self.layers)
         self.env = env
 
-    def forward(self, obs: Tensor):
+    def forward(self, obs: Tensor):        
         obs = obs.to(torch.int)
+        enc_images = self.env.get_encoded_images(obs)
+        
         # Ensure obs is properly reshaped for the network
         batch_size = obs.shape[0] if len(obs.shape) > 3 else 1
         # obs = obs.view(batch_size, -1)  # Flatten input to (batch_size, features)
-        
-        # return self.network(obs)
+
+        return self.network(enc_images)
 
         # For debugging, simply return mean of psnr's over diff lr for this img
-        values = self.env.get_mean_reward(obs)
-        return values
+        # values = self.env.get_mean_reward(obs)
+        # return values
 
 class LRActor(Actor):
     def __init__(self, env: Env, lrs: list[float] = None, input_dim: int = 1024, h_dim: int = 64):

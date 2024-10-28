@@ -82,6 +82,7 @@ class Policy(nn.Module):
                 device='cuda'
                 ):
         super().__init__()
+        print(f'initializing policy with device: {device}')
         self.actor = actor.to(device)
         self.critic = critic.to(device)
 
@@ -131,9 +132,9 @@ class Policy(nn.Module):
         # print(f"Did optimizer step with actor loss: {actor_loss}")
 
         # # Critic update
-        # self.critic_optimizer.zero_grad()
-        # critic_loss.backward()
-        # self.critic_optimizer.step()
+        self.critic_optimizer.zero_grad()
+        critic_loss.backward()
+        self.critic_optimizer.step()
 
     def predict_values(self, obs):
         """
