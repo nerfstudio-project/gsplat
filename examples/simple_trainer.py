@@ -155,7 +155,8 @@ class Config:
     # Regularization for blur mask mean
     blur_mean_reg: float = 0.001
     # Regularization for blur mask smoothness
-    blur_smoothness_reg: float = 0.0
+    blur_a: float = 4
+    blur_c: float = 0.5
 
     # Enable bilateral grid. (experimental)
     use_bilateral_grid: bool = False
@@ -414,7 +415,7 @@ class Runner:
 
         self.blur_optimizers = []
         if cfg.blur_opt:
-            self.blur_module = BlurOptModule(len(self.trainset)).to(self.device)
+            self.blur_module = BlurOptModule(cfg, len(self.trainset)).to(self.device)
             self.blur_module.zero_init()
             self.blur_optimizers = [
                 torch.optim.Adam(
@@ -671,7 +672,7 @@ class Runner:
                     renders_blur[..., 0:3],
                     renders_blur[..., 3:4],
                 )
-                blur_mask = self.blur_module.predict_mask(image_ids, depths_blur)
+                blur_mask = self.blur_module.predict_mask(image_ids, depths)
                 colors = (1 - blur_mask) * colors + blur_mask * colors_blur
 
             self.cfg.strategy.step_pre_backward(
@@ -713,9 +714,6 @@ class Runner:
             if cfg.blur_opt:
                 loss += cfg.blur_mean_reg * self.blur_module.mask_mean_loss(
                     blur_mask, step
-                )
-                loss += cfg.blur_smoothness_reg * self.blur_module.mask_smoothness_loss(
-                    blur_mask
                 )
 
             # regularizations
@@ -875,6 +873,8 @@ class Runner:
                 self.eval(step, stage="train")
                 self.eval(step)
                 self.render_traj(step)
+            if (step + 1) % 1000 == 0 or step == 0:
+                self.eval(step, stage="train", vis_skip=True)
 
             # run compression
             if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:
@@ -892,7 +892,7 @@ class Runner:
                 self.viewer.update(step, num_train_rays_per_step)
 
     @torch.no_grad()
-    def eval(self, step: int, stage: str = "val"):
+    def eval(self, step: int, stage: str = "val", vis_skip: bool = False):
         """Entry for evaluation."""
         print("Running evaluation...")
         cfg = self.cfg
@@ -904,10 +904,13 @@ class Runner:
         dataloader = torch.utils.data.DataLoader(
             dataset, batch_size=1, shuffle=False, num_workers=1
         )
+        train_vis_image_ids = np.linspace(0, len(dataloader) - 1, 7).astype(int)
 
         ellipse_time = 0
         metrics = defaultdict(list)
         for i, data in enumerate(dataloader):
+            if vis_skip and stage == "train" and i not in train_vis_image_ids:
+                continue
             camtoworlds = data["camtoworld"].to(device)
             Ks = data["K"].to(device)
             pixels = data["image"].to(device) / 255.0
@@ -957,7 +960,7 @@ class Runner:
                     renders_blur[..., 0:3],
                     renders_blur[..., 3:4],
                 )
-                blur_mask = self.blur_module.predict_mask(image_ids, depths_blur)
+                blur_mask = self.blur_module.predict_mask(image_ids, depths)
                 canvas_list.append(blur_mask.repeat(1, 1, 1, 3))
                 canvas_list.append(torch.clamp(colors_blur, 0.0, 1.0))
                 colors = (1 - blur_mask) * colors + blur_mask * colors_blur

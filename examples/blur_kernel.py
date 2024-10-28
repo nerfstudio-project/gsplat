@@ -10,8 +10,11 @@ from gsplat.utils import log_transform
 class BlurOptModule(nn.Module):
     """Blur optimization module."""
 
-    def __init__(self, n: int, embed_dim: int = 4):
+    def __init__(self, cfg, n: int, embed_dim: int = 4):
         super().__init__()
+        self.a = cfg.blur_a
+        self.c = cfg.blur_c
+
         self.embeds = torch.nn.Embedding(n, embed_dim)
         self.means_encoder = get_encoder(3, 3)
         self.depths_encoder = get_encoder(3, 1)
@@ -75,17 +78,17 @@ class BlurOptModule(nn.Module):
     def mask_mean_loss(self, blur_mask: Tensor, step: int, eps: float = 1e-2):
         """Mask mean loss."""
         x = blur_mask.mean()
-        a = 0.9
-        meanloss = a * (1 / (1 - x + eps) - 1) + (1 - a) * (1 / (x + eps) - 1)
-        return meanloss
-
-    def mask_smoothness_loss(self, blur_mask: Tensor):
-        """Mask smoothness loss."""
-        blurred_xy = median_blur(blur_mask.permute(0, 3, 1, 2), (5, 5)).permute(
-            0, 2, 3, 1
-        )
-        smoothloss = F.huber_loss(blur_mask, blurred_xy)
-        return smoothloss
+        if step <= 2000:
+            a = 20
+            b = 1
+            c = 0.2
+        else:
+            a = self.a
+            b = 1
+            c = self.c
+        print(x.item(), a, b, c)
+        meanloss = a * (1 / (1 - x + eps) - 1) + b * (1 / (x + eps) - 1)
+        return c * meanloss
 
 
 def get_encoder(num_freqs: int, input_dims: int):
