@@ -78,14 +78,14 @@ class BlurOptModule(nn.Module):
 
         The loss function is designed to diverge to +infinity at 0 and 1. This
         prevents the mask from collapsing to predicting all 0s or 1s. It is also
-        bias towards 0 to encourage sparsity. During warmup, we set this bias very
-        high to start with a sparse and not collapsed blur mask."""
+        bias towards 0 to encourage sparsity. During warmup, we set this bias even
+        higher to start with a sparse and not collapsed blur mask."""
         x = blur_mask.mean()
         if step <= self.num_warmup_steps:
-            a = 20
+            a = 2
         else:
-            a = 10
-        meanloss = a * (1 / (1 - x + eps) - 1) + (1 / (x + eps) - 1)
+            a = 1
+        meanloss = a * (1 / (1 - x + eps) - 1) + 0.1 * (1 / (x + eps) - 1)
         return meanloss
 
 

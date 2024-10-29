@@ -153,7 +153,7 @@ class Config:
     # Learning rate for blur optimization
     blur_opt_lr: float = 1e-3
     # Regularization for blur mask mean
-    blur_mean_reg: float = 0.0002
+    blur_mean_reg: float = 0.002
 
     # Enable bilateral grid. (experimental)
     use_bilateral_grid: bool = False
