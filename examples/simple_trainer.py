@@ -28,6 +28,7 @@ from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMe
 from fused_ssim import fused_ssim
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from typing_extensions import Literal, assert_never
+from blur_opt import BlurOptModule
 from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
 from lib_bilagrid import (
     BilateralGrid,
@@ -35,7 +36,6 @@ from lib_bilagrid import (
     color_correct,
     total_variation_loss,
 )
-from blur_kernel import BlurOptModule
 
 from gsplat.compression import PngCompression
 from gsplat.distributed import cli
@@ -412,7 +412,7 @@ class Runner:
 
         self.blur_optimizers = []
         if cfg.blur_opt:
-            self.blur_module = BlurOptModule(cfg, len(self.trainset)).to(self.device)
+            self.blur_module = BlurOptModule(len(self.trainset)).to(self.device)
             self.blur_module.zero_init()
             self.blur_optimizers = [
                 torch.optim.Adam(
