@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -7,14 +6,13 @@ from examples.mlp import create_mlp
 from gsplat.utils import log_transform
 
 
-@dataclass
 class BlurOptModule(nn.Module):
     """Blur optimization module."""
 
-    num_warmup_steps: int = 2000
-
     def __init__(self, n: int, embed_dim: int = 4):
         super().__init__()
+        self.num_warmup_steps = 2000
+
         self.embeds = torch.nn.Embedding(n, embed_dim)
         self.means_encoder = get_encoder(3, 3)
         self.depths_encoder = get_encoder(3, 1)
@@ -76,7 +74,12 @@ class BlurOptModule(nn.Module):
         return blur_mask
 
     def mask_mean_loss(self, blur_mask: Tensor, step: int, eps: float = 1e-2):
-        """Mask mean loss."""
+        """Loss function for regularizing the blur mask by controlling its mean.
+
+        The loss function is designed to diverge to +infinity at 0 and 1. This
+        prevents the mask from collapsing to predicting all 0s or 1s. It is also
+        bias towards 0 to encourage sparsity. During warmup, we set this bias very
+        high to start with a sparse and not collapsed blur mask."""
         x = blur_mask.mean()
         if step <= self.num_warmup_steps:
             a = 20
