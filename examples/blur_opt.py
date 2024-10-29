@@ -81,10 +81,12 @@ class BlurOptModule(nn.Module):
         sparsity. During warmup, the bias is even higher to start with a sparse mask."""
         x = blur_mask.mean()
         if step <= self.num_warmup_steps:
-            a = 2
+            a = 3
+            b = 0.1
         else:
             a = 1
-        maskloss = a * (1 / (1 - x + eps) - 1) + 0.1 * (1 / (x + eps) - 1)
+            b = 0.1
+        maskloss = a * (1 / (1 - x + eps) - 1) + b * (1 / (x + eps) - 1)
         return maskloss
 
 
