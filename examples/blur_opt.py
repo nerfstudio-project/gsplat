@@ -11,8 +11,6 @@ class BlurOptModule(nn.Module):
 
     def __init__(self, n: int, embed_dim: int = 4):
         super().__init__()
-        self.num_warmup_steps = 2000
-
         self.embeds = torch.nn.Embedding(n, embed_dim)
         self.means_encoder = get_encoder(3, 3)
         self.depths_encoder = get_encoder(3, 1)
@@ -73,19 +71,15 @@ class BlurOptModule(nn.Module):
         blur_mask = torch.sigmoid(mlp_out)
         return blur_mask
 
-    def mask_loss(self, blur_mask: Tensor, step: int, eps: float = 1e-2):
+    def mask_loss(self, blur_mask: Tensor, eps: float = 1e-2):
         """Loss function for regularizing the blur mask by controlling its mean.
 
         The loss function diverges to +infinity at 0 and 1. This prevents the mask
-        from collapsing all 0s or 1s. It is also biased towards 0 to encourage
-        sparsity. During warmup, the bias is even higher to start with a sparse mask."""
+        from collapsing all 0s or 1s. It is biased towards 0 to encourage sparsity.
+        """
         x = blur_mask.mean()
-        if step <= self.num_warmup_steps:
-            a = 3
-            b = 0.1
-        else:
-            a = 1
-            b = 0.1
+        a = 2.0
+        b = 0.1
         maskloss = a * (1 / (1 - x + eps) - 1) + b * (1 / (x + eps) - 1)
         return maskloss
 

@@ -153,7 +153,9 @@ class Config:
     # Learning rate for blur optimization
     blur_opt_lr: float = 1e-3
     # Regularization for blur mask
-    blur_mask_reg: float = 0.002
+    blur_mask_reg: float = 0.001
+    # Blur start iteration
+    blur_start_iter: int = 2_000
 
     # Enable bilateral grid. (experimental)
     use_bilateral_grid: bool = False
@@ -651,7 +653,7 @@ class Runner:
             if cfg.random_bkgd:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
-            if cfg.blur_opt:
+            if cfg.blur_opt and step >= cfg.blur_start_iter:
                 blur_mask = self.blur_module.predict_mask(image_ids, depths)
                 renders_blur, _, _ = self.rasterize_splats(
                     camtoworlds=camtoworlds,
@@ -704,8 +706,8 @@ class Runner:
             if cfg.use_bilateral_grid:
                 tvloss = 10 * total_variation_loss(self.bil_grids.grids)
                 loss += tvloss
-            if cfg.blur_opt:
-                loss += cfg.blur_mask_reg * self.blur_module.mask_loss(blur_mask, step)
+            if cfg.blur_opt and step >= cfg.blur_start_iter:
+                loss += cfg.blur_mask_reg * self.blur_module.mask_loss(blur_mask)
 
             # regularizations
             if cfg.opacity_reg > 0.0:
@@ -865,6 +867,8 @@ class Runner:
                 self.eval(step, stage="train")
                 self.eval(step, stage="val")
                 self.render_traj(step)
+            if step % 1000 == 0:
+                self.eval(step, stage="vis")
 
             # run compression
             if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:
@@ -890,7 +894,7 @@ class Runner:
         world_rank = self.world_rank
         world_size = self.world_size
 
-        dataset = self.trainset if stage == "train" else self.valset
+        dataset = self.valset if stage == "val" else self.trainset
         dataloader = torch.utils.data.DataLoader(
             dataset, batch_size=1, shuffle=False, num_workers=1
         )
@@ -898,6 +902,9 @@ class Runner:
         ellipse_time = 0
         metrics = defaultdict(list)
         for i, data in enumerate(dataloader):
+            if stage == "vis":
+                if i % 5 != 0:
+                    continue
             camtoworlds = data["camtoworld"].to(device)
             Ks = data["K"].to(device)
             pixels = data["image"].to(device) / 255.0
@@ -929,7 +936,7 @@ class Runner:
 
             colors = torch.clamp(colors, 0.0, 1.0)
             canvas_list = [pixels, colors]
-            if self.cfg.blur_opt and stage == "train":
+            if self.cfg.blur_opt and stage != "val":
                 blur_mask = self.blur_module.predict_mask(image_ids, depths)
                 canvas_list.append(blur_mask.repeat(1, 1, 1, 3))
                 renders_blur, _, _ = self.rasterize_splats(
