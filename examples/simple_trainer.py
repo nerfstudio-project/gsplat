@@ -83,7 +83,7 @@ class Config:
     # Number of training steps
     max_steps: int = 30_000
     # Steps to evaluate the model
-    eval_steps: List[int] = field(default_factory=lambda: [7_000, 15_000, 30_000])
+    eval_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
     # Steps to save the model
     save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
 
@@ -153,10 +153,7 @@ class Config:
     # Learning rate for blur optimization
     blur_opt_lr: float = 1e-3
     # Regularization for blur mask mean
-    blur_mean_reg: float = 0.001
-    # Regularization for blur mask smoothness
-    blur_a: float = 4
-    blur_c: float = 0.5
+    blur_mean_reg: float = 0.0002
 
     # Enable bilateral grid. (experimental)
     use_bilateral_grid: bool = False
@@ -655,6 +652,7 @@ class Runner:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
             if cfg.blur_opt:
+                blur_mask = self.blur_module.predict_mask(image_ids, depths)
                 renders_blur, _, _ = self.rasterize_splats(
                     camtoworlds=camtoworlds,
                     Ks=Ks,
@@ -664,16 +662,11 @@ class Runner:
                     near_plane=cfg.near_plane,
                     far_plane=cfg.far_plane,
                     image_ids=image_ids,
-                    render_mode="RGB+ED",
+                    render_mode="RGB",
                     masks=masks,
                     blur=True,
                 )
-                colors_blur, depths_blur = (
-                    renders_blur[..., 0:3],
-                    renders_blur[..., 3:4],
-                )
-                blur_mask = self.blur_module.predict_mask(image_ids, depths)
-                colors = (1 - blur_mask) * colors + blur_mask * colors_blur
+                colors = (1 - blur_mask) * colors + blur_mask * renders_blur[..., 0:3]
 
             self.cfg.strategy.step_pre_backward(
                 params=self.splats,
@@ -871,10 +864,8 @@ class Runner:
             # eval the full set
             if step in [i - 1 for i in cfg.eval_steps]:
                 self.eval(step, stage="train")
-                self.eval(step)
+                self.eval(step, stage="val")
                 self.render_traj(step)
-            if (step + 1) % 1000 == 0 or step == 0:
-                self.eval(step, stage="train", vis_skip=True)
 
             # run compression
             if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:
@@ -892,7 +883,7 @@ class Runner:
                 self.viewer.update(step, num_train_rays_per_step)
 
     @torch.no_grad()
-    def eval(self, step: int, stage: str = "val", vis_skip: bool = False):
+    def eval(self, step: int, stage: str = "val"):
         """Entry for evaluation."""
         print("Running evaluation...")
         cfg = self.cfg
@@ -904,13 +895,10 @@ class Runner:
         dataloader = torch.utils.data.DataLoader(
             dataset, batch_size=1, shuffle=False, num_workers=1
         )
-        train_vis_image_ids = np.linspace(0, len(dataloader) - 1, 7).astype(int)
 
         ellipse_time = 0
         metrics = defaultdict(list)
         for i, data in enumerate(dataloader):
-            if vis_skip and stage == "train" and i not in train_vis_image_ids:
-                continue
             camtoworlds = data["camtoworld"].to(device)
             Ks = data["K"].to(device)
             pixels = data["image"].to(device) / 255.0
@@ -943,6 +931,8 @@ class Runner:
             colors = torch.clamp(colors, 0.0, 1.0)
             canvas_list = [pixels, colors]
             if self.cfg.blur_opt and stage == "train":
+                blur_mask = self.blur_module.predict_mask(image_ids, depths)
+                canvas_list.append(blur_mask.repeat(1, 1, 1, 3))
                 renders_blur, _, _ = self.rasterize_splats(
                     camtoworlds=camtoworlds,
                     Ks=Ks,
@@ -952,16 +942,11 @@ class Runner:
                     near_plane=cfg.near_plane,
                     far_plane=cfg.far_plane,
                     image_ids=image_ids,
-                    render_mode="RGB+ED",
+                    render_mode="RGB",
                     masks=masks,
                     blur=True,
                 )
-                colors_blur, depths_blur = (
-                    renders_blur[..., 0:3],
-                    renders_blur[..., 3:4],
-                )
-                blur_mask = self.blur_module.predict_mask(image_ids, depths)
-                canvas_list.append(blur_mask.repeat(1, 1, 1, 3))
+                colors_blur = renders_blur[..., 0:3]
                 canvas_list.append(torch.clamp(colors_blur, 0.0, 1.0))
                 colors = (1 - blur_mask) * colors + blur_mask * colors_blur
                 colors = torch.clamp(colors, 0.0, 1.0)

@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 import torch.nn.functional as F
-from kornia.filters import median_blur
 from examples.mlp import create_mlp
 from gsplat.utils import log_transform
 
@@ -10,11 +9,8 @@ from gsplat.utils import log_transform
 class BlurOptModule(nn.Module):
     """Blur optimization module."""
 
-    def __init__(self, cfg, n: int, embed_dim: int = 4):
+    def __init__(self, n: int, embed_dim: int = 4):
         super().__init__()
-        self.a = cfg.blur_a
-        self.c = cfg.blur_c
-
         self.embeds = torch.nn.Embedding(n, embed_dim)
         self.means_encoder = get_encoder(3, 3)
         self.depths_encoder = get_encoder(3, 1)
@@ -80,15 +76,10 @@ class BlurOptModule(nn.Module):
         x = blur_mask.mean()
         if step <= 2000:
             a = 20
-            b = 1
-            c = 0.2
         else:
-            a = self.a
-            b = 1
-            c = self.c
-        print(x.item(), a, b, c)
-        meanloss = a * (1 / (1 - x + eps) - 1) + b * (1 / (x + eps) - 1)
-        return c * meanloss
+            a = 10
+        meanloss = a * (1 / (1 - x + eps) - 1) + (1 / (x + eps) - 1)
+        return meanloss
 
 
 def get_encoder(num_freqs: int, input_dims: int):

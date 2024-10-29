@@ -1,12 +1,11 @@
 SCENE_DIR="data/deblur_dataset/real_defocus_blur"
 SCENE_LIST="defocuscake defocuscaps defocuscisco defocuscoral defocuscupcake defocuscups defocusdaisy defocussausage defocusseal defocustools"
-SCENE_LIST="defocuscake defocustools defocussausage defocuscupcake defocuscups defocuscoral defocusdaisy defocusseal defocuscaps defocuscisco"
 
 DATA_FACTOR=4
 RENDER_TRAJ_PATH="spiral"
 CAP_MAX=250000
 
-RESULT_DIR="results/benchmark_mcmc_deblur/c0.2_a10"
+RESULT_DIR="results/benchmark_mcmc_deblur"
 for SCENE in $SCENE_LIST;
 do
     echo "Running $SCENE"
@@ -15,8 +14,6 @@ do
     CUDA_VISIBLE_DEVICES=0 python simple_trainer.py mcmc --disable_viewer --data_factor $DATA_FACTOR \
         --strategy.cap-max $CAP_MAX \
         --blur_opt \
-        --blur_a 10 \
-        --blur_c 0.2 \
         --render_traj_path $RENDER_TRAJ_PATH \
         --data_dir $SCENE_DIR/$SCENE/ \
         --result_dir $RESULT_DIR/$SCENE
