@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -6,8 +7,11 @@ from examples.mlp import create_mlp
 from gsplat.utils import log_transform
 
 
+@dataclass
 class BlurOptModule(nn.Module):
     """Blur optimization module."""
+
+    num_warmup_steps: int = 2000
 
     def __init__(self, n: int, embed_dim: int = 4):
         super().__init__()
@@ -74,7 +78,7 @@ class BlurOptModule(nn.Module):
     def mask_mean_loss(self, blur_mask: Tensor, step: int, eps: float = 1e-2):
         """Mask mean loss."""
         x = blur_mask.mean()
-        if step <= 2000:
+        if step <= self.num_warmup_steps:
             a = 20
         else:
             a = 10

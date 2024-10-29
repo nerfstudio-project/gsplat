@@ -19,4 +19,5 @@ do
         --result_dir $RESULT_DIR/$SCENE
 done
 
+# Summarize the stats
 python benchmarks/compression/summarize_stats.py --results_dir $RESULT_DIR --scenes $SCENE_LIST --stage val
