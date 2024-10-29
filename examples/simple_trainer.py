@@ -83,7 +83,7 @@ class Config:
     # Number of training steps
     max_steps: int = 30_000
     # Steps to evaluate the model
-    eval_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    eval_steps: List[int] = field(default_factory=lambda: [7_000, 15_000, 30_000])
     # Steps to save the model
     save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
 
@@ -152,8 +152,8 @@ class Config:
     blur_opt: bool = False
     # Learning rate for blur optimization
     blur_opt_lr: float = 1e-3
-    # Regularization for blur mask mean
-    blur_mean_reg: float = 0.002
+    # Regularization for blur mask
+    blur_mask_reg: float = 0.002
 
     # Enable bilateral grid. (experimental)
     use_bilateral_grid: bool = False
@@ -705,9 +705,7 @@ class Runner:
                 tvloss = 10 * total_variation_loss(self.bil_grids.grids)
                 loss += tvloss
             if cfg.blur_opt:
-                loss += cfg.blur_mean_reg * self.blur_module.mask_mean_loss(
-                    blur_mask, step
-                )
+                loss += cfg.blur_mask_reg * self.blur_module.mask_loss(blur_mask, step)
 
             # regularizations
             if cfg.opacity_reg > 0.0:
@@ -721,6 +719,7 @@ class Runner:
                     loss
                     + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
                 )
+
             loss.backward()
 
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
