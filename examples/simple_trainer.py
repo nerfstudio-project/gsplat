@@ -154,8 +154,9 @@ class Config:
     blur_opt_lr: float = 1e-3
     # Regularization for blur mask
     blur_mask_reg: float = 0.001
-    # Blur start iteration
-    blur_start_iter: int = 2_000
+    # Regularization for blur optimization as weight decay
+    blur_opt_reg: float = 1e-6
+    blur_a: float = 0.8
 
     # Enable bilateral grid. (experimental)
     use_bilateral_grid: bool = False
@@ -414,12 +415,13 @@ class Runner:
 
         self.blur_optimizers = []
         if cfg.blur_opt:
-            self.blur_module = BlurOptModule(len(self.trainset)).to(self.device)
+            self.blur_module = BlurOptModule(cfg, len(self.trainset)).to(self.device)
             self.blur_module.zero_init()
             self.blur_optimizers = [
                 torch.optim.Adam(
                     self.blur_module.parameters(),
                     lr=cfg.blur_opt_lr * math.sqrt(cfg.batch_size),
+                    weight_decay=cfg.blur_opt_reg,
                 ),
             ]
             if world_size > 1:
@@ -653,7 +655,7 @@ class Runner:
             if cfg.random_bkgd:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
-            if cfg.blur_opt and step >= cfg.blur_start_iter:
+            if cfg.blur_opt:
                 blur_mask = self.blur_module.predict_mask(image_ids, depths)
                 renders_blur, _, _ = self.rasterize_splats(
                     camtoworlds=camtoworlds,
@@ -706,7 +708,7 @@ class Runner:
             if cfg.use_bilateral_grid:
                 tvloss = 10 * total_variation_loss(self.bil_grids.grids)
                 loss += tvloss
-            if cfg.blur_opt and step >= cfg.blur_start_iter:
+            if cfg.blur_opt:
                 loss += cfg.blur_mask_reg * self.blur_module.mask_loss(blur_mask)
 
             # regularizations

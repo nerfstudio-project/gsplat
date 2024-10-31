@@ -9,8 +9,9 @@ from gsplat.utils import log_transform
 class BlurOptModule(nn.Module):
     """Blur optimization module."""
 
-    def __init__(self, n: int, embed_dim: int = 4):
+    def __init__(self, cfg, n: int, embed_dim: int = 4):
         super().__init__()
+        self.blur_a = cfg.blur_a
         self.embeds = torch.nn.Embedding(n, embed_dim)
         self.means_encoder = get_encoder(3, 3)
         self.depths_encoder = get_encoder(3, 1)
@@ -39,9 +40,7 @@ class BlurOptModule(nn.Module):
         quats: Tensor,
     ):
         quats = F.normalize(quats, dim=-1)
-        means_log = log_transform(means)
-
-        means_emb = self.means_encoder.encode(means_log)
+        means_emb = self.means_encoder.encode(log_transform(means))
         images_emb = self.embeds(image_ids).repeat(means.shape[0], 1)
         mlp_out = self.blur_deltas_mlp(
             torch.cat([images_emb, means_emb, scales, quats], dim=-1)
@@ -61,7 +60,6 @@ class BlurOptModule(nn.Module):
         )
         grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
         grid_emb = self.grid_encoder.encode(grid_xy)
-
         depths_emb = self.depths_encoder.encode(log_transform(depths))
         images_emb = self.embeds(image_ids).repeat(*depths_emb.shape[:-1], 1)
         mlp_in = torch.cat([images_emb, grid_emb, depths_emb], dim=-1)
@@ -78,9 +76,7 @@ class BlurOptModule(nn.Module):
         from collapsing all 0s or 1s. It is biased towards 0 to encourage sparsity.
         """
         x = blur_mask.mean()
-        a = 2.0
-        b = 0.1
-        maskloss = a * (1 / (1 - x + eps) - 1) + b * (1 / (x + eps) - 1)
+        maskloss = self.blur_a * (1 / (1 - x + eps) - 1) + 0.2 * (1 / (x + eps) - 1)
         return maskloss
 
 
