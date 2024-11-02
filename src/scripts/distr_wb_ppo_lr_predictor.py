@@ -5,11 +5,11 @@ import wandb
 import os
 from dataclasses import dataclass
 import tyro
-from src.ppo.ppo import PPO
+from src.ppo.ppo import PPO, Env
 from src.ppo.base_policy import Policy
 from src.ppo.lr_predictor.actor_critic import LRCritic, LRActor
 from src.ppo.lr_predictor.env import LREnv
-from src.utils import image_path_to_tensor, seed_everything
+from src.utils import image_path_to_tensor, seed_everything, LinearSchedule
 
 device = 'cuda'
 seed_everything(42)
@@ -18,7 +18,7 @@ height: int = 256
 width: int = 256
 # im_path = 'images/adam.jpg'
 im_path = None
-if not im_path:    
+if not im_path:
     gt_image = torch.ones((height, width, 3)) * 1.0
     # make top left and bottom right red, blue
     gt_image[: height // 2, : width // 2, :] = torch.tensor([1.0, 0.0, 0.0])
@@ -55,7 +55,7 @@ class PPOConfig:
     batch_size: int = 32
     buffer_size: int = 128
     num_updates: int = 300
-    entropy_coeff: float = 0.2
+    entropy_schedule: LinearSchedule = LinearSchedule(300, 0.5, 0.1, 0.1)
     log_interval: int = 1
     actor_lr: float = 3e-4
     critic_lr: float = 3e-4
@@ -80,15 +80,23 @@ class EnvConfig:
     img_encoder: str = 'dino'
 
 class WandbCallback:
-    def __init__(self, policy, env, ppo, is_sweep: bool = False):
+    def __init__(self, policy, train_env : Env, ppo, test_env: Env = None, is_sweep: bool = False):
         self.policy = policy
-        self.env = env
+        self.train_env = train_env
+        self.test_env = test_env
+        
         self.ppo = ppo
         self.is_sweep = is_sweep
         self.iteration = 0
 
     def __call__(self, policy):
-        num_matches = eval_policy(policy, self.env)
+        num_matches = eval_policy(policy, self.train_env)
+        
+        num_test_matches = -1
+        if self.test_env is not None:
+            policy.set_env(train_mode=False)
+            num_test_matches = eval_policy(policy, self.test_env, verbose=False)
+            policy.set_env(train_mode=True)
         
         # Base metrics logged in both modes
         metrics = {
@@ -97,10 +105,13 @@ class WandbCallback:
             "critic_loss": self.ppo.logger["critic_losses"][-1] if self.ppo.logger["critic_losses"] else None,
             "avg_reward": self.ppo.logger["avg_rewards"][-1] if self.ppo.logger["avg_rewards"] else None,
 
+            "entropy_coeff": self.ppo.logger["entropy_coeff"][-1],
             "entropy": self.ppo.logger["entropy"][-1],
             "surrogate_loss": self.ppo.logger["surr_loss"][-1],
             "avg_advantage": self.ppo.logger["avg_advantages"][-1],
             "avg_critic_value": self.ppo.logger["avg_critic_values"][-1],
+            
+            "num_matches_test": num_test_matches,
         }
         
         wandb.log(metrics, step=self.iteration)
@@ -113,14 +124,17 @@ def setup_wandb_sweep(method: str='grid'):
         'command': ['/secondary/home/aayushg/miniconda3/envs/gsplat/bin/python3', '${program}', '--run_sweep_agent'],  # Updated this line
         'method': method,
         'parameters': {
-            'n_epochs': {'values': [3, 5, 7]},
-            'batch_size': {'values': [256, 512, 1024]},
+            'n_epochs': {'values': [5]},
+            'batch_size': {'values': [1024]},
             'buffer_multiplier': {'values': [1]},
             'num_updates': {'values': [300, 400, 500]},
-            'entropy_coeff': {'values': [0.05, 0.1, 0.15, 0.20]},
+            'entropy_coeff_schedule': {'values': ['linear']},
+            'entropy_coeff_start': {'values': [.8, .6, .4, .2]},
+            'entropy_coeff_stride': {'values': [.05, .1, .25, .5]},
+            'entropy_coeff_freq': {'values': [0.01, 0.05, 0.1, 0.2]},
             'actor_lr': {'values': [3e-4, 1e-3]},
             'critic_lr': {'values': [1e-4]},
-            'clip_epsilon': {'values': [0.15, 0.18, 0.2]}
+            'clip_epsilon': {'values': [.18]}
             # 'critic_lr': {'values': [1e-4, 3e-4, 1e-3]}
         },
         'metric': {
@@ -139,6 +153,12 @@ def setup_wandb_sweep(method: str='grid'):
 def train(config: PPOConfig, is_sweep: bool = False, save_ckpt: bool = False, load_ckpt_id: str = None) -> None:
     """Main training function used for both sweep and single runs"""
     if is_sweep:
+        entropy_schedule = LinearSchedule(
+            num_updates=wandb.config.num_updates,
+            start=wandb.config.entropy_coeff_start,
+            stride=wandb.config.entropy_coeff_stride,
+            frequency=wandb.config.entropy_coeff_freq
+        )
         # For sweep: compute buffer_size from multiplier
         buffer_size = wandb.config.batch_size * wandb.config.buffer_multiplier
         config = PPOConfig(
@@ -146,7 +166,7 @@ def train(config: PPOConfig, is_sweep: bool = False, save_ckpt: bool = False, lo
             batch_size=wandb.config.batch_size,
             buffer_size=buffer_size,
             num_updates=wandb.config.num_updates,
-            entropy_coeff=wandb.config.entropy_coeff,
+            entropy_schedule=entropy_schedule,
             actor_lr=wandb.config.actor_lr,
             critic_lr=wandb.config.critic_lr,
             clip_epsilon=wandb.config.clip_epsilon,
@@ -156,7 +176,6 @@ def train(config: PPOConfig, is_sweep: bool = False, save_ckpt: bool = False, lo
         
     # Initialize environment and models
     train_env_config = EnvConfig(device=config.device)
-    
     train_env = LREnv(
         dataset_path=train_env_config.dataset_path,
         num_points=train_env_config.num_points,
@@ -168,14 +187,30 @@ def train(config: PPOConfig, is_sweep: bool = False, save_ckpt: bool = False, lo
         lrs=train_env_config.lrs,
         num_trials=train_env_config.num_trials,
     )
-
+    
+    # Eval
+    test_env_config = EnvConfig(device=config.device)
+    test_env = LREnv(
+        dataset_path=test_env_config.dataset_path+"_test",
+        num_points=test_env_config.num_points,
+        num_iterations=test_env_config.iterations,
+        observation_shape=test_env_config.observation_shape,
+        action_shape=test_env_config.action_shape,
+        device=test_env_config.device,
+        img_encoder=test_env_config.img_encoder,
+        lrs = test_env_config.lrs,
+        num_trials = test_env_config.num_trials,
+    )
+    
     actor = LRActor(
-        env=train_env,
+        train_env=train_env,
+        test_env=test_env,
         lrs=train_env.lrs,
         input_dim=train_env.encoded_img_shape[0]
     )
     critic = LRCritic(
-        env=train_env,
+        train_env=train_env,
+        test_env=test_env,
         input_dim=train_env.encoded_img_shape[0]
     )
     policy = Policy(
@@ -195,7 +230,7 @@ def train(config: PPOConfig, is_sweep: bool = False, save_ckpt: bool = False, lo
         buffer_size=config.buffer_size,
         log_interval=config.log_interval,
         device=config.device,
-        entropy_coeff=config.entropy_coeff,
+        entropy_schedule=config.entropy_schedule,
         clip_epsilon=config.clip_epsilon,
         shuffle=True,
         normalize_advantages=True,
@@ -203,7 +238,7 @@ def train(config: PPOConfig, is_sweep: bool = False, save_ckpt: bool = False, lo
     )
 
     # Then create and set the callback
-    wandb_callback = WandbCallback(policy, train_env, ppo, is_sweep=is_sweep)
+    wandb_callback = WandbCallback(policy, train_env, ppo, test_env=test_env, is_sweep=is_sweep)
     ppo.log_callback = wandb_callback
 
     # Train
@@ -218,25 +253,9 @@ def train(config: PPOConfig, is_sweep: bool = False, save_ckpt: bool = False, lo
         ppo.save_policy(ckpt_path)
         wandb.save(ckpt_path)
 
-    # Eval
-    test_env_config = EnvConfig(device=config.device)
-    test_env = LREnv(
-        dataset_path=test_env_config.dataset_path+"_test",
-        num_points=test_env_config.num_points,
-        num_iterations=test_env_config.iterations,
-        observation_shape=test_env_config.observation_shape,
-        action_shape=test_env_config.action_shape,
-        device=test_env_config.device,
-        img_encoder=test_env_config.img_encoder,
-        lrs = test_env_config.lrs,
-        num_trials = test_env_config.num_trials,
-    )
-
-    actor.env = test_env
-    critic.env = test_env
-    num_match = eval_policy(policy, test_env, verbose=True)
-    wandb.log({"num_matches_test": num_match})
-    print(f"Number of matches on test set: {num_match}")
+    ppo.policy.set_env(train_mode=False)
+    num_test_matches = eval_policy(policy, test_env, verbose=True)
+    print(f"Number of matches on test set: {num_test_matches}")
     
 
 def train_with_wandb(
@@ -297,16 +316,22 @@ def main(
         )
 
         return
-    
+
     else: # train without sweep
-        # our 
+        entropy_schedule = LinearSchedule(
+            num_updates=300,
+            start=0.5,
+            stride=0.1,
+            frequency=0.1
+        )
+        
         config = PPOConfig(
             batch_size=64,
             buffer_size=512,
             clip_epsilon=.18,
             n_epochs=7,
             num_updates=300,
-            entropy_coeff=0.15,
+            entropy_schedule=entropy_schedule,
             device=device
         )
 

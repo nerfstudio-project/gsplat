@@ -90,7 +90,7 @@ class Policy(nn.Module):
         # print(f"critic: {self.critic}")
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=actor_lr)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=critic_lr)
-
+    
     def select_action(self, obs):
         """
         Given an observation, use the actor to select an action and return
@@ -135,6 +135,13 @@ class Policy(nn.Module):
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         self.critic_optimizer.step()
+    
+    def set_env(self, train_mode: bool):
+        """
+        Set the env based on train or test mode.
+        """
+        self.actor.set_env(train_mode)
+        self.critic.set_env(train_mode)
 
     def predict_values(self, obs):
         """

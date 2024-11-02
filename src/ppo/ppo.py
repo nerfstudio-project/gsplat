@@ -14,14 +14,14 @@ from .base_policy import Policy
 from .base_env import Env
 from .rollout_buffer import RolloutBuffer
 from src.utils import *
-
+    
 class PPO:
     def __init__(self, policy: Policy, env: Env, 
                  clip_epsilon=0.2, 
                  gamma=1, 
                  gae_lambda=0.95, 
                  normalize_advantages=True, 
-                 entropy_coeff=0.0,
+                 entropy_schedule=lambda t: 0.2,
                  n_epochs=5, 
                  batch_size=10, 
                  buffer_size=20,
@@ -30,6 +30,7 @@ class PPO:
                  shuffle=False,
                  log_callback=None,
                  plots_path=None,
+                 
                  **kwargs
                  ):
         """
@@ -40,7 +41,6 @@ class PPO:
         - gamma: Discount factor for future rewards (1 means full future reward impact).
         - gae_lambda: Trade-off between bias and variance for GAE (lambda-return).
         - normalize_advantages: Normalize advantages for better numerical stability.
-        - entropy_coeff: Adds entropy to encourage exploration (higher value -> more exploration).
         - n_epochs: Number of passes over the data to update the policy.
         - batch_size: Number of samples per batch for policy updates.
         - buffer_size: Number of steps to store in the rollout buffer.
@@ -55,12 +55,12 @@ class PPO:
         self.gamma = gamma                              # Discount factor for future rewards.
         self.gae_lambda = gae_lambda                    # Governs the advantage estimation trade-off.
         self.normalize_advantages = normalize_advantages
-        self.entropy_coeff = entropy_coeff              # Encourage exploration.
         self.n_epochs = n_epochs
         self.batch_size = batch_size
         self.buffer_size = buffer_size
         
         self.shuffle = shuffle
+        self.entropy_schedule = entropy_schedule
 
         # Initialize the rollout buffer to store experiences
         self.rollout_buffer = RolloutBuffer(
@@ -82,6 +82,7 @@ class PPO:
             "avg_critic_values": [],
             "avg_advantages": [],
             "entropy": [],
+            "entropy_coeff": [],
             "surr_loss": [],
             "timesteps": [],
             "num_match": []
@@ -169,7 +170,7 @@ class PPO:
         # print(f"actor loss before: {actor_loss}")
         # print(f"surr1: {surr1}, surr2: {surr2}")
         # print(f"ratios: {ratios}")
-        entropy_loss = self.entropy_coeff * entropy.mean()
+        entropy_loss = self.entropy_schedule(self.logger["i_so_far"]) * entropy.mean()
         actor_loss -= entropy_loss
         
         # print(f"actions: {actions}")
@@ -200,6 +201,8 @@ class PPO:
                 self.logger["actor_losses"].append(actor_loss.item())
                 self.logger["critic_losses"].append(critic_loss.item())
                 self.logger["entropy"].append(entropy.item())
+        
+        self.logger["entropy_coeff"].append(self.entropy_schedule(self.logger["i_so_far"]))
 
         self.logger["avg_rewards"].append(self.rollout_buffer.rewards.mean().item())
         self.logger["avg_advantages"].append(self.rollout_buffer.advantages.mean().item())
@@ -219,15 +222,13 @@ class PPO:
             i_so_far += 1
 
             self.logger["timesteps"].append(t_so_far)
+            self.logger["i_so_far"] = i_so_far
 
             # Perform policy (actor+critic) updates
             self.update()
 
             if i_so_far % self.log_interval == 0:
                 self._log_summary()
-        
-        if self.plots_path:
-            self.plot_training_progress()
 
     def _log_summary(self):
         """
@@ -237,6 +238,7 @@ class PPO:
         print(f"  Timesteps so far: {self.logger['t_so_far']}")
         print(f"  Actor Loss: {self.logger['actor_losses'][-1]:.6f}")
         print(f"  Entropy: {self.logger['entropy'][-1]:.4f}")
+        print(f"  Entropy Coefficient: {self.logger['entropy_coeff'][-1]:.4f}")
         print(f"  Surrogate Loss: {self.logger['surr_loss'][-1]:.4f}")
         print(f"  Critic Loss: {self.logger['critic_losses'][-1]:.4f}")
         print(f"  Avg Rewards: {self.logger['avg_rewards'][-1]:.4f}")
@@ -247,66 +249,7 @@ class PPO:
             num_match = self.log_callback(self.policy)
             self.logger["num_match"].append(num_match)
             print(f"  Num Match: {num_match}")
-        print("=" * 50)
-    
-    def plot_training_progress(self):
-        # Use logging data to plot (actor loss, critic loss, rewards, avg critic values, avg advantages, and entropy)
-        plt.figure(figsize=(24, 14))
-        
-        plt.subplot(4, 2, 1)
-        plt.plot(self.logger['actor_losses'], label='Actor Loss')
-        plt.xlabel('Timesteps')
-        plt.ylabel('Loss')
-        plt.title('Actor Loss')
-        
-        plt.subplot(4, 2, 2)
-        plt.plot(self.logger['critic_losses'], label='Critic Loss')
-        plt.xlabel('Timesteps')
-        plt.ylabel('Loss')
-        plt.title('Critic Loss')
-        
-        plt.subplot(4, 2, 3)
-        plt.plot(self.logger['avg_rewards'], label='Avg Rewards')
-        plt.xlabel('Timesteps')
-        plt.ylabel('Rewards')
-        plt.title('Average Rewards')
-        
-        plt.subplot(4, 2, 4)
-        plt.plot(self.logger['avg_critic_values'], label='Avg Critic Values')
-        plt.xlabel('Timesteps')
-        plt.ylabel('Values')
-        plt.title('Average Critic Values')
-        
-        plt.subplot(4, 2, 5)
-        plt.plot(self.logger['avg_advantages'], label='Avg Advantages')
-        plt.xlabel('Timesteps')
-        plt.ylabel('Advantages')
-        plt.title('Average Advantages')
-
-        # make y scale integers
-        plt.subplot(4, 2, 6)
-        plt.plot(self.logger['num_match'], label='Num Match')
-        plt.xlabel('Timesteps')
-        plt.ylabel('Num Match')
-        plt.title('Number of Matches')
-        plt.gca().yaxis.set_major_locator(plt.MaxNLocator(integer=True))
-        
-        plt.subplot(4, 2, 7)
-        plt.plot(self.logger['entropy'], label='Entropy')
-        plt.xlabel('Timesteps')
-        plt.ylabel('Entropy')
-        plt.title('Entropy')
-        
-        plt.subplot(4, 2, 8)
-        plt.plot(self.logger['surr_loss'], label='PG Loss')
-        plt.xlabel('Timesteps')
-        plt.ylabel('PG Loss')
-        plt.title('PG')
-        
-        # Save the plot to a file using attributes
-        # plt.tight_layout()
-        # plt.savefig(self.plots_path)
-        
+        print("=" * 50)    
 
     def save_policy(self, path="policy_checkpoint.pth"):
         checkpoint = {

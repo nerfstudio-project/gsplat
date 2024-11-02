@@ -1,5 +1,5 @@
 SCRIPT="src/scripts/distr_wb_ppo_lr_predictor.py"
-PROJECT_NAME="ppo_lr_predictor_distr_no_multiplier_final"
+PROJECT_NAME="ppo_lr_predictor_distr_entropy_sched_debug"
 ENTITY="rl_gsplat"
 COMMAND="python $SCRIPT --sweep --project_name $PROJECT_NAME --entity $ENTITY"
 $COMMAND

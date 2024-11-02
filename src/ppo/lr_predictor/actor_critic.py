@@ -9,7 +9,7 @@ from src.ppo.base_env import Env
 
 
 class LRCritic(Critic):
-    def __init__(self, env: Env, input_dim: int = 1024, h_dim: int = 64):
+    def __init__(self, train_env: Env, test_env: Env, input_dim: int = 1024, h_dim: int = 64):
         super().__init__()
         # should map obs (image) to value
         self.layers = [
@@ -18,7 +18,14 @@ class LRCritic(Critic):
             nn.Linear(h_dim, 1),
         ]
         self.network = nn.Sequential(*self.layers)
-        self.env = env
+        self.train_env = train_env
+        self.test_env = test_env
+        
+        self.set_env(train_mode=True)
+    
+    def set_env(self, train_mode: bool):
+        assert train_mode or self.test_env is not None, "Test env must be set if train mode is False"
+        self.env = self.train_env if train_mode else self.test_env
 
     def forward(self, obs: Tensor):        
         obs = obs.to(torch.int)
@@ -35,13 +42,13 @@ class LRCritic(Critic):
         # return values
 
 class LRActor(Actor):
-    def __init__(self, env: Env, lrs: list[float] = None, input_dim: int = 1024, h_dim: int = 64):
+    def __init__(self, train_env: Env, test_env: Env = None, lrs: list[float] = None, input_dim: int = 1024, h_dim: int = 64):
         super().__init__()
         if lrs:
             self.lrs = Tensor(lrs)
         else:
             self.lrs = Tensor([10**-i for i in range(10)])
-        self.lrs = self.lrs.to(device=env.device)
+        self.lrs = self.lrs.to(device=train_env.device)
         
         print(f"Actor using learning rates: {self.lrs}")
         self.layers = [
@@ -51,7 +58,14 @@ class LRActor(Actor):
             nn.Softmax(dim=-1)
         ]
         self.network = nn.Sequential(*self.layers)
-        self.env = env
+        self.train_env = train_env
+        self.test_env = test_env
+        
+        self.set_env(train_mode=True)
+
+    def set_env(self, train_mode: bool):
+        assert train_mode or self.test_env is not None, "Test env must be set if train mode is False"
+        self.env = self.train_env if train_mode else self.test_env
         
     def forward(self, obs: Tensor):
         # convert from torch float to int
