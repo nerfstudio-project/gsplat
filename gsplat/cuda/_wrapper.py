@@ -144,7 +144,7 @@ def proj(
     Ks: Tensor,  # [C, 3, 3]
     width: int,
     height: int,
-    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+    camera_model: Literal["pinhole", "ortho", "fisheye", "spherical"] = "pinhole",
 ) -> Tuple[Tensor, Tensor]:
     """Projection of Gaussians (perspective or orthographic).
 
@@ -216,7 +216,7 @@ def fully_fused_projection(
     packed: bool = False,
     sparse_grad: bool = False,
     calc_compensations: bool = False,
-    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+    camera_model: Literal["pinhole", "ortho", "fisheye", "spherical"] = "pinhole",
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Projects Gaussians to 2D.
 
@@ -695,7 +695,7 @@ class _Proj(torch.autograd.Function):
         Ks: Tensor,  # [C, 3, 3]
         width: int,
         height: int,
-        camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+        camera_model: Literal["pinhole", "ortho", "fisheye", "spherical"] = "pinhole",
     ) -> Tuple[Tensor, Tensor]:
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
@@ -791,7 +791,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         far_plane: float,
         radius_clip: float,
         calc_compensations: bool,
-        camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+        camera_model: Literal["pinhole", "ortho", "fisheye", "spherical"] = "pinhole",
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
@@ -1048,7 +1048,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         radius_clip: float,
         sparse_grad: bool,
         calc_compensations: bool,
-        camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+        camera_model: Literal["pinhole", "ortho", "fisheye", "spherical"] = "pinhole",
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"

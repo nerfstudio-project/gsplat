@@ -36,6 +36,7 @@ enum CameraModelType
     PINHOLE = 0,
     ORTHO = 1,
     FISHEYE = 2,
+    SPHERICAL = 3
 };
 
 std::tuple<torch::Tensor, torch::Tensor> quat_scale_to_covar_preci_fwd_tensor(
