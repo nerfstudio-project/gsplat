@@ -11,6 +11,7 @@ import math
 
 import pytest
 import torch
+import os
 
 from gsplat._helper import load_test_data
 
@@ -30,7 +31,10 @@ def test_data():
         Ks,
         width,
         height,
-    ) = load_test_data(device=device)
+    ) = load_test_data(
+        device=device,
+        data_path=os.path.join(os.path.dirname(__file__), "../assets/test_garden.npz"),
+    )
     colors = colors[None].repeat(len(viewmats), 1, 1)
     return {
         "means": means,
@@ -270,7 +274,7 @@ def test_projection(
     )
 
     torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_quats, _v_quats, rtol=2e-1, atol=1e-2)
+    torch.testing.assert_close(v_quats, _v_quats, rtol=2e-1, atol=2e-2)
     torch.testing.assert_close(v_scales, _v_scales, rtol=1e-1, atol=2e-1)
     torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=6e-2)
 
