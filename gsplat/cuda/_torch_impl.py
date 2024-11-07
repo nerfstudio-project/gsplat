@@ -249,7 +249,8 @@ def _world_to_cam(
 
 def _fully_fused_projection(
     means: Tensor,  # [N, 3]
-    covars: Tensor,  # [N, 3, 3]
+    quats: Tensor,
+    scales: Tensor,
     viewmats: Tensor,  # [C, 4, 4]
     Ks: Tensor,  # [C, 3, 3]
     width: int,
@@ -267,6 +268,10 @@ def _fully_fused_projection(
         This is a minimal implementation of fully fused version, which has more
         arguments. Not all arguments are supported.
     """
+    covars, _ = _quat_scale_to_covar_preci(quats, scales, triu=False)  # [N, 3, 3]
+    normals = _quat_to_rotmat(quats)[..., 2]  # [N, 3]
+    normals = normals.repeat(viewmats.shape[0], 1, 1)  # [C, N, 3]
+
     means_c, covars_c = _world_to_cam(means, covars, viewmats)
 
     if camera_model == "ortho":
@@ -324,7 +329,7 @@ def _fully_fused_projection(
     radius[~inside] = 0.0
 
     radii = radius.int()
-    return radii, means2d, depths, conics, compensations
+    return radii, means2d, depths, normals, conics, compensations
 
 
 @torch.no_grad()

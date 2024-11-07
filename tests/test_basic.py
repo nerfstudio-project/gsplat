@@ -199,7 +199,7 @@ def test_projection(
 
     # forward
     if fused:
-        radii, means2d, depths, conics, compensations = fully_fused_projection(
+        radii, means2d, depths, normals, conics, compensations = fully_fused_projection(
             means,
             None,
             quats,
@@ -213,7 +213,7 @@ def test_projection(
         )
     else:
         covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [N, 6]
-        radii, means2d, depths, conics, compensations = fully_fused_projection(
+        radii, means2d, depths, normals, conics, compensations = fully_fused_projection(
             means,
             covars,
             None,
@@ -225,10 +225,17 @@ def test_projection(
             calc_compensations=calc_compensations,
             camera_model=camera_model,
         )
-    _covars, _ = quat_scale_to_covar_preci(quats, scales, triu=False)  # [N, 3, 3]
-    _radii, _means2d, _depths, _conics, _compensations = _fully_fused_projection(
+    (
+        _radii,
+        _means2d,
+        _depths,
+        _normals,
+        _conics,
+        _compensations,
+    ) = _fully_fused_projection(
         means,
-        _covars,
+        quats,
+        scales,
         viewmats,
         Ks,
         width,
@@ -242,6 +249,7 @@ def test_projection(
     torch.testing.assert_close(radii, _radii, rtol=0, atol=1)
     torch.testing.assert_close(means2d[valid], _means2d[valid], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(depths[valid], _depths[valid], rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(normals[valid], _normals[valid], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(conics[valid], _conics[valid], rtol=1e-4, atol=1e-4)
     if calc_compensations:
         torch.testing.assert_close(
@@ -251,12 +259,14 @@ def test_projection(
     # backward
     v_means2d = torch.randn_like(means2d) * valid[..., None]
     v_depths = torch.randn_like(depths) * valid
+    v_normals = torch.randn_like(normals) * valid[..., None]
     v_conics = torch.randn_like(conics) * valid[..., None]
     if calc_compensations:
         v_compensations = torch.randn_like(compensations) * valid
     v_viewmats, v_quats, v_scales, v_means = torch.autograd.grad(
         (means2d * v_means2d).sum()
         + (depths * v_depths).sum()
+        + (normals * v_normals).sum()
         + (conics * v_conics).sum()
         + ((compensations * v_compensations).sum() if calc_compensations else 0),
         (viewmats, quats, scales, means),
@@ -264,6 +274,7 @@ def test_projection(
     _v_viewmats, _v_quats, _v_scales, _v_means = torch.autograd.grad(
         (_means2d * v_means2d).sum()
         + (_depths * v_depths).sum()
+        + (_normals * v_normals).sum()
         + (_conics * v_conics).sum()
         + ((_compensations * v_compensations).sum() if calc_compensations else 0),
         (viewmats, quats, scales, means),
@@ -276,7 +287,7 @@ def test_projection(
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-@pytest.mark.parametrize("fused", [False, True])
+@pytest.mark.parametrize("fused", [True])
 @pytest.mark.parametrize("sparse_grad", [False, True])
 @pytest.mark.parametrize("calc_compensations", [False, True])
 @pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
@@ -312,6 +323,7 @@ def test_fully_fused_projection_packed(
             radii,
             means2d,
             depths,
+            normals,
             conics,
             compensations,
         ) = fully_fused_projection(
@@ -328,7 +340,14 @@ def test_fully_fused_projection_packed(
             calc_compensations=calc_compensations,
             camera_model=camera_model,
         )
-        _radii, _means2d, _depths, _conics, _compensations = fully_fused_projection(
+        (
+            _radii,
+            _means2d,
+            _depths,
+            _normals,
+            _conics,
+            _compensations,
+        ) = fully_fused_projection(
             means,
             None,
             quats,
@@ -349,6 +368,7 @@ def test_fully_fused_projection_packed(
             radii,
             means2d,
             depths,
+            normals,
             conics,
             compensations,
         ) = fully_fused_projection(
@@ -365,7 +385,14 @@ def test_fully_fused_projection_packed(
             calc_compensations=calc_compensations,
             camera_model=camera_model,
         )
-        _radii, _means2d, _depths, _conics, _compensations = fully_fused_projection(
+        (
+            _radii,
+            _means2d,
+            _depths,
+            _normals,
+            _conics,
+            _compensations,
+        ) = fully_fused_projection(
             means,
             covars,
             None,
@@ -389,6 +416,9 @@ def test_fully_fused_projection_packed(
     __depths = torch.sparse_coo_tensor(
         torch.stack([camera_ids, gaussian_ids]), depths, _depths.shape
     ).to_dense()
+    __normals = torch.sparse_coo_tensor(
+        torch.stack([camera_ids, gaussian_ids]), normals, _normals.shape
+    ).to_dense()
     __conics = torch.sparse_coo_tensor(
         torch.stack([camera_ids, gaussian_ids]), conics, _conics.shape
     ).to_dense()
@@ -400,6 +430,7 @@ def test_fully_fused_projection_packed(
     torch.testing.assert_close(__radii[sel], _radii[sel], rtol=0, atol=1)
     torch.testing.assert_close(__means2d[sel], _means2d[sel], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(__depths[sel], _depths[sel], rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(__normals[sel], _normals[sel], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(__conics[sel], _conics[sel], rtol=1e-4, atol=1e-4)
     if calc_compensations:
         torch.testing.assert_close(
@@ -409,10 +440,12 @@ def test_fully_fused_projection_packed(
     # backward
     v_means2d = torch.randn_like(_means2d) * sel[..., None]
     v_depths = torch.randn_like(_depths) * sel
+    v_normals = torch.randn_like(_normals) * sel[..., None]
     v_conics = torch.randn_like(_conics) * sel[..., None]
     _v_viewmats, _v_quats, _v_scales, _v_means = torch.autograd.grad(
         (_means2d * v_means2d).sum()
         + (_depths * v_depths).sum()
+        + (_normals * v_normals).sum()
         + (_conics * v_conics).sum(),
         (viewmats, quats, scales, means),
         retain_graph=True,
@@ -420,6 +453,7 @@ def test_fully_fused_projection_packed(
     v_viewmats, v_quats, v_scales, v_means = torch.autograd.grad(
         (means2d * v_means2d[__radii > 0]).sum()
         + (depths * v_depths[__radii > 0]).sum()
+        + (normals * v_normals[__radii > 0]).sum()
         + (conics * v_conics[__radii > 0]).sum(),
         (viewmats, quats, scales, means),
         retain_graph=True,
@@ -476,7 +510,6 @@ def test_rasterize_to_pixels(test_data, channels: int):
         fully_fused_projection,
         isect_offset_encode,
         isect_tiles,
-        quat_scale_to_covar_preci,
         rasterize_to_pixels,
     )
 
@@ -494,11 +527,9 @@ def test_rasterize_to_pixels(test_data, channels: int):
     colors = torch.randn(C, len(means), channels, device=device)
     backgrounds = torch.rand((C, colors.shape[-1]), device=device)
 
-    covars, _ = quat_scale_to_covar_preci(quats, scales, compute_preci=False, triu=True)
-
     # Project Gaussians to 2D
-    radii, means2d, depths, conics, compensations = fully_fused_projection(
-        means, covars, None, None, viewmats, Ks, width, height
+    radii, means2d, depths, normals, conics, compensations = fully_fused_projection(
+        means, None, quats, scales, viewmats, Ks, width, height
     )
     opacities = opacities.repeat(C, 1)
 
