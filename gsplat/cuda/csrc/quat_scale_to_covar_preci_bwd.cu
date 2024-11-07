@@ -1,6 +1,6 @@
 #include "bindings.h"
-#include "helpers.cuh"
-#include "utils.cuh"
+#include "quat.cuh"
+#include "quat_scale_to_covar_preci.cuh"
 
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>

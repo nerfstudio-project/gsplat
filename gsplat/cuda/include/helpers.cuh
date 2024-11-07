@@ -1,5 +1,5 @@
-#ifndef GSPLAT_CUDA_HELPERS_H
-#define GSPLAT_CUDA_HELPERS_H
+#ifndef GSPLAT_CUDA_HELPERS_CUH
+#define GSPLAT_CUDA_HELPERS_CUH
 
 #include "types.cuh"
 
@@ -15,7 +15,7 @@ namespace cg = cooperative_groups;
 
 template <uint32_t DIM, class T, class WarpT>
 inline __device__ void warpSum(T *val, WarpT &warp) {
-    GSPLAT_PRAGMA_UNROLL
+#pragma unroll
     for (uint32_t i = 0; i < DIM; i++) {
         val[i] = cg::reduce(warp, val[i], cg::plus<T>());
     }
@@ -79,4 +79,4 @@ template <typename T> __forceinline__ __device__ T sum(vec3<T> a) {
 
 } // namespace gsplat
 
-#endif // GSPLAT_CUDA_HELPERS_H
+#endif // GSPLAT_CUDA_HELPERS_CUH
