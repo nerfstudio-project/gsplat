@@ -10,6 +10,7 @@ import imageio
 import nerfview
 import numpy as np
 import torch
+import torchvision
 import torch.nn.functional as F
 import tqdm
 import tyro
@@ -41,6 +42,8 @@ from gsplat.distributed import cli
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 from gsplat.optimizers import SelectiveAdam
+from iresnet import iResNet
+import matplotlib.pyplot as plt
 
 
 @dataclass
@@ -82,7 +85,7 @@ class Config:
     # Number of training steps
     max_steps: int = 30_000
     # Steps to evaluate the model
-    eval_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    eval_steps: List[int] = field(default_factory=lambda: [1, 7_000, 30_000])
     # Steps to save the model
     save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
 
@@ -269,6 +272,237 @@ def create_splats_with_optimizers(
     }
     return splats, optimizers
 
+def homogenize(X: torch.Tensor):
+    assert X.ndim == 2
+    assert X.shape[1] in (2, 3)
+    return torch.cat(
+        (X, torch.ones((X.shape[0], 1), dtype=X.dtype, device=X.device)), dim=1
+    )
+
+def dehomogenize(X: torch.Tensor):
+    assert X.ndim == 2
+    assert X.shape[1] in (3, 4)
+    return X[:, :-1] / X[:, -1:]
+
+def fov2focal(fov, pixels):
+    return pixels / (2 * math.tan(fov / 2))
+
+def focal2fov(focal, pixels):
+    return 2 * math.atan(pixels / (2 * focal))
+
+def generate_pts(viewpoint_cam, boundary_scale=4, sample_resolution=20):
+    width = viewpoint_cam['image'].shape[1]
+    height = viewpoint_cam['image'].shape[0]
+    sample_width = int(width / sample_resolution)
+    sample_height = int(height / sample_resolution)
+    K = viewpoint_cam['K'].cuda()
+    width = viewpoint_cam['fisheye_image'].shape[1]
+    height = viewpoint_cam['fisheye_image'].shape[0]
+    width = int(width * boundary_scale)
+    height = int(height * boundary_scale)
+    K[0, 2] = width / 2
+    K[1, 2] = height / 2
+    i, j = np.meshgrid(
+        np.linspace(0, width, sample_width),
+        np.linspace(0, height, sample_height),
+        indexing="ij",
+    )
+    i = i.T
+    j = j.T
+
+    P_sensor = (
+        torch.from_numpy(np.stack((i, j), axis=-1))
+        .to(torch.float32)
+        .cuda()
+    )
+    P_sensor_hom = homogenize(P_sensor.reshape((-1, 2)))
+    P_view_insidelens_direction_hom = (K.inverse() @ P_sensor_hom.T).T
+    P_view_insidelens_direction = dehomogenize(P_view_insidelens_direction_hom)
+
+    return P_sensor, P_view_insidelens_direction
+
+
+def init_from_coeff(coeff, ref_points):
+    r = torch.sqrt(torch.sum(ref_points**2, dim=-1, keepdim=True))
+    inv_r = 1 / (r + 1e-5)
+    theta = torch.atan(r)
+    if len(coeff) == 4:
+        ref_points = ref_points * (inv_r * (theta + coeff[0] * theta**3 + coeff[1] * theta**5 + coeff[2] * theta**7 + coeff[3] * theta**9))
+    else:
+        assert "bug"
+    print(f"using coeff: {coeff}")
+
+    return ref_points
+
+def plot_points(ref_points, path):
+    p1 = ref_points.clone().reshape(-1, 2)
+    plt.figure(figsize=(int(ref_points.shape[1]/4), int(ref_points.shape[0]/4)))
+    x = p1[:, 0].detach().cpu().numpy()  # Convert tensor to numpy for plotting
+    y = p1[:, 1].detach().cpu().numpy()
+    plt.scatter(x, y)
+    plt.title('2D Points Plot')
+    plt.xlabel('X axis')
+    plt.ylabel('Y axis')
+    plt.xlim(p1[:, 0].min().item() - 0.1, p1[:, 0].max().item() + 0.1)
+    plt.ylim(p1[:, 1].min().item() - 0.1, p1[:, 1].max().item() + 0.1)
+    plt.grid(True)
+    plt.savefig(path)
+
+def init_from_colmap(viewpoint_cam, coeff, result_dir, lens_net, optimizer_lens_net, iresnet_lr=1e-7):
+    P_sensor, P_view_insidelens_direction = generate_pts(viewpoint_cam, boundary_scale=5, sample_resolution=40)
+    P_view_outsidelens_direction = P_view_insidelens_direction
+    camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
+    ref_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+    ref_points = init_from_coeff(coeff, ref_points)
+    inf_mask = torch.isinf(ref_points)
+    nan_mask = torch.isnan(ref_points)
+    ref_points[inf_mask] = 0
+    ref_points[nan_mask] = 0
+    plot_points(ref_points, os.path.join(result_dir, f"ref1.png"))
+
+    P_sensor, P_view_insidelens_direction = generate_pts(viewpoint_cam, boundary_scale=1.5, sample_resolution=40)
+    P_view_outsidelens_direction = P_view_insidelens_direction
+    camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
+    ref_points1 = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+    ref_points1 = init_from_coeff(coeff, ref_points1)
+    inf_mask = torch.isinf(ref_points1)
+    nan_mask = torch.isnan(ref_points1)
+    ref_points1[inf_mask] = 0
+    ref_points1[nan_mask] = 0
+    plot_points(ref_points1, os.path.join(result_dir, f"ref2.png"))
+    combine = torch.cat((ref_points, ref_points1), dim=0)
+    plot_points(combine, os.path.join(result_dir, f"ref1_2.png"))
+
+    P_sensor0, P_view_insidelens_direction0 = generate_pts(viewpoint_cam, boundary_scale=5, sample_resolution=40)
+    P_sensor1, P_view_insidelens_direction1 = generate_pts(viewpoint_cam, boundary_scale=1.5, sample_resolution=40)
+    P_sensor =torch.cat((P_sensor0, P_sensor1), dim=0)
+    P_view_insidelens_direction =torch.cat((P_view_insidelens_direction0, P_view_insidelens_direction1), dim=0)
+
+    progress_bar_ires = tqdm.tqdm(range(0, 10000), desc="Init Iresnet")
+    for i in range(10000):
+        P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=True)
+        control_points = homogenize(P_view_outsidelens_direction)
+        inf_mask = torch.isinf(control_points)
+        nan_mask = torch.isnan(control_points)
+        control_points[inf_mask] = 0
+        control_points[nan_mask] = 0
+        loss = ((control_points[:, :2] - combine.reshape(-1, 2))**2).mean()
+        progress_bar_ires.set_postfix(loss=loss.item())
+        progress_bar_ires.update(1)
+        loss.backward()
+        optimizer_lens_net.step()
+        optimizer_lens_net.zero_grad(set_to_none = True)
+
+        if i % 2000 == 0:
+            control_points_np = control_points.cpu().detach().numpy()
+            ref_points_np = ref_points.reshape(-1, 2).cpu().detach().numpy()
+            combine_np = combine.reshape(-1, 2).cpu().detach().numpy()
+            plt.figure(figsize=(10, 6))
+            plt.scatter(control_points_np[:, 0], control_points_np[:, 1], color='blue')
+            plt.scatter(combine_np[:, 0], combine_np[:, 1], color='red')
+            plt.savefig(os.path.join(result_dir, f"loss_{i}.png"))
+            plt.close()
+
+    progress_bar_ires.close()
+
+    for param_group in optimizer_lens_net.param_groups:
+        param_group['lr'] = iresnet_lr
+    print(f"The learning rate is reset to {param_group['lr']}")
+
+def generate_control_pts(viewpoint_cam, control_point_sample_scale=32, flow_scale=[2., 2.]):
+    width = viewpoint_cam['image'].shape[2]
+    height = viewpoint_cam['image'].shape[1]
+    sample_width = int(width / control_point_sample_scale)
+    sample_height = int(height/ control_point_sample_scale)
+    K = viewpoint_cam['K'].cuda().squeeze(0)
+    width = viewpoint_cam['fisheye_image'].shape[2]
+    height = viewpoint_cam['fisheye_image'].shape[1]
+    width = int(width * flow_scale[0])
+    height = int(height * flow_scale[1])
+    K[0, 2] = width / 2
+    K[1, 2] = height / 2
+    i, j = np.meshgrid(
+        np.linspace(0, width, sample_width),
+        np.linspace(0, height, sample_height),
+        indexing="ij",
+    )
+    i = i.T
+    j = j.T
+    P_sensor = (
+        torch.from_numpy(np.stack((i, j), axis=-1))
+        .to(torch.float32)
+        .cuda()
+    )
+    P_sensor_hom = homogenize(P_sensor.reshape((-1, 2)))
+    P_view_insidelens_direction_hom = (torch.inverse(K) @ P_sensor_hom.T).T
+    P_view_insidelens_direction = dehomogenize(P_view_insidelens_direction_hom)
+
+    return P_sensor, P_view_insidelens_direction
+
+def getProjectionMatrix(znear, zfar, fovX, fovY):
+    if torch.is_tensor(fovX) and torch.is_tensor(fovY):
+        tanHalfFovY = torch.tan((fovY / 2))
+        tanHalfFovX = torch.tan((fovX / 2))
+    else:
+        tanHalfFovY = math.tan((fovY / 2))
+        tanHalfFovX = math.tan((fovX / 2))
+
+    top = tanHalfFovY * znear
+    bottom = -top
+    right = tanHalfFovX * znear
+    left = -right
+
+    P = torch.zeros(4, 4)
+
+    z_sign = 1.0
+
+    P[0, 0] = 2.0 * znear / (right - left)
+    P[1, 1] = 2.0 * znear / (top - bottom)
+    P[0, 2] = (right + left) / (right - left)
+    P[1, 2] = (top + bottom) / (top - bottom)
+    P[3, 2] = z_sign
+    P[2, 2] = z_sign * zfar / (zfar - znear)
+    P[2, 3] = -(zfar * znear) / (zfar - znear)
+    return P
+
+def center_crop(tensor, target_height, target_width):
+    _, _, height, width = tensor.size()
+
+    # Calculate the starting coordinates for the crop
+    start_y = (height - target_height) // 2
+    start_x = (width - target_width) // 2
+
+    # Create a grid for the interpolation
+    grid_y, grid_x = torch.meshgrid(torch.linspace(start_y, start_y + target_height - 1, target_height),
+                                    torch.linspace(start_x, start_x + target_width - 1, target_width))
+    grid = torch.stack((grid_x, grid_y), 2).unsqueeze(0).to(tensor.device)
+
+    # Normalize grid to [-1, 1]
+    grid = 2.0 * grid / torch.tensor([width - 1, height - 1]).cuda() - 1.0
+    grid = grid.permute(0, 1, 2, 3).expand(tensor.size(0), target_height, target_width, 2)
+
+    # Perform the interpolation
+    cropped_tensor = F.grid_sample(tensor, grid, align_corners=True)
+
+    return cropped_tensor
+
+def apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_cam, image, projection_matrix, flow_scale=[2., 2.]):
+    P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=False)
+    camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
+    control_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
+
+    flow = control_points @ projection_matrix[:2, :2]
+    flow = F.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(int(viewpoint_cam['fisheye_image'].shape[1]*flow_scale[0]), int(viewpoint_cam['fisheye_image'].shape[2]*flow_scale[1])), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+    image = F.grid_sample(
+        image.permute(0, 3, 1, 2),
+        flow.unsqueeze(0),
+        mode="bilinear",
+        padding_mode="zeros",
+        align_corners=True,
+    )
+    image = center_crop(image, viewpoint_cam['fisheye_image'].shape[1], viewpoint_cam['fisheye_image'].shape[2])
+    mask = (~((image[0][0]==0.0000) & (image[0][1]==0.0000)).unsqueeze(0)).float()
+    return image, mask, flow
 
 class Runner:
     """Engine for training and testing."""
@@ -355,6 +589,16 @@ class Runner:
                 self.compression_method = PngCompression()
             else:
                 raise ValueError(f"Unknown compression strategy: {cfg.compression}")
+
+        self.lens_net = iResNet().cuda()
+        l_lens_net = [{'params': self.lens_net.parameters(), 'lr': 1e-5}]
+        self.optimizer_lens_net = torch.optim.Adam(l_lens_net, eps=1e-15)
+        viewpoint_cam = self.trainset.__getitem__(0)
+        coeff = self.trainset.__getitem__(0)['coeff']
+        init_from_colmap(viewpoint_cam, coeff, cfg.result_dir, self.lens_net, self.optimizer_lens_net, iresnet_lr=1e-7)
+        if world_size > 1:
+            self.lens_net = DDP(self.lens_net)
+
 
         self.pose_optimizers = []
         if cfg.pose_opt:
@@ -590,11 +834,13 @@ class Runner:
             sh_degree_to_use = min(step // cfg.sh_degree_interval, cfg.sh_degree)
 
             # forward
+            Ks[0][0][-1] = Ks[0][0][-1] * 1.5
+            Ks[0][1][-1] = Ks[0][1][-1] * 2
             renders, alphas, info = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
-                width=width,
-                height=height,
+                width=int(width*1.5),
+                height=height*2,
                 sh_degree=sh_degree_to_use,
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
@@ -628,12 +874,30 @@ class Runner:
                 info=info,
             )
 
+            # apply distortion field
+            P_sensor, P_view_insidelens_direction = generate_control_pts(data, control_point_sample_scale=32, flow_scale=[2., 2.])
+            #torchvision.utils.save_image(colors.permute(0, 3, 1, 2), os.path.join(cfg.result_dir, f'render.png'))
+            #torchvision.utils.save_image(pixels.permute(0, 3, 1, 2), os.path.join(cfg.result_dir, f'gt.png'))
+            #torchvision.utils.save_image(data['fisheye_image'].permute(0, 3, 1, 2)/255, os.path.join(cfg.result_dir, f'gt_fish.png'))
+            fovx = focal2fov(Ks[0][0][0], 1.5*width)
+            fovy = focal2fov(Ks[0][1][1], 2*height)
+            projection_matrix = getProjectionMatrix(cfg.near_plane, cfg.far_plane, fovx, fovy).cuda()
+            image, mask, flow_apply2_gt_or_img = apply_distortion(self.lens_net, P_view_insidelens_direction, P_sensor, data, colors, projection_matrix, flow_scale=[2., 2.])
+            #torchvision.utils.save_image(data['fisheye_image'].permute(0, 3, 1, 2)/255, os.path.join(cfg.result_dir, f'gt_fish.png'))
+            #torchvision.utils.save_image(image, os.path.join(cfg.result_dir, f'render_fish.png'))
+            fish_gt = (data['fisheye_image'].permute(0, 3, 1, 2)/255).cuda()
+
             # loss
-            l1loss = F.l1_loss(colors, pixels)
+            l1loss = F.l1_loss(image, fish_gt)
             ssimloss = 1.0 - fused_ssim(
-                colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2), padding="valid"
+                image, fish_gt, padding="valid"
             )
             loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
+            #l1loss = F.l1_loss(colors, pixels)
+            #ssimloss = 1.0 - fused_ssim(
+            #    colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2), padding="valid"
+            #)
+            #loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
             if cfg.depth_loss:
                 # query depths from depth map
                 points = torch.stack(
@@ -779,6 +1043,8 @@ class Runner:
                 optimizer.zero_grad(set_to_none=True)
             for scheduler in schedulers:
                 scheduler.step()
+            self.optimizer_lens_net.step()
+            self.optimizer_lens_net.zero_grad(set_to_none=True)
 
             # Run post-backward steps after backward and optimizer
             if isinstance(self.cfg.strategy, DefaultStrategy):
@@ -803,8 +1069,9 @@ class Runner:
                 assert_never(self.cfg.strategy)
 
             # eval the full set
-            if step in [i - 1 for i in cfg.eval_steps]:
-                self.eval(step)
+            if step in [1000, 10000, 20000]:
+            #if step in [i - 1 for i in cfg.eval_steps]:
+                self.eval(step, flow_apply2_gt_or_img)
                 self.render_traj(step)
 
             # run compression
@@ -823,7 +1090,7 @@ class Runner:
                 self.viewer.update(step, num_train_rays_per_step)
 
     @torch.no_grad()
-    def eval(self, step: int, stage: str = "val"):
+    def eval(self, step: int, flow_apply2_gt_or_img: Tensor, stage: str = "val"):
         """Entry for evaluation."""
         print("Running evaluation...")
         cfg = self.cfg
@@ -839,6 +1106,8 @@ class Runner:
         for i, data in enumerate(valloader):
             camtoworlds = data["camtoworld"].to(device)
             Ks = data["K"].to(device)
+            Ks[0][0][-1] = Ks[0][0][-1] * 1.5
+            Ks[0][1][-1] = Ks[0][1][-1] * 2
             pixels = data["image"].to(device) / 255.0
             masks = data["mask"].to(device) if "mask" in data else None
             height, width = pixels.shape[1:3]
@@ -848,17 +1117,27 @@ class Runner:
             colors, _, _ = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
-                width=width,
-                height=height,
+                width=int(width*1.5),
+                height=height*2,
                 sh_degree=cfg.sh_degree,
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 masks=masks,
             )  # [1, H, W, 3]
+
+            colors = F.grid_sample(
+                colors.permute(0, 3, 1, 2),
+                flow_apply2_gt_or_img.unsqueeze(0),
+                mode="bilinear",
+                padding_mode="zeros",
+                align_corners=True,
+            )
+            colors = center_crop(colors, data['fisheye_image'].shape[1], data['fisheye_image'].shape[2]).permute(0, 2, 3, 1)
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
 
             colors = torch.clamp(colors, 0.0, 1.0)
+            pixels = data["fisheye_image"].to(device) / 255.0
             canvas_list = [pixels, colors]
 
             if world_rank == 0:

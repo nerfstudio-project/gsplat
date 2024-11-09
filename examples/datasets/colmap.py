@@ -8,6 +8,9 @@ import imageio.v2 as imageio
 import numpy as np
 import torch
 from pycolmap import SceneManager
+import pickle
+import struct
+import collections
 
 from .normalize import (
     align_principle_axes,
@@ -16,6 +19,25 @@ from .normalize import (
     transform_points,
 )
 
+CameraModel = collections.namedtuple(
+    "CameraModel", ["model_id", "model_name", "num_params"])
+CAMERA_MODELS = {
+    CameraModel(model_id=0, model_name="SIMPLE_PINHOLE", num_params=3),
+    CameraModel(model_id=1, model_name="PINHOLE", num_params=4),
+    CameraModel(model_id=2, model_name="SIMPLE_RADIAL", num_params=4),
+    CameraModel(model_id=3, model_name="RADIAL", num_params=5),
+    CameraModel(model_id=4, model_name="OPENCV", num_params=8),
+    CameraModel(model_id=5, model_name="OPENCV_FISHEYE", num_params=8),
+    CameraModel(model_id=6, model_name="FULL_OPENCV", num_params=12),
+    CameraModel(model_id=7, model_name="FOV", num_params=5),
+    CameraModel(model_id=8, model_name="SIMPLE_RADIAL_FISHEYE", num_params=4),
+    CameraModel(model_id=9, model_name="RADIAL_FISHEYE", num_params=5),
+    CameraModel(model_id=10, model_name="THIN_PRISM_FISHEYE", num_params=12)
+}
+CAMERA_MODEL_IDS = dict([(camera_model.model_id, camera_model)
+                         for camera_model in CAMERA_MODELS])
+CAMERA_MODEL_NAMES = dict([(camera_model.model_name, camera_model)
+                           for camera_model in CAMERA_MODELS])
 
 def _get_rel_paths(path_dir: str) -> List[str]:
     """Recursively get relative paths of files in a directory."""
@@ -52,18 +74,26 @@ class Parser:
         manager.load_cameras()
         manager.load_images()
         manager.load_points3D()
+        fisheye_manager = SceneManager(os.path.join(data_dir, "fish/sparse/0"))
+        fisheye_manager.load_cameras()
+        fisheye_manager.load_images()
+        fisheye_manager.load_points3D()
 
         # Extract extrinsic matrices in world-to-camera format.
         imdata = manager.images
+        fisheye_imdata = fisheye_manager.images
         w2c_mats = []
         camera_ids = []
+        fisheye_camera_ids = []
         Ks_dict = dict()
         params_dict = dict()
+        fisheye_params_dict = dict()
         imsize_dict = dict()  # width, height
         mask_dict = dict()
         bottom = np.array([0, 0, 0, 1]).reshape(1, 4)
-        for k in imdata:
+        for k, fisheye_k in zip(imdata, fisheye_imdata):
             im = imdata[k]
+            fisheye_im = fisheye_imdata[fisheye_k]
             rot = im.R()
             trans = im.tvec.reshape(3, 1)
             w2c = np.concatenate([np.concatenate([rot, trans], 1), bottom], axis=0)
@@ -71,10 +101,14 @@ class Parser:
 
             # support different camera intrinsics
             camera_id = im.camera_id
+            fisheye_camera_id = fisheye_im.camera_id
             camera_ids.append(camera_id)
+            fisheye_camera_ids.append(fisheye_camera_id)
 
             # camera intrinsics
             cam = manager.cameras[camera_id]
+            fisheye_cam = fisheye_manager.cameras[fisheye_camera_id]
+            fisheye_params = np.array([fisheye_cam.k1, fisheye_cam.k2, fisheye_cam.k3, fisheye_cam.k4], dtype=np.float32)
             fx, fy, cx, cy = cam.fx, cam.fy, cam.cx, cam.cy
             K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
             K[:2, :] /= factor
@@ -105,6 +139,7 @@ class Parser:
             ), f"Only perspective and fisheye cameras are supported, got {type_}"
 
             params_dict[camera_id] = params
+            fisheye_params_dict[fisheye_camera_id] = fisheye_params
             imsize_dict[camera_id] = (cam.width // factor, cam.height // factor)
             mask_dict[camera_id] = None
         print(
@@ -124,13 +159,16 @@ class Parser:
         # Image names from COLMAP. No need for permuting the poses according to
         # image names anymore.
         image_names = [imdata[k].name for k in imdata]
+        fisheye_image_names = [fisheye_imdata[k].name for k in fisheye_imdata]
 
         # Previous Nerf results were generated with images sorted by filename,
         # ensure metrics are reported on the same test set.
         inds = np.argsort(image_names)
+        fisheye_inds = np.argsort(image_names)
         image_names = [image_names[i] for i in inds]
         camtoworlds = camtoworlds[inds]
         camera_ids = [camera_ids[i] for i in inds]
+        fisheye_camera_ids = [fisheye_camera_ids[i] for i in fisheye_inds]
 
         # Load extended metadata. Used by Bilarf dataset.
         self.extconf = {
@@ -165,6 +203,10 @@ class Parser:
         image_files = sorted(_get_rel_paths(image_dir))
         colmap_to_image = dict(zip(colmap_files, image_files))
         image_paths = [os.path.join(image_dir, colmap_to_image[f]) for f in image_names]
+        if os.path.exists(os.path.join(data_dir, "fish/images")):
+            p = os.path.join(data_dir, "fish/images")
+            fisheye_image_paths = [os.path.join(p, colmap_to_image[f]) for f in image_names]
+
 
         # 3D points and {image_name -> [point_idx]}
         points = manager.points3D.astype(np.float32)
@@ -198,10 +240,13 @@ class Parser:
 
         self.image_names = image_names  # List[str], (num_images,)
         self.image_paths = image_paths  # List[str], (num_images,)
+        self.fisheye_image_paths = fisheye_image_paths  # List[str], (num_images,)
         self.camtoworlds = camtoworlds  # np.ndarray, (num_images, 4, 4)
         self.camera_ids = camera_ids  # List[int], (num_images,)
+        self.fisheye_camera_ids = fisheye_camera_ids  # List[int], (num_images,)
         self.Ks_dict = Ks_dict  # Dict of camera_id -> K
         self.params_dict = params_dict  # Dict of camera_id -> params
+        self.fisheye_params_dict = fisheye_params_dict  # Dict of camera_id -> params
         self.imsize_dict = imsize_dict  # Dict of camera_id -> (width, height)
         self.mask_dict = mask_dict  # Dict of camera_id -> mask
         self.points = points  # np.ndarray, (num_points, 3)
@@ -325,9 +370,13 @@ class Dataset:
     def __getitem__(self, item: int) -> Dict[str, Any]:
         index = self.indices[item]
         image = imageio.imread(self.parser.image_paths[index])[..., :3]
+        fisheye_image = imageio.imread(self.parser.fisheye_image_paths[index])[..., :3]
         camera_id = self.parser.camera_ids[index]
+        fisheye_camera_id = self.parser.fisheye_camera_ids[index]
         K = self.parser.Ks_dict[camera_id].copy()  # undistorted K
         params = self.parser.params_dict[camera_id]
+        fisheye_params_mine = self.parser.fisheye_params_dict[fisheye_camera_id]
+        fisheye_params = self.parser.params_dict[camera_id]
         camtoworlds = self.parser.camtoworlds[index]
         mask = self.parser.mask_dict[camera_id]
 
@@ -352,8 +401,10 @@ class Dataset:
 
         data = {
             "K": torch.from_numpy(K).float(),
+            "coeff": torch.from_numpy(fisheye_params_mine).float(),
             "camtoworld": torch.from_numpy(camtoworlds).float(),
             "image": torch.from_numpy(image).float(),
+            "fisheye_image": torch.from_numpy(fisheye_image).float(),
             "image_id": item,  # the index of the image in the dataset
         }
         if mask is not None:
