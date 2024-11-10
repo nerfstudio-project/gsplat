@@ -11,6 +11,7 @@ from pycolmap import SceneManager
 import pickle
 import struct
 import collections
+from itertools import islice
 
 from .normalize import (
     align_principle_axes,
@@ -82,6 +83,10 @@ class Parser:
         # Extract extrinsic matrices in world-to-camera format.
         imdata = manager.images
         fisheye_imdata = fisheye_manager.images
+        # remove inaccurate cameras in eyeful dataset
+        #if 'seating' in colmap_dir:
+        #    imdata = collections.OrderedDict(islice(imdata.items(), 168*5, 168*6))
+        #    fisheye_imdata = collections.OrderedDict(islice(fisheye_imdata.items(), 168*5, 168*6))
         w2c_mats = []
         camera_ids = []
         fisheye_camera_ids = []
@@ -108,7 +113,10 @@ class Parser:
             # camera intrinsics
             cam = manager.cameras[camera_id]
             fisheye_cam = fisheye_manager.cameras[fisheye_camera_id]
-            fisheye_params = np.array([fisheye_cam.k1, fisheye_cam.k2, fisheye_cam.k3, fisheye_cam.k4], dtype=np.float32)
+            if 'seating' in colmap_dir:
+                fisheye_params = np.array([-0.03936274483986258, 0.005866545097262303, -0.0012988220238146179, 0.], dtype=np.float32)
+            else:
+                fisheye_params = np.array([fisheye_cam.k1, fisheye_cam.k2, fisheye_cam.k3, fisheye_cam.k4], dtype=np.float32)
             fx, fy, cx, cy = cam.fx, cam.fy, cam.cx, cam.cy
             K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
             K[:2, :] /= factor
