@@ -62,7 +62,7 @@ To run all the experiments together run:
 ./sls_benchmark.sh
 ```
 ## Preparing Datasets
-The [RobustNeRF  dataset](https://storage.googleapis.com/jax3d-public/projects/robustnerf/robustnerf.tar.gz) and [NeRF On-the-go dataset](https://cvg-data.inf.ethz.ch/on-the-go.zip) are used for experiments. The Stable Diffusion features used for these scenes can be found [here](https://borealisdata.ca/dataset.xhtml?persistentId=doi:10.5683/SP3/WOFXFT&faces-redirect=true).
+The [RobustNeRF  dataset](https://storage.googleapis.com/jax3d-public/projects/robustnerf/robustnerf.tar.gz) and [NeRF On-the-go dataset](https://cvg-data.inf.ethz.ch/on-the-go.zip) are used for experiments. Both datasets formatted to be compatible with our code along with their Stable Diffusion features can be found [here](https://borealisdata.ca/dataset.xhtml?persistentId=doi%3A10.5683%2FSP3%2FWOFXFT).
  
 To extract these features on your own datasets you can run the Jupyter notebook `./examples/datasets/sd_feature_extraction.ipynb`. 
 
