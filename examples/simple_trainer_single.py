@@ -46,6 +46,7 @@ from gsplat.optimizers import SelectiveAdam
 from iresnet import iResNet
 
 from utils_cubemap import homogenize, dehomogenize, fov2focal, focal2fov, generate_pts, init_from_coeff, plot_points, init_from_colmap, generate_control_pts, getProjectionMatrix, center_crop, apply_distortion, rotate_camera, generate_pts_up_down_left_right, interpolate_with_control, apply_flow_up_down_left_right, mask_half, render_cubemap, generate_circular_mask
+from utils_mitsuba import fetchPly
 
 @dataclass
 class Config:
@@ -88,7 +89,7 @@ class Config:
     # Steps to evaluate the model
     eval_steps: List[int] = field(default_factory=lambda: [1, 7_000, 30_000])
     # Steps to save the model
-    save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    save_steps: List[int] = field(default_factory=lambda: [7_000, 20_000, 30_000])
 
     # Initialization strategy
     init_type: str = "sfm"
@@ -190,6 +191,7 @@ class Config:
 
 def create_splats_with_optimizers(
     parser: Parser,
+    pcd,
     init_type: str = "sfm",
     init_num_pts: int = 100_000,
     init_extent: float = 3.0,
@@ -211,6 +213,9 @@ def create_splats_with_optimizers(
     elif init_type == "random":
         points = init_extent * scene_scale * (torch.rand((init_num_pts, 3)) * 2 - 1)
         rgbs = torch.rand((init_num_pts, 3))
+    elif init_type == 'netflix':
+        points = torch.tensor(np.asarray(pcd.points)).float().cuda()
+        rgbs = torch.tensor(np.asarray(pcd.colors)).float().cuda()
     else:
         raise ValueError("Please specify a correct init_type: sfm or random")
 
@@ -297,6 +302,7 @@ class Runner:
         os.makedirs(self.stats_dir, exist_ok=True)
         self.render_dir = f"{cfg.result_dir}/renders"
         os.makedirs(self.render_dir, exist_ok=True)
+        os.makedirs(f"{cfg.result_dir}/monitor", exist_ok=True)
 
         # Tensorboard
         self.writer = SummaryWriter(log_dir=f"{cfg.result_dir}/tb")
@@ -320,8 +326,14 @@ class Runner:
 
         # Model
         feature_dim = 32 if cfg.app_opt else None
+        pcd = None
+        if cfg.init_type == 'netflix':
+            ply_path = os.path.join(cfg.data_dir, f'sparse/0/fused.ply')
+            pcd = fetchPly(ply_path)
+
         self.splats, self.optimizers = create_splats_with_optimizers(
             self.parser,
+            pcd,
             init_type=cfg.init_type,
             init_num_pts=cfg.init_num_pts,
             init_extent=cfg.init_extent,
@@ -618,20 +630,11 @@ class Runner:
             sh_degree_to_use = min(step // cfg.sh_degree_interval, cfg.sh_degree)
 
             # forward
-            Ks[0][0][-1] = Ks[0][0][-1] * 1.5
-            Ks[0][1][-1] = Ks[0][1][-1] * 2
-            renders, alphas, info = self.rasterize_splats(
-                camtoworlds=camtoworlds,
-                Ks=Ks,
-                width=int(width*1.5),
-                height=height*2,
-                sh_degree=sh_degree_to_use,
-                near_plane=cfg.near_plane,
-                far_plane=cfg.far_plane,
-                image_ids=image_ids,
-                render_mode="RGB+ED" if cfg.depth_loss else "RGB",
-                masks=masks,
-            )
+            scale_x = 2.
+            scale_y = 2.
+            Ks[0][0][-1] = Ks[0][0][-1] * scale_x
+            Ks[0][1][-1] = Ks[0][1][-1] * scale_y
+            renders, alphas, info = self.rasterize_splats(camtoworlds=camtoworlds,Ks=Ks,width=int(width*scale_x),height=int(height*scale_y),sh_degree=sh_degree_to_use,near_plane=cfg.near_plane,far_plane=cfg.far_plane,image_ids=image_ids,render_mode="RGB+ED" if cfg.depth_loss else "RGB",masks=masks)
             if renders.shape[-1] == 4:
                 colors, depths = renders[..., 0:3], renders[..., 3:4]
             else:
@@ -659,14 +662,30 @@ class Runner:
             )
 
             # apply distortion field
-            P_sensor, P_view_insidelens_direction = generate_control_pts(data, control_point_sample_scale=32, flow_scale=[2., 2.])
-            fovx = focal2fov(Ks[0][0][0], 1.5*width)
-            fovy = focal2fov(Ks[0][1][1], 2*height)
-            projection_matrix = getProjectionMatrix(cfg.near_plane, cfg.far_plane, fovx, fovy).cuda()
-            image, mask, flow_apply2_gt_or_img = apply_distortion(self.lens_net, P_view_insidelens_direction, P_sensor, data, colors, projection_matrix, flow_scale=[2., 2.])
-            fish_gt = (data['fisheye_image'].permute(0, 3, 1, 2)/255).cuda()
+            apply2gt = False
+            if apply2gt:
+                P_sensor, P_view_insidelens_direction = generate_control_pts(data, control_point_sample_scale=16, flow_scale=[1.5, 1.5])
+                fovx_orig = focal2fov(Ks[0][0][0], 1.5*width)
+                fovy_orig = focal2fov(Ks[0][1][1], 1.5*height)
+                projection_matrix = getProjectionMatrix(cfg.near_plane, cfg.far_plane, fovx_orig, fovy_orig).cuda()
+                fish_gt, mask, flow_apply2_gt_or_img = apply_distortion(self.lens_net, P_view_insidelens_direction, P_sensor, data, colors, projection_matrix, flow_scale=[2., 2.], apply2gt=apply2gt)
+                fish_gt = fish_gt.unsqueeze(0)
+                image = colors.permute(0, 3, 1, 2)
+            else:
+                P_sensor, P_view_insidelens_direction = generate_control_pts(data, control_point_sample_scale=32, flow_scale=[3., 3.])
+                fovx = focal2fov(Ks[0][0][0], scale_x*width)
+                fovy = focal2fov(Ks[0][1][1], scale_y*height)
+                projection_matrix = getProjectionMatrix(cfg.near_plane, cfg.far_plane, fovx, fovy).cuda()
+                image, mask, flow_apply2_gt_or_img = apply_distortion(self.lens_net, P_view_insidelens_direction, P_sensor, data, colors, projection_matrix, flow_scale=[3., 3.])
+                fish_gt = (data['fisheye_image'].permute(0, 3, 1, 2)/255).cuda()
 
-            if step > 1000:
+
+            #torchvision.utils.save_image(colors.permute(0, 3, 1, 2), os.path.join(cfg.result_dir, f'render_pers.png'))
+            #torchvision.utils.save_image(image, os.path.join(cfg.result_dir, f'render.png'))
+            #torchvision.utils.save_image(fish_gt, os.path.join(cfg.result_dir, f'gt.png'))
+            #torchvision.utils.save_image(data['image'].permute(0, 3, 1, 2)/255, os.path.join(cfg.result_dir, f'gt_pers.png'))
+            #import pdb;pdb.set_trace()
+            if step > 1000 or True:
                 black_boundary_mask = (image != 0).float()
                 fish_gt = fish_gt * black_boundary_mask
 
@@ -676,11 +695,7 @@ class Runner:
                 image, fish_gt, padding="valid"
             )
             loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
-            #l1loss = F.l1_loss(colors, pixels)
-            #ssimloss = 1.0 - fused_ssim(
-            #    colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2), padding="valid"
-            #)
-            #loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
+
             if cfg.depth_loss:
                 # query depths from depth map
                 points = torch.stack(
@@ -729,13 +744,10 @@ class Runner:
             pbar.set_description(desc)
 
             # write images (gt and render)
-            # if world_rank == 0 and step % 800 == 0:
-            #     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
-            #     canvas = canvas.reshape(-1, *canvas.shape[2:])
-            #     imageio.imwrite(
-            #         f"{self.render_dir}/train_rank{self.world_rank}.png",
-            #         (canvas * 255).astype(np.uint8),
-            #     )
+            if world_rank == 0 and step % 500 == 0:
+                torchvision.utils.save_image(image, os.path.join(cfg.result_dir, f'monitor/perspective_{step}.png'))
+                torchvision.utils.save_image(fish_gt, os.path.join(cfg.result_dir, f'monitor/gt_{step}.png'))
+
 
             if world_rank == 0 and cfg.tb_every > 0 and step % cfg.tb_every == 0:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
@@ -755,7 +767,8 @@ class Runner:
                 self.writer.flush()
 
             # save checkpoint before updating the model
-            if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
+            #if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
+            if step in [10001, 20001, 29998]:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
                 stats = {
                     "mem": mem,
@@ -782,6 +795,7 @@ class Runner:
                 torch.save(
                     data, f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt"
                 )
+                torch.save(self.lens_net.state_dict(), f"{self.ckpt_dir}/lens_net_{step}.pt")
 
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:
@@ -852,9 +866,22 @@ class Runner:
                 assert_never(self.cfg.strategy)
 
             # eval the full set
-            if step in [1, 5000, 10000, 20000, 29990]:
+            if step in [1, 10000, 20000, 29999]:
             #if step in [i - 1 for i in cfg.eval_steps]:
-                self.eval(step, flow_apply2_gt_or_img)
+                with torch.no_grad():
+                    scale_x = 2.2
+                    scale_y = 2.2
+                    fovx = focal2fov(Ks[0][0][0], scale_x*width)
+                    fovy = focal2fov(Ks[0][1][1], scale_y*height)
+                    projection_matrix = getProjectionMatrix(cfg.near_plane, cfg.far_plane, fovx, fovy).cuda()
+                    flow_scale = [3., 3.]
+                    P_sensor_, P_view_insidelens_direction_ = generate_control_pts(data, control_point_sample_scale=4, flow_scale=[3., 3.])
+                    P_view_outsidelens_direction_ = self.lens_net.forward(P_view_insidelens_direction_, sensor_to_frustum=apply2gt)
+                    camera_directions_w_lens_ = homogenize(P_view_outsidelens_direction_)
+                    control_points_ = camera_directions_w_lens_.reshape((P_sensor_.shape[0], P_sensor_.shape[1], 3))[:, :, :2]
+                    flow = control_points_ @ projection_matrix[:2, :2]
+                    flow_eval = F.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(int(data['fisheye_image'].shape[1]*flow_scale[0]), int(data['fisheye_image'].shape[2]*flow_scale[1])), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+                self.eval(step, flow_eval, apply2gt, scale_x, scale_y)
                 self.render_traj(step)
 
             # run compression
@@ -873,7 +900,8 @@ class Runner:
                 self.viewer.update(step, num_train_rays_per_step)
 
     @torch.no_grad()
-    def eval(self, step: int, flow_apply2_gt_or_img: Tensor, stage: str = "val"):
+    def eval(self, step: int, flow_apply2_gt_or_img: Tensor, apply2gt: bool, scale_x: float, scale_y: float, stage: str = "val"):
+
         """Entry for evaluation."""
         print("Running evaluation...")
         cfg = self.cfg
@@ -889,8 +917,8 @@ class Runner:
         for i, data in enumerate(valloader):
             camtoworlds = data["camtoworld"].to(device)
             Ks = data["K"].to(device)
-            Ks[0][0][-1] = Ks[0][0][-1] * 1.5
-            Ks[0][1][-1] = Ks[0][1][-1] * 2.
+            Ks[0][0][-1] = Ks[0][0][-1] * scale_x
+            Ks[0][1][-1] = Ks[0][1][-1] * scale_y
             pixels = data["image"].to(device) / 255.0
             masks = data["mask"].to(device) if "mask" in data else None
             height, width = pixels.shape[1:3]
@@ -900,28 +928,43 @@ class Runner:
             colors, _, _ = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
-                width=int(width*1.5),
-                height=height*2,
+                width=int(width*scale_x),
+                height=int(height*scale_y),
                 sh_degree=cfg.sh_degree,
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 masks=masks,
             )  # [1, H, W, 3]
 
-            colors = F.grid_sample(
-                colors.permute(0, 3, 1, 2),
-                flow_apply2_gt_or_img.unsqueeze(0),
-                mode="bilinear",
-                padding_mode="zeros",
-                align_corners=True,
-            )
-            colors = center_crop(colors, data['fisheye_image'].shape[1], data['fisheye_image'].shape[2]).permute(0, 2, 3, 1)
+            torchvision.utils.save_image(colors.permute(0, 3, 1, 2), os.path.join(cfg.result_dir, f'renders/perspective_{i}.png'))
+            if not apply2gt:
+                colors = F.grid_sample(
+                    colors.permute(0, 3, 1, 2),
+                    flow_apply2_gt_or_img.unsqueeze(0),
+                    mode="bilinear",
+                    padding_mode="zeros",
+                    align_corners=True,
+                )
+                colors = center_crop(colors, data['fisheye_image'].shape[1], data['fisheye_image'].shape[2]).permute(0, 2, 3, 1)
+            else:
+                pixels = F.grid_sample(
+                    data["fisheye_image"].cuda().permute(0, 3, 1, 2)/255,
+                    flow_apply2_gt_or_img.unsqueeze(0),
+                    mode="bilinear",
+                    padding_mode="zeros",
+                    align_corners=True,
+                ).permute(0, 2, 3, 1)
+
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
 
             colors = torch.clamp(colors, 0.0, 1.0)
-            pixels = data["fisheye_image"].to(device) / 255.0
+            if not apply2gt:
+                pixels = data["fisheye_image"].to(device) / 255.0
             canvas_list = [pixels, colors]
+            torchvision.utils.save_image(pixels.permute(0, 3, 1, 2), os.path.join(cfg.result_dir, f'renders/gt_{i}.png'))
+            torchvision.utils.save_image(colors.permute(0, 3, 1, 2), os.path.join(cfg.result_dir, f'renders/rendering_{i}.png'))
+            if apply2gt: continue
 
             if world_rank == 0:
                 # write images
@@ -943,7 +986,7 @@ class Runner:
                     cc_colors_p = cc_colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
                     metrics["cc_psnr"].append(self.psnr(cc_colors_p, pixels_p))
 
-        if world_rank == 0:
+        if world_rank == 0 and not apply2gt:
             ellipse_time /= len(valloader)
 
             stats = {k: torch.stack(v).mean().item() for k, v in metrics.items()}

@@ -83,10 +83,10 @@ class Parser:
         # Extract extrinsic matrices in world-to-camera format.
         imdata = manager.images
         fisheye_imdata = fisheye_manager.images
-        # remove inaccurate cameras in eyeful dataset
-        #if 'seating' in colmap_dir:
-        #    imdata = collections.OrderedDict(islice(imdata.items(), 168*5, 168*6))
-        #    fisheye_imdata = collections.OrderedDict(islice(fisheye_imdata.items(), 168*5, 168*6))
+         #remove inaccurate cameras in eyeful dataset
+        if 'seating' in colmap_dir:
+            imdata = collections.OrderedDict(islice(imdata.items(), 168*3, 168*9))
+            fisheye_imdata = collections.OrderedDict(islice(fisheye_imdata.items(), 168*3, 168*9))
         w2c_mats = []
         camera_ids = []
         fisheye_camera_ids = []
@@ -368,9 +368,11 @@ class Dataset:
         self.load_depths = load_depths
         indices = np.arange(len(self.parser.image_names))
         if split == "train":
-            self.indices = indices[indices % self.parser.test_every != 0]
+            #self.indices = indices[indices % self.parser.test_every != 0]
+            self.indices = indices[:]
         else:
-            self.indices = indices[indices % self.parser.test_every == 0]
+            #self.indices = indices[indices % self.parser.test_every == 0]
+            self.indices = indices[:]
 
     def __len__(self):
         return len(self.indices)

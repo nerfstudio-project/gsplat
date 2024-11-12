@@ -227,13 +227,20 @@ def center_crop(tensor, target_height, target_width):
 
     return cropped_tensor
 
-def apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_cam, image, projection_matrix, flow_scale=[2., 2.]):
+def apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_cam, image, projection_matrix, flow_scale=[2., 2.], apply2gt=False):
     #P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=True)
-    P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=False)
+    P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=apply2gt)
     camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
     control_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
 
     flow = control_points @ projection_matrix[:2, :2]
+
+    if apply2gt:
+        flow = F.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(int(viewpoint_cam['image'].shape[1]*2.), int(viewpoint_cam['image'].shape[2]*2.)), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+        gt_image = F.grid_sample(viewpoint_cam['fisheye_image'].cuda().permute(0, 3, 1, 2)/255, flow.unsqueeze(0), mode="bilinear", padding_mode="zeros", align_corners=True).squeeze(0)
+        mask = (~((gt_image[0]<0.00001) & (gt_image[1]<0.00001)).unsqueeze(0)).float()
+        return gt_image, mask, flow
+
     flow = F.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(int(viewpoint_cam['fisheye_image'].shape[1]*flow_scale[0]), int(viewpoint_cam['fisheye_image'].shape[2]*flow_scale[1])), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
     image = F.grid_sample(
         image.permute(0, 3, 1, 2),
@@ -326,9 +333,9 @@ def interpolate_with_control(control_r, control_theta, r):
 def apply_flow_up_down_left_right(width, height, K, rays, rays_residual, img, types="forward", is_fisheye=False, control_r=None, control_theta=None, cubemap_net_threshold=1.57):
     r = torch.sqrt(torch.sum(rays**2, dim=-1, keepdim=True))
     if is_fisheye:
-        r[r > cubemap_net_threshold] = cubemap_net_threshold
-        theta = torch.tan(r) + interpolate_with_control(control_r, control_theta, r)
-        #theta = torch.tan(r)
+        #r[r > cubemap_net_threshold] = cubemap_net_threshold
+        #theta = torch.tan(r) + interpolate_with_control(control_r, control_theta, r)
+        theta = torch.tan(r)
         inv_r = 1 / (r + 1e-5)
 
         scale = theta * inv_r
@@ -442,20 +449,31 @@ def generate_circular_mask(image_shape: torch.Size, radius: int) -> torch.Tensor
 
     return mask
 
-def render_cubemap(width, height, new_width, new_height, fov90_width, fov90_height, Ks, camtoworlds, cfg, sh_degree_to_use, image_ids, masks, cubemap_net, rasterize_splats, cubemap_net_threshold):
+def render_cubemap(width, height, new_width, new_height, fov90_width, fov90_height, Ks, camtoworlds, cfg, sh_degree_to_use, image_ids, masks, cubemap_net, rasterize_splats, cubemap_net_threshold, render_pano=False):
     mask_fov90 = torch.zeros((1, height, width), dtype=torch.float32).cuda()
-    mask_fov90[:, height//2 - int(fov90_height//2) - 1:height//2 + int(fov90_height//2) + 1, width//2 - int(fov90_width//2) - 1:width//2 + int(fov90_width//2) + 1] = 1
+    mask_fov90[:, height//2 - int(fov90_height//2) - 2:height//2 + int(fov90_height//2) + 2, width//2 - int(fov90_width//2) - 1:width//2 + int(fov90_width//2) + 2] = 1
 
     camtoworlds_up = rotate_camera(camtoworlds[0].inverse(), 90, 0, 0).unsqueeze(0).inverse()
     camtoworlds_down = rotate_camera(camtoworlds[0].inverse(), -90, 0, 0).unsqueeze(0).inverse()
     camtoworlds_right = rotate_camera(camtoworlds[0].inverse(), 0, 90, 0).unsqueeze(0).inverse()
     camtoworlds_left = rotate_camera(camtoworlds[0].inverse(), 0, -90, 0).unsqueeze(0).inverse()
+    if render_pano:
+        camtoworlds_back = rotate_camera(camtoworlds[0].inverse(), 0, 180, 0).unsqueeze(0).inverse()
+        img_perspective_list = []
     info_list = []
     renders_forward, _, info_forward = rasterize_splats(camtoworlds=camtoworlds, Ks=Ks, width=new_width, height=new_height, sh_degree=sh_degree_to_use, near_plane=cfg.near_plane, far_plane=cfg.far_plane, image_ids=image_ids, render_mode="RGB+ED" if cfg.depth_loss else "RGB", masks=masks)
     renders_up, _, info_up = rasterize_splats(camtoworlds=camtoworlds_up, Ks=Ks, width=new_width, height=new_height, sh_degree=sh_degree_to_use, near_plane=cfg.near_plane, far_plane=cfg.far_plane, image_ids=image_ids, render_mode="RGB+ED" if cfg.depth_loss else "RGB", masks=masks)
     renders_down, _, info_down = rasterize_splats(camtoworlds=camtoworlds_down, Ks=Ks, width=new_width, height=new_height, sh_degree=sh_degree_to_use, near_plane=cfg.near_plane, far_plane=cfg.far_plane, image_ids=image_ids, render_mode="RGB+ED" if cfg.depth_loss else "RGB", masks=masks)
     renders_left, _, info_left = rasterize_splats(camtoworlds=camtoworlds_left, Ks=Ks, width=new_width, height=new_height, sh_degree=sh_degree_to_use, near_plane=cfg.near_plane, far_plane=cfg.far_plane, image_ids=image_ids, render_mode="RGB+ED" if cfg.depth_loss else "RGB", masks=masks)
     renders_right, _, info_right = rasterize_splats(camtoworlds=camtoworlds_right, Ks=Ks, width=new_width, height=new_height, sh_degree=sh_degree_to_use, near_plane=cfg.near_plane, far_plane=cfg.far_plane, image_ids=image_ids, render_mode="RGB+ED" if cfg.depth_loss else "RGB", masks=masks)
+    if render_pano:
+        renders_back, _, _ = rasterize_splats(camtoworlds=camtoworlds_back, Ks=Ks, width=new_width, height=new_height, sh_degree=sh_degree_to_use, near_plane=cfg.near_plane, far_plane=cfg.far_plane, image_ids=image_ids, render_mode="RGB+ED" if cfg.depth_loss else "RGB", masks=masks)
+        img_perspective_list.append(renders_forward)
+        img_perspective_list.append(renders_up)
+        img_perspective_list.append(renders_down)
+        img_perspective_list.append(renders_left)
+        img_perspective_list.append(renders_right)
+        img_perspective_list.append(renders_back)
     info_list.append(info_forward)
     info_list.append(info_up)
     info_list.append(info_down)
@@ -472,8 +490,9 @@ def render_cubemap(width, height, new_width, new_height, fov90_width, fov90_heig
     rays_4_faces = generate_pts_up_down_left_right(new_width, new_height, Ks[0])
     rays_residual_4_faces = generate_pts_up_down_left_right(new_width, new_height, Ks[0])
     img_list = []
-    control_r = torch.linspace(0, cubemap_net_threshold, 10000).unsqueeze(1).cuda()
-    control_theta = cubemap_net.forward(control_r, sensor_to_frustum=True)
+    #control_r = torch.linspace(0, cubemap_net_threshold, 10000).unsqueeze(1).cuda()
+    #control_theta = cubemap_net.forward(control_r, sensor_to_frustum=True)
+    control_theta, control_r = None, None
 
     img_fish_forward, img_perspective, control_theta = apply_flow_up_down_left_right(width, height, Ks[0], rays_4_faces, rays_residual_4_faces, renders_forward.permute(0, 3, 1, 2)[0]*mask_fov90, types="forward", is_fisheye=True, control_r=control_r, control_theta=control_theta, cubemap_net_threshold=cubemap_net_threshold)
     img_list.append(img_fish_forward)
@@ -489,6 +508,7 @@ def render_cubemap(width, height, new_width, new_height, fov90_width, fov90_heig
     img_fish_right, img_perspective = apply_flow_up_down_left_right(width, height, Ks[0], rays_4_faces, rays_residual_4_faces, renders_right.permute(0, 3, 1, 2)[0]*mask_fov90, types="right", is_fisheye=True, control_r=control_r, control_theta=control_theta, cubemap_net_threshold=cubemap_net_threshold)
     img_fish_right, half_mask = mask_half(img_fish_right, 'right')
     img_list.append(img_fish_right)
+    img_fish_back, img_perspective = apply_flow_up_down_left_right(width, height, Ks[0], rays_4_faces, rays_residual_4_faces, renders_back.permute(0, 3, 1, 2)[0]*mask_fov90, types="right", is_fisheye=True, control_r=control_r, control_theta=control_theta, cubemap_net_threshold=cubemap_net_threshold)
 
     #torchvision.utils.save_image(img_fish_forward, os.path.join(cfg.result_dir, f'forward_fish.png'))
     #torchvision.utils.save_image(img_fish_up, os.path.join(cfg.result_dir, f'up_fish.png'))
@@ -496,5 +516,7 @@ def render_cubemap(width, height, new_width, new_height, fov90_width, fov90_heig
     #torchvision.utils.save_image(img_fish_left, os.path.join(cfg.result_dir, f'left_fish.png'))
     #torchvision.utils.save_image(img_fish_right, os.path.join(cfg.result_dir, f'right_fish.png'))
 
+    if render_pano:
+        return img_list, info_list, img_perspective_list
     return img_list, info_list
 
