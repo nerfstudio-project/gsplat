@@ -20,7 +20,7 @@ from typing import Union
 
 from torch import nn
 
-from examples.external import TCNN_EXISTS, tcnn
+from examples.mlp.external import TCNN_EXISTS, tcnn
 
 
 def activation_to_tcnn_string(activation: Union[nn.Module, None]) -> str:
