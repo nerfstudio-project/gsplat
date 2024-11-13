@@ -9,9 +9,8 @@ from gsplat.utils import log_transform
 class BlurOptModule(nn.Module):
     """Blur optimization module."""
 
-    def __init__(self, cfg, n: int, embed_dim: int = 4):
+    def __init__(self, n: int, embed_dim: int = 4):
         super().__init__()
-        self.blur_a = cfg.blur_a
         self.embeds = torch.nn.Embedding(n, embed_dim)
         self.means_encoder = get_encoder(3, 3)
         self.depths_encoder = get_encoder(3, 1)
@@ -28,6 +27,7 @@ class BlurOptModule(nn.Module):
             layer_width=64,
             out_dim=7,
         )
+        self.bounded_l1_loss = bounded_l1_loss(10.0, 0.5)
 
     def zero_init(self):
         torch.nn.init.zeros_(self.embeds.weight)
@@ -69,15 +69,33 @@ class BlurOptModule(nn.Module):
         blur_mask = torch.sigmoid(mlp_out)
         return blur_mask
 
-    def mask_loss(self, blur_mask: Tensor, eps: float = 1e-2):
+    def mask_loss(self, blur_mask: Tensor):
         """Loss function for regularizing the blur mask by controlling its mean.
 
-        The loss function diverges to +infinity at 0 and 1. This prevents the mask
-        from collapsing all 0s or 1s. It is biased towards 0 to encourage sparsity.
+        Uses bounded l1 loss which diverges to +infinity at 0 and 1 to prevents the mask
+        from collapsing all 0s or 1s.
         """
         x = blur_mask.mean()
-        maskloss = self.blur_a * (1 / (1 - x + eps) - 1) + 0.2 * (1 / (x + eps) - 1)
-        return maskloss
+        return self.bounded_l1_loss(x)
+
+
+def bounded_l1_loss(lambda_a: float, lambda_b: float, eps: float = 1e-2):
+    """L1 loss function with discontinuities at 0 and 1.
+
+    Args:
+        lambda_a (float): Coefficient of L1 loss.
+        lambda_b (float): Coefficient of bounded loss.
+        eps (float, optional): Epsilon to prevent divide by zero. Defaults to 1e-2.
+    """
+
+    def loss_fn(x: Tensor):
+        return lambda_a * x + lambda_b * (1 / (1 - x + eps) + 1 / (x + eps))
+
+    # Compute constant that sets min to zero
+    xs = torch.linspace(0, 1, 1000)
+    ys = loss_fn(xs)
+    c = ys.min()
+    return lambda x: loss_fn(x) - c
 
 
 def get_encoder(num_freqs: int, input_dims: int):

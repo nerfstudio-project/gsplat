@@ -4,8 +4,8 @@ SCENE_LIST="defocuscake defocuscaps defocuscisco defocuscoral defocuscupcake def
 DATA_FACTOR=4
 RENDER_TRAJ_PATH="spiral"
 CAP_MAX=250000
+RESULT_DIR="results/benchmark_mcmc_deblur"
 
-RESULT_DIR="results/benchmark_mcmc_deblur_wd/1e-3_0.8"
 for SCENE in $SCENE_LIST;
 do
     echo "Running $SCENE"
@@ -14,12 +14,10 @@ do
     CUDA_VISIBLE_DEVICES=0 python simple_trainer.py mcmc --disable_viewer --data_factor $DATA_FACTOR \
         --strategy.cap-max $CAP_MAX \
         --blur_opt \
-        --blur_opt_lr 1e-3 \
-        --blur_a 0.8 \
-        --blur_mask_reg 0.002 \
         --render_traj_path $RENDER_TRAJ_PATH \
         --data_dir $SCENE_DIR/$SCENE/ \
         --result_dir $RESULT_DIR/$SCENE
 done
+
 # Summarize the stats
 python benchmarks/compression/summarize_stats.py --results_dir $RESULT_DIR --scenes $SCENE_LIST --stage val

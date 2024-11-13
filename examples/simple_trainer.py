@@ -156,7 +156,6 @@ class Config:
     blur_mask_reg: float = 0.001
     # Regularization for blur optimization as weight decay
     blur_opt_reg: float = 1e-6
-    blur_a: float = 0.8
 
     # Enable bilateral grid. (experimental)
     use_bilateral_grid: bool = False
@@ -415,7 +414,7 @@ class Runner:
 
         self.blur_optimizers = []
         if cfg.blur_opt:
-            self.blur_module = BlurOptModule(cfg, len(self.trainset)).to(self.device)
+            self.blur_module = BlurOptModule(len(self.trainset)).to(self.device)
             self.blur_module.zero_init()
             self.blur_optimizers = [
                 torch.optim.Adam(
@@ -869,8 +868,8 @@ class Runner:
                 self.eval(step, stage="train")
                 self.eval(step, stage="val")
                 self.render_traj(step)
-            if step % 1000 == 0:
-                self.eval(step, stage="vis")
+            # if step % 1000 == 0:
+            #     self.eval(step, stage="vis")
 
             # run compression
             if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:
