@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import cv2
 import time
 from dataclasses import dataclass, field
 from collections import defaultdict
@@ -46,24 +47,10 @@ from gsplat.optimizers import SelectiveAdam
 from iresnet import iResNet
 
 from utils_cubemap import homogenize, dehomogenize, fov2focal, focal2fov, generate_pts, init_from_coeff, plot_points, init_from_colmap, generate_control_pts, getProjectionMatrix, center_crop, apply_distortion, rotate_camera, generate_pts_up_down_left_right, interpolate_with_control, apply_flow_up_down_left_right, mask_half, render_cubemap, generate_circular_mask
-from utils_mitsuba import fetchPly
+from utils_mitsuba import readCamerasFromTransforms, PILtoTorch, cubemap_to_panorama, rotation_matrix_to_quaternion, quaternion_to_rotation_matrix
 
 @dataclass
 class Config:
-    # ablation study
-    control_point_sample_scale: int = 32
-    control_point_sample_scale_eval: int = 4
-    iresnet_lr: float = 1e-7
-    step2start: int = 3000
-    step2end: int = 7000
-    scale_x: float = 2
-    scale_y: float = 2
-    scale_x_eval: float = 2
-    scale_y_eval: float = 2
-    when2addmask: int = 100
-    update_min_opacity: float = 0.005
-
-
     # Disable viewer
     disable_viewer: bool = False
     # Path to the .pt files. If provide, it will skip training and run evaluation only.
@@ -75,6 +62,7 @@ class Config:
 
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
+    mitsuba_dir: str = ""
     # Downsample factor for the dataset
     data_factor: int = 4
     # Directory to save results
@@ -103,7 +91,7 @@ class Config:
     # Steps to evaluate the model
     eval_steps: List[int] = field(default_factory=lambda: [1, 7_000, 30_000])
     # Steps to save the model
-    save_steps: List[int] = field(default_factory=lambda: [7_000, 20_000, 30_000])
+    save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
 
     # Initialization strategy
     init_type: str = "sfm"
@@ -227,7 +215,7 @@ def create_splats_with_optimizers(
     elif init_type == "random":
         points = init_extent * scene_scale * (torch.rand((init_num_pts, 3)) * 2 - 1)
         rgbs = torch.rand((init_num_pts, 3))
-    elif init_type == 'netflix':
+    elif init_type == 'mitsuba':
         points = torch.tensor(np.asarray(pcd.points)).float().cuda()
         rgbs = torch.tensor(np.asarray(pcd.colors)).float().cuda()
     else:
@@ -338,16 +326,12 @@ class Runner:
         self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
         print("Scene scale:", self.scene_scale)
 
+        self.camtoworld_list, self.Ks_list, self.gt_img_list, self.gt_img_name_list, self.pcd = readCamerasFromTransforms(cfg.mitsuba_dir, 'transforms_train.json', None)
         # Model
         feature_dim = 32 if cfg.app_opt else None
-        pcd = None
-        if cfg.init_type == 'netflix':
-            ply_path = os.path.join(cfg.data_dir, f'sparse/0/fused.ply')
-            pcd = fetchPly(ply_path)
-
         self.splats, self.optimizers = create_splats_with_optimizers(
             self.parser,
-            pcd,
+            self.pcd,
             init_type=cfg.init_type,
             init_num_pts=cfg.init_num_pts,
             init_extent=cfg.init_extent,
@@ -393,7 +377,7 @@ class Runner:
 
             viewpoint_cam = self.trainset.__getitem__(0)
             coeff = self.trainset.__getitem__(0)['coeff']
-            init_from_colmap(viewpoint_cam, coeff, cfg.result_dir, self.lens_net, optimizer_lens_net, scheduler_lens_net, iresnet_lr=1e-12)
+            #init_from_colmap(viewpoint_cam, coeff, cfg.result_dir, self.lens_net, optimizer_lens_net, scheduler_lens_net, iresnet_lr=1e-7)
         else:
             self.lens_net = iResNet().cuda()
 
@@ -402,17 +386,39 @@ class Runner:
             for param in self.lens_net.state_dict().values():
                 dist.broadcast(param, src=0)
 
-            l_lens_net = [{'params': self.lens_net.parameters(), 'lr': cfg.iresnet_lr}]
+            l_lens_net = [{'params': self.lens_net.parameters(), 'lr': 1e-7}]
             self.optimizer_lens_net = torch.optim.Adam(l_lens_net, eps=1e-15)
             self.lens_net = DDP(self.lens_net)
         else:
-            l_lens_net = [{'params': self.lens_net.parameters(), 'lr': cfg.iresnet_lr}]
+            l_lens_net = [{'params': self.lens_net.parameters(), 'lr': 1e-7}]
             self.optimizer_lens_net = torch.optim.Adam(l_lens_net, eps=1e-15)
 
-        self.intrinsic_adjust = torch.nn.Parameter(torch.zeros(len(self.trainset), 2, device='cuda'))
-        self.intrinsic_optimizers = torch.optim.Adam([self.intrinsic_adjust], lr= 1e-5 * math.sqrt(cfg.batch_size), weight_decay=1e-6,)
-        if world_size > 1:
-            self.pose_adjust = DDP(self.pose_adjust)
+
+        y_train = torch.linspace(0, 15., 5000).unsqueeze(1).cuda()
+        # manually copy from metashape distortion coeffs
+        x_train = torch.atan(y_train) - 0.03936274483986258 * torch.atan(y_train)**3 + 0.005866545097262303 * torch.atan(y_train)**5 - 0.0012988220238146179 * torch.atan(y_train)**7
+        self.cubemap_net = iResNet(input_num=1).cuda()
+        l_cubemap_net = [{'params': self.cubemap_net.parameters(), 'lr': 1e-5}]
+        self.optimizer_cubemap_net = torch.optim.Adam(l_cubemap_net, eps=1e-15)
+        self.scheduler_cubemap_net = torch.optim.lr_scheduler.MultiStepLR(self.optimizer_cubemap_net, milestones=[2000, 7000, 9000], gamma=0.5)
+        #x_train = torch.linspace(0, 1.5, 1000).unsqueeze(1).cuda()
+        #y_train = torch.tan(x_train).cuda()
+        criterion = torch.nn.MSELoss()
+        progress_bar_ires = tqdm.tqdm(range(0, 1), desc="Init Cubemapnet")
+        for epoch in range(1):
+            y_pred = self.cubemap_net.forward(x_train, sensor_to_frustum=True) + torch.tan(x_train)
+            loss = criterion(y_pred, y_train)
+            self.optimizer_cubemap_net.zero_grad()
+            loss.backward()
+            self.optimizer_cubemap_net.step()
+            self.scheduler_cubemap_net.step()
+            progress_bar_ires.set_postfix(loss=loss.item())
+            progress_bar_ires.update(1)
+        cubemap_net_lr = 1e-7
+        for param_group in self.optimizer_cubemap_net.param_groups:
+            param_group['lr'] = cubemap_net_lr
+        print(f"The learning rate of cubemap_net is reset to {cubemap_net_lr}")
+
 
         self.pose_optimizers = []
         if cfg.pose_opt:
@@ -608,13 +614,10 @@ class Runner:
         )
         trainloader_iter = iter(trainloader)
 
+
         # Training loop.
         global_tic = time.time()
         pbar = tqdm.tqdm(range(init_step, max_steps))
-        debug_grid = None
-        #debug_grid = torch.load('/home/yd428/gsplat/examples/results/netflix/paul_garden_scale2/P_view_outsidelens_direction.pt')
-        #debug_grid = torch.load('/home/yd428/gsplat/examples/results/nyc/P_view_outsidelens_direction.pt')
-        #debug_grid = torch.load('/home/yd428/gsplat/examples/results/netflix/paul_office_crop_deblur_optpose/P_view_outsidelens_direction.pt')
         for step in pbar:
             if not cfg.disable_viewer:
                 while self.viewer.state.status == "paused":
@@ -652,20 +655,55 @@ class Runner:
             sh_degree_to_use = min(step // cfg.sh_degree_interval, cfg.sh_degree)
 
             # forward
-            Ks[0][0][0] += self.intrinsic_adjust[step % len(self.trainset)][0]
-            Ks[0][1][1] += self.intrinsic_adjust[step % len(self.trainset)][1]
-            Ks[0][0][-1] = Ks[0][0][-1] * cfg.scale_x
-            Ks[0][1][-1] = Ks[0][1][-1] * cfg.scale_y
-            renders, alphas, info = self.rasterize_splats(camtoworlds=camtoworlds,Ks=Ks,width=int(width*cfg.scale_x),height=int(height*cfg.scale_y),sh_degree=sh_degree_to_use,near_plane=cfg.near_plane,far_plane=cfg.far_plane,image_ids=image_ids,render_mode="RGB+ED" if cfg.depth_loss else "RGB",masks=masks)
-            if renders.shape[-1] == 4:
-                colors, depths = renders[..., 0:3], renders[..., 3:4]
-            else:
-                colors, depths = renders, None
+            Ks = torch.tensor(self.Ks_list[step % len(self.Ks_list)]).cuda().unsqueeze(0)
+            camtoworlds = torch.tensor(self.camtoworld_list[step % len(self.camtoworld_list)]).cuda().unsqueeze(0).float()
+            image_name = self.gt_img_name_list[step % len(self.Ks_list)]
+            image_ids = torch.tensor([int(image_name.split("scene")[1].split("_")[0])]).cuda()
+            gt_img_pil = self.gt_img_list[step % len(self.Ks_list)]
+            width, height = gt_img_pil.size
+            gt_img = PILtoTorch(gt_img_pil, gt_img_pil.size)[:3, ...].clamp(0.0, 1.0).cuda().permute(1, 2, 0).unsqueeze(0)
+            data['fisheye_image'] = gt_img * 255
+            mask = None
+
+            #renders, alphas, info = self.rasterize_splats(
+            #    camtoworlds=camtoworlds,
+            #    Ks=Ks,
+            #    width=width,
+            #    height=height,
+            #    sh_degree=sh_degree_to_use,
+            #    near_plane=cfg.near_plane,
+            #    far_plane=cfg.far_plane,
+            #    image_ids=image_ids,
+            #    render_mode="RGB+ED" if cfg.depth_loss else "RGB",
+            #    masks=masks,
+            #)
+            #torchvision.utils.save_image(renders.permute(0, 3, 1, 2), os.path.join(cfg.result_dir, f'test.png'))
+
+            fovx = focal2fov(Ks[0][0][0], width)
+            fovy = focal2fov(Ks[0][1][1], height)
+            #width = data['fisheye_image'].shape[2]
+            #height = data['fisheye_image'].shape[1]
+            focal_x = fov2focal(fovx, width)
+            focal_y = fov2focal(fovy, height)
+            Ks[0][0][0] = focal_x
+            Ks[0][1][1] = focal_y
+            fov90_width = Ks[0][0][0] * 2 * math.tan(1.57079632679 / 2)
+            fov90_height = Ks[0][1][1] * 2 * math.tan(1.57079632679 / 2)
+            new_width = width
+            new_height = height
+            Ks[0][0][-1] = new_width / 2
+            Ks[0][1][-1] = new_height / 2
+            img_list, info_list = render_cubemap(width, height, new_width, new_height, fov90_width, fov90_height, Ks, camtoworlds, cfg, sh_degree_to_use, image_ids, masks, self.cubemap_net, self.rasterize_splats, cubemap_net_threshold=1.392)
+
+            #if renders.shape[-1] == 4:
+            #    colors, depths = renders[..., 0:3], renders[..., 3:4]
+            #else:
+            #    colors, depths = renders, None
 
             if cfg.use_bilateral_grid:
                 grid_y, grid_x = torch.meshgrid(
-                    (torch.arange(int(height*cfg.scale_y), device=self.device) + 0.5) / int(height*cfg.scale_y),
-                    (torch.arange(int(width*cfg.scale_x), device=self.device) + 0.5) / int(width*cfg.scale_x),
+                    (torch.arange(height, device=self.device) + 0.5) / height,
+                    (torch.arange(width, device=self.device) + 0.5) / width,
                     indexing="ij",
                 )
                 grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
@@ -680,50 +718,51 @@ class Runner:
                 optimizers=self.optimizers,
                 state=self.strategy_state,
                 step=step,
-                info=info,
+                info=info_list[0],
             )
 
             # apply distortion field
-            apply2gt = False
-            if apply2gt:
-                P_sensor, P_view_insidelens_direction = generate_control_pts(data, control_point_sample_scale=16, flow_scale=[1.5, 1.5])
-                fovx_orig = focal2fov(Ks[0][0][0], 1.5*width)
-                fovy_orig = focal2fov(Ks[0][1][1], 1.5*height)
-                projection_matrix = getProjectionMatrix(cfg.near_plane, cfg.far_plane, fovx_orig, fovy_orig).cuda()
-                fish_gt, mask, flow_apply2_gt_or_img = apply_distortion(self.lens_net, P_view_insidelens_direction, P_sensor, data, colors, projection_matrix, flow_scale=[2., 2.], apply2gt=apply2gt)
-                fish_gt = fish_gt.unsqueeze(0)
-                image = colors.permute(0, 3, 1, 2)
-            else:
-                P_sensor, P_view_insidelens_direction = generate_control_pts(data, control_point_sample_scale=cfg.control_point_sample_scale, flow_scale=[3., 3.])
-                fovx = focal2fov(Ks[0][0][0], cfg.scale_x*width)
-                fovy = focal2fov(Ks[0][1][1], cfg.scale_y*height)
-                projection_matrix = getProjectionMatrix(cfg.near_plane, cfg.far_plane, fovx, fovy).cuda()
-                if step == cfg.step2start:
-                    for param_group in self.optimizer_lens_net.param_groups:
-                        lr = param_group['lr']
-                    print(lr)
-                    debug_grid = None
-                if step == cfg.step2end or step == 0:
-                    image, mask, flow_apply2_gt_or_img, debug_grid = apply_distortion(self.lens_net, P_view_insidelens_direction, P_sensor, data, colors, projection_matrix, flow_scale=[3., 3.], debug_grid=debug_grid, update_debug_grid=True)
-                else:
-                    image, mask, flow_apply2_gt_or_img = apply_distortion(self.lens_net, P_view_insidelens_direction, P_sensor, data, colors, projection_matrix, flow_scale=[3., 3.], debug_grid=debug_grid)
-                fish_gt = (data['fisheye_image'].permute(0, 3, 1, 2)/255).cuda()
+            fish_gt = (data['fisheye_image'].permute(0, 3, 1, 2)/255).cuda()
 
+            #final_image = torch.zeros_like(img_list[0])
+            #intensity_final = final_image.sum(dim=0, keepdim=True)  # Track the current intensities of the final image
+            #for img in img_list:
+            #    intensity_img = img.sum(dim=0, keepdim=True)  # Calculate the intensity for the current image
+            #    mask = intensity_img > intensity_final  # Find pixels where the new image has a larger intensity
+            #    final_image = torch.where(mask, img, final_image)  # Update final image where intensity is larger
+            #    intensity_final = torch.where(mask, intensity_img, intensity_final)  # Update intensity tracker
+            #torchvision.utils.save_image(final_image, os.path.join(cfg.result_dir, f'final_fish.png'))
+            #torchvision.utils.save_image(data['fisheye_image'].permute(0, 3, 1, 2)/255, os.path.join(cfg.result_dir, f'gt_fish.png'))
 
-            #torchvision.utils.save_image(colors.permute(0, 3, 1, 2), os.path.join(cfg.result_dir, f'render_pers.png'))
-            #torchvision.utils.save_image(image, os.path.join(cfg.result_dir, f'render.png'))
-            #torchvision.utils.save_image(fish_gt, os.path.join(cfg.result_dir, f'gt.png'))
-            #torchvision.utils.save_image(data['image'].permute(0, 3, 1, 2)/255, os.path.join(cfg.result_dir, f'gt_pers.png'))
-            #import pdb;pdb.set_trace()
-            if step >= cfg.when2addmask:
-                black_boundary_mask = (image != 0).float()
-                fish_gt = fish_gt * black_boundary_mask
+            mask_gt_image = generate_circular_mask(fish_gt[0].shape, 400).cuda()
 
+            #torchvision.utils.save_image(final_image*mask_gt_image, os.path.join(cfg.result_dir, f'final_fish_masked_{step}.png'))
+            #torchvision.utils.save_image(fish_gt[0] * mask_gt_image, os.path.join(cfg.result_dir, f'gt_0.png'))
+            #torchvision.utils.save_image(fish_gt[0] * mask_gt_image, os.path.join(cfg.result_dir, f'gt_1.png'))
+            #torchvision.utils.save_image(fish_gt[0] * mask_gt_image, os.path.join(cfg.result_dir, f'gt_2.png'))
+            #torchvision.utils.save_image(fish_gt[0] * mask_gt_image, os.path.join(cfg.result_dir, f'gt_3.png'))
+            #torchvision.utils.save_image(fish_gt[0] * mask_gt_image, os.path.join(cfg.result_dir, f'gt_4.png'))
+            #torchvision.utils.save_image(img_list[0] * mask_gt_image, os.path.join(cfg.result_dir, f'img_0.png'))
+            #torchvision.utils.save_image(img_list[1] * mask_gt_image, os.path.join(cfg.result_dir, f'img_1.png'))
+            #torchvision.utils.save_image(img_list[2] * mask_gt_image, os.path.join(cfg.result_dir, f'img_2.png'))
+            #torchvision.utils.save_image(img_list[3] * mask_gt_image, os.path.join(cfg.result_dir, f'img_3.png'))
+            #torchvision.utils.save_image(img_list[4] * mask_gt_image, os.path.join(cfg.result_dir, f'img_4.png'))
             # loss
-            l1loss = F.l1_loss(image, fish_gt)
-            ssimloss = 1.0 - fused_ssim(
-                image, fish_gt, padding="valid"
+            l1loss = (
+                F.l1_loss(img_list[0]*mask_gt_image, fish_gt[0]*mask_gt_image) +
+                F.l1_loss(img_list[1]*mask_gt_image, fish_gt[0]*mask_gt_image) +
+                F.l1_loss(img_list[2]*mask_gt_image, fish_gt[0]*mask_gt_image) +
+                F.l1_loss(img_list[3]*mask_gt_image, fish_gt[0]*mask_gt_image) +
+                F.l1_loss(img_list[4]*mask_gt_image, fish_gt[0]*mask_gt_image)
             )
+            ssimloss = 5. - (
+                fused_ssim(img_list[0].unsqueeze(0)*mask_gt_image.unsqueeze(0), fish_gt*mask_gt_image.unsqueeze(0), padding="valid") +
+                fused_ssim(img_list[1].unsqueeze(0)*mask_gt_image.unsqueeze(0), fish_gt*mask_gt_image.unsqueeze(0), padding="valid") +
+                fused_ssim(img_list[2].unsqueeze(0)*mask_gt_image.unsqueeze(0), fish_gt*mask_gt_image.unsqueeze(0), padding="valid") +
+                fused_ssim(img_list[3].unsqueeze(0)*mask_gt_image.unsqueeze(0), fish_gt*mask_gt_image.unsqueeze(0), padding="valid") +
+                fused_ssim(img_list[4].unsqueeze(0)*mask_gt_image.unsqueeze(0), fish_gt*mask_gt_image.unsqueeze(0), padding="valid")
+            )
+
             loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
 
             if cfg.depth_loss:
@@ -775,9 +814,15 @@ class Runner:
 
             # write images (gt and render)
             if world_rank == 0 and step % 500 == 0:
-                torchvision.utils.save_image(image, os.path.join(cfg.result_dir, f'monitor/perspective_{step}.png'))
+                final_image = torch.zeros_like(img_list[0])
+                intensity_final = final_image.sum(dim=0, keepdim=True)  # Track the current intensities of the final image
+                for img in img_list:
+                    intensity_img = img.sum(dim=0, keepdim=True)  # Calculate the intensity for the current image
+                    mask = intensity_img > intensity_final  # Find pixels where the new image has a larger intensity
+                    final_image = torch.where(mask, img, final_image)  # Update final image where intensity is larger
+                    intensity_final = torch.where(mask, intensity_img, intensity_final)  # Update intensity tracker
+                torchvision.utils.save_image(final_image, os.path.join(cfg.result_dir, f'monitor/final_fish_{step}.png'))
                 torchvision.utils.save_image(fish_gt, os.path.join(cfg.result_dir, f'monitor/gt_{step}.png'))
-
 
             if world_rank == 0 and cfg.tb_every > 0 and step % cfg.tb_every == 0:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
@@ -797,8 +842,8 @@ class Runner:
                 self.writer.flush()
 
             # save checkpoint before updating the model
-            if step in [i - 1 for i in cfg.save_steps]:
-            #if step in [10001, 20001, 29998]:
+            #if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
+            if step in [1, 5000, 10000, 15000, 20000, 25000] or step == max_steps - 1:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
                 stats = {
                     "mem": mem,
@@ -825,7 +870,6 @@ class Runner:
                 torch.save(
                     data, f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt"
                 )
-                torch.save(self.lens_net.state_dict(), f"{self.ckpt_dir}/lens_net_{step}.pt")
 
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:
@@ -870,11 +914,10 @@ class Runner:
                 optimizer.zero_grad(set_to_none=True)
             for scheduler in schedulers:
                 scheduler.step()
-            if debug_grid == None:
-                self.optimizer_lens_net.step()
-                self.optimizer_lens_net.zero_grad(set_to_none=True)
-            #self.intrinsic_optimizers.step()
-            #self.intrinsic_optimizers.zero_grad(set_to_none=True)
+            #self.optimizer_lens_net.step()
+            #self.optimizer_lens_net.zero_grad(set_to_none=True)
+            self.optimizer_cubemap_net.step()
+            self.optimizer_cubemap_net.zero_grad(set_to_none=True)
 
             # Run post-backward steps after backward and optimizer
             if isinstance(self.cfg.strategy, DefaultStrategy):
@@ -883,7 +926,7 @@ class Runner:
                     optimizers=self.optimizers,
                     state=self.strategy_state,
                     step=step,
-                    info=info,
+                    info=info_list[0],
                     packed=cfg.packed,
                 )
             elif isinstance(self.cfg.strategy, MCMCStrategy):
@@ -892,27 +935,16 @@ class Runner:
                     optimizers=self.optimizers,
                     state=self.strategy_state,
                     step=step,
-                    info=info,
+                    info=info_list[0],
                     lr=schedulers[0].get_last_lr()[0],
                 )
             else:
                 assert_never(self.cfg.strategy)
 
             # eval the full set
-            #if step in [1, 10000, 20000, 29999] and False:
-            if step in [i - 1 for i in cfg.eval_steps]:
-                with torch.no_grad():
-                    fovx = focal2fov(Ks[0][0][0], cfg.scale_x_eval*width)
-                    fovy = focal2fov(Ks[0][1][1], cfg.scale_y_eval*height)
-                    projection_matrix = getProjectionMatrix(cfg.near_plane, cfg.far_plane, fovx, fovy).cuda()
-                    flow_scale = [3., 3.]
-                    P_sensor_, P_view_insidelens_direction_ = generate_control_pts(data, control_point_sample_scale=4, flow_scale=[3., 3.])
-                    P_view_outsidelens_direction_ = self.lens_net.forward(P_view_insidelens_direction_, sensor_to_frustum=apply2gt)
-                    camera_directions_w_lens_ = homogenize(P_view_outsidelens_direction_)
-                    control_points_ = camera_directions_w_lens_.reshape((P_sensor_.shape[0], P_sensor_.shape[1], 3))[:, :, :2]
-                    flow = control_points_ @ projection_matrix[:2, :2]
-                    flow_eval = F.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(int(data['fisheye_image'].shape[1]*flow_scale[0]), int(data['fisheye_image'].shape[2]*flow_scale[1])), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
-                self.eval(step, flow_eval, apply2gt, cfg.scale_x_eval, cfg.scale_y_eval)
+            if step in [1, 5000, 10000, 15000, 20000, 25000]:
+            #if step in [i - 1 for i in cfg.eval_steps]:
+                self.eval(step, self.cubemap_net, self.rasterize_splats)
                 self.render_traj(step)
 
             # run compression
@@ -931,8 +963,7 @@ class Runner:
                 self.viewer.update(step, num_train_rays_per_step)
 
     @torch.no_grad()
-    def eval(self, step: int, flow_apply2_gt_or_img: Tensor, apply2gt: bool, scale_x: float, scale_y: float, stage: str = "val"):
-
+    def eval(self, step: int, cubemap_net, rasterize_splats, stage: str = "val"):
         """Entry for evaluation."""
         print("Running evaluation...")
         cfg = self.cfg
@@ -945,60 +976,49 @@ class Runner:
         )
         ellipse_time = 0
         metrics = defaultdict(list)
-        for i, data in enumerate(valloader):
-            camtoworlds = data["camtoworld"].to(device)
-            Ks = data["K"].to(device)
-            Ks[0][0][-1] = Ks[0][0][-1] * scale_x
-            Ks[0][1][-1] = Ks[0][1][-1] * scale_y
-            pixels = data["image"].to(device) / 255.0
-            masks = data["mask"].to(device) if "mask" in data else None
-            height, width = pixels.shape[1:3]
+        for i, camtoworlds in enumerate(self.camtoworld_list):
+            Ks = torch.tensor(self.Ks_list[i]).cuda().unsqueeze(0)
+            camtoworlds = torch.tensor(camtoworlds).cuda().unsqueeze(0).float()
+            image_name = self.gt_img_name_list[i]
+            image_ids = torch.tensor([int(image_name.split("scene")[1].split("_")[0])]).cuda()
+            gt_img_pil = self.gt_img_list[i]
+            width, height = gt_img_pil.size
+            gt_img = PILtoTorch(gt_img_pil, gt_img_pil.size)[:3, ...].clamp(0.0, 1.0).cuda().permute(1, 2, 0).unsqueeze(0)
+            pixels = gt_img
+            masks = None
 
             torch.cuda.synchronize()
             tic = time.time()
-            colors, _, _ = self.rasterize_splats(
-                camtoworlds=camtoworlds,
-                Ks=Ks,
-                width=int(width*scale_x),
-                height=int(height*scale_y),
-                sh_degree=cfg.sh_degree,
-                near_plane=cfg.near_plane,
-                far_plane=cfg.far_plane,
-                masks=masks,
-            )  # [1, H, W, 3]
 
-            torchvision.utils.save_image(colors.permute(0, 3, 1, 2), os.path.join(cfg.result_dir, f'renders/perspective_{i}.png'))
-            if not apply2gt:
-                colors = F.grid_sample(
-                    colors.permute(0, 3, 1, 2),
-                    flow_apply2_gt_or_img.unsqueeze(0),
-                    mode="bilinear",
-                    padding_mode="zeros",
-                    align_corners=True,
-                )
-                colors = center_crop(colors, data['fisheye_image'].shape[1], data['fisheye_image'].shape[2]).permute(0, 2, 3, 1)
-            else:
-                pixels = F.grid_sample(
-                    data["fisheye_image"].cuda().permute(0, 3, 1, 2)/255,
-                    flow_apply2_gt_or_img.unsqueeze(0),
-                    mode="bilinear",
-                    padding_mode="zeros",
-                    align_corners=True,
-                ).permute(0, 2, 3, 1)
+            fovx = focal2fov(Ks[0][0][0], width)
+            fovy = focal2fov(Ks[0][1][1], height)
+            focal_x = fov2focal(fovx, width)
+            focal_y = fov2focal(fovy, height)
+            Ks[0][0][0] = focal_x
+            Ks[0][1][1] = focal_y
+            fov90_width = Ks[0][0][0] * 2 * math.tan(1.57079632679 / 2)
+            fov90_height = Ks[0][1][1] * 2 * math.tan(1.57079632679 / 2)
+            new_width = width
+            new_height = height
+            Ks[0][0][-1] = new_width / 2
+            Ks[0][1][-1] = new_height / 2
+            img_list, info_list = render_cubemap(width, height, new_width, new_height, fov90_width, fov90_height, Ks, camtoworlds, cfg, cfg.sh_degree, image_ids, masks, cubemap_net, rasterize_splats, cubemap_net_threshold=1.392)
+            final_image = torch.zeros_like(img_list[0])
+            intensity_final = final_image.sum(dim=0, keepdim=True)  # Track the current intensities of the final image
+            for img in img_list:
+                intensity_img = img.sum(dim=0, keepdim=True)  # Calculate the intensity for the current image
+                mask = intensity_img > intensity_final  # Find pixels where the new image has a larger intensity
+                final_image = torch.where(mask, img, final_image)  # Update final image where intensity is larger
+                intensity_final = torch.where(mask, intensity_img, intensity_final)  # Update intensity tracker
+            colors = final_image.unsqueeze(0).permute(0, 2, 3, 1)
 
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
 
             colors = torch.clamp(colors, 0.0, 1.0)
-            if not apply2gt:
-                pixels = data["fisheye_image"].to(device) / 255.0
-            mask = (~((colors[..., 0] == 0.0) & (colors[..., 1] == 0.0) & (colors[..., 2] == 0.0))).unsqueeze(0).float().permute(0, 2, 3, 1)
-            pixels = pixels * mask
-            colors = colors * mask
             canvas_list = [pixels, colors]
             torchvision.utils.save_image(pixels.permute(0, 3, 1, 2), os.path.join(cfg.result_dir, f'renders/gt_{i}.png'))
             torchvision.utils.save_image(colors.permute(0, 3, 1, 2), os.path.join(cfg.result_dir, f'renders/rendering_{i}.png'))
-            if apply2gt: continue
 
             if world_rank == 0:
                 # write images
@@ -1010,7 +1030,7 @@ class Runner:
                 )
 
                 pixels_p = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
-                colors_p = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
+                colors_p = colors.permute(0, 3, 1, 2) # [1, 3, H, W]
                 black_boundary_mask = (pixels_p != 0).float()
                 metrics["psnr"].append(self.psnr(colors_p, pixels_p*black_boundary_mask))
                 metrics["ssim"].append(self.ssim(colors_p, pixels_p*black_boundary_mask))
@@ -1020,7 +1040,7 @@ class Runner:
                     cc_colors_p = cc_colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
                     metrics["cc_psnr"].append(self.psnr(cc_colors_p, pixels_p))
 
-        if world_rank == 0 and not apply2gt:
+        if world_rank == 0:
             ellipse_time /= len(valloader)
 
             stats = {k: torch.stack(v).mean().item() for k, v in metrics.items()}
@@ -1173,6 +1193,95 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         step = ckpts[0]["step"]
         #runner.eval(step=step)
         #runner.render_traj(step=step)
+
+        os.makedirs(f"{cfg.result_dir}/validation_{step}", exist_ok=True)
+        os.makedirs(f"{cfg.result_dir}/validation_{step}/forward", exist_ok=True)
+        os.makedirs(f"{cfg.result_dir}/validation_{step}/up", exist_ok=True)
+        os.makedirs(f"{cfg.result_dir}/validation_{step}/down", exist_ok=True)
+        os.makedirs(f"{cfg.result_dir}/validation_{step}/left", exist_ok=True)
+        os.makedirs(f"{cfg.result_dir}/validation_{step}/right", exist_ok=True)
+        os.makedirs(f"{cfg.result_dir}/validation_{step}/back", exist_ok=True)
+        os.makedirs(f"{cfg.result_dir}/validation_{step}/pano", exist_ok=True)
+        os.makedirs(f"{cfg.result_dir}/validation_{step}/180", exist_ok=True)
+        #for i, camtoworlds in enumerate(runner.camtoworld_list):
+        if 'living' in cfg.result_dir:
+            with open('/home/yd428/playaround_gaussian_platting/output/living_largefov_cubemap_sorted_dis/images.txt') as f:
+                lines = f.readlines()
+        elif 'kitchen' in cfg.result_dir:
+            with open('/home/yd428/playaround_gaussian_platting/output/kitchen_largefov_cubemap_sorted_dis/images.txt') as f:
+                lines = f.readlines()
+        elif 'hilbert' in cfg.result_dir:
+            with open('/home/yd428/playaround_gaussian_platting/output/hilbert_largefov_cubemap_sorted_dis/images.txt') as f:
+                lines = f.readlines()
+        i = 0
+        for line in lines:
+            if line.startswith("#") or not line.strip():
+                continue
+            parts = line.split()
+            image_id = int(parts[0])
+            qw, qx, qy, qz = map(float, parts[1:5])
+            tx, ty, tz = map(float, parts[5:8])
+            camera_id = int(parts[8])
+            image_name = parts[9]
+            quaternion_tensor = torch.tensor([qw, qx, qy, qz], dtype=torch.float32)
+            R = quaternion_to_rotation_matrix(quaternion_tensor).cuda()
+            T = torch.tensor([tx, ty, tz]).cuda().view(-1, 1)
+            Rt = torch.cat((R, T), dim=1)
+            last_row = torch.tensor([[0., 0., 0., 1.]]).cuda()
+            w2c = torch.cat((Rt, last_row), dim=0)
+            camtoworlds = w2c.inverse().unsqueeze(0)
+
+            Ks = torch.tensor(runner.Ks_list[0]).cuda().unsqueeze(0)
+            #camtoworlds = torch.tensor(runner.camtoworld_list[i]).cuda().unsqueeze(0).float()
+            #image_name = runner.gt_img_name_list[i]
+            image_ids = torch.tensor([0]).cuda()
+            gt_img_pil = runner.gt_img_list[0]
+            width, height = gt_img_pil.size
+            gt_img = PILtoTorch(gt_img_pil, gt_img_pil.size)[:3, ...].clamp(0.0, 1.0).cuda().permute(1, 2, 0).unsqueeze(0)
+            pixels = gt_img
+            masks = None
+            fovx = focal2fov(Ks[0][0][0], width)
+            fovy = focal2fov(Ks[0][1][1], height)
+            focal_x = fov2focal(fovx, width)
+            focal_y = fov2focal(fovy, height)
+            Ks[0][0][0] = focal_x
+            Ks[0][1][1] = focal_y
+            fov90_width = Ks[0][0][0] * 2 * math.tan(1.57079632679 / 2)
+            fov90_height = Ks[0][1][1] * 2 * math.tan(1.57079632679 / 2)
+            new_width = width
+            new_height = height
+            Ks[0][0][-1] = new_width / 2
+            Ks[0][1][-1] = new_height / 2
+            cubemap_net = None
+            img_list, info_list, img_perspective_list = render_cubemap(width, height, new_width, new_height, fov90_width, fov90_height, Ks, camtoworlds, cfg, cfg.sh_degree, image_ids, masks, cubemap_net, runner.rasterize_splats, cubemap_net_threshold=1.392, render_pano=True)
+            final_image = torch.zeros_like(img_list[0])
+            intensity_final = final_image.sum(dim=0, keepdim=True)
+            for img in img_list:
+                intensity_img = img.sum(dim=0, keepdim=True)
+                mask = intensity_img > intensity_final
+                final_image = torch.where(mask, img, final_image)
+                intensity_final = torch.where(mask, intensity_img, intensity_final)
+            colors = final_image.unsqueeze(0).permute(0, 2, 3, 1)
+            colors = torch.clamp(colors, 0.0, 1.0)
+            canvas_list = [pixels, colors]
+            torchvision.utils.save_image(pixels.permute(0, 3, 1, 2), os.path.join(cfg.result_dir, f'validation_{step}/180/gt_{i}.png'))
+            torchvision.utils.save_image(colors.permute(0, 3, 1, 2), os.path.join(cfg.result_dir, f'validation_{step}/180/rendering_{i}.png'))
+
+            img_fov90_list = [img.squeeze(0).permute(2, 0, 1)[:, height//2 - int(fov90_height/2) - 1:height//2 + int(fov90_height/2) + 1, width//2 - int(fov90_width/2) - 1:width//2 + int(fov90_width/2) + 1] for img in img_perspective_list]
+
+            torchvision.utils.save_image(img_fov90_list[0], os.path.join(cfg.result_dir, f'validation_{step}/forward/forward_{i}.png'))
+            torchvision.utils.save_image(img_fov90_list[1], os.path.join(cfg.result_dir, f'validation_{step}/up/up_{i}.png'))
+            torchvision.utils.save_image(img_fov90_list[2], os.path.join(cfg.result_dir, f'validation_{step}/down/down_{i}.png'))
+            torchvision.utils.save_image(img_fov90_list[3], os.path.join(cfg.result_dir, f'validation_{step}/left/left_{i}.png'))
+            torchvision.utils.save_image(img_fov90_list[4], os.path.join(cfg.result_dir, f'validation_{step}/right/right_{i}.png'))
+            torchvision.utils.save_image(img_fov90_list[5], os.path.join(cfg.result_dir, f'validation_{step}/back/back_{i}.png'))
+
+            pano = cubemap_to_panorama(cfg.result_dir, img_fov90_list, i, step=step)[img_fov90_list[5].shape[-1] : img_fov90_list[5].shape[-1]*3, :, :]
+            cv2.imwrite(os.path.join(cfg.result_dir, f'validation_{step}/pano/pano{i}.png'), pano)
+            i += 1
+            print(i)
+
+        import pdb;pdb.set_trace()
         if cfg.compression is not None:
             runner.run_compression(step=step)
     else:
@@ -1217,7 +1326,6 @@ if __name__ == "__main__":
         ),
     }
     cfg = tyro.extras.overridable_config_cli(configs)
-    #cfg.strategy.min_opacity = cfg.update_min_opacity
     cfg.adjust_steps(cfg.steps_scaler)
 
     # try import extra dependencies

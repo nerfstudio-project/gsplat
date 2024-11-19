@@ -113,7 +113,7 @@ def PILtoTorch(pil_image, resolution):
         return resized_image.unsqueeze(dim=-1).permute(2, 0, 1)
 
 
-def cubemap_to_panorama(path, img_fov90_list, count):
+def cubemap_to_panorama(path, img_fov90_list, count, step=None):
     #img_forward = np.transpose(img_fov90_list[0], (1, 2, 0))[..., ::-1]
     #img_up = np.transpose(img_fov90_list[1], (1, 2, 0))[..., ::-1]
     #img_down = np.transpose(img_fov90_list[2], (1, 2, 0))[..., ::-1]
@@ -121,12 +121,12 @@ def cubemap_to_panorama(path, img_fov90_list, count):
     #img_right = np.transpose(img_fov90_list[4], (1, 2, 0))[..., ::-1]
     #img_back = np.transpose(img_fov90_list[5], (1, 2, 0))[..., ::-1]
 
-    img_forward = cv2.imread(os.path.join(path, f'validation/forward/forward_{count}.png'))
-    img_up = cv2.imread(os.path.join(path, f'validation/up/up_{count}.png'))
-    img_down = cv2.imread(os.path.join(path, f'validation/down/down_{count}.png'))
-    img_left = cv2.imread(os.path.join(path, f'validation/left/left_{count}.png'))
-    img_right = cv2.imread(os.path.join(path, f'validation/right/right_{count}.png'))
-    img_back = cv2.imread(os.path.join(path, f'validation/back/back_{count}.png'))
+    img_forward = cv2.imread(os.path.join(path, f'validation_{step}/forward/forward_{count}.png'))
+    img_up = cv2.imread(os.path.join(path, f'validation_{step}/up/up_{count}.png'))
+    img_down = cv2.imread(os.path.join(path, f'validation_{step}/down/down_{count}.png'))
+    img_left = cv2.imread(os.path.join(path, f'validation_{step}/left/left_{count}.png'))
+    img_right = cv2.imread(os.path.join(path, f'validation_{step}/right/right_{count}.png'))
+    img_back = cv2.imread(os.path.join(path, f'validation_{step}/back/back_{count}.png'))
 
 # Desired output image size (800x800)
     output_width = img_forward.shape[0] * 4

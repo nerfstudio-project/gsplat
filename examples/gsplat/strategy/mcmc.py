@@ -127,7 +127,7 @@ class MCMCStrategy(Strategy):
             # teleport GSs
             n_relocated_gs = self._relocate_gs(params, optimizers, binoms)
             if self.verbose:
-                print(f"Step {step}: Relocated {n_relocated_gs} GSs.")
+                print(f"Step {step}: Relocated {n_relocated_gs} GSs using threshold {self.min_opacity}.")
 
             # add new GSs
             n_new_gs = self._add_new_gs(params, optimizers, binoms)

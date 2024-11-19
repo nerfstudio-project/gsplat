@@ -61,6 +61,7 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
     // check if points are with camera near and far plane
     vec3<T> mean_c;
     mat3<T> R;
+    vec3<T> cam_center;
     if (valid) {
         // shift pointers to the current camera and gaussian
         means += col_idx * 3;
@@ -79,6 +80,7 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
             viewmats[10] // 3rd column
         );
         vec3<T> t = vec3<T>(viewmats[3], viewmats[7], viewmats[11]);
+        cam_center = -glm::inverse(R) * t;
 
         // transform Gaussian center to camera space
         pos_world_to_cam(R, t, glm::make_vec3(means), mean_c);
@@ -228,7 +230,11 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
             radii[thread_data] = (int32_t)radius;
             means2d[thread_data * 2] = mean2d.x;
             means2d[thread_data * 2 + 1] = mean2d.y;
+            //if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+            //    printf("%f\n", mean_c.z);
+            //}
             depths[thread_data] = mean_c.z;
+            //depths[thread_data] = sqrt((glm::make_vec3(means).x - cam_center.x) * (glm::make_vec3(means).x - cam_center.x) + (glm::make_vec3(means).y - cam_center.y) * (glm::make_vec3(means).y - cam_center.y) + (glm::make_vec3(means).z - cam_center.z) * (glm::make_vec3(means).z - cam_center.z));
             conics[thread_data * 3] = covar2d_inv[0][0];
             conics[thread_data * 3 + 1] = covar2d_inv[0][1];
             conics[thread_data * 3 + 2] = covar2d_inv[1][1];

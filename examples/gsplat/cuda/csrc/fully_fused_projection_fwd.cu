@@ -68,6 +68,7 @@ __global__ void fully_fused_projection_fwd_kernel(
         viewmats[10] // 3rd column
     );
     vec3<T> t = vec3<T>(viewmats[3], viewmats[7], viewmats[11]);
+    vec3<T> cam_center = -glm::inverse(R) * t;
 
     // transform Gaussian center to camera space
     vec3<T> mean_c;
@@ -186,7 +187,11 @@ __global__ void fully_fused_projection_fwd_kernel(
     radii[idx] = (int32_t)radius;
     means2d[idx * 2] = mean2d.x;
     means2d[idx * 2 + 1] = mean2d.y;
+    //if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+    //    printf("%f\n", mean_c.z);
+    //}
     depths[idx] = mean_c.z;
+    //depths[idx] = sqrt((glm::make_vec3(means).x - cam_center.x) * (glm::make_vec3(means).x - cam_center.x) + (glm::make_vec3(means).y - cam_center.y) * (glm::make_vec3(means).y - cam_center.y) + (glm::make_vec3(means).z - cam_center.z) * (glm::make_vec3(means).z - cam_center.z));
     conics[idx * 3] = covar2d_inv[0][0];
     conics[idx * 3 + 1] = covar2d_inv[0][1];
     conics[idx * 3 + 2] = covar2d_inv[1][1];

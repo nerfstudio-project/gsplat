@@ -227,9 +227,18 @@ def center_crop(tensor, target_height, target_width):
 
     return cropped_tensor
 
-def apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_cam, image, projection_matrix, flow_scale=[2., 2.], apply2gt=False):
+def apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_cam, image, projection_matrix, flow_scale=[2., 2.], apply2gt=False, debug_grid=None, update_debug_grid=False):
     #P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=True)
-    P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=apply2gt)
+    #torch.save(P_view_outsidelens_direction, '/home/yd428/gsplat/examples/results/netflix/paul_office_crop/P_view_outsidelens_direction.pt')
+    #torch.save(P_view_outsidelens_direction, '/home/yd428/gsplat/examples/results/netflix/paul_garden_scale2/P_view_outsidelens_direction.pt')
+    #torch.save(P_view_outsidelens_direction, '/home/yd428/gsplat/examples/results/netflix/paul_office_crop_deblur_optpose/P_view_outsidelens_direction.pt')
+    if debug_grid != None:
+        P_view_outsidelens_direction = debug_grid
+    else:
+        P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=apply2gt)
+        #import pdb;pdb.set_trace()
+        #print(9)
+
     camera_directions_w_lens = homogenize(P_view_outsidelens_direction)
     control_points = camera_directions_w_lens.reshape((P_sensor.shape[0], P_sensor.shape[1], 3))[:, :, :2]
 
@@ -251,7 +260,10 @@ def apply_distortion(lens_net, P_view_insidelens_direction, P_sensor, viewpoint_
     )
     image = center_crop(image, viewpoint_cam['fisheye_image'].shape[1], viewpoint_cam['fisheye_image'].shape[2])
     mask = (~((image[0][0]==0.0000) & (image[0][1]==0.0000)).unsqueeze(0)).float()
-    return image, mask, flow
+    if not update_debug_grid:
+        return image, mask, flow
+    else:
+        return image, mask, flow, P_view_outsidelens_direction.detach()
 
 def rotate_camera(camtoworlds, deg_x, deg_y, deg_z):
     R = camtoworlds[:3, :3].cpu().numpy()  # World-to-camera rotation matrix
@@ -451,7 +463,7 @@ def generate_circular_mask(image_shape: torch.Size, radius: int) -> torch.Tensor
 
 def render_cubemap(width, height, new_width, new_height, fov90_width, fov90_height, Ks, camtoworlds, cfg, sh_degree_to_use, image_ids, masks, cubemap_net, rasterize_splats, cubemap_net_threshold, render_pano=False):
     mask_fov90 = torch.zeros((1, height, width), dtype=torch.float32).cuda()
-    mask_fov90[:, height//2 - int(fov90_height//2) - 2:height//2 + int(fov90_height//2) + 2, width//2 - int(fov90_width//2) - 1:width//2 + int(fov90_width//2) + 2] = 1
+    mask_fov90[:, height//2 - int(fov90_height//2) - 1:height//2 + int(fov90_height//2) + 1, width//2 - int(fov90_width//2) - 1:width//2 + int(fov90_width//2) + 1] = 1
 
     camtoworlds_up = rotate_camera(camtoworlds[0].inverse(), 90, 0, 0).unsqueeze(0).inverse()
     camtoworlds_down = rotate_camera(camtoworlds[0].inverse(), -90, 0, 0).unsqueeze(0).inverse()
@@ -508,7 +520,8 @@ def render_cubemap(width, height, new_width, new_height, fov90_width, fov90_heig
     img_fish_right, img_perspective = apply_flow_up_down_left_right(width, height, Ks[0], rays_4_faces, rays_residual_4_faces, renders_right.permute(0, 3, 1, 2)[0]*mask_fov90, types="right", is_fisheye=True, control_r=control_r, control_theta=control_theta, cubemap_net_threshold=cubemap_net_threshold)
     img_fish_right, half_mask = mask_half(img_fish_right, 'right')
     img_list.append(img_fish_right)
-    img_fish_back, img_perspective = apply_flow_up_down_left_right(width, height, Ks[0], rays_4_faces, rays_residual_4_faces, renders_back.permute(0, 3, 1, 2)[0]*mask_fov90, types="right", is_fisheye=True, control_r=control_r, control_theta=control_theta, cubemap_net_threshold=cubemap_net_threshold)
+    if render_pano:
+        img_fish_back, img_perspective = apply_flow_up_down_left_right(width, height, Ks[0], rays_4_faces, rays_residual_4_faces, renders_back.permute(0, 3, 1, 2)[0]*mask_fov90, types="right", is_fisheye=True, control_r=control_r, control_theta=control_theta, cubemap_net_threshold=cubemap_net_threshold)
 
     #torchvision.utils.save_image(img_fish_forward, os.path.join(cfg.result_dir, f'forward_fish.png'))
     #torchvision.utils.save_image(img_fish_up, os.path.join(cfg.result_dir, f'up_fish.png'))

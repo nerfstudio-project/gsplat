@@ -12,6 +12,7 @@ import pickle
 import struct
 import collections
 from itertools import islice
+import random
 
 from .normalize import (
     align_principle_axes,
@@ -372,7 +373,8 @@ class Dataset:
             self.indices = indices[:]
         else:
             #self.indices = indices[indices % self.parser.test_every == 0]
-            self.indices = indices[:]
+            #self.indices = indices[:]
+            self.indices = random.sample(indices.tolist(), 20)
 
     def __len__(self):
         return len(self.indices)
