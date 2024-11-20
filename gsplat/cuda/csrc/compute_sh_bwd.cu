@@ -1,4 +1,5 @@
 #include "bindings.h"
+#include "helpers.cuh"
 #include "spherical_harmonics.cuh"
 #include "types.cuh"
 

@@ -18,9 +18,12 @@ class Strategy:
         optimizers: Dict[str, torch.optim.Optimizer],
     ):
         """Sanity check for the parameters and optimizers."""
-        assert set(params.keys()) == set(optimizers.keys()), (
-            "params and optimizers must have the same keys, "
-            f"but got {params.keys()} and {optimizers.keys()}"
+        trainable_params = set(
+            [name for name, param in params.items() if param.requires_grad]
+        )
+        assert trainable_params == set(optimizers.keys()), (
+            "trainable parameters and optimizers must have the same keys, "
+            f"but got {trainable_params} and {optimizers.keys()}"
         )
 
         for optimizer in optimizers.values():
