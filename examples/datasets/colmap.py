@@ -390,6 +390,7 @@ class Dataset:
         fisheye_params_mine = self.parser.fisheye_params_dict[fisheye_camera_id]
         fisheye_params = self.parser.params_dict[camera_id]
         camtoworlds = self.parser.camtoworlds[index]
+        image_names = self.parser.image_names[index]
         mask = self.parser.mask_dict[camera_id]
 
         if len(params) > 0:
@@ -418,6 +419,8 @@ class Dataset:
             "image": torch.from_numpy(image).float(),
             "fisheye_image": torch.from_numpy(fisheye_image).float(),
             "image_id": item,  # the index of the image in the dataset
+            "image_name": image_names,  # the index of the image in the dataset
+            "transform": self.parser.transform,  # the index of the image in the dataset
         }
         if mask is not None:
             data["mask"] = torch.from_numpy(mask).bool()

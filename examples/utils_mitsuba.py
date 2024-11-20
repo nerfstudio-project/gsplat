@@ -26,6 +26,8 @@ def fetchPly(path):
     plydata = PlyData.read(path)
     vertices = plydata['vertex']
     positions = np.vstack([vertices['x'], vertices['y'], vertices['z']]).T
+
+    #positions = np.vstack([vertices['y'], vertices['z'], vertices['x']]).T
     colors = np.vstack([vertices['red'], vertices['green'], vertices['blue']]).T / 255.0
     return BasicPointCloud(points=positions, colors=colors, normals=None)
 

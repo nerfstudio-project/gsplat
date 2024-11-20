@@ -47,6 +47,8 @@ from iresnet import iResNet
 
 from utils_cubemap import homogenize, dehomogenize, fov2focal, focal2fov, generate_pts, init_from_coeff, plot_points, init_from_colmap, generate_control_pts, getProjectionMatrix, center_crop, apply_distortion, rotate_camera, generate_pts_up_down_left_right, interpolate_with_control, apply_flow_up_down_left_right, mask_half, render_cubemap, generate_circular_mask
 from utils_mitsuba import fetchPly
+from utils_mitsuba import readCamerasFromTransforms, PILtoTorch, cubemap_to_panorama, rotation_matrix_to_quaternion, quaternion_to_rotation_matrix
+from datasets.normalize import transform_cameras, transform_points
 
 @dataclass
 class Config:
@@ -62,6 +64,7 @@ class Config:
     scale_y_eval: float = 2
     when2addmask: int = 100
     update_min_opacity: float = 0.005
+    iresnet_path: str = ''
 
 
     # Disable viewer
@@ -103,7 +106,7 @@ class Config:
     # Steps to evaluate the model
     eval_steps: List[int] = field(default_factory=lambda: [1, 7_000, 30_000])
     # Steps to save the model
-    save_steps: List[int] = field(default_factory=lambda: [7_000, 20_000, 30_000])
+    save_steps: List[int] = field(default_factory=lambda: [7_011, 10_011, 20_111, 29_996])
 
     # Initialization strategy
     init_type: str = "sfm"
@@ -229,6 +232,7 @@ def create_splats_with_optimizers(
         rgbs = torch.rand((init_num_pts, 3))
     elif init_type == 'netflix':
         points = torch.tensor(np.asarray(pcd.points)).float().cuda()
+        points = transform_points(parser.transform, points.cpu()).float().cuda()
         rgbs = torch.tensor(np.asarray(pcd.colors)).float().cuda()
     else:
         raise ValueError("Please specify a correct init_type: sfm or random")
@@ -297,7 +301,7 @@ class Runner:
 
     def __init__(
         self, local_rank: int, world_rank, world_size: int, cfg: Config
-    ) -> None:
+        , evaluation: bool    ) -> None:
         set_random_seed(42 + local_rank)
 
         self.cfg = cfg
@@ -342,7 +346,7 @@ class Runner:
         feature_dim = 32 if cfg.app_opt else None
         pcd = None
         if cfg.init_type == 'netflix':
-            ply_path = os.path.join(cfg.data_dir, f'sparse/0/fused.ply')
+            ply_path = os.path.join(cfg.data_dir, f'fish/sparse/0/fused.ply')
             pcd = fetchPly(ply_path)
 
         self.splats, self.optimizers = create_splats_with_optimizers(
@@ -393,7 +397,8 @@ class Runner:
 
             viewpoint_cam = self.trainset.__getitem__(0)
             coeff = self.trainset.__getitem__(0)['coeff']
-            init_from_colmap(viewpoint_cam, coeff, cfg.result_dir, self.lens_net, optimizer_lens_net, scheduler_lens_net, iresnet_lr=1e-12)
+            if not evaluation:
+                init_from_colmap(viewpoint_cam, coeff, cfg.result_dir, self.lens_net, optimizer_lens_net, scheduler_lens_net, iresnet_lr=1e-12)
         else:
             self.lens_net = iResNet().cuda()
 
@@ -607,6 +612,7 @@ class Runner:
             pin_memory=True,
         )
         trainloader_iter = iter(trainloader)
+        self.trainloader_iter = trainloader_iter
 
         # Training loop.
         global_tic = time.time()
@@ -1160,22 +1166,125 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         if world_rank == 0:
             print("Viewer is disabled in distributed training.")
 
-    runner = Runner(local_rank, world_rank, world_size, cfg)
 
     if cfg.ckpt is not None:
+        runner = Runner(local_rank, world_rank, world_size, cfg, True)
         # run eval only
         ckpts = [
             torch.load(file, map_location=runner.device, weights_only=True)
             for file in cfg.ckpt
         ]
+        runner.lens_net.load_state_dict(ckpts.pop(-1))
         for k in runner.splats.keys():
             runner.splats[k].data = torch.cat([ckpt["splats"][k] for ckpt in ckpts])
         step = ckpts[0]["step"]
         #runner.eval(step=step)
         #runner.render_traj(step=step)
-        if cfg.compression is not None:
-            runner.run_compression(step=step)
+        #if cfg.compression is not None:
+        #    runner.run_compression(step=step)
+
+
+        os.makedirs(f"{cfg.result_dir}/validation_{step}", exist_ok=True)
+        os.makedirs(f"{cfg.result_dir}/validation_{step}/forward", exist_ok=True)
+        os.makedirs(f"{cfg.result_dir}/validation_{step}/perspective", exist_ok=True)
+        os.makedirs(f"{cfg.result_dir}/validation_{step}/fish", exist_ok=True)
+        if 'cube' in cfg.result_dir:
+            with open('/home/yd428/playaround_gaussian_platting/cvpr/cube_lr7_apply2render_res2/images.txt') as f:
+                lines = f.readlines()
+        elif 'rock' in cfg.result_dir:
+            with open('/home/yd428/playaround_gaussian_platting/cvpr/rock_vanilla/images.txt') as f:
+                lines = f.readlines()
+        elif 'chairs' in cfg.result_dir:
+            with open('/home/yd428/playaround_gaussian_platting/cvpr/chairs_vanilla/images.txt') as f:
+                lines = f.readlines()
+        elif 'flowers' in cfg.result_dir:
+            with open('/home/yd428/playaround_gaussian_platting/cvpr/flowers_vanilla/images.txt') as f:
+                lines = f.readlines()
+        elif 'garden' in cfg.result_dir:
+            with open('/home/yd428/playaround_gaussian_platting/netflix/netflix_garden_colmap_0.5/images.txt') as f:
+                lines = f.readlines()
+        elif 'room' in cfg.result_dir:
+            with open('/home/yd428/playaround_gaussian_platting/netflix/netflix_other_room_lr8_apply2render_res2_scale2.5_/images.txt') as f:
+                lines = f.readlines()
+
+        with torch.no_grad():
+            trainloader = torch.utils.data.DataLoader(
+                runner.trainset,
+                batch_size=cfg.batch_size,
+                shuffle=False,
+                num_workers=4,
+                persistent_workers=True,
+                pin_memory=True,
+            )
+            trainloader_iter = iter(trainloader)
+            data = next(trainloader_iter)
+            fish_gt = (data['fisheye_image'].permute(0, 3, 1, 2)/255).cuda()
+            transform = data["transform"][0].float()
+            #print(data["camtoworld"])
+            #print(data["image_name"])
+            #torchvision.utils.save_image(fish_gt, '/home/yd428/coor/new.png')
+            #print(transform_cameras(, data["camtoworld"]))
+            Ks = data["K"].cuda()
+            height, width = Ks[0][1][-1]*2, Ks[0][0][-1]*2
+            fovx = focal2fov(Ks[0][0][0], cfg.scale_x_eval*width)
+            fovy = focal2fov(Ks[0][1][1], cfg.scale_y_eval*height)
+            projection_matrix = getProjectionMatrix(cfg.near_plane, cfg.far_plane, fovx, fovy).cuda()
+            flow_scale = [3., 3.]
+            P_sensor_, P_view_insidelens_direction_ = generate_control_pts(data, control_point_sample_scale=cfg.control_point_sample_scale_eval, flow_scale=[3., 3.])
+            P_view_outsidelens_direction_ = runner.lens_net.forward(P_view_insidelens_direction_, sensor_to_frustum=False)
+            camera_directions_w_lens_ = homogenize(P_view_outsidelens_direction_)
+            control_points_ = camera_directions_w_lens_.reshape((P_sensor_.shape[0], P_sensor_.shape[1], 3))[:, :, :2]
+            flow = control_points_ @ projection_matrix[:2, :2]
+            flow_apply2_gt_or_img = F.interpolate(flow.permute(2, 0, 1).unsqueeze(0), size=(int(data['fisheye_image'].shape[1]*flow_scale[0]), int(data['fisheye_image'].shape[2]*flow_scale[1])), mode='bilinear', align_corners=False).permute(0, 2, 3, 1).squeeze(0)
+
+            i = 0
+            for line in lines:
+                if line.startswith("#") or not line.strip():
+                    continue
+                parts = line.split()
+                image_id = int(parts[0])
+                qw, qx, qy, qz = map(float, parts[1:5])
+                tx, ty, tz = map(float, parts[5:8])
+                camera_id = int(parts[8])
+                image_name = parts[9]
+                quaternion_tensor = torch.tensor([qw, qx, qy, qz], dtype=torch.float32)
+                R = quaternion_to_rotation_matrix(quaternion_tensor).cuda()
+                T = torch.tensor([tx, ty, tz]).cuda().view(-1, 1)
+                Rt = torch.cat((R, T), dim=1)
+                last_row = torch.tensor([[0., 0., 0., 1.]]).cuda()
+                w2c = torch.cat((Rt, last_row), dim=0)
+                camtoworlds = w2c.inverse().unsqueeze(0)
+                camtoworlds = torch.from_numpy(transform_cameras(transform, camtoworlds.cpu())).cuda()
+
+                if i == 0:
+                    Ks[0][0][-1] = Ks[0][0][-1] * cfg.scale_x_eval
+                    Ks[0][1][-1] = Ks[0][1][-1] * cfg.scale_y_eval
+                image_ids = torch.tensor([0]).cuda()
+                masks = None
+                colors, _, _ = runner.rasterize_splats(
+                    camtoworlds=camtoworlds,
+                    Ks=Ks,
+                    width=int(width*cfg.scale_x_eval),
+                    height=int(height*cfg.scale_y_eval),
+                    sh_degree=cfg.sh_degree,
+                    near_plane=cfg.near_plane,
+                    far_plane=cfg.far_plane,
+                    masks=masks,
+                )  # [1, H, W, 3]
+                torchvision.utils.save_image(colors.permute(0, 3, 1, 2)[0], os.path.join(cfg.result_dir, f'validation_{step}/perspective/perspective_{i}.png'))
+                colors = F.grid_sample(
+                    colors.permute(0, 3, 1, 2),
+                    flow_apply2_gt_or_img.unsqueeze(0),
+                    mode="bilinear",
+                    padding_mode="zeros",
+                    align_corners=True,
+                )
+                colors = center_crop(colors, data['fisheye_image'].shape[1], data['fisheye_image'].shape[2])
+                torchvision.utils.save_image(colors[0], os.path.join(cfg.result_dir, f'validation_{step}/fish/perspective_{i}.png'))
+                i += 1
+                print(i)
     else:
+        runner = Runner(local_rank, world_rank, world_size, cfg, False)
         runner.train()
 
     if not cfg.disable_viewer:
