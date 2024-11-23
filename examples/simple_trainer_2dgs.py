@@ -436,7 +436,7 @@ class Runner:
                 **kwargs,
             )
         elif self.model_type == "2dgs-inria":
-            render_colors, render_alphas, info = rasterization_2dgs_inria_wrapper(
+            renders, info = rasterization_2dgs_inria_wrapper(
                 means=means,
                 quats=quats,
                 scales=scales,
