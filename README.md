@@ -33,7 +33,7 @@ The effect of UBP with $\kappa=10^{-14}$ on `gsplat`:
 |stump       |   2.53x|-0.23|
 
 ## Installation
-Installation process is similar to the main `gsplat` branch. Make sure to `pip install -r requirements.txt` under the examples directory.
+Installation process is similar to the main `gsplat` branch. Please install from source through `pip install git+https://github.com/lilygoli/SpotLessSplats.git` to include changes to the CUDA kernel. Make sure to `pip install -r requirements.txt` under the examples directory.
 
 ## Run Experiments
 You can run experiments with the robust masking as below:
