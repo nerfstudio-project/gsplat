@@ -687,7 +687,7 @@ class Runner:
 
             # Pass the error histogram for capturing error statistics
             info["err"] = torch.histogram(
-                torch.mean(torch.abs(colors - pixels), dim=-3).clone().detach().cpu(),
+                torch.mean(torch.abs(colors - pixels), dim=-1).clone().detach().cpu(),
                 bins=cfg.bin_size,
                 range=(0.0, 1.0),
             )[0]
