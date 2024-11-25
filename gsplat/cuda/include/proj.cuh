@@ -1,5 +1,5 @@
-#ifndef GSPLAT_CUDA_PROJ_H
-#define GSPLAT_CUDA_PROJ_H
+#ifndef GSPLAT_CUDA_PROJ_CUH
+#define GSPLAT_CUDA_PROJ_CUH
 
 #include "types.cuh"
 
@@ -344,4 +344,4 @@ inline __device__ void fisheye_proj_vjp(
 
 } // namespace gsplat
 
-#endif // GSPLAT_CUDA_PROJ_H
+#endif // GSPLAT_CUDA_PROJ_CUH
