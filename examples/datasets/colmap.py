@@ -30,7 +30,7 @@ def _get_rel_paths(path_dir: str) -> List[str]:
 
 def _resize_image_folder(image_dir: str, resized_dir: str, factor: int) -> str:
     """Resize image folder."""
-    print("Downscaling full resolution images instead of provided jpgs.")
+    print(f"Downscaling images by {factor}x from {image_dir} to {resized_dir}.")
     os.makedirs(resized_dir, exist_ok=True)
 
     image_files = _get_rel_paths(image_dir)
