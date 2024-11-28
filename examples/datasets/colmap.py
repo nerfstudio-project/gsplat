@@ -1,9 +1,11 @@
 import os
 import json
+from tqdm import tqdm
 from typing import Any, Dict, List, Optional
 from typing_extensions import assert_never
 
 import cv2
+from PIL import Image
 import imageio.v2 as imageio
 import numpy as np
 import torch
@@ -163,6 +165,28 @@ class Parser:
         # so we need to map between the two sorted lists of files.
         colmap_files = sorted(_get_rel_paths(colmap_image_dir))
         image_files = sorted(_get_rel_paths(image_dir))
+        if factor > 1 and os.path.splitext(image_files[0])[1].lower() == ".jpg":
+            print("Downscaling full resolution images instead of provided jpgs.")
+            image_dir = image_dir + "_png"
+            os.makedirs(image_dir, exist_ok=True)
+            image_files = [
+                os.path.splitext(image_file)[0] + ".png" for image_file in image_files
+            ]
+            for colmap_file, image_file in zip(tqdm(colmap_files), image_files):
+                resized_image_path = os.path.join(image_dir, image_file)
+                if os.path.isfile(resized_image_path):
+                    continue
+                full_image = imageio.imread(
+                    os.path.join(colmap_image_dir, colmap_file)
+                )[..., :3]
+                resized_size = (
+                    int(round(full_image.shape[1] / factor)),
+                    int(round(full_image.shape[0] / factor)),
+                )
+                resized_image = np.array(
+                    Image.fromarray(full_image).resize(resized_size, Image.BICUBIC)
+                )
+                imageio.imwrite(resized_image_path, resized_image)
         colmap_to_image = dict(zip(colmap_files, image_files))
         image_paths = [os.path.join(image_dir, colmap_to_image[f]) for f in image_names]
 
@@ -389,7 +413,6 @@ if __name__ == "__main__":
     import argparse
 
     import imageio.v2 as imageio
-    import tqdm
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", type=str, default="data/360_v2/garden")
@@ -404,7 +427,7 @@ if __name__ == "__main__":
     print(f"Dataset: {len(dataset)} images.")
 
     writer = imageio.get_writer("results/points.mp4", fps=30)
-    for data in tqdm.tqdm(dataset, desc="Plotting points"):
+    for data in tqdm(dataset, desc="Plotting points"):
         image = data["image"].numpy().astype(np.uint8)
         points = data["points"].numpy()
         depths = data["depths"].numpy()
