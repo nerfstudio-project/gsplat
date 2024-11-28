@@ -14,7 +14,7 @@ do
     echo "Running $SCENE"
 
     # train and eval
-    CUDA_VISIBLE_DEVICES=0 python simple_trainer.py mcmc --disable_viewer --data_factor $DATA_FACTOR \
+    CUDA_VISIBLE_DEVICES=0 python examples/simple_trainer.py mcmc --disable_viewer --data_factor $DATA_FACTOR \
         --strategy.cap-max $CAP_MAX \
         --opacity_reg 0.001 \
         --use_bilateral_grid \
