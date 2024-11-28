@@ -28,6 +28,31 @@ def _get_rel_paths(path_dir: str) -> List[str]:
     return paths
 
 
+def _resize_image_folder(image_dir: str, resized_dir: str, factor: int) -> str:
+    """Resize image folder."""
+    print("Downscaling full resolution images instead of provided jpgs.")
+    os.makedirs(resized_dir, exist_ok=True)
+
+    image_files = _get_rel_paths(image_dir)
+    for image_file in tqdm(image_files):
+        image_path = os.path.join(image_dir, image_file)
+        resized_path = os.path.join(
+            resized_dir, os.path.splitext(image_file)[0] + ".png"
+        )
+        if os.path.isfile(resized_path):
+            continue
+        image = imageio.imread(image_path)[..., :3]
+        resized_size = (
+            int(round(image.shape[1] / factor)),
+            int(round(image.shape[0] / factor)),
+        )
+        resized_image = np.array(
+            Image.fromarray(image).resize(resized_size, Image.BICUBIC)
+        )
+        imageio.imwrite(resized_path, resized_image)
+    return resized_dir
+
+
 class Parser:
     """COLMAP parser."""
 
@@ -166,27 +191,10 @@ class Parser:
         colmap_files = sorted(_get_rel_paths(colmap_image_dir))
         image_files = sorted(_get_rel_paths(image_dir))
         if factor > 1 and os.path.splitext(image_files[0])[1].lower() == ".jpg":
-            print("Downscaling full resolution images instead of provided jpgs.")
-            image_dir = image_dir + "_png"
-            os.makedirs(image_dir, exist_ok=True)
-            image_files = [
-                os.path.splitext(image_file)[0] + ".png" for image_file in image_files
-            ]
-            for colmap_file, image_file in zip(tqdm(colmap_files), image_files):
-                resized_image_path = os.path.join(image_dir, image_file)
-                if os.path.isfile(resized_image_path):
-                    continue
-                full_image = imageio.imread(
-                    os.path.join(colmap_image_dir, colmap_file)
-                )[..., :3]
-                resized_size = (
-                    int(round(full_image.shape[1] / factor)),
-                    int(round(full_image.shape[0] / factor)),
-                )
-                resized_image = np.array(
-                    Image.fromarray(full_image).resize(resized_size, Image.BICUBIC)
-                )
-                imageio.imwrite(resized_image_path, resized_image)
+            image_dir = _resize_image_folder(
+                colmap_image_dir, image_dir + "_png", factor=factor
+            )
+            image_files = sorted(_get_rel_paths(image_dir))
         colmap_to_image = dict(zip(colmap_files, image_files))
         image_paths = [os.path.join(image_dir, colmap_to_image[f]) for f in image_names]
 
