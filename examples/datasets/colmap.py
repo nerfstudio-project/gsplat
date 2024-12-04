@@ -5,6 +5,7 @@ from typing_extensions import assert_never
 
 import cv2
 import imageio.v2 as imageio
+from PIL import Image
 import numpy as np
 import torch
 from pycolmap import SceneManager
@@ -35,6 +36,7 @@ class Parser:
         factor: int = 1,
         normalize: bool = False,
         test_every: int = 8,
+        test_max_res: int = 1600,  # max image side length in pixel for test split
     ):
         self.data_dir = data_dir
         self.factor = factor
@@ -58,8 +60,12 @@ class Parser:
         w2c_mats = []
         camera_ids = []
         Ks_dict = dict()
+        Ks_dict_test = dict()
         params_dict = dict()
         imsize_dict = dict()  # width, height
+        imsize_dict_test = (
+            dict()
+        )  # width, height for test images -> max resolution limited
         mask_dict = dict()
         bottom = np.array([0, 0, 0, 1]).reshape(1, 4)
         for k in imdata:
@@ -75,9 +81,12 @@ class Parser:
 
             # camera intrinsics
             cam = manager.cameras[camera_id]
+            # cam.width, cam.height =
             fx, fy, cx, cy = cam.fx, cam.fy, cam.cx, cam.cy
             K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
             K[:2, :] /= factor
+            # K[:2, :] /= 3.09125
+
             Ks_dict[camera_id] = K
 
             # Get distortion parameters.
@@ -201,8 +210,10 @@ class Parser:
         self.camtoworlds = camtoworlds  # np.ndarray, (num_images, 4, 4)
         self.camera_ids = camera_ids  # List[int], (num_images,)
         self.Ks_dict = Ks_dict  # Dict of camera_id -> K
+        self.Ks_dict_test = Ks_dict_test
         self.params_dict = params_dict  # Dict of camera_id -> params
         self.imsize_dict = imsize_dict  # Dict of camera_id -> (width, height)
+        self.imsize_dict_test = imsize_dict_test
         self.mask_dict = mask_dict  # Dict of camera_id -> mask
         self.points = points  # np.ndarray, (num_points, 3)
         self.points_err = points_err  # np.ndarray, (num_points,)
@@ -214,6 +225,15 @@ class Parser:
         # intrinsics stored in COLMAP corresponds to 2x upsampled images.
         actual_image = imageio.imread(self.image_paths[0])[..., :3]
         actual_height, actual_width = actual_image.shape[:2]
+
+        # need to check image resolution. create seperate K for test set
+        # if size > test_max_res
+        max_side = max(actual_width, actual_height)
+        scale_test = 1
+        if max_side > test_max_res:
+            global_down_test = max_side / test_max_res
+            scale_test = float(global_down_test)
+
         colmap_width, colmap_height = self.imsize_dict[self.camera_ids[0]]
         s_height, s_width = actual_height / colmap_height, actual_width / colmap_width
         for camera_id, K in self.Ks_dict.items():
@@ -222,6 +242,15 @@ class Parser:
             self.Ks_dict[camera_id] = K
             width, height = self.imsize_dict[camera_id]
             self.imsize_dict[camera_id] = (int(width * s_width), int(height * s_height))
+
+            K_test = K.copy()
+            K_test[0, :] /= scale_test
+            K_test[1, :] /= scale_test
+            self.Ks_dict_test[camera_id] = K_test
+            self.imsize_dict_test[camera_id] = (
+                int(width * s_width / scale_test),
+                int(height * s_height / scale_test),
+            )
 
         # undistortion
         self.mapx_dict = dict()
@@ -324,14 +353,29 @@ class Dataset:
 
     def __getitem__(self, item: int) -> Dict[str, Any]:
         index = self.indices[item]
-        image = imageio.imread(self.parser.image_paths[index])[..., :3]
+        image = Image.open(self.parser.image_paths[index])
         camera_id = self.parser.camera_ids[index]
-        K = self.parser.Ks_dict[camera_id].copy()  # undistorted K
         params = self.parser.params_dict[camera_id]
         camtoworlds = self.parser.camtoworlds[index]
         mask = self.parser.mask_dict[camera_id]
 
+        # use K with downscaled resolution for test split
+        if self.split == "train":
+            K = self.parser.Ks_dict[camera_id].copy()  # undistorted K
+        else:
+            K = self.parser.Ks_dict_test[camera_id].copy()
+
+        # downscale test image
+        if self.split != "train":
+            resized_image_PIL = image.resize(self.parser.imsize_dict_test[camera_id])
+            image = resized_image_PIL
+        image = np.array(image)
+        image = image[..., :3]
+
         if len(params) > 0:
+            # evaluation does not support distorted images
+            if self.split != "train":
+                assert False, "only undistorted datasets are handled for evaluation"
             # Images are distorted. Undistort them.
             mapx, mapy = (
                 self.parser.mapx_dict[camera_id],
