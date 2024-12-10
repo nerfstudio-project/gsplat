@@ -48,7 +48,7 @@ class Config:
     # Disable viewer
     disable_viewer: bool = False
     # Path to the .pt files. If provide, it will skip training and run evaluation only.
-    ckpt: Optional[List[str]] = None
+    ckpt: Optional[List[str]] = None #["./results/garden/ckpts/ckpt_29999_rank0.pt"]
     # Name of compression strategy to use
     compression: Optional[Literal["png"]] = None
     # Render trajectory path
@@ -1078,7 +1078,6 @@ if __name__ == "__main__":
     }
     cfg = tyro.extras.overridable_config_cli(configs)
     cfg.adjust_steps(cfg.steps_scaler)
-    cfg.ckpt = ["/main/rajrup/Dropbox/Project/GsplatStream/LivoGstream/src/gsplat/results/garden/ckpts/ckpt_6999_rank0.pt", "/main/rajrup/Dropbox/Project/GsplatStream/LivoGstream/src/gsplat/results/garden/ckpts/ckpt_29999_rank0.pt"]
 
     # try import extra dependencies
     if cfg.compression == "png":
@@ -1096,8 +1095,15 @@ if __name__ == "__main__":
 
 
 """
-# Run
+# Run Training
 CUDA_VISIBLE_DEVICES=0 python examples/simple_trainer.py default \
     --data_dir /bigdata2/rajrup/datasets/gsplat_data/360_v2/garden --data_factor 4 \
     --result_dir ./results/garden
+
+# Run Evaluation and View Model
+CUDA_VISIBLE_DEVICES=0 python examples/simple_trainer.py default \
+    --data_dir /bigdata2/rajrup/datasets/gsplat_data/360_v2/garden --data_factor 4 \
+    --result_dir ./results/test \
+    --ckpt ./results/garden/ckpts/ckpt_29999_rank0.pt
+
 """
