@@ -118,15 +118,17 @@ def init_from_colmap(viewpoint_cam, coeff, result_dir, lens_net, optimizer_lens_
 
     progress_bar_ires = tqdm.tqdm(range(0, 5000), desc="Init Iresnet")
     for i in range(5000):
+        #P_view_insidelens_direction -> network -> compare with combine
+        #combine -> network -> compare with P_view_insidelens_direction
         P_view_outsidelens_direction = lens_net.forward(P_view_insidelens_direction, sensor_to_frustum=True)
         #P_view_outsidelens_direction = lens_net.forward(combine.reshape(-1, 2), sensor_to_frustum=True)
         control_points = P_view_outsidelens_direction
-        inf_mask = torch.isinf(control_points)
-        nan_mask = torch.isnan(control_points)
-        control_points[inf_mask] = 0
-        control_points[nan_mask] = 0
-        loss = ((control_points - combine.reshape(-1, 2))**2).mean()
-        #loss = ((control_points - P_view_insidelens_direction)**2).mean()
+        inf_mask = torch.isinf(P_view_outsidelens_direction)
+        nan_mask = torch.isnan(P_view_outsidelens_direction)
+        P_view_outsidelens_direction[inf_mask] = 0
+        P_view_outsidelens_direction[nan_mask] = 0
+        loss = ((P_view_outsidelens_direction - combine.reshape(-1, 2))**2).mean()
+        #loss = ((P_view_outsidelens_direction - P_view_insidelens_direction)**2).mean()
         progress_bar_ires.set_postfix({"loss": f"{loss.item():.7f}"})
         progress_bar_ires.update(1)
         loss.backward()
@@ -135,7 +137,7 @@ def init_from_colmap(viewpoint_cam, coeff, result_dir, lens_net, optimizer_lens_
         scheduler_lens_net.step()
 
         if i % 2000 == 1:
-            control_points_np = control_points.cpu().detach().numpy()
+            control_points_np = P_view_outsidelens_direction.cpu().detach().numpy()
             combine_np = combine.reshape(-1, 2).cpu().detach().numpy()
             #combine_np = P_view_insidelens_direction.reshape(-1, 2).cpu().detach().numpy()
             plt.figure(figsize=(10, 6))
@@ -463,7 +465,7 @@ def generate_circular_mask(image_shape: torch.Size, radius: int) -> torch.Tensor
 
 def render_cubemap(width, height, new_width, new_height, fov90_width, fov90_height, Ks, camtoworlds, cfg, sh_degree_to_use, image_ids, masks, cubemap_net, rasterize_splats, cubemap_net_threshold, render_pano=False):
     mask_fov90 = torch.zeros((1, height, width), dtype=torch.float32).cuda()
-    mask_fov90[:, height//2 - int(fov90_height//2) - 1:height//2 + int(fov90_height//2) + 1, width//2 - int(fov90_width//2) - 1:width//2 + int(fov90_width//2) + 1] = 1
+    mask_fov90[:, height//2 - int(fov90_height//2) - 2:height//2 + int(fov90_height//2) + 2, width//2 - int(fov90_width//2) - 2:width//2 + int(fov90_width//2) + 2] = 1
 
     camtoworlds_up = rotate_camera(camtoworlds[0].inverse(), 90, 0, 0).unsqueeze(0).inverse()
     camtoworlds_down = rotate_camera(camtoworlds[0].inverse(), -90, 0, 0).unsqueeze(0).inverse()
