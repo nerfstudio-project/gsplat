@@ -49,7 +49,7 @@ done
 if command -v zip &> /dev/null
 then
     echo "Zipping results"
-    python benchmarks/compression/summarize_stats.py --results_dir $RESULT_DIR
+    python benchmarks/compression/summarize_stats.py --results_dir $RESULT_DIR --scenes $SCENE_LIST
 else
     echo "zip command not found, skipping zipping"
 fi
