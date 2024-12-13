@@ -1,6 +1,7 @@
 import warnings
 
 from .compression import PngCompression
+from .optimizers import SelectiveAdam
 from .cuda._torch_impl import accumulate
 from .cuda._torch_impl_2dgs import accumulate_2dgs
 from .cuda._wrapper import (
