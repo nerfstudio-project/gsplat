@@ -180,18 +180,21 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
     T radius;
     if (valid) {
         // take 3 sigma as the radius (non differentiable)
+        T scale_factor = 3.4086;
         T b = 0.5f * (covar2d[0][0] + covar2d[1][1]);
         T v1 = b + sqrt(max(0.1f, b * b - det));
         T v2 = b - sqrt(max(0.1f, b * b - det));
-        radius = ceil(3.f * sqrt(max(v1, v2)));
+        radius = ceil(scale_factor * sqrt(max(v1, v2)));
+        T x_proj = scale_factor * sqrt(covar2d[0][0]);
+        T y_proj = scale_factor * sqrt(covar2d[1][1]);
 
         if (radius <= radius_clip) {
             valid = false;
         }
 
         // mask out gaussians outside the image region
-        if (mean2d.x + radius <= 0 || mean2d.x - radius >= image_width ||
-            mean2d.y + radius <= 0 || mean2d.y - radius >= image_height) {
+        if (mean2d.x + x_proj <= 0 || mean2d.x - x_proj >= image_width ||
+            mean2d.y + y_proj <= 0 || mean2d.y - y_proj >= image_height) {
             valid = false;
         }
     }
