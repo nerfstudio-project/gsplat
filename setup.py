@@ -34,11 +34,11 @@ def get_extensions():
     from torch.__config__ import parallel_info
     from torch.utils.cpp_extension import CUDAExtension
 
-    extensions_dir_v2 = osp.join("gsplat", "cuda", "csrc")
-    sources_v2 = glob.glob(osp.join(extensions_dir_v2, "*.cu")) + glob.glob(
-        osp.join(extensions_dir_v2, "*.cpp")
+    extensions_dir = osp.join("gsplat", "cuda")
+    sources = glob.glob(osp.join(extensions_dir, "csrc", "*.cu")) + glob.glob(
+        osp.join(extensions_dir, "csrc", "*.cpp")
     )
-    sources_v2 = [path for path in sources_v2 if "hip" not in path]
+    sources = [path for path in sources if "hip" not in path]
 
     undef_macros = []
     define_macros = []
@@ -90,18 +90,19 @@ def get_extensions():
         extra_compile_args["nvcc"] += ["-DWIN32_LEAN_AND_MEAN"]
 
     current_dir = pathlib.Path(__file__).parent.resolve()
-    glm_path = os.path.join(current_dir, "gsplat", "cuda", "csrc", "third_party", "glm")
-    extension_v2 = CUDAExtension(
+    glm_path = osp.join(current_dir, "gsplat", "cuda", "csrc", "third_party", "glm")
+    include_dirs = [glm_path, osp.join(current_dir, "gsplat", "cuda", "include")]
+
+    extension = CUDAExtension(
         "gsplat.csrc",
-        sources_v2,
-        include_dirs=[extensions_dir_v2, glm_path],  # glm lives in v2.
+        sources,
+        include_dirs=include_dirs,
         define_macros=define_macros,
         undef_macros=undef_macros,
         extra_compile_args=extra_compile_args,
         extra_link_args=extra_link_args,
     )
-
-    return [extension_v2]
+    return [extension]
 
 
 setup(

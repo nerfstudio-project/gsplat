@@ -1,13 +1,7 @@
-#ifndef GSPLAT_CUDA_TYPES_H
-#define GSPLAT_CUDA_TYPES_H
+#ifndef GSPLAT_CUDA_TYPES_CUH
+#define GSPLAT_CUDA_TYPES_CUH
 
-#include <cuda.h>
-#include <cuda_fp16.h>
-#include <cuda_runtime.h>
-
-#include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
-
 #include <ATen/Dispatch.h>
 
 namespace gsplat {
@@ -48,4 +42,4 @@ template <> struct OpType<c10::BFloat16> {
 
 } // namespace gsplat
 
-#endif // GSPLAT_CUDA_TYPES_H
+#endif // GSPLAT_CUDA_TYPES_CUH

@@ -1,6 +1,7 @@
 #include "bindings.h"
 #include "helpers.cuh"
-#include "utils.cuh"
+#include "transform.cuh"
+#include "2dgs.cuh"
 
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>

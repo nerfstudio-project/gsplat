@@ -436,7 +436,7 @@ class Runner:
                 **kwargs,
             )
         elif self.model_type == "2dgs-inria":
-            render_colors, render_alphas, info = rasterization_2dgs_inria_wrapper(
+            renders, info = rasterization_2dgs_inria_wrapper(
                 means=means,
                 quats=quats,
                 scales=scales,
@@ -577,6 +577,10 @@ class Runner:
                 step=step,
                 info=info,
             )
+            masks = data["mask"].to(device) if "mask" in data else None
+            if masks is not None:
+                pixels = pixels * masks[..., None]
+                colors = colors * masks[..., None]
 
             # loss
             l1loss = F.l1_loss(colors, pixels)
