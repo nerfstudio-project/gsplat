@@ -72,11 +72,19 @@ __global__ void fully_fused_projection_fwd_kernel(
     // transform Gaussian center to camera space
     vec3<T> mean_c;
     pos_world_to_cam(R, t, glm::make_vec3(means), mean_c);
-    if (mean_c.z < near_plane || mean_c.z > far_plane) {
-        radii[idx] = 0;
-        return;
+    if(camera_model != CameraModelType::SPHERICAL){
+        if (mean_c.z < near_plane || mean_c.z > far_plane) {
+            radii[idx] = 0;
+            return;
+        }
     }
-
+    else{
+        float r = sqrt(mean_c.x * mean_c.x + mean_c.y * mean_c.y + mean_c.z * mean_c.z);
+        if (r < near_plane || r > far_plane) {
+            radii[idx] = 0;
+            return;
+        }
+    }
     // transform Gaussian covariance to camera space
     mat3<T> covar;
     if (covars != nullptr) {
@@ -150,14 +158,20 @@ __global__ void fully_fused_projection_fwd_kernel(
                 mean2d
             );
             break;
+        case CameraModelType::SPHERICAL: // spherical projection
+            spherical_proj<T>(
+                mean_c,
+                covar_c,
+                image_width,
+                image_height,
+                covar2d,
+                mean2d
+            );
+            break;
     }
 
     T compensation;
     T det = add_blur(eps2d, covar2d, compensation);
-    if (det <= 0.f) {
-        radii[idx] = 0;
-        return;
-    }
 
     // compute the inverse of the 2d covariance
     mat2<T> covar2d_inv;
@@ -176,17 +190,25 @@ __global__ void fully_fused_projection_fwd_kernel(
     }
 
     // mask out gaussians outside the image region
-    if (mean2d.x + radius <= 0 || mean2d.x - radius >= image_width ||
-        mean2d.y + radius <= 0 || mean2d.y - radius >= image_height) {
-        radii[idx] = 0;
-        return;
+    if(camera_model != CameraModelType::SPHERICAL)
+    {
+        if (mean2d.x + radius <= 0 || mean2d.x - radius >= image_width ||
+            mean2d.y + radius <= 0 || mean2d.y - radius >= image_height) {
+            radii[idx] = 0;
+            return;
+        }
     }
 
     // write to outputs
     radii[idx] = (int32_t)radius;
     means2d[idx * 2] = mean2d.x;
     means2d[idx * 2 + 1] = mean2d.y;
-    depths[idx] = mean_c.z;
+    if (camera_model != CameraModelType::SPHERICAL) {
+        depths[idx] = mean_c.z;
+        depths[idx] = sqrt(mean_c.x * mean_c.x + mean_c.y * mean_c.y + mean_c.z * mean_c.z);
+    } else {
+        depths[idx] = sqrt(mean_c.x * mean_c.x + mean_c.y * mean_c.y + mean_c.z * mean_c.z);
+    }
     conics[idx * 3] = covar2d_inv[0][0];
     conics[idx * 3 + 1] = covar2d_inv[0][1];
     conics[idx * 3 + 2] = covar2d_inv[1][1];

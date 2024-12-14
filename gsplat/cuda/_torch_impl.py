@@ -222,6 +222,57 @@ def _ortho_proj(
     return means2d, cov2d  # [C, N, 2], [C, N, 2, 2]
 
 
+def _spherical_proj(
+    means: Tensor,  # [C, N, 3]
+    covars: Tensor,  # [C, N, 3, 3]
+    width: int,
+    height: int,
+) -> Tuple[Tensor, Tensor]:
+    """PyTorch implementation of spherical projection for 3D Gaussians.
+
+    Args:
+        means: Gaussian means in camera coordinate system. [C, N, 3].
+        covars: Gaussian covariances in camera coordinate system. [C, N, 3, 3].
+        width: Image width.
+        height: Image height.
+
+    Returns:
+        A tuple:
+
+        - **means2d**: Projected means. [C, N, 2].
+        - **cov2d**: Projected covariances. [C, N, 2, 2].
+    """
+    C, N, _ = means.shape
+
+    tx, ty, tz = torch.unbind(means, dim=-1)  # [C, N]
+    tr = torch.sqrt(tx**2 + ty**2 + tz**2)
+    xz_norm = torch.sqrt(tx * tx + tz * tz + 1e-8)
+    denom_xz = tx * tx + tz * tz + 1e-8
+    denom_r2 = tr * tr + 1e-8
+
+    longitude = torch.atan2(tx, tz)
+    latitude = torch.atan2(ty, xz_norm)
+
+    normalized_latitude = latitude / (torch.pi / 2.0)
+    normalized_longitude = longitude / torch.pi
+
+    means2d = torch.stack([(normalized_longitude + 1) * width / 2, (normalized_latitude + 1) * height / 2], dim=-1)
+    O = torch.zeros((C, N), device=means.device, dtype=means.dtype)
+    J = torch.stack(
+        [
+            width / (2 * torch.pi) * (tz / denom_xz),
+            height / torch.pi * -(tx * ty) / (denom_r2 * xz_norm),
+            O,
+            height / torch.pi * xz_norm / denom_r2,
+            width / (2 * torch.pi) * -tx / denom_xz,
+            height / torch.pi * -(tz * ty) / (denom_r2 * xz_norm)
+        ],
+        dim=-1,
+    ).reshape(C, N, 2, 3)
+
+    cov2d = torch.einsum("...ij,...jk,...kl->...il", J, covars, J.transpose(-1, -2))
+    return means2d, cov2d  # [C, N, 2], [C, N, 2, 2]
+
 def _world_to_cam(
     means: Tensor,  # [N, 3]
     covars: Tensor,  # [N, 3, 3]
@@ -258,7 +309,7 @@ def _fully_fused_projection(
     near_plane: float = 0.01,
     far_plane: float = 1e10,
     calc_compensations: bool = False,
-    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+    camera_model: Literal["pinhole", "ortho", "fisheye", "spherical"] = "pinhole",
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Optional[Tensor]]:
     """PyTorch implementation of `gsplat.cuda._wrapper.fully_fused_projection()`
 
@@ -275,6 +326,8 @@ def _fully_fused_projection(
         means2d, covars2d = _fisheye_proj(means_c, covars_c, Ks, width, height)
     elif camera_model == "pinhole":
         means2d, covars2d = _persp_proj(means_c, covars_c, Ks, width, height)
+    elif camera_model == "spherical":
+        means2d, covars2d = _spherical_proj(means_c, covars_c, width, height)
     else:
         assert_never(camera_model)
 

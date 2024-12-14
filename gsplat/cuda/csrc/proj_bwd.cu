@@ -108,6 +108,18 @@ __global__ void proj_bwd_kernel(
                 v_covar
             );
             break;
+        case CameraModelType::SPHERICAL: // spherical projection
+            spherical_proj_vjp<OpT>(
+                mean,
+                covar,
+                width,
+                height,
+                glm::transpose(v_covar2d),
+                v_mean2d,
+                v_mean,
+                v_covar
+            );
+            break;
     }
 
     // write to outputs: glm is column-major but we want row-major

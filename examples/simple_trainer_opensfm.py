@@ -15,7 +15,7 @@ import tqdm
 import tyro
 import viser
 import yaml
-from datasets.colmap import Dataset, Parser
+from datasets.opensfm import Dataset, Parser
 from datasets.traj import (
     generate_interpolated_path,
     generate_ellipse_path_z,
@@ -49,17 +49,18 @@ class Config:
     disable_viewer: bool = False
     # Path to the .pt files. If provide, it will skip training and run evaluation only.
     ckpt: Optional[List[str]] = None
+
     # Name of compression strategy to use
     compression: Optional[Literal["png"]] = None
     # Render trajectory path
     render_traj_path: str = "interp"
 
     # Path to the Mip-NeRF 360 dataset
-    data_dir: str = "data/360_v2/garden"
+    data_dir: str = "data_dir"
     # Downsample factor for the dataset
     data_factor: int = 4
     # Directory to save results
-    result_dir: str = "results/garden"
+    result_dir: str = "results/"
     # Every N images there is a test image
     test_every: int = 8
     # Random crop size for training  (experimental)
@@ -69,7 +70,7 @@ class Config:
     # Normalize the world space
     normalize_world_space: bool = True
     # Camera model
-    camera_model: Literal["pinhole", "ortho", "fisheye", "spherical"] = "pinhole"
+    camera_model: Literal["pinhole", "ortho", "fisheye", "spherical"] = "spherical"
 
     # Port for the viewer server
     port: int = 8080
@@ -106,7 +107,7 @@ class Config:
     # Near plane clipping distance
     near_plane: float = 0.01
     # Far plane clipping distance
-    far_plane: float = 1e10
+    far_plane: float = 1e8
 
     # Strategy for GS densification
     strategy: Union[DefaultStrategy, MCMCStrategy] = field(
@@ -182,7 +183,6 @@ class Config:
             strategy.refine_every = int(strategy.refine_every * factor)
         else:
             assert_never(strategy)
-
 
 def create_splats_with_optimizers(
     parser: Parser,
@@ -302,8 +302,7 @@ class Runner:
         self.parser = Parser(
             data_dir=cfg.data_dir,
             factor=cfg.data_factor,
-            normalize=cfg.normalize_world_space,
-            test_every=cfg.test_every,
+            normalize=cfg.normalize_world_space
         )
         self.trainset = Dataset(
             self.parser,
@@ -314,7 +313,6 @@ class Runner:
         self.valset = Dataset(self.parser, split="val")
         self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
         print("Scene scale:", self.scene_scale)
-
         # Model
         feature_dim = 32 if cfg.app_opt else None
         self.splats, self.optimizers = create_splats_with_optimizers(
@@ -686,7 +684,7 @@ class Runner:
             #     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
             #     canvas = canvas.reshape(-1, *canvas.shape[2:])
             #     imageio.imwrite(
-            #         f"{self.render_dir}/train_rank{self.world_rank}.png",
+            #         f"{self.render_dir}/train_rank{self.world_rank}_{step}.png",
             #         (canvas * 255).astype(np.uint8),
             #     )
 

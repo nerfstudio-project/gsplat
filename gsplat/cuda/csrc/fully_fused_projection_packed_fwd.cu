@@ -82,8 +82,16 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
 
         // transform Gaussian center to camera space
         pos_world_to_cam(R, t, glm::make_vec3(means), mean_c);
-        if (mean_c.z < near_plane || mean_c.z > far_plane) {
-            valid = false;
+        if(camera_model != CameraModelType::SPHERICAL){
+            if (mean_c.z < near_plane || mean_c.z > far_plane) {
+                valid = false;
+            }
+        }
+        else{
+            float r = sqrt(mean_c.x * mean_c.x + mean_c.y * mean_c.y + mean_c.z * mean_c.z);
+            if (r < near_plane || r > far_plane) {
+                valid = false;
+            }
         }
     }
 
@@ -165,6 +173,16 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
                     mean2d
                 );
                 break;
+            case CameraModelType::SPHERICAL: // spherical projection
+                spherical_proj<T>(
+                    mean_c,
+                    covar_c,
+                    image_width,
+                    image_height,
+                    covar2d,
+                    mean2d
+                );
+                break;
         }
 
         det = add_blur(eps2d, covar2d, compensation);
@@ -190,9 +208,11 @@ __global__ void fully_fused_projection_packed_fwd_kernel(
         }
 
         // mask out gaussians outside the image region
-        if (mean2d.x + radius <= 0 || mean2d.x - radius >= image_width ||
-            mean2d.y + radius <= 0 || mean2d.y - radius >= image_height) {
-            valid = false;
+        if(camera_model != CameraModelType::SPHERICAL){
+            if (mean2d.x + radius <= 0 || mean2d.x - radius >= image_width ||
+                mean2d.y + radius <= 0 || mean2d.y - radius >= image_height) {
+                valid = false;
+            }
         }
     }
 
