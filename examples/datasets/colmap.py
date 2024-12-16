@@ -81,12 +81,9 @@ class Parser:
 
             # camera intrinsics
             cam = manager.cameras[camera_id]
-            # cam.width, cam.height =
             fx, fy, cx, cy = cam.fx, cam.fy, cam.cx, cam.cy
             K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
             K[:2, :] /= factor
-            # K[:2, :] /= 3.09125
-
             Ks_dict[camera_id] = K
 
             # Get distortion parameters.
@@ -226,8 +223,7 @@ class Parser:
         actual_image = imageio.imread(self.image_paths[0])[..., :3]
         actual_height, actual_width = actual_image.shape[:2]
 
-        # need to check image resolution. create seperate K for test set
-        # if size > test_max_res
+        # need to check image resolution. create separate K for test set
         max_side = max(actual_width, actual_height)
         scale_test = 1
         if max_side > test_max_res:
