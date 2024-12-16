@@ -1,23 +1,22 @@
-SCENE_DIR="data/360_v2"
+SCENE_DIR="data/db"
 # eval all 9 scenes for benchmarking
-SCENE_LIST="garden bicycle stump bonsai counter kitchen room treehill flowers"
+SCENE_LIST="playroom drjohnson"
 
 # # 0.36M GSs
-# RESULT_DIR="results/benchmark_mcmc_0_36M_png_compression"
+# RESULT_DIR="results/benchmark_db_mcmc_0_36M_png_compression"
 # CAP_MAX=360000
 
 # # 0.49M GSs
-# RESULT_DIR="results/benchmark_mcmc_0_49M_png_compression"
+# RESULT_DIR="results/benchmark_db_mcmc_0_49M_png_compression"
 # CAP_MAX=490000
 
 # 1M GSs
-RESULT_DIR="results/benchmark_mcmc_1M_png_compression"
+RESULT_DIR="results/benchmark_db_mcmc_1M_png_compression"
 CAP_MAX=1000000
 
 # # 4M GSs
-# RESULT_DIR="results/benchmark_mcmc_4M_png_compression"
+# RESULT_DIR="results/benchmark_db_mcmc_4M_png_compression"
 # CAP_MAX=4000000
-
 
 for SCENE in $SCENE_LIST;
 do
@@ -43,7 +42,7 @@ done
 if command -v zip &> /dev/null
 then
     echo "Zipping results"
-    python benchmarks/compression/summarize_stats.py --results_dir $RESULT_DIR --scenes $SCENE_LIST
+    python benchmarks/compression/summarize_stats.py --results_dir $RESULT_DIR --scenes $SCENE_LIST --scenes $SCENE_LIST
 else
     echo "zip command not found, skipping zipping"
 fi
