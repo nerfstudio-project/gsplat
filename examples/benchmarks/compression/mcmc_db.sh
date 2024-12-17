@@ -1,21 +1,21 @@
-SCENE_DIR="data/tandt"
+SCENE_DIR="data/DeepBlending"
 
-SCENE_LIST="train truck"
+SCENE_LIST="drjohnson playroom"
 
 # # 0.36M GSs
-# RESULT_DIR="results/benchmark_tt_mcmc_0_36M_png_compression"
+# RESULT_DIR="results/benchmark_db_mcmc_0_36M_png_compression"
 # CAP_MAX=360000
 
 # # 0.49M GSs
-# RESULT_DIR="results/benchmark_tt_mcmc_tt_0_49M_png_compression"
+# RESULT_DIR="results/benchmark_db_mcmc_0_49M_png_compression"
 # CAP_MAX=490000
 
 # 1M GSs
-RESULT_DIR="results/benchmark_tt_mcmc_1M_png_compression"
+RESULT_DIR="results/benchmark_db_mcmc_1M_png_compression"
 CAP_MAX=1000000
 
 # # 4M GSs
-# RESULT_DIR="results/benchmark_tt_mcmc_4M_png_compression"
+# RESULT_DIR="results/benchmark_db_mcmc_4M_png_compression"
 # CAP_MAX=4000000
 
 # Override default values if provided as arguments
