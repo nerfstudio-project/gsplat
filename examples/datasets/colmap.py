@@ -266,8 +266,8 @@ class Parser:
                     + params[2] * theta**6
                     + params[3] * theta**8
                 )
-                mapx = fx * x1 * r + width // 2
-                mapy = fy * y1 * r + height // 2
+                mapx = (fx * x1 * r + width // 2).astype(np.float32)
+                mapy = (fy * y1 * r + height // 2).astype(np.float32)
 
                 # Use mask to define ROI
                 mask = np.logical_and(
