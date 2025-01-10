@@ -6,7 +6,7 @@
 
     <!-- Generated with Sphinx 7.4.7 and Furo 2024.08.06 -->
         <title>gsplat.strategy.mcmc - gsplat documentation</title>
-      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=a746c00c" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=354aac6f" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=302659d7" />
     
@@ -310,21 +310,21 @@
         </div>
         <article role="main" id="furo-main-content">
           <h1>Source code for gsplat.strategy.mcmc</h1><div class="highlight"><pre>
-<span></span><span class="kn">import</span> <span class="nn">math</span>
-<span class="kn">from</span> <span class="nn">dataclasses</span> <span class="kn">import</span> <span class="n">dataclass</span>
-<span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">Union</span>
+<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">Union</span>
 
-<span class="kn">import</span> <span class="nn">torch</span>
-<span class="kn">from</span> <span class="nn">torch</span> <span class="kn">import</span> <span class="n">Tensor</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">Tensor</span>
 
-<span class="kn">from</span> <span class="nn">.base</span> <span class="kn">import</span> <span class="n">Strategy</span>
-<span class="kn">from</span> <span class="nn">.ops</span> <span class="kn">import</span> <span class="n">inject_noise_to_position</span><span class="p">,</span> <span class="n">relocate</span><span class="p">,</span> <span class="n">sample_add</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.base</span><span class="w"> </span><span class="kn">import</span> <span class="n">Strategy</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.ops</span><span class="w"> </span><span class="kn">import</span> <span class="n">inject_noise_to_position</span><span class="p">,</span> <span class="n">relocate</span><span class="p">,</span> <span class="n">sample_add</span>
 
 
 <div class="viewcode-block" id="MCMCStrategy">
 <a class="viewcode-back" href="../../../apis/strategy.html#gsplat.MCMCStrategy">[docs]</a>
 <span class="nd">@dataclass</span>
-<span class="k">class</span> <span class="nc">MCMCStrategy</span><span class="p">(</span><span class="n">Strategy</span><span class="p">):</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">MCMCStrategy</span><span class="p">(</span><span class="n">Strategy</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Strategy that follows the paper:</span>
 
 <span class="sd">    `3D Gaussian Splatting as Markov Chain Monte Carlo &lt;https://arxiv.org/abs/2404.09591&gt;`_</span>
@@ -370,7 +370,7 @@
 
 <div class="viewcode-block" id="MCMCStrategy.initialize_state">
 <a class="viewcode-back" href="../../../apis/strategy.html#gsplat.MCMCStrategy.initialize_state">[docs]</a>
-    <span class="k">def</span> <span class="nf">initialize_state</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">initialize_state</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialize and return the running state for this strategy.&quot;&quot;&quot;</span>
         <span class="n">n_max</span> <span class="o">=</span> <span class="mi">51</span>
         <span class="n">binoms</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">n_max</span><span class="p">,</span> <span class="n">n_max</span><span class="p">))</span>
@@ -382,7 +382,7 @@
 
 <div class="viewcode-block" id="MCMCStrategy.check_sanity">
 <a class="viewcode-back" href="../../../apis/strategy.html#gsplat.MCMCStrategy.check_sanity">[docs]</a>
-    <span class="k">def</span> <span class="nf">check_sanity</span><span class="p">(</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">check_sanity</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">params</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">Parameter</span><span class="p">],</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">ParameterDict</span><span class="p">],</span>
         <span class="n">optimizers</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">optim</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">],</span>
@@ -422,7 +422,7 @@
 
 <div class="viewcode-block" id="MCMCStrategy.step_post_backward">
 <a class="viewcode-back" href="../../../apis/strategy.html#gsplat.MCMCStrategy.step_post_backward">[docs]</a>
-    <span class="k">def</span> <span class="nf">step_post_backward</span><span class="p">(</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">step_post_backward</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">params</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">Parameter</span><span class="p">],</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">ParameterDict</span><span class="p">],</span>
         <span class="n">optimizers</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">optim</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">],</span>
@@ -468,7 +468,7 @@
 
 
     <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
-    <span class="k">def</span> <span class="nf">_relocate_gs</span><span class="p">(</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_relocate_gs</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">params</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">Parameter</span><span class="p">],</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">ParameterDict</span><span class="p">],</span>
         <span class="n">optimizers</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">optim</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">],</span>
@@ -489,7 +489,7 @@
         <span class="k">return</span> <span class="n">n_gs</span>
 
     <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
-    <span class="k">def</span> <span class="nf">_add_new_gs</span><span class="p">(</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_add_new_gs</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">params</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">Parameter</span><span class="p">],</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">ParameterDict</span><span class="p">],</span>
         <span class="n">optimizers</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">optim</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">],</span>

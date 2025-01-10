@@ -6,7 +6,7 @@
 
     <!-- Generated with Sphinx 7.4.7 and Furo 2024.08.06 -->
         <title>gsplat.cuda._torch_impl_2dgs - gsplat documentation</title>
-      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=a746c00c" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=354aac6f" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=302659d7" />
     
@@ -310,15 +310,15 @@
         </div>
         <article role="main" id="furo-main-content">
           <h1>Source code for gsplat.cuda._torch_impl_2dgs</h1><div class="highlight"><pre>
-<span></span><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span>
+<span></span><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span>
 
-<span class="kn">import</span> <span class="nn">torch</span>
-<span class="kn">from</span> <span class="nn">torch</span> <span class="kn">import</span> <span class="n">Tensor</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">Tensor</span>
 
-<span class="kn">from</span> <span class="nn">gsplat.cuda._torch_impl</span> <span class="kn">import</span> <span class="n">_quat_scale_to_matrix</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">gsplat.cuda._torch_impl</span><span class="w"> </span><span class="kn">import</span> <span class="n">_quat_scale_to_matrix</span>
 
 
-<span class="k">def</span> <span class="nf">_fully_fused_projection_2dgs</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_fully_fused_projection_2dgs</span><span class="p">(</span>
     <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
     <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 4]</span>
     <span class="n">scales</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
@@ -389,7 +389,7 @@
 
 <div class="viewcode-block" id="accumulate_2dgs">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.accumulate_2dgs">[docs]</a>
-<span class="k">def</span> <span class="nf">accumulate_2dgs</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">accumulate_2dgs</span><span class="p">(</span>
     <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 2]</span>
     <span class="n">ray_transforms</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 3, 3]</span>
     <span class="n">opacities</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N]</span>
@@ -430,7 +430,7 @@
 <span class="sd">    &quot;&quot;&quot;</span>
 
     <span class="k">try</span><span class="p">:</span>
-        <span class="kn">from</span> <span class="nn">nerfacc</span> <span class="kn">import</span> <span class="n">accumulate_along_rays</span><span class="p">,</span> <span class="n">render_weight_from_alpha</span>
+        <span class="kn">from</span><span class="w"> </span><span class="nn">nerfacc</span><span class="w"> </span><span class="kn">import</span> <span class="n">accumulate_along_rays</span><span class="p">,</span> <span class="n">render_weight_from_alpha</span>
     <span class="k">except</span> <span class="ne">ImportError</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ImportError</span><span class="p">(</span><span class="s2">&quot;Please install nerfacc package: pip install nerfacc&quot;</span><span class="p">)</span>
 
@@ -483,7 +483,7 @@
 
 
 
-<span class="k">def</span> <span class="nf">_rasterize_to_pixels_2dgs</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_rasterize_to_pixels_2dgs</span><span class="p">(</span>
     <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 2]</span>
     <span class="n">ray_transforms</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 3, 3]</span>
     <span class="n">colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, channels]</span>
@@ -519,7 +519,7 @@
 <span class="sd">        This function requires the `nerfacc` package to be installed. Please install it</span>
 <span class="sd">        using the following command `pip install nerfacc`.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
-    <span class="kn">from</span> <span class="nn">._wrapper</span> <span class="kn">import</span> <span class="n">rasterize_to_indices_in_range_2dgs</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">._wrapper</span><span class="w"> </span><span class="kn">import</span> <span class="n">rasterize_to_indices_in_range_2dgs</span>
 
     <span class="n">C</span><span class="p">,</span> <span class="n">N</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="mi">2</span><span class="p">]</span>
     <span class="n">n_isects</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">flatten_ids</span><span class="p">)</span>

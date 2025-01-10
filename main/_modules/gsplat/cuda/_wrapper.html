@@ -6,7 +6,7 @@
 
     <!-- Generated with Sphinx 7.4.7 and Furo 2024.08.06 -->
         <title>gsplat.cuda._wrapper - gsplat documentation</title>
-      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=a746c00c" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=354aac6f" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=302659d7" />
     
@@ -310,25 +310,25 @@
         </div>
         <article role="main" id="furo-main-content">
           <h1>Source code for gsplat.cuda._wrapper</h1><div class="highlight"><pre>
-<span></span><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">Any</span>
-<span class="kn">import</span> <span class="nn">warnings</span>
-<span class="kn">from</span> <span class="nn">typing_extensions</span> <span class="kn">import</span> <span class="n">Literal</span>
+<span></span><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">Any</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing_extensions</span><span class="w"> </span><span class="kn">import</span> <span class="n">Literal</span>
 
-<span class="kn">import</span> <span class="nn">torch</span>
-<span class="kn">from</span> <span class="nn">torch</span> <span class="kn">import</span> <span class="n">Tensor</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">Tensor</span>
 
 
-<span class="k">def</span> <span class="nf">_make_lazy_cuda_func</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">:</span>
-    <span class="k">def</span> <span class="nf">call_cuda</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_make_lazy_cuda_func</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">call_cuda</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
         <span class="c1"># pylint: disable=import-outside-toplevel</span>
-        <span class="kn">from</span> <span class="nn">._backend</span> <span class="kn">import</span> <span class="n">_C</span>
+        <span class="kn">from</span><span class="w"> </span><span class="nn">._backend</span><span class="w"> </span><span class="kn">import</span> <span class="n">_C</span>
 
         <span class="k">return</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">_C</span><span class="p">,</span> <span class="n">name</span><span class="p">)(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
 
     <span class="k">return</span> <span class="n">call_cuda</span>
 
 
-<span class="k">def</span> <span class="nf">selective_adam_update</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">selective_adam_update</span><span class="p">(</span>
     <span class="n">param</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
     <span class="n">param_grad</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
     <span class="n">exp_avg</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
@@ -346,9 +346,9 @@
     <span class="p">)</span>
 
 
-<span class="k">def</span> <span class="nf">_make_lazy_cuda_obj</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_make_lazy_cuda_obj</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
     <span class="c1"># pylint: disable=import-outside-toplevel</span>
-    <span class="kn">from</span> <span class="nn">._backend</span> <span class="kn">import</span> <span class="n">_C</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">._backend</span><span class="w"> </span><span class="kn">import</span> <span class="n">_C</span>
 
     <span class="n">obj</span> <span class="o">=</span> <span class="n">_C</span>
     <span class="k">for</span> <span class="n">name_split</span> <span class="ow">in</span> <span class="n">name</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;.&quot;</span><span class="p">):</span>
@@ -358,7 +358,7 @@
 
 <div class="viewcode-block" id="spherical_harmonics">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.spherical_harmonics">[docs]</a>
-<span class="k">def</span> <span class="nf">spherical_harmonics</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">spherical_harmonics</span><span class="p">(</span>
     <span class="n">degrees_to_use</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">dirs</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., 3]</span>
     <span class="n">coeffs</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., K, 3]</span>
@@ -390,7 +390,7 @@
 
 <div class="viewcode-block" id="quat_scale_to_covar_preci">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.quat_scale_to_covar_preci">[docs]</a>
-<span class="k">def</span> <span class="nf">quat_scale_to_covar_preci</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">quat_scale_to_covar_preci</span><span class="p">(</span>
     <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 4],</span>
     <span class="n">scales</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3],</span>
     <span class="n">compute_covar</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
@@ -425,7 +425,7 @@
 
 
 
-<span class="k">def</span> <span class="nf">persp_proj</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">persp_proj</span><span class="p">(</span>
     <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 3]</span>
     <span class="n">covars</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 3, 3]</span>
     <span class="n">Ks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, 3, 3]</span>
@@ -458,7 +458,7 @@
 
 <div class="viewcode-block" id="proj">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.proj">[docs]</a>
-<span class="k">def</span> <span class="nf">proj</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">proj</span><span class="p">(</span>
     <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 3]</span>
     <span class="n">covars</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 3, 3]</span>
     <span class="n">Ks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, 3, 3]</span>
@@ -494,7 +494,7 @@
 
 <div class="viewcode-block" id="world_to_cam">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.world_to_cam">[docs]</a>
-<span class="k">def</span> <span class="nf">world_to_cam</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">world_to_cam</span><span class="p">(</span>
     <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
     <span class="n">covars</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3, 3]</span>
     <span class="n">viewmats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, 4, 4]</span>
@@ -526,7 +526,7 @@
 
 <div class="viewcode-block" id="fully_fused_projection">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.fully_fused_projection">[docs]</a>
-<span class="k">def</span> <span class="nf">fully_fused_projection</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">fully_fused_projection</span><span class="p">(</span>
     <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
     <span class="n">covars</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">],</span>  <span class="c1"># [N, 6] or None</span>
     <span class="n">quats</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">],</span>  <span class="c1"># [N, 4] or None</span>
@@ -669,7 +669,7 @@
 <div class="viewcode-block" id="isect_tiles">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.isect_tiles">[docs]</a>
 <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
-<span class="k">def</span> <span class="nf">isect_tiles</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">isect_tiles</span><span class="p">(</span>
     <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 2] or [nnz, 2]</span>
     <span class="n">radii</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N] or [nnz]</span>
     <span class="n">depths</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N] or [nnz]</span>
@@ -746,7 +746,7 @@
 <div class="viewcode-block" id="isect_offset_encode">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.isect_offset_encode">[docs]</a>
 <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
-<span class="k">def</span> <span class="nf">isect_offset_encode</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">isect_offset_encode</span><span class="p">(</span>
     <span class="n">isect_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">n_cameras</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">tile_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">tile_height</span><span class="p">:</span> <span class="nb">int</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Encodes intersection ids to offsets.</span>
@@ -768,7 +768,7 @@
 
 <div class="viewcode-block" id="rasterize_to_pixels">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.rasterize_to_pixels">[docs]</a>
-<span class="k">def</span> <span class="nf">rasterize_to_pixels</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">rasterize_to_pixels</span><span class="p">(</span>
     <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 2] or [nnz, 2]</span>
     <span class="n">conics</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 3] or [nnz, 3]</span>
     <span class="n">colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, channels] or [nnz, channels]</span>
@@ -907,7 +907,7 @@
 <div class="viewcode-block" id="rasterize_to_indices_in_range">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.rasterize_to_indices_in_range">[docs]</a>
 <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
-<span class="k">def</span> <span class="nf">rasterize_to_indices_in_range</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">rasterize_to_indices_in_range</span><span class="p">(</span>
     <span class="n">range_start</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">range_end</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">transmittances</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, image_height, image_width]</span>
@@ -982,11 +982,11 @@
 
 
 
-<span class="k">class</span> <span class="nc">_QuatScaleToCovarPreci</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">_QuatScaleToCovarPreci</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Converts quaternions and scales to covariance and precision matrices.&quot;&quot;&quot;</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span>
         <span class="n">ctx</span><span class="p">,</span>
         <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 4],</span>
         <span class="n">scales</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3],</span>
@@ -1004,7 +1004,7 @@
         <span class="k">return</span> <span class="n">covars</span><span class="p">,</span> <span class="n">precis</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">backward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">v_covars</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">v_precis</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">v_covars</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">v_precis</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">):</span>
         <span class="n">quats</span><span class="p">,</span> <span class="n">scales</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
         <span class="n">compute_covar</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">compute_covar</span>
         <span class="n">compute_preci</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">compute_preci</span>
@@ -1023,11 +1023,11 @@
         <span class="k">return</span> <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
 
 
-<span class="k">class</span> <span class="nc">_Proj</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">_Proj</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Perspective fully_fused_projection on Gaussians.&quot;&quot;&quot;</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span>
         <span class="n">ctx</span><span class="p">,</span>
         <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 3]</span>
         <span class="n">covars</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 3, 3]</span>
@@ -1055,7 +1055,7 @@
         <span class="k">return</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">covars2d</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">backward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">v_means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">v_covars2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">v_means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">v_covars2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">):</span>
         <span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">Ks</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
         <span class="n">width</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">width</span>
         <span class="n">height</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">height</span>
@@ -1073,11 +1073,11 @@
         <span class="k">return</span> <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
 
 
-<span class="k">class</span> <span class="nc">_WorldToCam</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">_WorldToCam</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Transforms Gaussians from world to camera space.&quot;&quot;&quot;</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span>
         <span class="n">ctx</span><span class="p">,</span>
         <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
         <span class="n">covars</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3, 3]</span>
@@ -1090,7 +1090,7 @@
         <span class="k">return</span> <span class="n">means_c</span><span class="p">,</span> <span class="n">covars_c</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">backward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">v_means_c</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">v_covars_c</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">v_means_c</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">v_covars_c</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">):</span>
         <span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">viewmats</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
         <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span><span class="p">,</span> <span class="n">v_viewmats</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;world_to_cam_bwd&quot;</span><span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
@@ -1111,11 +1111,11 @@
         <span class="k">return</span> <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span><span class="p">,</span> <span class="n">v_viewmats</span>
 
 
-<span class="k">class</span> <span class="nc">_FullyFusedProjection</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">_FullyFusedProjection</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Projects Gaussians to 2D.&quot;&quot;&quot;</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span>
         <span class="n">ctx</span><span class="p">,</span>
         <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
         <span class="n">covars</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 6] or None</span>
@@ -1168,7 +1168,7 @@
         <span class="k">return</span> <span class="n">radii</span><span class="p">,</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">depths</span><span class="p">,</span> <span class="n">conics</span><span class="p">,</span> <span class="n">compensations</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">backward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">v_radii</span><span class="p">,</span> <span class="n">v_means2d</span><span class="p">,</span> <span class="n">v_depths</span><span class="p">,</span> <span class="n">v_conics</span><span class="p">,</span> <span class="n">v_compensations</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">v_radii</span><span class="p">,</span> <span class="n">v_means2d</span><span class="p">,</span> <span class="n">v_depths</span><span class="p">,</span> <span class="n">v_conics</span><span class="p">,</span> <span class="n">v_compensations</span><span class="p">):</span>
         <span class="p">(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">covars</span><span class="p">,</span>
@@ -1237,11 +1237,11 @@
         <span class="p">)</span>
 
 
-<span class="k">class</span> <span class="nc">_RasterizeToPixels</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">_RasterizeToPixels</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterize gaussians&quot;&quot;&quot;</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span>
         <span class="n">ctx</span><span class="p">,</span>
         <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 2]</span>
         <span class="n">conics</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 3]</span>
@@ -1294,7 +1294,7 @@
         <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">backward</span><span class="p">(</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span>
         <span class="n">ctx</span><span class="p">,</span>
         <span class="n">v_render_colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, H, W, 3]</span>
         <span class="n">v_render_alphas</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, H, W, 1]</span>
@@ -1367,11 +1367,11 @@
         <span class="p">)</span>
 
 
-<span class="k">class</span> <span class="nc">_FullyFusedProjectionPacked</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">_FullyFusedProjectionPacked</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Projects Gaussians to 2D. Return packed tensors.&quot;&quot;&quot;</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span>
         <span class="n">ctx</span><span class="p">,</span>
         <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
         <span class="n">covars</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 6] or None</span>
@@ -1441,7 +1441,7 @@
         <span class="k">return</span> <span class="n">camera_ids</span><span class="p">,</span> <span class="n">gaussian_ids</span><span class="p">,</span> <span class="n">radii</span><span class="p">,</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">depths</span><span class="p">,</span> <span class="n">conics</span><span class="p">,</span> <span class="n">compensations</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">backward</span><span class="p">(</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span>
         <span class="n">ctx</span><span class="p">,</span>
         <span class="n">v_camera_ids</span><span class="p">,</span>
         <span class="n">v_gaussian_ids</span><span class="p">,</span>
@@ -1562,11 +1562,11 @@
         <span class="p">)</span>
 
 
-<span class="k">class</span> <span class="nc">_SphericalHarmonics</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">_SphericalHarmonics</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Spherical Harmonics&quot;&quot;&quot;</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span>
         <span class="n">ctx</span><span class="p">,</span> <span class="n">sh_degree</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">dirs</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">coeffs</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">masks</span><span class="p">:</span> <span class="n">Tensor</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
         <span class="n">colors</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;compute_sh_fwd&quot;</span><span class="p">)(</span><span class="n">sh_degree</span><span class="p">,</span> <span class="n">dirs</span><span class="p">,</span> <span class="n">coeffs</span><span class="p">,</span> <span class="n">masks</span><span class="p">)</span>
@@ -1576,7 +1576,7 @@
         <span class="k">return</span> <span class="n">colors</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">backward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">v_colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">v_colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">):</span>
         <span class="n">dirs</span><span class="p">,</span> <span class="n">coeffs</span><span class="p">,</span> <span class="n">masks</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
         <span class="n">sh_degree</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">sh_degree</span>
         <span class="n">num_bases</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">num_bases</span>
@@ -1598,7 +1598,7 @@
 <span class="c1">###### 2DGS ######</span>
 <div class="viewcode-block" id="fully_fused_projection_2dgs">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.fully_fused_projection_2dgs">[docs]</a>
-<span class="k">def</span> <span class="nf">fully_fused_projection_2dgs</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">fully_fused_projection_2dgs</span><span class="p">(</span>
     <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
     <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 4]</span>
     <span class="n">scales</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
@@ -1703,11 +1703,11 @@
 
 
 
-<span class="k">class</span> <span class="nc">_FullyFusedProjection2DGS</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">_FullyFusedProjection2DGS</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Projects Gaussians to 2D.&quot;&quot;&quot;</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span>
         <span class="n">ctx</span><span class="p">,</span>
         <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
         <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
@@ -1753,7 +1753,7 @@
         <span class="k">return</span> <span class="n">radii</span><span class="p">,</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">depths</span><span class="p">,</span> <span class="n">ray_transforms</span><span class="p">,</span> <span class="n">normals</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">backward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">v_radii</span><span class="p">,</span> <span class="n">v_means2d</span><span class="p">,</span> <span class="n">v_depths</span><span class="p">,</span> <span class="n">v_ray_transforms</span><span class="p">,</span> <span class="n">v_normals</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">v_radii</span><span class="p">,</span> <span class="n">v_means2d</span><span class="p">,</span> <span class="n">v_depths</span><span class="p">,</span> <span class="n">v_ray_transforms</span><span class="p">,</span> <span class="n">v_normals</span><span class="p">):</span>
         <span class="p">(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">quats</span><span class="p">,</span>
@@ -1810,11 +1810,11 @@
         <span class="p">)</span>
 
 
-<span class="k">class</span> <span class="nc">_FullyFusedProjectionPacked2DGS</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">_FullyFusedProjectionPacked2DGS</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Projects Gaussians to 2D. Return packed tensors.&quot;&quot;&quot;</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span>
         <span class="n">ctx</span><span class="p">,</span>
         <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
         <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 4]</span>
@@ -1866,7 +1866,7 @@
         <span class="k">return</span> <span class="n">camera_ids</span><span class="p">,</span> <span class="n">gaussian_ids</span><span class="p">,</span> <span class="n">radii</span><span class="p">,</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">depths</span><span class="p">,</span> <span class="n">ray_transforms</span><span class="p">,</span> <span class="n">normals</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">backward</span><span class="p">(</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span>
         <span class="n">ctx</span><span class="p">,</span>
         <span class="n">v_camera_ids</span><span class="p">,</span>
         <span class="n">v_gaussian_ids</span><span class="p">,</span>
@@ -1967,7 +1967,7 @@
 
 <div class="viewcode-block" id="rasterize_to_pixels_2dgs">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.rasterize_to_pixels_2dgs">[docs]</a>
-<span class="k">def</span> <span class="nf">rasterize_to_pixels_2dgs</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">rasterize_to_pixels_2dgs</span><span class="p">(</span>
     <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
     <span class="n">ray_transforms</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
     <span class="n">colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
@@ -2096,7 +2096,7 @@
 <div class="viewcode-block" id="rasterize_to_indices_in_range_2dgs">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.rasterize_to_indices_in_range_2dgs">[docs]</a>
 <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
-<span class="k">def</span> <span class="nf">rasterize_to_indices_in_range_2dgs</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">rasterize_to_indices_in_range_2dgs</span><span class="p">(</span>
     <span class="n">range_start</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">range_end</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">transmittances</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
@@ -2173,11 +2173,11 @@
 
 
 
-<span class="k">class</span> <span class="nc">_RasterizeToPixels2DGS</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">_RasterizeToPixels2DGS</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterize gaussians 2DGS&quot;&quot;&quot;</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span>
         <span class="n">ctx</span><span class="p">,</span>
         <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
         <span class="n">ray_transforms</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
@@ -2251,7 +2251,7 @@
         <span class="p">)</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">backward</span><span class="p">(</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span>
         <span class="n">ctx</span><span class="p">,</span>
         <span class="n">v_render_colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
         <span class="n">v_render_alphas</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>

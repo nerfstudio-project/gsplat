@@ -7,7 +7,7 @@
 
     <!-- Generated with Sphinx 7.4.7 and Furo 2024.08.06 -->
         <title>Compression - gsplat documentation</title>
-      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=354aac6f" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=302659d7" />
     
@@ -329,7 +329,7 @@ as either a Dict of
 with at least the following keys: {“means”, “scales”, “quats”, “opacities”, “sh0”, “shN”}.
 On top of these attributes, an arbitrary number of extra attributes are supported.</p>
 <p>The following code snippet is an example of how to use the compression approach in <cite>gsplat</cite>:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">gsplat</span> <span class="kn">import</span> <span class="n">PngCompression</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">gsplat</span><span class="w"> </span><span class="kn">import</span> <span class="n">PngCompression</span>
 
 <span class="n">splats</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
     <span class="s2">&quot;means&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="s2">&quot;scales&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="s2">&quot;quats&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="s2">&quot;opacities&quot;</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">(</span><span class="n">N</span><span class="p">),</span>

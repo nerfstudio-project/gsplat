@@ -6,7 +6,7 @@
 
     <!-- Generated with Sphinx 7.4.7 and Furo 2024.08.06 -->
         <title>gsplat.compression.png_compression - gsplat documentation</title>
-      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=a746c00c" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=354aac6f" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=302659d7" />
     
@@ -310,24 +310,24 @@
         </div>
         <article role="main" id="furo-main-content">
           <h1>Source code for gsplat.compression.png_compression</h1><div class="highlight"><pre>
-<span></span><span class="kn">import</span> <span class="nn">json</span>
-<span class="kn">import</span> <span class="nn">os</span>
-<span class="kn">from</span> <span class="nn">dataclasses</span> <span class="kn">import</span> <span class="n">dataclass</span>
-<span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">Dict</span>
+<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">Dict</span>
 
-<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
-<span class="kn">import</span> <span class="nn">torch</span>
-<span class="kn">import</span> <span class="nn">torch.nn.functional</span> <span class="k">as</span> <span class="nn">F</span>
-<span class="kn">from</span> <span class="nn">torch</span> <span class="kn">import</span> <span class="n">Tensor</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch.nn.functional</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">F</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">Tensor</span>
 
-<span class="kn">from</span> <span class="nn">gsplat.compression.sort</span> <span class="kn">import</span> <span class="n">sort_splats</span>
-<span class="kn">from</span> <span class="nn">gsplat.utils</span> <span class="kn">import</span> <span class="n">inverse_log_transform</span><span class="p">,</span> <span class="n">log_transform</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">gsplat.compression.sort</span><span class="w"> </span><span class="kn">import</span> <span class="n">sort_splats</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">gsplat.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">inverse_log_transform</span><span class="p">,</span> <span class="n">log_transform</span>
 
 
 <div class="viewcode-block" id="PngCompression">
 <a class="viewcode-back" href="../../../apis/compression.html#gsplat.PngCompression">[docs]</a>
 <span class="nd">@dataclass</span>
-<span class="k">class</span> <span class="nc">PngCompression</span><span class="p">:</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">PngCompression</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Uses quantization and sorting to compress splats into PNG files and uses</span>
 <span class="sd">    K-means clustering to compress the spherical harmonic coefficents.</span>
 
@@ -358,7 +358,7 @@
     <span class="n">use_sort</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="n">verbose</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
 
-    <span class="k">def</span> <span class="nf">_get_compress_fn</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">param_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_get_compress_fn</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">param_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">:</span>
         <span class="n">compress_fn_map</span> <span class="o">=</span> <span class="p">{</span>
             <span class="s2">&quot;means&quot;</span><span class="p">:</span> <span class="n">_compress_png_16bit</span><span class="p">,</span>
             <span class="s2">&quot;scales&quot;</span><span class="p">:</span> <span class="n">_compress_png</span><span class="p">,</span>
@@ -372,7 +372,7 @@
         <span class="k">else</span><span class="p">:</span>
             <span class="k">return</span> <span class="n">_compress_npz</span>
 
-    <span class="k">def</span> <span class="nf">_get_decompress_fn</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">param_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_get_decompress_fn</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">param_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">:</span>
         <span class="n">decompress_fn_map</span> <span class="o">=</span> <span class="p">{</span>
             <span class="s2">&quot;means&quot;</span><span class="p">:</span> <span class="n">_decompress_png_16bit</span><span class="p">,</span>
             <span class="s2">&quot;scales&quot;</span><span class="p">:</span> <span class="n">_decompress_png</span><span class="p">,</span>
@@ -388,7 +388,7 @@
 
 <div class="viewcode-block" id="PngCompression.compress">
 <a class="viewcode-back" href="../../../apis/compression.html#gsplat.PngCompression.compress">[docs]</a>
-    <span class="k">def</span> <span class="nf">compress</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">compress_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">splats</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">compress</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">compress_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">splats</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Run compression</span>
 
 <span class="sd">        Args:</span>
@@ -429,7 +429,7 @@
 
 <div class="viewcode-block" id="PngCompression.decompress">
 <a class="viewcode-back" href="../../../apis/compression.html#gsplat.PngCompression.decompress">[docs]</a>
-    <span class="k">def</span> <span class="nf">decompress</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">compress_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">decompress</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">compress_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Run decompression</span>
 
 <span class="sd">        Args:</span>
@@ -453,7 +453,7 @@
 
 
 
-<span class="k">def</span> <span class="nf">_crop_n_splats</span><span class="p">(</span><span class="n">splats</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">],</span> <span class="n">n_crop</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_crop_n_splats</span><span class="p">(</span><span class="n">splats</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">],</span> <span class="n">n_crop</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
     <span class="n">opacities</span> <span class="o">=</span> <span class="n">splats</span><span class="p">[</span><span class="s2">&quot;opacities&quot;</span><span class="p">]</span>
     <span class="n">keep_indices</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">argsort</span><span class="p">(</span><span class="n">opacities</span><span class="p">,</span> <span class="n">descending</span><span class="o">=</span><span class="kc">True</span><span class="p">)[:</span><span class="o">-</span><span class="n">n_crop</span><span class="p">]</span>
     <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">splats</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
@@ -461,7 +461,7 @@
     <span class="k">return</span> <span class="n">splats</span>
 
 
-<span class="k">def</span> <span class="nf">_compress_png</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_compress_png</span><span class="p">(</span>
     <span class="n">compress_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">param_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">params</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">n_sidelen</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Compress parameters with 8-bit quantization and lossless PNG compression.</span>
@@ -475,7 +475,7 @@
 <span class="sd">    Returns:</span>
 <span class="sd">        Dict[str, Any]: metadata</span>
 <span class="sd">    &quot;&quot;&quot;</span>
-    <span class="kn">import</span> <span class="nn">imageio.v2</span> <span class="k">as</span> <span class="nn">imageio</span>
+    <span class="kn">import</span><span class="w"> </span><span class="nn">imageio.v2</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">imageio</span>
 
     <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">numel</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
         <span class="n">meta</span> <span class="o">=</span> <span class="p">{</span>
@@ -503,7 +503,7 @@
     <span class="k">return</span> <span class="n">meta</span>
 
 
-<span class="k">def</span> <span class="nf">_decompress_png</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">param_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">meta</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_decompress_png</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">param_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">meta</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Decompress parameters from PNG file.</span>
 
 <span class="sd">    Args:</span>
@@ -514,7 +514,7 @@
 <span class="sd">    Returns:</span>
 <span class="sd">        Tensor: parameters</span>
 <span class="sd">    &quot;&quot;&quot;</span>
-    <span class="kn">import</span> <span class="nn">imageio.v2</span> <span class="k">as</span> <span class="nn">imageio</span>
+    <span class="kn">import</span><span class="w"> </span><span class="nn">imageio.v2</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">imageio</span>
 
     <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">&quot;shape&quot;</span><span class="p">]):</span>
         <span class="n">params</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">&quot;shape&quot;</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">getattr</span><span class="p">(</span><span class="n">torch</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;dtype&quot;</span><span class="p">]))</span>
@@ -533,7 +533,7 @@
     <span class="k">return</span> <span class="n">params</span>
 
 
-<span class="k">def</span> <span class="nf">_compress_png_16bit</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_compress_png_16bit</span><span class="p">(</span>
     <span class="n">compress_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">param_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">params</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">n_sidelen</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Compress parameters with 16-bit quantization and PNG compression.</span>
@@ -547,7 +547,7 @@
 <span class="sd">    Returns:</span>
 <span class="sd">        Dict[str, Any]: metadata</span>
 <span class="sd">    &quot;&quot;&quot;</span>
-    <span class="kn">import</span> <span class="nn">imageio.v2</span> <span class="k">as</span> <span class="nn">imageio</span>
+    <span class="kn">import</span><span class="w"> </span><span class="nn">imageio.v2</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">imageio</span>
 
     <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">numel</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
         <span class="n">meta</span> <span class="o">=</span> <span class="p">{</span>
@@ -581,7 +581,7 @@
     <span class="k">return</span> <span class="n">meta</span>
 
 
-<span class="k">def</span> <span class="nf">_decompress_png_16bit</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_decompress_png_16bit</span><span class="p">(</span>
     <span class="n">compress_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">param_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">meta</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Decompress parameters from PNG files.</span>
@@ -594,7 +594,7 @@
 <span class="sd">    Returns:</span>
 <span class="sd">        Tensor: parameters</span>
 <span class="sd">    &quot;&quot;&quot;</span>
-    <span class="kn">import</span> <span class="nn">imageio.v2</span> <span class="k">as</span> <span class="nn">imageio</span>
+    <span class="kn">import</span><span class="w"> </span><span class="nn">imageio.v2</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">imageio</span>
 
     <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">&quot;shape&quot;</span><span class="p">]):</span>
         <span class="n">params</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">meta</span><span class="p">[</span><span class="s2">&quot;shape&quot;</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">getattr</span><span class="p">(</span><span class="n">torch</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;dtype&quot;</span><span class="p">]))</span>
@@ -616,7 +616,7 @@
     <span class="k">return</span> <span class="n">params</span>
 
 
-<span class="k">def</span> <span class="nf">_compress_npz</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_compress_npz</span><span class="p">(</span>
     <span class="n">compress_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">param_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">params</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Compress parameters with numpy&#39;s NPZ compression.&quot;&quot;&quot;</span>
@@ -631,7 +631,7 @@
     <span class="k">return</span> <span class="n">meta</span>
 
 
-<span class="k">def</span> <span class="nf">_decompress_npz</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">param_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">meta</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_decompress_npz</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">param_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">meta</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Decompress parameters with numpy&#39;s NPZ compression.&quot;&quot;&quot;</span>
     <span class="n">arr</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">compress_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">param_name</span><span class="si">}</span><span class="s2">.npz&quot;</span><span class="p">))[</span><span class="s2">&quot;arr&quot;</span><span class="p">]</span>
     <span class="n">params</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">arr</span><span class="p">)</span>
@@ -640,7 +640,7 @@
     <span class="k">return</span> <span class="n">params</span>
 
 
-<span class="k">def</span> <span class="nf">_compress_kmeans</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_compress_kmeans</span><span class="p">(</span>
     <span class="n">compress_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="n">param_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="n">params</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
@@ -666,7 +666,7 @@
 <span class="sd">        Dict[str, Any]: metadata</span>
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="k">try</span><span class="p">:</span>
-        <span class="kn">from</span> <span class="nn">torchpq.clustering</span> <span class="kn">import</span> <span class="n">KMeans</span>
+        <span class="kn">from</span><span class="w"> </span><span class="nn">torchpq.clustering</span><span class="w"> </span><span class="kn">import</span> <span class="n">KMeans</span>
     <span class="k">except</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ImportError</span><span class="p">(</span>
             <span class="s2">&quot;Please install torchpq with &#39;pip install torchpq&#39; to use K-means clustering&quot;</span>
@@ -709,7 +709,7 @@
     <span class="k">return</span> <span class="n">meta</span>
 
 
-<span class="k">def</span> <span class="nf">_decompress_kmeans</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_decompress_kmeans</span><span class="p">(</span>
     <span class="n">compress_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">param_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">meta</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="o">**</span><span class="n">kwargs</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Decompress parameters from K-means compression.</span>
