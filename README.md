@@ -15,25 +15,11 @@ gsplat is an open-source library for CUDA accelerated rasterization of gaussians
 
 **Dependence**: Please install [Pytorch](https://pytorch.org/get-started/locally/) first.
 
-
-
-
 The easiest way is to install from PyPI. In this way it will build the CUDA code **on the first run** (JIT).
 
 ```bash
 pip install gsplat
 ```
-
-Alternatively, you can install gsplat from python wheels containing pre-compiled binaries for a specific pytorch and cuda version. These wheels are stored in the github releases and can be found using simple index pages under https://docs.gsplat.studio/whl. 
-You obtain the wheel from this simple index page for a specific pytorch an and cuda version by appending these the version number after a + sign (part referred a *local version*). For example, to install gsplat for pytorch 2.0 and cuda 11.8 you can use
-```
-pip install gsplat==1.2.0+pt20cu118 --index-url https://docs.gsplat.studio/whl
-```
-Alternatively, you can specify the pytorch and cuda version in the index url using for example
-```
-pip install gsplat --index-url https://docs.gsplat.studio/whl/pt20cu118
-```
-This has the advantage that you do not have to pin a specific version of the package and as a result get automatically the latest package version.
 
 Alternatively you can install gsplat from source. In this way it will build the CUDA code during installation.
 
@@ -41,19 +27,25 @@ Alternatively you can install gsplat from source. In this way it will build the 
 pip install git+https://github.com/nerfstudio-project/gsplat.git
 ```
 
+We also provide [pre-compiled wheels](https://docs.gsplat.studio/whl) for both linux and windows on certain python-torch-CUDA combinations (please check first which versions are supported). Note this way you would have to manually install [gsplat's dependencies](https://github.com/nerfstudio-project/gsplat/blob/6022cf45a19ee307803aaf1f19d407befad2a033/setup.py#L115). For example, to install gsplat for pytorch 2.0 and cuda 11.8 you can run
+```
+pip install ninja numpy jaxtyping rich
+pip install gsplat --index-url https://docs.gsplat.studio/whl/pt20cu118
+```
 
-To install gsplat on Windows, please check [this instruction](docs/INSTALL_WIN.md).
+To build gsplat from source on Windows, please check [this instruction](docs/INSTALL_WIN.md).
 
 ## Evaluation
 
 This repo comes with a standalone script that reproduces the official Gaussian Splatting with exactly the same performance on PSNR, SSIM, LPIPS, and converged number of Gaussians. Powered by gsplat’s efficient CUDA implementation, the training takes up to **4x less GPU memory** with up to **15% less time** to finish than the official implementation. Full report can be found [here](https://docs.gsplat.studio/main/tests/eval.html).
 
 ```bash
-pip install -r examples/requirements.txt
+cd examples
+pip install -r requirements.txt
 # download mipnerf_360 benchmark data
-python examples/datasets/download_dataset.py
+python datasets/download_dataset.py
 # run batch evaluation
-bash examples/benchmarks/basic.sh
+bash benchmarks/basic.sh
 ```
 
 ## Examples
@@ -82,7 +74,7 @@ This project is developed by the following wonderful contributors (unordered):
 - [Zhuoyang Pan](https://panzhy.com/) (ShanghaiTech University): Core developer.
 - [Jianbo Ye](http://www.jianboye.org/) (Amazon): Core developer.
 
-We also have made the mathematical supplement, with conventions and derivations, available [here](https://arxiv.org/abs/2409.06765). If you find this library useful in your projects or papers, please consider citing:
+We also have a white paper with about the project with benchmarking and mathematical supplement with conventions and derivations, available [here](https://arxiv.org/abs/2409.06765). If you find this library useful in your projects or papers, please consider citing:
 
 ```
 @article{ye2024gsplatopensourcelibrarygaussian,

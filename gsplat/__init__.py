@@ -1,6 +1,7 @@
 import warnings
 
 from .compression import PngCompression
+from .optimizers import SelectiveAdam
 from .cuda._torch_impl import accumulate
 from .cuda._torch_impl_2dgs import accumulate_2dgs
 from .cuda._wrapper import (
@@ -48,5 +49,6 @@ all = [
     "rasterize_to_pixels_2dgs",
     "rasterize_to_indices_in_range_2dgs",
     "accumulate_2dgs",
-    "rasterization_2dgs_inria_wrapper" "__version__",
+    "rasterization_2dgs_inria_wrapper",
+    "__version__",
 ]

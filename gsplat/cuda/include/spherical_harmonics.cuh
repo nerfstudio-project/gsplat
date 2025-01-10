@@ -1,11 +1,7 @@
 #ifndef GSPLAT_SPHERICAL_HARMONICS_CUH
 #define GSPLAT_SPHERICAL_HARMONICS_CUH
 
-#include "bindings.h"
 #include "types.cuh"
-#include "utils.cuh"
-
-#include <cuda_runtime.h>
 
 namespace gsplat {
 
