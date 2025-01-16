@@ -62,6 +62,7 @@ class Parser:
         factor: int = 1,
         normalize: bool = False,
         test_every: int = 8,
+        test_max_res: int = 1600,
     ):
         self.data_dir = data_dir
         self.factor = factor
@@ -85,8 +86,12 @@ class Parser:
         w2c_mats = []
         camera_ids = []
         Ks_dict = dict()
+        Ks_dict_test = dict()
         params_dict = dict()
         imsize_dict = dict()  # width, height
+        imsize_dict_test = (
+            dict()
+        )  # width, height for test images -> max resolution limited
         mask_dict = dict()
         bottom = np.array([0, 0, 0, 1]).reshape(1, 4)
         for k in imdata:
@@ -233,8 +238,10 @@ class Parser:
         self.camtoworlds = camtoworlds  # np.ndarray, (num_images, 4, 4)
         self.camera_ids = camera_ids  # List[int], (num_images,)
         self.Ks_dict = Ks_dict  # Dict of camera_id -> K
+        self.Ks_dict_test = Ks_dict_test
         self.params_dict = params_dict  # Dict of camera_id -> params
         self.imsize_dict = imsize_dict  # Dict of camera_id -> (width, height)
+        self.imsize_dict_test = imsize_dict_test
         self.mask_dict = mask_dict  # Dict of camera_id -> mask
         self.points = points  # np.ndarray, (num_points, 3)
         self.points_err = points_err  # np.ndarray, (num_points,)
@@ -246,6 +253,17 @@ class Parser:
         # intrinsics stored in COLMAP corresponds to 2x upsampled images.
         actual_image = imageio.imread(self.image_paths[0])[..., :3]
         actual_height, actual_width = actual_image.shape[:2]
+
+        # need to check image resolution. create separate K for test set
+        max_side = max(actual_width, actual_height)
+        scale_test = 1
+        if max_side > test_max_res:
+            global_down_test = max_side / test_max_res
+            scale_test = float(global_down_test)
+            self.test_set_downscaled = True
+        else:
+            self.test_set_downscaled = False
+
         colmap_width, colmap_height = self.imsize_dict[self.camera_ids[0]]
         s_height, s_width = actual_height / colmap_height, actual_width / colmap_width
         for camera_id, K in self.Ks_dict.items():
@@ -254,6 +272,15 @@ class Parser:
             self.Ks_dict[camera_id] = K
             width, height = self.imsize_dict[camera_id]
             self.imsize_dict[camera_id] = (int(width * s_width), int(height * s_height))
+
+            K_test = K.copy()
+            K_test[0, :] /= scale_test
+            K_test[1, :] /= scale_test
+            self.Ks_dict_test[camera_id] = K_test
+            self.imsize_dict_test[camera_id] = (
+                int(width * s_width / scale_test),
+                int(height * s_height / scale_test),
+            )
 
         # undistortion
         self.mapx_dict = dict()
@@ -356,14 +383,29 @@ class Dataset:
 
     def __getitem__(self, item: int) -> Dict[str, Any]:
         index = self.indices[item]
-        image = imageio.imread(self.parser.image_paths[index])[..., :3]
         camera_id = self.parser.camera_ids[index]
-        K = self.parser.Ks_dict[camera_id].copy()  # undistorted K
+        image = Image.open(self.parser.image_paths[index])
+
+        # use different resolution for test set
+        if self.split != "train" and self.parser.test_set_downscaled:
+            K = self.parser.Ks_dict_test[camera_id]
+            image = image.resize(self.parser.imsize_dict_test[camera_id])
+        else:
+            K = self.parser.Ks_dict[camera_id].copy()  # undistorted K
+
+        image = np.array(image)
+        image = image[..., :3]
         params = self.parser.params_dict[camera_id]
         camtoworlds = self.parser.camtoworlds[index]
         mask = self.parser.mask_dict[camera_id]
 
         if len(params) > 0:
+            # evaluation does not support downscaled test set yet
+            if self.split != "train" and self.parser.test_set_downscaled:
+                assert (
+                    False
+                ), "only undistorted datasets are handled with downscaled test images"
+
             # Images are distorted. Undistort them.
             mapx, mapy = (
                 self.parser.mapx_dict[camera_id],
