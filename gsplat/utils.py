@@ -7,13 +7,15 @@ from torch import Tensor
 import numpy as np
 
 
-def save_ply(splats: torch.nn.ParameterDict, dir: str, colors: torch.Tensor = None):
+def save_ply(splats: torch.nn.ParameterDict, dir: str, colors: torch.Tensor = None, is_2dgs: bool = False):
     # Convert all tensors to numpy arrays in one go
     print(f"Saving ply to {dir}")
     numpy_data = {k: v.detach().cpu().numpy() for k, v in splats.items()}
 
     means = numpy_data["means"]
     scales = numpy_data["scales"]
+    if is_2dgs:
+        scales[:, 2] = np.log(1e-6)
     quats = numpy_data["quats"]
     opacities = numpy_data["opacities"]
 

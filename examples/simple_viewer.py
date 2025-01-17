@@ -21,7 +21,7 @@ import viser
 
 from gsplat._helper import load_test_data
 from gsplat.distributed import cli
-from gsplat.rendering import rasterization
+from gsplat.rendering import rasterization, rasterization_2dgs
 
 
 def main(local_rank: int, world_rank, world_size: int, args):
@@ -169,6 +169,8 @@ def main(local_rank: int, world_rank, world_size: int, args):
 
         if args.backend == "gsplat":
             rasterization_fn = rasterization
+        elif args.backend == "gsplat-2dgs":
+            rasterization_fn = rasterization_2dgs
         elif args.backend == "inria":
             from gsplat import rasterization_inria_wrapper
 
@@ -176,7 +178,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
         else:
             raise ValueError
 
-        render_colors, render_alphas, meta = rasterization_fn(
+        render_colors, render_alphas, _, _, _, _, meta = rasterization_fn(
             means,  # [N, 3]
             quats,  # [N, 4]
             scales,  # [N, 3]
