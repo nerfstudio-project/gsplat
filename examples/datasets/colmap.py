@@ -1,3 +1,4 @@
+from collections import defaultdict
 import os
 import json
 from tqdm import tqdm
@@ -87,7 +88,7 @@ class Parser:
         w2c_mats = []
         camera_ids = []
         Ks_dict = dict()
-        point_indices = DefaultDict(list) # image_name -> [point_idx]
+        point_indices = defaultdict(list) # image_name -> [point_idx]
         params_dict = dict()
         imsize_dict = dict()  # width, height
         mask_dict = dict()
