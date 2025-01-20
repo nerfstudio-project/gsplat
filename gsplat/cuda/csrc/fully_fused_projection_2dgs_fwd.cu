@@ -272,9 +272,9 @@ fully_fused_projection_fwd_2dgs_tensor(
     torch::Tensor radii =
         torch::empty({C, N}, means.options().dtype(torch::kInt32));
     torch::Tensor means2d = torch::empty({C, N, 2}, means.options());
-    torch::Tensor depths = torch::empty({C, N}, means.options());
+    torch::Tensor depths = torch::zeros({C, N}, means.options());
     torch::Tensor ray_transforms = torch::empty({C, N, 3, 3}, means.options());
-    torch::Tensor normals = torch::empty({C, N, 3}, means.options());
+    torch::Tensor normals = torch::zeros({C, N, 3}, means.options());
 
     if (C && N) {
         fully_fused_projection_fwd_2dgs_kernel<float>
