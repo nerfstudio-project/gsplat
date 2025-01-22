@@ -33,7 +33,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
     S *__restrict__ render_colors, // [C, image_height, image_width, COLOR_DIM]
     S *__restrict__ render_alphas, // [C, image_height, image_width, 1]
-    int32_t *__restrict__ last_ids // [C, image_height, image_width]
+    int32_t *__restrict__ last_ids, // [C, image_height, image_width]
+    S *__restrict__ contributions // [C, N, 2]
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
@@ -155,6 +156,11 @@ __global__ void rasterize_to_pixels_fwd_kernel(
 
             int32_t g = id_batch[t];
             const S vis = alpha * T;
+
+            S *contrib = contributions + g * 2;
+            atomicAdd(contrib, vis);
+            atomicAdd(contrib + 1, alpha);
+
             const S *c_ptr = colors + g * COLOR_DIM;
             GSPLAT_PRAGMA_UNROLL
             for (uint32_t k = 0; k < COLOR_DIM; ++k) {
@@ -185,7 +191,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
 }
 
 template <uint32_t CDIM>
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2] or [nnz, 2]
     const torch::Tensor &conics,    // [C, N, 3] or [nnz, 3]
@@ -239,6 +245,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
     torch::Tensor last_ids = torch::empty(
         {C, image_height, image_width}, means2d.options().dtype(torch::kInt32)
     );
+    torch::Tensor contributions = torch::zeros(
+        {C, opacities.size(-1), 2}, means2d.options().dtype(torch::kFloat32).requires_grad(false)
+    );
 
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
     const uint32_t shared_mem =
@@ -281,13 +290,14 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
             flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(),
             alphas.data_ptr<float>(),
-            last_ids.data_ptr<int32_t>()
+            last_ids.data_ptr<int32_t>(),
+            contributions.data_ptr<float>()
         );
 
-    return std::make_tuple(renders, alphas, last_ids);
+    return std::make_tuple(renders, alphas, last_ids, contributions);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 rasterize_to_pixels_fwd_tensor(
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2] or [nnz, 2]

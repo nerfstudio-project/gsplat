@@ -536,7 +536,7 @@ def rasterization(
                 if backgrounds is not None
                 else None
             )
-            render_colors_, render_alphas_ = rasterize_to_pixels(
+            render_colors_, render_alphas_, contributions = rasterize_to_pixels(
                 means2d,
                 conics,
                 colors_chunk,
@@ -555,7 +555,7 @@ def rasterization(
         render_colors = torch.cat(render_colors, dim=-1)
         render_alphas = render_alphas[0]  # discard the rest
     else:
-        render_colors, render_alphas = rasterize_to_pixels(
+        render_colors, render_alphas, contributions = rasterize_to_pixels(
             means2d,
             conics,
             colors,
@@ -578,7 +578,9 @@ def rasterization(
             ],
             dim=-1,
         )
-
+    
+    meta["contributions"] = contributions
+    
     return render_colors, render_alphas, meta
 
 
