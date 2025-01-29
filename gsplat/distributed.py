@@ -173,89 +173,52 @@ def all_to_all_tensor_list(
     splits: List[Union[int, Tensor]],
     output_splits: Optional[List[Union[int, Tensor]]] = None,
 ) -> List[Tensor]:
-    """Split and exchange tensors between all ranks in a many-to-many fashion.
-
-    Args:
-        world_size: The total number of ranks.
-        tensor_list: A list of tensors to split and exchange. The size of the first
-            dimension of all the tensors in this list should be the same. The rest
-            dimensions can be arbitrary. Shape: [(N, *), (N, *), ...]
-        splits: A list of integers representing the number of elements to send to each
-            rank. It will be used to split the tensor in the `tensor_list`.
-            The sum of the elements in this list should be equal to N. The size of this
-            list should be equal to the `world_size`.
-        output_splits: Splits of the output tensors. Could be pre-calculated via
-            `all_to_all_int32(world_size, splits)`. If not provided, it will
-            be calculated internally.
-
-    Returns:
-        A list of tensors exchanged between all ranks, where the i-th element is
-        corresponding to the i-th tensor in `tensor_list`. Note the shape of the
-        returned tensors might be different from the input tensors, depending on the
-        splits.
-
-    Examples:
-
-    .. code-block:: python
-
-        >>> # on rank 0
-        >>> # tensor_list = [torch.tensor([1, 2, 3]), torch.tensor([4, 5, 6])]
-        >>> # splits = [2, 1]
-
-        >>> # on rank 1
-        >>> # tensor_list = [torch.tensor([7, 8]), torch.tensor([9, 10])]
-        >>> # splits = [1, 1]
-
-        >>> collected = all_to_all_tensor_list(world_rank, world_size, tensor_list, splits)
-
-        >>> # on rank 0
-        >>> # [torch.tensor([1, 2, 7]), torch.tensor([4, 5, 9])]
-        >>> # on rank 1
-        >>> # [torch.tensor([3, 8]), torch.tensor([6, 10])]
-
-    """
     if world_size == 1:
         return tensor_list
 
+    # Validate inputs
     N = len(tensor_list[0])
     for tensor in tensor_list:
         assert len(tensor) == N, "All tensors should have the same first dimension size"
+    assert len(splits) == world_size, "The length of splits should be equal to world_size"
 
-    assert (
-        len(splits) == world_size
-    ), "The length of splits should be equal to world_size"
+    # Pre-calculate output splits if not provided to avoid redundant computation
+    if output_splits is None:
+        output_splits = all_to_all_int32(world_size, splits, device=tensor_list[0].device)
 
-    # concatenate tensors and record their sizes
-    data = torch.cat([t.reshape(N, -1) for t in tensor_list], dim=-1)
-    sizes = [t.numel() // N for t in tensor_list]
-
-    # all_to_all
-    if output_splits is not None:
-        collected_splits = output_splits
-    else:
-        collected_splits = all_to_all_int32(world_size, splits, device=data.device)
-    collected = [
-        torch.empty((l, *data.shape[1:]), dtype=data.dtype, device=data.device)
-        for l in collected_splits
-    ]
-    # torch.split requires tuple of integers
-    splits = [s.item() if isinstance(s, Tensor) else s for s in splits]
-    if data.requires_grad:
-        # differentiable all_to_all
-        distF.all_to_all(collected, data.split(splits, dim=0))
-    else:
-        # non-differentiable all_to_all
-        torch.distributed.all_to_all(collected, list(data.split(splits, dim=0)))
-    collected = torch.cat(collected, dim=0)
-
-    # split the collected tensor and reshape to the original shape
-    out_tensor_tuple = torch.split(collected, sizes, dim=-1)
+    # Process tensors one at a time to reduce peak memory
     out_tensor_list = []
-    for out_tensor, tensor in zip(out_tensor_tuple, tensor_list):
+    for tensor in tensor_list:
+        # Reshape tensor without creating a new copy if possible
+        flat_tensor = tensor.reshape(N, -1)
+        
+        # Pre-allocate output tensors
+        collected = [
+            torch.empty((l, flat_tensor.shape[1]), 
+                       dtype=flat_tensor.dtype, 
+                       device=flat_tensor.device)
+            for l in output_splits
+        ]
+
+        # Normalize splits for torch.split
+        norm_splits = [s.item() if isinstance(s, Tensor) else s for s in splits]
+        
+        # Perform all_to_all operation
+        if flat_tensor.requires_grad:
+            distF.all_to_all(collected, flat_tensor.split(norm_splits, dim=0))
+        else:
+            torch.distributed.all_to_all(collected, list(flat_tensor.split(norm_splits, dim=0)))
+
+        # Concatenate and reshape immediately
+        out_tensor = torch.cat(collected, dim=0)
         out_tensor = out_tensor.view(-1, *tensor.shape[1:])
         out_tensor_list.append(out_tensor)
-    return out_tensor_list
 
+        # Clear intermediate tensors
+        del collected, flat_tensor
+        torch.cuda.empty_cache()
+
+    return out_tensor_list
 
 def _find_free_port():
     import socket
