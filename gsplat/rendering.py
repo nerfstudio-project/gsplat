@@ -24,6 +24,66 @@ from .distributed import (
 )
 from .utils import depth_to_normal, get_projection_matrix
 
+import torch.distributed as dist
+
+import torch
+import torch.distributed as dist
+from typing import Optional
+
+def log_gpu_memory(stage: str, tensor: Optional[torch.Tensor] = None, verbose: bool = True):
+    """
+    Logs the current and peak GPU memory usage for the GPU associated with the given tensor,
+    along with the process rank.
+
+    Args:
+        stage (str): A descriptive label for the current stage in the code.
+        tensor (Optional[torch.Tensor]): A tensor to infer the GPU index from. If None,
+                                         defaults to the current device.
+        verbose (bool): If True, logging is performed. Default is True.
+    """
+    if not verbose:
+        return
+
+    if not torch.cuda.is_available():
+        print(f"[{stage}] CUDA is not available.")
+        return
+
+    # Determine the device index
+    if tensor is not None:
+        device = tensor.device
+    else:
+        device = torch.cuda.current_device()
+
+    if dist.is_initialized():
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
+    else:
+        rank = 0
+        world_size = 1
+
+    if device.type != 'cuda':
+        print(f"[{stage}] Tensor is not on a CUDA device. Current device: {device}")
+        return
+
+    gpu_index = device.index  # Get the GPU index
+
+    if gpu_index is None:
+        # Handle cases where the device is specified as 'cuda' without an index
+        gpu_index = 0
+
+    if gpu_index >= torch.cuda.device_count():
+        print(f"[{stage}] Invalid GPU index: {gpu_index}. Total GPUs available: {torch.cuda.device_count()}.")
+        return
+
+    mem_alloc = torch.cuda.memory_allocated(gpu_index) / (1024 ** 2)  # Convert to MB
+    mem_reserved = torch.cuda.memory_reserved(gpu_index) / (1024 ** 2)  # Convert to MB
+    mem_peak = torch.cuda.max_memory_allocated(gpu_index) / (1024 ** 2)  # Convert to MB
+
+    print(f"[{stage}] Rank {rank}/{world_size} GPU {gpu_index}: "
+          f"Allocated = {mem_alloc:.2f} MB, "
+          f"Reserved = {mem_reserved:.2f} MB, "
+          f"Peak Allocated = {mem_peak:.2f} MB")
+
 
 def rasterization(
     means: Tensor,  # [N, 3]
@@ -293,6 +353,7 @@ def rasterization(
         # Silently change C from local #Cameras to global #Cameras.
         C = len(viewmats)
 
+    #log_gpu_memory("Before projection", means)
     # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
     proj_results = fully_fused_projection(
         means,
@@ -313,6 +374,7 @@ def rasterization(
         camera_model=camera_model,
     )
 
+    #log_gpu_memory("After projection", means)
     if packed:
         # The results are packed into shape [nnz, ...]. All elements are valid.
         (
@@ -494,6 +556,7 @@ def rasterization(
     # Identify intersecting tiles
     tile_width = math.ceil(width / float(tile_size))
     tile_height = math.ceil(height / float(tile_size))
+    #log_gpu_memory("before isect_tiles", means)
     tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
         means2d,
         radii,
@@ -506,6 +569,7 @@ def rasterization(
         camera_ids=camera_ids,
         gaussian_ids=gaussian_ids,
     )
+    #log_gpu_memory("after isect_tiles", means)
     # print("rank", world_rank, "Before isect_offset_encode")
     isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
 
