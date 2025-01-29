@@ -339,7 +339,6 @@ def sample_add(
         if isinstance(v, torch.Tensor):
             state[k] = torch.cat((v, v_new))
 
-
 @torch.no_grad()
 def inject_noise_to_position(
     params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
@@ -347,23 +346,33 @@ def inject_noise_to_position(
     state: Dict[str, Tensor],
     scaler: float,
 ):
+    """Inplace inject noise to positions based on covariance and opacity."""
+    device = params["means"].device
+    
+    # Calculate opacities more efficiently
     opacities = torch.sigmoid(params["opacities"].flatten())
-    scales = torch.exp(params["scales"])
+    
+    # Compute scaling factor for noise more efficiently 
+    with torch.cuda.amp.autocast(enabled=True):
+        op_weights = 1 / (1 + torch.exp(-100 * (1 - opacities - 0.995)))
+    
+    # Generate noise directly in the right shape
+    noise = torch.randn_like(params["means"], device=device) * scaler
+    
+    # Scale noise by opacity weights
+    noise *= op_weights.unsqueeze(-1)
+    
+    # Get covariance matrices
     covars, _ = quat_scale_to_covar_preci(
-        params["quats"],
-        scales,
+        quats=params["quats"],
+        scales=torch.exp(params["scales"]),
         compute_covar=True,
         compute_preci=False,
         triu=False,
     )
-
-    def op_sigmoid(x, k=100, x0=0.995):
-        return 1 / (1 + torch.exp(-k * (x - x0)))
-
-    noise = (
-        torch.randn_like(params["means"])
-        * (op_sigmoid(1 - opacities)).unsqueeze(-1)
-        * scaler
-    )
-    noise = torch.einsum("bij,bj->bi", covars, noise)
+    
+    # Apply covariance scaling efficiently using batched operations
+    noise = torch.bmm(covars, noise.unsqueeze(-1)).squeeze(-1)
+    
+    # Update means inplace
     params["means"].add_(noise)
