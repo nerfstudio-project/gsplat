@@ -56,11 +56,11 @@ class Config:
     render_traj_path: str = "interp"
 
     # Path to the Mip-NeRF 360 dataset
-    data_dir: str = "data/360_v2/garden"
+    data_dir: str = "/home/paja/new_data/xplor/office_lobby/undistort/"
     # Downsample factor for the dataset
-    data_factor: int = 4
+    data_factor: int = 1
     # Directory to save results
-    result_dir: str = "results/garden"
+    result_dir: str = "results/office_lobby4k_default_full"
     # Every N images there is a test image
     test_every: int = 8
     # Random crop size for training  (experimental)
@@ -83,7 +83,7 @@ class Config:
     # Number of training steps
     max_steps: int = 30_000
     # Steps to evaluate the model
-    eval_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    eval_steps: List[int] = field(default_factory=lambda: [])
     # Steps to save the model
     save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
     # Whether to save ply file (storage size can be large)
@@ -153,7 +153,7 @@ class Config:
     app_opt_reg: float = 1e-6
 
     # Enable bilateral grid. (experimental)
-    use_bilateral_grid: bool = False
+    use_bilateral_grid: bool = True
     # Shape of the bilateral grid (X, Y, W)
     bilateral_grid_shape: Tuple[int, int, int] = (16, 16, 8)
 
@@ -1096,8 +1096,8 @@ if __name__ == "__main__":
             Config(
                 init_opa=0.5,
                 init_scale=0.1,
-                opacity_reg=0.01,
-                scale_reg=0.01,
+                opacity_reg=0.001, # opacity reg down removes black floaters
+                scale_reg=0.05, # scale_reg up helps to regulate huge splats
                 strategy=MCMCStrategy(verbose=True),
             ),
         ),
