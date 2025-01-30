@@ -182,7 +182,11 @@ class Parser:
             image_dir_suffix = ""
         colmap_image_dir = os.path.join(data_dir, "images")
         image_dir = os.path.join(data_dir, "images" + image_dir_suffix)
+        mask_dir = os.path.join(data_dir, "masks" + image_dir_suffix)
         for d in [image_dir, colmap_image_dir]:
+            if not os.path.exists(d):
+                raise ValueError(f"Image folder {d} does not exist.")
+        for d in [mask_dir, colmap_image_dir]:
             if not os.path.exists(d):
                 raise ValueError(f"Image folder {d} does not exist.")
 
@@ -197,6 +201,7 @@ class Parser:
             image_files = sorted(_get_rel_paths(image_dir))
         colmap_to_image = dict(zip(colmap_files, image_files))
         image_paths = [os.path.join(image_dir, colmap_to_image[f]) for f in image_names]
+        image_mask_paths = [os.path.join(mask_dir, colmap_to_image[f].replace('.jpg', '.png')) for f in image_names]
 
         # 3D points and {image_name -> [point_idx]}
         points = manager.points3D.astype(np.float32)
@@ -230,6 +235,7 @@ class Parser:
 
         self.image_names = image_names  # List[str], (num_images,)
         self.image_paths = image_paths  # List[str], (num_images,)
+        self.image_mask_paths = image_mask_paths  # List[str], (num_images,)
         self.camtoworlds = camtoworlds  # np.ndarray, (num_images, 4, 4)
         self.camera_ids = camera_ids  # List[int], (num_images,)
         self.Ks_dict = Ks_dict  # Dict of camera_id -> K
@@ -357,6 +363,16 @@ class Dataset:
     def __getitem__(self, item: int) -> Dict[str, Any]:
         index = self.indices[item]
         image = imageio.imread(self.parser.image_paths[index])[..., :3]
+        image_mask = imageio.imread(self.parser.image_mask_paths[index])
+    
+        # Handle different possible PNG formats:
+        if len(image_mask.shape) == 3:
+            if image_mask.shape[2] == 4:  # RGBA
+                image_mask = image_mask[..., -1]  # Take alpha channel
+            else:  # RGB
+                image_mask = image_mask.mean(axis=2)
+        # Now convert to binary
+        image_mask = (image_mask > 127).astype(np.uint8)
         camera_id = self.parser.camera_ids[index]
         K = self.parser.Ks_dict[camera_id].copy()  # undistorted K
         params = self.parser.params_dict[camera_id]
@@ -379,6 +395,7 @@ class Dataset:
             x = np.random.randint(0, max(w - self.patch_size, 1))
             y = np.random.randint(0, max(h - self.patch_size, 1))
             image = image[y : y + self.patch_size, x : x + self.patch_size]
+            image_mask = image_mask[y : y + self.patch_size, x : x + self.patch_size]
             K[0, 2] -= x
             K[1, 2] -= y
 
@@ -386,6 +403,7 @@ class Dataset:
             "K": torch.from_numpy(K).float(),
             "camtoworld": torch.from_numpy(camtoworlds).float(),
             "image": torch.from_numpy(image).float(),
+            "image_mask": ~torch.from_numpy(image_mask).bool(),
             "image_id": item,  # the index of the image in the dataset
         }
         if mask is not None:

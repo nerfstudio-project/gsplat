@@ -56,11 +56,11 @@ class Config:
     render_traj_path: str = "interp"
 
     # Path to the Mip-NeRF 360 dataset
-    data_dir: str = "/home/paja/new_data/xplor/office_lobby/undistort/"
+    data_dir: str = "/home/paja/new_data/basketball/"
     # Downsample factor for the dataset
     data_factor: int = 1
     # Directory to save results
-    result_dir: str = "results/office_lobby4k_default_full"
+    result_dir: str = "results/basketball_mcmc_1_350k_scale"
     # Every N images there is a test image
     test_every: int = 8
     # Random crop size for training  (experimental)
@@ -189,6 +189,23 @@ class Config:
         else:
             assert_never(strategy)
 
+def save_step_images(pixels, image_mask, save_dir, step):
+    """
+    Save both pixels and mask for each step
+    pixels: [1,n,m,3]
+    image_mask: [1,n,m,1]
+    """
+    # Create directory if it doesn't exist
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # Convert pixels to uint8 image format (multiply by 255 since they were divided earlier)
+    pixels_img = (pixels[0].detach().cpu().numpy() * 255).astype(np.uint8)
+    # Convert mask to binary uint8 format
+    mask_img = (image_mask[0].detach().cpu().numpy() * 255).astype(np.uint8)
+    
+    # Save both images
+    imageio.imwrite(os.path.join(save_dir, f'step_{step:04d}_image.png'), pixels_img)
+    imageio.imwrite(os.path.join(save_dir, f'step_{step:04d}_mask.png'), mask_img[..., 0])  # Remove single channel dimension
 
 def create_splats_with_optimizers(
     parser: Parser,
@@ -575,8 +592,12 @@ class Runner:
                 data = next(trainloader_iter)
 
             camtoworlds = camtoworlds_gt = data["camtoworld"].to(device)  # [1, 4, 4]
+            image_mask = data["image_mask"].to(device)
+            image_mask = image_mask.permute(1,2,0).unsqueeze(0)
             Ks = data["K"].to(device)  # [1, 3, 3]
             pixels = data["image"].to(device) / 255.0  # [1, H, W, 3]
+            #assert pixels.shape == image_mask.shape, f"pixels.shape {pixels.shape}, image_mask.shape {image_mask.shape}"
+            #save_step_images(pixels, image_mask, ".", step)
             num_train_rays_per_step = (
                 pixels.shape[0] * pixels.shape[1] * pixels.shape[2]
             )
@@ -615,6 +636,8 @@ class Runner:
             else:
                 colors, depths = renders, None
 
+            colors = colors * image_mask
+            pixels = pixels * image_mask
             if cfg.use_bilateral_grid:
                 grid_y, grid_x = torch.meshgrid(
                     (torch.arange(height, device=self.device) + 0.5) / height,
