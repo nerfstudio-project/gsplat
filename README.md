@@ -66,10 +66,7 @@ The [RobustNeRF  dataset](https://storage.googleapis.com/jax3d-public/projects/r
  
 To extract these features on your own datasets you can run the Jupyter notebook `./examples/datasets/sd_feature_extraction.ipynb`. 
 
-We assume that the image files have prefixes determining clean (`clean`), cluttered train data (`clutter`) and clean test data (`extra`). You can process datasets like NeRF On-the-go datasets that provide a JSON file with these tags with running:
-```
-python ./examples/datasets/prep_data.py
-```
+We assume that the image files have prefixes determining clean (`clean`), cluttered train data (`clutter`) and clean test data (`extra`). 
 
 ## Citation
 
