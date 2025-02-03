@@ -231,6 +231,24 @@ std::tuple<torch::Tensor, torch::Tensor> rasterize_to_indices_in_range_tensor(
     const torch::Tensor &flatten_ids   // [n_isects]
 );
 
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_trans_in_range_tensor(
+    const uint32_t range_start,
+    const uint32_t range_end,           // iteration steps
+    const torch::Tensor transmittances, // [C, image_height, image_width]
+    // Gaussian parameters
+    const torch::Tensor &means2d,   // [C, N, 2]
+    const torch::Tensor &conics,    // [C, N, 3]
+    const torch::Tensor &opacities, // [N]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // intersections
+    const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
+    const torch::Tensor &flatten_ids   // [n_isects]
+);
+
+
 torch::Tensor compute_sh_fwd_tensor(
     const uint32_t degrees_to_use,
     const torch::Tensor &dirs,              // [..., 3]
