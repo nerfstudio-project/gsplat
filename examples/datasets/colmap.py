@@ -183,10 +183,8 @@ class Parser:
         colmap_image_dir = os.path.join(data_dir, "images")
         image_dir = os.path.join(data_dir, "images" + image_dir_suffix)
         mask_dir = os.path.join(data_dir, "masks" + image_dir_suffix)
+
         for d in [image_dir, colmap_image_dir]:
-            if not os.path.exists(d):
-                raise ValueError(f"Image folder {d} does not exist.")
-        for d in [mask_dir, colmap_image_dir]:
             if not os.path.exists(d):
                 raise ValueError(f"Image folder {d} does not exist.")
 
@@ -201,7 +199,14 @@ class Parser:
             image_files = sorted(_get_rel_paths(image_dir))
         colmap_to_image = dict(zip(colmap_files, image_files))
         image_paths = [os.path.join(image_dir, colmap_to_image[f]) for f in image_names]
-        image_mask_paths = [os.path.join(mask_dir, colmap_to_image[f].replace('.jpg', '.png')) for f in image_names]
+        
+        # Only create mask paths if mask directory exists
+        image_mask_paths = []
+        if os.path.exists(mask_dir):
+            image_mask_paths = [os.path.join(mask_dir, colmap_to_image[f].replace('.jpg', '.png')) for f in image_names]
+        else:
+            print(f"Warning: Mask folder {mask_dir} does not exist. Proceeding without masks.")
+            image_mask_paths = [None] * len(image_names)
 
         # 3D points and {image_name -> [point_idx]}
         points = manager.points3D.astype(np.float32)
@@ -363,16 +368,23 @@ class Dataset:
     def __getitem__(self, item: int) -> Dict[str, Any]:
         index = self.indices[item]
         image = imageio.imread(self.parser.image_paths[index])[..., :3]
-        image_mask = imageio.imread(self.parser.image_mask_paths[index])
-    
-        # Handle different possible PNG formats:
-        if len(image_mask.shape) == 3:
-            if image_mask.shape[2] == 4:  # RGBA
-                image_mask = image_mask[..., -1]  # Take alpha channel
-            else:  # RGB
-                image_mask = image_mask.mean(axis=2)
-        # Now convert to binary
-        image_mask = (image_mask > 127).astype(np.uint8)
+        
+        # Handle mask loading with proper checks
+        image_mask = None
+        if self.parser.image_mask_paths[index] is not None:
+            image_mask = imageio.imread(self.parser.image_mask_paths[index])
+            # Handle different possible PNG formats:
+            if len(image_mask.shape) == 3:
+                if image_mask.shape[2] == 4:  # RGBA
+                    image_mask = image_mask[..., -1]  # Take alpha channel
+                else:  # RGB
+                    image_mask = image_mask.mean(axis=2)
+            # Now convert to binary
+            image_mask = (image_mask > 127).astype(np.uint8)
+        else:
+            # If no mask exists, create a dummy mask of ones (no masking)
+            image_mask = np.ones(image.shape[:2], dtype=np.uint8)
+
         camera_id = self.parser.camera_ids[index]
         K = self.parser.Ks_dict[camera_id].copy()  # undistorted K
         params = self.parser.params_dict[camera_id]
@@ -388,6 +400,7 @@ class Dataset:
             image = cv2.remap(image, mapx, mapy, cv2.INTER_LINEAR)
             x, y, w, h = self.parser.roi_undist_dict[camera_id]
             image = image[y : y + h, x : x + w]
+            image_mask = image_mask[y : y + h, x : x + w]
 
         if self.patch_size is not None:
             # Random crop.
