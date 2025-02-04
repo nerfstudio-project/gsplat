@@ -1,3 +1,47 @@
+# Installation
+```bash
+micromamba create -f environment.yml -y
+micromamba activate gsplat
+pip install -r examples/requirements.txt
+pip install -e .
+```
+
+# How to run
+Currently, there is an memory issue that pops up every now and then with the prefered densification strategy mcmc or mcmc-style. See for instance: https://github.com/nerfstudio-project/gsplat/issues/487. It is not safe to run it
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python examples/simple_trainer.py default --use-bilateral-grid --data-dir path --test_every 0 -restult-dir path --disable_viewer --steps-scaler 0.5
+```
+In the result-dir there will be a ckpt folder and a ply folder which has multiple files (one per GPU). They can be merged with either 
+```bash
+python scripts/merge_plys.py ./results/plys ./results/merged.plys
+
+```
+or 
+
+```bash 
+python merge_pts.py --ckpts-folder ./results/ckpts --output-dir ./results/ckpts
+```
+
+The images and masks (if available) must have the following folder structure
+```bash
+├── images
+│   └── L2PRO
+│       ├── camera_0
+│       └── camera_1
+├── masks
+│   └── L2PRO
+│       ├── camera_0
+│       └── camera_1
+├── sparse
+│   └── 0
+│       ├── cameras.bin
+│       ├── images.bin
+│       └── points3D.bin
+```
+Attention, the colmap loading dependency has a bug and does not properly work with the txt format. Only *.bin are working properly.
+
+
 # gsplat
 
 [![Core Tests.](https://github.com/nerfstudio-project/gsplat/actions/workflows/core_tests.yml/badge.svg?branch=main)](https://github.com/nerfstudio-project/gsplat/actions/workflows/core_tests.yml)
