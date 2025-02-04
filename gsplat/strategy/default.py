@@ -89,7 +89,7 @@ class DefaultStrategy(Strategy):
     refine_every: int = 100
     pause_refine_after_reset: int = 0
     absgrad: bool = False
-    revised_opacity: bool = False
+    revised_opacity: bool = True
     verbose: bool = False
     key_for_gradient: Literal["means2d", "gradient_2dgs"] = "means2d"
 

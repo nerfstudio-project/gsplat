@@ -56,11 +56,11 @@ class Config:
     render_traj_path: str = "interp"
 
     # Path to the Mip-NeRF 360 dataset
-    data_dir: str = "/home/paja/new_data/basketball/"
+    data_dir: str = "/home/paja/new_data/xplor/beach_structure/undistort/"
     # Downsample factor for the dataset
     data_factor: int = 1
     # Directory to save results
-    result_dir: str = "results/basketball_mcmc_1_350k_scale"
+    result_dir: str = "results/office_lobby_new"
     # Every N images there is a test image
     test_every: int = 8
     # Random crop size for training  (experimental)
@@ -592,8 +592,10 @@ class Runner:
                 data = next(trainloader_iter)
 
             camtoworlds = camtoworlds_gt = data["camtoworld"].to(device)  # [1, 4, 4]
-            image_mask = data["image_mask"].to(device)
-            image_mask = image_mask.permute(1,2,0).unsqueeze(0)
+            image_mask = None
+            if image_mask in data:
+                image_mask = data["image_mask"].to(device)
+                image_mask = image_mask.permute(1,2,0).unsqueeze(0)
             Ks = data["K"].to(device)  # [1, 3, 3]
             pixels = data["image"].to(device) / 255.0  # [1, H, W, 3]
             #assert pixels.shape == image_mask.shape, f"pixels.shape {pixels.shape}, image_mask.shape {image_mask.shape}"
@@ -636,8 +638,9 @@ class Runner:
             else:
                 colors, depths = renders, None
 
-            colors = colors * image_mask
-            pixels = pixels * image_mask
+            if image_mask is not None:
+                colors = colors * image_mask
+                pixels = pixels * image_mask
             if cfg.use_bilateral_grid:
                 grid_y, grid_x = torch.meshgrid(
                     (torch.arange(height, device=self.device) + 0.5) / height,
