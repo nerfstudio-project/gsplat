@@ -65,4 +65,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "rasterize_to_pixels_2dgs_bwd", &gsplat::rasterize_to_pixels_2dgs_bwd
     );
     m.def("rasterize_to_indices_2dgs", &gsplat::rasterize_to_indices_2dgs);
+
+    // 3DCS
+    m.def("projection_ewa_3dcs_fused_fwd", &gsplat::projection_ewa_3dcs_fused_fwd);
+    m.def("projection_ewa_3dcs_fused_bwd", &gsplat::projection_ewa_3dcs_fused_bwd);
+
+    m.def("rasterize_to_pixels_3dcs_fwd", &gsplat::rasterize_to_pixels_3dcs_fwd);
+    m.def("rasterize_to_pixels_3dcs_bwd", &gsplat::rasterize_to_pixels_3dcs_bwd);
+
+    m.def("spherical_harmonics_fwd_3dcs", &gsplat::spherical_harmonics_fwd_3dcs);
+    m.def("spherical_harmonics_bwd_3dcs", &gsplat::spherical_harmonics_bwd_3dcs);
 }
