@@ -26,11 +26,11 @@ python merge_pts.py --ckpts-folder ./results/ckpts --output-dir ./results/ckpts
 The images and masks (if available) must have the following folder structure
 ```bash
 ├── images
-│   └── L2PRO
+│   └── L2PRO (or othere device)
 │       ├── camera_0
 │       └── camera_1
 ├── masks
-│   └── L2PRO
+│   └── L2PRO (or other device, must be consistent with images folder)
 │       ├── camera_0
 │       └── camera_1
 ├── sparse
