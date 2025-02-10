@@ -147,12 +147,6 @@ __global__ void rasterize_to_pixels_fwd_kernel(
                 continue;
             }
 
-            const S next_T = T * (1.0f - alpha);
-            if (next_T <= 1e-4) { // this pixel is done: exclusive
-                done = true;
-                break;
-            }
-
             int32_t g = id_batch[t];
             const S vis = alpha * T;
             const S *c_ptr = colors + g * COLOR_DIM;
@@ -161,6 +155,13 @@ __global__ void rasterize_to_pixels_fwd_kernel(
                 pix_out[k] += c_ptr[k] * vis;
             }
             cur_idx = batch_start + t;
+
+            const S next_T = T * (1.0f - alpha);
+            if (next_T <= 1e-4) { // this pixel is done: exclusive
+                T = next_T;
+                done = true;
+                break;
+            }
 
             T = next_T;
         }
