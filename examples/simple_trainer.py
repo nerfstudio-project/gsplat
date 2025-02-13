@@ -90,6 +90,8 @@ class Config:
     save_ply: bool = False
     # Steps to save the model as ply
     ply_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    # Whether to disable video generation during training and evaluation
+    disable_video: bool = False
 
     # Initialization strategy
     init_type: str = "sfm"
@@ -932,6 +934,8 @@ class Runner:
     @torch.no_grad()
     def render_traj(self, step: int):
         """Entry for trajectory rendering."""
+        if self.cfg.disable_video:
+            return
         print("Running trajectory rendering...")
         cfg = self.cfg
         device = self.device
