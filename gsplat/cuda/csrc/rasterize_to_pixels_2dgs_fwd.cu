@@ -302,12 +302,6 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
                 continue;
             }
 
-            const S next_T = T * (1.0f - alpha);
-            if (next_T <= 1e-4) { // this pixel is done: exclusive
-                done = true;
-                break;
-            }
-
             // run volumetric rendering..
             int32_t g = id_batch[t];
             const S vis = alpha * T;
@@ -343,6 +337,13 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
             }
 
             cur_idx = batch_start + t;
+
+            const S next_T = T * (1.0f - alpha);
+            if (next_T <= 1e-4) { // this pixel is done: exclusive
+                T = next_T;
+                done = true;
+                break;
+            }
 
             T = next_T;
         }
