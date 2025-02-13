@@ -306,20 +306,27 @@ def _fully_fused_projection(
 
     depths = means_c[..., 2]  # [C, N]
 
+    # scale factor for 3 sigma in 2 dimension for a 2d multivariate gaussian
+    # distribution
+    scale_factor = 3.4086
+    # calculating magnitude of major and and minor axis
     b = (covars2d[..., 0, 0] + covars2d[..., 1, 1]) / 2  # (...,)
     v1 = b + torch.sqrt(torch.clamp(b**2 - det, min=0.01))  # (...,)
-    radius = torch.ceil(3.0 * torch.sqrt(v1))  # (...,)
+    radius = torch.ceil(scale_factor * torch.sqrt(v1))  # (...,)
     # v2 = b - torch.sqrt(torch.clamp(b**2 - det, min=0.01))  # (...,)
-    # radius = torch.ceil(3.0 * torch.sqrt(torch.max(v1, v2)))  # (...,)
+    # radius = torch.ceil(scale_factor * torch.sqrt(torch.max(v1, v2)))  # (...,)
+
+    x_proj = scale_factor * torch.sqrt(covars2d[..., 0, 0])  # (...,)
+    y_proj = scale_factor * torch.sqrt(covars2d[..., 1, 1])  # (...,)
 
     valid = (det > 0) & (depths > near_plane) & (depths < far_plane)
     radius[~valid] = 0.0
 
     inside = (
-        (means2d[..., 0] + radius > 0)
-        & (means2d[..., 0] - radius < width)
-        & (means2d[..., 1] + radius > 0)
-        & (means2d[..., 1] - radius < height)
+        (means2d[..., 0] + x_proj > 0)
+        & (means2d[..., 0] - x_proj < width)
+        & (means2d[..., 1] + y_proj > 0)
+        & (means2d[..., 1] - y_proj < height)
     )
     radius[~inside] = 0.0
 
