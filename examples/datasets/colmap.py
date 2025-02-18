@@ -69,6 +69,7 @@ class Parser:
         if not os.path.exists(colmap_image_dir):
             raise ValueError(f"Image folder {colmap_image_dir} does not exist.")
         downsample = False
+        image_extensions = [".JPG", ".jpg", ".PNG", ".png", ".JPEG", ".jpeg"]
         if factor > 1:
             image_dir_suffix = f"_{factor}"
             image_dir = os.path.join(data_dir, "images" + image_dir_suffix)
@@ -76,6 +77,15 @@ class Parser:
                 print("downsampling and saving the images.")
                 downsample = True
                 os.makedirs(image_dir)
+                
+                all_images = [i for i in os.listdir(colmap_image_dir) if any(i.endswith(ext) for ext in image_extensions)]
+                for im_name in all_images:
+                    im_path = os.path.join(colmap_image_dir, im_name)
+                    im_rgb = media.read_image(im_path)
+                    imsize = (im_rgb.shape[0] // factor, im_rgb.shape[1] // factor)
+                    resize_im = media.resize_image(im_rgb, imsize)
+                    out_path = os.path.join(image_dir, im_name)
+                    media.write_image(out_path, resize_im)
         else:
             image_dir = colmap_image_dir
 
@@ -97,6 +107,7 @@ class Parser:
             K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
             K[:2, :] /= factor
             Ks_dict[camera_id] = K
+            imsize_dict[camera_id] = (cam.width // factor, cam.height // factor)
 
             # Get distortion parameters.
             type_ = cam.camera_type
@@ -107,7 +118,7 @@ class Parser:
                 params = np.empty(0, dtype=np.float32)
                 camtype = "perspective"
             if type_ == 2 or type_ == "SIMPLE_RADIAL":
-                params = np.array([cam.k1], dtype=np.float32)
+                params = np.array([cam.k1, 0, 0, 0.], dtype=np.float32)
                 camtype = "perspective"
             elif type_ == 3 or type_ == "RADIAL":
                 params = np.array([cam.k1, cam.k2, 0.0, 0.0], dtype=np.float32)
@@ -124,14 +135,7 @@ class Parser:
 
             params_dict[camera_id] = params
 
-            # image size
-            imsize_dict[camera_id] = (cam.width // factor, cam.height // factor)
-            if downsample:
-                im_path = os.path.join(colmap_image_dir, im.name)
-                im_rgb = media.read_image(im_path)
-                resize_im = media.resize(im_rgb, imsize_dict[camera_id])
-                out_path = os.path.join(image_dir, im.name)
-                media.write_image(out_path, resize_im)
+            
 
         print(
             f"[Parser] {len(imdata)} images, taken by {len(set(camera_ids))} cameras."
