@@ -51,14 +51,17 @@ def load_synthetic(data_dir, file, factor: int, id_offset):
             fy = fov2focal(FOVX, image.height)
             cx, cy = 0.5 * image.width, 0.5 * image.height
             K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=float)
-            K[:2, :] /= factor
+            K[:2, :] /= abs(factor)
             Ks_dict[camera_id] = K
 
             camera_ids.append(camera_id)
             camtoworlds.append(c2w)
             # assume no distortion
             params_dict[camera_id] = np.empty(0, dtype=np.float32)
-            imsize_dict[camera_id] = (image.width // factor, image.height // factor)
+            imsize_dict[camera_id] = (
+                image.width // abs(factor),
+                image.height // abs(factor),
+            )
             mask_dict[camera_id] = None
             image_names.append(image_name)
             image_paths.append(image_path)
@@ -128,7 +131,7 @@ class Parser:
             image_paths_testdata,
             Ks_dict_testdata,
         ) = load_synthetic(
-            data_dir, "transforms_train.json", factor, train_camera_id_len
+            data_dir, "transforms_test.json", factor, train_camera_id_len
         )
 
         # join data
