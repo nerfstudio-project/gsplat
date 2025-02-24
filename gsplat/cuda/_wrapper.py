@@ -1695,14 +1695,14 @@ def rasterize_to_pixels_2dgs(
     if channels not in (1, 2, 3, 4, 8, 16, 32, 64, 128, 256, 512):
         padded_channels = (1 << (channels - 1).bit_length()) - channels
         colors = torch.cat(
-            [colors, torch.empty(*colors.shape[:-1], padded_channels, device=device)],
+            [colors, torch.zeros(*colors.shape[:-1], padded_channels, device=device)],
             dim=-1,
         )
         if backgrounds is not None:
             backgrounds = torch.cat(
                 [
                     backgrounds,
-                    torch.empty(
+                    torch.zeros(
                         *backgrounds.shape[:-1], padded_channels, device=device
                     ),
                 ],
