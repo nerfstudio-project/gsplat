@@ -4,6 +4,11 @@ compile_commands.json
 # Visual Studio Code configs.
 .vscode/
 
+# jetbrain ide
+.idea/
+cmake-build-debug/
+cmake-build-release/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

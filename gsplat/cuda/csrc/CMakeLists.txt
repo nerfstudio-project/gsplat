@@ -36,6 +36,7 @@ find_package(Torch REQUIRED)
 include_directories(${PYTHON_INCLUDE_DIRS})
 include_directories(${CMAKE_SOURCE_DIR})
 include_directories(${CMAKE_SOURCE_DIR}/third_party/glm)
+include_directories(${CMAKE_SOURCE_DIR}/../include)
 
 # Set up CUDA flags
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} ${NVCC_FLAGS}")
