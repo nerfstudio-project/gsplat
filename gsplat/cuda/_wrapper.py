@@ -246,7 +246,7 @@ def fully_fused_projection(
         covars: Gaussian covariances (flattened upper triangle). [N, 6] Optional.
         quats: Quaternions (No need to be normalized). [N, 4] Optional.
         scales: Scales. [N, 3] Optional.
-        viewmats: Camera-to-world matrices. [C, 4, 4]
+        viewmats: World-to-camera matrices. [C, 4, 4]
         Ks: Camera intrinsics. [C, 3, 3]
         width: Image width.
         height: Image height.
@@ -1281,7 +1281,7 @@ def fully_fused_projection_2dgs(
         means: Gaussian means. [N, 3]
         quats: Quaternions (No need to be normalized). [N, 4].
         scales: Scales. [N, 3].
-        viewmats: Camera-to-world matrices. [C, 4, 4]
+        viewmats: World-to-camera matrices. [C, 4, 4]
         Ks: Camera intrinsics. [C, 3, 3]
         width: Image width.
         height: Image height.
