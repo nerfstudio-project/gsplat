@@ -24,7 +24,7 @@ __global__ void fully_fused_projection_fwd_2dgs_kernel(
     const T *__restrict__ means,    // [N, 3]:  Gaussian means. (i.e. source points)
     const T *__restrict__ quats,    // [N, 4]:  Quaternions (No need to be normalized): This is the rotation component (for 2D)
     const T *__restrict__ scales,   // [N, 3]:  Scales. [N, 3] scales for x, y, z
-    const T *__restrict__ viewmats, // [C, 4, 4]:  Camera-to-World coordinate mat
+    const T *__restrict__ viewmats, // [C, 4, 4]:  World-to-Camera coordinate mat
                                     // [R t]
                                     // [0 1]
     const T *__restrict__ Ks,       // [C, 3, 3]:  Projective transformation matrix
