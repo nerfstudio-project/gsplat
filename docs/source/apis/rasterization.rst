@@ -29,8 +29,8 @@ projection equation:
 .. math::
 
     J = \begin{bmatrix}
-        f_{x}/z & 0 & -f_{x} t_{x}/z^{2} \\
-        0 & f_{y}/z & -f_{y} t_{y}/z^{2} \\
+        f_{x}/z & 0 & -f_{x} x/z^{2} \\
+        0 & f_{y}/z & -f_{y} y/z^{2} \\
         0 & 0 & 0
     \end{bmatrix}
 
