@@ -1,9 +1,8 @@
 #include "bindings.h"
 #include "types.cuh"
-#include "2dgs.cuh"
+#include "_utils.cuh"
+
 #include <cooperative_groups.h>
-#include <cub/cub.cuh>
-#include <cuda_runtime.h>
 
 namespace gsplat {
 
@@ -16,19 +15,19 @@ namespace cg = cooperative_groups;
  /**
   *
   */
-template <uint32_t COLOR_DIM, typename S>
+template <uint32_t COLOR_DIM>
 __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
     const uint32_t C,    // number of cameras
     const uint32_t N,    // number of gaussians
     const uint32_t n_isects,  // number of ray-primitive intersections.
     const bool packed,       // whether the input tensors are packed
-    const vec2<S> *__restrict__ means2d,   // Projected Gaussian means. [C, N, 2] if packed is False, [nnz, 2] if packed is True.
-    const S *__restrict__ ray_transforms,  // transformation matrices that transforms xy-planes in pixel spaces into splat coordinates. [C, N, 3, 3] if packed is False, [nnz, channels] if packed is True.
+    const vec2 *__restrict__ means2d,   // Projected Gaussian means. [C, N, 2] if packed is False, [nnz, 2] if packed is True.
+    const float *__restrict__ ray_transforms,  // transformation matrices that transforms xy-planes in pixel spaces into splat coordinates. [C, N, 3, 3] if packed is False, [nnz, channels] if packed is True.
                                            // This is (KWH)^{-1} in the paper (takes screen [x,y] and map to [u,v])
-    const S *__restrict__ colors,      // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]  // Gaussian colors or ND features.
-    const S *__restrict__ opacities,   // [C, N] or [nnz]                        // Gaussian opacities that support per-view values.
-    const S *__restrict__ normals,     // [C, N, 3] or [nnz, 3]                  // The normals in camera space.
-    const S *__restrict__ backgrounds, // [C, COLOR_DIM]                         // Background colors on camera basis
+    const float *__restrict__ colors,      // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]  // Gaussian colors or ND features.
+    const float *__restrict__ opacities,   // [C, N] or [nnz]                        // Gaussian opacities that support per-view values.
+    const float *__restrict__ normals,     // [C, N, 3] or [nnz, 3]                  // The normals in camera space.
+    const float *__restrict__ backgrounds, // [C, COLOR_DIM]                         // Background colors on camera basis
     const bool *__restrict__ masks,    // [C, tile_height, tile_width]            // Optional tile mask to skip rendering GS to masked tiles.
     const uint32_t image_width,
     const uint32_t image_height,
@@ -41,11 +40,11 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
     
     
     // outputs
-    S *__restrict__ render_colors,  // [C, image_height, image_width, COLOR_DIM]
-    S *__restrict__ render_alphas,  // [C, image_height, image_width, 1]
-    S *__restrict__ render_normals, // [C, image_height, image_width, 3]
-    S *__restrict__ render_distort, // [C, image_height, image_width, 1]  // Stores the per-pixel distortion error proposed in Mip-NeRF 360.
-    S *__restrict__ render_median,  // [C, image_height, image_width, 1]  // Stores the median depth contribution for each pixel "set to the depth of the Gaussian that brings the accumulated opacity over 0.5."
+    float *__restrict__ render_colors,  // [C, image_height, image_width, COLOR_DIM]
+    float *__restrict__ render_alphas,  // [C, image_height, image_width, 1]
+    float *__restrict__ render_normals, // [C, image_height, image_width, 3]
+    float *__restrict__ render_distort, // [C, image_height, image_width, 1]  // Stores the per-pixel distortion error proposed in Mip-NeRF 360.
+    float *__restrict__ render_median,  // [C, image_height, image_width, 1]  // Stores the median depth contribution for each pixel "set to the depth of the Gaussian that brings the accumulated opacity over 0.5."
     int32_t *__restrict__ last_ids, // [C, image_height, image_width]     // Stores the index of the last Gaussian that contributed to each pixel.
     int32_t *__restrict__ median_ids // [C, image_height, image_width]    // Stores the index of the Gaussian that contributes to the median depth for each pixel (bring over 0.5).
 ) {
@@ -85,8 +84,8 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
     }
 
     // find the center of the pixel
-    S px = (S)j + 0.5f;
-    S py = (S)i + 0.5f;
+    float px = (float)j + 0.5f;
+    float py = (float)i + 0.5f;
     int32_t pix_id = i * image_width + j;
 
     // return if out of bounds
@@ -134,20 +133,20 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
     int32_t *id_batch = (int32_t *)s; // [block_size]
 
     // stores the concatination for projected primitive source (x, y) and opacity alpha
-    vec3<S> *xy_opacity_batch =
-        reinterpret_cast<vec3<float> *>(&id_batch[block_size]); // [block_size]
+    vec3 *xy_opacity_batch =
+        reinterpret_cast<vec3 *>(&id_batch[block_size]); // [block_size]
 
     // these are row vectors of the ray transformation matrices for the current batch of gaussians
-    vec3<S> *u_Ms_batch = reinterpret_cast<vec3<float> *>(&xy_opacity_batch[block_size]); // [block_size]
-    vec3<S> *v_Ms_batch = reinterpret_cast<vec3<float> *>(&u_Ms_batch[block_size]); // [block_size]
-    vec3<S> *w_Ms_batch = reinterpret_cast<vec3<float> *>(&v_Ms_batch[block_size]); // [block_size]
+    vec3 *u_Ms_batch = reinterpret_cast<vec3 *>(&xy_opacity_batch[block_size]); // [block_size]
+    vec3 *v_Ms_batch = reinterpret_cast<vec3 *>(&u_Ms_batch[block_size]); // [block_size]
+    vec3 *w_Ms_batch = reinterpret_cast<vec3 *>(&v_Ms_batch[block_size]); // [block_size]
 
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
     // numerical precision so we use double for it. However double make bwd 1.5x
     // slower so we stick with float for now.
     // The coefficient for volumetric rendering for our responsible pixel.
-    S T = 1.0f;
+    float T = 1.0f;
     // index of most recent gaussian to write to this thread's pixel
     uint32_t cur_idx = 0;
 
@@ -159,11 +158,11 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
     // Per-pixel distortion error proposed in Mip-NeRF 360.
     // Implemented reference:
     // https://github.com/nerfstudio-project/nerfacc/blob/master/nerfacc/losses.py#L7
-    S distort = 0.f;
-    S accum_vis_depth = 0.f; // accumulate vis * depth
+    float distort = 0.f;
+    float accum_vis_depth = 0.f; // accumulate vis * depth
 
     // keep track of median depth contribution
-    S median_depth = 0.f;
+    float median_depth = 0.f;
     uint32_t median_idx = 0.f;
 
     /**
@@ -175,9 +174,9 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
      */
 
     // TODO (WZ): merge pix_out and normal_out to
-    //  S pix_out[COLOR_DIM + 3] = {0.f}
-    S pix_out[COLOR_DIM] = {0.f};
-    S normal_out[3] = {0.f};
+    //  float pix_out[COLOR_DIM + 3] = {0.f}
+    float pix_out[COLOR_DIM] = {0.f};
+    float normal_out[3] = {0.f};
     for (uint32_t b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
@@ -197,8 +196,8 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
         if (idx < range_end) {
             int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
             id_batch[tr] = g;
-            const vec2<S> xy = means2d[g];
-            const S opac = opacities[g];
+            const vec2 xy = means2d[g];
+            const float opac = opacities[g];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             u_Ms_batch[tr] = {
                 ray_transforms[g * 9], ray_transforms[g * 9 + 1], ray_transforms[g * 9 + 2]
@@ -262,47 +261,47 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
         uint32_t batch_size = min(block_size, range_end - batch_start);
         for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
 
-            const vec3<S> xy_opac = xy_opacity_batch[t];
-            const S opac = xy_opac.z;
+            const vec3 xy_opac = xy_opacity_batch[t];
+            const float opac = xy_opac.z;
 
-            const vec3<S> u_M = u_Ms_batch[t];
-            const vec3<S> v_M = v_Ms_batch[t];
-            const vec3<S> w_M = w_Ms_batch[t];
+            const vec3 u_M = u_Ms_batch[t];
+            const vec3 v_M = v_Ms_batch[t];
+            const vec3 w_M = w_Ms_batch[t];
 
             // h_u and h_v are the homogeneous plane representations (they are contravariant to the points on the primitive plane)
-            const vec3<S> h_u = px * w_M - u_M;
-            const vec3<S> h_v = py * w_M - v_M;
+            const vec3 h_u = px * w_M - u_M;
+            const vec3 h_v = py * w_M - v_M;
 
-            const vec3<S> ray_cross = glm::cross(h_u, h_v);
+            const vec3 ray_cross = glm::cross(h_u, h_v);
             if (ray_cross.z == 0.0)
                 continue;
 
-            const vec2<S> s = vec2<S>(ray_cross.x / ray_cross.z, ray_cross.y / ray_cross.z);
+            const vec2 s = vec2(ray_cross.x / ray_cross.z, ray_cross.y / ray_cross.z);
 
             // IMPORTANT: This is where the gaussian kernel is evaluated!!!!!
 
             // point of interseciton in uv space
-            const S gauss_weight_3d = s.x * s.x + s.y * s.y;
+            const float gauss_weight_3d = s.x * s.x + s.y * s.y;
             
             // projected gaussian kernel
-            const vec2<S> d = {xy_opac.x - px, xy_opac.y - py};
+            const vec2 d = {xy_opac.x - px, xy_opac.y - py};
             // #define FILTER_INV_SQUARE 2.0f
-            const S gauss_weight_2d = FILTER_INV_SQUARE * (d.x * d.x + d.y * d.y);
+            const float gauss_weight_2d = FILTER_INV_SQUARE * (d.x * d.x + d.y * d.y);
             
             // merge ray-intersection kernel and 2d gaussian kernel
-            const S gauss_weight = min(gauss_weight_3d, gauss_weight_2d);
+            const float gauss_weight = min(gauss_weight_3d, gauss_weight_2d);
 
 
-            const S sigma = 0.5f * gauss_weight;
+            const float sigma = 0.5f * gauss_weight;
             // evaluation of the gaussian exponential term
-            S alpha = min(0.999f, opac * __expf(-sigma));
+            float alpha = min(0.999f, opac * __expf(-sigma));
 
             // ignore transparent gaussians
             if (sigma < 0.f || alpha < 1.f / 255.f) {
                 continue;
             }
 
-            const S next_T = T * (1.0f - alpha);
+            const float next_T = T * (1.0f - alpha);
             if (next_T <= 1e-4) { // this pixel is done: exclusive
                 done = true;
                 break;
@@ -310,14 +309,14 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
 
             // run volumetric rendering..
             int32_t g = id_batch[t];
-            const S vis = alpha * T;
-            const S *c_ptr = colors + g * COLOR_DIM;
+            const float vis = alpha * T;
+            const float *c_ptr = colors + g * COLOR_DIM;
             GSPLAT_PRAGMA_UNROLL
             for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                 pix_out[k] += c_ptr[k] * vis;
             }
 
-            const S *n_ptr = normals + g * 3;
+            const float *n_ptr = normals + g * 3;
             GSPLAT_PRAGMA_UNROLL
             for (uint32_t k = 0; k < 3; ++k) {
                 normal_out[k] += n_ptr[k] * vis;
@@ -325,13 +324,13 @@ __global__ void rasterize_to_pixels_fwd_2dgs_kernel(
 
             if (render_distort != nullptr) {
                 // the last channel of colors is depth
-                const S depth = c_ptr[COLOR_DIM - 1];
+                const float depth = c_ptr[COLOR_DIM - 1];
                 // in nerfacc, loss_bi_0 = weights * t_mids *
                 // exclusive_sum(weights)
-                const S distort_bi_0 = vis * depth * (1.0f - T);
+                const float distort_bi_0 = vis * depth * (1.0f - T);
                 // in nerfacc, loss_bi_1 = weights * exclusive_sum(weights *
                 // t_mids)
-                const S distort_bi_1 = vis * accum_vis_depth;
+                const float distort_bi_1 = vis * accum_vis_depth;
                 distort += 2.0f * (distort_bi_0 - distort_bi_1);
                 accum_vis_depth += vis * depth;
             }
@@ -463,14 +462,14 @@ call_kernel_with_dim(
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
     const uint32_t shared_mem =
         tile_size * tile_size *
-        (sizeof(int32_t) + sizeof(vec3<float>) + sizeof(vec3<float>) +
-         sizeof(vec3<float>) + sizeof(vec3<float>));
+        (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3) +
+         sizeof(vec3) + sizeof(vec3));
 
     // TODO: an optimization can be done by passing the actual number of
     // channels into the kernel functions and avoid necessary global memory
     // writes. This requires moving the channel padding from python to C side.
     if (cudaFuncSetAttribute(
-            rasterize_to_pixels_fwd_2dgs_kernel<CDIM, float>,
+            rasterize_to_pixels_fwd_2dgs_kernel<CDIM>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
             shared_mem
         ) != cudaSuccess) {
@@ -480,13 +479,13 @@ call_kernel_with_dim(
             " bytes), try lowering tile_size."
         );
     }
-    rasterize_to_pixels_fwd_2dgs_kernel<CDIM, float>
+    rasterize_to_pixels_fwd_2dgs_kernel<CDIM>
         <<<blocks, threads, shared_mem, stream>>>(
             C,
             N,
             n_isects,
             packed,
-            reinterpret_cast<vec2<float> *>(means2d.data_ptr<float>()),
+            reinterpret_cast<vec2 *>(means2d.data_ptr<float>()),
             ray_transforms.data_ptr<float>(),
             colors.data_ptr<float>(),
             opacities.data_ptr<float>(),

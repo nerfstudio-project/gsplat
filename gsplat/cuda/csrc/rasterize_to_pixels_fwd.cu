@@ -1,8 +1,8 @@
 #include "bindings.h"
 #include "types.cuh"
+#include "_utils.cuh"
+
 #include <cooperative_groups.h>
-#include <cub/cub.cuh>
-#include <cuda_runtime.h>
 
 namespace gsplat {
 
@@ -12,17 +12,17 @@ namespace cg = cooperative_groups;
  * Rasterization to Pixels Forward Pass
  ****************************************************************************/
 
-template <uint32_t COLOR_DIM, typename S>
+template <uint32_t COLOR_DIM>
 __global__ void rasterize_to_pixels_fwd_kernel(
     const uint32_t C,
     const uint32_t N,
     const uint32_t n_isects,
     const bool packed,
-    const vec2<S> *__restrict__ means2d, // [C, N, 2] or [nnz, 2]
-    const vec3<S> *__restrict__ conics,  // [C, N, 3] or [nnz, 3]
-    const S *__restrict__ colors,      // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
-    const S *__restrict__ opacities,   // [C, N] or [nnz]
-    const S *__restrict__ backgrounds, // [C, COLOR_DIM]
+    const vec2 *__restrict__ means2d, // [C, N, 2] or [nnz, 2]
+    const vec3 *__restrict__ conics,  // [C, N, 3] or [nnz, 3]
+    const float *__restrict__ colors,      // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
+    const float *__restrict__ opacities,   // [C, N] or [nnz]
+    const float *__restrict__ backgrounds, // [C, COLOR_DIM]
     const bool *__restrict__ masks,    // [C, tile_height, tile_width]
     const uint32_t image_width,
     const uint32_t image_height,
@@ -31,8 +31,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
-    S *__restrict__ render_colors, // [C, image_height, image_width, COLOR_DIM]
-    S *__restrict__ render_alphas, // [C, image_height, image_width, 1]
+    float *__restrict__ render_colors, // [C, image_height, image_width, COLOR_DIM]
+    float *__restrict__ render_alphas, // [C, image_height, image_width, 1]
     int32_t *__restrict__ last_ids // [C, image_height, image_width]
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
@@ -56,8 +56,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         masks += camera_id * tile_height * tile_width;
     }
 
-    S px = (S)j + 0.5f;
-    S py = (S)i + 0.5f;
+    float px = (float)j + 0.5f;
+    float py = (float)i + 0.5f;
     int32_t pix_id = i * image_width + j;
 
     // return if out of bounds
@@ -89,17 +89,17 @@ __global__ void rasterize_to_pixels_fwd_kernel(
 
     extern __shared__ int s[];
     int32_t *id_batch = (int32_t *)s; // [block_size]
-    vec3<S> *xy_opacity_batch =
-        reinterpret_cast<vec3<float> *>(&id_batch[block_size]); // [block_size]
-    vec3<S> *conic_batch =
-        reinterpret_cast<vec3<float> *>(&xy_opacity_batch[block_size]
+    vec3 *xy_opacity_batch =
+        reinterpret_cast<vec3 *>(&id_batch[block_size]); // [block_size]
+    vec3 *conic_batch =
+        reinterpret_cast<vec3 *>(&xy_opacity_batch[block_size]
         ); // [block_size]
 
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
     // numerical precision so we use double for it. However double make bwd 1.5x
     // slower so we stick with float for now.
-    S T = 1.0f;
+    float T = 1.0f;
     // index of most recent gaussian to write to this thread's pixel
     uint32_t cur_idx = 0;
 
@@ -108,7 +108,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     // designated pixel
     uint32_t tr = block.thread_rank();
 
-    S pix_out[COLOR_DIM] = {0.f};
+    float pix_out[COLOR_DIM] = {0.f};
     for (uint32_t b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
@@ -123,8 +123,8 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         if (idx < range_end) {
             int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
             id_batch[tr] = g;
-            const vec2<S> xy = means2d[g];
-            const S opac = opacities[g];
+            const vec2 xy = means2d[g];
+            const float opac = opacities[g];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             conic_batch[tr] = conics[g];
         }
@@ -135,27 +135,27 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         // process gaussians in the current batch for this pixel
         uint32_t batch_size = min(block_size, range_end - batch_start);
         for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
-            const vec3<S> conic = conic_batch[t];
-            const vec3<S> xy_opac = xy_opacity_batch[t];
-            const S opac = xy_opac.z;
-            const vec2<S> delta = {xy_opac.x - px, xy_opac.y - py};
-            const S sigma = 0.5f * (conic.x * delta.x * delta.x +
+            const vec3 conic = conic_batch[t];
+            const vec3 xy_opac = xy_opacity_batch[t];
+            const float opac = xy_opac.z;
+            const vec2 delta = {xy_opac.x - px, xy_opac.y - py};
+            const float sigma = 0.5f * (conic.x * delta.x * delta.x +
                                     conic.z * delta.y * delta.y) +
                             conic.y * delta.x * delta.y;
-            S alpha = min(0.999f, opac * __expf(-sigma));
+            float alpha = min(0.999f, opac * __expf(-sigma));
             if (sigma < 0.f || alpha < 1.f / 255.f) {
                 continue;
             }
 
-            const S next_T = T * (1.0f - alpha);
+            const float next_T = T * (1.0f - alpha);
             if (next_T <= 1e-4) { // this pixel is done: exclusive
                 done = true;
                 break;
             }
 
             int32_t g = id_batch[t];
-            const S vis = alpha * T;
-            const S *c_ptr = colors + g * COLOR_DIM;
+            const float vis = alpha * T;
+            const float *c_ptr = colors + g * COLOR_DIM;
             GSPLAT_PRAGMA_UNROLL
             for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                 pix_out[k] += c_ptr[k] * vis;
@@ -243,13 +243,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
     at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
     const uint32_t shared_mem =
         tile_size * tile_size *
-        (sizeof(int32_t) + sizeof(vec3<float>) + sizeof(vec3<float>));
+        (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3));
 
     // TODO: an optimization can be done by passing the actual number of
     // channels into the kernel functions and avoid necessary global memory
     // writes. This requires moving the channel padding from python to C side.
     if (cudaFuncSetAttribute(
-            rasterize_to_pixels_fwd_kernel<CDIM, float>,
+            rasterize_to_pixels_fwd_kernel<CDIM>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
             shared_mem
         ) != cudaSuccess) {
@@ -259,14 +259,14 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
             " bytes), try lowering tile_size."
         );
     }
-    rasterize_to_pixels_fwd_kernel<CDIM, float>
+    rasterize_to_pixels_fwd_kernel<CDIM>
         <<<blocks, threads, shared_mem, stream>>>(
             C,
             N,
             n_isects,
             packed,
-            reinterpret_cast<vec2<float> *>(means2d.data_ptr<float>()),
-            reinterpret_cast<vec3<float> *>(conics.data_ptr<float>()),
+            reinterpret_cast<vec2 *>(means2d.data_ptr<float>()),
+            reinterpret_cast<vec3 *>(conics.data_ptr<float>()),
             colors.data_ptr<float>(),
             opacities.data_ptr<float>(),
             backgrounds.has_value() ? backgrounds.value().data_ptr<float>()

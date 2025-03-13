@@ -1,5 +1,4 @@
-#ifndef GSPLAT_CUDA_BINDINGS_H
-#define GSPLAT_CUDA_BINDINGS_H
+#pragma once
 
 #include <c10/cuda/CUDAGuard.h>
 #include <torch/extension.h>
@@ -74,22 +73,6 @@ std::tuple<torch::Tensor, torch::Tensor> proj_bwd_tensor(
     const torch::Tensor &v_covars2d // [C, N, 2, 2]
 );
 
-std::tuple<torch::Tensor, torch::Tensor> world_to_cam_fwd_tensor(
-    const torch::Tensor &means,   // [N, 3]
-    const torch::Tensor &covars,  // [N, 3, 3]
-    const torch::Tensor &viewmats // [C, 4, 4]
-);
-
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> world_to_cam_bwd_tensor(
-    const torch::Tensor &means,                    // [N, 3]
-    const torch::Tensor &covars,                   // [N, 3, 3]
-    const torch::Tensor &viewmats,                 // [C, 4, 4]
-    const at::optional<torch::Tensor> &v_means_c,  // [C, N, 3]
-    const at::optional<torch::Tensor> &v_covars_c, // [C, N, 3, 3]
-    const bool means_requires_grad,
-    const bool covars_requires_grad,
-    const bool viewmats_requires_grad
-);
 
 std::tuple<
     torch::Tensor,
@@ -502,5 +485,3 @@ void selective_adam_update(
     const uint32_t M);
 
 } // namespace gsplat
-
-#endif // GSPLAT_CUDA_BINDINGS_H

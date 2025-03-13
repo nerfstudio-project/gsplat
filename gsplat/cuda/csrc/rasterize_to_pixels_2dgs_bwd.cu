@@ -1,10 +1,10 @@
 #include "bindings.h"
-#include "helpers.cuh"
 #include "types.cuh"
-#include "2dgs.cuh"
+#include "reduce.cuh"
+#include "_utils.cuh"
+
 #include <cooperative_groups.h>
-#include <cub/cub.cuh>
-#include <cuda_runtime.h>
+#include <ATen/cuda/Atomic.cuh>
 
 namespace gsplat {
 
@@ -13,20 +13,20 @@ namespace cg = cooperative_groups;
 /****************************************************************************
  * Rasterization to Pixels Backward Pass 2DGS
  ****************************************************************************/
-template <uint32_t COLOR_DIM, typename S>
+template <uint32_t COLOR_DIM>
 __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
     const uint32_t C,    // number of cameras
     const uint32_t N,    // number of gaussians
     const uint32_t n_isects,  // number of ray-primitive intersections.
     const bool packed,       // whether the input tensors are packed
     // fwd inputs
-    const vec2<S> *__restrict__ means2d,   // Projected Gaussian means. [C, N, 2] if packed is False, [nnz, 2] if packed is True.
-    const S *__restrict__ ray_transforms,  // transformation matrices that transforms xy-planes in pixel spaces into splat coordinates. [C, N, 3, 3] if packed is False, [nnz, channels] if packed is True.
+    const vec2 *__restrict__ means2d,   // Projected Gaussian means. [C, N, 2] if packed is False, [nnz, 2] if packed is True.
+    const float *__restrict__ ray_transforms,  // transformation matrices that transforms xy-planes in pixel spaces into splat coordinates. [C, N, 3, 3] if packed is False, [nnz, channels] if packed is True.
                                            // This is (KWH)^{-1} in the paper (takes screen [x,y] and map to [u,v])
-    const S *__restrict__ colors,      // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]  // Gaussian colors or ND features.
-    const S *__restrict__ normals,     // [C, N, 3] or [nnz, 3]                  // The normals in camera space.
-    const S *__restrict__ opacities,   // [C, N] or [nnz]                        // Gaussian opacities that support per-view values.
-    const S *__restrict__ backgrounds, // [C, COLOR_DIM]                         // Background colors on camera basis
+    const float *__restrict__ colors,      // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]  // Gaussian colors or ND features.
+    const float *__restrict__ normals,     // [C, N, 3] or [nnz, 3]                  // The normals in camera space.
+    const float *__restrict__ opacities,   // [C, N] or [nnz]                        // Gaussian opacities that support per-view values.
+    const float *__restrict__ backgrounds, // [C, COLOR_DIM]                         // Background colors on camera basis
     const bool *__restrict__ masks,    // [C, tile_height, tile_width]           // Optional tile mask to skip rendering GS to masked tiles.
 
     const uint32_t image_width,
@@ -38,28 +38,28 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
 
     // fwd outputs
-    const S *__restrict__ render_colors,    // [C, image_height, image_width,
+    const float *__restrict__ render_colors,    // [C, image_height, image_width,
                                             // COLOR_DIM]
-    const S *__restrict__ render_alphas,    // [C, image_height, image_width, 1]
+    const float *__restrict__ render_alphas,    // [C, image_height, image_width, 1]
     const int32_t *__restrict__ last_ids,   // [C, image_height, image_width]     // the id to last gaussian that got intersected 
     const int32_t *__restrict__ median_ids, // [C, image_height, image_width]     // the id to the gaussian that brings the opacity over 0.5
 
     // grad outputs
-    const S *__restrict__ v_render_colors,  // [C, image_height, image_width,     // RGB
+    const float *__restrict__ v_render_colors,  // [C, image_height, image_width,     // RGB
                                             // COLOR_DIM]
-    const S *__restrict__ v_render_alphas,  // [C, image_height, image_width, 1]  // total opacities.
-    const S *__restrict__ v_render_normals, // [C, image_height, image_width, 3]  // camera space normals
-    const S *__restrict__ v_render_distort, // [C, image_height, image_width, 1]  // mip-nerf 360 distorts
-    const S *__restrict__ v_render_median,  // [C, image_height, image_width, 1]  // the median depth
+    const float *__restrict__ v_render_alphas,  // [C, image_height, image_width, 1]  // total opacities.
+    const float *__restrict__ v_render_normals, // [C, image_height, image_width, 3]  // camera space normals
+    const float *__restrict__ v_render_distort, // [C, image_height, image_width, 1]  // mip-nerf 360 distorts
+    const float *__restrict__ v_render_median,  // [C, image_height, image_width, 1]  // the median depth
 
     // grad inputs
-    vec2<S> *__restrict__ v_means2d_abs, // [C, N, 2] or [nnz, 2]
-    vec2<S> *__restrict__ v_means2d,     // [C, N, 2] or [nnz, 2]
-    S *__restrict__ v_ray_transforms,            // [C, N, 3, 3] or [nnz, 3, 3]
-    S *__restrict__ v_colors,    // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
-    S *__restrict__ v_opacities, // [C, N] or [nnz]
-    S *__restrict__ v_normals,   // [C, N, 3] or [nnz, 3]
-    S *__restrict__ v_densify
+    vec2 *__restrict__ v_means2d_abs, // [C, N, 2] or [nnz, 2]
+    vec2 *__restrict__ v_means2d,     // [C, N, 2] or [nnz, 2]
+    float *__restrict__ v_ray_transforms,            // [C, N, 3, 3] or [nnz, 3, 3]
+    float *__restrict__ v_colors,    // [C, N, COLOR_DIM] or [nnz, COLOR_DIM]
+    float *__restrict__ v_opacities, // [C, N] or [nnz]
+    float *__restrict__ v_normals,   // [C, N, 3] or [nnz, 3]
+    float *__restrict__ v_densify
 ) {
     /**
      * ==============================
@@ -101,8 +101,8 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
         return;
     }
 
-    const S px = (S)j + 0.5f;
-    const S py = (S)i + 0.5f;
+    const float px = (float)j + 0.5f;
+    const float py = (float)i + 0.5f;
     // clamp this value to the last pixel
     const int32_t pix_id =
         min(i * image_width + j, image_width * image_height - 1);
@@ -133,23 +133,23 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
     extern __shared__ int s[];
     int32_t *id_batch = (int32_t *)s; // [block_size]
 
-    vec3<S> *xy_opacity_batch = reinterpret_cast<vec3<float> *>(&id_batch[block_size]); // [block_size]
-    vec3<S> *u_Ms_batch = reinterpret_cast<vec3<float> *>(&xy_opacity_batch[block_size]); // [block_size]
-    vec3<S> *v_Ms_batch = reinterpret_cast<vec3<float> *>(&u_Ms_batch[block_size]); // [block_size]
-    vec3<S> *w_Ms_batch = reinterpret_cast<vec3<float> *>(&v_Ms_batch[block_size]); // [block_size]
+    vec3 *xy_opacity_batch = reinterpret_cast<vec3 *>(&id_batch[block_size]); // [block_size]
+    vec3 *u_Ms_batch = reinterpret_cast<vec3 *>(&xy_opacity_batch[block_size]); // [block_size]
+    vec3 *v_Ms_batch = reinterpret_cast<vec3 *>(&u_Ms_batch[block_size]); // [block_size]
+    vec3 *w_Ms_batch = reinterpret_cast<vec3 *>(&v_Ms_batch[block_size]); // [block_size]
 
     // extended memory block
-    S *rgbs_batch = (S *)&w_Ms_batch[block_size]; // [block_size * COLOR_DIM]
-    S *normals_batch = &rgbs_batch[block_size * COLOR_DIM]; // [block_size * 3]
+    float *rgbs_batch = (float *)&w_Ms_batch[block_size]; // [block_size * COLOR_DIM]
+    float *normals_batch = &rgbs_batch[block_size * COLOR_DIM]; // [block_size * 3]
 
     // this is the T AFTER the last gaussian in this pixel
-    S T_final = 1.0f - render_alphas[pix_id];
-    S T = T_final;
+    float T_final = 1.0f - render_alphas[pix_id];
+    float T = T_final;
 
     // the contribution from gaussians behind the current one
     // this is used to compute d(alpha)/d(c_i)
-    S buffer[COLOR_DIM] = {0.f};
-    S buffer_normals[3] = {0.f};
+    float buffer[COLOR_DIM] = {0.f};
+    float buffer_normals[3] = {0.f};
 
     // index of last gaussian to contribute to this pixel
     const int32_t bin_final = inside ? last_ids[pix_id] : 0;
@@ -165,15 +165,15 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
 
     // df/d_out for this pixel (within register)
     // FETCH COLOR GRADIENT
-    S v_render_c[COLOR_DIM];
+    float v_render_c[COLOR_DIM];
     GSPLAT_PRAGMA_UNROLL
     for (uint32_t k = 0; k < COLOR_DIM; ++k) {
         v_render_c[k] = v_render_colors[pix_id * COLOR_DIM + k];
     }
 
     // FETCH ALPHA GRADIENT
-    const S v_render_a = v_render_alphas[pix_id];
-    S v_render_n[3];
+    const float v_render_a = v_render_alphas[pix_id];
+    float v_render_n[3];
 
     // FETCH NORMAL GRADIENT (NORMALIZATION FOR 2DGS)
     GSPLAT_PRAGMA_UNROLL
@@ -182,9 +182,9 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
     }
 
     // PREPARE FOR DISTORTION (IF DISTORSION LOSS ENABLED)
-    S v_distort = 0.f;
-    S accum_d, accum_w;
-    S accum_d_buffer, accum_w_buffer, distort_buffer;
+    float v_distort = 0.f;
+    float accum_d, accum_w;
+    float accum_d_buffer, accum_w_buffer, distort_buffer;
     if (v_render_distort != nullptr) {
         v_distort = v_render_distort[pix_id];
         // last channel of render_colors is accumulated depth
@@ -196,7 +196,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
     }
 
     // median depth gradients
-    S v_median = v_render_median[pix_id];
+    float v_median = v_render_median[pix_id];
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing
@@ -240,8 +240,8 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
         if (idx >= range_start) {
             int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
             id_batch[tr] = g;
-            const vec2<S> xy = means2d[g];
-            const S opac = opacities[g];
+            const vec2 xy = means2d[g];
+            const float opac = opacities[g];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
 
             u_Ms_batch[tr] = {
@@ -283,19 +283,19 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
              * Forward pass variables
              * ==================================================
              */
-            S alpha;    // for the currently processed gaussian, per pixel
-            S opac;     // opacity of the currently processed gaussian, per pixel
-            S vis;      // visibility of the currently processed gaussian (the pure gaussian weight, not multiplied by opacity), per pixel
-            S gauss_weight_3d;    // 3D gaussian weight (using the proper intersection of UV space), per pixel
-            S gauss_weight_2d;    // 2D gaussian weight (using the projected 2D mean), per pixel    
-            S gauss_weight;        // minimum of 3D and 2D gaussian weights, per pixel
+            float alpha;    // for the currently processed gaussian, per pixel
+            float opac;     // opacity of the currently processed gaussian, per pixel
+            float vis;      // visibility of the currently processed gaussian (the pure gaussian weight, not multiplied by opacity), per pixel
+            float gauss_weight_3d;    // 3D gaussian weight (using the proper intersection of UV space), per pixel
+            float gauss_weight_2d;    // 2D gaussian weight (using the projected 2D mean), per pixel    
+            float gauss_weight;        // minimum of 3D and 2D gaussian weights, per pixel
 
-            vec2<S> s;      // normalized point of intersection on the uv, per pixel
-            vec2<S> d;      // position on uv plane with respect to the primitive center, per pixel
-            vec3<S> h_u;    // homogeneous plane parameter for us, per pixel
-            vec3<S> h_v;    // homogeneous plane parameter for vs, per pixel
-            vec3<S> ray_cross;    // ray cross product, the ray of plane intersection, per pixel
-            vec3<S> w_M;    // depth component of the ray transform matrix, per pixel
+            vec2 s;      // normalized point of intersection on the uv, per pixel
+            vec2 d;      // position on uv plane with respect to the primitive center, per pixel
+            vec3 h_u;    // homogeneous plane parameter for us, per pixel
+            vec3 h_v;    // homogeneous plane parameter for vs, per pixel
+            vec3 ray_cross;    // ray cross product, the ray of plane intersection, per pixel
+            vec3 w_M;    // depth component of the ray transform matrix, per pixel
             
             /**
              * ==================================================
@@ -303,12 +303,12 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
              * ==================================================
              */
             if (valid) {
-                vec3<S> xy_opac = xy_opacity_batch[t];
+                vec3 xy_opac = xy_opacity_batch[t];
 
                 opac = xy_opac.z;
 
-                const vec3<S> u_M = u_Ms_batch[t];
-                const vec3<S> v_M = v_Ms_batch[t];
+                const vec3 u_M = u_Ms_batch[t];
+                const vec3 v_M = v_Ms_batch[t];
                 
                 w_M = w_Ms_batch[t];
 
@@ -331,7 +331,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 gauss_weight = min(gauss_weight_3d, gauss_weight_2d);
 
                 // visibility and alpha
-                const S sigma = 0.5f * gauss_weight;
+                const float sigma = 0.5f * gauss_weight;
                 vis = __expf(-sigma);
                 alpha = min(0.999f, opac * vis);  // clipped alpha
 
@@ -355,23 +355,23 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
              * ==================================================
              */
              // rgb gradients
-            S v_rgb_local[COLOR_DIM] = {0.f};
+            float v_rgb_local[COLOR_DIM] = {0.f};
             // normal gradients
-            S v_normal_local[3] = {0.f};
+            float v_normal_local[3] = {0.f};
 
             // ray transform gradients
-            vec3<S> v_u_M_local = {0.f, 0.f, 0.f};
-            vec3<S> v_v_M_local = {0.f, 0.f, 0.f};
-            vec3<S> v_w_M_local = {0.f, 0.f, 0.f};
+            vec3 v_u_M_local = {0.f, 0.f, 0.f};
+            vec3 v_v_M_local = {0.f, 0.f, 0.f};
+            vec3 v_w_M_local = {0.f, 0.f, 0.f};
             
             // 2D mean gradients, used if 2d gaussian weight is applied
-            vec2<S> v_xy_local = {0.f, 0.f};
+            vec2 v_xy_local = {0.f, 0.f};
             
             // absolute 2D mean gradients, used if 2d gaussian weight is applied
-            vec2<S> v_xy_abs_local = {0.f, 0.f};
+            vec2 v_xy_abs_local = {0.f, 0.f};
 
             // opacity gradients
-            S v_opacity_local = 0.f;
+            float v_opacity_local = 0.f;
 
             // initialize everything to 0, only set if the lane is valid
             /**
@@ -395,14 +395,14 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 // compute the current T for this gaussian
                 // since the output T = coprod (1 - alpha_i), we have T_(i-1) = T_i * 1/(1 - alpha_(i-1))
                 // potential numerical stability issue if alpha -> 1
-                S ra = 1.0f / (1.0f - alpha);
+                float ra = 1.0f / (1.0f - alpha);
                 T *= ra;
 
                 // update v_rgb for this gaussian
                 // because the weight is computed as: c_i (a_i G_i) * T : T = prod{1, i-1}(1 - a_j G_j)
                 // we have d(img)/d(c_i) = (a_i G_i) * T
                 // where alpha_i is a_i * G_i
-                const S fac = alpha * T;
+                const float fac = alpha * T;
                 GSPLAT_PRAGMA_UNROLL
                 for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                     v_rgb_local[k] += fac * v_render_c[k];
@@ -411,7 +411,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 // contribution from this pixel to alpha
                 // we have d(alpha)/d(c_i) = c_i * G_i * T + [grad contribution from following gaussians in T term]
                 // this can be proven by symbolic differentiation of a_i with respect to c_out
-                S v_alpha = 0.f;
+                float v_alpha = 0.f;
                 for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                     v_alpha += (rgbs_batch[t * COLOR_DIM + k] * T - buffer[k] * ra) * v_render_c[k];
                 }
@@ -440,7 +440,7 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 // this prevents the background rendered in the fwd pass being considered as inaccuracies in primitives
                 // this allows us to swtich background colors to prevent overfitting to particular backgrounds i.e. black
                 if (backgrounds != nullptr) {
-                    S accum = 0.f;
+                    float accum = 0.f;
                     GSPLAT_PRAGMA_UNROLL
                     for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                         accum += backgrounds[k] * v_render_c[k];
@@ -451,8 +451,8 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 // contribution from distortion
                 if (v_render_distort != nullptr) {
                     // last channel of colors is depth
-                    S depth = rgbs_batch[t * COLOR_DIM + COLOR_DIM - 1];
-                    S dl_dw =
+                    float depth = rgbs_batch[t * COLOR_DIM + COLOR_DIM - 1];
+                    float dl_dw =
                         2.0f *
                         (2.0f * (depth * accum_w_buffer - accum_d_buffer) +
                          (accum_d - depth * accum_w));
@@ -472,29 +472,29 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                  * ==================================================
                  */
                 if (opac * vis <= 0.999f) {
-                    S v_depth = 0.f;
+                    float v_depth = 0.f;
                     // d(a_i * G_i) / d(G_i) = a_i
-                    const S v_G = opac * v_alpha;
+                    const float v_G = opac * v_alpha;
 
                     // case 1: in the forward pass, the proper ray-primitive intersection is used
                     if (gauss_weight_3d <= gauss_weight_2d) {
 
                         // derivative of G_i w.r.t. ray-primitive intersection uv coordinates
-                        const vec2<S> v_s = {
+                        const vec2 v_s = {
                             v_G * -vis * s.x + v_depth * w_M.x,
                             v_G * -vis * s.y + v_depth * w_M.y
                         };
 
                         // backward through the projective transform
                         // @see rasterize_to_pixels_2dgs_fwd.cu to understand what is going on here
-                        const vec3<S> v_z_w_M = {s.x, s.y, 1.0};
-                        const S v_sx_pz = v_s.x / ray_cross.z;
-                        const S v_sy_pz = v_s.y / ray_cross.z;
-                        const vec3<S> v_ray_cross = {
+                        const vec3 v_z_w_M = {s.x, s.y, 1.0};
+                        const float v_sx_pz = v_s.x / ray_cross.z;
+                        const float v_sy_pz = v_s.y / ray_cross.z;
+                        const vec3 v_ray_cross = {
                             v_sx_pz, v_sy_pz, -(v_sx_pz * s.x + v_sy_pz * s.y)
                         };
-                        const vec3<S> v_h_u = glm::cross(h_v, v_ray_cross);
-                        const vec3<S> v_h_v = glm::cross(v_ray_cross, h_u);
+                        const vec3 v_h_u = glm::cross(h_v, v_ray_cross);
+                        const vec3 v_h_v = glm::cross(v_ray_cross, h_u);
 
                         // derivative of ray-primitive intersection uv coordinates w.r.t. transformation (geometry) coefficients
                         v_u_M_local = {-v_h_u.x, -v_h_u.y, -v_h_u.z};
@@ -508,8 +508,8 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                     // case 2: in the forward pass, the 2D gaussian projected gaussian weight is used
                     } else {
                         // computing the derivative of G_i w.r.t. 2d projected gaussian parameters (trivial)
-                        const S v_G_ddelx = -vis * FILTER_INV_SQUARE * d.x;
-                        const S v_G_ddely = -vis * FILTER_INV_SQUARE * d.y;
+                        const float v_G_ddelx = -vis * FILTER_INV_SQUARE * d.x;
+                        const float v_G_ddely = -vis * FILTER_INV_SQUARE * d.y;
                         v_xy_local = {v_G * v_G_ddelx, v_G * v_G_ddely};
                         if (v_means2d_abs != nullptr) {
                             v_xy_abs_local = {
@@ -542,16 +542,16 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
              * Warp-level reduction to compute the sum of the gradients for each gaussian
              * ==================================================
              */
-            warpSum<COLOR_DIM, S>(v_rgb_local, warp);
-            warpSum<3, S>(v_normal_local, warp);
-            warpSum<decltype(warp), S>(v_xy_local, warp);
-            warpSum<decltype(warp), S>(v_u_M_local, warp);
-            warpSum<decltype(warp), S>(v_v_M_local, warp);
-            warpSum<decltype(warp), S>(v_w_M_local, warp);
+            warpSum<COLOR_DIM>(v_rgb_local, warp);
+            warpSum<3>(v_normal_local, warp);
+            warpSum<decltype(warp)>(v_xy_local, warp);
+            warpSum<decltype(warp)>(v_u_M_local, warp);
+            warpSum<decltype(warp)>(v_v_M_local, warp);
+            warpSum<decltype(warp)>(v_w_M_local, warp);
             if (v_means2d_abs != nullptr) {
-                warpSum<decltype(warp), S>(v_xy_abs_local, warp);
+                warpSum<decltype(warp)>(v_xy_abs_local, warp);
             }
-            warpSum<decltype(warp), S>(v_opacity_local, warp);
+            warpSum<decltype(warp)>(v_opacity_local, warp);
             int32_t g = id_batch[t]; // flatten index in [C * N] or [nnz]
 
             /**
@@ -560,19 +560,19 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
              * ==================================================
              */
             if (warp.thread_rank() == 0) {
-                S *v_rgb_ptr = (S *)(v_colors) + COLOR_DIM * g;
+                float *v_rgb_ptr = (float *)(v_colors) + COLOR_DIM * g;
                 GSPLAT_PRAGMA_UNROLL
                 for (uint32_t k = 0; k < COLOR_DIM; ++k) {
                     gpuAtomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
                 }
 
-                S *v_normal_ptr = (S *)(v_normals) + 3 * g;
+                float *v_normal_ptr = (float *)(v_normals) + 3 * g;
                 GSPLAT_PRAGMA_UNROLL
                 for (uint32_t k = 0; k < 3; ++k) {
                     gpuAtomicAdd(v_normal_ptr + k, v_normal_local[k]);
                 }
 
-                S *v_ray_transforms_ptr = (S *)(v_ray_transforms) + 9 * g;
+                float *v_ray_transforms_ptr = (float *)(v_ray_transforms) + 9 * g;
                 gpuAtomicAdd(v_ray_transforms_ptr, v_u_M_local.x);
                 gpuAtomicAdd(v_ray_transforms_ptr + 1, v_u_M_local.y);
                 gpuAtomicAdd(v_ray_transforms_ptr + 2, v_u_M_local.z);
@@ -583,12 +583,12 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
                 gpuAtomicAdd(v_ray_transforms_ptr + 7, v_w_M_local.y);
                 gpuAtomicAdd(v_ray_transforms_ptr + 8, v_w_M_local.z);
 
-                S *v_xy_ptr = (S *)(v_means2d) + 2 * g;
+                float *v_xy_ptr = (float *)(v_means2d) + 2 * g;
                 gpuAtomicAdd(v_xy_ptr, v_xy_local.x);
                 gpuAtomicAdd(v_xy_ptr + 1, v_xy_local.y);
 
                 if (v_means2d_abs != nullptr) {
-                    S *v_xy_abs_ptr = (S *)(v_means2d_abs) + 2 * g;
+                    float *v_xy_abs_ptr = (float *)(v_means2d_abs) + 2 * g;
                     gpuAtomicAdd(v_xy_abs_ptr, v_xy_abs_local.x);
                     gpuAtomicAdd(v_xy_abs_ptr + 1, v_xy_abs_local.y);
                 }
@@ -597,9 +597,9 @@ __global__ void rasterize_to_pixels_bwd_2dgs_kernel(
             }
 
             if (valid) {
-                S *v_densify_ptr = (S *)(v_densify) + 2 * g;
-                S *v_ray_transforms_ptr = (S *)(v_ray_transforms) + 9 * g;
-                S depth = w_M.z;
+                float *v_densify_ptr = (float *)(v_densify) + 2 * g;
+                float *v_ray_transforms_ptr = (float *)(v_ray_transforms) + 9 * g;
+                float depth = w_M.z;
                 v_densify_ptr[0] = v_ray_transforms_ptr[2] * depth;
                 v_densify_ptr[1] = v_ray_transforms_ptr[5] * depth;
             }
@@ -702,13 +702,13 @@ call_kernel_with_dim(
     if (n_isects) {
         const uint32_t shared_mem =
             tile_size * tile_size *
-            (sizeof(int32_t) + sizeof(vec3<float>) + sizeof(vec3<float>) +
-             sizeof(vec3<float>) + sizeof(vec3<float>) +
+            (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3) +
+             sizeof(vec3) + sizeof(vec3) +
              sizeof(float) * COLOR_DIM + sizeof(float) * 3);
         at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
 
         if (cudaFuncSetAttribute(
-                rasterize_to_pixels_bwd_2dgs_kernel<CDIM, float>,
+                rasterize_to_pixels_bwd_2dgs_kernel<CDIM>,
                 cudaFuncAttributeMaxDynamicSharedMemorySize,
                 shared_mem
             ) != cudaSuccess) {
@@ -718,13 +718,13 @@ call_kernel_with_dim(
                 " bytes), try lowering tile_size."
             );
         }
-        rasterize_to_pixels_bwd_2dgs_kernel<CDIM, float>
+        rasterize_to_pixels_bwd_2dgs_kernel<CDIM>
             <<<blocks, threads, shared_mem, stream>>>(
                 C,
                 N,
                 n_isects,
                 packed,
-                reinterpret_cast<vec2<float> *>(means2d.data_ptr<float>()),
+                reinterpret_cast<vec2 *>(means2d.data_ptr<float>()),
                 ray_transforms.data_ptr<float>(),
                 colors.data_ptr<float>(),
                 normals.data_ptr<float>(),
@@ -748,11 +748,11 @@ call_kernel_with_dim(
                 v_render_normals.data_ptr<float>(),
                 v_render_distort.data_ptr<float>(),
                 v_render_median.data_ptr<float>(),
-                absgrad ? reinterpret_cast<vec2<float> *>(
+                absgrad ? reinterpret_cast<vec2 *>(
                               v_means2d_abs.data_ptr<float>()
                           )
                         : nullptr,
-                reinterpret_cast<vec2<float> *>(v_means2d.data_ptr<float>()),
+                reinterpret_cast<vec2 *>(v_means2d.data_ptr<float>()),
                 v_ray_transforms.data_ptr<float>(),
                 v_colors.data_ptr<float>(),
                 v_opacities.data_ptr<float>(),

@@ -22,9 +22,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("proj_fwd", &gsplat::proj_fwd_tensor);
     m.def("proj_bwd", &gsplat::proj_bwd_tensor);
 
-    m.def("world_to_cam_fwd", &gsplat::world_to_cam_fwd_tensor);
-    m.def("world_to_cam_bwd", &gsplat::world_to_cam_bwd_tensor);
-
     m.def(
         "fully_fused_projection_fwd", &gsplat::fully_fused_projection_fwd_tensor
     );

@@ -1,8 +1,8 @@
 #include "bindings.h"
 #include "types.cuh"
+
 #include <cooperative_groups.h>
 #include <cub/cub.cuh>
-#include <cuda_runtime.h>
 
 namespace gsplat {
 
@@ -12,7 +12,7 @@ namespace cg = cooperative_groups;
  * Gaussian Tile Intersection
  ****************************************************************************/
 
-template <typename T>
+
 __global__ void isect_tiles(
     // if the data is [C, N, ...] or [nnz, ...] (packed)
     const bool packed,
@@ -24,9 +24,9 @@ __global__ void isect_tiles(
     const int64_t *__restrict__ camera_ids,   // [nnz] optional
     const int64_t *__restrict__ gaussian_ids, // [nnz] optional
     // data
-    const T *__restrict__ means2d,                   // [C, N, 2] or [nnz, 2]
+    const float *__restrict__ means2d,                   // [C, N, 2] or [nnz, 2]
     const int32_t *__restrict__ radii,               // [C, N] or [nnz]
-    const T *__restrict__ depths,                    // [C, N] or [nnz]
+    const float *__restrict__ depths,                    // [C, N] or [nnz]
     const int64_t *__restrict__ cum_tiles_per_gauss, // [C, N] or [nnz]
     const uint32_t tile_size,
     const uint32_t tile_width,
@@ -36,9 +36,6 @@ __global__ void isect_tiles(
     int64_t *__restrict__ isect_ids,       // [n_isects]
     int32_t *__restrict__ flatten_ids      // [n_isects]
 ) {
-    // For now we'll upcast float16 and bfloat16 to float32
-    using OpT = typename OpType<T>::type;
-
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
     bool first_pass = cum_tiles_per_gauss == nullptr;
@@ -46,7 +43,7 @@ __global__ void isect_tiles(
         return;
     }
 
-    const OpT radius = radii[idx];
+    const float radius = radii[idx];
     if (radius <= 0) {
         if (first_pass) {
             tiles_per_gauss[idx] = 0;
@@ -54,11 +51,11 @@ __global__ void isect_tiles(
         return;
     }
 
-    vec2<OpT> mean2d = glm::make_vec2(means2d + 2 * idx);
+    vec2 mean2d = glm::make_vec2(means2d + 2 * idx);
 
-    OpT tile_radius = radius / static_cast<OpT>(tile_size);
-    OpT tile_x = mean2d.x / static_cast<OpT>(tile_size);
-    OpT tile_y = mean2d.y / static_cast<OpT>(tile_size);
+    float tile_radius = radius / static_cast<float>(tile_size);
+    float tile_x = mean2d.x / static_cast<float>(tile_size);
+    float tile_y = mean2d.y / static_cast<float>(tile_size);
 
     // tile_min is inclusive, tile_max is exclusive
     uint2 tile_min, tile_max;
@@ -165,36 +162,28 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
     int64_t n_isects;
     torch::Tensor cum_tiles_per_gauss;
     if (total_elems) {
-        AT_DISPATCH_FLOATING_TYPES_AND2(
-            at::ScalarType::Half,
-            at::ScalarType::BFloat16,
-            means2d.scalar_type(),
-            "isect_tiles_total_elems",
-            [&]() {
-                isect_tiles<<<
-                    (total_elems + GSPLAT_N_THREADS - 1) / GSPLAT_N_THREADS,
-                    GSPLAT_N_THREADS,
-                    0,
-                    stream>>>(
-                    packed,
-                    C,
-                    N,
-                    nnz,
-                    camera_ids_ptr,
-                    gaussian_ids_ptr,
-                    reinterpret_cast<scalar_t *>(means2d.data_ptr<scalar_t>()),
-                    radii.data_ptr<int32_t>(),
-                    depths.data_ptr<scalar_t>(),
-                    nullptr,
-                    tile_size,
-                    tile_width,
-                    tile_height,
-                    tile_n_bits,
-                    tiles_per_gauss.data_ptr<int32_t>(),
-                    nullptr,
-                    nullptr
-                );
-            }
+        isect_tiles<<<
+            (total_elems + GSPLAT_N_THREADS - 1) / GSPLAT_N_THREADS,
+            GSPLAT_N_THREADS,
+            0,
+            stream>>>(
+            packed,
+            C,
+            N,
+            nnz,
+            camera_ids_ptr,
+            gaussian_ids_ptr,
+            reinterpret_cast<float *>(means2d.data_ptr<float>()),
+            radii.data_ptr<int32_t>(),
+            depths.data_ptr<float>(),
+            nullptr,
+            tile_size,
+            tile_width,
+            tile_height,
+            tile_n_bits,
+            tiles_per_gauss.data_ptr<int32_t>(),
+            nullptr,
+            nullptr
         );
         cum_tiles_per_gauss = torch::cumsum(tiles_per_gauss.view({-1}), 0);
         n_isects = cum_tiles_per_gauss[-1].item<int64_t>();
@@ -208,36 +197,28 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
     torch::Tensor flatten_ids =
         torch::empty({n_isects}, depths.options().dtype(torch::kInt32));
     if (n_isects) {
-        AT_DISPATCH_FLOATING_TYPES_AND2(
-            at::ScalarType::Half,
-            at::ScalarType::BFloat16,
-            means2d.scalar_type(),
-            "isect_tiles_n_isects",
-            [&]() {
-                isect_tiles<<<
-                    (total_elems + GSPLAT_N_THREADS - 1) / GSPLAT_N_THREADS,
-                    GSPLAT_N_THREADS,
-                    0,
-                    stream>>>(
-                    packed,
-                    C,
-                    N,
-                    nnz,
-                    camera_ids_ptr,
-                    gaussian_ids_ptr,
-                    reinterpret_cast<scalar_t *>(means2d.data_ptr<scalar_t>()),
-                    radii.data_ptr<int32_t>(),
-                    depths.data_ptr<scalar_t>(),
-                    cum_tiles_per_gauss.data_ptr<int64_t>(),
-                    tile_size,
-                    tile_width,
-                    tile_height,
-                    tile_n_bits,
-                    nullptr,
-                    isect_ids.data_ptr<int64_t>(),
-                    flatten_ids.data_ptr<int32_t>()
-                );
-            }
+        isect_tiles<<<
+            (total_elems + GSPLAT_N_THREADS - 1) / GSPLAT_N_THREADS,
+            GSPLAT_N_THREADS,
+            0,
+            stream>>>(
+            packed,
+            C,
+            N,
+            nnz,
+            camera_ids_ptr,
+            gaussian_ids_ptr,
+            reinterpret_cast<float *>(means2d.data_ptr<float>()),
+            radii.data_ptr<int32_t>(),
+            depths.data_ptr<float>(),
+            cum_tiles_per_gauss.data_ptr<int64_t>(),
+            tile_size,
+            tile_width,
+            tile_height,
+            tile_n_bits,
+            nullptr,
+            isect_ids.data_ptr<int64_t>(),
+            flatten_ids.data_ptr<int32_t>()
         );
     }
 

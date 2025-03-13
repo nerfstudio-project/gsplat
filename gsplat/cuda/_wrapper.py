@@ -1,9 +1,12 @@
-from typing import Callable, Optional, Tuple, Any
 import warnings
-from typing_extensions import Literal
+from typing import Any, Callable, Optional, Tuple
 
 import torch
 from torch import Tensor
+from typing_extensions import Literal
+
+# backward compatibility
+from ._torch_impl import _world_to_cam as world_to_cam
 
 
 def _make_lazy_cuda_func(name: str) -> Callable:
@@ -169,35 +172,6 @@ def proj(
     covars = covars.contiguous()
     Ks = Ks.contiguous()
     return _Proj.apply(means, covars, Ks, width, height, camera_model)
-
-
-def world_to_cam(
-    means: Tensor,  # [N, 3]
-    covars: Tensor,  # [N, 3, 3]
-    viewmats: Tensor,  # [C, 4, 4]
-) -> Tuple[Tensor, Tensor]:
-    """Transforms Gaussians from world to camera coordinate system.
-
-    Args:
-        means: Gaussian means. [N, 3]
-        covars: Gaussian covariances. [N, 3, 3]
-        viewmats: World-to-camera transformation matrices. [C, 4, 4]
-
-    Returns:
-        A tuple:
-
-        - **Gaussian means in camera coordinate system**. [C, N, 3]
-        - **Gaussian covariances in camera coordinate system**. [C, N, 3, 3]
-    """
-    C = viewmats.size(0)
-    N = means.size(0)
-    assert means.size() == (N, 3), means.size()
-    assert covars.size() == (N, 3, 3), covars.size()
-    assert viewmats.size() == (C, 4, 4), viewmats.size()
-    means = means.contiguous()
-    covars = covars.contiguous()
-    viewmats = viewmats.contiguous()
-    return _WorldToCam.apply(means, covars, viewmats)
 
 
 def fully_fused_projection(
@@ -732,44 +706,6 @@ class _Proj(torch.autograd.Function):
             v_covars2d.contiguous(),
         )
         return v_means, v_covars, None, None, None, None
-
-
-class _WorldToCam(torch.autograd.Function):
-    """Transforms Gaussians from world to camera space."""
-
-    @staticmethod
-    def forward(
-        ctx,
-        means: Tensor,  # [N, 3]
-        covars: Tensor,  # [N, 3, 3]
-        viewmats: Tensor,  # [C, 4, 4]
-    ) -> Tuple[Tensor, Tensor]:
-        means_c, covars_c = _make_lazy_cuda_func("world_to_cam_fwd")(
-            means, covars, viewmats
-        )
-        ctx.save_for_backward(means, covars, viewmats)
-        return means_c, covars_c
-
-    @staticmethod
-    def backward(ctx, v_means_c: Tensor, v_covars_c: Tensor):
-        means, covars, viewmats = ctx.saved_tensors
-        v_means, v_covars, v_viewmats = _make_lazy_cuda_func("world_to_cam_bwd")(
-            means,
-            covars,
-            viewmats,
-            v_means_c.contiguous(),
-            v_covars_c.contiguous(),
-            ctx.needs_input_grad[0],
-            ctx.needs_input_grad[1],
-            ctx.needs_input_grad[2],
-        )
-        if not ctx.needs_input_grad[0]:
-            v_means = None
-        if not ctx.needs_input_grad[1]:
-            v_covars = None
-        if not ctx.needs_input_grad[2]:
-            v_viewmats = None
-        return v_means, v_covars, v_viewmats
 
 
 class _FullyFusedProjection(torch.autograd.Function):
