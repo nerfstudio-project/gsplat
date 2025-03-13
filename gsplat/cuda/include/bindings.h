@@ -3,6 +3,7 @@
 #include <c10/cuda/CUDAGuard.h>
 #include <torch/extension.h>
 #include <tuple>
+#include "cameras.h"
 
 #define GSPLAT_N_THREADS 256
 
@@ -483,5 +484,22 @@ void selective_adam_update(
     const float eps,
     const uint32_t N,
     const uint32_t M);
+
+
+std::tuple<
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor>
+fully_fused_projection_3dgut_fwd_tensor(
+    const OpenCVPinholeCameraModelParameters &camera_params,   
+    const RollingShutterParameters &rs_params, 
+    const torch::Tensor &means,                // [N, 3]
+    const torch::Tensor &quats,                // [N, 4]
+    const torch::Tensor &scales,               // [N, 3]
+    const float near_plane,
+    const float far_plane,
+    const float radius_clip
+);
 
 } // namespace gsplat
