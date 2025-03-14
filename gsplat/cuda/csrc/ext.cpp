@@ -7,6 +7,7 @@
 #include "proj_fused.h"
 #include "proj_fused_packed.h"
 #include "sh.h"
+#include "adam.h"
 
 
 /****************************************************************************
@@ -110,12 +111,12 @@ std::tuple<
     torch::Tensor,
     torch::Tensor>
 proj_fused_fwd(
-    const torch::Tensor &means,                // [N, 3]
+    const torch::Tensor means,                // [N, 3]
     const at::optional<torch::Tensor> &covars, // [N, 6] optional
     const at::optional<torch::Tensor> &quats,  // [N, 4] optional
     const at::optional<torch::Tensor> &scales, // [N, 3] optional
-    const torch::Tensor &viewmats,             // [C, 4, 4]
-    const torch::Tensor &Ks,                   // [C, 3, 3]
+    const torch::Tensor viewmats,             // [C, 4, 4]
+    const torch::Tensor Ks,                   // [C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
@@ -197,24 +198,24 @@ std::tuple<
     torch::Tensor>
 proj_fused_bwd(
     // fwd inputs
-    const torch::Tensor &means,                // [N, 3]
+    const torch::Tensor means,                // [N, 3]
     const at::optional<torch::Tensor> &covars, // [N, 6] optional
     const at::optional<torch::Tensor> &quats,  // [N, 4] optional
     const at::optional<torch::Tensor> &scales, // [N, 3] optional
-    const torch::Tensor &viewmats,             // [C, 4, 4]
-    const torch::Tensor &Ks,                   // [C, 3, 3]
+    const torch::Tensor viewmats,             // [C, 4, 4]
+    const torch::Tensor Ks,                   // [C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
     const CameraModelType camera_model,
     // fwd outputs
-    const torch::Tensor &radii,                       // [C, N]
-    const torch::Tensor &conics,                      // [C, N, 3]
+    const torch::Tensor radii,                       // [C, N]
+    const torch::Tensor conics,                      // [C, N, 3]
     const at::optional<torch::Tensor> &compensations, // [C, N] optional
     // grad outputs
-    const torch::Tensor &v_means2d,                     // [C, N, 2]
-    const torch::Tensor &v_depths,                      // [C, N]
-    const torch::Tensor &v_conics,                      // [C, N, 3]
+    const torch::Tensor v_means2d,                     // [C, N, 2]
+    const torch::Tensor v_depths,                      // [C, N]
+    const torch::Tensor v_conics,                      // [C, N, 3]
     const at::optional<torch::Tensor> &v_compensations, // [C, N] optional
     const bool viewmats_requires_grad
 ) {
@@ -314,12 +315,12 @@ std::tuple<
     torch::Tensor,
     torch::Tensor>
 proj_fused_packed_fwd(
-    const torch::Tensor &means,                // [N, 3]
+    const torch::Tensor means,                // [N, 3]
     const at::optional<torch::Tensor> &covars, // [N, 6]
     const at::optional<torch::Tensor> &quats,  // [N, 3]
     const at::optional<torch::Tensor> &scales, // [N, 3]
-    const torch::Tensor &viewmats,             // [C, 4, 4]
-    const torch::Tensor &Ks,                   // [C, 3, 3]
+    const torch::Tensor viewmats,             // [C, 4, 4]
+    const torch::Tensor Ks,                   // [C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
@@ -472,25 +473,25 @@ std::tuple<
     torch::Tensor>
 proj_fused_packed_bwd(
     // fwd inputs
-    const torch::Tensor &means,                // [N, 3]
+    const torch::Tensor means,                // [N, 3]
     const at::optional<torch::Tensor> &covars, // [N, 6]
     const at::optional<torch::Tensor> &quats,  // [N, 4]
     const at::optional<torch::Tensor> &scales, // [N, 3]
-    const torch::Tensor &viewmats,             // [C, 4, 4]
-    const torch::Tensor &Ks,                   // [C, 3, 3]
+    const torch::Tensor viewmats,             // [C, 4, 4]
+    const torch::Tensor Ks,                   // [C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
     const CameraModelType camera_model,
     // fwd outputs
-    const torch::Tensor &camera_ids,                  // [nnz]
-    const torch::Tensor &gaussian_ids,                // [nnz]
-    const torch::Tensor &conics,                      // [nnz, 3]
+    const torch::Tensor camera_ids,                  // [nnz]
+    const torch::Tensor gaussian_ids,                // [nnz]
+    const torch::Tensor conics,                      // [nnz, 3]
     const at::optional<torch::Tensor> &compensations, // [nnz] optional
     // grad outputs
-    const torch::Tensor &v_means2d,                     // [nnz, 2]
-    const torch::Tensor &v_depths,                      // [nnz]
-    const torch::Tensor &v_conics,                      // [nnz, 3]
+    const torch::Tensor v_means2d,                     // [nnz, 2]
+    const torch::Tensor v_depths,                      // [nnz]
+    const torch::Tensor v_conics,                      // [nnz, 3]
     const at::optional<torch::Tensor> &v_compensations, // [nnz] optional
     const bool viewmats_requires_grad,
     const bool sparse_grad
@@ -596,8 +597,8 @@ proj_fused_packed_bwd(
 
 torch::Tensor sh_fwd(
     const uint32_t degrees_to_use,
-    const torch::Tensor &dirs,              // [..., 3]
-    const torch::Tensor &coeffs,            // [..., K, 3]
+    const torch::Tensor dirs,              // [..., 3]
+    const torch::Tensor coeffs,            // [..., K, 3]
     const at::optional<torch::Tensor> masks // [...]
 ) {
     DEVICE_GUARD(dirs);
@@ -636,10 +637,10 @@ torch::Tensor sh_fwd(
 std::tuple<torch::Tensor, torch::Tensor> sh_bwd(
     const uint32_t K,
     const uint32_t degrees_to_use,
-    const torch::Tensor &dirs,               // [..., 3]
-    const torch::Tensor &coeffs,             // [..., K, 3]
+    const torch::Tensor dirs,               // [..., 3]
+    const torch::Tensor coeffs,             // [..., K, 3]
     const at::optional<torch::Tensor> masks, // [...]
-    const torch::Tensor &v_colors,           // [..., 3]
+    const torch::Tensor v_colors,           // [..., 3]
     bool compute_v_dirs
 ) {
     DEVICE_GUARD(dirs);
@@ -682,6 +683,53 @@ std::tuple<torch::Tensor, torch::Tensor> sh_bwd(
 }
 
 
+
+/****************************************************************************
+ * Masked Adam
+ ****************************************************************************/
+
+void selective_adam(
+    torch::Tensor param,
+    torch::Tensor param_grad,
+    torch::Tensor exp_avg,
+    torch::Tensor exp_avg_sq,
+    torch::Tensor tiles_touched,
+    const float lr,
+    const float b1,
+    const float b2,
+    const float eps,
+    const uint32_t N,
+    const uint32_t M
+) {
+    DEVICE_GUARD(param);
+    CHECK_INPUT(param);
+    CHECK_INPUT(param_grad);
+    CHECK_INPUT(exp_avg);
+    CHECK_INPUT(exp_avg_sq);
+    CHECK_INPUT(tiles_touched);
+
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+    uint32_t n_elements = N * N;
+    uint32_t shmem_size = 0;
+    selective_adam_launcher(
+        shmem_size,
+        stream,
+        n_elements,
+        // args
+        param.data_ptr<float>(),
+        param_grad.data_ptr<float>(),
+        exp_avg.data_ptr<float>(),
+        exp_avg_sq.data_ptr<float>(),
+        tiles_touched.data_ptr<bool>(),
+        lr,
+        b1,
+        b2,
+        eps,
+        N,
+        M
+    );
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("proj_naive_fwd", proj_naive_fwd);
@@ -695,4 +743,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("sh_fwd", sh_fwd);
     m.def("sh_bwd", sh_bwd);
+
+    m.def("selective_adam", selective_adam);
 }
