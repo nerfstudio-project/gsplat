@@ -11,6 +11,13 @@
 #include <cooperative_groups.h>
 namespace cg = cooperative_groups;
 
+// #define DEBUG_PRINT_CUDA // uncomment to enable cuda debug printfs
+#ifdef DEBUG_PRINT_CUDA
+    #define DEBUG_PRINTF_CUDA(...) if(cg::this_grid().thread_rank() == 0) printf(__VA_ARGS__)
+#else
+    #define DEBUG_PRINTF_CUDA(...) ((void)0)
+#endif
+
 // Silence warnings / errors of the form
 //
 // __device__ / __host__ annotation is ignored on a function("XXX") that is explicitly defaulted on its first declaration
@@ -26,6 +33,26 @@ namespace cg = cooperative_groups;
 #include "cameras.h"
 
 #include "auxiliary.h"
+
+__forceinline__ __device__ glm::vec3 pix2world(const glm::vec2 pix, const int W, const int H, glm::vec4 inverse_vp0, glm::vec4 inverse_vp1, glm::vec4 inverse_vp3)
+{
+    const glm::vec2 pix_ndc = pix * glm::vec2(2.0f / W, 2.0f / H) - 1.0f;
+    glm::vec4 p_world = inverse_vp0 * pix_ndc.x + inverse_vp1 * pix_ndc.y + inverse_vp3;
+    float rcp_w = __frcp_rn(p_world.w);
+    return glm::vec3(p_world) * rcp_w;
+}
+
+__forceinline__ __device__ glm::vec3 pix2world(const glm::vec2 pix, const int W, const int H, const glm::mat4 inverse_vp)
+{
+    return pix2world(pix, W, H, inverse_vp[0], inverse_vp[1], inverse_vp[3]);
+}
+
+__forceinline__ __device__ glm::vec3 computeViewRay(const glm::mat4 inverse_vp, const glm::vec3 campos, const float2 pix, const int W, const int H)
+{
+    const glm::vec3 p_world = pix2world(glm::vec2(pix.x, pix.y), W, H, inverse_vp);
+    const glm::vec3 viewdir = glm::normalize(p_world - glm::vec3(campos.x, campos.y, campos.z));
+    return { viewdir.x, viewdir.y, viewdir.z };
+}
 
 // ---------------------------------------------------------------------------------------------
 
