@@ -6,6 +6,7 @@
 #include "proj_naive.h"
 #include "proj_fused.h"
 #include "proj_fused_packed.h"
+#include "sh.h"
 
 
 /****************************************************************************
@@ -589,6 +590,96 @@ proj_fused_packed_bwd(
     return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats);
 }
 
+/****************************************************************************
+ * Spherical Harmonics
+ ****************************************************************************/
+
+torch::Tensor sh_fwd(
+    const uint32_t degrees_to_use,
+    const torch::Tensor &dirs,              // [..., 3]
+    const torch::Tensor &coeffs,            // [..., K, 3]
+    const at::optional<torch::Tensor> masks // [...]
+) {
+    DEVICE_GUARD(dirs);
+    CHECK_INPUT(dirs);
+    CHECK_INPUT(coeffs);
+    if (masks.has_value()) {
+        CHECK_INPUT(masks.value());
+    }
+    TORCH_CHECK(coeffs.size(-1) == 3, "coeffs must have last dimension 3");
+    TORCH_CHECK(dirs.size(-1) == 3, "dirs must have last dimension 3");
+    const uint32_t K = coeffs.size(-2);
+    const uint32_t N = dirs.numel() / 3;
+    torch::Tensor colors = torch::empty_like(dirs); // [..., 3]
+
+    // parallelize over N * 3
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+    uint32_t n_elements = N;
+    uint32_t shmem_size = 0;
+    sh_fwd_launcher(
+        shmem_size,
+        stream,
+        n_elements,
+        // args
+        N,
+        K,
+        degrees_to_use,
+        reinterpret_cast<vec3 *>(dirs.data_ptr<float>()),
+        coeffs.data_ptr<float>(),
+        masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
+        colors.data_ptr<float>()
+    );
+    return colors; // [..., 3]
+}
+
+
+std::tuple<torch::Tensor, torch::Tensor> sh_bwd(
+    const uint32_t K,
+    const uint32_t degrees_to_use,
+    const torch::Tensor &dirs,               // [..., 3]
+    const torch::Tensor &coeffs,             // [..., K, 3]
+    const at::optional<torch::Tensor> masks, // [...]
+    const torch::Tensor &v_colors,           // [..., 3]
+    bool compute_v_dirs
+) {
+    DEVICE_GUARD(dirs);
+    CHECK_INPUT(dirs);
+    CHECK_INPUT(coeffs);
+    CHECK_INPUT(v_colors);
+    if (masks.has_value()) {
+        CHECK_INPUT(masks.value());
+    }
+    TORCH_CHECK(v_colors.size(-1) == 3, "v_colors must have last dimension 3");
+    TORCH_CHECK(coeffs.size(-1) == 3, "coeffs must have last dimension 3");
+    TORCH_CHECK(dirs.size(-1) == 3, "dirs must have last dimension 3");
+    const uint32_t N = dirs.numel() / 3;
+
+    torch::Tensor v_coeffs = torch::zeros_like(coeffs);
+    torch::Tensor v_dirs;
+    if (compute_v_dirs) {
+        v_dirs = torch::zeros_like(dirs);
+    }
+
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+    uint32_t n_elements = N;
+    uint32_t shmem_size = 0;
+    sh_bwd_launcher(
+        shmem_size,
+        stream,
+        n_elements,
+        // args
+        N,
+        K,
+        degrees_to_use,
+        reinterpret_cast<vec3 *>(dirs.data_ptr<float>()),
+        coeffs.data_ptr<float>(),
+        masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
+        v_colors.data_ptr<float>(),
+        v_coeffs.data_ptr<float>(),
+        compute_v_dirs ? v_dirs.data_ptr<float>() : nullptr
+    );
+    return std::make_tuple(v_coeffs, v_dirs); // [..., K, 3], [..., 3]
+}
 
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -601,4 +692,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("proj_fused_packed_fwd", proj_fused_packed_fwd);
     m.def("proj_fused_packed_bwd", proj_fused_packed_bwd);
+
+    m.def("sh_fwd", sh_fwd);
+    m.def("sh_bwd", sh_bwd);
 }
