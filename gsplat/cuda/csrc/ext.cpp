@@ -2,12 +2,13 @@
 #include <c10/cuda/CUDAGuard.h>
 #include <tuple>
 
-#include "common_host.h"
+#include "common.h"
 #include "proj_naive.h"
 #include "proj_fused.h"
 #include "proj_fused_packed.h"
 #include "sh.h"
 #include "adam.h"
+#include "isect_tiles.h"
 
 
 /****************************************************************************
@@ -685,7 +686,7 @@ std::tuple<torch::Tensor, torch::Tensor> sh_bwd(
 
 
 /****************************************************************************
- * Masked Adam
+ * Selective Adam
  ****************************************************************************/
 
 void selective_adam(
@@ -730,6 +731,211 @@ void selective_adam(
     );
 }
 
+
+/****************************************************************************
+ * Gaussian Tile Intersection
+ ****************************************************************************/
+
+
+ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles(
+    const torch::Tensor means2d,                    // [C, N, 2] or [nnz, 2]
+    const torch::Tensor radii,                      // [C, N] or [nnz]
+    const torch::Tensor depths,                     // [C, N] or [nnz]
+    const at::optional<torch::Tensor> camera_ids,   // [nnz]
+    const at::optional<torch::Tensor> gaussian_ids, // [nnz]
+    const uint32_t C,
+    const uint32_t tile_size,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
+    const bool sort,
+    const bool double_buffer
+) {
+    DEVICE_GUARD(means2d);
+    CHECK_INPUT(means2d);
+    CHECK_INPUT(radii);
+    CHECK_INPUT(depths);
+    if (camera_ids.has_value()) {
+        CHECK_INPUT(camera_ids.value());
+    }
+    if (gaussian_ids.has_value()) {
+        CHECK_INPUT(gaussian_ids.value());
+    }
+    bool packed = means2d.dim() == 2;
+
+    uint32_t N = 0, nnz = 0, total_elems = 0;
+    int64_t *camera_ids_ptr = nullptr;
+    int64_t *gaussian_ids_ptr = nullptr;
+    if (packed) {
+        nnz = means2d.size(0);
+        total_elems = nnz;
+        TORCH_CHECK(
+            camera_ids.has_value() && gaussian_ids.has_value(),
+            "When packed is set, camera_ids and gaussian_ids must be provided."
+        );
+        camera_ids_ptr = camera_ids.value().data_ptr<int64_t>();
+        gaussian_ids_ptr = gaussian_ids.value().data_ptr<int64_t>();
+    } else {
+        N = means2d.size(1); // number of gaussians
+        total_elems = C * N;
+    }
+
+    uint32_t n_tiles = tile_width * tile_height;
+    at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+
+    // the number of bits needed to encode the camera id and tile id
+    // Note: std::bit_width requires C++20
+    // uint32_t tile_n_bits = std::bit_width(n_tiles);
+    // uint32_t cam_n_bits = std::bit_width(C);
+    uint32_t tile_n_bits = (uint32_t)floor(log2(n_tiles)) + 1;
+    uint32_t cam_n_bits = (uint32_t)floor(log2(C)) + 1;
+    // the first 32 bits are used for the camera id and tile id altogether, so
+    // check if we have enough bits for them.
+    assert(tile_n_bits + cam_n_bits <= 32);
+
+    // first pass: compute number of tiles per gaussian
+    torch::Tensor tiles_per_gauss =
+        torch::empty_like(depths, depths.options().dtype(torch::kInt32));
+
+    int64_t n_isects;
+    torch::Tensor cum_tiles_per_gauss;
+    
+    uint32_t shmem_size = 0;
+    if (total_elems) {
+        isect_tiles_launcher(
+            shmem_size,
+            stream,
+            total_elems,
+            // args
+            packed,
+            C,
+            N,
+            nnz,
+            camera_ids_ptr,
+            gaussian_ids_ptr,
+            reinterpret_cast<float *>(means2d.data_ptr<float>()),
+            radii.data_ptr<int32_t>(),
+            depths.data_ptr<float>(),
+            nullptr,
+            tile_size,
+            tile_width,
+            tile_height,
+            tile_n_bits,
+            tiles_per_gauss.data_ptr<int32_t>(),
+            nullptr,
+            nullptr
+        );
+        cum_tiles_per_gauss = torch::cumsum(tiles_per_gauss.view({-1}), 0);
+        n_isects = cum_tiles_per_gauss[-1].item<int64_t>();
+    } else {
+        n_isects = 0;
+    }
+
+    // second pass: compute isect_ids and flatten_ids as a packed tensor
+    torch::Tensor isect_ids =
+        torch::empty({n_isects}, depths.options().dtype(torch::kInt64));
+    torch::Tensor flatten_ids =
+        torch::empty({n_isects}, depths.options().dtype(torch::kInt32));
+    if (n_isects) {
+        isect_tiles_launcher(
+            shmem_size,
+            stream,
+            total_elems,
+            // args
+            packed,
+            C,
+            N,
+            nnz,
+            camera_ids_ptr,
+            gaussian_ids_ptr,
+            reinterpret_cast<float *>(means2d.data_ptr<float>()),
+            radii.data_ptr<int32_t>(),
+            depths.data_ptr<float>(),
+            cum_tiles_per_gauss.data_ptr<int64_t>(),
+            tile_size,
+            tile_width,
+            tile_height,
+            tile_n_bits,
+            nullptr,
+            isect_ids.data_ptr<int64_t>(),
+            flatten_ids.data_ptr<int32_t>()
+        );
+    }
+
+    // optionally sort the Gaussians by isect_ids
+    if (n_isects && sort) {
+        torch::Tensor isect_ids_sorted = torch::empty_like(isect_ids);
+        torch::Tensor flatten_ids_sorted = torch::empty_like(flatten_ids);
+
+        bool isect_ids_swapped;
+        bool flatten_ids_swapped;
+        radix_sort(
+            stream,
+            n_isects,
+            tile_n_bits,
+            cam_n_bits,
+            double_buffer,
+            isect_ids.data_ptr<int64_t>(),
+            flatten_ids.data_ptr<int32_t>(),
+            isect_ids_sorted.data_ptr<int64_t>(),
+            flatten_ids_sorted.data_ptr<int32_t>(),
+            isect_ids_swapped,
+            flatten_ids_swapped
+        );
+        if (double_buffer) {
+            if (isect_ids_swapped) {
+                isect_ids_sorted = isect_ids;
+            }
+            if (flatten_ids_swapped) {
+                flatten_ids_sorted = flatten_ids;
+            }
+        }
+
+        return std::make_tuple(
+            tiles_per_gauss, isect_ids_sorted, flatten_ids_sorted
+        );
+    } else {
+        return std::make_tuple(tiles_per_gauss, isect_ids, flatten_ids);
+    }
+}
+
+torch::Tensor isect_offset_encode(
+    const torch::Tensor isect_ids, // [n_isects]
+    const uint32_t C,
+    const uint32_t tile_width,
+    const uint32_t tile_height
+) {
+    DEVICE_GUARD(isect_ids);
+    CHECK_INPUT(isect_ids);
+
+    uint32_t n_isects = isect_ids.size(0);
+    torch::Tensor offsets = torch::empty(
+        {C, tile_height, tile_width}, isect_ids.options().dtype(torch::kInt32)
+    );
+    if (n_isects) {
+        uint32_t n_tiles = tile_width * tile_height;
+        uint32_t tile_n_bits = (uint32_t)floor(log2(n_tiles)) + 1;
+        at::cuda::CUDAStream stream = at::cuda::getCurrentCUDAStream();
+        uint32_t shmem_size = 0;
+        uint32_t n_elements = n_isects;
+        isect_offset_encode_launcher(
+            shmem_size,
+            stream,
+            n_elements,
+            // args
+            n_isects,
+            isect_ids.data_ptr<int64_t>(),
+            C,
+            n_tiles,
+            tile_n_bits,
+            offsets.data_ptr<int32_t>()
+        );
+    } else {
+        offsets.fill_(0);
+    }
+    return offsets;
+}
+
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("proj_naive_fwd", proj_naive_fwd);
@@ -745,4 +951,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("sh_bwd", sh_bwd);
 
     m.def("selective_adam", selective_adam);
+
+    m.def("isect_tiles", isect_tiles);
+    m.def("isect_offset_encode", isect_offset_encode);
 }
