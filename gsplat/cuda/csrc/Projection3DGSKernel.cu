@@ -1,12 +1,15 @@
 #include <ATen/core/Tensor.h>
 #include <ATen/Dispatch.h>
 #include <c10/cuda/CUDAStream.h> 
+#include <cooperative_groups.h>
 
 #include "Common.h"
 #include "Utils.cuh"
 #include "ProjectionKernels.h"
 
 namespace gsplat{
+
+namespace cg = cooperative_groups;
 
 template <typename scalar_t>
 __global__ void projection_3dgs_fwd_kernel(
