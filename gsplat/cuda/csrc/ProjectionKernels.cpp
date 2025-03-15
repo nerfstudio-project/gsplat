@@ -12,7 +12,7 @@
 
 namespace gsplat{
 
-std::tuple<at::Tensor, at::Tensor> projection_ewa_3d_fwd(
+std::tuple<at::Tensor, at::Tensor> projection_ewa_3dgs_fwd(
     const at::Tensor means,  // [C, N, 3]
     const at::Tensor covars, // [C, N, 3, 3]
     const at::Tensor Ks,     // [C, 3, 3]
@@ -31,7 +31,7 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_3d_fwd(
     at::Tensor means2d = at::empty({C, N, 2}, means.options());
     at::Tensor covars2d = at::empty({C, N, 2, 2}, covars.options());
 
-    launch_projection_ewa_3d_fwd_kernel(
+    launch_projection_ewa_3dgs_fwd_kernel(
         // inputs
         means, 
         covars, 
@@ -47,7 +47,7 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_3d_fwd(
 }
 
 
-std::tuple<at::Tensor, at::Tensor> projection_ewa_3d_bwd(
+std::tuple<at::Tensor, at::Tensor> projection_ewa_3dgs_bwd(
     const at::Tensor means,  // [C, N, 3]
     const at::Tensor covars, // [C, N, 3, 3]
     const at::Tensor Ks,     // [C, 3, 3]
@@ -70,7 +70,7 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_3d_bwd(
     at::Tensor v_means = at::empty({C, N, 3}, means.options());
     at::Tensor v_covars = at::empty({C, N, 3, 3}, means.options());
 
-    launch_projection_ewa_3d_bwd_kernel(
+    launch_projection_ewa_3dgs_bwd_kernel(
         // inputs
         means, 
         covars, 
@@ -93,7 +93,7 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor>
-projection_ewa_3d_fused_fwd(
+projection_ewa_3dgs_fused_fwd(
     const at::Tensor means,                // [N, 3]
     const at::optional<at::Tensor> &covars, // [N, 6] optional
     const at::optional<at::Tensor> &quats,  // [N, 4] optional
@@ -135,7 +135,7 @@ projection_ewa_3d_fused_fwd(
         compensations = at::zeros({C, N}, means.options());
     }
     
-    launch_projection_ewa_3d_fused_fwd_kernel(
+    launch_projection_ewa_3dgs_fused_fwd_kernel(
         // inputs
         means,
         covars,
@@ -166,7 +166,7 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor>
-projection_ewa_3d_fused_bwd(
+projection_ewa_3dgs_fused_bwd(
     // fwd inputs
     const at::Tensor means,                // [N, 3]
     const at::optional<at::Tensor> &covars, // [N, 6] optional
@@ -226,7 +226,7 @@ projection_ewa_3d_fused_bwd(
         v_viewmats = at::zeros_like(viewmats);
     }
 
-    launch_projection_ewa_3d_fused_bwd_kernel(
+    launch_projection_ewa_3dgs_fused_bwd_kernel(
         // inputs
         means,
         covars,
@@ -268,7 +268,7 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor>
-projection_ewa_3d_packed_fwd(
+projection_ewa_3dgs_packed_fwd(
     const at::Tensor means,                // [N, 3]
     const at::optional<at::Tensor> &covars, // [N, 6] optional
     const at::optional<at::Tensor> &quats,  // [N, 4] optional
@@ -309,7 +309,7 @@ projection_ewa_3d_packed_fwd(
     at::Tensor block_accum;
     if (C && N) {
         at::Tensor block_cnts = at::empty({nrows * blocks_per_row}, opt);
-        launch_projection_ewa_3d_packed_fwd_kernel(
+        launch_projection_ewa_3dgs_packed_fwd_kernel(
             // inputs
             means,
             covars,
@@ -358,7 +358,7 @@ projection_ewa_3d_packed_fwd(
     }
 
     if (nnz) {
-        launch_projection_ewa_3d_packed_fwd_kernel(
+        launch_projection_ewa_3dgs_packed_fwd_kernel(
             // inputs
             means,
             covars,
@@ -408,7 +408,7 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor>
-projection_ewa_3d_packed_bwd(
+projection_ewa_3dgs_packed_bwd(
     // fwd inputs
     const at::Tensor means,                // [N, 3]
     const at::optional<at::Tensor> &covars, // [N, 6]
@@ -487,7 +487,7 @@ projection_ewa_3d_packed_bwd(
         }
     }
 
-    launch_projection_ewa_3d_packed_bwd_kernel(
+    launch_projection_ewa_3dgs_packed_bwd_kernel(
         // fwd inputs
         means,
         covars,

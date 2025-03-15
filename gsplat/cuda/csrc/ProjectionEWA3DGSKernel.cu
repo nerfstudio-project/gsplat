@@ -12,7 +12,7 @@ namespace gsplat{
 namespace cg = cooperative_groups;
 
 template <typename scalar_t>
-__global__ void projection_ewa_3d_fwd_kernel(
+__global__ void projection_ewa_3dgs_fwd_kernel(
     const uint32_t C,
     const uint32_t N,
     const scalar_t *__restrict__ means,  // [C, N, 3]
@@ -71,7 +71,7 @@ __global__ void projection_ewa_3d_fwd_kernel(
     }
 }
 
-void launch_projection_ewa_3d_fwd_kernel(
+void launch_projection_ewa_3dgs_fwd_kernel(
     // inputs
     const at::Tensor means,  // [C, N, 3]
     const at::Tensor covars, // [C, N, 3, 3]
@@ -92,9 +92,9 @@ void launch_projection_ewa_3d_fwd_kernel(
     int64_t shmem_size = 0; // No shared memory used in this kernel
 
     AT_DISPATCH_ALL_TYPES(
-        means.scalar_type(), "projection_ewa_3d_fwd_kernel",
+        means.scalar_type(), "projection_ewa_3dgs_fwd_kernel",
         [&]() {
-            projection_ewa_3d_fwd_kernel<scalar_t>
+            projection_ewa_3dgs_fwd_kernel<scalar_t>
                 <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
                 C, N, 
                 means.data_ptr<scalar_t>(),
@@ -111,7 +111,7 @@ void launch_projection_ewa_3d_fwd_kernel(
 
 
 template <typename scalar_t>
-__global__ void projection_ewa_3d_bwd_kernel(
+__global__ void projection_ewa_3dgs_bwd_kernel(
     const uint32_t C,
     const uint32_t N,
     const scalar_t *__restrict__ means,  // [C, N, 3]
@@ -217,7 +217,7 @@ __global__ void projection_ewa_3d_bwd_kernel(
     }
 }
 
-void launch_projection_ewa_3d_bwd_kernel(
+void launch_projection_ewa_3dgs_bwd_kernel(
     // inputs
     const at::Tensor means,  // [C, N, 3]
     const at::Tensor covars, // [C, N, 3, 3]
@@ -240,9 +240,9 @@ void launch_projection_ewa_3d_bwd_kernel(
     int64_t shmem_size = 0; // No shared memory used in this kernel
 
     AT_DISPATCH_ALL_TYPES(
-        means.scalar_type(), "projection_ewa_3d_fwd_kernel",
+        means.scalar_type(), "projection_ewa_3dgs_fwd_kernel",
         [&]() {
-            projection_ewa_3d_bwd_kernel<scalar_t>
+            projection_ewa_3dgs_bwd_kernel<scalar_t>
                 <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
                 C, N, 
                 means.data_ptr<scalar_t>(),

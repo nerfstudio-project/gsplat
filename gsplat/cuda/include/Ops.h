@@ -11,7 +11,7 @@ namespace gsplat{
 at::Tensor null(const at::Tensor input);
 
 // Project 3D gaussians (in camera space) to 2D image planes with EWA splatting.
-std::tuple<at::Tensor, at::Tensor> projection_ewa_3d_fwd(
+std::tuple<at::Tensor, at::Tensor> projection_ewa_3dgs_fwd(
     const at::Tensor means,  // [C, N, 3]
     const at::Tensor covars, // [C, N, 3, 3]
     const at::Tensor Ks,     // [C, 3, 3]
@@ -19,7 +19,7 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_3d_fwd(
     const uint32_t height,
     const CameraModelType camera_model
 );
-std::tuple<at::Tensor, at::Tensor> projection_ewa_3d_bwd(
+std::tuple<at::Tensor, at::Tensor> projection_ewa_3dgs_bwd(
     const at::Tensor means,  // [C, N, 3]
     const at::Tensor covars, // [C, N, 3, 3]
     const at::Tensor Ks,     // [C, 3, 3]
@@ -43,7 +43,7 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor>
-projection_ewa_3d_fused_fwd(
+projection_ewa_3dgs_fused_fwd(
     const at::Tensor means,                // [N, 3]
     const at::optional<at::Tensor> &covars, // [N, 6] optional
     const at::optional<at::Tensor> &quats,  // [N, 4] optional
@@ -65,7 +65,7 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor>
-projection_ewa_3d_fused_bwd(
+projection_ewa_3dgs_fused_bwd(
     // fwd inputs
     const at::Tensor means,                // [N, 3]
     const at::optional<at::Tensor> &covars, // [N, 6] optional
@@ -89,7 +89,7 @@ projection_ewa_3d_fused_bwd(
     const bool viewmats_requires_grad
 );
 
-// On top of fusing the operations like `projection_ewa_3d_fused_{fwd, bwd}`,
+// On top of fusing the operations like `projection_ewa_3dgs_fused_{fwd, bwd}`,
 // The packed version compresses the [C, N, D] tensors (both intermidiate and output) 
 // into a jagged format [nnz, D], leveraging the sparsity of these tensors.
 //
@@ -105,7 +105,7 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor>
-projection_ewa_3d_packed_fwd(
+projection_ewa_3dgs_packed_fwd(
     const at::Tensor means,                // [N, 3]
     const at::optional<at::Tensor> &covars, // [N, 6] optional
     const at::optional<at::Tensor> &quats,  // [N, 4] optional
@@ -127,7 +127,7 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor>
-projection_ewa_3d_packed_bwd(
+projection_ewa_3dgs_packed_bwd(
     // fwd inputs
     const at::Tensor means,                // [N, 3]
     const at::optional<at::Tensor> &covars, // [N, 6]

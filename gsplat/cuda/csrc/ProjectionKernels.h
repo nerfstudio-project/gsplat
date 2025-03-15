@@ -9,7 +9,7 @@ namespace at {
 namespace gsplat{
 
 
-void launch_projection_ewa_3d_fwd_kernel(
+void launch_projection_ewa_3dgs_fwd_kernel(
     // inputs
     const at::Tensor means,  // [C, N, 3]
     const at::Tensor covars, // [C, N, 3, 3]
@@ -21,7 +21,7 @@ void launch_projection_ewa_3d_fwd_kernel(
     at::Tensor means2d, // [C, N, 2]
     at::Tensor covars2d // [C, N, 2, 2]
 );
-void launch_projection_ewa_3d_bwd_kernel(
+void launch_projection_ewa_3dgs_bwd_kernel(
     // inputs
     const at::Tensor means,  // [C, N, 3]
     const at::Tensor covars, // [C, N, 3, 3]
@@ -37,7 +37,7 @@ void launch_projection_ewa_3d_bwd_kernel(
 );
 
 
-void launch_projection_ewa_3d_fused_fwd_kernel(
+void launch_projection_ewa_3dgs_fused_fwd_kernel(
     // inputs
     const at::Tensor means,                // [N, 3]
     const at::optional<at::Tensor> &covars, // [N, 6] optional
@@ -59,7 +59,7 @@ void launch_projection_ewa_3d_fused_fwd_kernel(
     at::Tensor conics,        // [C, N, 3]
     at::optional<at::Tensor> compensations  // [C, N] optional
 );
-void launch_projection_ewa_3d_fused_bwd_kernel(
+void launch_projection_ewa_3dgs_fused_bwd_kernel(
     // inputs
     // fwd inputs
     const at::Tensor means,                // [N, 3]
@@ -91,7 +91,7 @@ void launch_projection_ewa_3d_fused_bwd_kernel(
 );
 
 
-void launch_projection_ewa_3d_packed_fwd_kernel(
+void launch_projection_ewa_3dgs_packed_fwd_kernel(
     // inputs
     const at::Tensor means,                // [N, 3]
     const at::optional<at::Tensor> &covars, // [N, 6] optional
@@ -118,7 +118,7 @@ void launch_projection_ewa_3d_packed_fwd_kernel(
     at::optional<at::Tensor> conics,        // [nnz, 3]
     at::optional<at::Tensor> compensations  // [nnz] optional
 );
-void launch_projection_ewa_3d_packed_bwd_kernel(
+void launch_projection_ewa_3dgs_packed_bwd_kernel(
     // fwd inputs
     const at::Tensor means,                // [N, 3]
     const at::optional<at::Tensor> &covars, // [N, 6]
