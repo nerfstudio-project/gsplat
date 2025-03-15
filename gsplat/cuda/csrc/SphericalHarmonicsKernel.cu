@@ -415,6 +415,11 @@ void launch_spherical_harmonics_fwd_kernel(
     dim3 grid((N + threads.x - 1) / threads.x);
     int64_t shmem_size = 0; // No shared memory used in this kernel
 
+    if (N == 0) {
+        // skip the kernel launch if there are no elements
+        return;
+    }
+
     AT_DISPATCH_FLOATING_TYPES(
         dirs.scalar_type(), "spherical_harmonics_fwd_kernel",
         [&]() {
@@ -489,6 +494,11 @@ void launch_spherical_harmonics_bwd_kernel(
     dim3 threads(256);
     dim3 grid((N + threads.x - 1) / threads.x);
     int64_t shmem_size = 0; // No shared memory used in this kernel
+
+    if (N == 0) {
+        // skip the kernel launch if there are no elements
+        return;
+    }
 
     AT_DISPATCH_FLOATING_TYPES(
         dirs.scalar_type(), "spherical_harmonics_bwd_kernel",
