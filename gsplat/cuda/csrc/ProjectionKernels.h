@@ -118,5 +118,35 @@ void launch_projection_3dgs_packed_fwd_kernel(
     at::optional<at::Tensor> conics,        // [nnz, 3]
     at::optional<at::Tensor> compensations  // [nnz] optional
 );
+void launch_projection_3dgs_packed_bwd_kernel(
+    // fwd inputs
+    const at::Tensor means,                // [N, 3]
+    const at::optional<at::Tensor> &covars, // [N, 6]
+    const at::optional<at::Tensor> &quats,  // [N, 4]
+    const at::optional<at::Tensor> &scales, // [N, 3]
+    const at::Tensor viewmats,             // [C, 4, 4]
+    const at::Tensor Ks,                   // [C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float eps2d,
+    const CameraModelType camera_model,
+    // fwd outputs
+    const at::Tensor camera_ids,                  // [nnz]
+    const at::Tensor gaussian_ids,                // [nnz]
+    const at::Tensor conics,                      // [nnz, 3]
+    const at::optional<at::Tensor> &compensations, // [nnz] optional
+    // grad outputs
+    const at::Tensor v_means2d,                     // [nnz, 2]
+    const at::Tensor v_depths,                      // [nnz]
+    const at::Tensor v_conics,                      // [nnz, 3]
+    const at::optional<at::Tensor> &v_compensations, // [nnz] optional
+    const bool sparse_grad,
+    // grad inputs
+    at::Tensor v_means,   // [N, 3] or [nnz, 3]
+    at::optional<at::Tensor> v_covars,  // [N, 6] or [nnz, 6] Optional
+    at::optional<at::Tensor> v_quats,   // [N, 4] or [nnz, 4] Optional
+    at::optional<at::Tensor> v_scales,  // [N, 3] or [nnz, 3] Optional
+    at::optional<at::Tensor> v_viewmats // [C, 4, 4] Optional
+);
 
 }

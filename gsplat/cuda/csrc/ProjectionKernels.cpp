@@ -402,4 +402,122 @@ projection_3dgs_packed_fwd(
 }
 
 
+std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor>
+projection_3dgs_packed_bwd(
+    // fwd inputs
+    const at::Tensor means,                // [N, 3]
+    const at::optional<at::Tensor> &covars, // [N, 6]
+    const at::optional<at::Tensor> &quats,  // [N, 4]
+    const at::optional<at::Tensor> &scales, // [N, 3]
+    const at::Tensor viewmats,             // [C, 4, 4]
+    const at::Tensor Ks,                   // [C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float eps2d,
+    const CameraModelType camera_model,
+    // fwd outputs
+    const at::Tensor camera_ids,                  // [nnz]
+    const at::Tensor gaussian_ids,                // [nnz]
+    const at::Tensor conics,                      // [nnz, 3]
+    const at::optional<at::Tensor> &compensations, // [nnz] optional
+    // grad outputs
+    const at::Tensor v_means2d,                     // [nnz, 2]
+    const at::Tensor v_depths,                      // [nnz]
+    const at::Tensor v_conics,                      // [nnz, 3]
+    const at::optional<at::Tensor> &v_compensations, // [nnz] optional
+    const bool viewmats_requires_grad,
+    const bool sparse_grad
+) {
+    DEVICE_GUARD(means);
+    CHECK_INPUT(means);
+    if (covars.has_value()) {
+        CHECK_INPUT(covars.value());
+    } else {
+        assert(quats.has_value() && scales.has_value());
+        CHECK_INPUT(quats.value());
+        CHECK_INPUT(scales.value());
+    }
+    CHECK_INPUT(viewmats);
+    CHECK_INPUT(Ks);
+    CHECK_INPUT(camera_ids);
+    CHECK_INPUT(gaussian_ids);
+    CHECK_INPUT(conics);
+    CHECK_INPUT(v_means2d);
+    CHECK_INPUT(v_depths);
+    CHECK_INPUT(v_conics);
+    if (compensations.has_value()) {
+        CHECK_INPUT(compensations.value());
+    }
+    if (v_compensations.has_value()) {
+        CHECK_INPUT(v_compensations.value());
+        assert(compensations.has_value());
+    }
+
+    uint32_t N = means.size(0);    // number of gaussians
+    uint32_t C = viewmats.size(0); // number of cameras
+    uint32_t nnz = camera_ids.size(0);
+
+    at::Tensor v_means, v_covars, v_quats, v_scales, v_viewmats;
+    if (sparse_grad) {
+        v_means = at::zeros({nnz, 3}, means.options());
+        if (covars.has_value()) {
+            v_covars = at::zeros({nnz, 6}, covars.value().options());
+        } else {
+            v_quats = at::zeros({nnz, 4}, quats.value().options());
+            v_scales = at::zeros({nnz, 3}, scales.value().options());
+        }
+        if (viewmats_requires_grad) {
+            v_viewmats = at::zeros({C, 4, 4}, viewmats.options());
+        }
+    } else {
+        v_means = at::zeros_like(means);
+        if (covars.has_value()) {
+            v_covars = at::zeros_like(covars.value());
+        } else {
+            v_quats = at::zeros_like(quats.value());
+            v_scales = at::zeros_like(scales.value());
+        }
+        if (viewmats_requires_grad) {
+            v_viewmats = at::zeros_like(viewmats);
+        }
+    }
+
+    launch_projection_3dgs_packed_bwd_kernel(
+        // fwd inputs
+        means,
+        covars,
+        quats,
+        scales,
+        viewmats,
+        Ks,
+        image_width,
+        image_height,
+        eps2d,
+        camera_model,
+        // fwd outputs
+        camera_ids,
+        gaussian_ids,
+        conics,
+        compensations,
+        // grad outputs
+        v_means2d,
+        v_depths,
+        v_conics,
+        v_compensations,
+        sparse_grad,
+        // outputs
+        v_means,
+        v_covars.defined() ? std::optional<at::Tensor>(v_covars) : std::nullopt,
+        v_quats.defined() ? std::optional<at::Tensor>(v_quats) : std::nullopt,
+        v_scales.defined() ? std::optional<at::Tensor>(v_scales) : std::nullopt,
+        v_viewmats.defined() ? std::optional<at::Tensor>(v_viewmats) : std::nullopt
+    );
+    return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats);
+}
+
 } // namespace gsplat
