@@ -149,14 +149,13 @@ projection_3dgs_fused_fwd(
         near_plane,
         far_plane,
         radius_clip,
-        calc_compensations,
         camera_model,
         // outputs
         radii,
         means2d,
         depths,
         conics,
-        compensations
+        calc_compensations ? std::optional<at::Tensor>(compensations) : std::nullopt
     );
     return std::make_tuple(radii, means2d, depths, conics, compensations);
 }

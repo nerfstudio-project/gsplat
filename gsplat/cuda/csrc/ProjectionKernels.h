@@ -49,14 +49,13 @@ void launch_projection_3dgs_fused_fwd_kernel(
     const float near_plane,
     const float far_plane,
     const float radius_clip,
-    const bool calc_compensations,
     const CameraModelType camera_model,
     // outputs
     at::Tensor radii,          // [C, N]
     at::Tensor means2d,       // [C, N, 2]
     at::Tensor depths,        // [C, N]
     at::Tensor conics,        // [C, N, 3]
-    at::Tensor compensations  // [C, N] optional
+    at::optional<at::Tensor> compensations  // [C, N] optional
 );
 void launch_projection_3dgs_fused_bwd_kernel(
     // inputs
