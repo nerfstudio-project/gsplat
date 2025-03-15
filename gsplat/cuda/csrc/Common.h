@@ -7,12 +7,6 @@
 //
 // Some Macros.
 //
-#define CUDA_CHECK_THROW(x) \
-	do { \
-		cudaError_t _result = x; \
-		if (_result != cudaSuccess) \
-			throw std::runtime_error{fmt::format(FILE_LINE " " #x " failed: {}", cudaGetErrorString(_result))}; \
-	} while(0)
 #define CHECK_CUDA(x)                                                   \
     TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x)                                             \
@@ -55,25 +49,3 @@ enum CameraModelType
     ORTHO = 1,
     FISHEYE = 2,
 };
-
-
-// 
-// Constants
-//
-constexpr uint32_t N_THREADS = 256;
-
-
-//
-// Helper functions
-// https://github.com/NVlabs/tiny-cuda-nn
-template <typename T>
-__host__ __device__ T div_round_up(T val, T divisor) {
-	return (val + divisor - 1) / divisor;
-}
-
-template <typename T>
-constexpr __host__ __device__ uint32_t n_blocks_linear(T n_elements, uint32_t n_threads = N_THREADS) {
-	return (uint32_t)div_round_up(n_elements, (T)n_threads);
-}
-
-

@@ -126,7 +126,7 @@ except ImportError:
             extra_cuda_cflags = [opt_level, "--use_fast_math"]
         sources = list(glob.glob(os.path.join(PATH, "csrc/*.cu"))) + list(
             glob.glob(os.path.join(PATH, "csrc/*.cpp"))
-        )
+        ) + [os.path.join(PATH, "ext.cpp")]
 
         # If JIT is interrupted it might leave a lock in the build directory.
         # We dont want it to exist in any case.
@@ -152,7 +152,7 @@ except ImportError:
         #     # Build from scratch. Remove the build directory just to be safe: pytorch jit might stuck
         #     # if the build directory exists with a lock file in it.
         
-        # shutil.rmtree(build_dir)
+        shutil.rmtree(build_dir)
         tic = time.time()
         with Console().status(
             f"[bold yellow]gsplat: Setting up CUDA with MAX_JOBS={os.environ['MAX_JOBS']} (This may take a few minutes the first time)",
