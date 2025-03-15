@@ -152,7 +152,7 @@ except ImportError:
         #     # Build from scratch. Remove the build directory just to be safe: pytorch jit might stuck
         #     # if the build directory exists with a lock file in it.
         
-        shutil.rmtree(build_dir)
+        # shutil.rmtree(build_dir)
         tic = time.time()
         with Console().status(
             f"[bold yellow]gsplat: Setting up CUDA with MAX_JOBS={os.environ['MAX_JOBS']} (This may take a few minutes the first time)",
