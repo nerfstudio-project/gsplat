@@ -41,7 +41,7 @@ void launch_null_kernel(const at::Tensor input, at::Tensor output){
         return;
     }
 
-    AT_DISPATCH_FLOATING_TYPES_AND_COMPLEX_AND2(
+    AT_DISPATCH_ALL_TYPES_AND_COMPLEX_AND2(
         at::ScalarType::Half, at::ScalarType::BFloat16,
         input.scalar_type(), "null_kernel",
         [&]() {
