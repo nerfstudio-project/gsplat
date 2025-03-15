@@ -91,7 +91,7 @@ void launch_projection_ewa_3dgs_fwd_kernel(
     dim3 grid((n_elements + threads.x - 1) / threads.x);
     int64_t shmem_size = 0; // No shared memory used in this kernel
 
-    AT_DISPATCH_ALL_TYPES(
+    AT_DISPATCH_FLOATING_TYPES(
         means.scalar_type(), "projection_ewa_3dgs_fwd_kernel",
         [&]() {
             projection_ewa_3dgs_fwd_kernel<scalar_t>
@@ -239,7 +239,7 @@ void launch_projection_ewa_3dgs_bwd_kernel(
     dim3 grid((n_elements + threads.x - 1) / threads.x);
     int64_t shmem_size = 0; // No shared memory used in this kernel
 
-    AT_DISPATCH_ALL_TYPES(
+    AT_DISPATCH_FLOATING_TYPES(
         means.scalar_type(), "projection_ewa_3dgs_fwd_kernel",
         [&]() {
             projection_ewa_3dgs_bwd_kernel<scalar_t>

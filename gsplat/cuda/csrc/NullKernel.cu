@@ -36,7 +36,7 @@ void launch_null_kernel(const at::Tensor input, at::Tensor output){
     dim3 grid((n_elements + threads.x - 1) / threads.x);
     int64_t shmem_size = 0; // No shared memory used in this kernel
 
-    AT_DISPATCH_ALL_TYPES_AND_COMPLEX_AND2(
+    AT_DISPATCH_FLOATING_TYPES_AND_COMPLEX_AND2(
         at::ScalarType::Half, at::ScalarType::BFloat16,
         input.scalar_type(), "null_kernel",
         [&]() {
