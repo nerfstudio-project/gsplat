@@ -14,9 +14,10 @@ __global__ void null_kernel(
 ){
     // do nothing here
     const int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < n_elements) {
+    if (idx >= n_elements) {
         return;
     }
+    output[idx] = input[idx];
 }
 
 // Kernel launching (kernel<<<...>>>) has to be compiled by nvcc so it has to be 
@@ -29,8 +30,8 @@ __global__ void null_kernel(
 // 
 // The complete CPU operator should be defined in a .cpp file. with 
 // .h file as the bridge to call this CUDA kernel launching function.
-void launch_null_kernel(at::Tensor output, const at::Tensor input){
-    int64_t n_elements = input.size(0);
+void launch_null_kernel(const at::Tensor input, at::Tensor output){
+    int64_t n_elements = input.numel();
     dim3 threads(256);
     dim3 grid((n_elements + threads.x - 1) / threads.x);
     int64_t shmem_size = 0; // No shared memory used in this kernel

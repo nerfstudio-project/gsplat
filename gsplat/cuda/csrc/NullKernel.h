@@ -17,6 +17,6 @@ namespace gsplat{
 //
 // The .cpp file will define the complete operator, in which this launch function will be
 // called. 
-void launch_null_kernel(at::Tensor output, const at::Tensor input);
+void launch_null_kernel(const at::Tensor input, at::Tensor output);
 
 }
