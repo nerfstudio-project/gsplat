@@ -15,4 +15,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("projection_ewa_3dgs_packed_fwd", &gsplat::projection_ewa_3dgs_packed_fwd);
     m.def("projection_ewa_3dgs_packed_bwd", &gsplat::projection_ewa_3dgs_packed_bwd);
 
+    m.def("spherical_harmonics_fwd", &gsplat::spherical_harmonics_fwd);
+    m.def("spherical_harmonics_bwd", &gsplat::spherical_harmonics_bwd);
 }

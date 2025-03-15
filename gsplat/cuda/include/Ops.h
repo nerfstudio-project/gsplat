@@ -153,4 +153,21 @@ projection_ewa_3dgs_packed_bwd(
     const bool sparse_grad
 );
 
+// Sphereical harmonics
+at::Tensor spherical_harmonics_fwd(
+    const uint32_t degrees_to_use,
+    const at::Tensor dirs,              // [..., 3]
+    const at::Tensor coeffs,            // [..., K, 3]
+    const at::optional<at::Tensor> masks // [...]
+);
+std::tuple<at::Tensor, at::Tensor> spherical_harmonics_bwd(
+    const uint32_t K,
+    const uint32_t degrees_to_use,
+    const at::Tensor dirs,               // [..., 3]
+    const at::Tensor coeffs,             // [..., K, 3]
+    const at::optional<at::Tensor> masks, // [...]
+    const at::Tensor v_colors,           // [..., 3]
+    bool compute_v_dirs
+);
+
 }
