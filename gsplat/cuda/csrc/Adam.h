@@ -8,7 +8,7 @@ namespace at {
 
 namespace gsplat{
 
-void launch_selective_adam_kernel(
+void launch_adam_kernel(
     at::Tensor &param,               // [..., D]
     const at::Tensor &param_grad,    // [..., D]
     at::Tensor &exp_avg,             // [..., D]

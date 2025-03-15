@@ -10,7 +10,7 @@ namespace gsplat{
 namespace cg = cooperative_groups;
 
 template <typename scalar_t>
-__global__ void selective_adam_kernel(
+__global__ void adam_kernel(
     const uint32_t N,
     const uint32_t D,
     scalar_t* __restrict__ param,
@@ -41,7 +41,7 @@ __global__ void selective_adam_kernel(
     exp_avg_sq[p_idx] = register_exp_avg_sq;
 }
 
-void launch_selective_adam_kernel(
+void launch_adam_kernel(
     at::Tensor &param,               // [..., D]
     const at::Tensor &param_grad,    // [..., D]
     at::Tensor &exp_avg,             // [..., D]
@@ -67,9 +67,9 @@ void launch_selective_adam_kernel(
     }
 
     AT_DISPATCH_FLOATING_TYPES(
-        param.scalar_type(), "selective_adam_kernel",
+        param.scalar_type(), "adam_kernel",
         [&]() {
-            selective_adam_kernel<scalar_t>
+            adam_kernel<scalar_t>
                 <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
                     N,
                     D,

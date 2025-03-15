@@ -18,5 +18,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("spherical_harmonics_fwd", &gsplat::spherical_harmonics_fwd);
     m.def("spherical_harmonics_bwd", &gsplat::spherical_harmonics_bwd);
 
-    m.def("selective_adam", &gsplat::selective_adam);
+    m.def("adam", &gsplat::adam);
 }

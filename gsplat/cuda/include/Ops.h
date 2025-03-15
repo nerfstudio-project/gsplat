@@ -170,8 +170,10 @@ std::tuple<at::Tensor, at::Tensor> spherical_harmonics_bwd(
     bool compute_v_dirs
 );
 
-// Selective Adam
-void selective_adam(
+// Fused Adam that supports a valid mask to skip updating certain parameters.
+// Note skipping is not equivalent with zeroing out the gradients, which will still
+// update parameters with momentum.
+void adam(
     at::Tensor &param,               // [..., D]
     const at::Tensor &param_grad,    // [..., D]
     at::Tensor &exp_avg,             // [..., D]

@@ -7,12 +7,12 @@
 #include <ATen/NativeFunctions.h>
 
 #include "Common.h" // where all the macros are defined
-#include "SelectiveAdam.h" // where the launch function is declared
+#include "Adam.h" // where the launch function is declared
 #include "Ops.h" // a collection of all gsplat operators
 
 namespace gsplat{
 
-void selective_adam(
+void adam(
     at::Tensor &param,               // [..., D]
     const at::Tensor &param_grad,    // [..., D]
     at::Tensor &exp_avg,             // [..., D]
@@ -35,7 +35,7 @@ void selective_adam(
             "valid should have one less dimension than param");
     }
 
-    launch_selective_adam_kernel(
+    launch_adam_kernel(
         param,
         param_grad,
         exp_avg,
