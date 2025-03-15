@@ -411,11 +411,13 @@ void launch_spherical_harmonics_fwd_kernel(
     const uint32_t K = coeffs.size(-2);
     const uint32_t N = dirs.numel() / 3;
 
+    // parallelize over N * 3
+    int64_t n_elements = N * 3;
     dim3 threads(256);
-    dim3 grid((N + threads.x - 1) / threads.x);
+    dim3 grid((n_elements + threads.x - 1) / threads.x);
     int64_t shmem_size = 0; // No shared memory used in this kernel
 
-    if (N == 0) {
+    if (n_elements == 0) {
         // skip the kernel launch if there are no elements
         return;
     }
@@ -491,11 +493,13 @@ void launch_spherical_harmonics_bwd_kernel(
     const uint32_t K = coeffs.size(-2);
     const uint32_t N = dirs.numel() / 3;
 
+    // parallelize over N * 3
+    int64_t n_elements = N * 3;
     dim3 threads(256);
-    dim3 grid((N + threads.x - 1) / threads.x);
+    dim3 grid((n_elements + threads.x - 1) / threads.x);
     int64_t shmem_size = 0; // No shared memory used in this kernel
 
-    if (N == 0) {
+    if (n_elements == 0) {
         // skip the kernel launch if there are no elements
         return;
     }
