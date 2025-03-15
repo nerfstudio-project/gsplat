@@ -87,4 +87,81 @@ std::tuple<at::Tensor, at::Tensor> projection_3dgs_bwd(
     return std::make_tuple(v_means, v_covars);
 }
 
+std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor>
+projection_3dgs_fused_fwd(
+    const at::Tensor means,                // [N, 3]
+    const at::optional<at::Tensor> &covars, // [N, 6] optional
+    const at::optional<at::Tensor> &quats,  // [N, 4] optional
+    const at::optional<at::Tensor> &scales, // [N, 3] optional
+    const at::Tensor viewmats,             // [C, 4, 4]
+    const at::Tensor Ks,                   // [C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float eps2d,
+    const float near_plane,
+    const float far_plane,
+    const float radius_clip,
+    const bool calc_compensations,
+    const CameraModelType camera_model
+) {
+    DEVICE_GUARD(means);
+    CHECK_INPUT(means);
+    if (covars.has_value()) {
+        CHECK_INPUT(covars.value());
+    } else {
+        assert(quats.has_value() && scales.has_value());
+        CHECK_INPUT(quats.value());
+        CHECK_INPUT(scales.value());
+    }
+    CHECK_INPUT(viewmats);
+    CHECK_INPUT(Ks);
+
+    uint32_t N = means.size(0);    // number of gaussians
+    uint32_t C = viewmats.size(0); // number of cameras
+
+    at::Tensor radii =
+        at::empty({C, N}, means.options().dtype(at::kInt));
+    at::Tensor means2d = at::empty({C, N, 2}, means.options());
+    at::Tensor depths = at::empty({C, N}, means.options());
+    at::Tensor conics = at::empty({C, N, 3}, means.options());
+    at::Tensor compensations;
+    if (calc_compensations) {
+        // we dont want NaN to appear in this tensor, so we zero intialize it
+        compensations = at::zeros({C, N}, means.options());
+    }
+    
+    launch_projection_3dgs_fused_fwd_kernel(
+        // inputs
+        means,
+        covars,
+        quats,
+        scales,
+        viewmats,
+        Ks,
+        image_width,
+        image_height,
+        eps2d,
+        near_plane,
+        far_plane,
+        radius_clip,
+        calc_compensations,
+        camera_model,
+        // outputs
+        radii,
+        means2d,
+        depths,
+        conics,
+        compensations
+    );
+    return std::make_tuple(radii, means2d, depths, conics, compensations);
+}
+
+
+
+
 } // namespace gsplat
