@@ -89,4 +89,37 @@ projection_3dgs_fused_bwd(
     const bool viewmats_requires_grad
 );
 
+// On top of fusing the operations like `projection_3dgs_fused_{fwd, bwd}`,
+// The packed version compresses the [C, N, D] tensors (both intermidiate and output) 
+// into a jagged format [nnz, D], leveraging the sparsity of these tensors.
+//
+// This could lead to less memory usage than `_fused_{fwd, bwd}` if the level of
+// sparsity is high, i.e., most of the gaussians are not in the camera frustum. But
+// at the cost of slightly slower speed.
+std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor>
+projection_3dgs_packed_fwd(
+    const at::Tensor means,                // [N, 3]
+    const at::optional<at::Tensor> &covars, // [N, 6] optional
+    const at::optional<at::Tensor> &quats,  // [N, 4] optional
+    const at::optional<at::Tensor> &scales, // [N, 3] optional
+    const at::Tensor viewmats,             // [C, 4, 4]
+    const at::Tensor Ks,                   // [C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float eps2d,
+    const float near_plane,
+    const float far_plane,
+    const float radius_clip,
+    const bool calc_compensations,
+    const CameraModelType camera_model
+);
+
 }

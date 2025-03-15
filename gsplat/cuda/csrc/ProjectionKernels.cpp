@@ -257,4 +257,149 @@ projection_3dgs_fused_bwd(
     return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats);
 }
 
+
+
+std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor>
+projection_3dgs_packed_fwd(
+    const at::Tensor means,                // [N, 3]
+    const at::optional<at::Tensor> &covars, // [N, 6] optional
+    const at::optional<at::Tensor> &quats,  // [N, 4] optional
+    const at::optional<at::Tensor> &scales, // [N, 3] optional
+    const at::Tensor viewmats,             // [C, 4, 4]
+    const at::Tensor Ks,                   // [C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float eps2d,
+    const float near_plane,
+    const float far_plane,
+    const float radius_clip,
+    const bool calc_compensations,
+    const CameraModelType camera_model
+) {
+    DEVICE_GUARD(means);
+    CHECK_INPUT(means);
+    if (covars.has_value()) {
+        CHECK_INPUT(covars.value());
+    } else {
+        assert(quats.has_value() && scales.has_value());
+        CHECK_INPUT(quats.value());
+        CHECK_INPUT(scales.value());
+    }
+    CHECK_INPUT(viewmats);
+    CHECK_INPUT(Ks);
+
+    uint32_t N = means.size(0);    // number of gaussians
+    uint32_t C = viewmats.size(0); // number of cameras
+    auto opt = means.options();
+
+    uint32_t nrows = C;
+    uint32_t ncols = N;
+    uint32_t blocks_per_row = (ncols + N_THREADS_PACKED - 1) / N_THREADS_PACKED;
+
+    // first pass
+    int32_t nnz;
+    at::Tensor block_accum;
+    if (C && N) {
+        at::Tensor block_cnts = at::empty({nrows * blocks_per_row}, opt);
+        launch_projection_3dgs_packed_fwd_kernel(
+            // inputs
+            means,
+            covars,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            image_width,
+            image_height,
+            eps2d,
+            near_plane,
+            far_plane,
+            radius_clip,
+            std::nullopt, // block_accum
+            camera_model,
+            // outputs
+            block_cnts,
+            std::nullopt, // indptr
+            std::nullopt, // camera_ids
+            std::nullopt, // gaussian_ids
+            std::nullopt, // radii
+            std::nullopt, // means2d
+            std::nullopt, // depths
+            std::nullopt, // conics
+            std::nullopt  // compensations
+        );
+        block_accum = at::cumsum(block_cnts, 0, at::kInt);
+        nnz = block_accum[-1].item<int32_t>();
+    } else {
+        nnz = 0;
+    }
+
+    // second pass
+    at::Tensor indptr = at::empty({C + 1}, opt.dtype(at::kInt));
+    at::Tensor camera_ids = at::empty({nnz}, opt.dtype(at::kLong));
+    at::Tensor gaussian_ids = at::empty({nnz}, opt.dtype(at::kLong));
+    at::Tensor radii =
+        at::empty({nnz}, opt.dtype(at::kInt));
+    at::Tensor means2d = at::empty({nnz, 2}, opt);
+    at::Tensor depths = at::empty({nnz}, opt);
+    at::Tensor conics = at::empty({nnz, 3}, opt);
+    at::Tensor compensations;
+    if (calc_compensations) {
+        // we dont want NaN to appear in this tensor, so we zero intialize it
+        compensations = at::zeros({nnz}, opt);
+    }
+
+    if (nnz) {
+        launch_projection_3dgs_packed_fwd_kernel(
+            // inputs
+            means,
+            covars,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            image_width,
+            image_height,
+            eps2d,
+            near_plane,
+            far_plane,
+            radius_clip,
+            block_accum,
+            camera_model,
+            // outputs
+            std::nullopt,  // block_cnts
+            indptr,
+            camera_ids,
+            gaussian_ids,
+            radii,
+            means2d,
+            depths,
+            conics,
+            calc_compensations ? std::optional<at::Tensor>(compensations) : std::nullopt
+        );
+    } else {
+        indptr.fill_(0);
+    }
+
+    return std::make_tuple(
+        indptr,
+        camera_ids,
+        gaussian_ids,
+        radii,
+        means2d,
+        depths,
+        conics,
+        compensations
+    );
+}
+
+
 } // namespace gsplat

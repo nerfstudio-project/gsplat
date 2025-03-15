@@ -7,7 +7,8 @@ namespace at {
 }
 
 namespace gsplat{
-    
+
+
 void launch_projection_3dgs_fwd_kernel(
     // inputs
     const at::Tensor means,  // [C, N, 3]
@@ -34,6 +35,7 @@ void launch_projection_3dgs_bwd_kernel(
     at::Tensor v_means, // [C, N, 3]
     at::Tensor v_covars // [C, N, 3, 3]
 );
+
 
 void launch_projection_3dgs_fused_fwd_kernel(
     // inputs
@@ -86,6 +88,35 @@ void launch_projection_3dgs_fused_bwd_kernel(
     at::Tensor v_quats, // [C, N, 4]
     at::Tensor v_scales, // [C, N, 3]
     at::Tensor v_viewmats // [C, 4, 4]
+);
+
+
+void launch_projection_3dgs_packed_fwd_kernel(
+    // inputs
+    const at::Tensor means,                // [N, 3]
+    const at::optional<at::Tensor> &covars, // [N, 6] optional
+    const at::optional<at::Tensor> &quats,  // [N, 4] optional
+    const at::optional<at::Tensor> &scales, // [N, 3] optional
+    const at::Tensor viewmats,             // [C, 4, 4]
+    const at::Tensor Ks,                   // [C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float eps2d,
+    const float near_plane,
+    const float far_plane,
+    const float radius_clip,
+    const at::optional<at::Tensor> block_accum,    // [C * blocks_per_row] packing helper
+    const CameraModelType camera_model,
+    // outputs
+    at::optional<at::Tensor> block_cnts,      // [C * blocks_per_row] packing helper
+    at::optional<at::Tensor> indptr,          // [C + 1]
+    at::optional<at::Tensor> camera_ids,      // [nnz]
+    at::optional<at::Tensor> gaussian_ids,    // [nnz]
+    at::optional<at::Tensor> radii,          // [nnz]
+    at::optional<at::Tensor> means2d,       // [nnz, 2]
+    at::optional<at::Tensor> depths,        // [nnz]
+    at::optional<at::Tensor> conics,        // [nnz, 3]
+    at::optional<at::Tensor> compensations  // [nnz] optional
 );
 
 }

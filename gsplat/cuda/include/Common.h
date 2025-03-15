@@ -49,3 +49,6 @@ enum CameraModelType
     ORTHO = 1,
     FISHEYE = 2,
 };
+
+
+#define N_THREADS_PACKED 256
