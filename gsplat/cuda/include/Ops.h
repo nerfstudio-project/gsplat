@@ -272,5 +272,14 @@ rasterize_to_pixels_3dgs_bwd(
     bool absgrad
 );
 
+// Relocate some Gaussians in the Densification Process.
+// Equation (9) in "3D Gaussian Splatting as Markov Chain Monte Carlo"
+std::tuple<at::Tensor, at::Tensor> relocation(
+    at::Tensor opacities, // [N]
+    at::Tensor scales, // [N, 3]
+    at::Tensor ratios, // [N]
+    at::Tensor binoms, // [n_max, n_max]
+    const int n_max
+);
 
 }
