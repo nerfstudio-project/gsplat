@@ -308,7 +308,7 @@ projection_ewa_3dgs_packed_fwd(
     int32_t nnz;
     at::Tensor block_accum;
     if (C && N) {
-        at::Tensor block_cnts = at::empty({nrows * blocks_per_row}, opt);
+        at::Tensor block_cnts = at::empty({nrows * blocks_per_row}, opt.dtype(at::kInt));
         launch_projection_ewa_3dgs_packed_fwd_kernel(
             // inputs
             means,

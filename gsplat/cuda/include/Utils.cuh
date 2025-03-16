@@ -5,8 +5,9 @@
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 
-namespace cg = cooperative_groups;
+namespace gsplat {
 
+namespace cg = cooperative_groups;
 
 ///////////////////////////////
 // Coordinate Transformations
@@ -707,3 +708,4 @@ inline __device__ void fisheye_proj_vjp(
     v_mean3d.z += dL_dtz_raw;
 }
 
+} // namespace gsplat

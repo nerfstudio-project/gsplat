@@ -119,11 +119,10 @@ except ImportError:
 
         extra_include_paths = [os.path.join(PATH, "include/"), glm_path]
         opt_level = "-O0" if FAST_COMPILE else "-O3"
-        extra_cflags = [opt_level]
-        if NO_FAST_MATH:
-            extra_cuda_cflags = [opt_level]
-        else:
-            extra_cuda_cflags = [opt_level, "--use_fast_math"]
+        extra_cflags = [opt_level, "-Wno-attributes"]
+        extra_cuda_cflags = [opt_level]
+        if not NO_FAST_MATH:
+            extra_cuda_cflags += ["-use_fast_math"]
         sources = list(glob.glob(os.path.join(PATH, "csrc/*.cu"))) + list(
             glob.glob(os.path.join(PATH, "csrc/*.cpp"))
         ) + [os.path.join(PATH, "ext.cpp")]

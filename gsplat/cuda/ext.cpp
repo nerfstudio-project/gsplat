@@ -4,6 +4,12 @@
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
+    py::enum_<gsplat::CameraModelType>(m, "CameraModelType")
+        .value("PINHOLE", gsplat::CameraModelType::PINHOLE)
+        .value("ORTHO", gsplat::CameraModelType::ORTHO)
+        .value("FISHEYE", gsplat::CameraModelType::FISHEYE)
+        .export_values();
+
     m.def("null", &gsplat::null);
 
     m.def("projection_ewa_simple_fwd", &gsplat::projection_ewa_simple_fwd);

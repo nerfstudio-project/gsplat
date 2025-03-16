@@ -65,12 +65,13 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
 
     // return if out of bounds
     // keep not rasterizing threads around for reading data
-    bool inside = (i < image_height & j < image_width);
+    bool inside = (i < image_height && j < image_width);
     bool done = !inside;
 
     // when the mask is provided, render the background color and return
     // if this tile is labeled as False
-    if (masks != nullptr & inside & !masks[tile_id]) {
+    if (masks != nullptr && inside && !masks[tile_id]) {
+        #pragma unroll
         for (uint32_t k = 0; k < CDIM; ++k) {
             render_colors[pix_id * CDIM + k] =
                 backgrounds == nullptr ? 0.0f : backgrounds[k];
@@ -83,7 +84,7 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
     // which gaussians to look through in this tile
     int32_t range_start = tile_offsets[tile_id];
     int32_t range_end =
-        (camera_id == C - 1) & (tile_id == tile_width * tile_height - 1)
+        (camera_id == C - 1) && (tile_id == tile_width * tile_height - 1)
             ? n_isects
             : tile_offsets[tile_id + 1];
     const uint32_t block_size = block.size();
@@ -137,7 +138,7 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
 
         // process gaussians in the current batch for this pixel
         uint32_t batch_size = min(block_size, range_end - batch_start);
-        for (uint32_t t = 0; (t < batch_size) & !done; ++t) {
+        for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
             const vec3 conic = conic_batch[t];
             const vec3 xy_opac = xy_opacity_batch[t];
             const float opac = xy_opac.z;
@@ -151,7 +152,7 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
             }
 
             const float next_T = T * (1.0f - alpha);
-            if (next_T <= 1e-4) { // this pixel is done: exclusive
+            if (next_T <= 1e-4f) { // this pixel is done: exclusive
                 done = true;
                 break;
             }

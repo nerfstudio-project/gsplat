@@ -73,7 +73,8 @@ rasterize_to_pixels_3dgs_fwd(
             renders,                                                           \
             alphas,                                                            \
             last_ids                                                           \
-        );
+        );                                                                     \
+        break;
 
     // TODO: an optimization can be done by passing the actual number of
     // channels into the kernel functions and avoid necessary global memory
@@ -189,7 +190,8 @@ rasterize_to_pixels_3dgs_bwd(
             v_conics,                                                          \
             v_colors,                                                          \
             v_opacities                                                        \
-        );
+        );                                                                     \
+        break;
 
     // TODO: an optimization can be done by passing the actual number of
     // channels into the kernel functions and avoid necessary global memory

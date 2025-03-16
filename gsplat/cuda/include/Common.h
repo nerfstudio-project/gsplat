@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <glm/gtc/type_ptr.hpp>
 
+namespace gsplat {
+
 //
 // Some Macros.
 //
@@ -52,3 +54,5 @@ enum CameraModelType
 
 
 #define N_THREADS_PACKED 256
+
+} // namespace gsplat
