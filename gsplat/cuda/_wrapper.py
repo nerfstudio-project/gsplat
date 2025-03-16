@@ -1663,8 +1663,13 @@ def rasterize_to_pixels_2dgs(
         raise ValueError(f"Unsupported number of color channels: {channels}")
     if channels not in (1, 2, 3, 4, 8, 16, 32, 64, 128, 256, 512):
         padded_channels = (1 << (channels - 1).bit_length()) - channels
+        # Make sure the depth (last channel if present) remains in the last channel after padding (for depth distortion and median depth in CUDA kernel)
         colors = torch.cat(
-            [colors, torch.zeros(*colors.shape[:-1], padded_channels, device=device)],
+            [
+                colors[..., :-1],
+                torch.empty(*colors.shape[:-1], padded_channels, device=device),
+                colors[..., -1:],
+            ],
             dim=-1,
         )
         if backgrounds is not None:
@@ -1712,7 +1717,10 @@ def rasterize_to_pixels_2dgs(
     )
 
     if padded_channels > 0:
-        render_colors = render_colors[..., :-padded_channels]
+        render_colors = torch.cat(
+            [render_colors[..., : -padded_channels - 1], render_colors[..., -1:]],
+            dim=-1,
+        )
 
     return render_colors, render_alphas, render_normals, render_distort, render_median
 
