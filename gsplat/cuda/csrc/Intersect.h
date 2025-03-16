@@ -3,10 +3,10 @@
 #include <cstdint>
 
 namespace at {
-    class Tensor;
+class Tensor;
 }
 
-namespace gsplat{
+namespace gsplat {
 
 void launch_intersect_tile_kernel(
     // inputs
@@ -46,4 +46,4 @@ void radix_sort_double_buffer(
     at::Tensor flatten_ids_sorted
 );
 
-}
+} // namespace gsplat

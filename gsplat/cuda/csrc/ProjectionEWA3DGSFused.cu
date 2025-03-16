@@ -1,14 +1,14 @@
-#include <ATen/core/Tensor.h>
 #include <ATen/Dispatch.h>
-#include <c10/cuda/CUDAStream.h> 
+#include <ATen/core/Tensor.h>
 #include <ATen/cuda/Atomic.cuh>
+#include <c10/cuda/CUDAStream.h>
 #include <cooperative_groups.h>
 
 #include "Common.h"
-#include "Utils.cuh"
 #include "Projection.h"
+#include "Utils.cuh"
 
-namespace gsplat{
+namespace gsplat {
 
 namespace cg = cooperative_groups;
 
@@ -30,7 +30,7 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     const float radius_clip,
     const CameraModelType camera_model,
     // outputs
-    int32_t *__restrict__ radii,  // [C, N]
+    int32_t *__restrict__ radii,         // [C, N]
     scalar_t *__restrict__ means2d,      // [C, N, 2]
     scalar_t *__restrict__ depths,       // [C, N]
     scalar_t *__restrict__ conics,       // [C, N, 3]
@@ -102,48 +102,48 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     vec2 mean2d;
 
     switch (camera_model) {
-        case CameraModelType::PINHOLE: // perspective projection
-            persp_proj(
-                mean_c,
-                covar_c,
-                Ks[0],
-                Ks[4],
-                Ks[2],
-                Ks[5],
-                image_width,
-                image_height,
-                covar2d,
-                mean2d
-            );
-            break;
-        case CameraModelType::ORTHO: // orthographic projection
-            ortho_proj(
-                mean_c,
-                covar_c,
-                Ks[0],
-                Ks[4],
-                Ks[2],
-                Ks[5],
-                image_width,
-                image_height,
-                covar2d,
-                mean2d
-            );
-            break;
-        case CameraModelType::FISHEYE: // fisheye projection
-            fisheye_proj(
-                mean_c,
-                covar_c,
-                Ks[0],
-                Ks[4],
-                Ks[2],
-                Ks[5],
-                image_width,
-                image_height,
-                covar2d,
-                mean2d
-            );
-            break;
+    case CameraModelType::PINHOLE: // perspective projection
+        persp_proj(
+            mean_c,
+            covar_c,
+            Ks[0],
+            Ks[4],
+            Ks[2],
+            Ks[5],
+            image_width,
+            image_height,
+            covar2d,
+            mean2d
+        );
+        break;
+    case CameraModelType::ORTHO: // orthographic projection
+        ortho_proj(
+            mean_c,
+            covar_c,
+            Ks[0],
+            Ks[4],
+            Ks[2],
+            Ks[5],
+            image_width,
+            image_height,
+            covar2d,
+            mean2d
+        );
+        break;
+    case CameraModelType::FISHEYE: // fisheye projection
+        fisheye_proj(
+            mean_c,
+            covar_c,
+            Ks[0],
+            Ks[4],
+            Ks[2],
+            Ks[5],
+            image_width,
+            image_height,
+            covar2d,
+            mean2d
+        );
+        break;
     }
 
     float compensation;
@@ -188,7 +188,6 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     }
 }
 
-
 void launch_projection_ewa_3dgs_fused_fwd_kernel(
     // inputs
     const at::Tensor means,                // [N, 3]
@@ -205,12 +204,12 @@ void launch_projection_ewa_3dgs_fused_fwd_kernel(
     const float radius_clip,
     const CameraModelType camera_model,
     // outputs
-    at::Tensor radii,          // [C, N]
-    at::Tensor means2d,       // [C, N, 2]
-    at::Tensor depths,        // [C, N]
-    at::Tensor conics,        // [C, N, 3]
-    at::optional<at::Tensor> compensations  // [C, N] optional
-){
+    at::Tensor radii,                      // [C, N]
+    at::Tensor means2d,                    // [C, N, 2]
+    at::Tensor depths,                     // [C, N]
+    at::Tensor conics,                     // [C, N, 3]
+    at::optional<at::Tensor> compensations // [C, N] optional
+) {
     uint32_t N = means.size(0);    // number of gaussians
     uint32_t C = viewmats.size(0); // number of cameras
 
@@ -225,34 +224,43 @@ void launch_projection_ewa_3dgs_fused_fwd_kernel(
     }
 
     AT_DISPATCH_FLOATING_TYPES(
-        means.scalar_type(), "projection_ewa_3dgs_fused_fwd_kernel",
+        means.scalar_type(),
+        "projection_ewa_3dgs_fused_fwd_kernel",
         [&]() {
             projection_ewa_3dgs_fused_fwd_kernel<scalar_t>
-                <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
-                C,
-                N,
-                means.data_ptr<scalar_t>(),
-                covars.has_value() ? covars.value().data_ptr<scalar_t>() : nullptr,
-                quats.has_value() ? quats.value().data_ptr<scalar_t>() : nullptr,
-                scales.has_value() ? scales.value().data_ptr<scalar_t>() : nullptr,
-                viewmats.data_ptr<scalar_t>(),
-                Ks.data_ptr<scalar_t>(),
-                image_width,
-                image_height,
-                eps2d,
-                near_plane,
-                far_plane,
-                radius_clip,
-                camera_model,
-                radii.data_ptr<int32_t>(),
-                means2d.data_ptr<scalar_t>(),
-                depths.data_ptr<scalar_t>(),
-                conics.data_ptr<scalar_t>(),
-                compensations.has_value() ? compensations.value().data_ptr<scalar_t>() : nullptr
-            );
-        });
+                <<<grid,
+                   threads,
+                   shmem_size,
+                   at::cuda::getCurrentCUDAStream()>>>(
+                    C,
+                    N,
+                    means.data_ptr<scalar_t>(),
+                    covars.has_value() ? covars.value().data_ptr<scalar_t>()
+                                       : nullptr,
+                    quats.has_value() ? quats.value().data_ptr<scalar_t>()
+                                      : nullptr,
+                    scales.has_value() ? scales.value().data_ptr<scalar_t>()
+                                       : nullptr,
+                    viewmats.data_ptr<scalar_t>(),
+                    Ks.data_ptr<scalar_t>(),
+                    image_width,
+                    image_height,
+                    eps2d,
+                    near_plane,
+                    far_plane,
+                    radius_clip,
+                    camera_model,
+                    radii.data_ptr<int32_t>(),
+                    means2d.data_ptr<scalar_t>(),
+                    depths.data_ptr<scalar_t>(),
+                    conics.data_ptr<scalar_t>(),
+                    compensations.has_value()
+                        ? compensations.value().data_ptr<scalar_t>()
+                        : nullptr
+                );
+        }
+    );
 }
-
 
 template <typename scalar_t>
 __global__ void projection_ewa_3dgs_fused_bwd_kernel(
@@ -270,7 +278,7 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
     const float eps2d,
     const CameraModelType camera_model,
     // fwd outputs
-    const int32_t *__restrict__ radii,   // [C, N]
+    const int32_t *__restrict__ radii,          // [C, N]
     const scalar_t *__restrict__ conics,        // [C, N, 3]
     const scalar_t *__restrict__ compensations, // [C, N] optional
     // grad outputs
@@ -367,54 +375,54 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
     vec3 v_mean_c(0.f);
 
     switch (camera_model) {
-        case CameraModelType::PINHOLE: // perspective projection
-            persp_proj_vjp(
-                mean_c,
-                covar_c,
-                fx,
-                fy,
-                cx,
-                cy,
-                image_width,
-                image_height,
-                v_covar2d,
-                glm::make_vec2(v_means2d),
-                v_mean_c,
-                v_covar_c
-            );
-            break;
-        case CameraModelType::ORTHO: // orthographic projection
-            ortho_proj_vjp(
-                mean_c,
-                covar_c,
-                fx,
-                fy,
-                cx,
-                cy,
-                image_width,
-                image_height,
-                v_covar2d,
-                glm::make_vec2(v_means2d),
-                v_mean_c,
-                v_covar_c
-            );
-            break;
-        case CameraModelType::FISHEYE: // fisheye projection
-            fisheye_proj_vjp(
-                mean_c,
-                covar_c,
-                fx,
-                fy,
-                cx,
-                cy,
-                image_width,
-                image_height,
-                v_covar2d,
-                glm::make_vec2(v_means2d),
-                v_mean_c,
-                v_covar_c
-            );
-            break;
+    case CameraModelType::PINHOLE: // perspective projection
+        persp_proj_vjp(
+            mean_c,
+            covar_c,
+            fx,
+            fy,
+            cx,
+            cy,
+            image_width,
+            image_height,
+            v_covar2d,
+            glm::make_vec2(v_means2d),
+            v_mean_c,
+            v_covar_c
+        );
+        break;
+    case CameraModelType::ORTHO: // orthographic projection
+        ortho_proj_vjp(
+            mean_c,
+            covar_c,
+            fx,
+            fy,
+            cx,
+            cy,
+            image_width,
+            image_height,
+            v_covar2d,
+            glm::make_vec2(v_means2d),
+            v_mean_c,
+            v_covar_c
+        );
+        break;
+    case CameraModelType::FISHEYE: // fisheye projection
+        fisheye_proj_vjp(
+            mean_c,
+            covar_c,
+            fx,
+            fy,
+            cx,
+            cy,
+            image_width,
+            image_height,
+            v_covar2d,
+            glm::make_vec2(v_means2d),
+            v_mean_c,
+            v_covar_c
+        );
+        break;
     }
 
     // add contribution from v_depths
@@ -425,9 +433,7 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
     mat3 v_covar(0.f);
     mat3 v_R(0.f);
     vec3 v_t(0.f);
-    posW2C_VJP(
-        R, t, glm::make_vec3(means), v_mean_c, v_R, v_t, v_mean
-    );
+    posW2C_VJP(R, t, glm::make_vec3(means), v_mean_c, v_R, v_t, v_mean);
     covarW2C_VJP(R, covar, v_covar_c, v_R, v_covar);
 
     // #if __CUDA_ARCH__ >= 700
@@ -438,7 +444,7 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
         warpSum(v_mean, warp_group_g);
         if (warp_group_g.thread_rank() == 0) {
             v_means += gid * 3;
-            #pragma unroll
+#pragma unroll
             for (uint32_t i = 0; i < 3; i++) {
                 gpuAtomicAdd(v_means + i, v_mean[i]);
             }
@@ -461,9 +467,7 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
         mat3 rotmat = quat_to_rotmat(quat);
         vec4 v_quat(0.f);
         vec3 v_scale(0.f);
-        quat_scale_to_covar_vjp(
-            quat, scale, rotmat, v_covar, v_quat, v_scale
-        );
+        quat_scale_to_covar_vjp(quat, scale, rotmat, v_covar, v_quat, v_scale);
         warpSum(v_quat, warp_group_g);
         warpSum(v_scale, warp_group_g);
         if (warp_group_g.thread_rank() == 0) {
@@ -484,9 +488,9 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
         warpSum(v_t, warp_group_c);
         if (warp_group_c.thread_rank() == 0) {
             v_viewmats += cid * 16;
-            #pragma unroll
+#pragma unroll
             for (uint32_t i = 0; i < 3; i++) { // rows
-                #pragma unroll
+#pragma unroll
                 for (uint32_t j = 0; j < 3; j++) { // cols
                     gpuAtomicAdd(v_viewmats + i * 4 + j, v_R[j][i]);
                 }
@@ -495,7 +499,6 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
         }
     }
 }
-
 
 void launch_projection_ewa_3dgs_fused_bwd_kernel(
     // inputs
@@ -521,12 +524,12 @@ void launch_projection_ewa_3dgs_fused_bwd_kernel(
     const at::optional<at::Tensor> v_compensations, // [C, N] optional
     const bool viewmats_requires_grad,
     // outputs
-    at::Tensor v_means, // [C, N, 3]
-    at::Tensor v_covars, // [C, N, 3, 3]
-    at::Tensor v_quats, // [C, N, 4]
-    at::Tensor v_scales, // [C, N, 3]
+    at::Tensor v_means,   // [C, N, 3]
+    at::Tensor v_covars,  // [C, N, 3, 3]
+    at::Tensor v_quats,   // [C, N, 4]
+    at::Tensor v_scales,  // [C, N, 3]
     at::Tensor v_viewmats // [C, 4, 4]
-){
+) {
     uint32_t N = means.size(0);    // number of gaussians
     uint32_t C = viewmats.size(0); // number of cameras
 
@@ -541,41 +544,51 @@ void launch_projection_ewa_3dgs_fused_bwd_kernel(
     }
 
     AT_DISPATCH_FLOATING_TYPES(
-        means.scalar_type(), "projection_ewa_3dgs_fused_bwd_kernel",
+        means.scalar_type(),
+        "projection_ewa_3dgs_fused_bwd_kernel",
         [&]() {
-        projection_ewa_3dgs_fused_bwd_kernel<scalar_t>
-            <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
-                C,
-                N,
-                means.data_ptr<scalar_t>(),
-                covars.has_value() ? covars.value().data_ptr<scalar_t>() : nullptr,
-                covars.has_value() ? nullptr : quats.value().data_ptr<scalar_t>(),
-                covars.has_value() ? nullptr : scales.value().data_ptr<scalar_t>(),
-                viewmats.data_ptr<scalar_t>(),
-                Ks.data_ptr<scalar_t>(),
-                image_width,
-                image_height,
-                eps2d,
-                camera_model,
-                radii.data_ptr<int32_t>(),
-                conics.data_ptr<scalar_t>(),
-                compensations.has_value()
-                    ? compensations.value().data_ptr<scalar_t>()
-                    : nullptr,
-                v_means2d.data_ptr<scalar_t>(),
-                v_depths.data_ptr<scalar_t>(),
-                v_conics.data_ptr<scalar_t>(),
-                v_compensations.has_value()
-                    ? v_compensations.value().data_ptr<scalar_t>()
-                    : nullptr,
-                v_means.data_ptr<scalar_t>(),
-                covars.has_value() ? v_covars.data_ptr<scalar_t>() : nullptr,
-                covars.has_value() ? nullptr : v_quats.data_ptr<scalar_t>(),
-                covars.has_value() ? nullptr : v_scales.data_ptr<scalar_t>(),
-                viewmats_requires_grad ? v_viewmats.data_ptr<scalar_t>() : nullptr
-            );
-        });
+            projection_ewa_3dgs_fused_bwd_kernel<scalar_t>
+                <<<grid,
+                   threads,
+                   shmem_size,
+                   at::cuda::getCurrentCUDAStream()>>>(
+                    C,
+                    N,
+                    means.data_ptr<scalar_t>(),
+                    covars.has_value() ? covars.value().data_ptr<scalar_t>()
+                                       : nullptr,
+                    covars.has_value() ? nullptr
+                                       : quats.value().data_ptr<scalar_t>(),
+                    covars.has_value() ? nullptr
+                                       : scales.value().data_ptr<scalar_t>(),
+                    viewmats.data_ptr<scalar_t>(),
+                    Ks.data_ptr<scalar_t>(),
+                    image_width,
+                    image_height,
+                    eps2d,
+                    camera_model,
+                    radii.data_ptr<int32_t>(),
+                    conics.data_ptr<scalar_t>(),
+                    compensations.has_value()
+                        ? compensations.value().data_ptr<scalar_t>()
+                        : nullptr,
+                    v_means2d.data_ptr<scalar_t>(),
+                    v_depths.data_ptr<scalar_t>(),
+                    v_conics.data_ptr<scalar_t>(),
+                    v_compensations.has_value()
+                        ? v_compensations.value().data_ptr<scalar_t>()
+                        : nullptr,
+                    v_means.data_ptr<scalar_t>(),
+                    covars.has_value() ? v_covars.data_ptr<scalar_t>()
+                                       : nullptr,
+                    covars.has_value() ? nullptr : v_quats.data_ptr<scalar_t>(),
+                    covars.has_value() ? nullptr
+                                       : v_scales.data_ptr<scalar_t>(),
+                    viewmats_requires_grad ? v_viewmats.data_ptr<scalar_t>()
+                                           : nullptr
+                );
+        }
+    );
 }
-
 
 } // namespace gsplat

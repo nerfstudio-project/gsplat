@@ -1,17 +1,16 @@
-#include <ATen/core/Tensor.h>
 #include <ATen/TensorUtils.h>
+#include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAGuard.h> // for DEVICE_GUARD
 #include <tuple>
 
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
 
-#include "Common.h" // where all the macros are defined
+#include "Common.h"    // where all the macros are defined
 #include "Intersect.h" // where the launch function is declared
-#include "Ops.h" // a collection of all gsplat operators
+#include "Ops.h"       // a collection of all gsplat operators
 
-namespace gsplat{
-
+namespace gsplat {
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
     const at::Tensor means2d,                    // [C, N, 2] or [nnz, 2]
@@ -53,7 +52,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
     assert(tile_n_bits + cam_n_bits <= 32);
 
     // first pass: compute number of tiles per gaussian
-    at::Tensor tiles_per_gauss = at::empty_like(depths, depths.options().dtype(at::kInt));
+    at::Tensor tiles_per_gauss =
+        at::empty_like(depths, depths.options().dtype(at::kInt));
     int64_t n_isects;
     at::Tensor cum_tiles_per_gauss;
     if (n_elements) {
@@ -126,7 +126,6 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
     }
 }
 
-
 at::Tensor intersect_offset(
     const at::Tensor isect_ids, // [n_isects]
     const uint32_t C,
@@ -139,16 +138,11 @@ at::Tensor intersect_offset(
     at::Tensor offsets = at::empty(
         {C, tile_height, tile_width}, isect_ids.options().dtype(at::kInt)
     );
-    launch_intersect_offset_kernel(isect_ids, C, tile_width, tile_height, offsets);
+    launch_intersect_offset_kernel(
+        isect_ids, C, tile_width, tile_height, offsets
+    );
     return offsets;
 }
-
-
-
-
-
-
-    
 
 // at::Tensor spherical_harmonics_fwd(
 //     const uint32_t degrees_to_use,
@@ -164,7 +158,7 @@ at::Tensor intersect_offset(
 //     }
 //     TORCH_CHECK(coeffs.size(-1) == 3, "coeffs must have last dimension 3");
 //     TORCH_CHECK(dirs.size(-1) == 3, "dirs must have last dimension 3");
-    
+
 //     at::Tensor colors = at::empty_like(dirs); // [..., 3]
 
 //     launch_spherical_harmonics_fwd_kernel(
@@ -176,8 +170,6 @@ at::Tensor intersect_offset(
 //     );
 //     return colors; // [..., 3]
 // }
-
-
 
 // std::tuple<at::Tensor, at::Tensor> spherical_harmonics_bwd(
 //     const uint32_t K,
@@ -195,9 +187,9 @@ at::Tensor intersect_offset(
 //     if (masks.has_value()) {
 //         CHECK_INPUT(masks.value());
 //     }
-//     TORCH_CHECK(v_colors.size(-1) == 3, "v_colors must have last dimension 3");
-//     TORCH_CHECK(coeffs.size(-1) == 3, "coeffs must have last dimension 3");
-//     TORCH_CHECK(dirs.size(-1) == 3, "dirs must have last dimension 3");
+//     TORCH_CHECK(v_colors.size(-1) == 3, "v_colors must have last dimension
+//     3"); TORCH_CHECK(coeffs.size(-1) == 3, "coeffs must have last dimension
+//     3"); TORCH_CHECK(dirs.size(-1) == 3, "dirs must have last dimension 3");
 //     const uint32_t N = dirs.numel() / 3;
 
 //     at::Tensor v_coeffs = at::zeros_like(coeffs);
@@ -220,5 +212,5 @@ at::Tensor intersect_offset(
 //     );
 //     return std::make_tuple(v_coeffs, v_dirs); // [..., K, 3], [..., 3]
 // }
-    
+
 } // namespace gsplat

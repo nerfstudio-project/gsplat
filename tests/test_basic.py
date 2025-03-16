@@ -87,6 +87,7 @@ def test_quat_scale_to_covar_preci(test_data, triu: bool):
     torch.testing.assert_close(v_quats, _v_quats, rtol=1e-1, atol=1e-1)
     torch.testing.assert_close(v_scales, _v_scales, rtol=1e-1, atol=1e-1)
 
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
 def test_proj(test_data, camera_model: Literal["pinhole", "ortho", "fisheye"]):

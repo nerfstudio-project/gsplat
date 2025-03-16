@@ -1,22 +1,22 @@
-#include <ATen/core/Tensor.h>
 #include <ATen/TensorUtils.h>
+#include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAGuard.h> // for DEVICE_GUARD
 #include <tuple>
 
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
 
+#include "Adam.h"   // where the launch function is declared
 #include "Common.h" // where all the macros are defined
-#include "Adam.h" // where the launch function is declared
-#include "Ops.h" // a collection of all gsplat operators
+#include "Ops.h"    // a collection of all gsplat operators
 
-namespace gsplat{
+namespace gsplat {
 
 void adam(
-    at::Tensor &param,               // [..., D]
-    const at::Tensor &param_grad,    // [..., D]
-    at::Tensor &exp_avg,             // [..., D]
-    at::Tensor &exp_avg_sq,          // [..., D]
+    at::Tensor &param,                    // [..., D]
+    const at::Tensor &param_grad,         // [..., D]
+    at::Tensor &exp_avg,                  // [..., D]
+    at::Tensor &exp_avg_sq,               // [..., D]
     const at::optional<at::Tensor> valid, // [...]
     const float lr,
     const float b1,
@@ -31,22 +31,14 @@ void adam(
     if (valid.has_value()) {
         CHECK_INPUT(valid.value());
         TORCH_CHECK(
-            valid.value().dim() + 1 == param.dim(), 
-            "valid should have one less dimension than param");
+            valid.value().dim() + 1 == param.dim(),
+            "valid should have one less dimension than param"
+        );
     }
 
     launch_adam_kernel(
-        param,
-        param_grad,
-        exp_avg,
-        exp_avg_sq,
-        valid,
-        lr,
-        b1,
-        b2,
-        eps
+        param, param_grad, exp_avg, exp_avg_sq, valid, lr, b1, b2, eps
     );
 }
 
-    
 } // namespace gsplat

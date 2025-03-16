@@ -1,5 +1,5 @@
-#include <ATen/core/Tensor.h>
 #include <ATen/TensorUtils.h>
+#include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAGuard.h> // for DEVICE_GUARD
 #include <tuple>
 
@@ -7,24 +7,23 @@
 #include <ATen/NativeFunctions.h>
 
 #include "Common.h"
-#include "Rasterization.h" 
 #include "Ops.h"
+#include "Rasterization.h"
 
-namespace gsplat{
+namespace gsplat {
 
 ////////////////////////////////////////////////////
 // 3DGS
 ////////////////////////////////////////////////////
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor>
-rasterize_to_pixels_3dgs_fwd(
+std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     // Gaussian parameters
     const at::Tensor means2d,   // [C, N, 2] or [nnz, 2]
     const at::Tensor conics,    // [C, N, 3] or [nnz, 3]
     const at::Tensor colors,    // [C, N, channels] or [nnz, channels]
     const at::Tensor opacities, // [C, N]  or [nnz]
     const at::optional<at::Tensor> backgrounds, // [C, channels]
-    const at::optional<at::Tensor> masks, // [C, tile_height, tile_width]
+    const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -47,15 +46,13 @@ rasterize_to_pixels_3dgs_fwd(
         CHECK_INPUT(masks.value());
     }
 
-    uint32_t C = tile_offsets.size(0);         // number of cameras
+    uint32_t C = tile_offsets.size(0); // number of cameras
     uint32_t channels = colors.size(-1);
 
-    at::Tensor renders = at::empty(
-        {C, image_height, image_width, channels}, means2d.options()
-    );
-    at::Tensor alphas = at::empty(
-        {C, image_height, image_width, 1}, means2d.options()
-    );
+    at::Tensor renders =
+        at::empty({C, image_height, image_width, channels}, means2d.options());
+    at::Tensor alphas =
+        at::empty({C, image_height, image_width, 1}, means2d.options());
     at::Tensor last_ids = at::empty(
         {C, image_height, image_width}, means2d.options().dtype(at::kInt)
     );
@@ -111,13 +108,7 @@ rasterize_to_pixels_3dgs_fwd(
     return std::make_tuple(renders, alphas, last_ids);
 }
 
-
-std::tuple<
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 rasterize_to_pixels_3dgs_bwd(
     // Gaussian parameters
     const at::Tensor means2d,                   // [C, N, 2] or [nnz, 2]
@@ -125,7 +116,7 @@ rasterize_to_pixels_3dgs_bwd(
     const at::Tensor colors,                    // [C, N, 3] or [nnz, 3]
     const at::Tensor opacities,                 // [C, N] or [nnz]
     const at::optional<at::Tensor> backgrounds, // [C, 3]
-    const at::optional<at::Tensor> masks, // [C, tile_height, tile_width]
+    const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -230,10 +221,9 @@ rasterize_to_pixels_3dgs_bwd(
     );
 }
 
-
 std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
     const uint32_t range_start,
-    const uint32_t range_end,           // iteration steps
+    const uint32_t range_end,        // iteration steps
     const at::Tensor transmittances, // [C, image_height, image_width]
     // Gaussian parameters
     const at::Tensor means2d,   // [C, N, 2]
@@ -263,8 +253,7 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
     at::Tensor chunk_starts;
     if (n_isects) {
         at::Tensor chunk_cnts = at::zeros(
-            {C * image_height * image_width},
-            means2d.options().dtype(at::kInt)
+            {C * image_height * image_width}, means2d.options().dtype(at::kInt)
         );
         launch_rasterize_to_indices_3dgs_kernel(
             range_start,
@@ -317,11 +306,9 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
     return std::make_tuple(gaussian_ids, pixel_ids);
 }
 
-
 ////////////////////////////////////////////////////
 // 2DGS
 ////////////////////////////////////////////////////
-
 
 std::tuple<
     at::Tensor,
@@ -333,13 +320,13 @@ std::tuple<
     at::Tensor>
 rasterize_to_pixels_2dgs_fwd(
     // Gaussian parameters
-    const at::Tensor means2d,   // [C, N, 2] or [nnz, 2]
-    const at::Tensor ray_transforms,    // [C, N, 3] or [nnz, 3]
-    const at::Tensor colors,    // [C, N, channels] or [nnz, channels]
-    const at::Tensor opacities, // [C, N]  or [nnz]
-    const at::Tensor normals,   // [C, N, 3] or [nnz, 3]
+    const at::Tensor means2d,        // [C, N, 2] or [nnz, 2]
+    const at::Tensor ray_transforms, // [C, N, 3] or [nnz, 3]
+    const at::Tensor colors,         // [C, N, channels] or [nnz, channels]
+    const at::Tensor opacities,      // [C, N]  or [nnz]
+    const at::Tensor normals,        // [C, N, 3] or [nnz, 3]
     const at::optional<at::Tensor> backgrounds, // [C, channels]
-    const at::optional<at::Tensor> masks, // [C, tile_height, tile_width]
+    const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -364,16 +351,22 @@ rasterize_to_pixels_2dgs_fwd(
     }
     auto opt = means2d.options();
 
-    uint32_t C = tile_offsets.size(0);         // number of cameras
+    uint32_t C = tile_offsets.size(0); // number of cameras
     uint32_t channels = colors.size(-1);
 
-    at::Tensor renders = at::empty({C, image_height, image_width, channels}, opt);
+    at::Tensor renders =
+        at::empty({C, image_height, image_width, channels}, opt);
     at::Tensor alphas = at::empty({C, image_height, image_width, 1}, opt);
-    at::Tensor last_ids = at::empty({C, image_height, image_width}, opt.dtype(at::kInt));
-    at::Tensor median_ids = at::empty({C, image_height, image_width}, opt.dtype(at::kInt));
-    at::Tensor render_normals = at::empty({C, image_height, image_width, 3}, opt);
-    at::Tensor render_distort = at::empty( {C, image_height, image_width, 1}, opt);
-    at::Tensor render_median = at::empty({C, image_height, image_width, 1}, opt);
+    at::Tensor last_ids =
+        at::empty({C, image_height, image_width}, opt.dtype(at::kInt));
+    at::Tensor median_ids =
+        at::empty({C, image_height, image_width}, opt.dtype(at::kInt));
+    at::Tensor render_normals =
+        at::empty({C, image_height, image_width, 3}, opt);
+    at::Tensor render_distort =
+        at::empty({C, image_height, image_width, 1}, opt);
+    at::Tensor render_median =
+        at::empty({C, image_height, image_width, 1}, opt);
 
 #define __LAUNCH_KERNEL__(N)                                                   \
     case N:                                                                    \
@@ -439,7 +432,6 @@ rasterize_to_pixels_2dgs_fwd(
     );
 }
 
-
 std::tuple<
     at::Tensor,
     at::Tensor,
@@ -450,14 +442,14 @@ std::tuple<
     at::Tensor>
 rasterize_to_pixels_2dgs_bwd(
     // Gaussian parameters
-    const at::Tensor means2d,   // [C, N, 2] or [nnz, 2]
-    const at::Tensor ray_transforms,    // [C, N, 3, 3] or [nnz, 3, 3]
-    const at::Tensor colors,    // [C, N, 3] or [nnz, 3]
-    const at::Tensor opacities, // [C, N] or [nnz]
-    const at::Tensor normals,   // [C, N, 3] or [nnz, 3]
+    const at::Tensor means2d,        // [C, N, 2] or [nnz, 2]
+    const at::Tensor ray_transforms, // [C, N, 3, 3] or [nnz, 3, 3]
+    const at::Tensor colors,         // [C, N, 3] or [nnz, 3]
+    const at::Tensor opacities,      // [C, N] or [nnz]
+    const at::Tensor normals,        // [C, N, 3] or [nnz, 3]
     const at::Tensor densify,
     const at::optional<at::Tensor> backgrounds, // [C, 3]
-    const at::optional<at::Tensor> masks, // [C, tile_height, tile_width]
+    const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -466,8 +458,7 @@ rasterize_to_pixels_2dgs_bwd(
     const at::Tensor tile_offsets, // [C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     // forward outputs
-    const at::Tensor
-        render_colors, // [C, image_height, image_width, COLOR_DIM]
+    const at::Tensor render_colors, // [C, image_height, image_width, COLOR_DIM]
     const at::Tensor render_alphas, // [C, image_height, image_width, 1]
     const at::Tensor last_ids,      // [C, image_height, image_width]
     const at::Tensor median_ids,    // [C, image_height, image_width]
@@ -592,15 +583,14 @@ rasterize_to_pixels_2dgs_bwd(
     );
 }
 
-
 std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
     const uint32_t range_start,
-    const uint32_t range_end,           // iteration steps
+    const uint32_t range_end,        // iteration steps
     const at::Tensor transmittances, // [C, image_height, image_width]
     // Gaussian parameters
-    const at::Tensor means2d,   // [C, N, 2]
-    const at::Tensor ray_transforms,    // [C, N, 3, 3]
-    const at::Tensor opacities, // [C, N]
+    const at::Tensor means2d,        // [C, N, 2]
+    const at::Tensor ray_transforms, // [C, N, 3, 3]
+    const at::Tensor opacities,      // [C, N]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -625,8 +615,7 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
     at::Tensor chunk_starts;
     if (n_isects) {
         at::Tensor chunk_cnts = at::zeros(
-            {C * image_height * image_width},
-            means2d.options().dtype(at::kInt)
+            {C * image_height * image_width}, means2d.options().dtype(at::kInt)
         );
         launch_rasterize_to_indices_2dgs_kernel(
             range_start,
@@ -679,6 +668,4 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
     return std::make_tuple(gaussian_ids, pixel_ids);
 }
 
-
-    
 } // namespace gsplat

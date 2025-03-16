@@ -1,13 +1,13 @@
-#include <ATen/core/Tensor.h>
 #include <ATen/Dispatch.h>
-#include <c10/cuda/CUDAStream.h> 
+#include <ATen/core/Tensor.h>
+#include <c10/cuda/CUDAStream.h>
 #include <cooperative_groups.h>
 
 #include "Common.h"
-#include "Utils.cuh"
 #include "Projection.h"
+#include "Utils.cuh"
 
-namespace gsplat{
+namespace gsplat {
 
 namespace cg = cooperative_groups;
 
@@ -23,7 +23,7 @@ __global__ void projection_ewa_simple_fwd_kernel(
     const CameraModelType camera_model,
     scalar_t *__restrict__ means2d, // [C, N, 2]
     scalar_t *__restrict__ covars2d // [C, N, 2, 2]
-){
+) {
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
     if (idx >= C * N) {
@@ -46,26 +46,28 @@ __global__ void projection_ewa_simple_fwd_kernel(
     const mat3 covar = glm::make_mat3(covars);
 
     switch (camera_model) {
-        case CameraModelType::PINHOLE: // perspective projection
-            persp_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
-            break;
-        case CameraModelType::ORTHO: // orthographic projection
-            ortho_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
-            break;
-        case CameraModelType::FISHEYE: // fisheye projection
-            fisheye_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
-            break;
+    case CameraModelType::PINHOLE: // perspective projection
+        persp_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
+        break;
+    case CameraModelType::ORTHO: // orthographic projection
+        ortho_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
+        break;
+    case CameraModelType::FISHEYE: // fisheye projection
+        fisheye_proj(
+            mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d
+        );
+        break;
     }
 
-    // write to outputs: glm is column-major but we want row-major
-    #pragma unroll
+// write to outputs: glm is column-major but we want row-major
+#pragma unroll
     for (uint32_t i = 0; i < 2; i++) { // rows
-        #pragma unroll
+#pragma unroll
         for (uint32_t j = 0; j < 2; j++) { // cols
             covars2d[i * 2 + j] = covar2d[j][i];
         }
     }
-    #pragma unroll
+#pragma unroll
     for (uint32_t i = 0; i < 2; i++) {
         means2d[i] = mean2d[i];
     }
@@ -82,7 +84,7 @@ void launch_projection_ewa_simple_fwd_kernel(
     // outputs
     at::Tensor means2d, // [C, N, 2]
     at::Tensor covars2d // [C, N, 2, 2]
-){
+) {
     uint32_t C = means.size(0);
     uint32_t N = means.size(1);
 
@@ -97,23 +99,28 @@ void launch_projection_ewa_simple_fwd_kernel(
     }
 
     AT_DISPATCH_FLOATING_TYPES(
-        means.scalar_type(), "projection_ewa_simple_fwd_kernel",
+        means.scalar_type(),
+        "projection_ewa_simple_fwd_kernel",
         [&]() {
             projection_ewa_simple_fwd_kernel<scalar_t>
-                <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
-                C, N, 
-                means.data_ptr<scalar_t>(),
-                covars.data_ptr<scalar_t>(),
-                Ks.data_ptr<scalar_t>(),
-                width,
-                height,
-                camera_model,
-                means2d.data_ptr<scalar_t>(),
-                covars2d.data_ptr<scalar_t>()
-            );
-        });
+                <<<grid,
+                   threads,
+                   shmem_size,
+                   at::cuda::getCurrentCUDAStream()>>>(
+                    C,
+                    N,
+                    means.data_ptr<scalar_t>(),
+                    covars.data_ptr<scalar_t>(),
+                    Ks.data_ptr<scalar_t>(),
+                    width,
+                    height,
+                    camera_model,
+                    means2d.data_ptr<scalar_t>(),
+                    covars2d.data_ptr<scalar_t>()
+                );
+        }
+    );
 }
-
 
 template <typename scalar_t>
 __global__ void projection_ewa_simple_bwd_kernel(
@@ -157,66 +164,66 @@ __global__ void projection_ewa_simple_bwd_kernel(
     const mat2 v_covar2d = glm::make_mat2(v_covars2d);
 
     switch (camera_model) {
-        case CameraModelType::PINHOLE: // perspective projection
-            persp_proj_vjp(
-                mean,
-                covar,
-                fx,
-                fy,
-                cx,
-                cy,
-                width,
-                height,
-                glm::transpose(v_covar2d),
-                v_mean2d,
-                v_mean,
-                v_covar
-            );
-            break;
-        case CameraModelType::ORTHO: // orthographic projection
-            ortho_proj_vjp(
-                mean,
-                covar,
-                fx,
-                fy,
-                cx,
-                cy,
-                width,
-                height,
-                glm::transpose(v_covar2d),
-                v_mean2d,
-                v_mean,
-                v_covar
-            );
-            break;
-        case CameraModelType::FISHEYE: // fisheye projection
-            fisheye_proj_vjp(
-                mean,
-                covar,
-                fx,
-                fy,
-                cx,
-                cy,
-                width,
-                height,
-                glm::transpose(v_covar2d),
-                v_mean2d,
-                v_mean,
-                v_covar
-            );
-            break;
+    case CameraModelType::PINHOLE: // perspective projection
+        persp_proj_vjp(
+            mean,
+            covar,
+            fx,
+            fy,
+            cx,
+            cy,
+            width,
+            height,
+            glm::transpose(v_covar2d),
+            v_mean2d,
+            v_mean,
+            v_covar
+        );
+        break;
+    case CameraModelType::ORTHO: // orthographic projection
+        ortho_proj_vjp(
+            mean,
+            covar,
+            fx,
+            fy,
+            cx,
+            cy,
+            width,
+            height,
+            glm::transpose(v_covar2d),
+            v_mean2d,
+            v_mean,
+            v_covar
+        );
+        break;
+    case CameraModelType::FISHEYE: // fisheye projection
+        fisheye_proj_vjp(
+            mean,
+            covar,
+            fx,
+            fy,
+            cx,
+            cy,
+            width,
+            height,
+            glm::transpose(v_covar2d),
+            v_mean2d,
+            v_mean,
+            v_covar
+        );
+        break;
     }
 
-    // write to outputs: glm is column-major but we want row-major
-    #pragma unroll
+// write to outputs: glm is column-major but we want row-major
+#pragma unroll
     for (uint32_t i = 0; i < 3; i++) { // rows
-        #pragma unroll
+#pragma unroll
         for (uint32_t j = 0; j < 3; j++) { // cols
             v_covars[i * 3 + j] = v_covar[j][i];
         }
     }
 
-    #pragma unroll
+#pragma unroll
     for (uint32_t i = 0; i < 3; i++) {
         v_means[i] = v_mean[i];
     }
@@ -230,12 +237,12 @@ void launch_projection_ewa_simple_bwd_kernel(
     const uint32_t width,
     const uint32_t height,
     const CameraModelType camera_model,
-    const at::Tensor v_means2d, // [C, N, 2]
+    const at::Tensor v_means2d,  // [C, N, 2]
     const at::Tensor v_covars2d, // [C, N, 2, 2]
     // outputs
     at::Tensor v_means, // [C, N, 3]
     at::Tensor v_covars // [C, N, 3, 3]
-){
+) {
     uint32_t C = means.size(0);
     uint32_t N = means.size(1);
 
@@ -250,24 +257,29 @@ void launch_projection_ewa_simple_bwd_kernel(
     }
 
     AT_DISPATCH_FLOATING_TYPES(
-        means.scalar_type(), "projection_ewa_simple_fwd_kernel",
+        means.scalar_type(),
+        "projection_ewa_simple_fwd_kernel",
         [&]() {
             projection_ewa_simple_bwd_kernel<scalar_t>
-                <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
-                C, N, 
-                means.data_ptr<scalar_t>(),
-                covars.data_ptr<scalar_t>(),
-                Ks.data_ptr<scalar_t>(),
-                width,
-                height,
-                camera_model,
-                v_means2d.data_ptr<scalar_t>(),
-                v_covars2d.data_ptr<scalar_t>(),
-                v_means.data_ptr<scalar_t>(),
-                v_covars.data_ptr<scalar_t>()
-            );
-        });
+                <<<grid,
+                   threads,
+                   shmem_size,
+                   at::cuda::getCurrentCUDAStream()>>>(
+                    C,
+                    N,
+                    means.data_ptr<scalar_t>(),
+                    covars.data_ptr<scalar_t>(),
+                    Ks.data_ptr<scalar_t>(),
+                    width,
+                    height,
+                    camera_model,
+                    v_means2d.data_ptr<scalar_t>(),
+                    v_covars2d.data_ptr<scalar_t>(),
+                    v_means.data_ptr<scalar_t>(),
+                    v_covars.data_ptr<scalar_t>()
+                );
+        }
+    );
 }
-
 
 } // namespace gsplat

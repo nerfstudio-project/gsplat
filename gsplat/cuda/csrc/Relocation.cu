@@ -1,11 +1,11 @@
-#include <ATen/core/Tensor.h>
 #include <ATen/Dispatch.h>
-#include <c10/cuda/CUDAStream.h> 
+#include <ATen/core/Tensor.h>
+#include <c10/cuda/CUDAStream.h>
 
 #include "Common.h"
 #include "Relocation.h"
 
-namespace gsplat{
+namespace gsplat {
 
 // Equation (9) in "3D Gaussian Splatting as Markov Chain Monte Carlo"
 template <typename scalar_t>
@@ -46,14 +46,14 @@ __global__ void relocation_kernel(
 void launch_relocation_kernel(
     // inputs
     at::Tensor opacities, // [N]
-    at::Tensor scales, // [N, 3]
-    at::Tensor ratios, // [N]
-    at::Tensor binoms, // [n_max, n_max]
+    at::Tensor scales,    // [N, 3]
+    at::Tensor ratios,    // [N]
+    at::Tensor binoms,    // [n_max, n_max]
     const int n_max,
     // outputs
     at::Tensor new_opacities, // [N]
-    at::Tensor new_scales  // [N, 3]
-){
+    at::Tensor new_scales     // [N, 3]
+) {
     uint32_t N = opacities.size(0);
 
     int64_t n_elements = N;
@@ -67,10 +67,14 @@ void launch_relocation_kernel(
     }
 
     AT_DISPATCH_FLOATING_TYPES(
-        opacities.scalar_type(), "relocation_kernel",
+        opacities.scalar_type(),
+        "relocation_kernel",
         [&]() {
             relocation_kernel<scalar_t>
-                <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+                <<<grid,
+                   threads,
+                   shmem_size,
+                   at::cuda::getCurrentCUDAStream()>>>(
                     N,
                     opacities.data_ptr<scalar_t>(),
                     scales.data_ptr<scalar_t>(),
@@ -80,8 +84,8 @@ void launch_relocation_kernel(
                     new_opacities.data_ptr<scalar_t>(),
                     new_scales.data_ptr<scalar_t>()
                 );
-        });
+        }
+    );
 }
-
 
 } // namespace gsplat

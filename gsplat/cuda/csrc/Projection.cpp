@@ -1,16 +1,16 @@
-#include <ATen/core/Tensor.h>
 #include <ATen/TensorUtils.h>
+#include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAGuard.h> // for DEVICE_GUARD
 #include <tuple>
 
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
 
-#include "Common.h" // where all the macros are defined
+#include "Common.h"     // where all the macros are defined
+#include "Ops.h"        // a collection of all gsplat operators
 #include "Projection.h" // where the launch function is declared
-#include "Ops.h" // a collection of all gsplat operators
 
-namespace gsplat{
+namespace gsplat {
 
 std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_fwd(
     const at::Tensor means,  // [C, N, 3]
@@ -33,19 +33,18 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_fwd(
 
     launch_projection_ewa_simple_fwd_kernel(
         // inputs
-        means, 
-        covars, 
-        Ks, 
-        width, 
-        height, 
+        means,
+        covars,
+        Ks,
+        width,
+        height,
         camera_model,
         // outputs
-        means2d, 
+        means2d,
         covars2d
     );
     return std::make_tuple(means2d, covars2d);
 }
-
 
 std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_bwd(
     const at::Tensor means,  // [C, N, 3]
@@ -72,11 +71,11 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_bwd(
 
     launch_projection_ewa_simple_bwd_kernel(
         // inputs
-        means, 
-        covars, 
-        Ks, 
-        width, 
-        height, 
+        means,
+        covars,
+        Ks,
+        width,
+        height,
         camera_model,
         v_means2d,
         v_covars2d,
@@ -124,8 +123,7 @@ projection_ewa_3dgs_fused_fwd(
     uint32_t N = means.size(0);    // number of gaussians
     uint32_t C = viewmats.size(0); // number of cameras
 
-    at::Tensor radii =
-        at::empty({C, N}, means.options().dtype(at::kInt));
+    at::Tensor radii = at::empty({C, N}, means.options().dtype(at::kInt));
     at::Tensor means2d = at::empty({C, N, 2}, means.options());
     at::Tensor depths = at::empty({C, N}, means.options());
     at::Tensor conics = at::empty({C, N, 3}, means.options());
@@ -134,7 +132,7 @@ projection_ewa_3dgs_fused_fwd(
         // we dont want NaN to appear in this tensor, so we zero intialize it
         compensations = at::zeros({C, N}, means.options());
     }
-    
+
     launch_projection_ewa_3dgs_fused_fwd_kernel(
         // inputs
         means,
@@ -155,17 +153,13 @@ projection_ewa_3dgs_fused_fwd(
         means2d,
         depths,
         conics,
-        calc_compensations ? at::optional<at::Tensor>(compensations) : std::nullopt
+        calc_compensations ? at::optional<at::Tensor>(compensations)
+                           : std::nullopt
     );
     return std::make_tuple(radii, means2d, depths, conics, compensations);
 }
 
-std::tuple<
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 projection_ewa_3dgs_fused_bwd(
     // fwd inputs
     const at::Tensor means,                // [N, 3]
@@ -257,8 +251,6 @@ projection_ewa_3dgs_fused_bwd(
     return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats);
 }
 
-
-
 std::tuple<
     at::Tensor,
     at::Tensor,
@@ -308,7 +300,8 @@ projection_ewa_3dgs_packed_fwd(
     int32_t nnz;
     at::Tensor block_accum;
     if (C && N) {
-        at::Tensor block_cnts = at::empty({nrows * blocks_per_row}, opt.dtype(at::kInt));
+        at::Tensor block_cnts =
+            at::empty({nrows * blocks_per_row}, opt.dtype(at::kInt));
         launch_projection_ewa_3dgs_packed_fwd_kernel(
             // inputs
             means,
@@ -346,8 +339,7 @@ projection_ewa_3dgs_packed_fwd(
     at::Tensor indptr = at::empty({C + 1}, opt.dtype(at::kInt));
     at::Tensor camera_ids = at::empty({nnz}, opt.dtype(at::kLong));
     at::Tensor gaussian_ids = at::empty({nnz}, opt.dtype(at::kLong));
-    at::Tensor radii =
-        at::empty({nnz}, opt.dtype(at::kInt));
+    at::Tensor radii = at::empty({nnz}, opt.dtype(at::kInt));
     at::Tensor means2d = at::empty({nnz, 2}, opt);
     at::Tensor depths = at::empty({nnz}, opt);
     at::Tensor conics = at::empty({nnz, 3}, opt);
@@ -375,7 +367,7 @@ projection_ewa_3dgs_packed_fwd(
             block_accum,
             camera_model,
             // outputs
-            std::nullopt,  // block_cnts
+            std::nullopt, // block_cnts
             indptr,
             camera_ids,
             gaussian_ids,
@@ -383,7 +375,8 @@ projection_ewa_3dgs_packed_fwd(
             means2d,
             depths,
             conics,
-            calc_compensations ? at::optional<at::Tensor>(compensations) : std::nullopt
+            calc_compensations ? at::optional<at::Tensor>(compensations)
+                               : std::nullopt
         );
     } else {
         indptr.fill_(0);
@@ -401,13 +394,7 @@ projection_ewa_3dgs_packed_fwd(
     );
 }
 
-
-std::tuple<
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 projection_ewa_3dgs_packed_bwd(
     // fwd inputs
     const at::Tensor means,                // [N, 3]
@@ -515,13 +502,11 @@ projection_ewa_3dgs_packed_bwd(
         v_covars.defined() ? at::optional<at::Tensor>(v_covars) : std::nullopt,
         v_quats.defined() ? at::optional<at::Tensor>(v_quats) : std::nullopt,
         v_scales.defined() ? at::optional<at::Tensor>(v_scales) : std::nullopt,
-        v_viewmats.defined() ? at::optional<at::Tensor>(v_viewmats) : std::nullopt
+        v_viewmats.defined() ? at::optional<at::Tensor>(v_viewmats)
+                             : std::nullopt
     );
     return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats);
 }
-
-
-
 
 std::tuple<
     at::Tensor,
@@ -530,11 +515,11 @@ std::tuple<
     at::Tensor,
     at::Tensor>
 projection_2dgs_fused_fwd(
-    const at::Tensor means,                // [N, 3]
-    const at::Tensor quats,  // [N, 4]
-    const at::Tensor scales, // [N, 3]
-    const at::Tensor viewmats,             // [C, 4, 4]
-    const at::Tensor Ks,                   // [C, 3, 3]
+    const at::Tensor means,    // [N, 3]
+    const at::Tensor quats,    // [N, 4]
+    const at::Tensor scales,   // [N, 3]
+    const at::Tensor viewmats, // [C, 4, 4]
+    const at::Tensor Ks,       // [C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
@@ -552,13 +537,12 @@ projection_2dgs_fused_fwd(
     uint32_t N = means.size(0);    // number of gaussians
     uint32_t C = viewmats.size(0); // number of cameras
 
-    at::Tensor radii =
-        at::empty({C, N}, means.options().dtype(at::kInt));
+    at::Tensor radii = at::empty({C, N}, means.options().dtype(at::kInt));
     at::Tensor means2d = at::empty({C, N, 2}, means.options());
     at::Tensor depths = at::empty({C, N}, means.options());
     at::Tensor ray_transforms = at::empty({C, N, 3, 3}, means.options());
     at::Tensor normals = at::zeros({C, N, 3}, means.options());
-    
+
     launch_projection_2dgs_fused_fwd_kernel(
         // inputs
         means,
@@ -581,28 +565,24 @@ projection_2dgs_fused_fwd(
     return std::make_tuple(radii, means2d, depths, ray_transforms, normals);
 }
 
-std::tuple<
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 projection_2dgs_fused_bwd(
     // fwd inputs
-    const at::Tensor means,                // [N, 3]
-    const at::Tensor quats,  // [N, 4]
-    const at::Tensor scales, // [N, 3]
-    const at::Tensor viewmats,             // [C, 4, 4]
-    const at::Tensor Ks,                   // [C, 3, 3]
+    const at::Tensor means,    // [N, 3]
+    const at::Tensor quats,    // [N, 4]
+    const at::Tensor scales,   // [N, 3]
+    const at::Tensor viewmats, // [C, 4, 4]
+    const at::Tensor Ks,       // [C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
-    const at::Tensor radii,                       // [C, N]
-    const at::Tensor ray_transforms,     // [C, N, 3, 3]
+    const at::Tensor radii,          // [C, N]
+    const at::Tensor ray_transforms, // [C, N, 3, 3]
     // grad outputs
-    const at::Tensor v_means2d,                     // [C, N, 2]
-    const at::Tensor v_depths,                      // [C, N]
-    const at::Tensor v_normals, // [C, N, 3]
-    const at::Tensor v_ray_transforms,     // [C, N, 3, 3]
+    const at::Tensor v_means2d,        // [C, N, 2]
+    const at::Tensor v_depths,         // [C, N]
+    const at::Tensor v_normals,        // [C, N, 3]
+    const at::Tensor v_ray_transforms, // [C, N, 3, 3]
     const bool viewmats_requires_grad
 ) {
     DEVICE_GUARD(means);
@@ -652,10 +632,6 @@ projection_2dgs_fused_bwd(
     return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
 }
 
-
-
-
-
 std::tuple<
     at::Tensor,
     at::Tensor,
@@ -666,11 +642,11 @@ std::tuple<
     at::Tensor,
     at::Tensor>
 projection_2dgs_packed_fwd(
-    const at::Tensor means,                // [N, 3]
-    const at::Tensor quats,  // [N, 4]
-    const at::Tensor scales, // [N, 3]
-    const at::Tensor viewmats,             // [C, 4, 4]
-    const at::Tensor Ks,                   // [C, 3, 3]
+    const at::Tensor means,    // [N, 3]
+    const at::Tensor quats,    // [N, 4]
+    const at::Tensor scales,   // [N, 3]
+    const at::Tensor viewmats, // [C, 4, 4]
+    const at::Tensor Ks,       // [C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float near_plane,
@@ -696,7 +672,8 @@ projection_2dgs_packed_fwd(
     int32_t nnz;
     at::Tensor block_accum;
     if (C && N) {
-        at::Tensor block_cnts = at::empty({nrows * blocks_per_row}, opt.dtype(at::kInt));
+        at::Tensor block_cnts =
+            at::empty({nrows * blocks_per_row}, opt.dtype(at::kInt));
         launch_projection_2dgs_packed_fwd_kernel(
             // inputs
             means,
@@ -731,8 +708,7 @@ projection_2dgs_packed_fwd(
     at::Tensor indptr = at::empty({C + 1}, opt.dtype(at::kInt));
     at::Tensor camera_ids = at::empty({nnz}, opt.dtype(at::kLong));
     at::Tensor gaussian_ids = at::empty({nnz}, opt.dtype(at::kLong));
-    at::Tensor radii =
-        at::empty({nnz}, opt.dtype(at::kInt));
+    at::Tensor radii = at::empty({nnz}, opt.dtype(at::kInt));
     at::Tensor means2d = at::empty({nnz, 2}, opt);
     at::Tensor depths = at::empty({nnz}, opt);
     at::Tensor ray_transforms = at::empty({nnz, 3, 3}, opt);
@@ -753,7 +729,7 @@ projection_2dgs_packed_fwd(
             radius_clip,
             block_accum,
             // outputs
-            std::nullopt,  // block_cnts
+            std::nullopt, // block_cnts
             indptr,
             camera_ids,
             gaussian_ids,
@@ -779,30 +755,25 @@ projection_2dgs_packed_fwd(
     );
 }
 
-
-std::tuple<
-    at::Tensor,
-    at::Tensor,
-    at::Tensor,
-    at::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 projection_2dgs_packed_bwd(
     // fwd inputs
-    const at::Tensor means,                // [N, 3]
-    const at::Tensor quats,  // [N, 4]
-    const at::Tensor scales, // [N, 3]
-    const at::Tensor viewmats,             // [C, 4, 4]
-    const at::Tensor Ks,                   // [C, 3, 3]
+    const at::Tensor means,    // [N, 3]
+    const at::Tensor quats,    // [N, 4]
+    const at::Tensor scales,   // [N, 3]
+    const at::Tensor viewmats, // [C, 4, 4]
+    const at::Tensor Ks,       // [C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
-    const at::Tensor camera_ids,                  // [nnz]
-    const at::Tensor gaussian_ids,                // [nnz]
-    const at::Tensor ray_transforms,       // [nnz, 3, 3]
+    const at::Tensor camera_ids,     // [nnz]
+    const at::Tensor gaussian_ids,   // [nnz]
+    const at::Tensor ray_transforms, // [nnz, 3, 3]
     // grad outputs
-    const at::Tensor v_means2d,                     // [nnz, 2]
-    const at::Tensor v_depths,                      // [nnz]
-    const at::Tensor v_ray_transforms,  // [nnz, 3, 3]
-    const at::Tensor v_normals, // [nnz, 3]
+    const at::Tensor v_means2d,        // [nnz, 2]
+    const at::Tensor v_depths,         // [nnz]
+    const at::Tensor v_ray_transforms, // [nnz, 3, 3]
+    const at::Tensor v_normals,        // [nnz, 3]
     const bool viewmats_requires_grad,
     const bool sparse_grad
 ) {
@@ -864,11 +835,10 @@ projection_2dgs_packed_bwd(
         v_means,
         v_quats,
         v_scales,
-        v_viewmats.defined() ? at::optional<at::Tensor>(v_viewmats) : std::nullopt
+        v_viewmats.defined() ? at::optional<at::Tensor>(v_viewmats)
+                             : std::nullopt
     );
     return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
 }
-
-
 
 } // namespace gsplat

@@ -1,12 +1,12 @@
-#include <ATen/core/Tensor.h>
 #include <ATen/Dispatch.h>
-#include <c10/cuda/CUDAStream.h> 
+#include <ATen/core/Tensor.h>
+#include <c10/cuda/CUDAStream.h>
 #include <cooperative_groups.h>
 
 #include "Common.h"
-#include "Rasterization.h" 
+#include "Rasterization.h"
 
-namespace gsplat{
+namespace gsplat {
 
 namespace cg = cooperative_groups;
 
@@ -17,9 +17,9 @@ __global__ void rasterize_to_indices_2dgs_kernel(
     const uint32_t C,
     const uint32_t N,
     const uint32_t n_isects,
-    const vec2 *__restrict__ means2d, // [C, N, 2]
-    const scalar_t *__restrict__ ray_transforms,        // [C, N, 3, 3]
-    const scalar_t *__restrict__ opacities,     // [C, N]
+    const vec2 *__restrict__ means2d,            // [C, N, 2]
+    const scalar_t *__restrict__ ray_transforms, // [C, N, 3, 3]
+    const scalar_t *__restrict__ opacities,      // [C, N]
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
@@ -27,7 +27,8 @@ __global__ void rasterize_to_indices_2dgs_kernel(
     const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
-    const scalar_t *__restrict__ transmittances,     // [C, image_height, image_width]
+    const scalar_t
+        *__restrict__ transmittances,         // [C, image_height, image_width]
     const int32_t *__restrict__ chunk_starts, // [C, image_height, image_width]
     int32_t *__restrict__ chunk_cnts,         // [C, image_height, image_width]
     int64_t *__restrict__ gaussian_ids,       // [n_elems]
@@ -86,14 +87,11 @@ __global__ void rasterize_to_indices_2dgs_kernel(
     vec3 *xy_opacity_batch =
         reinterpret_cast<vec3 *>(&id_batch[block_size]); // [block_size]
     vec3 *u_Ms_batch =
-        reinterpret_cast<vec3 *>(&xy_opacity_batch[block_size]
-        ); // [block_size]
+        reinterpret_cast<vec3 *>(&xy_opacity_batch[block_size]); // [block_size]
     vec3 *v_Ms_batch =
-        reinterpret_cast<vec3 *>(&u_Ms_batch[block_size]
-        ); // [block_size]
+        reinterpret_cast<vec3 *>(&u_Ms_batch[block_size]); // [block_size]
     vec3 *w_Ms_batch =
-        reinterpret_cast<vec3 *>(&v_Ms_batch[block_size]
-        ); // [block_size]
+        reinterpret_cast<vec3 *>(&v_Ms_batch[block_size]); // [block_size]
 
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
@@ -129,13 +127,19 @@ __global__ void rasterize_to_indices_2dgs_kernel(
             const float opac = opacities[g];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             u_Ms_batch[tr] = {
-                ray_transforms[g * 9], ray_transforms[g * 9 + 1], ray_transforms[g * 9 + 2]
+                ray_transforms[g * 9],
+                ray_transforms[g * 9 + 1],
+                ray_transforms[g * 9 + 2]
             };
             v_Ms_batch[tr] = {
-                ray_transforms[g * 9 + 3], ray_transforms[g * 9 + 4], ray_transforms[g * 9 + 5]
+                ray_transforms[g * 9 + 3],
+                ray_transforms[g * 9 + 4],
+                ray_transforms[g * 9 + 5]
             };
             w_Ms_batch[tr] = {
-                ray_transforms[g * 9 + 6], ray_transforms[g * 9 + 7], ray_transforms[g * 9 + 8]
+                ray_transforms[g * 9 + 6],
+                ray_transforms[g * 9 + 7],
+                ray_transforms[g * 9 + 8]
             };
         }
 
@@ -207,29 +211,29 @@ __global__ void rasterize_to_indices_2dgs_kernel(
     }
 }
 
-
 void launch_rasterize_to_indices_2dgs_kernel(
     const uint32_t range_start,
-    const uint32_t range_end,           // iteration steps
+    const uint32_t range_end,        // iteration steps
     const at::Tensor transmittances, // [C, image_height, image_width]
     // Gaussian parameters
-    const at::Tensor means2d,   // [C, N, 2]
-    const at::Tensor ray_transforms,    // [C, N, 3, 3]
-    const at::Tensor opacities, // [C, N]
+    const at::Tensor means2d,        // [C, N, 2]
+    const at::Tensor ray_transforms, // [C, N, 3, 3]
+    const at::Tensor opacities,      // [C, N]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
     // intersections
     const at::Tensor tile_offsets, // [C, tile_height, tile_width]
-    const at::Tensor flatten_ids,   // [n_isects]
+    const at::Tensor flatten_ids,  // [n_isects]
     // helper for double pass
-    const at::optional<at::Tensor> chunk_starts,   // [C, image_height, image_width]
+    const at::optional<at::Tensor>
+        chunk_starts, // [C, image_height, image_width]
     // outputs
-    at::optional<at::Tensor> chunk_cnts,         // [C, image_height, image_width]
-    at::optional<at::Tensor> gaussian_ids,       // [n_elems]
-    at::optional<at::Tensor> pixel_ids           // [n_elems]
-){
+    at::optional<at::Tensor> chunk_cnts,   // [C, image_height, image_width]
+    at::optional<at::Tensor> gaussian_ids, // [n_elems]
+    at::optional<at::Tensor> pixel_ids     // [n_elems]
+) {
     uint32_t C = means2d.size(0); // number of cameras
     uint32_t N = means2d.size(1); // number of gaussians
     uint32_t tile_height = tile_offsets.size(1);
@@ -241,9 +245,9 @@ void launch_rasterize_to_indices_2dgs_kernel(
     dim3 threads = {tile_size, tile_size, 1};
     dim3 grid = {C, tile_height, tile_width};
 
-    int64_t shmem_size =
-        tile_size * tile_size *
-        (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3) + sizeof(vec3) + sizeof(vec3));
+    int64_t shmem_size = tile_size * tile_size *
+                         (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3) +
+                          sizeof(vec3) + sizeof(vec3));
 
     // TODO: an optimization can be done by passing the actual number of
     // channels into the kernel functions and avoid necessary global memory
@@ -278,12 +282,15 @@ void launch_rasterize_to_indices_2dgs_kernel(
             tile_offsets.data_ptr<int32_t>(),
             flatten_ids.data_ptr<int32_t>(),
             transmittances.data_ptr<float>(),
-            chunk_starts.has_value() ? chunk_starts.value().data_ptr<int32_t>() : nullptr,
-            chunk_cnts.has_value() ? chunk_cnts.value().data_ptr<int32_t>() : nullptr,
-            gaussian_ids.has_value() ? gaussian_ids.value().data_ptr<int64_t>() : nullptr,
-            pixel_ids.has_value() ? pixel_ids.value().data_ptr<int64_t>() : nullptr
+            chunk_starts.has_value() ? chunk_starts.value().data_ptr<int32_t>()
+                                     : nullptr,
+            chunk_cnts.has_value() ? chunk_cnts.value().data_ptr<int32_t>()
+                                   : nullptr,
+            gaussian_ids.has_value() ? gaussian_ids.value().data_ptr<int64_t>()
+                                     : nullptr,
+            pixel_ids.has_value() ? pixel_ids.value().data_ptr<int64_t>()
+                                  : nullptr
         );
 }
-
 
 } // namespace gsplat

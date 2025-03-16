@@ -1,14 +1,14 @@
-#include <ATen/core/Tensor.h>
 #include <ATen/Dispatch.h>
-#include <c10/cuda/CUDAStream.h> 
-#include <cooperative_groups.h>
+#include <ATen/core/Tensor.h>
 #include <ATen/cuda/Atomic.cuh>
+#include <c10/cuda/CUDAStream.h>
+#include <cooperative_groups.h>
 
 #include "Common.h"
+#include "Rasterization.h"
 #include "Utils.cuh"
-#include "Rasterization.h" 
 
-namespace gsplat{
+namespace gsplat {
 
 namespace cg = cooperative_groups;
 
@@ -19,12 +19,12 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     const uint32_t n_isects,
     const bool packed,
     // fwd inputs
-    const vec2 *__restrict__ means2d, // [C, N, 2] or [nnz, 2]
-    const vec3 *__restrict__ conics,  // [C, N, 3] or [nnz, 3]
+    const vec2 *__restrict__ means2d,         // [C, N, 2] or [nnz, 2]
+    const vec3 *__restrict__ conics,          // [C, N, 3] or [nnz, 3]
     const scalar_t *__restrict__ colors,      // [C, N, CDIM] or [nnz, CDIM]
     const scalar_t *__restrict__ opacities,   // [C, N] or [nnz]
     const scalar_t *__restrict__ backgrounds, // [C, CDIM] or [nnz, CDIM]
-    const bool *__restrict__ masks,    // [C, tile_height, tile_width]
+    const bool *__restrict__ masks,           // [C, tile_height, tile_width]
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
@@ -33,16 +33,18 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
     // fwd outputs
-    const scalar_t *__restrict__ render_alphas,  // [C, image_height, image_width, 1]
+    const scalar_t
+        *__restrict__ render_alphas,      // [C, image_height, image_width, 1]
     const int32_t *__restrict__ last_ids, // [C, image_height, image_width]
     // grad outputs
-    const scalar_t *__restrict__ v_render_colors, // [C, image_height, image_width,
-                                           // CDIM]
-    const scalar_t *__restrict__ v_render_alphas, // [C, image_height, image_width, 1]
+    const scalar_t *__restrict__ v_render_colors, // [C, image_height,
+                                                  // image_width, CDIM]
+    const scalar_t
+        *__restrict__ v_render_alphas, // [C, image_height, image_width, 1]
     // grad inputs
-    vec2 *__restrict__ v_means2d_abs, // [C, N, 2] or [nnz, 2]
-    vec2 *__restrict__ v_means2d,     // [C, N, 2] or [nnz, 2]
-    vec3 *__restrict__ v_conics,      // [C, N, 3] or [nnz, 3]
+    vec2 *__restrict__ v_means2d_abs,  // [C, N, 2] or [nnz, 2]
+    vec2 *__restrict__ v_means2d,      // [C, N, 2] or [nnz, 2]
+    vec3 *__restrict__ v_conics,       // [C, N, 3] or [nnz, 3]
     scalar_t *__restrict__ v_colors,   // [C, N, CDIM] or [nnz, CDIM]
     scalar_t *__restrict__ v_opacities // [C, N] or [nnz]
 ) {
@@ -97,9 +99,9 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     vec3 *xy_opacity_batch =
         reinterpret_cast<vec3 *>(&id_batch[block_size]); // [block_size]
     vec3 *conic_batch =
-        reinterpret_cast<vec3 *>(&xy_opacity_batch[block_size]
-        );                                         // [block_size]
-    float *rgbs_batch = (float *)&conic_batch[block_size]; // [block_size * CDIM]
+        reinterpret_cast<vec3 *>(&xy_opacity_batch[block_size]); // [block_size]
+    float *rgbs_batch =
+        (float *)&conic_batch[block_size]; // [block_size * CDIM]
 
     // this is the T AFTER the last gaussian in this pixel
     float T_final = 1.0f - render_alphas[pix_id];
@@ -111,7 +113,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
 
     // df/d_out for this pixel
     float v_render_c[CDIM];
-    #pragma unroll
+#pragma unroll
     for (uint32_t k = 0; k < CDIM; ++k) {
         v_render_c[k] = v_render_colors[pix_id * CDIM + k];
     }
@@ -142,7 +144,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
             const float opac = opacities[g];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             conic_batch[tr] = conics[g];
-            #pragma unroll
+#pragma unroll
             for (uint32_t k = 0; k < CDIM; ++k) {
                 rgbs_batch[tr * CDIM + k] = colors[g * CDIM + k];
             }
@@ -169,8 +171,8 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
                 opac = xy_opac.z;
                 delta = {xy_opac.x - px, xy_opac.y - py};
                 float sigma = 0.5f * (conic.x * delta.x * delta.x +
-                                  conic.z * delta.y * delta.y) +
-                          conic.y * delta.x * delta.y;
+                                      conic.z * delta.y * delta.y) +
+                              conic.y * delta.x * delta.y;
                 vis = __expf(-sigma);
                 alpha = min(0.999f, opac * vis);
                 if (sigma < 0.f || alpha < 1.f / 255.f) {
@@ -194,24 +196,23 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
                 T *= ra;
                 // update v_rgb for this gaussian
                 const float fac = alpha * T;
-                #pragma unroll
+#pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
                     v_rgb_local[k] = fac * v_render_c[k];
                 }
                 // contribution from this pixel
                 float v_alpha = 0.f;
-                #pragma unroll
+#pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
-                    v_alpha +=
-                        (rgbs_batch[t * CDIM + k] * T - buffer[k] * ra) *
-                        v_render_c[k];
+                    v_alpha += (rgbs_batch[t * CDIM + k] * T - buffer[k] * ra) *
+                               v_render_c[k];
                 }
 
                 v_alpha += T_final * ra * v_render_a;
                 // contribution from background pixel
                 if (backgrounds != nullptr) {
                     float accum = 0.f;
-                    #pragma unroll
+#pragma unroll
                     for (uint32_t k = 0; k < CDIM; ++k) {
                         accum += backgrounds[k] * v_render_c[k];
                     }
@@ -235,7 +236,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
                     v_opacity_local = vis * v_alpha;
                 }
 
-                #pragma unroll
+#pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
                     buffer[k] += rgbs_batch[t * CDIM + k] * fac;
                 }
@@ -250,7 +251,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
             if (warp.thread_rank() == 0) {
                 int32_t g = id_batch[t]; // flatten index in [C * N] or [nnz]
                 float *v_rgb_ptr = (float *)(v_colors) + CDIM * g;
-                #pragma unroll
+#pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
                     gpuAtomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
                 }
@@ -276,7 +277,6 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     }
 }
 
-
 template <uint32_t CDIM>
 void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     // Gaussian parameters
@@ -285,7 +285,7 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     const at::Tensor colors,                    // [C, N, 3] or [nnz, 3]
     const at::Tensor opacities,                 // [C, N] or [nnz]
     const at::optional<at::Tensor> backgrounds, // [C, 3]
-    const at::optional<at::Tensor> masks, // [C, tile_height, tile_width]
+    const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -301,11 +301,11 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     const at::Tensor v_render_alphas, // [C, image_height, image_width, 1]
     // outputs
     at::optional<at::Tensor> v_means2d_abs, // [C, N, 2] or [nnz, 2]
-    at::Tensor v_means2d,     // [C, N, 2] or [nnz, 2]
-    at::Tensor v_conics,      // [C, N, 3] or [nnz, 3]
-    at::Tensor v_colors,       // [C, N, 3] or [nnz, 3]
-    at::Tensor v_opacities // [C, N] or [nnz]
-){
+    at::Tensor v_means2d,                   // [C, N, 2] or [nnz, 2]
+    at::Tensor v_conics,                    // [C, N, 3] or [nnz, 3]
+    at::Tensor v_colors,                    // [C, N, 3] or [nnz, 3]
+    at::Tensor v_opacities                  // [C, N] or [nnz]
+) {
     bool packed = means2d.dim() == 2;
 
     uint32_t C = tile_offsets.size(0);         // number of cameras
@@ -367,7 +367,11 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
             last_ids.data_ptr<int32_t>(),
             v_render_colors.data_ptr<float>(),
             v_render_alphas.data_ptr<float>(),
-            v_means2d_abs.has_value() ? reinterpret_cast<vec2 *>(v_means2d_abs.value().data_ptr<float>()) : nullptr,
+            v_means2d_abs.has_value()
+                ? reinterpret_cast<vec2 *>(
+                      v_means2d_abs.value().data_ptr<float>()
+                  )
+                : nullptr,
             reinterpret_cast<vec2 *>(v_means2d.data_ptr<float>()),
             reinterpret_cast<vec3 *>(v_conics.data_ptr<float>()),
             v_colors.data_ptr<float>(),
@@ -375,30 +379,32 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
         );
 }
 
-// Explicit Instantiation: this should match how it is being called in .cpp file.
+// Explicit Instantiation: this should match how it is being called in .cpp
+// file.
 // TODO: this is slow to compile, can we do something about it?
-#define __INS__(CDIM) \
-  template void launch_rasterize_to_pixels_3dgs_bwd_kernel<CDIM>(  \
-      const at::Tensor means2d,                   \
-      const at::Tensor conics,                    \
-      const at::Tensor colors,                    \
-      const at::Tensor opacities,                 \
-      const at::optional<at::Tensor> backgrounds, \
-      const at::optional<at::Tensor> masks,       \
-      uint32_t image_width,                       \
-      uint32_t image_height,                      \
-      uint32_t tile_size,                         \
-      const at::Tensor tile_offsets,              \
-      const at::Tensor flatten_ids,               \
-      const at::Tensor render_alphas,             \
-      const at::Tensor last_ids,                  \
-      const at::Tensor v_render_colors,           \
-      const at::Tensor v_render_alphas,           \
-      at::optional<at::Tensor> v_means2d_abs,     \
-      at::Tensor v_means2d,                       \
-      at::Tensor v_conics,                        \
-      at::Tensor v_colors,                        \
-      at::Tensor v_opacities);
+#define __INS__(CDIM)                                                          \
+    template void launch_rasterize_to_pixels_3dgs_bwd_kernel<CDIM>(            \
+        const at::Tensor means2d,                                              \
+        const at::Tensor conics,                                               \
+        const at::Tensor colors,                                               \
+        const at::Tensor opacities,                                            \
+        const at::optional<at::Tensor> backgrounds,                            \
+        const at::optional<at::Tensor> masks,                                  \
+        uint32_t image_width,                                                  \
+        uint32_t image_height,                                                 \
+        uint32_t tile_size,                                                    \
+        const at::Tensor tile_offsets,                                         \
+        const at::Tensor flatten_ids,                                          \
+        const at::Tensor render_alphas,                                        \
+        const at::Tensor last_ids,                                             \
+        const at::Tensor v_render_colors,                                      \
+        const at::Tensor v_render_alphas,                                      \
+        at::optional<at::Tensor> v_means2d_abs,                                \
+        at::Tensor v_means2d,                                                  \
+        at::Tensor v_conics,                                                   \
+        at::Tensor v_colors,                                                   \
+        at::Tensor v_opacities                                                 \
+    );
 
 __INS__(1)
 __INS__(2)

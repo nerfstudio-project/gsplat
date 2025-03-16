@@ -1,12 +1,12 @@
-#include <ATen/core/Tensor.h>
 #include <ATen/Dispatch.h>
-#include <c10/cuda/CUDAStream.h> 
+#include <ATen/core/Tensor.h>
+#include <c10/cuda/CUDAStream.h>
 #include <cooperative_groups.h>
 
 #include "Common.h"
-#include "Rasterization.h" 
+#include "Rasterization.h"
 
-namespace gsplat{
+namespace gsplat {
 
 namespace cg = cooperative_groups;
 
@@ -14,19 +14,18 @@ namespace cg = cooperative_groups;
 // Forward
 ////////////////////////////////////////////////////////////////
 
-
 template <uint32_t CDIM, typename scalar_t>
 __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
     const uint32_t C,
     const uint32_t N,
     const uint32_t n_isects,
     const bool packed,
-    const vec2 *__restrict__ means2d, // [C, N, 2] or [nnz, 2]
-    const vec3 *__restrict__ conics,  // [C, N, 3] or [nnz, 3]
+    const vec2 *__restrict__ means2d,         // [C, N, 2] or [nnz, 2]
+    const vec3 *__restrict__ conics,          // [C, N, 3] or [nnz, 3]
     const scalar_t *__restrict__ colors,      // [C, N, CDIM] or [nnz, CDIM]
     const scalar_t *__restrict__ opacities,   // [C, N] or [nnz]
     const scalar_t *__restrict__ backgrounds, // [C, CDIM]
-    const bool *__restrict__ masks,    // [C, tile_height, tile_width]
+    const bool *__restrict__ masks,           // [C, tile_height, tile_width]
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
@@ -34,9 +33,10 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
     const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
-    scalar_t *__restrict__ render_colors, // [C, image_height, image_width, CDIM]
+    scalar_t
+        *__restrict__ render_colors, // [C, image_height, image_width, CDIM]
     scalar_t *__restrict__ render_alphas, // [C, image_height, image_width, 1]
-    int32_t *__restrict__ last_ids // [C, image_height, image_width]
+    int32_t *__restrict__ last_ids        // [C, image_height, image_width]
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
@@ -71,7 +71,7 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
     // when the mask is provided, render the background color and return
     // if this tile is labeled as False
     if (masks != nullptr && inside && !masks[tile_id]) {
-        #pragma unroll
+#pragma unroll
         for (uint32_t k = 0; k < CDIM; ++k) {
             render_colors[pix_id * CDIM + k] =
                 backgrounds == nullptr ? 0.0f : backgrounds[k];
@@ -96,8 +96,7 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
     vec3 *xy_opacity_batch =
         reinterpret_cast<vec3 *>(&id_batch[block_size]); // [block_size]
     vec3 *conic_batch =
-        reinterpret_cast<vec3 *>(&xy_opacity_batch[block_size]
-        ); // [block_size]
+        reinterpret_cast<vec3 *>(&xy_opacity_batch[block_size]); // [block_size]
 
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
@@ -144,8 +143,8 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
             const float opac = xy_opac.z;
             const vec2 delta = {xy_opac.x - px, xy_opac.y - py};
             const float sigma = 0.5f * (conic.x * delta.x * delta.x +
-                                    conic.z * delta.y * delta.y) +
-                            conic.y * delta.x * delta.y;
+                                        conic.z * delta.y * delta.y) +
+                                conic.y * delta.x * delta.y;
             float alpha = min(0.999f, opac * __expf(-sigma));
             if (sigma < 0.f || alpha < 1.f / 255.f) {
                 continue;
@@ -160,7 +159,7 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
             int32_t g = id_batch[t];
             const float vis = alpha * T;
             const float *c_ptr = colors + g * CDIM;
-            #pragma unroll
+#pragma unroll
             for (uint32_t k = 0; k < CDIM; ++k) {
                 pix_out[k] += c_ptr[k] * vis;
             }
@@ -177,7 +176,7 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
         // with float32. However, double precision makes the backward pass 1.5x
         // slower so we stick with float for now.
         render_alphas[pix_id] = 1.0f - T;
-        #pragma unroll
+#pragma unroll
         for (uint32_t k = 0; k < CDIM; ++k) {
             render_colors[pix_id * CDIM + k] =
                 backgrounds == nullptr ? pix_out[k]
@@ -188,7 +187,6 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
     }
 }
 
-
 template <uint32_t CDIM>
 void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     // Gaussian parameters
@@ -197,19 +195,19 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     const at::Tensor colors,    // [C, N, channels] or [nnz, channels]
     const at::Tensor opacities, // [C, N]  or [nnz]
     const at::optional<at::Tensor> backgrounds, // [C, channels]
-    const at::optional<at::Tensor> masks, // [C, tile_height, tile_width]
+    const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
     // intersections
     const at::Tensor tile_offsets, // [C, tile_height, tile_width]
-    const at::Tensor flatten_ids,   // [n_isects]
+    const at::Tensor flatten_ids,  // [n_isects]
     // outputs
     at::Tensor renders, // [C, image_height, image_width, channels]
     at::Tensor alphas,  // [C, image_height, image_width]
     at::Tensor last_ids // [C, image_height, image_width]
-){
+) {
     bool packed = means2d.dim() == 2;
 
     uint32_t C = tile_offsets.size(0);         // number of cameras
@@ -224,8 +222,7 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     dim3 grid = {C, tile_height, tile_width};
 
     int64_t shmem_size =
-        tile_size * tile_size *
-        (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3));
+        tile_size * tile_size * (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3));
 
     // TODO: an optimization can be done by passing the actual number of
     // channels into the kernel functions and avoid necessary global memory
@@ -268,24 +265,26 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
         );
 }
 
-// Explicit Instantiation: this should match how it is being called in .cpp file.
+// Explicit Instantiation: this should match how it is being called in .cpp
+// file.
 // TODO: this is slow to compile, can we do something about it?
-#define __INS__(CDIM) \
-  template void launch_rasterize_to_pixels_3dgs_fwd_kernel<CDIM>(  \
-      const at::Tensor means2d,   \
-      const at::Tensor conics,    \
-      const at::Tensor colors,    \
-      const at::Tensor opacities, \
-      const at::optional<at::Tensor> backgrounds, \
-      const at::optional<at::Tensor> masks, \
-      uint32_t image_width,       \
-      uint32_t image_height,      \
-      uint32_t tile_size,         \
-      const at::Tensor tile_offsets, \
-      const at::Tensor flatten_ids, \
-      at::Tensor renders,         \
-      at::Tensor alphas,          \
-      at::Tensor last_ids);
+#define __INS__(CDIM)                                                          \
+    template void launch_rasterize_to_pixels_3dgs_fwd_kernel<CDIM>(            \
+        const at::Tensor means2d,                                              \
+        const at::Tensor conics,                                               \
+        const at::Tensor colors,                                               \
+        const at::Tensor opacities,                                            \
+        const at::optional<at::Tensor> backgrounds,                            \
+        const at::optional<at::Tensor> masks,                                  \
+        uint32_t image_width,                                                  \
+        uint32_t image_height,                                                 \
+        uint32_t tile_size,                                                    \
+        const at::Tensor tile_offsets,                                         \
+        const at::Tensor flatten_ids,                                          \
+        at::Tensor renders,                                                    \
+        at::Tensor alphas,                                                     \
+        at::Tensor last_ids                                                    \
+    );
 
 __INS__(1)
 __INS__(2)
@@ -307,6 +306,5 @@ __INS__(257)
 __INS__(512)
 __INS__(513)
 #undef __INS__
-
 
 } // namespace gsplat

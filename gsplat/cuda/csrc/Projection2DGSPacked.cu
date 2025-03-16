@@ -1,16 +1,16 @@
-#include <ATen/core/Tensor.h>
 #include <ATen/Dispatch.h>
-#include <c10/cuda/CUDAStream.h> 
+#include <ATen/core/Tensor.h>
 #include <ATen/cuda/Atomic.cuh>
+#include <c10/cuda/CUDAStream.h>
 #include <cooperative_groups.h>
 #include <cub/cub.cuh>
 
 #include "Common.h"
-#include "Utils.cuh"
 #include "Projection.h"
 #include "Projection2DGS.cuh" // Utils for 2DGS Projection
+#include "Utils.cuh"
 
-namespace gsplat{
+namespace gsplat {
 
 namespace cg = cooperative_groups;
 
@@ -32,14 +32,14 @@ __global__ void projection_2dgs_packed_fwd_kernel(
         *__restrict__ block_accum,    // [C * blocks_per_row] packing helper
     int32_t *__restrict__ block_cnts, // [C * blocks_per_row] packing helper
     // outputs
-    int32_t *__restrict__ indptr,       // [C + 1]
-    int64_t *__restrict__ camera_ids,   // [nnz]
-    int64_t *__restrict__ gaussian_ids, // [nnz]
-    int32_t *__restrict__ radii,        // [nnz]
-    scalar_t *__restrict__ means2d,            // [nnz, 2]
-    scalar_t *__restrict__ depths,             // [nnz]
-    scalar_t *__restrict__ ray_transforms,             // [nnz, 3, 3]
-    scalar_t *__restrict__ normals             // [nnz, 3]
+    int32_t *__restrict__ indptr,          // [C + 1]
+    int64_t *__restrict__ camera_ids,      // [nnz]
+    int64_t *__restrict__ gaussian_ids,    // [nnz]
+    int32_t *__restrict__ radii,           // [nnz]
+    scalar_t *__restrict__ means2d,        // [nnz, 2]
+    scalar_t *__restrict__ depths,         // [nnz]
+    scalar_t *__restrict__ ray_transforms, // [nnz, 3, 3]
+    scalar_t *__restrict__ normals         // [nnz, 3]
 ) {
     int32_t blocks_per_row = gridDim.x;
 
@@ -192,31 +192,31 @@ __global__ void projection_2dgs_packed_fwd_kernel(
     }
 }
 
-
 void launch_projection_2dgs_packed_fwd_kernel(
     // inputs
-    const at::Tensor means,                // [N, 3]
-    const at::Tensor quats,  // [N, 4]
-    const at::Tensor scales, // [N, 3]
-    const at::Tensor viewmats,             // [C, 4, 4]
-    const at::Tensor Ks,                   // [C, 3, 3]
+    const at::Tensor means,    // [N, 3]
+    const at::Tensor quats,    // [N, 4]
+    const at::Tensor scales,   // [N, 3]
+    const at::Tensor viewmats, // [C, 4, 4]
+    const at::Tensor Ks,       // [C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
     const float radius_clip,
-    const at::optional<at::Tensor> block_accum,    // [C * blocks_per_row] packing helper
+    const at::optional<at::Tensor>
+        block_accum, // [C * blocks_per_row] packing helper
     // outputs
-    at::optional<at::Tensor> block_cnts,      // [C * blocks_per_row] packing helper
-    at::optional<at::Tensor> indptr,          // [C + 1]
-    at::optional<at::Tensor> camera_ids,      // [nnz]
-    at::optional<at::Tensor> gaussian_ids,    // [nnz]
+    at::optional<at::Tensor> block_cnts, // [C * blocks_per_row] packing helper
+    at::optional<at::Tensor> indptr,     // [C + 1]
+    at::optional<at::Tensor> camera_ids, // [nnz]
+    at::optional<at::Tensor> gaussian_ids,   // [nnz]
     at::optional<at::Tensor> radii,          // [nnz]
-    at::optional<at::Tensor> means2d,       // [nnz, 2]
-    at::optional<at::Tensor> depths,        // [nnz]
-    at::optional<at::Tensor> ray_transforms,        // [nnz, 3, 3]
-    at::optional<at::Tensor> normals  // [nnz]
-){
+    at::optional<at::Tensor> means2d,        // [nnz, 2]
+    at::optional<at::Tensor> depths,         // [nnz]
+    at::optional<at::Tensor> ray_transforms, // [nnz, 3, 3]
+    at::optional<at::Tensor> normals         // [nnz]
+) {
     uint32_t N = means.size(0);    // number of gaussians
     uint32_t C = viewmats.size(0); // number of cameras
 
@@ -236,31 +236,36 @@ void launch_projection_2dgs_packed_fwd_kernel(
 
     projection_2dgs_packed_fwd_kernel<float>
         <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
-        C,
-        N,
-        means.data_ptr<float>(),
-        quats.data_ptr<float>(),
-        scales.data_ptr<float>(),
-        viewmats.data_ptr<float>(),
-        Ks.data_ptr<float>(),
-        image_width,
-        image_height,
-        near_plane,
-        far_plane,
-        radius_clip,
-        block_accum.has_value() ? block_accum.value().data_ptr<int32_t>() : nullptr,
-        block_cnts.has_value() ? block_cnts.value().data_ptr<int32_t>() : nullptr,
-        indptr.has_value() ? indptr.value().data_ptr<int32_t>() : nullptr,
-        camera_ids.has_value() ? camera_ids.value().data_ptr<int64_t>() : nullptr,
-        gaussian_ids.has_value() ? gaussian_ids.value().data_ptr<int64_t>() : nullptr,
-        radii.has_value() ? radii.value().data_ptr<int32_t>() : nullptr,
-        means2d.has_value() ? means2d.value().data_ptr<float>() : nullptr,
-        depths.has_value() ? depths.value().data_ptr<float>() : nullptr,
-        ray_transforms.has_value() ? ray_transforms.value().data_ptr<float>() : nullptr,
-        normals.has_value() ? normals.value().data_ptr<float>() : nullptr
-    );
+            C,
+            N,
+            means.data_ptr<float>(),
+            quats.data_ptr<float>(),
+            scales.data_ptr<float>(),
+            viewmats.data_ptr<float>(),
+            Ks.data_ptr<float>(),
+            image_width,
+            image_height,
+            near_plane,
+            far_plane,
+            radius_clip,
+            block_accum.has_value() ? block_accum.value().data_ptr<int32_t>()
+                                    : nullptr,
+            block_cnts.has_value() ? block_cnts.value().data_ptr<int32_t>()
+                                   : nullptr,
+            indptr.has_value() ? indptr.value().data_ptr<int32_t>() : nullptr,
+            camera_ids.has_value() ? camera_ids.value().data_ptr<int64_t>()
+                                   : nullptr,
+            gaussian_ids.has_value() ? gaussian_ids.value().data_ptr<int64_t>()
+                                     : nullptr,
+            radii.has_value() ? radii.value().data_ptr<int32_t>() : nullptr,
+            means2d.has_value() ? means2d.value().data_ptr<float>() : nullptr,
+            depths.has_value() ? depths.value().data_ptr<float>() : nullptr,
+            ray_transforms.has_value()
+                ? ray_transforms.value().data_ptr<float>()
+                : nullptr,
+            normals.has_value() ? normals.value().data_ptr<float>() : nullptr
+        );
 }
-
 
 template <typename scalar_t>
 __global__ void projection_2dgs_packed_bwd_kernel(
@@ -276,14 +281,14 @@ __global__ void projection_2dgs_packed_bwd_kernel(
     const int32_t image_width,
     const int32_t image_height,
     // fwd outputs
-    const int64_t *__restrict__ camera_ids,   // [nnz]
-    const int64_t *__restrict__ gaussian_ids, // [nnz]
-    const scalar_t *__restrict__ ray_transforms,             // [nnz, 3]
+    const int64_t *__restrict__ camera_ids,      // [nnz]
+    const int64_t *__restrict__ gaussian_ids,    // [nnz]
+    const scalar_t *__restrict__ ray_transforms, // [nnz, 3]
     // grad outputs
-    const scalar_t *__restrict__ v_means2d, // [nnz, 2]
-    const scalar_t *__restrict__ v_depths,  // [nnz]
+    const scalar_t *__restrict__ v_means2d,        // [nnz, 2]
+    const scalar_t *__restrict__ v_depths,         // [nnz]
     const scalar_t *__restrict__ v_ray_transforms, // [nnz, 3, 3]
-    const scalar_t *__restrict__ v_normals, // [nnz, 3]
+    const scalar_t *__restrict__ v_normals,        // [nnz, 3]
     const bool sparse_grad, // whether the outputs are in COO format [nnz, ...]
     // grad inputs
     scalar_t *__restrict__ v_means,   // [N, 3] or [nnz, 3]
@@ -371,7 +376,7 @@ __global__ void projection_2dgs_packed_bwd_kernel(
         // write out results with sparse layout
         if (v_means != nullptr) {
             v_means += idx * 3;
-            #pragma unroll
+#pragma unroll
             for (uint32_t i = 0; i < 3; i++) {
                 v_means[i] = v_mean[i];
             }
@@ -393,7 +398,7 @@ __global__ void projection_2dgs_packed_bwd_kernel(
             warpSum(v_mean, warp_group_g);
             if (warp_group_g.thread_rank() == 0) {
                 v_means += gid * 3;
-                #pragma unroll
+#pragma unroll
                 for (uint32_t i = 0; i < 3; i++) {
                     gpuAtomicAdd(v_means + i, v_mean[i]);
                 }
@@ -415,32 +420,31 @@ __global__ void projection_2dgs_packed_bwd_kernel(
     }
 }
 
-
 void launch_projection_2dgs_packed_bwd_kernel(
     // fwd inputs
-    const at::Tensor means,                // [N, 3]
-    const at::Tensor quats,  // [N, 4]
-    const at::Tensor scales, // [N, 3]
-    const at::Tensor viewmats,             // [C, 4, 4]
-    const at::Tensor Ks,                   // [C, 3, 3]
+    const at::Tensor means,    // [N, 3]
+    const at::Tensor quats,    // [N, 4]
+    const at::Tensor scales,   // [N, 3]
+    const at::Tensor viewmats, // [C, 4, 4]
+    const at::Tensor Ks,       // [C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
-    const at::Tensor camera_ids,                  // [nnz]
-    const at::Tensor gaussian_ids,                // [nnz]
-    const at::Tensor ray_transforms,       // [nnz, 3, 3]
+    const at::Tensor camera_ids,     // [nnz]
+    const at::Tensor gaussian_ids,   // [nnz]
+    const at::Tensor ray_transforms, // [nnz, 3, 3]
     // grad outputs
-    const at::Tensor v_means2d,                     // [nnz, 2]
-    const at::Tensor v_depths,                      // [nnz]
-    const at::Tensor v_ray_transforms,  // [nnz, 3, 3]
-    const at::Tensor v_normals, // [nnz, 3]
+    const at::Tensor v_means2d,        // [nnz, 2]
+    const at::Tensor v_depths,         // [nnz]
+    const at::Tensor v_ray_transforms, // [nnz, 3, 3]
+    const at::Tensor v_normals,        // [nnz, 3]
     const bool sparse_grad,
     // grad inputs
-    at::Tensor v_means,   // [N, 3] or [nnz, 3]
-    at::Tensor v_quats,   // [N, 4] or [nnz, 4]
-    at::Tensor v_scales,  // [N, 3] or [nnz, 3]
+    at::Tensor v_means,                 // [N, 3] or [nnz, 3]
+    at::Tensor v_quats,                 // [N, 4] or [nnz, 4]
+    at::Tensor v_scales,                // [N, 3] or [nnz, 3]
     at::optional<at::Tensor> v_viewmats // [C, 4, 4] Optional
-){
+) {
     uint32_t N = means.size(0);    // number of gaussians
     uint32_t C = viewmats.size(0); // number of cameras
     uint32_t nnz = camera_ids.size(0);
@@ -456,31 +460,30 @@ void launch_projection_2dgs_packed_bwd_kernel(
 
     projection_2dgs_packed_bwd_kernel<float>
         <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
-        C,
-        N,
-        nnz,
-        means.data_ptr<float>(),
-        quats.data_ptr<float>(),
-        scales.data_ptr<float>(),
-        viewmats.data_ptr<float>(),
-        Ks.data_ptr<float>(),
-        image_width,
-        image_height,
-        camera_ids.data_ptr<int64_t>(),
-        gaussian_ids.data_ptr<int64_t>(),
-        ray_transforms.data_ptr<float>(),
-        v_means2d.data_ptr<float>(),
-        v_depths.data_ptr<float>(),
-        v_ray_transforms.data_ptr<float>(),
-        v_normals.data_ptr<float>(),
-        sparse_grad,
-        v_means.data_ptr<float>(),
-        v_quats.data_ptr<float>(),
-        v_scales.data_ptr<float>(),
-        v_viewmats.has_value() ? v_viewmats.value().data_ptr<float>() : nullptr
-    );
+            C,
+            N,
+            nnz,
+            means.data_ptr<float>(),
+            quats.data_ptr<float>(),
+            scales.data_ptr<float>(),
+            viewmats.data_ptr<float>(),
+            Ks.data_ptr<float>(),
+            image_width,
+            image_height,
+            camera_ids.data_ptr<int64_t>(),
+            gaussian_ids.data_ptr<int64_t>(),
+            ray_transforms.data_ptr<float>(),
+            v_means2d.data_ptr<float>(),
+            v_depths.data_ptr<float>(),
+            v_ray_transforms.data_ptr<float>(),
+            v_normals.data_ptr<float>(),
+            sparse_grad,
+            v_means.data_ptr<float>(),
+            v_quats.data_ptr<float>(),
+            v_scales.data_ptr<float>(),
+            v_viewmats.has_value() ? v_viewmats.value().data_ptr<float>()
+                                   : nullptr
+        );
 }
-
-
 
 } // namespace gsplat

@@ -3,16 +3,16 @@
 #include <cstdint>
 
 namespace at {
-    class Tensor;
+class Tensor;
 }
 
-namespace gsplat{
+namespace gsplat {
 
 void launch_adam_kernel(
-    at::Tensor &param,               // [..., D]
-    const at::Tensor &param_grad,    // [..., D]
-    at::Tensor &exp_avg,             // [..., D]
-    at::Tensor &exp_avg_sq,          // [..., D]
+    at::Tensor &param,                    // [..., D]
+    const at::Tensor &param_grad,         // [..., D]
+    at::Tensor &exp_avg,                  // [..., D]
+    at::Tensor &exp_avg_sq,               // [..., D]
     const at::optional<at::Tensor> valid, // [...]
     const float lr,
     const float b1,

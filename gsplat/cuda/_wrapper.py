@@ -35,6 +35,7 @@ def world_to_cam(
         - **Gaussian covariances in camera coordinate system**. [C, N, 3, 3]
     """
     from ._torch_impl import _world_to_cam
+
     warnings.warn(
         "world_to_cam() is removed from the CUDA backend as it's relatively easy to "
         "implement in PyTorch. Currently use the PyTorch implementation instead. "
@@ -61,7 +62,7 @@ def adam(
     lr: float,
     b1: float,
     b2: float,
-    eps: float
+    eps: float,
 ) -> None:
     _make_lazy_cuda_func("adam")(
         param, param_grad, exp_avg, exp_avg_sq, valid, lr, b1, b2, eps
@@ -1196,7 +1197,9 @@ class _SphericalHarmonics(torch.autograd.Function):
     def forward(
         ctx, sh_degree: int, dirs: Tensor, coeffs: Tensor, masks: Tensor
     ) -> Tensor:
-        colors = _make_lazy_cuda_func("spherical_harmonics_fwd")(sh_degree, dirs, coeffs, masks)
+        colors = _make_lazy_cuda_func("spherical_harmonics_fwd")(
+            sh_degree, dirs, coeffs, masks
+        )
         ctx.save_for_backward(dirs, coeffs, masks)
         ctx.sh_degree = sh_degree
         ctx.num_bases = coeffs.shape[-2]
@@ -1771,9 +1774,7 @@ def rasterize_to_indices_in_range_2dgs(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-    out_gauss_ids, out_indices = _make_lazy_cuda_func(
-        "rasterize_to_indices_2dgs"
-    )(
+    out_gauss_ids, out_indices = _make_lazy_cuda_func("rasterize_to_indices_2dgs")(
         range_start,
         range_end,
         transmittances.contiguous(),

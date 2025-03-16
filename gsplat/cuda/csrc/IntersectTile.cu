@@ -1,17 +1,17 @@
-#include <ATen/core/Tensor.h>
 #include <ATen/Dispatch.h>
-#include <c10/cuda/CUDAStream.h> 
+#include <ATen/core/Tensor.h>
+#include <c10/cuda/CUDAStream.h>
 #include <cooperative_groups.h>
 
 // for CUB_WRAPPER
-#include <cub/cub.cuh>
 #include <c10/cuda/CUDACachingAllocator.h>
+#include <cub/cub.cuh>
 
 #include "Common.h"
-#include "Utils.cuh"
 #include "Intersect.h"
+#include "Utils.cuh"
 
-namespace gsplat{
+namespace gsplat {
 
 namespace cg = cooperative_groups;
 
@@ -32,9 +32,9 @@ __global__ void intersect_tile_kernel(
     const int64_t *__restrict__ camera_ids,   // [nnz] optional
     const int64_t *__restrict__ gaussian_ids, // [nnz] optional
     // data
-    const scalar_t *__restrict__ means2d,                   // [C, N, 2] or [nnz, 2]
+    const scalar_t *__restrict__ means2d,            // [C, N, 2] or [nnz, 2]
     const int32_t *__restrict__ radii,               // [C, N] or [nnz]
-    const scalar_t *__restrict__ depths,                    // [C, N] or [nnz]
+    const scalar_t *__restrict__ depths,             // [C, N] or [nnz]
     const int64_t *__restrict__ cum_tiles_per_gauss, // [C, N] or [nnz]
     const uint32_t tile_size,
     const uint32_t tile_width,
@@ -108,7 +108,6 @@ __global__ void intersect_tile_kernel(
     }
 }
 
-
 void launch_intersect_tile_kernel(
     // inputs
     const at::Tensor means2d,                    // [C, N, 2] or [nnz, 2]
@@ -125,7 +124,7 @@ void launch_intersect_tile_kernel(
     at::optional<at::Tensor> tiles_per_gauss, // [C, N] or [nnz]
     at::optional<at::Tensor> isect_ids,       // [n_isects]
     at::optional<at::Tensor> flatten_ids      // [n_isects]
-){
+) {
     bool packed = means2d.dim() == 2;
 
     uint32_t N, nnz;
@@ -159,29 +158,46 @@ void launch_intersect_tile_kernel(
     }
 
     AT_DISPATCH_FLOATING_TYPES(
-        means2d.scalar_type(), "intersect_tile_kernel",
+        means2d.scalar_type(),
+        "intersect_tile_kernel",
         [&]() {
             intersect_tile_kernel<scalar_t>
-                <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+                <<<grid,
+                   threads,
+                   shmem_size,
+                   at::cuda::getCurrentCUDAStream()>>>(
                     packed,
                     C,
                     N,
                     nnz,
-                    camera_ids.has_value() ? camera_ids.value().data_ptr<int64_t>() : nullptr,
-                    gaussian_ids.has_value() ? gaussian_ids.value().data_ptr<int64_t>() : nullptr,
+                    camera_ids.has_value()
+                        ? camera_ids.value().data_ptr<int64_t>()
+                        : nullptr,
+                    gaussian_ids.has_value()
+                        ? gaussian_ids.value().data_ptr<int64_t>()
+                        : nullptr,
                     means2d.data_ptr<scalar_t>(),
                     radii.data_ptr<int32_t>(),
                     depths.data_ptr<scalar_t>(),
-                    cum_tiles_per_gauss.has_value() ? cum_tiles_per_gauss.value().data_ptr<int64_t>() : nullptr,
+                    cum_tiles_per_gauss.has_value()
+                        ? cum_tiles_per_gauss.value().data_ptr<int64_t>()
+                        : nullptr,
                     tile_size,
                     tile_width,
                     tile_height,
                     tile_n_bits,
-                    tiles_per_gauss.has_value() ? tiles_per_gauss.value().data_ptr<int32_t>() : nullptr,
-                    isect_ids.has_value() ? isect_ids.value().data_ptr<int64_t>() : nullptr,
-                    flatten_ids.has_value() ? flatten_ids.value().data_ptr<int32_t>() : nullptr
+                    tiles_per_gauss.has_value()
+                        ? tiles_per_gauss.value().data_ptr<int32_t>()
+                        : nullptr,
+                    isect_ids.has_value()
+                        ? isect_ids.value().data_ptr<int64_t>()
+                        : nullptr,
+                    flatten_ids.has_value()
+                        ? flatten_ids.value().data_ptr<int32_t>()
+                        : nullptr
                 );
-        });
+        }
+    );
 }
 
 __global__ void intersect_offset_kernel(
@@ -240,7 +256,7 @@ void launch_intersect_offset_kernel(
     const uint32_t tile_height,
     // outputs
     at::Tensor offsets // [C, tile_height, tile_width]
-){
+) {
     int64_t n_elements = isect_ids.size(0); // total number of intersections
     dim3 threads(256);
     dim3 grid((n_elements + threads.x - 1) / threads.x);
@@ -253,15 +269,18 @@ void launch_intersect_offset_kernel(
 
     uint32_t n_tiles = tile_width * tile_height;
     uint32_t tile_n_bits = (uint32_t)floor(log2(n_tiles)) + 1;
-    intersect_offset_kernel
-        <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
-            n_elements,
-            isect_ids.data_ptr<int64_t>(),
-            C,
-            n_tiles,
-            tile_n_bits,
-            offsets.data_ptr<int32_t>()
-        );
+    intersect_offset_kernel<<<
+        grid,
+        threads,
+        shmem_size,
+        at::cuda::getCurrentCUDAStream()>>>(
+        n_elements,
+        isect_ids.data_ptr<int64_t>(),
+        C,
+        n_tiles,
+        tile_n_bits,
+        offsets.data_ptr<int32_t>()
+    );
 }
 
 // https://nvidia.github.io/cccl/cub/api/structcub_1_1DeviceRadixSort.html
@@ -281,9 +300,11 @@ void radix_sort_double_buffer(
 
     // Create a set of DoubleBuffers to wrap pairs of device pointers
     cub::DoubleBuffer<int64_t> d_keys(
-        isect_ids.data_ptr<int64_t>(), isect_ids_sorted.data_ptr<int64_t>());
+        isect_ids.data_ptr<int64_t>(), isect_ids_sorted.data_ptr<int64_t>()
+    );
     cub::DoubleBuffer<int32_t> d_values(
-        flatten_ids.data_ptr<int32_t>(), flatten_ids_sorted.data_ptr<int32_t>());
+        flatten_ids.data_ptr<int32_t>(), flatten_ids_sorted.data_ptr<int32_t>()
+    );
     CUB_WRAPPER(
         cub::DeviceRadixSort::SortPairs,
         d_keys,

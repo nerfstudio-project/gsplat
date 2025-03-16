@@ -16,20 +16,21 @@ namespace cg = cooperative_groups;
 // Transforms a 3D position from world coordinates to camera coordinates.
 // [R | t] is the world-to-camera transformation.
 inline __device__ void posW2C(
-    const mat3 R,  
-    const vec3 t, 
+    const mat3 R,
+    const vec3 t,
     const vec3 pW, // Input position in world coordinates
-    vec3 &pC // Output position in camera coordinates
+    vec3 &pC       // Output position in camera coordinates
 ) {
     pC = R * pW + t;
 }
 
 // Computes the vector-Jacobian product (VJP) for posW2C.
-// This function computes gradients of the transformation with respect to inputs.
+// This function computes gradients of the transformation with respect to
+// inputs.
 inline __device__ void posW2C_VJP(
     // Forward inputs
-    const mat3 R, 
-    const vec3 t, 
+    const mat3 R,
+    const vec3 t,
     const vec3 pW, // Input position in world coordinates
     // Gradient output
     const vec3 v_pC, // Gradient of the output position in camera coordinates
@@ -38,7 +39,7 @@ inline __device__ void posW2C_VJP(
     vec3 &v_t, // Gradient w.r.t. t
     vec3 &v_pW // Gradient w.r.t. pW
 ) {
-    // Using the rule for differentiating a linear transformation: 
+    // Using the rule for differentiating a linear transformation:
     // For D = W * X, G = dL/dD
     // dL/dW = G * X^T, dL/dX = W^T * G
     v_R += glm::outerProduct(v_pC, pW);
@@ -48,30 +49,33 @@ inline __device__ void posW2C_VJP(
 
 // Transforms a covariance matrix from world coordinates to camera coordinates.
 inline __device__ void covarW2C(
-    const mat3 R, 
+    const mat3 R,
     const mat3 covarW, // Input covariance matrix in world coordinates
-    mat3 &covarC // Output covariance matrix in camera coordinates
+    mat3 &covarC       // Output covariance matrix in camera coordinates
 ) {
     covarC = R * covarW * glm::transpose(R);
 }
 
 // Computes the vector-Jacobian product (VJP) for covarW2C.
-// This function computes gradients of the transformation with respect to inputs.
-inline __device__ void covarW2C_VJP(    
+// This function computes gradients of the transformation with respect to
+// inputs.
+inline __device__ void covarW2C_VJP(
     // Forward inputs
-    const mat3 R, 
+    const mat3 R,
     const mat3 covarW, // Input covariance matrix in world coordinates
     // Gradient output
-    const mat3 v_covarC, // Gradient of the output covariance matrix in camera coordinates
+    const mat3 v_covarC, // Gradient of the output covariance matrix in camera
+                         // coordinates
     // Gradient inputs (to be accumulated)
-    mat3 &v_R, // Gradient w.r.t. rotation matrix
+    mat3 &v_R,     // Gradient w.r.t. rotation matrix
     mat3 &v_covarW // Gradient w.r.t. world covariance matrix
 ) {
-    // Using the rule for differentiating quadratic forms: 
+    // Using the rule for differentiating quadratic forms:
     // For D = W * X * W^T, G = dL/dD
     // dL/dX = W^T * G * W
     // dL/dW = G * W * X^T + G^T * W * X
-    v_R += v_covarC * R * glm::transpose(covarW) + glm::transpose(v_covarC) * R * covarW;
+    v_R += v_covarC * R * glm::transpose(covarW) +
+           glm::transpose(v_covarC) * R * covarW;
     v_covarW += glm::transpose(R) * v_covarC * R;
 }
 
@@ -87,55 +91,47 @@ inline __device__ void warpSum(float *val, WarpT &warp) {
     }
 }
 
-template <class WarpT>
-inline __device__ void warpSum(float &val, WarpT &warp) {
+template <class WarpT> inline __device__ void warpSum(float &val, WarpT &warp) {
     val = cg::reduce(warp, val, cg::plus<float>());
 }
 
-template <class WarpT>
-inline __device__ void warpSum(vec4 &val, WarpT &warp) {
+template <class WarpT> inline __device__ void warpSum(vec4 &val, WarpT &warp) {
     val.x = cg::reduce(warp, val.x, cg::plus<float>());
     val.y = cg::reduce(warp, val.y, cg::plus<float>());
     val.z = cg::reduce(warp, val.z, cg::plus<float>());
     val.w = cg::reduce(warp, val.w, cg::plus<float>());
 }
 
-template <class WarpT>
-inline __device__ void warpSum(vec3 &val, WarpT &warp) {
+template <class WarpT> inline __device__ void warpSum(vec3 &val, WarpT &warp) {
     val.x = cg::reduce(warp, val.x, cg::plus<float>());
     val.y = cg::reduce(warp, val.y, cg::plus<float>());
     val.z = cg::reduce(warp, val.z, cg::plus<float>());
 }
 
-template <class WarpT>
-inline __device__ void warpSum(vec2 &val, WarpT &warp) {
+template <class WarpT> inline __device__ void warpSum(vec2 &val, WarpT &warp) {
     val.x = cg::reduce(warp, val.x, cg::plus<float>());
     val.y = cg::reduce(warp, val.y, cg::plus<float>());
 }
 
-template <class WarpT>
-inline __device__ void warpSum(mat4 &val, WarpT &warp) {
+template <class WarpT> inline __device__ void warpSum(mat4 &val, WarpT &warp) {
     warpSum(val[0], warp);
     warpSum(val[1], warp);
     warpSum(val[2], warp);
     warpSum(val[3], warp);
 }
 
-template <class WarpT>
-inline __device__ void warpSum(mat3 &val, WarpT &warp) {
+template <class WarpT> inline __device__ void warpSum(mat3 &val, WarpT &warp) {
     warpSum(val[0], warp);
     warpSum(val[1], warp);
     warpSum(val[2], warp);
 }
 
-template <class WarpT>
-inline __device__ void warpSum(mat2 &val, WarpT &warp) {
+template <class WarpT> inline __device__ void warpSum(mat2 &val, WarpT &warp) {
     warpSum(val[0], warp);
     warpSum(val[1], warp);
 }
 
-template <class WarpT>
-inline __device__ void warpMax(float &val, WarpT &warp) {
+template <class WarpT> inline __device__ void warpMax(float &val, WarpT &warp) {
     val = cg::reduce(warp, val, cg::greater<float>());
 }
 
@@ -167,7 +163,6 @@ inline __device__ mat3 quat_to_rotmat(const vec4 quat) {
     );
 }
 
-
 inline __device__ void
 quat_to_rotmat_vjp(const vec4 quat, const mat3 v_R, vec4 &v_quat) {
     float w = quat[0], x = quat[1], y = quat[2], z = quat[3];
@@ -179,20 +174,19 @@ quat_to_rotmat_vjp(const vec4 quat, const mat3 v_R, vec4 &v_quat) {
     w *= inv_norm;
     vec4 v_quat_n = vec4(
         2.f * (x * (v_R[1][2] - v_R[2][1]) + y * (v_R[2][0] - v_R[0][2]) +
-                z * (v_R[0][1] - v_R[1][0])),
+               z * (v_R[0][1] - v_R[1][0])),
         2.f *
             (-2.f * x * (v_R[1][1] + v_R[2][2]) + y * (v_R[0][1] + v_R[1][0]) +
-                z * (v_R[0][2] + v_R[2][0]) + w * (v_R[1][2] - v_R[2][1])),
+             z * (v_R[0][2] + v_R[2][0]) + w * (v_R[1][2] - v_R[2][1])),
         2.f * (x * (v_R[0][1] + v_R[1][0]) - 2.f * y * (v_R[0][0] + v_R[2][2]) +
-                z * (v_R[1][2] + v_R[2][1]) + w * (v_R[2][0] - v_R[0][2])),
+               z * (v_R[1][2] + v_R[2][1]) + w * (v_R[2][0] - v_R[0][2])),
         2.f * (x * (v_R[0][2] + v_R[2][0]) + y * (v_R[1][2] + v_R[2][1]) -
-                2.f * z * (v_R[0][0] + v_R[1][1]) + w * (v_R[0][1] - v_R[1][0]))
+               2.f * z * (v_R[0][0] + v_R[1][1]) + w * (v_R[0][1] - v_R[1][0]))
     );
 
     vec4 quat_n = vec4(w, x, y, z);
     v_quat += (v_quat_n - glm::dot(v_quat_n, quat_n) * quat_n) * inv_norm;
 }
-
 
 inline __device__ void quat_scale_to_covar_preci(
     const vec4 quat,
@@ -226,7 +220,6 @@ inline __device__ void quat_scale_to_covar_preci(
         *preci = M * glm::transpose(M);
     }
 }
-
 
 inline __device__ void quat_scale_to_covar_vjp(
     // fwd inputs
@@ -266,7 +259,6 @@ inline __device__ void quat_scale_to_covar_vjp(
     v_scale[2] +=
         R[2][0] * v_M[2][0] + R[2][1] * v_M[2][1] + R[2][2] * v_M[2][2];
 }
-
 
 inline __device__ void quat_scale_to_preci_vjp(
     // fwd inputs
@@ -310,19 +302,19 @@ inline __device__ void quat_scale_to_preci_vjp(
         (R[2][0] * v_M[2][0] + R[2][1] * v_M[2][1] + R[2][2] * v_M[2][2]);
 }
 
-
 ///////////////////////////////
 // Misc
 ///////////////////////////////
 
-inline __device__ void inverse_vjp(const mat2 Minv, const mat2 v_Minv, mat2 &v_M) {
+inline __device__ void
+inverse_vjp(const mat2 Minv, const mat2 v_Minv, mat2 &v_M) {
     // P = M^-1
     // df/dM = -P * df/dP * P
     v_M += -Minv * v_Minv * Minv;
 }
 
-
-inline __device__ float add_blur(const float eps2d, mat2 &covar, float &compensation) {
+inline __device__ float
+add_blur(const float eps2d, mat2 &covar, float &compensation) {
     float det_orig = covar[0][0] * covar[1][1] - covar[0][1] * covar[1][0];
     covar[0][0] += eps2d;
     covar[1][1] += eps2d;
@@ -330,7 +322,6 @@ inline __device__ float add_blur(const float eps2d, mat2 &covar, float &compensa
     compensation = sqrt(max(0.f, det_orig / det_blur));
     return det_blur;
 }
-
 
 inline __device__ void add_blur_vjp(
     const float eps2d,
@@ -356,17 +347,16 @@ inline __device__ void add_blur_vjp(
     // = (1 - comp^2) * conic_blur - aI * det(conic_blur)
 
     float det_conic_blur = conic_blur[0][0] * conic_blur[1][1] -
-                        conic_blur[0][1] * conic_blur[1][0];
+                           conic_blur[0][1] * conic_blur[1][0];
     float v_sqr_comp = v_compensation * 0.5 / (compensation + 1e-6);
     float one_minus_sqr_comp = 1 - compensation * compensation;
     v_covar[0][0] += v_sqr_comp * (one_minus_sqr_comp * conic_blur[0][0] -
-                                    eps2d * det_conic_blur);
+                                   eps2d * det_conic_blur);
     v_covar[0][1] += v_sqr_comp * (one_minus_sqr_comp * conic_blur[0][1]);
     v_covar[1][0] += v_sqr_comp * (one_minus_sqr_comp * conic_blur[1][0]);
     v_covar[1][1] += v_sqr_comp * (one_minus_sqr_comp * conic_blur[1][1] -
-                                    eps2d * det_conic_blur);
+                                   eps2d * det_conic_blur);
 }
-
 
 ///////////////////////////////
 // Projection Related
@@ -400,7 +390,6 @@ inline __device__ void ortho_proj(
     cov2d = J * cov3d * glm::transpose(J);
     mean2d = vec2({fx * x + cx, fy * y + cy});
 }
-
 
 inline __device__ void ortho_proj_vjp(
     // fwd inputs
@@ -442,7 +431,6 @@ inline __device__ void ortho_proj_vjp(
     v_mean3d += vec3(fx * v_mean2d[0], fy * v_mean2d[1], 0.f);
 }
 
-
 inline __device__ void persp_proj(
     // inputs
     const vec3 mean3d,
@@ -483,7 +471,6 @@ inline __device__ void persp_proj(
     cov2d = J * cov3d * glm::transpose(J);
     mean2d = vec2({fx * x * rz + cx, fy * y * rz + cy});
 }
-
 
 inline __device__ void persp_proj_vjp(
     // fwd inputs
@@ -546,7 +533,7 @@ inline __device__ void persp_proj_vjp(
     //         + 2 * fx * tx * rz3 * df/dJ_02 + 2 * fy * ty * rz3
     float rz3 = rz2 * rz;
     mat3x2 v_J = v_cov2d * J * glm::transpose(cov3d) +
-                    glm::transpose(v_cov2d) * J * cov3d;
+                 glm::transpose(v_cov2d) * J * cov3d;
 
     // fov clipping
     if (x * rz <= lim_x_pos && x * rz >= -lim_x_neg) {
@@ -560,10 +547,9 @@ inline __device__ void persp_proj_vjp(
         v_mean3d.z += -fy * rz3 * v_J[2][1] * ty;
     }
     v_mean3d.z += -fx * rz2 * v_J[0][0] - fy * rz2 * v_J[1][1] +
-                    2.f * fx * tx * rz3 * v_J[2][0] +
-                    2.f * fy * ty * rz3 * v_J[2][1];
+                  2.f * fx * tx * rz3 * v_J[2][0] +
+                  2.f * fy * ty * rz3 * v_J[2][1];
 }
-
 
 inline __device__ void fisheye_proj(
     // inputs
@@ -584,8 +570,7 @@ inline __device__ void fisheye_proj(
     float eps = 0.0000001f;
     float xy_len = glm::length(glm::vec2({x, y})) + eps;
     float theta = glm::atan(xy_len, z + eps);
-    mean2d =
-        vec2({x * fx * theta / xy_len + cx, y * fy * theta / xy_len + cy});
+    mean2d = vec2({x * fx * theta / xy_len + cx, y * fy * theta / xy_len + cy});
 
     float x2 = x * x + eps;
     float y2 = y * y;
@@ -605,7 +590,6 @@ inline __device__ void fisheye_proj(
     );
     cov2d = J * cov3d * glm::transpose(J);
 }
-
 
 inline __device__ void fisheye_proj_vjp(
     // fwd inputs
@@ -657,7 +641,7 @@ inline __device__ void fisheye_proj_vjp(
     v_cov3d += glm::transpose(J) * v_cov2d * J;
 
     mat3x2 v_J = v_cov2d * J * glm::transpose(cov3d) +
-                    glm::transpose(v_cov2d) * J * cov3d;
+                 glm::transpose(v_cov2d) * J * cov3d;
     float l4 = x2y2z2 * x2y2z2;
 
     float E = -l4 * x2y2 * theta + x2y2z2 * x2y2 * len_xy * z;
@@ -695,14 +679,14 @@ inline __device__ void fisheye_proj_vjp(
     float dJ_dz12 = 2.f * fy * y * z * inv1;
 
     float dL_dtx_raw = dJ_dx00 * v_J[0][0] + dJ_dx01 * v_J[1][0] +
-                    dJ_dx02 * v_J[2][0] + dJ_dx10 * v_J[0][1] +
-                    dJ_dx11 * v_J[1][1] + dJ_dx12 * v_J[2][1];
+                       dJ_dx02 * v_J[2][0] + dJ_dx10 * v_J[0][1] +
+                       dJ_dx11 * v_J[1][1] + dJ_dx12 * v_J[2][1];
     float dL_dty_raw = dJ_dy00 * v_J[0][0] + dJ_dy01 * v_J[1][0] +
-                    dJ_dy02 * v_J[2][0] + dJ_dy10 * v_J[0][1] +
-                    dJ_dy11 * v_J[1][1] + dJ_dy12 * v_J[2][1];
+                       dJ_dy02 * v_J[2][0] + dJ_dy10 * v_J[0][1] +
+                       dJ_dy11 * v_J[1][1] + dJ_dy12 * v_J[2][1];
     float dL_dtz_raw = dJ_dz00 * v_J[0][0] + dJ_dz01 * v_J[1][0] +
-                    dJ_dz02 * v_J[2][0] + dJ_dz10 * v_J[0][1] +
-                    dJ_dz11 * v_J[1][1] + dJ_dz12 * v_J[2][1];
+                       dJ_dz02 * v_J[2][0] + dJ_dz10 * v_J[0][1] +
+                       dJ_dz11 * v_J[1][1] + dJ_dz12 * v_J[2][1];
     v_mean3d.x += dL_dtx_raw;
     v_mean3d.y += dL_dty_raw;
     v_mean3d.z += dL_dtz_raw;
