@@ -660,7 +660,8 @@ void launch_rasterize_to_pixels_2dgs_bwd_kernel(
 
     int64_t shmem_size =
         tile_size * tile_size *
-        (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3) + sizeof(float) * CDIM);
+        (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3) +
+         sizeof(vec3) + sizeof(vec3) + sizeof(float) * CDIM + sizeof(float) * 3);
 
     if (n_isects == 0) {
         // skip the kernel launch if there are no elements

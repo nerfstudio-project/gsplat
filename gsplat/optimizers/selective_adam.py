@@ -1,6 +1,6 @@
 import torch
 
-from ..cuda._wrapper import selective_adam_update
+from ..cuda._wrapper import adam
 
 
 class SelectiveAdam(torch.optim.Adam):
@@ -13,7 +13,7 @@ class SelectiveAdam(torch.optim.Adam):
     parameter visibility is controlled by an external mask.
 
     Additionally, the operations are fused into a single kernel. This optimizer
-    leverages the `selective_adam_update` function from a CUDA backend for
+    leverages the `adam` function from a CUDA backend for
     optimized sparse updates.
 
     This is one of the two optimizers mentioned in the Taming3DGS paper.
@@ -73,7 +73,7 @@ class SelectiveAdam(torch.optim.Adam):
             exp_avg_sq = stored_state["exp_avg_sq"]
             M = param.numel() // N
 
-            selective_adam_update(
+            adam(
                 param,
                 param.grad,
                 exp_avg,
@@ -83,6 +83,4 @@ class SelectiveAdam(torch.optim.Adam):
                 beta1,
                 beta2,
                 eps,
-                N,
-                M,
             )

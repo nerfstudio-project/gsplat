@@ -592,5 +592,93 @@ rasterize_to_pixels_2dgs_bwd(
     );
 }
 
+
+std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
+    const uint32_t range_start,
+    const uint32_t range_end,           // iteration steps
+    const at::Tensor transmittances, // [C, image_height, image_width]
+    // Gaussian parameters
+    const at::Tensor means2d,   // [C, N, 2]
+    const at::Tensor ray_transforms,    // [C, N, 3, 3]
+    const at::Tensor opacities, // [C, N]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [C, tile_height, tile_width]
+    const at::Tensor flatten_ids   // [n_isects]
+) {
+    DEVICE_GUARD(means2d);
+    CHECK_INPUT(means2d);
+    CHECK_INPUT(ray_transforms);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(tile_offsets);
+    CHECK_INPUT(flatten_ids);
+
+    uint32_t C = means2d.size(0); // number of cameras
+    uint32_t N = means2d.size(1); // number of gaussians
+    uint32_t n_isects = flatten_ids.size(0);
+
+    // First pass: count the number of gaussians that contribute to each pixel
+    int64_t n_elems;
+    at::Tensor chunk_starts;
+    if (n_isects) {
+        at::Tensor chunk_cnts = at::zeros(
+            {C * image_height * image_width},
+            means2d.options().dtype(at::kInt)
+        );
+        launch_rasterize_to_indices_2dgs_kernel(
+            range_start,
+            range_end,
+            transmittances,
+            means2d,
+            ray_transforms,
+            opacities,
+            image_width,
+            image_height,
+            tile_size,
+            tile_offsets,
+            flatten_ids,
+            std::nullopt, // chunk_starts
+            at::optional<at::Tensor>(chunk_cnts),
+            std::nullopt, // gaussian_ids
+            std::nullopt  // pixel_ids
+        );
+        at::Tensor cumsum = at::cumsum(chunk_cnts, 0, chunk_cnts.scalar_type());
+        n_elems = cumsum[-1].item<int64_t>();
+        chunk_starts = cumsum - chunk_cnts;
+    } else {
+        n_elems = 0;
+    }
+
+    // Second pass: allocate memory and write out the gaussian and pixel ids.
+    at::Tensor gaussian_ids =
+        at::empty({n_elems}, means2d.options().dtype(at::kLong));
+    at::Tensor pixel_ids =
+        at::empty({n_elems}, means2d.options().dtype(at::kLong));
+    if (n_elems) {
+        launch_rasterize_to_indices_2dgs_kernel(
+            range_start,
+            range_end,
+            transmittances,
+            means2d,
+            ray_transforms,
+            opacities,
+            image_width,
+            image_height,
+            tile_size,
+            tile_offsets,
+            flatten_ids,
+            at::optional<at::Tensor>(chunk_starts),
+            std::nullopt, // chunk_cnts
+            at::optional<at::Tensor>(gaussian_ids),
+            at::optional<at::Tensor>(pixel_ids)
+        );
+    }
+    return std::make_tuple(gaussian_ids, pixel_ids);
+}
+
+
     
 } // namespace gsplat
