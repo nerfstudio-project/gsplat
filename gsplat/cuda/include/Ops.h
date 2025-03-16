@@ -393,4 +393,71 @@ projection_2dgs_packed_bwd(
     const bool sparse_grad
 );
 
+std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor>
+rasterize_to_pixels_2dgs_fwd(
+    // Gaussian parameters
+    const at::Tensor means2d,   // [C, N, 2] or [nnz, 2]
+    const at::Tensor ray_transforms,    // [C, N, 3] or [nnz, 3]
+    const at::Tensor colors,    // [C, N, channels] or [nnz, channels]
+    const at::Tensor opacities, // [C, N]  or [nnz]
+    const at::Tensor normals,   // [C, N, 3] or [nnz, 3]
+    const at::optional<at::Tensor> backgrounds, // [C, channels]
+    const at::optional<at::Tensor> masks, // [C, tile_height, tile_width]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [C, tile_height, tile_width]
+    const at::Tensor flatten_ids   // [n_isects]
+);
+std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor>
+rasterize_to_pixels_2dgs_bwd(
+    // Gaussian parameters
+    const at::Tensor means2d,   // [C, N, 2] or [nnz, 2]
+    const at::Tensor ray_transforms,    // [C, N, 3, 3] or [nnz, 3, 3]
+    const at::Tensor colors,    // [C, N, 3] or [nnz, 3]
+    const at::Tensor opacities, // [C, N] or [nnz]
+    const at::Tensor normals,   // [C, N, 3] or [nnz, 3]
+    const at::Tensor densify,
+    const at::optional<at::Tensor> backgrounds, // [C, 3]
+    const at::optional<at::Tensor> masks, // [C, tile_height, tile_width]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // ray_crossions
+    const at::Tensor tile_offsets, // [C, tile_height, tile_width]
+    const at::Tensor flatten_ids,  // [n_isects]
+    // forward outputs
+    const at::Tensor
+        render_colors, // [C, image_height, image_width, COLOR_DIM]
+    const at::Tensor render_alphas, // [C, image_height, image_width, 1]
+    const at::Tensor last_ids,      // [C, image_height, image_width]
+    const at::Tensor median_ids,    // [C, image_height, image_width]
+    // gradients of outputs
+    const at::Tensor v_render_colors,  // [C, image_height, image_width, 3]
+    const at::Tensor v_render_alphas,  // [C, image_height, image_width, 1]
+    const at::Tensor v_render_normals, // [C, image_height, image_width, 3]
+    const at::Tensor v_render_distort, // [C, image_height, image_width, 1]
+    const at::Tensor v_render_median,  // [C, image_height, image_width, 1]
+    // options
+    bool absgrad
+);
+
+
 }

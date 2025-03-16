@@ -12,6 +12,10 @@
 
 namespace gsplat{
 
+////////////////////////////////////////////////////
+// 3DGS
+////////////////////////////////////////////////////
+
 std::tuple<at::Tensor, at::Tensor, at::Tensor>
 rasterize_to_pixels_3dgs_fwd(
     // Gaussian parameters
@@ -313,6 +317,280 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
     return std::make_tuple(gaussian_ids, pixel_ids);
 }
 
+
+////////////////////////////////////////////////////
+// 2DGS
+////////////////////////////////////////////////////
+
+
+std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor>
+rasterize_to_pixels_2dgs_fwd(
+    // Gaussian parameters
+    const at::Tensor means2d,   // [C, N, 2] or [nnz, 2]
+    const at::Tensor ray_transforms,    // [C, N, 3] or [nnz, 3]
+    const at::Tensor colors,    // [C, N, channels] or [nnz, channels]
+    const at::Tensor opacities, // [C, N]  or [nnz]
+    const at::Tensor normals,   // [C, N, 3] or [nnz, 3]
+    const at::optional<at::Tensor> backgrounds, // [C, channels]
+    const at::optional<at::Tensor> masks, // [C, tile_height, tile_width]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [C, tile_height, tile_width]
+    const at::Tensor flatten_ids   // [n_isects]
+) {
+    DEVICE_GUARD(means2d);
+    CHECK_INPUT(means2d);
+    CHECK_INPUT(ray_transforms);
+    CHECK_INPUT(colors);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(normals);
+    CHECK_INPUT(tile_offsets);
+    CHECK_INPUT(flatten_ids);
+    if (backgrounds.has_value()) {
+        CHECK_INPUT(backgrounds.value());
+    }
+    if (masks.has_value()) {
+        CHECK_INPUT(masks.value());
+    }
+    auto opt = means2d.options();
+
+    uint32_t C = tile_offsets.size(0);         // number of cameras
+    uint32_t channels = colors.size(-1);
+
+    at::Tensor renders = at::empty({C, image_height, image_width, channels}, opt);
+    at::Tensor alphas = at::empty({C, image_height, image_width, 1}, opt);
+    at::Tensor last_ids = at::empty({C, image_height, image_width}, opt.dtype(at::kInt));
+    at::Tensor median_ids = at::empty({C, image_height, image_width}, opt.dtype(at::kInt));
+    at::Tensor render_normals = at::empty({C, image_height, image_width, 3}, opt);
+    at::Tensor render_distort = at::empty( {C, image_height, image_width, 1}, opt);
+    at::Tensor render_median = at::empty({C, image_height, image_width, 1}, opt);
+
+#define __LAUNCH_KERNEL__(N)                                                   \
+    case N:                                                                    \
+        launch_rasterize_to_pixels_2dgs_fwd_kernel<N>(                         \
+            means2d,                                                           \
+            ray_transforms,                                                    \
+            colors,                                                            \
+            opacities,                                                         \
+            normals,                                                           \
+            backgrounds,                                                       \
+            masks,                                                             \
+            image_width,                                                       \
+            image_height,                                                      \
+            tile_size,                                                         \
+            tile_offsets,                                                      \
+            flatten_ids,                                                       \
+            renders,                                                           \
+            alphas,                                                            \
+            render_normals,                                                    \
+            render_distort,                                                    \
+            render_median,                                                     \
+            last_ids,                                                          \
+            median_ids                                                         \
+        );                                                                     \
+        break;
+
+    // TODO: an optimization can be done by passing the actual number of
+    // channels into the kernel functions and avoid necessary global memory
+    // writes. This requires moving the channel padding from python to C side.
+    switch (channels) {
+        __LAUNCH_KERNEL__(1)
+        __LAUNCH_KERNEL__(2)
+        __LAUNCH_KERNEL__(3)
+        __LAUNCH_KERNEL__(4)
+        __LAUNCH_KERNEL__(5)
+        __LAUNCH_KERNEL__(8)
+        __LAUNCH_KERNEL__(9)
+        __LAUNCH_KERNEL__(16)
+        __LAUNCH_KERNEL__(17)
+        __LAUNCH_KERNEL__(32)
+        __LAUNCH_KERNEL__(33)
+        __LAUNCH_KERNEL__(64)
+        __LAUNCH_KERNEL__(65)
+        __LAUNCH_KERNEL__(128)
+        __LAUNCH_KERNEL__(129)
+        __LAUNCH_KERNEL__(256)
+        __LAUNCH_KERNEL__(257)
+        __LAUNCH_KERNEL__(512)
+        __LAUNCH_KERNEL__(513)
+    default:
+        AT_ERROR("Unsupported number of channels: ", channels);
+    }
+#undef __LAUNCH_KERNEL__
+
+    return std::make_tuple(
+        renders,
+        alphas,
+        render_normals,
+        render_distort,
+        render_median,
+        last_ids,
+        median_ids
+    );
+}
+
+
+std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor>
+rasterize_to_pixels_2dgs_bwd(
+    // Gaussian parameters
+    const at::Tensor means2d,   // [C, N, 2] or [nnz, 2]
+    const at::Tensor ray_transforms,    // [C, N, 3, 3] or [nnz, 3, 3]
+    const at::Tensor colors,    // [C, N, 3] or [nnz, 3]
+    const at::Tensor opacities, // [C, N] or [nnz]
+    const at::Tensor normals,   // [C, N, 3] or [nnz, 3]
+    const at::Tensor densify,
+    const at::optional<at::Tensor> backgrounds, // [C, 3]
+    const at::optional<at::Tensor> masks, // [C, tile_height, tile_width]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // ray_crossions
+    const at::Tensor tile_offsets, // [C, tile_height, tile_width]
+    const at::Tensor flatten_ids,  // [n_isects]
+    // forward outputs
+    const at::Tensor
+        render_colors, // [C, image_height, image_width, COLOR_DIM]
+    const at::Tensor render_alphas, // [C, image_height, image_width, 1]
+    const at::Tensor last_ids,      // [C, image_height, image_width]
+    const at::Tensor median_ids,    // [C, image_height, image_width]
+    // gradients of outputs
+    const at::Tensor v_render_colors,  // [C, image_height, image_width, 3]
+    const at::Tensor v_render_alphas,  // [C, image_height, image_width, 1]
+    const at::Tensor v_render_normals, // [C, image_height, image_width, 3]
+    const at::Tensor v_render_distort, // [C, image_height, image_width, 1]
+    const at::Tensor v_render_median,  // [C, image_height, image_width, 1]
+    // options
+    bool absgrad
+) {
+    DEVICE_GUARD(means2d);
+    CHECK_INPUT(means2d);
+    CHECK_INPUT(ray_transforms);
+    CHECK_INPUT(colors);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(normals);
+    CHECK_INPUT(densify);
+    CHECK_INPUT(tile_offsets);
+    CHECK_INPUT(flatten_ids);
+    CHECK_INPUT(render_colors);
+    CHECK_INPUT(render_alphas);
+    CHECK_INPUT(last_ids);
+    CHECK_INPUT(median_ids);
+    CHECK_INPUT(v_render_colors);
+    CHECK_INPUT(v_render_alphas);
+    CHECK_INPUT(v_render_normals);
+    CHECK_INPUT(v_render_distort);
+    CHECK_INPUT(v_render_median);
+    if (backgrounds.has_value()) {
+        CHECK_INPUT(backgrounds.value());
+    }
+    if (masks.has_value()) {
+        CHECK_INPUT(masks.value());
+    }
+
+    uint32_t channels = colors.size(-1);
+
+    at::Tensor v_means2d = at::zeros_like(means2d);
+    at::Tensor v_ray_transforms = at::zeros_like(ray_transforms);
+    at::Tensor v_colors = at::zeros_like(colors);
+    at::Tensor v_normals = at::zeros_like(normals);
+    at::Tensor v_opacities = at::zeros_like(opacities);
+    at::Tensor v_means2d_abs;
+    if (absgrad) {
+        v_means2d_abs = at::zeros_like(means2d);
+    }
+    at::Tensor v_densify = at::zeros_like(densify);
+
+#define __LAUNCH_KERNEL__(N)                                                   \
+    case N:                                                                    \
+        launch_rasterize_to_pixels_2dgs_bwd_kernel<N>(                         \
+            means2d,                                                           \
+            ray_transforms,                                                    \
+            colors,                                                            \
+            opacities,                                                         \
+            normals,                                                           \
+            densify,                                                           \
+            backgrounds,                                                       \
+            masks,                                                             \
+            image_width,                                                       \
+            image_height,                                                      \
+            tile_size,                                                         \
+            tile_offsets,                                                      \
+            flatten_ids,                                                       \
+            render_colors,                                                     \
+            render_alphas,                                                     \
+            last_ids,                                                          \
+            median_ids,                                                        \
+            v_render_colors,                                                   \
+            v_render_alphas,                                                   \
+            v_render_normals,                                                  \
+            v_render_distort,                                                  \
+            v_render_median,                                                   \
+            absgrad ? std::optional<at::Tensor>(v_means2d_abs) : std::nullopt, \
+            v_means2d,                                                         \
+            v_ray_transforms,                                                  \
+            v_colors,                                                          \
+            v_opacities,                                                       \
+            v_normals,                                                         \
+            v_densify                                                          \
+        );                                                                     \
+        break;
+
+    // TODO: an optimization can be done by passing the actual number of
+    // channels into the kernel functions and avoid necessary global memory
+    // writes. This requires moving the channel padding from python to C side.
+    switch (channels) {
+        __LAUNCH_KERNEL__(1)
+        __LAUNCH_KERNEL__(2)
+        __LAUNCH_KERNEL__(3)
+        __LAUNCH_KERNEL__(4)
+        __LAUNCH_KERNEL__(5)
+        __LAUNCH_KERNEL__(8)
+        __LAUNCH_KERNEL__(9)
+        __LAUNCH_KERNEL__(16)
+        __LAUNCH_KERNEL__(17)
+        __LAUNCH_KERNEL__(32)
+        __LAUNCH_KERNEL__(33)
+        __LAUNCH_KERNEL__(64)
+        __LAUNCH_KERNEL__(65)
+        __LAUNCH_KERNEL__(128)
+        __LAUNCH_KERNEL__(129)
+        __LAUNCH_KERNEL__(256)
+        __LAUNCH_KERNEL__(257)
+        __LAUNCH_KERNEL__(512)
+        __LAUNCH_KERNEL__(513)
+    default:
+        AT_ERROR("Unsupported number of channels: ", channels);
+    }
+#undef __LAUNCH_KERNEL__
+
+    return std::make_tuple(
+        v_means2d_abs,
+        v_means2d,
+        v_ray_transforms,
+        v_colors,
+        v_opacities,
+        v_normals,
+        v_densify
+    );
+}
 
     
 } // namespace gsplat
