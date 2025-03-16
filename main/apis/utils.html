@@ -427,7 +427,7 @@ which will be converted to covariances internally in a fused CUDA kernel. Either
 <li><p><strong>covars</strong> – Gaussian covariances (flattened upper triangle). [N, 6] Optional.</p></li>
 <li><p><strong>quats</strong> – Quaternions (No need to be normalized). [N, 4] Optional.</p></li>
 <li><p><strong>scales</strong> – Scales. [N, 3] Optional.</p></li>
-<li><p><strong>viewmats</strong> – Camera-to-world matrices. [C, 4, 4]</p></li>
+<li><p><strong>viewmats</strong> – World-to-camera matrices. [C, 4, 4]</p></li>
 <li><p><strong>Ks</strong> – Camera intrinsics. [C, 3, 3]</p></li>
 <li><p><strong>width</strong> – Image width.</p></li>
 <li><p><strong>height</strong> – Image height.</p></li>
@@ -708,7 +708,7 @@ per splat bounding box and 2D means in image space.</p>
 <li><p><strong>means</strong> – Gaussian means. [N, 3]</p></li>
 <li><p><strong>quats</strong> – Quaternions (No need to be normalized). [N, 4].</p></li>
 <li><p><strong>scales</strong> – Scales. [N, 3].</p></li>
-<li><p><strong>viewmats</strong> – Camera-to-world matrices. [C, 4, 4]</p></li>
+<li><p><strong>viewmats</strong> – World-to-camera matrices. [C, 4, 4]</p></li>
 <li><p><strong>Ks</strong> – Camera intrinsics. [C, 3, 3]</p></li>
 <li><p><strong>width</strong> – Image width.</p></li>
 <li><p><strong>height</strong> – Image height.</p></li>
