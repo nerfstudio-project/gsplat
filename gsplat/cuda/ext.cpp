@@ -41,4 +41,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("projection_2dgs_fused_fwd", &gsplat::projection_2dgs_fused_fwd);
     m.def("projection_2dgs_fused_bwd", &gsplat::projection_2dgs_fused_bwd);
+
+    m.def("projection_2dgs_packed_fwd", &gsplat::projection_2dgs_packed_fwd);
+    m.def("projection_2dgs_packed_bwd", &gsplat::projection_2dgs_packed_bwd);
 }

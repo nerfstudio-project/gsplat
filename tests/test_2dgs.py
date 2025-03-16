@@ -1,8 +1,8 @@
 import math
+import pdb
 
 import pytest
 import torch
-import pdb
 
 from gsplat._helper import load_test_data
 
@@ -326,6 +326,7 @@ def test_rasterize_to_pixels_2dgs(test_data):
     if diff.max() > 1e-5:
         print(f"DIFF > 1e-5, {diff.max()=} {diff.mean()=}")
         import os
+
         import imageio
 
         os.makedirs("renders", exist_ok=True)

@@ -194,4 +194,54 @@ void launch_projection_2dgs_fused_bwd_kernel(
     at::Tensor v_viewmats // [C, 4, 4]
 );
 
+void launch_projection_2dgs_packed_fwd_kernel(
+    // inputs
+    const at::Tensor means,                // [N, 3]
+    const at::Tensor quats,  // [N, 4]
+    const at::Tensor scales, // [N, 3]
+    const at::Tensor viewmats,             // [C, 4, 4]
+    const at::Tensor Ks,                   // [C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float near_plane,
+    const float far_plane,
+    const float radius_clip,
+    const at::optional<at::Tensor> block_accum,    // [C * blocks_per_row] packing helper
+    // outputs
+    at::optional<at::Tensor> block_cnts,      // [C * blocks_per_row] packing helper
+    at::optional<at::Tensor> indptr,          // [C + 1]
+    at::optional<at::Tensor> camera_ids,      // [nnz]
+    at::optional<at::Tensor> gaussian_ids,    // [nnz]
+    at::optional<at::Tensor> radii,          // [nnz]
+    at::optional<at::Tensor> means2d,       // [nnz, 2]
+    at::optional<at::Tensor> depths,        // [nnz]
+    at::optional<at::Tensor> ray_transforms,        // [nnz, 3, 3]
+    at::optional<at::Tensor> normals  // [nnz]
+);
+void launch_projection_2dgs_packed_bwd_kernel(
+    // fwd inputs
+    const at::Tensor means,                // [N, 3]
+    const at::Tensor quats,  // [N, 4]
+    const at::Tensor scales, // [N, 3]
+    const at::Tensor viewmats,             // [C, 4, 4]
+    const at::Tensor Ks,                   // [C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    // fwd outputs
+    const at::Tensor camera_ids,                  // [nnz]
+    const at::Tensor gaussian_ids,                // [nnz]
+    const at::Tensor ray_transforms,       // [nnz, 3, 3]
+    // grad outputs
+    const at::Tensor v_means2d,                     // [nnz, 2]
+    const at::Tensor v_depths,                      // [nnz]
+    const at::Tensor v_ray_transforms,  // [nnz, 3, 3]
+    const at::Tensor v_normals, // [nnz, 3]
+    const bool sparse_grad,
+    // grad inputs
+    at::Tensor v_means,   // [N, 3] or [nnz, 3]
+    at::Tensor v_quats,   // [N, 4] or [nnz, 4]
+    at::Tensor v_scales,  // [N, 3] or [nnz, 3]
+    at::optional<at::Tensor> v_viewmats // [C, 4, 4] Optional
+);
+
 }

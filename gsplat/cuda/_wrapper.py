@@ -1222,371 +1222,371 @@ class _SphericalHarmonics(torch.autograd.Function):
         return None, v_dirs, v_coeffs, None
 
 
-# ###### 2DGS ######
-# def fully_fused_projection_2dgs(
-#     means: Tensor,  # [N, 3]
-#     quats: Tensor,  # [N, 4]
-#     scales: Tensor,
-#     viewmats: Tensor,
-#     Ks: Tensor,
-#     width: int,
-#     height: int,
-#     eps2d: float = 0.3,
-#     near_plane: float = 0.01,
-#     far_plane: float = 1e10,
-#     radius_clip: float = 0.0,
-#     packed: bool = False,
-#     sparse_grad: bool = False,
-# ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
-#     """Prepare Gaussians for rasterization
+###### 2DGS ######
+def fully_fused_projection_2dgs(
+    means: Tensor,  # [N, 3]
+    quats: Tensor,  # [N, 4]
+    scales: Tensor,
+    viewmats: Tensor,
+    Ks: Tensor,
+    width: int,
+    height: int,
+    eps2d: float = 0.3,
+    near_plane: float = 0.01,
+    far_plane: float = 1e10,
+    radius_clip: float = 0.0,
+    packed: bool = False,
+    sparse_grad: bool = False,
+) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Prepare Gaussians for rasterization
 
-#     This function prepares ray-splat intersection matrices, computes
-#     per splat bounding box and 2D means in image space.
+    This function prepares ray-splat intersection matrices, computes
+    per splat bounding box and 2D means in image space.
 
-#     Args:
-#         means: Gaussian means. [N, 3]
-#         quats: Quaternions (No need to be normalized). [N, 4].
-#         scales: Scales. [N, 3].
-#         viewmats: Camera-to-world matrices. [C, 4, 4]
-#         Ks: Camera intrinsics. [C, 3, 3]
-#         width: Image width.
-#         height: Image height.
-#         near_plane: Near plane distance. Default: 0.01.
-#         far_plane: Far plane distance. Default: 200.
-#         radius_clip: Gaussians with projected radii smaller than this value will be ignored. Default: 0.0.
-#         packed: If True, the output tensors will be packed into a flattened tensor. Default: False.
-#         sparse_grad (Experimental): This is only effective when `packed` is True. If True, during backward the gradients
-#           of {`means`, `covars`, `quats`, `scales`} will be a sparse Tensor in COO layout. Default: False.
+    Args:
+        means: Gaussian means. [N, 3]
+        quats: Quaternions (No need to be normalized). [N, 4].
+        scales: Scales. [N, 3].
+        viewmats: Camera-to-world matrices. [C, 4, 4]
+        Ks: Camera intrinsics. [C, 3, 3]
+        width: Image width.
+        height: Image height.
+        near_plane: Near plane distance. Default: 0.01.
+        far_plane: Far plane distance. Default: 200.
+        radius_clip: Gaussians with projected radii smaller than this value will be ignored. Default: 0.0.
+        packed: If True, the output tensors will be packed into a flattened tensor. Default: False.
+        sparse_grad (Experimental): This is only effective when `packed` is True. If True, during backward the gradients
+          of {`means`, `covars`, `quats`, `scales`} will be a sparse Tensor in COO layout. Default: False.
 
-#     Returns:
-#         A tuple:
+    Returns:
+        A tuple:
 
-#         If `packed` is True:
+        If `packed` is True:
 
-#         - **camera_ids**. The row indices of the projected Gaussians. Int32 tensor of shape [nnz].
-#         - **gaussian_ids**. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].
-#         - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz].
-#         - **means**. Projected Gaussian means in 2D. [nnz, 2]
-#         - **depths**. The z-depth of the projected Gaussians. [nnz]
-#         - **ray_transforms**. transformation matrices that transforms xy-planes in pixel spaces into splat coordinates (WH)^T in equation (9) in paper [nnz, 3, 3]
-#         - **normals**. The normals in camera spaces. [nnz, 3]
+        - **camera_ids**. The row indices of the projected Gaussians. Int32 tensor of shape [nnz].
+        - **gaussian_ids**. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].
+        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz].
+        - **means**. Projected Gaussian means in 2D. [nnz, 2]
+        - **depths**. The z-depth of the projected Gaussians. [nnz]
+        - **ray_transforms**. transformation matrices that transforms xy-planes in pixel spaces into splat coordinates (WH)^T in equation (9) in paper [nnz, 3, 3]
+        - **normals**. The normals in camera spaces. [nnz, 3]
 
-#         If `packed` is False:
+        If `packed` is False:
 
-#         - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N].
-#         - **means**. Projected Gaussian means in 2D. [C, N, 2]
-#         - **depths**. The z-depth of the projected Gaussians. [C, N]
-#         - **ray_transforms**. transformation matrices that transforms xy-planes in pixel spaces into splat coordinates.
-#         - **normals**. The normals in camera spaces. [C, N, 3]
+        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N].
+        - **means**. Projected Gaussian means in 2D. [C, N, 2]
+        - **depths**. The z-depth of the projected Gaussians. [C, N]
+        - **ray_transforms**. transformation matrices that transforms xy-planes in pixel spaces into splat coordinates.
+        - **normals**. The normals in camera spaces. [C, N, 3]
 
-#     """
-#     C = viewmats.size(0)
-#     N = means.size(0)
-#     assert means.size() == (N, 3), means.size()
-#     assert viewmats.size() == (C, 4, 4), viewmats.size()
-#     assert Ks.size() == (C, 3, 3), Ks.size()
-#     means = means.contiguous()
-#     assert quats is not None, "quats is required"
-#     assert scales is not None, "scales is required"
-#     assert quats.size() == (N, 4), quats.size()
-#     assert scales.size() == (N, 3), scales.size()
-#     quats = quats.contiguous()
-#     scales = scales.contiguous()
-#     if sparse_grad:
-#         assert packed, "sparse_grad is only supported when packed is True"
+    """
+    C = viewmats.size(0)
+    N = means.size(0)
+    assert means.size() == (N, 3), means.size()
+    assert viewmats.size() == (C, 4, 4), viewmats.size()
+    assert Ks.size() == (C, 3, 3), Ks.size()
+    means = means.contiguous()
+    assert quats is not None, "quats is required"
+    assert scales is not None, "scales is required"
+    assert quats.size() == (N, 4), quats.size()
+    assert scales.size() == (N, 3), scales.size()
+    quats = quats.contiguous()
+    scales = scales.contiguous()
+    if sparse_grad:
+        assert packed, "sparse_grad is only supported when packed is True"
 
-#     viewmats = viewmats.contiguous()
-#     Ks = Ks.contiguous()
-#     if packed:
-#         return _FullyFusedProjectionPacked2DGS.apply(
-#             means,
-#             quats,
-#             scales,
-#             viewmats,
-#             Ks,
-#             width,
-#             height,
-#             near_plane,
-#             far_plane,
-#             radius_clip,
-#             sparse_grad,
-#         )
-#     else:
-#         return _FullyFusedProjection2DGS.apply(
-#             means,
-#             quats,
-#             scales,
-#             viewmats,
-#             Ks,
-#             width,
-#             height,
-#             eps2d,
-#             near_plane,
-#             far_plane,
-#             radius_clip,
-#         )
-
-
-# class _FullyFusedProjection2DGS(torch.autograd.Function):
-#     """Projects Gaussians to 2D."""
-
-#     @staticmethod
-#     def forward(
-#         ctx,
-#         means: Tensor,
-#         quats: Tensor,
-#         scales: Tensor,
-#         viewmats: Tensor,
-#         Ks: Tensor,
-#         width: int,
-#         height: int,
-#         eps2d: float,
-#         near_plane: float,
-#         far_plane: float,
-#         radius_clip: float,
-#     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
-#         radii, means2d, depths, ray_transforms, normals = _make_lazy_cuda_func(
-#             "fully_fused_projection_fwd_2dgs"
-#         )(
-#             means,
-#             quats,
-#             scales,
-#             viewmats,
-#             Ks,
-#             width,
-#             height,
-#             eps2d,
-#             near_plane,
-#             far_plane,
-#             radius_clip,
-#         )
-#         ctx.save_for_backward(
-#             means,
-#             quats,
-#             scales,
-#             viewmats,
-#             Ks,
-#             radii,
-#             ray_transforms,
-#             normals,
-#         )
-#         ctx.width = width
-#         ctx.height = height
-#         ctx.eps2d = eps2d
-
-#         return radii, means2d, depths, ray_transforms, normals
-
-#     @staticmethod
-#     def backward(ctx, v_radii, v_means2d, v_depths, v_ray_transforms, v_normals):
-#         (
-#             means,
-#             quats,
-#             scales,
-#             viewmats,
-#             Ks,
-#             radii,
-#             ray_transforms,
-#             normals,
-#         ) = ctx.saved_tensors
-#         width = ctx.width
-#         height = ctx.height
-#         eps2d = ctx.eps2d
-#         v_means, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
-#             "fully_fused_projection_bwd_2dgs"
-#         )(
-#             means,
-#             quats,
-#             scales,
-#             viewmats,
-#             Ks,
-#             width,
-#             height,
-#             radii,
-#             ray_transforms,
-#             v_means2d.contiguous(),
-#             v_depths.contiguous(),
-#             v_normals.contiguous(),
-#             v_ray_transforms.contiguous(),
-#             ctx.needs_input_grad[3],  # viewmats_requires_grad
-#         )
-#         if not ctx.needs_input_grad[0]:
-#             v_means = None
-#         if not ctx.needs_input_grad[1]:
-#             v_quats = None
-#         if not ctx.needs_input_grad[2]:
-#             v_scales = None
-#         if not ctx.needs_input_grad[3]:
-#             v_viewmats = None
-
-#         return (
-#             v_means,
-#             v_quats,
-#             v_scales,
-#             v_viewmats,
-#             None,
-#             None,
-#             None,
-#             None,
-#             None,
-#             None,
-#             None,
-#             None,
-#         )
+    viewmats = viewmats.contiguous()
+    Ks = Ks.contiguous()
+    if packed:
+        return _FullyFusedProjectionPacked2DGS.apply(
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            width,
+            height,
+            near_plane,
+            far_plane,
+            radius_clip,
+            sparse_grad,
+        )
+    else:
+        return _FullyFusedProjection2DGS.apply(
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            width,
+            height,
+            eps2d,
+            near_plane,
+            far_plane,
+            radius_clip,
+        )
 
 
-# class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
-#     """Projects Gaussians to 2D. Return packed tensors."""
+class _FullyFusedProjection2DGS(torch.autograd.Function):
+    """Projects Gaussians to 2D."""
 
-#     @staticmethod
-#     def forward(
-#         ctx,
-#         means: Tensor,  # [N, 3]
-#         quats: Tensor,  # [N, 4]
-#         scales: Tensor,  # [N, 3]
-#         viewmats: Tensor,  # [C, 4, 4]
-#         Ks: Tensor,  # [C, 3, 3]
-#         width: int,
-#         height: int,
-#         near_plane: float,
-#         far_plane: float,
-#         radius_clip: float,
-#         sparse_grad: bool,
-#     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
-#         (
-#             indptr,
-#             camera_ids,
-#             gaussian_ids,
-#             radii,
-#             means2d,
-#             depths,
-#             ray_transforms,
-#             normals,
-#         ) = _make_lazy_cuda_func("fully_fused_projection_packed_fwd_2dgs")(
-#             means,
-#             quats,
-#             scales,
-#             viewmats,
-#             Ks,
-#             width,
-#             height,
-#             near_plane,
-#             far_plane,
-#             radius_clip,
-#         )
-#         ctx.save_for_backward(
-#             camera_ids,
-#             gaussian_ids,
-#             means,
-#             quats,
-#             scales,
-#             viewmats,
-#             Ks,
-#             ray_transforms,
-#         )
-#         ctx.width = width
-#         ctx.height = height
-#         ctx.sparse_grad = sparse_grad
+    @staticmethod
+    def forward(
+        ctx,
+        means: Tensor,
+        quats: Tensor,
+        scales: Tensor,
+        viewmats: Tensor,
+        Ks: Tensor,
+        width: int,
+        height: int,
+        eps2d: float,
+        near_plane: float,
+        far_plane: float,
+        radius_clip: float,
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        radii, means2d, depths, ray_transforms, normals = _make_lazy_cuda_func(
+            "projection_2dgs_fused_fwd"
+        )(
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            width,
+            height,
+            eps2d,
+            near_plane,
+            far_plane,
+            radius_clip,
+        )
+        ctx.save_for_backward(
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            radii,
+            ray_transforms,
+            normals,
+        )
+        ctx.width = width
+        ctx.height = height
+        ctx.eps2d = eps2d
 
-#         return camera_ids, gaussian_ids, radii, means2d, depths, ray_transforms, normals
+        return radii, means2d, depths, ray_transforms, normals
 
-#     @staticmethod
-#     def backward(
-#         ctx,
-#         v_camera_ids,
-#         v_gaussian_ids,
-#         v_radii,
-#         v_means2d,
-#         v_depths,
-#         v_ray_transforms,
-#         v_normals,
-#     ):
-#         (
-#             camera_ids,
-#             gaussian_ids,
-#             means,
-#             quats,
-#             scales,
-#             viewmats,
-#             Ks,
-#             ray_transforms,
-#         ) = ctx.saved_tensors
-#         width = ctx.width
-#         height = ctx.height
-#         sparse_grad = ctx.sparse_grad
+    @staticmethod
+    def backward(ctx, v_radii, v_means2d, v_depths, v_ray_transforms, v_normals):
+        (
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            radii,
+            ray_transforms,
+            normals,
+        ) = ctx.saved_tensors
+        width = ctx.width
+        height = ctx.height
+        eps2d = ctx.eps2d
+        v_means, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
+            "projection_2dgs_fused_bwd"
+        )(
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            width,
+            height,
+            radii,
+            ray_transforms,
+            v_means2d.contiguous(),
+            v_depths.contiguous(),
+            v_normals.contiguous(),
+            v_ray_transforms.contiguous(),
+            ctx.needs_input_grad[3],  # viewmats_requires_grad
+        )
+        if not ctx.needs_input_grad[0]:
+            v_means = None
+        if not ctx.needs_input_grad[1]:
+            v_quats = None
+        if not ctx.needs_input_grad[2]:
+            v_scales = None
+        if not ctx.needs_input_grad[3]:
+            v_viewmats = None
 
-#         v_means, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
-#             "fully_fused_projection_packed_bwd_2dgs"
-#         )(
-#             means,
-#             quats,
-#             scales,
-#             viewmats,
-#             Ks,
-#             width,
-#             height,
-#             camera_ids,
-#             gaussian_ids,
-#             ray_transforms,
-#             v_means2d.contiguous(),
-#             v_depths.contiguous(),
-#             v_ray_transforms.contiguous(),
-#             v_normals.contiguous(),
-#             ctx.needs_input_grad[4],  # viewmats_requires_grad
-#             sparse_grad,
-#         )
+        return (
+            v_means,
+            v_quats,
+            v_scales,
+            v_viewmats,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
 
-#         if not ctx.needs_input_grad[0]:
-#             v_means = None
-#         else:
-#             if sparse_grad:
-#                 # TODO: gaussian_ids is duplicated so not ideal.
-#                 # An idea is to directly set the attribute (e.g., .sparse_grad) of
-#                 # the tensor but this requires the tensor to be leaf node only. And
-#                 # a customized optimizer would be needed in this case.
-#                 v_means = torch.sparse_coo_tensor(
-#                     indices=gaussian_ids[None],  # [1, nnz]
-#                     values=v_means,  # [nnz, 3]
-#                     size=means.size(),  # [N, 3]
-#                     is_coalesced=len(viewmats) == 1,
-#                 )
-#         if not ctx.needs_input_grad[1]:
-#             v_quats = None
-#         else:
-#             if sparse_grad:
-#                 v_quats = torch.sparse_coo_tensor(
-#                     indices=gaussian_ids[None],  # [1, nnz]
-#                     values=v_quats,  # [nnz, 4]
-#                     size=quats.size(),  # [N, 4]
-#                     is_coalesced=len(viewmats) == 1,
-#                 )
-#         if not ctx.needs_input_grad[2]:
-#             v_scales = None
-#         else:
-#             if sparse_grad:
-#                 v_scales = torch.sparse_coo_tensor(
-#                     indices=gaussian_ids[None],  # [1, nnz]
-#                     values=v_scales,  # [nnz, 3]
-#                     size=scales.size(),  # [N, 3]
-#                     is_coalesced=len(viewmats) == 1,
-#                 )
-#         if not ctx.needs_input_grad[4]:
-#             v_viewmats = None
 
-#         return (
-#             v_means,
-#             v_quats,
-#             v_scales,
-#             v_viewmats,
-#             None,
-#             None,
-#             None,
-#             None,
-#             None,
-#             None,
-#             None,
-#             None,
-#             None,
-#         )
+class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
+    """Projects Gaussians to 2D. Return packed tensors."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        means: Tensor,  # [N, 3]
+        quats: Tensor,  # [N, 4]
+        scales: Tensor,  # [N, 3]
+        viewmats: Tensor,  # [C, 4, 4]
+        Ks: Tensor,  # [C, 3, 3]
+        width: int,
+        height: int,
+        near_plane: float,
+        far_plane: float,
+        radius_clip: float,
+        sparse_grad: bool,
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        (
+            indptr,
+            camera_ids,
+            gaussian_ids,
+            radii,
+            means2d,
+            depths,
+            ray_transforms,
+            normals,
+        ) = _make_lazy_cuda_func("projection_2dgs_packed_fwd")(
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            width,
+            height,
+            near_plane,
+            far_plane,
+            radius_clip,
+        )
+        ctx.save_for_backward(
+            camera_ids,
+            gaussian_ids,
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            ray_transforms,
+        )
+        ctx.width = width
+        ctx.height = height
+        ctx.sparse_grad = sparse_grad
+
+        return camera_ids, gaussian_ids, radii, means2d, depths, ray_transforms, normals
+
+    @staticmethod
+    def backward(
+        ctx,
+        v_camera_ids,
+        v_gaussian_ids,
+        v_radii,
+        v_means2d,
+        v_depths,
+        v_ray_transforms,
+        v_normals,
+    ):
+        (
+            camera_ids,
+            gaussian_ids,
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            ray_transforms,
+        ) = ctx.saved_tensors
+        width = ctx.width
+        height = ctx.height
+        sparse_grad = ctx.sparse_grad
+
+        v_means, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
+            "projection_2dgs_packed_bwd"
+        )(
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            width,
+            height,
+            camera_ids,
+            gaussian_ids,
+            ray_transforms,
+            v_means2d.contiguous(),
+            v_depths.contiguous(),
+            v_ray_transforms.contiguous(),
+            v_normals.contiguous(),
+            ctx.needs_input_grad[4],  # viewmats_requires_grad
+            sparse_grad,
+        )
+
+        if not ctx.needs_input_grad[0]:
+            v_means = None
+        else:
+            if sparse_grad:
+                # TODO: gaussian_ids is duplicated so not ideal.
+                # An idea is to directly set the attribute (e.g., .sparse_grad) of
+                # the tensor but this requires the tensor to be leaf node only. And
+                # a customized optimizer would be needed in this case.
+                v_means = torch.sparse_coo_tensor(
+                    indices=gaussian_ids[None],  # [1, nnz]
+                    values=v_means,  # [nnz, 3]
+                    size=means.size(),  # [N, 3]
+                    is_coalesced=len(viewmats) == 1,
+                )
+        if not ctx.needs_input_grad[1]:
+            v_quats = None
+        else:
+            if sparse_grad:
+                v_quats = torch.sparse_coo_tensor(
+                    indices=gaussian_ids[None],  # [1, nnz]
+                    values=v_quats,  # [nnz, 4]
+                    size=quats.size(),  # [N, 4]
+                    is_coalesced=len(viewmats) == 1,
+                )
+        if not ctx.needs_input_grad[2]:
+            v_scales = None
+        else:
+            if sparse_grad:
+                v_scales = torch.sparse_coo_tensor(
+                    indices=gaussian_ids[None],  # [1, nnz]
+                    values=v_scales,  # [nnz, 3]
+                    size=scales.size(),  # [N, 3]
+                    is_coalesced=len(viewmats) == 1,
+                )
+        if not ctx.needs_input_grad[4]:
+            v_viewmats = None
+
+        return (
+            v_means,
+            v_quats,
+            v_scales,
+            v_viewmats,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
 
 
 # def rasterize_to_pixels_2dgs(
