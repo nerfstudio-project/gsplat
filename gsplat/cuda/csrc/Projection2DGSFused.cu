@@ -24,7 +24,7 @@ __global__ void projection_2dgs_fused_fwd_kernel(
                              // This is the rotation component (for 2D)
     const scalar_t
         *__restrict__ scales, // [N, 3]:  Scales. [N, 3] scales for x, y, z
-    const scalar_t *__restrict__ viewmats, // [C, 4, 4]:  Camera-to-World
+    const scalar_t *__restrict__ viewmats, // [C, 4, 4]:  World-to-Camera
                                            // coordinate mat [R t] [0 1]
     const scalar_t
         *__restrict__ Ks, // [C, 3, 3]:  Projective transformation matrix
