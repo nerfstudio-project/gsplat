@@ -45,9 +45,9 @@ std::tuple<
     at::Tensor>
 projection_ewa_3dgs_fused_fwd(
     const at::Tensor means,                // [N, 3]
-    const at::optional<at::Tensor> &covars, // [N, 6] optional
-    const at::optional<at::Tensor> &quats,  // [N, 4] optional
-    const at::optional<at::Tensor> &scales, // [N, 3] optional
+    const at::optional<at::Tensor> covars, // [N, 6] optional
+    const at::optional<at::Tensor> quats,  // [N, 4] optional
+    const at::optional<at::Tensor> scales, // [N, 3] optional
     const at::Tensor viewmats,             // [C, 4, 4]
     const at::Tensor Ks,                   // [C, 3, 3]
     const uint32_t image_width,
@@ -68,9 +68,9 @@ std::tuple<
 projection_ewa_3dgs_fused_bwd(
     // fwd inputs
     const at::Tensor means,                // [N, 3]
-    const at::optional<at::Tensor> &covars, // [N, 6] optional
-    const at::optional<at::Tensor> &quats,  // [N, 4] optional
-    const at::optional<at::Tensor> &scales, // [N, 3] optional
+    const at::optional<at::Tensor> covars, // [N, 6] optional
+    const at::optional<at::Tensor> quats,  // [N, 4] optional
+    const at::optional<at::Tensor> scales, // [N, 3] optional
     const at::Tensor viewmats,             // [C, 4, 4]
     const at::Tensor Ks,                   // [C, 3, 3]
     const uint32_t image_width,
@@ -80,12 +80,12 @@ projection_ewa_3dgs_fused_bwd(
     // fwd outputs
     const at::Tensor radii,                       // [C, N]
     const at::Tensor conics,                      // [C, N, 3]
-    const at::optional<at::Tensor> &compensations, // [C, N] optional
+    const at::optional<at::Tensor> compensations, // [C, N] optional
     // grad outputs
     const at::Tensor v_means2d,                     // [C, N, 2]
     const at::Tensor v_depths,                      // [C, N]
     const at::Tensor v_conics,                      // [C, N, 3]
-    const at::optional<at::Tensor> &v_compensations, // [C, N] optional
+    const at::optional<at::Tensor> v_compensations, // [C, N] optional
     const bool viewmats_requires_grad
 );
 
@@ -107,9 +107,9 @@ std::tuple<
     at::Tensor>
 projection_ewa_3dgs_packed_fwd(
     const at::Tensor means,                // [N, 3]
-    const at::optional<at::Tensor> &covars, // [N, 6] optional
-    const at::optional<at::Tensor> &quats,  // [N, 4] optional
-    const at::optional<at::Tensor> &scales, // [N, 3] optional
+    const at::optional<at::Tensor> covars, // [N, 6] optional
+    const at::optional<at::Tensor> quats,  // [N, 4] optional
+    const at::optional<at::Tensor> scales, // [N, 3] optional
     const at::Tensor viewmats,             // [C, 4, 4]
     const at::Tensor Ks,                   // [C, 3, 3]
     const uint32_t image_width,
@@ -130,9 +130,9 @@ std::tuple<
 projection_ewa_3dgs_packed_bwd(
     // fwd inputs
     const at::Tensor means,                // [N, 3]
-    const at::optional<at::Tensor> &covars, // [N, 6]
-    const at::optional<at::Tensor> &quats,  // [N, 4]
-    const at::optional<at::Tensor> &scales, // [N, 3]
+    const at::optional<at::Tensor> covars, // [N, 6]
+    const at::optional<at::Tensor> quats,  // [N, 4]
+    const at::optional<at::Tensor> scales, // [N, 3]
     const at::Tensor viewmats,             // [C, 4, 4]
     const at::Tensor Ks,                   // [C, 3, 3]
     const uint32_t image_width,
@@ -143,12 +143,12 @@ projection_ewa_3dgs_packed_bwd(
     const at::Tensor camera_ids,                  // [nnz]
     const at::Tensor gaussian_ids,                // [nnz]
     const at::Tensor conics,                      // [nnz, 3]
-    const at::optional<at::Tensor> &compensations, // [nnz] optional
+    const at::optional<at::Tensor> compensations, // [nnz] optional
     // grad outputs
     const at::Tensor v_means2d,                     // [nnz, 2]
     const at::Tensor v_depths,                      // [nnz]
     const at::Tensor v_conics,                      // [nnz, 3]
-    const at::optional<at::Tensor> &v_compensations, // [nnz] optional
+    const at::optional<at::Tensor> v_compensations, // [nnz] optional
     const bool viewmats_requires_grad,
     const bool sparse_grad
 );
@@ -178,7 +178,7 @@ void adam(
     const at::Tensor &param_grad,    // [..., D]
     at::Tensor &exp_avg,             // [..., D]
     at::Tensor &exp_avg_sq,          // [..., D]
-    const at::optional<at::Tensor> &valid, // [...]
+    const at::optional<at::Tensor> valid, // [...]
     const float lr,
     const float b1,
     const float b2,
@@ -298,6 +298,51 @@ std::tuple<at::Tensor, at::Tensor> relocation(
     at::Tensor ratios, // [N]
     at::Tensor binoms, // [n_max, n_max]
     const int n_max
+);
+
+// Projection for 2DGS
+std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor>
+projection_2dgs_fused_fwd(
+    const at::Tensor means,                // [N, 3]
+    const at::Tensor quats,  // [N, 4]
+    const at::Tensor scales, // [N, 3]
+    const at::Tensor viewmats,             // [C, 4, 4]
+    const at::Tensor Ks,                   // [C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float eps2d,
+    const float near_plane,
+    const float far_plane,
+    const float radius_clip
+);
+std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor>
+projection_2dgs_fused_bwd(
+    // fwd inputs
+    const at::Tensor means,                // [N, 3]
+    const at::Tensor quats,  // [N, 4]
+    const at::Tensor scales, // [N, 3]
+    const at::Tensor viewmats,             // [C, 4, 4]
+    const at::Tensor Ks,                   // [C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    // fwd outputs
+    const at::Tensor radii,                       // [C, N]
+    const at::Tensor ray_transforms,     // [C, N, 3, 3]
+    // grad outputs
+    const at::Tensor v_means2d,                     // [C, N, 2]
+    const at::Tensor v_depths,                      // [C, N]
+    const at::Tensor v_normals, // [C, N, 3]
+    const at::Tensor v_ray_transforms,     // [C, N, 3, 3]
+    const bool viewmats_requires_grad
 );
 
 }

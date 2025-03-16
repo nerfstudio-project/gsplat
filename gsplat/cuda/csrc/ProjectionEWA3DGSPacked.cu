@@ -246,9 +246,9 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
 void launch_projection_ewa_3dgs_packed_fwd_kernel(
     // inputs
     const at::Tensor means,                // [N, 3]
-    const at::optional<at::Tensor> &covars, // [N, 6] optional
-    const at::optional<at::Tensor> &quats,  // [N, 4] optional
-    const at::optional<at::Tensor> &scales, // [N, 3] optional
+    const at::optional<at::Tensor> covars, // [N, 6] optional
+    const at::optional<at::Tensor> quats,  // [N, 4] optional
+    const at::optional<at::Tensor> scales, // [N, 3] optional
     const at::Tensor viewmats,             // [C, 4, 4]
     const at::Tensor Ks,                   // [C, 3, 3]
     const uint32_t image_width,
@@ -607,9 +607,9 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
 void launch_projection_ewa_3dgs_packed_bwd_kernel(
     // fwd inputs
     const at::Tensor means,                // [N, 3]
-    const at::optional<at::Tensor> &covars, // [N, 6]
-    const at::optional<at::Tensor> &quats,  // [N, 4]
-    const at::optional<at::Tensor> &scales, // [N, 3]
+    const at::optional<at::Tensor> covars, // [N, 6]
+    const at::optional<at::Tensor> quats,  // [N, 4]
+    const at::optional<at::Tensor> scales, // [N, 3]
     const at::Tensor viewmats,             // [C, 4, 4]
     const at::Tensor Ks,                   // [C, 3, 3]
     const uint32_t image_width,
@@ -620,12 +620,12 @@ void launch_projection_ewa_3dgs_packed_bwd_kernel(
     const at::Tensor camera_ids,                  // [nnz]
     const at::Tensor gaussian_ids,                // [nnz]
     const at::Tensor conics,                      // [nnz, 3]
-    const at::optional<at::Tensor> &compensations, // [nnz] optional
+    const at::optional<at::Tensor> compensations, // [nnz] optional
     // grad outputs
     const at::Tensor v_means2d,                     // [nnz, 2]
     const at::Tensor v_depths,                      // [nnz]
     const at::Tensor v_conics,                      // [nnz, 3]
-    const at::optional<at::Tensor> &v_compensations, // [nnz] optional
+    const at::optional<at::Tensor> v_compensations, // [nnz] optional
     const bool sparse_grad,
     // grad inputs
     at::Tensor v_means,   // [N, 3] or [nnz, 3]

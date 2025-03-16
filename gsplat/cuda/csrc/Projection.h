@@ -40,9 +40,9 @@ void launch_projection_ewa_simple_bwd_kernel(
 void launch_projection_ewa_3dgs_fused_fwd_kernel(
     // inputs
     const at::Tensor means,                // [N, 3]
-    const at::optional<at::Tensor> &covars, // [N, 6] optional
-    const at::optional<at::Tensor> &quats,  // [N, 4] optional
-    const at::optional<at::Tensor> &scales, // [N, 3] optional
+    const at::optional<at::Tensor> covars, // [N, 6] optional
+    const at::optional<at::Tensor> quats,  // [N, 4] optional
+    const at::optional<at::Tensor> scales, // [N, 3] optional
     const at::Tensor viewmats,             // [C, 4, 4]
     const at::Tensor Ks,                   // [C, 3, 3]
     const uint32_t image_width,
@@ -63,9 +63,9 @@ void launch_projection_ewa_3dgs_fused_bwd_kernel(
     // inputs
     // fwd inputs
     const at::Tensor means,                // [N, 3]
-    const at::optional<at::Tensor> &covars, // [N, 6] optional
-    const at::optional<at::Tensor> &quats,  // [N, 4] optional
-    const at::optional<at::Tensor> &scales, // [N, 3] optional
+    const at::optional<at::Tensor> covars, // [N, 6] optional
+    const at::optional<at::Tensor> quats,  // [N, 4] optional
+    const at::optional<at::Tensor> scales, // [N, 3] optional
     const at::Tensor viewmats,             // [C, 4, 4]
     const at::Tensor Ks,                   // [C, 3, 3]
     const uint32_t image_width,
@@ -75,12 +75,12 @@ void launch_projection_ewa_3dgs_fused_bwd_kernel(
     // fwd outputs
     const at::Tensor radii,                       // [C, N]
     const at::Tensor conics,                      // [C, N, 3]
-    const at::optional<at::Tensor> &compensations, // [C, N] optional
+    const at::optional<at::Tensor> compensations, // [C, N] optional
     // grad outputs
     const at::Tensor v_means2d,                     // [C, N, 2]
     const at::Tensor v_depths,                      // [C, N]
     const at::Tensor v_conics,                      // [C, N, 3]
-    const at::optional<at::Tensor> &v_compensations, // [C, N] optional
+    const at::optional<at::Tensor> v_compensations, // [C, N] optional
     const bool viewmats_requires_grad,
     // outputs
     at::Tensor v_means, // [C, N, 3]
@@ -94,9 +94,9 @@ void launch_projection_ewa_3dgs_fused_bwd_kernel(
 void launch_projection_ewa_3dgs_packed_fwd_kernel(
     // inputs
     const at::Tensor means,                // [N, 3]
-    const at::optional<at::Tensor> &covars, // [N, 6] optional
-    const at::optional<at::Tensor> &quats,  // [N, 4] optional
-    const at::optional<at::Tensor> &scales, // [N, 3] optional
+    const at::optional<at::Tensor> covars, // [N, 6] optional
+    const at::optional<at::Tensor> quats,  // [N, 4] optional
+    const at::optional<at::Tensor> scales, // [N, 3] optional
     const at::Tensor viewmats,             // [C, 4, 4]
     const at::Tensor Ks,                   // [C, 3, 3]
     const uint32_t image_width,
@@ -121,9 +121,9 @@ void launch_projection_ewa_3dgs_packed_fwd_kernel(
 void launch_projection_ewa_3dgs_packed_bwd_kernel(
     // fwd inputs
     const at::Tensor means,                // [N, 3]
-    const at::optional<at::Tensor> &covars, // [N, 6]
-    const at::optional<at::Tensor> &quats,  // [N, 4]
-    const at::optional<at::Tensor> &scales, // [N, 3]
+    const at::optional<at::Tensor> covars, // [N, 6]
+    const at::optional<at::Tensor> quats,  // [N, 4]
+    const at::optional<at::Tensor> scales, // [N, 3]
     const at::Tensor viewmats,             // [C, 4, 4]
     const at::Tensor Ks,                   // [C, 3, 3]
     const uint32_t image_width,
@@ -134,12 +134,12 @@ void launch_projection_ewa_3dgs_packed_bwd_kernel(
     const at::Tensor camera_ids,                  // [nnz]
     const at::Tensor gaussian_ids,                // [nnz]
     const at::Tensor conics,                      // [nnz, 3]
-    const at::optional<at::Tensor> &compensations, // [nnz] optional
+    const at::optional<at::Tensor> compensations, // [nnz] optional
     // grad outputs
     const at::Tensor v_means2d,                     // [nnz, 2]
     const at::Tensor v_depths,                      // [nnz]
     const at::Tensor v_conics,                      // [nnz, 3]
-    const at::optional<at::Tensor> &v_compensations, // [nnz] optional
+    const at::optional<at::Tensor> v_compensations, // [nnz] optional
     const bool sparse_grad,
     // grad inputs
     at::Tensor v_means,   // [N, 3] or [nnz, 3]
@@ -147,6 +147,51 @@ void launch_projection_ewa_3dgs_packed_bwd_kernel(
     at::optional<at::Tensor> v_quats,   // [N, 4] or [nnz, 4] Optional
     at::optional<at::Tensor> v_scales,  // [N, 3] or [nnz, 3] Optional
     at::optional<at::Tensor> v_viewmats // [C, 4, 4] Optional
+);
+
+
+void launch_projection_2dgs_fused_fwd_kernel(
+    // inputs
+    const at::Tensor means,                // [N, 3]
+    const at::Tensor quats,  // [N, 4]
+    const at::Tensor scales, // [N, 3]
+    const at::Tensor viewmats,             // [C, 4, 4]
+    const at::Tensor Ks,                   // [C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float near_plane,
+    const float far_plane,
+    const float radius_clip,
+    // outputs
+    at::Tensor radii,          // [C, N]
+    at::Tensor means2d,       // [C, N, 2]
+    at::Tensor depths,        // [C, N]
+    at::Tensor ray_transforms,     // [C, N, 3, 3]
+    at::Tensor normals  // [C, N, 3]
+);
+void launch_projection_2dgs_fused_bwd_kernel(
+    // fwd inputs
+    const at::Tensor means,                // [N, 3]
+    const at::Tensor quats,  // [N, 4]
+    const at::Tensor scales, // [N, 3]
+    const at::Tensor viewmats,             // [C, 4, 4]
+    const at::Tensor Ks,                   // [C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    // fwd outputs
+    const at::Tensor radii,                       // [C, N]
+    const at::Tensor ray_transforms,        // [C, N, 3, 3]
+    // grad outputs
+    const at::Tensor v_means2d,                     // [C, N, 2]
+    const at::Tensor v_depths,                      // [C, N]
+    const at::Tensor v_normals, // [C, N, 3]
+    const at::Tensor v_ray_transforms,  // [C, N, 3, 3]
+    const bool viewmats_requires_grad,
+    // outputs
+    at::Tensor v_means, // [C, N, 3]
+    at::Tensor v_quats, // [C, N, 4]
+    at::Tensor v_scales, // [C, N, 3]
+    at::Tensor v_viewmats // [C, 4, 4]
 );
 
 }

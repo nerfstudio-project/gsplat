@@ -38,4 +38,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("rasterize_to_indices_3dgs", &gsplat::rasterize_to_indices_3dgs);
 
     m.def("relocation", &gsplat::relocation);
+
+    m.def("projection_2dgs_fused_fwd", &gsplat::projection_2dgs_fused_fwd);
+    m.def("projection_2dgs_fused_bwd", &gsplat::projection_2dgs_fused_bwd);
 }
