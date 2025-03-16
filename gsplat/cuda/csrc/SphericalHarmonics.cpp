@@ -72,7 +72,7 @@ std::tuple<at::Tensor, at::Tensor> spherical_harmonics_bwd(
         masks,
         v_colors,
         v_coeffs,
-        v_dirs.defined() ? at::optional<at::Tensor>(v_dirs) : std::nullopt
+        v_dirs.defined() ? at::optional<at::Tensor>(v_dirs) : c10::nullopt
     );
     return std::make_tuple(v_coeffs, v_dirs); // [..., K, 3], [..., 3]
 }
