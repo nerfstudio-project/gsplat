@@ -1670,7 +1670,6 @@ def rasterize_to_pixels_2dgs(
                 torch.empty(*colors.shape[:-1], padded_channels, device=device),
                 colors[..., -1:],
             ],
-            [colors, torch.zeros(*colors.shape[:-1], padded_channels, device=device)],
             dim=-1,
         )
         if backgrounds is not None:
