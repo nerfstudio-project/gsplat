@@ -295,16 +295,14 @@ void radix_sort_double_buffer(
     );
     switch (d_keys.selector) {
     case 0: // sorted items are stored in isect_ids
-        isect_ids_sorted.copy_(isect_ids);
-        // TODO: std swap?
+        isect_ids_sorted.set_(isect_ids);
         break;
     case 1: // sorted items are stored in isect_ids_sorted
         break;
     }
     switch (d_values.selector) {
     case 0: // sorted items are stored in flatten_ids
-        flatten_ids_sorted.copy_(flatten_ids);
-        // TODO: std swap?
+        flatten_ids_sorted.set_(flatten_ids);
         break;
     case 1: // sorted items are stored in flatten_ids_sorted
         break;
