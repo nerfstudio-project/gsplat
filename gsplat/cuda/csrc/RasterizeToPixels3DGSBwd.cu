@@ -67,25 +67,25 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
 
     // when the mask is provided, do nothing and return if
     // this tile is labeled as False
-    if (masks != nullptr & !masks[tile_id]) {
+    if (masks != nullptr && !masks[tile_id]) {
         return;
     }
 
-    const scalar_t px = (scalar_t)j + 0.5f;
-    const scalar_t py = (scalar_t)i + 0.5f;
+    const float px = (float)j + 0.5f;
+    const float py = (float)i + 0.5f;
     // clamp this value to the last pixel
     const int32_t pix_id =
         min(i * image_width + j, image_width * image_height - 1);
 
     // keep not rasterizing threads around for reading data
-    bool inside = (i < image_height & j < image_width);
+    bool inside = (i < image_height && j < image_width);
 
     // have all threads in tile process the same gaussians in batches
     // first collect gaussians between range.x and range.y in batches
     // which gaussians to look through in this tile
     int32_t range_start = tile_offsets[tile_id];
     int32_t range_end =
-        (camera_id == C - 1) & (tile_id == tile_width * tile_height - 1)
+        (camera_id == C - 1) && (tile_id == tile_width * tile_height - 1)
             ? n_isects
             : tile_offsets[tile_id + 1];
     const uint32_t block_size = block.size();
@@ -99,23 +99,23 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
     vec3 *conic_batch =
         reinterpret_cast<vec3 *>(&xy_opacity_batch[block_size]
         );                                         // [block_size]
-    scalar_t *rgbs_batch = (scalar_t *)&conic_batch[block_size]; // [block_size * CDIM]
+    float *rgbs_batch = (float *)&conic_batch[block_size]; // [block_size * CDIM]
 
     // this is the T AFTER the last gaussian in this pixel
-    scalar_t T_final = 1.0f - render_alphas[pix_id];
-    scalar_t T = T_final;
+    float T_final = 1.0f - render_alphas[pix_id];
+    float T = T_final;
     // the contribution from gaussians behind the current one
-    scalar_t buffer[CDIM] = {0.f};
+    float buffer[CDIM] = {0.f};
     // index of last gaussian to contribute to this pixel
     const int32_t bin_final = inside ? last_ids[pix_id] : 0;
 
     // df/d_out for this pixel
-    scalar_t v_render_c[CDIM];
+    float v_render_c[CDIM];
     #pragma unroll
     for (uint32_t k = 0; k < CDIM; ++k) {
         v_render_c[k] = v_render_colors[pix_id * CDIM + k];
     }
-    const scalar_t v_render_a = v_render_alphas[pix_id];
+    const float v_render_a = v_render_alphas[pix_id];
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing
@@ -139,7 +139,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
             int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
             id_batch[tr] = g;
             const vec2 xy = means2d[g];
-            const scalar_t opac = opacities[g];
+            const float opac = opacities[g];
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             conic_batch[tr] = conics[g];
             #pragma unroll
@@ -157,18 +157,18 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
             if (batch_end - t > bin_final) {
                 valid = 0;
             }
-            scalar_t alpha;
-            scalar_t opac;
+            float alpha;
+            float opac;
             vec2 delta;
             vec3 conic;
-            scalar_t vis;
+            float vis;
 
             if (valid) {
                 conic = conic_batch[t];
                 vec3 xy_opac = xy_opacity_batch[t];
                 opac = xy_opac.z;
                 delta = {xy_opac.x - px, xy_opac.y - py};
-                scalar_t sigma = 0.5f * (conic.x * delta.x * delta.x +
+                float sigma = 0.5f * (conic.x * delta.x * delta.x +
                                   conic.z * delta.y * delta.y) +
                           conic.y * delta.x * delta.y;
                 vis = __expf(-sigma);
@@ -182,24 +182,24 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
             if (!warp.any(valid)) {
                 continue;
             }
-            scalar_t v_rgb_local[CDIM] = {0.f};
+            float v_rgb_local[CDIM] = {0.f};
             vec3 v_conic_local = {0.f, 0.f, 0.f};
             vec2 v_xy_local = {0.f, 0.f};
             vec2 v_xy_abs_local = {0.f, 0.f};
-            scalar_t v_opacity_local = 0.f;
+            float v_opacity_local = 0.f;
             // initialize everything to 0, only set if the lane is valid
             if (valid) {
                 // compute the current T for this gaussian
-                scalar_t ra = 1.0f / (1.0f - alpha);
+                float ra = 1.0f / (1.0f - alpha);
                 T *= ra;
                 // update v_rgb for this gaussian
-                const scalar_t fac = alpha * T;
+                const float fac = alpha * T;
                 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
                     v_rgb_local[k] = fac * v_render_c[k];
                 }
                 // contribution from this pixel
-                scalar_t v_alpha = 0.f;
+                float v_alpha = 0.f;
                 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
                     v_alpha +=
@@ -210,7 +210,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
                 v_alpha += T_final * ra * v_render_a;
                 // contribution from background pixel
                 if (backgrounds != nullptr) {
-                    scalar_t accum = 0.f;
+                    float accum = 0.f;
                     #pragma unroll
                     for (uint32_t k = 0; k < CDIM; ++k) {
                         accum += backgrounds[k] * v_render_c[k];
@@ -219,7 +219,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
                 }
 
                 if (opac * vis <= 0.999f) {
-                    const scalar_t v_sigma = -opac * vis * v_alpha;
+                    const float v_sigma = -opac * vis * v_alpha;
                     v_conic_local = {
                         0.5f * v_sigma * delta.x * delta.x,
                         v_sigma * delta.x * delta.y,
@@ -249,23 +249,23 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
             warpSum(v_opacity_local, warp);
             if (warp.thread_rank() == 0) {
                 int32_t g = id_batch[t]; // flatten index in [C * N] or [nnz]
-                scalar_t *v_rgb_ptr = (scalar_t *)(v_colors) + CDIM * g;
+                float *v_rgb_ptr = (float *)(v_colors) + CDIM * g;
                 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
                     gpuAtomicAdd(v_rgb_ptr + k, v_rgb_local[k]);
                 }
 
-                scalar_t *v_conic_ptr = (scalar_t *)(v_conics) + 3 * g;
+                float *v_conic_ptr = (float *)(v_conics) + 3 * g;
                 gpuAtomicAdd(v_conic_ptr, v_conic_local.x);
                 gpuAtomicAdd(v_conic_ptr + 1, v_conic_local.y);
                 gpuAtomicAdd(v_conic_ptr + 2, v_conic_local.z);
 
-                scalar_t *v_xy_ptr = (scalar_t *)(v_means2d) + 2 * g;
+                float *v_xy_ptr = (float *)(v_means2d) + 2 * g;
                 gpuAtomicAdd(v_xy_ptr, v_xy_local.x);
                 gpuAtomicAdd(v_xy_ptr + 1, v_xy_local.y);
 
                 if (v_means2d_abs != nullptr) {
-                    scalar_t *v_xy_abs_ptr = (scalar_t *)(v_means2d_abs) + 2 * g;
+                    float *v_xy_abs_ptr = (float *)(v_means2d_abs) + 2 * g;
                     gpuAtomicAdd(v_xy_abs_ptr, v_xy_abs_local.x);
                     gpuAtomicAdd(v_xy_abs_ptr + 1, v_xy_abs_local.y);
                 }
@@ -400,9 +400,6 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
       at::Tensor v_colors,                        \
       at::Tensor v_opacities);
 
-// TODO: check this warning [with CDIM=1U] 
-// warning #177-D: variable "xy" was declared but never referenced
-// >> const vec2 xy = means2d[g];
 __INS__(1)
 __INS__(2)
 __INS__(3)

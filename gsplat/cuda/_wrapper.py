@@ -5,9 +5,6 @@ import torch
 from torch import Tensor
 from typing_extensions import Literal
 
-# backward compatibility
-# from ._torch_impl import _world_to_cam as world_to_cam
-
 
 def _make_lazy_cuda_func(name: str) -> Callable:
     def call_cuda(*args, **kwargs):
@@ -17,6 +14,42 @@ def _make_lazy_cuda_func(name: str) -> Callable:
         return getattr(_C, name)(*args, **kwargs)
 
     return call_cuda
+
+
+def world_to_cam(
+    means: Tensor,  # [N, 3]
+    covars: Tensor,  # [N, 3, 3]
+    viewmats: Tensor,  # [C, 4, 4]
+) -> Tuple[Tensor, Tensor]:
+    """Transforms Gaussians from world to camera coordinate system.
+
+    Args:
+        means: Gaussian means. [N, 3]
+        covars: Gaussian covariances. [N, 3, 3]
+        viewmats: World-to-camera transformation matrices. [C, 4, 4]
+
+    Returns:
+        A tuple:
+
+        - **Gaussian means in camera coordinate system**. [C, N, 3]
+        - **Gaussian covariances in camera coordinate system**. [C, N, 3, 3]
+    """
+    from ._torch_impl import _world_to_cam
+    warnings.warn(
+        "world_to_cam() is removed from the CUDA backend as it's relatively easy to "
+        "implement in PyTorch. Currently use the PyTorch implementation instead. "
+        "This function will be completely removed in a future release.",
+        DeprecationWarning,
+    )
+    C = viewmats.size(0)
+    N = means.size(0)
+    assert means.size() == (N, 3), means.size()
+    assert covars.size() == (N, 3, 3), covars.size()
+    assert viewmats.size() == (C, 4, 4), viewmats.size()
+    means = means.contiguous()
+    covars = covars.contiguous()
+    viewmats = viewmats.contiguous()
+    return _world_to_cam(means, covars, viewmats)
 
 
 def adam(
@@ -539,79 +572,79 @@ def rasterize_to_pixels(
     return render_colors, render_alphas
 
 
-# @torch.no_grad()
-# def rasterize_to_indices_in_range(
-#     range_start: int,
-#     range_end: int,
-#     transmittances: Tensor,  # [C, image_height, image_width]
-#     means2d: Tensor,  # [C, N, 2]
-#     conics: Tensor,  # [C, N, 3]
-#     opacities: Tensor,  # [C, N]
-#     image_width: int,
-#     image_height: int,
-#     tile_size: int,
-#     isect_offsets: Tensor,  # [C, tile_height, tile_width]
-#     flatten_ids: Tensor,  # [n_isects]
-# ) -> Tuple[Tensor, Tensor, Tensor]:
-#     """Rasterizes a batch of Gaussians to images but only returns the indices.
+@torch.no_grad()
+def rasterize_to_indices_in_range(
+    range_start: int,
+    range_end: int,
+    transmittances: Tensor,  # [C, image_height, image_width]
+    means2d: Tensor,  # [C, N, 2]
+    conics: Tensor,  # [C, N, 3]
+    opacities: Tensor,  # [C, N]
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    isect_offsets: Tensor,  # [C, tile_height, tile_width]
+    flatten_ids: Tensor,  # [n_isects]
+) -> Tuple[Tensor, Tensor, Tensor]:
+    """Rasterizes a batch of Gaussians to images but only returns the indices.
 
-#     .. note::
+    .. note::
 
-#         This function supports iterative rasterization, in which each call of this function
-#         will rasterize a batch of Gaussians from near to far, defined by `[range_start, range_end)`.
-#         If a one-step full rasterization is desired, set `range_start` to 0 and `range_end` to a really
-#         large number, e.g, 1e10.
+        This function supports iterative rasterization, in which each call of this function
+        will rasterize a batch of Gaussians from near to far, defined by `[range_start, range_end)`.
+        If a one-step full rasterization is desired, set `range_start` to 0 and `range_end` to a really
+        large number, e.g, 1e10.
 
-#     Args:
-#         range_start: The start batch of Gaussians to be rasterized (inclusive).
-#         range_end: The end batch of Gaussians to be rasterized (exclusive).
-#         transmittances: Currently transmittances. [C, image_height, image_width]
-#         means2d: Projected Gaussian means. [C, N, 2]
-#         conics: Inverse of the projected covariances with only upper triangle values. [C, N, 3]
-#         opacities: Gaussian opacities that support per-view values. [C, N]
-#         image_width: Image width.
-#         image_height: Image height.
-#         tile_size: Tile size.
-#         isect_offsets: Intersection offsets outputs from `isect_offset_encode()`. [C, tile_height, tile_width]
-#         flatten_ids: The global flatten indices in [C * N] from  `isect_tiles()`. [n_isects]
+    Args:
+        range_start: The start batch of Gaussians to be rasterized (inclusive).
+        range_end: The end batch of Gaussians to be rasterized (exclusive).
+        transmittances: Currently transmittances. [C, image_height, image_width]
+        means2d: Projected Gaussian means. [C, N, 2]
+        conics: Inverse of the projected covariances with only upper triangle values. [C, N, 3]
+        opacities: Gaussian opacities that support per-view values. [C, N]
+        image_width: Image width.
+        image_height: Image height.
+        tile_size: Tile size.
+        isect_offsets: Intersection offsets outputs from `isect_offset_encode()`. [C, tile_height, tile_width]
+        flatten_ids: The global flatten indices in [C * N] from  `isect_tiles()`. [n_isects]
 
-#     Returns:
-#         A tuple:
+    Returns:
+        A tuple:
 
-#         - **Gaussian ids**. Gaussian ids for the pixel intersection. A flattened list of shape [M].
-#         - **Pixel ids**. pixel indices (row-major). A flattened list of shape [M].
-#         - **Camera ids**. Camera indices. A flattened list of shape [M].
-#     """
+        - **Gaussian ids**. Gaussian ids for the pixel intersection. A flattened list of shape [M].
+        - **Pixel ids**. pixel indices (row-major). A flattened list of shape [M].
+        - **Camera ids**. Camera indices. A flattened list of shape [M].
+    """
 
-#     C, N, _ = means2d.shape
-#     assert conics.shape == (C, N, 3), conics.shape
-#     assert opacities.shape == (C, N), opacities.shape
-#     assert isect_offsets.shape[0] == C, isect_offsets.shape
+    C, N, _ = means2d.shape
+    assert conics.shape == (C, N, 3), conics.shape
+    assert opacities.shape == (C, N), opacities.shape
+    assert isect_offsets.shape[0] == C, isect_offsets.shape
 
-#     tile_height, tile_width = isect_offsets.shape[1:3]
-#     assert (
-#         tile_height * tile_size >= image_height
-#     ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
-#     assert (
-#         tile_width * tile_size >= image_width
-#     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
+    tile_height, tile_width = isect_offsets.shape[1:3]
+    assert (
+        tile_height * tile_size >= image_height
+    ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
+    assert (
+        tile_width * tile_size >= image_width
+    ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-#     out_gauss_ids, out_indices = _make_lazy_cuda_func("rasterize_to_indices_in_range")(
-#         range_start,
-#         range_end,
-#         transmittances.contiguous(),
-#         means2d.contiguous(),
-#         conics.contiguous(),
-#         opacities.contiguous(),
-#         image_width,
-#         image_height,
-#         tile_size,
-#         isect_offsets.contiguous(),
-#         flatten_ids.contiguous(),
-#     )
-#     out_pixel_ids = out_indices % (image_width * image_height)
-#     out_camera_ids = out_indices // (image_width * image_height)
-#     return out_gauss_ids, out_pixel_ids, out_camera_ids
+    out_gauss_ids, out_indices = _make_lazy_cuda_func("rasterize_to_indices_3dgs")(
+        range_start,
+        range_end,
+        transmittances.contiguous(),
+        means2d.contiguous(),
+        conics.contiguous(),
+        opacities.contiguous(),
+        image_width,
+        image_height,
+        tile_size,
+        isect_offsets.contiguous(),
+        flatten_ids.contiguous(),
+    )
+    out_pixel_ids = out_indices % (image_width * image_height)
+    out_camera_ids = out_indices // (image_width * image_height)
+    return out_gauss_ids, out_pixel_ids, out_camera_ids
 
 
 class _QuatScaleToCovarPreci(torch.autograd.Function):

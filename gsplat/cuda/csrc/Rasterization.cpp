@@ -109,32 +109,32 @@ rasterize_to_pixels_3dgs_fwd(
 
 
 std::tuple<
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor,
-    torch::Tensor>
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor>
 rasterize_to_pixels_3dgs_bwd(
     // Gaussian parameters
-    const torch::Tensor &means2d,                   // [C, N, 2] or [nnz, 2]
-    const torch::Tensor &conics,                    // [C, N, 3] or [nnz, 3]
-    const torch::Tensor &colors,                    // [C, N, 3] or [nnz, 3]
-    const torch::Tensor &opacities,                 // [C, N] or [nnz]
-    const at::optional<torch::Tensor> &backgrounds, // [C, 3]
-    const at::optional<torch::Tensor> &masks, // [C, tile_height, tile_width]
+    const at::Tensor means2d,                   // [C, N, 2] or [nnz, 2]
+    const at::Tensor conics,                    // [C, N, 3] or [nnz, 3]
+    const at::Tensor colors,                    // [C, N, 3] or [nnz, 3]
+    const at::Tensor opacities,                 // [C, N] or [nnz]
+    const at::optional<at::Tensor> backgrounds, // [C, 3]
+    const at::optional<at::Tensor> masks, // [C, tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
     // intersections
-    const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
-    const torch::Tensor &flatten_ids,  // [n_isects]
+    const at::Tensor tile_offsets, // [C, tile_height, tile_width]
+    const at::Tensor flatten_ids,  // [n_isects]
     // forward outputs
-    const torch::Tensor &render_alphas, // [C, image_height, image_width, 1]
-    const torch::Tensor &last_ids,      // [C, image_height, image_width]
+    const at::Tensor render_alphas, // [C, image_height, image_width, 1]
+    const at::Tensor last_ids,      // [C, image_height, image_width]
     // gradients of outputs
-    const torch::Tensor &v_render_colors, // [C, image_height, image_width, 3]
-    const torch::Tensor &v_render_alphas, // [C, image_height, image_width, 1]
+    const at::Tensor v_render_colors, // [C, image_height, image_width, 3]
+    const at::Tensor v_render_alphas, // [C, image_height, image_width, 1]
     // options
     bool absgrad
 ) {
@@ -158,13 +158,13 @@ rasterize_to_pixels_3dgs_bwd(
 
     uint32_t channels = colors.size(-1);
 
-    torch::Tensor v_means2d = torch::zeros_like(means2d);
-    torch::Tensor v_conics = torch::zeros_like(conics);
-    torch::Tensor v_colors = torch::zeros_like(colors);
-    torch::Tensor v_opacities = torch::zeros_like(opacities);
-    torch::Tensor v_means2d_abs;
+    at::Tensor v_means2d = at::zeros_like(means2d);
+    at::Tensor v_conics = at::zeros_like(conics);
+    at::Tensor v_colors = at::zeros_like(colors);
+    at::Tensor v_opacities = at::zeros_like(opacities);
+    at::Tensor v_means2d_abs;
     if (absgrad) {
-        v_means2d_abs = torch::zeros_like(means2d);
+        v_means2d_abs = at::zeros_like(means2d);
     }
 
 #define __LAUNCH_KERNEL__(N)                                                   \
@@ -185,7 +185,7 @@ rasterize_to_pixels_3dgs_bwd(
             last_ids,                                                          \
             v_render_colors,                                                   \
             v_render_alphas,                                                   \
-            absgrad ? std::optional<torch::Tensor>(v_means2d_abs) : std::nullopt, \
+            absgrad ? std::optional<at::Tensor>(v_means2d_abs) : std::nullopt, \
             v_means2d,                                                         \
             v_conics,                                                          \
             v_colors,                                                          \
@@ -225,6 +225,94 @@ rasterize_to_pixels_3dgs_bwd(
         v_means2d_abs, v_means2d, v_conics, v_colors, v_opacities
     );
 }
+
+
+std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
+    const uint32_t range_start,
+    const uint32_t range_end,           // iteration steps
+    const at::Tensor transmittances, // [C, image_height, image_width]
+    // Gaussian parameters
+    const at::Tensor means2d,   // [C, N, 2]
+    const at::Tensor conics,    // [C, N, 3]
+    const at::Tensor opacities, // [C, N]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [C, tile_height, tile_width]
+    const at::Tensor flatten_ids   // [n_isects]
+) {
+    DEVICE_GUARD(means2d);
+    CHECK_INPUT(means2d);
+    CHECK_INPUT(conics);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(tile_offsets);
+    CHECK_INPUT(flatten_ids);
+
+    uint32_t C = means2d.size(0); // number of cameras
+    uint32_t N = means2d.size(1); // number of gaussians
+    uint32_t n_isects = flatten_ids.size(0);
+
+    // First pass: count the number of gaussians that contribute to each pixel
+    int64_t n_elems;
+    at::Tensor chunk_starts;
+    if (n_isects) {
+        at::Tensor chunk_cnts = at::zeros(
+            {C * image_height * image_width},
+            means2d.options().dtype(at::kInt)
+        );
+        launch_rasterize_to_indices_3dgs_kernel(
+            range_start,
+            range_end,
+            transmittances,
+            means2d,
+            conics,
+            opacities,
+            image_width,
+            image_height,
+            tile_size,
+            tile_offsets,
+            flatten_ids,
+            std::nullopt, // chunk_starts
+            at::optional<at::Tensor>(chunk_cnts),
+            std::nullopt, // gaussian_ids
+            std::nullopt  // pixel_ids
+        );
+        at::Tensor cumsum = at::cumsum(chunk_cnts, 0, chunk_cnts.scalar_type());
+        n_elems = cumsum[-1].item<int64_t>();
+        chunk_starts = cumsum - chunk_cnts;
+    } else {
+        n_elems = 0;
+    }
+
+    // Second pass: allocate memory and write out the gaussian and pixel ids.
+    at::Tensor gaussian_ids =
+        at::empty({n_elems}, means2d.options().dtype(at::kLong));
+    at::Tensor pixel_ids =
+        at::empty({n_elems}, means2d.options().dtype(at::kLong));
+    if (n_elems) {
+        launch_rasterize_to_indices_3dgs_kernel(
+            range_start,
+            range_end,
+            transmittances,
+            means2d,
+            conics,
+            opacities,
+            image_width,
+            image_height,
+            tile_size,
+            tile_offsets,
+            flatten_ids,
+            at::optional<at::Tensor>(chunk_starts),
+            std::nullopt, // chunk_cnts
+            at::optional<at::Tensor>(gaussian_ids),
+            at::optional<at::Tensor>(pixel_ids)
+        );
+    }
+    return std::make_tuple(gaussian_ids, pixel_ids);
+}
+
 
     
 } // namespace gsplat
