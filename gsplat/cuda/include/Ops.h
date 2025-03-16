@@ -185,4 +185,24 @@ void adam(
     const float eps
 );
 
+// GS Tile Intersection
+std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
+    const at::Tensor means2d,                    // [C, N, 2] or [nnz, 2]
+    const at::Tensor radii,                      // [C, N] or [nnz]
+    const at::Tensor depths,                     // [C, N] or [nnz]
+    const at::optional<at::Tensor> camera_ids,   // [nnz]
+    const at::optional<at::Tensor> gaussian_ids, // [nnz]
+    const uint32_t C,
+    const uint32_t tile_size,
+    const uint32_t tile_width,
+    const uint32_t tile_height,
+    const bool sort
+);
+at::Tensor intersect_offset(
+    const at::Tensor isect_ids, // [n_isects]
+    const uint32_t C,
+    const uint32_t tile_width,
+    const uint32_t tile_height
+);
+
 }

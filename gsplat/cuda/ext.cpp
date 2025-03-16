@@ -19,4 +19,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("spherical_harmonics_bwd", &gsplat::spherical_harmonics_bwd);
 
     m.def("adam", &gsplat::adam);
+
+    m.def("intersect_tile", &gsplat::intersect_tile);
+    m.def("intersect_offset", &gsplat::intersect_offset);
 }

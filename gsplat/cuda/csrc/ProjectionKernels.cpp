@@ -155,7 +155,7 @@ projection_ewa_3dgs_fused_fwd(
         means2d,
         depths,
         conics,
-        calc_compensations ? std::optional<at::Tensor>(compensations) : std::nullopt
+        calc_compensations ? at::optional<at::Tensor>(compensations) : std::nullopt
     );
     return std::make_tuple(radii, means2d, depths, conics, compensations);
 }
@@ -383,7 +383,7 @@ projection_ewa_3dgs_packed_fwd(
             means2d,
             depths,
             conics,
-            calc_compensations ? std::optional<at::Tensor>(compensations) : std::nullopt
+            calc_compensations ? at::optional<at::Tensor>(compensations) : std::nullopt
         );
     } else {
         indptr.fill_(0);
@@ -512,10 +512,10 @@ projection_ewa_3dgs_packed_bwd(
         sparse_grad,
         // outputs
         v_means,
-        v_covars.defined() ? std::optional<at::Tensor>(v_covars) : std::nullopt,
-        v_quats.defined() ? std::optional<at::Tensor>(v_quats) : std::nullopt,
-        v_scales.defined() ? std::optional<at::Tensor>(v_scales) : std::nullopt,
-        v_viewmats.defined() ? std::optional<at::Tensor>(v_viewmats) : std::nullopt
+        v_covars.defined() ? at::optional<at::Tensor>(v_covars) : std::nullopt,
+        v_quats.defined() ? at::optional<at::Tensor>(v_quats) : std::nullopt,
+        v_scales.defined() ? at::optional<at::Tensor>(v_scales) : std::nullopt,
+        v_viewmats.defined() ? at::optional<at::Tensor>(v_viewmats) : std::nullopt
     );
     return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats);
 }
