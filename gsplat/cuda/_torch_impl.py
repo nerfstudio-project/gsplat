@@ -1,10 +1,10 @@
 import struct
 from typing import Optional, Tuple
-from typing_extensions import Literal, assert_never
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor
+from typing_extensions import Literal, assert_never
 
 
 def _quat_to_rotmat(quats: Tensor) -> Tensor:

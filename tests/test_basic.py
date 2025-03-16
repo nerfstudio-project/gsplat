@@ -6,12 +6,12 @@ pytest <THIS_PY_FILE> -s
 ```
 """
 
-from typing_extensions import Literal, assert_never
 import math
+import os
 
 import pytest
 import torch
-import os
+from typing_extensions import Literal, assert_never
 
 from gsplat._helper import load_test_data
 
@@ -89,48 +89,15 @@ def test_quat_scale_to_covar_preci(test_data, triu: bool):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_world_to_cam(test_data):
-    from gsplat.cuda._torch_impl import _world_to_cam
-    from gsplat.cuda._wrapper import quat_scale_to_covar_preci, world_to_cam
-
-    torch.manual_seed(42)
-
-    viewmats = test_data["viewmats"]
-    means = test_data["means"]
-    scales = test_data["scales"]
-    quats = test_data["quats"]
-    covars, _ = quat_scale_to_covar_preci(quats, scales)
-    means.requires_grad = True
-    covars.requires_grad = True
-    viewmats.requires_grad = True
-
-    # forward
-    means_c, covars_c = world_to_cam(means, covars, viewmats)
-    _means_c, _covars_c = _world_to_cam(means, covars, viewmats)
-    torch.testing.assert_close(means_c, _means_c)
-    torch.testing.assert_close(covars_c, _covars_c)
-
-    # backward
-    v_means_c = torch.randn_like(means_c)
-    v_covars_c = torch.randn_like(covars_c)
-    v_means, v_covars, v_viewmats = torch.autograd.grad(
-        (means_c * v_means_c).sum() + (covars_c * v_covars_c).sum(),
-        (means, covars, viewmats),
-    )
-    _v_means, _v_covars, _v_viewmats = torch.autograd.grad(
-        (_means_c * v_means_c).sum() + (_covars_c * v_covars_c).sum(),
-        (means, covars, viewmats),
-    )
-    torch.testing.assert_close(v_means, _v_means)
-    torch.testing.assert_close(v_covars, _v_covars)
-    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=1e-3)
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
 def test_proj(test_data, camera_model: Literal["pinhole", "ortho", "fisheye"]):
-    from gsplat.cuda._torch_impl import _persp_proj, _ortho_proj, _fisheye_proj
-    from gsplat.cuda._wrapper import proj, quat_scale_to_covar_preci, world_to_cam
+    from gsplat.cuda._torch_impl import (
+        _fisheye_proj,
+        _ortho_proj,
+        _persp_proj,
+        _world_to_cam,
+    )
+    from gsplat.cuda._wrapper import proj, quat_scale_to_covar_preci
 
     torch.manual_seed(42)
 
@@ -140,7 +107,7 @@ def test_proj(test_data, camera_model: Literal["pinhole", "ortho", "fisheye"]):
     width = test_data["width"]
 
     covars, _ = quat_scale_to_covar_preci(test_data["quats"], test_data["scales"])
-    means, covars = world_to_cam(test_data["means"], covars, viewmats)
+    means, covars = _world_to_cam(test_data["means"], covars, viewmats)
     means.requires_grad = True
     covars.requires_grad = True
 

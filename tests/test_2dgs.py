@@ -1,8 +1,8 @@
 import math
+import pdb
 
 import pytest
 import torch
-import pdb
 
 from gsplat._helper import load_test_data
 
@@ -15,7 +15,7 @@ def test_data():
     N = 2
     xs = torch.linspace(-1, 1, N, device=device)
     ys = torch.linspace(-1, 1, N, device=device)
-    xys = torch.stack(torch.meshgrid(xs, ys), dim=-1).reshape(-1, 2)
+    xys = torch.stack(torch.meshgrid(xs, ys, indexing="ij"), dim=-1).reshape(-1, 2)
     zs = torch.ones_like(xys[:, :1]) * 3
     means = torch.cat([xys, zs], dim=-1)
     quats = torch.tensor([[1.0, 0.0, 0.0, 0]], device=device).repeat(len(means), 1)
@@ -326,6 +326,7 @@ def test_rasterize_to_pixels_2dgs(test_data):
     if diff.max() > 1e-5:
         print(f"DIFF > 1e-5, {diff.max()=} {diff.mean()=}")
         import os
+
         import imageio
 
         os.makedirs("renders", exist_ok=True)
