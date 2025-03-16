@@ -1,7 +1,7 @@
 """ 
 Trigger compiling:
 
-FAST_COMPILE=1 TORCH_CUDA_ARCH_LIST="8.9" python -c "from gsplat.cuda._backend import _C"
+VERBOSE=1 FAST_COMPILE=1 TORCH_CUDA_ARCH_LIST="8.9" python -c "from gsplat.cuda._backend import _C"
 """
 
 import glob
@@ -24,6 +24,7 @@ from torch.utils.cpp_extension import (
 PATH = os.path.dirname(os.path.abspath(__file__))
 NO_FAST_MATH = os.getenv("NO_FAST_MATH", "0") == "1"
 FAST_COMPILE = os.getenv("FAST_COMPILE", "0") == "1"
+VERBOSE = os.getenv("VERBOSE", "0") == "1"
 MAX_JOBS = os.getenv("MAX_JOBS")
 need_to_unset_max_jobs = False
 if not MAX_JOBS:
@@ -134,29 +135,11 @@ except ImportError:
         except OSError:
             pass
 
-        # if os.path.exists(os.path.join(build_dir, f"{name}.so")) or os.path.exists(
-        #     os.path.join(build_dir, f"{name}.lib")
-        # ):
-        #     # If the build exists, we assume the extension has been built
-        #     # and we can load it.
-        #     _C = load_extension(
-        #         name=name,
-        #         sources=sources,
-        #         extra_cflags=extra_cflags,
-        #         extra_cuda_cflags=extra_cuda_cflags,
-        #         extra_include_paths=extra_include_paths,
-        #         build_directory=build_dir,
-        #     )
-        # else:
-        #     # Build from scratch. Remove the build directory just to be safe: pytorch jit might stuck
-        #     # if the build directory exists with a lock file in it.
-        
-        # shutil.rmtree(build_dir)
-        tic = time.time()
-        with Console().status(
-            f"[bold yellow]gsplat: Setting up CUDA with MAX_JOBS={os.environ['MAX_JOBS']} (This may take a few minutes the first time)",
-            spinner="bouncingBall",
+        if os.path.exists(os.path.join(build_dir, f"{name}.so")) or os.path.exists(
+            os.path.join(build_dir, f"{name}.lib")
         ):
+            # If the build exists, we assume the extension has been built
+            # and we can load it.
             _C = load_extension(
                 name=name,
                 sources=sources,
@@ -164,12 +147,30 @@ except ImportError:
                 extra_cuda_cflags=extra_cuda_cflags,
                 extra_include_paths=extra_include_paths,
                 build_directory=build_dir,
-                verbose=True,
+                verbose=VERBOSE,
             )
-        toc = time.time()
-        Console().print(
-            f"[green]gsplat: CUDA extension has been set up successfully in {toc - tic:.2f} seconds.[/green]"
-        )
+        else:
+            # Build from scratch. Remove the build directory just to be safe: pytorch jit might stuck
+            # if the build directory exists with a lock file in it.        
+            shutil.rmtree(build_dir)
+            tic = time.time()
+            with Console().status(
+                f"[bold yellow]gsplat: Setting up CUDA with MAX_JOBS={os.environ['MAX_JOBS']} (This may take a few minutes the first time)",
+                spinner="bouncingBall",
+            ):
+                _C = load_extension(
+                    name=name,
+                    sources=sources,
+                    extra_cflags=extra_cflags,
+                    extra_cuda_cflags=extra_cuda_cflags,
+                    extra_include_paths=extra_include_paths,
+                    build_directory=build_dir,
+                    verbose=VERBOSE,
+                )
+            toc = time.time()
+            Console().print(
+                f"[green]gsplat: CUDA extension has been set up successfully in {toc - tic:.2f} seconds.[/green]"
+            )
 
     else:
         Console().print(
