@@ -8,7 +8,7 @@
 #include <ATen/NativeFunctions.h>
 
 #include "Common.h" // where all the macros are defined
-#include "NullKernel.h" // where the launch function is declared
+#include "Null.h" // where the launch function is declared
 #include "Ops.h" // a collection of all gsplat operators
 
 namespace gsplat{

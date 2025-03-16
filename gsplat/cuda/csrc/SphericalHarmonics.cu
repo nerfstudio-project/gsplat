@@ -6,7 +6,7 @@
 
 #include "Common.h"
 #include "Utils.cuh"
-#include "SphericalHarmonicsKernel.h"
+#include "SphericalHarmonics.h"
 
 namespace gsplat{
 

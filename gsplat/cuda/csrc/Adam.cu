@@ -3,7 +3,7 @@
 #include <c10/cuda/CUDAStream.h> // at::cuda::getCurrentCUDAStream
 #include <cooperative_groups.h>
 
-#include "NullKernel.h"
+#include "Null.h"
 
 namespace gsplat{
 

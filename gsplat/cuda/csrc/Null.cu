@@ -2,7 +2,7 @@
 #include <ATen/Dispatch.h> // AT_DISPATCH_XXX
 #include <c10/cuda/CUDAStream.h> // at::cuda::getCurrentCUDAStream
 
-#include "NullKernel.h"
+#include "Null.h"
 // #include "Utils.cuh" // optionally include some shared utility functions
 
 namespace gsplat{

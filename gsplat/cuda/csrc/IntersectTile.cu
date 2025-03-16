@@ -9,7 +9,7 @@
 
 #include "Common.h"
 #include "Utils.cuh"
-#include "IntersectKernels.h"
+#include "Intersect.h"
 
 namespace gsplat{
 
