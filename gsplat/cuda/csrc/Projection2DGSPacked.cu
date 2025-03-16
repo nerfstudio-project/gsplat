@@ -89,7 +89,7 @@ __global__ void projection_2dgs_packed_fwd_kernel(
         // camera space
         quats += col_idx * 4;
         scales += col_idx * 3;
-        Ks
+        Ks += row_idx * 9;
 
         mat3 RS_camera =
             R * quat_to_rotmat(glm::make_vec4(quats)) *
