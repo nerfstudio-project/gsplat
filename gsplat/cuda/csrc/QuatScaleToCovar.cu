@@ -2,7 +2,6 @@
 #include <ATen/Dispatch.h>
 #include <c10/cuda/CUDAStream.h> 
 #include <cooperative_groups.h>
-// #include <ATen/cuda/Atomic.cuh>
 
 #include "Common.h"
 #include "Utils.cuh"

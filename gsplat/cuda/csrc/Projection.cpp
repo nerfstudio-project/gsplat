@@ -12,7 +12,7 @@
 
 namespace gsplat{
 
-std::tuple<at::Tensor, at::Tensor> projection_ewa_3dgs_fwd(
+std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_fwd(
     const at::Tensor means,  // [C, N, 3]
     const at::Tensor covars, // [C, N, 3, 3]
     const at::Tensor Ks,     // [C, 3, 3]
@@ -31,7 +31,7 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_3dgs_fwd(
     at::Tensor means2d = at::empty({C, N, 2}, means.options());
     at::Tensor covars2d = at::empty({C, N, 2, 2}, covars.options());
 
-    launch_projection_ewa_3dgs_fwd_kernel(
+    launch_projection_ewa_simple_fwd_kernel(
         // inputs
         means, 
         covars, 
@@ -47,7 +47,7 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_3dgs_fwd(
 }
 
 
-std::tuple<at::Tensor, at::Tensor> projection_ewa_3dgs_bwd(
+std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_bwd(
     const at::Tensor means,  // [C, N, 3]
     const at::Tensor covars, // [C, N, 3, 3]
     const at::Tensor Ks,     // [C, 3, 3]
@@ -70,7 +70,7 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_3dgs_bwd(
     at::Tensor v_means = at::empty({C, N, 3}, means.options());
     at::Tensor v_covars = at::empty({C, N, 3, 3}, means.options());
 
-    launch_projection_ewa_3dgs_bwd_kernel(
+    launch_projection_ewa_simple_bwd_kernel(
         // inputs
         means, 
         covars, 

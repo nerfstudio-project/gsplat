@@ -9,7 +9,7 @@ namespace at {
 namespace gsplat{
 
 
-void launch_projection_ewa_3dgs_fwd_kernel(
+void launch_projection_ewa_simple_fwd_kernel(
     // inputs
     const at::Tensor means,  // [C, N, 3]
     const at::Tensor covars, // [C, N, 3, 3]
@@ -21,7 +21,7 @@ void launch_projection_ewa_3dgs_fwd_kernel(
     at::Tensor means2d, // [C, N, 2]
     at::Tensor covars2d // [C, N, 2, 2]
 );
-void launch_projection_ewa_3dgs_bwd_kernel(
+void launch_projection_ewa_simple_bwd_kernel(
     // inputs
     const at::Tensor means,  // [C, N, 3]
     const at::Tensor covars, // [C, N, 3, 3]

@@ -6,8 +6,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("null", &gsplat::null);
 
-    m.def("projection_ewa_3dgs_fwd", &gsplat::projection_ewa_3dgs_fwd);
-    m.def("projection_ewa_3dgs_bwd", &gsplat::projection_ewa_3dgs_bwd);
+    m.def("projection_ewa_simple_fwd", &gsplat::projection_ewa_simple_fwd);
+    m.def("projection_ewa_simple_bwd", &gsplat::projection_ewa_simple_bwd);
 
     m.def("projection_ewa_3dgs_fused_fwd", &gsplat::projection_ewa_3dgs_fused_fwd);
     m.def("projection_ewa_3dgs_fused_bwd", &gsplat::projection_ewa_3dgs_fused_bwd);
@@ -25,4 +25,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("quat_scale_to_covar_preci_fwd", &gsplat::quat_scale_to_covar_preci_fwd);
     m.def("quat_scale_to_covar_preci_bwd", &gsplat::quat_scale_to_covar_preci_bwd);
+
+    m.def("rasterize_to_pixels_3dgs_fwd", &gsplat::rasterize_to_pixels_3dgs_fwd);
+    m.def("rasterize_to_pixels_3dgs_bwd", &gsplat::rasterize_to_pixels_3dgs_bwd);
 }
