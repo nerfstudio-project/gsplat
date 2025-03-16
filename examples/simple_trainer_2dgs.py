@@ -914,7 +914,7 @@ class Runner:
 
             # write images
             canvas = torch.cat(
-                [colors, depths.repeat(1, 1, 3)], dim=1 if width > height else 1
+                [colors, depths.repeat(1, 1, 3)], dim=0 if width > height else 1
             )
             canvas = (canvas.cpu().numpy() * 255).astype(np.uint8)
             canvas_all.append(canvas)
