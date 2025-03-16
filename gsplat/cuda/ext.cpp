@@ -22,4 +22,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("intersect_tile", &gsplat::intersect_tile);
     m.def("intersect_offset", &gsplat::intersect_offset);
+
+    m.def("quat_scale_to_covar_preci_fwd", &gsplat::quat_scale_to_covar_preci_fwd);
+    m.def("quat_scale_to_covar_preci_bwd", &gsplat::quat_scale_to_covar_preci_bwd);
 }
