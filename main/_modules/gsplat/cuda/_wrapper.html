@@ -310,12 +310,12 @@
         </div>
         <article role="main" id="furo-main-content">
           <h1>Source code for gsplat.cuda._wrapper</h1><div class="highlight"><pre>
-<span></span><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">Any</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">typing_extensions</span><span class="w"> </span><span class="kn">import</span> <span class="n">Literal</span>
+<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">Tensor</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing_extensions</span><span class="w"> </span><span class="kn">import</span> <span class="n">Literal</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_make_lazy_cuda_func</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">:</span>
@@ -328,21 +328,59 @@
     <span class="k">return</span> <span class="n">call_cuda</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">selective_adam_update</span><span class="p">(</span>
+<div class="viewcode-block" id="world_to_cam">
+<a class="viewcode-back" href="../../../apis/utils.html#gsplat.world_to_cam">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">world_to_cam</span><span class="p">(</span>
+    <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
+    <span class="n">covars</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3, 3]</span>
+    <span class="n">viewmats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, 4, 4]</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Transforms Gaussians from world to camera coordinate system.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        means: Gaussian means. [N, 3]</span>
+<span class="sd">        covars: Gaussian covariances. [N, 3, 3]</span>
+<span class="sd">        viewmats: World-to-camera transformation matrices. [C, 4, 4]</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A tuple:</span>
+
+<span class="sd">        - **Gaussian means in camera coordinate system**. [C, N, 3]</span>
+<span class="sd">        - **Gaussian covariances in camera coordinate system**. [C, N, 3, 3]</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">._torch_impl</span><span class="w"> </span><span class="kn">import</span> <span class="n">_world_to_cam</span>
+
+    <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
+        <span class="s2">&quot;world_to_cam() is removed from the CUDA backend as it&#39;s relatively easy to &quot;</span>
+        <span class="s2">&quot;implement in PyTorch. Currently use the PyTorch implementation instead. &quot;</span>
+        <span class="s2">&quot;This function will be completely removed in a future release.&quot;</span><span class="p">,</span>
+        <span class="ne">DeprecationWarning</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">C</span> <span class="o">=</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">N</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="n">means</span><span class="o">.</span><span class="n">size</span><span class="p">()</span> <span class="o">==</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">means</span><span class="o">.</span><span class="n">size</span><span class="p">()</span>
+    <span class="k">assert</span> <span class="n">covars</span><span class="o">.</span><span class="n">size</span><span class="p">()</span> <span class="o">==</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">covars</span><span class="o">.</span><span class="n">size</span><span class="p">()</span>
+    <span class="k">assert</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">size</span><span class="p">()</span> <span class="o">==</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">size</span><span class="p">()</span>
+    <span class="n">means</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
+    <span class="n">covars</span> <span class="o">=</span> <span class="n">covars</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
+    <span class="n">viewmats</span> <span class="o">=</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">_world_to_cam</span><span class="p">(</span><span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">viewmats</span><span class="p">)</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">adam</span><span class="p">(</span>
     <span class="n">param</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
     <span class="n">param_grad</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
     <span class="n">exp_avg</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
     <span class="n">exp_avg_sq</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
-    <span class="n">tiles_touched</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
+    <span class="n">valid</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
     <span class="n">lr</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
     <span class="n">b1</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
     <span class="n">b2</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
     <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-    <span class="n">N</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-    <span class="n">M</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;selective_adam_update&quot;</span><span class="p">)(</span>
-        <span class="n">param</span><span class="p">,</span> <span class="n">param_grad</span><span class="p">,</span> <span class="n">exp_avg</span><span class="p">,</span> <span class="n">exp_avg_sq</span><span class="p">,</span> <span class="n">tiles_touched</span><span class="p">,</span> <span class="n">lr</span><span class="p">,</span> <span class="n">b1</span><span class="p">,</span> <span class="n">b2</span><span class="p">,</span> <span class="n">eps</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">M</span>
+    <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;adam&quot;</span><span class="p">)(</span>
+        <span class="n">param</span><span class="p">,</span> <span class="n">param_grad</span><span class="p">,</span> <span class="n">exp_avg</span><span class="p">,</span> <span class="n">exp_avg_sq</span><span class="p">,</span> <span class="n">valid</span><span class="p">,</span> <span class="n">lr</span><span class="p">,</span> <span class="n">b1</span><span class="p">,</span> <span class="n">b2</span><span class="p">,</span> <span class="n">eps</span>
     <span class="p">)</span>
 
 
@@ -489,38 +527,6 @@
     <span class="n">covars</span> <span class="o">=</span> <span class="n">covars</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="n">Ks</span> <span class="o">=</span> <span class="n">Ks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="k">return</span> <span class="n">_Proj</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">Ks</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">height</span><span class="p">,</span> <span class="n">camera_model</span><span class="p">)</span></div>
-
-
-
-<div class="viewcode-block" id="world_to_cam">
-<a class="viewcode-back" href="../../../apis/utils.html#gsplat.world_to_cam">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">world_to_cam</span><span class="p">(</span>
-    <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
-    <span class="n">covars</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3, 3]</span>
-    <span class="n">viewmats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, 4, 4]</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Transforms Gaussians from world to camera coordinate system.</span>
-
-<span class="sd">    Args:</span>
-<span class="sd">        means: Gaussian means. [N, 3]</span>
-<span class="sd">        covars: Gaussian covariances. [N, 3, 3]</span>
-<span class="sd">        viewmats: World-to-camera transformation matrices. [C, 4, 4]</span>
-
-<span class="sd">    Returns:</span>
-<span class="sd">        A tuple:</span>
-
-<span class="sd">        - **Gaussian means in camera coordinate system**. [C, N, 3]</span>
-<span class="sd">        - **Gaussian covariances in camera coordinate system**. [C, N, 3, 3]</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="n">C</span> <span class="o">=</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-    <span class="n">N</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-    <span class="k">assert</span> <span class="n">means</span><span class="o">.</span><span class="n">size</span><span class="p">()</span> <span class="o">==</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">means</span><span class="o">.</span><span class="n">size</span><span class="p">()</span>
-    <span class="k">assert</span> <span class="n">covars</span><span class="o">.</span><span class="n">size</span><span class="p">()</span> <span class="o">==</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">covars</span><span class="o">.</span><span class="n">size</span><span class="p">()</span>
-    <span class="k">assert</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">size</span><span class="p">()</span> <span class="o">==</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">size</span><span class="p">()</span>
-    <span class="n">means</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
-    <span class="n">covars</span> <span class="o">=</span> <span class="n">covars</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
-    <span class="n">viewmats</span> <span class="o">=</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
-    <span class="k">return</span> <span class="n">_WorldToCam</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">viewmats</span><span class="p">)</span></div>
 
 
 
@@ -726,7 +732,7 @@
         <span class="k">assert</span> <span class="n">radii</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">radii</span><span class="o">.</span><span class="n">size</span><span class="p">()</span>
         <span class="k">assert</span> <span class="n">depths</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">depths</span><span class="o">.</span><span class="n">size</span><span class="p">()</span>
 
-    <span class="n">tiles_per_gauss</span><span class="p">,</span> <span class="n">isect_ids</span><span class="p">,</span> <span class="n">flatten_ids</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;isect_tiles&quot;</span><span class="p">)(</span>
+    <span class="n">tiles_per_gauss</span><span class="p">,</span> <span class="n">isect_ids</span><span class="p">,</span> <span class="n">flatten_ids</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;intersect_tile&quot;</span><span class="p">)(</span>
         <span class="n">means2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">radii</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="n">depths</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -737,7 +743,6 @@
         <span class="n">tile_width</span><span class="p">,</span>
         <span class="n">tile_height</span><span class="p">,</span>
         <span class="n">sort</span><span class="p">,</span>
-        <span class="kc">True</span><span class="p">,</span>  <span class="c1"># DoubleBuffer: memory efficient radixsort</span>
     <span class="p">)</span>
     <span class="k">return</span> <span class="n">tiles_per_gauss</span><span class="p">,</span> <span class="n">isect_ids</span><span class="p">,</span> <span class="n">flatten_ids</span></div>
 
@@ -760,7 +765,7 @@
 <span class="sd">    Returns:</span>
 <span class="sd">        Offsets. [C, tile_height, tile_width]</span>
 <span class="sd">    &quot;&quot;&quot;</span>
-    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;isect_offset_encode&quot;</span><span class="p">)(</span>
+    <span class="k">return</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;intersect_offset&quot;</span><span class="p">)(</span>
         <span class="n">isect_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span> <span class="n">n_cameras</span><span class="p">,</span> <span class="n">tile_width</span><span class="p">,</span> <span class="n">tile_height</span>
     <span class="p">)</span></div>
 
@@ -963,7 +968,7 @@
         <span class="n">tile_width</span> <span class="o">*</span> <span class="n">tile_size</span> <span class="o">&gt;=</span> <span class="n">image_width</span>
     <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Assert Failed: </span><span class="si">{</span><span class="n">tile_width</span><span class="si">}</span><span class="s2"> * </span><span class="si">{</span><span class="n">tile_size</span><span class="si">}</span><span class="s2"> &gt;= </span><span class="si">{</span><span class="n">image_width</span><span class="si">}</span><span class="s2">&quot;</span>
 
-    <span class="n">out_gauss_ids</span><span class="p">,</span> <span class="n">out_indices</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_to_indices_in_range&quot;</span><span class="p">)(</span>
+    <span class="n">out_gauss_ids</span><span class="p">,</span> <span class="n">out_indices</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_to_indices_3dgs&quot;</span><span class="p">)(</span>
         <span class="n">range_start</span><span class="p">,</span>
         <span class="n">range_end</span><span class="p">,</span>
         <span class="n">transmittances</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -1016,9 +1021,9 @@
         <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;quat_scale_to_covar_preci_bwd&quot;</span><span class="p">)(</span>
             <span class="n">quats</span><span class="p">,</span>
             <span class="n">scales</span><span class="p">,</span>
+            <span class="n">triu</span><span class="p">,</span>
             <span class="n">v_covars</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">compute_covar</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
             <span class="n">v_precis</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">compute_preci</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
-            <span class="n">triu</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="k">return</span> <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
 
@@ -1040,7 +1045,7 @@
             <span class="sa">f</span><span class="s2">&quot;CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span>
         <span class="p">)</span>
 
-        <span class="n">means2d</span><span class="p">,</span> <span class="n">covars2d</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;proj_fwd&quot;</span><span class="p">)(</span>
+        <span class="n">means2d</span><span class="p">,</span> <span class="n">covars2d</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;projection_ewa_simple_fwd&quot;</span><span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">covars</span><span class="p">,</span>
             <span class="n">Ks</span><span class="p">,</span>
@@ -1060,7 +1065,7 @@
         <span class="n">width</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">width</span>
         <span class="n">height</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">height</span>
         <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">camera_model_type</span>
-        <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;proj_bwd&quot;</span><span class="p">)(</span>
+        <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;projection_ewa_simple_bwd&quot;</span><span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">covars</span><span class="p">,</span>
             <span class="n">Ks</span><span class="p">,</span>
@@ -1071,44 +1076,6 @@
             <span class="n">v_covars2d</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
         <span class="p">)</span>
         <span class="k">return</span> <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
-
-
-<span class="k">class</span><span class="w"> </span><span class="nc">_WorldToCam</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Transforms Gaussians from world to camera space.&quot;&quot;&quot;</span>
-
-    <span class="nd">@staticmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span>
-        <span class="n">ctx</span><span class="p">,</span>
-        <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
-        <span class="n">covars</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3, 3]</span>
-        <span class="n">viewmats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, 4, 4]</span>
-    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-        <span class="n">means_c</span><span class="p">,</span> <span class="n">covars_c</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;world_to_cam_fwd&quot;</span><span class="p">)(</span>
-            <span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">viewmats</span>
-        <span class="p">)</span>
-        <span class="n">ctx</span><span class="o">.</span><span class="n">save_for_backward</span><span class="p">(</span><span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">viewmats</span><span class="p">)</span>
-        <span class="k">return</span> <span class="n">means_c</span><span class="p">,</span> <span class="n">covars_c</span>
-
-    <span class="nd">@staticmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">v_means_c</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">v_covars_c</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">):</span>
-        <span class="n">means</span><span class="p">,</span> <span class="n">covars</span><span class="p">,</span> <span class="n">viewmats</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
-        <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span><span class="p">,</span> <span class="n">v_viewmats</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;world_to_cam_bwd&quot;</span><span class="p">)(</span>
-            <span class="n">means</span><span class="p">,</span>
-            <span class="n">covars</span><span class="p">,</span>
-            <span class="n">viewmats</span><span class="p">,</span>
-            <span class="n">v_means_c</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
-            <span class="n">v_covars_c</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
-            <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
-            <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span>
-            <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span>
-        <span class="p">)</span>
-        <span class="k">if</span> <span class="ow">not</span> <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">0</span><span class="p">]:</span>
-            <span class="n">v_means</span> <span class="o">=</span> <span class="kc">None</span>
-        <span class="k">if</span> <span class="ow">not</span> <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">1</span><span class="p">]:</span>
-            <span class="n">v_covars</span> <span class="o">=</span> <span class="kc">None</span>
-        <span class="k">if</span> <span class="ow">not</span> <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">2</span><span class="p">]:</span>
-            <span class="n">v_viewmats</span> <span class="o">=</span> <span class="kc">None</span>
-        <span class="k">return</span> <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span><span class="p">,</span> <span class="n">v_viewmats</span>
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">_FullyFusedProjection</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
@@ -1138,7 +1105,7 @@
 
         <span class="c1"># &quot;covars&quot; and {&quot;quats&quot;, &quot;scales&quot;} are mutually exclusive</span>
         <span class="n">radii</span><span class="p">,</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">depths</span><span class="p">,</span> <span class="n">conics</span><span class="p">,</span> <span class="n">compensations</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
-            <span class="s2">&quot;fully_fused_projection_fwd&quot;</span>
+            <span class="s2">&quot;projection_ewa_3dgs_fused_fwd&quot;</span>
         <span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">covars</span><span class="p">,</span>
@@ -1187,7 +1154,7 @@
         <span class="k">if</span> <span class="n">v_compensations</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">v_compensations</span> <span class="o">=</span> <span class="n">v_compensations</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
         <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span><span class="p">,</span> <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span><span class="p">,</span> <span class="n">v_viewmats</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
-            <span class="s2">&quot;fully_fused_projection_bwd&quot;</span>
+            <span class="s2">&quot;projection_ewa_3dgs_fused_bwd&quot;</span>
         <span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">covars</span><span class="p">,</span>
@@ -1257,7 +1224,7 @@
         <span class="n">absgrad</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
         <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">last_ids</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
-            <span class="s2">&quot;rasterize_to_pixels_fwd&quot;</span>
+            <span class="s2">&quot;rasterize_to_pixels_3dgs_fwd&quot;</span>
         <span class="p">)(</span>
             <span class="n">means2d</span><span class="p">,</span>
             <span class="n">conics</span><span class="p">,</span>
@@ -1322,7 +1289,7 @@
             <span class="n">v_conics</span><span class="p">,</span>
             <span class="n">v_colors</span><span class="p">,</span>
             <span class="n">v_opacities</span><span class="p">,</span>
-        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_to_pixels_bwd&quot;</span><span class="p">)(</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_to_pixels_3dgs_bwd&quot;</span><span class="p">)(</span>
             <span class="n">means2d</span><span class="p">,</span>
             <span class="n">conics</span><span class="p">,</span>
             <span class="n">colors</span><span class="p">,</span>
@@ -1402,7 +1369,7 @@
             <span class="n">depths</span><span class="p">,</span>
             <span class="n">conics</span><span class="p">,</span>
             <span class="n">compensations</span><span class="p">,</span>
-        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;fully_fused_projection_packed_fwd&quot;</span><span class="p">)(</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;projection_ewa_3dgs_packed_fwd&quot;</span><span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">covars</span><span class="p">,</span>  <span class="c1"># optional</span>
             <span class="n">quats</span><span class="p">,</span>  <span class="c1"># optional</span>
@@ -1472,7 +1439,7 @@
         <span class="k">if</span> <span class="n">v_compensations</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">v_compensations</span> <span class="o">=</span> <span class="n">v_compensations</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
         <span class="n">v_means</span><span class="p">,</span> <span class="n">v_covars</span><span class="p">,</span> <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span><span class="p">,</span> <span class="n">v_viewmats</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
-            <span class="s2">&quot;fully_fused_projection_packed_bwd&quot;</span>
+            <span class="s2">&quot;projection_ewa_3dgs_packed_bwd&quot;</span>
         <span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">covars</span><span class="p">,</span>
@@ -1569,7 +1536,9 @@
     <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span>
         <span class="n">ctx</span><span class="p">,</span> <span class="n">sh_degree</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">dirs</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">coeffs</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">masks</span><span class="p">:</span> <span class="n">Tensor</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
-        <span class="n">colors</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;compute_sh_fwd&quot;</span><span class="p">)(</span><span class="n">sh_degree</span><span class="p">,</span> <span class="n">dirs</span><span class="p">,</span> <span class="n">coeffs</span><span class="p">,</span> <span class="n">masks</span><span class="p">)</span>
+        <span class="n">colors</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;spherical_harmonics_fwd&quot;</span><span class="p">)(</span>
+            <span class="n">sh_degree</span><span class="p">,</span> <span class="n">dirs</span><span class="p">,</span> <span class="n">coeffs</span><span class="p">,</span> <span class="n">masks</span>
+        <span class="p">)</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">save_for_backward</span><span class="p">(</span><span class="n">dirs</span><span class="p">,</span> <span class="n">coeffs</span><span class="p">,</span> <span class="n">masks</span><span class="p">)</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">sh_degree</span> <span class="o">=</span> <span class="n">sh_degree</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">num_bases</span> <span class="o">=</span> <span class="n">coeffs</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
@@ -1581,7 +1550,7 @@
         <span class="n">sh_degree</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">sh_degree</span>
         <span class="n">num_bases</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">num_bases</span>
         <span class="n">compute_v_dirs</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
-        <span class="n">v_coeffs</span><span class="p">,</span> <span class="n">v_dirs</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;compute_sh_bwd&quot;</span><span class="p">)(</span>
+        <span class="n">v_coeffs</span><span class="p">,</span> <span class="n">v_dirs</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;spherical_harmonics_bwd&quot;</span><span class="p">)(</span>
             <span class="n">num_bases</span><span class="p">,</span>
             <span class="n">sh_degree</span><span class="p">,</span>
             <span class="n">dirs</span><span class="p">,</span>
@@ -1722,7 +1691,7 @@
         <span class="n">radius_clip</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
         <span class="n">radii</span><span class="p">,</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">depths</span><span class="p">,</span> <span class="n">ray_transforms</span><span class="p">,</span> <span class="n">normals</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
-            <span class="s2">&quot;fully_fused_projection_fwd_2dgs&quot;</span>
+            <span class="s2">&quot;projection_2dgs_fused_fwd&quot;</span>
         <span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">quats</span><span class="p">,</span>
@@ -1768,7 +1737,7 @@
         <span class="n">height</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">height</span>
         <span class="n">eps2d</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">eps2d</span>
         <span class="n">v_means</span><span class="p">,</span> <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span><span class="p">,</span> <span class="n">v_viewmats</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
-            <span class="s2">&quot;fully_fused_projection_bwd_2dgs&quot;</span>
+            <span class="s2">&quot;projection_2dgs_fused_bwd&quot;</span>
         <span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">quats</span><span class="p">,</span>
@@ -1837,7 +1806,7 @@
             <span class="n">depths</span><span class="p">,</span>
             <span class="n">ray_transforms</span><span class="p">,</span>
             <span class="n">normals</span><span class="p">,</span>
-        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;fully_fused_projection_packed_fwd_2dgs&quot;</span><span class="p">)(</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;projection_2dgs_packed_fwd&quot;</span><span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">quats</span><span class="p">,</span>
             <span class="n">scales</span><span class="p">,</span>
@@ -1891,7 +1860,7 @@
         <span class="n">sparse_grad</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">sparse_grad</span>
 
         <span class="n">v_means</span><span class="p">,</span> <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span><span class="p">,</span> <span class="n">v_viewmats</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
-            <span class="s2">&quot;fully_fused_projection_packed_bwd_2dgs&quot;</span>
+            <span class="s2">&quot;projection_2dgs_packed_bwd&quot;</span>
         <span class="p">)(</span>
             <span class="n">means</span><span class="p">,</span>
             <span class="n">quats</span><span class="p">,</span>
@@ -2152,9 +2121,7 @@
         <span class="n">tile_width</span> <span class="o">*</span> <span class="n">tile_size</span> <span class="o">&gt;=</span> <span class="n">image_width</span>
     <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Assert Failed: </span><span class="si">{</span><span class="n">tile_width</span><span class="si">}</span><span class="s2"> * </span><span class="si">{</span><span class="n">tile_size</span><span class="si">}</span><span class="s2"> &gt;= </span><span class="si">{</span><span class="n">image_width</span><span class="si">}</span><span class="s2">&quot;</span>
 
-    <span class="n">out_gauss_ids</span><span class="p">,</span> <span class="n">out_indices</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
-        <span class="s2">&quot;rasterize_to_indices_in_range_2dgs&quot;</span>
-    <span class="p">)(</span>
+    <span class="n">out_gauss_ids</span><span class="p">,</span> <span class="n">out_indices</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_to_indices_2dgs&quot;</span><span class="p">)(</span>
         <span class="n">range_start</span><span class="p">,</span>
         <span class="n">range_end</span><span class="p">,</span>
         <span class="n">transmittances</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
@@ -2203,7 +2170,7 @@
             <span class="n">render_median</span><span class="p">,</span>
             <span class="n">last_ids</span><span class="p">,</span>
             <span class="n">median_ids</span><span class="p">,</span>
-        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_to_pixels_fwd_2dgs&quot;</span><span class="p">)(</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_to_pixels_2dgs_fwd&quot;</span><span class="p">)(</span>
             <span class="n">means2d</span><span class="p">,</span>
             <span class="n">ray_transforms</span><span class="p">,</span>
             <span class="n">colors</span><span class="p">,</span>
@@ -2289,7 +2256,7 @@
             <span class="n">v_opacities</span><span class="p">,</span>
             <span class="n">v_normals</span><span class="p">,</span>
             <span class="n">v_densify</span><span class="p">,</span>
-        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_to_pixels_bwd_2dgs&quot;</span><span class="p">)(</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;rasterize_to_pixels_2dgs_bwd&quot;</span><span class="p">)(</span>
             <span class="n">means2d</span><span class="p">,</span>
             <span class="n">ray_transforms</span><span class="p">,</span>
             <span class="n">colors</span><span class="p">,</span>
