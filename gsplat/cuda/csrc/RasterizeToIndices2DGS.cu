@@ -243,7 +243,7 @@ void launch_rasterize_to_indices_2dgs_kernel(
 
     int64_t shmem_size =
         tile_size * tile_size *
-        (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3));
+        (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3) + sizeof(vec3) + sizeof(vec3));
 
     // TODO: an optimization can be done by passing the actual number of
     // channels into the kernel functions and avoid necessary global memory

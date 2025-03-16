@@ -305,93 +305,93 @@ def test_rasterize_to_pixels_2dgs(test_data):
         distloss=True,
     )
 
-    # # ray_transforms_torch = ray_transforms.transpose(-1, -2).clone()
-    # _render_colors, _render_alphas, _render_normals = _rasterize_to_pixels_2dgs(
-    #     means2d,
-    #     ray_transforms,
-    #     colors,
-    #     normals,
-    #     opacities,
-    #     width,
-    #     height,
-    #     tile_size,
-    #     isect_offsets,
-    #     flatten_ids,
-    #     backgrounds=backgrounds,
-    # )
+    # ray_transforms_torch = ray_transforms.transpose(-1, -2).clone()
+    _render_colors, _render_alphas, _render_normals = _rasterize_to_pixels_2dgs(
+        means2d,
+        ray_transforms,
+        colors,
+        normals,
+        opacities,
+        width,
+        height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        backgrounds=backgrounds,
+    )
 
     cuda_render = render_colors[0].detach().cpu()
-    # torch_render = _render_colors[0].detach().cpu()
-    # diff = (cuda_render - torch_render).abs()
-    # if diff.max() > 1e-5:
-    #     print(f"DIFF > 1e-5, {diff.max()=} {diff.mean()=}")
-    #     import os
+    torch_render = _render_colors[0].detach().cpu()
+    diff = (cuda_render - torch_render).abs()
+    if diff.max() > 1e-5:
+        print(f"DIFF > 1e-5, {diff.max()=} {diff.mean()=}")
+        import os
 
-    #     import imageio
+        import imageio
 
-    #     os.makedirs("renders", exist_ok=True)
-    #     imageio.imwrite("renders/cuda_render.png", (255 * cuda_render).byte())
-    #     imageio.imwrite("renders/torch_render.png", (255 * torch_render).byte())
-    #     imageio.imwrite("renders/diff.png", (255 * diff).byte())
+        os.makedirs("renders", exist_ok=True)
+        imageio.imwrite("renders/cuda_render.png", (255 * cuda_render).byte())
+        imageio.imwrite("renders/torch_render.png", (255 * torch_render).byte())
+        imageio.imwrite("renders/diff.png", (255 * diff).byte())
 
-    # v_render_colors = torch.rand_like(render_colors)
-    # v_render_alphas = torch.rand_like(render_alphas)
-    # v_render_normals = torch.rand_like(render_normals)
+    v_render_colors = torch.rand_like(render_colors)
+    v_render_alphas = torch.rand_like(render_alphas)
+    v_render_normals = torch.rand_like(render_normals)
 
-    # (
-    #     v_means2d,
-    #     v_ray_transforms,
-    #     v_colors,
-    #     v_opacities,
-    #     v_backgrounds,
-    #     v_normals,
-    # ) = torch.autograd.grad(
-    #     (render_colors * v_render_colors).sum()
-    #     + (render_alphas * v_render_alphas).sum()
-    #     + (render_normals * v_render_normals).sum(),
-    #     (means2d, ray_transforms, colors, opacities, backgrounds, normals),
-    # )
+    (
+        v_means2d,
+        v_ray_transforms,
+        v_colors,
+        v_opacities,
+        v_backgrounds,
+        v_normals,
+    ) = torch.autograd.grad(
+        (render_colors * v_render_colors).sum()
+        + (render_alphas * v_render_alphas).sum()
+        + (render_normals * v_render_normals).sum(),
+        (means2d, ray_transforms, colors, opacities, backgrounds, normals),
+    )
 
-    # (
-    #     _v_means2d,
-    #     _v_ray_transforms,
-    #     _v_colors,
-    #     _v_opacities,
-    #     _v_backgrounds,
-    #     _v_normals,
-    # ) = torch.autograd.grad(
-    #     (_render_colors * v_render_colors).sum()
-    #     + (_render_alphas * v_render_alphas).sum()
-    #     + (_render_normals * v_render_normals).sum(),
-    #     (means2d, ray_transforms, colors, opacities, backgrounds, normals),
-    # )
+    (
+        _v_means2d,
+        _v_ray_transforms,
+        _v_colors,
+        _v_opacities,
+        _v_backgrounds,
+        _v_normals,
+    ) = torch.autograd.grad(
+        (_render_colors * v_render_colors).sum()
+        + (_render_alphas * v_render_alphas).sum()
+        + (_render_normals * v_render_normals).sum(),
+        (means2d, ray_transforms, colors, opacities, backgrounds, normals),
+    )
 
-    # pairs = {
-    #     "v_means2d": (v_means2d, _v_means2d),
-    #     "v_ray_transforms": (v_ray_transforms, _v_ray_transforms),
-    #     "v_colors": (v_colors, _v_colors),
-    #     "v_opacities": (v_opacities, _v_opacities),
-    #     "v_backgrounds": (v_backgrounds, _v_backgrounds),
-    #     "v_normals": (v_normals, _v_normals),
-    # }
-    # for name, (v, _v) in pairs.items():
-    #     diff = (v - _v).abs()
-    #     print(f"{name=} {v.shape} {diff.max()=} {diff.mean()=}")
+    pairs = {
+        "v_means2d": (v_means2d, _v_means2d),
+        "v_ray_transforms": (v_ray_transforms, _v_ray_transforms),
+        "v_colors": (v_colors, _v_colors),
+        "v_opacities": (v_opacities, _v_opacities),
+        "v_backgrounds": (v_backgrounds, _v_backgrounds),
+        "v_normals": (v_normals, _v_normals),
+    }
+    for name, (v, _v) in pairs.items():
+        diff = (v - _v).abs()
+        print(f"{name=} {v.shape} {diff.max()=} {diff.mean()=}")
 
-    # # assert close forward
-    # torch.testing.assert_close(render_colors, _render_colors)
-    # torch.testing.assert_close(render_alphas, _render_alphas)
-    # torch.testing.assert_close(render_normals, _render_normals)
+    # assert close forward
+    torch.testing.assert_close(render_colors, _render_colors)
+    torch.testing.assert_close(render_alphas, _render_alphas)
+    torch.testing.assert_close(render_normals, _render_normals)
 
-    # # assert close backward
-    # torch.testing.assert_close(v_means2d, _v_means2d, rtol=1e-3, atol=1e-3)
-    # torch.testing.assert_close(
-    #     v_ray_transforms, _v_ray_transforms, rtol=1e-3, atol=1e-3
-    # )
-    # torch.testing.assert_close(v_colors, _v_colors, rtol=1e-3, atol=1e-3)
-    # torch.testing.assert_close(v_opacities, _v_opacities, rtol=1e-3, atol=1e-3)
-    # torch.testing.assert_close(v_backgrounds, _v_backgrounds, rtol=1e-5, atol=1e-5)
-    # torch.testing.assert_close(v_normals, _v_normals, rtol=1e-3, atol=1e-3)
+    # assert close backward
+    torch.testing.assert_close(v_means2d, _v_means2d, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(
+        v_ray_transforms, _v_ray_transforms, rtol=1e-3, atol=1e-3
+    )
+    torch.testing.assert_close(v_colors, _v_colors, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(v_opacities, _v_opacities, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(v_backgrounds, _v_backgrounds, rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(v_normals, _v_normals, rtol=1e-3, atol=1e-3)
 
 
 if __name__ == "__main__":
