@@ -642,7 +642,14 @@ def test_rasterize_to_pixels_from_world(test_data, channels: int):
     v_render_colors = torch.randn_like(render_colors)
     v_render_alphas = torch.randn_like(render_alphas)
 
-    v_means, v_quats, v_scales, v_colors, v_opacities, v_backgrounds = torch.autograd.grad(
+    (
+        v_means,
+        v_quats,
+        v_scales,
+        v_colors,
+        v_opacities,
+        v_backgrounds,
+    ) = torch.autograd.grad(
         (render_colors * v_render_colors).sum()
         + (render_alphas * v_render_alphas).sum(),
         (means, quats, scales, colors, opacities, backgrounds),
@@ -659,9 +666,9 @@ def test_rasterize_to_pixels_from_world(test_data, channels: int):
     params.shutter_type = _C.ShutterType.GLOBAL
     params.principal_point = Ks[0, :2, 2].tolist()
     params.focal_length = Ks[0, :2, :2].diag().tolist()
-    params.radial_coeffs = [0., 0., 0., 0., 0., 0.]
-    params.tangential_coeffs = [0., 0.]
-    params.thin_prism_coeffs = [0., 0., 0., 0.]
+    params.radial_coeffs = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    params.tangential_coeffs = [0.0, 0.0]
+    params.thin_prism_coeffs = [0.0, 0.0, 0.0, 0.0]
 
     T_world_sensor_R = viewmats[0, :3, :3].cpu()
     T_world_sensor_t = viewmats[0, :3, 3].cpu().numpy()
@@ -674,14 +681,18 @@ def test_rasterize_to_pixels_from_world(test_data, channels: int):
     ).tolist()  # represents two tquat [t,q] poses at start / end timestamps
     rs.timestamps_us = [0, 1]  # arbitrary timestamps
 
-    __render_colors, __render_alphas, last_ids = _C.rasterize_to_pixels_from_world_3dgs_fwd(
+    (
+        __render_colors,
+        __render_alphas,
+        last_ids,
+    ) = _C.rasterize_to_pixels_from_world_3dgs_fwd(
         means.contiguous(),
         quats.contiguous(),
         scales.contiguous(),
         colors.contiguous(),
         opacities.contiguous(),
         backgrounds.contiguous(),
-        None, # masks
+        None,  # masks
         params,
         rs,
         tile_size,
@@ -698,14 +709,20 @@ def test_rasterize_to_pixels_from_world(test_data, channels: int):
     # ).detach().cpu()
     # imageio.imwrite("render.png", (canvas.numpy() * 255).astype(np.uint8))
 
-    __v_means, __v_quats, __v_scales, __v_colors, __v_opacities = _C.rasterize_to_pixels_from_world_3dgs_bwd(
+    (
+        __v_means,
+        __v_quats,
+        __v_scales,
+        __v_colors,
+        __v_opacities,
+    ) = _C.rasterize_to_pixels_from_world_3dgs_bwd(
         means.contiguous(),
         quats.contiguous(),
         scales.contiguous(),
         colors.contiguous(),
         opacities.contiguous(),
         backgrounds.contiguous(),
-        None, # masks
+        None,  # masks
         params,
         rs,
         tile_size,
@@ -744,6 +761,3 @@ def test_rasterize_to_pixels_from_world(test_data, channels: int):
     print("example v_opacities:")
     print(v_opacities[0, :2])
     print(__v_opacities[0, :2])
-
-
-

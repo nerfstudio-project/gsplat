@@ -19,6 +19,7 @@ torch.manual_seed(42)
 
 device = torch.device("cuda:0")
 
+
 def test_data():
     (
         means,
@@ -47,6 +48,7 @@ def test_data():
         "height": height,
     }
 
+
 data = test_data()
 Ks = data["Ks"][:1].contiguous()
 viewmats = data["viewmats"][:1].contiguous()
@@ -62,9 +64,9 @@ colors = data["colors"][:1].contiguous()
 resolution = [width, height]
 principal_point = Ks[0, :2, 2].tolist()
 focal_length = Ks[0, :2, :2].diag().tolist()
-radial_coeffs = [0., 0., 0., 0., 0., 0.]
-tangential_coeffs = [0., 0.]
-thin_prism_coeffs = [0., 0., 0., 0.]
+radial_coeffs = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+tangential_coeffs = [0.0, 0.0]
+thin_prism_coeffs = [0.0, 0.0, 0.0, 0.0]
 T_world_sensor_R = viewmats[0, :3, :3].cpu()
 T_world_sensor_t = viewmats[0, :3, 3].cpu().numpy()
 
@@ -85,6 +87,7 @@ rs.T_world_sensors = np.hstack(
     [T_world_sensor_tquat, T_world_sensor_tquat]
 ).tolist()  # represents two tquat [t,q] poses at start / end timestamps
 rs.timestamps_us = [0, 1]  # arbitrary timestamps
+
 
 def rasterizer_and_save(radii, means2d, depths, conics, file_name="render.png"):
     # Identify intersecting tiles
@@ -124,23 +127,21 @@ def rasterizer_and_save(radii, means2d, depths, conics, file_name="render.png"):
         flatten_ids.contiguous(),
     )
 
-    imageio.imsave(
-        file_name, (render_colors[0].cpu().numpy() * 255).astype(np.uint8)
-    )
+    imageio.imsave(file_name, (render_colors[0].cpu().numpy() * 255).astype(np.uint8))
 
 
 radii, means2d, depths, conics, _ = _C.projection_ut_3dgs_fused(
     means.contiguous(),
     quats.contiguous(),
     scales.contiguous(),
-    0.3, # eps2d,
-    0.01, # near
-    1e10, # far
-    0.0, # radius_clip
-    True, # calc_compensations
+    0.3,  # eps2d,
+    0.01,  # near
+    1e10,  # far
+    0.0,  # radius_clip
+    True,  # calc_compensations
     params,
     rs,
-    _C.UnscentedTransformParameters()
+    _C.UnscentedTransformParameters(),
 )
 rasterizer_and_save(radii, means2d, depths, conics, "results/ut_eval3d.png")
 

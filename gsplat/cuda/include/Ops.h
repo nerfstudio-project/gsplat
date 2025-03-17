@@ -3,8 +3,8 @@
 
 #include <ATen/core/Tensor.h>
 
-#include "Common.h"
 #include "Cameras.h"
+#include "Common.h"
 
 namespace gsplat {
 
@@ -461,7 +461,7 @@ std::tuple<
     at::Tensor,
     at::Tensor>
 projection_ut_3dgs_fused(
-    const at::Tensor means,                // [N, 3]
+    const at::Tensor means,  // [N, 3]
     const at::Tensor quats,  // [N, 4]
     const at::Tensor scales, // [N, 3]
     const float eps2d,
@@ -474,18 +474,19 @@ projection_ut_3dgs_fused(
     const UnscentedTransformParameters ut_params
 );
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3dgs_fwd(
+std::tuple<at::Tensor, at::Tensor, at::Tensor>
+rasterize_to_pixels_from_world_3dgs_fwd(
     // Gaussian parameters
-    const at::Tensor means, // [N, 3]
-    const at::Tensor quats, // [N, 4]
-    const at::Tensor scales, // [N, 3]
+    const at::Tensor means,     // [N, 3]
+    const at::Tensor quats,     // [N, 4]
+    const at::Tensor scales,    // [N, 3]
     const at::Tensor colors,    // [C, N, channels] or [nnz, channels]
     const at::Tensor opacities, // [C, N]  or [nnz]
     const at::optional<at::Tensor> backgrounds, // [C, channels]
     const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
     // image size
     const CameraModelParametersVariant camera_model_params,
-    const RollingShutterParameters rs_params, 
+    const RollingShutterParameters rs_params,
     const uint32_t tile_size,
     // intersections
     const at::Tensor tile_offsets, // [C, tile_height, tile_width]
@@ -495,16 +496,16 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 rasterize_to_pixels_from_world_3dgs_bwd(
     // Gaussian parameters
-    const at::Tensor means, // [N, 3]
-    const at::Tensor quats, // [N, 4]
-    const at::Tensor scales, // [N, 3]
+    const at::Tensor means,                     // [N, 3]
+    const at::Tensor quats,                     // [N, 4]
+    const at::Tensor scales,                    // [N, 3]
     const at::Tensor colors,                    // [C, N, 3] or [nnz, 3]
     const at::Tensor opacities,                 // [C, N] or [nnz]
     const at::optional<at::Tensor> backgrounds, // [C, 3]
     const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
     // image size
     const CameraModelParametersVariant camera_model_params,
-    const RollingShutterParameters rs_params, 
+    const RollingShutterParameters rs_params,
     const uint32_t tile_size,
     // intersections
     const at::Tensor tile_offsets, // [C, tile_height, tile_width]
@@ -514,7 +515,7 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     const at::Tensor last_ids,      // [C, image_height, image_width]
     // gradients of outputs
     const at::Tensor v_render_colors, // [C, image_height, image_width, 3]
-    const at::Tensor v_render_alphas // [C, image_height, image_width, 1]
+    const at::Tensor v_render_alphas  // [C, image_height, image_width, 1]
 );
 
 } // namespace gsplat
