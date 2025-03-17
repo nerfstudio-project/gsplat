@@ -572,3 +572,178 @@ def test_sh(test_data, sh_degree: int):
     torch.testing.assert_close(v_coeffs, _v_coeffs, rtol=1e-4, atol=1e-4)
     if sh_degree > 0:
         torch.testing.assert_close(v_dirs, _v_dirs, rtol=1e-4, atol=1e-4)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.parametrize("channels", [3])
+def test_rasterize_to_pixels_from_world(test_data, channels: int):
+    from gsplat.cuda._backend import _C
+    from gsplat.cuda._wrapper import (
+        fully_fused_projection,
+        isect_offset_encode,
+        isect_tiles,
+        quat_scale_to_covar_preci,
+        rasterize_to_pixels,
+    )
+
+    torch.manual_seed(42)
+
+    Ks = test_data["Ks"][:1]
+    viewmats = test_data["viewmats"][:1]
+    height = test_data["height"]
+    width = test_data["width"]
+    quats = test_data["quats"]
+    scales = test_data["scales"]
+    means = test_data["means"]
+    opacities = test_data["opacities"]
+    C = len(Ks)
+    colors = torch.rand(C, len(means), channels, device=device)
+    backgrounds = torch.rand((C, colors.shape[-1]), device=device)
+
+    means.requires_grad = True
+    quats.requires_grad = True
+    scales.requires_grad = True
+    colors.requires_grad = True
+    opacities.requires_grad = True
+    backgrounds.requires_grad = True
+
+    covars, _ = quat_scale_to_covar_preci(quats, scales, compute_preci=False, triu=True)
+
+    # Project Gaussians to 2D
+    radii, means2d, depths, conics, compensations = fully_fused_projection(
+        means, covars, None, None, viewmats, Ks, width, height, eps2d=1e-6
+    )
+    opacities = opacities.repeat(C, 1)
+
+    # Identify intersecting tiles
+    tile_size = 16 if channels <= 32 else 4
+    tile_width = math.ceil(width / float(tile_size))
+    tile_height = math.ceil(height / float(tile_size))
+    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
+
+    # forward
+    render_colors, render_alphas = rasterize_to_pixels(
+        means2d,
+        conics,
+        colors,
+        opacities,
+        width,
+        height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        backgrounds=backgrounds,
+    )
+
+    # backward
+    v_render_colors = torch.randn_like(render_colors)
+    v_render_alphas = torch.randn_like(render_alphas)
+
+    v_means, v_quats, v_scales, v_colors, v_opacities, v_backgrounds = torch.autograd.grad(
+        (render_colors * v_render_colors).sum()
+        + (render_alphas * v_render_alphas).sum(),
+        (means, quats, scales, colors, opacities, backgrounds),
+    )
+
+    # forward with 3D evaluation
+    import imageio
+    import numpy as np
+
+    from gsplat.utils import so3_matrix_to_quat
+
+    params = _C.OpenCVPinholeCameraModelParameters()
+    params.resolution = [width, height]
+    params.shutter_type = _C.ShutterType.GLOBAL
+    params.principal_point = Ks[0, :2, 2].tolist()
+    params.focal_length = Ks[0, :2, :2].diag().tolist()
+    params.radial_coeffs = [0., 0., 0., 0., 0., 0.]
+    params.tangential_coeffs = [0., 0.]
+    params.thin_prism_coeffs = [0., 0., 0., 0.]
+
+    T_world_sensor_R = viewmats[0, :3, :3].cpu()
+    T_world_sensor_t = viewmats[0, :3, 3].cpu().numpy()
+    T_world_sensor_quat = so3_matrix_to_quat(T_world_sensor_R).numpy()[0]
+    T_world_sensor_tquat = np.hstack([T_world_sensor_t, T_world_sensor_quat])
+
+    rs = _C.RollingShutterParameters()
+    rs.T_world_sensors = np.hstack(
+        [T_world_sensor_tquat, T_world_sensor_tquat]
+    ).tolist()  # represents two tquat [t,q] poses at start / end timestamps
+    rs.timestamps_us = [0, 1]  # arbitrary timestamps
+
+    __render_colors, __render_alphas, last_ids = _C.rasterize_to_pixels_from_world_3dgs_fwd(
+        means.contiguous(),
+        quats.contiguous(),
+        scales.contiguous(),
+        colors.contiguous(),
+        opacities.contiguous(),
+        backgrounds.contiguous(),
+        None, # masks
+        params,
+        rs,
+        tile_size,
+        isect_offsets.contiguous(),
+        flatten_ids.contiguous(),
+    )
+    diff = torch.abs(render_colors - __render_colors).mean()
+    print(f"diff color: {diff.item()}")
+    diff = torch.abs(render_alphas - __render_alphas).mean()
+    print(f"diff alpha: {diff.item()}")
+
+    # canvas = torch.cat(
+    #     [render_colors[0], __render_colors[0]], dim=0
+    # ).detach().cpu()
+    # imageio.imwrite("render.png", (canvas.numpy() * 255).astype(np.uint8))
+
+    __v_means, __v_quats, __v_scales, __v_colors, __v_opacities = _C.rasterize_to_pixels_from_world_3dgs_bwd(
+        means.contiguous(),
+        quats.contiguous(),
+        scales.contiguous(),
+        colors.contiguous(),
+        opacities.contiguous(),
+        backgrounds.contiguous(),
+        None, # masks
+        params,
+        rs,
+        tile_size,
+        isect_offsets.contiguous(),
+        flatten_ids.contiguous(),
+        __render_alphas.contiguous(),
+        last_ids.contiguous(),
+        v_render_colors.contiguous(),
+        v_render_alphas.contiguous(),
+    )
+    diff = torch.abs(v_means - __v_means).mean()
+    print(f"avg diff v_means: {diff.item()}")
+    print("example v_means:")
+    print(v_means[:2])
+    print(__v_means[:2])
+    print("----")
+    diff = torch.abs(v_quats - __v_quats).mean()
+    print(f"avg diff v_quats: {diff.item()}")
+    print("example v_quats:")
+    print(v_quats[:2])
+    print(__v_quats[:2])
+    print("----")
+    diff = torch.abs(v_scales - __v_scales).mean()
+    print(f"avg diff v_scales: {diff.item()}")
+    print("example v_scales:")
+    print(v_scales[:2])
+    print(__v_scales[:2])
+    diff = torch.abs(v_colors - __v_colors).mean()
+    print(f"avg diff v_colors: {diff.item()}")
+    print("example v_colors:")
+    print(v_colors[0, :2])
+    print(__v_colors[0, :2])
+    print("----")
+    diff = torch.abs(v_opacities - __v_opacities).mean()
+    print(f"avg diff v_opacities: {diff.item()}")
+    print("example v_opacities:")
+    print(v_opacities[0, :2])
+    print(__v_opacities[0, :2])
+
+
+

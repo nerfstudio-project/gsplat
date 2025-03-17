@@ -45,8 +45,8 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     const scalar_t
         *__restrict__ v_render_alphas, // [C, image_height, image_width, 1]
     // grad inputs
-    vec2 *__restrict__ v_means,      // [N, 3]
-    vec3 *__restrict__ v_quats,       // [N, 4]
+    vec3 *__restrict__ v_means,      // [N, 3]
+    vec4 *__restrict__ v_quats,       // [N, 4]
     vec3 *__restrict__ v_scales,      // [N, 3]
     scalar_t *__restrict__ v_colors,   // [C, N, CDIM] or [nnz, CDIM]
     scalar_t *__restrict__ v_opacities // [C, N] or [nnz]
@@ -195,7 +195,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                 power = evaluate_opacity_factor3D_geometric(
                     ray_o - xyz, ray_d, quat, scale, grd, gro
                 );
-    
+
                 vis = __expf(power);
                 alpha = min(0.999f, opac * vis);
                 if (power > 0.f || alpha < 1.f / 255.f) {
@@ -396,6 +396,27 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                 v_opacities.data_ptr<float>()
             );
     };
+
+    std::visit(OverloadVisitor{
+        [&](OpenCVPinholeCameraModelParameters const& params) {
+            // check for perfect-pinhole special case (none of the distortion coefficients is non-zero)
+            if (params.is_perfect_pinhole()) {
+                // instantiate perfect pinhole camera model instance by discarding all zero distortion parameters
+                auto const camera_model = PerfectPinholeCameraModel({
+                    params.resolution, params.shutter_type, params.principal_point, params.focal_length
+                });
+                launchKernel(camera_model);
+            } else {
+                launchKernel(OpenCVPinholeCameraModel(params));
+            }
+        },
+        [&](OpenCVFisheyeCameraModelParameters const& params) {
+            launchKernel(OpenCVFisheyeCameraModel<>(params));
+        },
+        [&](FThetaCameraModelParameters const& params) {
+            launchKernel(BackwardsFThetaCameraModel<>(params));
+        },
+    }, camera_model_params);
 }
 
 // Explicit Instantiation: this should match how it is being called in .cpp
