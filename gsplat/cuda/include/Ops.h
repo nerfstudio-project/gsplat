@@ -474,4 +474,22 @@ projection_ut_3dgs_fused(
     const UnscentedTransformParameters ut_params
 );
 
+std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3dgs_fwd(
+    // Gaussian parameters
+    const at::Tensor means, // [N, 3]
+    const at::Tensor quats, // [N, 4]
+    const at::Tensor scales, // [N, 3]
+    const at::Tensor colors,    // [C, N, channels] or [nnz, channels]
+    const at::Tensor opacities, // [C, N]  or [nnz]
+    const at::optional<at::Tensor> backgrounds, // [C, channels]
+    const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
+    // image size
+    const CameraModelParametersVariant camera_model_params,
+    const RollingShutterParameters rs_params, 
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [C, tile_height, tile_width]
+    const at::Tensor flatten_ids   // [n_isects]
+);
+
 } // namespace gsplat

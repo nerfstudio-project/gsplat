@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include "Cameras.h"
 
 namespace at {
 class Tensor;
@@ -189,6 +190,33 @@ void launch_rasterize_to_indices_2dgs_kernel(
     at::optional<at::Tensor> chunk_cnts,   // [C, image_height, image_width]
     at::optional<at::Tensor> gaussian_ids, // [n_elems]
     at::optional<at::Tensor> pixel_ids     // [n_elems]
+);
+
+///////////////////////////////////////////////////
+// rasterize_to_pixels_from_world_3dgs
+///////////////////////////////////////////////////
+
+template <uint32_t CDIM>
+void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
+    // Gaussian parameters
+    const at::Tensor means, // [N, 3]
+    const at::Tensor quats, // [N, 4]
+    const at::Tensor scales, // [N, 3]
+    const at::Tensor colors,    // [C, N, channels] or [nnz, channels]
+    const at::Tensor opacities, // [C, N]  or [nnz]
+    const at::optional<at::Tensor> backgrounds, // [C, channels]
+    const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
+    // image size
+    const CameraModelParametersVariant camera_model_params,
+    const RollingShutterParameters rs_params, 
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [C, tile_height, tile_width]
+    const at::Tensor flatten_ids,  // [n_isects]
+    // outputs
+    at::Tensor renders, // [C, image_height, image_width, channels]
+    at::Tensor alphas,  // [C, image_height, image_width]
+    at::Tensor last_ids // [C, image_height, image_width]
 );
 
 } // namespace gsplat

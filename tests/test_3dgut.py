@@ -96,17 +96,32 @@ def rasterizer_and_save(radii, means2d, depths, conics, file_name="render.png"):
     )
     isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
 
-    # forward
-    render_colors, render_alphas = rasterize_to_pixels(
-        means2d,
-        conics,
-        colors,
-        opacities.repeat(C, 1),
-        width,
-        height,
+    # # forward
+    # render_colors, render_alphas = rasterize_to_pixels(
+    #     means2d,
+    #     conics,
+    #     colors,
+    #     opacities.repeat(C, 1),
+    #     width,
+    #     height,
+    #     tile_size,
+    #     isect_offsets,
+    #     flatten_ids,
+    # )
+
+    render_colors, render_alphas, _ = _C.rasterize_to_pixels_from_world_3dgs_fwd(
+        means.contiguous(),
+        quats.contiguous(),
+        scales.contiguous(),
+        colors.contiguous(),
+        opacities.repeat(C, 1).contiguous(),
+        None,
+        None,
+        params,
+        rs,
         tile_size,
-        isect_offsets,
-        flatten_ids,
+        isect_offsets.contiguous(),
+        flatten_ids.contiguous(),
     )
 
     imageio.imsave(
@@ -127,9 +142,9 @@ radii, means2d, depths, conics, _ = _C.projection_ut_3dgs_fused(
     rs,
     _C.UnscentedTransformParameters()
 )
-rasterizer_and_save(radii, means2d, depths, conics, "results/ut.png")
+rasterizer_and_save(radii, means2d, depths, conics, "results/ut_eval3d.png")
 
 radii, means2d, depths, conics, _ = fully_fused_projection(
     means, None, quats, scales, viewmats, Ks, width, height, 0.3, 0.01, 1e10, 0.0
 )
-rasterizer_and_save(radii, means2d, depths, conics, "results/ewa.png")
+rasterizer_and_save(radii, means2d, depths, conics, "results/ewa_eval3d.png")

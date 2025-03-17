@@ -9,6 +9,7 @@
 #include "Common.h"
 #include "Ops.h"
 #include "Rasterization.h"
+#include "Cameras.h"
 
 namespace gsplat {
 
@@ -667,5 +668,95 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
     }
     return std::make_tuple(gaussian_ids, pixel_ids);
 }
+
+////////////////////////////////////////////////////
+// 3DGS (from world)
+////////////////////////////////////////////////////
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3dgs_fwd(
+    // Gaussian parameters
+    const at::Tensor means, // [N, 3]
+    const at::Tensor quats, // [N, 4]
+    const at::Tensor scales, // [N, 3]
+    const at::Tensor colors,    // [C, N, channels] or [nnz, channels]
+    const at::Tensor opacities, // [C, N]  or [nnz]
+    const at::optional<at::Tensor> backgrounds, // [C, channels]
+    const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
+    // image size
+    const CameraModelParametersVariant camera_model_params,
+    const RollingShutterParameters rs_params, 
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [C, tile_height, tile_width]
+    const at::Tensor flatten_ids   // [n_isects]
+) {
+    DEVICE_GUARD(means);
+    CHECK_INPUT(means);
+    CHECK_INPUT(quats);
+    CHECK_INPUT(colors);
+    CHECK_INPUT(colors);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(tile_offsets);
+    CHECK_INPUT(flatten_ids);
+    if (backgrounds.has_value()) {
+        CHECK_INPUT(backgrounds.value());
+    }
+    if (masks.has_value()) {
+        CHECK_INPUT(masks.value());
+    }
+
+    uint32_t C = tile_offsets.size(0); // number of cameras
+    uint32_t channels = colors.size(-1);
+    assert (channels == 3); // only support RGB for now
+    assert (C == 1); // only support single camera for now
+
+    auto resolution = std::visit(
+        [](auto const& params) { return params.resolution; },
+        camera_model_params
+    );
+    const uint32_t image_width = resolution[0];
+    const uint32_t image_height = resolution[1];
+
+    at::Tensor renders =
+        at::empty({C, image_height, image_width, channels}, means.options());
+    at::Tensor alphas =
+        at::empty({C, image_height, image_width, 1}, means.options());
+    at::Tensor last_ids = at::empty(
+        {C, image_height, image_width}, means.options().dtype(at::kInt)
+    );
+
+#define __LAUNCH_KERNEL__(N)                                                   \
+    case N:                                                                    \
+        launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel<N>(              \
+            means,                                                             \
+            quats,                                                             \
+            scales,                                                            \
+            colors,                                                            \
+            opacities,                                                         \
+            backgrounds,                                                       \
+            masks,                                                             \
+            camera_model_params,                                               \
+            rs_params,                                                         \
+            tile_size,                                                         \
+            tile_offsets,                                                      \
+            flatten_ids,                                                       \
+            renders,                                                           \
+            alphas,                                                            \
+            last_ids                                                           \
+        );                                                                     \
+        break;
+
+    // TODO: an optimization can be done by passing the actual number of
+    // channels into the kernel functions and avoid necessary global memory
+    // writes. This requires moving the channel padding from python to C side.
+    switch (channels) {
+        __LAUNCH_KERNEL__(3)
+    default:
+        AT_ERROR("Unsupported number of channels: ", channels);
+    }
+#undef __LAUNCH_KERNEL__
+
+    return std::make_tuple(renders, alphas, last_ids);
+};
 
 } // namespace gsplat
