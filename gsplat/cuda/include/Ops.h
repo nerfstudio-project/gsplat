@@ -4,6 +4,7 @@
 #include <ATen/core/Tensor.h>
 
 #include "Common.h"
+#include "Cameras.h"
 
 namespace gsplat {
 
@@ -449,6 +450,28 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
     // intersections
     const at::Tensor tile_offsets, // [C, tile_height, tile_width]
     const at::Tensor flatten_ids   // [n_isects]
+);
+
+// Use uncented transform to project 3D gaussians to 2D. (none differentiable)
+// https://arxiv.org/abs/2412.12507
+std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor>
+projection_ut_3dgs_fused(
+    const at::Tensor means,                // [N, 3]
+    const at::Tensor quats,  // [N, 4]
+    const at::Tensor scales, // [N, 3]
+    const float eps2d,
+    const float near_plane,
+    const float far_plane,
+    const float radius_clip,
+    const bool calc_compensations,
+    const CameraModelParametersVariant camera_model_params,
+    const RollingShutterParameters rs_params,
+    const UnscentedTransformParameters ut_params
 );
 
 } // namespace gsplat

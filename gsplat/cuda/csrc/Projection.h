@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include "Cameras.h"
 
 namespace at {
 class Tensor;
@@ -240,6 +241,26 @@ void launch_projection_2dgs_packed_bwd_kernel(
     at::Tensor v_quats,                 // [N, 4] or [nnz, 4]
     at::Tensor v_scales,                // [N, 3] or [nnz, 3]
     at::optional<at::Tensor> v_viewmats // [C, 4, 4] Optional
+);
+
+void launch_projection_ut_3dgs_fused_kernel(
+    // inputs
+    const at::Tensor means,                // [N, 3]
+    const at::Tensor quats,  // [N, 4]
+    const at::Tensor scales, // [N, 3]
+    const float eps2d,
+    const float near_plane,
+    const float far_plane,
+    const float radius_clip,
+    const CameraModelParametersVariant camera_model_params,
+    const RollingShutterParameters rs_params,
+    const UnscentedTransformParameters ut_params,
+    // outputs
+    at::Tensor radii,                      // [C, N]
+    at::Tensor means2d,                    // [C, N, 2]
+    at::Tensor depths,                     // [C, N]
+    at::Tensor conics,                     // [C, N, 3]
+    at::optional<at::Tensor> compensations // [C, N] optional
 );
 
 } // namespace gsplat

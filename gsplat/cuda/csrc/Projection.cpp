@@ -9,6 +9,7 @@
 #include "Common.h"     // where all the macros are defined
 #include "Ops.h"        // a collection of all gsplat operators
 #include "Projection.h" // where the launch function is declared
+#include "Cameras.h"
 
 namespace gsplat {
 
@@ -839,6 +840,66 @@ projection_2dgs_packed_bwd(
                              : std::nullopt
     );
     return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
+}
+
+std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor>
+projection_ut_3dgs_fused(
+    const at::Tensor means,                // [N, 3]
+    const at::Tensor quats,  // [N, 4]
+    const at::Tensor scales, // [N, 3]
+    const float eps2d,
+    const float near_plane,
+    const float far_plane,
+    const float radius_clip,
+    const bool calc_compensations,
+    const CameraModelParametersVariant camera_model_params,
+    const RollingShutterParameters rs_params,
+    const UnscentedTransformParameters ut_params
+) {
+    DEVICE_GUARD(means);
+    CHECK_INPUT(means);
+    CHECK_INPUT(quats);
+    CHECK_INPUT(scales);
+
+    uint32_t N = means.size(0);    // number of gaussians
+    uint32_t C = 1; // number of cameras, we only support one camera for now
+
+    at::Tensor radii = at::empty({C, N}, means.options().dtype(at::kInt));
+    at::Tensor means2d = at::empty({C, N, 2}, means.options());
+    at::Tensor depths = at::empty({C, N}, means.options());
+    at::Tensor conics = at::empty({C, N, 3}, means.options());
+    at::Tensor compensations;
+    if (calc_compensations) {
+        // we dont want NaN to appear in this tensor, so we zero intialize it
+        compensations = at::zeros({C, N}, means.options());
+    }
+
+    launch_projection_ut_3dgs_fused_kernel(
+        // inputs
+        means,
+        quats,
+        scales,
+        eps2d,
+        near_plane,
+        far_plane,
+        radius_clip,
+        camera_model_params,
+        rs_params,
+        ut_params,
+        // outputs
+        radii,
+        means2d,
+        depths,
+        conics,
+        calc_compensations ? at::optional<at::Tensor>(compensations)
+                           : std::nullopt
+    );
+    return std::make_tuple(radii, means2d, depths, conics, compensations);
 }
 
 } // namespace gsplat
