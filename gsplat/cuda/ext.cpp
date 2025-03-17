@@ -69,6 +69,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("projection_ut_3dgs_fused", &gsplat::projection_ut_3dgs_fused);
     m.def("rasterize_to_pixels_from_world_3dgs_fwd", &gsplat::rasterize_to_pixels_from_world_3dgs_fwd);
+    m.def("rasterize_to_pixels_from_world_3dgs_bwd", &gsplat::rasterize_to_pixels_from_world_3dgs_bwd);
 
     // Cameras from 3DGUT
     py::enum_<ShutterType>(m, "ShutterType")

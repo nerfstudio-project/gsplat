@@ -219,4 +219,35 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     at::Tensor last_ids // [C, image_height, image_width]
 );
 
+template <uint32_t CDIM>
+void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
+    // Gaussian parameters
+    const at::Tensor means, // [N, 3]
+    const at::Tensor quats, // [N, 4]
+    const at::Tensor scales, // [N, 3]
+    const at::Tensor colors,                    // [C, N, 3] or [nnz, 3]
+    const at::Tensor opacities,                 // [C, N] or [nnz]
+    const at::optional<at::Tensor> backgrounds, // [C, 3]
+    const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
+    // image size
+    const CameraModelParametersVariant camera_model_params,
+    const RollingShutterParameters rs_params, 
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [C, tile_height, tile_width]
+    const at::Tensor flatten_ids,  // [n_isects]
+    // forward outputs
+    const at::Tensor render_alphas, // [C, image_height, image_width, 1]
+    const at::Tensor last_ids,      // [C, image_height, image_width]
+    // gradients of outputs
+    const at::Tensor v_render_colors, // [C, image_height, image_width, 3]
+    const at::Tensor v_render_alphas, // [C, image_height, image_width, 1]
+    // outputs
+    at::Tensor v_means,      // [N, 3]
+    at::Tensor v_quats,      // [N, 4]
+    at::Tensor v_scales,     // [N, 3]
+    at::Tensor v_colors,                    // [C, N, 3] or [nnz, 3]
+    at::Tensor v_opacities                  // [C, N] or [nnz]
+);
+
 } // namespace gsplat

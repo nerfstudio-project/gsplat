@@ -163,8 +163,8 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             
             vec3 grd, gro;
             const float power = evaluate_opacity_factor3D_geometric(
-				ray_o - xyz, ray_d, quat, scale, grd, gro
-			);
+                ray_o - xyz, ray_d, quat, scale, grd, gro
+            );
 
             float alpha = min(0.999f, opac * __expf(power));
 
@@ -237,7 +237,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     assert (packed == false); // only support non-packed for now
 
     uint32_t C = tile_offsets.size(0);         // number of cameras
-    uint32_t N = packed ? 0 : means.size(1); // number of gaussians
+    uint32_t N = packed ? 0 : means.size(0);   // number of gaussians
     uint32_t tile_height = tile_offsets.size(1);
     uint32_t tile_width = tile_offsets.size(2);
     uint32_t n_isects = flatten_ids.size(0);

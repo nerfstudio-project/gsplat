@@ -563,7 +563,6 @@ __forceinline__ __device__ float evaluate_opacity_factor3D_geometric(
 
 __forceinline__ __device__ 
 float evaluate_opacity_factor3D_and_depth_geometric_bwd(
-    const int global_id,
     const glm::vec3& o_minus_mu, 
     const glm::vec3& raydir, 
     const glm::vec4& grot, 
@@ -574,9 +573,9 @@ float evaluate_opacity_factor3D_and_depth_geometric_bwd(
     const float gdist,
     const float rayHitGrdWeight, ///< dL_ddistance * weight
 #endif
-    glm::vec3* __restrict__ dL_dscales,
-    glm::vec4* __restrict__ dL_drotations,
-    glm::vec3* __restrict__ dL_dmeans3D)
+    glm::vec3 &dL_dscales,
+    glm::vec4 &dL_drotations,
+    glm::vec3 &dL_dmeans3D)
 {
     const float r = grot.x;
     const float x = grot.y;
@@ -655,21 +654,21 @@ float evaluate_opacity_factor3D_and_depth_geometric_bwd(
     const glm::vec4 grotGrdPoscr = matmul_bw_quat(gposc, gposcrGrd, grot);
     const glm::vec3 rayMoGPosGrd = -gposcGrd;
 
-    atomicAdd(&dL_dmeans3D[global_id].x, rayMoGPosGrd.x);
-    atomicAdd(&dL_dmeans3D[global_id].y, rayMoGPosGrd.y);
-    atomicAdd(&dL_dmeans3D[global_id].z, rayMoGPosGrd.z);
+    dL_dmeans3D.x += rayMoGPosGrd.x;
+    dL_dmeans3D.y += rayMoGPosGrd.y;
+    dL_dmeans3D.z += rayMoGPosGrd.z;
 
     const auto grduGrd = safe_normalize_bw(grdu, grdGrd + grdRayHitGrd);
-    atomicAdd(&dL_dscales[global_id].x, gsclRayHitGrd.x + gsclGrdGro.x + (-rayDirR.x / (gscl.x * gscl.x)) * grduGrd.x);
-    atomicAdd(&dL_dscales[global_id].y, gsclRayHitGrd.y + gsclGrdGro.y + (-rayDirR.y / (gscl.y * gscl.y)) * grduGrd.y);
-    atomicAdd(&dL_dscales[global_id].z, gsclRayHitGrd.z + gsclGrdGro.z + (-rayDirR.z / (gscl.z * gscl.z)) * grduGrd.z);
+    dL_dscales.x += gsclRayHitGrd.x + gsclGrdGro.x + (-rayDirR.x / (gscl.x * gscl.x)) * grduGrd.x;
+    dL_dscales.y += gsclRayHitGrd.y + gsclGrdGro.y + (-rayDirR.y / (gscl.y * gscl.y)) * grduGrd.y;
+    dL_dscales.z += gsclRayHitGrd.z + gsclGrdGro.z + (-rayDirR.z / (gscl.z * gscl.z)) * grduGrd.z;
 
     const auto rayDirRGrd = giscl * grduGrd;
     const auto grotGrdRayDirR = matmul_bw_quat(raydir, rayDirRGrd, grot);
-    atomicAdd(&dL_drotations[global_id].x, grotGrdPoscr.x + grotGrdRayDirR.x);
-    atomicAdd(&dL_drotations[global_id].y, grotGrdPoscr.y + grotGrdRayDirR.y);
-    atomicAdd(&dL_drotations[global_id].z, grotGrdPoscr.z + grotGrdRayDirR.z);
-    atomicAdd(&dL_drotations[global_id].w, grotGrdPoscr.w + grotGrdRayDirR.w);
+    dL_drotations.x += grotGrdPoscr.x + grotGrdRayDirR.x;
+    dL_drotations.y += grotGrdPoscr.y + grotGrdRayDirR.y;
+    dL_drotations.z += grotGrdPoscr.z + grotGrdRayDirR.z;
+    dL_drotations.w += grotGrdPoscr.w + grotGrdRayDirR.w;
 }
 
 __forceinline__ __device__ float depth_along_ray_geometric(const glm::vec3& grd, const glm::vec3& gro, const glm::vec3& gscl)

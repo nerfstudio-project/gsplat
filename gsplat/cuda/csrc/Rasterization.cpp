@@ -759,4 +759,98 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
     return std::make_tuple(renders, alphas, last_ids);
 };
 
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+rasterize_to_pixels_from_world_3dgs_bwd(
+    // Gaussian parameters
+    const at::Tensor means, // [N, 3]
+    const at::Tensor quats, // [N, 4]
+    const at::Tensor scales, // [N, 3]
+    const at::Tensor colors,                    // [C, N, 3] or [nnz, 3]
+    const at::Tensor opacities,                 // [C, N] or [nnz]
+    const at::optional<at::Tensor> backgrounds, // [C, 3]
+    const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
+    // image size
+    const CameraModelParametersVariant camera_model_params,
+    const RollingShutterParameters rs_params, 
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [C, tile_height, tile_width]
+    const at::Tensor flatten_ids,  // [n_isects]
+    // forward outputs
+    const at::Tensor render_alphas, // [C, image_height, image_width, 1]
+    const at::Tensor last_ids,      // [C, image_height, image_width]
+    // gradients of outputs
+    const at::Tensor v_render_colors, // [C, image_height, image_width, 3]
+    const at::Tensor v_render_alphas // [C, image_height, image_width, 1]
+) {
+    DEVICE_GUARD(means);
+    CHECK_INPUT(means);
+    CHECK_INPUT(quats);
+    CHECK_INPUT(scales);
+    CHECK_INPUT(colors);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(tile_offsets);
+    CHECK_INPUT(flatten_ids);
+    CHECK_INPUT(render_alphas);
+    CHECK_INPUT(last_ids);
+    CHECK_INPUT(v_render_colors);
+    CHECK_INPUT(v_render_alphas);
+    if (backgrounds.has_value()) {
+        CHECK_INPUT(backgrounds.value());
+    }
+    if (masks.has_value()) {
+        CHECK_INPUT(masks.value());
+    }
+
+    uint32_t channels = colors.size(-1);
+
+    at::Tensor v_means = at::zeros_like(means);
+    at::Tensor v_quats = at::zeros_like(quats);
+    at::Tensor v_scales = at::zeros_like(scales);
+    at::Tensor v_colors = at::zeros_like(colors);
+    at::Tensor v_opacities = at::zeros_like(opacities);
+
+#define __LAUNCH_KERNEL__(N)                                                   \
+    case N:                                                                    \
+        launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel<N>(              \
+            means,                                                             \
+            quats,                                                             \
+            scales,                                                            \
+            colors,                                                            \
+            opacities,                                                         \
+            backgrounds,                                                       \
+            masks,                                                             \
+            camera_model_params,                                               \
+            rs_params,                                                         \
+            tile_size,                                                         \
+            tile_offsets,                                                      \
+            flatten_ids,                                                       \
+            render_alphas,                                                     \
+            last_ids,                                                          \
+            v_render_colors,                                                   \
+            v_render_alphas,                                                   \
+            v_means,                                                           \
+            v_quats,                                                           \
+            v_scales,                                                          \
+            v_colors,                                                          \
+            v_opacities                                                        \
+        );                                                                     \
+        break;
+
+    // TODO: an optimization can be done by passing the actual number of
+    // channels into the kernel functions and avoid necessary global memory
+    // writes. This requires moving the channel padding from python to C side.
+    switch (channels) {
+        __LAUNCH_KERNEL__(3)
+    default:
+        AT_ERROR("Unsupported number of channels: ", channels);
+    }
+#undef __LAUNCH_KERNEL__
+
+    return std::make_tuple(
+        v_means, v_quats, v_scales, v_colors, v_opacities
+    );
+}
+
 } // namespace gsplat
