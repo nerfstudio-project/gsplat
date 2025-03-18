@@ -1,3 +1,9 @@
+""" 
+Trigger compiling (for debugging):
+
+VERBOSE=1 FAST_COMPILE=1 TORCH_CUDA_ARCH_LIST="8.9" python -c "from gsplat.cuda._backend import _C"
+"""
+
 import glob
 import json
 import os
@@ -6,8 +12,8 @@ import time
 from subprocess import DEVNULL, call
 
 from rich.console import Console
+from torch.utils.cpp_extension import _find_cuda_home  # <--- For robust CUDA detection
 from torch.utils.cpp_extension import (
-    _find_cuda_home,          # <--- For robust CUDA detection
     _TORCH_PATH,
     _check_and_build_extension_h_precompiler_headers,
     _get_build_directory,
