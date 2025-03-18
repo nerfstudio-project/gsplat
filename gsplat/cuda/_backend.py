@@ -38,6 +38,7 @@ if not MAX_JOBS:
 # https://github.com/nerfstudio-project/gsplat/pull/583#issuecomment-2732597080
 USE_PRECOMPILED_HEADERS = version.parse(torch.__version__) >= version.parse("2.2")
 
+
 def load_extension(
     name,
     sources,
@@ -86,6 +87,7 @@ def load_extension(
         # The module should already be compiled if we get OSError
         return _import_module_from_library(name, build_directory, True)
 
+
 def cuda_toolkit_available():
     """
     Check more robustly if the CUDA toolkit is available.
@@ -106,6 +108,7 @@ def cuda_toolkit_available():
         except FileNotFoundError:
             return False
     return True
+
 
 def cuda_toolkit_version():
     """Get the CUDA toolkit version if we found CUDA home."""
