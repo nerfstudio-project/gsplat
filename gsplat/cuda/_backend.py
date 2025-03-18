@@ -11,6 +11,8 @@ import shutil
 import time
 from subprocess import DEVNULL, call
 
+import torch
+from packaging import version
 from rich.console import Console
 from torch.utils.cpp_extension import _find_cuda_home  # <--- For robust CUDA detection
 from torch.utils.cpp_extension import (
@@ -32,6 +34,9 @@ if not MAX_JOBS:
     need_to_unset_max_jobs = True
     os.environ["MAX_JOBS"] = "10"
 
+# torch has bugs on precompiled headers before 2.2, see:
+# https://github.com/nerfstudio-project/gsplat/pull/583#issuecomment-2732597080
+USE_PRECOMPILED_HEADERS = version.parse(torch.__version__) >= version.parse("2.2")
 
 def load_extension(
     name,
@@ -42,7 +47,6 @@ def load_extension(
     extra_include_paths=None,
     build_directory=None,
     verbose=False,
-    use_pch=True,
 ):
     """Load a JIT compiled extension."""
     # Make sure the build directory exists.
@@ -54,7 +58,7 @@ def load_extension(
     # https://github.com/pytorch/pytorch/blob/e3513fb2af7951ddf725d8c5b6f6d962a053c9da/torch/utils/cpp_extension.py#L1736
     # But it's ok so we catch this exception and ignore it.
     try:
-        if use_pch:
+        if USE_PRECOMPILED_HEADERS:
             # Using PreCompiled Header('torch/extension.h') to reduce compile time.
             _check_and_build_extension_h_precompiler_headers(
                 extra_cflags, extra_include_paths
@@ -152,9 +156,10 @@ except ImportError:
         except OSError:
             pass
 
-        if os.path.exists(os.path.join(build_dir, f"{name}.so")) or os.path.exists(
-            os.path.join(build_dir, f"{name}.lib")
-        ):
+        # if os.path.exists(os.path.join(build_dir, f"{name}.so")) or os.path.exists(
+        #     os.path.join(build_dir, f"{name}.lib")
+        # ):
+        if False:
             # If the build exists, we assume the extension has been built
             # and we can load it.
             _C = load_extension(
