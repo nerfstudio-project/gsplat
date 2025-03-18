@@ -154,7 +154,7 @@ projection_ewa_3dgs_fused_fwd(
         depths,
         conics,
         calc_compensations ? at::optional<at::Tensor>(compensations)
-                           : std::nullopt
+                           : c10::nullopt
     );
     return std::make_tuple(radii, means2d, depths, conics, compensations);
 }
@@ -316,18 +316,18 @@ projection_ewa_3dgs_packed_fwd(
             near_plane,
             far_plane,
             radius_clip,
-            std::nullopt, // block_accum
+            c10::nullopt, // block_accum
             camera_model,
             // outputs
             block_cnts,
-            std::nullopt, // indptr
-            std::nullopt, // camera_ids
-            std::nullopt, // gaussian_ids
-            std::nullopt, // radii
-            std::nullopt, // means2d
-            std::nullopt, // depths
-            std::nullopt, // conics
-            std::nullopt  // compensations
+            c10::nullopt, // indptr
+            c10::nullopt, // camera_ids
+            c10::nullopt, // gaussian_ids
+            c10::nullopt, // radii
+            c10::nullopt, // means2d
+            c10::nullopt, // depths
+            c10::nullopt, // conics
+            c10::nullopt  // compensations
         );
         block_accum = at::cumsum(block_cnts, 0, at::kInt);
         nnz = block_accum[-1].item<int32_t>();
@@ -367,7 +367,7 @@ projection_ewa_3dgs_packed_fwd(
             block_accum,
             camera_model,
             // outputs
-            std::nullopt, // block_cnts
+            c10::nullopt, // block_cnts
             indptr,
             camera_ids,
             gaussian_ids,
@@ -376,7 +376,7 @@ projection_ewa_3dgs_packed_fwd(
             depths,
             conics,
             calc_compensations ? at::optional<at::Tensor>(compensations)
-                               : std::nullopt
+                               : c10::nullopt
         );
     } else {
         indptr.fill_(0);
@@ -499,11 +499,11 @@ projection_ewa_3dgs_packed_bwd(
         sparse_grad,
         // outputs
         v_means,
-        v_covars.defined() ? at::optional<at::Tensor>(v_covars) : std::nullopt,
-        v_quats.defined() ? at::optional<at::Tensor>(v_quats) : std::nullopt,
-        v_scales.defined() ? at::optional<at::Tensor>(v_scales) : std::nullopt,
+        v_covars.defined() ? at::optional<at::Tensor>(v_covars) : c10::nullopt,
+        v_quats.defined() ? at::optional<at::Tensor>(v_quats) : c10::nullopt,
+        v_scales.defined() ? at::optional<at::Tensor>(v_scales) : c10::nullopt,
         v_viewmats.defined() ? at::optional<at::Tensor>(v_viewmats)
-                             : std::nullopt
+                             : c10::nullopt
     );
     return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats);
 }
@@ -686,17 +686,17 @@ projection_2dgs_packed_fwd(
             near_plane,
             far_plane,
             radius_clip,
-            std::nullopt, // block_accum
+            c10::nullopt, // block_accum
             // outputs
             block_cnts,
-            std::nullopt, // indptr
-            std::nullopt, // camera_ids
-            std::nullopt, // gaussian_ids
-            std::nullopt, // radii
-            std::nullopt, // means2d
-            std::nullopt, // depths
-            std::nullopt, // ray_transforms
-            std::nullopt  // normals
+            c10::nullopt, // indptr
+            c10::nullopt, // camera_ids
+            c10::nullopt, // gaussian_ids
+            c10::nullopt, // radii
+            c10::nullopt, // means2d
+            c10::nullopt, // depths
+            c10::nullopt, // ray_transforms
+            c10::nullopt  // normals
         );
         block_accum = at::cumsum(block_cnts, 0, at::kInt);
         nnz = block_accum[-1].item<int32_t>();
@@ -729,7 +729,7 @@ projection_2dgs_packed_fwd(
             radius_clip,
             block_accum,
             // outputs
-            std::nullopt, // block_cnts
+            c10::nullopt, // block_cnts
             indptr,
             camera_ids,
             gaussian_ids,
@@ -836,7 +836,7 @@ projection_2dgs_packed_bwd(
         v_quats,
         v_scales,
         v_viewmats.defined() ? at::optional<at::Tensor>(v_viewmats)
-                             : std::nullopt
+                             : c10::nullopt
     );
     return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
 }
