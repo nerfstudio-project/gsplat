@@ -159,10 +159,9 @@ except ImportError:
         except OSError:
             pass
 
-        # if os.path.exists(os.path.join(build_dir, f"{name}.so")) or os.path.exists(
-        #     os.path.join(build_dir, f"{name}.lib")
-        # ):
-        if False:
+        if os.path.exists(os.path.join(build_dir, f"{name}.so")) or os.path.exists(
+            os.path.join(build_dir, f"{name}.lib")
+        ):
             # If the build exists, we assume the extension has been built
             # and we can load it.
             _C = load_extension(
