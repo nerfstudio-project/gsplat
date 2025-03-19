@@ -15,7 +15,8 @@ import tqdm
 import tyro
 import viser
 import yaml
-from datasets.colmap import Dataset, Parser
+from datasets.synthetic import Dataset
+from datasets.synthetic import Parser
 from datasets.traj import (
     generate_interpolated_path,
     generate_ellipse_path_z,
@@ -38,10 +39,9 @@ from lib_bilagrid import (
 
 from gsplat.compression import PngCompression
 from gsplat.distributed import cli
-from gsplat.rendering import rasterization
+from gsplat import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 from gsplat.optimizers import SelectiveAdam
-from gsplat.utils import save_ply
 
 
 @dataclass
@@ -58,7 +58,7 @@ class Config:
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
     # Downsample factor for the dataset
-    data_factor: int = -1
+    data_factor: int = 1
     # Directory to save results
     result_dir: str = "results/garden"
     # Every N images there is a test image
@@ -86,15 +86,9 @@ class Config:
     eval_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
     # Steps to save the model
     save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
-    # Whether to save ply file (storage size can be large)
-    save_ply: bool = False
-    # Steps to save the model as ply
-    ply_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
-    # Whether to disable video generation during training and evaluation
-    disable_video: bool = False
 
     # Initialization strategy
-    init_type: str = "sfm"
+    init_type: str = "random"
     # Initial number of GSs. Ignored if using sfm
     init_num_pts: int = 100_000
     # Initial extent of GSs as a multiple of the camera extent. Ignored if using sfm
@@ -174,7 +168,6 @@ class Config:
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
         self.save_steps = [int(i * factor) for i in self.save_steps]
-        self.ply_steps = [int(i * factor) for i in self.ply_steps]
         self.max_steps = int(self.max_steps * factor)
         self.sh_degree_interval = int(self.sh_degree_interval * factor)
 
@@ -302,11 +295,12 @@ class Runner:
         os.makedirs(self.stats_dir, exist_ok=True)
         self.render_dir = f"{cfg.result_dir}/renders"
         os.makedirs(self.render_dir, exist_ok=True)
-        self.ply_dir = f"{cfg.result_dir}/ply"
-        os.makedirs(self.ply_dir, exist_ok=True)
 
         # Tensorboard
         self.writer = SummaryWriter(log_dir=f"{cfg.result_dir}/tb")
+
+        # use white background
+        self.use_white_background = True
 
         # Load data: Training data should contain initial points and colors.
         self.parser = Parser(
@@ -320,6 +314,7 @@ class Runner:
             split="train",
             patch_size=cfg.patch_size,
             load_depths=cfg.depth_loss,
+            white_background=self.use_white_background,
         )
         self.valset = Dataset(self.parser, split="val")
         self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
@@ -478,6 +473,13 @@ class Runner:
             colors = torch.sigmoid(colors)
         else:
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
+        if self.use_white_background:
+            background = torch.ones(1, colors.shape[-1], device=self.device)
+            # background = torch.ones(
+            #     camtoworlds.shape[0], colors.shape[-1], device="cuda"
+            # )
+        else:
+            background = None
 
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
         render_colors, render_alphas, info = rasterization(
@@ -490,6 +492,7 @@ class Runner:
             Ks=Ks,  # [C, 3, 3]
             width=width,
             height=height,
+            backgrounds=background,
             packed=self.cfg.packed,
             absgrad=(
                 self.cfg.strategy.absgrad
@@ -504,6 +507,7 @@ class Runner:
         )
         if masks is not None:
             render_colors[~masks] = 0
+
         return render_colors, render_alphas, info
 
     def train(self):
@@ -745,24 +749,6 @@ class Runner:
                 torch.save(
                     data, f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt"
                 )
-            if (
-                step in [i - 1 for i in cfg.ply_steps]
-                or step == max_steps - 1
-                and cfg.save_ply
-            ):
-                rgb = None
-                if self.cfg.app_opt:
-                    # eval at origin to bake the appeareance into the colors
-                    rgb = self.app_module(
-                        features=self.splats["features"],
-                        embed_ids=None,
-                        dirs=torch.zeros_like(self.splats["means"][None, :, :]),
-                        sh_degree=sh_degree_to_use,
-                    )
-                    rgb = rgb + self.splats["colors"]
-                    rgb = torch.sigmoid(rgb).squeeze(0)
-
-                save_ply(self.splats, f"{self.ply_dir}/point_cloud_{step}.ply", rgb)
 
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:
@@ -934,8 +920,6 @@ class Runner:
     @torch.no_grad()
     def render_traj(self, step: int):
         """Entry for trajectory rendering."""
-        if self.cfg.disable_video:
-            return
         print("Running trajectory rendering...")
         cfg = self.cfg
         device = self.device
@@ -1033,7 +1017,7 @@ class Runner:
         c2w = torch.from_numpy(c2w).float().to(self.device)
         K = torch.from_numpy(K).float().to(self.device)
 
-        render_colors, _, _ = self.rasterize_splats(
+        render_colors, render_alphas, _ = self.rasterize_splats(
             camtoworlds=c2w[None],
             Ks=K[None],
             width=W,
