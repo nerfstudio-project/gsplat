@@ -13,6 +13,10 @@ from gsplat import (
 )
 from gsplat._helper import load_test_data
 from gsplat.cuda._backend import _C
+from gsplat.cuda._wrapper import (
+    fully_fused_projection_with_ut,
+    rasterize_to_pixels_eval3d,
+)
 from gsplat.utils import so3_matrix_to_quat
 
 torch.manual_seed(42)
@@ -112,36 +116,27 @@ def rasterizer_and_save(radii, means2d, depths, conics, file_name="render.png"):
     #     flatten_ids,
     # )
 
-    render_colors, render_alphas, _ = _C.rasterize_to_pixels_from_world_3dgs_fwd(
-        means.contiguous(),
-        quats.contiguous(),
-        scales.contiguous(),
-        colors.contiguous(),
-        opacities.repeat(C, 1).contiguous(),
-        None,
-        None,
-        params,
-        rs,
+    render_colors, render_alphas = rasterize_to_pixels_eval3d(
+        means,
+        quats,
+        scales,
+        colors,
+        opacities.repeat(C, 1),
+        viewmats,
+        Ks,
+        width,
+        height,
+        "pinhole",
         tile_size,
-        isect_offsets.contiguous(),
-        flatten_ids.contiguous(),
+        isect_offsets,
+        flatten_ids,
     )
 
     imageio.imsave(file_name, (render_colors[0].cpu().numpy() * 255).astype(np.uint8))
 
 
-radii, means2d, depths, conics, _ = _C.projection_ut_3dgs_fused(
-    means.contiguous(),
-    quats.contiguous(),
-    scales.contiguous(),
-    0.3,  # eps2d,
-    0.01,  # near
-    1e10,  # far
-    0.0,  # radius_clip
-    True,  # calc_compensations
-    params,
-    rs,
-    _C.UnscentedTransformParameters(),
+radii, means2d, depths, conics, _ = fully_fused_projection_with_ut(
+    means, quats, scales, viewmats, Ks, width, height, 0.3, 0.01, 1e10, 0.0
 )
 rasterizer_and_save(radii, means2d, depths, conics, "results/ut_eval3d.png")
 

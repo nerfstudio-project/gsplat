@@ -2,6 +2,7 @@ import warnings
 from typing import Any, Callable, Optional, Tuple
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 from typing_extensions import Literal
 
@@ -573,6 +574,148 @@ def rasterize_to_pixels(
     return render_colors, render_alphas
 
 
+def rasterize_to_pixels_eval3d(
+    means: Tensor, # [N, 3]
+    quats: Tensor, # [N, 4]
+    scales: Tensor, # [N, 3]
+    colors: Tensor,  # [C, N, channels] or [nnz, channels]
+    opacities: Tensor,  # [C, N] or [nnz]
+    viewmats: Tensor,  # [C, 4, 4]
+    Ks: Tensor,  # [C, 3, 3]
+    image_width: int,
+    image_height: int,
+    camera_model: Literal["pinhole", "ortho", "fisheye"],
+    tile_size: int,
+    isect_offsets: Tensor,  # [C, tile_height, tile_width]
+    flatten_ids: Tensor,  # [n_isects]
+    backgrounds: Optional[Tensor] = None,  # [C, channels]
+    masks: Optional[Tensor] = None,  # [C, tile_height, tile_width]
+    packed: bool = False,
+) -> Tuple[Tensor, Tensor]:
+    """Rasterizes Gaussians to pixels.
+
+    Args:
+        TODO
+
+    Returns:
+        A tuple:
+
+        - **Rendered colors**. [C, image_height, image_width, channels]
+        - **Rendered alphas**. [C, image_height, image_width, 1]
+    """
+    C = isect_offsets.size(0)
+    device = means.device
+    assert packed is False, "packed is not supported in eval3d"
+    assert C == 1, "C should be 1 in eval3d"
+    assert backgrounds is None
+    assert masks is None
+
+    # We need quats are already normalized
+    quats = F.normalize(quats, p=2, dim=-1)
+
+    N = means.size(0)
+    assert means.shape == (N, 3), means.shape
+    assert quats.shape == (N, 4), quats.shape
+    assert scales.shape == (N, 3), scales.shape
+    assert viewmats.shape == (C, 4, 4), viewmats.shape
+    assert Ks.shape == (C, 3, 3), Ks.shape
+
+    if False: # packed
+        nnz = means2d.size(0)
+        assert means2d.shape == (nnz, 2), means2d.shape
+        assert conics.shape == (nnz, 3), conics.shape
+        assert colors.shape[0] == nnz, colors.shape
+        assert opacities.shape == (nnz,), opacities.shape
+    else:
+        assert colors.shape[:2] == (C, N), colors.shape
+        assert opacities.shape == (C, N), opacities.shape
+
+    if backgrounds is not None:
+        assert backgrounds.shape == (C, colors.shape[-1]), backgrounds.shape
+        backgrounds = backgrounds.contiguous()
+    if masks is not None:
+        assert masks.shape == isect_offsets.shape, masks.shape
+        masks = masks.contiguous()
+
+    # Pad the channels to the nearest supported number if necessary
+    channels = colors.shape[-1]
+    assert channels == 3, "only support 3 channels in eval3d"
+    if channels > 513 or channels == 0:
+        # TODO: maybe worth to support zero channels?
+        raise ValueError(f"Unsupported number of color channels: {channels}")
+    if channels not in (
+        1,
+        2,
+        3,
+        4,
+        5,
+        8,
+        9,
+        16,
+        17,
+        32,
+        33,
+        64,
+        65,
+        128,
+        129,
+        256,
+        257,
+        512,
+        513,
+    ):
+        padded_channels = (1 << (channels - 1).bit_length()) - channels
+        colors = torch.cat(
+            [
+                colors,
+                torch.zeros(*colors.shape[:-1], padded_channels, device=device),
+            ],
+            dim=-1,
+        )
+        if backgrounds is not None:
+            backgrounds = torch.cat(
+                [
+                    backgrounds,
+                    torch.zeros(
+                        *backgrounds.shape[:-1], padded_channels, device=device
+                    ),
+                ],
+                dim=-1,
+            )
+    else:
+        padded_channels = 0
+
+    tile_height, tile_width = isect_offsets.shape[1:3]
+    assert (
+        tile_height * tile_size >= image_height
+    ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
+    assert (
+        tile_width * tile_size >= image_width
+    ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
+
+    render_colors, render_alphas = _RasterizeToPixelsEval3D.apply(
+        means.contiguous(),
+        quats.contiguous(),
+        scales.contiguous(),
+        colors.contiguous(),
+        opacities.contiguous(),
+        backgrounds,
+        masks,
+        viewmats.contiguous(),
+        Ks.contiguous(),
+        image_width,
+        image_height,
+        camera_model,
+        tile_size,
+        isect_offsets.contiguous(),
+        flatten_ids.contiguous(),
+    )
+
+    if padded_channels > 0:
+        render_colors = render_colors[..., :-padded_channels]
+    return render_colors, render_alphas
+
+
 @torch.no_grad()
 def rasterize_to_indices_in_range(
     range_start: int,
@@ -864,6 +1007,90 @@ class _FullyFusedProjection(torch.autograd.Function):
             None,
         )
 
+def to_params(
+    viewmats: Tensor,  # [C, 4, 4]
+    Ks: Tensor,  # [C, 3, 3]
+    width: int,
+    height: int,
+    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+):
+    import numpy as np
+
+    from gsplat.utils import so3_matrix_to_quat
+
+    C = viewmats.size(0)
+    assert C == 1, "Only support single camera for now"
+    
+    # check the R part in the viewmats are orthonormal
+    R = viewmats[:, :3, :3]
+    det = torch.det(R)
+    assert torch.allclose(det, torch.ones_like(det)), "The R part in the viewmats should be orthonormal"
+
+    if camera_model == "pinhole":
+        cm_params = _make_lazy_cuda_obj("OpenCVPinholeCameraModelParameters")()
+        cm_params.resolution = [width, height]
+        cm_params.shutter_type = _make_lazy_cuda_obj("ShutterType.GLOBAL")
+        cm_params.principal_point = Ks[0, :2, 2].tolist()
+        cm_params.focal_length = Ks[0, :2, :2].diag().tolist()
+        cm_params.radial_coeffs = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        cm_params.tangential_coeffs = [0.0, 0.0]
+        cm_params.thin_prism_coeffs = [0.0, 0.0, 0.0, 0.0]
+
+    elif camera_model == "fisheye":
+        cm_params = _make_lazy_cuda_obj("OpenCVFisheyeCameraModelParameters")()
+    else:
+        raise NotImplementedError(f"Camera model {camera_model} is not supported")
+
+    T_world_sensor_R = viewmats[0, :3, :3].cpu()
+    T_world_sensor_quat = so3_matrix_to_quat(T_world_sensor_R).numpy()[0]
+    T_world_sensor_t = viewmats[0, :3, 3].cpu().numpy()
+    T_world_sensor_tquat = np.hstack([T_world_sensor_t, T_world_sensor_quat])
+
+    rs_params = _make_lazy_cuda_obj("RollingShutterParameters")()
+    rs_params.T_world_sensors = np.hstack(
+        [T_world_sensor_tquat, T_world_sensor_tquat]
+    ).tolist()  # represents two tquat [t,q] poses at start / end timestamps
+    rs_params.timestamps_us = [0, 1]  # arbitrary timestamps
+    return cm_params, rs_params
+
+
+def fully_fused_projection_with_ut(
+    means: Tensor,  # [N, 3]
+    quats: Tensor,  # [N, 4]
+    scales: Tensor,  # [N, 3]
+    viewmats: Tensor,  # [C, 4, 4]
+    Ks: Tensor,  # [C, 3, 3]
+    width: int,
+    height: int,
+    eps2d: float = 0.3,
+    near_plane: float = 0.01,
+    far_plane: float = 1e10,
+    radius_clip: float = 0.0,
+    calc_compensations: bool = False,
+    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    ut_params = _make_lazy_cuda_obj("UnscentedTransformParameters")()
+    cm_params, rs_params = to_params(viewmats, Ks, width, height, camera_model)
+    
+    radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
+        "projection_ut_3dgs_fused"
+    )(
+        means,
+        quats,
+        scales,
+        eps2d,
+        near_plane,
+        far_plane,
+        radius_clip,
+        calc_compensations,
+        cm_params,
+        rs_params,
+        ut_params,
+    )
+    if not calc_compensations:
+        compensations = None
+    return radii, means2d, depths, conics, compensations
+
 
 class _RasterizeToPixels(torch.autograd.Function):
     """Rasterize gaussians"""
@@ -994,6 +1221,137 @@ class _RasterizeToPixels(torch.autograd.Function):
             None,
         )
 
+
+class _RasterizeToPixelsEval3D(torch.autograd.Function):
+    """Rasterize gaussians"""
+
+    @staticmethod
+    def forward(
+        ctx,
+        means: Tensor,  # [N, 3]
+        quats: Tensor,  # [N, 4]
+        scales: Tensor,  # [N, 3]
+        colors: Tensor,  # [C, N, D]
+        opacities: Tensor,  # [C, N]
+        backgrounds: Tensor,  # [C, D], Optional
+        masks: Tensor,  # [C, tile_height, tile_width], Optional
+        viewmats: Tensor,  # [C, 4, 4]
+        Ks: Tensor,  # [C, 3, 3]
+        width: int,
+        height: int,
+        camera_model: Literal["pinhole", "ortho", "fisheye"],
+        tile_size: int,
+        isect_offsets: Tensor,  # [C, tile_height, tile_width]
+        flatten_ids: Tensor,  # [n_isects]
+    ) -> Tuple[Tensor, Tensor]:
+        cm_params, rs_params = to_params(viewmats, Ks, width, height, camera_model)
+
+        render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
+            "rasterize_to_pixels_from_world_3dgs_fwd"
+        )(
+            means,
+            quats,
+            scales,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            cm_params,
+            rs_params,
+            tile_size,
+            isect_offsets,
+            flatten_ids,
+        )
+
+        ctx.save_for_backward(
+            means,
+            quats,
+            scales,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            isect_offsets,
+            flatten_ids,
+            render_alphas,
+            last_ids,
+        )
+        ctx.cm_params = cm_params
+        ctx.rs_params = rs_params
+        ctx.tile_size = tile_size
+
+        return render_colors, render_alphas
+
+    @staticmethod
+    def backward(
+        ctx,
+        v_render_colors: Tensor,  # [C, H, W, 3]
+        v_render_alphas: Tensor,  # [C, H, W, 1]
+    ):
+        (
+            means,
+            quats,
+            scales,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            isect_offsets,
+            flatten_ids,
+            render_alphas,
+            last_ids,
+        ) = ctx.saved_tensors
+        cm_params = ctx.cm_params
+        rs_params = ctx.rs_params
+        tile_size = ctx.tile_size
+
+        (
+            v_means,
+            v_quats,
+            v_scales,
+            v_colors,
+            v_opacities,
+        ) = _make_lazy_cuda_func("rasterize_to_pixels_from_world_3dgs_bwd")(
+            means,
+            quats,
+            scales,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            cm_params,
+            rs_params,
+            tile_size,
+            isect_offsets,
+            flatten_ids,
+            render_alphas,
+            last_ids,
+            v_render_colors.contiguous(),
+            v_render_alphas.contiguous(),
+        )
+
+        if ctx.needs_input_grad[5]: # backgrounds
+            raise NotImplementedError
+        if ctx.needs_input_grad[7]: # viewmats
+            raise NotImplementedError
+
+        return (
+            v_means,
+            v_quats,
+            v_scales,
+            v_colors,
+            v_opacities,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
 
 class _FullyFusedProjectionPacked(torch.autograd.Function):
     """Projects Gaussians to 2D. Return packed tensors."""

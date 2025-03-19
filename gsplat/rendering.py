@@ -10,10 +10,12 @@ from typing_extensions import Literal
 from .cuda._wrapper import (
     fully_fused_projection,
     fully_fused_projection_2dgs,
+    fully_fused_projection_with_ut,
     isect_offset_encode,
     isect_tiles,
     rasterize_to_pixels,
     rasterize_to_pixels_2dgs,
+    rasterize_to_pixels_eval3d,
     spherical_harmonics,
 )
 from .distributed import (
@@ -51,6 +53,8 @@ def rasterization(
     distributed: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
     covars: Optional[Tensor] = None,
+    with_ut: bool = False,
+    with_eval3d: bool = False,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -293,25 +297,47 @@ def rasterization(
         # Silently change C from local #Cameras to global #Cameras.
         C = len(viewmats)
 
-    # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
-    proj_results = fully_fused_projection(
-        means,
-        covars,
-        quats,
-        scales,
-        viewmats,
-        Ks,
-        width,
-        height,
-        eps2d=eps2d,
-        packed=packed,
-        near_plane=near_plane,
-        far_plane=far_plane,
-        radius_clip=radius_clip,
-        sparse_grad=sparse_grad,
-        calc_compensations=(rasterize_mode == "antialiased"),
-        camera_model=camera_model,
-    )
+    if with_ut:
+        assert covars is None
+        assert packed is False
+        assert sparse_grad is False
+        assert rasterize_mode == "classic"
+        proj_results = fully_fused_projection_with_ut(
+            means,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            width,
+            height,
+            eps2d=eps2d,
+            near_plane=near_plane,
+            far_plane=far_plane,
+            radius_clip=radius_clip,
+            calc_compensations=(rasterize_mode == "antialiased"),
+            camera_model=camera_model,
+        )
+
+    else:
+        # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
+        proj_results = fully_fused_projection(
+            means,
+            covars,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            width,
+            height,
+            eps2d=eps2d,
+            packed=packed,
+            near_plane=near_plane,
+            far_plane=far_plane,
+            radius_clip=radius_clip,
+            sparse_grad=sparse_grad,
+            calc_compensations=(rasterize_mode == "antialiased"),
+            camera_model=camera_model,
+        )
 
     if packed:
         # The results are packed into shape [nnz, ...]. All elements are valid.
@@ -536,39 +562,83 @@ def rasterization(
                 if backgrounds is not None
                 else None
             )
-            render_colors_, render_alphas_ = rasterize_to_pixels(
+            if with_eval3d:
+                assert packed is False
+                assert backgrounds_chunk is None
+                assert render_mode == "RGB"
+                render_colors_, render_alphas_ = rasterize_to_pixels_eval3d(
+                    means,
+                    quats,
+                    scales,
+                    colors_chunk,
+                    opacities,
+                    viewmats,
+                    Ks,
+                    width,
+                    height,
+                    camera_model,
+                    tile_size,
+                    isect_offsets,
+                    flatten_ids,
+                    backgrounds=backgrounds_chunk,
+                    packed=packed,
+                )            
+            else:
+                render_colors_, render_alphas_ = rasterize_to_pixels(
+                    means2d,
+                    conics,
+                    colors_chunk,
+                    opacities,
+                    width,
+                    height,
+                    tile_size,
+                    isect_offsets,
+                    flatten_ids,
+                    backgrounds=backgrounds_chunk,
+                    packed=packed,
+                    absgrad=absgrad,
+                )
+            render_colors.append(render_colors_)
+            render_alphas.append(render_alphas_)
+        render_colors = torch.cat(render_colors, dim=-1)
+        render_alphas = render_alphas[0]  # discard the rest
+    else:
+        if with_eval3d:
+            assert packed is False
+            assert backgrounds is None
+            assert render_mode == "RGB"
+            render_colors, render_alphas = rasterize_to_pixels_eval3d(
+                means,
+                quats,
+                scales,
+                colors,
+                opacities,
+                viewmats,
+                Ks,
+                width,
+                height,
+                camera_model,
+                tile_size,
+                isect_offsets,
+                flatten_ids,
+                backgrounds=backgrounds,
+                packed=packed,
+            )            
+        else:
+            render_colors, render_alphas = rasterize_to_pixels(
                 means2d,
                 conics,
-                colors_chunk,
+                colors,
                 opacities,
                 width,
                 height,
                 tile_size,
                 isect_offsets,
                 flatten_ids,
-                backgrounds=backgrounds_chunk,
+                backgrounds=backgrounds,
                 packed=packed,
                 absgrad=absgrad,
             )
-            render_colors.append(render_colors_)
-            render_alphas.append(render_alphas_)
-        render_colors = torch.cat(render_colors, dim=-1)
-        render_alphas = render_alphas[0]  # discard the rest
-    else:
-        render_colors, render_alphas = rasterize_to_pixels(
-            means2d,
-            conics,
-            colors,
-            opacities,
-            width,
-            height,
-            tile_size,
-            isect_offsets,
-            flatten_ids,
-            backgrounds=backgrounds,
-            packed=packed,
-            absgrad=absgrad,
-        )
     if render_mode in ["ED", "RGB+ED"]:
         # normalize the accumulated depth to get the expected depth
         render_colors = torch.cat(

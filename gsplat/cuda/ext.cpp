@@ -77,7 +77,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .value("ROLLING_LEFT_TO_RIGHT", ShutterType::ROLLING_LEFT_TO_RIGHT)
         .value("ROLLING_BOTTOM_TO_TOP", ShutterType::ROLLING_BOTTOM_TO_TOP)
         .value("ROLLING_RIGHT_TO_LEFT", ShutterType::ROLLING_RIGHT_TO_LEFT)
-        .value("GLOBAL", ShutterType::GLOBAL);
+        .value("GLOBAL", ShutterType::GLOBAL)
+        .export_values();
 
     py::class_<CameraModelParameters>(m, "CameraModelParameters")
         .def(py::init<>())

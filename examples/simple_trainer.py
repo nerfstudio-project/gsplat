@@ -2,8 +2,8 @@ import json
 import math
 import os
 import time
-from dataclasses import dataclass, field
 from collections import defaultdict
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Union
 
 import imageio
@@ -17,30 +17,25 @@ import viser
 import yaml
 from datasets.colmap import Dataset, Parser
 from datasets.traj import (
-    generate_interpolated_path,
     generate_ellipse_path_z,
+    generate_interpolated_path,
     generate_spiral_path,
 )
+from fused_ssim import fused_ssim
+from lib_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
-from fused_ssim import fused_ssim
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from typing_extensions import Literal, assert_never
 from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
-from lib_bilagrid import (
-    BilateralGrid,
-    slice,
-    color_correct,
-    total_variation_loss,
-)
 
 from gsplat.compression import PngCompression
 from gsplat.distributed import cli
+from gsplat.optimizers import SelectiveAdam
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
-from gsplat.optimizers import SelectiveAdam
 from gsplat.utils import save_ply
 
 
@@ -170,6 +165,10 @@ class Config:
     tb_save_image: bool = False
 
     lpips_net: Literal["vgg", "alex"] = "alex"
+
+    # 3DGUT (uncented transform + eval 3D)
+    with_ut: bool = False
+    with_eval3d: bool = False
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -500,6 +499,8 @@ class Runner:
             rasterize_mode=rasterize_mode,
             distributed=self.world_size > 1,
             camera_model=self.cfg.camera_model,
+            with_ut=self.cfg.with_ut,
+            with_eval3d=self.cfg.with_eval3d,
             **kwargs,
         )
         if masks is not None:

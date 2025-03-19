@@ -1,5 +1,5 @@
 SCENE_DIR="data/360_v2"
-RESULT_DIR="results/benchmark_mcmc_1M"
+RESULT_DIR="results/benchmark_mcmc_1M_eval3d"
 SCENE_LIST="garden bonsai" # treehill flowers
 RENDER_TRAJ_PATH="ellipse"
 
@@ -16,7 +16,8 @@ do
     echo "Running $SCENE"
 
     # train without eval
-    CUDA_VISIBLE_DEVICES=5 python simple_trainer.py mcmc --eval_steps -1 --disable_viewer --data_factor $DATA_FACTOR \
+    CUDA_VISIBLE_DEVICES=6 python simple_trainer.py mcmc --eval_steps -1 --disable_viewer --data_factor $DATA_FACTOR \
+        --with_eval3d \
         --strategy.cap-max $CAP_MAX \
         --render_traj_path $RENDER_TRAJ_PATH \
         --data_dir $SCENE_DIR/$SCENE/ \
@@ -25,7 +26,8 @@ do
     # run eval and render
     for CKPT in $RESULT_DIR/$SCENE/ckpts/*;
     do
-        CUDA_VISIBLE_DEVICES=5 python simple_trainer.py mcmc --disable_viewer --data_factor $DATA_FACTOR \
+        CUDA_VISIBLE_DEVICES=6 python simple_trainer.py mcmc --disable_viewer --data_factor $DATA_FACTOR \
+            --with_eval3d \
             --strategy.cap-max $CAP_MAX \
             --render_traj_path $RENDER_TRAJ_PATH \
             --data_dir $SCENE_DIR/$SCENE/ \
