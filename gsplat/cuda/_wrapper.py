@@ -591,6 +591,8 @@ def rasterize_to_pixels_eval3d(
     backgrounds: Optional[Tensor] = None,  # [C, channels]
     masks: Optional[Tensor] = None,  # [C, tile_height, tile_width]
     packed: bool = False,
+    cm_params=None,
+    rs_params=None,
 ) -> Tuple[Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
@@ -709,6 +711,8 @@ def rasterize_to_pixels_eval3d(
         tile_size,
         isect_offsets.contiguous(),
         flatten_ids.contiguous(),
+        cm_params,
+        rs_params,
     )
 
     if padded_channels > 0:
@@ -1068,9 +1072,16 @@ def fully_fused_projection_with_ut(
     radius_clip: float = 0.0,
     calc_compensations: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+    cm_params=None,
+    rs_params=None,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     ut_params = _make_lazy_cuda_obj("UnscentedTransformParameters")()
-    cm_params, rs_params = to_params(viewmats, Ks, width, height, camera_model)
+    if cm_params is None or rs_params is None:
+        print("On the fly computing cm_params and rs_params")
+        cm_params, rs_params = to_params(viewmats, Ks, width, height, camera_model)
+    else:
+        cm_params = cm_params.to_cpp()
+        rs_params = rs_params.to_cpp()
     
     radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
         "projection_ut_3dgs_fused"
@@ -1243,8 +1254,15 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         tile_size: int,
         isect_offsets: Tensor,  # [C, tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
+        cm_params=None,
+        rs_params=None,
     ) -> Tuple[Tensor, Tensor]:
-        cm_params, rs_params = to_params(viewmats, Ks, width, height, camera_model)
+        if cm_params is None or rs_params is None:
+            print("On the fly computing cm_params and rs_params")
+            cm_params, rs_params = to_params(viewmats, Ks, width, height, camera_model)
+        else:
+            cm_params = cm_params.to_cpp()
+            rs_params = rs_params.to_cpp()
 
         render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
             "rasterize_to_pixels_from_world_3dgs_fwd"
@@ -1341,6 +1359,8 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             v_scales,
             v_colors,
             v_opacities,
+            None,
+            None,
             None,
             None,
             None,

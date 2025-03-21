@@ -456,6 +456,8 @@ class Runner:
         width: int,
         height: int,
         masks: Optional[Tensor] = None,
+        cm_params = None,
+        rs_params = None,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         means = self.splats["means"]  # [N, 3]
@@ -501,6 +503,8 @@ class Runner:
             camera_model=self.cfg.camera_model,
             with_ut=self.cfg.with_ut,
             with_eval3d=self.cfg.with_eval3d,
+            cm_params=cm_params,
+            rs_params=rs_params,
             **kwargs,
         )
         if masks is not None:
@@ -558,6 +562,7 @@ class Runner:
             num_workers=4,
             persistent_workers=True,
             pin_memory=True,
+            collate_fn=self.trainset.collate_fn,
         )
         trainloader_iter = iter(trainloader)
 
@@ -612,6 +617,8 @@ class Runner:
                 image_ids=image_ids,
                 render_mode="RGB+ED" if cfg.depth_loss else "RGB",
                 masks=masks,
+                cm_params=data["cm_params"][0],
+                rs_params=data["rs_params"][0],
             )
             if renders.shape[-1] == 4:
                 colors, depths = renders[..., 0:3], renders[..., 3:4]
@@ -883,6 +890,8 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 masks=masks,
+                cm_params=data["cm_params"][0],
+                rs_params=data["rs_params"][0],
             )  # [1, H, W, 3]
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic

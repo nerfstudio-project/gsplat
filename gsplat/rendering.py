@@ -55,6 +55,8 @@ def rasterization(
     covars: Optional[Tensor] = None,
     with_ut: bool = False,
     with_eval3d: bool = False,
+    cm_params=None,
+    rs_params=None,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -316,6 +318,8 @@ def rasterization(
             radius_clip=radius_clip,
             calc_compensations=(rasterize_mode == "antialiased"),
             camera_model=camera_model,
+            cm_params=cm_params,
+            rs_params=rs_params,
         )
 
     else:
@@ -582,6 +586,8 @@ def rasterization(
                     flatten_ids,
                     backgrounds=backgrounds_chunk,
                     packed=packed,
+                    cm_params=cm_params,
+                    rs_params=rs_params,
                 )            
             else:
                 render_colors_, render_alphas_ = rasterize_to_pixels(
@@ -623,6 +629,8 @@ def rasterization(
                 flatten_ids,
                 backgrounds=backgrounds,
                 packed=packed,
+                cm_params=cm_params,
+                rs_params=rs_params,
             )            
         else:
             render_colors, render_alphas = rasterize_to_pixels(

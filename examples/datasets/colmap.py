@@ -1,15 +1,17 @@
-import os
 import json
-from tqdm import tqdm
+import os
 from typing import Any, Dict, List, Optional
-from typing_extensions import assert_never
 
 import cv2
-from PIL import Image
 import imageio.v2 as imageio
 import numpy as np
 import torch
+from PIL import Image
 from pycolmap import SceneManager
+from tqdm import tqdm
+from typing_extensions import assert_never
+
+from gsplat.camera import to_params
 
 from .normalize import (
     align_principle_axes,
@@ -354,6 +356,16 @@ class Dataset:
     def __len__(self):
         return len(self.indices)
 
+    def collate_fn(self, batch):
+        keys = list(batch[0].keys())
+        collated = {}
+        for k in keys:
+            if isinstance(batch[0][k], torch.Tensor):
+                collated[k] = torch.stack([b[k] for b in batch], dim=0)
+            else:
+                collated[k] = [b[k] for b in batch]
+        return collated
+
     def __getitem__(self, item: int) -> Dict[str, Any]:
         index = self.indices[item]
         image = imageio.imread(self.parser.image_paths[index])[..., :3]
@@ -386,10 +398,20 @@ class Dataset:
             "K": torch.from_numpy(K).float(),
             "camtoworld": torch.from_numpy(camtoworlds).float(),
             "image": torch.from_numpy(image).float(),
-            "image_id": item,  # the index of the image in the dataset
+            "image_id": torch.tensor(item, dtype=torch.long),  # the index of the image in the dataset
         }
         if mask is not None:
             data["mask"] = torch.from_numpy(mask).bool()
+
+        cm_params, rs_params = to_params(
+            torch.linalg.inv(data["camtoworld"])[None],
+            data["K"][None],
+            data["image"].shape[1], # width
+            data["image"].shape[0], # height
+            camera_model="pinhole"
+        )
+        data["cm_params"] = cm_params
+        data["rs_params"] = rs_params
 
         if self.load_depths:
             # projected points to image plane to get depths
