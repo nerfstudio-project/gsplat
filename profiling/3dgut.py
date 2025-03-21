@@ -161,7 +161,7 @@ def worker(local_rank: int, world_rank: int, world_size: int, args):
     collection = []
     batch_size = 1
     channels = 3
-    scene_grid = 5
+    scene_grid = 11
     packed = False
     sparse_grad = False
 

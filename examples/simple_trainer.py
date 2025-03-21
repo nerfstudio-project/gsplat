@@ -868,7 +868,7 @@ class Runner:
         world_size = self.world_size
 
         valloader = torch.utils.data.DataLoader(
-            self.valset, batch_size=1, shuffle=False, num_workers=1
+            self.valset, batch_size=1, shuffle=False, num_workers=1, collate_fn=self.valset.collate_fn
         )
         ellipse_time = 0
         metrics = defaultdict(list)
@@ -1072,7 +1072,7 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
             runner.splats[k].data = torch.cat([ckpt["splats"][k] for ckpt in ckpts])
         step = ckpts[0]["step"]
         runner.eval(step=step)
-        runner.render_traj(step=step)
+        # runner.render_traj(step=step)
         if cfg.compression is not None:
             runner.run_compression(step=step)
     else:
