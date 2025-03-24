@@ -2,8 +2,8 @@ import json
 import math
 import os
 import time
-from dataclasses import dataclass, field
 from collections import defaultdict
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Union
 
 import imageio
@@ -17,30 +17,25 @@ import viser
 import yaml
 from datasets.colmap import Dataset, Parser
 from datasets.traj import (
-    generate_interpolated_path,
     generate_ellipse_path_z,
+    generate_interpolated_path,
     generate_spiral_path,
 )
+from fused_ssim import fused_ssim
+from lib_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
-from fused_ssim import fused_ssim
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from typing_extensions import Literal, assert_never
 from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
-from lib_bilagrid import (
-    BilateralGrid,
-    slice,
-    color_correct,
-    total_variation_loss,
-)
 
 from gsplat.compression import PngCompression
 from gsplat.distributed import cli
+from gsplat.optimizers import SelectiveAdam
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
-from gsplat.optimizers import SelectiveAdam
 from gsplat.utils import save_ply
 
 
@@ -746,10 +741,8 @@ class Runner:
                     data, f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt"
                 )
             if (
-                step in [i - 1 for i in cfg.ply_steps]
-                or step == max_steps - 1
-                and cfg.save_ply
-            ):
+                step in [i - 1 for i in cfg.ply_steps] or step == max_steps - 1
+            ) and cfg.save_ply:
                 rgb = None
                 if self.cfg.app_opt:
                     # eval at origin to bake the appeareance into the colors
