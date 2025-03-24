@@ -33,7 +33,7 @@ __global__ void intersect_tile_kernel(
     const int64_t *__restrict__ gaussian_ids, // [nnz] optional
     // data
     const scalar_t *__restrict__ means2d,            // [C, N, 2] or [nnz, 2]
-    const int32_t *__restrict__ radii,               // [C, N] or [nnz]
+    const int32_t *__restrict__ radii,               // [C, N, 2] or [nnz, 2]
     const scalar_t *__restrict__ depths,             // [C, N] or [nnz]
     const int64_t *__restrict__ cum_tiles_per_gauss, // [C, N] or [nnz]
     const uint32_t tile_size,
@@ -51,8 +51,9 @@ __global__ void intersect_tile_kernel(
         return;
     }
 
-    const float radius = radii[idx];
-    if (radius <= 0) {
+    const float radius_x = radii[idx * 2];
+    const float radius_y = radii[idx * 2 + 1];
+    if (radius_x <= 0 || radius_y <= 0) {
         if (first_pass) {
             tiles_per_gauss[idx] = 0;
         }
@@ -61,17 +62,18 @@ __global__ void intersect_tile_kernel(
 
     vec2 mean2d = glm::make_vec2(means2d + 2 * idx);
 
-    float tile_radius = radius / static_cast<float>(tile_size);
+    float tile_radius_x = radius_x / static_cast<float>(tile_size);
+    float tile_radius_y = radius_y / static_cast<float>(tile_size);
     float tile_x = mean2d.x / static_cast<float>(tile_size);
     float tile_y = mean2d.y / static_cast<float>(tile_size);
 
     // tile_min is inclusive, tile_max is exclusive
     uint2 tile_min, tile_max;
-    tile_min.x = min(max(0, (uint32_t)floor(tile_x - tile_radius)), tile_width);
+    tile_min.x = min(max(0, (uint32_t)floor(tile_x - tile_radius_x)), tile_width);
     tile_min.y =
-        min(max(0, (uint32_t)floor(tile_y - tile_radius)), tile_height);
-    tile_max.x = min(max(0, (uint32_t)ceil(tile_x + tile_radius)), tile_width);
-    tile_max.y = min(max(0, (uint32_t)ceil(tile_y + tile_radius)), tile_height);
+        min(max(0, (uint32_t)floor(tile_y - tile_radius_y)), tile_height);
+    tile_max.x = min(max(0, (uint32_t)ceil(tile_x + tile_radius_x)), tile_width);
+    tile_max.y = min(max(0, (uint32_t)ceil(tile_y + tile_radius_y)), tile_height);
 
     if (first_pass) {
         // first pass only writes out tiles_per_gauss
@@ -111,7 +113,7 @@ __global__ void intersect_tile_kernel(
 void launch_intersect_tile_kernel(
     // inputs
     const at::Tensor means2d,                    // [C, N, 2] or [nnz, 2]
-    const at::Tensor radii,                      // [C, N] or [nnz]
+    const at::Tensor radii,                      // [C, N, 2] or [nnz, 2]
     const at::Tensor depths,                     // [C, N] or [nnz]
     const at::optional<at::Tensor> camera_ids,   // [nnz]
     const at::optional<at::Tensor> gaussian_ids, // [nnz]

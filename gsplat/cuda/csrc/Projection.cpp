@@ -123,7 +123,7 @@ projection_ewa_3dgs_fused_fwd(
     uint32_t N = means.size(0);    // number of gaussians
     uint32_t C = viewmats.size(0); // number of cameras
 
-    at::Tensor radii = at::empty({C, N}, means.options().dtype(at::kInt));
+    at::Tensor radii = at::empty({C, N, 2}, means.options().dtype(at::kInt));
     at::Tensor means2d = at::empty({C, N, 2}, means.options());
     at::Tensor depths = at::empty({C, N}, means.options());
     at::Tensor conics = at::empty({C, N, 3}, means.options());
@@ -173,7 +173,7 @@ projection_ewa_3dgs_fused_bwd(
     const float eps2d,
     const CameraModelType camera_model,
     // fwd outputs
-    const at::Tensor radii,                       // [C, N]
+    const at::Tensor radii,                       // [C, N, 2]
     const at::Tensor conics,                      // [C, N, 3]
     const at::optional<at::Tensor> compensations, // [C, N] optional
     // grad outputs
@@ -339,7 +339,7 @@ projection_ewa_3dgs_packed_fwd(
     at::Tensor indptr = at::empty({C + 1}, opt.dtype(at::kInt));
     at::Tensor camera_ids = at::empty({nnz}, opt.dtype(at::kLong));
     at::Tensor gaussian_ids = at::empty({nnz}, opt.dtype(at::kLong));
-    at::Tensor radii = at::empty({nnz}, opt.dtype(at::kInt));
+    at::Tensor radii = at::empty({nnz, 2}, opt.dtype(at::kInt));
     at::Tensor means2d = at::empty({nnz, 2}, opt);
     at::Tensor depths = at::empty({nnz}, opt);
     at::Tensor conics = at::empty({nnz, 3}, opt);
@@ -537,7 +537,7 @@ projection_2dgs_fused_fwd(
     uint32_t N = means.size(0);    // number of gaussians
     uint32_t C = viewmats.size(0); // number of cameras
 
-    at::Tensor radii = at::empty({C, N}, means.options().dtype(at::kInt));
+    at::Tensor radii = at::empty({C, N, 2}, means.options().dtype(at::kInt));
     at::Tensor means2d = at::empty({C, N, 2}, means.options());
     at::Tensor depths = at::empty({C, N}, means.options());
     at::Tensor ray_transforms = at::empty({C, N, 3, 3}, means.options());
@@ -576,7 +576,7 @@ projection_2dgs_fused_bwd(
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
-    const at::Tensor radii,          // [C, N]
+    const at::Tensor radii,          // [C, N, 2]
     const at::Tensor ray_transforms, // [C, N, 3, 3]
     // grad outputs
     const at::Tensor v_means2d,        // [C, N, 2]
@@ -708,7 +708,7 @@ projection_2dgs_packed_fwd(
     at::Tensor indptr = at::empty({C + 1}, opt.dtype(at::kInt));
     at::Tensor camera_ids = at::empty({nnz}, opt.dtype(at::kLong));
     at::Tensor gaussian_ids = at::empty({nnz}, opt.dtype(at::kLong));
-    at::Tensor radii = at::empty({nnz}, opt.dtype(at::kInt));
+    at::Tensor radii = at::empty({nnz, 2}, opt.dtype(at::kInt));
     at::Tensor means2d = at::empty({nnz, 2}, opt);
     at::Tensor depths = at::empty({nnz}, opt);
     at::Tensor ray_transforms = at::empty({nnz, 3, 3}, opt);

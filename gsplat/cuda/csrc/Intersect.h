@@ -11,7 +11,7 @@ namespace gsplat {
 void launch_intersect_tile_kernel(
     // inputs
     const at::Tensor means2d,                    // [C, N, 2] or [nnz, 2]
-    const at::Tensor radii,                      // [C, N] or [nnz]
+    const at::Tensor radii,                      // [C, N, 2] or [nnz, 2]
     const at::Tensor depths,                     // [C, N] or [nnz]
     const at::optional<at::Tensor> camera_ids,   // [nnz]
     const at::optional<at::Tensor> gaussian_ids, // [nnz]
