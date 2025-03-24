@@ -68,10 +68,6 @@ def main(
     viewmats = viewmats[:1].repeat(batch_size, 1, 1)
     Ks = Ks[:1].repeat(batch_size, 1, 1)
 
-    cm_params, rs_params = to_params(
-        viewmats, Ks, width, height, camera_model="pinhole"
-    )
-
     # more channels
     colors = colors[:, :1].repeat(1, channels)
 
@@ -91,6 +87,10 @@ def main(
     render_width, render_height = RESOLUTIONS[reso]  # desired resolution
     Ks[..., 0, :] *= render_width / width
     Ks[..., 1, :] *= render_height / height
+
+    cm_params, rs_params = to_params(
+        viewmats, Ks, render_width, render_height, camera_model="pinhole"
+    )
 
     torch.cuda.reset_peak_memory_stats()
     mem_tic = torch.cuda.max_memory_allocated() / 1024**3
@@ -144,6 +144,13 @@ def main(
         torch.cuda.memory._dump_snapshot(
             f"snapshot_{reso}_{scene_grid}_{batch_size}_{channels}.pickle"
         )
+
+    import imageio
+    print (render_colors[0].shape)
+    imageio.imwrite(
+        f"rendered_eval3d_{with_eval3d}.png",
+        (render_colors[0].detach().cpu().numpy() * 255).astype("uint8"),
+    )
 
     return {
         "mem_fwd": mem_toc_fwd,
