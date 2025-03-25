@@ -398,7 +398,9 @@ class Dataset:
             "K": torch.from_numpy(K).float(),
             "camtoworld": torch.from_numpy(camtoworlds).float(),
             "image": torch.from_numpy(image).float(),
-            "image_id": torch.tensor(item, dtype=torch.long),  # the index of the image in the dataset
+            "image_id": torch.tensor(
+                item, dtype=torch.long
+            ),  # the index of the image in the dataset
         }
         if mask is not None:
             data["mask"] = torch.from_numpy(mask).bool()
@@ -406,9 +408,9 @@ class Dataset:
         cm_params, rs_params = to_params(
             torch.linalg.inv(data["camtoworld"])[None],
             data["K"][None],
-            data["image"].shape[1], # width
-            data["image"].shape[0], # height
-            camera_model="pinhole"
+            data["image"].shape[1],  # width
+            data["image"].shape[0],  # height
+            camera_model="pinhole",
         )
         data["cm_params"] = cm_params
         data["rs_params"] = rs_params

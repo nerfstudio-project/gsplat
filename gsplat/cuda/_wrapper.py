@@ -583,9 +583,9 @@ def rasterize_to_pixels(
 
 
 def rasterize_to_pixels_eval3d(
-    means: Tensor, # [N, 3]
-    quats: Tensor, # [N, 4]
-    scales: Tensor, # [N, 3]
+    means: Tensor,  # [N, 3]
+    quats: Tensor,  # [N, 4]
+    scales: Tensor,  # [N, 3]
     colors: Tensor,  # [C, N, channels] or [nnz, channels]
     opacities: Tensor,  # [C, N] or [nnz]
     viewmats: Tensor,  # [C, 4, 4]
@@ -620,7 +620,6 @@ def rasterize_to_pixels_eval3d(
     assert backgrounds is None
     assert masks is None
 
-
     N = means.size(0)
     assert means.shape == (N, 3), means.shape
     assert quats.shape == (N, 4), quats.shape
@@ -628,7 +627,7 @@ def rasterize_to_pixels_eval3d(
     assert viewmats.shape == (C, 4, 4), viewmats.shape
     assert Ks.shape == (C, 3, 3), Ks.shape
 
-    if False: # packed
+    if False:  # packed
         nnz = means2d.size(0)
         assert means2d.shape == (nnz, 2), means2d.shape
         assert conics.shape == (nnz, 3), conics.shape
@@ -1020,6 +1019,7 @@ class _FullyFusedProjection(torch.autograd.Function):
             None,
         )
 
+
 def to_params(
     viewmats: Tensor,  # [C, 4, 4]
     Ks: Tensor,  # [C, 3, 3]
@@ -1033,11 +1033,13 @@ def to_params(
 
     C = viewmats.size(0)
     assert C == 1, "Only support single camera for now"
-    
+
     # check the R part in the viewmats are orthonormal
     R = viewmats[:, :3, :3]
     det = torch.det(R)
-    assert torch.allclose(det, torch.ones_like(det)), "The R part in the viewmats should be orthonormal"
+    assert torch.allclose(
+        det, torch.ones_like(det)
+    ), "The R part in the viewmats should be orthonormal"
 
     if camera_model == "pinhole":
         cm_params = _make_lazy_cuda_obj("OpenCVPinholeCameraModelParameters")()
@@ -1092,7 +1094,7 @@ def fully_fused_projection_with_ut(
     else:
         cm_params = cm_params.to_cpp()
         rs_params = rs_params.to_cpp()
-    
+
     radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
         "projection_ut_3dgs_fused"
     )(
@@ -1334,13 +1336,9 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         rs_params = ctx.rs_params
         tile_size = ctx.tile_size
 
-        (
-            v_means,
-            v_quats,
-            v_scales,
-            v_colors,
-            v_opacities,
-        ) = _make_lazy_cuda_func("rasterize_to_pixels_from_world_3dgs_bwd")(
+        (v_means, v_quats, v_scales, v_colors, v_opacities,) = _make_lazy_cuda_func(
+            "rasterize_to_pixels_from_world_3dgs_bwd"
+        )(
             means,
             quats,
             scales,
@@ -1359,9 +1357,9 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             v_render_alphas.contiguous(),
         )
 
-        if ctx.needs_input_grad[5]: # backgrounds
+        if ctx.needs_input_grad[5]:  # backgrounds
             raise NotImplementedError
-        if ctx.needs_input_grad[7]: # viewmats
+        if ctx.needs_input_grad[7]:  # viewmats
             raise NotImplementedError
 
         return (
@@ -1383,6 +1381,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             None,
             None,
         )
+
 
 class _FullyFusedProjectionPacked(torch.autograd.Function):
     """Projects Gaussians to 2D. Return packed tensors."""

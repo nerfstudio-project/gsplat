@@ -456,8 +456,8 @@ class Runner:
         width: int,
         height: int,
         masks: Optional[Tensor] = None,
-        cm_params = None,
-        rs_params = None,
+        cm_params=None,
+        rs_params=None,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         means = self.splats["means"]  # [N, 3]
@@ -866,7 +866,11 @@ class Runner:
         world_size = self.world_size
 
         valloader = torch.utils.data.DataLoader(
-            self.valset, batch_size=1, shuffle=False, num_workers=1, collate_fn=self.valset.collate_fn
+            self.valset,
+            batch_size=1,
+            shuffle=False,
+            num_workers=1,
+            collate_fn=self.valset.collate_fn,
         )
         ellipse_time = 0
         metrics = defaultdict(list)

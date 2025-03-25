@@ -317,7 +317,7 @@ def rasterization(
             far_plane=far_plane,
             radius_clip=radius_clip,
             calc_compensations=(rasterize_mode == "antialiased"),
-            opacities=opacities, # use opacities to compute a tigher bound for radii.
+            opacities=opacities,  # use opacities to compute a tigher bound for radii.
             camera_model=camera_model,
             cm_params=cm_params,
             rs_params=rs_params,
@@ -590,7 +590,7 @@ def rasterization(
                     packed=packed,
                     cm_params=cm_params,
                     rs_params=rs_params,
-                )            
+                )
             else:
                 render_colors_, render_alphas_ = rasterize_to_pixels(
                     means2d,
@@ -633,7 +633,7 @@ def rasterization(
                 packed=packed,
                 cm_params=cm_params,
                 rs_params=rs_params,
-            )            
+            )
         else:
             render_colors, render_alphas = rasterize_to_pixels(
                 means2d,

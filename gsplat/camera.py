@@ -10,22 +10,29 @@ from gsplat.cuda._wrapper import _make_lazy_cuda_obj
 @dataclass
 class CameraModelParameters:
 
-    resolution: Tuple[int, int] # (width, height)
+    resolution: Tuple[int, int]  # (width, height)
     shutter_type: Literal[
         "GLOBAL",
         "ROLLING_TOP_TO_BOTTOM",
         "ROLLING_LEFT_TO_RIGHT",
         "ROLLING_BOTTOM_TO_TOP",
-        "ROLLING_RIGHT_TO_LEFT"
+        "ROLLING_RIGHT_TO_LEFT",
     ]
 
-    
+
 @dataclass
 class OpenCVPinholeCameraModelParameters(CameraModelParameters):
 
     principal_point: Tuple[float, float]
     focal_length: Tuple[float, float]
-    radial_coeffs: Tuple[float, float, float, float, float, float] = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    radial_coeffs: Tuple[float, float, float, float, float, float] = (
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+    )
     tangential_coeffs: Tuple[float, float] = (0.0, 0.0)
     thin_prism_coeffs: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
 
@@ -40,9 +47,10 @@ class OpenCVPinholeCameraModelParameters(CameraModelParameters):
         p.thin_prism_coeffs = self.thin_prism_coeffs
         return p
 
+
 @dataclass
 class OpenCVFisheyeCameraModelParameters(CameraModelParameters):
-    
+
     principal_point: Tuple[float, float]
     focal_length: Tuple[float, float]
     radial_coeffs: Tuple[float, float, float, float]
@@ -56,10 +64,11 @@ class OpenCVFisheyeCameraModelParameters(CameraModelParameters):
         p.radial_coeffs = self.radial_coeffs
         return p
 
+
 @dataclass
 class RollingShutterParameters:
 
-    T_world_sensors: Tuple[float, ...] # 7 * 2
+    T_world_sensors: Tuple[float, ...]  # 7 * 2
     timestamps_us: Tuple[int, int]
 
     def to_cpp(self):
@@ -82,11 +91,13 @@ def to_params(
 
     C = viewmats.size(0)
     assert C == 1, "Only support single camera for now"
-    
+
     # check the R part in the viewmats are orthonormal
     R = viewmats[:, :3, :3]
     det = torch.det(R)
-    assert torch.allclose(det, torch.ones_like(det)), "The R part in the viewmats should be orthonormal"
+    assert torch.allclose(
+        det, torch.ones_like(det)
+    ), "The R part in the viewmats should be orthonormal"
 
     if camera_model == "pinhole":
         cm_params = OpenCVPinholeCameraModelParameters(
@@ -96,7 +107,7 @@ def to_params(
             focal_length=Ks[0, :2, :2].diag().tolist(),
             radial_coeffs=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
             tangential_coeffs=(0.0, 0.0),
-            thin_prism_coeffs=(0.0, 0.0, 0.0, 0.0)
+            thin_prism_coeffs=(0.0, 0.0, 0.0, 0.0),
         )
     else:
         raise NotImplementedError(f"Camera model {camera_model} is not supported")
@@ -107,9 +118,9 @@ def to_params(
     T_world_sensor_tquat = np.hstack([T_world_sensor_t, T_world_sensor_quat])
 
     rs_params = RollingShutterParameters(
-        T_world_sensors = np.hstack(
+        T_world_sensors=np.hstack(
             [T_world_sensor_tquat, T_world_sensor_tquat]
         ).tolist(),  # represents two tquat [t,q] poses at start / end timestamps
-        timestamps_us = [0, 1]  # arbitrary timestamps
+        timestamps_us=[0, 1],  # arbitrary timestamps
     )
     return cm_params, rs_params

@@ -146,7 +146,8 @@ def main(
         )
 
     import imageio
-    print (render_colors[0].shape)
+
+    print(render_colors[0].shape)
     imageio.imwrite(
         f"rendered_eval3d_{with_eval3d}.png",
         (render_colors[0].detach().cpu().numpy() * 255).astype("uint8"),
