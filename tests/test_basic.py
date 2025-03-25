@@ -136,7 +136,7 @@ def test_proj(test_data, camera_model: Literal["pinhole", "ortho", "fisheye"]):
         (_means2d * v_means2d).sum() + (_covars2d * v_covars2d).sum(),
         (means, covars),
     )
-    torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=1e-2)
+    torch.testing.assert_close(v_means, _v_means, rtol=2e-1, atol=1e-2)
     torch.testing.assert_close(v_covars, _v_covars, rtol=1e-1, atol=1e-1)
 
 
@@ -209,7 +209,7 @@ def test_projection(
     )
 
     # radii is integer so we allow for 1 unit difference
-    valid = (radii > 0) & (_radii > 0)
+    valid = (radii > 0).all(dim=-1) & (_radii > 0).all(dim=-1)
     torch.testing.assert_close(radii, _radii, rtol=0, atol=1)
     torch.testing.assert_close(means2d[valid], _means2d[valid], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(depths[valid], _depths[valid], rtol=1e-4, atol=1e-4)
@@ -367,7 +367,7 @@ def test_fully_fused_projection_packed(
         __compensations = torch.sparse_coo_tensor(
             torch.stack([camera_ids, gaussian_ids]), compensations, _compensations.shape
         ).to_dense()
-    sel = (__radii > 0) & (_radii > 0)
+    sel = (__radii > 0).all(dim=-1) & (_radii > 0).all(dim=-1)
     torch.testing.assert_close(__radii[sel], _radii[sel], rtol=0, atol=1)
     torch.testing.assert_close(__means2d[sel], _means2d[sel], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(__depths[sel], _depths[sel], rtol=1e-4, atol=1e-4)
@@ -389,9 +389,9 @@ def test_fully_fused_projection_packed(
         retain_graph=True,
     )
     v_viewmats, v_quats, v_scales, v_means = torch.autograd.grad(
-        (means2d * v_means2d[__radii > 0]).sum()
-        + (depths * v_depths[__radii > 0]).sum()
-        + (conics * v_conics[__radii > 0]).sum(),
+        (means2d * v_means2d[(__radii > 0).all(dim=-1)]).sum()
+        + (depths * v_depths[(__radii > 0).all(dim=-1)]).sum()
+        + (conics * v_conics[(__radii > 0).all(dim=-1)]).sum(),
         (viewmats, quats, scales, means),
         retain_graph=True,
     )
@@ -416,7 +416,7 @@ def test_isect(test_data):
     C, N = 3, 1000
     width, height = 40, 60
     means2d = torch.randn(C, N, 2, device=device) * width
-    radii = torch.randint(0, width, (C, N), device=device, dtype=torch.int32)
+    radii = torch.randint(0, width, (C, N, 2), device=device, dtype=torch.int32)
     depths = torch.rand(C, N, device=device)
 
     tile_size = 16

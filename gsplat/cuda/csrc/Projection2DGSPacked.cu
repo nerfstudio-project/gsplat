@@ -35,7 +35,7 @@ __global__ void projection_2dgs_packed_fwd_kernel(
     int32_t *__restrict__ indptr,          // [C + 1]
     int64_t *__restrict__ camera_ids,      // [nnz]
     int64_t *__restrict__ gaussian_ids,    // [nnz]
-    int32_t *__restrict__ radii,           // [nnz]
+    int32_t *__restrict__ radii,           // [nnz, 2]
     scalar_t *__restrict__ means2d,        // [nnz, 2]
     scalar_t *__restrict__ depths,         // [nnz]
     scalar_t *__restrict__ ray_transforms, // [nnz, 3, 3]
@@ -82,7 +82,7 @@ __global__ void projection_2dgs_packed_fwd_kernel(
 
     vec2 mean2d;
     mat3 M;
-    float radius;
+    float radius_x, radius_y;
     vec3 normal;
     if (valid) {
         // build ray transformation matrix and transform from world space to
@@ -117,15 +117,16 @@ __global__ void projection_2dgs_packed_fwd_kernel(
 
         const vec2 temp = {sum(f * M0 * M0), sum(f * M1 * M1)};
         const vec2 half_extend = mean2d * mean2d - temp;
-        radius = ceil(3.f * sqrt(max(1e-4, max(half_extend.x, half_extend.y))));
+        radius_x = ceil(3.33f * sqrt(max(1e-4, half_extend.x)));
+        radius_y = ceil(3.33f * sqrt(max(1e-4, half_extend.y)));
 
-        if (radius <= radius_clip) {
+        if (radius_x <= radius_clip && radius_y <= radius_clip) {
             valid = false;
         }
 
         // mask out gaussians outside the image region
-        if (mean2d.x + radius <= 0 || mean2d.x - radius >= image_width ||
-            mean2d.y + radius <= 0 || mean2d.y - radius >= image_height) {
+        if (mean2d.x + radius_x <= 0 || mean2d.x - radius_x >= image_width ||
+            mean2d.y + radius_y <= 0 || mean2d.y - radius_y >= image_height) {
             valid = false;
         }
 
@@ -164,7 +165,8 @@ __global__ void projection_2dgs_packed_fwd_kernel(
             // write to outputs
             camera_ids[thread_data] = row_idx;   // cid
             gaussian_ids[thread_data] = col_idx; // gid
-            radii[thread_data] = (int32_t)radius;
+            radii[thread_data * 2] = (int32_t)radius_x;
+            radii[thread_data * 2 + 1] = (int32_t)radius_y;
             means2d[thread_data * 2] = mean2d.x;
             means2d[thread_data * 2 + 1] = mean2d.y;
             depths[thread_data] = mean_c.z;
@@ -212,7 +214,7 @@ void launch_projection_2dgs_packed_fwd_kernel(
     at::optional<at::Tensor> indptr,     // [C + 1]
     at::optional<at::Tensor> camera_ids, // [nnz]
     at::optional<at::Tensor> gaussian_ids,   // [nnz]
-    at::optional<at::Tensor> radii,          // [nnz]
+    at::optional<at::Tensor> radii,          // [nnz, 2]
     at::optional<at::Tensor> means2d,        // [nnz, 2]
     at::optional<at::Tensor> depths,         // [nnz]
     at::optional<at::Tensor> ray_transforms, // [nnz, 3, 3]

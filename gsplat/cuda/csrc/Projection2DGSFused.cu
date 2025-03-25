@@ -41,9 +41,8 @@ __global__ void projection_2dgs_fused_fwd_kernel(
     const scalar_t radius_clip, // Radius clipping threshold (through away small
                                 // primitives)
     // outputs
-    int32_t *__restrict__ radii, // [C, N]   The maximum radius of the projected
-                                 // Gaussians in pixel unit. Int32 tensor of
-                                 // shape [C, N].
+    int32_t *__restrict__ radii, // [C, N, 2]   The maximum radius of the projected
+                                 // Gaussians in pixel unit. Int32 tensor.
     scalar_t
         *__restrict__ means2d, // [C, N, 2] 2D means of the projected Gaussians.
     scalar_t
@@ -140,7 +139,8 @@ __global__ void projection_2dgs_fused_fwd_kernel(
 
     // return this thread for overly small primitives
     if (mean_c.z < near_plane || mean_c.z > far_plane) {
-        radii[idx] = 0;
+        radii[idx * 2] = 0;
+        radii[idx * 2 + 1] = 0;
         return;
     }
 
@@ -216,19 +216,21 @@ __global__ void projection_2dgs_fused_fwd_kernel(
     const vec2 half_extend = mean2d * mean2d - temp;
 
     // ==============================================
-    const float radius =
-        ceil(3.f * sqrt(max(1e-4, max(half_extend.x, half_extend.y))));
+    const float radius_x = ceil(3.33f * sqrt(max(1e-4, half_extend.x)));
+    const float radius_y = ceil(3.33f * sqrt(max(1e-4, half_extend.y)));
 
-    if (radius <= radius_clip) {
-        radii[idx] = 0;
+    if (radius_x <= radius_clip && radius_y <= radius_clip) {
+        radii[idx * 2] = 0;
+        radii[idx * 2 + 1] = 0;
         return;
     }
 
     // CULLING STEP:
     // mask out gaussians outside the image region
-    if (mean2d.x + radius <= 0 || mean2d.x - radius >= image_width ||
-        mean2d.y + radius <= 0 || mean2d.y - radius >= image_height) {
-        radii[idx] = 0;
+    if (mean2d.x + radius_x <= 0 || mean2d.x - radius_x >= image_width ||
+        mean2d.y + radius_y <= 0 || mean2d.y - radius_y >= image_height) {
+        radii[idx * 2] = 0;
+        radii[idx * 2 + 1] = 0;
         return;
     }
 
@@ -239,7 +241,8 @@ __global__ void projection_2dgs_fused_fwd_kernel(
     normal *= multipler;
 
     // write to outputs
-    radii[idx] = (int32_t)radius;
+    radii[idx * 2] = (int32_t)radius_x;
+    radii[idx * 2 + 1] = (int32_t)radius_y;
     means2d[idx * 2] = mean2d.x;
     means2d[idx * 2 + 1] = mean2d.y;
     depths[idx] = mean_c.z;
@@ -274,7 +277,7 @@ void launch_projection_2dgs_fused_fwd_kernel(
     const float far_plane,
     const float radius_clip,
     // outputs
-    at::Tensor radii,          // [C, N]
+    at::Tensor radii,          // [C, N, 2]
     at::Tensor means2d,        // [C, N, 2]
     at::Tensor depths,         // [C, N]
     at::Tensor ray_transforms, // [C, N, 3, 3]
@@ -328,7 +331,7 @@ __global__ void projection_2dgs_fused_bwd_kernel(
     const int32_t image_width,
     const int32_t image_height,
     // fwd outputs
-    const int32_t *__restrict__ radii,           // [C, N]
+    const int32_t *__restrict__ radii,           // [C, N, 2]
     const scalar_t *__restrict__ ray_transforms, // [C, N, 3, 3]
     // grad outputs
     const scalar_t *__restrict__ v_means2d, // [C, N, 2]
@@ -343,7 +346,7 @@ __global__ void projection_2dgs_fused_bwd_kernel(
 ) {
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
-    if (idx >= C * N || radii[idx] <= 0) {
+    if (idx >= C * N || radii[idx * 2] <= 0 || radii[idx * 2 + 1] <= 0) {
         return;
     }
     const uint32_t cid = idx / N; // camera id
@@ -457,7 +460,7 @@ void launch_projection_2dgs_fused_bwd_kernel(
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
-    const at::Tensor radii,          // [C, N]
+    const at::Tensor radii,          // [C, N, 2]
     const at::Tensor ray_transforms, // [C, N, 3, 3]
     // grad outputs
     const at::Tensor v_means2d,        // [C, N, 2]

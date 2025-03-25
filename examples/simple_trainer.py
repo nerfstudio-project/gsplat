@@ -780,7 +780,7 @@ class Runner:
                     )
                     visibility_mask.scatter_(0, info["gaussian_ids"], 1)
                 else:
-                    visibility_mask = (info["radii"] > 0).any(0)
+                    visibility_mask = (info["radii"] > 0).all(-1).any(0)
 
             # optimize
             for optimizer in self.optimizers.values():

@@ -37,7 +37,7 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
     int32_t *__restrict__ indptr,        // [C + 1]
     int64_t *__restrict__ camera_ids,    // [nnz]
     int64_t *__restrict__ gaussian_ids,  // [nnz]
-    int32_t *__restrict__ radii,         // [nnz]
+    int32_t *__restrict__ radii,         // [nnz, 2]
     scalar_t *__restrict__ means2d,      // [nnz, 2]
     scalar_t *__restrict__ depths,       // [nnz]
     scalar_t *__restrict__ conics,       // [nnz, 3]
@@ -172,21 +172,24 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
     }
 
     // check if the points are in the image region
-    float radius;
-    if (valid) {
-        // take 3 sigma as the radius (non differentiable)
+    float radius_x, radius_y;
+    if (valid) {    
+        // compute tight rectangular bounding box (non differentiable)
+        // https://arxiv.org/pdf/2402.00525
         float b = 0.5f * (covar2d[0][0] + covar2d[1][1]);
-        float v1 = b + sqrt(max(0.1f, b * b - det));
-        float v2 = b - sqrt(max(0.1f, b * b - det));
-        radius = ceil(3.f * sqrt(max(v1, v2)));
-
-        if (radius <= radius_clip) {
+        float tmp = sqrtf(max(0.01f, b * b - det));
+        float v1 = b + tmp; // larger eigenvalue
+        float r1 = 3.33f * sqrtf(v1);
+        radius_x = ceilf(min(3.33f * sqrtf(covar2d[0][0]), r1));
+        radius_y = ceilf(min(3.33f * sqrtf(covar2d[1][1]), r1));
+        
+        if (radius_x <= radius_clip && radius_y <= radius_clip) {
             valid = false;
         }
 
         // mask out gaussians outside the image region
-        if (mean2d.x + radius <= 0 || mean2d.x - radius >= image_width ||
-            mean2d.y + radius <= 0 || mean2d.y - radius >= image_height) {
+        if (mean2d.x + radius_x <= 0 || mean2d.x - radius_x >= image_width ||
+            mean2d.y + radius_y <= 0 || mean2d.y - radius_y >= image_height) {
             valid = false;
         }
     }
@@ -220,7 +223,8 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
             // write to outputs
             camera_ids[thread_data] = row_idx;   // cid
             gaussian_ids[thread_data] = col_idx; // gid
-            radii[thread_data] = (int32_t)radius;
+            radii[thread_data * 2] = (int32_t)radius_x;
+            radii[thread_data * 2 + 1] = (int32_t)radius_y;
             means2d[thread_data * 2] = mean2d.x;
             means2d[thread_data * 2 + 1] = mean2d.y;
             depths[thread_data] = mean_c.z;
@@ -265,7 +269,7 @@ void launch_projection_ewa_3dgs_packed_fwd_kernel(
     at::optional<at::Tensor> indptr,     // [C + 1]
     at::optional<at::Tensor> camera_ids, // [nnz]
     at::optional<at::Tensor> gaussian_ids, // [nnz]
-    at::optional<at::Tensor> radii,        // [nnz]
+    at::optional<at::Tensor> radii,        // [nnz, 2]
     at::optional<at::Tensor> means2d,      // [nnz, 2]
     at::optional<at::Tensor> depths,       // [nnz]
     at::optional<at::Tensor> conics,       // [nnz, 3]
