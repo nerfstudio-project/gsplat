@@ -97,6 +97,7 @@ projection_ewa_3dgs_fused_fwd(
     const at::optional<at::Tensor> covars, // [N, 6] optional
     const at::optional<at::Tensor> quats,  // [N, 4] optional
     const at::optional<at::Tensor> scales, // [N, 3] optional
+    const at::optional<at::Tensor> opacities, // [N] optional
     const at::Tensor viewmats,             // [C, 4, 4]
     const at::Tensor Ks,                   // [C, 3, 3]
     const uint32_t image_width,
@@ -139,6 +140,7 @@ projection_ewa_3dgs_fused_fwd(
         covars,
         quats,
         scales,
+        opacities,
         viewmats,
         Ks,
         image_width,
@@ -265,6 +267,7 @@ projection_ewa_3dgs_packed_fwd(
     const at::optional<at::Tensor> covars, // [N, 6] optional
     const at::optional<at::Tensor> quats,  // [N, 4] optional
     const at::optional<at::Tensor> scales, // [N, 3] optional
+    const at::optional<at::Tensor> opacities, // [N] optional
     const at::Tensor viewmats,             // [C, 4, 4]
     const at::Tensor Ks,                   // [C, 3, 3]
     const uint32_t image_width,
@@ -308,6 +311,7 @@ projection_ewa_3dgs_packed_fwd(
             covars,
             quats,
             scales,
+            opacities,
             viewmats,
             Ks,
             image_width,
@@ -356,6 +360,7 @@ projection_ewa_3dgs_packed_fwd(
             covars,
             quats,
             scales,
+            opacities,
             viewmats,
             Ks,
             image_width,
