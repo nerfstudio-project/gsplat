@@ -186,8 +186,8 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
         // float sint = sinf(theta);
         // float radius_x = ceil(fabs(r1 * cost) + fabs(r2 * sint));
         // float radius_y = ceil(fabs(r1 * sint) + fabs(r2 * cost));
-        radius_x = ceilf(min(3.33f * sqrtf(covar2d_inv[0][0]), r1));
-        radius_y = ceilf(min(3.33f * sqrtf(covar2d_inv[1][1]), r1));
+        radius_x = ceilf(min(3.33f * sqrtf(covar2d[0][0]), r1));
+        radius_y = ceilf(min(3.33f * sqrtf(covar2d[1][1]), r1));
         
         if (radius_x <= radius_clip && radius_y <= radius_clip) {
             valid = false;
