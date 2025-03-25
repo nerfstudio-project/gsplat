@@ -320,7 +320,7 @@ def _fully_fused_projection(
     radius_x = torch.ceil(torch.abs(r1 * cost) + torch.abs(r2 * sint))  # (...,)
     radius_y = torch.ceil(torch.abs(r1 * sint) + torch.abs(r2 * cost))  # (...,)
 
-    radius = torch.stack([radius_x, radius_y], dim=-1) # (..., 2)
+    radius = torch.stack([radius_x, radius_y], dim=-1)  # (..., 2)
 
     valid = (det > 0) & (depths > near_plane) & (depths < far_plane)
     radius[~valid] = 0.0

@@ -741,10 +741,8 @@ class Runner:
                     data, f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt"
                 )
             if (
-                (step in [i - 1 for i in cfg.ply_steps]
-                or step == max_steps - 1)
-                and cfg.save_ply
-            ):
+                step in [i - 1 for i in cfg.ply_steps] or step == max_steps - 1
+            ) and cfg.save_ply:
                 rgb = None
                 if self.cfg.app_opt:
                     # eval at origin to bake the appeareance into the colors
