@@ -599,7 +599,7 @@
 
 <span class="sd">        - **camera_ids**. The row indices of the projected Gaussians. Int32 tensor of shape [nnz].</span>
 <span class="sd">        - **gaussian_ids**. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].</span>
-<span class="sd">        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz].</span>
+<span class="sd">        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz, 2].</span>
 <span class="sd">        - **means**. Projected Gaussian means in 2D. [nnz, 2]</span>
 <span class="sd">        - **depths**. The z-depth of the projected Gaussians. [nnz]</span>
 <span class="sd">        - **conics**. Inverse of the projected covariances. Return the flattend upper triangle with [nnz, 3]</span>
@@ -607,7 +607,7 @@
 
 <span class="sd">        If `packed` is False:</span>
 
-<span class="sd">        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N].</span>
+<span class="sd">        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N, 2].</span>
 <span class="sd">        - **means**. Projected Gaussian means in 2D. [C, N, 2]</span>
 <span class="sd">        - **depths**. The z-depth of the projected Gaussians. [C, N]</span>
 <span class="sd">        - **conics**. Inverse of the projected covariances. Return the flattend upper triangle with [C, N, 3]</span>
@@ -677,7 +677,7 @@
 <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">isect_tiles</span><span class="p">(</span>
     <span class="n">means2d</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 2] or [nnz, 2]</span>
-    <span class="n">radii</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N] or [nnz]</span>
+    <span class="n">radii</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, 2] or [nnz, 2]</span>
     <span class="n">depths</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N] or [nnz]</span>
     <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">tile_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
@@ -692,7 +692,7 @@
 
 <span class="sd">    Args:</span>
 <span class="sd">        means2d: Projected Gaussian means. [C, N, 2] if packed is False, [nnz, 2] if packed is True.</span>
-<span class="sd">        radii: Maximum radii of the projected Gaussians. [C, N] if packed is False, [nnz] if packed is True.</span>
+<span class="sd">        radii: Maximum radii of the projected Gaussians. [C, N, 2] if packed is False, [nnz, 2] if packed is True.</span>
 <span class="sd">        depths: Z-depth of the projected Gaussians. [C, N] if packed is False, [nnz] if packed is True.</span>
 <span class="sd">        tile_size: Tile size.</span>
 <span class="sd">        tile_width: Tile width.</span>
@@ -717,7 +717,7 @@
     <span class="k">if</span> <span class="n">packed</span><span class="p">:</span>
         <span class="n">nnz</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
         <span class="k">assert</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">nnz</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">means2d</span><span class="o">.</span><span class="n">size</span><span class="p">()</span>
-        <span class="k">assert</span> <span class="n">radii</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">nnz</span><span class="p">,),</span> <span class="n">radii</span><span class="o">.</span><span class="n">size</span><span class="p">()</span>
+        <span class="k">assert</span> <span class="n">radii</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">nnz</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">radii</span><span class="o">.</span><span class="n">size</span><span class="p">()</span>
         <span class="k">assert</span> <span class="n">depths</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">nnz</span><span class="p">,),</span> <span class="n">depths</span><span class="o">.</span><span class="n">size</span><span class="p">()</span>
         <span class="k">assert</span> <span class="n">camera_ids</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">,</span> <span class="s2">&quot;camera_ids is required if packed is True&quot;</span>
         <span class="k">assert</span> <span class="n">gaussian_ids</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">,</span> <span class="s2">&quot;gaussian_ids is required if packed is True&quot;</span>
@@ -729,7 +729,7 @@
     <span class="k">else</span><span class="p">:</span>
         <span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span>
         <span class="k">assert</span> <span class="n">means2d</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">means2d</span><span class="o">.</span><span class="n">size</span><span class="p">()</span>
-        <span class="k">assert</span> <span class="n">radii</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">radii</span><span class="o">.</span><span class="n">size</span><span class="p">()</span>
+        <span class="k">assert</span> <span class="n">radii</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">radii</span><span class="o">.</span><span class="n">size</span><span class="p">()</span>
         <span class="k">assert</span> <span class="n">depths</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">depths</span><span class="o">.</span><span class="n">size</span><span class="p">()</span>
 
     <span class="n">tiles_per_gauss</span><span class="p">,</span> <span class="n">isect_ids</span><span class="p">,</span> <span class="n">flatten_ids</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;intersect_tile&quot;</span><span class="p">)(</span>
@@ -1609,7 +1609,7 @@
 
 <span class="sd">        - **camera_ids**. The row indices of the projected Gaussians. Int32 tensor of shape [nnz].</span>
 <span class="sd">        - **gaussian_ids**. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].</span>
-<span class="sd">        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz].</span>
+<span class="sd">        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz, 2].</span>
 <span class="sd">        - **means**. Projected Gaussian means in 2D. [nnz, 2]</span>
 <span class="sd">        - **depths**. The z-depth of the projected Gaussians. [nnz]</span>
 <span class="sd">        - **ray_transforms**. transformation matrices that transforms xy-planes in pixel spaces into splat coordinates (WH)^T in equation (9) in paper [nnz, 3, 3]</span>
@@ -1617,7 +1617,7 @@
 
 <span class="sd">        If `packed` is False:</span>
 
-<span class="sd">        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N].</span>
+<span class="sd">        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N, 2].</span>
 <span class="sd">        - **means**. Projected Gaussian means in 2D. [C, N, 2]</span>
 <span class="sd">        - **depths**. The z-depth of the projected Gaussians. [C, N]</span>
 <span class="sd">        - **ray_transforms**. transformation matrices that transforms xy-planes in pixel spaces into splat coordinates.</span>

@@ -447,7 +447,7 @@ is useful for anti-aliasing. Default: False.</p></li>
 <ul class="simple">
 <li><p><strong>camera_ids</strong>. The row indices of the projected Gaussians. Int32 tensor of shape [nnz].</p></li>
 <li><p><strong>gaussian_ids</strong>. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].</p></li>
-<li><p><strong>radii</strong>. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz].</p></li>
+<li><p><strong>radii</strong>. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz, 2].</p></li>
 <li><p><strong>means</strong>. Projected Gaussian means in 2D. [nnz, 2]</p></li>
 <li><p><strong>depths</strong>. The z-depth of the projected Gaussians. [nnz]</p></li>
 <li><p><strong>conics</strong>. Inverse of the projected covariances. Return the flattend upper triangle with [nnz, 3]</p></li>
@@ -455,7 +455,7 @@ is useful for anti-aliasing. Default: False.</p></li>
 </ul>
 <p>If <cite>packed</cite> is False:</p>
 <ul class="simple">
-<li><p><strong>radii</strong>. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N].</p></li>
+<li><p><strong>radii</strong>. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N, 2].</p></li>
 <li><p><strong>means</strong>. Projected Gaussian means in 2D. [C, N, 2]</p></li>
 <li><p><strong>depths</strong>. The z-depth of the projected Gaussians. [C, N]</p></li>
 <li><p><strong>conics</strong>. Inverse of the projected covariances. Return the flattend upper triangle with [C, N, 3]</p></li>
@@ -477,7 +477,7 @@ is useful for anti-aliasing. Default: False.</p></li>
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>means2d</strong> – Projected Gaussian means. [C, N, 2] if packed is False, [nnz, 2] if packed is True.</p></li>
-<li><p><strong>radii</strong> – Maximum radii of the projected Gaussians. [C, N] if packed is False, [nnz] if packed is True.</p></li>
+<li><p><strong>radii</strong> – Maximum radii of the projected Gaussians. [C, N, 2] if packed is False, [nnz, 2] if packed is True.</p></li>
 <li><p><strong>depths</strong> – Z-depth of the projected Gaussians. [C, N] if packed is False, [nnz] if packed is True.</p></li>
 <li><p><strong>tile_size</strong> – Tile size.</p></li>
 <li><p><strong>tile_width</strong> – Tile width.</p></li>
@@ -725,7 +725,7 @@ of {<cite>means</cite>, <cite>covars</cite>, <cite>quats</cite>, <cite>scales</c
 <ul class="simple">
 <li><p><strong>camera_ids</strong>. The row indices of the projected Gaussians. Int32 tensor of shape [nnz].</p></li>
 <li><p><strong>gaussian_ids</strong>. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].</p></li>
-<li><p><strong>radii</strong>. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz].</p></li>
+<li><p><strong>radii</strong>. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz, 2].</p></li>
 <li><p><strong>means</strong>. Projected Gaussian means in 2D. [nnz, 2]</p></li>
 <li><p><strong>depths</strong>. The z-depth of the projected Gaussians. [nnz]</p></li>
 <li><p><strong>ray_transforms</strong>. transformation matrices that transforms xy-planes in pixel spaces into splat coordinates (WH)^T in equation (9) in paper [nnz, 3, 3]</p></li>
@@ -733,7 +733,7 @@ of {<cite>means</cite>, <cite>covars</cite>, <cite>quats</cite>, <cite>scales</c
 </ul>
 <p>If <cite>packed</cite> is False:</p>
 <ul class="simple">
-<li><p><strong>radii</strong>. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N].</p></li>
+<li><p><strong>radii</strong>. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N, 2].</p></li>
 <li><p><strong>means</strong>. Projected Gaussian means in 2D. [C, N, 2]</p></li>
 <li><p><strong>depths</strong>. The z-depth of the projected Gaussians. [C, N]</p></li>
 <li><p><strong>ray_transforms</strong>. transformation matrices that transforms xy-planes in pixel spaces into splat coordinates.</p></li>
