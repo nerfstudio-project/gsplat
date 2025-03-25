@@ -311,7 +311,7 @@ def rasterization(
         sparse_grad=sparse_grad,
         calc_compensations=(rasterize_mode == "antialiased"),
         camera_model=camera_model,
-        opacities=opacities, # use opacities to compute a tigher bound for radii.
+        opacities=opacities,  # use opacities to compute a tigher bound for radii.
     )
 
     if packed:
