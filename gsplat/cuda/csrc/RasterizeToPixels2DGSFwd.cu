@@ -361,7 +361,7 @@ __global__ void rasterize_to_pixels_2dgs_fwd_kernel(
             float alpha = min(0.999f, opac * __expf(-sigma));
 
             // ignore transparent gaussians
-            if (sigma < 0.f || alpha < 1.f / 255.f) {
+            if (sigma < 0.f || alpha < ALPHA_THRESHOLD) {
                 continue;
             }
 

@@ -117,8 +117,8 @@ __global__ void projection_2dgs_packed_fwd_kernel(
 
         const vec2 temp = {sum(f * M0 * M0), sum(f * M1 * M1)};
         const vec2 half_extend = mean2d * mean2d - temp;
-        radius_x = ceil(3.f * sqrt(max(1e-4, half_extend.x)));
-        radius_y = ceil(3.f * sqrt(max(1e-4, half_extend.y)));
+        radius_x = ceil(3.33f * sqrt(max(1e-4, half_extend.x)));
+        radius_y = ceil(3.33f * sqrt(max(1e-4, half_extend.y)));
 
         if (radius_x <= radius_clip && radius_y <= radius_clip) {
             valid = false;

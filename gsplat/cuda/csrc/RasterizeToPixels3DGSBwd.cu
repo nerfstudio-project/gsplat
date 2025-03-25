@@ -175,7 +175,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
                               conic.y * delta.x * delta.y;
                 vis = __expf(-sigma);
                 alpha = min(0.999f, opac * vis);
-                if (sigma < 0.f || alpha < 1.f / 255.f) {
+                if (sigma < 0.f || alpha < ALPHA_THRESHOLD) {
                     valid = false;
                 }
             }

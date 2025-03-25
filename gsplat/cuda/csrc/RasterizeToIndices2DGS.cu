@@ -178,7 +178,7 @@ __global__ void rasterize_to_indices_2dgs_kernel(
             const float sigma = 0.5f * gauss_weight;
             float alpha = min(0.999f, opac * __expf(-sigma));
 
-            if (sigma < 0.f || alpha < 1.f / 255.f) {
+            if (sigma < 0.f || alpha < ALPHA_THRESHOLD) {
                 continue;
             }
 

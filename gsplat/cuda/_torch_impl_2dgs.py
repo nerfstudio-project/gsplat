@@ -59,7 +59,7 @@ def _fully_fused_projection_2dgs(
     )  # [C, N, 2]
 
     depths = means_c[..., 2]  # [C, N]
-    radius = torch.ceil(3.0 * extents)  # (C, N, 2)
+    radius = torch.ceil(3.33 * extents)  # (C, N, 2)
 
     valid = valid.squeeze(-1) & (depths > near_plane) & (depths < far_plane)
     radius[~valid] = 0.0

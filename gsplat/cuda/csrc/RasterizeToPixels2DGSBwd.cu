@@ -387,7 +387,7 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
                 alpha = min(0.999f, opac * vis); // clipped alpha
 
                 // gaussian throw out
-                if (sigma < 0.f || alpha < 1.f / 255.f) {
+                if (sigma < 0.f || alpha < ALPHA_THRESHOLD) {
                     valid = false;
                 }
             }

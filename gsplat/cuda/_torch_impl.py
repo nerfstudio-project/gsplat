@@ -309,18 +309,11 @@ def _fully_fused_projection(
     b = (covars2d[..., 0, 0] + covars2d[..., 1, 1]) / 2  # (...,)
     tmp = torch.sqrt(torch.clamp(b**2 - det, min=0.01))
     v1 = b + tmp  # (...,)
-    v2 = b - tmp  # (...,)
-    theta = 0.5 * torch.atan2(
-        2 * covars2d[..., 0, 1], (covars2d[..., 0, 0] - covars2d[..., 1, 1])
-    )  # (...,)
-    r1 = 3.0 * torch.sqrt(v1)
-    r2 = 3.0 * torch.sqrt(v2)
-    cost = torch.cos(theta)  # (...,)
-    sint = torch.sin(theta)  # (...,)
-    radius_x = torch.ceil(torch.abs(r1 * cost) + torch.abs(r2 * sint))  # (...,)
-    radius_y = torch.ceil(torch.abs(r1 * sint) + torch.abs(r2 * cost))  # (...,)
+    r1 = 3.33 * torch.sqrt(v1)
+    radius_x = torch.ceil(torch.minimum(3.33 * torch.sqrt(covars2d[..., 0, 0]), r1))
+    radius_y = torch.ceil(torch.minimum(3.33 * torch.sqrt(covars2d[..., 1, 1]), r1))
 
-    radius = torch.stack([radius_x, radius_y], dim=-1) # (..., 2)
+    radius = torch.stack([radius_x, radius_y], dim=-1)  # (..., 2)
 
     valid = (det > 0) & (depths > near_plane) & (depths < far_plane)
     radius[~valid] = 0.0

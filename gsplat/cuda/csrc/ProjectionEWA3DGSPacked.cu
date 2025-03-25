@@ -21,6 +21,7 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
     const scalar_t *__restrict__ covars,   // [N, 6] Optional
     const scalar_t *__restrict__ quats,    // [N, 4] Optional
     const scalar_t *__restrict__ scales,   // [N, 3] Optional
+    const scalar_t *__restrict__ opacities, // [N] optional
     const scalar_t *__restrict__ viewmats, // [C, 4, 4]
     const scalar_t *__restrict__ Ks,       // [C, 3, 3]
     const int32_t image_width,
@@ -173,21 +174,27 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
 
     // check if the points are in the image region
     float radius_x, radius_y;
-    if (valid) {    
-        // compute tight bounding box of 3 sigma (non differentiable)
+    if (valid) {
+        float extend = 3.33f;
+        if (opacities != nullptr) {
+            float opacity = opacities[col_idx];
+            opacity *= compensation;
+            if (opacity < ALPHA_THRESHOLD) {
+                valid = false;
+            }
+            // Compute opacity-aware bounding box.
+            // https://arxiv.org/pdf/2402.00525 Section B.2
+            extend = min(extend, sqrt(2.0f * logf(opacity / ALPHA_THRESHOLD)));
+        }
+        
+        // compute tight rectangular bounding box (non differentiable)
+        // https://arxiv.org/pdf/2402.00525
         float b = 0.5f * (covar2d[0][0] + covar2d[1][1]);
         float tmp = sqrtf(max(0.01f, b * b - det));
         float v1 = b + tmp; // larger eigenvalue
-        // float v2 = b - tmp; // smaller eigenvalue
-        // float theta = 0.5f * atan2(2.f * covar2d[0][1], (covar2d[0][0] - covar2d[1][1]));
-        float r1 = 3.33f * sqrtf(v1);
-        // float r2 = 3.f * sqrtf(v2);
-        // float cost = cosf(theta);
-        // float sint = sinf(theta);
-        // float radius_x = ceil(fabs(r1 * cost) + fabs(r2 * sint));
-        // float radius_y = ceil(fabs(r1 * sint) + fabs(r2 * cost));
-        radius_x = ceilf(min(3.33f * sqrtf(covar2d[0][0]), r1));
-        radius_y = ceilf(min(3.33f * sqrtf(covar2d[1][1]), r1));
+        float r1 = extend * sqrtf(v1);
+        radius_x = ceilf(min(extend * sqrtf(covar2d[0][0]), r1));
+        radius_y = ceilf(min(extend * sqrtf(covar2d[1][1]), r1));
         
         if (radius_x <= radius_clip && radius_y <= radius_clip) {
             valid = false;
@@ -259,6 +266,7 @@ void launch_projection_ewa_3dgs_packed_fwd_kernel(
     const at::optional<at::Tensor> covars, // [N, 6] optional
     const at::optional<at::Tensor> quats,  // [N, 4] optional
     const at::optional<at::Tensor> scales, // [N, 3] optional
+    const at::optional<at::Tensor> opacities, // [N] optional
     const at::Tensor viewmats,             // [C, 4, 4]
     const at::Tensor Ks,                   // [C, 3, 3]
     const uint32_t image_width,
@@ -315,6 +323,8 @@ void launch_projection_ewa_3dgs_packed_fwd_kernel(
                     quats.has_value() ? quats.value().data_ptr<scalar_t>()
                                       : nullptr,
                     scales.has_value() ? scales.value().data_ptr<scalar_t>()
+                                       : nullptr,
+                    opacities.has_value() ? opacities.value().data_ptr<scalar_t>()
                                        : nullptr,
                     viewmats.data_ptr<scalar_t>(),
                     Ks.data_ptr<scalar_t>(),
