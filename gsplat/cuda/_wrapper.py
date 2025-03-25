@@ -612,6 +612,8 @@ def rasterize_to_pixels_eval3d(
     assert backgrounds is None
     assert masks is None
 
+    # We need quats are already normalized
+    quats = F.normalize(quats, p=2, dim=-1)
 
     N = means.size(0)
     assert means.shape == (N, 3), means.shape

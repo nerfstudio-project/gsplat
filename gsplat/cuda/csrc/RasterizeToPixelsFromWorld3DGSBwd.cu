@@ -180,40 +180,21 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             float opac;
             float vis;
 
-            mat3 R, S;
+            vec3 grd, gro;
+            float power;
             vec3 xyz;
             vec3 scale;
             vec4 quat;
-            mat3 Mt;
-            vec3 o_minus_mu, gro, grd, grd_n, gcrod;
-            float grayDist, power;
             if (valid) {
                 const vec4 xyz_opac = xyz_opacity_batch[t];
                 opac = xyz_opac[3];
                 xyz = {xyz_opac[0], xyz_opac[1], xyz_opac[2]};
                 scale = scale_batch[t];
                 quat = quat_batch[t];
-                
-                R = quat_to_rotmat(quat);
-                S = mat3(
-                    1.0f / scale[0],
-                    0.f,
-                    0.f,
-                    0.f,
-                    1.0f / scale[1],
-                    0.f,
-                    0.f,
-                    0.f,
-                    1.0f / scale[2]
+    
+                power = evaluate_opacity_factor3D_geometric(
+                    ray_o - xyz, ray_d, quat, scale, grd, gro
                 );
-                Mt = glm::transpose(R * S);
-                o_minus_mu = ray_o - xyz;
-                gro = Mt * o_minus_mu;
-                grd = Mt * ray_d;
-                grd_n = safe_normalize(grd);
-                gcrod = glm::cross(grd_n, gro);
-                grayDist = glm::dot(gcrod, gcrod);
-                power = -0.5f * grayDist;
 
                 vis = __expf(power);
                 alpha = min(0.999f, opac * vis);
@@ -263,18 +244,11 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
 
                 if (opac * vis <= 0.999f) {
                     const float v_vis = opac * v_alpha;
-                    float v_gradDist = -0.5f * vis * v_vis;
-                    vec3 v_gcrod = 2.0f * v_gradDist * gcrod;
-                    vec3 v_grd_n = - glm::cross(v_gcrod, gro);
-                    vec3 v_gro = glm::cross(v_gcrod, grd_n);
-                    vec3 v_grd = safe_normalize_bw(grd, v_grd_n);
-                    mat3 v_Mt = glm::outerProduct(v_grd, ray_d) + 
-                        glm::outerProduct(v_gro, o_minus_mu);
-                    vec3 v_o_minus_mu = glm::transpose(Mt) * v_gro;
-
-                    v_mean_local += -v_o_minus_mu;
-                    quat_scale_to_preci_half_vjp(
-                        quat, scale, R, glm::transpose(v_Mt), v_quat_local, v_scale_local
+                    evaluate_opacity_factor3D_and_depth_geometric_bwd(
+                        ray_o - xyz, ray_d, quat, scale,
+                        vis, v_vis, 
+                        // outputs:  dL_dscales, dL_drotations, dL_dmeans3D
+                        v_scale_local, v_quat_local, v_mean_local
                     );
                     v_opacity_local = vis * v_alpha;
                 }
