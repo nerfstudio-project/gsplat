@@ -302,6 +302,72 @@ inline __device__ void quat_scale_to_preci_vjp(
         (R[2][0] * v_M[2][0] + R[2][1] * v_M[2][1] + R[2][2] * v_M[2][2]);
 }
 
+inline __device__ void quat_scale_to_covar_preci_half(
+    const vec4 quat,
+    const vec3 scale,
+    // optional outputs
+    mat3 *covar_half,
+    mat3 *preci_half
+) {
+    mat3 R = quat_to_rotmat(quat);
+    if (covar_half != nullptr) {
+        // C = R * S
+        mat3 S =
+            mat3(scale[0], 0.f, 0.f, 0.f, scale[1], 0.f, 0.f, 0.f, scale[2]);
+        *covar_half = R * S;
+    }
+    if (preci_half != nullptr) {
+        // P = R * S^-1
+        mat3 S = mat3(
+            1.0f / scale[0],
+            0.f,
+            0.f,
+            0.f,
+            1.0f / scale[1],
+            0.f,
+            0.f,
+            0.f,
+            1.0f / scale[2]
+        );
+        *preci_half = R * S;
+    }
+}
+
+inline __device__ void quat_scale_to_preci_half_vjp(
+    // fwd inputs
+    const vec4 quat,
+    const vec3 scale,
+    // precompute
+    const mat3 R,
+    // grad outputs
+    const mat3 v_M, // M is perci_half
+    // grad inputs
+    vec4 &v_quat,
+    vec3 &v_scale
+) {
+    float w = quat[0], x = quat[1], y = quat[2], z = quat[3];
+    float sx = 1.0f / scale[0], sy = 1.0f / scale[1], sz = 1.0f / scale[2];
+
+    // M = R * S
+    mat3 S = mat3(sx, 0.f, 0.f, 0.f, sy, 0.f, 0.f, 0.f, sz);
+    mat3 v_R = v_M * S;
+
+    // grad for (quat, scale) from preci
+    quat_to_rotmat_vjp(quat, v_R, v_quat);
+
+    v_scale[0] +=
+        -sx * sx *
+        (R[0][0] * v_M[0][0] + R[0][1] * v_M[0][1] + R[0][2] * v_M[0][2]);
+    v_scale[1] +=
+        -sy * sy *
+        (R[1][0] * v_M[1][0] + R[1][1] * v_M[1][1] + R[1][2] * v_M[1][2]);
+    v_scale[2] +=
+        -sz * sz *
+        (R[2][0] * v_M[2][0] + R[2][1] * v_M[2][1] + R[2][2] * v_M[2][2]);
+}
+
+
+
 ///////////////////////////////
 // Misc
 ///////////////////////////////

@@ -7,6 +7,7 @@
 #include "Rasterization.h"
 #include "Cameras.cuh"
 #include "Auxiliary.h"
+#include "Utils.cuh"
 
 namespace gsplat {
 
@@ -108,10 +109,8 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     int32_t *id_batch = (int32_t *)s; // [block_size]
     vec4 *xyz_opacity_batch =
         reinterpret_cast<vec4 *>(&id_batch[block_size]); // [block_size]
-    vec3 *scale_batch =
-        reinterpret_cast<vec3 *>(&xyz_opacity_batch[block_size]); // [block_size]
-    vec4 *quat_batch =
-        reinterpret_cast<vec4 *>(&scale_batch[block_size]); // [block_size]
+    mat3 *iscl_rot_batch =
+        reinterpret_cast<mat3 *>(&xyz_opacity_batch[block_size]); // [block_size]
     
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
@@ -145,8 +144,24 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             const vec3 xyz = means[g];
             const float opac = opacities[g];
             xyz_opacity_batch[tr] = {xyz.x, xyz.y, xyz.z, opac};
-            scale_batch[tr] = scales[g];
-            quat_batch[tr] = quats[g];
+            
+            const vec4 quat = quats[g];
+            vec3 scale = scales[g];
+            
+            mat3 R = quat_to_rotmat(quat);
+            mat3 S = mat3(
+                1.0f / scale[0],
+                0.f,
+                0.f,
+                0.f,
+                1.0f / scale[1],
+                0.f,
+                0.f,
+                0.f,
+                1.0f / scale[2]
+            );
+            mat3 iscl_rot = S * glm::transpose(R);
+            iscl_rot_batch[tr] = iscl_rot;
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -157,18 +172,17 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
             const vec4 xyz_opac = xyz_opacity_batch[t];
             const float opac = xyz_opac[3];
-            const vec3 xyz = {xyz_opac[0], xyz_opac[1], xyz_opac[2]};
-            const vec3 scale = scale_batch[t];
-            const vec4 quat = quat_batch[t];
-            
-            vec3 grd, gro;
-            const float power = evaluate_opacity_factor3D_geometric(
-                ray_o - xyz, ray_d, quat, scale, grd, gro
-            );
+            const vec3 xyz = {xyz_opac[0], xyz_opac[1], xyz_opac[2]};            
+            const mat3 iscl_rot = iscl_rot_batch[t];
+
+            const vec3 gro = iscl_rot * (ray_o - xyz);
+            const vec3 grd = safe_normalize(iscl_rot * ray_d);
+            const vec3 gcrod = glm::cross(grd, gro);
+            const float grayDist = glm::dot(gcrod, gcrod);
+            const float power = -0.5f * grayDist;
 
             float alpha = min(0.999f, opac * __expf(power));
-
-            if (power > 0.f || alpha < 1.f / 255.f) {
+            if (alpha < 1.f / 255.f) {
                 continue;
             }
 
@@ -250,7 +264,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
 
     int64_t shmem_size =
         tile_size * tile_size * 
-        (sizeof(int32_t) + sizeof(vec4) + sizeof(vec3) + sizeof(vec4));
+        (sizeof(int32_t) + sizeof(vec4) + sizeof(mat3));
 
     // TODO: an optimization can be done by passing the actual number of
     // channels into the kernel functions and avoid necessary global memory

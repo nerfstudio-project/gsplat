@@ -570,17 +570,9 @@ safe_normalize_bw(const glm::vec3 &v, const glm::vec3 &d_out) {
     if (l > 0.0f) {
         const float il = rsqrtf(l);
         const float il3 = (il * il * il);
-        return il * d_out -
-               il3 * glm::vec3(
-                         d_out.x * (v.x * v.x) + d_out.y * (v.y * v.x) +
-                             d_out.z * (v.z * v.x),
-                         d_out.x * (v.x * v.y) + d_out.y * (v.y * v.y) +
-                             d_out.z * (v.z * v.y),
-                         d_out.x * (v.x * v.z) + d_out.y * (v.y * v.z) +
-                             d_out.z * (v.z * v.z)
-                     );
+        return il * d_out - il3 * glm::dot(d_out, v) * v;
     }
-    return glm::vec3(0);
+    return d_out;
 }
 
 // ------------------------------------------------------------------------
