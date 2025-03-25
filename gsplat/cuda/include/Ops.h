@@ -466,6 +466,7 @@ projection_ut_3dgs_fused(
     const at::Tensor means,  // [N, 3]
     const at::Tensor quats,  // [N, 4]
     const at::Tensor scales, // [N, 3]
+    const at::optional<at::Tensor> opacities, // [N] optional
     const float eps2d,
     const float near_plane,
     const float far_plane,

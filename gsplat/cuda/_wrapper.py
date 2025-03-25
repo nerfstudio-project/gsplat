@@ -1081,6 +1081,7 @@ def fully_fused_projection_with_ut(
     radius_clip: float = 0.0,
     calc_compensations: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+    opacities: Optional[Tensor] = None,  # [N] or None
     cm_params=None,
     rs_params=None,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
@@ -1095,9 +1096,10 @@ def fully_fused_projection_with_ut(
     radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
         "projection_ut_3dgs_fused"
     )(
-        means,
-        quats,
-        scales,
+        means.contiguous(),
+        quats.contiguous(),
+        scales.contiguous(),
+        opacities.contiguous() if opacities is not None else None,
         eps2d,
         near_plane,
         far_plane,
