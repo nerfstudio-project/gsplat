@@ -76,7 +76,7 @@ def test_projection_2dgs(test_data):
 
     # TODO (WZ): is the following true for 2dgs as while?
     # radii is integer so we allow for 1 unit difference
-    valid = (radii > 0) & (_radii > 0)
+    valid = ((radii > 0) & (_radii > 0)).all(dim=-1)
     torch.testing.assert_close(radii, _radii, rtol=0, atol=1)
     torch.testing.assert_close(means2d[valid], _means2d[valid], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(depths[valid], _depths[valid], rtol=1e-4, atol=1e-4)
@@ -86,10 +86,10 @@ def test_projection_2dgs(test_data):
     torch.testing.assert_close(normals[valid], _normals[valid], rtol=1e-4, atol=1e-4)
 
     # backward
-    v_means2d = torch.randn_like(means2d) * radii[..., None]
-    v_depths = torch.randn_like(depths) * radii
-    v_ray_transforms = torch.randn_like(ray_transforms) * radii[..., None, None]
-    v_normals = torch.randn_like(normals) * radii[..., None]
+    v_means2d = torch.randn_like(means2d) * valid[..., None]
+    v_depths = torch.randn_like(depths) * valid
+    v_ray_transforms = torch.randn_like(ray_transforms) * valid[..., None, None]
+    v_normals = torch.randn_like(normals) * valid[..., None]
 
     v_quats, v_scales, v_means = torch.autograd.grad(
         (means2d * v_means2d).sum()
@@ -189,7 +189,7 @@ def test_fully_fused_projection_packed_2dgs(
         torch.stack([camera_ids, gaussian_ids]), normals, _normals.shape
     ).to_dense()
 
-    sel = (__radii > 0) & (_radii > 0)
+    sel = ((__radii > 0) & (_radii > 0)).all(dim=-1)
     torch.testing.assert_close(__radii[sel], _radii[sel], rtol=0, atol=1)
     torch.testing.assert_close(__means2d[sel], _means2d[sel], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(__depths[sel], _depths[sel], rtol=1e-4, atol=1e-4)
@@ -212,10 +212,10 @@ def test_fully_fused_projection_packed_2dgs(
         retain_graph=True,
     )
     v_quats, v_scales, v_means = torch.autograd.grad(
-        (means2d * v_means2d[__radii > 0]).sum()
-        + (depths * v_depths[__radii > 0]).sum()
-        + (ray_transforms * v_ray_transforms[__radii > 0]).sum()
-        + (normals * v_normals[__radii > 0]).sum(),
+        (means2d * v_means2d[(__radii > 0).all(dim=-1)]).sum()
+        + (depths * v_depths[(__radii > 0).all(dim=-1)]).sum()
+        + (ray_transforms * v_ray_transforms[(__radii > 0).all(dim=-1)]).sum()
+        + (normals * v_normals[(__radii > 0).all(dim=-1)]).sum(),
         (quats, scales, means),
         retain_graph=True,
     )

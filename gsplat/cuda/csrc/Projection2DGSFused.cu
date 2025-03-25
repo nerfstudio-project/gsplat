@@ -216,8 +216,8 @@ __global__ void projection_2dgs_fused_fwd_kernel(
     const vec2 half_extend = mean2d * mean2d - temp;
 
     // ==============================================
-    const float radius_x = ceil(3.f * sqrt(max(1e-4, half_extend.x)));
-    const float radius_y = ceil(3.f * sqrt(max(1e-4, half_extend.y)));
+    const float radius_x = ceil(3.33f * sqrt(max(1e-4, half_extend.x)));
+    const float radius_y = ceil(3.33f * sqrt(max(1e-4, half_extend.y)));
 
     if (radius_x <= radius_clip && radius_y <= radius_clip) {
         radii[idx * 2] = 0;
