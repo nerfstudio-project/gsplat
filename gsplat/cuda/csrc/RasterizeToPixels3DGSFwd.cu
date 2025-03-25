@@ -146,7 +146,7 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
                                         conic.z * delta.y * delta.y) +
                                 conic.y * delta.x * delta.y;
             float alpha = min(0.999f, opac * __expf(-sigma));
-            if (sigma < 0.f || alpha < 1.f / 255.f) {
+            if (sigma < 0.f || alpha < ALPHA_THRESHOLD) {
                 continue;
             }
 
