@@ -162,14 +162,16 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     float b = 0.5f * (covar2d[0][0] + covar2d[1][1]);
     float tmp = sqrtf(max(0.01f, b * b - det));
     float v1 = b + tmp; // larger eigenvalue
-    float v2 = b - tmp; // smaller eigenvalue
-    float theta = 0.5f * atan2(2.f * covar2d[0][1], (covar2d[0][0] - covar2d[1][1]));
-    float r1 = 3.f * sqrtf(v1);
-    float r2 = 3.f * sqrtf(v2);
-    float cost = cosf(theta);
-    float sint = sinf(theta);
-    float radius_x = ceil(fabs(r1 * cost) + fabs(r2 * sint));
-    float radius_y = ceil(fabs(r1 * sint) + fabs(r2 * cost));
+    // float v2 = b - tmp; // smaller eigenvalue
+    // float theta = 0.5f * atan2(2.f * covar2d[0][1], (covar2d[0][0] - covar2d[1][1]));
+    float r1 = 3.33f * sqrtf(v1);
+    // float r2 = 3.f * sqrtf(v2);
+    // float cost = cosf(theta);
+    // float sint = sinf(theta);
+    // float radius_x = ceil(fabs(r1 * cost) + fabs(r2 * sint));
+    // float radius_y = ceil(fabs(r1 * sint) + fabs(r2 * cost));
+    float radius_x = ceilf(min(3.33f * sqrtf(covar2d_inv[0][0]), r1));
+    float radius_y = ceilf(min(3.33f * sqrtf(covar2d_inv[1][1]), r1));
 
     if (radius_x <= radius_clip && radius_y <= radius_clip) {
         radii[idx * 2] = 0;
