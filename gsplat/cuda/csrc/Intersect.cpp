@@ -14,7 +14,7 @@ namespace gsplat {
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
     const at::Tensor means2d,                    // [C, N, 2] or [nnz, 2]
-    const at::Tensor radii,                      // [C, N] or [nnz]
+    const at::Tensor radii,                      // [C, N, 2] or [nnz, 2]
     const at::Tensor depths,                     // [C, N] or [nnz]
     const at::optional<at::Tensor> camera_ids,   // [nnz]
     const at::optional<at::Tensor> gaussian_ids, // [nnz]
@@ -62,17 +62,17 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
             means2d,
             radii,
             depths,
-            packed ? camera_ids : std::nullopt,
-            packed ? gaussian_ids : std::nullopt,
+            packed ? camera_ids : c10::nullopt,
+            packed ? gaussian_ids : c10::nullopt,
             C,
             tile_size,
             tile_width,
             tile_height,
-            std::nullopt, // cum_tiles_per_gauss
+            c10::nullopt, // cum_tiles_per_gauss
             // outputs
             at::optional<at::Tensor>(tiles_per_gauss),
-            std::nullopt, // isect_ids
-            std::nullopt  // flatten_ids
+            c10::nullopt, // isect_ids
+            c10::nullopt  // flatten_ids
         );
         cum_tiles_per_gauss = at::cumsum(tiles_per_gauss.view({-1}), 0);
         n_isects = cum_tiles_per_gauss[-1].item<int64_t>();
@@ -91,15 +91,15 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
             means2d,
             radii,
             depths,
-            packed ? camera_ids : std::nullopt,
-            packed ? gaussian_ids : std::nullopt,
+            packed ? camera_ids : c10::nullopt,
+            packed ? gaussian_ids : c10::nullopt,
             C,
             tile_size,
             tile_width,
             tile_height,
             cum_tiles_per_gauss,
             // outputs
-            std::nullopt, // tiles_per_gauss
+            c10::nullopt, // tiles_per_gauss
             at::optional<at::Tensor>(isect_ids),
             at::optional<at::Tensor>(flatten_ids)
         );
@@ -208,7 +208,7 @@ at::Tensor intersect_offset(
 //         masks,
 //         v_colors,
 //         v_coeffs,
-//         v_dirs.defined() ? at::optional<at::Tensor>(v_dirs) : std::nullopt
+//         v_dirs.defined() ? at::optional<at::Tensor>(v_dirs) : c10::nullopt
 //     );
 //     return std::make_tuple(v_coeffs, v_dirs); // [..., K, 3], [..., 3]
 // }

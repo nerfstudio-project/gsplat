@@ -181,7 +181,7 @@ rasterize_to_pixels_3dgs_bwd(
             last_ids,                                                          \
             v_render_colors,                                                   \
             v_render_alphas,                                                   \
-            absgrad ? std::optional<at::Tensor>(v_means2d_abs) : std::nullopt, \
+            absgrad ? c10::optional<at::Tensor>(v_means2d_abs) : c10::nullopt, \
             v_means2d,                                                         \
             v_conics,                                                          \
             v_colors,                                                          \
@@ -268,14 +268,14 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
             tile_size,
             tile_offsets,
             flatten_ids,
-            std::nullopt, // chunk_starts
+            c10::nullopt, // chunk_starts
             at::optional<at::Tensor>(chunk_cnts),
-            std::nullopt, // gaussian_ids
-            std::nullopt  // pixel_ids
+            c10::nullopt, // gaussian_ids
+            c10::nullopt  // pixel_ids
         );
         at::Tensor cumsum = at::cumsum(chunk_cnts, 0, chunk_cnts.scalar_type());
         n_elems = cumsum[-1].item<int64_t>();
-        chunk_starts = cumsum - chunk_cnts;
+        chunk_starts = at::sub(cumsum, chunk_cnts);
     } else {
         n_elems = 0;
     }
@@ -299,7 +299,7 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
             tile_offsets,
             flatten_ids,
             at::optional<at::Tensor>(chunk_starts),
-            std::nullopt, // chunk_cnts
+            c10::nullopt, // chunk_cnts
             at::optional<at::Tensor>(gaussian_ids),
             at::optional<at::Tensor>(pixel_ids)
         );
@@ -535,7 +535,7 @@ rasterize_to_pixels_2dgs_bwd(
             v_render_normals,                                                  \
             v_render_distort,                                                  \
             v_render_median,                                                   \
-            absgrad ? std::optional<at::Tensor>(v_means2d_abs) : std::nullopt, \
+            absgrad ? c10::optional<at::Tensor>(v_means2d_abs) : c10::nullopt, \
             v_means2d,                                                         \
             v_ray_transforms,                                                  \
             v_colors,                                                          \
@@ -630,14 +630,14 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
             tile_size,
             tile_offsets,
             flatten_ids,
-            std::nullopt, // chunk_starts
+            c10::nullopt, // chunk_starts
             at::optional<at::Tensor>(chunk_cnts),
-            std::nullopt, // gaussian_ids
-            std::nullopt  // pixel_ids
+            c10::nullopt, // gaussian_ids
+            c10::nullopt  // pixel_ids
         );
         at::Tensor cumsum = at::cumsum(chunk_cnts, 0, chunk_cnts.scalar_type());
         n_elems = cumsum[-1].item<int64_t>();
-        chunk_starts = cumsum - chunk_cnts;
+        chunk_starts = at::sub(cumsum, chunk_cnts);
     } else {
         n_elems = 0;
     }
@@ -661,7 +661,7 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
             tile_offsets,
             flatten_ids,
             at::optional<at::Tensor>(chunk_starts),
-            std::nullopt, // chunk_cnts
+            c10::nullopt, // chunk_cnts
             at::optional<at::Tensor>(gaussian_ids),
             at::optional<at::Tensor>(pixel_ids)
         );

@@ -400,7 +400,7 @@ def rasterization(
         camtoworlds = torch.inverse(viewmats)  # [C, 4, 4]
         if packed:
             dirs = means[gaussian_ids, :] - camtoworlds[camera_ids, :3, 3]  # [nnz, 3]
-            masks = radii > 0  # [nnz]
+            masks = (radii > 0).all(dim=-1)  # [nnz]
             if colors.dim() == 3:
                 # Turn [N, K, 3] into [nnz, 3]
                 shs = colors[gaussian_ids, :, :]  # [nnz, K, 3]
@@ -410,7 +410,7 @@ def rasterization(
             colors = spherical_harmonics(sh_degree, dirs, shs, masks=masks)  # [nnz, 3]
         else:
             dirs = means[None, :, :] - camtoworlds[:, None, :3, 3]  # [C, N, 3]
-            masks = radii > 0  # [C, N]
+            masks = (radii > 0).all(dim=-1)  # [C, N]
             if colors.dim() == 3:
                 # Turn [N, K, 3] into [C, N, K, 3]
                 shs = colors.expand(C, -1, -1, -1)  # [C, N, K, 3]
@@ -778,7 +778,7 @@ def _rasterization(
         # Colors are SH coefficients, with shape [N, K, 3] or [C, N, K, 3]
         camtoworlds = torch.inverse(viewmats)  # [C, 4, 4]
         dirs = means[None, :, :] - camtoworlds[:, None, :3, 3]  # [C, N, 3]
-        masks = radii > 0  # [C, N]
+        masks = (radii > 0).all(dim=-1)  # [C, N]
         if colors.dim() == 3:
             # Turn [N, K, 3] into [C, N, 3]
             shs = colors.expand(C, -1, -1, -1)  # [C, N, K, 3]
@@ -1303,7 +1303,7 @@ def rasterization_2dgs(
         else:
             dirs = means[None, :, :] - camtoworlds[:, None, :3, 3]
         colors = spherical_harmonics(
-            sh_degree, dirs, colors, masks=radii > 0
+            sh_degree, dirs, colors, masks=(radii > 0).all(dim=-1)
         )  # [nnz, D] or [C, N, 3]
         # make it apple-to-apple with Inria's CUDA Backend.
         colors = torch.clamp_min(colors + 0.5, 0.0)

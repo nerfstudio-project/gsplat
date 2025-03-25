@@ -274,7 +274,7 @@ def fully_fused_projection(
 
         - **camera_ids**. The row indices of the projected Gaussians. Int32 tensor of shape [nnz].
         - **gaussian_ids**. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].
-        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz].
+        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz, 2].
         - **means**. Projected Gaussian means in 2D. [nnz, 2]
         - **depths**. The z-depth of the projected Gaussians. [nnz]
         - **conics**. Inverse of the projected covariances. Return the flattend upper triangle with [nnz, 3]
@@ -282,7 +282,7 @@ def fully_fused_projection(
 
         If `packed` is False:
 
-        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N].
+        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N, 2].
         - **means**. Projected Gaussian means in 2D. [C, N, 2]
         - **depths**. The z-depth of the projected Gaussians. [C, N]
         - **conics**. Inverse of the projected covariances. Return the flattend upper triangle with [C, N, 3]
@@ -349,7 +349,7 @@ def fully_fused_projection(
 @torch.no_grad()
 def isect_tiles(
     means2d: Tensor,  # [C, N, 2] or [nnz, 2]
-    radii: Tensor,  # [C, N] or [nnz]
+    radii: Tensor,  # [C, N, 2] or [nnz, 2]
     depths: Tensor,  # [C, N] or [nnz]
     tile_size: int,
     tile_width: int,
@@ -364,7 +364,7 @@ def isect_tiles(
 
     Args:
         means2d: Projected Gaussian means. [C, N, 2] if packed is False, [nnz, 2] if packed is True.
-        radii: Maximum radii of the projected Gaussians. [C, N] if packed is False, [nnz] if packed is True.
+        radii: Maximum radii of the projected Gaussians. [C, N, 2] if packed is False, [nnz, 2] if packed is True.
         depths: Z-depth of the projected Gaussians. [C, N] if packed is False, [nnz] if packed is True.
         tile_size: Tile size.
         tile_width: Tile width.
@@ -389,7 +389,7 @@ def isect_tiles(
     if packed:
         nnz = means2d.size(0)
         assert means2d.shape == (nnz, 2), means2d.size()
-        assert radii.shape == (nnz,), radii.size()
+        assert radii.shape == (nnz, 2), radii.size()
         assert depths.shape == (nnz,), depths.size()
         assert camera_ids is not None, "camera_ids is required if packed is True"
         assert gaussian_ids is not None, "gaussian_ids is required if packed is True"
@@ -401,7 +401,7 @@ def isect_tiles(
     else:
         C, N, _ = means2d.shape
         assert means2d.shape == (C, N, 2), means2d.size()
-        assert radii.shape == (C, N), radii.size()
+        assert radii.shape == (C, N, 2), radii.size()
         assert depths.shape == (C, N), depths.size()
 
     tiles_per_gauss, isect_ids, flatten_ids = _make_lazy_cuda_func("intersect_tile")(
@@ -1646,7 +1646,7 @@ def fully_fused_projection_2dgs(
 
         - **camera_ids**. The row indices of the projected Gaussians. Int32 tensor of shape [nnz].
         - **gaussian_ids**. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].
-        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz].
+        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz, 2].
         - **means**. Projected Gaussian means in 2D. [nnz, 2]
         - **depths**. The z-depth of the projected Gaussians. [nnz]
         - **ray_transforms**. transformation matrices that transforms xy-planes in pixel spaces into splat coordinates (WH)^T in equation (9) in paper [nnz, 3, 3]
@@ -1654,7 +1654,7 @@ def fully_fused_projection_2dgs(
 
         If `packed` is False:
 
-        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N].
+        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N, 2].
         - **means**. Projected Gaussian means in 2D. [C, N, 2]
         - **depths**. The z-depth of the projected Gaussians. [C, N]
         - **ray_transforms**. transformation matrices that transforms xy-planes in pixel spaces into splat coordinates.

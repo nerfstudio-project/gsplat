@@ -52,7 +52,7 @@ void launch_projection_ewa_3dgs_fused_fwd_kernel(
     const float radius_clip,
     const CameraModelType camera_model,
     // outputs
-    at::Tensor radii,                      // [C, N]
+    at::Tensor radii,                      // [C, N, 2]
     at::Tensor means2d,                    // [C, N, 2]
     at::Tensor depths,                     // [C, N]
     at::Tensor conics,                     // [C, N, 3]
@@ -72,7 +72,7 @@ void launch_projection_ewa_3dgs_fused_bwd_kernel(
     const float eps2d,
     const CameraModelType camera_model,
     // fwd outputs
-    const at::Tensor radii,                       // [C, N]
+    const at::Tensor radii,                       // [C, N, 2]
     const at::Tensor conics,                      // [C, N, 3]
     const at::optional<at::Tensor> compensations, // [C, N] optional
     // grad outputs
@@ -111,7 +111,7 @@ void launch_projection_ewa_3dgs_packed_fwd_kernel(
     at::optional<at::Tensor> indptr,     // [C + 1]
     at::optional<at::Tensor> camera_ids, // [nnz]
     at::optional<at::Tensor> gaussian_ids, // [nnz]
-    at::optional<at::Tensor> radii,        // [nnz]
+    at::optional<at::Tensor> radii,        // [nnz, 2]
     at::optional<at::Tensor> means2d,      // [nnz, 2]
     at::optional<at::Tensor> depths,       // [nnz]
     at::optional<at::Tensor> conics,       // [nnz, 3]
@@ -161,7 +161,7 @@ void launch_projection_2dgs_fused_fwd_kernel(
     const float far_plane,
     const float radius_clip,
     // outputs
-    at::Tensor radii,          // [C, N]
+    at::Tensor radii,          // [C, N, 2]
     at::Tensor means2d,        // [C, N, 2]
     at::Tensor depths,         // [C, N]
     at::Tensor ray_transforms, // [C, N, 3, 3]
@@ -177,7 +177,7 @@ void launch_projection_2dgs_fused_bwd_kernel(
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
-    const at::Tensor radii,          // [C, N]
+    const at::Tensor radii,          // [C, N, 2]
     const at::Tensor ray_transforms, // [C, N, 3, 3]
     // grad outputs
     const at::Tensor v_means2d,        // [C, N, 2]
@@ -211,7 +211,7 @@ void launch_projection_2dgs_packed_fwd_kernel(
     at::optional<at::Tensor> indptr,     // [C + 1]
     at::optional<at::Tensor> camera_ids, // [nnz]
     at::optional<at::Tensor> gaussian_ids,   // [nnz]
-    at::optional<at::Tensor> radii,          // [nnz]
+    at::optional<at::Tensor> radii,          // [nnz, 2]
     at::optional<at::Tensor> means2d,        // [nnz, 2]
     at::optional<at::Tensor> depths,         // [nnz]
     at::optional<at::Tensor> ray_transforms, // [nnz, 3, 3]

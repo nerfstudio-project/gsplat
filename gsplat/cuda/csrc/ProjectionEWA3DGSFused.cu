@@ -30,7 +30,7 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     const float radius_clip,
     const CameraModelType camera_model,
     // outputs
-    int32_t *__restrict__ radii,         // [C, N]
+    int32_t *__restrict__ radii,         // [C, N, 2]
     scalar_t *__restrict__ means2d,      // [C, N, 2]
     scalar_t *__restrict__ depths,       // [C, N]
     scalar_t *__restrict__ conics,       // [C, N, 3]
@@ -67,7 +67,8 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     vec3 mean_c;
     posW2C(R, t, glm::make_vec3(means), mean_c);
     if (mean_c.z < near_plane || mean_c.z > far_plane) {
-        radii[idx] = 0;
+        radii[idx * 2] = 0;
+        radii[idx * 2 + 1] = 0;
         return;
     }
 
@@ -149,34 +150,46 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     float compensation;
     float det = add_blur(eps2d, covar2d, compensation);
     if (det <= 0.f) {
-        radii[idx] = 0;
+        radii[idx * 2] = 0;
+        radii[idx * 2 + 1] = 0;
         return;
     }
 
     // compute the inverse of the 2d covariance
     mat2 covar2d_inv = glm::inverse(covar2d);
 
-    // take 3 sigma as the radius (non differentiable)
+    // compute tight bounding box of 3 sigma (non differentiable)
     float b = 0.5f * (covar2d[0][0] + covar2d[1][1]);
-    float v1 = b + sqrt(max(0.01f, b * b - det));
-    float radius = ceil(3.f * sqrt(v1));
-    // float v2 = b - sqrt(max(0.1f, b * b - det));
-    // float radius = ceil(3.f * sqrt(max(v1, v2)));
+    float tmp = sqrtf(max(0.01f, b * b - det));
+    float v1 = b + tmp; // larger eigenvalue
+    // float v2 = b - tmp; // smaller eigenvalue
+    // float theta = 0.5f * atan2(2.f * covar2d[0][1], (covar2d[0][0] - covar2d[1][1]));
+    float r1 = 3.33f * sqrtf(v1);
+    // float r2 = 3.f * sqrtf(v2);
+    // float cost = cosf(theta);
+    // float sint = sinf(theta);
+    // float radius_x = ceil(fabs(r1 * cost) + fabs(r2 * sint));
+    // float radius_y = ceil(fabs(r1 * sint) + fabs(r2 * cost));
+    float radius_x = ceilf(min(3.33f * sqrtf(covar2d[0][0]), r1));
+    float radius_y = ceilf(min(3.33f * sqrtf(covar2d[1][1]), r1));
 
-    if (radius <= radius_clip) {
-        radii[idx] = 0;
+    if (radius_x <= radius_clip && radius_y <= radius_clip) {
+        radii[idx * 2] = 0;
+        radii[idx * 2 + 1] = 0;
         return;
     }
 
     // mask out gaussians outside the image region
-    if (mean2d.x + radius <= 0 || mean2d.x - radius >= image_width ||
-        mean2d.y + radius <= 0 || mean2d.y - radius >= image_height) {
-        radii[idx] = 0;
+    if (mean2d.x + radius_x <= 0 || mean2d.x - radius_x >= image_width ||
+        mean2d.y + radius_y <= 0 || mean2d.y - radius_y >= image_height) {
+        radii[idx * 2] = 0;
+        radii[idx * 2 + 1] = 0;
         return;
     }
 
     // write to outputs
-    radii[idx] = (int32_t)radius;
+    radii[idx * 2] = (int32_t)radius_x;
+    radii[idx * 2 + 1] = (int32_t)radius_y;
     means2d[idx * 2] = mean2d.x;
     means2d[idx * 2 + 1] = mean2d.y;
     depths[idx] = mean_c.z;
@@ -204,7 +217,7 @@ void launch_projection_ewa_3dgs_fused_fwd_kernel(
     const float radius_clip,
     const CameraModelType camera_model,
     // outputs
-    at::Tensor radii,                      // [C, N]
+    at::Tensor radii,                      // [C, N, 2]
     at::Tensor means2d,                    // [C, N, 2]
     at::Tensor depths,                     // [C, N]
     at::Tensor conics,                     // [C, N, 3]
@@ -278,7 +291,7 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
     const float eps2d,
     const CameraModelType camera_model,
     // fwd outputs
-    const int32_t *__restrict__ radii,          // [C, N]
+    const int32_t *__restrict__ radii,          // [C, N, 2]
     const scalar_t *__restrict__ conics,        // [C, N, 3]
     const scalar_t *__restrict__ compensations, // [C, N] optional
     // grad outputs
@@ -295,7 +308,7 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
 ) {
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
-    if (idx >= C * N || radii[idx] <= 0) {
+    if (idx >= C * N || radii[idx * 2] <= 0 || radii[idx * 2 + 1] <= 0) {
         return;
     }
     const uint32_t cid = idx / N; // camera id
@@ -514,7 +527,7 @@ void launch_projection_ewa_3dgs_fused_bwd_kernel(
     const float eps2d,
     const CameraModelType camera_model,
     // fwd outputs
-    const at::Tensor radii,                       // [C, N]
+    const at::Tensor radii,                       // [C, N, 2]
     const at::Tensor conics,                      // [C, N, 3]
     const at::optional<at::Tensor> compensations, // [C, N] optional
     // grad outputs

@@ -754,8 +754,8 @@ class Runner:
                     data, f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt"
                 )
             if (
-                step in [i - 1 for i in cfg.ply_steps]
-                or step == max_steps - 1
+                (step in [i - 1 for i in cfg.ply_steps]
+                or step == max_steps - 1)
                 and cfg.save_ply
             ):
                 rgb = None
@@ -795,7 +795,7 @@ class Runner:
                     )
                     visibility_mask.scatter_(0, info["gaussian_ids"], 1)
                 else:
-                    visibility_mask = (info["radii"] > 0).any(0)
+                    visibility_mask = (info["radii"] > 0).all(-1).any(0)
 
             # optimize
             for optimizer in self.optimizers.values():

@@ -75,7 +75,7 @@ projection_ewa_3dgs_fused_bwd(
     const float eps2d,
     const CameraModelType camera_model,
     // fwd outputs
-    const at::Tensor radii,                       // [C, N]
+    const at::Tensor radii,                       // [C, N, 2]
     const at::Tensor conics,                      // [C, N, 3]
     const at::optional<at::Tensor> compensations, // [C, N] optional
     // grad outputs
@@ -181,7 +181,7 @@ void adam(
 // GS Tile Intersection
 std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
     const at::Tensor means2d,                    // [C, N, 2] or [nnz, 2]
-    const at::Tensor radii,                      // [C, N] or [nnz]
+    const at::Tensor radii,                      // [C, N, 2] or [nnz, 2]
     const at::Tensor depths,                     // [C, N] or [nnz]
     const at::optional<at::Tensor> camera_ids,   // [nnz]
     const at::optional<at::Tensor> gaussian_ids, // [nnz]
@@ -316,7 +316,7 @@ projection_2dgs_fused_bwd(
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
-    const at::Tensor radii,          // [C, N]
+    const at::Tensor radii,          // [C, N, 2]
     const at::Tensor ray_transforms, // [C, N, 3, 3]
     // grad outputs
     const at::Tensor v_means2d,        // [C, N, 2]
