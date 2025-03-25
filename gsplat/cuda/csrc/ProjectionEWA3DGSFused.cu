@@ -20,6 +20,7 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     const scalar_t *__restrict__ covars,   // [N, 6] optional
     const scalar_t *__restrict__ quats,    // [N, 4] optional
     const scalar_t *__restrict__ scales,   // [N, 3] optional
+    const scalar_t *__restrict__ opacities, // [N] optional
     const scalar_t *__restrict__ viewmats, // [C, 4, 4]
     const scalar_t *__restrict__ Ks,       // [C, 3, 3]
     const int32_t image_width,
@@ -158,14 +159,28 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     // compute the inverse of the 2d covariance
     mat2 covar2d_inv = glm::inverse(covar2d);
 
+    float extend = 3.33f;
+    if (opacities != nullptr) {
+        float opacity = opacities[gid];
+        opacity *= compensation;
+        if (opacity < ALPHA_THRESHOLD) {
+            radii[idx * 2] = 0;
+            radii[idx * 2 + 1] = 0;
+            return;
+        }
+        // Compute opacity-aware bounding box.
+        // https://arxiv.org/pdf/2402.00525 Section B.2
+        extend = min(extend, sqrt(2.0f * logf(opacity / ALPHA_THRESHOLD)));
+    }
+
     // compute tight rectangular bounding box (non differentiable)
     // https://arxiv.org/pdf/2402.00525
     float b = 0.5f * (covar2d[0][0] + covar2d[1][1]);
     float tmp = sqrtf(max(0.01f, b * b - det));
     float v1 = b + tmp; // larger eigenvalue
-    float r1 = 3.33f * sqrtf(v1);
-    float radius_x = ceilf(min(3.33f * sqrtf(covar2d[0][0]), r1));
-    float radius_y = ceilf(min(3.33f * sqrtf(covar2d[1][1]), r1));
+    float r1 = extend * sqrtf(v1);
+    float radius_x = ceilf(min(extend * sqrtf(covar2d[0][0]), r1));
+    float radius_y = ceilf(min(extend * sqrtf(covar2d[1][1]), r1));
 
     if (radius_x <= radius_clip && radius_y <= radius_clip) {
         radii[idx * 2] = 0;
@@ -201,6 +216,7 @@ void launch_projection_ewa_3dgs_fused_fwd_kernel(
     const at::optional<at::Tensor> covars, // [N, 6] optional
     const at::optional<at::Tensor> quats,  // [N, 4] optional
     const at::optional<at::Tensor> scales, // [N, 3] optional
+    const at::optional<at::Tensor> opacities, // [N] optional
     const at::Tensor viewmats,             // [C, 4, 4]
     const at::Tensor Ks,                   // [C, 3, 3]
     const uint32_t image_width,
@@ -248,6 +264,8 @@ void launch_projection_ewa_3dgs_fused_fwd_kernel(
                                       : nullptr,
                     scales.has_value() ? scales.value().data_ptr<scalar_t>()
                                        : nullptr,
+                    opacities.has_value() ? opacities.value().data_ptr<scalar_t>()
+                                         : nullptr,
                     viewmats.data_ptr<scalar_t>(),
                     Ks.data_ptr<scalar_t>(),
                     image_width,

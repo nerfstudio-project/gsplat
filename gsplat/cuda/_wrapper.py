@@ -223,6 +223,7 @@ def fully_fused_projection(
     sparse_grad: bool = False,
     calc_compensations: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+    opacities: Optional[Tensor] = None,  # [N] or None
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Projects Gaussians to 2D.
 
@@ -265,6 +266,8 @@ def fully_fused_projection(
           of {`means`, `covars`, `quats`, `scales`} will be a sparse Tensor in COO layout. Default: False.
         calc_compensations: If True, a view-dependent opacity compensation factor will be computed, which
           is useful for anti-aliasing. Default: False.
+        opacities: Gaussian opacities in range [0, 1]. If provided, will use it to compute a tighter bounds.
+            [N] or None. Default: None.
 
     Returns:
         A tuple:
@@ -305,6 +308,9 @@ def fully_fused_projection(
         scales = scales.contiguous()
     if sparse_grad:
         assert packed, "sparse_grad is only supported when packed is True"
+    if opacities is not None:
+        assert opacities.size() == (N,), opacities.size()
+        opacities = opacities.contiguous()
 
     viewmats = viewmats.contiguous()
     Ks = Ks.contiguous()
@@ -325,6 +331,7 @@ def fully_fused_projection(
             sparse_grad,
             calc_compensations,
             camera_model,
+            opacities,
         )
     else:
         return _FullyFusedProjection.apply(
@@ -342,6 +349,7 @@ def fully_fused_projection(
             radius_clip,
             calc_compensations,
             camera_model,
+            opacities,
         )
 
 
@@ -759,6 +767,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         radius_clip: float,
         calc_compensations: bool,
         camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+        opacities: Optional[Tensor] = None,  # [N] or None
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
@@ -772,6 +781,7 @@ class _FullyFusedProjection(torch.autograd.Function):
             covars,
             quats,
             scales,
+            opacities,
             viewmats,
             Ks,
             width,
@@ -852,6 +862,7 @@ class _FullyFusedProjection(torch.autograd.Function):
             v_quats,
             v_scales,
             v_viewmats,
+            None,
             None,
             None,
             None,
@@ -1016,6 +1027,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         sparse_grad: bool,
         calc_compensations: bool,
         camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+        opacities: Optional[Tensor] = None,  # [N] or None
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
@@ -1035,6 +1047,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             covars,  # optional
             quats,  # optional
             scales,  # optional
+            opacities,  # optional
             viewmats,
             Ks,
             width,
@@ -1177,6 +1190,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             v_quats,
             v_scales,
             v_viewmats,
+            None,
             None,
             None,
             None,

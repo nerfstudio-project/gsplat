@@ -45,12 +45,13 @@ std::tuple<
     at::Tensor,
     at::Tensor>
 projection_ewa_3dgs_fused_fwd(
-    const at::Tensor means,                // [N, 3]
-    const at::optional<at::Tensor> covars, // [N, 6] optional
-    const at::optional<at::Tensor> quats,  // [N, 4] optional
-    const at::optional<at::Tensor> scales, // [N, 3] optional
-    const at::Tensor viewmats,             // [C, 4, 4]
-    const at::Tensor Ks,                   // [C, 3, 3]
+    const at::Tensor means,                   // [N, 3]
+    const at::optional<at::Tensor> covars,    // [N, 6] optional
+    const at::optional<at::Tensor> quats,     // [N, 4] optional
+    const at::optional<at::Tensor> scales,    // [N, 3] optional
+    const at::optional<at::Tensor> opacities, // [N] optional
+    const at::Tensor viewmats,                // [C, 4, 4]
+    const at::Tensor Ks,                      // [C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
@@ -103,12 +104,13 @@ std::tuple<
     at::Tensor,
     at::Tensor>
 projection_ewa_3dgs_packed_fwd(
-    const at::Tensor means,                // [N, 3]
-    const at::optional<at::Tensor> covars, // [N, 6] optional
-    const at::optional<at::Tensor> quats,  // [N, 4] optional
-    const at::optional<at::Tensor> scales, // [N, 3] optional
-    const at::Tensor viewmats,             // [C, 4, 4]
-    const at::Tensor Ks,                   // [C, 3, 3]
+    const at::Tensor means,                   // [N, 3]
+    const at::optional<at::Tensor> covars,    // [N, 6] optional
+    const at::optional<at::Tensor> quats,     // [N, 4] optional
+    const at::optional<at::Tensor> scales,    // [N, 3] optional
+    const at::optional<at::Tensor> opacities, // [N] optional
+    const at::Tensor viewmats,                // [C, 4, 4]
+    const at::Tensor Ks,                      // [C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,

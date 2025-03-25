@@ -140,7 +140,7 @@ __global__ void rasterize_to_indices_3dgs_kernel(
                                 conic.y * delta.x * delta.y;
             float alpha = min(0.999f, opac * __expf(-sigma));
 
-            if (sigma < 0.f || alpha < 1.f / 255.f) {
+            if (sigma < 0.f || alpha < ALPHA_THRESHOLD) {
                 continue;
             }
 
