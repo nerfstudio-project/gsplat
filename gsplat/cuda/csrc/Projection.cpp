@@ -332,7 +332,9 @@ projection_ewa_3dgs_packed_fwd(
             c10::nullopt, // means2d
             c10::nullopt, // depths
             c10::nullopt, // conics
-            c10::nullopt  // compensations
+            // pass in as an indicator on whether compensation will be applied or not.
+            calc_compensations ? at::optional<at::Tensor>(at::empty({1}, opt))
+                               : c10::nullopt
         );
         block_accum = at::cumsum(block_cnts, 0, at::kInt);
         nnz = block_accum[-1].item<int32_t>();

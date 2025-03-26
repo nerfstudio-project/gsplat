@@ -178,7 +178,10 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
         float extend = 3.33f;
         if (opacities != nullptr) {
             float opacity = opacities[col_idx];
-            opacity *= compensation;
+            if (compensations != nullptr) {
+                // we assume compensation term will be applied later on.
+                opacity *= compensation;
+            }    
             if (opacity < ALPHA_THRESHOLD) {
                 valid = false;
             }

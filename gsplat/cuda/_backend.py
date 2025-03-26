@@ -21,7 +21,6 @@ from torch.utils.cpp_extension import (
     _get_build_directory,
     _import_module_from_library,
     _jit_compile,
-    remove_extension_h_precompiler_headers,
 )
 
 PATH = os.path.dirname(os.path.abspath(__file__))
@@ -29,6 +28,7 @@ NO_FAST_MATH = os.getenv("NO_FAST_MATH", "0") == "1"
 FAST_COMPILE = os.getenv("FAST_COMPILE", "0") == "1"
 VERBOSE = os.getenv("VERBOSE", "0") == "1"
 MAX_JOBS = os.getenv("MAX_JOBS")
+USE_PRECOMPILED_HEADERS = os.getenv("USE_PRECOMPILED_HEADERS", "0") == "1"
 need_to_unset_max_jobs = False
 if not MAX_JOBS:
     need_to_unset_max_jobs = True
@@ -36,7 +36,11 @@ if not MAX_JOBS:
 
 # torch has bugs on precompiled headers before 2.2, see:
 # https://github.com/nerfstudio-project/gsplat/pull/583#issuecomment-2732597080
-USE_PRECOMPILED_HEADERS = version.parse(torch.__version__) >= version.parse("2.2")
+if version.parse(torch.__version__) < version.parse("2.2") and USE_PRECOMPILED_HEADERS:
+    Console().print(
+        "[yellow]gsplat: Precompiled headers are enabled but torch version is lower than 2.2. Disabling it.[/yellow]"
+    )
+    USE_PRECOMPILED_HEADERS = False
 
 
 def load_extension(
@@ -61,13 +65,12 @@ def load_extension(
     try:
         if USE_PRECOMPILED_HEADERS:
             # Using PreCompiled Header('torch/extension.h') to reduce compile time.
+            # remove: remove_extension_h_precompiler_headers()
             _check_and_build_extension_h_precompiler_headers(
                 extra_cflags, extra_include_paths
             )
             head_file = os.path.join(_TORCH_PATH, "include", "torch", "extension.h")
             extra_cflags += ["-include", head_file, "-Winvalid-pch"]
-        else:
-            remove_extension_h_precompiler_headers()
 
         return _jit_compile(
             name,
