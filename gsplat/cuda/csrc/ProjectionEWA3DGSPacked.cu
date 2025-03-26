@@ -178,13 +178,16 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
         float extend = 3.33f;
         if (opacities != nullptr) {
             float opacity = opacities[col_idx];
-            opacity *= compensation;
+            if (compensations != nullptr) {
+                // we assume compensation term will be applied later on.
+                opacity *= compensation;
+            }    
             if (opacity < ALPHA_THRESHOLD) {
                 valid = false;
             }
             // Compute opacity-aware bounding box.
             // https://arxiv.org/pdf/2402.00525 Section B.2
-            extend = min(extend, sqrt(2.0f * logf(opacity / ALPHA_THRESHOLD)));
+            extend = min(extend, sqrt(2.0f * __logf(opacity / ALPHA_THRESHOLD)));
         }
         
         // compute tight rectangular bounding box (non differentiable)
