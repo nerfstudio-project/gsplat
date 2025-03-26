@@ -325,9 +325,6 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         [&](OpenCVFisheyeCameraModelParameters const& params) {
             launchKernel(OpenCVFisheyeCameraModel<>(params));
         },
-        [&](FThetaCameraModelParameters const& params) {
-            launchKernel(BackwardsFThetaCameraModel<>(params));
-        },
     }, camera_model_params);
 }
 

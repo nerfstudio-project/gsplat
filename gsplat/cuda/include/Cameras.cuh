@@ -6,11 +6,6 @@
 #include <cmath>
 #include <limits>
 
-#include <thrust/random.h>
-
-#include <cooperative_groups.h>
-namespace cg = cooperative_groups;
-
 // Silence warnings / errors of the form
 //
 // __device__ / __host__ annotation is ignored on a function("XXX") that is
@@ -25,8 +20,6 @@ namespace cg = cooperative_groups;
 #pragma nv_diag_default = esa_on_defaulted_function_ignored
 
 #include "Cameras.h"
-
-#include "Auxiliary.h"
 
 // ---------------------------------------------------------------------------------------------
 
@@ -917,124 +910,6 @@ struct OpenCVFisheyeCameraModel : BaseCameraModel<OpenCVFisheyeCameraModel<N_NEW
     }
 };
 
-template <size_t N_NEWTON_ITERATIONS = 3 /* fixed number of Netwon iteration for polynomial inversion - same as in NCore */>
-struct BackwardsFThetaCameraModel : BaseCameraModel<BackwardsFThetaCameraModel<N_NEWTON_ITERATIONS>> {
-    // NV-compatible FTheta camera model (NCore conventions)
-
-    using Base =
-        BaseCameraModel<BackwardsFThetaCameraModel<N_NEWTON_ITERATIONS>>;
-
-    BackwardsFThetaCameraModel(
-        FThetaCameraModelParameters const &parameters, float min_2d_norm = 1e-6f
-    )
-        : parameters(parameters), min_2d_norm(min_2d_norm),
-          dpixeldist_to_angle_poly{} {
-        if (parameters.reference_poly !=
-            FThetaCameraModelParameters::PolynomialType::PIXELDIST_TO_ANGLE)
-            throw std::runtime_error(
-                "Only supporting backwards reference polynomials"
-            );
-
-        // FThetaCameraModelParameters are defined such that the image
-        // coordinate origin corresponds to the center of the first pixel. To
-        // conform to the NCore CameraModel specification (having the image
-        // coordinate origin aligned with the top-left corner of the first
-        // pixel) we therefore need to offset the principal point by half a
-        // pixel. Please see NCore documentation for more information.
-        this->parameters.principal_point[0] += .5f;
-        this->parameters.principal_point[1] += .5f;
-
-// compute first derivative of the backwards polynomial
-#pragma unroll
-        for (auto j = 0; j < std::size(dpixeldist_to_angle_poly); ++j)
-            dpixeldist_to_angle_poly[j] =
-                (j + 1) * parameters.pixeldist_to_angle_poly.at(j + 1);
-    }
-
-    FThetaCameraModelParameters parameters;
-    float min_2d_norm;
-    std::array<float, FThetaCameraModelParameters::PolynomialDegree - 1>
-        dpixeldist_to_angle_poly; // coefficient of first derivative of the
-                                  // backwards polynomial
-
-    inline __device__ auto camera_ray_to_image_point(
-        glm::fvec3 const &cam_ray, float margin_factor
-    ) const -> typename Base::CameraRayToImagePointReturn {
-        // Make sure norm is non-vanishing (norm vanishes for points along the
-        // principal-axis)
-        auto cam_ray_xy_norm = numerically_stable_norm2(cam_ray.x, cam_ray.y);
-        if (cam_ray_xy_norm <= 0.f)
-            cam_ray_xy_norm = std::numeric_limits<float>::epsilon();
-
-        auto const alpha_full = std::atan2(cam_ray_xy_norm, cam_ray.z);
-
-        // Limit angles to max_angle to prevent projected points to leave valid
-        // cone around max_angle. In particular for omnidirectional cameras,
-        // this prevents points outside the FOV to be wrongly projected to
-        // in-image-domain points because of badly constrained polynomials
-        // outside the effective FOV (which is different to the image
-        // boundaries).
-        //
-        // These FOV-clamped projections will be marked as *invalid*
-        auto const alpha = alpha_full < parameters.max_angle
-                               ? alpha_full
-                               : parameters.max_angle;
-
-        auto const delta = eval_poly_inverse_horner_newton<N_NEWTON_ITERATIONS>(
-            PolynomialProxy<PolynomialType::FULL, 6>{
-                parameters.pixeldist_to_angle_poly
-            },
-            PolynomialProxy<PolynomialType::FULL, 5>{dpixeldist_to_angle_poly},
-            PolynomialProxy<PolynomialType::FULL, 6>{
-                parameters.angle_to_pixeldist_poly
-            },
-            alpha
-        );
-
-        auto const theta = delta / cam_ray_xy_norm;
-        auto const image_point = glm::fvec2{
-            theta * cam_ray.x + parameters.principal_point[0],
-            theta * cam_ray.y + parameters.principal_point[1]
-        };
-
-        auto valid = true;
-        valid &= image_point_in_image_bounds_margin(
-            image_point, parameters.resolution, margin_factor
-        );
-        valid &= alpha < parameters.max_angle;
-
-        return {image_point, valid};
-    }
-
-    inline __device__ glm::fvec3
-    image_point_to_camera_ray(glm::fvec2 image_point) const {
-        auto const image_point_dist =
-            image_point -
-            glm::fvec2{
-                parameters.principal_point[0], parameters.principal_point[1]
-            };
-
-        auto const rdist = length(image_point_dist);
-
-        // Evaluate backward polynomial
-        auto const alpha =
-            eval_poly_horner(parameters.pixeldist_to_angle_poly, rdist);
-
-        // Compute the camera ray and set the ones at the image center to
-        // [0,0,1]
-        if (rdist >= min_2d_norm) {
-            auto const scale_factor = std::sin(alpha) / rdist;
-            return glm::fvec3{
-                scale_factor * image_point_dist.x,
-                scale_factor * image_point_dist.y,
-                std::cos(alpha)
-            };
-        } else {
-            return glm::fvec3{0.f, 0.f, 1.f};
-        }
-    }
-};
-
 // ---------------------------------------------------------------------------------------------
 
 // Gaussian projections
@@ -1094,8 +969,6 @@ inline __device__ auto world_gaussian_sigma_points(
 
     ret.points[0] = gaussian_world_mean;
 
-    DEBUG_PRINTF_CUDA("lambda %f\n", lambda);
-
 #pragma unroll
     for (auto i = 0u; i < D; ++i) {
         auto const delta =
@@ -1111,22 +984,10 @@ inline __device__ auto world_gaussian_sigma_points(
     ret.weights_covariance[0] =
         lambda / (D + lambda) + (1 - alpha * alpha + beta);
 
-    DEBUG_PRINTF_CUDA("ret.weights_mean[0] %f\n", ret.weights_mean[0]);
-    DEBUG_PRINTF_CUDA(
-        "ret.weights_covariance[0] %f\n", ret.weights_covariance[0]
-    );
-
 #pragma unroll
     for (auto i = 0u; i < 2 * D; ++i) {
         ret.weights_mean[i + 1] = 1 / (2 * (D + lambda));
         ret.weights_covariance[i + 1] = 1 / (2 * (D + lambda));
-
-        DEBUG_PRINTF_CUDA(
-            "ret.weights_mean[i + 1] %f\n", ret.weights_mean[i + 1]
-        );
-        DEBUG_PRINTF_CUDA(
-            "ret.weights_covariance[i + 1] %f\n", ret.weights_covariance[i + 1]
-        );
     }
 
     return ret;
@@ -1148,98 +1009,12 @@ world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
     glm::fvec3 const &gaussian_world_scale,
     glm::fquat const &gaussian_world_rot
 ) -> ImageGaussianReturn {
-
-    DEBUG_PRINTF_CUDA(
-        "gaussian_world_mean %f %f %f\n",
-        gaussian_world_mean.x,
-        gaussian_world_mean.y,
-        gaussian_world_mean.z
-    );
-    DEBUG_PRINTF_CUDA(
-        "gaussian_world_scale %f %f %f\n",
-        gaussian_world_scale.x,
-        gaussian_world_scale.y,
-        gaussian_world_scale.z
-    );
-    DEBUG_PRINTF_CUDA(
-        "gaussian_world_rot %f %f %f %f\n",
-        gaussian_world_rot.x,
-        gaussian_world_rot.y,
-        gaussian_world_rot.z,
-        gaussian_world_rot.w
-    );
-
     // Compute sigma points for input distribution
     auto const sigma_points = world_gaussian_sigma_points(
         unscented_transform_parameters,
         gaussian_world_mean,
         gaussian_world_scale,
         gaussian_world_rot
-    );
-
-    DEBUG_PRINTF_CUDA(
-        "sigma_points 0 %f %f %f\n",
-        sigma_points.points[0].x,
-        sigma_points.points[0].y,
-        sigma_points.points[0].z
-    );
-    DEBUG_PRINTF_CUDA(
-        "sigma_points 1 %f %f %f\n",
-        sigma_points.points[1].x,
-        sigma_points.points[1].y,
-        sigma_points.points[1].z
-    );
-    DEBUG_PRINTF_CUDA(
-        "sigma_points 2 %f %f %f\n",
-        sigma_points.points[2].x,
-        sigma_points.points[2].y,
-        sigma_points.points[2].z
-    );
-    DEBUG_PRINTF_CUDA(
-        "sigma_points 3 %f %f %f\n",
-        sigma_points.points[3].x,
-        sigma_points.points[3].y,
-        sigma_points.points[3].z
-    );
-    DEBUG_PRINTF_CUDA(
-        "sigma_points 4 %f %f %f\n",
-        sigma_points.points[4].x,
-        sigma_points.points[4].y,
-        sigma_points.points[4].z
-    );
-    DEBUG_PRINTF_CUDA(
-        "sigma_points 5 %f %f %f\n",
-        sigma_points.points[5].x,
-        sigma_points.points[5].y,
-        sigma_points.points[5].z
-    );
-    DEBUG_PRINTF_CUDA(
-        "sigma_points 6 %f %f %f\n",
-        sigma_points.points[6].x,
-        sigma_points.points[6].y,
-        sigma_points.points[6].z
-    );
-
-    DEBUG_PRINTF_CUDA(
-        "sigma_points.weights_mean 0 %f\n", sigma_points.weights_mean[0]
-    );
-    DEBUG_PRINTF_CUDA(
-        "sigma_points.weights_mean 1 %f\n", sigma_points.weights_mean[1]
-    );
-    DEBUG_PRINTF_CUDA(
-        "sigma_points.weights_mean 2 %f\n", sigma_points.weights_mean[2]
-    );
-    DEBUG_PRINTF_CUDA(
-        "sigma_points.weights_mean 3 %f\n", sigma_points.weights_mean[3]
-    );
-    DEBUG_PRINTF_CUDA(
-        "sigma_points.weights_mean 4 %f\n", sigma_points.weights_mean[4]
-    );
-    DEBUG_PRINTF_CUDA(
-        "sigma_points.weights_mean 5 %f\n", sigma_points.weights_mean[5]
-    );
-    DEBUG_PRINTF_CUDA(
-        "sigma_points.weights_mean 6 %f\n", sigma_points.weights_mean[6]
     );
 
     // Transform sigma points / compute approximation of output distribution via
@@ -1268,41 +1043,11 @@ world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
         image_points[i] = {image_point.x, image_point.y};
 
         image_mean += sigma_points.weights_mean[i] * image_points[i];
-
-        DEBUG_PRINTF_CUDA(
-            "image_points[%i] %f %f  -- image_mean %f %f\n",
-            i,
-            image_points[i].x,
-            image_points[i].y,
-            image_mean.x,
-            image_mean.y
-        );
-        // DEBUG_PRINTF_CUDA("sigma_points.points[%i] %f %f\n", i,
-        // sigma_points.points[i].x, sigma_points.points[i].y);
-        // DEBUG_PRINTF_CUDA("sigma_points.weights_mean[%i] %f\n", i,
-        // sigma_points.weights_mean[i]);
     }
 
     auto image_covariance = glm::fmat2{0};
     for (auto i = 0u; i < std::size(image_points); ++i) {
         auto const image_mean_vec = image_points[i] - image_mean;
-
-        DEBUG_PRINTF_CUDA(
-            "image_mean_vec[%i] %f %f\n", i, image_mean_vec.x, image_mean_vec.y
-        );
-
-        image_covariance += sigma_points.weights_covariance[i] *
-                            glm::outerProduct(image_mean_vec, image_mean_vec);
-
-        DEBUG_PRINTF_CUDA(
-            "image_covariance[%i] %f %f\n",
-            i,
-            image_covariance[0][0],
-            image_covariance[1][0]
-        );
-        DEBUG_PRINTF_CUDA(
-            "  %f %f\n", image_covariance[0][1], image_covariance[1][1]
-        );
     }
 
     return {
@@ -1312,188 +1057,3 @@ world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
         valid
     };
 }
-
-template <size_t N_ROLLING_SHUTTER_ITERATIONS, class CameraModel>
-inline __device__ auto
-world_gaussian_to_image_gaussian_monte_carlo_transform_shutter_pose(
-    CameraModel const &camera_model,
-    RollingShutterParameters const &rolling_shutter_parameters,
-    MonteCarloTransformParameters const &monte_carlo_transform_parameters,
-    glm::fvec3 const &gaussian_world_mean,
-    glm::fvec3 const &gaussian_world_scale,
-    glm::fquat const &gaussian_world_rot
-) -> ImageGaussianReturn {
-
-    /// Computes 2D screen-space projection for a Gaussian via Monte Carlo
-    /// sampling of the projection
-
-    // seed a random number generator
-    thrust::default_random_engine rng(cg::this_grid().thread_rank());
-
-    // standard normal distribution (mean 0, variance 1)
-    thrust::normal_distribution<float> d{0.f, 1.f};
-
-    // Compute offset transformation L such that x = mean + L * u is normal
-    // distributed according to mean and covariance C = L * L^T (see
-    // https://juanitorduz.github.io/multivariate_normal/) As C = R * S * S^T *
-    // R^T, we have that L = R * S (note, this is not lower-triangular /
-    // Cholesky, but more a QR decomposition with a diagonal term, which is
-    // sufficient for the transformation below)
-
-    auto const R = glm::mat3_cast(gaussian_world_rot); // quat is local -> world
-    auto const S = glm::mat3{
-        gaussian_world_scale.x,
-        0.f,
-        0.f,
-        0.f,
-        gaussian_world_scale.y,
-        0.f,
-        0.f,
-        0.f,
-        gaussian_world_scale.z
-    };
-    auto const L = R * S;
-
-    // Welford's online algorithm for 2D mean and covariance
-    glm::fvec2 mean;  // running sum of online mean
-    glm::mat2 SDiffs; // running sum of online outer product of mean differences
-
-    bool valid =
-        monte_carlo_transform_parameters.require_all_sample_points_valid;
-
-    for (auto i = 1; i <= monte_carlo_transform_parameters.n_samples; ++i) {
-        // sample point in world space according to original Gaussian
-        // distribution
-        auto const world_sample_point =
-            gaussian_world_mean + L * glm::fvec3{d(rng), d(rng), d(rng)};
-
-        // project the sample point to 2D screen space
-        auto const
-            [sample_point_2d,
-             sample_point_valid,
-             sample_point_timestamp_us,
-             sample_point_T_world_sensor] =
-                camera_model.template world_point_to_image_point_shutter_pose<
-                    N_ROLLING_SHUTTER_ITERATIONS>(
-                    world_sample_point,
-                    rolling_shutter_parameters,
-                    monte_carlo_transform_parameters.in_image_margin_factor
-                );
-
-        if (monte_carlo_transform_parameters.require_all_sample_points_valid) {
-            valid &= sample_point_valid; // all have to be valid
-        } else {
-            valid |= sample_point_valid; // any valid is sufficient
-        }
-
-        // update using Welford's online algorithm for 3d mean and covariance
-        // (~outer product of differences to running means)
-
-        if (i == 1) {
-            // init estimates (single sample / no outer product difference)
-            mean = sample_point_2d;
-            SDiffs = {0.f, 0.f, 0.f, 0.f};
-        } else {
-            auto const mean_vec_old = sample_point_2d - mean;
-            mean += mean_vec_old / float(i);
-            SDiffs += glm::outerProduct(
-                mean_vec_old, sample_point_2d - mean
-            ); // todo [JME]: speed up / don't compute lower diagonal
-        }
-    }
-
-    auto const image_mean = mean; // sample mean
-    auto const image_covariance =
-        glm::fvec3{SDiffs[0][0], SDiffs[1][0], SDiffs[1][1]} /
-        float(
-            monte_carlo_transform_parameters.n_samples - 1
-        ); // unbiased sample covariance
-
-    return {image_mean, image_covariance, valid};
-}
-
-inline glm::vec3 CameraGSplat::position() const {
-    return glm::vec3{_position[0], _position[1], _position[2]};
-}
-
-inline glm::mat4x3 CameraGSplat::viewmatrix() const {
-    glm::mat4x3 mat;
-    for (int i = 0; i < 4; i++) {
-        float4 tmp = *((float4 *)(_viewmatrix.data() + i * 4));
-        mat[i][0] = tmp.x;
-        mat[i][1] = tmp.y;
-        mat[i][2] = tmp.z;
-    }
-    return mat;
-}
-
-inline glm::mat4x4 CameraGSplat::projmatrix() const {
-    glm::mat4x4 mat;
-    for (int i = 0; i < 4; i++) {
-        float4 tmp = *((float4 *)(_projmatrix.data() + i * 4));
-        mat[i][0] = tmp.x;
-        mat[i][1] = tmp.y;
-        mat[i][2] = tmp.z;
-        mat[i][3] = tmp.w;
-    }
-    return mat;
-}
-
-inline glm::mat4x4 CameraGSplat::inv_viewprojmatrix() const {
-    glm::mat4x4 mat;
-    for (int i = 0; i < 4; i++) {
-        float4 tmp = *((float4 *)(_inv_viewprojmatrix.data() + i * 4));
-        mat[i][0] = tmp.x;
-        mat[i][1] = tmp.y;
-        mat[i][2] = tmp.z;
-        mat[i][3] = tmp.w;
-    }
-    return mat;
-}
-
-// std::variants are too complicated for CUDA,
-template <typename CAMERA_MODEL> struct DeviceCameraInput {
-    const CAMERA_MODEL camera_model;
-    const RollingShutterParameters rolling_shutter_parameters;
-
-    DeviceCameraInput(
-        const CAMERA_MODEL &camera_model,
-        const RollingShutterParameters &rolling_shutter_parameters
-    )
-        : camera_model(camera_model),
-          rolling_shutter_parameters(rolling_shutter_parameters) {}
-
-    __forceinline__ __device__ const std::array<uint64_t, 2> &
-    resolution() const {
-        return camera_model.parameters.resolution;
-    }
-
-    __forceinline__ __device__ WorldRay generate_ray(const float2 &pixf) const {
-        return camera_model.image_point_to_world_ray_shutter_pose(
-            glm::vec2(pixf.x, pixf.y), rolling_shutter_parameters
-        );
-    }
-};
-
-template <> struct DeviceCameraInput<CameraGSplat> {
-    std::array<uint64_t, 2> _resolution;
-    glm::mat4 projmatrix_inv;
-    glm::vec3 cam_pos;
-
-    DeviceCameraInput(const CameraGSplat &camera)
-        : _resolution{camera.resolution},
-          projmatrix_inv{camera.inv_viewprojmatrix()},
-          cam_pos{camera.position()} {}
-
-    __forceinline__ __device__ const std::array<uint64_t, 2> &
-    resolution() const {
-        return _resolution;
-    }
-
-    __forceinline__ __device__ WorldRay generate_ray(const float2 &pixf) const {
-        const glm::vec3 dir = computeViewRay(
-            projmatrix_inv, cam_pos, pixf, _resolution[0], _resolution[1]
-        );
-        return {cam_pos, dir};
-    }
-};

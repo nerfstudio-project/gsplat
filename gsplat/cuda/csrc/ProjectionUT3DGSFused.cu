@@ -227,9 +227,6 @@ void launch_projection_ut_3dgs_fused_kernel(
         [&](OpenCVFisheyeCameraModelParameters const& params) {
             launchKernel(OpenCVFisheyeCameraModel<>(params));
         },
-        [&](FThetaCameraModelParameters const& params) {
-            launchKernel(BackwardsFThetaCameraModel<>(params));
-        },
     }, camera_model_params);
 }
 

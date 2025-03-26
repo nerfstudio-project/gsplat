@@ -8,11 +8,6 @@
 #include <limits>
 #include <variant>
 
-#if defined(__CUDACC__)
-#include <cuda.h>
-#endif
-#include <glm/fwd.hpp>
-
 // ---------------------------------------------------------------------------------------------
 
 // Camera-specific types (camera model parameters and returns)
@@ -23,6 +18,12 @@ enum class ShutterType {
     ROLLING_BOTTOM_TO_TOP,
     ROLLING_RIGHT_TO_LEFT,
     GLOBAL
+};
+
+struct RollingShutterParameters {
+    // represents two tquat [t,q] poses
+    std::array<float, 7 * 2> T_world_sensors; 
+    std::array<int64_t, 2> timestamps_us;
 };
 
 struct CameraModelParameters {
@@ -56,69 +57,10 @@ struct OpenCVFisheyeCameraModelParameters : CameraModelParameters {
     float max_angle;
 };
 
-struct FThetaCameraModelParameters : CameraModelParameters {
-    enum class PolynomialType {
-        PIXELDIST_TO_ANGLE,
-        ANGLE_TO_PIXELDIST,
-    };
-    std::array<float, 2> principal_point;
-    PolynomialType reference_poly;
-    static constexpr size_t PolynomialDegree = 6;
-    std::array<float, PolynomialDegree>
-        pixeldist_to_angle_poly; // backward polynomial
-    std::array<float, PolynomialDegree>
-        angle_to_pixeldist_poly; // forward polynomial
-    float max_angle;
-};
-
-struct RollingShutterParameters {
-    std::array<float, 7 * 2>
-        T_world_sensors; // represents two tquat [t,q] poses
-    std::array<int64_t, 2> timestamps_us;
-};
 
 using CameraModelParametersVariant = std::variant<
     OpenCVPinholeCameraModelParameters,
-    OpenCVFisheyeCameraModelParameters,
-    FThetaCameraModelParameters>;
-
-struct CameraNRE {
-    CameraModelParametersVariant camera_model_parameters;
-    RollingShutterParameters rolling_shutter_parameters;
-
-    std::tuple<int, int> set_resolution() const {
-        auto const &resolution = std::visit(
-            [](auto const &params) { return params.resolution; },
-            camera_model_parameters
-        );
-        return {resolution[0], resolution[1]};
-    }
-};
-
-struct CameraGSplat {
-    std::array<uint64_t, 2> resolution;
-    // glm::vec3 cam_pos;
-    std::array<float, 3> _position;
-    // glm::mat4x3 viewmatrix_mat;
-    std::array<float, 16> _viewmatrix;
-    // glm::mat4x4 projmatrix_mat;
-    std::array<float, 16> _projmatrix;
-    // glm::mat4x4 inv_viewprojmatrix_mat;
-    std::array<float, 16> _inv_viewprojmatrix;
-    float tan_fovx;
-    float tan_fovy;
-
-    std::tuple<int, int> set_resolution() const {
-        return {resolution[0], resolution[1]};
-    }
-
-    glm::vec3 position() const;
-    glm::mat4x3 viewmatrix() const;
-    glm::mat4x4 projmatrix() const;
-    glm::mat4x4 inv_viewprojmatrix() const;
-};
-
-using CameraInputVariant = std::variant<CameraNRE, CameraGSplat>;
+    OpenCVFisheyeCameraModelParameters>;
 
 // ---------------------------------------------------------------------------------------------
 
@@ -140,19 +82,6 @@ struct UnscentedTransformParameters {
     bool require_all_sigma_points_valid =
         false; // true: all sigma points must be valid to mark a projection as
                // "valid" false: a single valid sigma point is sufficient to
-               // mark a projection as "valid"
-};
-
-struct MonteCarloTransformParameters {
-    size_t n_samples = 500;
-
-    // Parameters controlling validity of the Monte Carlo transform results
-    float in_image_margin_factor =
-        0.1f; // 10% out of bounds margin is acceptable for "valid" projection
-              // state
-    bool require_all_sample_points_valid =
-        false; // true: all sample points must be valid to mark a projection as
-               // "valid" false: a single valid sample point is sufficient to
                // mark a projection as "valid"
 };
 
