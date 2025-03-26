@@ -8,7 +8,6 @@
 #include "Rasterization.h"
 #include "Utils.cuh"
 #include "Cameras.cuh"
-#include "Auxiliary.h"
 
 namespace gsplat {
 

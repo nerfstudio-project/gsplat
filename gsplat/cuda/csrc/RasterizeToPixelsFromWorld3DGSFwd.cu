@@ -6,7 +6,6 @@
 #include "Common.h"
 #include "Rasterization.h"
 #include "Cameras.cuh"
-#include "Auxiliary.h"
 #include "Utils.cuh"
 
 namespace gsplat {
