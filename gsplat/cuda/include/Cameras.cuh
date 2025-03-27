@@ -1048,6 +1048,8 @@ world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
     auto image_covariance = glm::fmat2{0};
     for (auto i = 0u; i < std::size(image_points); ++i) {
         auto const image_mean_vec = image_points[i] - image_mean;
+        image_covariance += sigma_points.weights_covariance[i] *
+                            glm::outerProduct(image_mean_vec, image_mean_vec);
     }
 
     return {
