@@ -166,6 +166,8 @@ class Config:
 
     lpips_net: Literal["vgg", "alex"] = "alex"
 
+    perfect_camera: bool = True
+
     # 3DGUT (uncented transform + eval 3D)
     with_ut: bool = False
     with_eval3d: bool = False
@@ -314,7 +316,7 @@ class Runner:
             normalize=cfg.normalize_world_space,
             test_every=cfg.test_every,
             # uncentered transform projection (ut) allows training on distorted images
-            undistort=not cfg.with_ut,
+            perfect_camera=cfg.perfect_camera,
         )
         self.trainset = Dataset(
             self.parser,

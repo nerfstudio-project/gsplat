@@ -64,7 +64,7 @@ class Parser:
         factor: int = 1,
         normalize: bool = False,
         test_every: int = 8,
-        undistort: bool = True,
+        perfect_camera: bool = True,
     ):
         self.data_dir = data_dir
         self.factor = factor
@@ -258,8 +258,8 @@ class Parser:
             width, height = self.imsize_dict[camera_id]
             self.imsize_dict[camera_id] = (int(width * s_width), int(height * s_height))
 
-        # undistortion
-        if undistort:
+        # undistort to perfect pinhole/fisheye camera
+        if perfect_camera:
             self.mapx_dict = dict()
             self.mapy_dict = dict()
             self.roi_undist_dict = dict()
@@ -334,7 +334,7 @@ class Parser:
         dists = np.linalg.norm(camera_locations - scene_center, axis=1)
         self.scene_scale = np.max(dists)
         self.camtype = camtype
-        self.undistort = undistort
+        self.perfect_camera = perfect_camera
 
 
 class Dataset:
@@ -379,7 +379,7 @@ class Dataset:
         camtoworlds = self.parser.camtoworlds[index]
         mask = self.parser.mask_dict[camera_id] # maybe none
 
-        if self.parser.undistort and len(params) > 0:
+        if self.parser.perfect_camera and len(params) > 0:
             # Images are distorted. Undistort them.
             mapx, mapy = (
                 self.parser.mapx_dict[camera_id],
@@ -388,7 +388,9 @@ class Dataset:
             image = cv2.remap(image, mapx, mapy, cv2.INTER_LINEAR)
             x, y, w, h = self.parser.roi_undist_dict[camera_id]
             image = image[y : y + h, x : x + w]
-
+            # Set params to zero as everything is undistorted to a perfect camera.
+            params = np.zeros_like(params)
+            
         if self.patch_size is not None:
             # Random crop.
             h, w = image.shape[:2]

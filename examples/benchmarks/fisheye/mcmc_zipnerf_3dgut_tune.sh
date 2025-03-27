@@ -6,7 +6,7 @@ RENDER_TRAJ_PATH="ellipse"
 # RESULT_DIR="results/benchmark_mcmc_1M_zipnerf_3dgut_perfect"
 # CAP_MAX=1000000
 
-RESULT_DIR="results/benchmark_mcmc_4M_zipnerf_3dgut_perfect"
+RESULT_DIR="results/benchmark_mcmc_4M_zipnerf_3dgut_perfect_iscale0.5"
 CAP_MAX=4000000
 
 for SCENE in $SCENE_LIST;
@@ -14,8 +14,8 @@ do
     echo "Running $SCENE"
 
     # train without eval
-    CUDA_VISIBLE_DEVICES=7 python simple_trainer.py mcmc  --eval_steps -1 --disable_viewer --data_factor $DATA_FACTOR \
-        --with_eval3d --with_ut --perfect_camera \
+    CUDA_VISIBLE_DEVICES=5 python simple_trainer.py mcmc  --eval_steps -1 --disable_viewer --data_factor $DATA_FACTOR \
+        --with_eval3d --with_ut --perfect_camera --init_scale 0.5 \
         --strategy.cap-max $CAP_MAX \
         --opacity_reg 0.001 \
         --use_bilateral_grid \
@@ -26,8 +26,8 @@ do
 
     for CKPT in $RESULT_DIR/$SCENE/ckpts/*;
     do
-        CUDA_VISIBLE_DEVICES=7 python simple_trainer.py mcmc --disable_viewer --data_factor $DATA_FACTOR \
-            --with_eval3d --with_ut --perfect_camera \
+        CUDA_VISIBLE_DEVICES=5 python simple_trainer.py mcmc --disable_viewer --data_factor $DATA_FACTOR \
+            --with_eval3d --with_ut --perfect_camera --init_scale 0.5 \
             --strategy.cap-max $CAP_MAX \
             --opacity_reg 0.001 \
             --use_bilateral_grid \
