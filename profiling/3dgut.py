@@ -236,6 +236,36 @@ def worker(local_rank: int, world_rank: int, world_size: int, args):
     )
     torch.cuda.empty_cache()
 
+    print("gsplat with_ut[True] with_eval3d[True]")
+    stats = main(
+        with_ut=True,
+        with_eval3d=True,
+        batch_size=batch_size,
+        channels=channels,
+        reso="1080p",
+        scene_grid=scene_grid,
+        packed=packed,
+        sparse_grad=sparse_grad,
+        repeats=args.repeats,
+        world_rank=world_rank,
+        world_size=world_size,
+    )
+    collection.append(
+        [
+            "gsplat",
+            True,
+            True,
+            # configs
+            # scene_grid,
+            # stats
+            # f"{stats['mem_fwd']:0.2f}",
+            f"{stats['mem_all']:0.2f}",
+            f"{1.0 / stats['time_fwd']:0.1f} x {(batch_size)}",
+            f"{1.0 / stats['time_bwd']:0.1f} x {(batch_size)}",
+        ]
+    )
+    torch.cuda.empty_cache()
+
     if world_rank == 0:
         headers = [
             "With UT",
