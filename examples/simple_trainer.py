@@ -313,6 +313,8 @@ class Runner:
             factor=cfg.data_factor,
             normalize=cfg.normalize_world_space,
             test_every=cfg.test_every,
+            # uncentered transform projection (ut) allows training on distorted images
+            undistort=not cfg.with_ut,
         )
         self.trainset = Dataset(
             self.parser,
@@ -839,7 +841,7 @@ class Runner:
             # eval the full set
             if step in [i - 1 for i in cfg.eval_steps]:
                 self.eval(step)
-                self.render_traj(step)
+                # self.render_traj(step)
 
             # run compression
             if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:

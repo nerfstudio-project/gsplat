@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Literal, Tuple
+from typing import Literal, Optional, Tuple
 
 import torch
 from torch import Tensor
@@ -54,6 +54,7 @@ class OpenCVFisheyeCameraModelParameters(CameraModelParameters):
     principal_point: Tuple[float, float]
     focal_length: Tuple[float, float]
     radial_coeffs: Tuple[float, float, float, float]
+    max_angle: float
 
     def to_cpp(self):
         p = _make_lazy_cuda_obj("OpenCVFisheyeCameraModelParameters")()
@@ -62,6 +63,7 @@ class OpenCVFisheyeCameraModelParameters(CameraModelParameters):
         p.principal_point = self.principal_point
         p.focal_length = self.focal_length
         p.radial_coeffs = self.radial_coeffs
+        p.max_angle = self.max_angle
         return p
 
 
@@ -77,6 +79,21 @@ class RollingShutterParameters:
         p.timestamps_us = self.timestamps_us
         return p
 
+def compute_max_distance_to_border(image_size_component: float, principal_point_component: float) -> float:
+    """Given an image size component (x or y) and corresponding principal point component (x or y),
+    returns the maximum distance (in image domain units) from the principal point to either image boundary."""
+    center = 0.5 * image_size_component
+    if principal_point_component > center:
+        return principal_point_component
+    else:
+        return image_size_component - principal_point_component
+
+def compute_max_radius(image_size: Tuple[int, int], principal_point: Tuple[float, float]) -> float:
+    """Compute the maximum radius from the principal point to the image boundaries."""
+    max_diag_x = compute_max_distance_to_border(image_size[0], principal_point[0])
+    max_diag_y = compute_max_distance_to_border(image_size[1], principal_point[1])
+    max_diag = (max_diag_x ** 2 + max_diag_y ** 2) ** 0.5
+    return max_diag
 
 def to_params(
     viewmats: Tensor,  # [C, 4, 4]
@@ -84,6 +101,7 @@ def to_params(
     width: int,
     height: int,
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+    params: Optional[Tensor] = None,
 ):
     import numpy as np
 
@@ -108,6 +126,26 @@ def to_params(
             radial_coeffs=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
             tangential_coeffs=(0.0, 0.0),
             thin_prism_coeffs=(0.0, 0.0, 0.0, 0.0),
+        )
+    elif camera_model == "fisheye":
+        assert params is not None, "params should be provided for fisheye camera model"
+        resolution=(width, height)
+        principal_point=Ks[0, :2, 2].tolist()
+        focal_length=Ks[0, :2, :2].diag().tolist()
+
+        # Estimate max angle for fisheye
+        max_radius_pixels = compute_max_radius(resolution, principal_point)
+        fov_angle_x = 2.0 * max_radius_pixels / focal_length[0]
+        fov_angle_y = 2.0 * max_radius_pixels / focal_length[1]
+        max_angle = np.max([fov_angle_x, fov_angle_y]) / 2.0
+        
+        cm_params = OpenCVFisheyeCameraModelParameters(
+            resolution=resolution,
+            shutter_type="GLOBAL",
+            principal_point=principal_point,
+            focal_length=focal_length,
+            radial_coeffs=params.tolist(),
+            max_angle=max_angle,
         )
     else:
         raise NotImplementedError(f"Camera model {camera_model} is not supported")

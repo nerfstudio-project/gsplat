@@ -3,7 +3,7 @@ SCENE_LIST="alameda"
 DATA_FACTOR=4
 RENDER_TRAJ_PATH="ellipse"
 
-RESULT_DIR="results/benchmark_mcmc_1M_zipnerf"
+RESULT_DIR="results/benchmark_mcmc_1M_zipnerf_3dgut"
 CAP_MAX=1000000
 
 # RESULT_DIR="results/benchmark_mcmc_4M_zipnerf"
@@ -15,6 +15,7 @@ do
 
     # train and eval
     CUDA_VISIBLE_DEVICES=0 python simple_trainer.py mcmc --disable_viewer --data_factor $DATA_FACTOR \
+        --with_eval3d --with_ut \
         --strategy.cap-max $CAP_MAX \
         --opacity_reg 0.001 \
         --use_bilateral_grid \
