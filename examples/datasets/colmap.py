@@ -321,12 +321,12 @@ class Parser:
                 else:
                     assert_never(camtype)
 
-            self.mapx_dict[camera_id] = mapx
-            self.mapy_dict[camera_id] = mapy
-            self.Ks_dict[camera_id] = K_undist
-            self.roi_undist_dict[camera_id] = roi_undist
-            self.imsize_dict[camera_id] = (roi_undist[2], roi_undist[3])
-            self.mask_dict[camera_id] = mask
+                self.mapx_dict[camera_id] = mapx
+                self.mapy_dict[camera_id] = mapy
+                self.Ks_dict[camera_id] = K_undist
+                self.roi_undist_dict[camera_id] = roi_undist
+                self.imsize_dict[camera_id] = (roi_undist[2], roi_undist[3])
+                self.mask_dict[camera_id] = mask
 
         # size of the scene measured by cameras
         camera_locations = camtoworlds[:, :3, 3]
