@@ -1,7 +1,6 @@
 import math
 import struct
 
-import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import Tensor
@@ -357,43 +356,3 @@ def get_projection_matrix(znear, zfar, fovX, fovY, device="cuda"):
 #     P[2, 3] = -(zfar * znear) / (zfar - znear)
 #     return P
 
-
-def so3_matrix_to_quat(R: torch.Tensor) -> torch.Tensor:
-    """
-    Converts a singe / batch of SO3 rotation matrices (3x3) to unit quaternion representation.
-
-    Args:
-        R: single / batch of SO3 rotation matrices [bs, 3, 3]
-
-    Returns:
-        single / batch of unit quaternions (XYZW convention)  [bs, 4]
-    """
-    R = R.reshape((-1, 3, 3))  # batch dimensions unconditionally
-    num_rotations, D1, D2 = R.shape
-    assert (D1, D2) == (3, 3), "so3_matrix_to_quat: Input has to be a Bx3x3 tensor."
-
-    decision_matrix = torch.empty((num_rotations, 4), dtype=R.dtype, device=R.device)
-    quat = torch.empty((num_rotations, 4), dtype=R.dtype, device=R.device)
-
-    decision_matrix[:, :3] = R.diagonal(dim1=1, dim2=2)
-    decision_matrix[:, -1] = decision_matrix[:, :3].sum(dim=1)
-    choices = decision_matrix.argmax(dim=1)
-
-    ind = torch.nonzero(choices != 3, as_tuple=True)[0]
-    i = choices[ind]
-    j = (i + 1) % 3
-    k = (j + 1) % 3
-
-    quat[ind, i] = 1 - decision_matrix[ind, -1] + 2 * R[ind, i, i]
-    quat[ind, j] = R[ind, j, i] + R[ind, i, j]
-    quat[ind, k] = R[ind, k, i] + R[ind, i, k]
-    quat[ind, 3] = R[ind, k, j] - R[ind, j, k]
-
-    ind = torch.nonzero(choices == 3, as_tuple=True)[0]
-    quat[ind, 0] = R[ind, 2, 1] - R[ind, 1, 2]
-    quat[ind, 1] = R[ind, 0, 2] - R[ind, 2, 0]
-    quat[ind, 2] = R[ind, 1, 0] - R[ind, 0, 1]
-    quat[ind, 3] = 1 + decision_matrix[ind, -1]
-
-    quat = quat / torch.norm(quat, dim=1)[:, None]
-    return quat  # (N, 4)
