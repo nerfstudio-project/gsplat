@@ -294,8 +294,8 @@ def rasterization(
         or thin_prism_coeffs is not None
         or rolling_shutter != RollingShutterType.GLOBAL
     ):
-        assert with_ut and with_eval3d, (
-            "Distortion and rolling shutter are only supported with `with_ut=True` and `with_eval3d=True`."
+        assert with_ut, (
+            "Distortion and rolling shutter are only supported with `with_ut=True`."
         )
 
     if rolling_shutter != RollingShutterType.GLOBAL:

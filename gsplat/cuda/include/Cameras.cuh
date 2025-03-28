@@ -21,9 +21,12 @@
 #include "Cameras.h"
 
 template <typename T, std::size_t N>
-__host__ __device__ std::array<T, N> make_array(const T *ptr) {
+__device__ std::array<T, N> make_array(const T *ptr) {
     std::array<T, N> arr;
-    std::copy(ptr, ptr + N, arr.begin());
+#pragma unroll
+    for (std::size_t i = 0; i < N; ++i) {
+        arr[i] = ptr[i];
+    }
     return arr;
 }
 
@@ -482,7 +485,7 @@ struct OpenCVPinholeCameraModel
     struct Parameters : Base::Parameters {
         std::array<float, 2> principal_point;
         std::array<float, 2> focal_length;
-        std::array<float, 6> radial_coeffs = {0.f};
+        std::array<float, 6> radial_coeffs = {1.f};
         std::array<float, 2> tangential_coeffs = {0.f};
         std::array<float, 4> thin_prism_coeffs = {0.f};
     };
