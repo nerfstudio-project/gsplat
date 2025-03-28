@@ -307,8 +307,6 @@ def rasterization(
         assert (quats is not None) and (
             scales is not None
         ), "UT and eval3d requires to provide quats and scales."
-
-    if with_ut:
         assert packed is False, "Packed mode is not supported with UT."
         assert sparse_grad is False, "Sparse grad is not supported with UT."
 
@@ -614,7 +612,6 @@ def rasterization(
                     isect_offsets,
                     flatten_ids,
                     backgrounds=backgrounds_chunk,
-                    packed=packed,
                     camera_model=camera_model,
                     radial_coeffs=radial_coeffs,
                     tangential_coeffs=tangential_coeffs,
@@ -657,7 +654,6 @@ def rasterization(
                 isect_offsets,
                 flatten_ids,
                 backgrounds=backgrounds,
-                packed=packed,
                 camera_model=camera_model,
                 radial_coeffs=radial_coeffs,
                 tangential_coeffs=tangential_coeffs,

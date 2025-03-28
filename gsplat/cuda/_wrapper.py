@@ -631,7 +631,6 @@ def rasterize_to_pixels_eval3d(
     flatten_ids: Tensor,  # [n_isects]
     backgrounds: Optional[Tensor] = None,  # [C, channels]
     masks: Optional[Tensor] = None,  # [C, tile_height, tile_width]
-    packed: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
     ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
     # distortion
@@ -655,10 +654,6 @@ def rasterize_to_pixels_eval3d(
     """
     C = isect_offsets.size(0)
     device = means.device
-    assert packed is False, "packed is not supported in eval3d"
-    assert C == 1, "C should be 1 in eval3d"
-    assert backgrounds is None
-    assert masks is None
 
     N = means.size(0)
     assert means.shape == (N, 3), means.shape
@@ -667,15 +662,8 @@ def rasterize_to_pixels_eval3d(
     assert viewmats.shape == (C, 4, 4), viewmats.shape
     assert Ks.shape == (C, 3, 3), Ks.shape
 
-    if False:  # packed
-        nnz = means2d.size(0)
-        assert means2d.shape == (nnz, 2), means2d.shape
-        assert conics.shape == (nnz, 3), conics.shape
-        assert colors.shape[0] == nnz, colors.shape
-        assert opacities.shape == (nnz,), opacities.shape
-    else:
-        assert colors.shape[:2] == (C, N), colors.shape
-        assert opacities.shape == (C, N), opacities.shape
+    assert colors.shape[:2] == (C, N), colors.shape
+    assert opacities.shape == (C, N), opacities.shape
 
     if backgrounds is not None:
         assert backgrounds.shape == (C, colors.shape[-1]), backgrounds.shape
@@ -1403,8 +1391,13 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             v_render_alphas.contiguous(),
         )
 
-        if ctx.needs_input_grad[5]:  # backgrounds
-            raise NotImplementedError
+        if ctx.needs_input_grad[5]: # backgrounds
+            v_backgrounds = (v_render_colors * (1.0 - render_alphas).float()).sum(
+                dim=(1, 2)
+            )
+        else:
+            v_backgrounds = None
+            
         if ctx.needs_input_grad[7]:  # viewmats
             raise NotImplementedError
 
@@ -1414,7 +1407,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             v_scales,
             v_colors,
             v_opacities,
-            None,
+            v_backgrounds,
             None,
             None,
             None,
