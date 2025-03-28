@@ -294,7 +294,7 @@ def rasterization(
         or thin_prism_coeffs is not None
         or rolling_shutter != RollingShutterType.GLOBAL
     ):
-        assert with_ut and with_eval3d(
+        assert with_ut and with_eval3d, (
             "Distortion and rolling shutter are only supported with `with_ut=True` and `with_eval3d=True`."
         )
 
@@ -302,6 +302,8 @@ def rasterization(
         assert (
             viewmats_rs is not None
         ), "Rolling shutter requires to provide viewmats_rs."
+    else:
+        assert viewmats_rs is None, "viewmats_rs should be None for global rolling shutter."
 
     if with_ut or with_eval3d:
         assert (quats is not None) and (
@@ -428,9 +430,13 @@ def rasterization(
                 pass
     else:
         # Colors are SH coefficients, with shape [N, K, 3] or [C, N, K, 3]
-        camtoworlds = torch.inverse(viewmats)  # [C, 4, 4]
+        campos = torch.inverse(viewmats)[:, :3, 3]  # [C, 3]
+        if viewmats_rs is not None:
+            campos_rs = torch.inverse(viewmats_rs)[:, :3, 3]
+            campos = 0.5 * (campos + campos_rs)  # [C, 3]
+
         if packed:
-            dirs = means[gaussian_ids, :] - camtoworlds[camera_ids, :3, 3]  # [nnz, 3]
+            dirs = means[gaussian_ids, :] - campos[camera_ids, :]  # [nnz, 3]
             masks = (radii > 0).all(dim=-1)  # [nnz]
             if colors.dim() == 3:
                 # Turn [N, K, 3] into [nnz, 3]
@@ -440,7 +446,7 @@ def rasterization(
                 shs = colors[camera_ids, gaussian_ids, :, :]  # [nnz, K, 3]
             colors = spherical_harmonics(sh_degree, dirs, shs, masks=masks)  # [nnz, 3]
         else:
-            dirs = means[None, :, :] - camtoworlds[:, None, :3, 3]  # [C, N, 3]
+            dirs = means[None, :, :] - campos[:, None, :]  # [C, N, 3]
             masks = (radii > 0).all(dim=-1)  # [C, N]
             if colors.dim() == 3:
                 # Turn [N, K, 3] into [C, N, K, 3]
