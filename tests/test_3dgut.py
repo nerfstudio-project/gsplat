@@ -65,32 +65,6 @@ opacities = data["opacities"].contiguous()
 C = len(Ks)
 colors = data["colors"][:1].contiguous()
 
-resolution = [width, height]
-principal_point = Ks[0, :2, 2].tolist()
-focal_length = Ks[0, :2, :2].diag().tolist()
-radial_coeffs = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-tangential_coeffs = [0.0, 0.0]
-thin_prism_coeffs = [0.0, 0.0, 0.0, 0.0]
-T_world_sensor_R = viewmats[0, :3, :3].cpu()
-T_world_sensor_t = viewmats[0, :3, 3].cpu().numpy()
-
-params = _C.OpenCVPinholeCameraModelParameters()
-params.resolution = resolution
-params.shutter_type = _C.ShutterType.GLOBAL
-params.principal_point = principal_point
-params.focal_length = focal_length
-params.radial_coeffs = radial_coeffs
-params.tangential_coeffs = tangential_coeffs
-params.thin_prism_coeffs = thin_prism_coeffs
-
-T_world_sensor_quat = so3_matrix_to_quat(T_world_sensor_R).numpy()[0]
-T_world_sensor_tquat = np.hstack([T_world_sensor_t, T_world_sensor_quat])
-
-rs = _C.RollingShutterParameters()
-rs.T_world_sensors = np.hstack(
-    [T_world_sensor_tquat, T_world_sensor_tquat]
-).tolist()  # represents two tquat [t,q] poses at start / end 
-
 
 def rasterizer_and_save(radii, means2d, depths, conics, file_name="render.png"):
     # Identify intersecting tiles

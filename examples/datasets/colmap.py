@@ -11,8 +11,6 @@ from pycolmap import SceneManager
 from tqdm import tqdm
 from typing_extensions import assert_never
 
-from gsplat.camera import to_params
-
 from .normalize import (
     align_principle_axes,
     similarity_from_cameras,
@@ -410,18 +408,6 @@ class Dataset:
         }
         if mask is not None:
             data["mask"] = torch.from_numpy(mask).bool()
-
-        cm_params, rs_params = to_params(
-            torch.linalg.inv(data["camtoworld"])[None],
-            data["K"][None],
-            data["image"].shape[1],  # width
-            data["image"].shape[0],  # height
-            camera_model={
-                "perspective": "pinhole",
-                "fisheye": "fisheye",
-            }[self.parser.camtype],
-            params=torch.from_numpy(params).float(),
-        )
 
         if self.load_depths:
             # projected points to image plane to get depths

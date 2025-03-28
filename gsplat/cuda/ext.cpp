@@ -80,30 +80,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .value("GLOBAL", ShutterType::GLOBAL)
         .export_values();
 
-    py::class_<CameraModelParameters>(m, "CameraModelParameters")
-        .def(py::init<>())
-        .def_readwrite("resolution", &CameraModelParameters::resolution)
-        .def_readwrite("shutter_type", &CameraModelParameters::shutter_type);
-
-    py::class_<OpenCVPinholeCameraModelParameters, CameraModelParameters>(m, "OpenCVPinholeCameraModelParameters")
-        .def(py::init<>())
-        .def_readwrite("principal_point", &OpenCVPinholeCameraModelParameters::principal_point)
-        .def_readwrite("focal_length", &OpenCVPinholeCameraModelParameters::focal_length)
-        .def_readwrite("radial_coeffs", &OpenCVPinholeCameraModelParameters::radial_coeffs)
-        .def_readwrite("tangential_coeffs", &OpenCVPinholeCameraModelParameters::tangential_coeffs)
-        .def_readwrite("thin_prism_coeffs", &OpenCVPinholeCameraModelParameters::thin_prism_coeffs);
-
-    py::class_<OpenCVFisheyeCameraModelParameters, CameraModelParameters>(m, "OpenCVFisheyeCameraModelParameters")
-        .def(py::init<>())
-        .def_readwrite("principal_point", &OpenCVFisheyeCameraModelParameters::principal_point)
-        .def_readwrite("focal_length", &OpenCVFisheyeCameraModelParameters::focal_length)
-        .def_readwrite("radial_coeffs", &OpenCVFisheyeCameraModelParameters::radial_coeffs)
-        .def_readwrite("max_angle", &OpenCVFisheyeCameraModelParameters::max_angle);
-
-    py::class_<RollingShutterParameters>(m, "RollingShutterParameters")
-        .def(py::init<>())
-        .def_readwrite("T_world_sensors", &RollingShutterParameters::T_world_sensors);
-
     py::class_<UnscentedTransformParameters>(m, "UnscentedTransformParameters")
         .def(py::init<>())
         .def_readwrite("alpha", &UnscentedTransformParameters::alpha)

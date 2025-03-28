@@ -659,27 +659,6 @@ def test_rasterize_to_pixels_from_world(test_data, channels: int):
     import imageio
     import numpy as np
 
-    from gsplat.utils import so3_matrix_to_quat
-
-    params = _C.OpenCVPinholeCameraModelParameters()
-    params.resolution = [width, height]
-    params.shutter_type = _C.ShutterType.GLOBAL
-    params.principal_point = Ks[0, :2, 2].tolist()
-    params.focal_length = Ks[0, :2, :2].diag().tolist()
-    params.radial_coeffs = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    params.tangential_coeffs = [0.0, 0.0]
-    params.thin_prism_coeffs = [0.0, 0.0, 0.0, 0.0]
-
-    T_world_sensor_R = viewmats[0, :3, :3].cpu()
-    T_world_sensor_t = viewmats[0, :3, 3].cpu().numpy()
-    T_world_sensor_quat = so3_matrix_to_quat(T_world_sensor_R).numpy()[0]
-    T_world_sensor_tquat = np.hstack([T_world_sensor_t, T_world_sensor_quat])
-
-    rs = _C.RollingShutterParameters()
-    rs.T_world_sensors = np.hstack(
-        [T_world_sensor_tquat, T_world_sensor_tquat]
-    ).tolist()  # represents two tquat [t,q] poses at start / end 
-
     (
         __render_colors,
         __render_alphas,

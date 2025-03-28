@@ -23,8 +23,6 @@ enum class ShutterType {
 };
 
 struct RollingShutterParameters {
-    // represents two tquat [t,q] poses
-    std::array<float, 7 * 2> T_world_sensors; 
     glm::fvec3 t_start;
     glm::fquat q_start;
     glm::fvec3 t_end;
@@ -45,29 +43,12 @@ struct OpenCVPinholeCameraModelParameters : CameraModelParameters {
     std::array<float, 6> radial_coeffs;
     std::array<float, 2> tangential_coeffs;
     std::array<float, 4> thin_prism_coeffs;
-
-    auto is_perfect_pinhole() const -> bool {
-        auto const is_all_zero = [](auto const &arr) {
-            return std::all_of(arr.begin(), arr.end(), [](auto const &value) {
-                return std::abs(value) < std::numeric_limits<float>::epsilon();
-            });
-        };
-
-        return is_all_zero(radial_coeffs) && is_all_zero(tangential_coeffs) &&
-               is_all_zero(thin_prism_coeffs);
-    }
 };
 
 struct OpenCVFisheyeCameraModelParameters : CameraModelParameters {
     std::array<float, 4> radial_coeffs;
     float max_angle;
 };
-
-
-using CameraModelParametersVariant = std::variant<
-    PerfectPinholeCameraModelParameters,
-    OpenCVPinholeCameraModelParameters,
-    OpenCVFisheyeCameraModelParameters>;
 
 // ---------------------------------------------------------------------------------------------
 
@@ -91,11 +72,3 @@ struct UnscentedTransformParameters {
                // "valid" false: a single valid sigma point is sufficient to
                // mark a projection as "valid"
 };
-
-// ---------------------------------------------------------------------------------------------
-
-// Helper variadic template to be able to use lambda expressions in std::visit
-template <class... Ts> struct OverloadVisitor : Ts... {
-    using Ts::operator()...;
-};
-template <class... Ts> OverloadVisitor(Ts...) -> OverloadVisitor<Ts...>;

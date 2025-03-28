@@ -12,7 +12,6 @@ import torch
 from typing_extensions import Callable, Literal
 
 from gsplat._helper import load_test_data
-from gsplat.camera import to_params
 from gsplat.distributed import cli
 from gsplat.rendering import rasterization
 
@@ -87,10 +86,6 @@ def main(
     render_width, render_height = RESOLUTIONS[reso]  # desired resolution
     Ks[..., 0, :] *= render_width / width
     Ks[..., 1, :] *= render_height / height
-
-    cm_params, rs_params = to_params(
-        viewmats, Ks, render_width, render_height, camera_model="pinhole"
-    )
 
     torch.cuda.reset_peak_memory_stats()
     mem_tic = torch.cuda.max_memory_allocated() / 1024**3

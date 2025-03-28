@@ -1097,53 +1097,6 @@ class _FullyFusedProjection(torch.autograd.Function):
         )
 
 
-def to_params(
-    viewmats: Tensor,  # [C, 4, 4]
-    Ks: Tensor,  # [C, 3, 3]
-    width: int,
-    height: int,
-    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
-):
-    import numpy as np
-
-    from gsplat.utils import so3_matrix_to_quat
-
-    C = viewmats.size(0)
-    assert C == 1, "Only support single camera for now"
-
-    # check the R part in the viewmats are orthonormal
-    R = viewmats[:, :3, :3]
-    det = torch.det(R)
-    assert torch.allclose(
-        det, torch.ones_like(det)
-    ), "The R part in the viewmats should be orthonormal"
-
-    if camera_model == "pinhole":
-        cm_params = _make_lazy_cuda_obj("OpenCVPinholeCameraModelParameters")()
-        cm_params.resolution = [width, height]
-        cm_params.shutter_type = _make_lazy_cuda_obj("ShutterType.GLOBAL")
-        cm_params.principal_point = Ks[0, :2, 2].tolist()
-        cm_params.focal_length = Ks[0, :2, :2].diag().tolist()
-        cm_params.radial_coeffs = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        cm_params.tangential_coeffs = [0.0, 0.0]
-        cm_params.thin_prism_coeffs = [0.0, 0.0, 0.0, 0.0]
-
-    elif camera_model == "fisheye":
-        cm_params = _make_lazy_cuda_obj("OpenCVFisheyeCameraModelParameters")()
-    else:
-        raise NotImplementedError(f"Camera model {camera_model} is not supported")
-
-    T_world_sensor_R = viewmats[0, :3, :3].cpu()
-    T_world_sensor_quat = so3_matrix_to_quat(T_world_sensor_R).numpy()[0]
-    T_world_sensor_t = viewmats[0, :3, 3].cpu().numpy()
-    T_world_sensor_tquat = np.hstack([T_world_sensor_t, T_world_sensor_quat])
-
-    rs_params = _make_lazy_cuda_obj("RollingShutterParameters")()
-    rs_params.T_world_sensors = np.hstack(
-        [T_world_sensor_tquat, T_world_sensor_tquat]
-    ).tolist()  # represents two tquat [t,q] poses at start / end 
-    return cm_params, rs_params
-
 
 def fully_fused_projection_with_ut(
     means: Tensor,  # [N, 3]
