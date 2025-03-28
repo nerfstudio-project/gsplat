@@ -600,9 +600,6 @@ def rasterization(
                 else None
             )
             if with_eval3d:
-                assert packed is False
-                assert backgrounds_chunk is None
-                assert render_mode == "RGB"
                 render_colors_, render_alphas_ = rasterize_to_pixels_eval3d(
                     means,
                     quats,
@@ -646,9 +643,6 @@ def rasterization(
         render_alphas = render_alphas[0]  # discard the rest
     else:
         if with_eval3d:
-            assert packed is False
-            assert backgrounds is None
-            assert render_mode == "RGB"
             render_colors, render_alphas = rasterize_to_pixels_eval3d(
                 means,
                 quats,
