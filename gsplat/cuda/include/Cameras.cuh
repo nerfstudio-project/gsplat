@@ -647,7 +647,6 @@ struct OpenCVFisheyeCameraModel : BaseCameraModel<OpenCVFisheyeCameraModel<N_NEW
         std::array<float, 2> principal_point;
         std::array<float, 2> focal_length;
         std::array<float, 4> radial_coeffs;
-        float max_angle;
     };
 
     __host__ __device__ OpenCVFisheyeCameraModel(
@@ -668,6 +667,16 @@ struct OpenCVFisheyeCameraModel : BaseCameraModel<OpenCVFisheyeCameraModel<N_NEW
         // 5*k2*theta^4 + 7*k3*theta^8 + 9*k4*theta^8
         dforward_poly_even = {1, 3 * k1, 5 * k2, 7 * k3, 9 * k4};
 
+        auto const max_diag_x = max(
+            parameters.resolution[0] - parameters.principal_point[0],
+            parameters.principal_point[0]
+        );
+        auto const max_diag_y = max(
+            parameters.resolution[1] - parameters.principal_point[1],
+            parameters.principal_point[1]
+        );
+        max_angle = std::sqrt(max_diag_x * max_diag_x + max_diag_y * max_diag_y);
+
         // approximate backward poly (mapping normalized distances to angles)
         // *very crudely* by linear interpolation / equidistant angle model
         // (also assuming image-centered principal point)
@@ -675,9 +684,7 @@ struct OpenCVFisheyeCameraModel : BaseCameraModel<OpenCVFisheyeCameraModel<N_NEW
             parameters.resolution[0] / 2.f / parameters.focal_length[0],
             parameters.resolution[1] / 2.f / parameters.focal_length[1]
         );
-        approx_backward_poly = {
-            0.f, parameters.max_angle / max_normalized_dist
-        };
+        approx_backward_poly = {0.f, max_angle / max_normalized_dist};
     }
 
     Parameters parameters;
@@ -685,6 +692,7 @@ struct OpenCVFisheyeCameraModel : BaseCameraModel<OpenCVFisheyeCameraModel<N_NEW
     std::array<float, 5> forward_poly_odd;
     std::array<float, 5> dforward_poly_even;
     std::array<float, 2> approx_backward_poly;
+    float max_angle;
 
     inline __device__ auto camera_ray_to_image_point(
         glm::fvec3 const &cam_ray, float margin_factor
@@ -705,9 +713,7 @@ struct OpenCVFisheyeCameraModel : BaseCameraModel<OpenCVFisheyeCameraModel<N_NEW
         // boundaries).
         //
         // These FOV-clamped projections will be marked as *invalid*
-        auto const theta = theta_full < parameters.max_angle
-                               ? theta_full
-                               : parameters.max_angle;
+        auto const theta = theta_full < max_angle ? theta_full : max_angle;
 
         // Evaluate forward polynomial (correspond to the radial distances to
         // the principal point in the normalized image domain (up to focal
@@ -726,9 +732,7 @@ struct OpenCVFisheyeCameraModel : BaseCameraModel<OpenCVFisheyeCameraModel<N_NEW
         valid &= image_point_in_image_bounds_margin(
             image_point, parameters.resolution, margin_factor
         );
-        valid &= theta <
-                 parameters
-                     .max_angle; // explicitly check for strictly smaller angles
+        valid &= theta < max_angle; // explicitly check for strictly smaller angles
                                  // to classify FOV-clamped points as invalid
 
         return {image_point, valid};
