@@ -22,34 +22,6 @@ enum class ShutterType {
     GLOBAL
 };
 
-struct RollingShutterParameters {
-    glm::fvec3 t_start;
-    glm::fquat q_start;
-    glm::fvec3 t_end;
-    glm::fquat q_end;
-};
-
-struct CameraModelParameters {
-    std::array<uint32_t, 2> resolution;
-    ShutterType shutter_type;
-    std::array<float, 2> principal_point;
-    std::array<float, 2> focal_length;
-};
-
-struct PerfectPinholeCameraModelParameters : CameraModelParameters {
-};
-
-struct OpenCVPinholeCameraModelParameters : CameraModelParameters {
-    std::array<float, 6> radial_coeffs;
-    std::array<float, 2> tangential_coeffs;
-    std::array<float, 4> thin_prism_coeffs;
-};
-
-struct OpenCVFisheyeCameraModelParameters : CameraModelParameters {
-    std::array<float, 4> radial_coeffs;
-    float max_angle;
-};
-
 // ---------------------------------------------------------------------------------------------
 
 // Gaussian-specific types

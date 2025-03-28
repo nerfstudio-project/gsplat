@@ -67,7 +67,7 @@ __global__ void projection_ut_3dgs_fused_kernel(
     const vec2 principal_point = {Ks[cid * 9 + 2], Ks[cid * 9 + 5]};
 
     // Create rolling shutter parameter
-    RollingShutterParameters rs_params = make_rolling_shutter_params(
+    auto rs_params = RollingShutterParameters(
         viewmats0 + cid * 16,
         viewmats1 == nullptr ? nullptr : viewmats1 + cid * 16
     );
@@ -88,7 +88,7 @@ __global__ void projection_ut_3dgs_fused_kernel(
     ImageGaussianReturn image_gaussian_return;
     if (camera_model_type == CameraModelType::PINHOLE) {
         if (radial_coeffs == nullptr && tangential_coeffs == nullptr && thin_prism_coeffs == nullptr) {
-            PerfectPinholeCameraModelParameters cm_params = {};
+            PerfectPinholeCameraModel::Parameters cm_params = {};
             cm_params.resolution = {image_width, image_height};
             cm_params.shutter_type = rs_type;
             cm_params.principal_point = { principal_point.x, principal_point.y };
@@ -98,44 +98,26 @@ __global__ void projection_ut_3dgs_fused_kernel(
                 world_gaussian_to_image_gaussian_unscented_transform_shutter_pose<N_ROLLING_SHUTTER_ITERATIONS>(
                     camera_model, rs_params, ut_params, mean, scale, quat);
         } else {
-            OpenCVPinholeCameraModelParameters cm_params = {};
+            OpenCVPinholeCameraModel<>::Parameters cm_params = {};
             cm_params.resolution = {image_width, image_height};
             cm_params.shutter_type = rs_type;
             cm_params.principal_point = { principal_point.x, principal_point.y };
             cm_params.focal_length = { focal_length.x, focal_length.y };
-            cm_params.radial_coeffs = {
-                radial_coeffs[cid * 6 + 0],
-                radial_coeffs[cid * 6 + 1],
-                radial_coeffs[cid * 6 + 2],
-                radial_coeffs[cid * 6 + 3],
-                radial_coeffs[cid * 6 + 4],
-                radial_coeffs[cid * 6 + 5]
-            };
-            cm_params.tangential_coeffs = {
-                tangential_coeffs[cid * 2 + 0],
-                tangential_coeffs[cid * 2 + 1]
-            };
-            cm_params.thin_prism_coeffs = {
-                thin_prism_coeffs[cid * 2 + 0],
-                thin_prism_coeffs[cid * 2 + 1]
-            };
+            cm_params.radial_coeffs = make_array<float, 6>(radial_coeffs + cid * 6);
+            cm_params.tangential_coeffs = make_array<float, 2>(tangential_coeffs + cid * 2);
+            cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + cid * 2);
             OpenCVPinholeCameraModel camera_model(cm_params);
             image_gaussian_return =
                 world_gaussian_to_image_gaussian_unscented_transform_shutter_pose<N_ROLLING_SHUTTER_ITERATIONS>(
                     camera_model, rs_params, ut_params, mean, scale, quat);
         }
     } else if (camera_model_type == CameraModelType::FISHEYE) {
-        OpenCVFisheyeCameraModelParameters cm_params = {};
+        OpenCVFisheyeCameraModel<>::Parameters cm_params = {};
         cm_params.resolution = {image_width, image_height};
         cm_params.shutter_type = rs_type;
         cm_params.principal_point = { principal_point.x, principal_point.y };
         cm_params.focal_length = { focal_length.x, focal_length.y };
-        cm_params.radial_coeffs = {
-            radial_coeffs[cid * 4 + 0],
-            radial_coeffs[cid * 4 + 1],
-            radial_coeffs[cid * 4 + 2],
-            radial_coeffs[cid * 4 + 3]
-        };
+        cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + cid * 4);
         OpenCVFisheyeCameraModel camera_model(cm_params);
         image_gaussian_return =
             world_gaussian_to_image_gaussian_unscented_transform_shutter_pose<N_ROLLING_SHUTTER_ITERATIONS>(
