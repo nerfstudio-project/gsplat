@@ -8,6 +8,7 @@ from torch import Tensor
 from typing_extensions import Literal
 
 from .cuda._wrapper import (
+    RollingShutterType,
     fully_fused_projection,
     fully_fused_projection_2dgs,
     fully_fused_projection_with_ut,
@@ -55,6 +56,13 @@ def rasterization(
     covars: Optional[Tensor] = None,
     with_ut: bool = False,
     with_eval3d: bool = False,
+    # distortion
+    radial_coeffs: Optional[Tensor] = None,
+    tangential_coeffs: Optional[Tensor] = None,
+    thin_prism_coeffs: Optional[Tensor] = None,
+    # rolling shutter
+    rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
+    viewmats_rs: Optional[Tensor] = None, # [C, 4, 4]
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -280,6 +288,26 @@ def rasterization(
     if absgrad:
         assert not distributed, "AbsGrad is not supported in distributed mode."
 
+    if (
+        radial_coeffs is not None or
+        tangential_coeffs is not None or
+        thin_prism_coeffs is not None or
+        rolling_shutter != RollingShutterType.GLOBAL
+    ):
+        assert with_ut and with_eval3d (
+            "Distortion and rolling shutter are only supported with `with_ut=True` and `with_eval3d=True`."
+        )
+
+    if rolling_shutter != RollingShutterType.GLOBAL:
+        assert viewmats_rs is not None, "Rolling shutter requires to provide viewmats_rs."
+
+    if with_ut or with_eval3d:
+        assert (quats is not None) and (scales is not None), "UT and eval3d requires to provide quats and scales."
+
+    if with_ut:
+        assert packed is False, "Packed mode is not supported with UT."
+        assert sparse_grad is False, "Sparse grad is not supported with UT."
+
     # If in distributed mode, we distribute the projection computation over Gaussians
     # and the rasterize computation over cameras. So first we gather the cameras
     # from all ranks for projection.
@@ -293,22 +321,19 @@ def rasterization(
         # Enforce that the number of cameras is the same across all ranks.
         C_world = [C] * world_size
         viewmats, Ks = all_gather_tensor_list(world_size, [viewmats, Ks])
+        if viewmats_rs is not None:
+            viewmats_rs, = all_gather_tensor_list(world_size, [viewmats_rs])
 
         # Silently change C from local #Cameras to global #Cameras.
         C = len(viewmats)
 
     if with_ut:
-        assert covars is None
-        assert packed is False
-        assert sparse_grad is False
-        assert rasterize_mode == "classic"
         proj_results = fully_fused_projection_with_ut(
             means,
             quats,
             scales,
             opacities, # use opacities to compute a tigher bound for radii.
             viewmats,
-            None, # rolling shutter
             Ks,
             width,
             height,
@@ -318,9 +343,11 @@ def rasterization(
             radius_clip=radius_clip,
             calc_compensations=(rasterize_mode == "antialiased"),
             camera_model=camera_model,
-            radial_coeffs=None,
-            tangential_coeffs=None,
-            thin_prism_coeffs=None,
+            radial_coeffs=radial_coeffs,
+            tangential_coeffs=tangential_coeffs,
+            thin_prism_coeffs=thin_prism_coeffs,
+            rolling_shutter=rolling_shutter,
+            viewmats_rs=viewmats_rs,
         )
 
     else:
@@ -582,12 +609,17 @@ def rasterization(
                     Ks,
                     width,
                     height,
-                    camera_model,
                     tile_size,
                     isect_offsets,
                     flatten_ids,
                     backgrounds=backgrounds_chunk,
                     packed=packed,
+                    camera_model=camera_model,
+                    radial_coeffs=radial_coeffs,
+                    tangential_coeffs=tangential_coeffs,
+                    thin_prism_coeffs=thin_prism_coeffs,
+                    rolling_shutter=rolling_shutter,
+                    viewmats_rs=viewmats_rs,
                 )
             else:
                 render_colors_, render_alphas_ = rasterize_to_pixels(
@@ -623,12 +655,17 @@ def rasterization(
                 Ks,
                 width,
                 height,
-                camera_model,
                 tile_size,
                 isect_offsets,
                 flatten_ids,
                 backgrounds=backgrounds,
                 packed=packed,
+                camera_model=camera_model,
+                radial_coeffs=radial_coeffs,
+                tangential_coeffs=tangential_coeffs,
+                thin_prism_coeffs=thin_prism_coeffs,
+                rolling_shutter=rolling_shutter,
+                viewmats_rs=viewmats_rs,
             )
         else:
             render_colors, render_alphas = rasterize_to_pixels(
