@@ -117,8 +117,6 @@ def main(
         radius_clip=3.0,
         sparse_grad=sparse_grad,
         distributed=world_size > 1,
-        cm_params=cm_params,
-        rs_params=rs_params,
         with_ut=with_ut,
         with_eval3d=with_eval3d,
     )

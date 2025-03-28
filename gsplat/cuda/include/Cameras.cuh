@@ -14,77 +14,11 @@
 // in GLM
 #define GLM_ENABLE_EXPERIMENTAL
 #pragma nv_diag_suppress = esa_on_defaulted_function_ignored
-#include <glm/glm.hpp>
-#include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/matrix_operation.hpp> // needs define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/quaternion.hpp> // glm rotate
 #pragma nv_diag_default = esa_on_defaulted_function_ignored
 
 #include "Cameras.h"
-
-// ---------------------------------------------------------------------------------------------
-
-// quaternion : apply to point
-
-// TODO[janickm]: use glm's quaternion math directly
-inline __device__ __host__ glm::fvec3
-apply_quaternion(glm::fquat const &q, glm::fvec3 const &p) {
-    const glm::fmat3 R = glm::mat3_cast(q);
-    return R * p;
-}
-
-inline __device__ __host__ glm::fvec3
-apply_quaternion(glm::fvec4 const &q, glm::fvec3 const &p) {
-    // Quaternion rotation matrix coefficients
-    auto const xx = q.x * q.x;
-    auto const yy = q.y * q.y;
-    auto const zz = q.z * q.z;
-    auto const xy = q.x * q.y;
-    auto const xz = q.x * q.z;
-    auto const yz = q.y * q.z;
-    auto const wx = q.w * q.x;
-    auto const wy = q.w * q.y;
-    auto const wz = q.w * q.z;
-
-    // Apply quaternion rotation to point
-    auto const &p_x = p.x, p_y = p.y, p_z = p.z;
-    auto const x = p_x * (1 - 2 * yy - 2 * zz) + p_y * (2 * xy - 2 * wz) +
-                   p_z * (2 * xz + 2 * wy);
-    auto const y = p_x * (2 * xy + 2 * wz) + p_y * (1 - 2 * xx - 2 * zz) +
-                   p_z * (2 * yz - 2 * wx);
-    auto const z = p_x * (2 * xz - 2 * wy) + p_y * (2 * yz + 2 * wx) +
-                   p_z * (1 - 2 * xx - 2 * yy);
-
-    return {x, y, z};
-}
-
-// quaternion : slerp interpolation
-
-inline __device__ __host__ glm::fvec4
-unitquat_slerp(glm::fvec4 const &q_start, glm::fvec4 q_end, float t) {
-    // omega is the 'angle' between both quaternions
-    auto cos_omega = glm::dot(q_start, q_end);
-
-    // flip quaternions with negative angle to perform shortest arc
-    // interpolation
-    if (cos_omega < 0.0f) {
-        cos_omega *= -1.f;
-        q_end *= -1.f;
-    }
-
-    // true if q_start and q_end are close
-    auto const nearby_quaternions = cos_omega > (1.0f - 1e-3);
-
-    // General approach (use linear interpolation for nearby quaternions)
-    auto const omega = std::acos(cos_omega);
-    auto const alpha =
-        nearby_quaternions ? (1.f - t) : std::sin((1.f - t) * omega);
-    auto const beta = nearby_quaternions ? t : std::sin(t * omega);
-
-    // Interpolate
-    auto const ret = glm::normalize(alpha * q_start + beta * q_end);
-
-    return ret;
-}
 
 // ---------------------------------------------------------------------------------------------
 
@@ -222,39 +156,6 @@ inline __device__ float eval_poly_inverse_horner_newton(
 
 // Camera models
 
-inline __device__ auto interpolate_shutter_pose_t(
-    float relative_frame_time,
-    RollingShutterParameters const &rolling_shutter_parameters
-) -> glm::fvec3 {
-    auto const &frame_T_world_sensors =
-        rolling_shutter_parameters.T_world_sensors;
-    auto const t_start = glm::fvec3(
-        frame_T_world_sensors[0],
-        frame_T_world_sensors[1],
-        frame_T_world_sensors[2]
-    );
-    auto const q_start = glm::fvec4(
-        frame_T_world_sensors[3],
-        frame_T_world_sensors[4],
-        frame_T_world_sensors[5],
-        frame_T_world_sensors[6]
-    );
-    auto const t_end = glm::fvec3(
-        frame_T_world_sensors[7],
-        frame_T_world_sensors[8],
-        frame_T_world_sensors[9]
-    );
-    auto const q_end = glm::fvec4(
-        frame_T_world_sensors[10],
-        frame_T_world_sensors[11],
-        frame_T_world_sensors[12],
-        frame_T_world_sensors[13]
-    );
-
-    // Interpolate a pose linearly for a relative frame time
-    return (1.f - relative_frame_time) * t_start + relative_frame_time * t_end;
-}
-
 /**
  * @brief Checks if a given image point is within the image bounds considering a
  * margin.
@@ -273,7 +174,7 @@ inline __device__ auto interpolate_shutter_pose_t(
  */
 __forceinline__ __device__ __host__ bool image_point_in_image_bounds_margin(
     glm::vec2 const &image_point,
-    std::array<uint64_t, 2> const &resolution,
+    std::array<uint32_t, 2> const &resolution,
     float margin_factor
 ) {
     const float MARGIN_X = resolution[0] * margin_factor;
@@ -297,7 +198,7 @@ struct ShutterPose {
 
     inline __device__ __host__ auto
     camera_world_position() const -> glm::fvec3 {
-        return apply_quaternion(glm::inverse(q), -t);
+        return glm::rotate(glm::inverse(q), -t);
     }
 
     inline __device__ __host__ auto
@@ -312,50 +213,15 @@ inline __device__ __host__ auto interpolate_shutter_pose(
     float relative_frame_time,
     RollingShutterParameters const &rolling_shutter_parameters
 ) -> ShutterPose {
-    auto const &frame_T_world_sensors =
-        rolling_shutter_parameters.T_world_sensors;
-    auto const t_start = glm::fvec3(
-        frame_T_world_sensors[0],
-        frame_T_world_sensors[1],
-        frame_T_world_sensors[2]
-    );
-    auto const q_start = glm::fvec4(
-        frame_T_world_sensors[3],
-        frame_T_world_sensors[4],
-        frame_T_world_sensors[5],
-        frame_T_world_sensors[6]
-    );
-    auto const t_end = glm::fvec3(
-        frame_T_world_sensors[7],
-        frame_T_world_sensors[8],
-        frame_T_world_sensors[9]
-    );
-    auto const q_end = glm::fvec4(
-        frame_T_world_sensors[10],
-        frame_T_world_sensors[11],
-        frame_T_world_sensors[12],
-        frame_T_world_sensors[13]
-    );
-
+    auto const t_start = rolling_shutter_parameters.t_start;
+    auto const q_start = rolling_shutter_parameters.q_start;
+    auto const t_end = rolling_shutter_parameters.t_end;
+    auto const q_end = rolling_shutter_parameters.q_end;
     // Interpolate a pose linearly for a relative frame time
     auto const t_rs =
         (1.f - relative_frame_time) * t_start + relative_frame_time * t_end;
-    auto const q_rs = unitquat_slerp(
-        q_start, q_end, relative_frame_time
-    ); // xyzw representation
-    return ShutterPose{t_rs, glm::fquat{q_rs[3], q_rs[0], q_rs[1], q_rs[2]}};
-}
-
-inline __device__ __host__ auto interpolate_shutter_pose_se3(
-    float relative_frame_time,
-    RollingShutterParameters const &rolling_shutter_parameters
-) {
-    auto pose = interpolate_shutter_pose(
-        relative_frame_time, rolling_shutter_parameters
-    );
-    auto ret = glm::mat4x3{glm::mat3_cast(pose.q)};
-    ret[3] = pose.t;
-    return ret;
+    auto const q_rs = glm::slerp(q_start, q_end, relative_frame_time);
+    return ShutterPose{t_rs, q_rs};
 }
 
 template <class DerivedCameraModel> struct BaseCameraModel {
@@ -409,17 +275,9 @@ template <class DerivedCameraModel> struct BaseCameraModel {
             .camera_ray_to_world_ray(camera_ray);
     };
 
-    struct CameraRayToImagePointReturn {
+    struct ImagePointReturn {
         glm::fvec2 imagePoint;
         bool valid_flag;
-    };
-
-    struct WorldPointToImagePointReturn {
-        glm::fvec2 imagePoint;
-        bool valid_flag;
-        int64_t timestamp_us;
-        using TQuatArray = std::array<float, 7>;
-        TQuatArray T_world_sensor;
     };
 
     template <size_t N_ROLLING_SHUTTER_ITERATIONS>
@@ -427,58 +285,28 @@ template <class DerivedCameraModel> struct BaseCameraModel {
         glm::fvec3 const &world_point,
         RollingShutterParameters const &rolling_shutter_parameters,
         float margin_factor
-    ) const -> WorldPointToImagePointReturn {
+    ) const -> ImagePointReturn {
         // Perform rolling-shutter-based world point to image point projection /
         // optimization
 
         auto derived = static_cast<DerivedCameraModel const *>(this);
 
-        auto const &frame_T_world_sensors =
-            rolling_shutter_parameters.T_world_sensors;
-        auto const t_start = glm::fvec3(
-            frame_T_world_sensors[0],
-            frame_T_world_sensors[1],
-            frame_T_world_sensors[2]
-        );
-        auto const q_start = glm::fvec4(
-            frame_T_world_sensors[3],
-            frame_T_world_sensors[4],
-            frame_T_world_sensors[5],
-            frame_T_world_sensors[6]
-        );
-        auto const t_end = glm::fvec3(
-            frame_T_world_sensors[7],
-            frame_T_world_sensors[8],
-            frame_T_world_sensors[9]
-        );
-        auto const q_end = glm::fvec4(
-            frame_T_world_sensors[10],
-            frame_T_world_sensors[11],
-            frame_T_world_sensors[12],
-            frame_T_world_sensors[13]
-        );
+        auto const t_start = rolling_shutter_parameters.t_start;
+        auto const q_start = rolling_shutter_parameters.q_start;
+        auto const t_end = rolling_shutter_parameters.t_end;
+        auto const q_end = rolling_shutter_parameters.q_end;
 
         // Always perform transformation using start pose
         auto const [image_point_start, valid_start] =
             derived->camera_ray_to_image_point(
-                apply_quaternion(q_start, world_point) + t_start, margin_factor
+                glm::rotate(q_start, world_point) + t_start, margin_factor
             );
 
         if (derived->parameters.shutter_type == ShutterType::GLOBAL) {
             // Exit early if we have a global shutter sensor
             return {
                 {image_point_start.x, image_point_start.y},
-                valid_start,
-                rolling_shutter_parameters.timestamps_us[0],
-                {
-                    t_start.x,
-                    t_start.y,
-                    t_start.z,
-                    q_start.x,
-                    q_start.y,
-                    q_start.z,
-                    q_start.w,
-                }
+                valid_start
             };
         }
 
@@ -487,12 +315,11 @@ template <class DerivedCameraModel> struct BaseCameraModel {
         // iteration starting points
         auto const [image_point_end, valid_end] =
             derived->camera_ray_to_image_point(
-                apply_quaternion(q_end, world_point) + t_end, margin_factor
+                glm::rotate(q_end, world_point) + t_end, margin_factor
             );
 
         // This selection prefers points at the start-of-frame pose over
         // end-of-frame points
-        // - the optimization will determine the final timestamp for each point
         auto init_image_point = glm::fvec2{};
         if (valid_start) {
             init_image_point = image_point_start;
@@ -500,22 +327,10 @@ template <class DerivedCameraModel> struct BaseCameraModel {
             init_image_point = image_point_end;
         } else {
             // No valid projection at start or finish -> mark point as invalid.
-            // Still return projection result at end of frame to be consistent
-            // with ncore, as this will be condensed at the python interface
-            // level
+            // Still return projection result at end of frame
             return {
                 {image_point_end.x, image_point_end.y},
-                false,
-                rolling_shutter_parameters.timestamps_us[1],
-                {
-                    t_end.x,
-                    t_end.y,
-                    t_end.z,
-                    q_end.x,
-                    q_end.y,
-                    q_end.z,
-                    q_end.w,
-                }
+                false
             };
         }
 
@@ -523,7 +338,7 @@ template <class DerivedCameraModel> struct BaseCameraModel {
         auto image_points_rs_prev = init_image_point;
         auto relative_frame_time = float{};
         auto t_rs = glm::fvec3{};
-        auto q_rs = glm::fvec4{};
+        auto q_rs = glm::fquat{};
 #pragma unroll
         for (auto j = 0; j < N_ROLLING_SHUTTER_ITERATIONS; ++j) {
             relative_frame_time =
@@ -531,11 +346,11 @@ template <class DerivedCameraModel> struct BaseCameraModel {
 
             t_rs = (1.f - relative_frame_time) * t_start +
                    relative_frame_time * t_end;
-            q_rs = unitquat_slerp(q_start, q_end, relative_frame_time);
+            q_rs = glm::slerp(q_start, q_end, relative_frame_time);
 
             auto const [image_point_rs, valid_rs] =
                 derived->camera_ray_to_image_point(
-                    apply_quaternion(q_rs, world_point) + t_rs, margin_factor
+                    glm::rotate(q_rs, world_point) + t_rs, margin_factor
                 );
 
             image_points_rs_prev = image_point_rs;
@@ -543,49 +358,29 @@ template <class DerivedCameraModel> struct BaseCameraModel {
 
         return {
             {image_points_rs_prev.x, image_points_rs_prev.y},
-            true,
-            rolling_shutter_parameters.timestamps_us[0] +
-                int64_t(
-                    relative_frame_time *
-                    (rolling_shutter_parameters.timestamps_us[1] -
-                     rolling_shutter_parameters.timestamps_us[0])
-                ),
-            {
-                t_rs.x,
-                t_rs.y,
-                t_rs.z,
-                q_rs.x,
-                q_rs.y,
-                q_rs.z,
-                q_rs.w,
-            }
+            true
         };
     }
 };
 
 struct PerfectPinholeCameraModel : BaseCameraModel<PerfectPinholeCameraModel> {
-    // OpenCV-like pinhole camera model without any distortion (NCore
-    // conventions)
+    // OpenCV-like pinhole camera model without any distortion
 
     using Base = BaseCameraModel<PerfectPinholeCameraModel>;
 
-    struct Parameters : CameraModelParameters {
-        std::array<float, 2> principal_point;
-        std::array<float, 2> focal_length;
-    };
-
-    __host__ __device__ PerfectPinholeCameraModel(Parameters const &parameters)
+    __host__ __device__ PerfectPinholeCameraModel(
+        PerfectPinholeCameraModelParameters const &parameters)
         : parameters(parameters) {}
 
-    Parameters parameters;
+    PerfectPinholeCameraModelParameters parameters;
 
     inline __device__ auto camera_ray_to_image_point(
         glm::fvec3 const &cam_ray, float margin_factor
-    ) const -> typename Base::CameraRayToImagePointReturn {
+    ) const -> typename Base::ImagePointReturn {
         auto image_point = glm::fvec2{0.f, 0.f};
 
         // Treat all the points behind the camera plane to invalid / projecting
-        // to origin (NCore convention)
+        // to origin
         if (cam_ray.z <= 0.f)
             return {image_point, false};
 
@@ -627,9 +422,9 @@ struct PerfectPinholeCameraModel : BaseCameraModel<PerfectPinholeCameraModel> {
     }
 };
 
-template <size_t N_MAX_UNDISTORTION_ITERATIONS = 5 /* half the number of maximum iterations as in NCore reference model (currently using 10)*/>
+template <size_t N_MAX_UNDISTORTION_ITERATIONS = 5>
 struct OpenCVPinholeCameraModel : BaseCameraModel<OpenCVPinholeCameraModel<N_MAX_UNDISTORTION_ITERATIONS>> {
-    // OpenCV-compatible pinhole camera model (NCore conventions)
+    // OpenCV-compatible pinhole camera model
 
     using Base = BaseCameraModel<
         OpenCVPinholeCameraModel<N_MAX_UNDISTORTION_ITERATIONS>>;
@@ -685,11 +480,11 @@ struct OpenCVPinholeCameraModel : BaseCameraModel<OpenCVPinholeCameraModel<N_MAX
 
     inline __device__ auto camera_ray_to_image_point(
         glm::fvec3 const &cam_ray, float margin_factor
-    ) const -> typename Base::CameraRayToImagePointReturn {
+    ) const -> typename Base::ImagePointReturn {
         auto image_point = glm::fvec2{0.f, 0.f};
 
         // Treat all the points behind the camera plane to invalid / projecting
-        // to origin (NCore convention)
+        // to origin 
         if (cam_ray.z <= 0.f)
             return {image_point, false};
 
@@ -786,13 +581,13 @@ struct OpenCVPinholeCameraModel : BaseCameraModel<OpenCVPinholeCameraModel<N_MAX
     }
 };
 
-template <size_t N_NEWTON_ITERATIONS = 3 /* fixed number of Netwon iteration for polynomial inversion - same as in NCore */>
+template <size_t N_NEWTON_ITERATIONS = 3>
 struct OpenCVFisheyeCameraModel : BaseCameraModel<OpenCVFisheyeCameraModel<N_NEWTON_ITERATIONS>> {
-    // OpenCV-compatible fisheye camera model (NCore conventions)
+    // OpenCV-compatible fisheye camera model
 
     using Base = BaseCameraModel<OpenCVFisheyeCameraModel<N_NEWTON_ITERATIONS>>;
 
-    OpenCVFisheyeCameraModel(
+    __host__ __device__ OpenCVFisheyeCameraModel(
         OpenCVFisheyeCameraModelParameters const &parameters,
         float min_2d_norm = 1e-6f
     )
@@ -827,7 +622,7 @@ struct OpenCVFisheyeCameraModel : BaseCameraModel<OpenCVFisheyeCameraModel<N_NEW
 
     inline __device__ auto camera_ray_to_image_point(
         glm::fvec3 const &cam_ray, float margin_factor
-    ) const -> typename Base::CameraRayToImagePointReturn {
+    ) const -> typename Base::ImagePointReturn {
         // Make sure norm is non-vanishing (norm vanishes for points along the
         // principal-axis)
         auto cam_ray_xy_norm = numerically_stable_norm2(cam_ray.x, cam_ray.y);
@@ -995,7 +790,7 @@ inline __device__ auto world_gaussian_sigma_points(
 
 struct ImageGaussianReturn {
     glm::fvec2 mean;
-    glm::fvec3 covariance; // upper triangular part of covariance
+    glm::fmat2 covariance;
     bool valid;
 };
 
@@ -1024,7 +819,7 @@ world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
     auto image_mean = glm::fvec2{0};
 #pragma unroll
     for (auto i = 0u; i < std::size(image_points); ++i) {
-        auto const [image_point, point_valid, timestamp_us, T_world_sensor] =
+        auto const [image_point, point_valid] =
             // annotate with 'template' to avoid warnings: #174-D: expression
             // has no effect
             camera_model.template world_point_to_image_point_shutter_pose<
@@ -1046,6 +841,7 @@ world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
     }
 
     auto image_covariance = glm::fmat2{0};
+#pragma unroll
     for (auto i = 0u; i < std::size(image_points); ++i) {
         auto const image_mean_vec = image_points[i] - image_mean;
         image_covariance += sigma_points.weights_covariance[i] *
@@ -1054,8 +850,35 @@ world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
 
     return {
         image_mean,
-        {image_covariance[0][0], image_covariance[1][0], image_covariance[1][1]
-        },
+        image_covariance,
         valid
     };
+}
+
+
+inline __device__ auto make_rolling_shutter_params(
+    const float *se3_start, const float *se3_end
+) -> RollingShutterParameters {
+    // input is row-major, but glm is column-major
+    auto params = RollingShutterParameters{};
+
+    params.q_start = glm::quat_cast(glm::mat3(
+        se3_start[0], se3_start[4], se3_start[8],
+        se3_start[1], se3_start[5], se3_start[9],
+        se3_start[2], se3_start[6], se3_start[10]
+    ));
+    params.t_start = glm::fvec3(se3_start[3], se3_start[7], se3_start[11]);
+
+    if (se3_end == nullptr) {
+        params.q_end = params.q_start;
+        params.t_end = params.t_start;
+    } else {
+        params.q_end = glm::quat_cast(glm::mat3(
+            se3_end[0], se3_end[4], se3_end[8],
+            se3_end[1], se3_end[5], se3_end[9],
+            se3_end[2], se3_end[6], se3_end[10]
+        ));
+        params.t_end = glm::fvec3(se3_end[3], se3_end[7], se3_end[11]);
+    }
+    return params;
 }

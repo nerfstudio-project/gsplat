@@ -13,7 +13,7 @@ namespace gsplat {
 
 namespace cg = cooperative_groups;
 
-template <typename scalar_t, class CameraModel>
+template <typename scalar_t>
 __global__ void projection_ut_3dgs_fused_kernel(
     const uint32_t C,
     const uint32_t N,
@@ -21,13 +21,22 @@ __global__ void projection_ut_3dgs_fused_kernel(
     const scalar_t *__restrict__ quats,    // [N, 4]
     const scalar_t *__restrict__ scales,   // [N, 3]
     const scalar_t *__restrict__ opacities, // [N] optional
+    const scalar_t *__restrict__ viewmats0, // [C, 4, 4]
+    const scalar_t *__restrict__ viewmats1, // [C, 4, 4] optional for rolling shutter
+    const scalar_t *__restrict__ Ks,        // [C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
     const float eps2d,
     const float near_plane,
     const float far_plane,
     const float radius_clip,
-    const CameraModel camera_model,
-    const RollingShutterParameters rs_params, 
-    const UnscentedTransformParameters ut_params,
+    const CameraModelType camera_model_type,
+    // uncented transform
+    const UnscentedTransformParameters ut_params,    
+    const ShutterType rs_type,
+    const scalar_t *__restrict__ radial_coeffs, // [C, 6] or [C, 4] optional
+    const scalar_t *__restrict__ tangential_coeffs, // [C, 2] optional
+    const scalar_t *__restrict__ thin_prism_coeffs, // [C, 2] optional
     // outputs
     int32_t *__restrict__ radii,         // [C, N, 2]
     scalar_t *__restrict__ means2d,      // [C, N, 2]
@@ -40,10 +49,10 @@ __global__ void projection_ut_3dgs_fused_kernel(
     if (idx >= C * N) {
         return;
     }
-    // const uint32_t cid = idx / N; // camera id (single camera for now)
+    const uint32_t cid = idx / N; // camera id 
     const uint32_t gid = idx % N; // gaussian id
 
-    // shift pointers to the current camera and gaussian
+    // shift pointers to the current gaussian
     const glm::fvec3 mean = glm::make_vec3(means + gid * 3);
     const glm::fvec3 scale = glm::make_vec3(scales + gid * 3);
     glm::fquat quat = glm::fquat{
@@ -53,35 +62,101 @@ __global__ void projection_ut_3dgs_fused_kernel(
         quats[gid * 4 + 3]};  // w,x,y,z quaternion
     quat = glm::normalize(quat);
 
+    // shift pointers to the current camera. note that glm is colume-major.
+    const vec2 focal_length = {Ks[cid * 9 + 0], Ks[cid * 9 + 4]};
+    const vec2 principal_point = {Ks[cid * 9 + 2], Ks[cid * 9 + 5]};
+
+    // Create rolling shutter parameter
+    RollingShutterParameters rs_params = make_rolling_shutter_params(
+        viewmats0 + cid * 16,
+        viewmats1 == nullptr ? nullptr : viewmats1 + cid * 16
+    );
+
     // transform Gaussian center to camera space
 	// Interpolate to *center* shutter pose as single per-Gaussian camera pose
 	const auto shutter_pose = interpolate_shutter_pose(0.5f, rs_params);
-    const vec3 mean_c = apply_quaternion(shutter_pose.q, mean) + shutter_pose.t;
+    const vec3 mean_c = glm::rotate(shutter_pose.q, mean) + shutter_pose.t;
     if (mean_c.z < near_plane || mean_c.z > far_plane) {
         radii[idx * 2] = 0;
         radii[idx * 2 + 1] = 0;
         return;
     }
 
-    // fixed number of rolling-shutter iterations
+    // projection using uncented transform
     auto constexpr N_ROLLING_SHUTTER_ITERATIONS = 10; 
 
-    // projection using uncented transform
-    auto const image_gaussian_return =
-        world_gaussian_to_image_gaussian_unscented_transform_shutter_pose<N_ROLLING_SHUTTER_ITERATIONS>(
-            camera_model, rs_params, ut_params, mean, scale, quat
-        );
-    const glm::fvec2 mean2D_ut = image_gaussian_return.mean;
-    const glm::fvec3 cov2D_ut = image_gaussian_return.covariance; 
-    const bool valid_ut = image_gaussian_return.valid; 
+    ImageGaussianReturn image_gaussian_return;
+    if (camera_model_type == CameraModelType::PINHOLE) {
+        if (radial_coeffs == nullptr && tangential_coeffs == nullptr && thin_prism_coeffs == nullptr) {
+            PerfectPinholeCameraModelParameters cm_params = {};
+            cm_params.resolution = {image_width, image_height};
+            cm_params.shutter_type = rs_type;
+            cm_params.principal_point = { principal_point.x, principal_point.y };
+            cm_params.focal_length = { focal_length.x, focal_length.y };
+            PerfectPinholeCameraModel camera_model(cm_params);
+            image_gaussian_return =
+                world_gaussian_to_image_gaussian_unscented_transform_shutter_pose<N_ROLLING_SHUTTER_ITERATIONS>(
+                    camera_model, rs_params, ut_params, mean, scale, quat);
+        } else {
+            OpenCVPinholeCameraModelParameters cm_params = {};
+            cm_params.resolution = {image_width, image_height};
+            cm_params.shutter_type = rs_type;
+            cm_params.principal_point = { principal_point.x, principal_point.y };
+            cm_params.focal_length = { focal_length.x, focal_length.y };
+            cm_params.radial_coeffs = {
+                radial_coeffs[cid * 6 + 0],
+                radial_coeffs[cid * 6 + 1],
+                radial_coeffs[cid * 6 + 2],
+                radial_coeffs[cid * 6 + 3],
+                radial_coeffs[cid * 6 + 4],
+                radial_coeffs[cid * 6 + 5]
+            };
+            cm_params.tangential_coeffs = {
+                tangential_coeffs[cid * 2 + 0],
+                tangential_coeffs[cid * 2 + 1]
+            };
+            cm_params.thin_prism_coeffs = {
+                thin_prism_coeffs[cid * 2 + 0],
+                thin_prism_coeffs[cid * 2 + 1]
+            };
+            OpenCVPinholeCameraModel camera_model(cm_params);
+            image_gaussian_return =
+                world_gaussian_to_image_gaussian_unscented_transform_shutter_pose<N_ROLLING_SHUTTER_ITERATIONS>(
+                    camera_model, rs_params, ut_params, mean, scale, quat);
+        }
+    } else if (camera_model_type == CameraModelType::FISHEYE) {
+        OpenCVFisheyeCameraModelParameters cm_params = {};
+        cm_params.resolution = {image_width, image_height};
+        cm_params.shutter_type = rs_type;
+        cm_params.principal_point = { principal_point.x, principal_point.y };
+        cm_params.focal_length = { focal_length.x, focal_length.y };
+        cm_params.radial_coeffs = {
+            radial_coeffs[cid * 4 + 0],
+            radial_coeffs[cid * 4 + 1],
+            radial_coeffs[cid * 4 + 2],
+            radial_coeffs[cid * 4 + 3]
+        };
+        OpenCVFisheyeCameraModel camera_model(cm_params);
+        image_gaussian_return =
+            world_gaussian_to_image_gaussian_unscented_transform_shutter_pose<N_ROLLING_SHUTTER_ITERATIONS>(
+                camera_model, rs_params, ut_params, mean, scale, quat);
+    } else {
+        // should never reach here
+        assert(false);
+        return;
+    }
+
+    // // projection using uncented transform
+    // auto const image_gaussian_return =
+    //     world_gaussian_to_image_gaussian_unscented_transform_shutter_pose<N_ROLLING_SHUTTER_ITERATIONS>(
+    //         camera_model, rs_params, ut_params, mean, scale, quat
+    //     );
+    auto [mean2d, covar2d, valid_ut] = image_gaussian_return;
     if (!valid_ut) {
         radii[idx * 2] = 0;
         radii[idx * 2 + 1] = 0;
         return;
     }
-
-    mat2 covar2d = mat2(cov2D_ut[0], cov2D_ut[1], cov2D_ut[1], cov2D_ut[2]);
-    vec2 mean2d = mean2D_ut;
 
     float compensation;
     float det = add_blur(eps2d, covar2d, compensation);
@@ -124,8 +199,6 @@ __global__ void projection_ut_3dgs_fused_kernel(
     }
 
     // mask out gaussians outside the image region
-    auto image_width = camera_model.parameters.resolution[0];
-    auto image_height = camera_model.parameters.resolution[1];
     if (mean2d.x + radius_x <= 0 || mean2d.x - radius_x >= image_width ||
         mean2d.y + radius_y <= 0 || mean2d.y - radius_y >= image_height) {
         radii[idx * 2] = 0;
@@ -153,13 +226,22 @@ void launch_projection_ut_3dgs_fused_kernel(
     const at::Tensor quats,  // [N, 4]
     const at::Tensor scales, // [N, 3]
     const at::optional<at::Tensor> opacities, // [N] optional
+    const at::Tensor viewmats0,             // [C, 4, 4]
+    const at::optional<at::Tensor> viewmats1, // [C, 4, 4] optional for rolling shutter
+    const at::Tensor Ks,                   // [C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
     const float eps2d,
     const float near_plane,
     const float far_plane,
     const float radius_clip,
-    const CameraModelParametersVariant camera_model_params,
-    const RollingShutterParameters rs_params,
+    const CameraModelType camera_model,
+    // uncented transform
     const UnscentedTransformParameters ut_params,
+    ShutterType rs_type,
+    const at::optional<at::Tensor> radial_coeffs, // [C, 6] or [C, 4] optional
+    const at::optional<at::Tensor> tangential_coeffs, // [C, 2] optional
+    const at::optional<at::Tensor> thin_prism_coeffs, // [C, 2] optional
     // outputs
     at::Tensor radii,                      // [C, N, 2]
     at::Tensor means2d,                    // [C, N, 2]
@@ -167,10 +249,8 @@ void launch_projection_ut_3dgs_fused_kernel(
     at::Tensor conics,                     // [C, N, 3]
     at::optional<at::Tensor> compensations // [C, N] optional
 ) {
-    // Note: quats need to be normalized before passing in.
-
     uint32_t N = means.size(0);    // number of gaussians
-    uint32_t C = 1; // number of cameras, only support single camera for now
+    uint32_t C = Ks.size(0); // number of cameras
 
     int64_t n_elements = C * N;
     dim3 threads(256);
@@ -182,52 +262,47 @@ void launch_projection_ut_3dgs_fused_kernel(
         return;
     }
 
-    auto launchKernel = [&](auto const& camera_model) {
-        projection_ut_3dgs_fused_kernel<float>
-            <<<grid,
-            threads,
-            shmem_size,
-            at::cuda::getCurrentCUDAStream()>>>(
-                C,
-                N,
-                means.data_ptr<float>(),
-                quats.data_ptr<float>(),
-                scales.data_ptr<float>(),
-                opacities.has_value() ? opacities.value().data_ptr<float>() : nullptr,
-                eps2d,
-                near_plane,
-                far_plane,
-                radius_clip,
-                camera_model,
-                rs_params,
-                ut_params,
-                radii.data_ptr<int32_t>(),
-                means2d.data_ptr<float>(),
-                depths.data_ptr<float>(),
-                conics.data_ptr<float>(),
-                compensations.has_value()
-                    ? compensations.value().data_ptr<float>()
-                    : nullptr
-            );
-    };
-
-    std::visit(OverloadVisitor{
-        [&](OpenCVPinholeCameraModelParameters const& params) {
-            // check for perfect-pinhole special case (none of the distortion coefficients is non-zero)
-            if (params.is_perfect_pinhole()) {
-                // instantiate perfect pinhole camera model instance by discarding all zero distortion parameters
-                auto const camera_model = PerfectPinholeCameraModel({
-                    params.resolution, params.shutter_type, params.principal_point, params.focal_length
-                });
-                launchKernel(camera_model);
-            } else {
-                launchKernel(OpenCVPinholeCameraModel(params));
-            }
-        },
-        [&](OpenCVFisheyeCameraModelParameters const& params) {
-            launchKernel(OpenCVFisheyeCameraModel<>(params));
-        },
-    }, camera_model_params);
+    projection_ut_3dgs_fused_kernel<float>
+        <<<grid,
+        threads,
+        shmem_size,
+        at::cuda::getCurrentCUDAStream()>>>(
+            C,
+            N,
+            means.data_ptr<float>(),
+            quats.data_ptr<float>(),
+            scales.data_ptr<float>(),
+            opacities.has_value() ? opacities.value().data_ptr<float>() : nullptr,
+            viewmats0.data_ptr<float>(),
+            viewmats1.has_value() ? viewmats1.value().data_ptr<float>() : nullptr,
+            Ks.data_ptr<float>(),
+            image_width,
+            image_height,
+            eps2d,
+            near_plane,
+            far_plane,
+            radius_clip,
+            camera_model,
+            // uncented transform
+            ut_params,
+            rs_type,
+            radial_coeffs.has_value()
+                ? radial_coeffs.value().data_ptr<float>()
+                : nullptr,
+            tangential_coeffs.has_value()
+                ? tangential_coeffs.value().data_ptr<float>()
+                : nullptr,
+            thin_prism_coeffs.has_value()
+                ? thin_prism_coeffs.value().data_ptr<float>()
+                : nullptr,
+            radii.data_ptr<int32_t>(),
+            means2d.data_ptr<float>(),
+            depths.data_ptr<float>(),
+            conics.data_ptr<float>(),
+            compensations.has_value()
+                ? compensations.value().data_ptr<float>()
+                : nullptr
+        );
 }
 
 

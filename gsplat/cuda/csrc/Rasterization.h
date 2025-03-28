@@ -207,9 +207,20 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     const at::optional<at::Tensor> backgrounds, // [C, channels]
     const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
     // image size
-    const CameraModelParametersVariant camera_model_params,
-    const RollingShutterParameters rs_params, 
+    const uint32_t image_width,
+    const uint32_t image_height,
     const uint32_t tile_size,
+    // camera
+    const at::Tensor viewmats0,             // [C, 4, 4]
+    const at::optional<at::Tensor> viewmats1, // [C, 4, 4] optional for rolling shutter
+    const at::Tensor Ks,                   // [C, 3, 3]
+    const CameraModelType camera_model,
+    // uncented transform
+    const UnscentedTransformParameters ut_params,
+    ShutterType rs_type,
+    const at::optional<at::Tensor> radial_coeffs, // [C, 6] or [C, 4] optional
+    const at::optional<at::Tensor> tangential_coeffs, // [C, 2] optional
+    const at::optional<at::Tensor> thin_prism_coeffs, // [C, 2] optional
     // intersections
     const at::Tensor tile_offsets, // [C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
@@ -230,9 +241,20 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     const at::optional<at::Tensor> backgrounds, // [C, 3]
     const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
     // image size
-    const CameraModelParametersVariant camera_model_params,
-    const RollingShutterParameters rs_params, 
+    const uint32_t image_width,
+    const uint32_t image_height,
     const uint32_t tile_size,
+    // camera
+    const at::Tensor viewmats0,             // [C, 4, 4]
+    const at::optional<at::Tensor> viewmats1, // [C, 4, 4] optional for rolling shutter
+    const at::Tensor Ks,                   // [C, 3, 3]
+    const CameraModelType camera_model,
+    // uncented transform
+    const UnscentedTransformParameters ut_params,
+    ShutterType rs_type,
+    const at::optional<at::Tensor> radial_coeffs, // [C, 6] or [C, 4] optional
+    const at::optional<at::Tensor> tangential_coeffs, // [C, 2] optional
+    const at::optional<at::Tensor> thin_prism_coeffs, // [C, 2] optional
     // intersections
     const at::Tensor tile_offsets, // [C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
@@ -248,6 +270,6 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     at::Tensor v_scales,     // [N, 3]
     at::Tensor v_colors,                    // [C, N, 3] or [nnz, 3]
     at::Tensor v_opacities                  // [C, N] or [nnz]
-);
+) ;
 
 } // namespace gsplat

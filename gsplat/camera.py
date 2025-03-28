@@ -71,12 +71,10 @@ class OpenCVFisheyeCameraModelParameters(CameraModelParameters):
 class RollingShutterParameters:
 
     T_world_sensors: Tuple[float, ...]  # 7 * 2
-    timestamps_us: Tuple[int, int]
 
     def to_cpp(self):
         p = _make_lazy_cuda_obj("RollingShutterParameters")()
         p.T_world_sensors = self.T_world_sensors
-        p.timestamps_us = self.timestamps_us
         return p
 
 def compute_max_distance_to_border(image_size_component: float, principal_point_component: float) -> float:
@@ -158,7 +156,6 @@ def to_params(
     rs_params = RollingShutterParameters(
         T_world_sensors=np.hstack(
             [T_world_sensor_tquat, T_world_sensor_tquat]
-        ).tolist(),  # represents two tquat [t,q] poses at start / end timestamps
-        timestamps_us=[0, 1],  # arbitrary timestamps
+        ).tolist(),  # represents two tquat [t,q] poses at start / end
     )
     return cm_params, rs_params

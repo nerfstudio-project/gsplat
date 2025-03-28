@@ -89,8 +89,7 @@ T_world_sensor_tquat = np.hstack([T_world_sensor_t, T_world_sensor_quat])
 rs = _C.RollingShutterParameters()
 rs.T_world_sensors = np.hstack(
     [T_world_sensor_tquat, T_world_sensor_tquat]
-).tolist()  # represents two tquat [t,q] poses at start / end timestamps
-rs.timestamps_us = [0, 1]  # arbitrary timestamps
+).tolist()  # represents two tquat [t,q] poses at start / end 
 
 
 def rasterizer_and_save(radii, means2d, depths, conics, file_name="render.png"):
@@ -136,7 +135,7 @@ def rasterizer_and_save(radii, means2d, depths, conics, file_name="render.png"):
 
 
 radii, means2d, depths, conics, _ = fully_fused_projection_with_ut(
-    means, quats, scales, viewmats, Ks, width, height, 0.3, 0.01, 1e10, 0.0
+    means, quats, scales, None, viewmats, None, Ks, width, height, 0.3, 0.01, 1e10, 0.0
 )
 rasterizer_and_save(radii, means2d, depths, conics, "results/ut_eval3d.png")
 

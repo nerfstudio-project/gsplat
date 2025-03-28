@@ -422,8 +422,6 @@ class Dataset:
             }[self.parser.camtype],
             params=torch.from_numpy(params).float(),
         )
-        data["cm_params"] = cm_params
-        data["rs_params"] = rs_params
 
         if self.load_depths:
             # projected points to image plane to get depths

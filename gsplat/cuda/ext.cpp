@@ -102,8 +102,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     py::class_<RollingShutterParameters>(m, "RollingShutterParameters")
         .def(py::init<>())
-        .def_readwrite("T_world_sensors", &RollingShutterParameters::T_world_sensors)
-        .def_readwrite("timestamps_us", &RollingShutterParameters::timestamps_us);
+        .def_readwrite("T_world_sensors", &RollingShutterParameters::T_world_sensors);
 
     py::class_<UnscentedTransformParameters>(m, "UnscentedTransformParameters")
         .def(py::init<>())

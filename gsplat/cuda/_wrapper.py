@@ -1,4 +1,5 @@
 import warnings
+from dataclasses import dataclass
 from typing import Any, Callable, Optional, Tuple
 
 import torch
@@ -6,6 +7,78 @@ import torch.nn.functional as F
 from torch import Tensor
 from typing_extensions import Literal
 
+
+@dataclass
+class OpenCVDistortionParameters:
+    """Camera distortion parameters in OpenCV convention.
+    
+    See https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html for details.
+    """
+
+    # For pinhole camera, this is {k1, ..., k6}. For fisheye, this is {k1, ..., k4}
+    # Shape [C, 6] or [C, 4]
+    radial_coeffs: Optional[Tensor] = None 
+    # For pinhole camera only, {p1, p2}. Shape [C, 2]
+    tangential_coeffs: Optional[Tensor] = None
+    # For pinhole camera only, {s1, s2, s3, s4}. Shape [C, 4]
+    thin_prism_coeffs: Optional[Tensor] = None
+
+    def is_perfect(self) -> bool:
+        """Check if the camera is perfect (no distortion)."""
+        return (
+            self.radial_coeffs is None
+            and self.tangential_coeffs is None
+            and self.thin_prism_coeffs is None
+        )
+    
+    def assert_sanity(self) -> None:
+        """Check if the camera parameters are sane."""
+        if self.radial_coeffs is not None:
+            assert self.radial_coeffs.dim() == 2 and self.radial_coeffs.shape[1] in (4, 6), (
+                "Invalid radial coefficients shape. Expected [C, 4] or [C, 6], got {self.radial_coeffs.shape}"
+            )
+        if self.tangential_coeffs is not None:
+            assert self.tangential_coeffs.dim() == 2 and self.tangential_coeffs.shape[1] == 2, (
+                "Invalid tangential coefficients shape. Expected [C, 2], got {self.tangential_coeffs.shape}"
+            )
+        if self.thin_prism_coeffs is not None:
+            assert self.thin_prism_coeffs.dim() == 2 and self.thin_prism_coeffs.shape[1] == 4, (
+                "Invalid thin prism coefficients shape. Expected [C, 4], got {self.thin_prism_coeffs.shape}"
+            )
+
+@dataclass
+class RollingShutterParameters:
+    """Rolling shutter parameters."""
+
+    # Type of rolling shutter. "GLOBAL" means global shutter (i.e., no rolling shutter).
+    shutter_type: Literal[
+        "GLOBAL",
+        "ROLLING_TOP_TO_BOTTOM",
+        "ROLLING_LEFT_TO_RIGHT",
+        "ROLLING_BOTTOM_TO_TOP",
+        "ROLLING_RIGHT_TO_LEFT",
+    ] = "GLOBAL"
+    # The start world-to-camera transformation matrix. In the case of global shutter, 
+    # this is the only transformation matrix. Shape [C, 4, 4]
+    viewmats0: Optional[Tensor] = None
+    # The end world-to-camera transformation matrix. Optional. Shape [C, 4, 4]
+    viewmats1: Optional[Tensor] = None
+
+    def assert_sanity(self) -> None:
+        """Check if the rolling shutter parameters are sane."""
+        if self.is_global():
+            assert (self.viewmats0 is None) and (self.viewmats1 is None), (
+                "For global shutter, do not provide viewmats0 or viewmats1."
+            )
+        else:
+            assert (self.viewmats0 is not None) and (self.viewmats1 is not None), (
+                "Both viewmats0 and viewmats1 must be provided for rolling shutter."
+            )
+
+    def is_global(self) -> bool:
+        """Check if the rolling shutter is global."""
+        return self.shutter_type == "GLOBAL"
+    
 
 def _make_lazy_cuda_func(name: str) -> Callable:
     def call_cuda(*args, **kwargs):
@@ -599,8 +672,10 @@ def rasterize_to_pixels_eval3d(
     backgrounds: Optional[Tensor] = None,  # [C, channels]
     masks: Optional[Tensor] = None,  # [C, tile_height, tile_width]
     packed: bool = False,
-    cm_params=None,
-    rs_params=None,
+    viewmats_rs: Optional[Tensor] = None,  # [C, 4, 4]
+    radial_coeffs: Optional[Tensor] = None,  # [C, 4] or [C, 6]
+    tangential_coeffs: Optional[Tensor] = None,  # [C, 2]
+    thin_prism_coeffs: Optional[Tensor] = None,  # [C, 4]
 ) -> Tuple[Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
@@ -708,16 +783,18 @@ def rasterize_to_pixels_eval3d(
         opacities.contiguous(),
         backgrounds,
         masks,
-        viewmats.contiguous(),
-        Ks.contiguous(),
         image_width,
         image_height,
-        camera_model,
         tile_size,
+        viewmats.contiguous(),
+        viewmats_rs.contiguous() if viewmats_rs is not None else None,
+        Ks.contiguous(),
+        camera_model,
+        radial_coeffs.contiguous() if radial_coeffs is not None else None,
+        tangential_coeffs.contiguous() if tangential_coeffs is not None else None,
+        thin_prism_coeffs.contiguous() if thin_prism_coeffs is not None else None,
         isect_offsets.contiguous(),
         flatten_ids.contiguous(),
-        cm_params,
-        rs_params,
     )
 
     if padded_channels > 0:
@@ -1064,8 +1141,7 @@ def to_params(
     rs_params = _make_lazy_cuda_obj("RollingShutterParameters")()
     rs_params.T_world_sensors = np.hstack(
         [T_world_sensor_tquat, T_world_sensor_tquat]
-    ).tolist()  # represents two tquat [t,q] poses at start / end timestamps
-    rs_params.timestamps_us = [0, 1]  # arbitrary timestamps
+    ).tolist()  # represents two tquat [t,q] poses at start / end 
     return cm_params, rs_params
 
 
@@ -1073,7 +1149,9 @@ def fully_fused_projection_with_ut(
     means: Tensor,  # [N, 3]
     quats: Tensor,  # [N, 4]
     scales: Tensor,  # [N, 3]
-    viewmats: Tensor,  # [C, 4, 4]
+    opacities: Optional[Tensor], # [N]
+    viewmats0: Tensor, # [C, 4, 4]
+    viewmats1: Optional[Tensor], # [C, 4, 4] optional for rolling shutter
     Ks: Tensor,  # [C, 3, 3]
     width: int,
     height: int,
@@ -1083,17 +1161,16 @@ def fully_fused_projection_with_ut(
     radius_clip: float = 0.0,
     calc_compensations: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
-    opacities: Optional[Tensor] = None,  # [N] or None
-    cm_params=None,
-    rs_params=None,
+    # uncented transform
+    radial_coeffs: Optional[Tensor] = None,
+    tangential_coeffs: Optional[Tensor] = None,
+    thin_prism_coeffs: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     ut_params = _make_lazy_cuda_obj("UnscentedTransformParameters")()
-    if cm_params is None or rs_params is None:
-        print("On the fly computing cm_params and rs_params")
-        cm_params, rs_params = to_params(viewmats, Ks, width, height, camera_model)
-    else:
-        cm_params = cm_params.to_cpp()
-        rs_params = rs_params.to_cpp()
+    rs_type = _make_lazy_cuda_obj("ShutterType.GLOBAL")
+    camera_model_type = _make_lazy_cuda_obj(
+        f"CameraModelType.{camera_model.upper()}"
+    )
 
     radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
         "projection_ut_3dgs_fused"
@@ -1102,14 +1179,23 @@ def fully_fused_projection_with_ut(
         quats.contiguous(),
         scales.contiguous(),
         opacities.contiguous() if opacities is not None else None,
+        viewmats0.contiguous(),
+        viewmats1.contiguous() if viewmats1 is not None else None,
+        Ks.contiguous(),
+        width,
+        height,
         eps2d,
         near_plane,
         far_plane,
         radius_clip,
         calc_compensations,
-        cm_params,
-        rs_params,
+        camera_model_type,
+        # uncented transform
         ut_params,
+        rs_type,
+        radial_coeffs.contiguous() if radial_coeffs is not None else None,
+        tangential_coeffs.contiguous() if tangential_coeffs is not None else None,
+        thin_prism_coeffs.contiguous() if thin_prism_coeffs is not None else None,
     )
     if not calc_compensations:
         compensations = None
@@ -1259,23 +1345,24 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         opacities: Tensor,  # [C, N]
         backgrounds: Tensor,  # [C, D], Optional
         masks: Tensor,  # [C, tile_height, tile_width], Optional
-        viewmats: Tensor,  # [C, 4, 4]
-        Ks: Tensor,  # [C, 3, 3]
         width: int,
         height: int,
-        camera_model: Literal["pinhole", "ortho", "fisheye"],
         tile_size: int,
+        viewmats0: Tensor,  # [C, 4, 4]
+        viewmats1: Optional[Tensor],  # [C, 4, 4] optional for rolling shutter
+        Ks: Tensor,  # [C, 3, 3]
+        camera_model: Literal["pinhole", "ortho", "fisheye"],
+        radial_coeffs: Optional[Tensor],
+        tangential_coeffs: Optional[Tensor],
+        thin_prism_coeffs: Optional[Tensor],
         isect_offsets: Tensor,  # [C, tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
-        cm_params=None,
-        rs_params=None,
     ) -> Tuple[Tensor, Tensor]:
-        if cm_params is None or rs_params is None:
-            print("On the fly computing cm_params and rs_params")
-            cm_params, rs_params = to_params(viewmats, Ks, width, height, camera_model)
-        else:
-            cm_params = cm_params.to_cpp()
-            rs_params = rs_params.to_cpp()
+        ut_params = _make_lazy_cuda_obj("UnscentedTransformParameters")()
+        rs_type = _make_lazy_cuda_obj("ShutterType.GLOBAL")
+        camera_model = _make_lazy_cuda_obj(
+            f"CameraModelType.{camera_model.upper()}"
+        )
 
         render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
             "rasterize_to_pixels_from_world_3dgs_fwd"
@@ -1287,9 +1374,18 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             opacities,
             backgrounds,
             masks,
-            cm_params,
-            rs_params,
+            width,
+            height,
             tile_size,
+            viewmats0,
+            viewmats1,
+            Ks,
+            camera_model,
+            ut_params,
+            rs_type,
+            radial_coeffs,
+            tangential_coeffs,
+            thin_prism_coeffs,
             isect_offsets,
             flatten_ids,
         )
@@ -1302,13 +1398,22 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             opacities,
             backgrounds,
             masks,
+            viewmats0,
+            viewmats1,
+            Ks,
+            radial_coeffs,
+            tangential_coeffs,
+            thin_prism_coeffs,
             isect_offsets,
             flatten_ids,
             render_alphas,
             last_ids,
         )
-        ctx.cm_params = cm_params
-        ctx.rs_params = rs_params
+        ctx.width = width
+        ctx.height = height
+        ctx.ut_params = ut_params
+        ctx.rs_type = rs_type
+        ctx.camera_model = camera_model
         ctx.tile_size = tile_size
 
         return render_colors, render_alphas
@@ -1327,13 +1432,22 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             opacities,
             backgrounds,
             masks,
+            viewmats0,
+            viewmats1,
+            Ks,
+            radial_coeffs,
+            tangential_coeffs,
+            thin_prism_coeffs,
             isect_offsets,
             flatten_ids,
             render_alphas,
             last_ids,
         ) = ctx.saved_tensors
-        cm_params = ctx.cm_params
-        rs_params = ctx.rs_params
+        width = ctx.width
+        height = ctx.height
+        ut_params = ctx.ut_params
+        rs_type = ctx.rs_type
+        camera_model = ctx.camera_model
         tile_size = ctx.tile_size
 
         (v_means, v_quats, v_scales, v_colors, v_opacities,) = _make_lazy_cuda_func(
@@ -1346,9 +1460,18 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             opacities,
             backgrounds,
             masks,
-            cm_params,
-            rs_params,
+            width,
+            height,
             tile_size,
+            viewmats0,
+            viewmats1,
+            Ks,
+            camera_model,
+            ut_params,
+            rs_type,
+            radial_coeffs,
+            tangential_coeffs,
+            thin_prism_coeffs,
             isect_offsets,
             flatten_ids,
             render_alphas,
@@ -1368,6 +1491,8 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             v_scales,
             v_colors,
             v_opacities,
+            None,
+            None,
             None,
             None,
             None,

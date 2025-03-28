@@ -683,9 +683,20 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
     const at::optional<at::Tensor> backgrounds, // [C, channels]
     const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
     // image size
-    const CameraModelParametersVariant camera_model_params,
-    const RollingShutterParameters rs_params, 
+    const uint32_t image_width,
+    const uint32_t image_height,
     const uint32_t tile_size,
+    // camera
+    const at::Tensor viewmats0,             // [C, 4, 4]
+    const at::optional<at::Tensor> viewmats1, // [C, 4, 4] optional for rolling shutter
+    const at::Tensor Ks,                   // [C, 3, 3]
+    const CameraModelType camera_model,
+    // uncented transform
+    const UnscentedTransformParameters ut_params,
+    ShutterType rs_type,
+    const at::optional<at::Tensor> radial_coeffs, // [C, 6] or [C, 4] optional
+    const at::optional<at::Tensor> tangential_coeffs, // [C, 2] optional
+    const at::optional<at::Tensor> thin_prism_coeffs, // [C, 2] optional
     // intersections
     const at::Tensor tile_offsets, // [C, tile_height, tile_width]
     const at::Tensor flatten_ids   // [n_isects]
@@ -708,14 +719,6 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
     uint32_t C = tile_offsets.size(0); // number of cameras
     uint32_t channels = colors.size(-1);
     assert (channels == 3); // only support RGB for now
-    assert (C == 1); // only support single camera for now
-
-    auto resolution = std::visit(
-        [](auto const& params) { return params.resolution; },
-        camera_model_params
-    );
-    const uint32_t image_width = resolution[0];
-    const uint32_t image_height = resolution[1];
 
     at::Tensor renders =
         at::empty({C, image_height, image_width, channels}, means.options());
@@ -735,9 +738,18 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
             opacities,                                                         \
             backgrounds,                                                       \
             masks,                                                             \
-            camera_model_params,                                               \
-            rs_params,                                                         \
+            image_width,                                                       \
+            image_height,                                                      \
             tile_size,                                                         \
+            viewmats0,                                                         \
+            viewmats1,                                                         \
+            Ks,                                                                \
+            camera_model,                                                     \
+            ut_params,                                                        \
+            rs_type,                                                       \
+            radial_coeffs,                                                    \
+            tangential_coeffs,                                                \
+            thin_prism_coeffs,                                               \
             tile_offsets,                                                      \
             flatten_ids,                                                       \
             renders,                                                           \
@@ -771,9 +783,20 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     const at::optional<at::Tensor> backgrounds, // [C, 3]
     const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
     // image size
-    const CameraModelParametersVariant camera_model_params,
-    const RollingShutterParameters rs_params, 
+    const uint32_t image_width,
+    const uint32_t image_height,
     const uint32_t tile_size,
+    // camera
+    const at::Tensor viewmats0,             // [C, 4, 4]
+    const at::optional<at::Tensor> viewmats1, // [C, 4, 4] optional for rolling shutter
+    const at::Tensor Ks,                   // [C, 3, 3]
+    const CameraModelType camera_model,
+    // uncented transform
+    const UnscentedTransformParameters ut_params,
+    ShutterType rs_type,
+    const at::optional<at::Tensor> radial_coeffs, // [C, 6] or [C, 4] optional
+    const at::optional<at::Tensor> tangential_coeffs, // [C, 2] optional
+    const at::optional<at::Tensor> thin_prism_coeffs, // [C, 2] optional
     // intersections
     const at::Tensor tile_offsets, // [C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
@@ -821,9 +844,18 @@ rasterize_to_pixels_from_world_3dgs_bwd(
             opacities,                                                         \
             backgrounds,                                                       \
             masks,                                                             \
-            camera_model_params,                                               \
-            rs_params,                                                         \
+            image_width,                                                       \
+            image_height,                                                      \
             tile_size,                                                         \
+            viewmats0,                                                         \
+            viewmats1,                                                         \
+            Ks,                                                                \
+            camera_model,                                                     \
+            ut_params,                                                        \
+            rs_type,                                                       \
+            radial_coeffs,                                                    \
+            tangential_coeffs,                                                \
+            thin_prism_coeffs,                                               \
             tile_offsets,                                                      \
             flatten_ids,                                                       \
             render_alphas,                                                     \

@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <limits>
 #include <variant>
+#include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 // ---------------------------------------------------------------------------------------------
 
@@ -23,17 +25,23 @@ enum class ShutterType {
 struct RollingShutterParameters {
     // represents two tquat [t,q] poses
     std::array<float, 7 * 2> T_world_sensors; 
-    std::array<int64_t, 2> timestamps_us;
+    glm::fvec3 t_start;
+    glm::fquat q_start;
+    glm::fvec3 t_end;
+    glm::fquat q_end;
 };
 
 struct CameraModelParameters {
-    std::array<uint64_t, 2> resolution;
+    std::array<uint32_t, 2> resolution;
     ShutterType shutter_type;
+    std::array<float, 2> principal_point;
+    std::array<float, 2> focal_length;
+};
+
+struct PerfectPinholeCameraModelParameters : CameraModelParameters {
 };
 
 struct OpenCVPinholeCameraModelParameters : CameraModelParameters {
-    std::array<float, 2> principal_point;
-    std::array<float, 2> focal_length;
     std::array<float, 6> radial_coeffs;
     std::array<float, 2> tangential_coeffs;
     std::array<float, 4> thin_prism_coeffs;
@@ -51,14 +59,13 @@ struct OpenCVPinholeCameraModelParameters : CameraModelParameters {
 };
 
 struct OpenCVFisheyeCameraModelParameters : CameraModelParameters {
-    std::array<float, 2> principal_point;
-    std::array<float, 2> focal_length;
     std::array<float, 4> radial_coeffs;
     float max_angle;
 };
 
 
 using CameraModelParametersVariant = std::variant<
+    PerfectPinholeCameraModelParameters,
     OpenCVPinholeCameraModelParameters,
     OpenCVFisheyeCameraModelParameters>;
 

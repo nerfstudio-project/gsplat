@@ -23,8 +23,8 @@ __global__ void projection_2dgs_packed_fwd_kernel(
     const scalar_t *__restrict__ scales,   // [N, 3]
     const scalar_t *__restrict__ viewmats, // [C, 4, 4]
     const scalar_t *__restrict__ Ks,       // [C, 3, 3]
-    const int32_t image_width,
-    const int32_t image_height,
+    const uint32_t image_width,
+    const uint32_t image_height,
     const scalar_t near_plane,
     const scalar_t far_plane,
     const scalar_t radius_clip,
@@ -281,8 +281,8 @@ __global__ void projection_2dgs_packed_bwd_kernel(
     const scalar_t *__restrict__ scales,   // [N, 3]
     const scalar_t *__restrict__ viewmats, // [C, 4, 4]
     const scalar_t *__restrict__ Ks,       // [C, 3, 3]
-    const int32_t image_width,
-    const int32_t image_height,
+    const uint32_t image_width,
+    const uint32_t image_height,
     // fwd outputs
     const int64_t *__restrict__ camera_ids,      // [nnz]
     const int64_t *__restrict__ gaussian_ids,    // [nnz]

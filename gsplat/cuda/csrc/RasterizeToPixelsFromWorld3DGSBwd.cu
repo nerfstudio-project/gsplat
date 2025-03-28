@@ -13,7 +13,7 @@ namespace gsplat {
 
 namespace cg = cooperative_groups;
 
-template <uint32_t CDIM, typename scalar_t, typename CameraModel>
+template <uint32_t CDIM, typename scalar_t>
 __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     const uint32_t C,
     const uint32_t N,
@@ -27,11 +27,23 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     const scalar_t *__restrict__ opacities,   // [C, N] or [nnz]
     const scalar_t *__restrict__ backgrounds, // [C, CDIM] or [nnz, CDIM]
     const bool *__restrict__ masks,           // [C, tile_height, tile_width]
-    const CameraModel camera_model,
-    const RollingShutterParameters rs_params, 
+    const uint32_t image_width,
+    const uint32_t image_height,
     const uint32_t tile_size,
     const uint32_t tile_width,
     const uint32_t tile_height,
+    // camera model
+    const scalar_t *__restrict__ viewmats0, // [C, 4, 4]
+    const scalar_t *__restrict__ viewmats1, // [C, 4, 4] optional for rolling shutter
+    const scalar_t *__restrict__ Ks,        // [C, 3, 3]
+    const CameraModelType camera_model_type,
+    // uncented transform
+    const UnscentedTransformParameters ut_params,    
+    const ShutterType rs_type,
+    const scalar_t *__restrict__ radial_coeffs, // [C, 6] or [C, 4] optional
+    const scalar_t *__restrict__ tangential_coeffs, // [C, 2] optional
+    const scalar_t *__restrict__ thin_prism_coeffs, // [C, 2] optional
+    // intersections
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
     // fwd outputs
@@ -51,25 +63,22 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     scalar_t *__restrict__ v_opacities // [C, N] or [nnz]
 ) {
     auto block = cg::this_thread_block();
-    uint32_t camera_id = block.group_index().x;
+    uint32_t cid = block.group_index().x;
     uint32_t tile_id =
         block.group_index().y * tile_width + block.group_index().z;
     uint32_t i = block.group_index().y * tile_size + block.thread_index().y;
     uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
 
-    auto image_width = camera_model.parameters.resolution[0];
-    auto image_height = camera_model.parameters.resolution[1];
-
-    tile_offsets += camera_id * tile_height * tile_width;
-    render_alphas += camera_id * image_height * image_width;
-    last_ids += camera_id * image_height * image_width;
-    v_render_colors += camera_id * image_height * image_width * CDIM;
-    v_render_alphas += camera_id * image_height * image_width;
+    tile_offsets += cid * tile_height * tile_width;
+    render_alphas += cid * image_height * image_width;
+    last_ids += cid * image_height * image_width;
+    v_render_colors += cid * image_height * image_width * CDIM;
+    v_render_alphas += cid * image_height * image_width;
     if (backgrounds != nullptr) {
-        backgrounds += camera_id * CDIM;
+        backgrounds += cid * CDIM;
     }
     if (masks != nullptr) {
-        masks += camera_id * tile_height * tile_width;
+        masks += cid * tile_height * tile_width;
     }
 
     // when the mask is provided, do nothing and return if
@@ -84,10 +93,74 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     const int32_t pix_id =
         min(i * image_width + j, image_width * image_height - 1);
 
-    // Create ray from pixel
-    WorldRay ray = camera_model.image_point_to_world_ray_shutter_pose(
-        vec2(px, py), rs_params
+    // Create rolling shutter parameter
+    RollingShutterParameters rs_params = make_rolling_shutter_params(
+        viewmats0 + cid * 16,
+        viewmats1 == nullptr ? nullptr : viewmats1 + cid * 16
     );
+    // shift pointers to the current camera. note that glm is colume-major.
+    const vec2 focal_length = {Ks[cid * 9 + 0], Ks[cid * 9 + 4]};
+    const vec2 principal_point = {Ks[cid * 9 + 2], Ks[cid * 9 + 5]};
+    
+    // Create ray from pixel
+    WorldRay ray;
+    if (camera_model_type == CameraModelType::PINHOLE) {
+        if (radial_coeffs == nullptr && tangential_coeffs == nullptr && thin_prism_coeffs == nullptr) {
+            PerfectPinholeCameraModelParameters cm_params = {};
+            cm_params.resolution = {image_width, image_height};
+            cm_params.shutter_type = rs_type;
+            cm_params.principal_point = { principal_point.x, principal_point.y };
+            cm_params.focal_length = { focal_length.x, focal_length.y };
+            PerfectPinholeCameraModel camera_model(cm_params);
+            ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
+        } else {
+            OpenCVPinholeCameraModelParameters cm_params = {};
+            cm_params.resolution = {image_width, image_height};
+            cm_params.shutter_type = rs_type;
+            cm_params.principal_point = { principal_point.x, principal_point.y };
+            cm_params.focal_length = { focal_length.x, focal_length.y };
+            cm_params.radial_coeffs = {
+                radial_coeffs[cid * 6 + 0],
+                radial_coeffs[cid * 6 + 1],
+                radial_coeffs[cid * 6 + 2],
+                radial_coeffs[cid * 6 + 3],
+                radial_coeffs[cid * 6 + 4],
+                radial_coeffs[cid * 6 + 5]
+            };
+            cm_params.tangential_coeffs = {
+                tangential_coeffs[cid * 2 + 0],
+                tangential_coeffs[cid * 2 + 1]
+            };
+            cm_params.thin_prism_coeffs = {
+                thin_prism_coeffs[cid * 2 + 0],
+                thin_prism_coeffs[cid * 2 + 1]
+            };
+            OpenCVPinholeCameraModel camera_model(cm_params);
+            ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
+        }
+    } else if (camera_model_type == CameraModelType::FISHEYE) {
+        OpenCVFisheyeCameraModelParameters cm_params = {};
+        cm_params.resolution = {image_width, image_height};
+        cm_params.shutter_type = rs_type;
+        cm_params.principal_point = { principal_point.x, principal_point.y };
+        cm_params.focal_length = { focal_length.x, focal_length.y };
+        cm_params.radial_coeffs = {
+            radial_coeffs[cid * 4 + 0],
+            radial_coeffs[cid * 4 + 1],
+            radial_coeffs[cid * 4 + 2],
+            radial_coeffs[cid * 4 + 3]
+        };
+        OpenCVFisheyeCameraModel camera_model(cm_params);
+        ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
+    } else {
+        // should never reach here
+        assert(false);
+        return;
+    }
+
+    // WorldRay ray = camera_model.image_point_to_world_ray_shutter_pose(
+    //     vec2(px, py), rs_params
+    // );
     vec3 ray_d = ray.ray_dir;
     vec3 ray_o = ray.ray_org;
 
@@ -99,7 +172,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     // which gaussians to look through in this tile
     int32_t range_start = tile_offsets[tile_id];
     int32_t range_end =
-        (camera_id == C - 1) && (tile_id == tile_width * tile_height - 1)
+        (cid == C - 1) && (tile_id == tile_width * tile_height - 1)
             ? n_isects
             : tile_offsets[tile_id + 1];
     const uint32_t block_size = block.size();
@@ -329,9 +402,20 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     const at::optional<at::Tensor> backgrounds, // [C, 3]
     const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
     // image size
-    const CameraModelParametersVariant camera_model_params,
-    const RollingShutterParameters rs_params, 
+    const uint32_t image_width,
+    const uint32_t image_height,
     const uint32_t tile_size,
+    // camera
+    const at::Tensor viewmats0,             // [C, 4, 4]
+    const at::optional<at::Tensor> viewmats1, // [C, 4, 4] optional for rolling shutter
+    const at::Tensor Ks,                   // [C, 3, 3]
+    const CameraModelType camera_model,
+    // uncented transform
+    const UnscentedTransformParameters ut_params,
+    ShutterType rs_type,
+    const at::optional<at::Tensor> radial_coeffs, // [C, 6] or [C, 4] optional
+    const at::optional<at::Tensor> tangential_coeffs, // [C, 2] optional
+    const at::optional<at::Tensor> thin_prism_coeffs, // [C, 2] optional
     // intersections
     const at::Tensor tile_offsets, // [C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
@@ -356,7 +440,6 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     uint32_t tile_height = tile_offsets.size(1);
     uint32_t tile_width = tile_offsets.size(2);
     uint32_t n_isects = flatten_ids.size(0);
-    assert(C == 1); // only support 1 camera for now
 
     // Each block covers a tile on the image. In total there are
     // C * tile_height * tile_width blocks.
@@ -376,7 +459,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     // channels into the kernel functions and avoid necessary global memory
     // writes. This requires moving the channel padding from python to C side.
     if (cudaFuncSetAttribute(
-            rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float, PerfectPinholeCameraModel>,
+            rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
             shmem_size
         ) != cudaSuccess) {
@@ -387,58 +470,56 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         );
     }
 
-    auto launchKernel = [&](auto const& camera_model) {
-        rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float>
-            <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
-                C,
-                N,
-                n_isects,
-                packed,
-                reinterpret_cast<vec3 *>(means.data_ptr<float>()),
-                reinterpret_cast<vec4 *>(quats.data_ptr<float>()),
-                reinterpret_cast<vec3 *>(scales.data_ptr<float>()),
-                colors.data_ptr<float>(),
-                opacities.data_ptr<float>(),
-                backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                        : nullptr,
-                masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
-                camera_model,
-                rs_params,
-                tile_size,
-                tile_width,
-                tile_height,
-                tile_offsets.data_ptr<int32_t>(),
-                flatten_ids.data_ptr<int32_t>(),
-                render_alphas.data_ptr<float>(),
-                last_ids.data_ptr<int32_t>(),
-                v_render_colors.data_ptr<float>(),
-                v_render_alphas.data_ptr<float>(),
-                // outputs
-                reinterpret_cast<vec3 *>(v_means.data_ptr<float>()),
-                reinterpret_cast<vec4 *>(v_quats.data_ptr<float>()),
-                reinterpret_cast<vec3 *>(v_scales.data_ptr<float>()),
-                v_colors.data_ptr<float>(),
-                v_opacities.data_ptr<float>()
-            );
-    };
-
-    std::visit(OverloadVisitor{
-        [&](OpenCVPinholeCameraModelParameters const& params) {
-            // check for perfect-pinhole special case (none of the distortion coefficients is non-zero)
-            if (params.is_perfect_pinhole()) {
-                // instantiate perfect pinhole camera model instance by discarding all zero distortion parameters
-                auto const camera_model = PerfectPinholeCameraModel({
-                    params.resolution, params.shutter_type, params.principal_point, params.focal_length
-                });
-                launchKernel(camera_model);
-            } else {
-                launchKernel(OpenCVPinholeCameraModel(params));
-            }
-        },
-        [&](OpenCVFisheyeCameraModelParameters const& params) {
-            launchKernel(OpenCVFisheyeCameraModel<>(params));
-        },
-    }, camera_model_params);
+    rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float>
+        <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+            C,
+            N,
+            n_isects,
+            packed,
+            reinterpret_cast<vec3 *>(means.data_ptr<float>()),
+            reinterpret_cast<vec4 *>(quats.data_ptr<float>()),
+            reinterpret_cast<vec3 *>(scales.data_ptr<float>()),
+            colors.data_ptr<float>(),
+            opacities.data_ptr<float>(),
+            backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
+                                    : nullptr,
+            masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
+            image_width,
+            image_height,
+            tile_size,
+            tile_width,
+            tile_height,
+            // camera model
+            viewmats0.data_ptr<float>(),
+            viewmats1.has_value() ? viewmats1.value().data_ptr<float>()
+                                : nullptr,
+            Ks.data_ptr<float>(),
+            camera_model,
+            // uncented transform
+            ut_params,
+            rs_type,
+            radial_coeffs.has_value() ? radial_coeffs.value().data_ptr<float>()
+                                    : nullptr,
+            tangential_coeffs.has_value()
+                ? tangential_coeffs.value().data_ptr<float>()
+                : nullptr,
+            thin_prism_coeffs.has_value()
+                ? thin_prism_coeffs.value().data_ptr<float>()
+                : nullptr,
+            // intersections
+            tile_offsets.data_ptr<int32_t>(),
+            flatten_ids.data_ptr<int32_t>(),
+            render_alphas.data_ptr<float>(),
+            last_ids.data_ptr<int32_t>(),
+            v_render_colors.data_ptr<float>(),
+            v_render_alphas.data_ptr<float>(),
+            // outputs
+            reinterpret_cast<vec3 *>(v_means.data_ptr<float>()),
+            reinterpret_cast<vec4 *>(v_quats.data_ptr<float>()),
+            reinterpret_cast<vec3 *>(v_scales.data_ptr<float>()),
+            v_colors.data_ptr<float>(),
+            v_opacities.data_ptr<float>()
+        );
 }
 
 // Explicit Instantiation: this should match how it is being called in .cpp
@@ -453,9 +534,18 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         const at::Tensor opacities,                                            \
         const at::optional<at::Tensor> backgrounds,                            \
         const at::optional<at::Tensor> masks,                                  \
-        const CameraModelParametersVariant camera_model_params,                \
-        const RollingShutterParameters rs_params,                              \
-        uint32_t tile_size,                                                    \
+        const uint32_t image_width,                                            \
+        const uint32_t image_height,                                           \
+        const uint32_t tile_size,                                              \
+        const at::Tensor viewmats0,                                            \
+        const at::optional<at::Tensor> viewmats1,                              \
+        const at::Tensor Ks,                                                   \
+        const CameraModelType camera_model,                                    \
+        const UnscentedTransformParameters ut_params,                         \
+        const ShutterType rs_type,                                             \
+        const at::optional<at::Tensor> radial_coeffs,                         \
+        const at::optional<at::Tensor> tangential_coeffs,                     \
+        const at::optional<at::Tensor> thin_prism_coeffs,                     \
         const at::Tensor tile_offsets,                                         \
         const at::Tensor flatten_ids,                                          \
         const at::Tensor render_alphas,                                        \

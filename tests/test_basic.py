@@ -678,8 +678,7 @@ def test_rasterize_to_pixels_from_world(test_data, channels: int):
     rs = _C.RollingShutterParameters()
     rs.T_world_sensors = np.hstack(
         [T_world_sensor_tquat, T_world_sensor_tquat]
-    ).tolist()  # represents two tquat [t,q] poses at start / end timestamps
-    rs.timestamps_us = [0, 1]  # arbitrary timestamps
+    ).tolist()  # represents two tquat [t,q] poses at start / end 
 
     (
         __render_colors,
