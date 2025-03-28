@@ -771,5 +771,4 @@ inline __device__ vec3 safe_normalize_bw(const vec3 &v, const vec3 &d_out) {
     return d_out;
 }
 
-
 } // namespace gsplat

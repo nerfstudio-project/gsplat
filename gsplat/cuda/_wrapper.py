@@ -17,6 +17,7 @@ def _make_lazy_cuda_func(name: str) -> Callable:
 
     return call_cuda
 
+
 def _make_lazy_cuda_obj(name: str) -> Any:
     # pylint: disable=import-outside-toplevel
     from ._backend import _C
@@ -46,9 +47,9 @@ class UnscentedTransformParameters:
     kappa: float = 0.0
     # Parameters controlling validity of the unscented transform results. Default 0.1
     # is 10% margin.
-    in_image_margin_factor: float = 0.1  
+    in_image_margin_factor: float = 0.1
     # True: all sigma points must be valid
-    require_all_sigma_points_valid: bool = False  
+    require_all_sigma_points_valid: bool = False
 
     def to_cpp(self) -> Any:
         p = _make_lazy_cuda_obj("UnscentedTransformParameters")()
@@ -639,7 +640,7 @@ def rasterize_to_pixels_eval3d(
     thin_prism_coeffs: Optional[Tensor] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
-    viewmats_rs: Optional[Tensor] = None, # [C, 4, 4]
+    viewmats_rs: Optional[Tensor] = None,  # [C, 4, 4]
 ) -> Tuple[Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
@@ -1065,13 +1066,12 @@ class _FullyFusedProjection(torch.autograd.Function):
         )
 
 
-
 def fully_fused_projection_with_ut(
     means: Tensor,  # [N, 3]
     quats: Tensor,  # [N, 4]
     scales: Tensor,  # [N, 3]
-    opacities: Optional[Tensor], # [N]
-    viewmats: Tensor, # [C, 4, 4]
+    opacities: Optional[Tensor],  # [N]
+    viewmats: Tensor,  # [C, 4, 4]
     Ks: Tensor,  # [C, 3, 3]
     width: int,
     height: int,
@@ -1088,11 +1088,9 @@ def fully_fused_projection_with_ut(
     thin_prism_coeffs: Optional[Tensor] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
-    viewmats_rs: Optional[Tensor] = None, # [C, 4, 4]
+    viewmats_rs: Optional[Tensor] = None,  # [C, 4, 4]
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
-    camera_model_type = _make_lazy_cuda_obj(
-        f"CameraModelType.{camera_model.upper()}"
-    )
+    camera_model_type = _make_lazy_cuda_obj(f"CameraModelType.{camera_model.upper()}")
 
     radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
         "projection_ut_3dgs_fused"
@@ -1281,7 +1279,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         thin_prism_coeffs: Optional[Tensor] = None,
         # rolling shutter
         rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
-        viewmats_rs: Optional[Tensor] = None, # [C, 4, 4]
+        viewmats_rs: Optional[Tensor] = None,  # [C, 4, 4]
     ) -> Tuple[Tensor, Tensor]:
         ut_params = ut_params.to_cpp()
         rs_type = rolling_shutter.to_cpp()

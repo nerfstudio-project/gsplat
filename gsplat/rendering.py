@@ -62,7 +62,7 @@ def rasterization(
     thin_prism_coeffs: Optional[Tensor] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
-    viewmats_rs: Optional[Tensor] = None, # [C, 4, 4]
+    viewmats_rs: Optional[Tensor] = None,  # [C, 4, 4]
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -289,20 +289,24 @@ def rasterization(
         assert not distributed, "AbsGrad is not supported in distributed mode."
 
     if (
-        radial_coeffs is not None or
-        tangential_coeffs is not None or
-        thin_prism_coeffs is not None or
-        rolling_shutter != RollingShutterType.GLOBAL
+        radial_coeffs is not None
+        or tangential_coeffs is not None
+        or thin_prism_coeffs is not None
+        or rolling_shutter != RollingShutterType.GLOBAL
     ):
-        assert with_ut and with_eval3d (
+        assert with_ut and with_eval3d(
             "Distortion and rolling shutter are only supported with `with_ut=True` and `with_eval3d=True`."
         )
 
     if rolling_shutter != RollingShutterType.GLOBAL:
-        assert viewmats_rs is not None, "Rolling shutter requires to provide viewmats_rs."
+        assert (
+            viewmats_rs is not None
+        ), "Rolling shutter requires to provide viewmats_rs."
 
     if with_ut or with_eval3d:
-        assert (quats is not None) and (scales is not None), "UT and eval3d requires to provide quats and scales."
+        assert (quats is not None) and (
+            scales is not None
+        ), "UT and eval3d requires to provide quats and scales."
 
     if with_ut:
         assert packed is False, "Packed mode is not supported with UT."
@@ -322,7 +326,7 @@ def rasterization(
         C_world = [C] * world_size
         viewmats, Ks = all_gather_tensor_list(world_size, [viewmats, Ks])
         if viewmats_rs is not None:
-            viewmats_rs, = all_gather_tensor_list(world_size, [viewmats_rs])
+            (viewmats_rs,) = all_gather_tensor_list(world_size, [viewmats_rs])
 
         # Silently change C from local #Cameras to global #Cameras.
         C = len(viewmats)
@@ -332,7 +336,7 @@ def rasterization(
             means,
             quats,
             scales,
-            opacities, # use opacities to compute a tigher bound for radii.
+            opacities,  # use opacities to compute a tigher bound for radii.
             viewmats,
             Ks,
             width,

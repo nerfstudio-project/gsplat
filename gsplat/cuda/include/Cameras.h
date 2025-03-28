@@ -5,10 +5,10 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <limits>
-#include <variant>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <limits>
+#include <variant>
 
 // ---------------------------------------------------------------------------------------------
 

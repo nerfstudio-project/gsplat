@@ -356,4 +356,3 @@ def get_projection_matrix(znear, zfar, fovX, fovY, device="cuda"):
 #     P[2, 2] = z_sign * zfar / (zfar - znear)
 #     P[2, 3] = -(zfar * znear) / (zfar - znear)
 #     return P
-

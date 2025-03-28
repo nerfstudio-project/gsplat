@@ -15,13 +15,13 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #pragma nv_diag_suppress = esa_on_defaulted_function_ignored
 #include <glm/gtx/matrix_operation.hpp> // needs define GLM_ENABLE_EXPERIMENTAL
-#include <glm/gtx/quaternion.hpp> // glm rotate
+#include <glm/gtx/quaternion.hpp>       // glm rotate
 #pragma nv_diag_default = esa_on_defaulted_function_ignored
 
 #include "Cameras.h"
 
 template <typename T, std::size_t N>
-__host__ __device__ std::array<T, N> make_array(const T* ptr) {
+__host__ __device__ std::array<T, N> make_array(const T *ptr) {
     std::array<T, N> arr;
     std::copy(ptr, ptr + N, arr.begin());
     return arr;
@@ -33,14 +33,19 @@ struct RollingShutterParameters {
     glm::fvec3 t_end;
     glm::fquat q_end;
 
-    __host__ __device__ RollingShutterParameters(
-        const float *se3_start, const float *se3_end
-    ) {
+    __host__ __device__
+    RollingShutterParameters(const float *se3_start, const float *se3_end) {
         // input is row-major, but glm is column-major
         q_start = glm::quat_cast(glm::mat3(
-            se3_start[0], se3_start[4], se3_start[8],
-            se3_start[1], se3_start[5], se3_start[9],
-            se3_start[2], se3_start[6], se3_start[10]
+            se3_start[0],
+            se3_start[4],
+            se3_start[8],
+            se3_start[1],
+            se3_start[5],
+            se3_start[9],
+            se3_start[2],
+            se3_start[6],
+            se3_start[10]
         ));
         t_start = glm::fvec3(se3_start[3], se3_start[7], se3_start[11]);
 
@@ -49,9 +54,15 @@ struct RollingShutterParameters {
             t_end = t_start;
         } else {
             q_end = glm::quat_cast(glm::mat3(
-                se3_end[0], se3_end[4], se3_end[8],
-                se3_end[1], se3_end[5], se3_end[9],
-                se3_end[2], se3_end[6], se3_end[10]
+                se3_end[0],
+                se3_end[4],
+                se3_end[8],
+                se3_end[1],
+                se3_end[5],
+                se3_end[9],
+                se3_end[2],
+                se3_end[6],
+                se3_end[10]
             ));
             t_end = glm::fvec3(se3_end[3], se3_end[7], se3_end[11]);
         }
@@ -347,10 +358,7 @@ template <class DerivedCameraModel> struct BaseCameraModel {
 
         if (derived->parameters.shutter_type == ShutterType::GLOBAL) {
             // Exit early if we have a global shutter sensor
-            return {
-                {image_point_start.x, image_point_start.y},
-                valid_start
-            };
+            return {{image_point_start.x, image_point_start.y}, valid_start};
         }
 
         // Do initial transformations using both start and end poses to
@@ -371,10 +379,7 @@ template <class DerivedCameraModel> struct BaseCameraModel {
         } else {
             // No valid projection at start or finish -> mark point as invalid.
             // Still return projection result at end of frame
-            return {
-                {image_point_end.x, image_point_end.y},
-                false
-            };
+            return {{image_point_end.x, image_point_end.y}, false};
         }
 
         // Compute the new timestamp and project again
@@ -399,10 +404,7 @@ template <class DerivedCameraModel> struct BaseCameraModel {
             image_points_rs_prev = image_point_rs;
         }
 
-        return {
-            {image_points_rs_prev.x, image_points_rs_prev.y},
-            true
-        };
+        return {{image_points_rs_prev.x, image_points_rs_prev.y}, true};
     }
 };
 
@@ -411,13 +413,12 @@ struct PerfectPinholeCameraModel : BaseCameraModel<PerfectPinholeCameraModel> {
 
     using Base = BaseCameraModel<PerfectPinholeCameraModel>;
 
-    struct Parameters: Base::Parameters {
+    struct Parameters : Base::Parameters {
         std::array<float, 2> principal_point;
         std::array<float, 2> focal_length;
     };
 
-    __host__ __device__ PerfectPinholeCameraModel(
-        Parameters const &parameters)
+    __host__ __device__ PerfectPinholeCameraModel(Parameters const &parameters)
         : parameters(parameters) {}
 
     Parameters parameters;
@@ -471,7 +472,8 @@ struct PerfectPinholeCameraModel : BaseCameraModel<PerfectPinholeCameraModel> {
 };
 
 template <size_t N_MAX_UNDISTORTION_ITERATIONS = 5>
-struct OpenCVPinholeCameraModel : BaseCameraModel<OpenCVPinholeCameraModel<N_MAX_UNDISTORTION_ITERATIONS>> {
+struct OpenCVPinholeCameraModel
+    : BaseCameraModel<OpenCVPinholeCameraModel<N_MAX_UNDISTORTION_ITERATIONS>> {
     // OpenCV-compatible pinhole camera model
 
     using Base = BaseCameraModel<
@@ -540,7 +542,7 @@ struct OpenCVPinholeCameraModel : BaseCameraModel<OpenCVPinholeCameraModel<N_MAX
         auto image_point = glm::fvec2{0.f, 0.f};
 
         // Treat all the points behind the camera plane to invalid / projecting
-        // to origin 
+        // to origin
         if (cam_ray.z <= 0.f)
             return {image_point, false};
 
@@ -638,7 +640,8 @@ struct OpenCVPinholeCameraModel : BaseCameraModel<OpenCVPinholeCameraModel<N_MAX
 };
 
 template <size_t N_NEWTON_ITERATIONS = 3>
-struct OpenCVFisheyeCameraModel : BaseCameraModel<OpenCVFisheyeCameraModel<N_NEWTON_ITERATIONS>> {
+struct OpenCVFisheyeCameraModel
+    : BaseCameraModel<OpenCVFisheyeCameraModel<N_NEWTON_ITERATIONS>> {
     // OpenCV-compatible fisheye camera model
 
     using Base = BaseCameraModel<OpenCVFisheyeCameraModel<N_NEWTON_ITERATIONS>>;
@@ -650,8 +653,7 @@ struct OpenCVFisheyeCameraModel : BaseCameraModel<OpenCVFisheyeCameraModel<N_NEW
     };
 
     __host__ __device__ OpenCVFisheyeCameraModel(
-        Parameters const &parameters,
-        float min_2d_norm = 1e-6f
+        Parameters const &parameters, float min_2d_norm = 1e-6f
     )
         : parameters(parameters), min_2d_norm(min_2d_norm) {
         // initialize ninth-degree odd-only forward polynomial (mapping angles
@@ -667,15 +669,14 @@ struct OpenCVFisheyeCameraModel : BaseCameraModel<OpenCVFisheyeCameraModel<N_NEW
         // 5*k2*theta^4 + 7*k3*theta^8 + 9*k4*theta^8
         dforward_poly_even = {1, 3 * k1, 5 * k2, 7 * k3, 9 * k4};
 
-        auto const max_diag_x = max(
-            parameters.resolution[0] - parameters.principal_point[0],
-            parameters.principal_point[0]
-        );
-        auto const max_diag_y = max(
-            parameters.resolution[1] - parameters.principal_point[1],
-            parameters.principal_point[1]
-        );
-        max_angle = std::sqrt(max_diag_x * max_diag_x + max_diag_y * max_diag_y);
+        auto const max_diag_x =
+            max(parameters.resolution[0] - parameters.principal_point[0],
+                parameters.principal_point[0]);
+        auto const max_diag_y =
+            max(parameters.resolution[1] - parameters.principal_point[1],
+                parameters.principal_point[1]);
+        max_angle =
+            std::sqrt(max_diag_x * max_diag_x + max_diag_y * max_diag_y);
 
         // approximate backward poly (mapping normalized distances to angles)
         // *very crudely* by linear interpolation / equidistant angle model
@@ -732,8 +733,9 @@ struct OpenCVFisheyeCameraModel : BaseCameraModel<OpenCVFisheyeCameraModel<N_NEW
         valid &= image_point_in_image_bounds_margin(
             image_point, parameters.resolution, margin_factor
         );
-        valid &= theta < max_angle; // explicitly check for strictly smaller angles
-                                 // to classify FOV-clamped points as invalid
+        valid &=
+            theta < max_angle; // explicitly check for strictly smaller angles
+                               // to classify FOV-clamped points as invalid
 
         return {image_point, valid};
     }
@@ -929,4 +931,3 @@ world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
 
     return {image_mean, image_covariance, valid};
 }
-
