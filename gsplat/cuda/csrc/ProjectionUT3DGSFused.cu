@@ -103,9 +103,15 @@ __global__ void projection_ut_3dgs_fused_kernel(
             cm_params.shutter_type = rs_type;
             cm_params.principal_point = { principal_point.x, principal_point.y };
             cm_params.focal_length = { focal_length.x, focal_length.y };
-            cm_params.radial_coeffs = make_array<float, 6>(radial_coeffs + cid * 6);
-            cm_params.tangential_coeffs = make_array<float, 2>(tangential_coeffs + cid * 2);
-            cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + cid * 2);
+            if (radial_coeffs != nullptr) {
+                cm_params.radial_coeffs = make_array<float, 6>(radial_coeffs + cid * 6);
+            }
+            if (tangential_coeffs != nullptr) {
+                cm_params.tangential_coeffs = make_array<float, 2>(tangential_coeffs + cid * 2);
+            }
+            if (thin_prism_coeffs != nullptr) {
+                cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + cid * 4);
+            }
             OpenCVPinholeCameraModel camera_model(cm_params);
             image_gaussian_return =
                 world_gaussian_to_image_gaussian_unscented_transform_shutter_pose<N_ROLLING_SHUTTER_ITERATIONS>(
@@ -117,7 +123,9 @@ __global__ void projection_ut_3dgs_fused_kernel(
         cm_params.shutter_type = rs_type;
         cm_params.principal_point = { principal_point.x, principal_point.y };
         cm_params.focal_length = { focal_length.x, focal_length.y };
-        cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + cid * 4);
+        if (radial_coeffs != nullptr) {
+            cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + cid * 4);
+        }
         OpenCVFisheyeCameraModel camera_model(cm_params);
         image_gaussian_return =
             world_gaussian_to_image_gaussian_unscented_transform_shutter_pose<N_ROLLING_SHUTTER_ITERATIONS>(

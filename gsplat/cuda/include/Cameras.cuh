@@ -480,9 +480,9 @@ struct OpenCVPinholeCameraModel : BaseCameraModel<OpenCVPinholeCameraModel<N_MAX
     struct Parameters : Base::Parameters {
         std::array<float, 2> principal_point;
         std::array<float, 2> focal_length;
-        std::array<float, 6> radial_coeffs;
-        std::array<float, 2> tangential_coeffs;
-        std::array<float, 4> thin_prism_coeffs;
+        std::array<float, 6> radial_coeffs = {0.f};
+        std::array<float, 2> tangential_coeffs = {0.f};
+        std::array<float, 4> thin_prism_coeffs = {0.f};
     };
 
     __host__ __device__ OpenCVPinholeCameraModel(
@@ -646,7 +646,7 @@ struct OpenCVFisheyeCameraModel : BaseCameraModel<OpenCVFisheyeCameraModel<N_NEW
     struct Parameters : Base::Parameters {
         std::array<float, 2> principal_point;
         std::array<float, 2> focal_length;
-        std::array<float, 4> radial_coeffs;
+        std::array<float, 4> radial_coeffs = {0.f};
     };
 
     __host__ __device__ OpenCVFisheyeCameraModel(

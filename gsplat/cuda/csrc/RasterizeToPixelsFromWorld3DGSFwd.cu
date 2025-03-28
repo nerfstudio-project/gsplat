@@ -104,9 +104,15 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             cm_params.shutter_type = rs_type;
             cm_params.principal_point = { principal_point.x, principal_point.y };
             cm_params.focal_length = { focal_length.x, focal_length.y };
-            cm_params.radial_coeffs = make_array<float, 6>(radial_coeffs + cid * 6);
-            cm_params.tangential_coeffs = make_array<float, 2>(tangential_coeffs + cid * 2);
-            cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + cid * 2);
+            if (radial_coeffs != nullptr) {
+                cm_params.radial_coeffs = make_array<float, 6>(radial_coeffs + cid * 6);
+            }
+            if (tangential_coeffs != nullptr) {
+                cm_params.tangential_coeffs = make_array<float, 2>(tangential_coeffs + cid * 2);
+            }
+            if (thin_prism_coeffs != nullptr) {
+                cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + cid * 4);
+            }
             OpenCVPinholeCameraModel camera_model(cm_params);
             ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
         }
@@ -116,7 +122,9 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         cm_params.shutter_type = rs_type;
         cm_params.principal_point = { principal_point.x, principal_point.y };
         cm_params.focal_length = { focal_length.x, focal_length.y };
-        cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + cid * 4);
+        if (radial_coeffs != nullptr) {
+            cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + cid * 4);
+        }
         OpenCVFisheyeCameraModel camera_model(cm_params);
         ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
     } else {
