@@ -645,23 +645,22 @@ struct OpenCVPinholeCameraModel
         //     d(x, y) = alpha(x, y) / beta(x, y);
         const float r = x * x + y * y;
         const float r2 = r * r;
-        const float r4 = r2 * r2;
         const float alpha = 1.0f + r * (k1 + r * (k2 + r * k3));
         const float beta = 1.0f + r * (k4 + r * (k5 + r * k6));
         const float d = alpha / beta;
     
         // The perfect projection is:
-        // xd = x * d(x, y) + 2 * p1 * x * y + p2 * (r(x, y) + 2 * x^2) + s1 * r2 + s2 * r4;
-        // yd = y * d(x, y) + 2 * p2 * x * y + p1 * (r(x, y) + 2 * y^2) + s3 * r2 + s4 * r4;
+        // xd = x * d(x, y) + 2 * p1 * x * y + p2 * (r(x, y) + 2 * x^2) + s1 * r + s2 * r2;
+        // yd = y * d(x, y) + 2 * p2 * x * y + p1 * (r(x, y) + 2 * y^2) + s3 * r + s4 * r2;
     
         // Let's define
-        // fx(x, y) = x * d(x, y) + 2 * p1 * x * y + p2 * (r(x, y) + 2 * x^2) + s1 * r2 + s2 * r4 - xd;
-        // fy(x, y) = y * d(x, y) + 2 * p2 * x * y + p1 * (r(x, y) + 2 * y^2) + s3 * r2 + s4 * r4 - yd;
+        // fx(x, y) = x * d(x, y) + 2 * p1 * x * y + p2 * (r(x, y) + 2 * x^2) + s1 * r + s2 * r2 - xd;
+        // fy(x, y) = y * d(x, y) + 2 * p2 * x * y + p1 * (r(x, y) + 2 * y^2) + s3 * r + s4 * r2 - yd;
     
         // We are looking for a solution that satisfies
         // fx(x, y) = fy(x, y) = 0;
-        float fx = d * x + 2 * p1 * x * y + p2 * (r + 2 * x * x) + s1 * r2 + s2 * r4 - xd;
-        float fy = d * y + 2 * p2 * x * y + p1 * (r + 2 * y * y) + s3 * r2 + s4 * r4 - yd;
+        float fx = d * x + 2 * p1 * x * y + p2 * (r + 2 * x * x) + s1 * r + s2 * r2 - xd;
+        float fy = d * y + 2 * p2 * x * y + p1 * (r + 2 * y * y) + s3 * r + s4 * r2 - yd;
     
         // Compute derivative of alpha, beta over r.
         const float alpha_r = k1 + r * (2.0 * k2 + r * (3.0 * k3));
@@ -674,15 +673,15 @@ struct OpenCVPinholeCameraModel
     
         // Compute derivative of fx over x and y.
         float fx_x = d + d_x * x + 2.0 * p1 * y + 6.0 * p2 * x;
-        fx_x += r * x * (4.0 * s1 + 8.0 * s2 * r2);
+        fx_x += 2.0 * x * (s1 + 2.0 * s2 * r);
         float fx_y = d_y * x + 2.0 * p1 * x + 2.0 * p2 * y;
-        fx_y += r * y * (4.0 * s1 + 8.0 * s2 * r2);
+        fx_y += 2.0 * y * (s1 + 2.0 * s2 * r);
     
         // Compute derivative of fy over x and y.
         float fy_x = d_x * y + 2.0 * p2 * y + 2.0 * p1 * x;
-        fy_x += r * x * (4.0 * s3 + 8.0 * s4 * r2);
+        fy_x += 2.0 * x * (s3 + 2.0 * s4 * r);
         float fy_y = d + d_y * y + 2.0 * p2 * x + 6.0 * p1 * y;
-        fy_y += r * y * (4.0 * s3 + 8.0 * s4 * r2);
+        fy_y += 2.0 * y * (s3 + 2.0 * s4 * r);
 
         return {fx, fy, fx_x, fx_y, fy_x, fy_y};
     }
