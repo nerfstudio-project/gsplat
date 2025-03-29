@@ -485,7 +485,7 @@ struct OpenCVPinholeCameraModel
     struct Parameters : Base::Parameters {
         std::array<float, 2> principal_point;
         std::array<float, 2> focal_length;
-        std::array<float, 6> radial_coeffs = {1.f};
+        std::array<float, 6> radial_coeffs = {0.f};
         std::array<float, 2> tangential_coeffs = {0.f};
         std::array<float, 4> thin_prism_coeffs = {0.f};
     };
@@ -553,9 +553,12 @@ struct OpenCVPinholeCameraModel
         auto const uv_normalized = glm::fvec2(cam_ray.x, cam_ray.y) / cam_ray.z;
         auto const [icD, delta, r2] = compute_distortion(uv_normalized);
 
-        auto constexpr k_min_radial_dist = 0.8f, k_max_radial_dist = 1.2f;
-        auto const valid_radial =
-            (icD > k_min_radial_dist) && (icD < k_max_radial_dist);
+        // Note(ruilong): Radial clamping seems harmful to UT estimation in all cases.
+        // So disabling it.
+        // auto constexpr k_min_radial_dist = 0.8f, k_max_radial_dist = 1.2f;
+        // auto const valid_radial;
+        //     (icD > k_min_radial_dist) && (icD < k_max_radial_dist);
+        auto const valid_radial = true;
 
         // Project using ideal pinhole model (apply radial / tangential /
         // thin-prism distortions) in case radial distortion is within limits
@@ -1013,7 +1016,8 @@ world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
         } else {
             valid |= point_valid; // any valid is sufficient
         }
-
+        // printf("image point %d: %f, %f, valid: %d\n", i, image_point.x,
+        //        image_point.y, point_valid);
         image_points[i] = {image_point.x, image_point.y};
 
         image_mean += sigma_points.weights_mean[i] * image_points[i];
