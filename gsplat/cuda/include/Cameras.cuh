@@ -772,8 +772,13 @@ struct OpenCVFisheyeCameraModel
         auto const max_diag_y =
             max(parameters.resolution[1] - parameters.principal_point[1],
                 parameters.principal_point[1]);
-        max_angle =
-            std::sqrt(max_diag_x * max_diag_x + max_diag_y * max_diag_y);
+        auto const max_radius_pixels = std::sqrt(
+            max_diag_x * max_diag_x + max_diag_y * max_diag_y
+        );
+        max_angle = max(
+            max_radius_pixels / parameters.focal_length[0],
+            max_radius_pixels / parameters.focal_length[1]
+        );
 
         // approximate backward poly (mapping normalized distances to angles)
         // *very crudely* by linear interpolation / equidistant angle model
