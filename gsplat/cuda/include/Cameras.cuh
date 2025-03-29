@@ -560,7 +560,6 @@ struct OpenCVPinholeCameraModel
         // Project using ideal pinhole model (apply radial / tangential /
         // thin-prism distortions) in case radial distortion is within limits
         auto const uvND = icD * uv_normalized + delta;
-        // printf("valid_radial: %d, uvND: %f %f\n", valid_radial, uvND.x, uvND.y);
         if (valid_radial) {
             image_point =
                 uvND *
