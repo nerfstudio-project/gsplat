@@ -167,32 +167,32 @@ print(opencv_lens_distortion(uv, radial_coeffs))
 
 
 
-id = 18517
+id = 86704
 
 # scales[id:id+1, -1] *=4
 render_colors, render_alphas, info = rasterization(
-    means,#[id:id+1],
-    quats,#[id:id+1],
-    scales,#[id:id+1],
-    opacities,#[id:id+1],
-    colors,#[:, id:id+1],
+    means,
+    quats,
+    scales,
+    opacities,
+    colors,
     viewmats,
     Ks,
     width,
     height,
     packed=False,
-    camera_model="pinhole",
+    camera_model="fisheye",
     with_ut=True,
     with_eval3d=True,
-    radial_coeffs=torch.tensor([[-.3, -.3, 0.0, 0., 0., 0.]], device=device),
-    # tangential_coeffs=torch.tensor([[-2.2, 0.5]], device=device),
-    # thin_prism_coeffs=torch.tensor([[-4.2, 0.2, 0.3, 0.3]], device=device),
+    radial_coeffs=torch.tensor([[-.5, -.5, 0., 0.]], device=device),
+    tangential_coeffs=None,
+    thin_prism_coeffs=None,
     rolling_shutter=RollingShutterType.GLOBAL,
     viewmats_rs=None,
 )
 radii = info["radii"]
 
-# print (torch.where(radii == radii.max()))
+print (torch.where(radii == radii.max()))
 
 canvas = np.vstack([
     (render_colors[0].cpu().numpy() * 255).astype(np.uint8),

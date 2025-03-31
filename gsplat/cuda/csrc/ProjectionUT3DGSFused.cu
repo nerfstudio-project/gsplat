@@ -179,8 +179,8 @@ __global__ void projection_ut_3dgs_fused_kernel(
     float tmp = sqrtf(max(0.01f, b * b - det));
     float v1 = b + tmp; // larger eigenvalue
     float r1 = extend * sqrtf(v1);
-    float radius_x = ceilf(min(extend * sqrtf(covar2d[0][0]), r1));
-    float radius_y = ceilf(min(extend * sqrtf(covar2d[1][1]), r1));
+    float radius_x = ceilf(min(extend * sqrtf(covar2d[0][0]), r1)) + 1000.f;
+    float radius_y = ceilf(min(extend * sqrtf(covar2d[1][1]), r1)) + 1000.f;
 
     if (radius_x <= radius_clip && radius_y <= radius_clip) {
         radii[idx * 2] = 0;

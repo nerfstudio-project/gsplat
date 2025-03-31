@@ -179,7 +179,8 @@ inline __device__ float eval_poly_inverse_horner_newton(
     PolyProxy const &poly,
     DPolyProxy const &dpoly,
     TInvPolyApproxProxy const &inv_poly_approx,
-    float y
+    float y,
+    bool &converged
 ) {
     // Evaluates the inverse x = f^{-1}(y) of a reference polynomial y=f(x)
     // (given by poly_coefficients) at points y using numerically stable Horner
@@ -198,7 +199,13 @@ inline __device__ float eval_poly_inverse_horner_newton(
     for (auto j = 0; j < N_NEWTON_ITERATIONS; ++j) {
         auto const dfdx = dpoly.eval_horner(x);
         auto const residual = poly.eval_horner(x) - y;
-        x -= residual / dfdx;
+        auto const dx = residual / dfdx;
+        x -= dx;
+        if (std::fabs(dx) < 1e-6f) {
+            // Convergence check: if the change is small enough, we can stop
+            converged = true;
+            break;
+        }
     }
 
     return x;
@@ -770,7 +777,7 @@ struct OpenCVPinholeCameraModel
     }
 };
 
-template <size_t N_NEWTON_ITERATIONS = 3>
+template <size_t N_NEWTON_ITERATIONS = 10>
 struct OpenCVFisheyeCameraModel
     : BaseCameraModel<OpenCVFisheyeCameraModel<N_NEWTON_ITERATIONS>> {
     // OpenCV-compatible fisheye camera model
@@ -887,12 +894,19 @@ struct OpenCVFisheyeCameraModel
         auto const delta = length(uv);
 
         // Evaluate the inverse polynomial to find the angle theta
+        bool converged = false;
         auto const theta = eval_poly_inverse_horner_newton<N_NEWTON_ITERATIONS>(
             PolynomialProxy<PolynomialType::ODD, 5>{forward_poly_odd},
             PolynomialProxy<PolynomialType::EVEN, 5>{dforward_poly_even},
             PolynomialProxy<PolynomialType::FULL, 2>{approx_backward_poly},
-            delta
+            delta,
+            converged
         );
+
+        // Flipped points is not physically meaningful.
+        if (theta < 0.f || !converged) {
+            return {glm::fvec3{0.f, 0.f, 1.f}, false};
+        }
 
         // Compute the camera ray and set the ones at the image center to
         // [0,0,1]
