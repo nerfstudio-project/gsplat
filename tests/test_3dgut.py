@@ -84,6 +84,44 @@ viewmats_rs = viewmats.clone()
 #     with_eval3d=True,
 # )
 
+def opencv_lens_distortion_fisheye(
+    uv: Tensor, params: Tensor, eps: float = 1e-10
+) -> Tensor:
+    """The opencv camera distortion of {k1, k2, k3, p1, p2}.
+
+    See https://docs.opencv.org/4.x/db/d58/group__calib3d__fisheye.html for more details.
+
+    Args:
+        uv: (..., 2) UV coordinates.
+        params: (..., 4) or (4) OpenCV distortion parameters.
+
+    Returns:
+        (..., 2) distorted UV coordinates.
+    """
+    assert params.shape[-1] == 4, f"Invalid params shape: {params.shape}"
+    k1, k2, k3, k4 = torch.unbind(params, dim=-1)
+    u, v = torch.unbind(uv, dim=-1)
+    r = torch.sqrt(u * u + v * v)
+    theta = torch.atan(r)
+    theta_d = theta * (
+        1
+        + k1 * theta**2
+        + k2 * theta**4
+        + k3 * theta**6
+        + k4 * theta**8
+    )
+    scale = theta_d / torch.clamp(r, min=eps)
+    print ("theta", theta, " theta_d", theta_d, "scale", scale)
+    return uv * scale[..., None]
+
+
+# uv = torch.tensor([-0.133042, 0.600415])
+# params = torch.tensor([-2.5, -2.5, 0.0, 0.0])  # k1, k2, k3, k4
+# uv_prime = opencv_lens_distortion_fisheye(uv, params)
+# print ("uv_normalized", uv_prime)
+# # -0.001070, 0.004828
+# exit()
+
 
 def opencv_lens_distortion(
     uv: Tensor,
@@ -167,15 +205,15 @@ print(opencv_lens_distortion(uv, radial_coeffs))
 
 
 
-id = 86704
+id = 106767
 
 # scales[id:id+1, -1] *=4
 render_colors, render_alphas, info = rasterization(
-    means,
-    quats,
-    scales,
-    opacities,
-    colors,
+    means[id:id+1],
+    quats[id:id+1],
+    scales[id:id+1],
+    opacities[id:id+1] * 0 + 1,
+    colors[:, id:id+1],
     viewmats,
     Ks,
     width,
@@ -183,8 +221,8 @@ render_colors, render_alphas, info = rasterization(
     packed=False,
     camera_model="fisheye",
     with_ut=True,
-    with_eval3d=True,
-    radial_coeffs=torch.tensor([[-.5, -.5, 0., 0.]], device=device),
+    with_eval3d=False,
+    radial_coeffs=torch.tensor([[-2.5, -2.5, 0., 0.]], device=device),
     tangential_coeffs=None,
     thin_prism_coeffs=None,
     rolling_shutter=RollingShutterType.GLOBAL,

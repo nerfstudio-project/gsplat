@@ -862,12 +862,32 @@ struct OpenCVFisheyeCameraModel
         auto const delta =
             eval_poly_odd_horner(forward_poly_odd, theta) / cam_ray_xy_norm;
 
+        // Negative delta means the distortion makes point flipped across the
+        // image center. This cannot be produced by real lenses.
+        if (delta <= 0.f) {
+            return {{0.f, 0.f}, false};
+        }
+
         auto const image_point = glm::fvec2{
             parameters.focal_length[0] * delta * cam_ray.x +
                 parameters.principal_point[0],
             parameters.focal_length[1] * delta * cam_ray.y +
                 parameters.principal_point[1]
         };
+
+        // auto point = glm::fvec2{
+        //     cam_ray.x / cam_ray.z, // * parameters.focal_length[0] + parameters.principal_point[0], 
+        //     cam_ray.y / cam_ray.z // * parameters.focal_length[1] + parameters.principal_point[1]
+        // };
+        // printf("point: %f, %f; theta_full: %f, theta: %f, delta: %f, max_angle: %f, image_point: %f, %f, cam_ray: %f, %f, %f\n",
+        //     point.x, point.y, theta_full, theta, delta,
+        //     max_angle, image_point.x, image_point.y,
+        //     cam_ray.x, cam_ray.y, cam_ray.z
+        // );
+        // printf("parameters: %f, %f, %f, %f\n",
+        //     parameters.focal_length[0], parameters.focal_length[1],
+        //     parameters.principal_point[0], parameters.principal_point[1]
+        // );
 
         auto valid = true;
         valid &= image_point_in_image_bounds_margin(
@@ -1079,6 +1099,10 @@ world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
         image_covariance += sigma_points.weights_covariance[i] *
                             glm::outerProduct(image_mean_vec, image_mean_vec);
     }
+    // printf("image_covariance: %f, %f; %f, %f\n",
+    //        image_covariance[0][0], image_covariance[0][1],
+    //        image_covariance[1][0], image_covariance[1][1]);
+    // printf("det(image_covariance): %f\n", glm::determinant(image_covariance));
 
     return {image_mean, image_covariance, valid};
 }
