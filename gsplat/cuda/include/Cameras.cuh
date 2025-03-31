@@ -569,7 +569,10 @@ struct OpenCVPinholeCameraModel
         
         // Note(ruilong): Negative icD means the distortion makes point flipped across
         // the image center. This cannot be produced by real lenses.
-        auto const valid_radial = icD > 0.f;
+        // We use a threshold larger than zero here because we want to skip those rays
+        // that are **close** to be flipped. This is important for unscented transform
+        // on Gaussians as part of the Gaussian might across the flip boundary.
+        auto const valid_radial = icD > 0.8f;
 
         // Project using ideal pinhole model (apply radial / tangential /
         // thin-prism distortions) in case radial distortion is within limits
