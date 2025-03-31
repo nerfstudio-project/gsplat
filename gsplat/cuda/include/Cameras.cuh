@@ -862,11 +862,11 @@ struct OpenCVFisheyeCameraModel
         auto const delta =
             eval_poly_odd_horner(forward_poly_odd, theta) / cam_ray_xy_norm;
 
-        // Negative delta means the distortion makes point flipped across the
-        // image center. This cannot be produced by real lenses.
-        if (delta <= 0.f) {
-            return {{0.f, 0.f}, false};
-        }
+        // // Negative delta means the distortion makes point flipped across the
+        // // image center. This cannot be produced by real lenses.
+        // if (delta <= 0.f) {
+        //     return {{0.f, 0.f}, false};
+        // }
 
         auto const image_point = glm::fvec2{
             parameters.focal_length[0] * delta * cam_ray.x +
