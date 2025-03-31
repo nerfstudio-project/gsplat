@@ -242,6 +242,12 @@ __forceinline__ __device__ __host__ bool image_point_in_image_bounds_margin(
 struct WorldRay {
     glm::fvec3 ray_org;
     glm::fvec3 ray_dir;
+    bool valid_flag;
+};
+
+struct CameraRay {
+    glm::fvec3 ray_dir;
+    bool valid_flag;
 };
 
 struct ShutterPose {
@@ -257,7 +263,7 @@ struct ShutterPose {
     camera_ray_to_world_ray(glm::fvec3 const &camera_ray) const -> WorldRay {
         auto const R_inv = glm::mat3_cast(glm::inverse(q));
 
-        return {-R_inv * t, R_inv * camera_ray};
+        return {-R_inv * t, R_inv * camera_ray, true};
     }
 };
 
@@ -324,12 +330,16 @@ template <class DerivedCameraModel> struct BaseCameraModel {
         auto derived = static_cast<DerivedCameraModel const *>(this);
 
         auto const camera_ray = derived->image_point_to_camera_ray(image_point);
+        // If the camera ray is invalid, return an invalid world ray
+        if (!camera_ray.valid_flag) {
+            return {glm::fvec3{}, glm::fvec3{}, false};
+        }
 
         return interpolate_shutter_pose(
                    shutter_relative_frame_time(image_point),
                    rolling_shutter_parameters
         )
-            .camera_ray_to_world_ray(camera_ray);
+            .camera_ray_to_world_ray(camera_ray.ray_dir);
     };
 
     struct ImagePointReturn {
@@ -456,7 +466,7 @@ struct PerfectPinholeCameraModel : BaseCameraModel<PerfectPinholeCameraModel> {
         return {image_point, valid};
     }
 
-    inline __device__ glm::fvec3
+    inline __device__ CameraRay
     image_point_to_camera_ray(glm::fvec2 image_point) const {
         // Transform the image point to uv coordinate
         auto const uv =
@@ -470,7 +480,7 @@ struct PerfectPinholeCameraModel : BaseCameraModel<PerfectPinholeCameraModel> {
         auto const camera_ray = glm::fvec3{uv.x, uv.y, 1.f};
 
         // Make sure ray is normalized
-        return camera_ray / length(camera_ray);
+        return {camera_ray / length(camera_ray), true};
     }
 };
 
@@ -553,40 +563,41 @@ struct OpenCVPinholeCameraModel
         auto const uv_normalized = glm::fvec2(cam_ray.x, cam_ray.y) / cam_ray.z;
         auto const [icD, delta, r2] = compute_distortion(uv_normalized);
 
-        // Note(ruilong): Radial clamping seems harmful to UT estimation in all cases.
-        // So disabling it.
         // auto constexpr k_min_radial_dist = 0.8f, k_max_radial_dist = 1.2f;
         // auto const valid_radial;
         //     (icD > k_min_radial_dist) && (icD < k_max_radial_dist);
-        auto const valid_radial = true;
+        
+        // Note(ruilong): Negative icD means the distortion makes point flipped across
+        // the image center. This cannot be produced by real lenses.
+        auto const valid_radial = icD > 0.f;
 
         // Project using ideal pinhole model (apply radial / tangential /
         // thin-prism distortions) in case radial distortion is within limits
         auto const uvND = icD * uv_normalized + delta;
-        if (valid_radial) {
-            image_point =
-                uvND *
-                    glm::fvec2(
-                        parameters.focal_length[0], parameters.focal_length[1]
-                    ) +
+        // if (valid_radial) {
+        image_point =
+            uvND *
                 glm::fvec2(
-                    parameters.principal_point[0], parameters.principal_point[1]
-                );
-        } else {
-            // If the radial distortion is out-of-limits, the computed
-            // coordinates will be unreasonable (might even flip signs) - check
-            // on which side of the image we overshoot, and set the coordinates
-            // out of the image bounds accordingly. The coordinates will be
-            // clipped to viable range and direction but the exact values cannot
-            // be trusted / are still invalid
-            auto const roi_clipping_radius =
-                std::hypotf(parameters.resolution[0], parameters.resolution[1]);
-            image_point =
-                (roi_clipping_radius / std::sqrt(r2)) * uv_normalized +
-                glm::fvec2(
-                    parameters.principal_point[0], parameters.principal_point[1]
-                );
-        }
+                    parameters.focal_length[0], parameters.focal_length[1]
+                ) +
+            glm::fvec2(
+                parameters.principal_point[0], parameters.principal_point[1]
+            );
+        // } else {
+        //     // If the radial distortion is out-of-limits, the computed
+        //     // coordinates will be unreasonable (might even flip signs) - check
+        //     // on which side of the image we overshoot, and set the coordinates
+        //     // out of the image bounds accordingly. The coordinates will be
+        //     // clipped to viable range and direction but the exact values cannot
+        //     // be trusted / are still invalid
+        //     auto const roi_clipping_radius =
+        //         std::hypotf(parameters.resolution[0], parameters.resolution[1]);
+        //     image_point =
+        //         (roi_clipping_radius / std::sqrt(r2)) * uv_normalized +
+        //         glm::fvec2(
+        //             parameters.principal_point[0], parameters.principal_point[1]
+        //         );
+        // }
 
         // Check if the image points fall within the image, set points that have
         // too large distortion or fall outside the image sensor to invalid
@@ -632,7 +643,7 @@ struct OpenCVPinholeCameraModel
     }
 
     struct JacobianReturn {
-        float fx, fy, fx_x, fx_y, fy_x, fy_y;
+        float fx, fy, fx_x, fx_y, fy_x, fy_y, valid_flag;
     };
 
     inline __device__ auto compute_residual_and_jacobian(
@@ -650,7 +661,13 @@ struct OpenCVPinholeCameraModel
         const float r2 = r * r;
         const float alpha = 1.0f + r * (k1 + r * (k2 + r * k3));
         const float beta = 1.0f + r * (k4 + r * (k5 + r * k6));
-        const float d = alpha / beta;
+        const float d = alpha / beta; // icD
+
+        // Negative icD means the distortion makes point flipped across the image
+        // center. This cannot be produced by real lenses.
+        if (d <= 0.f) {
+            return {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, false};
+        }
     
         // The perfect projection is:
         // xd = x * d(x, y) + 2 * p1 * x * y + p2 * (r(x, y) + 2 * x^2) + s1 * r + s2 * r2;
@@ -686,12 +703,12 @@ struct OpenCVPinholeCameraModel
         float fy_y = d + d_y * y + 2.0 * p2 * x + 6.0 * p1 * y;
         fy_y += 2.0 * y * (s3 + 2.0 * s4 * r);
 
-        return {fx, fy, fx_x, fx_y, fy_x, fy_y};
+        return {fx, fy, fx_x, fx_y, fy_x, fy_y, true};
     }
     
 
     inline __device__ glm::fvec2
-    compute_undistortion_newton(glm::fvec2 const &image_point) const {
+    compute_undistortion_newton(glm::fvec2 const &image_point, bool &converged) const {
         // Iteratively undistorts the image point using the newton method
 
         // Initial guess for the undistorted point
@@ -705,8 +722,14 @@ struct OpenCVPinholeCameraModel
         auto xd = uv_0.x, yd = uv_0.y;
         auto x = xd, y = yd;
         constexpr auto eps = 1e-6f;
-        for (int i = 0; i < N_MAX_UNDISTORTION_ITERATIONS; ++i) {
-            auto const [fx, fy, fx_x, fx_y, fy_x, fy_y] = compute_residual_and_jacobian(x, y, xd, yd);
+        converged = false;
+        int iter = 0;
+        while (iter < N_MAX_UNDISTORTION_ITERATIONS) {
+            iter++;
+            auto const [fx, fy, fx_x, fx_y, fy_x, fy_y, valid] = compute_residual_and_jacobian(x, y, xd, yd);
+            if (!valid) {
+                break;
+            }
 
             // Compute the Jacobian.
             auto const det = fx_y * fy_x - fx_x * fy_y;
@@ -721,24 +744,26 @@ struct OpenCVPinholeCameraModel
 
             // Check for convergence.
             if (fabs(dx) < eps && fabs(dy) < eps) {
+                converged = true;
                 break;
             }
         }
         return {x, y};
     }
 
-    inline __device__ glm::fvec3
-    image_point_to_camera_ray(glm::fvec2 image_point) const {
+    inline __device__ CameraRay
+    image_point_to_camera_ray(glm::fvec2 image_point) const {        
         // Undistort the image point to uv coordinate. Newton method is more
         // accurate than iterative method, but slower.
         // auto uv = compute_undistortion_iterative(image_point);
-        auto uv = compute_undistortion_newton(image_point);
+        bool valid;
+        auto uv = compute_undistortion_newton(image_point, valid);
 
         // Unproject the undistorted image point to camera ray
         auto const camera_ray = glm::fvec3{uv.x, uv.y, 1.f};
 
         // Make sure ray is normalized
-        return camera_ray / length(camera_ray);
+        return {camera_ray / length(camera_ray), valid};
     }
 };
 
@@ -845,7 +870,7 @@ struct OpenCVFisheyeCameraModel
         return {image_point, valid};
     }
 
-    inline __device__ glm::fvec3
+    inline __device__ CameraRay
     image_point_to_camera_ray(glm::fvec2 image_point) const {
         // Normalize the image point coordinates
         auto const uv =
@@ -871,13 +896,16 @@ struct OpenCVFisheyeCameraModel
         if (delta >= min_2d_norm) {
             // Scale the uv coordinates by the sine of the angle theta
             auto const scale_factor = std::sin(theta) / delta;
-            return glm::fvec3{
-                scale_factor * uv.x, scale_factor * uv.y, std::cos(theta)
+            return {
+                glm::fvec3{
+                    scale_factor * uv.x, scale_factor * uv.y, std::cos(theta)
+                },
+                true
             };
         } else {
             // For points at the image center, return a ray pointing straight
             // ahead
-            return glm::fvec3{0.f, 0.f, 1.f};
+            return {glm::fvec3{0.f, 0.f, 1.f}, true};
         }
     }
 };

@@ -151,7 +151,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     vec3 ray_o = ray.ray_org;
 
     // keep not rasterizing threads around for reading data
-    bool inside = (i < image_height && j < image_width);
+    bool done = (i < image_height && j < image_width) && ray.valid_flag;
 
     // have all threads in tile process the same gaussians in batches
     // first collect gaussians between range.x and range.y in batches
@@ -182,7 +182,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     // the contribution from gaussians behind the current one
     float buffer[CDIM] = {0.f};
     // index of last gaussian to contribute to this pixel
-    const int32_t bin_final = inside ? last_ids[pix_id] : 0;
+    const int32_t bin_final = done ? last_ids[pix_id] : 0;
 
     // df/d_out for this pixel
     float v_render_c[CDIM];
@@ -230,7 +230,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         // 0 index is the furthest back gaussian in the batch
         for (uint32_t t = max(0, batch_end - warp_bin_final); t < batch_size;
              ++t) {
-            bool valid = inside;
+            bool valid = done;
             if (batch_end - t > bin_final) {
                 valid = 0;
             }
@@ -545,25 +545,25 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         at::Tensor v_opacities                                                 \
     );
 
-__INS__(1)
-__INS__(2)
+// __INS__(1)
+// __INS__(2)
 __INS__(3)
-__INS__(4)
-__INS__(5)
-__INS__(8)
-__INS__(9)
-__INS__(16)
-__INS__(17)
-__INS__(32)
-__INS__(33)
-__INS__(64)
-__INS__(65)
-__INS__(128)
-__INS__(129)
-__INS__(256)
-__INS__(257)
-__INS__(512)
-__INS__(513)
+// __INS__(4)
+// __INS__(5)
+// __INS__(8)
+// __INS__(9)
+// __INS__(16)
+// __INS__(17)
+// __INS__(32)
+// __INS__(33)
+// __INS__(64)
+// __INS__(65)
+// __INS__(128)
+// __INS__(129)
+// __INS__(256)
+// __INS__(257)
+// __INS__(512)
+// __INS__(513)
     
 #undef __INS__
 

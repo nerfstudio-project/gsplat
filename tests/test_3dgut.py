@@ -4,20 +4,21 @@ import os
 import imageio
 import numpy as np
 import torch
+from torch import Tensor
 
 from gsplat import (
     fully_fused_projection,
     isect_offset_encode,
     isect_tiles,
+    rasterization,
     rasterize_to_pixels,
 )
 from gsplat._helper import load_test_data
-from gsplat.cuda._backend import _C
 from gsplat.cuda._wrapper import (
+    RollingShutterType,
     fully_fused_projection_with_ut,
     rasterize_to_pixels_eval3d,
 )
-from gsplat.utils import so3_matrix_to_quat
 
 torch.manual_seed(42)
 
@@ -64,56 +65,138 @@ means = data["means"].contiguous()
 opacities = data["opacities"].contiguous()
 C = len(Ks)
 colors = data["colors"][:1].contiguous()
+viewmats_rs = viewmats.clone()
 
 
-def rasterizer_and_save(radii, means2d, depths, conics, file_name="render.png"):
-    # Identify intersecting tiles
-    tile_size = 16
-    tile_width = math.ceil(width / float(tile_size))
-    tile_height = math.ceil(height / float(tile_size))
-    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
-        means2d, radii, depths, tile_size, tile_width, tile_height
+# render_colors_undistorted, _, _ = rasterization(
+#     means,
+#     quats,
+#     scales,
+#     opacities, 
+#     colors,
+#     viewmats,
+#     Ks,
+#     width,
+#     height,
+#     packed=False,
+#     camera_model="pinhole",
+#     with_ut=True,
+#     with_eval3d=True,
+# )
+
+
+def opencv_lens_distortion(
+    uv: Tensor,
+    radial_coeffs: Tensor = None,
+    tangential_coeffs: Tensor = None,
+    thin_prism_coeffs: Tensor = None,
+) -> Tensor:
+    """The opencv camera distortion of {k1, k2, p1, p2, k3, k4, k5, k6}.
+
+    See https://docs.opencv.org/3.4/d9/d0c/group__calib3d.html for more details.
+    """
+    if radial_coeffs is None:
+        k1, k2, k3, k4, k5, k6 = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    else:
+        k1, k2, k3, k4, k5, k6 = radial_coeffs.unbind(dim=-1)
+    if tangential_coeffs is None:
+        p1, p2 = 0.0, 0.0
+    else:
+        p1, p2 = tangential_coeffs.unbind(dim=-1)
+    if thin_prism_coeffs is None:
+        s1, s2, s3, s4 = 0.0, 0.0, 0.0, 0.0
+    else:
+        s1, s2, s3, s4 = thin_prism_coeffs.unbind(dim=-1)
+
+    assert uv.ndim == 2
+
+    u, v = torch.unbind(uv, dim=-1)
+    r2 = u * u + v * v
+    r4 = r2**2
+    r6 = r4 * r2
+    ratial = (1 + k1 * r2 + k2 * r4 + k3 * r6) / (
+        1 + k4 * r2 + k5 * r4 + k6 * r6
     )
-    isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
+    if ratial < 0:
+        print ("Warning: negative radial distortion factor")
+    fx = 2 * p1 * u * v + p2 * (r2 + 2 * u * u) + s1 * r2 + s2 * r4
+    fy = 2 * p2 * u * v + p1 * (r2 + 2 * v * v) + s3 * r2 + s4 * r4
+    return torch.stack([u * ratial + fx, v * ratial + fy], dim=-1)
 
-    # # forward
-    # render_colors, render_alphas = rasterize_to_pixels(
-    #     means2d,
-    #     conics,
-    #     colors,
-    #     opacities.repeat(C, 1),
-    #     width,
-    #     height,
-    #     tile_size,
-    #     isect_offsets,
-    #     flatten_ids,
-    # )
-
-    render_colors, render_alphas = rasterize_to_pixels_eval3d(
-        means,
-        quats,
-        scales,
-        colors,
-        opacities.repeat(C, 1),
-        viewmats,
-        Ks,
-        width,
-        height,
-        "pinhole",
-        tile_size,
-        isect_offsets,
-        flatten_ids,
-    )
-
-    imageio.imsave(file_name, (render_colors[0].cpu().numpy() * 255).astype(np.uint8))
+# converged: 1, iter: 7, xd: -0.654764, yd: -0.433112, x: 1.133525, y: 0.749801
+uv = torch.tensor([[1.133525, 0.749801]])
+radial_coeffs = torch.tensor([-0.3, -0.3, 0.0, 0.0, 0.0, 0.0])  # k1, k2, k3, k4, k5, k6
+print(opencv_lens_distortion(uv, radial_coeffs))
 
 
-radii, means2d, depths, conics, _ = fully_fused_projection_with_ut(
-    means, quats, scales, None, viewmats, None, Ks, width, height, 0.3, 0.01, 1e10, 0.0
+# import cv2
+
+# K = Ks[0].cpu().numpy()
+# fx = K[0, 0]
+# fy = K[1, 1]
+# cx = K[0, 2]
+# cy = K[1, 2]
+
+# x, y = torch.meshgrid(torch.arange(width), torch.arange(height), indexing="xy")
+# x = x.flatten()
+# y = y.flatten()
+# u = (x - cx) / fx
+# v = (y - cy) / fy
+# uv = torch.stack([u, v], dim=-1)  # (H*W, 2)
+# uv_prime = opencv_lens_distortion(
+#     uv,
+#     radial_coeffs=torch.tensor([2.3, 2.3, 0.0, 0.0, 0.0, 0.0]),  # k1, k2, k3, k4, k5, k6
+#     tangential_coeffs=torch.tensor([0.0, 0.0]),  # p1, p2
+#     thin_prism_coeffs=torch.tensor([0.0, 0.0, 0.0, 0.0]),  # s1, s2, s3, s4
+# )
+# x_prime = uv_prime[:, 0] * fx + cx
+# y_prime = uv_prime[:, 1] * fy + cy
+# mapx = x_prime.reshape(height, width).numpy()
+# mapy = y_prime.reshape(height, width).numpy()
+
+# # params = np.array([2.3, 2.3, 0.0, 0.0], dtype=np.float32)  # k1, k2, p1, p2
+# # mapx, mapy = cv2.initUndistortRectifyMap(
+# #     K, params, None, K, (width, height), cv2.CV_32FC1
+# # )
+# image = (render_colors_undistorted[0].cpu().numpy() * 255).astype(np.uint8)  # (H, W, C)
+# image = cv2.remap(image, mapx, mapy, cv2.INTER_LINEAR)
+# imageio.imsave("results/render.jpg", image)
+
+# print ("uv_normalized", uv[:5])
+# print ("uvND", uv_prime[:5])
+
+
+
+id = 18517
+
+# scales[id:id+1, -1] *=4
+render_colors, render_alphas, info = rasterization(
+    means,#[id:id+1],
+    quats,#[id:id+1],
+    scales,#[id:id+1],
+    opacities,#[id:id+1],
+    colors,#[:, id:id+1],
+    viewmats,
+    Ks,
+    width,
+    height,
+    packed=False,
+    camera_model="pinhole",
+    with_ut=True,
+    with_eval3d=True,
+    radial_coeffs=torch.tensor([[-.3, -.3, 0.0, 0., 0., 0.]], device=device),
+    # tangential_coeffs=torch.tensor([[-2.2, 0.5]], device=device),
+    # thin_prism_coeffs=torch.tensor([[-4.2, 0.2, 0.3, 0.3]], device=device),
+    rolling_shutter=RollingShutterType.GLOBAL,
+    viewmats_rs=None,
 )
-rasterizer_and_save(radii, means2d, depths, conics, "results/ut_eval3d.png")
+radii = info["radii"]
 
-radii, means2d, depths, conics, _ = fully_fused_projection(
-    means, None, quats, scales, viewmats, Ks, width, height, 0.3, 0.01, 1e10, 0.0
-)
-rasterizer_and_save(radii, means2d, depths, conics, "results/ewa_eval3d.png")
+# print (torch.where(radii == radii.max()))
+
+canvas = np.vstack([
+    (render_colors[0].cpu().numpy() * 255).astype(np.uint8),
+])
+print (canvas.shape)
+
+imageio.imsave("results/render.jpg", canvas)
