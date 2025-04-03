@@ -941,7 +941,7 @@ projection_ut_3dgs_fused(
         depths,
         conics,
         calc_compensations ? at::optional<at::Tensor>(compensations)
-                           : std::nullopt
+                           : at::nullopt
     );
     return std::make_tuple(radii, means2d, depths, conics, compensations);
 }
