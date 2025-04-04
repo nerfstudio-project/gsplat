@@ -17,7 +17,6 @@ from rich.console import Console
 from torch.utils.cpp_extension import _find_cuda_home  # <--- For robust CUDA detection
 from torch.utils.cpp_extension import (
     _TORCH_PATH,
-    _check_and_build_extension_h_precompiler_headers,
     _get_build_directory,
     _import_module_from_library,
     _jit_compile,
@@ -64,6 +63,10 @@ def load_extension(
     # But it's ok so we catch this exception and ignore it.
     try:
         if USE_PRECOMPILED_HEADERS:
+            from torch.utils.cpp_extension import (
+                _check_and_build_extension_h_precompiler_headers,
+            )
+
             # Using PreCompiled Header('torch/extension.h') to reduce compile time.
             # remove: remove_extension_h_precompiler_headers()
             _check_and_build_extension_h_precompiler_headers(
