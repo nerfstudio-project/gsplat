@@ -47,20 +47,20 @@ __global__ void adam_kernel(
 }
 
 void launch_adam_kernel(
-    at::Tensor &param,                    // [..., D]
-    const at::Tensor &param_grad,         // [..., D]
-    at::Tensor &exp_avg,                  // [..., D]
-    at::Tensor &exp_avg_sq,               // [..., D]
-    const at::optional<at::Tensor> valid, // [...]
+    at::Tensor &param,                    // [N, ...]
+    const at::Tensor &param_grad,         // [N, ...]
+    at::Tensor &exp_avg,                  // [N, ...]
+    at::Tensor &exp_avg_sq,               // [N, ...]
+    const at::optional<at::Tensor> valid, // [N]
     const float lr,
     const float b1,
     const float b2,
     const float eps
 ) {
-    const uint32_t D = param.size(-1);
-    const uint32_t N = param.numel() / D;
+    const uint32_t N = param.size(0);
+    const uint32_t D = param.numel() / N;
 
-    // parallel over [..., D]
+    // parallel over [N, ...]
     int64_t n_elements = N * D;
     dim3 threads(256);
     dim3 grid((n_elements + threads.x - 1) / threads.x);
