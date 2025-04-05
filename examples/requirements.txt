@@ -19,4 +19,4 @@ tensorboard
 tensorly
 pyyaml
 matplotlib
-git+https://github.com/rahul-goel/fused-ssim@1272e21a282342e89537159e4bad508b19b34157
+git+https://github.com/rahul-goel/fused-ssim@328dc9836f513d00c4b5bc38fe30478b4435cbb5
