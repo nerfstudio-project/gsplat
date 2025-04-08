@@ -643,8 +643,9 @@ def rasterize_to_pixels_eval3d(
 ) -> Tuple[Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
-    Args:
-        TODO
+    Similar to `rasterize_to_pixels()`, but compute the Gaussian responses in the
+    3D world space instead of the 2D image space. Supports rolling shutter and
+    camera distortion. 
 
     Returns:
         A tuple:
@@ -1078,6 +1079,14 @@ def fully_fused_projection_with_ut(
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [C, 4, 4]
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """Projects Gaussians to 2D using Unscented Transform (UT).
+
+    similar to `fully_fused_projection()`, but supports camera distortion and
+    rolling shutter.
+
+    .. warning::
+        This function is not differentiable to any input.
+    """
     camera_model_type = _make_lazy_cuda_obj(f"CameraModelType.{camera_model.upper()}")
 
     radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(

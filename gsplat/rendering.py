@@ -144,6 +144,13 @@ def rasterization(
         `AbsGS: Recovering Fine Details for 3D Gaussian Splatting <https://arxiv.org/abs/2404.10484>`_,
         which is shown to be more effective for splitting Gaussians during training.
 
+    .. note::
+        **Camera Distortion and Rolling Shutter**: The function supports rendering with opencv
+        distortion formula for pinhole and fisheye cameras (`radial_coeffs`, `tangential_coeffs`, `thin_prism_coeffs`).
+        It also supports rolling shutter rendering with the `rolling_shutter` argument. We take 
+        reference from the paper `3DGUT: Enabling Distorted Cameras and Secondary Rays in Gaussian Splatting 
+        <https://arxiv.org/abs/2412.12507>`_.
+
     .. warning::
         This function is currently not differentiable w.r.t. the camera intrinsics `Ks`.
 
@@ -193,6 +200,19 @@ def rasterization(
             and "fisheye". Default is "pinhole".
         covars: Optional covariance matrices of the Gaussians. If provided, the `quats` and
             `scales` will be ignored. [N, 3, 3], Default is None.
+        with_ut: Whether to use Unscented Transform (UT) for projection. Default is False.
+        with_eval3d: Whether to calculate Gaussian response in 3D world space, instead
+            of 2D image space. Default is False.
+        radial_coeffs: Opencv pinhole/fisheye radial distortion coefficients. Default is None.
+            For pinhole camera, the shape should be [C, 6]. For fisheye camera, the shape
+            should be [C, 4].
+        tangential_coeffs: Opencv pinhole tangential distortion coefficients. Default is None.
+            The shape should be [C, 2] if provided.
+        thin_prism_coeffs: Opencv pinhole thin prism distortion coefficients. Default is None.
+            The shape should be [C, 4] if provided.
+        rolling_shutter: The rolling shutter type. Default `RollingShutterType.GLOBAL` means
+            global shutter. 
+        viewmats_rs: The second viewmat when rolling shutter is used. Default is None.
 
     Returns:
         A tuple:
