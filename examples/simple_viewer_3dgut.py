@@ -118,38 +118,6 @@ def main(local_rank: int, world_rank, world_size: int, args):
         shN = torch.cat(shN, dim=0)
         colors = torch.cat([sh0, shN], dim=-2)
         sh_degree = int(math.sqrt(colors.shape[-2]) - 1)
-
-        # # crop
-        # aabb = torch.tensor((-1.0, -1.0, -1.0, 1.0, 1.0, 0.7), device=device)
-        # edges = aabb[3:] - aabb[:3]
-        # sel = ((means >= aabb[:3]) & (means <= aabb[3:])).all(dim=-1)
-        # sel = torch.where(sel)[0]
-        # means, quats, scales, colors, opacities = (
-        #     means[sel],
-        #     quats[sel],
-        #     scales[sel],
-        #     colors[sel],
-        #     opacities[sel],
-        # )
-
-        # # repeat the scene into a grid (to mimic a large-scale setting)
-        # repeats = args.scene_grid
-        # gridx, gridy = torch.meshgrid(
-        #     [
-        #         torch.arange(-(repeats // 2), repeats // 2 + 1, device=device),
-        #         torch.arange(-(repeats // 2), repeats // 2 + 1, device=device),
-        #     ],
-        #     indexing="ij",
-        # )
-        # grid = torch.stack([gridx, gridy, torch.zeros_like(gridx)], dim=-1).reshape(
-        #     -1, 3
-        # )
-        # means = means[None, :, :] + grid[:, None, :] * edges[None, None, :]
-        # means = means.reshape(-1, 3)
-        # quats = quats.repeat(repeats**2, 1)
-        # scales = scales.repeat(repeats**2, 1)
-        # colors = colors.repeat(repeats**2, 1, 1)
-        # opacities = opacities.repeat(repeats**2)
         print("Number of Gaussians:", len(means))
 
     # register and open viewer

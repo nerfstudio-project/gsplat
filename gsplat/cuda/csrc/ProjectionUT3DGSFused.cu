@@ -83,8 +83,6 @@ __global__ void projection_ut_3dgs_fused_kernel(
     }
 
     // projection using uncented transform
-    auto constexpr N_ROLLING_SHUTTER_ITERATIONS = 10; 
-
     ImageGaussianReturn image_gaussian_return;
     if (camera_model_type == CameraModelType::PINHOLE) {
         if (radial_coeffs == nullptr && tangential_coeffs == nullptr && thin_prism_coeffs == nullptr) {
@@ -95,7 +93,7 @@ __global__ void projection_ut_3dgs_fused_kernel(
             cm_params.focal_length = { focal_length.x, focal_length.y };
             PerfectPinholeCameraModel camera_model(cm_params);
             image_gaussian_return =
-                world_gaussian_to_image_gaussian_unscented_transform_shutter_pose<N_ROLLING_SHUTTER_ITERATIONS>(
+                world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
                     camera_model, rs_params, ut_params, mean, scale, quat);
         } else {
             OpenCVPinholeCameraModel<>::Parameters cm_params = {};
@@ -114,7 +112,7 @@ __global__ void projection_ut_3dgs_fused_kernel(
             }
             OpenCVPinholeCameraModel camera_model(cm_params);
             image_gaussian_return =
-                world_gaussian_to_image_gaussian_unscented_transform_shutter_pose<N_ROLLING_SHUTTER_ITERATIONS>(
+                world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
                     camera_model, rs_params, ut_params, mean, scale, quat);
         }
     } else if (camera_model_type == CameraModelType::FISHEYE) {
@@ -128,7 +126,7 @@ __global__ void projection_ut_3dgs_fused_kernel(
         }
         OpenCVFisheyeCameraModel camera_model(cm_params);
         image_gaussian_return =
-            world_gaussian_to_image_gaussian_unscented_transform_shutter_pose<N_ROLLING_SHUTTER_ITERATIONS>(
+            world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
                 camera_model, rs_params, ut_params, mean, scale, quat);
     } else {
         // should never reach here

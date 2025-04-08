@@ -351,7 +351,7 @@ template <class DerivedCameraModel> struct BaseCameraModel {
         bool valid_flag;
     };
 
-    template <size_t N_ROLLING_SHUTTER_ITERATIONS>
+    template <size_t N_ROLLING_SHUTTER_ITERATIONS = 10>
     inline __device__ auto world_point_to_image_point_shutter_pose(
         glm::fvec3 const &world_point,
         RollingShutterParameters const &rolling_shutter_parameters,
@@ -1131,7 +1131,7 @@ struct ImageGaussianReturn {
     bool valid;
 };
 
-template <size_t N_ROLLING_SHUTTER_ITERATIONS, class CameraModel>
+template <class CameraModel>
 inline __device__ auto
 world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
     CameraModel const &camera_model,
@@ -1160,8 +1160,7 @@ world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
         auto const [image_point, point_valid] =
             // annotate with 'template' to avoid warnings: #174-D: expression
             // has no effect
-            camera_model.template world_point_to_image_point_shutter_pose<
-                N_ROLLING_SHUTTER_ITERATIONS>(
+            camera_model.template world_point_to_image_point_shutter_pose<>(
                 sigma_points.points[i],
                 rolling_shutter_parameters,
                 unscented_transform_parameters.in_image_margin_factor
@@ -1176,8 +1175,6 @@ world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
         } else {
             valid |= point_valid; // any valid is sufficient
         }
-        // printf("image point %d: %f, %f, valid: %d\n", i, image_point.x,
-        //        image_point.y, point_valid);
         image_points[i] = {image_point.x, image_point.y};
 
         image_mean += sigma_points.weights_mean[i] * image_points[i];
@@ -1194,11 +1191,6 @@ world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
         image_covariance += sigma_points.weights_covariance[i] *
                             glm::outerProduct(image_mean_vec, image_mean_vec);
     }
-    // printf("image_covariance: %f, %f; %f, %f\n",
-    //        image_covariance[0][0], image_covariance[0][1],
-    //        image_covariance[1][0], image_covariance[1][1]);
-    // printf("det(image_covariance): %f\n",
-    // glm::determinant(image_covariance));
 
     return {image_mean, image_covariance, valid};
 }

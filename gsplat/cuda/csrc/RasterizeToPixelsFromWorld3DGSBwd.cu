@@ -147,8 +147,8 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         assert(false);
         return;
     }
-    vec3 ray_d = ray.ray_dir;
-    vec3 ray_o = ray.ray_org;
+    const vec3 ray_d = ray.ray_dir;
+    const vec3 ray_o = ray.ray_org;
 
     // keep not rasterizing threads around for reading data
     bool done = (i < image_height && j < image_width) && ray.valid_flag;
