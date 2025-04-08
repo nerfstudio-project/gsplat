@@ -79,7 +79,7 @@ def sort_centers(centers: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
     morton = encode_morton3_vec(x, y, z)
 
     # Sort indices based on Morton codes
-    sorted_indices = indices[torch.argsort(morton)]
+    sorted_indices = indices[torch.argsort(morton).to(indices.device)]
 
     return sorted_indices
 
