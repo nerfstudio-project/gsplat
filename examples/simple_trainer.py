@@ -859,10 +859,7 @@ class Runner:
         world_size = self.world_size
 
         valloader = torch.utils.data.DataLoader(
-            self.valset,
-            batch_size=1,
-            shuffle=False,
-            num_workers=1
+            self.valset, batch_size=1, shuffle=False, num_workers=1
         )
         ellipse_time = 0
         metrics = defaultdict(list)

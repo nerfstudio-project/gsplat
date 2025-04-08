@@ -1,15 +1,15 @@
-import json
 import os
+import json
+from tqdm import tqdm
 from typing import Any, Dict, List, Optional
+from typing_extensions import assert_never
 
 import cv2
+from PIL import Image
 import imageio.v2 as imageio
 import numpy as np
 import torch
-from PIL import Image
 from pycolmap import SceneManager
-from tqdm import tqdm
-from typing_extensions import assert_never
 
 from .normalize import (
     align_principle_axes,
@@ -255,7 +255,7 @@ class Parser:
             width, height = self.imsize_dict[camera_id]
             self.imsize_dict[camera_id] = (int(width * s_width), int(height * s_height))
 
-        # undistort to perfect pinhole/fisheye camera
+        # undistortion
         self.mapx_dict = dict()
         self.mapy_dict = dict()
         self.roi_undist_dict = dict()
@@ -354,24 +354,14 @@ class Dataset:
     def __len__(self):
         return len(self.indices)
 
-    def collate_fn(self, batch):
-        keys = list(batch[0].keys())
-        collated = {}
-        for k in keys:
-            if isinstance(batch[0][k], torch.Tensor):
-                collated[k] = torch.stack([b[k] for b in batch], dim=0)
-            else:
-                collated[k] = [b[k] for b in batch]
-        return collated
-
     def __getitem__(self, item: int) -> Dict[str, Any]:
         index = self.indices[item]
         image = imageio.imread(self.parser.image_paths[index])[..., :3]
         camera_id = self.parser.camera_ids[index]
-        K = self.parser.Ks_dict[camera_id].copy()
+        K = self.parser.Ks_dict[camera_id].copy()  # undistorted K
         params = self.parser.params_dict[camera_id]
         camtoworlds = self.parser.camtoworlds[index]
-        mask = self.parser.mask_dict[camera_id]  # maybe none
+        mask = self.parser.mask_dict[camera_id]
 
         if len(params) > 0:
             # Images are distorted. Undistort them.
@@ -396,9 +386,7 @@ class Dataset:
             "K": torch.from_numpy(K).float(),
             "camtoworld": torch.from_numpy(camtoworlds).float(),
             "image": torch.from_numpy(image).float(),
-            "image_id": torch.tensor(
-                item, dtype=torch.long
-            ),  # the index of the image in the dataset
+            "image_id": item,  # the index of the image in the dataset
         }
         if mask is not None:
             data["mask"] = torch.from_numpy(mask).bool()
