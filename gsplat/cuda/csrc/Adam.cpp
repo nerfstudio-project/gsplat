@@ -13,11 +13,11 @@
 namespace gsplat {
 
 void adam(
-    at::Tensor &param,                    // [..., D]
-    const at::Tensor &param_grad,         // [..., D]
-    at::Tensor &exp_avg,                  // [..., D]
-    at::Tensor &exp_avg_sq,               // [..., D]
-    const at::optional<at::Tensor> valid, // [...]
+    at::Tensor &param,                    // [N, ...]
+    const at::Tensor &param_grad,         // [N, ...]
+    at::Tensor &exp_avg,                  // [N, ...]
+    at::Tensor &exp_avg_sq,               // [N, ...]
+    const at::optional<at::Tensor> valid, // [N]
     const float lr,
     const float b1,
     const float b2,
@@ -30,9 +30,10 @@ void adam(
     CHECK_INPUT(exp_avg_sq);
     if (valid.has_value()) {
         CHECK_INPUT(valid.value());
+        TORCH_CHECK(valid.value().dim() == 1, "valid should be 1D tensor");
         TORCH_CHECK(
-            valid.value().dim() + 1 == param.dim(),
-            "valid should have one less dimension than param"
+            valid.value().size(0) == param.size(0),
+            "valid first dimension should match param first dimension"
         );
     }
 
