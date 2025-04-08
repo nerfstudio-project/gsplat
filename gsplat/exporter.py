@@ -470,6 +470,8 @@ def export_gaussian_splat(
     with open("file.ply", "wb") as binary_file:
         binary_file.write(splat_bytes)
 
+    Save to file.splat instead of file.ply if using the splat format.
+
     Args:
         means (torch.Tensor): Splat means. Shape (N, 3)
         scales (torch.Tensor): Splat scales. Shape (N, 3)
