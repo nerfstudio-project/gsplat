@@ -166,8 +166,6 @@ class Config:
 
     lpips_net: Literal["vgg", "alex"] = "alex"
 
-    perfect_camera: bool = True
-
     # 3DGUT (uncented transform + eval 3D)
     with_ut: bool = False
     with_eval3d: bool = False
@@ -315,8 +313,6 @@ class Runner:
             factor=cfg.data_factor,
             normalize=cfg.normalize_world_space,
             test_every=cfg.test_every,
-            # uncentered transform projection (ut) allows training on distorted images
-            perfect_camera=cfg.perfect_camera,
         )
         self.trainset = Dataset(
             self.parser,
@@ -562,7 +558,6 @@ class Runner:
             num_workers=4,
             persistent_workers=True,
             pin_memory=True,
-            collate_fn=self.trainset.collate_fn,
         )
         trainloader_iter = iter(trainloader)
 
@@ -837,7 +832,7 @@ class Runner:
             # eval the full set
             if step in [i - 1 for i in cfg.eval_steps]:
                 self.eval(step)
-                # self.render_traj(step)
+                self.render_traj(step)
 
             # run compression
             if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:
@@ -867,8 +862,7 @@ class Runner:
             self.valset,
             batch_size=1,
             shuffle=False,
-            num_workers=1,
-            collate_fn=self.valset.collate_fn,
+            num_workers=1
         )
         ellipse_time = 0
         metrics = defaultdict(list)
@@ -1070,7 +1064,7 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
             runner.splats[k].data = torch.cat([ckpt["splats"][k] for ckpt in ckpts])
         step = ckpts[0]["step"]
         runner.eval(step=step)
-        # runner.render_traj(step=step)
+        runner.render_traj(step=step)
         if cfg.compression is not None:
             runner.run_compression(step=step)
     else:
