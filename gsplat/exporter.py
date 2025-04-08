@@ -1,5 +1,87 @@
+import math
+import struct
+from io import BytesIO
+from typing import Optional
+
 import torch
-import torch as t
+
+
+def sh2rgb(sh: torch.Tensor) -> torch.Tensor:
+    """Convert Sphere Harmonics to RGB
+
+    Args:
+        sh (torch.Tensor): SH tensor
+
+    Returns:
+        torch.Tensor: RGB tensor
+    """
+    C0 = 0.28209479177387814
+    return sh * C0 + 0.5
+
+
+def part1by2_vec(x: torch.Tensor) -> torch.Tensor:
+    """Interleave bits of x with 0s
+
+    Args:
+        x (torch.Tensor): Input tensor. Shape (N,)
+
+    Returns:
+        torch.Tensor: Output tensor. Shape (N,)
+    """
+
+    x = x & 0x000003FF
+    x = (x ^ (x << 16)) & 0xFF0000FF
+    x = (x ^ (x << 8)) & 0x0300F00F
+    x = (x ^ (x << 4)) & 0x030C30C3
+    x = (x ^ (x << 2)) & 0x09249249
+    return x
+
+
+def encode_morton3_vec(
+    x: torch.Tensor, y: torch.Tensor, z: torch.Tensor
+) -> torch.Tensor:
+    """Compute Morton codes for 3D coordinates
+
+    Args:
+        x (torch.Tensor): X coordinates. Shape (N,)
+        y (torch.Tensor): Y coordinates. Shape (N,)
+        z (torch.Tensor): Z coordinates. Shape (N,)
+    Returns:
+        torch.Tensor: Morton codes. Shape (N,)
+    """
+    return (part1by2_vec(z) << 2) + (part1by2_vec(y) << 1) + part1by2_vec(x)
+
+
+def sort_centers(centers: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
+    """Sort centers based on Morton codes
+
+    Args:
+        centers (torch.Tensor): Centers. Shape (N, 3)
+        indices (torch.Tensor): Indices. Shape (N,)
+    Returns:
+        torch.Tensor: Sorted indices. Shape (N,)
+    """
+    # Compute min and max values in a single operation
+    min_vals, _ = torch.min(centers, dim=0)
+    max_vals, _ = torch.max(centers, dim=0)
+
+    # Compute the scaling factors
+    lengths = max_vals - min_vals
+    lengths[lengths == 0] = 1  # Prevent division by zero
+
+    # Normalize and scale to 10-bit integer range (0-1024)
+    scaled_centers = ((centers - min_vals) / lengths * 1024).floor().to(torch.int32)
+
+    # Extract x, y, z coordinates
+    x, y, z = scaled_centers[:, 0], scaled_centers[:, 1], scaled_centers[:, 2]
+
+    # Compute Morton codes using vectorized operations
+    morton = encode_morton3_vec(x, y, z)
+
+    # Sort indices based on Morton codes
+    sorted_indices = indices[torch.argsort(morton)]
+
+    return sorted_indices
 
 
 def pack_unorm(value: torch.Tensor, bits: int) -> torch.Tensor:
@@ -71,8 +153,6 @@ def pack_rotation(q: torch.Tensor) -> torch.Tensor:
         torch.Tensor: Packed values. Shape (N,)
     """
 
-    import math
-
     # Normalize each quaternion
     norms = torch.linalg.norm(q, dim=-1, keepdim=True)
     q = q / norms
@@ -135,10 +215,6 @@ def splat2ply_bytes_compressed(
     Returns:
         bytes: Binary compressed Ply file representing the model.
     """
-    import struct
-    from io import BytesIO
-
-    from eyesplat.utils.splat import sh2rgb, sort_centers
 
     # Filter the splats with too low opacity
     mask = torch.sigmoid(opacities) > opacity_threshold
@@ -296,8 +372,6 @@ def splat2ply_bytes(
     Returns:
         bytes: Binary Ply file representing the model.
     """
-    import struct
-    from io import BytesIO
 
     num_splats = means.shape[0]
     buffer = BytesIO()
@@ -351,10 +425,6 @@ def splat2splat_bytes(
     Returns:
         bytes: Binary Splat file representing the model.
     """
-    import struct
-    from io import BytesIO
-
-    from eyesplat.utils.splat import sh2rgb, sort_centers
 
     scales = torch.exp(scales)
     sh0_color = sh2rgb(sh0)
@@ -380,16 +450,25 @@ def splat2splat_bytes(
     return buffer.getvalue()
 
 
-def export(
+def export_gaussian_splat(
     means: torch.Tensor,
     scales: torch.Tensor,
     quats: torch.Tensor,
     opacities: torch.Tensor,
     sh0: torch.Tensor,
-    shN: t.Optional[torch.Tensor] = None,
+    shN: Optional[torch.Tensor] = None,
     format: str = "ply",
 ) -> bytes:
     """Export a Splat model to a file.
+    The three supported formats are:
+    - ply: A standard PLY file format. Supported by most viewers.
+    - splat: A custom Splat file format. Supported by antimatter15 viewer.
+    - ply_compressed: A compressed PLY file format. Used by Supersplat viewer.
+
+    The bytes obtained can be written to file like this:
+    splat_bytes = export(means, scales, quats, opacities, sh0, shN)
+    with open("file.ply", "wb") as binary_file:
+        binary_file.write(splat_bytes)
 
     Args:
         means (torch.Tensor): Splat means. Shape (N, 3)
@@ -402,10 +481,12 @@ def export(
     """
 
     if format == "ply":
+        assert shN is not None, "shN must be provided for ply format"
         data = splat2ply_bytes(means, scales, quats, opacities, sh0, shN)
     elif format == "splat":
         data = splat2splat_bytes(means, scales, quats, opacities, sh0)
     elif format == "ply_compressed":
+        assert shN is not None, "shN must be provided for ply_compressed format"
         data = splat2ply_bytes_compressed(means, scales, quats, opacities, sh0, shN)
     else:
         raise ValueError(f"Unsupported format: {format}")
