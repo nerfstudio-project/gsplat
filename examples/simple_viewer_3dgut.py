@@ -1,10 +1,3 @@
-"""A simple example to render a (large-scale) Gaussian Splats
-
-```bash
-python examples/simple_viewer.py --scene_grid 13
-```
-"""
-
 import argparse
 import math
 import os
