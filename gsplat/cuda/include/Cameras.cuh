@@ -36,7 +36,7 @@ struct RollingShutterParameters {
     glm::fvec3 t_end;
     glm::fquat q_end;
 
-    __host__ __device__
+    __device__
     RollingShutterParameters(const float *se3_start, const float *se3_end) {
         // input is row-major, but glm is column-major
         q_start = glm::quat_cast(glm::mat3(
@@ -91,7 +91,7 @@ inline __device__ float numerically_stable_norm2(float x, float y) {
 }
 
 template <size_t N_COEFFS>
-inline __device__ float
+inline __host__ __device__ float
 eval_poly_horner(std::array<float, N_COEFFS> const &poly, float x) {
     // Evaluates a polynomial y=f(x) with
     //
@@ -109,7 +109,7 @@ eval_poly_horner(std::array<float, N_COEFFS> const &poly, float x) {
 }
 
 template <size_t N_COEFFS>
-inline __device__ float
+inline __host__ __device__ float
 eval_poly_odd_horner(std::array<float, N_COEFFS> const &poly_odd, float x) {
     // Evaluates an odd-only polynomial y=f(x) with
     //
@@ -127,7 +127,7 @@ eval_poly_odd_horner(std::array<float, N_COEFFS> const &poly_odd, float x) {
 }
 
 template <size_t N_COEFFS>
-inline __device__ float
+inline __host__ __device__ float
 eval_poly_even_horner(std::array<float, N_COEFFS> const &poly_even, float x) {
     // Evaluates an even-only polynomial y=f(x) with
     //
@@ -156,7 +156,7 @@ struct PolynomialProxy {
 
     // Evaluate the polynomial using Horner's method based on the polynomial
     // type
-    inline __device__ float eval_horner(float x) const {
+    inline __host__ __device__ float eval_horner(float x) const {
         if constexpr (POLYNOMIAL_TYPE == PolynomialType::FULL) {
             // Evaluate a full polynomial
             return eval_poly_horner(coeffs, x);
@@ -175,7 +175,7 @@ template <
     class PolyProxy,
     class DPolyProxy,
     class TInvPolyApproxProxy>
-inline __device__ float eval_poly_inverse_horner_newton(
+inline __host__ __device__ float eval_poly_inverse_horner_newton(
     PolyProxy const &poly,
     DPolyProxy const &dpoly,
     TInvPolyApproxProxy const &inv_poly_approx,
@@ -231,7 +231,7 @@ inline __device__ float eval_poly_inverse_horner_newton(
  * @return true if the image point is within the image bounds considering the
  * margin, false otherwise.
  */
-__forceinline__ __device__ __host__ bool image_point_in_image_bounds_margin(
+__forceinline__ __device__ bool image_point_in_image_bounds_margin(
     glm::vec2 const &image_point,
     std::array<uint32_t, 2> const &resolution,
     float margin_factor
@@ -261,12 +261,12 @@ struct ShutterPose {
     glm::fvec3 t;
     glm::fquat q;
 
-    inline __device__ __host__ auto
+    inline __device__ auto
     camera_world_position() const -> glm::fvec3 {
         return glm::rotate(glm::inverse(q), -t);
     }
 
-    inline __device__ __host__ auto
+    inline __device__ auto
     camera_ray_to_world_ray(glm::fvec3 const &camera_ray) const -> WorldRay {
         auto const R_inv = glm::mat3_cast(glm::inverse(q));
 
@@ -274,7 +274,7 @@ struct ShutterPose {
     }
 };
 
-inline __device__ __host__ auto interpolate_shutter_pose(
+inline __device__ auto interpolate_shutter_pose(
     float relative_frame_time,
     RollingShutterParameters const &rolling_shutter_parameters
 ) -> ShutterPose {
@@ -438,7 +438,7 @@ struct PerfectPinholeCameraModel : BaseCameraModel<PerfectPinholeCameraModel> {
         std::array<float, 2> focal_length;
     };
 
-    __host__ __device__ PerfectPinholeCameraModel(Parameters const &parameters)
+    __device__ PerfectPinholeCameraModel(Parameters const &parameters)
         : parameters(parameters) {}
 
     Parameters parameters;
@@ -507,7 +507,7 @@ struct OpenCVPinholeCameraModel
         std::array<float, 4> thin_prism_coeffs = {0.f};
     };
 
-    __host__ __device__ OpenCVPinholeCameraModel(
+    __device__ OpenCVPinholeCameraModel(
         Parameters const &parameters,
         float stop_undistortion_square_error_px2 = 1e-12
     )
@@ -777,7 +777,66 @@ struct OpenCVPinholeCameraModel
     }
 };
 
-template <size_t N_NEWTON_ITERATIONS = 10>
+#define PI 3.14159265358979323846f
+
+// solve 1 + ax + bx^2 + cx^3 = 0
+inline __host__ __device__ float compute_opencv_fisheye_max_angle(float a, float b, float c) {
+    const float INF = std::numeric_limits<float>::max();
+
+    if (c == 0.0f) {
+        if (b == 0.0f) {
+            if (a >= 0.0f) {
+                return INF;
+            } else {
+                return -1.0f / a;
+            }
+        }
+        float delta = a * a - 4.0f * b;
+        if (delta >= 0.0f) {
+            delta = std::sqrt(delta) - a;
+            if (delta > 0.0f) {
+                return 2.0f / delta;
+            }
+        }
+    } else {
+        float boc = b / c;
+        float boc2 = boc * boc;
+
+        float t1 = (9.0f * a * boc - 2.0f * b * boc2 - 27.0f) / c;
+        float t2 = 3.0f * a / c - boc2;
+        float delta = t1 * t1 + 4.0f * t2 * t2 * t2;
+
+        if (delta >= 0.0f) {
+            float d2 = std::sqrt(delta);
+            float cube_root = std::cbrt((d2 + t1) / 2.0f);
+            if (cube_root != 0.0f) {
+                float soln = (cube_root - (t2 / cube_root) - boc) / 3.0f;
+                if (soln > 0.0f) {
+                    return soln;
+                }
+            }
+        } else {
+            // Complex root case (delta < 0): 3 real roots
+            float theta = std::atan2(std::sqrt(-delta), t1) / 3.0f;
+            constexpr float two_third_pi = 2.0f * PI / 3.0f;
+
+            float t3 = 2.0f * std::sqrt(-t2);
+            float soln = INF;
+            for (int i : {-1, 0, 1}) {
+                float angle = theta + i * two_third_pi;
+                float s = (t3 * std::cos(angle) - boc) / 3.0f;
+                if (s > 0.0f) {
+                    soln = std::min(soln, s);
+                }
+            }
+            return soln;
+        }
+    }
+
+    return INF;
+}
+
+template <size_t N_NEWTON_ITERATIONS = 20>
 struct OpenCVFisheyeCameraModel
     : BaseCameraModel<OpenCVFisheyeCameraModel<N_NEWTON_ITERATIONS>> {
     // OpenCV-compatible fisheye camera model
@@ -813,9 +872,34 @@ struct OpenCVFisheyeCameraModel
         auto const max_radius_pixels = std::sqrt(
             max_diag_x * max_diag_x + max_diag_y * max_diag_y
         );
-        max_angle = max(
-            max_radius_pixels / parameters.focal_length[0],
-            max_radius_pixels / parameters.focal_length[1]
+
+        if (k4 == 0) {
+            max_angle = std::sqrt(compute_opencv_fisheye_max_angle(
+                3.f * k1, 5.f * k2, 7.f * k3
+            ));    
+        } else {
+            std::array<float, 4> ddforward_poly_odd = {6 * k1, 20 * k2, 56 * k3, 72 * k4};
+            std::array<float, 1> approx = {1.57f};
+            
+            bool converged = false;
+            max_angle = eval_poly_inverse_horner_newton<N_NEWTON_ITERATIONS>(
+                PolynomialProxy<PolynomialType::EVEN, 5>{dforward_poly_even},
+                PolynomialProxy<PolynomialType::ODD, 4>{ddforward_poly_odd},
+                PolynomialProxy<PolynomialType::EVEN, 1>{approx},
+                0.f,
+                converged
+            );
+            if (!converged || max_angle <= 0.f) {
+                max_angle = std::numeric_limits<float>::max();
+            }
+        }
+
+        max_angle = min(
+            max_angle,
+            max(
+                max_radius_pixels / parameters.focal_length[0],
+                max_radius_pixels / parameters.focal_length[1]
+            )
         );
 
         // approximate backward poly (mapping normalized distances to angles)
@@ -838,6 +922,9 @@ struct OpenCVFisheyeCameraModel
     inline __device__ auto camera_ray_to_image_point(
         glm::fvec3 const &cam_ray, float margin_factor
     ) const -> typename Base::ImagePointReturn {
+        if (cam_ray.z <= 0.f)
+            return {{0.f, 0.f}, false};
+
         // Make sure norm is non-vanishing (norm vanishes for points along the
         // principal-axis)
         auto cam_ray_xy_norm = numerically_stable_norm2(cam_ray.x, cam_ray.y);
@@ -862,11 +949,11 @@ struct OpenCVFisheyeCameraModel
         auto const delta =
             eval_poly_odd_horner(forward_poly_odd, theta) / cam_ray_xy_norm;
 
-        // // Negative delta means the distortion makes point flipped across the
-        // // image center. This cannot be produced by real lenses.
-        // if (delta <= 0.f) {
-        //     return {{0.f, 0.f}, false};
-        // }
+        // Negative delta means the distortion makes point flipped across the
+        // image center. This cannot be produced by real lenses.
+        if (delta <= 0.f) {
+            return {{0.f, 0.f}, false};
+        }
 
         auto const image_point = glm::fvec2{
             parameters.focal_length[0] * delta * cam_ray.x +
@@ -894,8 +981,8 @@ struct OpenCVFisheyeCameraModel
             image_point, parameters.resolution, margin_factor
         );
         valid &=
-            theta < max_angle; // explicitly check for strictly smaller angles
-                               // to classify FOV-clamped points as invalid
+            theta <= max_angle; // explicitly check for strictly smaller angles
+                                // to classify FOV-clamped points as invalid
 
         return {image_point, valid};
     }
@@ -924,7 +1011,7 @@ struct OpenCVFisheyeCameraModel
         );
 
         // Flipped points is not physically meaningful.
-        if (theta < 0.f || !converged) {
+        if (theta < 0.f || theta >= max_angle || !converged) {
             return {glm::fvec3{0.f, 0.f, 1.f}, false};
         }
 
