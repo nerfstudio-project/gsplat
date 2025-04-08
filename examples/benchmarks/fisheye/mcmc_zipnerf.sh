@@ -3,18 +3,15 @@ SCENE_LIST="berlin london nyc alameda"
 DATA_FACTOR=4
 RENDER_TRAJ_PATH="ellipse"
 
-# RESULT_DIR="results/benchmark_mcmc_1M_zipnerf"
-# CAP_MAX=1000000
-
-RESULT_DIR="results/benchmark_mcmc_4M_zipnerf_fisheyeGS_iscale0.5"
-CAP_MAX=4000000
+RESULT_DIR="results/benchmark_mcmc_2M_zipnerf"
+CAP_MAX=2000000
 
 for SCENE in $SCENE_LIST;
 do
     echo "Running $SCENE"
 
     # train without eval
-    CUDA_VISIBLE_DEVICES=4 python simple_trainer.py mcmc --eval_steps -1 --disable_viewer --data_factor $DATA_FACTOR \
+    CUDA_VISIBLE_DEVICES=0 python simple_trainer.py mcmc --eval_steps -1 --disable_viewer --data_factor $DATA_FACTOR \
         --strategy.cap-max $CAP_MAX \
         --opacity_reg 0.001 \
         --init_scale 0.5 \
@@ -26,7 +23,7 @@ do
 
     for CKPT in $RESULT_DIR/$SCENE/ckpts/*;
     do
-        CUDA_VISIBLE_DEVICES=4 python simple_trainer.py mcmc --disable_viewer --data_factor $DATA_FACTOR \
+        CUDA_VISIBLE_DEVICES=0 python simple_trainer.py mcmc --disable_viewer --data_factor $DATA_FACTOR \
             --strategy.cap-max $CAP_MAX \
             --opacity_reg 0.001 \
             --init_scale 0.5 \
