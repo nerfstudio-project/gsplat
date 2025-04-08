@@ -47,7 +47,7 @@ class UnscentedTransformParameters:
     kappa: float = 0.0
     # Parameters controlling validity of the unscented transform results. Default 0.1
     # is 10% margin.
-    in_image_margin_factor: float = 10000
+    in_image_margin_factor: float = 0.1
     # True: all sigma points must be valid
     require_all_sigma_points_valid: bool = True
 
@@ -675,7 +675,6 @@ def rasterize_to_pixels_eval3d(
 
     # Pad the channels to the nearest supported number if necessary
     channels = colors.shape[-1]
-    assert channels == 3, "only support 3 channels in eval3d"
     if channels > 513 or channels == 0:
         # TODO: maybe worth to support zero channels?
         raise ValueError(f"Unsupported number of color channels: {channels}")

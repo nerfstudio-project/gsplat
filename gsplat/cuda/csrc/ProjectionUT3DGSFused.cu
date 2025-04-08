@@ -136,11 +136,6 @@ __global__ void projection_ut_3dgs_fused_kernel(
         return;
     }
 
-    // // projection using uncented transform
-    // auto const image_gaussian_return =
-    //     world_gaussian_to_image_gaussian_unscented_transform_shutter_pose<N_ROLLING_SHUTTER_ITERATIONS>(
-    //         camera_model, rs_params, ut_params, mean, scale, quat
-    //     );
     auto [mean2d, covar2d, valid_ut] = image_gaussian_return;
     if (!valid_ut) {
         radii[idx * 2] = 0;
