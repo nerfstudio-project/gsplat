@@ -261,13 +261,12 @@ struct ShutterPose {
     glm::fvec3 t;
     glm::fquat q;
 
-    inline __device__ auto
-    camera_world_position() const -> glm::fvec3 {
+    inline __device__ auto camera_world_position() const -> glm::fvec3 {
         return glm::rotate(glm::inverse(q), -t);
     }
 
-    inline __device__ auto
-    camera_ray_to_world_ray(glm::fvec3 const &camera_ray) const -> WorldRay {
+    inline __device__ auto camera_ray_to_world_ray(glm::fvec3 const &camera_ray
+    ) const -> WorldRay {
         auto const R_inv = glm::mat3_cast(glm::inverse(q));
 
         return {-R_inv * t, R_inv * camera_ray, true};
@@ -473,8 +472,8 @@ struct PerfectPinholeCameraModel : BaseCameraModel<PerfectPinholeCameraModel> {
         return {image_point, valid};
     }
 
-    inline __device__ CameraRay
-    image_point_to_camera_ray(glm::fvec2 image_point) const {
+    inline __device__ CameraRay image_point_to_camera_ray(glm::fvec2 image_point
+    ) const {
         // Transform the image point to uv coordinate
         auto const uv =
             (image_point -
@@ -573,12 +572,13 @@ struct OpenCVPinholeCameraModel
         // auto constexpr k_min_radial_dist = 0.8f, k_max_radial_dist = 1.2f;
         // auto const valid_radial;
         //     (icD > k_min_radial_dist) && (icD < k_max_radial_dist);
-        
-        // Note(ruilong): Negative icD means the distortion makes point flipped across
-        // the image center. This cannot be produced by real lenses.
-        // We use a threshold larger than zero here because we want to skip those rays
-        // that are **close** to be flipped. This is important for unscented transform
-        // on Gaussians as part of the Gaussian might across the flip boundary.
+
+        // Note(ruilong): Negative icD means the distortion makes point flipped
+        // across the image center. This cannot be produced by real lenses. We
+        // use a threshold larger than zero here because we want to skip those
+        // rays that are **close** to be flipped. This is important for
+        // unscented transform on Gaussians as part of the Gaussian might across
+        // the flip boundary.
         auto const valid_radial = icD > 0.8f;
 
         // Project using ideal pinhole model (apply radial / tangential /
@@ -586,26 +586,30 @@ struct OpenCVPinholeCameraModel
         auto const uvND = icD * uv_normalized + delta;
         // if (valid_radial) {
         image_point =
-            uvND *
-                glm::fvec2(
-                    parameters.focal_length[0], parameters.focal_length[1]
-                ) +
+            uvND * glm::fvec2(
+                       parameters.focal_length[0], parameters.focal_length[1]
+                   ) +
             glm::fvec2(
                 parameters.principal_point[0], parameters.principal_point[1]
             );
         // } else {
         //     // If the radial distortion is out-of-limits, the computed
-        //     // coordinates will be unreasonable (might even flip signs) - check
-        //     // on which side of the image we overshoot, and set the coordinates
+        //     // coordinates will be unreasonable (might even flip signs) -
+        //     check
+        //     // on which side of the image we overshoot, and set the
+        //     coordinates
         //     // out of the image bounds accordingly. The coordinates will be
-        //     // clipped to viable range and direction but the exact values cannot
+        //     // clipped to viable range and direction but the exact values
+        //     cannot
         //     // be trusted / are still invalid
         //     auto const roi_clipping_radius =
-        //         std::hypotf(parameters.resolution[0], parameters.resolution[1]);
+        //         std::hypotf(parameters.resolution[0],
+        //         parameters.resolution[1]);
         //     image_point =
         //         (roi_clipping_radius / std::sqrt(r2)) * uv_normalized +
         //         glm::fvec2(
-        //             parameters.principal_point[0], parameters.principal_point[1]
+        //             parameters.principal_point[0],
+        //             parameters.principal_point[1]
         //         );
         // }
 
@@ -659,54 +663,58 @@ struct OpenCVPinholeCameraModel
     inline __device__ auto compute_residual_and_jacobian(
         float x, float y, float xd, float yd
     ) const -> JacobianReturn {
-        auto const& [k1, k2, k3, k4, k5, k6] = parameters.radial_coeffs;
-        auto const& [p1, p2] = parameters.tangential_coeffs;
-        auto const& [s1, s2, s3, s4] = parameters.thin_prism_coeffs;
+        auto const &[k1, k2, k3, k4, k5, k6] = parameters.radial_coeffs;
+        auto const &[p1, p2] = parameters.tangential_coeffs;
+        auto const &[s1, s2, s3, s4] = parameters.thin_prism_coeffs;
 
         // let r(x, y) = x^2 + y^2;
-        //     alpha(x, y) = 1 + k1 * r(x, y) + k2 * r(x, y) ^2 + k3 * r(x, y)^3;
-        //     beta(x, y) = 1 + k4 * r(x, y) + k5 * r(x, y) ^2 + k6 * r(x, y)^3;
-        //     d(x, y) = alpha(x, y) / beta(x, y);
+        //     alpha(x, y) = 1 + k1 * r(x, y) + k2 * r(x, y) ^2 + k3 * r(x,
+        //     y)^3; beta(x, y) = 1 + k4 * r(x, y) + k5 * r(x, y) ^2 + k6 * r(x,
+        //     y)^3; d(x, y) = alpha(x, y) / beta(x, y);
         const float r = x * x + y * y;
         const float r2 = r * r;
         const float alpha = 1.0f + r * (k1 + r * (k2 + r * k3));
         const float beta = 1.0f + r * (k4 + r * (k5 + r * k6));
         const float d = alpha / beta; // icD
 
-        // Negative icD means the distortion makes point flipped across the image
-        // center. This cannot be produced by real lenses.
+        // Negative icD means the distortion makes point flipped across the
+        // image center. This cannot be produced by real lenses.
         if (d <= 0.f) {
             return {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, false};
         }
-    
+
         // The perfect projection is:
-        // xd = x * d(x, y) + 2 * p1 * x * y + p2 * (r(x, y) + 2 * x^2) + s1 * r + s2 * r2;
-        // yd = y * d(x, y) + 2 * p2 * x * y + p1 * (r(x, y) + 2 * y^2) + s3 * r + s4 * r2;
-    
+        // xd = x * d(x, y) + 2 * p1 * x * y + p2 * (r(x, y) + 2 * x^2) + s1 * r
+        // + s2 * r2; yd = y * d(x, y) + 2 * p2 * x * y + p1 * (r(x, y) + 2 *
+        // y^2) + s3 * r + s4 * r2;
+
         // Let's define
-        // fx(x, y) = x * d(x, y) + 2 * p1 * x * y + p2 * (r(x, y) + 2 * x^2) + s1 * r + s2 * r2 - xd;
-        // fy(x, y) = y * d(x, y) + 2 * p2 * x * y + p1 * (r(x, y) + 2 * y^2) + s3 * r + s4 * r2 - yd;
-    
+        // fx(x, y) = x * d(x, y) + 2 * p1 * x * y + p2 * (r(x, y) + 2 * x^2) +
+        // s1 * r + s2 * r2 - xd; fy(x, y) = y * d(x, y) + 2 * p2 * x * y + p1 *
+        // (r(x, y) + 2 * y^2) + s3 * r + s4 * r2 - yd;
+
         // We are looking for a solution that satisfies
         // fx(x, y) = fy(x, y) = 0;
-        float fx = d * x + 2 * p1 * x * y + p2 * (r + 2 * x * x) + s1 * r + s2 * r2 - xd;
-        float fy = d * y + 2 * p2 * x * y + p1 * (r + 2 * y * y) + s3 * r + s4 * r2 - yd;
-    
+        float fx = d * x + 2 * p1 * x * y + p2 * (r + 2 * x * x) + s1 * r +
+                   s2 * r2 - xd;
+        float fy = d * y + 2 * p2 * x * y + p1 * (r + 2 * y * y) + s3 * r +
+                   s4 * r2 - yd;
+
         // Compute derivative of alpha, beta over r.
         const float alpha_r = k1 + r * (2.0 * k2 + r * (3.0 * k3));
         const float beta_r = k4 + r * (2.0 * k5 + r * (3.0 * k6));
-    
+
         // Compute derivative of d over [x, y]
-        const float d_r = (alpha_r * beta - alpha * beta_r) / (beta * beta); 
+        const float d_r = (alpha_r * beta - alpha * beta_r) / (beta * beta);
         const float d_x = 2.0 * x * d_r;
         const float d_y = 2.0 * y * d_r;
-    
+
         // Compute derivative of fx over x and y.
         float fx_x = d + d_x * x + 2.0 * p1 * y + 6.0 * p2 * x;
         fx_x += 2.0 * x * (s1 + 2.0 * s2 * r);
         float fx_y = d_y * x + 2.0 * p1 * x + 2.0 * p2 * y;
         fx_y += 2.0 * y * (s1 + 2.0 * s2 * r);
-    
+
         // Compute derivative of fy over x and y.
         float fy_x = d_x * y + 2.0 * p2 * y + 2.0 * p1 * x;
         fy_x += 2.0 * x * (s3 + 2.0 * s4 * r);
@@ -715,10 +723,10 @@ struct OpenCVPinholeCameraModel
 
         return {fx, fy, fx_x, fx_y, fy_x, fy_y, true};
     }
-    
 
-    inline __device__ glm::fvec2
-    compute_undistortion_newton(glm::fvec2 const &image_point, bool &converged) const {
+    inline __device__ glm::fvec2 compute_undistortion_newton(
+        glm::fvec2 const &image_point, bool &converged
+    ) const {
         // Iteratively undistorts the image point using the newton method
 
         // Initial guess for the undistorted point
@@ -736,7 +744,8 @@ struct OpenCVPinholeCameraModel
         int iter = 0;
         while (iter < N_MAX_UNDISTORTION_ITERATIONS) {
             iter++;
-            auto const [fx, fy, fx_x, fx_y, fy_x, fy_y, valid] = compute_residual_and_jacobian(x, y, xd, yd);
+            auto const [fx, fy, fx_x, fx_y, fy_x, fy_y, valid] =
+                compute_residual_and_jacobian(x, y, xd, yd);
             if (!valid) {
                 break;
             }
@@ -745,7 +754,7 @@ struct OpenCVPinholeCameraModel
             auto const det = fx_y * fy_x - fx_x * fy_y;
             if (fabsf(det) < eps)
                 break;
-    
+
             // Update
             auto const dx = (fx * fy_y - fy * fx_y) / det;
             auto const dy = (fy * fx_x - fx * fy_x) / det;
@@ -761,8 +770,8 @@ struct OpenCVPinholeCameraModel
         return {x, y};
     }
 
-    inline __device__ CameraRay
-    image_point_to_camera_ray(glm::fvec2 image_point) const {        
+    inline __device__ CameraRay image_point_to_camera_ray(glm::fvec2 image_point
+    ) const {
         // Undistort the image point to uv coordinate. Newton method is more
         // accurate than iterative method, but slower.
         // auto uv = compute_undistortion_iterative(image_point);
@@ -780,7 +789,8 @@ struct OpenCVPinholeCameraModel
 #define PI 3.14159265358979323846f
 
 // solve 1 + ax + bx^2 + cx^3 = 0
-inline __host__ __device__ float compute_opencv_fisheye_max_angle(float a, float b, float c) {
+inline __host__ __device__ float
+compute_opencv_fisheye_max_angle(float a, float b, float c) {
     const float INF = std::numeric_limits<float>::max();
 
     if (c == 0.0f) {
@@ -856,7 +866,7 @@ struct OpenCVFisheyeCameraModel
         // initialize ninth-degree odd-only forward polynomial (mapping angles
         // to normalized distances) theta + k1*theta^3 + k2*theta^5 + k3*theta^7
         // + k4*theta^9
-        auto const& [k1, k2, k3, k4] = parameters.radial_coeffs;
+        auto const &[k1, k2, k3, k4] = parameters.radial_coeffs;
         forward_poly_odd = {1.f, k1, k2, k3, k4};
 
         // eighth-degree differential of forward polynomial 1 + 3*k1*theta^2 +
@@ -869,18 +879,19 @@ struct OpenCVFisheyeCameraModel
         auto const max_diag_y =
             max(parameters.resolution[1] - parameters.principal_point[1],
                 parameters.principal_point[1]);
-        auto const max_radius_pixels = std::sqrt(
-            max_diag_x * max_diag_x + max_diag_y * max_diag_y
-        );
+        auto const max_radius_pixels =
+            std::sqrt(max_diag_x * max_diag_x + max_diag_y * max_diag_y);
 
         if (k4 == 0) {
-            max_angle = std::sqrt(compute_opencv_fisheye_max_angle(
-                3.f * k1, 5.f * k2, 7.f * k3
-            ));    
+            max_angle = std::sqrt(
+                compute_opencv_fisheye_max_angle(3.f * k1, 5.f * k2, 7.f * k3)
+            );
         } else {
-            std::array<float, 4> ddforward_poly_odd = {6 * k1, 20 * k2, 56 * k3, 72 * k4};
+            std::array<float, 4> ddforward_poly_odd = {
+                6 * k1, 20 * k2, 56 * k3, 72 * k4
+            };
             std::array<float, 1> approx = {1.57f};
-            
+
             bool converged = false;
             max_angle = eval_poly_inverse_horner_newton<N_NEWTON_ITERATIONS>(
                 PolynomialProxy<PolynomialType::EVEN, 5>{dforward_poly_even},
@@ -894,13 +905,10 @@ struct OpenCVFisheyeCameraModel
             }
         }
 
-        max_angle = min(
-            max_angle,
-            max(
-                max_radius_pixels / parameters.focal_length[0],
-                max_radius_pixels / parameters.focal_length[1]
-            )
-        );
+        max_angle =
+            min(max_angle,
+                max(max_radius_pixels / parameters.focal_length[0],
+                    max_radius_pixels / parameters.focal_length[1]));
 
         // approximate backward poly (mapping normalized distances to angles)
         // *very crudely* by linear interpolation / equidistant angle model
@@ -963,10 +971,12 @@ struct OpenCVFisheyeCameraModel
         };
 
         // auto point = glm::fvec2{
-        //     cam_ray.x / cam_ray.z, // * parameters.focal_length[0] + parameters.principal_point[0], 
-        //     cam_ray.y / cam_ray.z // * parameters.focal_length[1] + parameters.principal_point[1]
+        //     cam_ray.x / cam_ray.z, // * parameters.focal_length[0] +
+        //     parameters.principal_point[0], cam_ray.y / cam_ray.z // *
+        //     parameters.focal_length[1] + parameters.principal_point[1]
         // };
-        // printf("point: %f, %f; theta_full: %f, theta: %f, delta: %f, max_angle: %f, image_point: %f, %f, cam_ray: %f, %f, %f\n",
+        // printf("point: %f, %f; theta_full: %f, theta: %f, delta: %f,
+        // max_angle: %f, image_point: %f, %f, cam_ray: %f, %f, %f\n",
         //     point.x, point.y, theta_full, theta, delta,
         //     max_angle, image_point.x, image_point.y,
         //     cam_ray.x, cam_ray.y, cam_ray.z
@@ -987,8 +997,8 @@ struct OpenCVFisheyeCameraModel
         return {image_point, valid};
     }
 
-    inline __device__ CameraRay
-    image_point_to_camera_ray(glm::fvec2 image_point) const {
+    inline __device__ CameraRay image_point_to_camera_ray(glm::fvec2 image_point
+    ) const {
         // Normalize the image point coordinates
         auto const uv =
             (image_point -
@@ -1189,7 +1199,8 @@ world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
     // printf("image_covariance: %f, %f; %f, %f\n",
     //        image_covariance[0][0], image_covariance[0][1],
     //        image_covariance[1][0], image_covariance[1][1]);
-    // printf("det(image_covariance): %f\n", glm::determinant(image_covariance));
+    // printf("det(image_covariance): %f\n",
+    // glm::determinant(image_covariance));
 
     return {image_mean, image_covariance, valid};
 }

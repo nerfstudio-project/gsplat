@@ -72,7 +72,7 @@ viewmats_rs = viewmats.clone()
 #     means,
 #     quats,
 #     scales,
-#     opacities, 
+#     opacities,
 #     colors,
 #     viewmats,
 #     Ks,
@@ -83,6 +83,7 @@ viewmats_rs = viewmats.clone()
 #     with_ut=True,
 #     with_eval3d=True,
 # )
+
 
 def opencv_lens_distortion_fisheye(
     uv: Tensor, params: Tensor, eps: float = 1e-10
@@ -104,14 +105,10 @@ def opencv_lens_distortion_fisheye(
     r = torch.sqrt(u * u + v * v)
     theta = torch.atan(r)
     theta_d = theta * (
-        1
-        + k1 * theta**2
-        + k2 * theta**4
-        + k3 * theta**6
-        + k4 * theta**8
+        1 + k1 * theta**2 + k2 * theta**4 + k3 * theta**6 + k4 * theta**8
     )
     scale = theta_d / torch.clamp(r, min=eps)
-    print ("theta", theta, " theta_d", theta_d, "scale", scale)
+    print("theta", theta, " theta_d", theta_d, "scale", scale)
     return uv * scale[..., None]
 
 
@@ -152,14 +149,13 @@ def opencv_lens_distortion(
     r2 = u * u + v * v
     r4 = r2**2
     r6 = r4 * r2
-    ratial = (1 + k1 * r2 + k2 * r4 + k3 * r6) / (
-        1 + k4 * r2 + k5 * r4 + k6 * r6
-    )
+    ratial = (1 + k1 * r2 + k2 * r4 + k3 * r6) / (1 + k4 * r2 + k5 * r4 + k6 * r6)
     if ratial < 0:
-        print ("Warning: negative radial distortion factor")
+        print("Warning: negative radial distortion factor")
     fx = 2 * p1 * u * v + p2 * (r2 + 2 * u * u) + s1 * r2 + s2 * r4
     fy = 2 * p2 * u * v + p1 * (r2 + 2 * v * v) + s3 * r2 + s4 * r4
     return torch.stack([u * ratial + fx, v * ratial + fy], dim=-1)
+
 
 # converged: 1, iter: 7, xd: -0.654764, yd: -0.433112, x: 1.133525, y: 0.749801
 uv = torch.tensor([[1.133525, 0.749801]])
@@ -204,16 +200,15 @@ print(opencv_lens_distortion(uv, radial_coeffs))
 # print ("uvND", uv_prime[:5])
 
 
-
 id = 106767
 
 # scales[id:id+1, -1] *=4
 render_colors, render_alphas, info = rasterization(
-    means[id:id+1],
-    quats[id:id+1],
-    scales[id:id+1],
-    opacities[id:id+1] * 0 + 1,
-    colors[:, id:id+1],
+    means[id : id + 1],
+    quats[id : id + 1],
+    scales[id : id + 1],
+    opacities[id : id + 1] * 0 + 1,
+    colors[:, id : id + 1],
     viewmats,
     Ks,
     width,
@@ -222,7 +217,7 @@ render_colors, render_alphas, info = rasterization(
     camera_model="fisheye",
     with_ut=True,
     with_eval3d=False,
-    radial_coeffs=torch.tensor([[-2.5, -2.5, 0., 0.]], device=device),
+    radial_coeffs=torch.tensor([[-2.5, -2.5, 0.0, 0.0]], device=device),
     tangential_coeffs=None,
     thin_prism_coeffs=None,
     rolling_shutter=RollingShutterType.GLOBAL,
@@ -230,11 +225,13 @@ render_colors, render_alphas, info = rasterization(
 )
 radii = info["radii"]
 
-print (torch.where(radii == radii.max()))
+print(torch.where(radii == radii.max()))
 
-canvas = np.vstack([
-    (render_colors[0].cpu().numpy() * 255).astype(np.uint8),
-])
-print (canvas.shape)
+canvas = np.vstack(
+    [
+        (render_colors[0].cpu().numpy() * 255).astype(np.uint8),
+    ]
+)
+print(canvas.shape)
 
 imageio.imsave("results/render.jpg", canvas)

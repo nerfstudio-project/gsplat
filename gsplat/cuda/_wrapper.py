@@ -645,7 +645,7 @@ def rasterize_to_pixels_eval3d(
 
     Similar to `rasterize_to_pixels()`, but compute the Gaussian responses in the
     3D world space instead of the 2D image space. Supports rolling shutter and
-    camera distortion. 
+    camera distortion.
 
     Returns:
         A tuple:
@@ -1400,13 +1400,13 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             v_render_alphas.contiguous(),
         )
 
-        if ctx.needs_input_grad[5]: # backgrounds
+        if ctx.needs_input_grad[5]:  # backgrounds
             v_backgrounds = (v_render_colors * (1.0 - render_alphas).float()).sum(
                 dim=(1, 2)
             )
         else:
             v_backgrounds = None
-            
+
         if ctx.needs_input_grad[7]:  # viewmats
             raise NotImplementedError
 

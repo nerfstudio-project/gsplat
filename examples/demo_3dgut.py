@@ -108,9 +108,9 @@ def main(local_rank: int, world_rank, world_size: int, args):
     else:
         means, quats, scales, opacities, sh0, shN = [], [], [], [], [], []
         for ckpt_path in args.ckpt:
-            ckpt = torch.load(
-                ckpt_path, map_location=device, weights_only=True
-            )["splats"]
+            ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)[
+                "splats"
+            ]
             means.append(ckpt["means"])
             quats.append(F.normalize(ckpt["quats"], p=2, dim=-1))
             scales.append(torch.exp(ckpt["scales"]))
@@ -177,34 +177,40 @@ def main(local_rank: int, world_rank, world_size: int, args):
             rasterization_fn = rasterization_inria_wrapper
         else:
             raise ValueError
-        
+
         if gui_ckeckbox_3dgut.value:
             radial_coeffs = torch.tensor(
-                [[
-                    gui_slider_radial_coeffs1.value,  # k1
-                    gui_slider_radial_coeffs2.value,  # k2
-                    0.,
-                    0.,
-                    0.,
-                    0.,
-                ]],
-                device=device
+                [
+                    [
+                        gui_slider_radial_coeffs1.value,  # k1
+                        gui_slider_radial_coeffs2.value,  # k2
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                    ]
+                ],
+                device=device,
             )
             tangential_coeffs = torch.tensor(
-                [[
-                    gui_slider_tangential_coeffs1.value,  # p1
-                    gui_slider_tangential_coeffs2.value,  # p2
-                ]],
-                device=device
+                [
+                    [
+                        gui_slider_tangential_coeffs1.value,  # p1
+                        gui_slider_tangential_coeffs2.value,  # p2
+                    ]
+                ],
+                device=device,
             )
             thin_prism_coeffs = torch.tensor(
-                [[
-                    gui_slider_thin_prism_coeffs1.value,  # s1
-                    gui_slider_thin_prism_coeffs2.value,  # s2
-                    0.,  # s3
-                    0.,  # s4
-                ]],
-                device=device
+                [
+                    [
+                        gui_slider_thin_prism_coeffs1.value,  # s1
+                        gui_slider_thin_prism_coeffs2.value,  # s2
+                        0.0,  # s3
+                        0.0,  # s4
+                    ]
+                ],
+                device=device,
             )
         else:
             radial_coeffs = None
@@ -263,7 +269,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
     gui_slider_thin_prism_coeffs2 = server.gui.add_slider(
         "thin prism coeffs: s2", min=-1.0, max=1.0, step=0.01, initial_value=0
     )
-    
+
     @gui_ckeckbox_3dgut.on_update
     @gui_dropdown_camera_type.on_update
     @gui_slider_radial_coeffs1.on_update
@@ -274,7 +280,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
     @gui_slider_thin_prism_coeffs2.on_update
     def _(event: viser.GuiEvent) -> None:
         viewer.rerender(None)
-        
+
     viewer = nerfview.Viewer(
         server=server,
         render_fn=viewer_render_fn,

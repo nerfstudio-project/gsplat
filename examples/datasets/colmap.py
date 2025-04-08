@@ -375,7 +375,7 @@ class Dataset:
         K = self.parser.Ks_dict[camera_id].copy()
         params = self.parser.params_dict[camera_id]
         camtoworlds = self.parser.camtoworlds[index]
-        mask = self.parser.mask_dict[camera_id] # maybe none
+        mask = self.parser.mask_dict[camera_id]  # maybe none
 
         if self.parser.perfect_camera and len(params) > 0:
             # Images are distorted. Undistort them.
@@ -388,7 +388,7 @@ class Dataset:
             image = image[y : y + h, x : x + w]
             # Set params to zero as everything is undistorted to a perfect camera.
             params = np.zeros_like(params)
-            
+
         if self.patch_size is not None:
             # Random crop.
             h, w = image.shape[:2]
