@@ -36,7 +36,7 @@ from gsplat.distributed import cli
 from gsplat.optimizers import SelectiveAdam
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
-from gsplat.exporter import export_gaussian_splats
+from gsplat import export_splats
 
 
 @dataclass
@@ -759,7 +759,7 @@ class Runner:
                     sh0 = self.splats["sh0"]
                     shN = self.splats["shN"]
 
-                    splats_bytes = export_gaussian_splats(
+                    export_splats(
                         means=means,
                         scales=scales,
                         quats=quats,
@@ -767,11 +767,8 @@ class Runner:
                         sh0=sh0,
                         shN=shN,
                         format="ply",
+                        save_to=f"{self.ply_dir}/point_cloud_{step}.ply",
                     )
-                    with open(
-                        f"{self.ply_dir}/point_cloud_{step}.ply", "wb"
-                    ) as binary_file:
-                        binary_file.write(splats_bytes)
 
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:

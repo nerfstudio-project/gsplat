@@ -1,7 +1,7 @@
 import math
 import struct
 from io import BytesIO
-from typing import Literal
+from typing import Literal, Optional
 
 import torch
 
@@ -450,7 +450,7 @@ def splat2splat_bytes(
     return buffer.getvalue()
 
 
-def export_gaussian_splats(
+def export_splats(
     means: torch.Tensor,
     scales: torch.Tensor,
     quats: torch.Tensor,
@@ -458,19 +458,13 @@ def export_gaussian_splats(
     sh0: torch.Tensor,
     shN: torch.Tensor,
     format: Literal["ply", "splat", "ply_compressed"] = "ply",
+    save_to: Optional[str] = None,
 ) -> bytes:
     """Export a Gaussian Splats model to bytes.
     The three supported formats are:
     - ply: A standard PLY file format. Supported by most viewers.
     - splat: A custom Splat file format. Supported by antimatter15 viewer.
     - ply_compressed: A compressed PLY file format. Used by Supersplat viewer.
-
-    The bytes obtained can be written to file like this:
-    splats_bytes = export_gaussian_splats(means, scales, quats, opacities, sh0, shN)
-    with open("file.ply", "wb") as binary_file:
-        binary_file.write(splats_bytes)
-
-    Save to file.splat instead of file.ply if using the splat format.
 
     Args:
         means (torch.Tensor): Splat means. Shape (N, 3)
@@ -480,6 +474,7 @@ def export_gaussian_splats(
         sh0 (torch.Tensor): Spherical harmonics. Shape (N, 1, 3)
         shN (torch.Tensor): Spherical harmonics. Shape (N, K, 3)
         format (str): Export format. Options: "ply", "splat", "ply_compressed". Default: "ply"
+        save_to (str): Output file path. If provided, the bytes will be written to file.
     """
     total_splats = means.shape[0]
     assert means.shape == (total_splats, 3), "Means must be of shape (N, 3)"
@@ -528,5 +523,9 @@ def export_gaussian_splats(
         data = splat2ply_bytes_compressed(means, scales, quats, opacities, sh0, shN)
     else:
         raise ValueError(f"Unsupported format: {format}")
+
+    if save_to:
+        with open(save_to, "wb") as binary_file:
+            binary_file.write(data)
 
     return data

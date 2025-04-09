@@ -18,6 +18,7 @@ from .cuda._wrapper import (
     world_to_cam,
 )
 from .optimizers import SelectiveAdam
+from .exporter import export_splats
 from .rendering import (
     rasterization,
     rasterization_2dgs,
