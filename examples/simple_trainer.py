@@ -36,7 +36,7 @@ from gsplat.distributed import cli
 from gsplat.optimizers import SelectiveAdam
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
-from gsplat.utils import save_ply
+from gsplat.exporter import export_gaussian_splats
 
 
 @dataclass
@@ -743,19 +743,35 @@ class Runner:
             if (
                 step in [i - 1 for i in cfg.ply_steps] or step == max_steps - 1
             ) and cfg.save_ply:
-                rgb = None
-                if self.cfg.app_opt:
-                    # eval at origin to bake the appeareance into the colors
-                    rgb = self.app_module(
-                        features=self.splats["features"],
-                        embed_ids=None,
-                        dirs=torch.zeros_like(self.splats["means"][None, :, :]),
-                        sh_degree=sh_degree_to_use,
-                    )
-                    rgb = rgb + self.splats["colors"]
-                    rgb = torch.sigmoid(rgb).squeeze(0)
 
-                save_ply(self.splats, f"{self.ply_dir}/point_cloud_{step}.ply", rgb)
+                if self.cfg.app_opt:
+                    import warnings
+
+                    warnings.warn(
+                        "Saving PLY with appearance optimization is not supported yet.",
+                        UserWarning,
+                    )
+                else:
+                    means = self.splats["means"]
+                    scales = self.splats["scales"]
+                    quats = self.splats["quats"]
+                    opacities = self.splats["opacities"]
+                    sh0 = self.splats["sh0"]
+                    shN = self.splats["shN"]
+
+                    splats_bytes = export_gaussian_splats(
+                        means=means,
+                        scales=scales,
+                        quats=quats,
+                        opacities=opacities,
+                        sh0=sh0,
+                        shN=shN,
+                        format="ply",
+                    )
+                    with open(
+                        f"{self.ply_dir}/point_cloud_{step}.ply", "wb"
+                    ) as binary_file:
+                        binary_file.write(splats_bytes)
 
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:

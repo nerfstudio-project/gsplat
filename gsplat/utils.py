@@ -1,13 +1,20 @@
 import math
 import struct
+import warnings
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import Tensor
-import numpy as np
 
 
 def save_ply(splats: torch.nn.ParameterDict, dir: str, colors: torch.Tensor = None):
+    warnings.warn(
+        "save_ply() is deprecated and may be removed in a future release. "
+        "Please use the new export_gaussian_splats() function instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     # Convert all tensors to numpy arrays in one go
     print(f"Saving ply to {dir}")
     numpy_data = {k: v.detach().cpu().numpy() for k, v in splats.items()}
