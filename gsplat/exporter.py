@@ -487,10 +487,12 @@ def export_gaussian_splats(
     assert quats.shape == (total_splats, 4), "Quaternions must be of shape (N, 4)"
     assert opacities.shape == (total_splats,), "Opacities must be of shape (N,)"
     assert sh0.shape == (total_splats, 1, 3), "sh0 must be of shape (N, 1, 3)"
-    assert shN.shape == (total_splats, None, 3), "shN must be of shape (N, K, 3)"
+    assert (
+        shN.ndim == 3 and shN.shape[0] == total_splats and shN.shape[2] == 3
+    ), f"shN must be of shape (N, K, 3), got {shN.shape}"
 
     # Reshape spherical harmonics
-    sh0 = sh0.transpose(0, 2, 1).reshape(means.shape[0], -1)  # Shape (N, 3)
+    sh0 = sh0.squeeze(1)  # Shape (N, 3)
     shN = shN.transpose(0, 2, 1).reshape(means.shape[0], -1)  # Shape (N, K * 3)
 
     # Check for NaN or Inf values
