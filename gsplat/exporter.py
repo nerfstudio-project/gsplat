@@ -488,7 +488,7 @@ def export_splats(
 
     # Reshape spherical harmonics
     sh0 = sh0.squeeze(1)  # Shape (N, 3)
-    shN = shN.transpose(0, 2, 1).reshape(means.shape[0], -1)  # Shape (N, K * 3)
+    shN = shN.permute(0, 2, 1).reshape(means.shape[0], -1)  # Shape (N, K * 3)
 
     # Check for NaN or Inf values
     invalid_mask = (

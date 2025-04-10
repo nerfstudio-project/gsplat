@@ -31,12 +31,12 @@ from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from typing_extensions import Literal, assert_never
 from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
 
+from gsplat import export_splats
 from gsplat.compression import PngCompression
 from gsplat.distributed import cli
 from gsplat.optimizers import SelectiveAdam
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
-from gsplat import export_splats
 
 
 @dataclass
@@ -745,30 +745,35 @@ class Runner:
             ) and cfg.save_ply:
 
                 if self.cfg.app_opt:
-                    import warnings
-
-                    warnings.warn(
-                        "Saving PLY with appearance optimization is not supported yet.",
-                        UserWarning,
+                    # eval at origin to bake the appeareance into the colors
+                    rgb = self.app_module(
+                        features=self.splats["features"],
+                        embed_ids=None,
+                        dirs=torch.zeros_like(self.splats["means"][None, :, :]),
+                        sh_degree=sh_degree_to_use,
                     )
+                    rgb = rgb + self.splats["colors"]
+                    rgb = torch.sigmoid(rgb).squeeze(0).unsqueeze(1)
+                    sh0 = rgb_to_sh(rgb)
+                    shN = torch.empty([sh0.shape[0], 0, 3], device=sh0.device)
                 else:
-                    means = self.splats["means"]
-                    scales = self.splats["scales"]
-                    quats = self.splats["quats"]
-                    opacities = self.splats["opacities"]
                     sh0 = self.splats["sh0"]
                     shN = self.splats["shN"]
 
-                    export_splats(
-                        means=means,
-                        scales=scales,
-                        quats=quats,
-                        opacities=opacities,
-                        sh0=sh0,
-                        shN=shN,
-                        format="ply",
-                        save_to=f"{self.ply_dir}/point_cloud_{step}.ply",
-                    )
+                means = self.splats["means"]
+                scales = self.splats["scales"]
+                quats = self.splats["quats"]
+                opacities = self.splats["opacities"]
+                export_splats(
+                    means=means,
+                    scales=scales,
+                    quats=quats,
+                    opacities=opacities,
+                    sh0=sh0,
+                    shN=shN,
+                    format="ply",
+                    save_to=f"{self.ply_dir}/point_cloud_{step}.ply",
+                )
 
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:

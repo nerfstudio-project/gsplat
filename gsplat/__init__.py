@@ -17,8 +17,8 @@ from .cuda._wrapper import (
     spherical_harmonics,
     world_to_cam,
 )
-from .optimizers import SelectiveAdam
 from .exporter import export_splats
+from .optimizers import SelectiveAdam
 from .rendering import (
     rasterization,
     rasterization_2dgs,
@@ -51,5 +51,6 @@ all = [
     "rasterize_to_indices_in_range_2dgs",
     "accumulate_2dgs",
     "rasterization_2dgs_inria_wrapper",
+    "export_splats",
     "__version__",
 ]
