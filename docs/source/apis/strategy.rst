@@ -61,10 +61,10 @@ that can be used with our strategies:
 .. code-block:: python
 
     N = 100
-    params = torch.nn.ParameterDict{
+    params = torch.nn.ParameterDict({
         "means": Tensor(N, 3), "scales": Tensor(N), "quats": Tensor(N, 4), "opacities": Tensor(N),
         "colors": Tensor(N, 25, 3), "features1": Tensor(N, 128), "features2": Tensor(N, 64),
-    }
+    })
     optimizers = {k: torch.optim.Adam([p], lr=1e-3) for k, p in params.keys()}
 
 Below are the strategies that are currently implemented in `gsplat`:
