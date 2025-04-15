@@ -11,7 +11,6 @@ import os
 import time
 import colorsys
 import json
-import datetime
 from pathlib import Path
 from typing import Callable, Literal, Optional, Tuple, Union, Dict, List
 from jaxtyping import Float32, UInt8
@@ -706,7 +705,7 @@ class Viewer(object):
             )
             self._max_img_res_slider.on_update(self.rerender)
 
-            render_tab_state = RenderTabState(
+            self.render_tab_state = RenderTabState(
                 preview_render=False,
                 preview_fov=0.0,
                 preview_time=0.0,
@@ -716,7 +715,7 @@ class Viewer(object):
 
             fov_degrees = server.gui.add_slider(
                 "Default FOV",
-                initial_value=75.0,
+                initial_value=50.0,
                 min=0.1,
                 max=175.0,
                 step=0.01,
@@ -738,7 +737,7 @@ class Viewer(object):
 
             resolution = server.gui.add_vector2(
                 "Resolution",
-                initial_value=(1920, 1080),
+                initial_value=(1280, 960),
                 min=(50, 50),
                 max=(10_000, 10_000),
                 step=1,
@@ -811,6 +810,20 @@ class Viewer(object):
                     @exit_button.on_click
                     def _(_) -> None:
                         modal.close()
+
+            reset_up_button = server.gui.add_button(
+                "Reset Up Direction",
+                icon=viser.Icon.ARROW_BIG_UP_LINES,
+                color="gray",
+                hint="Set the up direction of the camera orbit controls to the camera's current up direction.",
+            )
+
+            @reset_up_button.on_click
+            def _(event: viser.GuiEvent) -> None:
+                assert event.client is not None
+                event.client.camera.up_direction = vt.SO3(
+                    event.client.camera.wxyz
+                ) @ np.array([0.0, -1.0, 0.0])
 
             loop = server.gui.add_checkbox(
                 "Loop",
@@ -907,8 +920,9 @@ class Viewer(object):
                 pause_button = server.gui.add_button(
                     "Pause", icon=viser.Icon.PLAYER_PAUSE, visible=False
                 )
-                preview_render_button = server.gui.add_button(
+                preview_save_camera_path_button = server.gui.add_button(
                     "Preview Render",
+                    icon=viser.Icon.EYE,
                     hint="Show a preview of the render in the viewport.",
                 )
                 preview_render_stop_button = server.gui.add_button(
@@ -945,6 +959,35 @@ class Viewer(object):
                 camera_path.default_transition_sec = transition_sec_number.value
                 duration_number.value = camera_path.compute_duration()
 
+            trajectory_folder = server.gui.add_folder("Trajectory")
+            with trajectory_folder:
+                # set the initial value to the current date-time string
+                trajectory_name_text = server.gui.add_text(
+                    "Name",
+                    initial_value="default",
+                    hint="Name of the trajectory",
+                )
+
+                # add button for loading existing path
+                load_camera_path_button = server.gui.add_button(
+                    "Load Trajectory",
+                    icon=viser.Icon.FOLDER_OPEN,
+                    hint="Load an existing camera path.",
+                )
+
+                save_camera_path_button = server.gui.add_button(
+                    "Save Trajectory",
+                    icon=viser.Icon.FILE_EXPORT,
+                    hint="Save the current trajectory to a json file.",
+                )
+
+                dump_video_button = server.gui.add_button(
+                    "Dump Video",
+                    color="green",
+                    icon=viser.Icon.PLAYER_PLAY,
+                    hint="Dump the current trajectory as a video.",
+                )
+
         def get_max_frame_index() -> int:
             return max(1, int(framerate_number.value * duration_number.value) - 1)
 
@@ -973,12 +1016,12 @@ class Viewer(object):
             time = None
             if len(maybe_pose_and_fov_rad) == 3:  # Time is enabled.
                 pose, fov_rad, time = maybe_pose_and_fov_rad
-                render_tab_state.preview_time = time
+                self.render_tab_state.preview_time = time
             else:
                 pose, fov_rad = maybe_pose_and_fov_rad
-            render_tab_state.preview_fov = fov_rad
-            render_tab_state.preview_aspect = camera_path.get_aspect()
-            render_tab_state.preview_camera_type = camera_type.value
+            self.render_tab_state.preview_fov = fov_rad
+            self.render_tab_state.preview_aspect = camera_path.get_aspect()
+            self.render_tab_state.preview_camera_type = camera_type.value
 
             if time is not None:
                 return pose, fov_rad, time
@@ -1001,7 +1044,9 @@ class Viewer(object):
                     disabled=get_max_frame_index() == 1,
                 )
                 play_button.disabled = preview_frame_slider.disabled
-                preview_render_button.disabled = preview_frame_slider.disabled
+                preview_save_camera_path_button.disabled = preview_frame_slider.disabled
+                save_camera_path_button.disabled = preview_frame_slider.disabled
+                dump_video_button.disabled = preview_frame_slider.disabled
 
             @preview_frame_slider.on_update
             def _(_) -> None:
@@ -1023,7 +1068,7 @@ class Viewer(object):
                     position=pose.translation(),
                     color=(10, 200, 30),
                 )
-                if render_tab_state.preview_render:
+                if self.render_tab_state.preview_render:
                     for client in server.get_clients().values():
                         client.camera.wxyz = pose.rotation().wxyz
                         client.camera.position = pose.translation()
@@ -1033,11 +1078,12 @@ class Viewer(object):
         # We back up the camera poses before and after we start previewing renders.
         camera_pose_backup_from_id: Dict[int, tuple] = {}
 
-        @preview_render_button.on_click
+        @preview_save_camera_path_button.on_click
         def _(_) -> None:
-            render_tab_state.preview_render = True
-            preview_render_button.visible = False
+            self.render_tab_state.preview_render = True
+            preview_save_camera_path_button.visible = False
             preview_render_stop_button.visible = True
+            dump_video_button.disabled = True
 
             maybe_pose_and_fov_rad = compute_and_update_preview_camera_state()
             if maybe_pose_and_fov_rad is None:
@@ -1064,9 +1110,10 @@ class Viewer(object):
 
         @preview_render_stop_button.on_click
         def _(_) -> None:
-            render_tab_state.preview_render = False
-            preview_render_button.visible = True
+            self.render_tab_state.preview_render = False
+            preview_save_camera_path_button.visible = True
             preview_render_stop_button.visible = False
+            dump_video_button.disabled = False
 
             # Revert camera poses.
             for client in server.get_clients().values():
@@ -1109,6 +1156,7 @@ class Viewer(object):
         def _(_) -> None:
             play_button.visible = False
             pause_button.visible = True
+            dump_video_button.disabled = True
 
             def play() -> None:
                 while not play_button.visible:
@@ -1120,20 +1168,16 @@ class Viewer(object):
                         ) % max_frame
                     time.sleep(1.0 / framerate_number.value)
 
-            threading.Thread(target=play).start()
+            play_thread = threading.Thread(target=play)
+            play_thread.start()
+            play_thread.join()
+            dump_video_button.disabled = False
 
         # Play the camera trajectory when the play button is pressed.
         @pause_button.on_click
         def _(_) -> None:
             play_button.visible = True
             pause_button.visible = False
-
-        # add button for loading existing path
-        load_camera_path_button = server.gui.add_button(
-            "Load Path",
-            icon=viser.Icon.FOLDER_OPEN,
-            hint="Load an existing camera path.",
-        )
 
         @load_camera_path_button.on_click
         def _(event: viser.GuiEvent) -> None:
@@ -1207,9 +1251,12 @@ class Viewer(object):
                         )
 
                         # update the render name
-                        render_name_text.value = json_path.stem
+                        trajectory_name_text.value = json_path.stem
                         camera_path.update_spline()
                         modal.close()
+
+                        # visualize the camera path
+                        server.scene.set_global_visibility(True)
 
                 cancel_button = event.client.gui.add_button("Cancel")
 
@@ -1217,35 +1264,7 @@ class Viewer(object):
                 def _(_) -> None:
                     modal.close()
 
-        # set the initial value to the current date-time string
-        # now = datetime.datetime.now()
-        render_name_text = server.gui.add_text(
-            "Render name",
-            initial_value="default",
-            hint="Name of the render",
-        )
-        render_button = server.gui.add_button(
-            "Generate Command",
-            color="green",
-            icon=viser.Icon.FILE_EXPORT,
-            hint="Generate the ns-render command for rendering the camera path.",
-        )
-
-        reset_up_button = server.gui.add_button(
-            "Reset Up Direction",
-            icon=viser.Icon.ARROW_BIG_UP_LINES,
-            color="gray",
-            hint="Set the up direction of the camera orbit controls to the camera's current up direction.",
-        )
-
-        @reset_up_button.on_click
-        def _(event: viser.GuiEvent) -> None:
-            assert event.client is not None
-            event.client.camera.up_direction = vt.SO3(
-                event.client.camera.wxyz
-            ) @ np.array([0.0, -1.0, 0.0])
-
-        @render_button.on_click
+        @save_camera_path_button.on_click
         def _(event: viser.GuiEvent) -> None:
             assert event.client is not None
             num_frames = int(framerate_number.value * duration_number.value)
@@ -1338,7 +1357,9 @@ class Viewer(object):
             # now write the json file
             try:
                 json_outfile = (
-                    self.datapath / "camera_paths" / f"{render_name_text.value}.json"
+                    self.datapath
+                    / "camera_paths"
+                    / f"{trajectory_name_text.value}.json"
                 )
                 json_outfile.parent.mkdir(parents=True, exist_ok=True)
             except Exception:
@@ -1348,41 +1369,126 @@ class Viewer(object):
                 json_outfile = (
                     self.config_path.parent
                     / "camera_paths"
-                    / f"{render_name_text.value}.json"
+                    / f"{trajectory_name_text.value}.json"
                 )
                 json_outfile.parent.mkdir(parents=True, exist_ok=True)
             with open(json_outfile.absolute(), "w") as outfile:
                 json.dump(json_data, outfile)
 
-            # instead of showing the command, directly render the video
+        @dump_video_button.on_click
+        def _(event: viser.GuiEvent) -> None:
+            client = event.client
+            assert client is not None
 
-            # now show the command
-            # with event.client.gui.add_modal("Render Command") as modal:
-            #     dataname = self.datapath.name
-            #     command = " ".join(
-            #         [
-            #             "ns-render camera-path",
-            #             f"--load-config {self.config_path}",
-            #             f"--camera-path-filename {json_outfile.absolute()}",
-            #             f"--output-path renders/{dataname}/{render_name_text.value}.mp4",
-            #         ]
-            #     )
-            #     event.client.gui.add_markdown(
-            #         "\n".join(
-            #             [
-            #                 "To render the trajectory, run the following from the command line:",
-            #                 "",
-            #                 "```",
-            #                 command,
-            #                 "```",
-            #             ]
-            #         )
-            #     )
-            #     close_button = event.client.gui.add_button("Close")
+            # disable all the trajectory control widgets
+            add_button.disabled = True
+            clear_keyframes_button.disabled = True
+            reset_up_button.disabled = True
+            play_button.disabled = True
+            pause_button.disabled = True
+            save_camera_path_button.disabled = True
+            load_camera_path_button.disabled = True
+            framerate_number.disabled = True
+            duration_number.disabled = True
+            tension_slider.disabled = True
+            fov_degrees.disabled = True
+            transition_sec_number.disabled = True
+            move_checkbox.disabled = True
+            show_keyframe_checkbox.disabled = True
+            show_spline_checkbox.disabled = True
+            resolution.disabled = True
+            preview_save_camera_path_button.disabled = True
+            camera_type.disabled = True
+            preview_frame_slider.disabled = True
+            dump_video_button.disabled = True
 
-            #     @close_button.on_click
-            #     def _(_) -> None:
-            #         modal.close()
+            # enter into preview render mode
+            self.render_tab_state.preview_render = True
+            maybe_pose_and_fov_rad = compute_and_update_preview_camera_state()
+            if maybe_pose_and_fov_rad is None:
+                remove_preview_camera()
+                return
+            if len(maybe_pose_and_fov_rad) == 3:  # Time is enabled.
+                pose, fov, time = maybe_pose_and_fov_rad
+            else:
+                pose, fov = maybe_pose_and_fov_rad
+            del fov
+
+            # Hide all scene nodes when we're previewing the render.
+            server.scene.set_global_visibility(False)
+
+            # Back up and then set camera poses.
+            for client in server.get_clients().values():
+                camera_pose_backup_from_id[client.client_id] = (
+                    client.camera.position,
+                    client.camera.look_at,
+                    client.camera.up_direction,
+                )
+                client.camera.wxyz = pose.rotation().wxyz
+                client.camera.position = pose.translation()
+
+            def dump() -> None:
+                writer = imageio.get_writer(
+                    f"{self.datapath}/videos/traj_{trajectory_name_text.value}.mp4",
+                    fps=framerate_number.value,
+                )
+                max_frame = int(framerate_number.value * duration_number.value)
+                assert max_frame > 0 and preview_frame_slider is not None
+                preview_frame_slider.value = 0
+                for _ in range(max_frame):
+                    preview_frame_slider.value = (
+                        preview_frame_slider.value + 1
+                    ) % max_frame
+                    image = client.camera.get_render(
+                        height=resolution.value[1], width=resolution.value[0]
+                    )
+                    writer.append_data(image)
+                writer.close()
+                print(f"Video saved to videos/traj_{trajectory_name_text.value}.mp4")
+
+            dump_thread = threading.Thread(target=dump)
+            dump_thread.start()
+            dump_thread.join()
+
+            # enable all the trajectory control widgets
+            add_button.disabled = False
+            clear_keyframes_button.disabled = False
+            reset_up_button.disabled = False
+            play_button.disabled = False
+            pause_button.disabled = False
+            save_camera_path_button.disabled = False
+            load_camera_path_button.disabled = False
+            framerate_number.disabled = False
+            duration_number.disabled = False
+            tension_slider.disabled = False
+            fov_degrees.disabled = False
+            transition_sec_number.disabled = False
+            move_checkbox.disabled = False
+            show_keyframe_checkbox.disabled = False
+            show_spline_checkbox.disabled = False
+            resolution.disabled = False
+            preview_save_camera_path_button.disabled = False
+            camera_type.disabled = False
+            preview_frame_slider.disabled = False
+            dump_video_button.disabled = False
+
+            # exit preview render mode
+            self.render_tab_state.preview_render = False
+
+            # Revert camera poses.
+            for client in server.get_clients().values():
+                if client.client_id not in camera_pose_backup_from_id:
+                    continue
+                cam_position, cam_look_at, cam_up = camera_pose_backup_from_id.pop(
+                    client.client_id
+                )
+                client.camera.position = cam_position
+                client.camera.look_at = cam_look_at
+                client.camera.up_direction = cam_up
+                client.flush()
+
+            # Un-hide scene nodes.
+            server.scene.set_global_visibility(True)
 
         camera_path = CameraPath(server, duration_number)
         camera_path.tension = tension_slider.value
