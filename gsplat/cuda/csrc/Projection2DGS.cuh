@@ -33,24 +33,14 @@ inline __device__ void compute_ray_transforms_aabb_vjp(
         const float dpy_dT10 = f * ray_transforms[6];
         const float dpy_dT11 = f * ray_transforms[7];
         const float dpy_dT12 = -f * ray_transforms[8];
-        const float dpx_dT30 =
-            ray_transforms[0] *
-            (f - 2 * f * f * ray_transforms[6] * ray_transforms[6]);
-        const float dpx_dT31 =
-            ray_transforms[1] *
-            (f - 2 * f * f * ray_transforms[7] * ray_transforms[7]);
-        const float dpx_dT32 =
-            -ray_transforms[2] *
-            (f + 2 * f * f * ray_transforms[8] * ray_transforms[8]);
-        const float dpy_dT30 =
-            ray_transforms[3] *
-            (f - 2 * f * f * ray_transforms[6] * ray_transforms[6]);
-        const float dpy_dT31 =
-            ray_transforms[4] *
-            (f - 2 * f * f * ray_transforms[7] * ray_transforms[7]);
-        const float dpy_dT32 =
-            -ray_transforms[5] *
-            (f + 2 * f * f * ray_transforms[8] * ray_transforms[8]);
+        const float dpx_dd = -f * f * (ray_transforms[0] * ray_transforms[6] + ray_transforms[1] * ray_transforms[7] - ray_transforms[2] * ray_transforms[8]);
+        const float dpx_dT30 = ray_transforms[0] * f + 2 * dpx_dd * ray_transforms[6];
+        const float dpx_dT31 = ray_transforms[1] * f + 2 * dpx_dd * ray_transforms[7];
+        const float dpx_dT32 = -ray_transforms[2] * f - 2 * dpx_dd * ray_transforms[8];
+        const float dpy_dd = -f * f * (ray_transforms[3] * ray_transforms[6] + ray_transforms[4] * ray_transforms[7] - ray_transforms[5] * ray_transforms[8]);
+        const float dpy_dT30 = ray_transforms[3] * f + 2 * dpy_dd * ray_transforms[6];
+        const float dpy_dT31 = ray_transforms[4] * f + 2 * dpy_dd * ray_transforms[7];
+        const float dpy_dT32 = -ray_transforms[5] * f - 2 * dpy_dd * ray_transforms[8];
 
         _v_ray_transforms[0][0] += v_means2d[0] * dpx_dT00;
         _v_ray_transforms[0][1] += v_means2d[0] * dpx_dT01;
