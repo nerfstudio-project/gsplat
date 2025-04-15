@@ -378,7 +378,11 @@ def _isect_tiles(
         index = cam_id * N + gauss_id
         curr_idx = cum_tiles_per_gauss[index - 1] if index > 0 else 0
 
-        depth_id = struct.unpack("i", struct.pack("f", depths[cam_id, gauss_id]))[0]
+        # Reinterpret float bits as int32 (preserving bit pattern)
+        depth_f32 = depths[cam_id, gauss_id]
+        depth_id = struct.unpack("i", struct.pack("f", depth_f32))[0]
+        # Store in a 64-bit int, zero-extending to lower 32 bits
+        depth_id = int(depth_id) & 0xFFFFFFFF  # Ensures upper 32 bits are zero
 
         tile_min = tile_mins[cam_id, gauss_id]
         tile_max = tile_maxs[cam_id, gauss_id]
