@@ -3,6 +3,7 @@ import struct
 from io import BytesIO
 from typing import Literal, Optional
 
+import numpy as np
 import torch
 
 
@@ -342,12 +343,14 @@ def splat2ply_bytes_compressed(
         shN_chunk_quantized = shN_chunk_quantized.to(torch.uint8)
         sh_data.extend([shN_chunk_quantized.ravel()])
 
-    chunk_data = torch.cat(chunk_data)
-    splat_data = torch.cat(splat_data)
-    sh_data = torch.cat(sh_data)
-    buffer.write(struct.pack("<" + "f" * chunk_data.shape[0], *chunk_data.tolist()))
-    buffer.write(struct.pack("<" + "I" * splat_data.shape[0], *splat_data.tolist()))
-    buffer.write(struct.pack("<" + "B" * sh_data.shape[0], *sh_data.tolist()))
+    float_dtype = np.dtype(np.float32).newbyteorder('<')
+    uint32_dtype = np.dtype(np.uint32).newbyteorder('<')
+    uint8_dtype = np.dtype(np.uint8)
+
+    buffer.write(torch.cat(chunk_data).detach().cpu().numpy().astype(float_dtype).tobytes())
+    buffer.write(torch.cat(splat_data).detach().cpu().numpy().astype(uint32_dtype).tobytes())
+    buffer.write(torch.cat(sh_data).detach().cpu().numpy().astype(uint8_dtype).tobytes())
+
     return buffer.getvalue()
 
 
@@ -402,7 +405,9 @@ def splat2ply_bytes(
     splat_data = splat_data.to(torch.float32)
 
     # Write binary data
-    buffer.write(splat_data.detach().cpu().numpy().astype('float32').tobytes())
+    float_dtype = np.dtype(np.float32).newbyteorder('<')
+    buffer.write(splat_data.detach().cpu().numpy().astype(float_dtype).tobytes())
+
     return buffer.getvalue()
 
 
@@ -426,26 +431,39 @@ def splat2splat_bytes(
         bytes: Binary Splat file representing the model.
     """
 
+    # Preprocess
     scales = torch.exp(scales)
     sh0_color = sh2rgb(sh0)
     colors = torch.cat(
-        [sh0_color, 1 / (1 + torch.exp(-opacities.unsqueeze(-1)))], dim=1
+        [sh0_color, torch.sigmoid(opacities).unsqueeze(-1)], dim=1
     )
-    colors = torch.clip(colors * 255, 0, 255).to(torch.uint8)
-    rots = torch.clip(
-        (quats / torch.linalg.norm(quats, dim=1, keepdim=True)) * 128 + 128, 0, 255
-    ).to(torch.uint8)
+    colors = (colors * 255).clamp(0, 255).to(torch.uint8)
+
+    rots = (quats / torch.linalg.norm(quats, dim=1, keepdim=True)) * 128 + 128
+    rots = rots.clamp(0, 255).to(torch.uint8)
 
     # Sort splats
     num_splats = means.shape[0]
-    indices = torch.arange(num_splats)
-    indices = sort_centers(means, indices)
+    indices = sort_centers(means, torch.arange(num_splats))
+
+    # Reorder everything
+    means = means[indices]
+    scales = scales[indices]
+    colors = colors[indices]
+    rots = rots[indices]
+
+    float_dtype = np.dtype(np.float32).newbyteorder('<')
+    means_np = means.detach().cpu().numpy().astype(float_dtype)
+    scales_np = scales.detach().cpu().numpy().astype(float_dtype)
+    colors_np = colors.detach().cpu().numpy().astype(np.uint8)
+    rots_np = rots.detach().cpu().numpy().astype(np.uint8)
+
     buffer = BytesIO()
-    for idx in indices:
-        buffer.write(struct.pack("<3f", *means[idx].tolist()))
-        buffer.write(struct.pack("<3f", *scales[idx].tolist()))
-        buffer.write(struct.pack("<4B", *colors[idx].tolist()))
-        buffer.write(struct.pack("<4B", *rots[idx].tolist()))
+    for i in range(num_splats):
+        buffer.write(means_np[i].tobytes())
+        buffer.write(scales_np[i].tobytes())
+        buffer.write(colors_np[i].tobytes())
+        buffer.write(rots_np[i].tobytes())
 
     return buffer.getvalue()
 
