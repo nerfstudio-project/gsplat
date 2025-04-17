@@ -13,7 +13,7 @@ import colorsys
 import json
 from pathlib import Path
 from typing import Callable, Literal, Optional, Tuple, Union, Dict, List
-from jaxtyping import Float32, UInt8
+from jaxtyping import Float32, UInt8, Float
 import dataclasses
 import threading
 from threading import Lock
@@ -22,10 +22,12 @@ from scipy import interpolate
 import splines
 import splines.quaternion
 from rich.console import Console
+import matplotlib
 import imageio
 import tqdm
 import numpy as np
 import torch
+from torch import Tensor
 import torch.nn.functional as F
 
 import viser
@@ -37,6 +39,35 @@ from gsplat.rendering import rasterization
 
 VISER_NERFSTUDIO_SCALE_RATIO: float = 10.0
 CONSOLE = Console(width=120)
+
+Colormaps = Literal["turbo", "viridis", "magma", "inferno", "cividis", "gray"]
+
+
+def apply_float_colormap(
+    image: Float[Tensor, "*bs 1"], colormap: Colormaps = "viridis"
+) -> Float[Tensor, "*bs rgb=3"]:
+    """Copied from nerfstudio/utils/colormaps.py
+    Convert single channel to a color image.
+
+    Args:
+        image: Single channel image.
+        colormap: Colormap for image.
+
+    Returns:
+        Tensor: Colored image with colors in [0, 1]
+    """
+
+    image = torch.nan_to_num(image, 0)
+    if colormap == "gray":
+        return image.repeat(1, 1, 3)
+    image_long = (image * 255).long()
+    image_long_min = torch.min(image_long)
+    image_long_max = torch.max(image_long)
+    assert image_long_min >= 0, f"the min value is {image_long_min}"
+    assert image_long_max <= 255, f"the max value is {image_long_max}"
+    return torch.tensor(matplotlib.colormaps[colormap].colors, device=image.device)[
+        image_long[..., 0]
+    ]
 
 
 @dataclasses.dataclass
@@ -575,7 +606,7 @@ class RenderTabState:
     preview_fov: float
     preview_time: float
     preview_aspect: float
-    preview_camera_type: Literal["Perspective", "Fisheye", "Equirectangular"]
+    preview_camera_model: Literal["pinhole", "ortho", "fisheye"]
 
 
 @dataclasses.dataclass
@@ -710,11 +741,11 @@ class Viewer(object):
                 preview_fov=0.0,
                 preview_time=0.0,
                 preview_aspect=1.0,
-                preview_camera_type="Perspective",
+                preview_camera_model="pinhole",
             )
 
             fov_degrees = server.gui.add_slider(
-                "Default FOV",
+                "FOV",
                 initial_value=50.0,
                 min=0.1,
                 max=175.0,
@@ -749,12 +780,101 @@ class Viewer(object):
                 camera_path.update_aspect(resolution.value[0] / resolution.value[1])
                 compute_and_update_preview_camera_state()
 
-            camera_type = server.gui.add_dropdown(
-                "Camera type",
-                ("Perspective", "Fisheye", "Equirectangular"),
-                initial_value="Perspective",
-                hint="Camera model to render with. This is applied to all keyframes.",
+            self._near_far_plane_slider = server.gui.add_vector2(
+                "Near Far Plane",
+                initial_value=(1e-2, 1e2),
+                min=(1e-3, 1e1),
+                max=(1e1, 1e2),
+                step=1e-3,
+                hint="Near and far plane for rendering.",
             )
+            self._near_far_plane_slider.on_update(self.rerender)
+
+            self._radius_clip_slider = server.gui.add_number(
+                "Radius Clip",
+                initial_value=0.0,
+                min=0.0,
+                max=100.0,
+                step=1.0,
+                hint="2D radius clip for rendering.",
+            )
+            self._radius_clip_slider.on_update(self.rerender)
+
+            self._eps2d_slider = server.gui.add_number(
+                "2D Epsilon",
+                initial_value=0.3,
+                min=0.01,
+                max=1.0,
+                step=0.01,
+                hint="Epsilon added to the egienvalues of projected 2D covariance matrices.",
+            )
+            self._eps2d_slider.on_update(self.rerender)
+
+            self._backgrounds_slider = server.gui.add_vector3(
+                "Background Color",
+                initial_value=(0.0, 0.0, 0.0),
+                min=(-10.0, -10.0, -10.0),
+                max=(10.0, 10.0, 10.0),
+                step=0.1,
+                hint="Background color for rendering.",
+            )
+            self._backgrounds_slider.on_update(self.rerender)
+
+            self._render_mode_dropdown = server.gui.add_dropdown(
+                "Render Mode",
+                ("rgb", "depth(accumulated)", "depth(expected)", "alpha"),
+                initial_value="rgb",
+                hint="Render mode to use.",
+            )
+            self._render_mode_dropdown.on_update(self.rerender)
+
+            self._normalize_disparity_checkbox = server.gui.add_checkbox(
+                "Normalize Disparity",
+                initial_value=False,
+                hint="Normalize depth in disparity space.",
+            )
+            # TODO: fix bug in disparity normalization
+            self._normalize_disparity_checkbox.disabled = True
+            self._normalize_disparity_checkbox.on_update(self.rerender)
+
+            self._normalize_nearfar_checkbox = server.gui.add_checkbox(
+                "Normalize Near/Far",
+                initial_value=False,
+                hint="Normalize depth with near/far plane.",
+            )
+            self._normalize_nearfar_checkbox.on_update(self.rerender)
+
+            self._colormap_dropdown = server.gui.add_dropdown(
+                "Colormap",
+                (
+                    "turbo",
+                    "viridis",
+                    "magma",
+                    "inferno",
+                    "cividis",
+                    "gray",
+                ),
+                initial_value="turbo",
+                hint="Colormap used for rendering depth/alpha.",
+            )
+            self._colormap_dropdown.on_update(self.rerender)
+
+            self._rasterize_mode_dropdown = server.gui.add_dropdown(
+                "Rasterize Mode",
+                ("classic", "antialiased"),
+                initial_value="classic",
+                hint="Rasterize mode to use.",
+            )
+            self._rasterize_mode_dropdown.on_update(self.rerender)
+
+            self._camera_model_dropdown = server.gui.add_dropdown(
+                "Camera Model",
+                ("pinhole", "ortho", "fisheye"),
+                initial_value="pinhole",
+                hint="Camera model to use.",
+            )
+            self._camera_model_dropdown.on_update(self.rerender)
+
             add_button = server.gui.add_button(
                 "Add Keyframe",
                 icon=viser.Icon.PLUS,
@@ -1021,7 +1141,9 @@ class Viewer(object):
                 pose, fov_rad = maybe_pose_and_fov_rad
             self.render_tab_state.preview_fov = fov_rad
             self.render_tab_state.preview_aspect = camera_path.get_aspect()
-            self.render_tab_state.preview_camera_type = camera_type.value
+            self.render_tab_state.preview_camera_model = (
+                self._camera_model_dropdown.value
+            )
 
             if time is not None:
                 return pose, fov_rad, time
@@ -1274,7 +1396,7 @@ class Viewer(object):
             #     matrix : flattened 4x4 matrix
             #     fov: float in degrees
             #     aspect: float
-            # camera_type: string of camera type
+            # camera_model: string of camera model
             # render_height: int
             # render_width: int
             # fps: int
@@ -1307,7 +1429,8 @@ class Viewer(object):
             json_data["default_fov"] = fov_degrees.value
             json_data["default_transition_sec"] = transition_sec_number.value
             json_data["keyframes"] = keyframes
-            json_data["camera_type"] = camera_type.value.lower()
+            # TODO: seperate rendering json and camera path json?
+            json_data["camera_model"] = self._camera_model_dropdown.value.lower()
             json_data["render_height"] = resolution.value[1]
             json_data["render_width"] = resolution.value[0]
             json_data["fps"] = framerate_number.value
@@ -1398,9 +1521,18 @@ class Viewer(object):
             show_spline_checkbox.disabled = True
             resolution.disabled = True
             preview_save_camera_path_button.disabled = True
-            camera_type.disabled = True
             preview_frame_slider.disabled = True
             dump_video_button.disabled = True
+            self._near_far_plane_slider.disabled = True
+            self._radius_clip_slider.disabled = True
+            self._eps2d_slider.disabled = True
+            self._backgrounds_slider.disabled = True
+            self._render_mode_dropdown.disabled = True
+            self._normalize_disparity_checkbox.disabled = True
+            self._normalize_nearfar_checkbox.disabled = True
+            self._colormap_dropdown.disabled = True
+            self._rasterize_mode_dropdown.disabled = True
+            self._camera_model_dropdown.disabled = True
 
             # enter into preview render mode
             self.render_tab_state.preview_render = True
@@ -1450,7 +1582,7 @@ class Viewer(object):
             dump_thread.start()
             dump_thread.join()
 
-            # enable all the trajectory control widgets
+            # enable all the trajectory/rendering control widgets
             add_button.disabled = False
             clear_keyframes_button.disabled = False
             reset_up_button.disabled = False
@@ -1468,9 +1600,18 @@ class Viewer(object):
             show_spline_checkbox.disabled = False
             resolution.disabled = False
             preview_save_camera_path_button.disabled = False
-            camera_type.disabled = False
             preview_frame_slider.disabled = False
             dump_video_button.disabled = False
+            self._near_far_plane_slider.disabled = False
+            self._radius_clip_slider.disabled = False
+            self._eps2d_slider.disabled = False
+            self._backgrounds_slider.disabled = False
+            self._render_mode_dropdown.disabled = False
+            self._normalize_disparity_checkbox.disabled = False
+            self._normalize_nearfar_checkbox.disabled = False
+            self._colormap_dropdown.disabled = False
+            self._rasterize_mode_dropdown.disabled = False
+            self._camera_model_dropdown.disabled = False
 
             # exit preview render mode
             self.render_tab_state.preview_render = False
@@ -1598,6 +1739,22 @@ class Viewer(object):
                 Step: {self._step}\\
                 Training Completed!
                 </sub>"""
+
+    def get_rendering_args(self):
+        # get the rendering args from the rendering panel
+        return {
+            "near_plane": self._near_far_plane_slider.value[0],
+            "far_plane": self._near_far_plane_slider.value[1],
+            "radius_clip": self._radius_clip_slider.value,
+            "eps2d": self._eps2d_slider.value,
+            "backgrounds": self._backgrounds_slider.value,
+            "render_mode": self._render_mode_dropdown.value,
+            "rasterize_mode": self._rasterize_mode_dropdown.value,
+            "camera_model": self._camera_model_dropdown.value,
+            "normalize_disparity": self._normalize_disparity_checkbox.value,
+            "normalize_nearfar": self._normalize_nearfar_checkbox.value,
+            "colormap": self._colormap_dropdown.value,
+        }
 
 
 def main(local_rank: int, world_rank, world_size: int, args):
@@ -1735,7 +1892,9 @@ def main(local_rank: int, world_rank, world_size: int, args):
 
     # register and open viewer
     @torch.no_grad()
-    def viewer_render_fn(camera_state: CameraState, img_wh: Tuple[int, int]):
+    def viewer_render_fn(
+        camera_state: CameraState, img_wh: Tuple[int, int], viewer_args: Dict
+    ):
         width, height = img_wh
         c2w = camera_state.c2w
         K = camera_state.get_K(img_wh)
@@ -1752,6 +1911,22 @@ def main(local_rank: int, world_rank, world_size: int, args):
         else:
             raise ValueError
 
+        # convert viewer_args to kwargs
+        kwargs = viewer_args.copy()
+        render_mode_map = {
+            "rgb": "RGB",
+            "depth(accumulated)": "D",
+            "depth(expected)": "ED",
+            "alpha": "RGB",
+        }
+        kwargs["render_mode"] = render_mode_map[viewer_args["render_mode"]]
+        kwargs["backgrounds"] = torch.tensor(
+            [viewer_args["backgrounds"]], device=device
+        )
+        del kwargs["normalize_disparity"]
+        del kwargs["normalize_nearfar"]
+        del kwargs["colormap"]
+
         render_colors, render_alphas, meta = rasterization_fn(
             means,  # [N, 3]
             quats,  # [N, 4]
@@ -1763,12 +1938,37 @@ def main(local_rank: int, world_rank, world_size: int, args):
             width,
             height,
             sh_degree=sh_degree,
-            render_mode="RGB",
-            # this is to speedup large-scale rendering by skipping far-away Gaussians.
-            radius_clip=3,
+            **kwargs,
         )
-        render_rgbs = render_colors[0, ..., 0:3].cpu().numpy()
-        return render_rgbs
+
+        if viewer_args["render_mode"] == "rgb":
+            # colors represented with sh are not guranteed to be in [0, 1]
+            render_colors = render_colors[0, ..., 0:3].clamp(0, 1)
+            renders = render_colors.cpu().numpy()
+        elif viewer_args["render_mode"] in ["depth(accumulated)", "depth(expected)"]:
+            # normalize depth to [0, 1]
+            depth = render_colors[0, ..., 0:1]
+            if viewer_args["normalize_nearfar"]:
+                near_plane, far_plane = kwargs["near_plane"], kwargs["far_plane"]
+            else:
+                near_plane = depth.min()
+                far_plane = depth.max()
+            if not viewer_args["normalize_disparity"]:
+                depth_norm = (depth - near_plane) / (far_plane - near_plane + 1e-10)
+            else:
+                disp = 1 / (depth + 1e-10)
+                disp_max = 1 / (near_plane + 1e-10)
+                disp_min = 1 / (far_plane + 1e-10)
+                disp_norm = (disp - disp_min) / (disp_max - disp_min + 1e-10)
+                depth_norm = 1 / (disp_norm + 1e-10)
+            depth_norm = torch.clip(depth_norm, 0, 1)
+            renders = (
+                apply_float_colormap(depth_norm, viewer_args["colormap"]).cpu().numpy()
+            )
+        elif viewer_args["render_mode"] == "alpha":
+            alpha = render_alphas[0, ..., 0:1]
+            renders = apply_float_colormap(alpha, viewer_args["colormap"]).cpu().numpy()
+        return renders
 
     server = viser.ViserServer(port=args.port, verbose=False)
     _ = Viewer(

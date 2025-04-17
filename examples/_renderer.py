@@ -145,7 +145,10 @@ class Renderer(threading.Thread):
                 with self.lock, set_trace_context(self._may_interrupt_trace):
                     tic = time.time()
                     W, H = img_wh = self._get_img_wh(task.camera_state.aspect)
-                    rendered = self.viewer.render_fn(task.camera_state, img_wh)
+                    viewer_args = self.viewer.get_rendering_args()
+                    rendered = self.viewer.render_fn(
+                        task.camera_state, img_wh, viewer_args
+                    )
                     if isinstance(rendered, tuple):
                         img, depth = rendered
                     else:
