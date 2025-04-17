@@ -343,13 +343,19 @@ def splat2ply_bytes_compressed(
         shN_chunk_quantized = shN_chunk_quantized.to(torch.uint8)
         sh_data.extend([shN_chunk_quantized.ravel()])
 
-    float_dtype = np.dtype(np.float32).newbyteorder('<')
-    uint32_dtype = np.dtype(np.uint32).newbyteorder('<')
+    float_dtype = np.dtype(np.float32).newbyteorder("<")
+    uint32_dtype = np.dtype(np.uint32).newbyteorder("<")
     uint8_dtype = np.dtype(np.uint8)
 
-    buffer.write(torch.cat(chunk_data).detach().cpu().numpy().astype(float_dtype).tobytes())
-    buffer.write(torch.cat(splat_data).detach().cpu().numpy().astype(uint32_dtype).tobytes())
-    buffer.write(torch.cat(sh_data).detach().cpu().numpy().astype(uint8_dtype).tobytes())
+    buffer.write(
+        torch.cat(chunk_data).detach().cpu().numpy().astype(float_dtype).tobytes()
+    )
+    buffer.write(
+        torch.cat(splat_data).detach().cpu().numpy().astype(uint32_dtype).tobytes()
+    )
+    buffer.write(
+        torch.cat(sh_data).detach().cpu().numpy().astype(uint8_dtype).tobytes()
+    )
 
     return buffer.getvalue()
 
@@ -405,7 +411,7 @@ def splat2ply_bytes(
     splat_data = splat_data.to(torch.float32)
 
     # Write binary data
-    float_dtype = np.dtype(np.float32).newbyteorder('<')
+    float_dtype = np.dtype(np.float32).newbyteorder("<")
     buffer.write(splat_data.detach().cpu().numpy().astype(float_dtype).tobytes())
 
     return buffer.getvalue()
@@ -434,9 +440,7 @@ def splat2splat_bytes(
     # Preprocess
     scales = torch.exp(scales)
     sh0_color = sh2rgb(sh0)
-    colors = torch.cat(
-        [sh0_color, torch.sigmoid(opacities).unsqueeze(-1)], dim=1
-    )
+    colors = torch.cat([sh0_color, torch.sigmoid(opacities).unsqueeze(-1)], dim=1)
     colors = (colors * 255).clamp(0, 255).to(torch.uint8)
 
     rots = (quats / torch.linalg.norm(quats, dim=1, keepdim=True)) * 128 + 128
@@ -452,7 +456,7 @@ def splat2splat_bytes(
     colors = colors[indices]
     rots = rots[indices]
 
-    float_dtype = np.dtype(np.float32).newbyteorder('<')
+    float_dtype = np.dtype(np.float32).newbyteorder("<")
     means_np = means.detach().cpu().numpy().astype(float_dtype)
     scales_np = scales.detach().cpu().numpy().astype(float_dtype)
     colors_np = colors.detach().cpu().numpy().astype(np.uint8)
