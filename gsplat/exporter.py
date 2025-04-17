@@ -402,7 +402,7 @@ def splat2ply_bytes(
     splat_data = splat_data.to(torch.float32)
 
     # Write binary data
-    buffer.write(struct.pack("<" + "f" * splat_data.numel(), *splat_data.flatten()))
+    buffer.write(splat_data.detach().cpu().numpy().astype('float32').tobytes())
     return buffer.getvalue()
 
 
