@@ -88,25 +88,26 @@ class Renderer(threading.Thread):
         return self._may_interrupt_trace
 
     def _get_img_wh(self, aspect: float) -> Tuple[int, int]:
-        max_img_res = self.viewer._max_img_res_slider.value
-        if self._state == "high":
+        # we always trade off speed for quality
+        max_img_res = self.viewer._viewer_res_slider.value
+        if self._state in ["high", "low_move", "low_static"]:
             #  if True:
             H = max_img_res
             W = int(H * aspect)
             if W > max_img_res:
                 W = max_img_res
                 H = int(W / aspect)
-        elif self._state in ["low_move", "low_static"]:
-            num_view_rays_per_sec = self.viewer.state.num_view_rays_per_sec
-            target_fps = self._target_fps
-            num_viewer_rays = num_view_rays_per_sec / target_fps
-            H = (num_viewer_rays / aspect) ** 0.5
-            H = int(round(H, -1))
-            H = max(min(max_img_res, H), 30)
-            W = int(H * aspect)
-            if W > max_img_res:
-                W = max_img_res
-                H = int(W / aspect)
+            # elif self._state in ["low_move", "low_static"]:
+            #     num_view_rays_per_sec = self.viewer.state.num_view_rays_per_sec
+            #     target_fps = self._target_fps
+            #     num_viewer_rays = num_view_rays_per_sec / target_fps
+            #     H = (num_viewer_rays / aspect) ** 0.5
+            #     H = int(round(H, -1))
+            #     H = max(min(max_img_res, H), 30)
+            #     W = int(H * aspect)
+            #     if W > max_img_res:
+            #         W = max_img_res
+            #         H = int(W / aspect)
         else:
             raise ValueError(f"Unknown state: {self._state}.")
         return W, H

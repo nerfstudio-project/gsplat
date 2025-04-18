@@ -80,7 +80,6 @@ class Keyframe:
     wxyz: np.ndarray
     override_fov_enabled: bool
     override_fov_rad: float
-    override_time_enabled: bool
     override_time_val: float
     aspect: float
     override_transition_enabled: bool
@@ -93,7 +92,6 @@ class Keyframe:
             camera.wxyz,
             override_fov_enabled=False,
             override_fov_rad=camera.fov,
-            override_time_enabled=False,
             override_time_val=0.0,
             aspect=aspect,
             override_transition_enabled=False,
@@ -110,7 +108,6 @@ class CameraPath:
         self,
         server: viser.ViserServer,
         duration_element: viser.GuiInputHandle[float],
-        time_enabled: bool = False,
     ):
         self._server = server
         self._keyframes: Dict[int, Tuple[Keyframe, viser.CameraFrustumHandle]] = {}
@@ -130,7 +127,6 @@ class CameraPath:
         self.framerate: float = 30.0
         self.tension: float = 0.5  # Tension / alpha term.
         self.default_fov: float = 0.0
-        self.time_enabled = time_enabled
         self.default_render_time: float = 0.0
         self.default_transition_sec: float = 0.0
         self.show_spline: bool = True
@@ -165,7 +161,7 @@ class CameraPath:
             position=keyframe.position,
             visible=self._keyframes_visible,
         )
-        self._server.scene.add_icosphere(
+        server.scene.add_icosphere(
             f"/render_cameras/{keyframe_index}/sphere",
             radius=0.03,
             color=(200, 10, 30),
@@ -185,7 +181,7 @@ class CameraPath:
                 override_fov = server.gui.add_checkbox(
                     "Override FOV", initial_value=keyframe.override_fov_enabled
                 )
-                override_fov_degrees = server.gui.add_slider(
+                override_fov_degrees_slider = server.gui.add_slider(
                     "Override FOV (degrees)",
                     5.0,
                     175.0,
@@ -193,29 +189,6 @@ class CameraPath:
                     initial_value=keyframe.override_fov_rad * 180.0 / np.pi,
                     disabled=not keyframe.override_fov_enabled,
                 )
-                if self.time_enabled:
-                    override_time = server.gui.add_checkbox(
-                        "Override Time", initial_value=keyframe.override_time_enabled
-                    )
-                    override_time_val = server.gui.add_slider(
-                        "Override Time",
-                        0.0,
-                        1.0,
-                        step=0.01,
-                        initial_value=keyframe.override_time_val,
-                        disabled=not keyframe.override_time_enabled,
-                    )
-
-                    @override_time.on_update
-                    def _(_) -> None:
-                        keyframe.override_time_enabled = override_time.value
-                        override_time_val.disabled = not override_time.value
-                        self.add_camera(keyframe, keyframe_index)
-
-                    @override_time_val.on_update
-                    def _(_) -> None:
-                        keyframe.override_time_val = override_time_val.value
-                        self.add_camera(keyframe, keyframe_index)
 
                 delete_button = server.gui.add_button(
                     "Delete", color="red", icon=viser.Icon.TRASH
@@ -226,12 +199,14 @@ class CameraPath:
             @override_fov.on_update
             def _(_) -> None:
                 keyframe.override_fov_enabled = override_fov.value
-                override_fov_degrees.disabled = not override_fov.value
+                override_fov_degrees_slider.disabled = not override_fov.value
                 self.add_camera(keyframe, keyframe_index)
 
-            @override_fov_degrees.on_update
+            @override_fov_degrees_slider.on_update
             def _(_) -> None:
-                keyframe.override_fov_rad = override_fov_degrees.value / 180.0 * np.pi
+                keyframe.override_fov_rad = (
+                    override_fov_degrees_slider.value / 180.0 * np.pi
+                )
                 self.add_camera(keyframe, keyframe_index)
 
             @delete_button.on_click
@@ -368,47 +343,22 @@ class CameraPath:
             endconditions="closed" if self.loop else "natural",
         )
 
-        self._time_spline = splines.KochanekBartels(
-            [
-                (
-                    keyframe[0].override_time_val
-                    if keyframe[0].override_time_enabled
-                    else self.default_render_time
-                )
-                for keyframe in self._keyframes.values()
-            ],
-            tcb=(self.tension, 0.0, 0.0),
-            endconditions="closed" if self.loop else "natural",
-        )
-
         assert self._orientation_spline is not None
         assert self._position_spline is not None
         assert self._fov_spline is not None
-        if self.time_enabled:
-            assert self._time_spline is not None
         max_t = self.compute_duration()
         t = max_t * normalized_t
         spline_t = float(self.spline_t_from_t_sec(np.array(t)))
 
         quat = self._orientation_spline.evaluate(spline_t)
         assert isinstance(quat, splines.quaternion.UnitQuaternion)
-        if self.time_enabled:
-            return (
-                vt.SE3.from_rotation_and_translation(
-                    vt.SO3(np.array([quat.scalar, *quat.vector])),
-                    self._position_spline.evaluate(spline_t),
-                ),
-                float(self._fov_spline.evaluate(spline_t)),
-                float(self._time_spline.evaluate(spline_t)),
-            )
-        else:
-            return (
-                vt.SE3.from_rotation_and_translation(
-                    vt.SO3(np.array([quat.scalar, *quat.vector])),
-                    self._position_spline.evaluate(spline_t),
-                ),
-                float(self._fov_spline.evaluate(spline_t)),
-            )
+        return (
+            vt.SE3.from_rotation_and_translation(
+                vt.SO3(np.array([quat.scalar, *quat.vector])),
+                self._position_spline.evaluate(spline_t),
+            ),
+            float(self._fov_spline.evaluate(spline_t)),
+        )
 
     def update_spline(self) -> None:
         num_frames = int(self.compute_duration() * self.framerate)
@@ -703,6 +653,13 @@ class Viewer(object):
 
     def _define_guis(self):
         server = self.server
+        server.gui.set_panel_label("gsplat viewer")
+        server.gui.configure_theme(
+            control_layout="collapsible",
+            # dark_mode=True,
+            # brand_color=(255, 211, 105),
+            # control_width="large",
+        )
         with server.gui.add_folder(
             "Stats", visible=self.mode == "training"
         ) as self._stats_folder:
@@ -713,6 +670,7 @@ class Viewer(object):
                 </sub>"""
             )
             self._stats_text = server.gui.add_markdown(self._stats_text_fn())
+        self.server.set_global_visibility(True)
 
         with server.gui.add_folder(
             "Training", visible=self.mode == "training"
@@ -731,10 +689,15 @@ class Viewer(object):
             self._train_util_slider.on_update(self.rerender)
 
         with server.gui.add_folder("Rendering") as self._rendering_folder:
-            self._max_img_res_slider = server.gui.add_slider(
-                "Max Img Res", min=64, max=2048, step=1, initial_value=2048
+            self._viewer_res_slider = server.gui.add_slider(
+                "Viewer Res",
+                min=64,
+                max=2048,
+                step=1,
+                initial_value=2048,
+                hint="Maximum resolution of the rendered image.",
             )
-            self._max_img_res_slider.on_update(self.rerender)
+            self._viewer_res_slider.on_update(self.rerender)
 
             self.render_tab_state = RenderTabState(
                 preview_render=False,
@@ -744,7 +707,7 @@ class Viewer(object):
                 preview_camera_model="pinhole",
             )
 
-            fov_degrees = server.gui.add_slider(
+            fov_degrees_slider = server.gui.add_slider(
                 "FOV",
                 initial_value=50.0,
                 min=0.1,
@@ -753,9 +716,9 @@ class Viewer(object):
                 hint="Field-of-view for rendering, which can also be overridden on a per-keyframe basis.",
             )
 
-            @fov_degrees.on_update
+            @fov_degrees_slider.on_update
             def _(_) -> None:
-                fov_radians = fov_degrees.value / 180.0 * np.pi
+                fov_radians = fov_degrees_slider.value / 180.0 * np.pi
                 for client in server.get_clients().values():
                     client.camera.fov = fov_radians
 
@@ -763,24 +726,28 @@ class Viewer(object):
 
                 # Updating the aspect ratio will also re-render the camera frustums.
                 # Could rethink this.
-                camera_path.update_aspect(resolution.value[0] / resolution.value[1])
+                camera_path.update_aspect(
+                    render_res_vec2.value[0] / render_res_vec2.value[1]
+                )
                 compute_and_update_preview_camera_state()
 
-            resolution = server.gui.add_vector2(
-                "Resolution",
+            render_res_vec2 = server.gui.add_vector2(
+                "Render Res",
                 initial_value=(1280, 960),
                 min=(50, 50),
                 max=(10_000, 10_000),
                 step=1,
-                hint="Render output resolution in pixels.",
+                hint="Rendering resolution.",
             )
 
-            @resolution.on_update
+            @render_res_vec2.on_update
             def _(_) -> None:
-                camera_path.update_aspect(resolution.value[0] / resolution.value[1])
+                camera_path.update_aspect(
+                    render_res_vec2.value[0] / render_res_vec2.value[1]
+                )
                 compute_and_update_preview_camera_state()
 
-            self._near_far_plane_slider = server.gui.add_vector2(
+            self._near_far_plane_vec2 = server.gui.add_vector2(
                 "Near Far Plane",
                 initial_value=(1e-2, 1e2),
                 min=(1e-3, 1e1),
@@ -788,7 +755,7 @@ class Viewer(object):
                 step=1e-3,
                 hint="Near and far plane for rendering.",
             )
-            self._near_far_plane_slider.on_update(self.rerender)
+            self._near_far_plane_vec2.on_update(self.rerender)
 
             self._radius_clip_slider = server.gui.add_number(
                 "Radius Clip",
@@ -810,12 +777,17 @@ class Viewer(object):
             )
             self._eps2d_slider.on_update(self.rerender)
 
-            self._backgrounds_slider = server.gui.add_vector3(
-                "Background Color",
+            # self._backgrounds_slider = server.gui.add_vector3(
+            #     "Background",
+            #     initial_value=(0.0, 0.0, 0.0),
+            #     min=(-10.0, -10.0, -10.0),
+            #     max=(10.0, 10.0, 10.0),
+            #     step=0.1,
+            #     hint="Background color for rendering.",
+            # )
+            self._backgrounds_slider = server.gui.add_rgb(
+                "Background",
                 initial_value=(0.0, 0.0, 0.0),
-                min=(-10.0, -10.0, -10.0),
-                max=(10.0, 10.0, 10.0),
-                step=0.1,
                 hint="Background color for rendering.",
             )
             self._backgrounds_slider.on_update(self.rerender)
@@ -826,23 +798,34 @@ class Viewer(object):
                 initial_value="rgb",
                 hint="Render mode to use.",
             )
-            self._render_mode_dropdown.on_update(self.rerender)
 
-            self._normalize_disparity_checkbox = server.gui.add_checkbox(
-                "Normalize Disparity",
-                initial_value=False,
-                hint="Normalize depth in disparity space.",
-            )
-            # TODO: fix bug in disparity normalization
-            self._normalize_disparity_checkbox.disabled = True
-            self._normalize_disparity_checkbox.on_update(self.rerender)
+            @self._render_mode_dropdown.on_update
+            def _(_) -> None:
+                if "depth" in self._render_mode_dropdown.value:
+                    self._normalize_nearfar_checkbox.disabled = False
+                else:
+                    self._normalize_nearfar_checkbox.disabled = True
+                if self._render_mode_dropdown.value == "rgb":
+                    self._inverse_checkbox.disabled = True
+                else:
+                    self._inverse_checkbox.disabled = False
+                self.rerender(_)
 
             self._normalize_nearfar_checkbox = server.gui.add_checkbox(
-                "Normalize Near/Far",
+                "Norm Near/Far",
                 initial_value=False,
+                disabled=True,
                 hint="Normalize depth with near/far plane.",
             )
             self._normalize_nearfar_checkbox.on_update(self.rerender)
+
+            self._inverse_checkbox = server.gui.add_checkbox(
+                "Inverse",
+                initial_value=True,
+                disabled=True,
+                hint="Inverse normalized values.",
+            )
+            self._inverse_checkbox.on_update(self.rerender)
 
             self._colormap_dropdown = server.gui.add_dropdown(
                 "Colormap",
@@ -890,7 +873,7 @@ class Viewer(object):
                 camera_path.add_camera(
                     Keyframe.from_camera(
                         camera,
-                        aspect=resolution.value[0] / resolution.value[1],
+                        aspect=render_res_vec2.value[0] / render_res_vec2.value[1],
                     ),
                 )
                 duration_number.value = camera_path.compute_duration()
@@ -1184,7 +1167,7 @@ class Viewer(object):
                 preview_camera_handle = server.scene.add_camera_frustum(
                     "/preview_camera",
                     fov=fov_rad,
-                    aspect=resolution.value[0] / resolution.value[1],
+                    aspect=render_res_vec2.value[0] / render_res_vec2.value[1],
                     scale=0.35,
                     wxyz=pose.rotation().wxyz,
                     position=pose.translation(),
@@ -1192,8 +1175,10 @@ class Viewer(object):
                 )
                 if self.render_tab_state.preview_render:
                     for client in server.get_clients().values():
+                        # aspect ratio not assignable, pass args in get_render instead
                         client.camera.wxyz = pose.rotation().wxyz
                         client.camera.position = pose.translation()
+                        client.camera.fov = fov_rad
 
             return preview_frame_slider
 
@@ -1354,9 +1339,6 @@ class Viewer(object):
                                     )
                                     > 1e-3,
                                     override_fov_rad=frame["fov"] / 180.0 * np.pi,
-                                    override_time_enabled=frame.get(
-                                        "override_time_enabled", False
-                                    ),
                                     override_time_val=frame.get("render_time", None),
                                     aspect=frame["aspect"],
                                     override_transition_enabled=frame.get(
@@ -1419,20 +1401,20 @@ class Viewer(object):
                     "fov": (
                         np.rad2deg(keyframe.override_fov_rad)
                         if keyframe.override_fov_enabled
-                        else fov_degrees.value
+                        else fov_degrees_slider.value
                     ),
                     "aspect": keyframe.aspect,
                     "override_transition_enabled": keyframe.override_transition_enabled,
                     "override_transition_sec": keyframe.override_transition_sec,
                 }
                 keyframes.append(keyframe_dict)
-            json_data["default_fov"] = fov_degrees.value
+            json_data["default_fov"] = fov_degrees_slider.value
             json_data["default_transition_sec"] = transition_sec_number.value
             json_data["keyframes"] = keyframes
             # TODO: seperate rendering json and camera path json?
             json_data["camera_model"] = self._camera_model_dropdown.value.lower()
-            json_data["render_height"] = resolution.value[1]
-            json_data["render_width"] = resolution.value[0]
+            json_data["render_height"] = render_res_vec2.value[1]
+            json_data["render_width"] = render_res_vec2.value[0]
             json_data["fps"] = framerate_number.value
             json_data["seconds"] = duration_number.value
             json_data["is_cycle"] = loop.value
@@ -1458,7 +1440,7 @@ class Viewer(object):
                 camera_path_list_dict = {
                     "camera_to_world": pose.as_matrix().flatten().tolist(),
                     "fov": np.rad2deg(fov),
-                    "aspect": resolution.value[0] / resolution.value[1],
+                    "aspect": render_res_vec2.value[0] / render_res_vec2.value[1],
                 }
                 if time is not None:
                     camera_path_list_dict["render_time"] = time
@@ -1514,22 +1496,22 @@ class Viewer(object):
             framerate_number.disabled = True
             duration_number.disabled = True
             tension_slider.disabled = True
-            fov_degrees.disabled = True
+            fov_degrees_slider.disabled = True
             transition_sec_number.disabled = True
             move_checkbox.disabled = True
             show_keyframe_checkbox.disabled = True
             show_spline_checkbox.disabled = True
-            resolution.disabled = True
+            render_res_vec2.disabled = True
             preview_save_camera_path_button.disabled = True
             preview_frame_slider.disabled = True
             dump_video_button.disabled = True
-            self._near_far_plane_slider.disabled = True
+            self._near_far_plane_vec2.disabled = True
             self._radius_clip_slider.disabled = True
             self._eps2d_slider.disabled = True
             self._backgrounds_slider.disabled = True
             self._render_mode_dropdown.disabled = True
-            self._normalize_disparity_checkbox.disabled = True
             self._normalize_nearfar_checkbox.disabled = True
+            self._inverse_checkbox.disabled = True
             self._colormap_dropdown.disabled = True
             self._rasterize_mode_dropdown.disabled = True
             self._camera_model_dropdown.disabled = True
@@ -1560,6 +1542,7 @@ class Viewer(object):
                 client.camera.position = pose.translation()
 
             def dump() -> None:
+                os.makedirs(self.datapath / "videos", exist_ok=True)
                 writer = imageio.get_writer(
                     f"{self.datapath}/videos/traj_{trajectory_name_text.value}.mp4",
                     fps=framerate_number.value,
@@ -1572,7 +1555,7 @@ class Viewer(object):
                         preview_frame_slider.value + 1
                     ) % max_frame
                     image = client.camera.get_render(
-                        height=resolution.value[1], width=resolution.value[0]
+                        height=render_res_vec2.value[1], width=render_res_vec2.value[0]
                     )
                     writer.append_data(image)
                 writer.close()
@@ -1593,22 +1576,22 @@ class Viewer(object):
             framerate_number.disabled = False
             duration_number.disabled = False
             tension_slider.disabled = False
-            fov_degrees.disabled = False
+            fov_degrees_slider.disabled = False
             transition_sec_number.disabled = False
             move_checkbox.disabled = False
             show_keyframe_checkbox.disabled = False
             show_spline_checkbox.disabled = False
-            resolution.disabled = False
+            render_res_vec2.disabled = False
             preview_save_camera_path_button.disabled = False
             preview_frame_slider.disabled = False
             dump_video_button.disabled = False
-            self._near_far_plane_slider.disabled = False
+            self._near_far_plane_vec2.disabled = False
             self._radius_clip_slider.disabled = False
             self._eps2d_slider.disabled = False
             self._backgrounds_slider.disabled = False
             self._render_mode_dropdown.disabled = False
-            self._normalize_disparity_checkbox.disabled = False
             self._normalize_nearfar_checkbox.disabled = False
+            self._inverse_checkbox.disabled = False
             self._colormap_dropdown.disabled = False
             self._rasterize_mode_dropdown.disabled = False
             self._camera_model_dropdown.disabled = False
@@ -1633,7 +1616,7 @@ class Viewer(object):
 
         camera_path = CameraPath(server, duration_number)
         camera_path.tension = tension_slider.value
-        camera_path.default_fov = fov_degrees.value / 180.0 * np.pi
+        camera_path.default_fov = fov_degrees_slider.value / 180.0 * np.pi
         camera_path.default_transition_sec = transition_sec_number.value
 
     def _toggle_train_buttons(self, _):
@@ -1710,7 +1693,7 @@ class Viewer(object):
             train_s = self.state.num_train_rays_per_sec
             view_s = self.state.num_view_rays_per_sec
             train_util = self._train_util_slider.value
-            view_n = self._max_img_res_slider.value**2
+            view_n = self._viewer_res_slider.value**2
             train_n = num_train_rays_per_step
             train_time = train_n / train_s
             view_time = view_n / view_s
@@ -1743,16 +1726,16 @@ class Viewer(object):
     def get_rendering_args(self):
         # get the rendering args from the rendering panel
         return {
-            "near_plane": self._near_far_plane_slider.value[0],
-            "far_plane": self._near_far_plane_slider.value[1],
+            "near_plane": self._near_far_plane_vec2.value[0],
+            "far_plane": self._near_far_plane_vec2.value[1],
             "radius_clip": self._radius_clip_slider.value,
             "eps2d": self._eps2d_slider.value,
             "backgrounds": self._backgrounds_slider.value,
             "render_mode": self._render_mode_dropdown.value,
             "rasterize_mode": self._rasterize_mode_dropdown.value,
             "camera_model": self._camera_model_dropdown.value,
-            "normalize_disparity": self._normalize_disparity_checkbox.value,
             "normalize_nearfar": self._normalize_nearfar_checkbox.value,
+            "inverse": self._inverse_checkbox.value,
             "colormap": self._colormap_dropdown.value,
         }
 
@@ -1923,9 +1906,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
         kwargs["backgrounds"] = torch.tensor(
             [viewer_args["backgrounds"]], device=device
         )
-        del kwargs["normalize_disparity"]
-        del kwargs["normalize_nearfar"]
-        del kwargs["colormap"]
+        del kwargs["normalize_nearfar"], kwargs["inverse"], kwargs["colormap"]
 
         render_colors, render_alphas, meta = rasterization_fn(
             means,  # [N, 3]
@@ -1953,20 +1934,17 @@ def main(local_rank: int, world_rank, world_size: int, args):
             else:
                 near_plane = depth.min()
                 far_plane = depth.max()
-            if not viewer_args["normalize_disparity"]:
-                depth_norm = (depth - near_plane) / (far_plane - near_plane + 1e-10)
-            else:
-                disp = 1 / (depth + 1e-10)
-                disp_max = 1 / (near_plane + 1e-10)
-                disp_min = 1 / (far_plane + 1e-10)
-                disp_norm = (disp - disp_min) / (disp_max - disp_min + 1e-10)
-                depth_norm = 1 / (disp_norm + 1e-10)
+            depth_norm = (depth - near_plane) / (far_plane - near_plane + 1e-10)
             depth_norm = torch.clip(depth_norm, 0, 1)
+            if viewer_args["inverse"]:
+                depth_norm = 1 - depth_norm
             renders = (
                 apply_float_colormap(depth_norm, viewer_args["colormap"]).cpu().numpy()
             )
         elif viewer_args["render_mode"] == "alpha":
             alpha = render_alphas[0, ..., 0:1]
+            if viewer_args["inverse"]:
+                alpha = 1 - alpha
             renders = apply_float_colormap(alpha, viewer_args["colormap"]).cpu().numpy()
         return renders
 
