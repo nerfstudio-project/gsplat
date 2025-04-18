@@ -17,6 +17,7 @@ from gsplat._helper import load_test_data
 
 device = torch.device("cuda:0")
 
+
 @pytest.fixture
 def test_data():
     (
