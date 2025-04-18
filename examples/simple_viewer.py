@@ -670,7 +670,7 @@ class Viewer(object):
                 </sub>"""
             )
             self._stats_text = server.gui.add_markdown(self._stats_text_fn())
-        self.server.set_global_visibility(True)
+        self.server.scene.set_global_visibility(True)
 
         with server.gui.add_folder(
             "Training", visible=self.mode == "training"
@@ -1903,8 +1903,8 @@ def main(local_rank: int, world_rank, world_size: int, args):
             "alpha": "RGB",
         }
         kwargs["render_mode"] = render_mode_map[viewer_args["render_mode"]]
-        kwargs["backgrounds"] = torch.tensor(
-            [viewer_args["backgrounds"]], device=device
+        kwargs["backgrounds"] = (
+            torch.tensor([viewer_args["backgrounds"]], device=device) / 255.0
         )
         del kwargs["normalize_nearfar"], kwargs["inverse"], kwargs["colormap"]
 
