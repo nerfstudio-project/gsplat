@@ -590,6 +590,9 @@
     <span class="k">if</span> <span class="n">absgrad</span><span class="p">:</span>
         <span class="k">assert</span> <span class="ow">not</span> <span class="n">distributed</span><span class="p">,</span> <span class="s2">&quot;AbsGrad is not supported in distributed mode.&quot;</span>
 
+    <span class="c1"># Implement the multi-GPU strategy proposed in </span>
+    <span class="c1"># `On Scaling Up 3D Gaussian Splatting Training &lt;https://arxiv.org/abs/2406.18533&gt;`.</span>
+    <span class="c1">#</span>
     <span class="c1"># If in distributed mode, we distribute the projection computation over Gaussians</span>
     <span class="c1"># and the rasterize computation over cameras. So first we gather the cameras</span>
     <span class="c1"># from all ranks for projection.</span>
@@ -708,7 +711,7 @@
 
     <span class="c1"># If in distributed mode, we need to scatter the GSs to the destination ranks, based</span>
     <span class="c1"># on which cameras they are visible to, which we already figured out in the projection</span>
-    <span class="c1"># stage.</span>
+    <span class="c1"># stage. </span>
     <span class="k">if</span> <span class="n">distributed</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">packed</span><span class="p">:</span>
             <span class="c1"># count how many elements need to be sent to each rank</span>
