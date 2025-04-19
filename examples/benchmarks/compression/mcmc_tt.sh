@@ -1,5 +1,5 @@
 SCENE_DIR="data/tandt"
-# eval all 9 scenes for benchmarking
+
 SCENE_LIST="train truck"
 
 # # 0.36M GSs
@@ -17,6 +17,10 @@ CAP_MAX=1000000
 # # 4M GSs
 # RESULT_DIR="results/benchmark_tt_mcmc_4M_png_compression"
 # CAP_MAX=4000000
+
+# Override default values if provided as arguments
+[ ! -z "$1" ] && RESULT_DIR="$1"
+[ ! -z "$2" ] && CAP_MAX="$2"
 
 for SCENE in $SCENE_LIST;
 do
