@@ -276,6 +276,9 @@ def rasterization(
     if absgrad:
         assert not distributed, "AbsGrad is not supported in distributed mode."
 
+    # Implement the multi-GPU strategy proposed in 
+    # `On Scaling Up 3D Gaussian Splatting Training <https://arxiv.org/abs/2406.18533>`.
+    #
     # If in distributed mode, we distribute the projection computation over Gaussians
     # and the rasterize computation over cameras. So first we gather the cameras
     # from all ranks for projection.
@@ -394,7 +397,7 @@ def rasterization(
 
     # If in distributed mode, we need to scatter the GSs to the destination ranks, based
     # on which cameras they are visible to, which we already figured out in the projection
-    # stage.
+    # stage. 
     if distributed:
         if packed:
             # count how many elements need to be sent to each rank
