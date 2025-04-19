@@ -1890,7 +1890,7 @@
             <span class="n">v_depths</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
             <span class="n">v_ray_transforms</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
             <span class="n">v_normals</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
-            <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">4</span><span class="p">],</span>  <span class="c1"># viewmats_requires_grad</span>
+            <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">3</span><span class="p">],</span>  <span class="c1"># viewmats_requires_grad</span>
             <span class="n">sparse_grad</span><span class="p">,</span>
         <span class="p">)</span>
 
@@ -1928,7 +1928,7 @@
                     <span class="n">size</span><span class="o">=</span><span class="n">scales</span><span class="o">.</span><span class="n">size</span><span class="p">(),</span>  <span class="c1"># [N, 3]</span>
                     <span class="n">is_coalesced</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="n">viewmats</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span><span class="p">,</span>
                 <span class="p">)</span>
-        <span class="k">if</span> <span class="ow">not</span> <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">4</span><span class="p">]:</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">3</span><span class="p">]:</span>
             <span class="n">v_viewmats</span> <span class="o">=</span> <span class="kc">None</span>
 
         <span class="k">return</span> <span class="p">(</span>
