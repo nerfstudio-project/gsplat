@@ -377,8 +377,9 @@ __global__ void projection_2dgs_fused_bwd_kernel(
         viewmats[10] // 3rd column
     );
     vec3 t = vec3(viewmats[3], viewmats[7], viewmats[11]);
+    vec3 mean_w = glm::make_vec3(means);
     vec3 mean_c;
-    posW2C(R, t, glm::make_vec3(means), mean_c);
+    posW2C(R, t, mean_w, mean_c);
 
     vec4 quat = glm::make_vec4(quats + gid * 4);
     vec2 scale = glm::make_vec2(scales + gid * 3);
@@ -413,7 +414,7 @@ __global__ void projection_2dgs_fused_bwd_kernel(
         R,
         P,
         t,
-        glm::make_vec3(means),
+        mean_w,
         mean_c,
         quat,
         scale,
