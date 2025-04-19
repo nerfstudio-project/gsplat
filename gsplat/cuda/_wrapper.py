@@ -1548,7 +1548,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
             v_depths.contiguous(),
             v_ray_transforms.contiguous(),
             v_normals.contiguous(),
-            ctx.needs_input_grad[4],  # viewmats_requires_grad
+            ctx.needs_input_grad[3],  # viewmats_requires_grad
             sparse_grad,
         )
 
@@ -1586,7 +1586,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
                     size=scales.size(),  # [N, 3]
                     is_coalesced=len(viewmats) == 1,
                 )
-        if not ctx.needs_input_grad[4]:
+        if not ctx.needs_input_grad[3]:
             v_viewmats = None
 
         return (
