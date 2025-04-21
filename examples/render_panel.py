@@ -562,6 +562,8 @@ class CameraPath:
 class RenderTabState:
     """Useful GUI handles exposed by the render tab."""
 
+    num_train_rays_per_sec: Optional[float] = None
+    num_view_rays_per_sec: float = 100000.0
     preview_render: bool = False
     preview_fov: float = 0.0
     preview_time: float = 0.0

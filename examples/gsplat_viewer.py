@@ -1,7 +1,7 @@
 """A simple example to render a (large-scale) Gaussian Splats
 
 ```bash
-python examples/simple_viewer.py --scene_grid 13
+python examples/gsplat_viewer.py --scene_grid 13
 ```
 """
 
@@ -23,7 +23,7 @@ from gsplat._helper import load_test_data
 from gsplat.distributed import cli
 from gsplat.rendering import rasterization
 
-from basic_viewer import Viewer, CameraState
+from examples.viewer import Viewer, CameraState
 from render_panel import RenderTabState, apply_float_colormap
 
 
@@ -68,7 +68,7 @@ class GsplatViewer(Viewer):
 
     def _init_render_tab(self):
         self.render_tab_state = GsplatRenderTabState()
-        self.render_tab_handles = {}
+        self._render_tab_handles = {}
         self._rendering_folder = self.server.gui.add_folder("Rendering")
 
     def _populate_render_tab(self):
@@ -243,7 +243,7 @@ class GsplatViewer(Viewer):
                     self.render_tab_state.camera_model = camera_model_dropdown.value
                     self.rerender(_)
 
-        self.render_tab_handles.update(
+        self._render_tab_handles.update(
             {
                 "total_gs_count_number": total_gs_count_number,
                 "rendered_gs_count_number": rendered_gs_count_number,
@@ -261,12 +261,12 @@ class GsplatViewer(Viewer):
         )
         super()._populate_render_tab()
 
-    def after_render(self):
+    def _after_render(self):
         # Update the GUI elements with current values
-        self.render_tab_handles["total_gs_count_number"].value = (
+        self._render_tab_handles["total_gs_count_number"].value = (
             self.render_tab_state.total_gs_count
         )
-        self.render_tab_handles["rendered_gs_count_number"].value = (
+        self._render_tab_handles["rendered_gs_count_number"].value = (
             self.render_tab_state.rendered_gs_count
         )
 
@@ -420,7 +420,6 @@ def main(local_rank: int, world_rank, world_size: int, args):
         K = torch.from_numpy(K).float().to(device)
         viewmat = c2w.inverse()
 
-        # Use the render_tab_state to get gsplat-specific parameters
         RENDER_MODE_MAP = {
             "rgb": "RGB",
             "depth(accumulated)": "D",
@@ -450,7 +449,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
             camera_model=render_tab_state.camera_model,
         )
         render_tab_state.total_gs_count = len(means)
-        render_tab_state.rendered_gs_count = (info["radii"] > 0).sum().item()
+        render_tab_state.rendered_gs_count = (info["radii"] > 0).all(-1).sum().item()
 
         if render_tab_state.render_mode == "rgb":
             # colors represented with sh are not guranteed to be in [0, 1]

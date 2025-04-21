@@ -1,12 +1,12 @@
 import dataclasses
 import time
 from threading import Lock
-from typing import Callable, Literal, Optional, Tuple, Union
+from typing import Callable, Literal, Tuple
 
 import numpy as np
 import viser
 import viser.transforms as vt
-from jaxtyping import Float32, UInt8
+from jaxtyping import Float32
 
 from _renderer import Renderer, RenderTask
 from render_panel import populate_general_render_tab, RenderTabState
@@ -30,15 +30,6 @@ class CameraState(object):
             ]
         )
         return K
-
-
-@dataclasses.dataclass
-class ViewerState(object):
-    num_train_rays_per_sec: Optional[float] = None
-    num_view_rays_per_sec: float = 100000.0
-    status: Literal["rendering", "preparing", "training", "paused", "completed"] = (
-        "training"
-    )
 
 
 VIEWER_LOCK = Lock()
@@ -81,10 +72,8 @@ class Viewer(object):
         self.render_fn = render_fn
         self.mode = mode
         self.lock = VIEWER_LOCK
-        self.state = ViewerState()
+        self.state = "preparing"
         self.output_dir = output_dir
-        if self.mode == "rendering":
-            self.state.status = "rendering"
 
         # Private states.
         self._renderers: dict[int, Renderer] = {}
@@ -102,13 +91,64 @@ class Viewer(object):
             dark_mode=True,
             brand_color=(255, 211, 105),
         )
+        if self.mode == "training":
+            self._init_train_tab()
+            self._populate_training_tab()
         self._init_render_tab()
         self._populate_render_tab()
+        self.state = mode
+
+    def _init_train_tab(self):
+        self._train_tab_handles = {}
+        self._training_folder = self.server.gui.add_folder("Training")
+
+    def _populate_training_tab(self):
+        server = self.server
+        with self._training_folder:
+            step_number = server.gui.add_number(
+                "Step",
+                min=0,
+                max=1000000,
+                step=1,
+                disabled=True,
+                initial_value=0,
+            )
+            pause_train_button = server.gui.add_button(
+                "Pause",
+                icon=viser.Icon.PLAYER_PAUSE,
+                hint="Pause the training.",
+            )
+            resume_train_button = server.gui.add_button(
+                "Resume",
+                icon=viser.Icon.PLAYER_PLAY,
+                visible=False,
+                hint="Resume the training.",
+            )
+
+            @pause_train_button.on_click
+            @resume_train_button.on_click
+            def _(_) -> None:
+                pause_train_button.visible = not pause_train_button.visible
+                resume_train_button.visible = not resume_train_button.visible
+                if self.state != "completed":
+                    self.state = "paused" if self.state == "training" else "training"
+
+            train_util_slider = self.server.gui.add_slider(
+                "Train Util", min=0.0, max=1.0, step=0.05, initial_value=0.9
+            )
+            train_util_slider.on_update(self.rerender)
+
+        self._train_tab_handles = {
+            "step_number": step_number,
+            "pause_train_button": pause_train_button,
+            "resume_train_button": resume_train_button,
+            "train_util_slider": train_util_slider,
+        }
 
     def _init_render_tab(self):
         # Allow subclasses to override for custom rendering table
         self.render_tab_state = RenderTabState()
-        self.render_tab_handles = {}
+        self._render_tab_handles = {}
         self._rendering_folder = self.server.gui.add_folder("Rendering")
 
     def _populate_render_tab(self):
@@ -130,53 +170,20 @@ class Viewer(object):
                 self.render_tab_state.viewer_res = int(viewer_res_slider.value)
                 self.rerender(_)
 
-            self.render_tab_handles["viewer_res_slider"] = viewer_res_slider
+            self._render_tab_handles["viewer_res_slider"] = viewer_res_slider
 
+        # training tab handles should also be disabled during dumping video.
+        extra_handles = self._render_tab_handles.copy()
+        if self.mode == "training":
+            extra_handles.update(self._train_tab_handles)
         handles = populate_general_render_tab(
             self.server,
             output_dir=self.output_dir,
             folder=self._rendering_folder,
             render_tab_state=self.render_tab_state,
-            extra_handles=self.render_tab_handles,
+            extra_handles=extra_handles,
         )
-        self.render_tab_handles.update(handles)
-
-    def _define_guis(self):
-        with self.server.gui.add_folder(
-            "Stats", visible=self.mode == "training"
-        ) as self._stats_folder:
-            self._stats_text_fn = (
-                lambda: f"""<sub>
-                Step: {self._step}\\
-                Last Update: {self._last_update_step}
-                </sub>"""
-            )
-            self._stats_text = self.server.gui.add_markdown(self._stats_text_fn())
-
-        with self.server.gui.add_folder(
-            "Training", visible=self.mode == "training"
-        ) as self._training_folder:
-            self._pause_train_button = self.server.gui.add_button("Pause")
-            self._pause_train_button.on_click(self._toggle_train_buttons)
-            self._pause_train_button.on_click(self._toggle_train_s)
-            self._resume_train_button = self.server.gui.add_button("Resume")
-            self._resume_train_button.visible = False
-            self._resume_train_button.on_click(self._toggle_train_buttons)
-            self._resume_train_button.on_click(self._toggle_train_s)
-
-            self._train_util_slider = self.server.gui.add_slider(
-                "Train Util", min=0.0, max=1.0, step=0.05, initial_value=0.9
-            )
-            self._train_util_slider.on_update(self.rerender)
-
-    def _toggle_train_buttons(self, _):
-        self._pause_train_button.visible = not self._pause_train_button.visible
-        self._resume_train_button.visible = not self._resume_train_button.visible
-
-    def _toggle_train_s(self, _):
-        if self.state.status == "completed":
-            return
-        self.state.status = "paused" if self.state.status == "training" else "training"
+        self._render_tab_handles.update(handles)
 
     def rerender(self, _):
         clients = self.server.get_clients()
@@ -229,21 +236,23 @@ class Viewer(object):
         if step < 5:
             return
         self._step = step
-        with self.server.atomic(), self._stats_folder:
-            self._stats_text.content = self._stats_text_fn()
+        self._train_tab_handles["step_number"].value = step
         if len(self._renderers) == 0:
             return
         # Stop training while user moves camera to make viewing smoother.
         while time.time() - self._last_move_time < 0.1:
             time.sleep(0.05)
-        if self.state.status == "training" and self._train_util_slider.value != 1:
+        if (
+            self.state == "training"
+            and self._train_tab_handles["train_util_slider"].value != 1
+        ):
             assert (
-                self.state.num_train_rays_per_sec is not None
+                self.render_tab_state.num_train_rays_per_sec is not None
             ), "User must keep track of `num_train_rays_per_sec` to use `update`."
-            train_s = self.state.num_train_rays_per_sec
-            view_s = self.state.num_view_rays_per_sec
-            train_util = self._train_util_slider.value
-            view_n = self._viewer_res_slider.value**2
+            train_s = self.render_tab_state.num_train_rays_per_sec
+            view_s = self.render_tab_state.num_view_rays_per_sec
+            train_util = self._train_tab_handles["train_util_slider"].value
+            view_n = self.render_tab_state.viewer_res**2
             train_n = num_train_rays_per_step
             train_time = train_n / train_s
             view_time = view_n / view_s
@@ -259,21 +268,15 @@ class Viewer(object):
                     self._renderers[client_id].submit(
                         RenderTask("update", camera_state)
                     )
-                with self.server.atomic(), self._stats_folder:
-                    self._stats_text.content = self._stats_text_fn()
 
-    def after_render(self):
+    def _after_render(self):
         # This function will be called each time render_fn is called.
         # It can be used to update the viewer panel.
         pass
 
     def complete(self):
-        self.state.status = "completed"
-        self._pause_train_button.disabled = True
-        self._resume_train_button.disabled = True
-        self._train_util_slider.disabled = True
-        with self.server.atomic(), self._stats_folder:
-            self._stats_text.content = f"""<sub>
-                Step: {self._step}\\
-                Training Completed!
-                </sub>"""
+        print("Training complete, disable training tab.")
+        self.state = "completed"
+        self._train_tab_handles["pause_train_button"].disabled = True
+        self._train_tab_handles["resume_train_button"].disabled = True
+        self._train_tab_handles["train_util_slider"].disabled = True

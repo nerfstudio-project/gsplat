@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Literal, Optional, Tuple, get_args
 import viser
 
 if TYPE_CHECKING:
-    from simple_viewer import CameraState, Viewer
+    from examples.viewer import CameraState, Viewer
 
 RenderState = Literal["low_move", "low_static", "high"]
 RenderAction = Literal["rerender", "move", "static", "update"]
@@ -57,7 +57,7 @@ class Renderer(threading.Thread):
         self.lock = lock
 
         self.running = True
-        self.is_prepared_fn = lambda: self.viewer.state.status != "preparing"
+        self.is_prepared_fn = lambda: self.viewer.state != "preparing"
 
         self._render_event = threading.Event()
         self._state: RenderState = "low_static"
@@ -98,7 +98,7 @@ class Renderer(threading.Thread):
                 W = max_img_res
                 H = int(W / aspect)
         elif self._state in ["low_move", "low_static"]:
-            num_view_rays_per_sec = self.viewer.state.num_view_rays_per_sec
+            num_view_rays_per_sec = self.viewer.render_tab_state.num_view_rays_per_sec
             target_fps = self._target_fps
             num_viewer_rays = num_view_rays_per_sec / target_fps
             H = (num_viewer_rays / aspect) ** 0.5
@@ -153,12 +153,12 @@ class Renderer(threading.Thread):
                         task.camera_state,
                         self.viewer.render_tab_state,
                     )
-                    self.viewer.after_render()
+                    self.viewer._after_render()
                     if isinstance(rendered, tuple):
                         img, depth = rendered
                     else:
                         img, depth = rendered, None
-                    self.viewer.state.num_view_rays_per_sec = (W * H) / (
+                    self.viewer.render_tab_state.num_view_rays_per_sec = (W * H) / (
                         time.time() - tic
                     )
             except InterruptRenderException:
