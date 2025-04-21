@@ -92,14 +92,14 @@ class Viewer(object):
             brand_color=(255, 211, 105),
         )
         if self.mode == "training":
-            self._init_train_tab()
+            self._init_training_tab()
             self._populate_training_tab()
-        self._init_render_tab()
-        self._populate_render_tab()
+        self._init_rendering_tab()
+        self._populate_rendering_tab()
         self.state = mode
 
-    def _init_train_tab(self):
-        self._train_tab_handles = {}
+    def _init_training_tab(self):
+        self._training_tab_handles = {}
         self._training_folder = self.server.gui.add_folder("Training")
 
     def _populate_training_tab(self):
@@ -138,21 +138,21 @@ class Viewer(object):
             )
             train_util_slider.on_update(self.rerender)
 
-        self._train_tab_handles = {
+        self._training_tab_handles = {
             "step_number": step_number,
             "pause_train_button": pause_train_button,
             "resume_train_button": resume_train_button,
             "train_util_slider": train_util_slider,
         }
 
-    def _init_render_tab(self):
+    def _init_rendering_tab(self):
         # Allow subclasses to override for custom rendering table
         self.render_tab_state = RenderTabState()
-        self._render_tab_handles = {}
+        self._rendering_tab_handles = {}
         self._rendering_folder = self.server.gui.add_folder("Rendering")
 
-    def _populate_render_tab(self):
-        # Allow subclasses to override for custom renderign table
+    def _populate_rendering_tab(self):
+        # Allow subclasses to override for custom rendering table
         assert self.render_tab_state is not None, "Render tab state is not initialized"
         assert self._rendering_folder is not None, "Rendering folder is not initialized"
         with self._rendering_folder:
@@ -170,12 +170,12 @@ class Viewer(object):
                 self.render_tab_state.viewer_res = int(viewer_res_slider.value)
                 self.rerender(_)
 
-            self._render_tab_handles["viewer_res_slider"] = viewer_res_slider
+            self._rendering_tab_handles["viewer_res_slider"] = viewer_res_slider
 
         # training tab handles should also be disabled during dumping video.
-        extra_handles = self._render_tab_handles.copy()
+        extra_handles = self._rendering_tab_handles.copy()
         if self.mode == "training":
-            extra_handles.update(self._train_tab_handles)
+            extra_handles.update(self._training_tab_handles)
         handles = populate_general_render_tab(
             self.server,
             output_dir=self.output_dir,
@@ -183,7 +183,7 @@ class Viewer(object):
             render_tab_state=self.render_tab_state,
             extra_handles=extra_handles,
         )
-        self._render_tab_handles.update(handles)
+        self._rendering_tab_handles.update(handles)
 
     def rerender(self, _):
         clients = self.server.get_clients()
@@ -236,7 +236,7 @@ class Viewer(object):
         if step < 5:
             return
         self._step = step
-        self._train_tab_handles["step_number"].value = step
+        self._training_tab_handles["step_number"].value = step
         if len(self._renderers) == 0:
             return
         # Stop training while user moves camera to make viewing smoother.
@@ -244,14 +244,14 @@ class Viewer(object):
             time.sleep(0.05)
         if (
             self.state == "training"
-            and self._train_tab_handles["train_util_slider"].value != 1
+            and self._training_tab_handles["train_util_slider"].value != 1
         ):
             assert (
                 self.render_tab_state.num_train_rays_per_sec is not None
             ), "User must keep track of `num_train_rays_per_sec` to use `update`."
             train_s = self.render_tab_state.num_train_rays_per_sec
             view_s = self.render_tab_state.num_view_rays_per_sec
-            train_util = self._train_tab_handles["train_util_slider"].value
+            train_util = self._training_tab_handles["train_util_slider"].value
             view_n = self.render_tab_state.viewer_res**2
             train_n = num_train_rays_per_step
             train_time = train_n / train_s
@@ -277,6 +277,6 @@ class Viewer(object):
     def complete(self):
         print("Training complete, disable training tab.")
         self.state = "completed"
-        self._train_tab_handles["pause_train_button"].disabled = True
-        self._train_tab_handles["resume_train_button"].disabled = True
-        self._train_tab_handles["train_util_slider"].disabled = True
+        self._training_tab_handles["pause_train_button"].disabled = True
+        self._training_tab_handles["resume_train_button"].disabled = True
+        self._training_tab_handles["train_util_slider"].disabled = True

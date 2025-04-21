@@ -66,12 +66,12 @@ class GsplatViewer(Viewer):
         super().__init__(server, render_fn, output_dir, mode)
         server.gui.set_panel_label("gsplat viewer")
 
-    def _init_render_tab(self):
+    def _init_rendering_tab(self):
         self.render_tab_state = GsplatRenderTabState()
-        self._render_tab_handles = {}
+        self._rendering_tab_handles = {}
         self._rendering_folder = self.server.gui.add_folder("Rendering")
 
-    def _populate_render_tab(self):
+    def _populate_rendering_tab(self):
         server = self.server
         with self._rendering_folder:
             with server.gui.add_folder("Gsplat"):
@@ -243,7 +243,7 @@ class GsplatViewer(Viewer):
                     self.render_tab_state.camera_model = camera_model_dropdown.value
                     self.rerender(_)
 
-        self._render_tab_handles.update(
+        self._rendering_tab_handles.update(
             {
                 "total_gs_count_number": total_gs_count_number,
                 "rendered_gs_count_number": rendered_gs_count_number,
@@ -259,14 +259,14 @@ class GsplatViewer(Viewer):
                 "camera_model_dropdown": camera_model_dropdown,
             }
         )
-        super()._populate_render_tab()
+        super()._populate_rendering_tab()
 
     def _after_render(self):
         # Update the GUI elements with current values
-        self._render_tab_handles["total_gs_count_number"].value = (
+        self._rendering_tab_handles["total_gs_count_number"].value = (
             self.render_tab_state.total_gs_count
         )
-        self._render_tab_handles["rendered_gs_count_number"].value = (
+        self._rendering_tab_handles["rendered_gs_count_number"].value = (
             self.render_tab_state.rendered_gs_count
         )
 
