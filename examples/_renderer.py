@@ -89,25 +89,25 @@ class Renderer(threading.Thread):
 
     def _get_img_wh(self, aspect: float) -> Tuple[int, int]:
         # we always trade off speed for quality
-        max_img_res = self.viewer._viewer_res_slider.value
-        if self._state in ["high", "low_move", "low_static"]:
+        max_img_res = self.viewer.render_tab_state.viewer_res
+        if self._state in ["high"]:
             #  if True:
             H = max_img_res
             W = int(H * aspect)
             if W > max_img_res:
                 W = max_img_res
                 H = int(W / aspect)
-            # elif self._state in ["low_move", "low_static"]:
-            #     num_view_rays_per_sec = self.viewer.state.num_view_rays_per_sec
-            #     target_fps = self._target_fps
-            #     num_viewer_rays = num_view_rays_per_sec / target_fps
-            #     H = (num_viewer_rays / aspect) ** 0.5
-            #     H = int(round(H, -1))
-            #     H = max(min(max_img_res, H), 30)
-            #     W = int(H * aspect)
-            #     if W > max_img_res:
-            #         W = max_img_res
-            #         H = int(W / aspect)
+        elif self._state in ["low_move", "low_static"]:
+            num_view_rays_per_sec = self.viewer.state.num_view_rays_per_sec
+            target_fps = self._target_fps
+            num_viewer_rays = num_view_rays_per_sec / target_fps
+            H = (num_viewer_rays / aspect) ** 0.5
+            H = int(round(H, -1))
+            H = max(min(max_img_res, H), 30)
+            W = int(H * aspect)
+            if W > max_img_res:
+                W = max_img_res
+                H = int(W / aspect)
         else:
             raise ValueError(f"Unknown state: {self._state}.")
         return W, H
@@ -145,11 +145,15 @@ class Renderer(threading.Thread):
             try:
                 with self.lock, set_trace_context(self._may_interrupt_trace):
                     tic = time.time()
-                    W, H = img_wh = self._get_img_wh(task.camera_state.aspect)
-                    viewer_args = self.viewer.get_rendering_args()
+                    W, H = self._get_img_wh(task.camera_state.aspect)
+                    self.viewer.render_tab_state.viewer_width = W
+                    self.viewer.render_tab_state.viewer_height = H
+
                     rendered = self.viewer.render_fn(
-                        task.camera_state, img_wh, viewer_args
+                        task.camera_state,
+                        self.viewer.render_tab_state,
                     )
+                    self.viewer.after_render()
                     if isinstance(rendered, tuple):
                         img, depth = rendered
                     else:
