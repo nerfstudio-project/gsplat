@@ -1,15 +1,15 @@
-import os
 import json
-from tqdm import tqdm
+import os
 from typing import Any, Dict, List, Optional
-from typing_extensions import assert_never
 
 import cv2
-from PIL import Image
 import imageio.v2 as imageio
 import numpy as np
 import torch
+from PIL import Image
 from pycolmap import SceneManager
+from tqdm import tqdm
+from typing_extensions import assert_never
 
 from .normalize import (
     align_principal_axes,
@@ -225,6 +225,23 @@ class Parser:
             points = transform_points(T2, points)
 
             transform = T2 @ T1
+
+            # Fix for up side down. We assume more points towards
+            # the bottom of the scene which is true when ground floor is
+            # present in the images.
+            if np.median(points[:, 2]) > np.mean(points[:, 2]):
+                # rotate 180 degrees such that z is flipped
+                T3 = np.array(
+                    [
+                        [-1.0, 0.0, 0.0, 0.0],
+                        [0.0, -1.0, 0.0, 0.0],
+                        [0.0, 0.0, -1.0, 0.0],
+                        [0.0, 0.0, 0.0, 1.0],
+                    ]
+                )
+                camtoworlds = transform_cameras(T3, camtoworlds)
+                points = transform_points(T3, points)
+                transform = T3 @ transform
         else:
             transform = np.eye(4)
 
