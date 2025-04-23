@@ -269,10 +269,10 @@ def _world_to_cam(
 
 
 def _fully_fused_projection(
-    means: Tensor,  # [N, 3]
-    covars: Tensor,  # [N, 3, 3]
-    viewmats: Tensor,  # [C, 4, 4]
-    Ks: Tensor,  # [C, 3, 3]
+    means: Tensor,  # [B, N, 3]
+    covars: Tensor,  # [B, N, 3, 3]
+    viewmats: Tensor,  # [B, C, 4, 4]
+    Ks: Tensor,  # [B, C, 3, 3]
     width: int,
     height: int,
     eps2d: float = 0.3,
@@ -288,6 +288,13 @@ def _fully_fused_projection(
         This is a minimal implementation of fully fused version, which has more
         arguments. Not all arguments are supported.
     """
+    B, N, _ = means.shape
+    C = viewmats.shape[1]
+    assert means.shape == (B, N, 3), means.shape
+    assert covars.shape == (B, N, 3, 3), covars.shape
+    assert viewmats.shape == (B, C, 4, 4), viewmats.shape
+    assert Ks.shape == (B, C, 3, 3), Ks.shape
+
     means_c, covars_c = _world_to_cam(means, covars, viewmats)
 
     if camera_model == "ortho":
@@ -323,18 +330,18 @@ def _fully_fused_projection(
             covars2d[..., 0, 0] / det,
         ],
         dim=-1,
-    )  # [C, N, 3]
+    )  # [B, C, N, 3]
 
-    depths = means_c[..., 2]  # [C, N]
+    depths = means_c[..., 2]  # [B, C, N]
 
-    b = (covars2d[..., 0, 0] + covars2d[..., 1, 1]) / 2  # (...,)
+    b = (covars2d[..., 0, 0] + covars2d[..., 1, 1]) / 2  # (B, C, N)
     tmp = torch.sqrt(torch.clamp(b**2 - det, min=0.01))
-    v1 = b + tmp  # (...,)
+    v1 = b + tmp  # (B, C, N)
     r1 = 3.33 * torch.sqrt(v1)
     radius_x = torch.ceil(torch.minimum(3.33 * torch.sqrt(covars2d[..., 0, 0]), r1))
     radius_y = torch.ceil(torch.minimum(3.33 * torch.sqrt(covars2d[..., 1, 1]), r1))
 
-    radius = torch.stack([radius_x, radius_y], dim=-1)  # (..., 2)
+    radius = torch.stack([radius_x, radius_y], dim=-1)  # (B, C, N, 2)
 
     valid = (det > 0) & (depths > near_plane) & (depths < far_plane)
     radius[~valid] = 0.0
