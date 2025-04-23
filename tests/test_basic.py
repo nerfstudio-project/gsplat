@@ -34,15 +34,14 @@ def test_data():
         device=device,
         data_path=os.path.join(os.path.dirname(__file__), "../assets/test_garden.npz"),
     )
-    colors = colors[None].repeat(len(viewmats), 1, 1)
     return {
-        "means": means,
+        "means": means.expand(2, -1, -1),
         "quats": quats.expand(2, -1, -1),
         "scales": scales.expand(2, -1, -1),
-        "opacities": opacities,
-        "colors": colors,
-        "viewmats": viewmats,
-        "Ks": Ks,
+        "opacities": opacities.expand(2, -1),
+        "colors": colors[None].repeat(len(viewmats), 1, 1),
+        "viewmats": viewmats.expand(2, -1, -1, -1),
+        "Ks": Ks[None].repeat(2, 1, 1, 1),
         "width": width,
         "height": height,
     }
@@ -550,9 +549,10 @@ def test_sh(test_data, sh_degree: int):
 
     torch.manual_seed(42)
 
+    B = 2
     N = 1000
-    coeffs = torch.randn(N, (4 + 1) ** 2, 3, device=device)
-    dirs = torch.randn(N, 3, device=device)
+    coeffs = torch.randn(B, N, (4 + 1) ** 2, 3, device=device)
+    dirs = torch.randn(B, N, 3, device=device)
     coeffs.requires_grad = True
     dirs.requires_grad = True
 

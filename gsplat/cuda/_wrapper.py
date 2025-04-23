@@ -17,9 +17,9 @@ def _make_lazy_cuda_func(name: str) -> Callable:
 
 
 def world_to_cam(
-    means: Tensor,  # [N, 3]
-    covars: Tensor,  # [N, 3, 3]
-    viewmats: Tensor,  # [C, 4, 4]
+    means: Tensor,  # [B, N, 3]
+    covars: Tensor,  # [B, N, 3, 3]
+    viewmats: Tensor,  # [B, C, 4, 4]
 ) -> Tuple[Tensor, Tensor]:
     """Transforms Gaussians from world to camera coordinate system.
 
@@ -42,11 +42,11 @@ def world_to_cam(
         "This function will be completely removed in a future release.",
         DeprecationWarning,
     )
-    C = viewmats.size(0)
-    N = means.size(0)
-    assert means.size() == (N, 3), means.size()
-    assert covars.size() == (N, 3, 3), covars.size()
-    assert viewmats.size() == (C, 4, 4), viewmats.size()
+    B, N, _ = means.shape
+    C = viewmats.shape[1]
+    assert means.shape == (B, N, 3), means.shape
+    assert covars.shape == (B, N, 3, 3), covars.shape
+    assert viewmats.shape == (B, C, 4, 4), viewmats.shape
     means = means.contiguous()
     covars = covars.contiguous()
     viewmats = viewmats.contiguous()
@@ -175,9 +175,9 @@ def persp_proj(
 
 
 def proj(
-    means: Tensor,  # [C, N, 3]
-    covars: Tensor,  # [C, N, 3, 3]
-    Ks: Tensor,  # [C, 3, 3]
+    means: Tensor,  # [B, C, N, 3]
+    covars: Tensor,  # [B, C, N, 3, 3]
+    Ks: Tensor,  # [B, C, 3, 3]
     width: int,
     height: int,
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
@@ -185,22 +185,22 @@ def proj(
     """Projection of Gaussians (perspective or orthographic).
 
     Args:
-        means: Gaussian means. [C, N, 3]
-        covars: Gaussian covariances. [C, N, 3, 3]
-        Ks: Camera intrinsics. [C, 3, 3]
+        means: Gaussian means. [B, C, N, 3]
+        covars: Gaussian covariances. [B, C, N, 3, 3]
+        Ks: Camera intrinsics. [B, C, 3, 3]
         width: Image width.
         height: Image height.
 
     Returns:
         A tuple:
 
-        - **Projected means**. [C, N, 2]
-        - **Projected covariances**. [C, N, 2, 2]
+        - **Projected means**. [B, C, N, 2]
+        - **Projected covariances**. [B, C, N, 2, 2]
     """
-    C, N, _ = means.shape
-    assert means.shape == (C, N, 3), means.size()
-    assert covars.shape == (C, N, 3, 3), covars.size()
-    assert Ks.shape == (C, 3, 3), Ks.size()
+    B, C, N, _ = means.shape
+    assert means.shape == (B, C, N, 3), means.size()
+    assert covars.shape == (B, C, N, 3, 3), covars.size()
+    assert Ks.shape == (B, C, 3, 3), Ks.size()
     means = means.contiguous()
     covars = covars.contiguous()
     Ks = Ks.contiguous()
@@ -704,9 +704,9 @@ class _Proj(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        means: Tensor,  # [C, N, 3]
-        covars: Tensor,  # [C, N, 3, 3]
-        Ks: Tensor,  # [C, 3, 3]
+        means: Tensor,  # [B, C, N, 3]
+        covars: Tensor,  # [B, C, N, 3, 3]
+        Ks: Tensor,  # [B, C, 3, 3]
         width: int,
         height: int,
         camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
