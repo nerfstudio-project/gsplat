@@ -182,6 +182,8 @@ void adam(
 // GS Tile Intersection
 std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
     const at::Tensor means2d,                    // [C, N, 2] or [nnz, 2]
+    const at::Tensor opacities,                  // [C, N] or [nnz]
+    const at::Tensor conics,                     // [C, N, 3] or [nnz, 3]
     const at::Tensor radii,                      // [C, N, 2] or [nnz, 2]
     const at::Tensor depths,                     // [C, N] or [nnz]
     const at::optional<at::Tensor> camera_ids,   // [nnz]

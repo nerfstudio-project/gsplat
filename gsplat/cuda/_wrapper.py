@@ -356,6 +356,8 @@ def fully_fused_projection(
 @torch.no_grad()
 def isect_tiles(
     means2d: Tensor,  # [C, N, 2] or [nnz, 2]
+    opacities: Tensor,  # [C, N] or [nnz]
+    conics: Tensor,  # [C, N, 3] or [nnz, 3]
     radii: Tensor,  # [C, N, 2] or [nnz, 2]
     depths: Tensor,  # [C, N] or [nnz]
     tile_size: int,
@@ -413,6 +415,8 @@ def isect_tiles(
 
     tiles_per_gauss, isect_ids, flatten_ids = _make_lazy_cuda_func("intersect_tile")(
         means2d.contiguous(),
+        opacities.contiguous(),
+        conics.contiguous(),
         radii.contiguous(),
         depths.contiguous(),
         camera_ids,

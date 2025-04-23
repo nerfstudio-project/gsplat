@@ -9,6 +9,7 @@
 
 #include "Common.h"
 #include "Intersect.h"
+#include "EllipseIntersect.h"
 #include "Utils.cuh"
 
 namespace gsplat {
@@ -33,6 +34,8 @@ __global__ void intersect_tile_kernel(
     const int64_t *__restrict__ gaussian_ids, // [nnz] optional
     // data
     const scalar_t *__restrict__ means2d,            // [C, N, 2] or [nnz, 2]
+    const scalar_t *__restrict__ opacities,          // [C, N] or [nnz]
+    const scalar_t *__restrict__ conics,             // [C, N, 3] or [nnz, 3]
     const int32_t *__restrict__ radii,               // [C, N, 2] or [nnz, 2]
     const scalar_t *__restrict__ depths,             // [C, N] or [nnz]
     const int64_t *__restrict__ cum_tiles_per_gauss, // [C, N] or [nnz]
@@ -61,24 +64,22 @@ __global__ void intersect_tile_kernel(
     }
 
     vec2 mean2d = glm::make_vec2(means2d + 2 * idx);
-
-    float tile_radius_x = radius_x / static_cast<float>(tile_size);
-    float tile_radius_y = radius_y / static_cast<float>(tile_size);
-    float tile_x = mean2d.x / static_cast<float>(tile_size);
-    float tile_y = mean2d.y / static_cast<float>(tile_size);
-
-    // tile_min is inclusive, tile_max is exclusive
-    uint2 tile_min, tile_max;
-    tile_min.x = min(max(0, (uint32_t)floor(tile_x - tile_radius_x)), tile_width);
-    tile_min.y =
-        min(max(0, (uint32_t)floor(tile_y - tile_radius_y)), tile_height);
-    tile_max.x = min(max(0, (uint32_t)ceil(tile_x + tile_radius_x)), tile_width);
-    tile_max.y = min(max(0, (uint32_t)ceil(tile_y + tile_radius_y)), tile_height);
+    vec3 conic = glm::make_vec3(conics + 3 * idx);
 
     if (first_pass) {
-        // first pass only writes out tiles_per_gauss
-        tiles_per_gauss[idx] = static_cast<int32_t>(
-            (tile_max.y - tile_min.y) * (tile_max.x - tile_min.x)
+        tiles_per_gauss[idx]  = find_tiles_touched(
+            mean2d,
+            conic,
+            opacities[idx],
+            tile_size,
+            tile_width,
+            tile_height,
+            0,
+            0,
+            0,
+            0,
+            nullptr,
+            nullptr
         );
         return;
     }
@@ -98,25 +99,41 @@ __global__ void intersect_tile_kernel(
     // tolerance for negative depth
     int32_t depth_i32 = *(int32_t *)&(depths[idx]);  // Bit-level reinterpret
     int64_t depth_id_enc = static_cast<uint32_t>(depth_i32);  // Zero-extend to 64-bit
-    // int64_t depth_id_enc = (int64_t) * (int32_t *)&(depths[idx]);
-    
     int64_t cur_idx = (idx == 0) ? 0 : cum_tiles_per_gauss[idx - 1];
-    for (int32_t i = tile_min.y; i < tile_max.y; ++i) {
-        for (int32_t j = tile_min.x; j < tile_max.x; ++j) {
-            int64_t tile_id = i * tile_width + j;
-            // e.g. tile_n_bits = 22:
-            // camera id (10 bits) | tile id (22 bits) | depth (32 bits)
-            isect_ids[cur_idx] = cid_enc | (tile_id << 32) | depth_id_enc;
-            // the flatten index in [C * N] or [nnz]
-            flatten_ids[cur_idx] = static_cast<int32_t>(idx);
-            ++cur_idx;
-        }
-    }
+
+
+    find_tiles_touched(
+        mean2d,
+        conic,
+        opacities[idx],
+        tile_size,
+        tile_width,
+        tile_height,
+        idx, cur_idx,
+        depth_id_enc,
+        cid_enc,
+        isect_ids,
+        flatten_ids
+    );
+
+    // for (int32_t i = tile_min.y; i < tile_max.y; ++i) {
+    //     for (int32_t j = tile_min.x; j < tile_max.x; ++j) {
+    //         int64_t tile_id = i * tile_width + j;
+    //         // e.g. tile_n_bits = 22:
+    //         // camera id (10 bits) | tile id (22 bits) | depth (32 bits)
+    //         isect_ids[cur_idx] = cid_enc | (tile_id << 32) | depth_id_enc;
+    //         // the flatten index in [C * N] or [nnz]
+    //         flatten_ids[cur_idx] = static_cast<int32_t>(idx);
+    //         ++cur_idx;
+    //     }
+    // }
 }
 
 void launch_intersect_tile_kernel(
     // inputs
     const at::Tensor means2d,                    // [C, N, 2] or [nnz, 2]
+    const at::Tensor opacities,                  // [C, N] or [nnz]
+    const at::Tensor conics,                     // [C, N, 3] or [nnz, 3]
     const at::Tensor radii,                      // [C, N, 2] or [nnz, 2]
     const at::Tensor depths,                     // [C, N] or [nnz]
     const at::optional<at::Tensor> camera_ids,   // [nnz]
@@ -183,6 +200,8 @@ void launch_intersect_tile_kernel(
                         ? gaussian_ids.value().data_ptr<int64_t>()
                         : nullptr,
                     means2d.data_ptr<scalar_t>(),
+                    opacities.data_ptr<scalar_t>(),
+                    conics.data_ptr<scalar_t>(),
                     radii.data_ptr<int32_t>(),
                     depths.data_ptr<scalar_t>(),
                     cum_tiles_per_gauss.has_value()
