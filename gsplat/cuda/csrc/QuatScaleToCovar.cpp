@@ -15,8 +15,8 @@
 namespace gsplat {
 
 std::tuple<at::Tensor, at::Tensor> quat_scale_to_covar_preci_fwd(
-    const at::Tensor quats,  // [N, 4]
-    const at::Tensor scales, // [N, 3]
+    const at::Tensor quats,  // [..., 4]
+    const at::Tensor scales, // [..., 3]
     const bool compute_covar,
     const bool compute_preci,
     const bool triu
@@ -25,21 +25,30 @@ std::tuple<at::Tensor, at::Tensor> quat_scale_to_covar_preci_fwd(
     CHECK_INPUT(quats);
     CHECK_INPUT(scales);
 
-    uint32_t N = quats.size(0);
+    auto batch_shape = quats.sizes().vec();
+    batch_shape.pop_back();
 
     at::Tensor covars, precis;
     if (compute_covar) {
+        auto shape = batch_shape;
         if (triu) {
-            covars = at::empty({N, 6}, quats.options());
+            shape.push_back(6);
+            covars = at::empty(shape, quats.options());
         } else {
-            covars = at::empty({N, 3, 3}, quats.options());
+            shape.push_back(3);
+            shape.push_back(3);
+            covars = at::empty(shape, quats.options());
         }
     }
     if (compute_preci) {
+        auto shape = batch_shape;
         if (triu) {
-            precis = at::empty({N, 6}, quats.options());
+            shape.push_back(6);
+            precis = at::empty(shape, quats.options());
         } else {
-            precis = at::empty({N, 3, 3}, quats.options());
+            shape.push_back(3);
+            shape.push_back(3);
+            precis = at::empty(shape, quats.options());
         }
     }
 
@@ -55,11 +64,11 @@ std::tuple<at::Tensor, at::Tensor> quat_scale_to_covar_preci_fwd(
 }
 
 std::tuple<at::Tensor, at::Tensor> quat_scale_to_covar_preci_bwd(
-    const at::Tensor quats,  // [N, 4]
-    const at::Tensor scales, // [N, 3]
+    const at::Tensor quats,  // [..., 4]
+    const at::Tensor scales, // [..., 3]
     const bool triu,
-    const at::optional<at::Tensor> v_covars, // [N, 3, 3] or [N, 6]
-    const at::optional<at::Tensor> v_precis  // [N, 3, 3] or [N, 6]
+    const at::optional<at::Tensor> v_covars, // [..., 3, 3] or [..., 6]
+    const at::optional<at::Tensor> v_precis  // [..., 3, 3] or [..., 6]
 ) {
     DEVICE_GUARD(quats);
     CHECK_INPUT(quats);
@@ -70,8 +79,6 @@ std::tuple<at::Tensor, at::Tensor> quat_scale_to_covar_preci_bwd(
     if (v_precis.has_value()) {
         CHECK_INPUT(v_precis.value());
     }
-
-    uint32_t N = quats.size(0);
 
     // kernel with directly write values into these tensors so we could empty
     // init them.

@@ -201,18 +201,18 @@ at::Tensor intersect_offset(
 
 // Compute Covariance and Precision Matrices from Quaternion and Scale
 std::tuple<at::Tensor, at::Tensor> quat_scale_to_covar_preci_fwd(
-    const at::Tensor quats,  // [N, 4]
-    const at::Tensor scales, // [N, 3]
+    const at::Tensor quats,  // [..., 4]
+    const at::Tensor scales, // [..., 3]
     const bool compute_covar,
     const bool compute_preci,
     const bool triu
 );
 std::tuple<at::Tensor, at::Tensor> quat_scale_to_covar_preci_bwd(
-    const at::Tensor quats,  // [N, 4]
-    const at::Tensor scales, // [N, 3]
+    const at::Tensor quats,  // [..., 4]
+    const at::Tensor scales, // [..., 3]
     const bool triu,
-    const at::optional<at::Tensor> v_covars, // [N, 3, 3] or [N, 6]
-    const at::optional<at::Tensor> v_precis  // [N, 3, 3] or [N, 6]
+    const at::optional<at::Tensor> v_covars, // [..., 3, 3] or [..., 6]
+    const at::optional<at::Tensor> v_precis  // [..., 3, 3] or [..., 6]
 );
 
 // Rasterize 3D Gaussian to pixels

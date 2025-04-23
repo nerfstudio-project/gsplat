@@ -39,8 +39,8 @@ def _quat_scale_to_matrix(
 
 
 def _quat_scale_to_covar_preci(
-    quats: Tensor,  # [N, 4],
-    scales: Tensor,  # [N, 3],
+    quats: Tensor,  # [..., 4],
+    scales: Tensor,  # [..., 3],
     compute_covar: bool = True,
     compute_preci: bool = True,
     triu: bool = False,
@@ -50,7 +50,7 @@ def _quat_scale_to_covar_preci(
 
     if compute_covar:
         M = R * scales[..., None, :]  # (..., 3, 3)
-        covars = torch.bmm(M, M.transpose(-1, -2))  # (..., 3, 3)
+        covars = torch.einsum("...ij,...kj -> ...ik", M, M)  # (..., 3, 3)
         if triu:
             covars = covars.reshape(covars.shape[:-2] + (9,))  # (..., 9)
             covars = (
@@ -58,7 +58,7 @@ def _quat_scale_to_covar_preci(
             ) / 2.0  # (..., 6)
     if compute_preci:
         P = R * (1 / scales[..., None, :])  # (..., 3, 3)
-        precis = torch.bmm(P, P.transpose(-1, -2))  # (..., 3, 3)
+        precis = torch.einsum("...ij,...kj -> ...ik", P, P)  # (..., 3, 3)
         if triu:
             precis = precis.reshape(precis.shape[:-2] + (9,))
             precis = (

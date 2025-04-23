@@ -37,8 +37,8 @@ def test_data():
     colors = colors[None].repeat(len(viewmats), 1, 1)
     return {
         "means": means,
-        "quats": quats,
-        "scales": scales,
+        "quats": quats.expand(2, -1, -1),
+        "scales": scales.expand(2, -1, -1),
         "opacities": opacities,
         "colors": colors,
         "viewmats": viewmats,
