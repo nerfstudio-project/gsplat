@@ -2,6 +2,8 @@
 
 We now have integrated [NVIDIA 3DGUT](https://research.nvidia.com/labs/toronto-ai/3DGUT/) into gsplat, which extend 3D Gaussian Splatting (3DGS) to support nonlinear camera projections such as distortions in pinhole or fisheye cameras, and [rolling shutter](https://en.wikipedia.org/wiki/Rolling_shutter) effects. This allows user to directly train 3DGS on captured images without the need of undistort them beforehand (though camera calibration -- e.g., using COLMAP -- is still required to get distortion parameters).
 
+https://github.com/user-attachments/assets/291481ec-9546-4d50-a737-19422dbadffd
+
 ## How to Use
 
 Here are the instructions on how to use this feature.
