@@ -13,11 +13,13 @@
 namespace gsplat {
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
-    const at::Tensor means2d,                    // [C, N, 2] or [nnz, 2]
-    const at::Tensor radii,                      // [C, N, 2] or [nnz, 2]
-    const at::Tensor depths,                     // [C, N] or [nnz]
+    const at::Tensor means2d,                    // [B, C, N, 2] or [nnz, 2]
+    const at::Tensor radii,                      // [B, C, N, 2] or [nnz, 2]
+    const at::Tensor depths,                     // [B, C, N] or [nnz]
+    const at::optional<at::Tensor> batch_ids,    // [nnz]
     const at::optional<at::Tensor> camera_ids,   // [nnz]
     const at::optional<at::Tensor> gaussian_ids, // [nnz]
+    const uint32_t B,
     const uint32_t C,
     const uint32_t tile_size,
     const uint32_t tile_width,
@@ -33,9 +35,10 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
     bool packed = means2d.dim() == 2;
     if (packed) {
         TORCH_CHECK(
-            camera_ids.has_value() && gaussian_ids.has_value(),
-            "When packed is set, camera_ids and gaussian_ids must be provided."
+            batch_ids.has_value() && camera_ids.has_value() && gaussian_ids.has_value(),
+            "When packed is set, batch_ids, camera_ids and gaussian_ids must be provided."
         );
+        CHECK_INPUT(batch_ids.value());
         CHECK_INPUT(camera_ids.value());
         CHECK_INPUT(gaussian_ids.value());
     }
@@ -45,11 +48,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
     // Note: std::bit_width requires C++20
     // uint32_t tile_n_bits = std::bit_width(n_tiles);
     // uint32_t cam_n_bits = std::bit_width(C);
-    uint32_t tile_n_bits = (uint32_t)floor(log2(n_tiles)) + 1;
+    uint32_t batch_n_bits = (uint32_t)floor(log2(B)) + 1;
     uint32_t cam_n_bits = (uint32_t)floor(log2(C)) + 1;
-    // the first 32 bits are used for the camera id and tile id altogether, so
+    uint32_t tile_n_bits = (uint32_t)floor(log2(n_tiles)) + 1;
+    // the first 32 bits are used for the batch id, camera id and tile id altogether, so
     // check if we have enough bits for them.
-    assert(tile_n_bits + cam_n_bits <= 32);
+    assert(batch_n_bits + cam_n_bits + tile_n_bits <= 32);
 
     // first pass: compute number of tiles per gaussian
     at::Tensor tiles_per_gauss =
@@ -62,8 +66,10 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
             means2d,
             radii,
             depths,
+            packed ? batch_ids : c10::nullopt,
             packed ? camera_ids : c10::nullopt,
             packed ? gaussian_ids : c10::nullopt,
+            B,
             C,
             tile_size,
             tile_width,
@@ -91,8 +97,10 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
             means2d,
             radii,
             depths,
+            packed ? batch_ids : c10::nullopt,
             packed ? camera_ids : c10::nullopt,
             packed ? gaussian_ids : c10::nullopt,
+            B,
             C,
             tile_size,
             tile_width,
@@ -111,8 +119,9 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
         at::Tensor flatten_ids_sorted = at::empty_like(flatten_ids);
         radix_sort_double_buffer(
             n_isects,
-            tile_n_bits,
+            batch_n_bits,
             cam_n_bits,
+            tile_n_bits,
             isect_ids,
             flatten_ids,
             isect_ids_sorted,
@@ -128,6 +137,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
 
 at::Tensor intersect_offset(
     const at::Tensor isect_ids, // [n_isects]
+    const uint32_t B,
     const uint32_t C,
     const uint32_t tile_width,
     const uint32_t tile_height
@@ -136,10 +146,10 @@ at::Tensor intersect_offset(
     CHECK_INPUT(isect_ids);
 
     at::Tensor offsets = at::empty(
-        {C, tile_height, tile_width}, isect_ids.options().dtype(at::kInt)
+        {B, C, tile_height, tile_width}, isect_ids.options().dtype(at::kInt)
     );
     launch_intersect_offset_kernel(
-        isect_ids, C, tile_width, tile_height, offsets
+        isect_ids, B, C, tile_width, tile_height, offsets
     );
     return offsets;
 }

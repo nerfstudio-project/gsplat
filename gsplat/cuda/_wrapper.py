@@ -356,30 +356,34 @@ def fully_fused_projection(
 
 @torch.no_grad()
 def isect_tiles(
-    means2d: Tensor,  # [C, N, 2] or [nnz, 2]
-    radii: Tensor,  # [C, N, 2] or [nnz, 2]
-    depths: Tensor,  # [C, N] or [nnz]
+    means2d: Tensor,  # [B, C, N, 2] or [nnz, 2]
+    radii: Tensor,  # [B, C, N, 2] or [nnz, 2]
+    depths: Tensor,  # [B, C, N] or [nnz]
     tile_size: int,
     tile_width: int,
     tile_height: int,
     sort: bool = True,
     packed: bool = False,
+    n_batches: Optional[int] = None,
     n_cameras: Optional[int] = None,
+    batch_ids: Optional[Tensor] = None,
     camera_ids: Optional[Tensor] = None,
     gaussian_ids: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """Maps projected Gaussians to intersecting tiles.
 
     Args:
-        means2d: Projected Gaussian means. [C, N, 2] if packed is False, [nnz, 2] if packed is True.
-        radii: Maximum radii of the projected Gaussians. [C, N, 2] if packed is False, [nnz, 2] if packed is True.
-        depths: Z-depth of the projected Gaussians. [C, N] if packed is False, [nnz] if packed is True.
+        means2d: Projected Gaussian means. [B, C, N, 2] if packed is False, [nnz, 2] if packed is True.
+        radii: Maximum radii of the projected Gaussians. [B, C, N, 2] if packed is False, [nnz, 2] if packed is True.
+        depths: Z-depth of the projected Gaussians. [B, C, N] if packed is False, [nnz] if packed is True.
         tile_size: Tile size.
         tile_width: Tile width.
         tile_height: Tile height.
         sort: If True, the returned intersections will be sorted by the intersection ids. Default: True.
         packed: If True, the input tensors are packed. Default: False.
+        n_batches: Number of batches. Required if packed is True.
         n_cameras: Number of cameras. Required if packed is True.
+        batch_ids: The batch indices of the projected Gaussians. Required if packed is True.
         camera_ids: The row indices of the projected Gaussians. Required if packed is True.
         gaussian_ids: The column indices of the projected Gaussians. Required if packed is True.
 
@@ -387,37 +391,42 @@ def isect_tiles(
         A tuple:
 
         - **Tiles per Gaussian**. The number of tiles intersected by each Gaussian.
-          Int32 [C, N] if packed is False, Int32 [nnz] if packed is True.
+          Int32 [B, C, N] if packed is False, Int32 [nnz] if packed is True.
         - **Intersection ids**. Each id is an 64-bit integer with the following
           information: camera_id (Xc bits) | tile_id (Xt bits) | depth (32 bits).
           Xc and Xt are the maximum number of bits required to represent the camera and
           tile ids, respectively. Int64 [n_isects]
-        - **Flatten ids**. The global flatten indices in [C * N] or [nnz] (packed). [n_isects]
+        - **Flatten ids**. The global flatten indices in [B * C * N] or [nnz] (packed). [n_isects]
     """
     if packed:
         nnz = means2d.size(0)
         assert means2d.shape == (nnz, 2), means2d.size()
         assert radii.shape == (nnz, 2), radii.size()
         assert depths.shape == (nnz,), depths.size()
+        assert batch_ids is not None, "batch_ids is required if packed is True"
         assert camera_ids is not None, "camera_ids is required if packed is True"
         assert gaussian_ids is not None, "gaussian_ids is required if packed is True"
+        assert n_batches is not None, "n_batches is required if packed is True"
         assert n_cameras is not None, "n_cameras is required if packed is True"
         camera_ids = camera_ids.contiguous()
         gaussian_ids = gaussian_ids.contiguous()
+        B = n_batches
         C = n_cameras
 
     else:
-        C, N, _ = means2d.shape
-        assert means2d.shape == (C, N, 2), means2d.size()
-        assert radii.shape == (C, N, 2), radii.size()
-        assert depths.shape == (C, N), depths.size()
+        B, C, N, _ = means2d.shape
+        assert means2d.shape == (B, C, N, 2), means2d.size()
+        assert radii.shape == (B, C, N, 2), radii.size()
+        assert depths.shape == (B, C, N), depths.size()
 
     tiles_per_gauss, isect_ids, flatten_ids = _make_lazy_cuda_func("intersect_tile")(
         means2d.contiguous(),
         radii.contiguous(),
         depths.contiguous(),
+        batch_ids,
         camera_ids,
         gaussian_ids,
+        B,
         C,
         tile_size,
         tile_width,
@@ -429,21 +438,26 @@ def isect_tiles(
 
 @torch.no_grad()
 def isect_offset_encode(
-    isect_ids: Tensor, n_cameras: int, tile_width: int, tile_height: int
+    isect_ids: Tensor,
+    n_batches: int,
+    n_cameras: int,
+    tile_width: int,
+    tile_height: int,
 ) -> Tensor:
     """Encodes intersection ids to offsets.
 
     Args:
         isect_ids: Intersection ids. [n_isects]
+        n_batches: Number of batches.
         n_cameras: Number of cameras.
         tile_width: Tile width.
         tile_height: Tile height.
 
     Returns:
-        Offsets. [C, tile_height, tile_width]
+        Offsets. [B, C, tile_height, tile_width]
     """
     return _make_lazy_cuda_func("intersect_offset")(
-        isect_ids.contiguous(), n_cameras, tile_width, tile_height
+        isect_ids.contiguous(), n_batches, n_cameras, tile_width, tile_height
     )
 
 

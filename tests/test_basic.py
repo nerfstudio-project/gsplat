@@ -411,11 +411,11 @@ def test_isect(test_data):
 
     torch.manual_seed(42)
 
-    C, N = 3, 1000
+    B, C, N = 2, 3, 1000
     width, height = 40, 60
-    means2d = torch.randn(C, N, 2, device=device) * width
-    radii = torch.randint(0, width, (C, N, 2), device=device, dtype=torch.int32)
-    depths = torch.rand(C, N, device=device)
+    means2d = torch.randn(B, C, N, 2, device=device) * width
+    radii = torch.randint(0, width, (B, C, N, 2), device=device, dtype=torch.int32)
+    depths = torch.rand(B, C, N, device=device)
 
     tile_size = 16
     tile_width = math.ceil(width / tile_size)
@@ -424,12 +424,12 @@ def test_isect(test_data):
     tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
         means2d, radii, depths, tile_size, tile_width, tile_height
     )
-    isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
+    isect_offsets = isect_offset_encode(isect_ids, B, C, tile_width, tile_height)
 
     _tiles_per_gauss, _isect_ids, _gauss_ids = _isect_tiles(
         means2d, radii, depths, tile_size, tile_width, tile_height
     )
-    _isect_offsets = _isect_offset_encode(_isect_ids, C, tile_width, tile_height)
+    _isect_offsets = _isect_offset_encode(_isect_ids, B, C, tile_width, tile_height)
 
     torch.testing.assert_close(tiles_per_gauss, _tiles_per_gauss)
     torch.testing.assert_close(isect_ids, _isect_ids)
@@ -571,3 +571,7 @@ def test_sh(test_data, sh_degree: int):
     torch.testing.assert_close(v_coeffs, _v_coeffs, rtol=1e-4, atol=1e-4)
     if sh_degree > 0:
         torch.testing.assert_close(v_dirs, _v_dirs, rtol=1e-4, atol=1e-4)
+
+
+if __name__ == "__main__":
+    test_isect(None)
