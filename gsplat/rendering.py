@@ -26,13 +26,13 @@ from .utils import depth_to_normal, get_projection_matrix
 
 
 def rasterization(
-    means: Tensor,  # [N, 3]
-    quats: Tensor,  # [N, 4]
-    scales: Tensor,  # [N, 3]
-    opacities: Tensor,  # [N]
-    colors: Tensor,  # [(C,) N, D] or [(C,) N, K, 3]
-    viewmats: Tensor,  # [C, 4, 4]
-    Ks: Tensor,  # [C, 3, 3]
+    means: Tensor,  # [B, N, 3]
+    quats: Tensor,  # [B, N, 4]
+    scales: Tensor,  # [B, N, 3]
+    opacities: Tensor,  # [B, N]
+    colors: Tensor,  # [B, (C,) N, D] or [B, (C,) N, K, 3]
+    viewmats: Tensor,  # [B, C, 4, 4]
+    Ks: Tensor,  # [B, C, 3, 3]
     width: int,
     height: int,
     near_plane: float = 0.01,
@@ -76,10 +76,10 @@ def rasterization(
 
     .. note::
         **Support N-D Features**: If `sh_degree` is None,
-        the `colors` is expected to be with shape [N, D] or [C, N, D], in which D is the channel of
+        the `colors` is expected to be with shape [B, N, D] or [B, C, N, D], in which D is the channel of
         the features to be rendered. The computation is slow when D > 32 at the moment.
         If `sh_degree` is set, the `colors` is expected to be the SH coefficients with
-        shape [N, K, 3] or [C, N, K, 3], where K is the number of SH bases. In this case, it is expected
+        shape [B, N, K, 3] or [B, C, N, K, 3], where K is the number of SH bases. In this case, it is expected
         that :math:`(\\textit{sh_degree} + 1) ^ 2 \\leq K`, where `sh_degree` controls the
         activated bases in the SH coefficients.
 
@@ -97,7 +97,7 @@ def rasterization(
         packed into sparse tensors, which is more memory efficient but might be slightly
         slower. This is especially helpful when the scene is large and each camera sees only
         a small portion of the scene. If `packed` is False, the intermediate results are
-        with shape [C, N, ...], which is faster but might consume more memory.
+        with shape [B, C, N, ...], which is faster but might consume more memory.
 
     .. note::
         **Sparse Gradients**: If `sparse_grad` is True, the gradients for {means, quats, scales}
@@ -136,13 +136,13 @@ def rasterization(
         This function is currently not differentiable w.r.t. the camera intrinsics `Ks`.
 
     Args:
-        means: The 3D centers of the Gaussians. [N, 3]
-        quats: The quaternions of the Gaussians (wxyz convension). It's not required to be normalized. [N, 4]
-        scales: The scales of the Gaussians. [N, 3]
-        opacities: The opacities of the Gaussians. [N]
-        colors: The colors of the Gaussians. [(C,) N, D] or [(C,) N, K, 3] for SH coefficients.
-        viewmats: The world-to-cam transformation of the cameras. [C, 4, 4]
-        Ks: The camera intrinsics. [C, 3, 3]
+        means: The 3D centers of the Gaussians. [B, N, 3]
+        quats: The quaternions of the Gaussians (wxyz convension). It's not required to be normalized. [B, N, 4]
+        scales: The scales of the Gaussians. [B, N, 3]
+        opacities: The opacities of the Gaussians. [B, N]
+        colors: The colors of the Gaussians. [B, (C,) N, D] or [B, (C,) N, K, 3] for SH coefficients.
+        viewmats: The world-to-cam transformation of the cameras. [B, C, 4, 4]
+        Ks: The camera intrinsics. [B, C, 3, 3]
         width: The width of the image.
         height: The height of the image.
         near_plane: The near plane for clipping. Default is 0.01.
@@ -154,13 +154,13 @@ def rasterization(
             This will prevents the projected GS to be too small. For example eps2d=0.3
             leads to minimal 3 pixel unit. Default is 0.3.
         sh_degree: The SH degree to use, which can be smaller than the total
-            number of bands. If set, the `colors` should be [(C,) N, K, 3] SH coefficients,
-            else the `colors` should [(C,) N, D] post-activation color values. Default is None.
+            number of bands. If set, the `colors` should be [B, (C,) N, K, 3] SH coefficients,
+            else the `colors` should be [B, (C,) N, D] post-activation color values. Default is None.
         packed: Whether to use packed mode which is more memory efficient but might or
             might not be as fast. Default is True.
         tile_size: The size of the tiles for rasterization. Default is 16.
             (Note: other values are not tested)
-        backgrounds: The background colors. [C, D]. Default is None.
+        backgrounds: The background colors. [B, C, D]. Default is None.
         render_mode: The rendering mode. Supported modes are "RGB", "D", "ED", "RGB+D",
             and "RGB+ED". "RGB" renders the colored image, "D" renders the accumulated depth, and
             "ED" renders the expected depth. Default is "RGB".
@@ -180,17 +180,17 @@ def rasterization(
         camera_model: The camera model to use. Supported models are "pinhole", "ortho",
             and "fisheye". Default is "pinhole".
         covars: Optional covariance matrices of the Gaussians. If provided, the `quats` and
-            `scales` will be ignored. [N, 3, 3], Default is None.
+            `scales` will be ignored. [B, N, 3, 3], Default is None.
 
     Returns:
         A tuple:
 
-        **render_colors**: The rendered colors. [C, height, width, X].
+        **render_colors**: The rendered colors. [B, C, height, width, X].
         X depends on the `render_mode` and input `colors`. If `render_mode` is "RGB",
         X is D; if `render_mode` is "D" or "ED", X is 1; if `render_mode` is "RGB+D" or
         "RGB+ED", X is D+1.
 
-        **render_alphas**: The rendered alphas. [C, height, width, 1].
+        **render_alphas**: The rendered alphas. [B, C, height, width, 1].
 
         **meta**: A dictionary of intermediate results of the rasterization.
 
@@ -199,22 +199,22 @@ def rasterization(
     .. code-block:: python
 
         >>> # define Gaussians
-        >>> means = torch.randn((100, 3), device=device)
-        >>> quats = torch.randn((100, 4), device=device)
-        >>> scales = torch.rand((100, 3), device=device) * 0.1
-        >>> colors = torch.rand((100, 3), device=device)
-        >>> opacities = torch.rand((100,), device=device)
+        >>> means = torch.randn((2, 100, 3), device=device)
+        >>> quats = torch.randn((2, 100, 4), device=device)
+        >>> scales = torch.rand((2, 100, 3), device=device) * 0.1
+        >>> colors = torch.rand((2, 100, 3), device=device)
+        >>> opacities = torch.rand((2, 100), device=device)
         >>> # define cameras
-        >>> viewmats = torch.eye(4, device=device)[None, :, :]
+        >>> viewmats = torch.eye(4, device=device)[None, None, :, :]
         >>> Ks = torch.tensor([
-        >>>    [300., 0., 150.], [0., 300., 100.], [0., 0., 1.]], device=device)[None, :, :]
+        >>>    [300., 0., 150.], [0., 300., 100.], [0., 0., 1.]], device=device)[None, None, :, :]
         >>> width, height = 300, 200
         >>> # render
         >>> colors, alphas, meta = rasterization(
         >>>    means, quats, scales, opacities, colors, viewmats, Ks, width, height
         >>> )
         >>> print (colors.shape, alphas.shape)
-        torch.Size([1, 200, 300, 3]) torch.Size([1, 200, 300, 1])
+        torch.Size([2, 1, 200, 300, 3]) torch.Size([2, 1, 200, 300, 1])
         >>> print (meta.keys())
         dict_keys(['camera_ids', 'gaussian_ids', 'radii', 'means2d', 'depths', 'conics',
         'opacities', 'tile_width', 'tile_height', 'tiles_per_gauss', 'isect_ids',
@@ -223,22 +223,22 @@ def rasterization(
     """
     meta = {}
 
-    N = means.shape[0]
-    C = viewmats.shape[0]
+    B, N = means.shape[:2]
+    C = viewmats.shape[1]
     device = means.device
-    assert means.shape == (N, 3), means.shape
+    assert means.shape == (B, N, 3), means.shape
     if covars is None:
-        assert quats.shape == (N, 4), quats.shape
-        assert scales.shape == (N, 3), scales.shape
+        assert quats.shape == (B, N, 4), quats.shape
+        assert scales.shape == (B, N, 3), scales.shape
     else:
-        assert covars.shape == (N, 3, 3), covars.shape
+        assert covars.shape == (B, N, 3, 3), covars.shape
         quats, scales = None, None
         # convert covars from 3x3 matrix to upper-triangular 6D vector
         tri_indices = ([0, 0, 0, 1, 1, 2], [0, 1, 2, 1, 2, 2])
         covars = covars[..., tri_indices[0], tri_indices[1]]
-    assert opacities.shape == (N,), opacities.shape
-    assert viewmats.shape == (C, 4, 4), viewmats.shape
-    assert Ks.shape == (C, 3, 3), Ks.shape
+    assert opacities.shape == (B, N), opacities.shape
+    assert viewmats.shape == (B, C, 4, 4), viewmats.shape
+    assert Ks.shape == (B, C, 3, 3), Ks.shape
     assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
 
     def reshape_view(C: int, world_view: torch.Tensor, N_world: list) -> torch.Tensor:
@@ -251,26 +251,28 @@ def rasterization(
         return torch.stack([torch.cat(l, dim=0) for l in zip(*view_list)], dim=0)
 
     if sh_degree is None:
-        # treat colors as post-activation values, should be in shape [N, D] or [C, N, D]
-        assert (colors.dim() == 2 and colors.shape[0] == N) or (
-            colors.dim() == 3 and colors.shape[:2] == (C, N)
+        # treat colors as post-activation values, should be in shape [B, N, D] or [B, C, N, D]
+        assert (colors.dim() == 3 and colors.shape[:2] == (B, N)) or (
+            colors.dim() == 4 and colors.shape[:3] == (B, C, N)
         ), colors.shape
         if distributed:
             assert (
-                colors.dim() == 2
+                colors.dim() == 3
             ), "Distributed mode only supports per-Gaussian colors."
     else:
-        # treat colors as SH coefficients, should be in shape [N, K, 3] or [C, N, K, 3]
+        # treat colors as SH coefficients, should be in shape [B, N, K, 3] or [B, C, N, K, 3]
         # Allowing for activating partial SH bands
         assert (
-            colors.dim() == 3 and colors.shape[0] == N and colors.shape[2] == 3
+            colors.dim() == 4 and colors.shape[:2] == (B, N) and colors.shape[-1] == 3
         ) or (
-            colors.dim() == 4 and colors.shape[:2] == (C, N) and colors.shape[3] == 3
+            colors.dim() == 5
+            and colors.shape[:3] == (B, C, N)
+            and colors.shape[-1] == 3
         ), colors.shape
         assert (sh_degree + 1) ** 2 <= colors.shape[-2], colors.shape
         if distributed:
             assert (
-                colors.dim() == 3
+                colors.dim() == 4
             ), "Distributed mode only supports per-Gaussian colors."
 
     if absgrad:
@@ -283,6 +285,7 @@ def rasterization(
     # and the rasterize computation over cameras. So first we gather the cameras
     # from all ranks for projection.
     if distributed:
+        raise NotImplementedError()  # TODO: batchify this part
         world_rank = torch.distributed.get_rank()
         world_size = torch.distributed.get_world_size()
 
@@ -330,17 +333,18 @@ def rasterization(
         ) = proj_results
         opacities = opacities[gaussian_ids]  # [nnz]
     else:
-        # The results are with shape [C, N, ...]. Only the elements with radii > 0 are valid.
+        # The results are with shape [B, C, N, ...]. Only the elements with radii > 0 are valid.
         radii, means2d, depths, conics, compensations = proj_results
-        opacities = opacities.repeat(C, 1)  # [C, N]
-        camera_ids, gaussian_ids = None, None
+        opacities = opacities[:, None, :].repeat(1, C, 1)  # [B, C, N]
+        batch_ids, camera_ids, gaussian_ids = None, None, None
 
     if compensations is not None:
         opacities = opacities * compensations
 
     meta.update(
         {
-            # global camera_ids
+            # global batch and camera ids
+            "batch_ids": batch_ids,
             "camera_ids": camera_ids,
             # local gaussian_ids
             "gaussian_ids": gaussian_ids,
@@ -352,46 +356,53 @@ def rasterization(
         }
     )
 
-    # Turn colors into [C, N, D] or [nnz, D] to pass into rasterize_to_pixels()
+    # Turn colors into [B, C, N, D] or [nnz, D] to pass into rasterize_to_pixels()
     if sh_degree is None:
-        # Colors are post-activation values, with shape [N, D] or [C, N, D]
+        # Colors are post-activation values, with shape [B, N, D] or [B, C, N, D]
         if packed:
-            if colors.dim() == 2:
-                # Turn [N, D] into [nnz, D]
-                colors = colors[gaussian_ids]
+            if colors.dim() == 3:
+                # Turn [B, N, D] into [nnz, D]
+                colors = colors[batch_ids, gaussian_ids]
             else:
-                # Turn [C, N, D] into [nnz, D]
-                colors = colors[camera_ids, gaussian_ids]
+                # Turn [B, C, N, D] into [nnz, D]
+                colors = colors[batch_ids, camera_ids, gaussian_ids]
         else:
-            if colors.dim() == 2:
-                # Turn [N, D] into [C, N, D]
-                colors = colors.expand(C, -1, -1)
+            if colors.dim() == 3:
+                # Turn [B, N, D] into [B, C, N, D]
+                colors = colors[:, None, :, :].expand(-1, C, -1, -1)
             else:
-                # colors is already [C, N, D]
+                # colors is already [B, C, N, D]
                 pass
     else:
-        # Colors are SH coefficients, with shape [N, K, 3] or [C, N, K, 3]
-        camtoworlds = torch.inverse(viewmats)  # [C, 4, 4]
+        # Colors are SH coefficients, with shape [B, N, K, 3] or [B, C, N, K, 3]
+        camtoworlds = torch.inverse(viewmats)  # [B, C, 4, 4]
         if packed:
-            dirs = means[gaussian_ids, :] - camtoworlds[camera_ids, :3, 3]  # [nnz, 3]
+            dirs = (
+                means[batch_ids, gaussian_ids, :]
+                - camtoworlds[batch_ids, camera_ids, :3, 3]
+            )  # [nnz, 3]
             masks = (radii > 0).all(dim=-1)  # [nnz]
-            if colors.dim() == 3:
-                # Turn [N, K, 3] into [nnz, 3]
-                shs = colors[gaussian_ids, :, :]  # [nnz, K, 3]
+            if colors.dim() == 4:
+                # Turn [B, N, K, 3] into [nnz, 3]
+                shs = colors[batch_ids, gaussian_ids, :, :]  # [nnz, K, 3]
             else:
-                # Turn [C, N, K, 3] into [nnz, 3]
+                # Turn [B, C, N, K, 3] into [nnz, 3]
                 shs = colors[camera_ids, gaussian_ids, :, :]  # [nnz, K, 3]
             colors = spherical_harmonics(sh_degree, dirs, shs, masks=masks)  # [nnz, 3]
         else:
-            dirs = means[None, :, :] - camtoworlds[:, None, :3, 3]  # [C, N, 3]
-            masks = (radii > 0).all(dim=-1)  # [C, N]
-            if colors.dim() == 3:
-                # Turn [N, K, 3] into [C, N, K, 3]
-                shs = colors.expand(C, -1, -1, -1)  # [C, N, K, 3]
+            dirs = means[:, None, :, :] - camtoworlds[:, :, None, :3, 3]  # [B, C, N, 3]
+            masks = (radii > 0).all(dim=-1)  # [B, C, N]
+            if colors.dim() == 4:
+                # Turn [B, N, K, 3] into [B, C, N, K, 3]
+                shs = colors[:, None, :, :, :].expand(
+                    -1, C, -1, -1, -1
+                )  # [B, C, N, K, 3]
             else:
-                # colors is already [C, N, K, 3]
+                # colors is already [B, C, N, K, 3]
                 shs = colors
-            colors = spherical_harmonics(sh_degree, dirs, shs, masks=masks)  # [C, N, 3]
+            colors = spherical_harmonics(
+                sh_degree, dirs, shs, masks=masks
+            )  # [B, C, N, 3]
         # make it apple-to-apple with Inria's CUDA Backend.
         colors = torch.clamp_min(colors + 0.5, 0.0)
 
@@ -399,6 +410,7 @@ def rasterization(
     # on which cameras they are visible to, which we already figured out in the projection
     # stage.
     if distributed:
+        raise NotImplementedError()  # TODO: batchify
         if packed:
             # count how many elements need to be sent to each rank
             cnts = torch.bincount(camera_ids, minlength=C)  # all cameras
@@ -486,12 +498,12 @@ def rasterization(
         colors = torch.cat((colors, depths[..., None]), dim=-1)
         if backgrounds is not None:
             backgrounds = torch.cat(
-                [backgrounds, torch.zeros(C, 1, device=backgrounds.device)], dim=-1
+                [backgrounds, torch.zeros(B, C, 1, device=backgrounds.device)], dim=-1
             )
     elif render_mode in ["D", "ED"]:
         colors = depths[..., None]
         if backgrounds is not None:
-            backgrounds = torch.zeros(C, 1, device=backgrounds.device)
+            backgrounds = torch.zeros(B, C, 1, device=backgrounds.device)
     else:  # RGB
         pass
 
@@ -506,12 +518,14 @@ def rasterization(
         tile_width,
         tile_height,
         packed=packed,
+        n_batches=B,
         n_cameras=C,
+        batch_ids=batch_ids,
         camera_ids=camera_ids,
         gaussian_ids=gaussian_ids,
     )
     # print("rank", world_rank, "Before isect_offset_encode")
-    isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
+    isect_offsets = isect_offset_encode(isect_ids, B, C, tile_width, tile_height)
 
     meta.update(
         {
@@ -524,6 +538,7 @@ def rasterization(
             "width": width,
             "height": height,
             "tile_size": tile_size,
+            "n_batches": B,
             "n_cameras": C,
         }
     )
@@ -587,13 +602,13 @@ def rasterization(
 
 
 def _rasterization(
-    means: Tensor,  # [N, 3]
-    quats: Tensor,  # [N, 4]
-    scales: Tensor,  # [N, 3]
-    opacities: Tensor,  # [N]
-    colors: Tensor,  # [(C,) N, D] or [(C,) N, K, 3]
-    viewmats: Tensor,  # [C, 4, 4]
-    Ks: Tensor,  # [C, 3, 3]
+    means: Tensor,  # [B, N, 3]
+    quats: Tensor,  # [B, N, 4]
+    scales: Tensor,  # [B, N, 3]
+    opacities: Tensor,  # [B, N]
+    colors: Tensor,  # [B, (C,) N, D] or [B, (C,) N, K, 3]
+    viewmats: Tensor,  # [B, C, 4, 4]
+    Ks: Tensor,  # [B, C, 3, 3]
     width: int,
     height: int,
     near_plane: float = 0.01,
@@ -628,33 +643,35 @@ def _rasterization(
         _rasterize_to_pixels,
     )
 
-    N = means.shape[0]
-    C = viewmats.shape[0]
-    assert means.shape == (N, 3), means.shape
-    assert quats.shape == (N, 4), quats.shape
-    assert scales.shape == (N, 3), scales.shape
-    assert opacities.shape == (N,), opacities.shape
-    assert viewmats.shape == (C, 4, 4), viewmats.shape
-    assert Ks.shape == (C, 3, 3), Ks.shape
+    B, N = means.shape[:2]
+    C = viewmats.shape[1]
+    assert means.shape == (B, N, 3), means.shape
+    assert quats.shape == (B, N, 4), quats.shape
+    assert scales.shape == (B, N, 3), scales.shape
+    assert opacities.shape == (B, N), opacities.shape
+    assert viewmats.shape == (B, C, 4, 4), viewmats.shape
+    assert Ks.shape == (B, C, 3, 3), Ks.shape
     assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
 
     if sh_degree is None:
-        # treat colors as post-activation values, should be in shape [N, D] or [C, N, D]
-        assert (colors.dim() == 2 and colors.shape[0] == N) or (
-            colors.dim() == 3 and colors.shape[:2] == (C, N)
+        # treat colors as post-activation values, should be in shape [B, N, D] or [B, C, N, D]
+        assert (colors.dim() == 3 and colors.shape[:2] == (B, N)) or (
+            colors.dim() == 4 and colors.shape[:3] == (B, C, N)
         ), colors.shape
     else:
-        # treat colors as SH coefficients, should be in shape [N, K, 3] or [C, N, K, 3]
+        # treat colors as SH coefficients, should be in shape [B, N, K, 3] or [B, C, N, K, 3]
         # Allowing for activating partial SH bands
         assert (
-            colors.dim() == 3 and colors.shape[0] == N and colors.shape[2] == 3
+            colors.dim() == 4 and colors.shape[:2] == (B, N) and colors.shape[-1] == 3
         ) or (
-            colors.dim() == 4 and colors.shape[:2] == (C, N) and colors.shape[3] == 3
+            colors.dim() == 5
+            and colors.shape[:3] == (B, C, N)
+            and colors.shape[-1] == 3
         ), colors.shape
         assert (sh_degree + 1) ** 2 <= colors.shape[-2], colors.shape
 
     # Project Gaussians to 2D.
-    # The results are with shape [C, N, ...]. Only the elements with radii > 0 are valid.
+    # The results are with shape [B, C, N, ...]. Only the elements with radii > 0 are valid.
     covars, _ = _quat_scale_to_covar_preci(quats, scales, True, False, triu=False)
     radii, means2d, depths, conics, compensations = _fully_fused_projection(
         means,
@@ -668,8 +685,8 @@ def _rasterization(
         far_plane=far_plane,
         calc_compensations=(rasterize_mode == "antialiased"),
     )
-    opacities = opacities.repeat(C, 1)  # [C, N]
-    camera_ids, gaussian_ids = None, None
+    opacities = opacities[:, None, :].repeat(1, C, 1)  # [B, C, N]
+    batch_ids, camera_ids, gaussian_ids = None, None, None
 
     if compensations is not None:
         opacities = opacities * compensations
@@ -685,33 +702,35 @@ def _rasterization(
         tile_width,
         tile_height,
         packed=False,
+        n_batches=B,
         n_cameras=C,
+        batch_ids=batch_ids,
         camera_ids=camera_ids,
         gaussian_ids=gaussian_ids,
     )
-    isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
+    isect_offsets = isect_offset_encode(isect_ids, B, C, tile_width, tile_height)
 
-    # Turn colors into [C, N, D] or [nnz, D] to pass into rasterize_to_pixels()
+    # Turn colors into [B, C, N, D] or [nnz, D] to pass into rasterize_to_pixels()
     if sh_degree is None:
-        # Colors are post-activation values, with shape [N, D] or [C, N, D]
-        if colors.dim() == 2:
-            # Turn [N, D] into [C, N, D]
-            colors = colors.expand(C, -1, -1)
+        # Colors are post-activation values, with shape [B, N, D] or [B, C, N, D]
+        if colors.dim() == 3:
+            # Turn [B, N, D] into [B, C, N, D]
+            colors = colors[:, None, :, :].expand(-1, C, -1, -1)
         else:
-            # colors is already [C, N, D]
+            # colors is already [B, C, N, D]
             pass
     else:
-        # Colors are SH coefficients, with shape [N, K, 3] or [C, N, K, 3]
-        camtoworlds = torch.inverse(viewmats)  # [C, 4, 4]
-        dirs = means[None, :, :] - camtoworlds[:, None, :3, 3]  # [C, N, 3]
-        masks = (radii > 0).all(dim=-1)  # [C, N]
-        if colors.dim() == 3:
-            # Turn [N, K, 3] into [C, N, 3]
-            shs = colors.expand(C, -1, -1, -1)  # [C, N, K, 3]
+        # Colors are SH coefficients, with shape [B, N, K, 3] or [B, C, N, K, 3]
+        camtoworlds = torch.inverse(viewmats)  # [B, C, 4, 4]
+        dirs = means[:, None, :, :] - camtoworlds[:, :, None, :3, 3]  # [B, C, N, 3]
+        masks = (radii > 0).all(dim=-1)  # [B, C, N]
+        if colors.dim() == 4:
+            # Turn [B, N, K, 3] into [B, C, N, K, 3]
+            shs = colors[:, None, :, :, :].expand(-1, C, -1, -1, -1)  # [B, C, N, K, 3]
         else:
-            # colors is already [C, N, K, 3]
+            # colors is already [B, C, N, K, 3]
             shs = colors
-        colors = spherical_harmonics(sh_degree, dirs, shs, masks=masks)  # [C, N, 3]
+        colors = spherical_harmonics(sh_degree, dirs, shs, masks=masks)  # [B, C, N, 3]
         # make it apple-to-apple with Inria's CUDA Backend.
         colors = torch.clamp_min(colors + 0.5, 0.0)
 
@@ -720,12 +739,12 @@ def _rasterization(
         colors = torch.cat((colors, depths[..., None]), dim=-1)
         if backgrounds is not None:
             backgrounds = torch.cat(
-                [backgrounds, torch.zeros(C, 1, device=backgrounds.device)], dim=-1
+                [backgrounds, torch.zeros(B, C, 1, device=backgrounds.device)], dim=-1
             )
     elif render_mode in ["D", "ED"]:
         colors = depths[..., None]
         if backgrounds is not None:
-            backgrounds = torch.zeros(C, 1, device=backgrounds.device)
+            backgrounds = torch.zeros(B, C, 1, device=backgrounds.device)
     else:  # RGB
         pass
     if colors.shape[-1] > channel_chunk:
@@ -797,6 +816,7 @@ def _rasterization(
         "width": width,
         "height": height,
         "tile_size": tile_size,
+        "n_batches": B,
         "n_cameras": C,
     }
     return render_colors, render_alphas, meta
