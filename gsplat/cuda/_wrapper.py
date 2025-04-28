@@ -462,45 +462,45 @@ def isect_offset_encode(
 
 
 def rasterize_to_pixels(
-    means2d: Tensor,  # [C, N, 2] or [nnz, 2]
-    conics: Tensor,  # [C, N, 3] or [nnz, 3]
-    colors: Tensor,  # [C, N, channels] or [nnz, channels]
-    opacities: Tensor,  # [C, N] or [nnz]
+    means2d: Tensor,  # [B, C, N, 2] or [nnz, 2]
+    conics: Tensor,  # [B, C, N, 3] or [nnz, 3]
+    colors: Tensor,  # [B, C, N, channels] or [nnz, channels]
+    opacities: Tensor,  # [B, C, N] or [nnz]
     image_width: int,
     image_height: int,
     tile_size: int,
-    isect_offsets: Tensor,  # [C, tile_height, tile_width]
+    isect_offsets: Tensor,  # [B, C, tile_height, tile_width]
     flatten_ids: Tensor,  # [n_isects]
-    backgrounds: Optional[Tensor] = None,  # [C, channels]
-    masks: Optional[Tensor] = None,  # [C, tile_height, tile_width]
+    backgrounds: Optional[Tensor] = None,  # [B, C, channels]
+    masks: Optional[Tensor] = None,  # [B, C, tile_height, tile_width]
     packed: bool = False,
     absgrad: bool = False,
 ) -> Tuple[Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
     Args:
-        means2d: Projected Gaussian means. [C, N, 2] if packed is False, [nnz, 2] if packed is True.
-        conics: Inverse of the projected covariances with only upper triangle values. [C, N, 3] if packed is False, [nnz, 3] if packed is True.
-        colors: Gaussian colors or ND features. [C, N, channels] if packed is False, [nnz, channels] if packed is True.
-        opacities: Gaussian opacities that support per-view values. [C, N] if packed is False, [nnz] if packed is True.
+        means2d: Projected Gaussian means. [B, C, N, 2] if packed is False, [nnz, 2] if packed is True.
+        conics: Inverse of the projected covariances with only upper triangle values. [B, C, N, 3] if packed is False, [nnz, 3] if packed is True.
+        colors: Gaussian colors or ND features. [B, C, N, channels] if packed is False, [nnz, channels] if packed is True.
+        opacities: Gaussian opacities that support per-view values. [B, C, N] if packed is False, [nnz] if packed is True.
         image_width: Image width.
         image_height: Image height.
         tile_size: Tile size.
-        isect_offsets: Intersection offsets outputs from `isect_offset_encode()`. [C, tile_height, tile_width]
-        flatten_ids: The global flatten indices in [C * N] or [nnz] from  `isect_tiles()`. [n_isects]
-        backgrounds: Background colors. [C, channels]. Default: None.
-        masks: Optional tile mask to skip rendering GS to masked tiles. [C, tile_height, tile_width]. Default: None.
+        isect_offsets: Intersection offsets outputs from `isect_offset_encode()`. [B, C, tile_height, tile_width]
+        flatten_ids: The global flatten indices in [B * C * N] or [nnz] from  `isect_tiles()`. [n_isects]
+        backgrounds: Background colors. [B, C, channels]. Default: None.
+        masks: Optional tile mask to skip rendering GS to masked tiles. [B, C, tile_height, tile_width]. Default: None.
         packed: If True, the input tensors are expected to be packed with shape [nnz, ...]. Default: False.
         absgrad: If True, the backward pass will compute a `.absgrad` attribute for `means2d`. Default: False.
 
     Returns:
         A tuple:
 
-        - **Rendered colors**. [C, image_height, image_width, channels]
-        - **Rendered alphas**. [C, image_height, image_width, 1]
+        - **Rendered colors**. [B, C, image_height, image_width, channels]
+        - **Rendered alphas**. [B, C, image_height, image_width, 1]
     """
 
-    C = isect_offsets.size(0)
+    B, C = isect_offsets.shape[:2]
     device = means2d.device
     if packed:
         nnz = means2d.size(0)
@@ -509,13 +509,13 @@ def rasterize_to_pixels(
         assert colors.shape[0] == nnz, colors.shape
         assert opacities.shape == (nnz,), opacities.shape
     else:
-        N = means2d.size(1)
-        assert means2d.shape == (C, N, 2), means2d.shape
-        assert conics.shape == (C, N, 3), conics.shape
-        assert colors.shape[:2] == (C, N), colors.shape
-        assert opacities.shape == (C, N), opacities.shape
+        N = means2d.size(2)
+        assert means2d.shape == (B, C, N, 2), means2d.shape
+        assert conics.shape == (B, C, N, 3), conics.shape
+        assert colors.shape[:3] == (B, C, N), colors.shape
+        assert opacities.shape == (B, C, N), opacities.shape
     if backgrounds is not None:
-        assert backgrounds.shape == (C, colors.shape[-1]), backgrounds.shape
+        assert backgrounds.shape == (B, C, colors.shape[-1]), backgrounds.shape
         backgrounds = backgrounds.contiguous()
     if masks is not None:
         assert masks.shape == isect_offsets.shape, masks.shape
@@ -568,7 +568,7 @@ def rasterize_to_pixels(
     else:
         padded_channels = 0
 
-    tile_height, tile_width = isect_offsets.shape[1:3]
+    tile_height, tile_width = isect_offsets.shape[2:4]
     assert (
         tile_height * tile_size >= image_height
     ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
@@ -897,16 +897,16 @@ class _RasterizeToPixels(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        means2d: Tensor,  # [C, N, 2]
-        conics: Tensor,  # [C, N, 3]
-        colors: Tensor,  # [C, N, D]
-        opacities: Tensor,  # [C, N]
-        backgrounds: Tensor,  # [C, D], Optional
-        masks: Tensor,  # [C, tile_height, tile_width], Optional
+        means2d: Tensor,  # [B, C, N, 2]
+        conics: Tensor,  # [B, C, N, 3]
+        colors: Tensor,  # [B, C, N, D]
+        opacities: Tensor,  # [B, C, N]
+        backgrounds: Tensor,  # [B, C, D], Optional
+        masks: Tensor,  # [B, C, tile_height, tile_width], Optional
         width: int,
         height: int,
         tile_size: int,
-        isect_offsets: Tensor,  # [C, tile_height, tile_width]
+        isect_offsets: Tensor,  # [B, C, tile_height, tile_width]
         flatten_ids: Tensor,  # [n_isects]
         absgrad: bool,
     ) -> Tuple[Tensor, Tensor]:
@@ -950,8 +950,8 @@ class _RasterizeToPixels(torch.autograd.Function):
     @staticmethod
     def backward(
         ctx,
-        v_render_colors: Tensor,  # [C, H, W, 3]
-        v_render_alphas: Tensor,  # [C, H, W, 1]
+        v_render_colors: Tensor,  # [B, C, H, W, 3]
+        v_render_alphas: Tensor,  # [B, C, H, W, 1]
     ):
         (
             means2d,

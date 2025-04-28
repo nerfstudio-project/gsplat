@@ -16,47 +16,48 @@ namespace cg = cooperative_groups;
 
 template <uint32_t CDIM, typename scalar_t>
 __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
+    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
     const uint32_t n_isects,
     const bool packed,
-    const vec2 *__restrict__ means2d,         // [C, N, 2] or [nnz, 2]
-    const vec3 *__restrict__ conics,          // [C, N, 3] or [nnz, 3]
-    const scalar_t *__restrict__ colors,      // [C, N, CDIM] or [nnz, CDIM]
-    const scalar_t *__restrict__ opacities,   // [C, N] or [nnz]
-    const scalar_t *__restrict__ backgrounds, // [C, CDIM]
-    const bool *__restrict__ masks,           // [C, tile_height, tile_width]
+    const vec2 *__restrict__ means2d,         // [B, C, N, 2] or [nnz, 2]
+    const vec3 *__restrict__ conics,          // [B, C, N, 3] or [nnz, 3]
+    const scalar_t *__restrict__ colors,      // [B, C, N, CDIM] or [nnz, CDIM]
+    const scalar_t *__restrict__ opacities,   // [B, C, N] or [nnz]
+    const scalar_t *__restrict__ backgrounds, // [B, C, CDIM]
+    const bool *__restrict__ masks,           // [B, C, tile_height, tile_width]
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
     const uint32_t tile_width,
     const uint32_t tile_height,
-    const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
+    const int32_t *__restrict__ tile_offsets, // [B, C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
     scalar_t
-        *__restrict__ render_colors, // [C, image_height, image_width, CDIM]
-    scalar_t *__restrict__ render_alphas, // [C, image_height, image_width, 1]
-    int32_t *__restrict__ last_ids        // [C, image_height, image_width]
+        *__restrict__ render_colors, // [B, C, image_height, image_width, CDIM]
+    scalar_t *__restrict__ render_alphas, // [B, C, image_height, image_width, 1]
+    int32_t *__restrict__ last_ids        // [B, C, image_height, image_width]
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
 
     auto block = cg::this_thread_block();
-    int32_t camera_id = block.group_index().x;
+    int32_t batch_camera_id = block.group_index().x;
     int32_t tile_id =
         block.group_index().y * tile_width + block.group_index().z;
     uint32_t i = block.group_index().y * tile_size + block.thread_index().y;
     uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
 
-    tile_offsets += camera_id * tile_height * tile_width;
-    render_colors += camera_id * image_height * image_width * CDIM;
-    render_alphas += camera_id * image_height * image_width;
-    last_ids += camera_id * image_height * image_width;
+    tile_offsets += batch_camera_id * tile_height * tile_width;
+    render_colors += batch_camera_id * image_height * image_width * CDIM;
+    render_alphas += batch_camera_id * image_height * image_width;
+    last_ids += batch_camera_id * image_height * image_width;
     if (backgrounds != nullptr) {
-        backgrounds += camera_id * CDIM;
+        backgrounds += batch_camera_id * CDIM;
     }
     if (masks != nullptr) {
-        masks += camera_id * tile_height * tile_width;
+        masks += batch_camera_id * tile_height * tile_width;
     }
 
     float px = (float)j + 0.5f;
@@ -84,7 +85,7 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
     // which gaussians to look through in this tile
     int32_t range_start = tile_offsets[tile_id];
     int32_t range_end =
-        (camera_id == C - 1) && (tile_id == tile_width * tile_height - 1)
+        (batch_camera_id == B * C - 1) && (tile_id == tile_width * tile_height - 1)
             ? n_isects
             : tile_offsets[tile_id + 1];
     const uint32_t block_size = block.size();
@@ -190,36 +191,37 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
 template <uint32_t CDIM>
 void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     // Gaussian parameters
-    const at::Tensor means2d,   // [C, N, 2] or [nnz, 2]
-    const at::Tensor conics,    // [C, N, 3] or [nnz, 3]
-    const at::Tensor colors,    // [C, N, channels] or [nnz, channels]
-    const at::Tensor opacities, // [C, N]  or [nnz]
-    const at::optional<at::Tensor> backgrounds, // [C, channels]
-    const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
+    const at::Tensor means2d,   // [B, C, N, 2] or [nnz, 2]
+    const at::Tensor conics,    // [B, C, N, 3] or [nnz, 3]
+    const at::Tensor colors,    // [B, C, N, channels] or [nnz, channels]
+    const at::Tensor opacities, // [B, C, N]  or [nnz]
+    const at::optional<at::Tensor> backgrounds, // [B, C, channels]
+    const at::optional<at::Tensor> masks,       // [B, C, tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
     // intersections
-    const at::Tensor tile_offsets, // [C, tile_height, tile_width]
+    const at::Tensor tile_offsets, // [B, C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     // outputs
-    at::Tensor renders, // [C, image_height, image_width, channels]
-    at::Tensor alphas,  // [C, image_height, image_width]
-    at::Tensor last_ids // [C, image_height, image_width]
+    at::Tensor renders, // [B, C, image_height, image_width, channels]
+    at::Tensor alphas,  // [B, C, image_height, image_width]
+    at::Tensor last_ids // [B, C, image_height, image_width]
 ) {
     bool packed = means2d.dim() == 2;
 
-    uint32_t C = tile_offsets.size(0);         // number of cameras
-    uint32_t N = packed ? 0 : means2d.size(1); // number of gaussians
-    uint32_t tile_height = tile_offsets.size(1);
-    uint32_t tile_width = tile_offsets.size(2);
+    uint32_t B = tile_offsets.size(0);         // number of batches
+    uint32_t C = tile_offsets.size(1);         // number of cameras
+    uint32_t N = packed ? 0 : means2d.size(2); // number of gaussians
+    uint32_t tile_height = tile_offsets.size(2);
+    uint32_t tile_width = tile_offsets.size(3);
     uint32_t n_isects = flatten_ids.size(0);
 
     // Each block covers a tile on the image. In total there are
-    // C * tile_height * tile_width blocks.
+    // B * C * tile_height * tile_width blocks.
     dim3 threads = {tile_size, tile_size, 1};
-    dim3 grid = {C, tile_height, tile_width};
+    dim3 grid = {B * C, tile_height, tile_width};
 
     int64_t shmem_size =
         tile_size * tile_size * (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3));
@@ -241,6 +243,7 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
 
     rasterize_to_pixels_3dgs_fwd_kernel<CDIM, float>
         <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+            B,
             C,
             N,
             n_isects,

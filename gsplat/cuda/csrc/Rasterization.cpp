@@ -18,18 +18,18 @@ namespace gsplat {
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     // Gaussian parameters
-    const at::Tensor means2d,   // [C, N, 2] or [nnz, 2]
-    const at::Tensor conics,    // [C, N, 3] or [nnz, 3]
-    const at::Tensor colors,    // [C, N, channels] or [nnz, channels]
-    const at::Tensor opacities, // [C, N]  or [nnz]
-    const at::optional<at::Tensor> backgrounds, // [C, channels]
-    const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
+    const at::Tensor means2d,   // [B, C, N, 2] or [nnz, 2]
+    const at::Tensor conics,    // [B, C, N, 3] or [nnz, 3]
+    const at::Tensor colors,    // [B, C, N, channels] or [nnz, channels]
+    const at::Tensor opacities, // [B, C, N]  or [nnz]
+    const at::optional<at::Tensor> backgrounds, // [B, C, channels]
+    const at::optional<at::Tensor> masks,       // [B, C, tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
     // intersections
-    const at::Tensor tile_offsets, // [C, tile_height, tile_width]
+    const at::Tensor tile_offsets, // [B, C, tile_height, tile_width]
     const at::Tensor flatten_ids   // [n_isects]
 ) {
     DEVICE_GUARD(means2d);
@@ -46,15 +46,16 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
         CHECK_INPUT(masks.value());
     }
 
-    uint32_t C = tile_offsets.size(0); // number of cameras
+    uint32_t B = tile_offsets.size(0); // number of batches
+    uint32_t C = tile_offsets.size(1); // number of cameras
     uint32_t channels = colors.size(-1);
 
     at::Tensor renders =
-        at::empty({C, image_height, image_width, channels}, means2d.options());
+        at::empty({B, C, image_height, image_width, channels}, means2d.options());
     at::Tensor alphas =
-        at::empty({C, image_height, image_width, 1}, means2d.options());
+        at::empty({B, C, image_height, image_width, 1}, means2d.options());
     at::Tensor last_ids = at::empty(
-        {C, image_height, image_width}, means2d.options().dtype(at::kInt)
+        {B, C, image_height, image_width}, means2d.options().dtype(at::kInt)
     );
 
 #define __LAUNCH_KERNEL__(N)                                                   \
@@ -111,25 +112,25 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 rasterize_to_pixels_3dgs_bwd(
     // Gaussian parameters
-    const at::Tensor means2d,                   // [C, N, 2] or [nnz, 2]
-    const at::Tensor conics,                    // [C, N, 3] or [nnz, 3]
-    const at::Tensor colors,                    // [C, N, 3] or [nnz, 3]
-    const at::Tensor opacities,                 // [C, N] or [nnz]
-    const at::optional<at::Tensor> backgrounds, // [C, 3]
-    const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
+    const at::Tensor means2d,                   // [B, C, N, 2] or [nnz, 2]
+    const at::Tensor conics,                    // [B, C, N, 3] or [nnz, 3]
+    const at::Tensor colors,                    // [B, C, N, 3] or [nnz, 3]
+    const at::Tensor opacities,                 // [B, C, N] or [nnz]
+    const at::optional<at::Tensor> backgrounds, // [B, C, 3]
+    const at::optional<at::Tensor> masks,       // [B, C, tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
     // intersections
-    const at::Tensor tile_offsets, // [C, tile_height, tile_width]
+    const at::Tensor tile_offsets, // [B, C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     // forward outputs
-    const at::Tensor render_alphas, // [C, image_height, image_width, 1]
-    const at::Tensor last_ids,      // [C, image_height, image_width]
+    const at::Tensor render_alphas, // [B, C, image_height, image_width, 1]
+    const at::Tensor last_ids,      // [B, C, image_height, image_width]
     // gradients of outputs
-    const at::Tensor v_render_colors, // [C, image_height, image_width, 3]
-    const at::Tensor v_render_alphas, // [C, image_height, image_width, 1]
+    const at::Tensor v_render_colors, // [B, C, image_height, image_width, 3]
+    const at::Tensor v_render_alphas, // [B, C, image_height, image_width, 1]
     // options
     bool absgrad
 ) {
