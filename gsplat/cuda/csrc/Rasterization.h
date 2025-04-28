@@ -73,23 +73,23 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
 void launch_rasterize_to_indices_3dgs_kernel(
     const uint32_t range_start,
     const uint32_t range_end,        // iteration steps
-    const at::Tensor transmittances, // [C, image_height, image_width]
+    const at::Tensor transmittances, // [B, C, image_height, image_width]
     // Gaussian parameters
-    const at::Tensor means2d,   // [C, N, 2]
-    const at::Tensor conics,    // [C, N, 3]
-    const at::Tensor opacities, // [C, N]
+    const at::Tensor means2d,   // [B, C, N, 2]
+    const at::Tensor conics,    // [B, C, N, 3]
+    const at::Tensor opacities, // [B, C, N]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
     // intersections
-    const at::Tensor tile_offsets, // [C, tile_height, tile_width]
+    const at::Tensor tile_offsets, // [B, C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     // helper for double pass
     const at::optional<at::Tensor>
-        chunk_starts, // [C, image_height, image_width]
+        chunk_starts, // [B, C, image_height, image_width]
     // outputs
-    at::optional<at::Tensor> chunk_cnts,   // [C, image_height, image_width]
+    at::optional<at::Tensor> chunk_cnts,   // [B, C, image_height, image_width]
     at::optional<at::Tensor> gaussian_ids, // [n_elems]
     at::optional<at::Tensor> pixel_ids     // [n_elems]
 );

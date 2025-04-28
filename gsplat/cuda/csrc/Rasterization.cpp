@@ -225,17 +225,17 @@ rasterize_to_pixels_3dgs_bwd(
 std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
     const uint32_t range_start,
     const uint32_t range_end,        // iteration steps
-    const at::Tensor transmittances, // [C, image_height, image_width]
+    const at::Tensor transmittances, // [B, C, image_height, image_width]
     // Gaussian parameters
-    const at::Tensor means2d,   // [C, N, 2]
-    const at::Tensor conics,    // [C, N, 3]
-    const at::Tensor opacities, // [C, N]
+    const at::Tensor means2d,   // [B, C, N, 2]
+    const at::Tensor conics,    // [B, C, N, 3]
+    const at::Tensor opacities, // [B, C, N]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
     // intersections
-    const at::Tensor tile_offsets, // [C, tile_height, tile_width]
+    const at::Tensor tile_offsets, // [B, C, tile_height, tile_width]
     const at::Tensor flatten_ids   // [n_isects]
 ) {
     DEVICE_GUARD(means2d);
@@ -245,8 +245,9 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
     CHECK_INPUT(tile_offsets);
     CHECK_INPUT(flatten_ids);
 
-    uint32_t C = means2d.size(0); // number of cameras
-    uint32_t N = means2d.size(1); // number of gaussians
+    uint32_t B = means2d.size(0); // number of batches
+    uint32_t C = means2d.size(1); // number of cameras
+    uint32_t N = means2d.size(2); // number of gaussians
     uint32_t n_isects = flatten_ids.size(0);
 
     // First pass: count the number of gaussians that contribute to each pixel
@@ -254,7 +255,7 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
     at::Tensor chunk_starts;
     if (n_isects) {
         at::Tensor chunk_cnts = at::zeros(
-            {C * image_height * image_width}, means2d.options().dtype(at::kInt)
+            {B * C * image_height * image_width}, means2d.options().dtype(at::kInt)
         );
         launch_rasterize_to_indices_3dgs_kernel(
             range_start,

@@ -600,14 +600,14 @@ def rasterize_to_pixels(
 def rasterize_to_indices_in_range(
     range_start: int,
     range_end: int,
-    transmittances: Tensor,  # [C, image_height, image_width]
-    means2d: Tensor,  # [C, N, 2]
-    conics: Tensor,  # [C, N, 3]
-    opacities: Tensor,  # [C, N]
+    transmittances: Tensor,  # [B, C, image_height, image_width]
+    means2d: Tensor,  # [B, C, N, 2]
+    conics: Tensor,  # [B, C, N, 3]
+    opacities: Tensor,  # [B, C, N]
     image_width: int,
     image_height: int,
     tile_size: int,
-    isect_offsets: Tensor,  # [C, tile_height, tile_width]
+    isect_offsets: Tensor,  # [B, C, tile_height, tile_width]
     flatten_ids: Tensor,  # [n_isects]
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """Rasterizes a batch of Gaussians to images but only returns the indices.
@@ -622,15 +622,15 @@ def rasterize_to_indices_in_range(
     Args:
         range_start: The start batch of Gaussians to be rasterized (inclusive).
         range_end: The end batch of Gaussians to be rasterized (exclusive).
-        transmittances: Currently transmittances. [C, image_height, image_width]
-        means2d: Projected Gaussian means. [C, N, 2]
-        conics: Inverse of the projected covariances with only upper triangle values. [C, N, 3]
-        opacities: Gaussian opacities that support per-view values. [C, N]
+        transmittances: Currently transmittances. [B, C, image_height, image_width]
+        means2d: Projected Gaussian means. [B, C, N, 2]
+        conics: Inverse of the projected covariances with only upper triangle values. [B, C, N, 3]
+        opacities: Gaussian opacities that support per-view values. [B, C, N]
         image_width: Image width.
         image_height: Image height.
         tile_size: Tile size.
-        isect_offsets: Intersection offsets outputs from `isect_offset_encode()`. [C, tile_height, tile_width]
-        flatten_ids: The global flatten indices in [C * N] from  `isect_tiles()`. [n_isects]
+        isect_offsets: Intersection offsets outputs from `isect_offset_encode()`. [B, C, tile_height, tile_width]
+        flatten_ids: The global flatten indices in [B * C * N] from  `isect_tiles()`. [n_isects]
 
     Returns:
         A tuple:
@@ -638,14 +638,15 @@ def rasterize_to_indices_in_range(
         - **Gaussian ids**. Gaussian ids for the pixel intersection. A flattened list of shape [M].
         - **Pixel ids**. pixel indices (row-major). A flattened list of shape [M].
         - **Camera ids**. Camera indices. A flattened list of shape [M].
+        - **Batch ids**. Batch indices. A flattened list of shape [M].
     """
 
-    C, N, _ = means2d.shape
-    assert conics.shape == (C, N, 3), conics.shape
-    assert opacities.shape == (C, N), opacities.shape
-    assert isect_offsets.shape[0] == C, isect_offsets.shape
+    B, C, N, _ = means2d.shape
+    assert conics.shape == (B, C, N, 3), conics.shape
+    assert opacities.shape == (B, C, N), opacities.shape
+    assert isect_offsets.shape[:2] == (B, C), isect_offsets.shape
 
-    tile_height, tile_width = isect_offsets.shape[1:3]
+    tile_height, tile_width = isect_offsets.shape[2:4]
     assert (
         tile_height * tile_size >= image_height
     ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
@@ -667,8 +668,9 @@ def rasterize_to_indices_in_range(
         flatten_ids.contiguous(),
     )
     out_pixel_ids = out_indices % (image_width * image_height)
-    out_camera_ids = out_indices // (image_width * image_height)
-    return out_gauss_ids, out_pixel_ids, out_camera_ids
+    out_camera_ids = (out_indices // (image_width * image_height)) % C
+    out_batch_ids = (out_indices // (image_width * image_height)) // C
+    return out_gauss_ids, out_pixel_ids, out_camera_ids, out_batch_ids
 
 
 class _QuatScaleToCovarPreci(torch.autograd.Function):
@@ -1000,7 +1002,7 @@ class _RasterizeToPixels(torch.autograd.Function):
 
         if ctx.needs_input_grad[4]:
             v_backgrounds = (v_render_colors * (1.0 - render_alphas).float()).sum(
-                dim=(1, 2)
+                dim=(2, 3)
             )
         else:
             v_backgrounds = None
