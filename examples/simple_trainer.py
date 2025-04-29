@@ -38,8 +38,7 @@ from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 from gsplat.utils import save_ply
 from gsplat_viewer import GsplatViewer, GsplatRenderTabState
-from examples.viewer import CameraState, RenderTabState
-from render_panel import apply_float_colormap
+from nerfview import CameraState, RenderTabState, apply_float_colormap
 
 
 @dataclass
@@ -1136,7 +1135,7 @@ if __name__ == "__main__":
 
     ```bash
     # Single GPU training
-    CUDA_VISIBLE_DEVICES=9 python -m examples.simple_trainer default --data_dir ../data/360_v2/garden --max_steps 1
+    CUDA_VISIBLE_DEVICES=9 python -m examples.simple_trainer default
 
     # Distributed training on 4 GPUs: Effectively 4x batch size so run 4x less steps.
     CUDA_VISIBLE_DEVICES=0,1,2,3 python simple_trainer.py default --steps_scaler 0.25

@@ -14,8 +14,7 @@ from gsplat._helper import load_test_data
 from gsplat.distributed import cli
 from gsplat.rendering import rasterization
 
-from examples.viewer import CameraState
-from render_panel import RenderTabState, apply_float_colormap
+from nerfview import CameraState, RenderTabState, apply_float_colormap
 from examples.gsplat_viewer import GsplatViewer, GsplatRenderTabState
 
 

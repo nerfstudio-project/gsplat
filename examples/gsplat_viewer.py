@@ -2,8 +2,7 @@ import viser
 from pathlib import Path
 from typing import Literal
 from typing import Tuple, Callable
-from examples.viewer import Viewer
-from render_panel import RenderTabState
+from nerfview import Viewer, RenderTabState
 
 
 class GsplatRenderTabState(RenderTabState):
