@@ -1,7 +1,7 @@
 import dataclasses
 import time
 from threading import Lock
-from typing import Callable, Literal, Tuple
+from typing import Callable, Literal, Tuple, Optional
 
 import numpy as np
 import viser
@@ -64,7 +64,7 @@ class Viewer(object):
         self,
         server: viser.ViserServer,
         render_fn: Callable,
-        output_dir: Path,
+        output_dir: Optional[Path] = None,
         mode: Literal["rendering", "training"] = "rendering",
     ):
         # Public states.
@@ -73,7 +73,7 @@ class Viewer(object):
         self.mode = mode
         self.lock = VIEWER_LOCK
         self.state = "preparing"
-        self.output_dir = output_dir
+        self.output_dir = output_dir if output_dir is not None else Path("./results")
 
         # Private states.
         self._renderers: dict[int, Renderer] = {}

@@ -65,6 +65,7 @@ class Renderer(threading.Thread):
 
         self._target_fps = 30
         self._may_interrupt_render = False
+        self._old_version = False
 
         self._define_transitions()
 
@@ -145,14 +146,25 @@ class Renderer(threading.Thread):
             try:
                 with self.lock, set_trace_context(self._may_interrupt_trace):
                     tic = time.time()
-                    W, H = self._get_img_wh(task.camera_state.aspect)
+                    W, H = img_wh = self._get_img_wh(task.camera_state.aspect)
                     self.viewer.render_tab_state.viewer_width = W
                     self.viewer.render_tab_state.viewer_height = H
 
-                    rendered = self.viewer.render_fn(
-                        task.camera_state,
-                        self.viewer.render_tab_state,
-                    )
+                    if not self._old_version:
+                        try:
+                            rendered = self.viewer.render_fn(
+                                task.camera_state,
+                                self.viewer.render_tab_state,
+                            )
+                        except TypeError:
+                            self._old_version = True
+                            print(
+                                "[WARNING] Your API will be deprecated in the future, please update your render_fn."
+                            )
+                            rendered = self.viewer.render_fn(task.camera_state, img_wh)
+                    else:
+                        rendered = self.viewer.render_fn(task.camera_state, img_wh)
+
                     self.viewer._after_render()
                     if isinstance(rendered, tuple):
                         img, depth = rendered
