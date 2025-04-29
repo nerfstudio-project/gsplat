@@ -818,7 +818,6 @@ projection_2dgs_packed_bwd(
             v_viewmats = at::zeros_like(viewmats);
         }
     }
-
     launch_projection_2dgs_packed_bwd_kernel(
         // fwd inputs
         means,
