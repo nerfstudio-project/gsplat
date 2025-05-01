@@ -21,8 +21,12 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     const at::Tensor conics,    // [C, N, 3] or [nnz, 3]
     const at::Tensor colors,    // [C, N, channels] or [nnz, channels]
     const at::Tensor opacities, // [C, N]  or [nnz]
+    const at::Tensor ray_ts,    // [C, N] or [nnz]
+    const at::Tensor ray_planes,// [C, N, 2] or [nnz, 2]
+    const at::Tensor normals,   // [C, N, 3] or [nnz, 3]
     const at::optional<at::Tensor> backgrounds, // [C, channels]
     const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
+    const at::Tensor Ks,        // [C, 9]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
@@ -33,6 +37,10 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     // outputs
     at::Tensor renders, // [C, image_height, image_width, channels]
     at::Tensor alphas,  // [C, image_height, image_width]
+    at::Tensor expected_depths,  // [C, image_height, image_width, 3]
+    at::Tensor median_depths,    // [C, image_height, image_width, 3]
+    at::Tensor expected_normals, // [C, image_height, image_width, 3]
+    at::Tensor median_ids,       // [C, image_height, image_width]
     at::Tensor last_ids // [C, image_height, image_width]
 );
 
@@ -43,27 +51,38 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
     const at::Tensor conics,                    // [C, N, 3] or [nnz, 3]
     const at::Tensor colors,                    // [C, N, 3] or [nnz, 3]
     const at::Tensor opacities,                 // [C, N] or [nnz]
+    const at::Tensor ray_ts,                    // [C, N] or [nnz]
+    const at::Tensor ray_planes,                // [C, N, 2] or [nnz, 2]
+    const at::Tensor normals,                   // [C, N, 3] or [nnz, 3]
     const at::optional<at::Tensor> backgrounds, // [C, 3]
     const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
+    const at::Tensor Ks,
     // intersections
     const at::Tensor tile_offsets, // [C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     // forward outputs
     const at::Tensor render_alphas, // [C, image_height, image_width, 1]
     const at::Tensor last_ids,      // [C, image_height, image_width]
+    const at::Tensor median_ids,      // [C, image_height, image_width]
     // gradients of outputs
     const at::Tensor v_render_colors, // [C, image_height, image_width, 3]
     const at::Tensor v_render_alphas, // [C, image_height, image_width, 1]
+    const at::Tensor v_render_expected_depths, // [C, image_height, image_width, 1]
+    const at::Tensor v_render_median_depths, // [C, image_height, image_width, 1]
+    const at::Tensor v_render_expected_normals, // [C, image_height, image_width, 3]
     // outputs
     at::optional<at::Tensor> v_means2d_abs, // [C, N, 2] or [nnz, 2]
     at::Tensor v_means2d,                   // [C, N, 2] or [nnz, 2]
     at::Tensor v_conics,                    // [C, N, 3] or [nnz, 3]
     at::Tensor v_colors,                    // [C, N, 3] or [nnz, 3]
-    at::Tensor v_opacities                  // [C, N] or [nnz]
+    at::Tensor v_opacities,                 // [C, N] or [nnz]
+    at::Tensor v_ray_ts,                    // [C, N] or [nnz]
+    at::Tensor v_ray_planes,                // [C, N, 2] or [nnz, 2]
+    at::Tensor v_normals                    // [C, N, 3] or [nnz, 3]
 );
 
 /////////////////////////////////////////////////
