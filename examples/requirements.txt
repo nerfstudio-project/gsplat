@@ -20,3 +20,4 @@ tensorly
 pyyaml
 matplotlib
 git+https://github.com/rahul-goel/fused-ssim@328dc9836f513d00c4b5bc38fe30478b4435cbb5
+splines

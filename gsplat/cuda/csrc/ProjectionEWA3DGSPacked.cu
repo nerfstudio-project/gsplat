@@ -192,8 +192,8 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
         
         // compute tight rectangular bounding box (non differentiable)
         // https://arxiv.org/pdf/2402.00525
-        float radius_x = ceilf(extend * sqrtf(covar2d[0][0]));
-        float radius_y = ceilf(extend * sqrtf(covar2d[1][1]));
+        radius_x = ceilf(extend * sqrtf(covar2d[0][0]));
+        radius_y = ceilf(extend * sqrtf(covar2d[1][1]));
         
         if (radius_x <= radius_clip && radius_y <= radius_clip) {
             valid = false;

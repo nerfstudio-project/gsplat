@@ -15,7 +15,7 @@ from gsplat.distributed import cli
 from gsplat.rendering import rasterization
 
 from nerfview import CameraState, RenderTabState, apply_float_colormap
-from examples.gsplat_viewer import GsplatViewer, GsplatRenderTabState
+from gsplat_viewer import GsplatViewer, GsplatRenderTabState
 
 
 def main(local_rank: int, world_rank, world_size: int, args):
@@ -198,6 +198,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
             render_mode=RENDER_MODE_MAP[render_tab_state.render_mode],
             rasterize_mode=render_tab_state.rasterize_mode,
             camera_model=render_tab_state.camera_model,
+            packed=False,
         )
         render_tab_state.total_gs_count = len(means)
         render_tab_state.rendered_gs_count = (info["radii"] > 0).all(-1).sum().item()
