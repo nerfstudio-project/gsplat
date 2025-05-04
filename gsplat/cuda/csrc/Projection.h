@@ -18,7 +18,9 @@ void launch_projection_ewa_simple_fwd_kernel(
     const CameraModelType camera_model,
     // outputs
     at::Tensor means2d, // [C, N, 2]
-    at::Tensor covars2d // [C, N, 2, 2]
+    at::Tensor covars2d,// [C, N, 2, 2]
+    at::Tensor ray_planes, // [C, N, 2]
+    at::Tensor normals  // [C, N, 3]
 );
 void launch_projection_ewa_simple_bwd_kernel(
     // inputs
@@ -30,6 +32,8 @@ void launch_projection_ewa_simple_bwd_kernel(
     const CameraModelType camera_model,
     const at::Tensor v_means2d,  // [C, N, 2]
     const at::Tensor v_covars2d, // [C, N, 2, 2]
+    const at::Tensor v_ray_planes, // [C, N, 2]
+    const at::Tensor v_normals,  // [C, N, 3]
     // outputs
     at::Tensor v_means, // [C, N, 3]
     at::Tensor v_covars // [C, N, 3, 3]
@@ -56,7 +60,10 @@ void launch_projection_ewa_3dgs_fused_fwd_kernel(
     at::Tensor means2d,                    // [C, N, 2]
     at::Tensor depths,                     // [C, N]
     at::Tensor conics,                     // [C, N, 3]
-    at::optional<at::Tensor> compensations // [C, N] optional
+    at::optional<at::Tensor> compensations,// [C, N] optional
+    at::Tensor ray_ts,                     // [C, N]
+    at::Tensor ray_planes,                 // [C, N, 2]
+    at::Tensor normals                     // [C, N, 3]
 );
 void launch_projection_ewa_3dgs_fused_bwd_kernel(
     // inputs
@@ -80,6 +87,9 @@ void launch_projection_ewa_3dgs_fused_bwd_kernel(
     const at::Tensor v_depths,                      // [C, N]
     const at::Tensor v_conics,                      // [C, N, 3]
     const at::optional<at::Tensor> v_compensations, // [C, N] optional
+    const at::Tensor v_ray_ts,                      // [C, N]
+    const at::Tensor v_ray_planes,                  // [C, N, 2]
+    const at::Tensor v_normals,                     // [C, N, 3]
     const bool viewmats_requires_grad,
     // outputs
     at::Tensor v_means,   // [C, N, 3]
@@ -116,7 +126,10 @@ void launch_projection_ewa_3dgs_packed_fwd_kernel(
     at::optional<at::Tensor> means2d,      // [nnz, 2]
     at::optional<at::Tensor> depths,       // [nnz]
     at::optional<at::Tensor> conics,       // [nnz, 3]
-    at::optional<at::Tensor> compensations // [nnz] optional
+    at::optional<at::Tensor> compensations,// [nnz] optional
+    at::optional<at::Tensor> ray_ts,       // [nnz]
+    at::optional<at::Tensor> ray_planes,   // [nnz, 2]
+    at::optional<at::Tensor> normals       // [nnz, 3]
 );
 void launch_projection_ewa_3dgs_packed_bwd_kernel(
     // fwd inputs
@@ -140,6 +153,9 @@ void launch_projection_ewa_3dgs_packed_bwd_kernel(
     const at::Tensor v_depths,                      // [nnz]
     const at::Tensor v_conics,                      // [nnz, 3]
     const at::optional<at::Tensor> v_compensations, // [nnz] optional
+    const at::Tensor v_ray_ts,                      // [C, N]
+    const at::Tensor v_ray_planes,                  // [C, N, 2]
+    const at::Tensor v_normals,                     // [C, N, 3]
     const bool sparse_grad,
     // grad inputs
     at::Tensor v_means,                 // [N, 3] or [nnz, 3]

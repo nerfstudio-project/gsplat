@@ -42,7 +42,10 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
     scalar_t *__restrict__ means2d,      // [nnz, 2]
     scalar_t *__restrict__ depths,       // [nnz]
     scalar_t *__restrict__ conics,       // [nnz, 3]
-    scalar_t *__restrict__ compensations // [nnz] optional
+    scalar_t *__restrict__ compensations,// [nnz] optional
+    scalar_t *__restrict__ ray_ts,       // [nnz]
+    scalar_t *__restrict__ ray_planes,   // [nnz, 2]
+    scalar_t *__restrict__ normals       // [nnz, 2]
 ) {
     int32_t blocks_per_row = gridDim.x;
 
@@ -57,6 +60,7 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
     // check if points are with camera near and far plane
     vec3 mean_c;
     mat3 R;
+    scalar_t ray_t;
     if (valid) {
         // shift pointers to the current camera and gaussian
         means += col_idx * 3;
@@ -78,6 +82,7 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
 
         // transform Gaussian center to camera space
         posW2C(R, t, glm::make_vec3(means), mean_c);
+        ray_t = glm::length(mean_c);
         if (mean_c.z < near_plane || mean_c.z > far_plane) {
             valid = false;
         }
@@ -89,6 +94,8 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
     mat2 covar2d_inv;
     float compensation;
     float det;
+    vec2 ray_plane;
+    vec3 normal;
     if (valid) {
         // transform Gaussian covariance to camera space
         mat3 covar;
@@ -130,9 +137,12 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
                 image_width,
                 image_height,
                 covar2d,
-                mean2d
+                mean2d,
+                ray_plane,
+                normal
             );
             break;
+        // NOTE: support for other camera types needs to be added
         case CameraModelType::ORTHO: // orthographic projection
             ortho_proj(
                 mean_c,
@@ -246,6 +256,12 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
             if (compensations != nullptr) {
                 compensations[thread_data] = compensation;
             }
+            ray_ts[thread_data] = ray_t;
+            ray_planes[thread_data * 2] = ray_plane.x;
+            ray_planes[thread_data * 2 + 1] = ray_plane.y;
+            normals[thread_data * 3] = normal.x;
+            normals[thread_data * 3 + 1] = normal.y;
+            normals[thread_data * 3 + 2] = normal.z;
         }
         // lane 0 of the first block in each row writes the indptr
         if (threadIdx.x == 0 && block_col_idx == 0) {
@@ -286,7 +302,10 @@ void launch_projection_ewa_3dgs_packed_fwd_kernel(
     at::optional<at::Tensor> means2d,      // [nnz, 2]
     at::optional<at::Tensor> depths,       // [nnz]
     at::optional<at::Tensor> conics,       // [nnz, 3]
-    at::optional<at::Tensor> compensations // [nnz] optional
+    at::optional<at::Tensor> compensations,// [nnz] optional
+    at::optional<at::Tensor> ray_ts,       // [nnz]
+    at::optional<at::Tensor> ray_planes,   // [nnz, 2]
+    at::optional<at::Tensor> normals       // [nnz, 3]
 ) {
     uint32_t N = means.size(0);    // number of gaussians
     uint32_t C = viewmats.size(0); // number of cameras
@@ -358,7 +377,13 @@ void launch_projection_ewa_3dgs_packed_fwd_kernel(
                                        : nullptr,
                     compensations.has_value()
                         ? compensations.value().data_ptr<scalar_t>()
-                        : nullptr
+                        : nullptr,
+                    ray_ts.has_value() ? ray_ts.value().data_ptr<scalar_t>()
+                                        : nullptr,
+                    ray_planes.has_value() ? ray_planes.value().data_ptr<scalar_t>()
+                                        : nullptr,
+                    normals.has_value() ? normals.value().data_ptr<scalar_t>()
+                                        : nullptr
                 );
         }
     );
@@ -390,6 +415,9 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
     const scalar_t *__restrict__ v_depths,        // [nnz]
     const scalar_t *__restrict__ v_conics,        // [nnz, 3]
     const scalar_t *__restrict__ v_compensations, // [nnz] optional
+    const scalar_t *__restrict__ v_ray_ts,        // [nnz]
+    const scalar_t *__restrict__ v_ray_planes,    // [nnz, 2]
+    const scalar_t *__restrict__ v_normals,       // [nnz, 3]
     const bool sparse_grad, // whether the outputs are in COO format [nnz, ...]
     // grad inputs
     scalar_t *__restrict__ v_means,   // [N, 3] or [nnz, 3]
@@ -416,6 +444,9 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
     v_means2d += idx * 2;
     v_depths += idx;
     v_conics += idx * 3;
+    v_ray_ts += idx;
+    v_ray_planes += idx * 2;
+    v_normals += idx * 3;
 
     // vjp: compute the inverse of the 2d covariance
     mat2 covar2d_inv = mat2(conics[0], conics[1], conics[1], conics[2]);
@@ -423,6 +454,9 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
         mat2(v_conics[0], v_conics[1] * .5f, v_conics[1] * .5f, v_conics[2]);
     mat2 v_covar2d(0.f);
     inverse_vjp(covar2d_inv, v_covar2d_inv, v_covar2d);
+    scalar_t v_ray_t = v_ray_ts[0];
+    vec2 v_ray_plane = {v_ray_planes[0], v_ray_planes[1]};
+    vec3 v_normal = {v_normals[0], v_normals[1], v_normals[2]};
 
     if (v_compensations != nullptr) {
         // vjp: compensation term
@@ -490,10 +524,13 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
             image_height,
             v_covar2d,
             glm::make_vec2(v_means2d),
+            v_ray_plane,
+            v_normal,
             v_mean_c,
             v_covar_c
         );
         break;
+    // NOTE: support for other camera types needs to be added
     case CameraModelType::ORTHO: // orthographic projection
         ortho_proj_vjp(
             mean_c,
@@ -530,6 +567,7 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
 
     // add contribution from v_depths
     v_mean_c.z += v_depths[0];
+    v_mean_c += (float)v_ray_ts[0] * glm::normalize(mean_c);
 
     // vjp: transform Gaussian covariance to camera space
     vec3 v_mean(0.f);
@@ -665,6 +703,9 @@ void launch_projection_ewa_3dgs_packed_bwd_kernel(
     const at::Tensor v_depths,                      // [nnz]
     const at::Tensor v_conics,                      // [nnz, 3]
     const at::optional<at::Tensor> v_compensations, // [nnz] optional
+    const at::Tensor v_ray_ts,                      // [nnz]
+    const at::Tensor v_ray_planes,                  // [nnz, 2]
+    const at::Tensor v_normals,                     // [nnz, 3]
     const bool sparse_grad,
     // grad inputs
     at::Tensor v_means,                 // [N, 3] or [nnz, 3]
@@ -723,6 +764,9 @@ void launch_projection_ewa_3dgs_packed_bwd_kernel(
                     v_compensations.has_value()
                         ? v_compensations.value().data_ptr<scalar_t>()
                         : nullptr,
+                    v_ray_ts.data_ptr<scalar_t>(),
+                    v_ray_planes.data_ptr<scalar_t>(),
+                    v_normals.data_ptr<scalar_t>(),
                     sparse_grad,
                     v_means.data_ptr<scalar_t>(),
                     covars.has_value() ? v_covars.value().data_ptr<scalar_t>()

@@ -22,7 +22,9 @@ __global__ void projection_ewa_simple_fwd_kernel(
     const uint32_t height,
     const CameraModelType camera_model,
     scalar_t *__restrict__ means2d, // [C, N, 2]
-    scalar_t *__restrict__ covars2d // [C, N, 2, 2]
+    scalar_t *__restrict__ covars2d,// [C, N, 2, 2]
+    scalar_t *__restrict__ ray_planes, // [C, N, 2]
+    scalar_t *__restrict__ normals  // [C, N, 3]
 ) {
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -38,17 +40,22 @@ __global__ void projection_ewa_simple_fwd_kernel(
     Ks += cid * 9;
     means2d += idx * 2;
     covars2d += idx * 4;
+    ray_planes += idx * 2;
+    normals += idx * 3;
 
     float fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
     mat2 covar2d(0.f);
     vec2 mean2d(0.f);
+    vec2 ray_plane(0.f);
+    vec3 normal(0.f);
     const vec3 mean = glm::make_vec3(means);
     const mat3 covar = glm::make_mat3(covars);
 
     switch (camera_model) {
     case CameraModelType::PINHOLE: // perspective projection
-        persp_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
+        persp_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d, ray_plane, normal);
         break;
+    // NOTE: support for other camera types needs to be added
     case CameraModelType::ORTHO: // orthographic projection
         ortho_proj(mean, covar, fx, fy, cx, cy, width, height, covar2d, mean2d);
         break;
@@ -71,6 +78,14 @@ __global__ void projection_ewa_simple_fwd_kernel(
     for (uint32_t i = 0; i < 2; i++) {
         means2d[i] = mean2d[i];
     }
+#pragma unroll
+    for (uint32_t i = 0; i < 2; i++) {
+        ray_planes[i] = ray_plane[i];
+    }
+#pragma unroll
+    for (uint32_t i = 0; i < 2; i++) {
+        normals[i] = normal[i];
+    }
 }
 
 void launch_projection_ewa_simple_fwd_kernel(
@@ -83,7 +98,9 @@ void launch_projection_ewa_simple_fwd_kernel(
     const CameraModelType camera_model,
     // outputs
     at::Tensor means2d, // [C, N, 2]
-    at::Tensor covars2d // [C, N, 2, 2]
+    at::Tensor covars2d,// [C, N, 2, 2]
+    at::Tensor ray_planes, // [C, N, 2]
+    at::Tensor normals // [C, N, 3]
 ) {
     uint32_t C = means.size(0);
     uint32_t N = means.size(1);
@@ -116,7 +133,9 @@ void launch_projection_ewa_simple_fwd_kernel(
                     height,
                     camera_model,
                     means2d.data_ptr<scalar_t>(),
-                    covars2d.data_ptr<scalar_t>()
+                    covars2d.data_ptr<scalar_t>(),
+                    ray_planes.data_ptr<scalar_t>(),
+                    normals.data_ptr<scalar_t>()
                 );
         }
     );
@@ -134,6 +153,8 @@ __global__ void projection_ewa_simple_bwd_kernel(
     const CameraModelType camera_model,
     const scalar_t *__restrict__ v_means2d,  // [C, N, 2]
     const scalar_t *__restrict__ v_covars2d, // [C, N, 2, 2]
+    const scalar_t *__restrict__ v_ray_planes, // [C, N, 2]
+    const scalar_t *__restrict__ v_normals,  // [C, N, 3]
     scalar_t *__restrict__ v_means,          // [C, N, 3]
     scalar_t *__restrict__ v_covars          // [C, N, 3, 3]
 ) {
@@ -154,6 +175,8 @@ __global__ void projection_ewa_simple_bwd_kernel(
     Ks += cid * 9;
     v_means2d += idx * 2;
     v_covars2d += idx * 4;
+    v_ray_planes += idx * 2;
+    v_normals += idx * 3;
 
     float fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
     mat3 v_covar(0.f);
@@ -162,6 +185,8 @@ __global__ void projection_ewa_simple_bwd_kernel(
     const mat3 covar = glm::make_mat3(covars);
     const vec2 v_mean2d = glm::make_vec2(v_means2d);
     const mat2 v_covar2d = glm::make_mat2(v_covars2d);
+    const vec2 v_ray_plane = glm::make_vec2(v_ray_planes);
+    const vec3 v_normal = glm::make_vec3(v_normals);
 
     switch (camera_model) {
     case CameraModelType::PINHOLE: // perspective projection
@@ -176,10 +201,13 @@ __global__ void projection_ewa_simple_bwd_kernel(
             height,
             glm::transpose(v_covar2d),
             v_mean2d,
+            v_ray_plane,
+            v_normal,
             v_mean,
             v_covar
         );
         break;
+    // NOTE: support for other camera types needs to be added
     case CameraModelType::ORTHO: // orthographic projection
         ortho_proj_vjp(
             mean,
@@ -239,6 +267,8 @@ void launch_projection_ewa_simple_bwd_kernel(
     const CameraModelType camera_model,
     const at::Tensor v_means2d,  // [C, N, 2]
     const at::Tensor v_covars2d, // [C, N, 2, 2]
+    const at::Tensor v_ray_planes, // [C, N, 2]
+    const at::Tensor v_normals,  // [C, N, 3]
     // outputs
     at::Tensor v_means, // [C, N, 3]
     at::Tensor v_covars // [C, N, 3, 3]
@@ -275,6 +305,8 @@ void launch_projection_ewa_simple_bwd_kernel(
                     camera_model,
                     v_means2d.data_ptr<scalar_t>(),
                     v_covars2d.data_ptr<scalar_t>(),
+                    v_ray_planes.data_ptr<scalar_t>(),
+                    v_normals.data_ptr<scalar_t>(),
                     v_means.data_ptr<scalar_t>(),
                     v_covars.data_ptr<scalar_t>()
                 );

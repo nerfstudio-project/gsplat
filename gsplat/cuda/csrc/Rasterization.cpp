@@ -16,18 +16,22 @@ namespace gsplat {
 // 3DGS
 ////////////////////////////////////////////////////
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     // Gaussian parameters
     const at::Tensor means2d,   // [C, N, 2] or [nnz, 2]
     const at::Tensor conics,    // [C, N, 3] or [nnz, 3]
     const at::Tensor colors,    // [C, N, channels] or [nnz, channels]
     const at::Tensor opacities, // [C, N]  or [nnz]
+    const at::Tensor ray_ts,    // [C, N] or [nnz]
+    const at::Tensor ray_planes,// [C, N, 2] or [nnz, 2]
+    const at::Tensor normals,   // [C, N, 3] or [nnz, 3]
     const at::optional<at::Tensor> backgrounds, // [C, channels]
     const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
+    const at::Tensor Ks,
     // intersections
     const at::Tensor tile_offsets, // [C, tile_height, tile_width]
     const at::Tensor flatten_ids   // [n_isects]
@@ -37,6 +41,9 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     CHECK_INPUT(conics);
     CHECK_INPUT(colors);
     CHECK_INPUT(opacities);
+    CHECK_INPUT(ray_ts);
+    CHECK_INPUT(ray_planes);
+    CHECK_INPUT(normals);
     CHECK_INPUT(tile_offsets);
     CHECK_INPUT(flatten_ids);
     if (backgrounds.has_value()) {
@@ -53,6 +60,15 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
         at::empty({C, image_height, image_width, channels}, means2d.options());
     at::Tensor alphas =
         at::empty({C, image_height, image_width, 1}, means2d.options());
+    at::Tensor expected_depths =
+        at::empty({C, image_height, image_width, 1}, means2d.options());
+    at::Tensor median_depths =
+        at::empty({C, image_height, image_width, 1}, means2d.options());
+    at::Tensor expected_normals =
+        at::empty({C, image_height, image_width, 3}, means2d.options());
+    at::Tensor median_ids = at::empty(
+        {C, image_height, image_width}, means2d.options().dtype(at::kInt)
+    );
     at::Tensor last_ids = at::empty(
         {C, image_height, image_width}, means2d.options().dtype(at::kInt)
     );
@@ -64,8 +80,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
             conics,                                                            \
             colors,                                                            \
             opacities,                                                         \
+            ray_ts,                                                            \
+            ray_planes,                                                        \
+            normals,                                                           \
             backgrounds,                                                       \
             masks,                                                             \
+            Ks,                                                                \
             image_width,                                                       \
             image_height,                                                      \
             tile_size,                                                         \
@@ -73,6 +93,10 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
             flatten_ids,                                                       \
             renders,                                                           \
             alphas,                                                            \
+            expected_depths,                                                   \
+            median_depths,                                                     \
+            expected_normals,                                                  \
+            median_ids,                                                        \
             last_ids                                                           \
         );                                                                     \
         break;
@@ -105,31 +129,39 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     }
 #undef __LAUNCH_KERNEL__
 
-    return std::make_tuple(renders, alphas, last_ids);
+    return std::make_tuple(renders, alphas, expected_depths, median_depths, expected_normals, median_ids, last_ids);
 }
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 rasterize_to_pixels_3dgs_bwd(
     // Gaussian parameters
     const at::Tensor means2d,                   // [C, N, 2] or [nnz, 2]
     const at::Tensor conics,                    // [C, N, 3] or [nnz, 3]
     const at::Tensor colors,                    // [C, N, 3] or [nnz, 3]
     const at::Tensor opacities,                 // [C, N] or [nnz]
+    const at::Tensor ray_ts,                    // [C, N] or [nnz]
+    const at::Tensor ray_planes,                // [C, N, 2] or [nnz, 2]
+    const at::Tensor normals,                   // [C, N, 3] or [nnz, 3]
     const at::optional<at::Tensor> backgrounds, // [C, 3]
     const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
+    const at::Tensor Ks,
     // intersections
     const at::Tensor tile_offsets, // [C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     // forward outputs
     const at::Tensor render_alphas, // [C, image_height, image_width, 1]
     const at::Tensor last_ids,      // [C, image_height, image_width]
+    const at::Tensor median_ids,      // [C, image_height, image_width]
     // gradients of outputs
     const at::Tensor v_render_colors, // [C, image_height, image_width, 3]
     const at::Tensor v_render_alphas, // [C, image_height, image_width, 1]
+    const at::Tensor v_render_expected_depths, // [C, image_height, image_width, 1]
+    const at::Tensor v_render_median_depths, // [C, image_height, image_width, 1]
+    const at::Tensor v_render_expected_normals, // [C, image_height, image_width, 3]
     // options
     bool absgrad
 ) {
@@ -138,12 +170,20 @@ rasterize_to_pixels_3dgs_bwd(
     CHECK_INPUT(conics);
     CHECK_INPUT(colors);
     CHECK_INPUT(opacities);
+    CHECK_INPUT(ray_ts);
+    CHECK_INPUT(ray_planes);
+    CHECK_INPUT(normals);
+    CHECK_INPUT(Ks);
     CHECK_INPUT(tile_offsets);
     CHECK_INPUT(flatten_ids);
     CHECK_INPUT(render_alphas);
     CHECK_INPUT(last_ids);
+    CHECK_INPUT(median_ids);
     CHECK_INPUT(v_render_colors);
     CHECK_INPUT(v_render_alphas);
+    CHECK_INPUT(v_render_expected_depths);
+    CHECK_INPUT(v_render_median_depths);
+    CHECK_INPUT(v_render_expected_normals);
     if (backgrounds.has_value()) {
         CHECK_INPUT(backgrounds.value());
     }
@@ -161,6 +201,9 @@ rasterize_to_pixels_3dgs_bwd(
     if (absgrad) {
         v_means2d_abs = at::zeros_like(means2d);
     }
+    at::Tensor v_ray_ts = at::zeros_like(ray_ts);
+    at::Tensor v_ray_planes = at::zeros_like(ray_planes);
+    at::Tensor v_normals = at::zeros_like(normals);
 
 #define __LAUNCH_KERNEL__(N)                                                   \
     case N:                                                                    \
@@ -169,22 +212,33 @@ rasterize_to_pixels_3dgs_bwd(
             conics,                                                            \
             colors,                                                            \
             opacities,                                                         \
+            ray_ts,                                                            \
+            ray_planes,                                                        \
+            normals,                                                           \
             backgrounds,                                                       \
             masks,                                                             \
             image_width,                                                       \
             image_height,                                                      \
             tile_size,                                                         \
+            Ks,                                                                \
             tile_offsets,                                                      \
             flatten_ids,                                                       \
             render_alphas,                                                     \
             last_ids,                                                          \
+            median_ids,                                                        \
             v_render_colors,                                                   \
             v_render_alphas,                                                   \
+            v_render_expected_depths,                                          \
+            v_render_median_depths,                                            \
+            v_render_expected_normals,                                         \
             absgrad ? c10::optional<at::Tensor>(v_means2d_abs) : c10::nullopt, \
             v_means2d,                                                         \
             v_conics,                                                          \
             v_colors,                                                          \
-            v_opacities                                                        \
+            v_opacities,                                                       \
+            v_ray_ts,                                                          \
+            v_ray_planes,                                                      \
+            v_normals                                                          \
         );                                                                     \
         break;
 
@@ -217,7 +271,7 @@ rasterize_to_pixels_3dgs_bwd(
 #undef __LAUNCH_KERNEL__
 
     return std::make_tuple(
-        v_means2d_abs, v_means2d, v_conics, v_colors, v_opacities
+        v_means2d_abs, v_means2d, v_conics, v_colors, v_opacities, v_ray_ts, v_ray_planes, v_normals
     );
 }
 
