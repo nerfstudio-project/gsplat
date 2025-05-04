@@ -356,19 +356,62 @@ void radix_sort_double_buffer(
     case 1: // sorted items are stored in flatten_ids_sorted
         break;
     }
+}
 
-    // Double buffer is better than naive radix sort, in terms of mem usage.
-    // CUB_WRAPPER(
-    //     cub::DeviceRadixSort::SortPairs,
-    //     isect_ids,
-    //     isect_ids_sorted,
-    //     flatten_ids,
-    //     flatten_ids_sorted,
-    //     n_isects,
-    //     0,
-    //     32 + tile_n_bits + cam_n_bits,
-    //     stream
-    // );
+// https://nvidia.github.io/cccl/cub/api/structcub_1_1DeviceSegmentedRadixSort.html
+// DoubleBuffer reduce the auxiliary memory usage from O(N+P) to O(P)
+void segmented_radix_sort_double_buffer(
+    const int64_t n_isects,
+    const uint32_t n_segments,
+    const uint32_t batch_n_bits,
+    const uint32_t cam_n_bits,
+    const uint32_t tile_n_bits,
+    const at::Tensor offsets, // [B, C] or [nnz]
+    at::Tensor isect_ids,
+    at::Tensor flatten_ids,
+    at::Tensor isect_ids_sorted,
+    at::Tensor flatten_ids_sorted
+) {
+    if (n_isects <= 0) {
+        return;
+    }
+
+    // Create a set of DoubleBuffers to wrap pairs of device pointers
+    cub::DoubleBuffer<int64_t> d_keys(
+        isect_ids.data_ptr<int64_t>(), isect_ids_sorted.data_ptr<int64_t>()
+    );
+    cub::DoubleBuffer<int32_t> d_values(
+        flatten_ids.data_ptr<int32_t>(), flatten_ids_sorted.data_ptr<int32_t>()
+    );
+    // batch and camera dimensions are contiguous in the isect_ids, 
+    // so we can use DeviceSegmentedRadixSort to only sort the lower 
+    // (tile_n_bits + 32) bits
+    CUB_WRAPPER(
+        cub::DeviceSegmentedRadixSort::SortPairs,
+        d_keys,
+        d_values,
+        n_isects,
+        n_segments, // number of segments
+        offsets.data_ptr<int64_t>(),
+        offsets.data_ptr<int64_t>() + 1,
+        0,
+        32 + tile_n_bits,
+        at::cuda::getCurrentCUDAStream()
+    );
+    switch (d_keys.selector) {
+    case 0: // sorted items are stored in isect_ids
+        isect_ids_sorted.set_(isect_ids);
+        break;
+    case 1: // sorted items are stored in isect_ids_sorted
+        break;
+    }
+    switch (d_values.selector) {
+    case 0: // sorted items are stored in flatten_ids
+        flatten_ids_sorted.set_(flatten_ids);
+        break;
+    case 1: // sorted items are stored in flatten_ids_sorted
+        break;
+    }
 }
 
 } // namespace gsplat

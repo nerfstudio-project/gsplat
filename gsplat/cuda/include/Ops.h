@@ -192,7 +192,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
     const uint32_t tile_size,
     const uint32_t tile_width,
     const uint32_t tile_height,
-    const bool sort
+    const bool sort,
+    const bool segmented
 );
 at::Tensor intersect_offset(
     const at::Tensor isect_ids, // [n_isects]

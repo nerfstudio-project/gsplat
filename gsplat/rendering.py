@@ -50,6 +50,7 @@ def rasterization(
     channel_chunk: int = 32,
     distributed: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+    segmented: bool = False,
     covars: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
@@ -179,6 +180,7 @@ def rasterization(
             the function will collaboratively render the images for all ranks.
         camera_model: The camera model to use. Supported models are "pinhole", "ortho",
             and "fisheye". Default is "pinhole".
+        segmented: Whether to use segmented radix sort. Default is False.
         covars: Optional covariance matrices of the Gaussians. If provided, the `quats` and
             `scales` will be ignored. [B, N, 3, 3], Default is None.
 
@@ -517,6 +519,7 @@ def rasterization(
         tile_size,
         tile_width,
         tile_height,
+        segmented=segmented,
         packed=packed,
         n_batches=B,
         n_cameras=C,

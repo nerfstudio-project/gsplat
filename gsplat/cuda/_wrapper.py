@@ -363,6 +363,7 @@ def isect_tiles(
     tile_width: int,
     tile_height: int,
     sort: bool = True,
+    segmented: bool = False,
     packed: bool = False,
     n_batches: Optional[int] = None,
     n_cameras: Optional[int] = None,
@@ -380,6 +381,7 @@ def isect_tiles(
         tile_width: Tile width.
         tile_height: Tile height.
         sort: If True, the returned intersections will be sorted by the intersection ids. Default: True.
+        segmented: If True, segmented radix sort will be used to sort the intersections. Default: False.
         packed: If True, the input tensors are packed. Default: False.
         n_batches: Number of batches. Required if packed is True.
         n_cameras: Number of cameras. Required if packed is True.
@@ -432,6 +434,7 @@ def isect_tiles(
         tile_width,
         tile_height,
         sort,
+        segmented,
     )
     return tiles_per_gauss, isect_ids, flatten_ids
 
