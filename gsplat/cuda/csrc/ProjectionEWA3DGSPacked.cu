@@ -47,12 +47,10 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
     scalar_t *__restrict__ compensations // [nnz] optional
 ) {
     int32_t blocks_per_row = gridDim.x;
-
     int32_t row_idx = blockIdx.y;
     int32_t block_col_idx = blockIdx.x;
     int32_t block_idx = row_idx * blocks_per_row + block_col_idx;
-
-    int32_t col_idx = block_col_idx * blockDim.x + threadIdx.x; // gid
+    int32_t col_idx = block_col_idx * blockDim.x + threadIdx.x;
     const int32_t bid = row_idx / C;
     const int32_t cid = row_idx % C;
     const int32_t gid = col_idx;
@@ -261,7 +259,7 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
         if (threadIdx.x == 0 && block_col_idx == 0) {
             if (row_idx == 0) {
                 indptr[0] = 0;
-                indptr[C] = block_accum[C * blocks_per_row - 1];
+                indptr[B * C] = block_accum[B * C * blocks_per_row - 1];
             } else {
                 indptr[row_idx] = block_accum[block_idx - 1];
             }

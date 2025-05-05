@@ -1384,11 +1384,11 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        means: Tensor,
-        quats: Tensor,
-        scales: Tensor,
-        viewmats: Tensor,
-        Ks: Tensor,
+        means: Tensor,  # [B, N, 3]
+        quats: Tensor,  # [B, N, 4]
+        scales: Tensor,  # [B, N, 3]
+        viewmats: Tensor,  # [B, C, 4, 4]
+        Ks: Tensor,  # [B, C, 3, 3]
         width: int,
         height: int,
         eps2d: float,
@@ -1505,6 +1505,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         (
             indptr,
+            batch_ids,
             camera_ids,
             gaussian_ids,
             radii,
@@ -1525,6 +1526,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
             radius_clip,
         )
         ctx.save_for_backward(
+            batch_ids,
             camera_ids,
             gaussian_ids,
             means,
@@ -1538,11 +1540,21 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
         ctx.height = height
         ctx.sparse_grad = sparse_grad
 
-        return camera_ids, gaussian_ids, radii, means2d, depths, ray_transforms, normals
+        return (
+            batch_ids,
+            camera_ids,
+            gaussian_ids,
+            radii,
+            means2d,
+            depths,
+            ray_transforms,
+            normals,
+        )
 
     @staticmethod
     def backward(
         ctx,
+        v_batch_ids,
         v_camera_ids,
         v_gaussian_ids,
         v_radii,
@@ -1552,6 +1564,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
         v_normals,
     ):
         (
+            batch_ids,
             camera_ids,
             gaussian_ids,
             means,
@@ -1575,6 +1588,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
             Ks,
             width,
             height,
+            batch_ids,
             camera_ids,
             gaussian_ids,
             ray_transforms,

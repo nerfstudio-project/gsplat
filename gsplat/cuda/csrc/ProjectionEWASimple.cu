@@ -32,12 +32,12 @@ __global__ void projection_ewa_simple_fwd_kernel(
     }
     const uint32_t bid = idx / (C * N); // batch id
     const uint32_t cid = (idx / N) % C; // camera id
-    const uint32_t gid = idx % N; // gaussian id
+    // const uint32_t gid = idx % N; // gaussian id
 
     // shift pointers to the current camera and gaussian
     means += idx * 3;
     covars += idx * 9;
-    Ks += cid * 9;
+    Ks += bid * C * 9 + cid * 9;
     means2d += idx * 2;
     covars2d += idx * 4;
 
@@ -150,14 +150,14 @@ __global__ void projection_ewa_simple_bwd_kernel(
     }
     const uint32_t bid = idx / (C * N); // batch id
     const uint32_t cid = (idx / N) % C; // camera id
-    const uint32_t gid = idx % N; // gaussian id
+    // const uint32_t gid = idx % N; // gaussian id
 
     // shift pointers to the current batch, camera and gaussian
     means += idx * 3;
     covars += idx * 9;
     v_means += idx * 3;
     v_covars += idx * 9;
-    Ks += cid * 9;
+    Ks += bid * C * 9 + cid * 9;
     v_means2d += idx * 2;
     v_covars2d += idx * 4;
 

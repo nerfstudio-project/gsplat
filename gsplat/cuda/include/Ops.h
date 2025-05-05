@@ -341,13 +341,14 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor,
+    at::Tensor,
     at::Tensor>
 projection_2dgs_packed_fwd(
-    const at::Tensor means,    // [N, 3]
-    const at::Tensor quats,    // [N, 4]
-    const at::Tensor scales,   // [N, 3]
-    const at::Tensor viewmats, // [C, 4, 4]
-    const at::Tensor Ks,       // [C, 3, 3]
+    const at::Tensor means,    // [B, N, 3]
+    const at::Tensor quats,    // [B, N, 4]
+    const at::Tensor scales,   // [B, N, 3]
+    const at::Tensor viewmats, // [B, C, 4, 4]
+    const at::Tensor Ks,       // [B, C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float near_plane,
@@ -357,16 +358,17 @@ projection_2dgs_packed_fwd(
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 projection_2dgs_packed_bwd(
     // fwd inputs
-    const at::Tensor means,    // [N, 3]
-    const at::Tensor quats,    // [N, 4]
-    const at::Tensor scales,   // [N, 3]
-    const at::Tensor viewmats, // [C, 4, 4]
-    const at::Tensor Ks,       // [C, 3, 3]
+    const at::Tensor means,    // [B, N, 3]
+    const at::Tensor quats,    // [B, N, 4]
+    const at::Tensor scales,   // [B, N, 3]
+    const at::Tensor viewmats, // [B, C, 4, 4]
+    const at::Tensor Ks,       // [B, C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
-    const at::Tensor camera_ids,     // [nnz]
-    const at::Tensor gaussian_ids,   // [nnz]
+    const at::Tensor batch_ids,    // [nnz]
+    const at::Tensor camera_ids,   // [nnz]
+    const at::Tensor gaussian_ids, // [nnz]
     const at::Tensor ray_transforms, // [nnz, 3, 3]
     // grad outputs
     const at::Tensor v_means2d,        // [nnz, 2]

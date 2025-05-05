@@ -8,6 +8,7 @@ pytest <THIS_PY_FILE> -s
 
 import math
 import os
+from einops import repeat
 
 import pytest
 import torch
@@ -34,14 +35,16 @@ def test_data():
         device=device,
         data_path=os.path.join(os.path.dirname(__file__), "../assets/test_garden.npz"),
     )
+    B = 2
+    C = len(viewmats)
     return {
-        "means": means.expand(2, -1, -1),
-        "quats": quats.expand(2, -1, -1),
-        "scales": scales.expand(2, -1, -1),
-        "opacities": opacities.expand(2, -1),
-        "colors": colors[None].repeat(len(viewmats), 1, 1),
-        "viewmats": viewmats.expand(2, -1, -1, -1),
-        "Ks": Ks[None].repeat(2, 1, 1, 1),
+        "means": repeat(means, "... -> b ...", b=B),
+        "quats": repeat(quats, "... -> b ...", b=B),
+        "scales": repeat(scales, "... -> b ...", b=B),
+        "opacities": repeat(opacities, "... -> b ...", b=B),
+        "colors": repeat(colors, "... -> c ...", c=C),
+        "viewmats": repeat(viewmats, "... -> b ...", b=B),
+        "Ks": repeat(Ks, "... -> b ...", b=B),
         "width": width,
         "height": height,
     }
@@ -473,7 +476,7 @@ def test_rasterize_to_pixels(test_data, channels: int):
     radii, means2d, depths, conics, compensations = fully_fused_projection(
         means, covars, None, None, viewmats, Ks, width, height
     )
-    opacities = opacities[:, None, :].repeat(1, C, 1)
+    opacities = repeat(opacities, "b n -> b c n", c=C)
 
     # Identify intersecting tiles
     tile_size = 16 if channels <= 32 else 4

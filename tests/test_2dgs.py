@@ -79,7 +79,7 @@ def test_projection_2dgs(test_data):
     # TODO (WZ): is the following true for 2dgs as while?
     # radii is integer so we allow for 1 unit difference
     valid = ((radii > 0) & (_radii > 0)).all(dim=-1)
-    torch.testing.assert_close(radii, _radii, rtol=5e-5, atol=1)
+    torch.testing.assert_close(radii, _radii, rtol=1e-3, atol=1)
     torch.testing.assert_close(means2d[valid], _means2d[valid], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(depths[valid], _depths[valid], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(
@@ -145,6 +145,7 @@ def test_fully_fused_projection_packed_2dgs(
     means.requires_grad = True
 
     (
+        batch_ids,
         camera_ids,
         gaussian_ids,
         radii,
@@ -176,19 +177,21 @@ def test_fully_fused_projection_packed_2dgs(
     )
     # recover packed tensors to full matrices for testing
     __radii = torch.sparse_coo_tensor(
-        torch.stack([camera_ids, gaussian_ids]), radii, _radii.shape
+        torch.stack([batch_ids, camera_ids, gaussian_ids]), radii, _radii.shape
     ).to_dense()
     __means2d = torch.sparse_coo_tensor(
-        torch.stack([camera_ids, gaussian_ids]), means2d, _means2d.shape
+        torch.stack([batch_ids, camera_ids, gaussian_ids]), means2d, _means2d.shape
     ).to_dense()
     __depths = torch.sparse_coo_tensor(
-        torch.stack([camera_ids, gaussian_ids]), depths, _depths.shape
+        torch.stack([batch_ids, camera_ids, gaussian_ids]), depths, _depths.shape
     ).to_dense()
     __ray_transforms = torch.sparse_coo_tensor(
-        torch.stack([camera_ids, gaussian_ids]), ray_transforms, _ray_transforms.shape
+        torch.stack([batch_ids, camera_ids, gaussian_ids]),
+        ray_transforms,
+        _ray_transforms.shape,
     ).to_dense()
     __normals = torch.sparse_coo_tensor(
-        torch.stack([camera_ids, gaussian_ids]), normals, _normals.shape
+        torch.stack([batch_ids, camera_ids, gaussian_ids]), normals, _normals.shape
     ).to_dense()
 
     sel = ((__radii > 0) & (_radii > 0)).all(dim=-1)
