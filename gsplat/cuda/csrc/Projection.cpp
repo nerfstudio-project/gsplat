@@ -525,11 +525,11 @@ std::tuple<
     at::Tensor,
     at::Tensor>
 projection_2dgs_fused_fwd(
-    const at::Tensor means,    // [N, 3]
-    const at::Tensor quats,    // [N, 4]
-    const at::Tensor scales,   // [N, 3]
-    const at::Tensor viewmats, // [C, 4, 4]
-    const at::Tensor Ks,       // [C, 3, 3]
+    const at::Tensor means,    // [B, N, 3]
+    const at::Tensor quats,    // [B, N, 4]
+    const at::Tensor scales,   // [B, N, 3]
+    const at::Tensor viewmats, // [B, C, 4, 4]
+    const at::Tensor Ks,       // [B, C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
@@ -544,14 +544,15 @@ projection_2dgs_fused_fwd(
     CHECK_INPUT(viewmats);
     CHECK_INPUT(Ks);
 
-    uint32_t N = means.size(0);    // number of gaussians
-    uint32_t C = viewmats.size(0); // number of cameras
+    uint32_t B = means.size(0);    // number of gaussians
+    uint32_t N = means.size(1);    // number of gaussians
+    uint32_t C = viewmats.size(1); // number of cameras
 
-    at::Tensor radii = at::empty({C, N, 2}, means.options().dtype(at::kInt));
-    at::Tensor means2d = at::empty({C, N, 2}, means.options());
-    at::Tensor depths = at::empty({C, N}, means.options());
-    at::Tensor ray_transforms = at::empty({C, N, 3, 3}, means.options());
-    at::Tensor normals = at::zeros({C, N, 3}, means.options());
+    at::Tensor radii = at::empty({B, C, N, 2}, means.options().dtype(at::kInt));
+    at::Tensor means2d = at::empty({B, C, N, 2}, means.options());
+    at::Tensor depths = at::empty({B, C, N}, means.options());
+    at::Tensor ray_transforms = at::empty({B, C, N, 3, 3}, means.options());
+    at::Tensor normals = at::zeros({B, C, N, 3}, means.options());
 
     launch_projection_2dgs_fused_fwd_kernel(
         // inputs
@@ -578,21 +579,21 @@ projection_2dgs_fused_fwd(
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 projection_2dgs_fused_bwd(
     // fwd inputs
-    const at::Tensor means,    // [N, 3]
-    const at::Tensor quats,    // [N, 4]
-    const at::Tensor scales,   // [N, 3]
-    const at::Tensor viewmats, // [C, 4, 4]
-    const at::Tensor Ks,       // [C, 3, 3]
+    const at::Tensor means,    // [B, N, 3]
+    const at::Tensor quats,    // [B, N, 4]
+    const at::Tensor scales,   // [B, N, 3]
+    const at::Tensor viewmats, // [B, C, 4, 4]
+    const at::Tensor Ks,       // [B, C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
-    const at::Tensor radii,          // [C, N, 2]
-    const at::Tensor ray_transforms, // [C, N, 3, 3]
+    const at::Tensor radii,          // [B, C, N, 2]
+    const at::Tensor ray_transforms, // [B, C, N, 3, 3]
     // grad outputs
-    const at::Tensor v_means2d,        // [C, N, 2]
-    const at::Tensor v_depths,         // [C, N]
-    const at::Tensor v_normals,        // [C, N, 3]
-    const at::Tensor v_ray_transforms, // [C, N, 3, 3]
+    const at::Tensor v_means2d,        // [B, C, N, 2]
+    const at::Tensor v_depths,         // [B, C, N]
+    const at::Tensor v_normals,        // [B, C, N, 3]
+    const at::Tensor v_ray_transforms, // [B, C, N, 3, 3]
     const bool viewmats_requires_grad
 ) {
     DEVICE_GUARD(means);

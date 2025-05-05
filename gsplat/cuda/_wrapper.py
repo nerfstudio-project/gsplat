@@ -1261,11 +1261,11 @@ class _SphericalHarmonics(torch.autograd.Function):
 
 ###### 2DGS ######
 def fully_fused_projection_2dgs(
-    means: Tensor,  # [N, 3]
-    quats: Tensor,  # [N, 4]
-    scales: Tensor,
-    viewmats: Tensor,
-    Ks: Tensor,
+    means: Tensor,  # [B, N, 3]
+    quats: Tensor,  # [B, N, 4]
+    scales: Tensor,  # [B, N, 3]
+    viewmats: Tensor,  # [B, C, 4, 4]
+    Ks: Tensor,  # [B, C, 3, 3]
     width: int,
     height: int,
     eps2d: float = 0.3,
@@ -1281,11 +1281,11 @@ def fully_fused_projection_2dgs(
     per splat bounding box and 2D means in image space.
 
     Args:
-        means: Gaussian means. [N, 3]
-        quats: Quaternions (No need to be normalized). [N, 4].
-        scales: Scales. [N, 3].
-        viewmats: World-to-camera matrices. [C, 4, 4]
-        Ks: Camera intrinsics. [C, 3, 3]
+        means: Gaussian means. [B, N, 3]
+        quats: Quaternions (No need to be normalized). [B, N, 4].
+        scales: Scales. [B, N, 3].
+        viewmats: World-to-camera matrices. [B, C, 4, 4]
+        Ks: Camera intrinsics. [B, C, 3, 3]
         width: Image width.
         height: Image height.
         near_plane: Near plane distance. Default: 0.01.
@@ -1317,16 +1317,16 @@ def fully_fused_projection_2dgs(
         - **normals**. The normals in camera spaces. [C, N, 3]
 
     """
-    C = viewmats.size(0)
-    N = means.size(0)
-    assert means.size() == (N, 3), means.size()
-    assert viewmats.size() == (C, 4, 4), viewmats.size()
-    assert Ks.size() == (C, 3, 3), Ks.size()
+    B, N, _ = means.size()
+    C = viewmats.size(1)
+    assert means.size() == (B, N, 3), means.size()
+    assert viewmats.size() == (B, C, 4, 4), viewmats.size()
+    assert Ks.size() == (B, C, 3, 3), Ks.size()
     means = means.contiguous()
     assert quats is not None, "quats is required"
     assert scales is not None, "scales is required"
-    assert quats.size() == (N, 4), quats.size()
-    assert scales.size() == (N, 3), scales.size()
+    assert quats.size() == (B, N, 4), quats.size()
+    assert scales.size() == (B, N, 3), scales.size()
     quats = quats.contiguous()
     scales = scales.contiguous()
     if sparse_grad:

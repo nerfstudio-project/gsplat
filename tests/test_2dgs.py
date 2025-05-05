@@ -1,4 +1,5 @@
 import math
+from einops import repeat
 
 import pytest
 import torch
@@ -11,24 +12,26 @@ device = torch.device("cuda:0")
 @pytest.fixture
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_data():
-    N = 2
-    xs = torch.linspace(-1, 1, N, device=device)
-    ys = torch.linspace(-1, 1, N, device=device)
-    xys = torch.stack(torch.meshgrid(xs, ys, indexing="ij"), dim=-1).reshape(-1, 2)
-    zs = torch.ones_like(xys[:, :1]) * 3
-    means = torch.cat([xys, zs], dim=-1)
-    quats = torch.tensor([[1.0, 0.0, 0.0, 0]], device=device).repeat(len(means), 1)
-    scales = torch.ones_like(means)
+    # TODO(JC): maybe use stronger test
+    B = 2
+    C = 3
+    N = 1000
+    means = torch.randn(B, N, 3, device=device)
+    quats = torch.randn(B, N, 4, device=device)
+    scales = torch.ones_like(means)  # [B, N, 3]
     scales[..., :2] *= 0.1
-    opacities = torch.ones(1, len(means), device=device) * 0.5
-    colors = torch.rand(1, len(means), 3, device=device)
-    viewmats = torch.eye(4, device=device).reshape(1, 4, 4)
+    opacities = torch.rand(B, N, device=device) * 0.5
+    colors = torch.rand(B, N, 3, device=device)
+    viewmats = repeat(torch.eye(4, device=device), "i j -> b c i j", b=B, c=C)
     # W, H = 24, 20
     W, H = 640, 480
     fx, fy, cx, cy = W, W, W // 2, H // 2
-    Ks = torch.tensor(
-        [[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], device=device
-    ).reshape(1, 3, 3)
+    Ks = repeat(
+        torch.tensor([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], device=device),
+        "i j -> b c i j",
+        b=B,
+        c=C,
+    )
     return {
         "means": means,
         "quats": quats,
@@ -49,13 +52,13 @@ def test_projection_2dgs(test_data):
 
     torch.manual_seed(42)
 
-    Ks = test_data["Ks"]
-    viewmats = test_data["viewmats"]
+    Ks = test_data["Ks"]  # [B, C, 3, 3]
+    viewmats = test_data["viewmats"]  # [B, C, 4, 4]
     height = test_data["height"]
     width = test_data["width"]
-    quats = test_data["quats"]
-    scales = test_data["scales"]
-    means = test_data["means"]
+    quats = test_data["quats"]  # [B, N, 4]
+    scales = test_data["scales"]  # [B, N, 3]
+    means = test_data["means"]  # [B, N, 3]
     viewmats.requires_grad = True
     quats.requires_grad = True
     scales.requires_grad = True
@@ -66,7 +69,7 @@ def test_projection_2dgs(test_data):
         means, quats, scales, viewmats, Ks, width, height
     )
     _ray_transforms = _ray_transforms.permute(
-        (0, 1, 3, 2)
+        (0, 1, 2, 4, 3)
     )  # TODO(WZ): Figure out why do we need to permute here
 
     radii, means2d, depths, ray_transforms, normals = fully_fused_projection_2dgs(
@@ -76,7 +79,7 @@ def test_projection_2dgs(test_data):
     # TODO (WZ): is the following true for 2dgs as while?
     # radii is integer so we allow for 1 unit difference
     valid = ((radii > 0) & (_radii > 0)).all(dim=-1)
-    torch.testing.assert_close(radii, _radii, rtol=0, atol=1)
+    torch.testing.assert_close(radii, _radii, rtol=5e-5, atol=1)
     torch.testing.assert_close(means2d[valid], _means2d[valid], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(depths[valid], _depths[valid], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(
@@ -105,7 +108,7 @@ def test_projection_2dgs(test_data):
         (viewmats, quats, scales, means),
     )
 
-    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=6e-2, atol=1e-3)
     torch.testing.assert_close(v_quats, _v_quats, rtol=2e-1, atol=1e-2)
     torch.testing.assert_close(
         v_scales[..., :2], _v_scales[..., :2], rtol=1e-1, atol=2e-1

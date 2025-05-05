@@ -15,19 +15,20 @@ namespace cg = cooperative_groups;
 
 template <typename scalar_t>
 __global__ void projection_2dgs_fused_fwd_kernel(
+    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
     const scalar_t
-        *__restrict__ means, // [N, 3]:  Gaussian means. (i.e. source points)
+        *__restrict__ means, // [B, N, 3]:  Gaussian means. (i.e. source points)
     const scalar_t
-        *__restrict__ quats, // [N, 4]:  Quaternions (No need to be normalized):
+        *__restrict__ quats, // [B, N, 4]:  Quaternions (No need to be normalized):
                              // This is the rotation component (for 2D)
     const scalar_t
-        *__restrict__ scales, // [N, 3]:  Scales. [N, 3] scales for x, y, z
-    const scalar_t *__restrict__ viewmats, // [C, 4, 4]:  World-to-Camera
+        *__restrict__ scales, // [B, N, 3]:  Scales. [B, N, 3] scales for x, y, z
+    const scalar_t *__restrict__ viewmats, // [B, C, 4, 4]:  World-to-Camera
                                            // coordinate mat [R t] [0 1]
     const scalar_t
-        *__restrict__ Ks, // [C, 3, 3]:  Projective transformation matrix
+        *__restrict__ Ks, // [B, C, 3, 3]:  Projective transformation matrix
                           // [f_x 0  c_x]
                           // [0  f_y c_y]
                           // [0   0   1]  : f_x, f_y are focal lengths, c_x, c_y
@@ -41,40 +42,40 @@ __global__ void projection_2dgs_fused_fwd_kernel(
     const scalar_t radius_clip, // Radius clipping threshold (through away small
                                 // primitives)
     // outputs
-    int32_t *__restrict__ radii, // [C, N, 2]   The maximum radius of the projected
+    int32_t *__restrict__ radii, // [B, C, N, 2]   The maximum radius of the projected
                                  // Gaussians in pixel unit. Int32 tensor.
     scalar_t
-        *__restrict__ means2d, // [C, N, 2] 2D means of the projected Gaussians.
+        *__restrict__ means2d, // [B, C, N, 2] 2D means of the projected Gaussians.
     scalar_t
-        *__restrict__ depths, // [C, N] The z-depth of the projected Gaussians.
+        *__restrict__ depths, // [B, C, N] The z-depth of the projected Gaussians.
     scalar_t
-        *__restrict__ ray_transforms, // [C, N, 3, 3] Transformation matrices
+        *__restrict__ ray_transforms, // [B, C, N, 3, 3] Transformation matrices
                                       // that transform xy-planes in pixel
                                       // spaces into splat coordinates (WH)^T in
                                       // equation (9) in paper
-    scalar_t *__restrict__ normals    // [C, N, 3] The normals in camera spaces.
+    scalar_t *__restrict__ normals    // [B, C, N, 3] The normals in camera spaces.
 ) {
 
     /**
      * ===============================================
      * Initialize execution and threading variables:
      * idx: global thread index
-     * cid: camera id (N is the total number of primitives, C is the number of
-     cameras)
-     * gid: gaussian id (N is the total number of primitives, C is the number of
-     cameras)
+     * bid: batch id
+     * cid: camera id
+     * gid: gaussian id
 
      * THIS KERNEL LAUNCHES PER PRIMITIVE PER CAMERA i.e. C*N THREADS IN TOTAL
      * ===============================================
     */
 
-    // parallelize over C * N.
+    // parallelize over B * C * N.
     uint32_t idx =
         cg::this_grid().thread_rank(); // get the thread index from grid
-    if (idx >= C * N) {
+    if (idx >= B * C * N) {
         return;
     }
-    const uint32_t cid = idx / N; // camera id
+    const uint32_t bid = idx / (C * N); // batch id
+    const uint32_t cid = (idx / N) % C; // camera id
     const uint32_t gid = idx % N; // gaussian id
 
     /**
@@ -84,10 +85,9 @@ __global__ void projection_2dgs_fused_fwd_kernel(
      */
 
     // shift pointers to the current camera and gaussian
-    means += gid *
-             3; // find the mean of the primitive this thread is responsible for
-    viewmats += cid * 16; // step 4x4 camera matrix
-    Ks += cid * 9;        // step 3x3 intrinsic matrix
+    means += bid * N * 3 + gid * 3; // find the mean of the primitive this thread is responsible for
+    viewmats += bid * C * 16 + cid * 16; // step 4x4 camera matrix
+    Ks += bid * C * 9 + cid * 9;        // step 3x3 intrinsic matrix
 
     // glm is column-major but input is row-major
     // rotation component of the camera. Explicit Transpose
@@ -138,14 +138,14 @@ __global__ void projection_2dgs_fused_fwd_kernel(
     posW2C(R, t, glm::make_vec3(means), mean_c);
 
     // return this thread for overly small primitives
-    if (mean_c.z < near_plane || mean_c.z > far_plane) {
+    if (mean_c.z <= near_plane || mean_c.z >= far_plane) {
         radii[idx * 2] = 0;
         radii[idx * 2 + 1] = 0;
         return;
     }
 
-    quats += gid * 4;
-    scales += gid * 3;
+    quats += bid * N * 4 + gid * 4;
+    scales += bid * N * 3 + gid * 3;
 
     mat3 RS_camera =
         R * quat_to_rotmat(glm::make_vec4(quats)) *
@@ -266,27 +266,28 @@ __global__ void projection_2dgs_fused_fwd_kernel(
 
 void launch_projection_2dgs_fused_fwd_kernel(
     // inputs
-    const at::Tensor means,    // [N, 3]
-    const at::Tensor quats,    // [N, 4]
-    const at::Tensor scales,   // [N, 3]
-    const at::Tensor viewmats, // [C, 4, 4]
-    const at::Tensor Ks,       // [C, 3, 3]
+    const at::Tensor means,    // [B, N, 3]
+    const at::Tensor quats,    // [B, N, 4]
+    const at::Tensor scales,   // [B, N, 3]
+    const at::Tensor viewmats, // [B, C, 4, 4]
+    const at::Tensor Ks,       // [B, C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
     const float radius_clip,
     // outputs
-    at::Tensor radii,          // [C, N, 2]
-    at::Tensor means2d,        // [C, N, 2]
-    at::Tensor depths,         // [C, N]
-    at::Tensor ray_transforms, // [C, N, 3, 3]
-    at::Tensor normals         // [C, N, 3]
+    at::Tensor radii,          // [B, C, N, 2]
+    at::Tensor means2d,        // [B, C, N, 2]
+    at::Tensor depths,         // [B, C, N]
+    at::Tensor ray_transforms, // [B, C, N, 3, 3]
+    at::Tensor normals         // [B, C, N, 3]
 ) {
-    uint32_t N = means.size(0);    // number of gaussians
-    uint32_t C = viewmats.size(0); // number of cameras
+    uint32_t B = means.size(0);    // number of gaussians
+    uint32_t N = means.size(1);    // number of gaussians
+    uint32_t C = viewmats.size(1); // number of cameras
 
-    int64_t n_elements = C * N;
+    int64_t n_elements = B * C * N;
     dim3 threads(256);
     dim3 grid((n_elements + threads.x - 1) / threads.x);
     int64_t shmem_size = 0; // No shared memory used in this kernel
@@ -298,6 +299,7 @@ void launch_projection_2dgs_fused_fwd_kernel(
 
     projection_2dgs_fused_fwd_kernel<float>
         <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+            B,
             C,
             N,
             means.data_ptr<float>(),
@@ -321,41 +323,43 @@ void launch_projection_2dgs_fused_fwd_kernel(
 template <typename scalar_t>
 __global__ void projection_2dgs_fused_bwd_kernel(
     // fwd inputs
+    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const scalar_t *__restrict__ means,    // [N, 3]
-    const scalar_t *__restrict__ quats,    // [N, 4]
-    const scalar_t *__restrict__ scales,   // [N, 3]
-    const scalar_t *__restrict__ viewmats, // [C, 4, 4]
-    const scalar_t *__restrict__ Ks,       // [C, 3, 3]
+    const scalar_t *__restrict__ means,    // [B, N, 3]
+    const scalar_t *__restrict__ quats,    // [B, N, 4]
+    const scalar_t *__restrict__ scales,   // [B, N, 3]
+    const scalar_t *__restrict__ viewmats, // [B, C, 4, 4]
+    const scalar_t *__restrict__ Ks,       // [B, C, 3, 3]
     const int32_t image_width,
     const int32_t image_height,
     // fwd outputs
-    const int32_t *__restrict__ radii,           // [C, N, 2]
-    const scalar_t *__restrict__ ray_transforms, // [C, N, 3, 3]
+    const int32_t *__restrict__ radii,           // [B, C, N, 2]
+    const scalar_t *__restrict__ ray_transforms, // [B, C, N, 3, 3]
     // grad outputs
-    const scalar_t *__restrict__ v_means2d, // [C, N, 2]
-    const scalar_t *__restrict__ v_depths,  // [C, N]
-    const scalar_t *__restrict__ v_normals, // [C, N, 3]
+    const scalar_t *__restrict__ v_means2d, // [B, C, N, 2]
+    const scalar_t *__restrict__ v_depths,  // [B, C, N]
+    const scalar_t *__restrict__ v_normals, // [B, C, N, 3]
     // grad inputs
-    scalar_t *__restrict__ v_ray_transforms, // [C, N, 3, 3]
-    scalar_t *__restrict__ v_means,          // [N, 3]
-    scalar_t *__restrict__ v_quats,          // [N, 4]
-    scalar_t *__restrict__ v_scales,         // [N, 3]
-    scalar_t *__restrict__ v_viewmats        // [C, 4, 4]
+    scalar_t *__restrict__ v_ray_transforms, // [B, C, N, 3, 3]
+    scalar_t *__restrict__ v_means,          // [B, N, 3]
+    scalar_t *__restrict__ v_quats,          // [B, N, 4]
+    scalar_t *__restrict__ v_scales,         // [B, N, 3]
+    scalar_t *__restrict__ v_viewmats        // [B, C, 4, 4]
 ) {
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
-    if (idx >= C * N || radii[idx * 2] <= 0 || radii[idx * 2 + 1] <= 0) {
+    if (idx >= B * C * N || radii[idx * 2] <= 0 || radii[idx * 2 + 1] <= 0) {
         return;
     }
-    const uint32_t cid = idx / N; // camera id
+    const uint32_t bid = idx / (C * N); // batch id
+    const uint32_t cid = (idx / N) % C; // camera id
     const uint32_t gid = idx % N; // gaussian id
 
     // shift pointers to the current camera and gaussian
-    means += gid * 3;
-    viewmats += cid * 16;
-    Ks += cid * 9;
+    means += bid * N * 3 + gid * 3;
+    viewmats += bid * C * 16 + cid * 16;
+    Ks += bid * C * 9 + cid * 9;
 
     ray_transforms += idx * 9;
 
@@ -381,8 +385,8 @@ __global__ void projection_2dgs_fused_bwd_kernel(
     vec3 mean_c;
     posW2C(R, t, mean_w, mean_c);
 
-    vec4 quat = glm::make_vec4(quats + gid * 4);
-    vec2 scale = glm::make_vec2(scales + gid * 3);
+    vec4 quat = glm::make_vec4(quats + bid * N * 4 + gid * 4);
+    vec2 scale = glm::make_vec2(scales + bid * N * 3 + gid * 3);
 
     mat3 P = mat3(Ks[0], 0.0, Ks[2], 0.0, Ks[4], Ks[5], 0.0, 0.0, 1.0);
 
@@ -433,7 +437,7 @@ __global__ void projection_2dgs_fused_bwd_kernel(
     if (v_means != nullptr) {
         warpSum(v_mean, warp_group_g);
         if (warp_group_g.thread_rank() == 0) {
-            v_means += gid * 3;
+            v_means += bid * N * 3 + gid * 3;
 #pragma unroll
             for (uint32_t i = 0; i < 3; i++) {
                 gpuAtomicAdd(v_means + i, v_mean[i]);
@@ -445,8 +449,8 @@ __global__ void projection_2dgs_fused_bwd_kernel(
     warpSum(v_quat, warp_group_g);
     warpSum(v_scale, warp_group_g);
     if (warp_group_g.thread_rank() == 0) {
-        v_quats += gid * 4;
-        v_scales += gid * 3;
+        v_quats += bid * N * 4 + gid * 4;
+        v_scales += bid * N * 3 + gid * 3;
         gpuAtomicAdd(v_quats, v_quat[0]);
         gpuAtomicAdd(v_quats + 1, v_quat[1]);
         gpuAtomicAdd(v_quats + 2, v_quat[2]);
@@ -460,7 +464,7 @@ __global__ void projection_2dgs_fused_bwd_kernel(
         warpSum(v_R, warp_group_c);
         warpSum(v_t, warp_group_c);
         if (warp_group_c.thread_rank() == 0) {
-            v_viewmats += cid * 16;
+            v_viewmats += bid * C * 16 + cid * 16;
 #pragma unroll
             for (uint32_t i = 0; i < 3; i++) {
 #pragma unroll
@@ -475,32 +479,33 @@ __global__ void projection_2dgs_fused_bwd_kernel(
 
 void launch_projection_2dgs_fused_bwd_kernel(
     // fwd inputs
-    const at::Tensor means,    // [N, 3]
-    const at::Tensor quats,    // [N, 4]
-    const at::Tensor scales,   // [N, 3]
-    const at::Tensor viewmats, // [C, 4, 4]
-    const at::Tensor Ks,       // [C, 3, 3]
+    const at::Tensor means,    // [B, N, 3]
+    const at::Tensor quats,    // [B, N, 4]
+    const at::Tensor scales,   // [B, N, 3]
+    const at::Tensor viewmats, // [B, C, 4, 4]
+    const at::Tensor Ks,       // [B, C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
-    const at::Tensor radii,          // [C, N, 2]
-    const at::Tensor ray_transforms, // [C, N, 3, 3]
+    const at::Tensor radii,          // [B, C, N, 2]
+    const at::Tensor ray_transforms, // [B, C, N, 3, 3]
     // grad outputs
-    const at::Tensor v_means2d,        // [C, N, 2]
-    const at::Tensor v_depths,         // [C, N]
-    const at::Tensor v_normals,        // [C, N, 3]
-    const at::Tensor v_ray_transforms, // [C, N, 3, 3]
+    const at::Tensor v_means2d,        // [B, C, N, 2]
+    const at::Tensor v_depths,         // [B, C, N]
+    const at::Tensor v_normals,        // [B, C, N, 3]
+    const at::Tensor v_ray_transforms, // [B, C, N, 3, 3]
     const bool viewmats_requires_grad,
     // outputs
-    at::Tensor v_means,   // [C, N, 3]
-    at::Tensor v_quats,   // [C, N, 4]
-    at::Tensor v_scales,  // [C, N, 3]
-    at::Tensor v_viewmats // [C, 4, 4]
+    at::Tensor v_means,   // [B, C, N, 3]
+    at::Tensor v_quats,   // [B, C, N, 4]
+    at::Tensor v_scales,  // [B, C, N, 3]
+    at::Tensor v_viewmats // [B, C, 4, 4]
 ) {
-    uint32_t N = means.size(0);    // number of gaussians
-    uint32_t C = viewmats.size(0); // number of cameras
+    uint32_t B = means.size(0);    // number of gaussians
+    uint32_t N = means.size(1);    // number of gaussians
+    uint32_t C = viewmats.size(1); // number of cameras
 
-    int64_t n_elements = C * N;
+    int64_t n_elements = B * C * N;
     dim3 threads(256);
     dim3 grid((n_elements + threads.x - 1) / threads.x);
     int64_t shmem_size = 0; // No shared memory used in this kernel
@@ -512,6 +517,7 @@ void launch_projection_2dgs_fused_bwd_kernel(
 
     projection_2dgs_fused_bwd_kernel<float>
         <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+            B,
             C,
             N,
             means.data_ptr<float>(),

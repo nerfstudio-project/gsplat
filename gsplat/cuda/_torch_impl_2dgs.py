@@ -7,16 +7,16 @@ from gsplat.cuda._torch_impl import _quat_scale_to_matrix
 
 
 def _fully_fused_projection_2dgs(
-    means: Tensor,  # [N, 3]
-    quats: Tensor,  # [N, 4]
-    scales: Tensor,  # [N, 3]
-    viewmats: Tensor,  # [C, 4, 4]
-    Ks: Tensor,  # [C, 3, 3]
+    means: Tensor,  # [B, N, 3]
+    quats: Tensor,  # [B, N, 4]
+    scales: Tensor,  # [B, N, 3]
+    viewmats: Tensor,  # [B, C, 4, 4]
+    Ks: Tensor,  # [B, C, 3, 3]
     width: int,
     height: int,
     near_plane: float = 0.01,
     far_plane: float = 1e10,
-    eps: float = 1e-6,
+    eps: float = 0,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
     """PyTorch implementation of `gsplat.cuda._wrapper.fully_fused_projection_2dgs()`
 
@@ -25,41 +25,43 @@ def _fully_fused_projection_2dgs(
         This is a minimal implementation of fully fused version, which has more
         arguments. Not all arguments are supported.
     """
-    R_cw = viewmats[:, :3, :3]  # [C, 3, 3]
-    t_cw = viewmats[:, :3, 3]  # [C, 3]
-    means_c = torch.einsum("cij,nj->cni", R_cw, means) + t_cw[:, None, :]  # (C, N, 3)
+    R_cw = viewmats[..., :3, :3]  # [B, C, 3, 3]
+    t_cw = viewmats[..., :3, 3]  # [B, C, 3]
+    means_c = (
+        torch.einsum("bcij,bnj->bcni", R_cw, means) + t_cw[..., None, :]
+    )  # (B, C, N, 3)
     RS_wl = _quat_scale_to_matrix(quats, scales)
-    RS_cl = torch.einsum("cij,njk->cnik", R_cw, RS_wl)  # [C, N, 3, 3]
+    RS_cl = torch.einsum("bcij,bnjk->bcnik", R_cw, RS_wl)  # [B, C, N, 3, 3]
 
     # compute normals
-    normals = RS_cl[..., 2]  # [C, N, 3]
-    C, N, _ = normals.shape
-    cos = -normals.reshape((C * N, 1, 3)) @ means_c.reshape((C * N, 3, 1))
-    cos = cos.reshape((C, N, 1))
+    normals = RS_cl[..., 2]  # [B, C, N, 3]
+    B, C, N, _ = normals.shape
+    cos = -normals.reshape((-1, 1, 3)) @ means_c.reshape((-1, 3, 1))
+    cos = cos.reshape((B, C, N, 1))
     multiplier = torch.where(cos > 0, torch.tensor(1.0), torch.tensor(-1.0))
     normals *= multiplier
 
     # ray transform matrix, omitting the z rotation
-    T_cl = torch.cat([RS_cl[..., :2], means_c[..., None]], dim=-1)  # [C, N, 3, 3]
-    T_sl = torch.einsum("cij,cnjk->cnik", Ks[:, :3, :3], T_cl)  # [C, N, 3, 3]
+    T_cl = torch.cat([RS_cl[..., :2], means_c[..., None]], dim=-1)  # [B, C, N, 3, 3]
+    T_sl = torch.einsum("bcij,bcnjk->bcnik", Ks[..., :3, :3], T_cl)  # [B, C, N, 3, 3]
     # in paper notation M = (WH)^T
     # later h_u = M @ h_x, h_v = M @ h_y
-    M = torch.transpose(T_sl, -1, -2)  # [C, N, 3, 3]
+    M = torch.transpose(T_sl, -1, -2)  # [B, C, N, 3, 3]
 
     # compute the AABB of gaussian
-    test = torch.tensor([1.0, 1.0, -1.0], device=means.device).reshape(1, 1, 3)
-    d = (M[..., 2] * M[..., 2] * test).sum(dim=-1, keepdim=True)  # [C, N, 1]
+    test = torch.tensor([1.0, 1.0, -1.0], device=means.device).reshape(1, 1, 1, 3)
+    d = (M[..., 2] * M[..., 2] * test).sum(dim=-1, keepdim=True)  # [B, C, N, 1]
     valid = torch.abs(d) > eps
     f = torch.where(valid, test / d, torch.zeros_like(test)).unsqueeze(
         -1
-    )  # (C, N, 3, 1)
-    means2d = (M[..., :2] * M[..., 2:3] * f).sum(dim=-2)  # [C, N, 2]
+    )  # (B, C, N, 3, 1)
+    means2d = (M[..., :2] * M[..., 2:3] * f).sum(dim=-2)  # [B, C, N, 2]
     extents = torch.sqrt(
-        means2d**2 - (M[..., :2] * M[..., :2] * f).sum(dim=-2)
-    )  # [C, N, 2]
+        (means2d**2 - (M[..., :2] * M[..., :2] * f).sum(dim=-2)).clamp_min(1e-4)
+    )  # [B, C, N, 2]
 
-    depths = means_c[..., 2]  # [C, N]
-    radius = torch.ceil(3.33 * extents)  # (C, N, 2)
+    depths = means_c[..., 2]  # [B, C, N]
+    radius = torch.ceil(3.33 * extents)  # (B, C, N, 2)
 
     valid = valid.squeeze(-1) & (depths > near_plane) & (depths < far_plane)
     radius[~valid] = 0.0
