@@ -178,3 +178,5 @@ at::Tensor intersect_offset(
     );
     return offsets;
 }
+
+} // namespace gsplat

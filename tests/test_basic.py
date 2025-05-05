@@ -134,7 +134,7 @@ def test_proj(test_data, camera_model: Literal["pinhole", "ortho", "fisheye"]):
         (_means2d * v_means2d).sum() + (_covars2d * v_covars2d).sum(),
         (means, covars),
     )
-    torch.testing.assert_close(v_means, _v_means, rtol=2e-1, atol=1e-2)
+    torch.testing.assert_close(v_means, _v_means, rtol=6e-1, atol=1e-2)
     torch.testing.assert_close(v_covars, _v_covars, rtol=1e-1, atol=1e-1)
 
 

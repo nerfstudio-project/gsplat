@@ -29,8 +29,8 @@ def _quat_to_rotmat(quats: Tensor) -> Tensor:
 
 
 def _quat_scale_to_matrix(
-    quats: Tensor,  # [N, 4],
-    scales: Tensor,  # [N, 3],
+    quats: Tensor,  # [B, N, 4],
+    scales: Tensor,  # [B, N, 3],
 ) -> Tensor:
     """Convert quaternion and scale to a 3x3 matrix (R * S)."""
     R = _quat_to_rotmat(quats)  # (..., 3, 3)
