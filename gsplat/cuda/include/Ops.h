@@ -102,15 +102,16 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor,
+    at::Tensor,
     at::Tensor>
 projection_ewa_3dgs_packed_fwd(
-    const at::Tensor means,                   // [N, 3]
-    const at::optional<at::Tensor> covars,    // [N, 6] optional
-    const at::optional<at::Tensor> quats,     // [N, 4] optional
-    const at::optional<at::Tensor> scales,    // [N, 3] optional
-    const at::optional<at::Tensor> opacities, // [N] optional
-    const at::Tensor viewmats,                // [C, 4, 4]
-    const at::Tensor Ks,                      // [C, 3, 3]
+    const at::Tensor means,                   // [B, N, 3]
+    const at::optional<at::Tensor> covars,    // [B, N, 6] optional
+    const at::optional<at::Tensor> quats,     // [B, N, 4] optional
+    const at::optional<at::Tensor> scales,    // [B, N, 3] optional
+    const at::optional<at::Tensor> opacities, // [B, N] optional
+    const at::Tensor viewmats,                // [B, C, 4, 4]
+    const at::Tensor Ks,                      // [B, C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
@@ -123,17 +124,18 @@ projection_ewa_3dgs_packed_fwd(
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 projection_ewa_3dgs_packed_bwd(
     // fwd inputs
-    const at::Tensor means,                // [N, 3]
-    const at::optional<at::Tensor> covars, // [N, 6]
-    const at::optional<at::Tensor> quats,  // [N, 4]
-    const at::optional<at::Tensor> scales, // [N, 3]
-    const at::Tensor viewmats,             // [C, 4, 4]
-    const at::Tensor Ks,                   // [C, 3, 3]
+    const at::Tensor means,                // [B, N, 3]
+    const at::optional<at::Tensor> covars, // [B, N, 6]
+    const at::optional<at::Tensor> quats,  // [B, N, 4]
+    const at::optional<at::Tensor> scales, // [B, N, 3]
+    const at::Tensor viewmats,             // [B, C, 4, 4]
+    const at::Tensor Ks,                   // [B, C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
     const CameraModelType camera_model,
     // fwd outputs
+    const at::Tensor batch_ids,                   // [nnz]
     const at::Tensor camera_ids,                  // [nnz]
     const at::Tensor gaussian_ids,                // [nnz]
     const at::Tensor conics,                      // [nnz, 3]

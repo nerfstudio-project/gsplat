@@ -264,15 +264,16 @@ std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor,
+    at::Tensor,
     at::Tensor>
 projection_ewa_3dgs_packed_fwd(
-    const at::Tensor means,                // [N, 3]
-    const at::optional<at::Tensor> covars, // [N, 6] optional
-    const at::optional<at::Tensor> quats,  // [N, 4] optional
-    const at::optional<at::Tensor> scales, // [N, 3] optional
-    const at::optional<at::Tensor> opacities, // [N] optional
-    const at::Tensor viewmats,             // [C, 4, 4]
-    const at::Tensor Ks,                   // [C, 3, 3]
+    const at::Tensor means,                // [B, N, 3]
+    const at::optional<at::Tensor> covars, // [B, N, 6] optional
+    const at::optional<at::Tensor> quats,  // [B, N, 4] optional
+    const at::optional<at::Tensor> scales, // [B, N, 3] optional
+    const at::optional<at::Tensor> opacities, // [B, N] optional
+    const at::Tensor viewmats,             // [B, C, 4, 4]
+    const at::Tensor Ks,                   // [B, C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
@@ -294,18 +295,19 @@ projection_ewa_3dgs_packed_fwd(
     CHECK_INPUT(viewmats);
     CHECK_INPUT(Ks);
 
-    uint32_t N = means.size(0);    // number of gaussians
-    uint32_t C = viewmats.size(0); // number of cameras
+    uint32_t B = means.size(0);    // number of gaussians
+    uint32_t N = means.size(1);    // number of gaussians
+    uint32_t C = viewmats.size(1); // number of cameras
     auto opt = means.options();
 
-    uint32_t nrows = C;
+    uint32_t nrows = B * C;
     uint32_t ncols = N;
     uint32_t blocks_per_row = (ncols + N_THREADS_PACKED - 1) / N_THREADS_PACKED;
 
     // first pass
     int32_t nnz;
     at::Tensor block_accum;
-    if (C && N) {
+    if (B && C && N) {
         at::Tensor block_cnts =
             at::empty({nrows * blocks_per_row}, opt.dtype(at::kInt));
         launch_projection_ewa_3dgs_packed_fwd_kernel(
@@ -328,6 +330,7 @@ projection_ewa_3dgs_packed_fwd(
             // outputs
             block_cnts,
             c10::nullopt, // indptr
+            c10::nullopt, // batch_ids
             c10::nullopt, // camera_ids
             c10::nullopt, // gaussian_ids
             c10::nullopt, // radii
@@ -345,7 +348,8 @@ projection_ewa_3dgs_packed_fwd(
     }
 
     // second pass
-    at::Tensor indptr = at::empty({C + 1}, opt.dtype(at::kInt));
+    at::Tensor indptr = at::empty({B * C + 1}, opt.dtype(at::kInt));
+    at::Tensor batch_ids = at::empty({nnz}, opt.dtype(at::kLong));
     at::Tensor camera_ids = at::empty({nnz}, opt.dtype(at::kLong));
     at::Tensor gaussian_ids = at::empty({nnz}, opt.dtype(at::kLong));
     at::Tensor radii = at::empty({nnz, 2}, opt.dtype(at::kInt));
@@ -379,6 +383,7 @@ projection_ewa_3dgs_packed_fwd(
             // outputs
             c10::nullopt, // block_cnts
             indptr,
+            batch_ids,
             camera_ids,
             gaussian_ids,
             radii,
@@ -394,6 +399,7 @@ projection_ewa_3dgs_packed_fwd(
 
     return std::make_tuple(
         indptr,
+        batch_ids,
         camera_ids,
         gaussian_ids,
         radii,
@@ -407,17 +413,18 @@ projection_ewa_3dgs_packed_fwd(
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 projection_ewa_3dgs_packed_bwd(
     // fwd inputs
-    const at::Tensor means,                // [N, 3]
-    const at::optional<at::Tensor> covars, // [N, 6]
-    const at::optional<at::Tensor> quats,  // [N, 4]
-    const at::optional<at::Tensor> scales, // [N, 3]
-    const at::Tensor viewmats,             // [C, 4, 4]
-    const at::Tensor Ks,                   // [C, 3, 3]
+    const at::Tensor means,                // [B, N, 3]
+    const at::optional<at::Tensor> covars, // [B, N, 6]
+    const at::optional<at::Tensor> quats,  // [B, N, 4]
+    const at::optional<at::Tensor> scales, // [B, N, 3]
+    const at::Tensor viewmats,             // [B, C, 4, 4]
+    const at::Tensor Ks,                   // [B, C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
     const CameraModelType camera_model,
     // fwd outputs
+    const at::Tensor batch_ids,                   // [nnz]
     const at::Tensor camera_ids,                  // [nnz]
     const at::Tensor gaussian_ids,                // [nnz]
     const at::Tensor conics,                      // [nnz, 3]
@@ -455,8 +462,9 @@ projection_ewa_3dgs_packed_bwd(
         assert(compensations.has_value());
     }
 
-    // uint32_t N = means.size(0);    // number of gaussians
-    uint32_t C = viewmats.size(0); // number of cameras
+    uint32_t B = means.size(0);    // number of batches
+    // uint32_t N = means.size(1);    // number of gaussians
+    uint32_t C = viewmats.size(1); // number of cameras
     uint32_t nnz = camera_ids.size(0);
 
     at::Tensor v_means, v_covars, v_quats, v_scales, v_viewmats;
@@ -469,7 +477,7 @@ projection_ewa_3dgs_packed_bwd(
             v_scales = at::zeros({nnz, 3}, scales.value().options());
         }
         if (viewmats_requires_grad) {
-            v_viewmats = at::zeros({C, 4, 4}, viewmats.options());
+            v_viewmats = at::zeros({B, C, 4, 4}, viewmats.options());
         }
     } else {
         v_means = at::zeros_like(means);
@@ -497,6 +505,7 @@ projection_ewa_3dgs_packed_bwd(
         eps2d,
         camera_model,
         // fwd outputs
+        batch_ids,
         camera_ids,
         gaussian_ids,
         conics,

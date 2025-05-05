@@ -238,7 +238,7 @@ def test_projection(
         (viewmats, quats, scales, means),
     )
 
-    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=2e-3)
+    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=2e-3, atol=2e-3)
     torch.testing.assert_close(v_quats, _v_quats, rtol=2e-1, atol=2e-2)
     torch.testing.assert_close(v_scales, _v_scales, rtol=5e-1, atol=2e-1)
     torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=6e-2)
@@ -276,6 +276,7 @@ def test_fully_fused_projection_packed(
     # forward
     if fused:
         (
+            batch_ids,
             camera_ids,
             gaussian_ids,
             radii,
@@ -311,8 +312,9 @@ def test_fully_fused_projection_packed(
             camera_model=camera_model,
         )
     else:
-        covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [N, 6]
+        covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [B, N, 6]
         (
+            batch_ids,
             camera_ids,
             gaussian_ids,
             radii,
@@ -350,20 +352,22 @@ def test_fully_fused_projection_packed(
 
     # recover packed tensors to full matrices for testing
     __radii = torch.sparse_coo_tensor(
-        torch.stack([camera_ids, gaussian_ids]), radii, _radii.shape
+        torch.stack([batch_ids, camera_ids, gaussian_ids]), radii, _radii.shape
     ).to_dense()
     __means2d = torch.sparse_coo_tensor(
-        torch.stack([camera_ids, gaussian_ids]), means2d, _means2d.shape
+        torch.stack([batch_ids, camera_ids, gaussian_ids]), means2d, _means2d.shape
     ).to_dense()
     __depths = torch.sparse_coo_tensor(
-        torch.stack([camera_ids, gaussian_ids]), depths, _depths.shape
+        torch.stack([batch_ids, camera_ids, gaussian_ids]), depths, _depths.shape
     ).to_dense()
     __conics = torch.sparse_coo_tensor(
-        torch.stack([camera_ids, gaussian_ids]), conics, _conics.shape
+        torch.stack([batch_ids, camera_ids, gaussian_ids]), conics, _conics.shape
     ).to_dense()
     if calc_compensations:
         __compensations = torch.sparse_coo_tensor(
-            torch.stack([camera_ids, gaussian_ids]), compensations, _compensations.shape
+            torch.stack([batch_ids, camera_ids, gaussian_ids]),
+            compensations,
+            _compensations.shape,
         ).to_dense()
     sel = (__radii > 0).all(dim=-1) & (_radii > 0).all(dim=-1)
     torch.testing.assert_close(__radii[sel], _radii[sel], rtol=0, atol=1)

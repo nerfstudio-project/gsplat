@@ -15,15 +15,16 @@ namespace cg = cooperative_groups;
 
 template <typename scalar_t>
 __global__ void projection_ewa_3dgs_packed_fwd_kernel(
+    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const scalar_t *__restrict__ means,    // [N, 3]
-    const scalar_t *__restrict__ covars,   // [N, 6] Optional
-    const scalar_t *__restrict__ quats,    // [N, 4] Optional
-    const scalar_t *__restrict__ scales,   // [N, 3] Optional
-    const scalar_t *__restrict__ opacities, // [N] optional
-    const scalar_t *__restrict__ viewmats, // [C, 4, 4]
-    const scalar_t *__restrict__ Ks,       // [C, 3, 3]
+    const scalar_t *__restrict__ means,    // [B, N, 3]
+    const scalar_t *__restrict__ covars,   // [B, N, 6] Optional
+    const scalar_t *__restrict__ quats,    // [B, N, 4] Optional
+    const scalar_t *__restrict__ scales,   // [B, N, 3] Optional
+    const scalar_t *__restrict__ opacities, // [B, N] optional
+    const scalar_t *__restrict__ viewmats, // [B, C, 4, 4]
+    const scalar_t *__restrict__ Ks,       // [B, C, 3, 3]
     const int32_t image_width,
     const int32_t image_height,
     const float eps2d,
@@ -31,11 +32,12 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
     const float far_plane,
     const float radius_clip,
     const int32_t
-        *__restrict__ block_accum, // [C * blocks_per_row] packing helper
+        *__restrict__ block_accum, // [B * C * blocks_per_row] packing helper
     const CameraModelType camera_model,
     // outputs
-    int32_t *__restrict__ block_cnts,    // [C * blocks_per_row] packing helper
-    int32_t *__restrict__ indptr,        // [C + 1]
+    int32_t *__restrict__ block_cnts,    // [B * C * blocks_per_row] packing helper
+    int32_t *__restrict__ indptr,        // [B * C + 1]
+    int64_t *__restrict__ batch_ids,       // [nnz]
     int64_t *__restrict__ camera_ids,    // [nnz]
     int64_t *__restrict__ gaussian_ids,  // [nnz]
     int32_t *__restrict__ radii,         // [nnz, 2]
@@ -46,21 +48,24 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
 ) {
     int32_t blocks_per_row = gridDim.x;
 
-    int32_t row_idx = blockIdx.y; // cid
+    int32_t row_idx = blockIdx.y;
     int32_t block_col_idx = blockIdx.x;
     int32_t block_idx = row_idx * blocks_per_row + block_col_idx;
 
     int32_t col_idx = block_col_idx * blockDim.x + threadIdx.x; // gid
+    const int32_t bid = row_idx / C;
+    const int32_t cid = row_idx % C;
+    const int32_t gid = col_idx;
 
-    bool valid = (row_idx < C) && (col_idx < N);
+    bool valid = (bid < B) && (cid < C) && (gid < N);
 
     // check if points are with camera near and far plane
     vec3 mean_c;
     mat3 R;
     if (valid) {
         // shift pointers to the current camera and gaussian
-        means += col_idx * 3;
-        viewmats += row_idx * 16;
+        means += bid * N * 3 + gid * 3;
+        viewmats += bid * C * 16 + cid * 16;
 
         // glm is column-major but input is row-major
         R = mat3(
@@ -94,7 +99,7 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
         mat3 covar;
         if (covars != nullptr) {
             // if a precomputed covariance is provided
-            covars += col_idx * 6;
+            covars += bid * N * 6 + gid * 6;
             covar = mat3(
                 covars[0],
                 covars[1],
@@ -108,8 +113,8 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
             );
         } else {
             // if not then compute it from quaternions and scales
-            quats += col_idx * 4;
-            scales += col_idx * 3;
+            quats += bid * N * 4 + gid * 4;
+            scales += bid * N * 3 + gid * 3;
             quat_scale_to_covar_preci(
                 glm::make_vec4(quats), glm::make_vec3(scales), &covar, nullptr
             );
@@ -117,7 +122,7 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
         mat3 covar_c;
         covarW2C(R, covar, covar_c);
 
-        Ks += row_idx * 9;
+        Ks += bid * C * 9 + cid * 9;
         switch (camera_model) {
         case CameraModelType::PINHOLE: // perspective projection
             persp_proj(
@@ -237,8 +242,9 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
                 thread_data += offset;
             }
             // write to outputs
-            camera_ids[thread_data] = row_idx;   // cid
-            gaussian_ids[thread_data] = col_idx; // gid
+            batch_ids[thread_data] = bid;
+            camera_ids[thread_data] = cid;
+            gaussian_ids[thread_data] = gid;
             radii[thread_data * 2] = (int32_t)radius_x;
             radii[thread_data * 2 + 1] = (int32_t)radius_y;
             means2d[thread_data * 2] = mean2d.x;
@@ -265,13 +271,13 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
 
 void launch_projection_ewa_3dgs_packed_fwd_kernel(
     // inputs
-    const at::Tensor means,                // [N, 3]
-    const at::optional<at::Tensor> covars, // [N, 6] optional
-    const at::optional<at::Tensor> quats,  // [N, 4] optional
-    const at::optional<at::Tensor> scales, // [N, 3] optional
-    const at::optional<at::Tensor> opacities, // [N] optional
-    const at::Tensor viewmats,             // [C, 4, 4]
-    const at::Tensor Ks,                   // [C, 3, 3]
+    const at::Tensor means,                // [B, N, 3]
+    const at::optional<at::Tensor> covars, // [B, N, 6] optional
+    const at::optional<at::Tensor> quats,  // [B, N, 4] optional
+    const at::optional<at::Tensor> scales, // [B, N, 3] optional
+    const at::optional<at::Tensor> opacities, // [B, N] optional
+    const at::Tensor viewmats,             // [B, C, 4, 4]
+    const at::Tensor Ks,                   // [B, C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
@@ -279,11 +285,12 @@ void launch_projection_ewa_3dgs_packed_fwd_kernel(
     const float far_plane,
     const float radius_clip,
     const at::optional<at::Tensor>
-        block_accum, // [C * blocks_per_row] packing helper
+        block_accum, // [B * C * blocks_per_row] packing helper
     const CameraModelType camera_model,
     // outputs
-    at::optional<at::Tensor> block_cnts, // [C * blocks_per_row] packing helper
-    at::optional<at::Tensor> indptr,     // [C + 1]
+    at::optional<at::Tensor> block_cnts, // [B * C * blocks_per_row] packing helper
+    at::optional<at::Tensor> indptr,     // [B * C + 1]
+    at::optional<at::Tensor> batch_ids, // [nnz]
     at::optional<at::Tensor> camera_ids, // [nnz]
     at::optional<at::Tensor> gaussian_ids, // [nnz]
     at::optional<at::Tensor> radii,        // [nnz, 2]
@@ -292,10 +299,11 @@ void launch_projection_ewa_3dgs_packed_fwd_kernel(
     at::optional<at::Tensor> conics,       // [nnz, 3]
     at::optional<at::Tensor> compensations // [nnz] optional
 ) {
-    uint32_t N = means.size(0);    // number of gaussians
-    uint32_t C = viewmats.size(0); // number of cameras
+    uint32_t B = means.size(0);    // number of batches
+    uint32_t N = means.size(1);    // number of gaussians
+    uint32_t C = viewmats.size(1); // number of cameras
 
-    uint32_t nrows = C;
+    uint32_t nrows = B * C;
     uint32_t ncols = N;
     uint32_t blocks_per_row = (ncols + N_THREADS_PACKED - 1) / N_THREADS_PACKED;
 
@@ -304,7 +312,7 @@ void launch_projection_ewa_3dgs_packed_fwd_kernel(
     dim3 grid(blocks_per_row, nrows, 1);
     int64_t shmem_size = 0; // No shared memory used in this kernel
 
-    if (N == 0 || C == 0) {
+    if (B == 0 || N == 0 || C == 0) {
         // skip the kernel launch if there are no elements
         return;
     }
@@ -318,6 +326,7 @@ void launch_projection_ewa_3dgs_packed_fwd_kernel(
                    threads,
                    shmem_size,
                    at::cuda::getCurrentCUDAStream()>>>(
+                    B,
                     C,
                     N,
                     means.data_ptr<scalar_t>(),
@@ -346,6 +355,9 @@ void launch_projection_ewa_3dgs_packed_fwd_kernel(
                         : nullptr,
                     indptr.has_value() ? indptr.value().data_ptr<int32_t>()
                                        : nullptr,
+                    batch_ids.has_value()
+                        ? batch_ids.value().data_ptr<int64_t>()
+                        : nullptr,
                     camera_ids.has_value()
                         ? camera_ids.value().data_ptr<int64_t>()
                         : nullptr,
@@ -371,20 +383,22 @@ void launch_projection_ewa_3dgs_packed_fwd_kernel(
 template <typename scalar_t>
 __global__ void projection_ewa_3dgs_packed_bwd_kernel(
     // fwd inputs
+    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
     const uint32_t nnz,
-    const scalar_t *__restrict__ means,    // [N, 3]
-    const scalar_t *__restrict__ covars,   // [N, 6] Optional
-    const scalar_t *__restrict__ quats,    // [N, 4] Optional
-    const scalar_t *__restrict__ scales,   // [N, 3] Optional
-    const scalar_t *__restrict__ viewmats, // [C, 4, 4]
-    const scalar_t *__restrict__ Ks,       // [C, 3, 3]
+    const scalar_t *__restrict__ means,    // [B, N, 3]
+    const scalar_t *__restrict__ covars,   // [B, N, 6] Optional
+    const scalar_t *__restrict__ quats,    // [B, N, 4] Optional
+    const scalar_t *__restrict__ scales,   // [B, N, 3] Optional
+    const scalar_t *__restrict__ viewmats, // [B, C, 4, 4]
+    const scalar_t *__restrict__ Ks,       // [B, C, 3, 3]
     const int32_t image_width,
     const int32_t image_height,
     const scalar_t eps2d,
     const CameraModelType camera_model,
     // fwd outputs
+    const int64_t *__restrict__ batch_ids,     // [nnz]
     const int64_t *__restrict__ camera_ids,     // [nnz]
     const int64_t *__restrict__ gaussian_ids,   // [nnz]
     const scalar_t *__restrict__ conics,        // [nnz, 3]
@@ -396,24 +410,25 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
     const scalar_t *__restrict__ v_compensations, // [nnz] optional
     const bool sparse_grad, // whether the outputs are in COO format [nnz, ...]
     // grad inputs
-    scalar_t *__restrict__ v_means,   // [N, 3] or [nnz, 3]
-    scalar_t *__restrict__ v_covars,  // [N, 6] or [nnz, 6] Optional
-    scalar_t *__restrict__ v_quats,   // [N, 4] or [nnz, 4] Optional
-    scalar_t *__restrict__ v_scales,  // [N, 3] or [nnz, 3] Optional
-    scalar_t *__restrict__ v_viewmats // [C, 4, 4] Optional
+    scalar_t *__restrict__ v_means,   // [B, N, 3] or [nnz, 3]
+    scalar_t *__restrict__ v_covars,  // [B, N, 6] or [nnz, 6] Optional
+    scalar_t *__restrict__ v_quats,   // [B, N, 4] or [nnz, 4] Optional
+    scalar_t *__restrict__ v_scales,  // [B, N, 3] or [nnz, 3] Optional
+    scalar_t *__restrict__ v_viewmats // [B, C, 4, 4] Optional
 ) {
     // parallelize over nnz.
     uint32_t idx = cg::this_grid().thread_rank();
     if (idx >= nnz) {
         return;
     }
+    const int64_t bid = batch_ids[idx];    // batch id
     const int64_t cid = camera_ids[idx];   // camera id
     const int64_t gid = gaussian_ids[idx]; // gaussian id
 
     // shift pointers to the current camera and gaussian
-    means += gid * 3;
-    viewmats += cid * 16;
-    Ks += cid * 9;
+    means += bid * N * 3 + gid * 3;
+    viewmats += bid * C * 16 + cid * 16;
+    Ks += bid * C * 9 + cid * 9;
 
     conics += idx * 3;
 
@@ -455,7 +470,7 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
     vec3 scale;
     if (covars != nullptr) {
         // if a precomputed covariance is provided
-        covars += gid * 6;
+        covars += bid * N * 6 + gid * 6;
         covar = mat3(
             covars[0],
             covars[1],
@@ -469,8 +484,8 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
         );
     } else {
         // if not then compute it from quaternions and scales
-        quat = glm::make_vec4(quats + gid * 4);
-        scale = glm::make_vec3(scales + gid * 3);
+        quat = glm::make_vec4(quats + bid * N * 4 + gid * 4);
+        scale = glm::make_vec3(scales + bid * N * 3 + gid * 3);
         quat_scale_to_covar_preci(quat, scale, &covar, nullptr);
     }
     vec3 mean_c;
@@ -586,7 +601,7 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
         if (v_means != nullptr) {
             warpSum(v_mean, warp_group_g);
             if (warp_group_g.thread_rank() == 0) {
-                v_means += gid * 3;
+                v_means += bid * N * 3 + gid * 3;
 #pragma unroll
                 for (uint32_t i = 0; i < 3; i++) {
                     gpuAtomicAdd(v_means + i, v_mean[i]);
@@ -597,7 +612,7 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
             // Directly output gradients w.r.t. the covariance
             warpSum(v_covar, warp_group_g);
             if (warp_group_g.thread_rank() == 0) {
-                v_covars += gid * 6;
+                v_covars += bid * N * 6 + gid * 6;
                 gpuAtomicAdd(v_covars, v_covar[0][0]);
                 gpuAtomicAdd(v_covars + 1, v_covar[0][1] + v_covar[1][0]);
                 gpuAtomicAdd(v_covars + 2, v_covar[0][2] + v_covar[2][0]);
@@ -616,8 +631,8 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
             warpSum(v_quat, warp_group_g);
             warpSum(v_scale, warp_group_g);
             if (warp_group_g.thread_rank() == 0) {
-                v_quats += gid * 4;
-                v_scales += gid * 3;
+                v_quats += bid * N * 4 + gid * 4;
+                v_scales += bid * N * 3 + gid * 3;
                 gpuAtomicAdd(v_quats, v_quat[0]);
                 gpuAtomicAdd(v_quats + 1, v_quat[1]);
                 gpuAtomicAdd(v_quats + 2, v_quat[2]);
@@ -634,7 +649,7 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
         warpSum(v_R, warp_group_c);
         warpSum(v_t, warp_group_c);
         if (warp_group_c.thread_rank() == 0) {
-            v_viewmats += cid * 16;
+            v_viewmats += bid * C * 16 + cid * 16;
 #pragma unroll
             for (uint32_t i = 0; i < 3; i++) { // rows
 #pragma unroll
@@ -649,17 +664,18 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
 
 void launch_projection_ewa_3dgs_packed_bwd_kernel(
     // fwd inputs
-    const at::Tensor means,                // [N, 3]
-    const at::optional<at::Tensor> covars, // [N, 6]
-    const at::optional<at::Tensor> quats,  // [N, 4]
-    const at::optional<at::Tensor> scales, // [N, 3]
-    const at::Tensor viewmats,             // [C, 4, 4]
-    const at::Tensor Ks,                   // [C, 3, 3]
+    const at::Tensor means,                // [B, N, 3]
+    const at::optional<at::Tensor> covars, // [B, N, 6]
+    const at::optional<at::Tensor> quats,  // [B, N, 4]
+    const at::optional<at::Tensor> scales, // [B, N, 3]
+    const at::Tensor viewmats,             // [B, C, 4, 4]
+    const at::Tensor Ks,                   // [B, C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
     const CameraModelType camera_model,
     // fwd outputs
+    const at::Tensor batch_ids,                   // [nnz]
     const at::Tensor camera_ids,                  // [nnz]
     const at::Tensor gaussian_ids,                // [nnz]
     const at::Tensor conics,                      // [nnz, 3]
@@ -671,15 +687,16 @@ void launch_projection_ewa_3dgs_packed_bwd_kernel(
     const at::optional<at::Tensor> v_compensations, // [nnz] optional
     const bool sparse_grad,
     // grad inputs
-    at::Tensor v_means,                 // [N, 3] or [nnz, 3]
-    at::optional<at::Tensor> v_covars,  // [N, 6] or [nnz, 6] Optional
-    at::optional<at::Tensor> v_quats,   // [N, 4] or [nnz, 4] Optional
-    at::optional<at::Tensor> v_scales,  // [N, 3] or [nnz, 3] Optional
-    at::optional<at::Tensor> v_viewmats // [C, 4, 4] Optional
+    at::Tensor v_means,                 // [B, N, 3] or [nnz, 3]
+    at::optional<at::Tensor> v_covars,  // [B, N, 6] or [nnz, 6] Optional
+    at::optional<at::Tensor> v_quats,   // [B, N, 4] or [nnz, 4] Optional
+    at::optional<at::Tensor> v_scales,  // [B, N, 3] or [nnz, 3] Optional
+    at::optional<at::Tensor> v_viewmats // [B, C, 4, 4] Optional
 ) {
-    uint32_t N = means.size(0);    // number of gaussians
-    uint32_t C = viewmats.size(0); // number of cameras
-    uint32_t nnz = camera_ids.size(0);
+    uint32_t B = means.size(0);    // number of gaussians
+    uint32_t N = means.size(1);    // number of gaussians
+    uint32_t C = viewmats.size(1); // number of cameras
+    uint32_t nnz = batch_ids.size(0);
 
     dim3 threads(256);
     dim3 grid((nnz + threads.x - 1) / threads.x);
@@ -699,6 +716,7 @@ void launch_projection_ewa_3dgs_packed_bwd_kernel(
                    threads,
                    shmem_size,
                    at::cuda::getCurrentCUDAStream()>>>(
+                    B, 
                     C,
                     N,
                     nnz,
@@ -715,6 +733,7 @@ void launch_projection_ewa_3dgs_packed_bwd_kernel(
                     image_height,
                     eps2d,
                     camera_model,
+                    batch_ids.data_ptr<int64_t>(),
                     camera_ids.data_ptr<int64_t>(),
                     gaussian_ids.data_ptr<int64_t>(),
                     conics.data_ptr<scalar_t>(),
