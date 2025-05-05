@@ -1310,11 +1310,11 @@ def fully_fused_projection_2dgs(
 
         If `packed` is False:
 
-        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N, 2].
-        - **means**. Projected Gaussian means in 2D. [C, N, 2]
-        - **depths**. The z-depth of the projected Gaussians. [C, N]
+        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [B, C, N, 2].
+        - **means**. Projected Gaussian means in 2D. [B, C, N, 2]
+        - **depths**. The z-depth of the projected Gaussians. [B, C, N]
         - **ray_transforms**. transformation matrices that transforms xy-planes in pixel spaces into splat coordinates.
-        - **normals**. The normals in camera spaces. [C, N, 3]
+        - **normals**. The normals in camera spaces. [B, C, N, 3]
 
     """
     B, N, _ = means.size()
@@ -1627,19 +1627,19 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
 
 
 def rasterize_to_pixels_2dgs(
-    means2d: Tensor,
-    ray_transforms: Tensor,
-    colors: Tensor,
-    opacities: Tensor,
-    normals: Tensor,
-    densify: Tensor,
+    means2d: Tensor,  # [B, C, N, 2]
+    ray_transforms: Tensor,  # [B, C, N, 3, 3]
+    colors: Tensor,  # [B, C, N, channels]
+    opacities: Tensor,  # [B, C, N]
+    normals: Tensor,  # [B, C, N, 3]
+    densify: Tensor,  # [B, C, N, 2]
     image_width: int,
     image_height: int,
     tile_size: int,
-    isect_offsets: Tensor,
-    flatten_ids: Tensor,
-    backgrounds: Optional[Tensor] = None,
-    masks: Optional[Tensor] = None,
+    isect_offsets: Tensor,  # [B, C, tile_height, tile_width]
+    flatten_ids: Tensor,  # [n_isects]
+    backgrounds: Optional[Tensor] = None,  # [B, C, channels]
+    masks: Optional[Tensor] = None,  # [B, C, tile_height, tile_width]
     packed: bool = False,
     absgrad: bool = False,
     distloss: bool = False,
@@ -1647,32 +1647,32 @@ def rasterize_to_pixels_2dgs(
     """Rasterize Gaussians to pixels.
 
     Args:
-        means2d: Projected Gaussian means. [C, N, 2] if packed is False, [nnz, 2] if packed is True.
-        ray_transforms: transformation matrices that transforms xy-planes in pixel spaces into splat coordinates. [C, N, 3, 3] if packed is False, [nnz, channels] if packed is True.
-        colors: Gaussian colors or ND features. [C, N, channels] if packed is False, [nnz, channels] if packed is True.
-        opacities: Gaussian opacities that support per-view values. [C, N] if packed is False, [nnz] if packed is True.
-        normals: The normals in camera space. [C, N, 3] if packed is False, [nnz, 3] if packed is True.
-        densify: Dummy variable to keep track of gradient for densification. [C, N, 2] if packed, [nnz, 3] if packed is True.
+        means2d: Projected Gaussian means. [B, C, N, 2] if packed is False, [nnz, 2] if packed is True.
+        ray_transforms: transformation matrices that transforms xy-planes in pixel spaces into splat coordinates. [B, C, N, 3, 3] if packed is False, [nnz, channels] if packed is True.
+        colors: Gaussian colors or ND features. [B, C, N, channels] if packed is False, [nnz, channels] if packed is True.
+        opacities: Gaussian opacities that support per-view values. [B, C, N] if packed is False, [nnz] if packed is True.
+        normals: The normals in camera space. [B, C, N, 3] if packed is False, [nnz, 3] if packed is True.
+        densify: Dummy variable to keep track of gradient for densification. [B, C, N, 2] if packed, [nnz, 3] if packed is True.
         tile_size: Tile size.
-        isect_offsets: Intersection offsets outputs from `isect_offset_encode()`. [C, tile_height, tile_width]
-        flatten_ids: The global flatten indices in [C * N] or [nnz] from  `isect_tiles()`. [n_isects]
-        backgrounds: Background colors. [C, channels]. Default: None.
-        masks: Optional tile mask to skip rendering GS to masked tiles. [C, tile_height, tile_width]. Default: None.
+        isect_offsets: Intersection offsets outputs from `isect_offset_encode()`. [B, C, tile_height, tile_width]
+        flatten_ids: The global flatten indices in [B * C * N] or [nnz] from  `isect_tiles()`. [n_isects]
+        backgrounds: Background colors. [B, C, channels]. Default: None.
+        masks: Optional tile mask to skip rendering GS to masked tiles. [B, C, tile_height, tile_width]. Default: None.
         packed: If True, the input tensors are expected to be packed with shape [nnz, ...]. Default: False.
         absgrad: If True, the backward pass will compute a `.absgrad` attribute for `means2d`. Default: False.
 
     Returns:
         A tuple:
 
-        - **Rendered colors**.      [C, image_height, image_width, channels]
-        - **Rendered alphas**.      [C, image_height, image_width, 1]
-        - **Rendered normals**.     [C, image_height, image_width, 3]
-        - **Rendered distortion**.  [C, image_height, image_width, 1]
-        - **Rendered median depth**.[C, image_height, image_width, 1]
+        - **Rendered colors**.      [B, C, image_height, image_width, channels]
+        - **Rendered alphas**.      [B, C, image_height, image_width, 1]
+        - **Rendered normals**.     [B, C, image_height, image_width, 3]
+        - **Rendered distortion**.  [B, C, image_height, image_width, 1]
+        - **Rendered median depth**.[B, C, image_height, image_width, 1]
 
 
     """
-    C = isect_offsets.size(0)
+    B, C = isect_offsets.shape[:2]
     device = means2d.device
     if packed:
         nnz = means2d.size(0)
@@ -1681,13 +1681,13 @@ def rasterize_to_pixels_2dgs(
         assert colors.shape[0] == nnz, colors.shape
         assert opacities.shape == (nnz,), opacities.shape
     else:
-        N = means2d.size(1)
-        assert means2d.shape == (C, N, 2), means2d.shape
-        assert ray_transforms.shape == (C, N, 3, 3), ray_transforms.shape
-        assert colors.shape[:2] == (C, N), colors.shape
-        assert opacities.shape == (C, N), opacities.shape
+        N = means2d.size(2)
+        assert means2d.shape == (B, C, N, 2), means2d.shape
+        assert ray_transforms.shape == (B, C, N, 3, 3), ray_transforms.shape
+        assert colors.shape[:3] == (B, C, N), colors.shape
+        assert opacities.shape == (B, C, N), opacities.shape
     if backgrounds is not None:
-        assert backgrounds.shape == (C, colors.shape[-1]), backgrounds.shape
+        assert backgrounds.shape == (B, C, colors.shape[-1]), backgrounds.shape
         backgrounds = backgrounds.contiguous()
 
     # Pad the channels to the nearest supported number if necessary
@@ -1718,7 +1718,7 @@ def rasterize_to_pixels_2dgs(
             )
     else:
         padded_channels = 0
-    tile_height, tile_width = isect_offsets.shape[1:3]
+    tile_height, tile_width = isect_offsets.shape[2:4]
     assert (
         tile_height * tile_size >= image_height
     ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
@@ -1763,10 +1763,10 @@ def rasterize_to_pixels_2dgs(
 def rasterize_to_indices_in_range_2dgs(
     range_start: int,
     range_end: int,
-    transmittances: Tensor,
-    means2d: Tensor,
-    ray_transforms: Tensor,
-    opacities: Tensor,
+    transmittances: Tensor,  # [B, C, image_height, image_width]
+    means2d: Tensor,  # [B, C, N, 2]
+    ray_transforms: Tensor,  # [B, C, N, 3, 3]
+    opacities: Tensor,  # [B, C, N]
     image_width: int,
     image_height: int,
     tile_size: int,
@@ -1785,15 +1785,15 @@ def rasterize_to_indices_in_range_2dgs(
     Args:
         range_start: The start batch of Gaussians to be rasterized (inclusive).
         range_end: The end batch of Gaussians to be rasterized (exclusive).
-        transmittances: Currently transmittances. [C, image_height, image_width]
-        means2d: Projected Gaussian means. [C, N, 2]
-        ray_transforms: transformation matrices that transforms xy-planes in pixel spaces into splat coordinates. [C, N, 3, 3]
-        opacities: Gaussian opacities that support per-view values. [C, N]
+        transmittances: Currently transmittances. [B, C, image_height, image_width]
+        means2d: Projected Gaussian means. [B, C, N, 2]
+        ray_transforms: transformation matrices that transforms xy-planes in pixel spaces into splat coordinates. [B, C, N, 3, 3]
+        opacities: Gaussian opacities that support per-view values. [B, C, N]
         image_width: Image width.
         image_height: Image height.
         tile_size: Tile size.
-        isect_offsets: Intersection offsets outputs from `isect_offset_encode()`. [C, tile_height, tile_width]
-        flatten_ids: The global flatten indices in [C * N] from  `isect_tiles()`. [n_isects]
+        isect_offsets: Intersection offsets outputs from `isect_offset_encode()`. [B, C, tile_height, tile_width]
+        flatten_ids: The global flatten indices in [B * C * N] from  `isect_tiles()`. [n_isects]
 
     Returns:
         A tuple:
@@ -1801,14 +1801,15 @@ def rasterize_to_indices_in_range_2dgs(
         - **Gaussian ids**. Gaussian ids for the pixel intersection. A flattened list of shape [M].
         - **Pixel ids**. pixel indices (row-major). A flattened list of shape [M].
         - **Camera ids**. Camera indices. A flattened list of shape [M].
+        - **Batch ids**. Batch indices. A flattened list of shape [M].
     """
 
-    C, N, _ = means2d.shape
-    assert ray_transforms.shape == (C, N, 3, 3), ray_transforms.shape
-    assert opacities.shape == (C, N), opacities.shape
-    assert isect_offsets.shape[0] == C, isect_offsets.shape
+    B, C, N, _ = means2d.shape
+    assert ray_transforms.shape == (B, C, N, 3, 3), ray_transforms.shape
+    assert opacities.shape == (B, C, N), opacities.shape
+    assert isect_offsets.shape[:2] == (B, C), isect_offsets.shape
 
-    tile_height, tile_width = isect_offsets.shape[1:3]
+    tile_height, tile_width = isect_offsets.shape[2:4]
     assert (
         tile_height * tile_size >= image_height
     ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
@@ -1830,8 +1831,9 @@ def rasterize_to_indices_in_range_2dgs(
         flatten_ids.contiguous(),
     )
     out_pixel_ids = out_indices % (image_width * image_height)
-    out_camera_ids = out_indices // (image_width * image_height)
-    return out_gauss_ids, out_pixel_ids, out_camera_ids
+    out_camera_ids = (out_indices // (image_width * image_height)) % C
+    out_batch_ids = (out_indices // (image_width * image_height)) // C
+    return out_gauss_ids, out_pixel_ids, out_camera_ids, out_batch_ids
 
 
 class _RasterizeToPixels2DGS(torch.autograd.Function):
@@ -1901,7 +1903,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
         ctx.absgrad = absgrad
         ctx.distloss = distloss
 
-        # doubel to float
+        # double to float
         render_alphas = render_alphas.float()
         return (
             render_colors,
@@ -1981,7 +1983,7 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
 
         if ctx.needs_input_grad[6]:
             v_backgrounds = (v_render_colors * (1.0 - render_alphas).float()).sum(
-                dim=(1, 2)
+                dim=(2, 3)
             )
         else:
             v_backgrounds = None

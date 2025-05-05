@@ -455,7 +455,7 @@ projection_ewa_3dgs_packed_bwd(
         assert(compensations.has_value());
     }
 
-    uint32_t N = means.size(0);    // number of gaussians
+    // uint32_t N = means.size(0);    // number of gaussians
     uint32_t C = viewmats.size(0); // number of cameras
     uint32_t nnz = camera_ids.size(0);
 

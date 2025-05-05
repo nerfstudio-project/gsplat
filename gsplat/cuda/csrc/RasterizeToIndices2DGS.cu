@@ -14,23 +14,24 @@ template <typename scalar_t>
 __global__ void rasterize_to_indices_2dgs_kernel(
     const uint32_t range_start,
     const uint32_t range_end,
+    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
     const uint32_t n_isects,
-    const vec2 *__restrict__ means2d,            // [C, N, 2]
-    const scalar_t *__restrict__ ray_transforms, // [C, N, 3, 3]
-    const scalar_t *__restrict__ opacities,      // [C, N]
+    const vec2 *__restrict__ means2d,            // [B, C, N, 2]
+    const scalar_t *__restrict__ ray_transforms, // [B, C, N, 3, 3]
+    const scalar_t *__restrict__ opacities,      // [B, C, N]
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
     const uint32_t tile_width,
     const uint32_t tile_height,
-    const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
+    const int32_t *__restrict__ tile_offsets, // [B, C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
     const scalar_t
-        *__restrict__ transmittances,         // [C, image_height, image_width]
-    const int32_t *__restrict__ chunk_starts, // [C, image_height, image_width]
-    int32_t *__restrict__ chunk_cnts,         // [C, image_height, image_width]
+        *__restrict__ transmittances,         // [B, C, image_height, image_width]
+    const int32_t *__restrict__ chunk_starts, // [B, C, image_height, image_width]
+    int32_t *__restrict__ chunk_cnts,         // [B, C, image_height, image_width]
     int64_t *__restrict__ gaussian_ids,       // [n_elems]
     int64_t *__restrict__ pixel_ids           // [n_elems]
 ) {
@@ -38,15 +39,15 @@ __global__ void rasterize_to_indices_2dgs_kernel(
     // shared tile
 
     auto block = cg::this_thread_block();
-    uint32_t camera_id = block.group_index().x;
+    uint32_t batch_camera_id = block.group_index().x;
     uint32_t tile_id =
         block.group_index().y * tile_width + block.group_index().z;
     uint32_t i = block.group_index().y * tile_size + block.thread_index().y;
     uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
 
     // move pointers to the current camera
-    tile_offsets += camera_id * tile_height * tile_width;
-    transmittances += camera_id * image_height * image_width;
+    tile_offsets += batch_camera_id * tile_height * tile_width;
+    transmittances += batch_camera_id * image_height * image_width;
 
     float px = (float)j + 0.5f;
     float py = (float)i + 0.5f;
@@ -60,7 +61,7 @@ __global__ void rasterize_to_indices_2dgs_kernel(
     bool first_pass = chunk_starts == nullptr;
     int32_t base;
     if (!first_pass && inside) {
-        chunk_starts += camera_id * image_height * image_width;
+        chunk_starts += batch_camera_id * image_height * image_width;
         base = chunk_starts[pix_id];
     }
 
@@ -69,7 +70,7 @@ __global__ void rasterize_to_indices_2dgs_kernel(
     // which gaussians to look through in this tile
     int32_t isect_range_start = tile_offsets[tile_id];
     int32_t isect_range_end =
-        (camera_id == C - 1) && (tile_id == tile_width * tile_height - 1)
+        (batch_camera_id == B * C - 1) && (tile_id == tile_width * tile_height - 1)
             ? n_isects
             : tile_offsets[tile_id + 1];
     const uint32_t block_size = block.size();
@@ -197,7 +198,7 @@ __global__ void rasterize_to_indices_2dgs_kernel(
                 int32_t g = id_batch[t]; // flatten index in [C * N]
                 gaussian_ids[base + cnt] = g % N;
                 pixel_ids[base + cnt] =
-                    pix_id + camera_id * image_height * image_width;
+                    pix_id + batch_camera_id * image_height * image_width;
                 cnt += 1;
             }
 
@@ -206,7 +207,7 @@ __global__ void rasterize_to_indices_2dgs_kernel(
     }
 
     if (inside && first_pass) {
-        chunk_cnts += camera_id * image_height * image_width;
+        chunk_cnts += batch_camera_id * image_height * image_width;
         chunk_cnts[pix_id] = cnt;
     }
 }
@@ -214,36 +215,37 @@ __global__ void rasterize_to_indices_2dgs_kernel(
 void launch_rasterize_to_indices_2dgs_kernel(
     const uint32_t range_start,
     const uint32_t range_end,        // iteration steps
-    const at::Tensor transmittances, // [C, image_height, image_width]
+    const at::Tensor transmittances, // [B, C, image_height, image_width]
     // Gaussian parameters
-    const at::Tensor means2d,        // [C, N, 2]
-    const at::Tensor ray_transforms, // [C, N, 3, 3]
-    const at::Tensor opacities,      // [C, N]
+    const at::Tensor means2d,        // [B, C, N, 2]
+    const at::Tensor ray_transforms, // [B, C, N, 3, 3]
+    const at::Tensor opacities,      // [B, C, N]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
     // intersections
-    const at::Tensor tile_offsets, // [C, tile_height, tile_width]
+    const at::Tensor tile_offsets, // [B, C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     // helper for double pass
     const at::optional<at::Tensor>
-        chunk_starts, // [C, image_height, image_width]
+        chunk_starts, // [B, C, image_height, image_width]
     // outputs
-    at::optional<at::Tensor> chunk_cnts,   // [C, image_height, image_width]
+    at::optional<at::Tensor> chunk_cnts,   // [B, C, image_height, image_width]
     at::optional<at::Tensor> gaussian_ids, // [n_elems]
     at::optional<at::Tensor> pixel_ids     // [n_elems]
 ) {
-    uint32_t C = means2d.size(0); // number of cameras
-    uint32_t N = means2d.size(1); // number of gaussians
-    uint32_t tile_height = tile_offsets.size(1);
-    uint32_t tile_width = tile_offsets.size(2);
+    uint32_t B = means2d.size(0); // number of batches
+    uint32_t C = means2d.size(1); // number of cameras
+    uint32_t N = means2d.size(2); // number of gaussians
+    uint32_t tile_height = tile_offsets.size(2);
+    uint32_t tile_width = tile_offsets.size(3);
     uint32_t n_isects = flatten_ids.size(0);
 
     // Each block covers a tile on the image. In total there are
     // C * tile_height * tile_width blocks.
     dim3 threads = {tile_size, tile_size, 1};
-    dim3 grid = {C, tile_height, tile_width};
+    dim3 grid = {B * C, tile_height, tile_width};
 
     int64_t shmem_size = tile_size * tile_size *
                          (sizeof(int32_t) + sizeof(vec3) + sizeof(vec3) +
@@ -268,6 +270,7 @@ void launch_rasterize_to_indices_2dgs_kernel(
         <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
             range_start,
             range_end,
+            B,
             C,
             N,
             n_isects,

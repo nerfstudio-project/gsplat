@@ -125,7 +125,7 @@ __global__ void rasterize_to_pixels_3dgs_fwd_kernel(
         uint32_t batch_start = range_start + block_size * b;
         uint32_t idx = batch_start + tr;
         if (idx < range_end) {
-            int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
+            int32_t g = flatten_ids[idx]; // flatten index in [B * C * N] or [nnz]
             id_batch[tr] = g;
             const vec2 xy = means2d[g];
             const float opac = opacities[g];
