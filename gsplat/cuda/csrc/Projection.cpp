@@ -554,7 +554,7 @@ projection_2dgs_fused_fwd(
     CHECK_INPUT(viewmats);
     CHECK_INPUT(Ks);
 
-    uint32_t B = means.size(0);    // number of gaussians
+    uint32_t B = means.size(0);    // number of batches
     uint32_t N = means.size(1);    // number of gaussians
     uint32_t C = viewmats.size(1); // number of cameras
 
@@ -785,11 +785,11 @@ projection_2dgs_packed_fwd(
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 projection_2dgs_packed_bwd(
     // fwd inputs
-    const at::Tensor means,    // [N, 3]
-    const at::Tensor quats,    // [N, 4]
-    const at::Tensor scales,   // [N, 3]
-    const at::Tensor viewmats, // [C, 4, 4]
-    const at::Tensor Ks,       // [C, 3, 3]
+    const at::Tensor means,    // [B, N, 3]
+    const at::Tensor quats,    // [B, N, 4]
+    const at::Tensor scales,   // [B, N, 3]
+    const at::Tensor viewmats, // [B, C, 4, 4]
+    const at::Tensor Ks,       // [B, C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
