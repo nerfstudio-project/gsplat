@@ -25,32 +25,16 @@ std::tuple<at::Tensor, at::Tensor> quat_scale_to_covar_preci_fwd(
     CHECK_INPUT(quats);
     CHECK_INPUT(scales);
 
-    auto batch_dims = quats.sizes().vec();
-    batch_dims.pop_back();
+    at::DimVector out_shape(quats.sizes().slice(0, quats.dim() - 1));
+    if (triu) {
+        out_shape.append({6});
+    } else {
+        out_shape.append({3, 3});
+    }
 
     at::Tensor covars, precis;
-    if (compute_covar) {
-        auto shape = batch_dims;
-        if (triu) {
-            shape.push_back(6);
-            covars = at::empty(shape, quats.options());
-        } else {
-            shape.push_back(3);
-            shape.push_back(3);
-            covars = at::empty(shape, quats.options());
-        }
-    }
-    if (compute_preci) {
-        auto shape = batch_dims;
-        if (triu) {
-            shape.push_back(6);
-            precis = at::empty(shape, quats.options());
-        } else {
-            shape.push_back(3);
-            shape.push_back(3);
-            precis = at::empty(shape, quats.options());
-        }
-    }
+    if (compute_covar) covars = at::empty(out_shape, quats.options());
+    if (compute_preci) precis = at::empty(out_shape, quats.options());
 
     launch_quat_scale_to_covar_preci_fwd_kernel(
         quats,
