@@ -1,3 +1,5 @@
+// Some of the code are referenced from 3DGRUT codebase.
+// https://github.com/nv-tlabs/3dgrut
 #pragma once
 
 #include <array>
