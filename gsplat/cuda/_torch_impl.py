@@ -29,10 +29,13 @@ def _quat_to_rotmat(quats: Tensor) -> Tensor:
 
 
 def _quat_scale_to_matrix(
-    quats: Tensor,  # [B, N, 4],
-    scales: Tensor,  # [B, N, 3],
+    quats: Tensor,  # [..., 4],
+    scales: Tensor,  # [..., 3],
 ) -> Tensor:
     """Convert quaternion and scale to a 3x3 matrix (R * S)."""
+    batch_dims = quats.shape[:-1]
+    assert quats.shape == batch_dims + (4,), quats.shape
+    assert scales.shape == batch_dims + (3,), scales.shape
     R = _quat_to_rotmat(quats)  # (..., 3, 3)
     M = R * scales[..., None, :]  # (..., 3, 3)
     return M
@@ -46,13 +49,16 @@ def _quat_scale_to_covar_preci(
     triu: bool = False,
 ) -> Tuple[Optional[Tensor], Optional[Tensor]]:
     """PyTorch implementation of `gsplat.cuda._wrapper.quat_scale_to_covar_preci()`."""
+    batch_dims = quats.shape[:-1]
+    assert quats.shape == batch_dims + (4,), quats.shape
+    assert scales.shape == batch_dims + (3,), scales.shape
     R = _quat_to_rotmat(quats)  # (..., 3, 3)
 
     if compute_covar:
         M = R * scales[..., None, :]  # (..., 3, 3)
         covars = torch.einsum("...ij,...kj -> ...ik", M, M)  # (..., 3, 3)
         if triu:
-            covars = covars.reshape(covars.shape[:-2] + (9,))  # (..., 9)
+            covars = covars.reshape(batch_dims + (9,))  # (..., 9)
             covars = (
                 covars[..., [0, 1, 2, 4, 5, 8]] + covars[..., [0, 3, 6, 4, 7, 8]]
             ) / 2.0  # (..., 6)
@@ -60,7 +66,7 @@ def _quat_scale_to_covar_preci(
         P = R * (1 / scales[..., None, :])  # (..., 3, 3)
         precis = torch.einsum("...ij,...kj -> ...ik", P, P)  # (..., 3, 3)
         if triu:
-            precis = precis.reshape(precis.shape[:-2] + (9,))
+            precis = precis.reshape(batch_dims + (9,))
             precis = (
                 precis[..., [0, 1, 2, 4, 5, 8]] + precis[..., [0, 3, 6, 4, 7, 8]]
             ) / 2.0
@@ -768,13 +774,21 @@ def _eval_sh_bases_fast(basis_dim: int, dirs: Tensor):
 
 
 def _spherical_harmonics(
-    degree: int,
+    degrees_to_use: int,
     dirs: torch.Tensor,  # [..., 3]
     coeffs: torch.Tensor,  # [..., K, 3]
 ):
     """Pytorch implementation of `gsplat.cuda._wrapper.spherical_harmonics()`."""
+    assert (degrees_to_use + 1) ** 2 <= coeffs.shape[-2], coeffs.shape
+    batch_dims = dirs.shape[:-1]
+    assert dirs.shape == batch_dims + (3,), dirs.shape
+    assert (
+        (len(coeffs.shape) == len(batch_dims) + 2)
+        and coeffs.shape[:-2] == batch_dims
+        and coeffs.shape[-1] == 3
+    ), coeffs.shape
     dirs = F.normalize(dirs, p=2, dim=-1)
-    num_bases = (degree + 1) ** 2
+    num_bases = (degrees_to_use + 1) ** 2
     bases = torch.zeros_like(coeffs[..., 0])
     bases[..., :num_bases] = _eval_sh_bases_fast(num_bases, dirs)
     return (bases[..., None] * coeffs).sum(dim=-2)

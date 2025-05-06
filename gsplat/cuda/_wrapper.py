@@ -83,7 +83,7 @@ def spherical_harmonics(
     degrees_to_use: int,
     dirs: Tensor,  # [..., 3]
     coeffs: Tensor,  # [..., K, 3]
-    masks: Optional[Tensor] = None,
+    masks: Optional[Tensor] = None,  # [...,]
 ) -> Tensor:
     """Computes spherical harmonics.
 
@@ -97,11 +97,15 @@ def spherical_harmonics(
         Spherical harmonics. [..., 3]
     """
     assert (degrees_to_use + 1) ** 2 <= coeffs.shape[-2], coeffs.shape
-    assert dirs.shape[:-1] == coeffs.shape[:-2], (dirs.shape, coeffs.shape)
-    assert dirs.shape[-1] == 3, dirs.shape
-    assert coeffs.shape[-1] == 3, coeffs.shape
+    batch_dims = dirs.shape[:-1]
+    assert dirs.shape == batch_dims + (3,), dirs.shape
+    assert (
+        (len(coeffs.shape) == len(batch_dims) + 2)
+        and coeffs.shape[:-2] == batch_dims
+        and coeffs.shape[-1] == 3
+    ), coeffs.shape
     if masks is not None:
-        assert masks.shape == dirs.shape[:-1], masks.shape
+        assert masks.shape == batch_dims, masks.shape
         masks = masks.contiguous()
     return _SphericalHarmonics.apply(
         degrees_to_use, dirs.contiguous(), coeffs.contiguous(), masks
@@ -132,9 +136,9 @@ def quat_scale_to_covar_preci(
         - **Covariance matrices**. If `triu` is True the returned shape is [..., 6], otherwise [..., 3, 3].
         - **Precision matrices**. If `triu` is True the returned shape is [..., 6], otherwise [..., 3, 3].
     """
-    assert quats.shape[:-1] == scales.shape[:-1], (quats.shape, scales.shape)
-    assert quats.shape[-1] == 4, quats.shape
-    assert scales.shape[-1] == 3, scales.shape
+    batch_dims = quats.shape[:-1]
+    assert quats.shape == batch_dims + (4,), quats.shape
+    assert scales.shape == batch_dims + (3,), scales.shape
     quats = quats.contiguous()
     scales = scales.contiguous()
     covars, precis = _QuatScaleToCovarPreci.apply(
