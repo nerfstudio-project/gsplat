@@ -1,3 +1,4 @@
+import math
 import warnings
 from typing import Any, Callable, Optional, Tuple
 
@@ -362,9 +363,9 @@ def fully_fused_projection(
 
 @torch.no_grad()
 def isect_tiles(
-    means2d: Tensor,  # [B, C, N, 2] or [nnz, 2]
-    radii: Tensor,  # [B, C, N, 2] or [nnz, 2]
-    depths: Tensor,  # [B, C, N] or [nnz]
+    means2d: Tensor,  # [..., C, N, 2] or [nnz, 2]
+    radii: Tensor,  # [..., C, N, 2] or [nnz, 2]
+    depths: Tensor,  # [..., C, N] or [nnz]
     tile_size: int,
     tile_width: int,
     tile_height: int,
@@ -422,10 +423,12 @@ def isect_tiles(
         C = n_cameras
 
     else:
-        B, C, N, _ = means2d.shape
-        assert means2d.shape == (B, C, N, 2), means2d.size()
-        assert radii.shape == (B, C, N, 2), radii.size()
-        assert depths.shape == (B, C, N), depths.size()
+        batch_dims = means2d.shape[:-3]
+        B = math.prod(batch_dims)
+        C, N = means2d.shape[-3:-1]
+        assert means2d.shape == batch_dims + (C, N, 2), means2d.size()
+        assert radii.shape == batch_dims + (C, N, 2), radii.size()
+        assert depths.shape == batch_dims + (C, N), depths.size()
 
     tiles_per_gauss, isect_ids, flatten_ids = _make_lazy_cuda_func("intersect_tile")(
         means2d.contiguous(),
@@ -463,7 +466,7 @@ def isect_offset_encode(
         tile_height: Tile height.
 
     Returns:
-        Offsets. [B, C, tile_height, tile_width]
+        Offsets. [..., C, tile_height, tile_width]
     """
     return _make_lazy_cuda_func("intersect_offset")(
         isect_ids.contiguous(), n_batches, n_cameras, tile_width, tile_height

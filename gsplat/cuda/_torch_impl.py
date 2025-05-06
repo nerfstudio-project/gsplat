@@ -1,6 +1,7 @@
 import struct
 from typing import Optional, Tuple
 
+import math
 import torch
 import torch.nn.functional as F
 from torch import Tensor
@@ -375,9 +376,9 @@ def _fully_fused_projection(
 
 @torch.no_grad()
 def _isect_tiles(
-    means2d: Tensor,
-    radii: Tensor,
-    depths: Tensor,
+    means2d: Tensor,  # [..., C, N, 2]
+    radii: Tensor,  # [..., C, N, 2]
+    depths: Tensor,  # [..., C, N]
     tile_size: int,
     tile_width: int,
     tile_height: int,
@@ -390,8 +391,17 @@ def _isect_tiles(
         This is a minimal implementation of the fully fused version, which has more
         arguments. Not all arguments are supported.
     """
-    B, C, N = means2d.shape[:3]
+    batch_dims = means2d.shape[:-3]
+    C, N = means2d.shape[-3:-1]
+    assert means2d.shape == batch_dims + (C, N, 2), means2d.shape
+    assert radii.shape == batch_dims + (C, N, 2), radii.shape
+    assert depths.shape == batch_dims + (C, N), depths.shape
+
     device = means2d.device
+    B = math.prod(batch_dims)
+    means2d = means2d.reshape(B, C, N, 2)
+    radii = radii.reshape(B, C, N, 2)
+    depths = depths.reshape(B, C, N)
 
     # compute tiles_per_gauss
     tile_means2d = means2d / tile_size
@@ -402,7 +412,7 @@ def _isect_tiles(
     tile_mins[..., 1] = torch.clamp(tile_mins[..., 1], 0, tile_height)
     tile_maxs[..., 0] = torch.clamp(tile_maxs[..., 0], 0, tile_width)
     tile_maxs[..., 1] = torch.clamp(tile_maxs[..., 1], 0, tile_height)
-    tiles_per_gauss = (tile_maxs - tile_mins).prod(dim=-1)  # [B, C, N]
+    tiles_per_gauss = (tile_maxs - tile_mins).prod(dim=-1)  # [..., C, N]
     tiles_per_gauss *= (radii > 0.0).all(dim=-1)
 
     n_isects = tiles_per_gauss.sum().item()
@@ -469,6 +479,7 @@ def _isect_tiles(
         isect_ids, sort_indices = torch.sort(isect_ids)
         flatten_ids = flatten_ids[sort_indices]
 
+    tiles_per_gauss = tiles_per_gauss.reshape(batch_dims + (C, N))
     return tiles_per_gauss.int(), isect_ids, flatten_ids
 
 

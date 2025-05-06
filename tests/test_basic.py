@@ -164,7 +164,7 @@ def test_proj(
 @pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
 @pytest.mark.parametrize("fused", [False, True])
 @pytest.mark.parametrize("calc_compensations", [True, False])
-@pytest.mark.parametrize("batch_dims", [[]])
+@pytest.mark.parametrize("batch_dims", [[], [2], [1, 2]])
 def test_projection(
     test_data,
     fused: bool,
@@ -434,17 +434,26 @@ def test_fully_fused_projection_packed(
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_isect(test_data):
+@pytest.mark.parametrize("batch_dims", [[], [2], [1, 2]])
+def test_isect(test_data, batch_dims: list[int]):
     from gsplat.cuda._torch_impl import _isect_offset_encode, _isect_tiles
     from gsplat.cuda._wrapper import isect_offset_encode, isect_tiles
 
     torch.manual_seed(42)
 
-    B, C, N = 2, 3, 1000
+    B = math.prod(batch_dims)
+    C, N = 3, 1000
     width, height = 40, 60
-    means2d = torch.randn(B, C, N, 2, device=device) * width
-    radii = torch.randint(0, width, (B, C, N, 2), device=device, dtype=torch.int32)
-    depths = torch.rand(B, C, N, device=device)
+
+    test_data = {
+        "means2d": torch.randn(C, N, 2, device=device) * width,
+        "radii": torch.randint(0, width, (C, N, 2), device=device, dtype=torch.int32),
+        "depths": torch.rand(C, N, device=device),
+    }
+    test_data = _repeat(test_data, batch_dims)
+    means2d = test_data["means2d"]
+    radii = test_data["radii"]
+    depths = test_data["depths"]
 
     tile_size = 16
     tile_width = math.ceil(width / tile_size)

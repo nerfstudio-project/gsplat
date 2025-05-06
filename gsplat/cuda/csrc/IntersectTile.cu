@@ -122,9 +122,9 @@ __global__ void intersect_tile_kernel(
 
 void launch_intersect_tile_kernel(
     // inputs
-    const at::Tensor means2d,                    // [B, C, N, 2] or [nnz, 2]
-    const at::Tensor radii,                      // [B, C, N, 2] or [nnz, 2]
-    const at::Tensor depths,                     // [B, C, N] or [nnz]
+    const at::Tensor means2d,                    // [..., C, N, 2] or [nnz, 2]
+    const at::Tensor radii,                      // [..., C, N, 2] or [nnz, 2]
+    const at::Tensor depths,                     // [..., C, N] or [nnz]
     const at::optional<at::Tensor> batch_ids,    // [nnz]
     const at::optional<at::Tensor> camera_ids,   // [nnz]
     const at::optional<at::Tensor> gaussian_ids, // [nnz]
@@ -133,9 +133,9 @@ void launch_intersect_tile_kernel(
     const uint32_t tile_size,
     const uint32_t tile_width,
     const uint32_t tile_height,
-    const at::optional<at::Tensor> cum_tiles_per_gauss, // [B, C, N] or [nnz]
+    const at::optional<at::Tensor> cum_tiles_per_gauss, // [..., C, N] or [nnz]
     // outputs
-    at::optional<at::Tensor> tiles_per_gauss, // [B, C, N] or [nnz]
+    at::optional<at::Tensor> tiles_per_gauss, // [..., C, N] or [nnz]
     at::optional<at::Tensor> isect_ids,       // [n_isects]
     at::optional<at::Tensor> flatten_ids      // [n_isects]
 ) {
@@ -147,7 +147,7 @@ void launch_intersect_tile_kernel(
         nnz = means2d.size(0); // total number of gaussians
         n_elements = nnz;
     } else {
-        N = means2d.size(2); // number of gaussians per camera
+        N = means2d.size(-2); // number of gaussians per camera
         n_elements = B * C * N;
     }
 
