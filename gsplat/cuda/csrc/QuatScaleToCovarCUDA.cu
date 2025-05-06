@@ -14,12 +14,12 @@ namespace cg = cooperative_groups;
 template <typename scalar_t>
 __global__ void quat_scale_to_covar_preci_fwd_kernel(
     const uint32_t N,
-    const scalar_t *__restrict__ quats,  // [..., 4]
-    const scalar_t *__restrict__ scales, // [..., 3]
+    const scalar_t *__restrict__ quats,  // [N, 4]
+    const scalar_t *__restrict__ scales, // [N, 3]
     const bool triu,
     // outputs
-    scalar_t *__restrict__ covars, // [..., 3, 3] or [..., 6]
-    scalar_t *__restrict__ precis  // [..., 3, 3] or [..., 6]
+    scalar_t *__restrict__ covars, // [N, 3, 3] or [N, 6]
+    scalar_t *__restrict__ precis  // [N, 3, 3] or [N, 6]
 ) {
     // parallelize over N.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -130,15 +130,15 @@ template <typename scalar_t>
 __global__ void quat_scale_to_covar_preci_bwd_kernel(
     const uint32_t N,
     // fwd inputs
-    const scalar_t *__restrict__ quats,  // [..., 4]
-    const scalar_t *__restrict__ scales, // [..., 3]
+    const scalar_t *__restrict__ quats,  // [N, 4]
+    const scalar_t *__restrict__ scales, // [N, 3]
     const bool triu,
     // grad outputs
-    const scalar_t *__restrict__ v_covars, // [..., 3, 3] or [..., 6]
-    const scalar_t *__restrict__ v_precis, // [..., 3, 3] or [..., 6]
+    const scalar_t *__restrict__ v_covars, // [N, 3, 3] or [N, 6]
+    const scalar_t *__restrict__ v_precis, // [N, 3, 3] or [N, 6]
     // grad inputs
-    scalar_t *__restrict__ v_quats, // [..., 4]
-    scalar_t *__restrict__ v_scales // [..., 3]
+    scalar_t *__restrict__ v_quats, // [N, 4]
+    scalar_t *__restrict__ v_scales // [N, 3]
 ) {
     // parallelize over N.
     uint32_t idx = cg::this_grid().thread_rank();
