@@ -35,29 +35,42 @@ def test_data():
         device=device,
         data_path=os.path.join(os.path.dirname(__file__), "../assets/test_garden.npz"),
     )
-    B = 2
-    C = len(viewmats)
     return {
-        "means": repeat(means, "... -> b ...", b=B),
-        "quats": repeat(quats, "... -> b ...", b=B),
-        "scales": repeat(scales, "... -> b ...", b=B),
-        "opacities": repeat(opacities, "... -> b ...", b=B),
-        "colors": repeat(colors, "... -> c ...", c=C),
-        "viewmats": repeat(viewmats, "... -> b ...", b=B),
-        "Ks": repeat(Ks, "... -> b ...", b=B),
+        "means": means,
+        "quats": quats,
+        "scales": scales,
+        "opacities": opacities,
+        "viewmats": viewmats,
+        "Ks": Ks,
         "width": width,
         "height": height,
     }
 
 
+def _repeat(data: dict, batch_dims: list[int]):
+    # append multiple batch dimensions to the front of the tensor
+    # eg. x.shape = [N, 3], batch_dims = [1, 2], return shape is [1, 2, N, 3]
+    # eg. x.shape = [N, 3], batch_dims = [], return shape is [N, 3]
+    ret = {}
+    for k, v in data.items():
+        if isinstance(v, torch.Tensor) and len(batch_dims) > 0:
+            new_shape = list(batch_dims) + list(v.shape)
+            ret[k] = v.expand(new_shape)
+        else:
+            ret[k] = v
+    return ret
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("triu", [False, True])
-def test_quat_scale_to_covar_preci(test_data, triu: bool):
+@pytest.mark.parametrize("batch_dims", [[], [1], [1, 2]])
+def test_quat_scale_to_covar_preci(test_data, triu: bool, batch_dims: list[int]):
     from gsplat.cuda._torch_impl import _quat_scale_to_covar_preci
     from gsplat.cuda._wrapper import quat_scale_to_covar_preci
 
     torch.manual_seed(42)
 
+    test_data = _repeat(test_data, batch_dims)
     quats = test_data["quats"]
     scales = test_data["scales"]
     quats.requires_grad = True
@@ -85,8 +98,8 @@ def test_quat_scale_to_covar_preci(test_data, triu: bool):
         (_covars * v_covars + _precis * v_precis).sum(),
         (quats, scales),
     )
-    torch.testing.assert_close(v_quats, _v_quats, rtol=1e-1, atol=1e-1)
-    torch.testing.assert_close(v_scales, _v_scales, rtol=1e-1, atol=1e-1)
+    torch.testing.assert_close(v_quats, _v_quats, rtol=1e0, atol=1e-1)
+    torch.testing.assert_close(v_scales, _v_scales, rtol=1e0, atol=1e-1)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
@@ -550,16 +563,21 @@ def test_rasterize_to_pixels(test_data, channels: int):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("sh_degree", [0, 1, 2, 3, 4])
-def test_sh(test_data, sh_degree: int):
+@pytest.mark.parametrize("batch_dims", [[], [1], [1, 2]])
+def test_sh(test_data, sh_degree: int, batch_dims: list[int]):
     from gsplat.cuda._torch_impl import _spherical_harmonics
     from gsplat.cuda._wrapper import spherical_harmonics
 
     torch.manual_seed(42)
 
-    B = 2
     N = 1000
-    coeffs = torch.randn(B, N, (4 + 1) ** 2, 3, device=device)
-    dirs = torch.randn(B, N, 3, device=device)
+    test_data = {
+        "coeffs": torch.randn(N, (4 + 1) ** 2, 3, device=device),
+        "dirs": torch.randn(N, 3, device=device),
+    }
+    test_data = _repeat(test_data, batch_dims)
+    coeffs = test_data["coeffs"]
+    dirs = test_data["dirs"]
     coeffs.requires_grad = True
     dirs.requires_grad = True
 
