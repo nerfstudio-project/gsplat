@@ -36,8 +36,8 @@ def _quat_scale_to_matrix(
     batch_dims = quats.shape[:-1]
     assert quats.shape == batch_dims + (4,), quats.shape
     assert scales.shape == batch_dims + (3,), scales.shape
-    R = _quat_to_rotmat(quats)  # (..., 3, 3)
-    M = R * scales[..., None, :]  # (..., 3, 3)
+    R = _quat_to_rotmat(quats)  # [..., 3, 3]
+    M = R * scales[..., None, :]  # [..., 3, 3]
     return M
 
 
@@ -52,64 +52,65 @@ def _quat_scale_to_covar_preci(
     batch_dims = quats.shape[:-1]
     assert quats.shape == batch_dims + (4,), quats.shape
     assert scales.shape == batch_dims + (3,), scales.shape
-    R = _quat_to_rotmat(quats)  # (..., 3, 3)
+    R = _quat_to_rotmat(quats)  # [..., 3, 3]
 
     if compute_covar:
-        M = R * scales[..., None, :]  # (..., 3, 3)
-        covars = torch.einsum("...ij,...kj -> ...ik", M, M)  # (..., 3, 3)
+        M = R * scales[..., None, :]  # [..., 3, 3]
+        covars = torch.einsum("...ij,...kj -> ...ik", M, M)  # [..., 3, 3]
         if triu:
-            covars = covars.reshape(batch_dims + (9,))  # (..., 9)
+            covars = covars.reshape(batch_dims + (9,))  # [..., 9]
             covars = (
                 covars[..., [0, 1, 2, 4, 5, 8]] + covars[..., [0, 3, 6, 4, 7, 8]]
-            ) / 2.0  # (..., 6)
+            ) / 2.0  # [..., 6]
     if compute_preci:
-        P = R * (1 / scales[..., None, :])  # (..., 3, 3)
-        precis = torch.einsum("...ij,...kj -> ...ik", P, P)  # (..., 3, 3)
+        P = R * (1 / scales[..., None, :])  # [..., 3, 3]
+        precis = torch.einsum("...ij,...kj -> ...ik", P, P)  # [..., 3, 3]
         if triu:
-            precis = precis.reshape(batch_dims + (9,))
+            precis = precis.reshape(batch_dims + (9,))  # [..., 9]
             precis = (
                 precis[..., [0, 1, 2, 4, 5, 8]] + precis[..., [0, 3, 6, 4, 7, 8]]
-            ) / 2.0
+            ) / 2.0  # [..., 6]
 
     return covars if compute_covar else None, precis if compute_preci else None
 
 
 def _persp_proj(
-    means: Tensor,  # [B, C, N, 3]
-    covars: Tensor,  # [B, C, N, 3, 3]
-    Ks: Tensor,  # [B, C, 3, 3]
+    means: Tensor,  # [..., C, N, 3]
+    covars: Tensor,  # [..., C, N, 3, 3]
+    Ks: Tensor,  # [..., C, 3, 3]
     width: int,
     height: int,
 ) -> Tuple[Tensor, Tensor]:
     """PyTorch implementation of perspective projection for 3D Gaussians.
 
     Args:
-        means: Gaussian means in camera coordinate system. [B, C, N, 3].
-        covars: Gaussian covariances in camera coordinate system. [B, C, N, 3, 3].
-        Ks: Camera intrinsics. [B, C, 3, 3].
+        means: Gaussian means in camera coordinate system. [..., C, N, 3].
+        covars: Gaussian covariances in camera coordinate system. [..., C, N, 3, 3].
+        Ks: Camera intrinsics. [..., C, 3, 3].
         width: Image width.
         height: Image height.
 
     Returns:
         A tuple:
 
-        - **means2d**: Projected means. [B, C, N, 2].
-        - **cov2d**: Projected covariances. [B, C, N, 2, 2].
+        - **means2d**: Projected means. [..., C, N, 2].
+        - **cov2d**: Projected covariances. [..., C, N, 2, 2].
     """
-    B, C, N, _ = means.shape
-    assert means.shape == (B, C, N, 3), means.shape
-    assert covars.shape == (B, C, N, 3, 3), covars.shape
-    assert Ks.shape == (B, C, 3, 3), Ks.shape
+    batch_dims = means.shape[:-3]
+    C, N = means.shape[-3:-1]
+    assert means.shape == batch_dims + (C, N, 3), means.shape
+    assert covars.shape == batch_dims + (C, N, 3, 3), covars.shape
+    assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
 
-    tx, ty, tz = torch.unbind(means, dim=-1)  # [B, C, N]
-    tz2 = tz**2  # [B, C, N]
+    tx, ty, tz = torch.unbind(means, dim=-1)  # [..., C, N]
+    tz2 = tz**2  # [..., C, N]
 
-    fx = Ks[..., 0, 0, None]  # [B, C, 1]
-    fy = Ks[..., 1, 1, None]  # [B, C, 1]
-    cx = Ks[..., 0, 2, None]  # [B, C, 1]
-    cy = Ks[..., 1, 2, None]  # [B, C, 1]
-    tan_fovx = 0.5 * width / fx  # [B, C, 1]
-    tan_fovy = 0.5 * height / fy  # [B, C, 1]
+    fx = Ks[..., 0, 0, None]  # [..., C, 1]
+    fy = Ks[..., 1, 1, None]  # [..., C, 1]
+    cx = Ks[..., 0, 2, None]  # [..., C, 1]
+    cy = Ks[..., 1, 2, None]  # [..., C, 1]
+    tan_fovx = 0.5 * width / fx  # [..., C, 1]
+    tan_fovy = 0.5 * height / fy  # [..., C, 1]
 
     lim_x_pos = (width - cx) / fx + 0.3 * tan_fovx
     lim_x_neg = cx / fx + 0.3 * tan_fovx
@@ -118,50 +119,53 @@ def _persp_proj(
     tx = tz * torch.clamp(tx / tz, min=-lim_x_neg, max=lim_x_pos)
     ty = tz * torch.clamp(ty / tz, min=-lim_y_neg, max=lim_y_pos)
 
-    O = torch.zeros((B, C, N), device=means.device, dtype=means.dtype)
+    O = torch.zeros(batch_dims + (C, N), device=means.device, dtype=means.dtype)
     J = torch.stack(
         [fx / tz, O, -fx * tx / tz2, O, fy / tz, -fy * ty / tz2], dim=-1
-    ).reshape(B, C, N, 2, 3)
+    ).reshape(batch_dims + (C, N, 2, 3))
 
     cov2d = torch.einsum("...ij,...jk,...kl->...il", J, covars, J.transpose(-1, -2))
-    means2d = torch.einsum("bcij,bcnj->bcni", Ks[..., :2, :3], means)  # [B, C, N, 2]
-    means2d = means2d / tz[..., None]  # [B, C, N, 2]
-    return means2d, cov2d  # [B, C, N, 2], [B, C, N, 2, 2]
+    means2d = torch.einsum(
+        "...ij,...nj->...ni", Ks[..., :2, :3], means
+    )  # [..., C, N, 2]
+    means2d = means2d / tz[..., None]  # [..., C, N, 2]
+    return means2d, cov2d  # [..., C, N, 2], [..., C, N, 2, 2]
 
 
 def _fisheye_proj(
-    means: Tensor,  # [B, C, N, 3]
-    covars: Tensor,  # [B, C, N, 3, 3]
-    Ks: Tensor,  # [B, C, 3, 3]
+    means: Tensor,  # [..., C, N, 3]
+    covars: Tensor,  # [..., C, N, 3, 3]
+    Ks: Tensor,  # [..., C, 3, 3]
     width: int,
     height: int,
 ) -> Tuple[Tensor, Tensor]:
     """PyTorch implementation of fisheye projection for 3D Gaussians.
 
     Args:
-        means: Gaussian means in camera coordinate system. [B, C, N, 3].
-        covars: Gaussian covariances in camera coordinate system. [B, C, N, 3, 3].
-        Ks: Camera intrinsics. [B, C, 3, 3].
+        means: Gaussian means in camera coordinate system. [..., C, N, 3].
+        covars: Gaussian covariances in camera coordinate system. [..., C, N, 3, 3].
+        Ks: Camera intrinsics. [..., C, 3, 3].
         width: Image width.
         height: Image height.
 
     Returns:
         A tuple:
 
-        - **means2d**: Projected means. [B, C, N, 2].
-        - **cov2d**: Projected covariances. [B, C, N, 2, 2].
+        - **means2d**: Projected means. [..., C, N, 2].
+        - **cov2d**: Projected covariances. [..., C, N, 2, 2].
     """
-    B, C, N, _ = means.shape
-    assert means.shape == (B, C, N, 3), means.shape
-    assert covars.shape == (B, C, N, 3, 3), covars.shape
-    assert Ks.shape == (B, C, 3, 3), Ks.shape
+    batch_dims = means.shape[:-3]
+    C, N = means.shape[-3:-1]
+    assert means.shape == batch_dims + (C, N, 3), means.shape
+    assert covars.shape == batch_dims + (C, N, 3, 3), covars.shape
+    assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
 
-    x, y, z = torch.unbind(means, dim=-1)  # [B, C, N]
+    x, y, z = torch.unbind(means, dim=-1)  # [..., C, N]
 
-    fx = Ks[..., 0, 0, None]  # [B, C, 1]
-    fy = Ks[..., 1, 1, None]  # [B, C, 1]
-    cx = Ks[..., 0, 2, None]  # [B, C, 1]
-    cy = Ks[..., 1, 2, None]  # [B, C, 1]
+    fx = Ks[..., 0, 0, None]  # [..., C, 1]
+    fy = Ks[..., 1, 1, None]  # [..., C, 1]
+    cx = Ks[..., 0, 2, None]  # [..., C, 1]
+    cy = Ks[..., 1, 2, None]  # [..., C, 1]
 
     eps = 0.0000001
     xy_len = (x**2 + y**2) ** 0.5 + eps
@@ -172,7 +176,7 @@ def _fisheye_proj(
             y * fy * theta / xy_len + cy,
         ],
         dim=-1,
-    )  # [B, C, N, 2]
+    )  # [..., C, N, 2]
 
     x2 = x * x + eps
     y2 = y * y
@@ -191,60 +195,61 @@ def _fisheye_proj(
             -fy * y * x2y2z2_inv,
         ],
         dim=-1,
-    ).reshape(B, C, N, 2, 3)
+    ).reshape(batch_dims + (C, N, 2, 3))
 
     cov2d = torch.einsum("...ij,...jk,...kl->...il", J, covars, J.transpose(-1, -2))
-    return means2d, cov2d  # [B, C, N, 2], [B, C, N, 2, 2]
+    return means2d, cov2d  # [..., C, N, 2], [..., C, N, 2, 2]
 
 
 def _ortho_proj(
-    means: Tensor,  # [B, C, N, 3]
-    covars: Tensor,  # [B, C, N, 3, 3]
-    Ks: Tensor,  # [B, C, 3, 3]
+    means: Tensor,  # [..., C, N, 3]
+    covars: Tensor,  # [..., C, N, 3, 3]
+    Ks: Tensor,  # [..., C, 3, 3]
     width: int,
     height: int,
 ) -> Tuple[Tensor, Tensor]:
     """PyTorch implementation of orthographic projection for 3D Gaussians.
 
     Args:
-        means: Gaussian means in camera coordinate system. [B, C, N, 3].
-        covars: Gaussian covariances in camera coordinate system. [B, C, N, 3, 3].
-        Ks: Camera intrinsics. [B, C, 3, 3].
+        means: Gaussian means in camera coordinate system. [..., C, N, 3].
+        covars: Gaussian covariances in camera coordinate system. [..., C, N, 3, 3].
+        Ks: Camera intrinsics. [..., C, 3, 3].
         width: Image width.
         height: Image height.
 
     Returns:
         A tuple:
 
-        - **means2d**: Projected means. [B, C, N, 2].
-        - **cov2d**: Projected covariances. [B, C, N, 2, 2].
+        - **means2d**: Projected means. [..., C, N, 2].
+        - **cov2d**: Projected covariances. [..., C, N, 2, 2].
     """
-    B, C, N, _ = means.shape
-    assert means.shape == (B, C, N, 3), means.shape
-    assert covars.shape == (B, C, N, 3, 3), covars.shape
-    assert Ks.shape == (B, C, 3, 3), Ks.shape
+    batch_dims = means.shape[:-3]
+    C, N = means.shape[-3:-1]
+    assert means.shape == batch_dims + (C, N, 3), means.shape
+    assert covars.shape == batch_dims + (C, N, 3, 3), covars.shape
+    assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
 
-    fx = Ks[..., 0, 0, None]  # [B, C, 1]
-    fy = Ks[..., 1, 1, None]  # [B, C, 1]
+    fx = Ks[..., 0, 0, None]  # [..., C, 1]
+    fy = Ks[..., 1, 1, None]  # [..., C, 1]
 
-    O = torch.zeros((B, C, 1), device=means.device, dtype=means.dtype)
+    O = torch.zeros(batch_dims + (C, 1), device=means.device, dtype=means.dtype)
     J = (
         torch.stack([fx, O, O, O, fy, O], dim=-1)
-        .reshape(B, C, 1, 2, 3)
-        .repeat(1, 1, N, 1, 1)
+        .reshape(batch_dims + (C, 1, 2, 3))
+        .repeat([1] * len(batch_dims) + [1, N, 1, 1])
     )
 
     cov2d = torch.einsum("...ij,...jk,...kl->...il", J, covars, J.transpose(-1, -2))
     means2d = (
         means[..., :2] * Ks[..., None, [0, 1], [0, 1]] + Ks[..., None, [0, 1], [2, 2]]
-    )  # [B, C, N, 2]
-    return means2d, cov2d  # [B, C, N, 2], [B, C, N, 2, 2]
+    )  # [..., C, N, 2]
+    return means2d, cov2d  # [..., C, N, 2], [..., C, N, 2, 2]
 
 
 def _world_to_cam(
-    means: Tensor,  # [B, N, 3]
-    covars: Tensor,  # [B, N, 3, 3]
-    viewmats: Tensor,  # [B, C, 4, 4]
+    means: Tensor,  # [..., N, 3]
+    covars: Tensor,  # [..., N, 3, 3]
+    viewmats: Tensor,  # [..., C, 4, 4]
 ) -> Tuple[Tensor, Tensor]:
     """PyTorch implementation of world to camera transformation on Gaussians.
 
@@ -259,18 +264,21 @@ def _world_to_cam(
         - **means_c**: Gaussian means in camera coordinate system. [B, C, N, 3].
         - **covars_c**: Gaussian covariances in camera coordinate system. [B, C, N, 3, 3].
     """
-    B, N, _ = means.shape
-    C = viewmats.shape[1]
-    assert means.shape == (B, N, 3), means.shape
-    assert covars.shape == (B, N, 3, 3), covars.shape
-    assert viewmats.shape == (B, C, 4, 4), viewmats.shape
+    batch_dims = means.shape[:-2]
+    N = means.shape[-2]
+    C = viewmats.shape[-3]
+    assert means.shape == batch_dims + (N, 3), means.shape
+    assert covars.shape == batch_dims + (N, 3, 3), covars.shape
+    assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
 
-    R = viewmats[..., :3, :3]  # [B, C, 3, 3]
-    t = viewmats[..., :3, 3]  # [B, C, 3]
+    R = viewmats[..., :3, :3]  # [..., C, 3, 3]
+    t = viewmats[..., :3, 3]  # [..., C, 3]
     means_c = (
-        torch.einsum("bcij,bnj->bcni", R, means) + t[:, :, None, :]
-    )  # (B, C, N, 3)
-    covars_c = torch.einsum("bcij,bnjk,bclk->bcnil", R, covars, R)  # (B, C, N, 3, 3)
+        torch.einsum("...cij,...nj->...cni", R, means) + t[..., None, :]
+    )  # [..., C, N, 3]
+    covars_c = torch.einsum(
+        "...cij,...njk,...clk->...cnil", R, covars, R
+    )  # [..., C, N, 3, 3]
     return means_c, covars_c
 
 

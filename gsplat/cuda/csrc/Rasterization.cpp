@@ -611,7 +611,7 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
 
     uint32_t B = means2d.size(0); // number of batches
     uint32_t C = means2d.size(1); // number of cameras
-    uint32_t N = means2d.size(2); // number of gaussians
+    // uint32_t N = means2d.size(2); // number of gaussians
     uint32_t n_isects = flatten_ids.size(0);
 
     // First pass: count the number of gaussians that contribute to each pixel

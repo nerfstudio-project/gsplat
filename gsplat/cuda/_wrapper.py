@@ -179,9 +179,9 @@ def persp_proj(
 
 
 def proj(
-    means: Tensor,  # [B, C, N, 3]
-    covars: Tensor,  # [B, C, N, 3, 3]
-    Ks: Tensor,  # [B, C, 3, 3]
+    means: Tensor,  # [..., C, N, 3]
+    covars: Tensor,  # [..., C, N, 3, 3]
+    Ks: Tensor,  # [..., C, 3, 3]
     width: int,
     height: int,
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
@@ -189,22 +189,23 @@ def proj(
     """Projection of Gaussians (perspective or orthographic).
 
     Args:
-        means: Gaussian means. [B, C, N, 3]
-        covars: Gaussian covariances. [B, C, N, 3, 3]
-        Ks: Camera intrinsics. [B, C, 3, 3]
+        means: Gaussian means. [..., C, N, 3]
+        covars: Gaussian covariances. [..., C, N, 3, 3]
+        Ks: Camera intrinsics. [..., C, 3, 3]
         width: Image width.
         height: Image height.
 
     Returns:
         A tuple:
 
-        - **Projected means**. [B, C, N, 2]
-        - **Projected covariances**. [B, C, N, 2, 2]
+        - **Projected means**. [..., C, N, 2]
+        - **Projected covariances**. [..., C, N, 2, 2]
     """
-    B, C, N, _ = means.shape
-    assert means.shape == (B, C, N, 3), means.size()
-    assert covars.shape == (B, C, N, 3, 3), covars.size()
-    assert Ks.shape == (B, C, 3, 3), Ks.size()
+    batch_dims = means.shape[:-3]
+    C, N = means.shape[-3:-1]
+    assert means.shape == batch_dims + (C, N, 3), means.size()
+    assert covars.shape == batch_dims + (C, N, 3, 3), covars.size()
+    assert Ks.shape == batch_dims + (C, 3, 3), Ks.size()
     means = means.contiguous()
     covars = covars.contiguous()
     Ks = Ks.contiguous()
@@ -727,9 +728,9 @@ class _Proj(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        means: Tensor,  # [B, C, N, 3]
-        covars: Tensor,  # [B, C, N, 3, 3]
-        Ks: Tensor,  # [B, C, 3, 3]
+        means: Tensor,  # [..., C, N, 3]
+        covars: Tensor,  # [..., C, N, 3, 3]
+        Ks: Tensor,  # [..., C, 3, 3]
         width: int,
         height: int,
         camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",

@@ -13,9 +13,9 @@
 namespace gsplat {
 
 std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_fwd(
-    const at::Tensor means,  // [B, C, N, 3]
-    const at::Tensor covars, // [B, C, N, 3, 3]
-    const at::Tensor Ks,     // [B, C, 3, 3]
+    const at::Tensor means,  // [..., C, N, 3]
+    const at::Tensor covars, // [..., C, N, 3, 3]
+    const at::Tensor Ks,     // [..., C, 3, 3]
     const uint32_t width,
     const uint32_t height,
     const CameraModelType camera_model
@@ -25,12 +25,17 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_fwd(
     CHECK_INPUT(covars);
     CHECK_INPUT(Ks);
 
-    uint32_t B = means.size(0);
-    uint32_t C = means.size(1);
-    uint32_t N = means.size(2);
+    at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 3));
+    uint32_t C = means.size(-3);
+    uint32_t N = means.size(-2);
 
-    at::Tensor means2d = at::empty({B, C, N, 2}, means.options());
-    at::Tensor covars2d = at::empty({B, C, N, 2, 2}, covars.options());
+    at::DimVector means2d_shape(batch_dims);
+    means2d_shape.append({C, N, 2});
+    at::Tensor means2d = at::empty(means2d_shape, means.options());
+    
+    at::DimVector covars2d_shape(batch_dims);
+    covars2d_shape.append({C, N, 2, 2});
+    at::Tensor covars2d = at::empty(covars2d_shape, covars.options());
 
     launch_projection_ewa_simple_fwd_kernel(
         // inputs
@@ -48,14 +53,14 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_fwd(
 }
 
 std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_bwd(
-    const at::Tensor means,  // [B, C, N, 3]
-    const at::Tensor covars, // [B, C, N, 3, 3]
-    const at::Tensor Ks,     // [B, C, 3, 3]
+    const at::Tensor means,  // [..., C, N, 3]
+    const at::Tensor covars, // [..., C, N, 3, 3]
+    const at::Tensor Ks,     // [..., C, 3, 3]
     const uint32_t width,
     const uint32_t height,
     const CameraModelType camera_model,
-    const at::Tensor v_means2d, // [B, C, N, 2]
-    const at::Tensor v_covars2d // [B, C, N, 2, 2]
+    const at::Tensor v_means2d, // [..., C, N, 2]
+    const at::Tensor v_covars2d // [..., C, N, 2, 2]
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -64,12 +69,17 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_bwd(
     CHECK_INPUT(v_means2d);
     CHECK_INPUT(v_covars2d);
 
-    uint32_t B = means.size(0);
-    uint32_t C = means.size(1);
-    uint32_t N = means.size(2);
+    at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 3));
+    uint32_t C = means.size(-3);
+    uint32_t N = means.size(-2);
 
-    at::Tensor v_means = at::empty({B, C, N, 3}, means.options());
-    at::Tensor v_covars = at::empty({B, C, N, 3, 3}, means.options());
+    at::DimVector v_means_shape(batch_dims);
+    v_means_shape.append({C, N, 3});
+    at::Tensor v_means = at::empty(v_means_shape, means.options());
+
+    at::DimVector v_covars_shape(batch_dims);
+    v_covars_shape.append({C, N, 3, 3});
+    at::Tensor v_covars = at::empty(v_covars_shape, means.options());
 
     launch_projection_ewa_simple_bwd_kernel(
         // inputs

@@ -16,14 +16,14 @@ __global__ void projection_ewa_simple_fwd_kernel(
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const scalar_t *__restrict__ means,  // [B, C, N, 3]
-    const scalar_t *__restrict__ covars, // [B, C, N, 3, 3]
-    const scalar_t *__restrict__ Ks,     // [B, C, 3, 3]
+    const scalar_t *__restrict__ means,  // [..., C, N, 3]
+    const scalar_t *__restrict__ covars, // [..., C, N, 3, 3]
+    const scalar_t *__restrict__ Ks,     // [..., C, 3, 3]
     const uint32_t width,
     const uint32_t height,
     const CameraModelType camera_model,
-    scalar_t *__restrict__ means2d, // [B, C, N, 2]
-    scalar_t *__restrict__ covars2d // [B, C, N, 2, 2]
+    scalar_t *__restrict__ means2d, // [..., C, N, 2]
+    scalar_t *__restrict__ covars2d // [..., C, N, 2, 2]
 ) {
     // parallelize over B * C * N.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -77,19 +77,19 @@ __global__ void projection_ewa_simple_fwd_kernel(
 
 void launch_projection_ewa_simple_fwd_kernel(
     // inputs
-    const at::Tensor means,  // [B, C, N, 3]
-    const at::Tensor covars, // [B, C, N, 3, 3]
-    const at::Tensor Ks,     // [B, C, 3, 3]
+    const at::Tensor means,  // [..., C, N, 3]
+    const at::Tensor covars, // [..., C, N, 3, 3]
+    const at::Tensor Ks,     // [..., C, 3, 3]
     const uint32_t width,
     const uint32_t height,
     const CameraModelType camera_model,
     // outputs
-    at::Tensor means2d, // [B, C, N, 2]
-    at::Tensor covars2d // [B, C, N, 2, 2]
+    at::Tensor means2d, // [..., C, N, 2]
+    at::Tensor covars2d // [..., C, N, 2, 2]
 ) {
-    uint32_t B = means.size(0);
-    uint32_t C = means.size(1);
-    uint32_t N = means.size(2);
+    uint32_t B = means.numel() / (means.size(-3) * means.size(-2) * 3);
+    uint32_t C = means.size(-3);
+    uint32_t N = means.size(-2);
 
     int64_t n_elements = B * C * N;
     dim3 threads(256);
@@ -131,16 +131,16 @@ __global__ void projection_ewa_simple_bwd_kernel(
     const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const scalar_t *__restrict__ means,  // [B, C, N, 3]
-    const scalar_t *__restrict__ covars, // [B, C, N, 3, 3]
-    const scalar_t *__restrict__ Ks,     // [B, C, 3, 3]
+    const scalar_t *__restrict__ means,  // [..., C, N, 3]
+    const scalar_t *__restrict__ covars, // [..., C, N, 3, 3]
+    const scalar_t *__restrict__ Ks,     // [..., C, 3, 3]
     const uint32_t width,
     const uint32_t height,
     const CameraModelType camera_model,
-    const scalar_t *__restrict__ v_means2d,  // [B, C, N, 2]
-    const scalar_t *__restrict__ v_covars2d, // [B, C, N, 2, 2]
-    scalar_t *__restrict__ v_means,          // [B, C, N, 3]
-    scalar_t *__restrict__ v_covars          // [B, C, N, 3, 3]
+    const scalar_t *__restrict__ v_means2d,  // [..., C, N, 2]
+    const scalar_t *__restrict__ v_covars2d, // [..., C, N, 2, 2]
+    scalar_t *__restrict__ v_means,          // [..., C, N, 3]
+    scalar_t *__restrict__ v_covars          // [..., C, N, 3, 3]
 ) {
 
     // parallelize over B * C * N.
@@ -237,21 +237,21 @@ __global__ void projection_ewa_simple_bwd_kernel(
 
 void launch_projection_ewa_simple_bwd_kernel(
     // inputs
-    const at::Tensor means,  // [B, C, N, 3]
-    const at::Tensor covars, // [B, C, N, 3, 3]
-    const at::Tensor Ks,     // [B, C, 3, 3]
+    const at::Tensor means,  // [..., C, N, 3]
+    const at::Tensor covars, // [..., C, N, 3, 3]
+    const at::Tensor Ks,     // [..., C, 3, 3]
     const uint32_t width,
     const uint32_t height,
     const CameraModelType camera_model,
-    const at::Tensor v_means2d,  // [B, C, N, 2]
-    const at::Tensor v_covars2d, // [B, C, N, 2, 2]
+    const at::Tensor v_means2d,  // [..., C, N, 2]
+    const at::Tensor v_covars2d, // [..., C, N, 2, 2]
     // outputs
-    at::Tensor v_means, // [B, C, N, 3]
-    at::Tensor v_covars // [B, C, N, 3, 3]
+    at::Tensor v_means, // [..., C, N, 3]
+    at::Tensor v_covars // [..., C, N, 3, 3]
 ) {
-    uint32_t B = means.size(0);
-    uint32_t C = means.size(1);
-    uint32_t N = means.size(2);
+    uint32_t B = means.numel() / (means.size(-3) * means.size(-2) * 3);
+    uint32_t C = means.size(-3);
+    uint32_t N = means.size(-2);
 
     int64_t n_elements = B * C * N;
     dim3 threads(256);

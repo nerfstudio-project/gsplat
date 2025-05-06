@@ -63,7 +63,7 @@ def _repeat(data: dict, batch_dims: list[int]):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("triu", [False, True])
-@pytest.mark.parametrize("batch_dims", [[], [1], [1, 2]])
+@pytest.mark.parametrize("batch_dims", [[], [2], [1, 2]])
 def test_quat_scale_to_covar_preci(test_data, triu: bool, batch_dims: list[int]):
     from gsplat.cuda._torch_impl import _quat_scale_to_covar_preci
     from gsplat.cuda._wrapper import quat_scale_to_covar_preci
@@ -104,7 +104,12 @@ def test_quat_scale_to_covar_preci(test_data, triu: bool, batch_dims: list[int])
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
-def test_proj(test_data, camera_model: Literal["pinhole", "ortho", "fisheye"]):
+@pytest.mark.parametrize("batch_dims", [[], [2], [1, 2]])
+def test_proj(
+    test_data,
+    camera_model: Literal["pinhole", "ortho", "fisheye"],
+    batch_dims: list[int],
+):
     from gsplat.cuda._torch_impl import (
         _fisheye_proj,
         _ortho_proj,
@@ -115,6 +120,7 @@ def test_proj(test_data, camera_model: Literal["pinhole", "ortho", "fisheye"]):
 
     torch.manual_seed(42)
 
+    test_data = _repeat(test_data, batch_dims)
     Ks = test_data["Ks"]
     viewmats = test_data["viewmats"]
     height = test_data["height"]
@@ -563,7 +569,7 @@ def test_rasterize_to_pixels(test_data, channels: int):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("sh_degree", [0, 1, 2, 3, 4])
-@pytest.mark.parametrize("batch_dims", [[], [1], [1, 2]])
+@pytest.mark.parametrize("batch_dims", [[], [2], [1, 2]])
 def test_sh(test_data, sh_degree: int, batch_dims: list[int]):
     from gsplat.cuda._torch_impl import _spherical_harmonics
     from gsplat.cuda._wrapper import spherical_harmonics
