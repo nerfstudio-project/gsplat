@@ -217,13 +217,13 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
 
 void launch_projection_ewa_3dgs_fused_fwd_kernel(
     // inputs
-    const at::Tensor means,                // [B, N, 3]
-    const at::optional<at::Tensor> covars, // [B, N, 6] optional
-    const at::optional<at::Tensor> quats,  // [B, N, 4] optional
-    const at::optional<at::Tensor> scales, // [B, N, 3] optional
-    const at::optional<at::Tensor> opacities, // [B, N] optional
-    const at::Tensor viewmats,             // [B, C, 4, 4]
-    const at::Tensor Ks,                   // [B, C, 3, 3]
+    const at::Tensor means,                // [..., N, 3]
+    const at::optional<at::Tensor> covars, // [..., N, 6] optional
+    const at::optional<at::Tensor> quats,  // [..., N, 4] optional
+    const at::optional<at::Tensor> scales, // [..., N, 3] optional
+    const at::optional<at::Tensor> opacities, // [..., N] optional
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
@@ -232,15 +232,15 @@ void launch_projection_ewa_3dgs_fused_fwd_kernel(
     const float radius_clip,
     const CameraModelType camera_model,
     // outputs
-    at::Tensor radii,                      // [B, C, N, 2]
-    at::Tensor means2d,                    // [B, C, N, 2]
-    at::Tensor depths,                     // [B, C, N]
-    at::Tensor conics,                     // [B, C, N, 3]
-    at::optional<at::Tensor> compensations // [B, C, N] optional
+    at::Tensor radii,                      // [..., C, N, 2]
+    at::Tensor means2d,                    // [..., C, N, 2]
+    at::Tensor depths,                     // [..., C, N]
+    at::Tensor conics,                     // [..., C, N, 3]
+    at::optional<at::Tensor> compensations // [..., C, N] optional
 ) {
-    uint32_t B = means.size(0);    // number of batches
-    uint32_t N = means.size(1);    // number of gaussians
-    uint32_t C = viewmats.size(1); // number of cameras
+    uint32_t N = means.size(-2);    // number of gaussians
+    uint32_t C = viewmats.size(-3); // number of cameras
+    uint32_t B = means.numel() / (N * 3);    // number of batches
 
     int64_t n_elements = B * C * N;
     dim3 threads(256);
@@ -537,36 +537,36 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
 void launch_projection_ewa_3dgs_fused_bwd_kernel(
     // inputs
     // fwd inputs
-    const at::Tensor means,                // [B, N, 3]
-    const at::optional<at::Tensor> covars, // [B, N, 6] optional
-    const at::optional<at::Tensor> quats,  // [B, N, 4] optional
-    const at::optional<at::Tensor> scales, // [B, N, 3] optional
-    const at::Tensor viewmats,             // [B, C, 4, 4]
-    const at::Tensor Ks,                   // [B, C, 3, 3]
+    const at::Tensor means,                // [..., N, 3]
+    const at::optional<at::Tensor> covars, // [..., N, 6] optional
+    const at::optional<at::Tensor> quats,  // [..., N, 4] optional
+    const at::optional<at::Tensor> scales, // [..., N, 3] optional
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
     const CameraModelType camera_model,
     // fwd outputs
-    const at::Tensor radii,                       // [B, C, N, 2]
-    const at::Tensor conics,                      // [B, C, N, 3]
-    const at::optional<at::Tensor> compensations, // [B, C, N] optional
+    const at::Tensor radii,                       // [..., C, N, 2]
+    const at::Tensor conics,                      // [..., C, N, 3]
+    const at::optional<at::Tensor> compensations, // [..., C, N] optional
     // grad outputs
-    const at::Tensor v_means2d,                     // [B, C, N, 2]
-    const at::Tensor v_depths,                      // [B, C, N]
-    const at::Tensor v_conics,                      // [B, C, N, 3]
-    const at::optional<at::Tensor> v_compensations, // [B, C, N] optional
+    const at::Tensor v_means2d,                     // [..., C, N, 2]
+    const at::Tensor v_depths,                      // [..., C, N]
+    const at::Tensor v_conics,                      // [..., C, N, 3]
+    const at::optional<at::Tensor> v_compensations, // [..., C, N] optional
     const bool viewmats_requires_grad,
     // outputs
-    at::Tensor v_means,   // [B, N, 3]
-    at::Tensor v_covars,  // [B, N, 3, 3]
-    at::Tensor v_quats,   // [B, N, 4]
-    at::Tensor v_scales,  // [B, N, 3]
-    at::Tensor v_viewmats // [B, C, 4, 4]
+    at::Tensor v_means,   // [..., N, 3]
+    at::Tensor v_covars,  // [..., N, 3, 3]
+    at::Tensor v_quats,   // [..., N, 4]
+    at::Tensor v_scales,  // [..., N, 3]
+    at::Tensor v_viewmats // [..., C, 4, 4]
 ) {
-    uint32_t B = means.size(0);    // number of batches
-    uint32_t N = means.size(1);    // number of gaussians
-    uint32_t C = viewmats.size(1); // number of cameras
+    uint32_t N = means.size(-2);    // number of gaussians
+    uint32_t C = viewmats.size(-3); // number of cameras
+    uint32_t B = means.numel() / (N * 3); // number of batches
 
     int64_t n_elements = B * C * N;
     dim3 threads(256);

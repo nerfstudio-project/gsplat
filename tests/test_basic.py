@@ -164,17 +164,20 @@ def test_proj(
 @pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
 @pytest.mark.parametrize("fused", [False, True])
 @pytest.mark.parametrize("calc_compensations", [True, False])
+@pytest.mark.parametrize("batch_dims", [[]])
 def test_projection(
     test_data,
     fused: bool,
     calc_compensations: bool,
     camera_model: Literal["pinhole", "ortho", "fisheye"],
+    batch_dims: list[int],
 ):
     from gsplat.cuda._torch_impl import _fully_fused_projection
     from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci
 
     torch.manual_seed(42)
 
+    test_data = _repeat(test_data, batch_dims)
     Ks = test_data["Ks"]
     viewmats = test_data["viewmats"]
     height = test_data["height"]
@@ -203,7 +206,7 @@ def test_projection(
             camera_model=camera_model,
         )
     else:
-        covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [N, 6]
+        covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [..., N, 6]
         radii, means2d, depths, conics, compensations = fully_fused_projection(
             means,
             covars,
@@ -216,7 +219,7 @@ def test_projection(
             calc_compensations=calc_compensations,
             camera_model=camera_model,
         )
-    _covars, _ = quat_scale_to_covar_preci(quats, scales, triu=False)  # [N, 3, 3]
+    _covars, _ = quat_scale_to_covar_preci(quats, scales, triu=False)  # [..., N, 3, 3]
     _radii, _means2d, _depths, _conics, _compensations = _fully_fused_projection(
         means,
         _covars,

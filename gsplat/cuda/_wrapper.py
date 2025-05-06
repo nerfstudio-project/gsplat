@@ -213,12 +213,12 @@ def proj(
 
 
 def fully_fused_projection(
-    means: Tensor,  # [B, N, 3]
-    covars: Optional[Tensor],  # [B, N, 6] or None
-    quats: Optional[Tensor],  # [B, N, 4] or None
-    scales: Optional[Tensor],  # [B, N, 3] or None
-    viewmats: Tensor,  # [B, C, 4, 4]
-    Ks: Tensor,  # [B, C, 3, 3]
+    means: Tensor,  # [..., N, 3]
+    covars: Optional[Tensor],  # [..., N, 6] or None
+    quats: Optional[Tensor],  # [..., N, 4] or None
+    scales: Optional[Tensor],  # [..., N, 3] or None
+    viewmats: Tensor,  # [..., C, 4, 4]
+    Ks: Tensor,  # [..., C, 3, 3]
     width: int,
     height: int,
     eps2d: float = 0.3,
@@ -229,7 +229,7 @@ def fully_fused_projection(
     sparse_grad: bool = False,
     calc_compensations: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
-    opacities: Optional[Tensor] = None,  # [B, N] or None
+    opacities: Optional[Tensor] = None,  # [..., N] or None
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Projects Gaussians to 2D.
 
@@ -255,12 +255,12 @@ def fully_fused_projection(
         {`quats`, `scales`} should be provided.
 
     Args:
-        means: Gaussian means. [B, N, 3]
-        covars: Gaussian covariances (flattened upper triangle). [B, N, 6] Optional.
-        quats: Quaternions (No need to be normalized). [B, N, 4] Optional.
-        scales: Scales. [B, N, 3] Optional.
-        viewmats: World-to-camera matrices. [B, C, 4, 4]
-        Ks: Camera intrinsics. [B, C, 3, 3]
+        means: Gaussian means. [..., N, 3]
+        covars: Gaussian covariances (flattened upper triangle). [..., N, 6] Optional.
+        quats: Quaternions (No need to be normalized). [..., N, 4] Optional.
+        scales: Scales. [..., N, 3] Optional.
+        viewmats: World-to-camera matrices. [..., C, 4, 4]
+        Ks: Camera intrinsics. [..., C, 3, 3]
         width: Image width.
         height: Image height.
         eps2d: A epsilon added to the 2D covariance for numerical stability. Default: 0.3.
@@ -273,7 +273,7 @@ def fully_fused_projection(
         calc_compensations: If True, a view-dependent opacity compensation factor will be computed, which
           is useful for anti-aliasing. Default: False.
         opacities: Gaussian opacities in range [0, 1]. If provided, will use it to compute a tighter bounds.
-            [B, N] or None. Default: None.
+            [..., N] or None. Default: None.
 
     Returns:
         A tuple:
@@ -290,32 +290,33 @@ def fully_fused_projection(
 
         If `packed` is False:
 
-        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [B, C, N, 2].
-        - **means**. Projected Gaussian means in 2D. [B, C, N, 2]
-        - **depths**. The z-depth of the projected Gaussians. [B, C, N]
-        - **conics**. Inverse of the projected covariances. Return the flattend upper triangle with [B, C, N, 3]
-        - **compensations**. The view-dependent opacity compensation factor. [B, C, N]
+        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [..., C, N, 2].
+        - **means**. Projected Gaussian means in 2D. [..., C, N, 2]
+        - **depths**. The z-depth of the projected Gaussians. [..., C, N]
+        - **conics**. Inverse of the projected covariances. Return the flattend upper triangle with [..., C, N, 3]
+        - **compensations**. The view-dependent opacity compensation factor. [..., C, N]
     """
-    B, N, _ = means.shape
-    C = viewmats.shape[1]
-    assert means.size() == (B, N, 3), means.size()
-    assert viewmats.size() == (B, C, 4, 4), viewmats.size()
-    assert Ks.size() == (B, C, 3, 3), Ks.size()
+    batch_dims = means.shape[:-2]
+    N = means.shape[-2]
+    C = viewmats.shape[-3]
+    assert means.size() == batch_dims + (N, 3), means.size()
+    assert viewmats.size() == batch_dims + (C, 4, 4), viewmats.size()
+    assert Ks.size() == batch_dims + (C, 3, 3), Ks.size()
     means = means.contiguous()
     if covars is not None:
-        assert covars.size() == (B, N, 6), covars.size()
+        assert covars.size() == batch_dims + (N, 6), covars.size()
         covars = covars.contiguous()
     else:
         assert quats is not None, "covars or quats is required"
         assert scales is not None, "covars or scales is required"
-        assert quats.size() == (B, N, 4), quats.size()
-        assert scales.size() == (B, N, 3), scales.size()
+        assert quats.size() == batch_dims + (N, 4), quats.size()
+        assert scales.size() == batch_dims + (N, 3), scales.size()
         quats = quats.contiguous()
         scales = scales.contiguous()
     if sparse_grad:
         assert packed, "sparse_grad is only supported when packed is True"
     if opacities is not None:
-        assert opacities.size() == (B, N), opacities.size()
+        assert opacities.size() == batch_dims + (N,), opacities.size()
         opacities = opacities.contiguous()
 
     viewmats = viewmats.contiguous()
@@ -778,12 +779,12 @@ class _FullyFusedProjection(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        means: Tensor,  # [B, N, 3]
-        covars: Tensor,  # [B, N, 6] or None
-        quats: Tensor,  # [B, N, 4] or None
-        scales: Tensor,  # [B, N, 3] or None
-        viewmats: Tensor,  # [B, C, 4, 4]
-        Ks: Tensor,  # [B, C, 3, 3]
+        means: Tensor,  # [..., N, 3]
+        covars: Tensor,  # [..., N, 6] or None
+        quats: Tensor,  # [..., N, 4] or None
+        scales: Tensor,  # [..., N, 3] or None
+        viewmats: Tensor,  # [..., C, 4, 4]
+        Ks: Tensor,  # [..., C, 3, 3]
         width: int,
         height: int,
         eps2d: float,
@@ -792,7 +793,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         radius_clip: float,
         calc_compensations: bool,
         camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
-        opacities: Optional[Tensor] = None,  # [B, N] or None
+        opacities: Optional[Tensor] = None,  # [..., N] or None
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"

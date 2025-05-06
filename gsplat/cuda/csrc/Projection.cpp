@@ -105,13 +105,13 @@ std::tuple<
     at::Tensor,
     at::Tensor>
 projection_ewa_3dgs_fused_fwd(
-    const at::Tensor means,                // [B, N, 3]
-    const at::optional<at::Tensor> covars, // [B, N, 6] optional
-    const at::optional<at::Tensor> quats,  // [B, N, 4] optional
-    const at::optional<at::Tensor> scales, // [B, N, 3] optional
-    const at::optional<at::Tensor> opacities, // [B, N] optional
-    const at::Tensor viewmats,             // [B, C, 4, 4]
-    const at::Tensor Ks,                   // [B, C, 3, 3]
+    const at::Tensor means,                // [..., N, 3]
+    const at::optional<at::Tensor> covars, // [..., N, 6] optional
+    const at::optional<at::Tensor> quats,  // [..., N, 4] optional
+    const at::optional<at::Tensor> scales, // [..., N, 3] optional
+    const at::optional<at::Tensor> opacities, // [..., N] optional
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
@@ -133,18 +133,28 @@ projection_ewa_3dgs_fused_fwd(
     CHECK_INPUT(viewmats);
     CHECK_INPUT(Ks);
 
-    uint32_t B = means.size(0);    // number of gaussians
-    uint32_t N = means.size(1);    // number of gaussians
-    uint32_t C = viewmats.size(1); // number of cameras
+    at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 2));
+    uint32_t N = means.size(-2);    // number of gaussians
+    uint32_t C = viewmats.size(-3); // number of cameras
 
-    at::Tensor radii = at::empty({B, C, N, 2}, means.options().dtype(at::kInt));
-    at::Tensor means2d = at::empty({B, C, N, 2}, means.options());
-    at::Tensor depths = at::empty({B, C, N}, means.options());
-    at::Tensor conics = at::empty({B, C, N, 3}, means.options());
+    at::DimVector radii_shape(batch_dims);
+    radii_shape.append({C, N, 2});
+    at::Tensor radii = at::empty(radii_shape, means.options().dtype(at::kInt));
+    at::DimVector means2d_shape(batch_dims);
+    means2d_shape.append({C, N, 2});
+    at::Tensor means2d = at::empty(means2d_shape, means.options());
+    at::DimVector depths_shape(batch_dims);
+    depths_shape.append({C, N});
+    at::Tensor depths = at::empty(depths_shape, means.options());
+    at::DimVector conics_shape(batch_dims);
+    conics_shape.append({C, N, 3});
+    at::Tensor conics = at::empty(conics_shape, means.options());
     at::Tensor compensations;
     if (calc_compensations) {
         // we dont want NaN to appear in this tensor, so we zero intialize it
-        compensations = at::zeros({B, C, N}, means.options());
+        at::DimVector compensations_shape(batch_dims);
+        compensations_shape.append({C, N});
+        compensations = at::zeros(compensations_shape, means.options());
     }
 
     launch_projection_ewa_3dgs_fused_fwd_kernel(
@@ -177,25 +187,25 @@ projection_ewa_3dgs_fused_fwd(
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 projection_ewa_3dgs_fused_bwd(
     // fwd inputs
-    const at::Tensor means,                // [B, N, 3]
-    const at::optional<at::Tensor> covars, // [B, N, 6] optional
-    const at::optional<at::Tensor> quats,  // [B, N, 4] optional
-    const at::optional<at::Tensor> scales, // [B, N, 3] optional
-    const at::Tensor viewmats,             // [B, C, 4, 4]
-    const at::Tensor Ks,                   // [B, C, 3, 3]
+    const at::Tensor means,                // [..., N, 3]
+    const at::optional<at::Tensor> covars, // [..., N, 6] optional
+    const at::optional<at::Tensor> quats,  // [..., N, 4] optional
+    const at::optional<at::Tensor> scales, // [..., N, 3] optional
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
     const CameraModelType camera_model,
     // fwd outputs
-    const at::Tensor radii,                       // [B, C, N, 2]
-    const at::Tensor conics,                      // [B, C, N, 3]
-    const at::optional<at::Tensor> compensations, // [B, C, N] optional
+    const at::Tensor radii,                       // [..., C, N, 2]
+    const at::Tensor conics,                      // [..., C, N, 3]
+    const at::optional<at::Tensor> compensations, // [..., C, N] optional
     // grad outputs
-    const at::Tensor v_means2d,                     // [B, C, N, 2]
-    const at::Tensor v_depths,                      // [B, C, N]
-    const at::Tensor v_conics,                      // [B, C, N, 3]
-    const at::optional<at::Tensor> v_compensations, // [B, C, N] optional
+    const at::Tensor v_means2d,                     // [..., C, N, 2]
+    const at::Tensor v_depths,                      // [..., C, N]
+    const at::Tensor v_conics,                      // [..., C, N, 3]
+    const at::optional<at::Tensor> v_compensations, // [..., C, N] optional
     const bool viewmats_requires_grad
 ) {
     DEVICE_GUARD(means);
