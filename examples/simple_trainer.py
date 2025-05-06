@@ -4,10 +4,10 @@ import os
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import imageio
-import nerfview
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -31,12 +31,14 @@ from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from typing_extensions import Literal, assert_never
 from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
 
+from gsplat import export_splats
 from gsplat.compression import PngCompression
 from gsplat.distributed import cli
 from gsplat.optimizers import SelectiveAdam
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
-from gsplat.utils import save_ply
+from gsplat_viewer import GsplatViewer, GsplatRenderTabState
+from nerfview import CameraState, RenderTabState, apply_float_colormap
 
 
 @dataclass
@@ -443,9 +445,10 @@ class Runner:
         # Viewer
         if not self.cfg.disable_viewer:
             self.server = viser.ViserServer(port=cfg.port, verbose=False)
-            self.viewer = nerfview.Viewer(
+            self.viewer = GsplatViewer(
                 server=self.server,
                 render_fn=self._viewer_render_fn,
+                output_dir=Path(cfg.result_dir),
                 mode="training",
             )
 
@@ -456,6 +459,8 @@ class Runner:
         width: int,
         height: int,
         masks: Optional[Tensor] = None,
+        rasterize_mode: Optional[Literal["classic", "antialiased"]] = None,
+        camera_model: Optional[Literal["pinhole", "ortho", "fisheye"]] = None,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         means = self.splats["means"]  # [N, 3]
@@ -478,7 +483,10 @@ class Runner:
         else:
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
-        rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
+        if rasterize_mode is None:
+            rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
+        if camera_model is None:
+            camera_model = self.cfg.camera_model
         render_colors, render_alphas, info = rasterization(
             means=means,
             quats=quats,
@@ -566,7 +574,7 @@ class Runner:
         pbar = tqdm.tqdm(range(init_step, max_steps))
         for step in pbar:
             if not cfg.disable_viewer:
-                while self.viewer.state.status == "paused":
+                while self.viewer.state == "paused":
                     time.sleep(0.01)
                 self.viewer.lock.acquire()
                 tic = time.time()
@@ -749,7 +757,7 @@ class Runner:
             if (
                 step in [i - 1 for i in cfg.ply_steps] or step == max_steps - 1
             ) and cfg.save_ply:
-                rgb = None
+
                 if self.cfg.app_opt:
                     # eval at origin to bake the appeareance into the colors
                     rgb = self.app_module(
@@ -759,9 +767,27 @@ class Runner:
                         sh_degree=sh_degree_to_use,
                     )
                     rgb = rgb + self.splats["colors"]
-                    rgb = torch.sigmoid(rgb).squeeze(0)
+                    rgb = torch.sigmoid(rgb).squeeze(0).unsqueeze(1)
+                    sh0 = rgb_to_sh(rgb)
+                    shN = torch.empty([sh0.shape[0], 0, 3], device=sh0.device)
+                else:
+                    sh0 = self.splats["sh0"]
+                    shN = self.splats["shN"]
 
-                save_ply(self.splats, f"{self.ply_dir}/point_cloud_{step}.ply", rgb)
+                means = self.splats["means"]
+                scales = self.splats["scales"]
+                quats = self.splats["quats"]
+                opacities = self.splats["opacities"]
+                export_splats(
+                    means=means,
+                    scales=scales,
+                    quats=quats,
+                    opacities=opacities,
+                    sh0=sh0,
+                    shN=shN,
+                    format="ply",
+                    save_to=f"{self.ply_dir}/point_cloud_{step}.ply",
+                )
 
             # Turn Gradients into Sparse Tensor before running optimizer
             if cfg.sparse_grad:
@@ -845,7 +871,9 @@ class Runner:
                     num_train_rays_per_step * num_train_steps_per_sec
                 )
                 # Update the viewer state.
-                self.viewer.state.num_train_rays_per_sec = num_train_rays_per_sec
+                self.viewer.render_tab_state.num_train_rays_per_sec = (
+                    num_train_rays_per_sec
+                )
                 # Update the scene.
                 self.viewer.update(step, num_train_rays_per_step)
 
@@ -1023,24 +1051,76 @@ class Runner:
 
     @torch.no_grad()
     def _viewer_render_fn(
-        self, camera_state: nerfview.CameraState, img_wh: Tuple[int, int]
+        self, camera_state: CameraState, render_tab_state: RenderTabState
     ):
-        """Callable function for the viewer."""
-        W, H = img_wh
+        assert isinstance(render_tab_state, GsplatRenderTabState)
+        if render_tab_state.preview_render:
+            width = render_tab_state.render_width
+            height = render_tab_state.render_height
+        else:
+            width = render_tab_state.viewer_width
+            height = render_tab_state.viewer_height
         c2w = camera_state.c2w
-        K = camera_state.get_K(img_wh)
+        K = camera_state.get_K((width, height))
         c2w = torch.from_numpy(c2w).float().to(self.device)
         K = torch.from_numpy(K).float().to(self.device)
 
-        render_colors, _, _ = self.rasterize_splats(
+        RENDER_MODE_MAP = {
+            "rgb": "RGB",
+            "depth(accumulated)": "D",
+            "depth(expected)": "ED",
+            "alpha": "RGB",
+        }
+
+        render_colors, render_alphas, info = self.rasterize_splats(
             camtoworlds=c2w[None],
             Ks=K[None],
-            width=W,
-            height=H,
-            sh_degree=self.cfg.sh_degree,  # active all SH degrees
-            radius_clip=3.0,  # skip GSs that have small image radius (in pixels)
+            width=width,
+            height=height,
+            sh_degree=min(render_tab_state.max_sh_degree, self.cfg.sh_degree),
+            near_plane=render_tab_state.near_plane,
+            far_plane=render_tab_state.far_plane,
+            radius_clip=render_tab_state.radius_clip,
+            eps2d=render_tab_state.eps2d,
+            backgrounds=torch.tensor([render_tab_state.backgrounds], device=self.device)
+            / 255.0,
+            render_mode=RENDER_MODE_MAP[render_tab_state.render_mode],
+            rasterize_mode=render_tab_state.rasterize_mode,
+            camera_model=render_tab_state.camera_model,
         )  # [1, H, W, 3]
-        return render_colors[0].cpu().numpy()
+        render_tab_state.total_gs_count = len(self.splats["means"])
+        render_tab_state.rendered_gs_count = (info["radii"] > 0).all(-1).sum().item()
+
+        if render_tab_state.render_mode == "rgb":
+            # colors represented with sh are not guranteed to be in [0, 1]
+            render_colors = render_colors[0, ..., 0:3].clamp(0, 1)
+            renders = render_colors.cpu().numpy()
+        elif render_tab_state.render_mode in ["depth(accumulated)", "depth(expected)"]:
+            # normalize depth to [0, 1]
+            depth = render_colors[0, ..., 0:1]
+            if render_tab_state.normalize_nearfar:
+                near_plane = render_tab_state.near_plane
+                far_plane = render_tab_state.far_plane
+            else:
+                near_plane = depth.min()
+                far_plane = depth.max()
+            depth_norm = (depth - near_plane) / (far_plane - near_plane + 1e-10)
+            depth_norm = torch.clip(depth_norm, 0, 1)
+            if render_tab_state.inverse:
+                depth_norm = 1 - depth_norm
+            renders = (
+                apply_float_colormap(depth_norm, render_tab_state.colormap)
+                .cpu()
+                .numpy()
+            )
+        elif render_tab_state.render_mode == "alpha":
+            alpha = render_alphas[0, ..., 0:1]
+            if render_tab_state.inverse:
+                alpha = 1 - alpha
+            renders = (
+                apply_float_colormap(alpha, render_tab_state.colormap).cpu().numpy()
+            )
+        return renders
 
 
 def main(local_rank: int, world_rank, world_size: int, cfg: Config):
@@ -1067,6 +1147,7 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
     else:
         runner.train()
 
+    runner.viewer.complete()
     if not cfg.disable_viewer:
         print("Viewer running... Ctrl+C to exit.")
         time.sleep(1000000)
@@ -1078,7 +1159,7 @@ if __name__ == "__main__":
 
     ```bash
     # Single GPU training
-    CUDA_VISIBLE_DEVICES=0 python simple_trainer.py default
+    CUDA_VISIBLE_DEVICES=9 python -m examples.simple_trainer default
 
     # Distributed training on 4 GPUs: Effectively 4x batch size so run 4x less steps.
     CUDA_VISIBLE_DEVICES=0,1,2,3 python simple_trainer.py default --steps_scaler 0.25

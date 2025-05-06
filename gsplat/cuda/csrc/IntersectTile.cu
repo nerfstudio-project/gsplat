@@ -95,7 +95,11 @@ __global__ void intersect_tile_kernel(
     }
     const int64_t cid_enc = cid << (32 + tile_n_bits);
 
-    int64_t depth_id_enc = (int64_t) * (int32_t *)&(depths[idx]);
+    // tolerance for negative depth
+    int32_t depth_i32 = *(int32_t *)&(depths[idx]);  // Bit-level reinterpret
+    int64_t depth_id_enc = static_cast<uint32_t>(depth_i32);  // Zero-extend to 64-bit
+    // int64_t depth_id_enc = (int64_t) * (int32_t *)&(depths[idx]);
+    
     int64_t cur_idx = (idx == 0) ? 0 : cum_tiles_per_gauss[idx - 1];
     for (int32_t i = tile_min.y; i < tile_max.y; ++i) {
         for (int32_t j = tile_min.x; j < tile_max.x; ++j) {

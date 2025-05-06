@@ -1,5 +1,6 @@
 import math
 import struct
+import warnings
 
 import numpy as np
 import torch
@@ -8,6 +9,12 @@ from torch import Tensor
 
 
 def save_ply(splats: torch.nn.ParameterDict, dir: str, colors: torch.Tensor = None):
+    warnings.warn(
+        "save_ply() is deprecated and may be removed in a future release. "
+        "Please use the new export_gaussian_splats() function instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     # Convert all tensors to numpy arrays in one go
     print(f"Saving ply to {dir}")
     numpy_data = {k: v.detach().cpu().numpy() for k, v in splats.items()}
@@ -28,8 +35,8 @@ def save_ply(splats: torch.nn.ParameterDict, dir: str, colors: torch.Tensor = No
         | np.isinf(scales).any(axis=1)
         | np.isnan(quats).any(axis=1)
         | np.isinf(quats).any(axis=1)
-        | np.isnan(opacities).any(axis=0)
-        | np.isinf(opacities).any(axis=0)
+        | np.isnan(opacities)
+        | np.isinf(opacities)
         | np.isnan(sh0).any(axis=1)
         | np.isinf(sh0).any(axis=1)
         | np.isnan(shN).any(axis=1)
