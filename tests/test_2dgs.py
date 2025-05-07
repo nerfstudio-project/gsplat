@@ -1,5 +1,4 @@
 import math
-from einops import repeat
 
 import pytest
 import torch
@@ -21,14 +20,13 @@ def test_data():
     scales[..., :2] *= 0.1
     opacities = torch.rand(C, N, device=device) * 0.5
     colors = torch.rand(C, N, 3, device=device)
-    viewmats = repeat(torch.eye(4, device=device), "i j -> c i j", c=C)
+    viewmats = torch.broadcast_to(torch.eye(4, device=device), (C, 4, 4))
     # W, H = 24, 20
     W, H = 640, 480
     fx, fy, cx, cy = W, W, W // 2, H // 2
-    Ks = repeat(
+    Ks = torch.broadcast_to(
         torch.tensor([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], device=device),
-        "i j -> c i j",
-        c=C,
+        (C, 3, 3),
     )
     return {
         "means": means,
@@ -298,7 +296,13 @@ def test_rasterize_to_pixels_2dgs(test_data, channels: int, batch_dims: tuple[in
     normals.requires_grad = True
     densify.requires_grad = True
 
-    (render_colors, render_alphas, render_normals, _, _,) = rasterize_to_pixels_2dgs(
+    (
+        render_colors,
+        render_alphas,
+        render_normals,
+        _,
+        _,
+    ) = rasterize_to_pixels_2dgs(
         means2d,
         ray_transforms,
         colors,

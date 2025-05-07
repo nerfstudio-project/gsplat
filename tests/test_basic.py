@@ -8,7 +8,6 @@ pytest <THIS_PY_FILE> -s
 
 import math
 import os
-from einops import repeat
 
 import pytest
 import torch
@@ -530,7 +529,7 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: tuple[int]):
     radii, means2d, depths, conics, compensations = fully_fused_projection(
         means, covars, None, None, viewmats, Ks, width, height
     )
-    opacities = repeat(opacities, "... n -> ... c n", c=C)
+    opacities = torch.broadcast_to(opacities[..., None, :], batch_dims + (C, N))
 
     # Identify intersecting tiles
     tile_size = 16 if channels <= 32 else 4

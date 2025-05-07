@@ -63,15 +63,19 @@ def main(
         height,
     ) = load_test_data(device=device, scene_grid=scene_grid)
 
-    from einops import repeat
-
-    means = repeat(means, "... -> b ...", b=n_batches)
-    quats = repeat(quats, "... -> b ... ", b=n_batches)
-    scales = repeat(scales, "... -> b ... ", b=n_batches)
-    opacities = repeat(opacities, "... -> b ...", b=n_batches)
-    colors = repeat(colors[..., 0], "... -> b ... c", b=n_batches, c=channels)
-    viewmats = repeat(viewmats[0], "... -> b c ... ", b=n_batches, c=n_cameras).clone()
-    Ks = repeat(Ks[0], "... -> b c ... ", b=n_batches, c=n_cameras).clone()
+    means = torch.broadcast_to(means, (n_batches, *means.shape))
+    quats = torch.broadcast_to(quats, (n_batches, *quats.shape))
+    scales = torch.broadcast_to(scales, (n_batches, *scales.shape))
+    opacities = torch.broadcast_to(opacities, (n_batches, *opacities.shape))
+    colors = torch.broadcast_to(
+        colors[None, ..., :1], (n_batches, *colors.shape[:-1], channels)
+    )
+    viewmats = torch.broadcast_to(
+        viewmats[None, None, 0, ...], (n_batches, n_cameras, *viewmats.shape[1:])
+    ).clone()
+    Ks = torch.broadcast_to(
+        Ks[None, None, 0, ...], (n_batches, n_cameras, *Ks.shape[1:])
+    ).clone()
 
     # distribute the gaussians
     means = means[world_rank::world_size].contiguous()
