@@ -77,15 +77,14 @@ This project is developed by the following wonderful contributors (unordered):
 We also have a white paper with about the project with benchmarking and mathematical supplement with conventions and derivations, available [here](https://arxiv.org/abs/2409.06765). If you find this library useful in your projects or papers, please consider citing:
 
 ```
-@article{ye2024gsplatopensourcelibrarygaussian,
-    title={gsplat: An Open-Source Library for {Gaussian} Splatting}, 
-    author={Vickie Ye and Ruilong Li and Justin Kerr and Matias Turkulainen and Brent Yi and Zhuoyang Pan and Otto Seiskari and Jianbo Ye and Jeffrey Hu and Matthew Tancik and Angjoo Kanazawa},
-    year={2024},
-    eprint={2409.06765},
-    journal={arXiv preprint arXiv:2409.06765},
-    archivePrefix={arXiv},
-    primaryClass={cs.CV},
-    url={https://arxiv.org/abs/2409.06765}, 
+@article{ye2025gsplat,
+  title={gsplat: An open-source library for Gaussian splatting},
+  author={Ye, Vickie and Li, Ruilong and Kerr, Justin and Turkulainen, Matias and Yi, Brent and Pan, Zhuoyang and Seiskari, Otto and Ye, Jianbo and Hu, Jeffrey and Tancik, Matthew and Angjoo Kanazawa},
+  journal={Journal of Machine Learning Research},
+  volume={26},
+  number={34},
+  pages={1--17},
+  year={2025}
 }
 ```
 

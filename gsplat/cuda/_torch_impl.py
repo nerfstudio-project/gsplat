@@ -350,12 +350,8 @@ def _fully_fused_projection(
 
     depths = means_c[..., 2]  # [..., C, N]
 
-    b = (covars2d[..., 0, 0] + covars2d[..., 1, 1]) / 2  # [..., C, N]
-    tmp = torch.sqrt(torch.clamp(b**2 - det, min=0.01))
-    v1 = b + tmp  # [..., C, N]
-    r1 = 3.33 * torch.sqrt(v1)
-    radius_x = torch.ceil(torch.minimum(3.33 * torch.sqrt(covars2d[..., 0, 0]), r1))
-    radius_y = torch.ceil(torch.minimum(3.33 * torch.sqrt(covars2d[..., 1, 1]), r1))
+    radius_x = torch.ceil(3.33 * torch.sqrt(covars2d[..., 0, 0]))
+    radius_y = torch.ceil(3.33 * torch.sqrt(covars2d[..., 1, 1]))
 
     radius = torch.stack([radius_x, radius_y], dim=-1)  # [..., C, N, 2]
 

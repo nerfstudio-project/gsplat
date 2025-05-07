@@ -230,10 +230,10 @@ class Parser:
             # the bottom of the scene which is true when ground floor is
             # present in the images.
             if np.median(points[:, 2]) > np.mean(points[:, 2]):
-                # rotate 180 degrees such that z is flipped
+                # rotate 180 degrees around x axis such that z is flipped
                 T3 = np.array(
                     [
-                        [-1.0, 0.0, 0.0, 0.0],
+                        [1.0, 0.0, 0.0, 0.0],
                         [0.0, -1.0, 0.0, 0.0],
                         [0.0, 0.0, -1.0, 0.0],
                         [0.0, 0.0, 0.0, 1.0],
