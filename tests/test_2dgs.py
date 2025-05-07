@@ -5,6 +5,7 @@ import pytest
 import torch
 
 from gsplat._helper import load_test_data
+from tests.test_basic import expand
 
 device = torch.device("cuda:0")
 
@@ -12,24 +13,22 @@ device = torch.device("cuda:0")
 @pytest.fixture
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_data():
-    B = 2
     C = 3
     N = 1000
-    means = torch.randn(B, N, 3, device=device)
-    quats = torch.randn(B, N, 4, device=device)
+    means = torch.randn(N, 3, device=device)
+    quats = torch.randn(N, 4, device=device)
     quats = torch.nn.functional.normalize(quats, dim=-1)
-    scales = torch.ones(B, N, 3, device=device)
+    scales = torch.ones(N, 3, device=device)
     scales[..., :2] *= 0.1
-    opacities = torch.rand(B, C, N, device=device) * 0.5
-    colors = torch.rand(B, C, N, 3, device=device)
-    viewmats = repeat(torch.eye(4, device=device), "i j -> b c i j", b=B, c=C)
+    opacities = torch.rand(C, N, device=device) * 0.5
+    colors = torch.rand(C, N, 3, device=device)
+    viewmats = repeat(torch.eye(4, device=device), "i j -> c i j", c=C)
     # W, H = 24, 20
     W, H = 640, 480
     fx, fy, cx, cy = W, W, W // 2, H // 2
     Ks = repeat(
         torch.tensor([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], device=device),
-        "i j -> b c i j",
-        b=B,
+        "i j -> c i j",
         c=C,
     )
     return {
@@ -46,19 +45,21 @@ def test_data():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_projection_2dgs(test_data):
+@pytest.mark.parametrize("batch_size", [(), (2,), (1, 2)])
+def test_projection_2dgs(test_data, batch_size):
     from gsplat.cuda._torch_impl_2dgs import _fully_fused_projection_2dgs
     from gsplat.cuda._wrapper import fully_fused_projection_2dgs
 
     torch.manual_seed(42)
 
-    Ks = test_data["Ks"]  # [B, C, 3, 3]
-    viewmats = test_data["viewmats"]  # [B, C, 4, 4]
+    test_data = expand(test_data, batch_size)
+    Ks = test_data["Ks"]  # [..., C, 3, 3]
+    viewmats = test_data["viewmats"]  # [..., C, 4, 4]
     height = test_data["height"]
     width = test_data["width"]
-    quats = test_data["quats"]  # [B, N, 4]
-    scales = test_data["scales"]  # [B, N, 3]
-    means = test_data["means"]  # [B, N, 3]
+    quats = test_data["quats"]  # [..., N, 4]
+    scales = test_data["scales"]  # [..., N, 3]
+    means = test_data["means"]  # [..., N, 3]
     viewmats.requires_grad = True
     quats.requires_grad = True
     scales.requires_grad = True
@@ -68,9 +69,6 @@ def test_projection_2dgs(test_data):
     _radii, _means2d, _depths, _ray_transforms, _normals = _fully_fused_projection_2dgs(
         means, quats, scales, viewmats, Ks, width, height
     )
-    _ray_transforms = _ray_transforms.permute(
-        (0, 1, 2, 4, 3)
-    )  # TODO(WZ): Figure out why do we need to permute here
 
     radii, means2d, depths, ray_transforms, normals = fully_fused_projection_2dgs(
         means, quats, scales, viewmats, Ks, width, height

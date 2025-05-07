@@ -266,26 +266,26 @@ __global__ void projection_2dgs_fused_fwd_kernel(
 
 void launch_projection_2dgs_fused_fwd_kernel(
     // inputs
-    const at::Tensor means,    // [B, N, 3]
-    const at::Tensor quats,    // [B, N, 4]
-    const at::Tensor scales,   // [B, N, 3]
-    const at::Tensor viewmats, // [B, C, 4, 4]
-    const at::Tensor Ks,       // [B, C, 3, 3]
+    const at::Tensor means,    // [..., N, 3]
+    const at::Tensor quats,    // [..., N, 4]
+    const at::Tensor scales,   // [..., N, 3]
+    const at::Tensor viewmats, // [..., C, 4, 4]
+    const at::Tensor Ks,       // [..., C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
     const float radius_clip,
     // outputs
-    at::Tensor radii,          // [B, C, N, 2]
-    at::Tensor means2d,        // [B, C, N, 2]
-    at::Tensor depths,         // [B, C, N]
-    at::Tensor ray_transforms, // [B, C, N, 3, 3]
-    at::Tensor normals         // [B, C, N, 3]
+    at::Tensor radii,          // [..., C, N, 2]
+    at::Tensor means2d,        // [..., C, N, 2]
+    at::Tensor depths,         // [..., C, N]
+    at::Tensor ray_transforms, // [..., C, N, 3, 3]
+    at::Tensor normals         // [..., C, N, 3]
 ) {
-    uint32_t B = means.size(0);    // number of gaussians
-    uint32_t N = means.size(1);    // number of gaussians
-    uint32_t C = viewmats.size(1); // number of cameras
+    uint32_t N = means.size(-2);          // number of gaussians
+    uint32_t B = means.numel() / (N * 3); // number of batches
+    uint32_t C = viewmats.size(-3);       // number of cameras
 
     int64_t n_elements = B * C * N;
     dim3 threads(256);
@@ -340,8 +340,8 @@ __global__ void projection_2dgs_fused_bwd_kernel(
     const scalar_t *__restrict__ v_means2d, // [B, C, N, 2]
     const scalar_t *__restrict__ v_depths,  // [B, C, N]
     const scalar_t *__restrict__ v_normals, // [B, C, N, 3]
+    const scalar_t *__restrict__ v_ray_transforms, // [B, C, N, 3, 3]
     // grad inputs
-    scalar_t *__restrict__ v_ray_transforms, // [B, C, N, 3, 3]
     scalar_t *__restrict__ v_means,          // [B, N, 3]
     scalar_t *__restrict__ v_quats,          // [B, N, 4]
     scalar_t *__restrict__ v_scales,         // [B, N, 3]
@@ -479,31 +479,31 @@ __global__ void projection_2dgs_fused_bwd_kernel(
 
 void launch_projection_2dgs_fused_bwd_kernel(
     // fwd inputs
-    const at::Tensor means,    // [B, N, 3]
-    const at::Tensor quats,    // [B, N, 4]
-    const at::Tensor scales,   // [B, N, 3]
-    const at::Tensor viewmats, // [B, C, 4, 4]
-    const at::Tensor Ks,       // [B, C, 3, 3]
+    const at::Tensor means,    // [..., N, 3]
+    const at::Tensor quats,    // [..., N, 4]
+    const at::Tensor scales,   // [..., N, 3]
+    const at::Tensor viewmats, // [..., C, 4, 4]
+    const at::Tensor Ks,       // [..., C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
-    const at::Tensor radii,          // [B, C, N, 2]
-    const at::Tensor ray_transforms, // [B, C, N, 3, 3]
+    const at::Tensor radii,          // [..., C, N, 2]
+    const at::Tensor ray_transforms, // [..., C, N, 3, 3]
     // grad outputs
-    const at::Tensor v_means2d,        // [B, C, N, 2]
-    const at::Tensor v_depths,         // [B, C, N]
-    const at::Tensor v_normals,        // [B, C, N, 3]
-    const at::Tensor v_ray_transforms, // [B, C, N, 3, 3]
+    const at::Tensor v_means2d,        // [..., C, N, 2]
+    const at::Tensor v_depths,         // [..., C, N]
+    const at::Tensor v_normals,        // [..., C, N, 3]
+    const at::Tensor v_ray_transforms, // [..., C, N, 3, 3]
     const bool viewmats_requires_grad,
     // outputs
-    at::Tensor v_means,   // [B, C, N, 3]
-    at::Tensor v_quats,   // [B, C, N, 4]
-    at::Tensor v_scales,  // [B, C, N, 3]
-    at::Tensor v_viewmats // [B, C, 4, 4]
+    at::Tensor v_means,   // [..., N, 3]
+    at::Tensor v_quats,   // [..., N, 4]
+    at::Tensor v_scales,  // [..., N, 3]
+    at::Tensor v_viewmats // [..., C, 4, 4]
 ) {
-    uint32_t B = means.size(0);    // number of gaussians
-    uint32_t N = means.size(1);    // number of gaussians
-    uint32_t C = viewmats.size(1); // number of cameras
+    uint32_t N = means.size(-2);          // number of gaussians
+    uint32_t B = means.numel() / (N * 3); // number of batches
+    uint32_t C = viewmats.size(-3);       // number of cameras
 
     int64_t n_elements = B * C * N;
     dim3 threads(256);

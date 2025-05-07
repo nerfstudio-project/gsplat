@@ -47,7 +47,7 @@ def test_data():
     }
 
 
-def _repeat(data: dict, batch_dims: tuple[int]):
+def expand(data: dict, batch_dims: tuple[int]):
     # append multiple batch dimensions to the front of the tensor
     # eg. x.shape = [N, 3], batch_dims = (1, 2), return shape is [1, 2, N, 3]
     # eg. x.shape = [N, 3], batch_dims = (), return shape is [N, 3]
@@ -70,7 +70,7 @@ def test_quat_scale_to_covar_preci(test_data, triu: bool, batch_dims: tuple[int]
 
     torch.manual_seed(42)
 
-    test_data = _repeat(test_data, batch_dims)
+    test_data = expand(test_data, batch_dims)
     quats = test_data["quats"]
     scales = test_data["scales"]
     quats.requires_grad = True
@@ -120,7 +120,7 @@ def test_proj(
 
     torch.manual_seed(42)
 
-    test_data = _repeat(test_data, batch_dims)
+    test_data = expand(test_data, batch_dims)
     Ks = test_data["Ks"]
     viewmats = test_data["viewmats"]
     height = test_data["height"]
@@ -177,7 +177,7 @@ def test_projection(
 
     torch.manual_seed(42)
 
-    test_data = _repeat(test_data, batch_dims)
+    test_data = expand(test_data, batch_dims)
     Ks = test_data["Ks"]
     viewmats = test_data["viewmats"]
     height = test_data["height"]
@@ -287,7 +287,7 @@ def test_fully_fused_projection_packed(
 
     torch.manual_seed(42)
 
-    test_data = _repeat(test_data, batch_dims)
+    test_data = expand(test_data, batch_dims)
     Ks = test_data["Ks"]
     viewmats = test_data["viewmats"]
     height = test_data["height"]
@@ -463,7 +463,7 @@ def test_isect(test_data, batch_dims: tuple[int]):
         "radii": torch.randint(0, width, (C, N, 2), device=device, dtype=torch.int32),
         "depths": torch.rand(C, N, device=device),
     }
-    test_data = _repeat(test_data, batch_dims)
+    test_data = expand(test_data, batch_dims)
     means2d = test_data["means2d"]
     radii = test_data["radii"]
     depths = test_data["depths"]
@@ -512,7 +512,7 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: tuple[int]):
             "backgrounds": torch.rand((C, channels), device=device),
         }
     )
-    test_data = _repeat(test_data, batch_dims)
+    test_data = expand(test_data, batch_dims)
     Ks = test_data["Ks"]
     viewmats = test_data["viewmats"]
     height = test_data["height"]
@@ -617,7 +617,7 @@ def test_sh(test_data, sh_degree: int, batch_dims: tuple[int]):
         "coeffs": torch.randn(N, (4 + 1) ** 2, 3, device=device),
         "dirs": torch.randn(N, 3, device=device),
     }
-    test_data = _repeat(test_data, batch_dims)
+    test_data = expand(test_data, batch_dims)
     coeffs = test_data["coeffs"]
     dirs = test_data["dirs"]
     coeffs.requires_grad = True
