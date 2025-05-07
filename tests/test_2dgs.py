@@ -2,10 +2,23 @@ import math
 
 import pytest
 import torch
-
-from tests.test_basic import expand
+from typing_extensions import Tuple
 
 device = torch.device("cuda:0")
+
+
+def expand(data: dict, batch_dims: Tuple[int, ...]):
+    # append multiple batch dimensions to the front of the tensor
+    # eg. x.shape = [N, 3], batch_dims = (1, 2), return shape is [1, 2, N, 3]
+    # eg. x.shape = [N, 3], batch_dims = (), return shape is [N, 3]
+    ret = {}
+    for k, v in data.items():
+        if isinstance(v, torch.Tensor) and len(batch_dims) > 0:
+            new_shape = batch_dims + v.shape
+            ret[k] = v.expand(new_shape)
+        else:
+            ret[k] = v
+    return ret
 
 
 @pytest.fixture
@@ -43,7 +56,7 @@ def test_data():
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
-def test_projection_2dgs(test_data, batch_dims: tuple[int]):
+def test_projection_2dgs(test_data, batch_dims: Tuple[int, ...]):
     from gsplat.cuda._torch_impl_2dgs import _fully_fused_projection_2dgs
     from gsplat.cuda._wrapper import fully_fused_projection_2dgs
 
@@ -115,7 +128,7 @@ def test_projection_2dgs(test_data, batch_dims: tuple[int]):
 @pytest.mark.parametrize("sparse_grad", [False])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 def test_fully_fused_projection_packed_2dgs(
-    test_data, sparse_grad: bool, batch_dims: tuple[int]
+    test_data, sparse_grad: bool, batch_dims: Tuple[int, ...]
 ):
     from gsplat.cuda._wrapper import fully_fused_projection_2dgs
 
@@ -238,7 +251,9 @@ def test_fully_fused_projection_packed_2dgs(
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("channels", [3, 31])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
-def test_rasterize_to_pixels_2dgs(test_data, channels: int, batch_dims: tuple[int]):
+def test_rasterize_to_pixels_2dgs(
+    test_data, channels: int, batch_dims: Tuple[int, ...]
+):
     from gsplat.cuda._torch_impl_2dgs import _rasterize_to_pixels_2dgs
     from gsplat.cuda._wrapper import (
         fully_fused_projection_2dgs,

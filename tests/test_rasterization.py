@@ -6,7 +6,7 @@ pytest <THIS_PY_FILE> -s
 ```
 """
 
-from typing import Optional
+from typing import Optional, Tuple
 
 import pytest
 import torch
@@ -25,7 +25,7 @@ def test_rasterization(
     sh_degree: Optional[int],
     render_mode: str,
     packed: bool,
-    batch_dims: tuple[int],
+    batch_dims: Tuple[int, ...],
 ):
     from gsplat.rendering import _rasterization, rasterization
 

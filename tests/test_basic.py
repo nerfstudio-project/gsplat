@@ -11,11 +11,25 @@ import os
 
 import pytest
 import torch
-from typing_extensions import Literal, assert_never
+from typing_extensions import Literal, Tuple, assert_never
 
 from gsplat._helper import load_test_data
 
 device = torch.device("cuda:0")
+
+
+def expand(data: dict, batch_dims: Tuple[int, ...]):
+    # append multiple batch dimensions to the front of the tensor
+    # eg. x.shape = [N, 3], batch_dims = (1, 2), return shape is [1, 2, N, 3]
+    # eg. x.shape = [N, 3], batch_dims = (), return shape is [N, 3]
+    ret = {}
+    for k, v in data.items():
+        if isinstance(v, torch.Tensor) and len(batch_dims) > 0:
+            new_shape = batch_dims + v.shape
+            ret[k] = v.expand(new_shape)
+        else:
+            ret[k] = v
+    return ret
 
 
 @pytest.fixture
@@ -46,24 +60,10 @@ def test_data():
     }
 
 
-def expand(data: dict, batch_dims: tuple[int]):
-    # append multiple batch dimensions to the front of the tensor
-    # eg. x.shape = [N, 3], batch_dims = (1, 2), return shape is [1, 2, N, 3]
-    # eg. x.shape = [N, 3], batch_dims = (), return shape is [N, 3]
-    ret = {}
-    for k, v in data.items():
-        if isinstance(v, torch.Tensor) and len(batch_dims) > 0:
-            new_shape = batch_dims + v.shape
-            ret[k] = v.expand(new_shape)
-        else:
-            ret[k] = v
-    return ret
-
-
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("triu", [False, True])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
-def test_quat_scale_to_covar_preci(test_data, triu: bool, batch_dims: tuple[int]):
+def test_quat_scale_to_covar_preci(test_data, triu: bool, batch_dims: Tuple[int, ...]):
     from gsplat.cuda._torch_impl import _quat_scale_to_covar_preci
     from gsplat.cuda._wrapper import quat_scale_to_covar_preci
 
@@ -107,7 +107,7 @@ def test_quat_scale_to_covar_preci(test_data, triu: bool, batch_dims: tuple[int]
 def test_proj(
     test_data,
     camera_model: Literal["pinhole", "ortho", "fisheye"],
-    batch_dims: tuple[int],
+    batch_dims: Tuple[int, ...],
 ):
     from gsplat.cuda._torch_impl import (
         _fisheye_proj,
@@ -169,7 +169,7 @@ def test_projection(
     fused: bool,
     calc_compensations: bool,
     camera_model: Literal["pinhole", "ortho", "fisheye"],
-    batch_dims: tuple[int],
+    batch_dims: Tuple[int, ...],
 ):
     from gsplat.cuda._torch_impl import _fully_fused_projection
     from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci
@@ -280,7 +280,7 @@ def test_fully_fused_projection_packed(
     sparse_grad: bool,
     calc_compensations: bool,
     camera_model: Literal["pinhole", "ortho", "fisheye"],
-    batch_dims: tuple[int],
+    batch_dims: Tuple[int, ...],
 ):
     from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci
 
@@ -446,7 +446,7 @@ def test_fully_fused_projection_packed(
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
-def test_isect(test_data, batch_dims: tuple[int]):
+def test_isect(test_data, batch_dims: Tuple[int, ...]):
     from gsplat.cuda._torch_impl import _isect_offset_encode, _isect_tiles
     from gsplat.cuda._wrapper import isect_offset_encode, isect_tiles
 
@@ -490,7 +490,7 @@ def test_isect(test_data, batch_dims: tuple[int]):
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("channels", [3, 32, 128])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
-def test_rasterize_to_pixels(test_data, channels: int, batch_dims: tuple[int]):
+def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ...]):
     from gsplat.cuda._torch_impl import _rasterize_to_pixels
     from gsplat.cuda._wrapper import (
         fully_fused_projection,
@@ -605,7 +605,7 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: tuple[int]):
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("sh_degree", [0, 1, 2, 3, 4])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
-def test_sh(test_data, sh_degree: int, batch_dims: tuple[int]):
+def test_sh(test_data, sh_degree: int, batch_dims: Tuple[int, ...]):
     from gsplat.cuda._torch_impl import _spherical_harmonics
     from gsplat.cuda._wrapper import spherical_harmonics
 
