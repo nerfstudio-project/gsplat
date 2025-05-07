@@ -297,7 +297,7 @@ def rasterization(
     # and the rasterize computation over cameras. So first we gather the cameras
     # from all ranks for projection.
     if distributed:
-        raise NotImplementedError()  # TODO: batchify this part
+        assert batch_dims == (), "Distributed mode does not support batch dimensions"
         world_rank = torch.distributed.get_rank()
         world_size = torch.distributed.get_world_size()
 
@@ -433,7 +433,6 @@ def rasterization(
     # on which cameras they are visible to, which we already figured out in the projection
     # stage.
     if distributed:
-        raise NotImplementedError()  # TODO: batchify
         if packed:
             # count how many elements need to be sent to each rank
             cnts = torch.bincount(camera_ids, minlength=C)  # all cameras
