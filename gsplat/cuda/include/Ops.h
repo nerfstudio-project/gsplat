@@ -147,7 +147,7 @@ projection_ewa_3dgs_packed_bwd(
     const bool sparse_grad
 );
 
-// Sphereical harmonics
+// Spherical harmonics
 at::Tensor spherical_harmonics_fwd(
     const uint32_t degrees_to_use,
     const at::Tensor dirs,               // [..., 3]
@@ -451,6 +451,163 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
     // intersections
     const at::Tensor tile_offsets, // [C, tile_height, tile_width]
     const at::Tensor flatten_ids   // [n_isects]
+);
+
+//====== 3DCS ======//
+
+// Spherical harmonics
+at::Tensor spherical_harmonics_fwd_3dcs(
+    const uint32_t degrees_to_use,
+    const at::Tensor convex_points,      // [N, 6, 3]
+    const at::Tensor dirs,               // [..., 3]
+    const at::Tensor coeffs,             // [..., K, 3]
+    const at::optional<at::Tensor> masks // [...]
+);
+std::tuple<at::Tensor, at::Tensor, at::Tensor> spherical_harmonics_bwd_3dcs(
+    const uint32_t K,
+    const uint32_t degrees_to_use,
+    const at::Tensor convex_points,     // [N, 6, 3]
+    const at::Tensor dirs,                // [..., 3]
+    const at::Tensor coeffs,              // [..., K, 3]
+    const at::optional<at::Tensor> masks, // [...]
+    const at::Tensor v_colors,            // [..., 3]
+    bool compute_v_convex_points,
+    bool compute_v_dirs
+);
+
+std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor>
+projection_ewa_3dcs_fused_fwd(
+    const at::Tensor convex_points,               // [N, 6, 3]
+    const at::Tensor cumsum_of_points_per_convex, // [N]
+    const at::Tensor delta,                       // [N]
+    const at::Tensor sigma,                       // [N]
+    at::Tensor scaling,                     // [N]
+    const at::optional<at::Tensor> opacities, // [N] optional
+    const at::Tensor viewmats,                    // [C, 4, 4]
+    const at::Tensor Ks,                          // [C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t total_nb_points,
+    const float eps2d,
+    const float near_plane,
+    const float far_plane,
+    const float radius_clip,
+    const bool calc_compensations,
+    const CameraModelType camera_model
+);
+
+std::tuple<
+    at::Tensor,
+    at::Tensor>
+projection_ewa_3dcs_fused_bwd(
+    // fwd inputs
+    const at::Tensor convex_points,                // [N, 3]
+    const at::Tensor cumsum_of_points_per_convex, // [N]
+    const at::Tensor viewmats,             // [C, 4, 4]
+    const at::Tensor Ks,                   // [C, 3, 3]
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const float eps2d,
+    const CameraModelType camera_model,
+    // fwd outputs
+    const at::Tensor radii,                       // [C, N, 2]
+    const at::Tensor hull,                        // [C, 2*total_nb_points]
+    const at::Tensor num_points_per_convex_view,  // [C, N]
+    //const at::Tensor normals,                     // [C, total_nb_points, 2]
+    const at::Tensor offsets,                     // [C, total_nb_points]
+    const at::Tensor p_image,                     // [C, total_nb_points, 2]
+    const at::Tensor indices,                     // [C, total_nb_points]
+    const at::Tensor conics,                      // [C, N, 3]
+    const at::optional<at::Tensor> compensations, // [C, N] optional
+    // grad inputs
+    const at::Tensor v_normals,                     // [C, total_nb_points, 2]
+    const at::Tensor v_offsets,                     // [C, total_nb_points]
+    // grad outputs
+    const at::Tensor v_means2d,                     // [C, N, 2]
+    const at::Tensor v_depths,                      // [C, N]
+    const at::Tensor v_conics,                      // [C, N, 3]
+    const at::optional<at::Tensor> v_compensations, // [C, N] optional
+    const bool viewmats_requires_grad
+);
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor>
+rasterize_to_pixels_3dcs_fwd(
+    // 3D convex parameters
+    const at::Tensor means2d,   // [C, N, 2] or [nnz, 2]
+    const at::Tensor normals,   // [C, total_nb_points, 2] or [nnz, 2]
+    const at::Tensor offsets,   // [C, total_nb_points] or [nnz]
+    const at::Tensor num_points_per_convex_view, // [C, N]
+    const at::Tensor delta,     // [C, N]
+    const at::Tensor sigma,     // [C, N]
+    const uint32_t num_points_per_convex, // 6
+    const at::Tensor cumsum_of_points_per_convex, // [C]
+    const at::Tensor depths,    // [C, N]
+    const at::Tensor conics,    // [C, N, 3] or [nnz, 3]
+    const at::Tensor colors,    // [C, N, channels] or [nnz, channels]
+    const at::Tensor opacities, // [C, N]  or [nnz]
+    const at::optional<at::Tensor> backgrounds, // [C, channels]
+    const at::optional<at::Tensor> masks, // [C, tile_height, tile_width]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [C, tile_height, tile_width]
+    const at::Tensor flatten_ids   // [n_isects]
+);
+
+std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor>
+rasterize_to_pixels_3dcs_bwd(
+    // 3D convex parameters
+    const at::Tensor means2d,                   // [C, N, 2] or [nnz, 2]
+    const at::Tensor normals,                   // [C, total_nb_points, 2] or [nnz, 2]
+    const at::Tensor offsets,                   // [C, total_nb_points] or [nnz]
+    const uint32_t num_points_per_convex,           // 6
+    const at::Tensor delta,                     // [C, N]
+    const at::Tensor sigma,                     // [C, N]
+    const at::Tensor num_points_per_convex_view, // [C, N]
+    const at::Tensor cumsum_of_points_per_convex, // [C, N]
+    const at::Tensor depths,                    // [C, N]
+    const at::Tensor conics,                    // [C, N, 3] or [nnz, 3]
+    const at::Tensor colors,                    // [C, N, 3] or [nnz, 3]
+    const at::Tensor opacities,                 // [C, N] or [nnz]
+    const at::optional<at::Tensor> backgrounds, // [C, 3]
+    const at::optional<at::Tensor> masks, // [C, tile_height, tile_width]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [C, tile_height, tile_width]
+    const at::Tensor flatten_ids,  // [n_isects]
+    // forward outputs
+    const at::Tensor render_alphas, // [C, image_height, image_width, 1]
+    const at::Tensor last_ids,      // [C, image_height, image_width]
+    // gradients of outputs
+    const at::Tensor v_render_colors, // [C, image_height, image_width, 3]
+    const at::Tensor v_render_alphas, // [C, image_height, image_width, 1]
+    // options
+    bool absgrad
 );
 
 } // namespace gsplat

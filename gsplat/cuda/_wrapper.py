@@ -1983,3 +1983,874 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             None,
             None,
         )
+
+
+##### 3DCS ####
+def spherical_harmonics_3dcs(
+    degrees_to_use: int,
+    convex_points: Tensor,  # [N, 6, 3]
+    dirs: Tensor,  # [..., 3]
+    coeffs: Tensor,  # [..., K, 3]
+    masks: Optional[Tensor] = None,
+) -> Tensor:
+    """Computes spherical harmonics.
+
+    Args:
+        degrees_to_use: The degree to be used.
+        convex_points: the 3D convex points. [N, 6, 3]
+        dirs: Directions. [..., 3]
+        coeffs: Coefficients. [..., K, 3]
+        masks: Optional boolen masks to skip some computation. [...,] Default: None.
+
+    Returns:
+        Spherical harmonics. [..., 3]
+    """
+    assert (degrees_to_use + 1) ** 2 <= coeffs.shape[-2], coeffs.shape
+    assert dirs.shape[:-1] == coeffs.shape[:-2], (dirs.shape, coeffs.shape)
+    assert dirs.shape[-1] == 3, dirs.shape
+    assert coeffs.shape[-1] == 3, coeffs.shape
+    if masks is not None:
+        assert masks.shape == dirs.shape[:-1], masks.shape
+        masks = masks.contiguous()
+    return _SphericalHarmonics_3dcs.apply(
+        degrees_to_use, convex_points.contiguous(), dirs.contiguous(), coeffs.contiguous(), masks
+    )
+
+class _SphericalHarmonics_3dcs(torch.autograd.Function):
+    """Spherical Harmonics version for 3DCS"""
+
+    @staticmethod
+    def forward(
+        ctx, sh_degree: int, convex_points: Tensor, dirs: Tensor, coeffs: Tensor, masks: Tensor
+    ) -> Tensor:
+        colors = _make_lazy_cuda_func("spherical_harmonics_fwd_3dcs")(sh_degree, convex_points, dirs, coeffs, masks)
+        ctx.save_for_backward(convex_points, dirs, coeffs, masks)
+        ctx.sh_degree = sh_degree
+        ctx.num_bases = coeffs.shape[-2]
+        return colors
+
+    @staticmethod
+    def backward(ctx, v_colors: Tensor):
+        convex_points, dirs, coeffs, masks = ctx.saved_tensors
+        sh_degree = ctx.sh_degree
+        num_bases = ctx.num_bases
+        compute_v_convex_points = ctx.needs_input_grad[1]
+        compute_v_dirs = ctx.needs_input_grad[2]
+        v_convex_points, v_coeffs, v_dirs = _make_lazy_cuda_func("spherical_harmonics_bwd_3dcs")(
+            num_bases,
+            sh_degree,
+            convex_points,
+            dirs,
+            coeffs,
+            masks,
+            v_colors.contiguous(),
+            compute_v_convex_points,
+            compute_v_dirs,
+        )
+        if not compute_v_dirs:
+            v_dirs = None
+        if not compute_v_convex_points:
+            v_convex_points = None
+        return None, v_convex_points, v_dirs, v_coeffs, None
+
+
+def fully_fused_projection_3dcs(
+    convex_points: Tensor,  # [N, 6, 3]
+    cumsum_of_points_per_convex: Tensor, # [N]
+    delta: Tensor, # [N]
+    sigma: Tensor, # [N]
+    scaling: Tensor, # [N]
+    viewmats: Tensor,  # [C, 4, 4]
+    Ks: Tensor,  # [C, 3, 3]
+    width: int,
+    height: int,
+    eps2d: float = 0.3,
+    near_plane: float = 0.01,
+    far_plane: float = 1e10,
+    radius_clip: float = 0.0,
+    packed: bool = False,
+    sparse_grad: bool = False,
+    calc_compensations: bool = False,
+    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+    opacities: Optional[Tensor] = None,  # [N] or None
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """Projects Convex points to 2D convex hull.
+
+    .. note::
+
+        During projection, we ignore the 3D convexes that are outside of the camera frustum.
+        So not all the elements in the output tensors are valid. The output `radii` could serve as
+        an indicator, in which zero radii means the corresponding elements are invalid in
+        the output tensors and will be ignored in the next rasterization process. If `packed=True`,
+        the output tensors will be packed into a flattened tensor, in which all elements are valid.
+        In this case, a `camera_ids` tensor and `gaussian_ids` tensor will be returned to indicate the
+        row (camera) and column (Gaussian) indices of the packed flattened tensor, which is essentially
+        following the COO sparse tensor format.
+
+    .. note::
+
+        This functions supports projecting Gaussians with either covariances or {quaternions, scales},
+        which will be converted to covariances internally in a fused CUDA kernel. Either `covars` or
+        {`quats`, `scales`} should be provided.
+
+    Args:
+        convex_points: Gaussian means. [N, 6, 3]
+        cumsum_of_points_per_convex: Cumulative sum of points per convex. [N]
+        delta: Delta values. [N]
+        sigma: Sigma values. [N]
+        scaling: Scaling values. [N]
+        viewmats: Camera-to-world matrices. [C, 4, 4]
+        Ks: Camera intrinsics. [C, 3, 3]
+        width: Image width.
+        height: Image height.
+        eps2d: A epsilon added to the 2D covariance for numerical stability. Default: 0.3.
+        near_plane: Near plane distance. Default: 0.01.
+        far_plane: Far plane distance. Default: 1e10.
+        radius_clip: Gaussians with projected radii smaller than this value will be ignored. Default: 0.0.
+        packed: If True, the output tensors will be packed into a flattened tensor. Default: False.
+        sparse_grad: This is only effective when `packed` is True. If True, during backward the gradients
+          of {`means`, `covars`, `quats`, `scales`} will be a sparse Tensor in COO layout. Default: False.
+        calc_compensations: If True, a view-dependent opacity compensation factor will be computed, which
+          is useful for anti-aliasing. Default: False.
+
+    Returns:
+        A tuple:
+
+        If `packed` is True:
+
+        - **camera_ids**. The row indices of the projected Gaussians. Int32 tensor of shape [nnz].
+        - **gaussian_ids**. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].
+        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz].
+        - **means**. Projected Gaussian means in 2D. [nnz, 2]
+        - **depths**. The z-depth of the projected Gaussians. [nnz]
+        - **conics**. Inverse of the projected covariances. Return the flattend upper triangle with [nnz, 3]
+        - **compensations**. The view-dependent opacity compensation factor. [nnz]
+
+        If `packed` is False:
+
+        - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [C, N].
+        - **means**. Projected Gaussian means in 2D. [C, N, 2]
+        - **depths**. The z-depth of the projected Gaussians. [C, N]
+        - **conics**. Inverse of the projected covariances. Return the flattend upper triangle with [C, N, 3]
+        - **compensations**. The view-dependent opacity compensation factor. [C, N]
+    """
+    C = viewmats.size(0)
+    N = convex_points.size(0)
+    total_nb_points = 6 * N#//+ cumsum_of_points_per_convex[-1]
+    assert convex_points.size() == (N, 6, 3), convex_points.size()
+    assert viewmats.size() == (C, 4, 4), viewmats.size()
+    assert Ks.size() == (C, 3, 3), Ks.size()
+    convex_points = convex_points.contiguous()
+    if sparse_grad:
+        assert packed, "sparse_grad is only supported when packed is True"
+    if opacities is not None:
+        assert opacities.size() == (N,), opacities.size()
+        opacities = opacities.contiguous()
+
+    viewmats = viewmats.contiguous()
+    Ks = Ks.contiguous()
+    # FIXME: Do packed later
+    #if packed:
+    #    return _FullyFusedProjectionPacked_3dcs.apply(
+    #        convex_points,
+    #        viewmats,
+    #        Ks,
+    #        width,
+    #        height,
+    #        eps2d,
+    #        near_plane,
+    #        far_plane,
+    #        radius_clip,
+    #        sparse_grad,
+    #        calc_compensations,
+    #        camera_model,
+    #    )
+    #else:
+    return _FullyFusedProjection_3dcs.apply(
+        convex_points,
+        cumsum_of_points_per_convex,
+        delta,
+        sigma,
+        scaling,
+        viewmats,
+        Ks,
+        width,
+        height,
+        total_nb_points,
+        eps2d,
+        near_plane,
+        far_plane,
+        radius_clip,
+        calc_compensations,
+        camera_model,
+        opacities,
+    )
+
+def rasterize_to_pixels_3dcs(
+    means2d: Tensor,  # [C, N, 2] or [nnz, 2]
+    normals: Tensor,  # [C, total_nb_points, 2] or [nnz, 3]
+    offsets: Tensor,  # [C, total_nb_points]
+    num_points_per_convex_view: Tensor, # [C, N]
+    delta: Tensor,  # [C, N]
+    sigma: Tensor,  # [C, N]
+    num_points_per_convex: int,  # 6 in practice
+    cumsum_of_points_per_convex: Tensor,  # [N]
+    depths: Tensor,  # [C, N]
+    conics: Tensor,  # [C, N, 3] or [nnz, 3]
+    colors: Tensor,  # [C, N, channels] or [nnz, channels]
+    opacities: Tensor,  # [C, N] or [nnz]
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    isect_offsets: Tensor,  # [C, tile_height, tile_width]
+    flatten_ids: Tensor,  # [n_isects]
+    backgrounds: Optional[Tensor] = None,  # [C, channels]
+    masks: Optional[Tensor] = None,  # [C, tile_height, tile_width]
+    packed: bool = False,
+    absgrad: bool = False,
+) -> Tuple[Tensor, Tensor]:
+    """Rasterizes 3D convexes to pixels.
+
+    Args:
+        means2d: Projected 3D convex centers. [C, N, 2] if packed is False, [nnz, 2] if packed is True.
+        normals: The normals in camera space. [C, N, 3]
+        offsets: The offsets of the points in the convex. [C, N]
+        num_points_per_convex_view: The number of points per convex in the view.
+        delta: The delta of the points in the convex. [C, N]
+        sigma: The sigma of the points in the convex. [C, N]
+        num_points_per_convex: The number of points per convex. 6 in practice
+        cumsum_of_points_per_convex: The cumsum of the number of points per convex. [N]
+        depths: The z-depth of the projected 3D convexes center. [C, N]
+        conics: Inverse of the projected covariances with only upper triangle values. [C, N, 3] if packed is False, [nnz, 3] if packed is True.
+        colors: Gaussian colors or ND features. [C, N, channels] if packed is False, [nnz, channels] if packed is True.
+        opacities: Gaussian opacities that support per-view values. [C, N] if packed is False, [nnz] if packed is True.
+        image_width: Image width.
+        image_height: Image height.
+        tile_size: Tile size.
+        isect_offsets: Intersection offsets outputs from `isect_offset_encode()`. [C, tile_height, tile_width]
+        flatten_ids: The global flatten indices in [C * N] or [nnz] from  `isect_tiles()`. [n_isects]
+        backgrounds: Background colors. [C, channels]. Default: None.
+        masks: Optional tile mask to skip rendering GS to masked tiles. [C, tile_height, tile_width]. Default: None.
+        packed: If True, the input tensors are expected to be packed with shape [nnz, ...]. Default: False.
+        absgrad: If True, the backward pass will compute a `.absgrad` attribute for `means2d`. Default: False.
+
+    Returns:
+        A tuple:
+
+        - **Rendered colors**. [C, image_height, image_width, channels]
+        - **Rendered alphas**. [C, image_height, image_width, 1]
+    """
+
+    C = isect_offsets.size(0)
+    device = means2d.device
+    # FIXME: Check new 3DCS arguments
+    if packed:
+        nnz = means2d.size(0)
+        assert means2d.shape == (nnz, 2), means2d.shape
+        assert conics.shape == (nnz, 3), conics.shape
+        assert colors.shape[0] == nnz, colors.shape
+        assert opacities.shape == (nnz,), opacities.shape
+    else:
+        N = means2d.size(1)
+        assert means2d.shape == (C, N, 2), means2d.shape
+        assert conics.shape == (C, N, 3), conics.shape
+        assert colors.shape[:2] == (C, N), colors.shape
+        assert opacities.shape == (C, N), opacities.shape
+    if backgrounds is not None:
+        assert backgrounds.shape == (C, colors.shape[-1]), backgrounds.shape
+        backgrounds = backgrounds.contiguous()
+    if masks is not None:
+        assert masks.shape == isect_offsets.shape, masks.shape
+        masks = masks.contiguous()
+
+    # Pad the channels to the nearest supported number if necessary
+    channels = colors.shape[-1]
+    if channels > 513 or channels == 0:
+        # TODO: maybe worth to support zero channels?
+        raise ValueError(f"Unsupported number of color channels: {channels}")
+    if channels not in (
+        1,
+        2,
+        3,
+        4,
+        5,
+        8,
+        9,
+        16,
+        17,
+        32,
+        33,
+        64,
+        65,
+        128,
+        129,
+        256,
+        257,
+        512,
+        513,
+    ):
+        padded_channels = (1 << (channels - 1).bit_length()) - channels
+        colors = torch.cat(
+            [
+                colors,
+                torch.zeros(*colors.shape[:-1], padded_channels, device=device),
+            ],
+            dim=-1,
+        )
+        if backgrounds is not None:
+            backgrounds = torch.cat(
+                [
+                    backgrounds,
+                    torch.zeros(
+                        *backgrounds.shape[:-1], padded_channels, device=device
+                    ),
+                ],
+                dim=-1,
+            )
+    else:
+        padded_channels = 0
+
+    tile_height, tile_width = isect_offsets.shape[1:3]
+    assert (
+        tile_height * tile_size >= image_height
+    ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
+    assert (
+        tile_width * tile_size >= image_width
+    ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
+
+    render_colors, render_alphas = _RasterizeToPixels_3dcs.apply(
+        means2d.contiguous(),
+        normals.contiguous(),
+        offsets.contiguous(),
+        num_points_per_convex_view.contiguous(),
+        delta.contiguous(),
+        sigma.contiguous(),
+        num_points_per_convex,
+        cumsum_of_points_per_convex.contiguous(),
+        depths.contiguous(),
+        conics.contiguous(),
+        colors.contiguous(),
+        opacities.contiguous(),
+        backgrounds,
+        masks,
+        image_width,
+        image_height,
+        tile_size,
+        isect_offsets.contiguous(),
+        flatten_ids.contiguous(),
+        absgrad,
+    )
+
+    if padded_channels > 0:
+        render_colors = render_colors[..., :-padded_channels]
+    return render_colors, render_alphas
+
+
+class _FullyFusedProjection_3dcs(torch.autograd.Function):
+    """Projects 3D Convex to 2D."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        convex_points: Tensor,  # [N, 6, 3]
+        cumsum_of_points_per_convex, # [N]
+        delta, # [N]
+        sigma, # [N]
+        scaling, # [N]
+        viewmats: Tensor,  # [C, 4, 4]
+        Ks: Tensor,  # [C, 3, 3]
+        width: int,
+        height: int,
+        total_nb_points: int,
+        eps2d: float,
+        near_plane: float,
+        far_plane: float,
+        radius_clip: float,
+        calc_compensations: bool,
+        camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+        opacities: Optional[Tensor] = None,  # [N] or None
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        camera_model_type = _make_lazy_cuda_obj(
+            f"CameraModelType.{camera_model.upper()}"
+        )
+
+        normals, offsets, p_image, hull, num_points_per_convex_view, indices, radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
+            "projection_ewa_3dcs_fused_fwd"
+        )(
+            convex_points,
+            cumsum_of_points_per_convex,
+            delta,
+            sigma,
+            scaling,
+            opacities,
+            viewmats,
+            Ks,
+            width,
+            height,
+            total_nb_points,
+            eps2d,
+            near_plane,
+            far_plane,
+            radius_clip,
+            calc_compensations,
+            camera_model_type,
+        )
+        if not calc_compensations:
+            compensations = None
+        ctx.save_for_backward(
+            convex_points, viewmats, Ks, normals, offsets, p_image, hull, num_points_per_convex_view, indices, radii, conics, compensations
+        )
+        ctx.width = width
+        ctx.height = height
+        ctx.eps2d = eps2d
+        ctx.camera_model_type = camera_model_type
+        ctx.cumsum_of_points_per_convex = cumsum_of_points_per_convex
+        return normals, offsets, p_image, hull, num_points_per_convex_view, indices, radii, means2d, depths, conics, compensations
+
+    @staticmethod
+    def backward(ctx, v_normals, v_offsets, v_p_image, v_hull, v_num_points_per_convex_view, v_indices, v_radii, v_means2d, v_depths, v_conics, v_compensations):
+        (
+            convex_points,
+            viewmats,
+            Ks,
+            _,
+            offsets,
+            p_image,
+            hull,
+            num_points_per_convex_view,
+            indices,
+            radii,
+            conics,
+            compensations,
+        ) = ctx.saved_tensors
+        width = ctx.width
+        height = ctx.height
+        eps2d = ctx.eps2d
+        cumsum_of_points_per_convex = ctx.cumsum_of_points_per_convex
+        camera_model_type = ctx.camera_model_type
+        if v_compensations is not None:
+            v_compensations = v_compensations.contiguous()
+        v_convex_points, v_viewmats = _make_lazy_cuda_func(
+            "projection_ewa_3dcs_fused_bwd"
+        )(
+            convex_points,
+            cumsum_of_points_per_convex,
+            viewmats,
+            Ks,
+            width,
+            height,
+            eps2d,
+            camera_model_type,
+            radii,
+            hull,
+            num_points_per_convex_view,
+            #normals,
+            offsets,
+            p_image,
+            indices,
+            conics,
+            compensations,
+            v_normals.contiguous(),
+            v_offsets.contiguous(),
+            v_means2d.contiguous(),
+            v_depths.contiguous(),
+            v_conics.contiguous(),
+            v_compensations,
+            ctx.needs_input_grad[5],  # viewmats_requires_grad
+        )
+
+        if not ctx.needs_input_grad[0]:
+            v_convex_points = None
+        # FIXME: check for delta, sigma, scaling?
+        if not ctx.needs_input_grad[5]:
+            v_viewmats = None
+
+        return (
+            v_convex_points,
+            None,
+            None,#v_delta,
+            None,#v_sigma,
+            None,#v_scaling,
+            v_viewmats,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+class _RasterizeToPixels_3dcs(torch.autograd.Function):
+    """Rasterize gaussians"""
+
+    @staticmethod
+    def forward(
+        ctx,
+        means2d: Tensor,  # [C, N, 2]
+        normals: Tensor,  # [C, N, 3]
+        offsets: Tensor,  # [C, N]
+        num_points_per_convex_view: Tensor, # [C, N]
+        delta: Tensor,  # [C, N]
+        sigma: Tensor,  # [C, N]
+        num_points_per_convex: int,  # 6 in practice
+        cumsum_of_points_per_convex: Tensor,  # [N]
+        depths: Tensor,  # [C, N]
+        conics: Tensor,  # [C, N, 3]
+        colors: Tensor,  # [C, N, D]
+        opacities: Tensor,  # [C, N]
+        backgrounds: Tensor,  # [C, D], Optional
+        masks: Tensor,  # [C, tile_height, tile_width], Optional
+        width: int,
+        height: int,
+        tile_size: int,
+        isect_offsets: Tensor,  # [C, tile_height, tile_width]
+        flatten_ids: Tensor,  # [n_isects]
+        absgrad: bool,
+    ) -> Tuple[Tensor, Tensor]:
+        render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
+            "rasterize_to_pixels_3dcs_fwd"
+        )(
+            means2d,
+            normals,
+            offsets,
+            num_points_per_convex_view,
+            delta,
+            sigma,
+            num_points_per_convex,
+            cumsum_of_points_per_convex,
+            depths,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            width,
+            height,
+            tile_size,
+            isect_offsets,
+            flatten_ids,
+        )
+
+        ctx.save_for_backward(
+            means2d,
+            normals,
+            offsets,
+            num_points_per_convex_view,
+            delta,
+            sigma,
+            depths,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            isect_offsets,
+            flatten_ids,
+            render_alphas,
+            last_ids,
+        )
+        ctx.width = width
+        ctx.height = height
+        ctx.tile_size = tile_size
+        ctx.absgrad = absgrad
+        ctx.cumsum_of_points_per_convex = cumsum_of_points_per_convex
+        ctx.num_points_per_convex = num_points_per_convex
+
+        # double to float
+        render_alphas = render_alphas.float()
+        return render_colors, render_alphas
+
+    @staticmethod
+    def backward(
+        ctx,
+        v_render_colors: Tensor,  # [C, H, W, 3]
+        v_render_alphas: Tensor,  # [C, H, W, 1]
+    ):
+        (
+            means2d,
+            normals,
+            offsets,
+            num_points_per_convex_view,
+            delta,
+            sigma,
+            depths,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            isect_offsets,
+            flatten_ids,
+            render_alphas,
+            last_ids,
+        ) = ctx.saved_tensors
+
+        width = ctx.width
+        height = ctx.height
+        tile_size = ctx.tile_size
+        absgrad = ctx.absgrad
+        cumsum_of_points_per_convex = ctx.cumsum_of_points_per_convex
+        num_points_per_convex = ctx.num_points_per_convex
+
+        (
+            v_means2d_abs,
+            v_means2d,
+            v_normals,
+            v_offsets,
+            v_delta,
+            v_sigma,
+            v_conics,
+            v_colors,
+            v_opacities,
+        ) = _make_lazy_cuda_func("rasterize_to_pixels_3dcs_bwd")(
+            means2d,
+            normals,
+            offsets,
+            num_points_per_convex,
+            delta,
+            sigma,
+            num_points_per_convex_view,
+            cumsum_of_points_per_convex,
+            depths,
+            conics,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            width,
+            height,
+            tile_size,
+            isect_offsets,
+            flatten_ids,
+            render_alphas,
+            last_ids,
+            v_render_colors.contiguous(),
+            v_render_alphas.contiguous(),
+            absgrad,
+        )
+        if absgrad:
+            means2d.absgrad = v_means2d_abs
+
+        if ctx.needs_input_grad[12]:
+            v_backgrounds = (v_render_colors * (1.0 - render_alphas).float()).sum(
+                dim=(1, 2)
+            )
+        else:
+            v_backgrounds = None
+
+        return (
+            v_means2d,
+            v_normals,
+            v_offsets,
+            None,
+            v_delta,
+            v_sigma,
+            None,
+            None,
+            None,#v_depths
+            v_conics,
+            v_colors,
+            v_opacities,
+            v_backgrounds,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+#class _FullyFusedProjectionPacked_3dcs(torch.autograd.Function):
+#    """Projects Gaussians to 2D. Return packed tensors."""
+#
+#    @staticmethod
+#    def forward(
+#        ctx,
+#        convex_points: Tensor,  # [N, 6, 3]
+#        viewmats: Tensor,  # [C, 4, 4]
+#        Ks: Tensor,  # [C, 3, 3]
+#        width: int,
+#        height: int,
+#        eps2d: float,
+#        near_plane: float,
+#        far_plane: float,
+#        radius_clip: float,
+#        sparse_grad: bool,
+#        calc_compensations: bool,
+#        camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+#    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+#        camera_model_type = _make_lazy_cuda_obj(
+#            f"CameraModelType.{camera_model.upper()}"
+#        )
+#
+#        (
+#            indptr,
+#            camera_ids,
+#            gaussian_ids,
+#            radii,
+#            means2d,
+#            depths,
+#            conics,
+#            compensations,
+#        ) = _make_lazy_cuda_func("fully_fused_projection_packed_fwd_3dcs")(
+#            convex_points,
+#            viewmats,
+#            Ks,
+#            width,
+#            height,
+#            eps2d,
+#            near_plane,
+#            far_plane,
+#            radius_clip,
+#            calc_compensations,
+#            camera_model_type,
+#        )
+#        if not calc_compensations:
+#            compensations = None
+#        ctx.save_for_backward(
+#            camera_ids,
+#            gaussian_ids,
+#            means,
+#            covars,
+#            quats,
+#            scales,
+#            viewmats,
+#            Ks,
+#            conics,
+#            compensations,
+#        )
+#        ctx.width = width
+#        ctx.height = height
+#        ctx.eps2d = eps2d
+#        ctx.sparse_grad = sparse_grad
+#        ctx.camera_model_type = camera_model_type
+#
+#        return camera_ids, gaussian_ids, radii, means2d, depths, conics, compensations
+#
+#    @staticmethod
+#    def backward(
+#        ctx,
+#        v_camera_ids,
+#        v_gaussian_ids,
+#        v_radii,
+#        v_means2d,
+#        v_depths,
+#        v_conics,
+#        v_compensations,
+#    ):
+#        (
+#            camera_ids,
+#            gaussian_ids,
+#            means,
+#            covars,
+#            quats,
+#            scales,
+#            viewmats,
+#            Ks,
+#            conics,
+#            compensations,
+#        ) = ctx.saved_tensors
+#        width = ctx.width
+#        height = ctx.height
+#        eps2d = ctx.eps2d
+#        sparse_grad = ctx.sparse_grad
+#        camera_model_type = ctx.camera_model_type
+#
+#        if v_compensations is not None:
+#            v_compensations = v_compensations.contiguous()
+#        v_means, v_covars, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
+#            "fully_fused_projection_packed_bwd"
+#        )(
+#            means,
+#            covars,
+#            quats,
+#            scales,
+#            viewmats,
+#            Ks,
+#            width,
+#            height,
+#            eps2d,
+#            camera_model_type,
+#            camera_ids,
+#            gaussian_ids,
+#            conics,
+#            compensations,
+#            v_means2d.contiguous(),
+#            v_depths.contiguous(),
+#            v_conics.contiguous(),
+#            v_compensations,
+#            ctx.needs_input_grad[4],  # viewmats_requires_grad
+#            sparse_grad,
+#        )
+#
+#        if not ctx.needs_input_grad[0]:
+#            v_means = None
+#        else:
+#            if sparse_grad:
+#                # TODO: gaussian_ids is duplicated so not ideal.
+#                # An idea is to directly set the attribute (e.g., .sparse_grad) of
+#                # the tensor but this requires the tensor to be leaf node only. And
+#                # a customized optimizer would be needed in this case.
+#                v_means = torch.sparse_coo_tensor(
+#                    indices=gaussian_ids[None],  # [1, nnz]
+#                    values=v_means,  # [nnz, 3]
+#                    size=means.size(),  # [N, 3]
+#                    is_coalesced=len(viewmats) == 1,
+#                )
+#        if not ctx.needs_input_grad[1]:
+#            v_covars = None
+#        else:
+#            if sparse_grad:
+#                v_covars = torch.sparse_coo_tensor(
+#                    indices=gaussian_ids[None],  # [1, nnz]
+#                    values=v_covars,  # [nnz, 6]
+#                    size=covars.size(),  # [N, 6]
+#                    is_coalesced=len(viewmats) == 1,
+#                )
+#        if not ctx.needs_input_grad[2]:
+#            v_quats = None
+#        else:
+#            if sparse_grad:
+#                v_quats = torch.sparse_coo_tensor(
+#                    indices=gaussian_ids[None],  # [1, nnz]
+#                    values=v_quats,  # [nnz, 4]
+#                    size=quats.size(),  # [N, 4]
+#                    is_coalesced=len(viewmats) == 1,
+#                )
+#        if not ctx.needs_input_grad[3]:
+#            v_scales = None
+#        else:
+#            if sparse_grad:
+#                v_scales = torch.sparse_coo_tensor(
+#                    indices=gaussian_ids[None],  # [1, nnz]
+#                    values=v_scales,  # [nnz, 3]
+#                    size=scales.size(),  # [N, 3]
+#                    is_coalesced=len(viewmats) == 1,
+#                )
+#        if not ctx.needs_input_grad[4]:
+#            v_viewmats = None
+#
+#        return (
+#            v_means,
+#            v_covars,
+#            v_quats,
+#            v_scales,
+#            v_viewmats,
+#            None,
+#            None,
+#            None,
+#            None,
+#            None,
+#            None,
+#            None,
+#            None,
+#            None,
+#            None,
+#        )
+

@@ -7,6 +7,124 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+def fibonacci_sphere(x, y, z, radii, nb_points):
+    # Prepare storage for the generated points
+    points_per_convex = torch.zeros((x.shape[0], nb_points, 3), device=x.device)
+
+    # Generate nb_points on a unit sphere using the Fibonacci lattice
+    for i in range(nb_points):
+        # z-coordinates, linearly spaced between 1 and -1, converted to tensor
+        z_coord = torch.tensor(1 - (2 * i / (nb_points - 1)), device=x.device)  # Tensor
+
+        # Calculate the radial distance in the xy-plane
+        radii_xy = torch.sqrt(1 - z_coord**2)  # Tensor, radial distance in the xy-plane
+
+        # Theta, spaced by the golden angle
+        theta = torch.pi * (3.0 - torch.sqrt(torch.tensor(5.0))) * i  # Scalar, but used later in tensor ops
+
+        # Generate unit vectors for each point on the sphere
+        x_unit = radii_xy * torch.cos(theta.clone().detach())  # Tensor
+        y_unit = radii_xy * torch.sin(theta.clone().detach())  # Tensor
+        z_unit = z_coord  # Already a tensor
+
+        # Stack the unit vector (shape: [3]) and scale it by radii (shape: [100, 1])
+        unit_sphere_point = torch.stack([x_unit, y_unit, z_unit], dim=0)  # Shape: [3]
+
+        # Apply the scaling by radii and add the center coordinates
+        points_per_convex[:, i, :] = radii * unit_sphere_point + torch.stack([x, y, z], dim=1)
+
+    return points_per_convex
+
+def save_ply_convex(splats: torch.nn.ParameterDict, dir: str, colors: torch.Tensor = None):
+    # Convert all tensors to numpy arrays in one go
+    print(f"Saving ply to {dir}")
+    numpy_data = {k: v.detach().cpu().numpy() for k, v in splats.items()}
+
+    convex_points = numpy_data["convex_points"]
+    opacities = numpy_data["opacities"]
+    delta = numpy_data["delta"]
+    sigma = numpy_data["sigma"]
+
+    sh0 = numpy_data["sh0"].transpose(0, 2, 1).reshape(convex_points.shape[0], -1)
+    shN = numpy_data["shN"].transpose(0, 2, 1).reshape(convex_points.shape[0], -1)
+
+    # Create a mask to identify rows with NaN or Inf in any of the numpy_data arrays
+    invalid_mask = (
+        np.isnan(convex_points).any(axis=2)
+        | np.isinf(convex_points).any(axis=2)
+        | np.isnan(opacities).any(axis=0)
+        | np.isinf(opacities).any(axis=0)
+        | np.isnan(delta).any(axis=0)
+        | np.isinf(delta).any(axis=0)
+        | np.isnan(sigma).any(axis=0)
+        | np.isinf(sigma).any(axis=0)
+        | np.isnan(sh0).any(axis=1)
+        | np.isinf(sh0).any(axis=1)
+        | np.isnan(shN).any(axis=1)
+        | np.isinf(shN).any(axis=1)
+    )
+
+    # Filter out rows with NaNs or Infs from all data arrays
+    convex_points = convex_points[~invalid_mask]
+    opacities = opacities[~invalid_mask]
+    delta = delta[~invalid_mask]
+    sigma = sigma[~invalid_mask]
+    sh0 = sh0[~invalid_mask]
+    shN = shN[~invalid_mask]
+
+    num_points = convex_points.shape[0]
+
+    with open(dir, "wb") as f:
+        # Write PLY header
+        f.write(b"ply\n")
+        f.write(b"format binary_little_endian 1.0\n")
+        f.write(f"element vertex {num_points}\n".encode())
+        f.write(b"property float x\n")
+        f.write(b"property float y\n")
+        f.write(b"property float z\n")
+        f.write(b"property float nx\n")
+        f.write(b"property float ny\n")
+        f.write(b"property float nz\n")
+
+        if colors is not None:
+            for j in range(colors.shape[1]):
+                f.write(f"property float f_dc_{j}\n".encode())
+        else:
+            for i, data in enumerate([sh0, shN]):
+                prefix = "f_dc" if i == 0 else "f_rest"
+                for j in range(data.shape[1]):
+                    f.write(f"property float {prefix}_{j}\n".encode())
+
+        f.write(b"property float opacity\n")
+
+        for i in range(scales.shape[1]):
+            f.write(f"property float scale_{i}\n".encode())
+        for i in range(quats.shape[1]):
+            f.write(f"property float rot_{i}\n".encode())
+
+        f.write(b"end_header\n")
+
+        # Write vertex data
+        for i in range(num_points):
+            f.write(struct.pack("<fff", *means[i]))  # x, y, z
+            f.write(struct.pack("<fff", 0, 0, 0))  # nx, ny, nz (zeros)
+
+            if colors is not None:
+                color = colors.detach().cpu().numpy()
+                for j in range(color.shape[1]):
+                    f_dc = (color[i, j] - 0.5) / 0.2820947917738781
+                    f.write(struct.pack("<f", f_dc))
+            else:
+                for data in [sh0, shN]:
+                    for j in range(data.shape[1]):
+                        f.write(struct.pack("<f", data[i, j]))
+
+            f.write(struct.pack("<f", opacities[i]))  # opacity
+
+            for data in [scales, quats]:
+                for j in range(data.shape[1]):
+                    f.write(struct.pack("<f", data[i, j]))
+
 
 def save_ply(splats: torch.nn.ParameterDict, dir: str, colors: torch.Tensor = None):
     warnings.warn(

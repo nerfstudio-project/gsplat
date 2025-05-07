@@ -5,6 +5,13 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+def load_ply_data(
+    data_path: Optional[str] = None,
+    device="cuda",
+    scene_crop: Tuple[float, float, float, float, float, float] = (-2, -2, -2, 2, 2, 2),
+    scene_grid: int = 1,
+):
+    assert True
 
 def load_test_data(
     data_path: Optional[str] = None,

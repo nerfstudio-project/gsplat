@@ -668,4 +668,276 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
     return std::make_tuple(gaussian_ids, pixel_ids);
 }
 
+////////////////////////////////////////////////////
+// 3DCS
+////////////////////////////////////////////////////
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dcs_fwd(
+    // 3D convex parameters
+    const at::Tensor means2d,   // [C, N, 2] or [nnz, 2]
+    const at::Tensor normals,   // [C, total_nb_points, 2] or [nnz, 2]
+    const at::Tensor offsets,   // [C, N, 1]
+    const at::Tensor num_points_per_convex_view, // [C, N]
+    const at::Tensor delta,     // [C, N]
+    const at::Tensor sigma,     // [C, N]
+    const uint32_t num_points_per_convex, // 6
+    const at::Tensor cumsum_of_points_per_convex, // [C]
+    const at::Tensor depths,    // [C, N]
+    const at::Tensor conics,    // [C, N, 3] or [nnz, 3]
+    const at::Tensor colors,    // [C, N, channels] or [nnz, channels]
+    const at::Tensor opacities, // [C, N]  or [nnz]
+    const at::optional<at::Tensor> backgrounds, // [C, channels]
+    const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [C, tile_height, tile_width]
+    const at::Tensor flatten_ids   // [n_isects]
+) {
+    DEVICE_GUARD(means2d);
+    CHECK_INPUT(means2d);
+    CHECK_INPUT(normals);
+    CHECK_INPUT(offsets);
+    CHECK_INPUT(num_points_per_convex_view);
+    CHECK_INPUT(delta);
+    CHECK_INPUT(sigma);
+    CHECK_INPUT(cumsum_of_points_per_convex);
+    CHECK_INPUT(depths);
+    CHECK_INPUT(conics);
+    CHECK_INPUT(colors);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(tile_offsets);
+    CHECK_INPUT(flatten_ids);
+    if (backgrounds.has_value()) {
+        CHECK_INPUT(backgrounds.value());
+    }
+    if (masks.has_value()) {
+        CHECK_INPUT(masks.value());
+    }
+
+    uint32_t C = tile_offsets.size(0); // number of cameras
+    uint32_t channels = colors.size(-1);
+
+    at::Tensor renders =
+        at::empty({C, image_height, image_width, channels}, means2d.options());
+    at::Tensor alphas =
+        at::empty({C, image_height, image_width, 1}, means2d.options());
+    at::Tensor last_ids = at::empty(
+        {C, image_height, image_width}, means2d.options().dtype(at::kInt)
+    );
+
+#define __LAUNCH_KERNEL__(N)                                                   \
+    case N:                                                                    \
+        launch_rasterize_to_pixels_3dcs_fwd_kernel<N>(                         \
+            means2d,                                                           \
+            normals,                                                           \
+            offsets,                                                           \
+            num_points_per_convex_view,                                        \
+            delta,                                                             \
+            sigma,                                                             \
+            num_points_per_convex,                                             \
+            cumsum_of_points_per_convex,                                       \
+            depths,                                                            \
+            conics,                                                            \
+            colors,                                                            \
+            opacities,                                                         \
+            backgrounds,                                                       \
+            masks,                                                             \
+            image_width,                                                       \
+            image_height,                                                      \
+            tile_size,                                                         \
+            tile_offsets,                                                      \
+            flatten_ids,                                                       \
+            renders,                                                           \
+            alphas,                                                            \
+            last_ids                                                           \
+        );                                                                     \
+        break;
+
+    // TODO: an optimization can be done by passing the actual number of
+    // channels into the kernel functions and avoid necessary global memory
+    // writes. This requires moving the channel padding from python to C side.
+    switch (channels) {
+        __LAUNCH_KERNEL__(1)
+        __LAUNCH_KERNEL__(2)
+        __LAUNCH_KERNEL__(3)
+        __LAUNCH_KERNEL__(4)
+        __LAUNCH_KERNEL__(5)
+        __LAUNCH_KERNEL__(8)
+        __LAUNCH_KERNEL__(9)
+        __LAUNCH_KERNEL__(16)
+        __LAUNCH_KERNEL__(17)
+        __LAUNCH_KERNEL__(32)
+        __LAUNCH_KERNEL__(33)
+        __LAUNCH_KERNEL__(64)
+        __LAUNCH_KERNEL__(65)
+        __LAUNCH_KERNEL__(128)
+        __LAUNCH_KERNEL__(129)
+        __LAUNCH_KERNEL__(256)
+        __LAUNCH_KERNEL__(257)
+        __LAUNCH_KERNEL__(512)
+        __LAUNCH_KERNEL__(513)
+    default:
+        AT_ERROR("Unsupported number of channels: ", channels);
+    }
+#undef __LAUNCH_KERNEL__
+
+    return std::make_tuple(renders, alphas, last_ids);
+}
+
+std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor>
+rasterize_to_pixels_3dcs_bwd(
+    // Gaussian parameters
+    const at::Tensor means2d,                   // [C, N, 2] or [nnz, 2]
+    const at::Tensor normals,                   // [C, total_nb_points, 2] or [nnz*6, 2]
+    const at::Tensor offsets,                   // [C, K, 3] or [nnz, 3]
+    const uint32_t num_points_per_convex,     // 6
+    const at::Tensor delta,                     // [C, N]
+    const at::Tensor sigma,                     // [C, N]
+    const at::Tensor num_points_per_convex_view, // [C, N]
+    const at::Tensor cumsum_of_points_per_convex, // [C, N]
+    const at::Tensor depths,                    // [C, N]
+    const at::Tensor conics,                    // [C, N, 3] or [nnz, 3]
+    const at::Tensor colors,                    // [C, N, 3] or [nnz, 3]
+    const at::Tensor opacities,                 // [C, N] or [nnz]
+    const at::optional<at::Tensor> backgrounds, // [C, 3]
+    const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
+    // image size
+    const uint32_t image_width,
+    const uint32_t image_height,
+    const uint32_t tile_size,
+    // intersections
+    const at::Tensor tile_offsets, // [C, tile_height, tile_width]
+    const at::Tensor flatten_ids,  // [n_isects]
+    // forward outputs
+    const at::Tensor render_alphas, // [C, image_height, image_width, 1]
+    const at::Tensor last_ids,      // [C, image_height, image_width]
+    // gradients of outputs
+    const at::Tensor v_render_colors, // [C, image_height, image_width, 3]
+    const at::Tensor v_render_alphas, // [C, image_height, image_width, 1]
+    // options
+    bool absgrad
+) {
+    DEVICE_GUARD(means2d);
+    CHECK_INPUT(means2d);
+    CHECK_INPUT(normals);
+    CHECK_INPUT(offsets);
+    CHECK_INPUT(delta);
+    CHECK_INPUT(sigma);
+    CHECK_INPUT(cumsum_of_points_per_convex);
+    CHECK_INPUT(depths);
+    CHECK_INPUT(conics);
+    CHECK_INPUT(colors);
+    CHECK_INPUT(opacities);
+    CHECK_INPUT(tile_offsets);
+    CHECK_INPUT(flatten_ids);
+    CHECK_INPUT(render_alphas);
+    CHECK_INPUT(last_ids);
+    CHECK_INPUT(v_render_colors);
+    CHECK_INPUT(v_render_alphas);
+    if (backgrounds.has_value()) {
+        CHECK_INPUT(backgrounds.value());
+    }
+    if (masks.has_value()) {
+        CHECK_INPUT(masks.value());
+    }
+
+    uint32_t channels = colors.size(-1);
+
+    at::Tensor v_means2d = at::zeros_like(means2d);
+    at::Tensor v_normals = at::zeros_like(normals);
+    at::Tensor v_offsets = at::zeros_like(offsets);
+    at::Tensor v_delta = at::zeros_like(delta);
+    at::Tensor v_sigma = at::zeros_like(sigma);
+    at::Tensor v_conics = at::zeros_like(conics);
+    at::Tensor v_colors = at::zeros_like(colors);
+    at::Tensor v_opacities = at::zeros_like(opacities);
+    at::Tensor v_means2d_abs;
+    if (absgrad) {
+        v_means2d_abs = at::zeros_like(means2d);
+    }
+
+#define __LAUNCH_KERNEL__(N)                                                   \
+    case N:                                                                    \
+        launch_rasterize_to_pixels_3dcs_bwd_kernel<N>(                         \
+            means2d,                                                           \
+            normals,                                                           \
+            offsets,                                                           \
+            num_points_per_convex,                                             \
+            delta,                                                             \
+            sigma,                                                             \
+            num_points_per_convex_view,                                        \
+            cumsum_of_points_per_convex,                                       \
+            depths,                                                            \
+            conics,                                                            \
+            colors,                                                            \
+            opacities,                                                         \
+            backgrounds,                                                       \
+            masks,                                                             \
+            image_width,                                                       \
+            image_height,                                                      \
+            tile_size,                                                         \
+            tile_offsets,                                                      \
+            flatten_ids,                                                       \
+            render_alphas,                                                     \
+            last_ids,                                                          \
+            v_render_colors,                                                   \
+            v_render_alphas,                                                   \
+            absgrad ? c10::optional<at::Tensor>(v_means2d_abs) : c10::nullopt, \
+            v_means2d,                                                         \
+            v_normals,                                                         \
+            v_offsets,                                                         \
+            v_delta,                                                           \
+            v_sigma,                                                           \
+            v_conics,                                                          \
+            v_colors,                                                          \
+            v_opacities                                                        \
+        );                                                                     \
+        break;
+
+    // TODO: an optimization can be done by passing the actual number of
+    // channels into the kernel functions and avoid necessary global memory
+    // writes. This requires moving the channel padding from python to C side.
+    switch (channels) {
+        __LAUNCH_KERNEL__(1)
+        __LAUNCH_KERNEL__(2)
+        __LAUNCH_KERNEL__(3)
+        __LAUNCH_KERNEL__(4)
+        __LAUNCH_KERNEL__(5)
+        __LAUNCH_KERNEL__(8)
+        __LAUNCH_KERNEL__(9)
+        __LAUNCH_KERNEL__(16)
+        __LAUNCH_KERNEL__(17)
+        __LAUNCH_KERNEL__(32)
+        __LAUNCH_KERNEL__(33)
+        __LAUNCH_KERNEL__(64)
+        __LAUNCH_KERNEL__(65)
+        __LAUNCH_KERNEL__(128)
+        __LAUNCH_KERNEL__(129)
+        __LAUNCH_KERNEL__(256)
+        __LAUNCH_KERNEL__(257)
+        __LAUNCH_KERNEL__(512)
+        __LAUNCH_KERNEL__(513)
+    default:
+        AT_ERROR("Unsupported number of channels: ", channels);
+    }
+#undef __LAUNCH_KERNEL__
+
+    return std::make_tuple(
+        v_means2d_abs, v_means2d, v_normals, v_offsets, v_delta, v_sigma, v_conics, v_colors, v_opacities
+    );
+}
+
+
 } // namespace gsplat

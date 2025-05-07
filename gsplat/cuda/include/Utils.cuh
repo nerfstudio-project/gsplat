@@ -91,6 +91,16 @@ inline __device__ void warpSum(float *val, WarpT &warp) {
     }
 }
 
+template <uint32_t DIM, class WarpT>
+inline __device__ void warpSum(vec3 *val, WarpT &warp) {
+#pragma unroll
+    for (uint32_t i = 0; i < DIM; i++) {
+        val[i].x = cg::reduce(warp, val[i].x, cg::plus<float>());
+        val[i].y = cg::reduce(warp, val[i].y, cg::plus<float>());
+        val[i].z = cg::reduce(warp, val[i].z, cg::plus<float>());
+    }
+}
+
 template <class WarpT> inline __device__ void warpSum(float &val, WarpT &warp) {
     val = cg::reduce(warp, val, cg::plus<float>());
 }
