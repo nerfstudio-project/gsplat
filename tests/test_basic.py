@@ -36,12 +36,12 @@ def test_data():
         data_path=os.path.join(os.path.dirname(__file__), "../assets/test_garden.npz"),
     )
     return {
-        "means": means,
-        "quats": quats,
-        "scales": scales,
-        "opacities": opacities,
-        "viewmats": viewmats,
-        "Ks": Ks,
+        "means": means,  # [N, 3]
+        "quats": quats,  # [N, 4]
+        "scales": scales,  # [N, 3]
+        "opacities": opacities,  # [N]
+        "viewmats": viewmats,  # [C, 4, 4]
+        "Ks": Ks,  # [C, 3, 3]
         "width": width,
         "height": height,
     }
@@ -443,6 +443,7 @@ def test_isect(test_data, batch_dims: list[int]):
 
     B = math.prod(batch_dims)
     C, N = 3, 1000
+    I = B * C
     width, height = 40, 60
 
     test_data = {
@@ -462,12 +463,12 @@ def test_isect(test_data, batch_dims: list[int]):
     tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
         means2d, radii, depths, tile_size, tile_width, tile_height
     )
-    isect_offsets = isect_offset_encode(isect_ids, B, C, tile_width, tile_height)
+    isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
 
     _tiles_per_gauss, _isect_ids, _gauss_ids = _isect_tiles(
         means2d, radii, depths, tile_size, tile_width, tile_height
     )
-    _isect_offsets = _isect_offset_encode(_isect_ids, B, C, tile_width, tile_height)
+    _isect_offsets = _isect_offset_encode(_isect_ids, I, tile_width, tile_height)
 
     torch.testing.assert_close(tiles_per_gauss, _tiles_per_gauss)
     torch.testing.assert_close(isect_ids, _isect_ids)

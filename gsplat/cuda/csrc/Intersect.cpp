@@ -13,14 +13,12 @@
 namespace gsplat {
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
-    const at::Tensor means2d,                    // [..., C, N, 2] or [nnz, 2]
-    const at::Tensor radii,                      // [..., C, N, 2] or [nnz, 2]
-    const at::Tensor depths,                     // [..., C, N] or [nnz]
-    const at::optional<at::Tensor> batch_ids,    // [nnz]
-    const at::optional<at::Tensor> camera_ids,   // [nnz]
+    const at::Tensor means2d,                    // [..., N, 2] or [nnz, 2]
+    const at::Tensor radii,                      // [..., N, 2] or [nnz, 2]
+    const at::Tensor depths,                     // [..., N] or [nnz]
+    const at::optional<at::Tensor> image_ids,    // [nnz]
     const at::optional<at::Tensor> gaussian_ids, // [nnz]
-    const uint32_t B,
-    const uint32_t C,
+    const uint32_t I,
     const uint32_t tile_size,
     const uint32_t tile_width,
     const uint32_t tile_height,
@@ -36,25 +34,23 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
     bool packed = means2d.dim() == 2;
     if (packed) {
         TORCH_CHECK(
-            batch_ids.has_value() && camera_ids.has_value() && gaussian_ids.has_value(),
-            "When packed is set, batch_ids, camera_ids and gaussian_ids must be provided."
+            image_ids.has_value() && gaussian_ids.has_value(),
+            "When packed is set, image_ids and gaussian_ids must be provided."
         );
-        CHECK_INPUT(batch_ids.value());
-        CHECK_INPUT(camera_ids.value());
+        CHECK_INPUT(image_ids.value());
         CHECK_INPUT(gaussian_ids.value());
     }
 
     uint32_t n_tiles = tile_width * tile_height;
-    // the number of bits needed to encode the camera id and tile id
+    // the number of bits needed to encode the image id and tile id
     // Note: std::bit_width requires C++20
     // uint32_t tile_n_bits = std::bit_width(n_tiles);
-    // uint32_t cam_n_bits = std::bit_width(C);
-    uint32_t batch_n_bits = (uint32_t)floor(log2(B)) + 1;
-    uint32_t cam_n_bits = (uint32_t)floor(log2(C)) + 1;
+    // uint32_t image_n_bits = std::bit_width(I);
+    uint32_t image_n_bits = (uint32_t)floor(log2(I)) + 1;
     uint32_t tile_n_bits = (uint32_t)floor(log2(n_tiles)) + 1;
-    // the first 32 bits are used for the batch id, camera id and tile id altogether, so
+    // the first 32 bits are used for the image id and tile id altogether, so
     // check if we have enough bits for them.
-    assert(batch_n_bits + cam_n_bits + tile_n_bits <= 32);
+    assert(image_n_bits + tile_n_bits <= 32);
 
     // first pass: compute number of tiles per gaussian
     at::Tensor tiles_per_gauss =
@@ -68,11 +64,9 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
             means2d,
             radii,
             depths,
-            packed ? batch_ids : c10::nullopt,
-            packed ? camera_ids : c10::nullopt,
+            packed ? image_ids : c10::nullopt,
             packed ? gaussian_ids : c10::nullopt,
-            B,
-            C,
+            I,
             tile_size,
             tile_width,
             tile_height,
@@ -85,9 +79,9 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
         cum_tiles_per_gauss = at::cumsum(tiles_per_gauss.view({-1}), 0);
         n_isects = cum_tiles_per_gauss[-1].item<int64_t>();
         if (segmented) {
-            // batch and camera offsets in the isect_ids and flatten_ids
+            // offsets in the isect_ids and flatten_ids
             offsets = at::cumsum(
-                at::sum(tiles_per_gauss, 2).view({-1}), 0
+                at::sum(tiles_per_gauss, -1).view({-1}), 0
             );
             offsets = at::cat(
                 {at::tensor({0}, offsets.options().dtype(at::kInt)),
@@ -109,11 +103,9 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
             means2d,
             radii,
             depths,
-            packed ? batch_ids : c10::nullopt,
-            packed ? camera_ids : c10::nullopt,
+            packed ? image_ids : c10::nullopt,
             packed ? gaussian_ids : c10::nullopt,
-            B,
-            C,
+            I,
             tile_size,
             tile_width,
             tile_height,
@@ -132,9 +124,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
         if (segmented) {
             segmented_radix_sort_double_buffer(
                 n_isects,
-                B * C,
-                batch_n_bits,
-                cam_n_bits,
+                I,
+                image_n_bits,
                 tile_n_bits,
                 offsets,
                 isect_ids,
@@ -145,8 +136,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
         } else {
             radix_sort_double_buffer(
                 n_isects,
-                batch_n_bits,
-                cam_n_bits,
+                image_n_bits,
                 tile_n_bits,
                 isect_ids,
                 flatten_ids,
@@ -162,8 +152,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
 
 at::Tensor intersect_offset(
     const at::Tensor isect_ids, // [n_isects]
-    const uint32_t B,
-    const uint32_t C,
+    const uint32_t I,
     const uint32_t tile_width,
     const uint32_t tile_height
 ) {
@@ -171,10 +160,10 @@ at::Tensor intersect_offset(
     CHECK_INPUT(isect_ids);
 
     at::Tensor offsets = at::empty(
-        {B, C, tile_height, tile_width}, isect_ids.options().dtype(at::kInt)
+        {I, tile_height, tile_width}, isect_ids.options().dtype(at::kInt)
     );
     launch_intersect_offset_kernel(
-        isect_ids, B, C, tile_width, tile_height, offsets
+        isect_ids, I, tile_width, tile_height, offsets
     );
     return offsets;
 }

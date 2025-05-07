@@ -376,9 +376,9 @@ def _fully_fused_projection(
 
 @torch.no_grad()
 def _isect_tiles(
-    means2d: Tensor,  # [..., C, N, 2]
-    radii: Tensor,  # [..., C, N, 2]
-    depths: Tensor,  # [..., C, N]
+    means2d: Tensor,  # [..., N, 2]
+    radii: Tensor,  # [..., N, 2]
+    depths: Tensor,  # [..., N]
     tile_size: int,
     tile_width: int,
     tile_height: int,
@@ -391,17 +391,17 @@ def _isect_tiles(
         This is a minimal implementation of the fully fused version, which has more
         arguments. Not all arguments are supported.
     """
-    batch_dims = means2d.shape[:-3]
-    C, N = means2d.shape[-3:-1]
-    assert means2d.shape == batch_dims + (C, N, 2), means2d.shape
-    assert radii.shape == batch_dims + (C, N, 2), radii.shape
-    assert depths.shape == batch_dims + (C, N), depths.shape
+    image_dims = means2d.shape[:-2]
+    N = means2d.shape[-2]
+    assert means2d.shape == image_dims + (N, 2), means2d.shape
+    assert radii.shape == image_dims + (N, 2), radii.shape
+    assert depths.shape == image_dims + (N,), depths.shape
 
     device = means2d.device
-    B = math.prod(batch_dims)
-    means2d = means2d.reshape(B, C, N, 2)
-    radii = radii.reshape(B, C, N, 2)
-    depths = depths.reshape(B, C, N)
+    I = math.prod(image_dims)
+    means2d = means2d.reshape(I, N, 2)
+    radii = radii.reshape(I, N, 2)
+    depths = depths.reshape(I, N)
 
     # compute tiles_per_gauss
     tile_means2d = means2d / tile_size
@@ -423,53 +423,43 @@ def _isect_tiles(
     flatten_ids = torch.empty(n_isects, dtype=torch.int32, device=device)
 
     cum_tiles_per_gauss = torch.cumsum(tiles_per_gauss.flatten(), dim=0)
-    batch_n_bits = B.bit_length()
-    camera_n_bits = C.bit_length()
+    image_n_bits = I.bit_length()
     tile_n_bits = (tile_width * tile_height).bit_length()
-    assert batch_n_bits + camera_n_bits + tile_n_bits + 32 <= 64
+    assert image_n_bits + tile_n_bits + 32 <= 64
 
     def binary(num):
         return "".join("{:0>8b}".format(c) for c in struct.pack("!f", num))
 
-    def kernel(batch_id, cam_id, gauss_id):
-        if (
-            radii[batch_id, cam_id, gauss_id, 0] <= 0.0
-            or radii[batch_id, cam_id, gauss_id, 1] <= 0.0
-        ):
+    def kernel(image_id, gauss_id):
+        if radii[image_id, gauss_id, 0] <= 0.0 or radii[image_id, gauss_id, 1] <= 0.0:
             return
-        index = batch_id * C * N + cam_id * N + gauss_id
+        index = image_id * N + gauss_id
         curr_idx = cum_tiles_per_gauss[index - 1] if index > 0 else 0
 
         # Reinterpret float bits as int32 (preserving bit pattern)
-        depth_f32 = depths[batch_id, cam_id, gauss_id]
+        depth_f32 = depths[image_id, gauss_id]
         depth_id = struct.unpack("i", struct.pack("f", depth_f32))[0]
         # Store in a 64-bit int, zero-extending to lower 32 bits
         depth_id = int(depth_id) & 0xFFFFFFFF  # Ensures upper 32 bits are zero
 
-        tile_min = tile_mins[batch_id, cam_id, gauss_id]
-        tile_max = tile_maxs[batch_id, cam_id, gauss_id]
+        tile_min = tile_mins[image_id, gauss_id]
+        tile_max = tile_maxs[image_id, gauss_id]
         for y in range(tile_min[1], tile_max[1]):
             for x in range(tile_min[0], tile_max[0]):
                 tile_id = y * tile_width + x
                 # isect_ids[curr_idx] = (
-                #     (batch_id << (camera_n_bits + tile_n_bits + 32))
-                #     | (cam_id << (tile_n_bits + 32))
+                #     (image_id << (tile_n_bits + 32))
                 #     | (tile_id << 32)
                 #     | depth_id
                 # )
                 isect_ids_lo[curr_idx] = depth_id
-                isect_ids_hi[curr_idx] = (
-                    (batch_id << (camera_n_bits + tile_n_bits))
-                    | (cam_id << tile_n_bits)
-                    | tile_id
-                )
+                isect_ids_hi[curr_idx] = (image_id << tile_n_bits) | tile_id
                 flatten_ids[curr_idx] = index  # flattened index
                 curr_idx += 1
 
-    for batch_id in range(B):
-        for cam_id in range(C):
-            for gauss_id in range(N):
-                kernel(batch_id, cam_id, gauss_id)
+    for image_id in range(I):
+        for gauss_id in range(N):
+            kernel(image_id, gauss_id)
 
     isect_ids = (isect_ids_hi.to(torch.int64) << 32) | (
         isect_ids_lo.to(torch.int64) & 0xFFFFFFFF
@@ -479,13 +469,13 @@ def _isect_tiles(
         isect_ids, sort_indices = torch.sort(isect_ids)
         flatten_ids = flatten_ids[sort_indices]
 
-    tiles_per_gauss = tiles_per_gauss.reshape(batch_dims + (C, N))
-    return tiles_per_gauss.int(), isect_ids, flatten_ids
+    tiles_per_gauss = tiles_per_gauss.reshape(image_dims + (N,)).int()
+    return tiles_per_gauss, isect_ids, flatten_ids
 
 
 @torch.no_grad()
 def _isect_offset_encode(
-    isect_ids: Tensor, B: int, C: int, tile_width: int, tile_height: int
+    isect_ids: Tensor, I: int, tile_width: int, tile_height: int
 ) -> Tensor:
     """Pytorch implementation of `gsplat.cuda._wrapper.isect_offset_encode()`.
 
@@ -494,21 +484,19 @@ def _isect_offset_encode(
         This is a minimal implementation of the fully fused version, which has more
         arguments. Not all arguments are supported.
     """
-    cam_n_bits = C.bit_length()
     tile_n_bits = (tile_width * tile_height).bit_length()
     tile_counts = torch.zeros(
-        (B, C, tile_height, tile_width), dtype=torch.int64, device=isect_ids.device
+        (I, tile_height, tile_width), dtype=torch.int64, device=isect_ids.device
     )
 
     isect_ids_uq, counts = torch.unique_consecutive(isect_ids >> 32, return_counts=True)
 
-    batch_ids_uq = isect_ids_uq >> (tile_n_bits + cam_n_bits)
-    cam_ids_uq = (isect_ids_uq >> tile_n_bits) & ((1 << cam_n_bits) - 1)
+    image_ids_uq = isect_ids_uq >> tile_n_bits
     tile_ids_uq = isect_ids_uq & ((1 << tile_n_bits) - 1)
     tile_ids_x_uq = tile_ids_uq % tile_width
     tile_ids_y_uq = tile_ids_uq // tile_width
 
-    tile_counts[batch_ids_uq, cam_ids_uq, tile_ids_y_uq, tile_ids_x_uq] = counts
+    tile_counts[image_ids_uq, tile_ids_y_uq, tile_ids_x_uq] = counts
 
     cum_tile_counts = torch.cumsum(tile_counts.flatten(), dim=0).reshape_as(tile_counts)
     offsets = cum_tile_counts - tile_counts
