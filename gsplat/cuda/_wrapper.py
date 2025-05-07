@@ -281,6 +281,7 @@ def fully_fused_projection(
 
         If `packed` is True:
 
+        - **batch_ids**. The row indices of the projected Gaussians. Int32 tensor of shape [nnz].
         - **camera_ids**. The row indices of the projected Gaussians. Int32 tensor of shape [nnz].
         - **gaussian_ids**. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].
         - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz, 2].
@@ -455,7 +456,7 @@ def isect_offset_encode(
         tile_height: Tile height.
 
     Returns:
-        Offsets. [..., tile_height, tile_width]
+        Offsets. [I, tile_height, tile_width]
     """
     return _make_lazy_cuda_func("intersect_offset")(
         isect_ids.contiguous(), n_images, tile_width, tile_height
@@ -1031,12 +1032,12 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        means: Tensor,  # [B, N, 3]
-        covars: Tensor,  # [B, N, 6] or None
-        quats: Tensor,  # [B, N, 4] or None
-        scales: Tensor,  # [B, N, 3] or None
-        viewmats: Tensor,  # [B, C, 4, 4]
-        Ks: Tensor,  # [B, C, 3, 3]
+        means: Tensor,  # [..., N, 3]
+        covars: Tensor,  # [..., N, 6] or None
+        quats: Tensor,  # [..., N, 4] or None
+        scales: Tensor,  # [..., N, 3] or None
+        viewmats: Tensor,  # [..., C, 4, 4]
+        Ks: Tensor,  # [..., C, 3, 3]
         width: int,
         height: int,
         eps2d: float,
@@ -1046,7 +1047,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         sparse_grad: bool,
         calc_compensations: bool,
         camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
-        opacities: Optional[Tensor] = None,  # [B, N] or None
+        opacities: Optional[Tensor] = None,  # [..., N] or None
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
@@ -1170,6 +1171,10 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             sparse_grad,
         )
 
+        if sparse_grad:
+            batch_dims = means.shape[:-2]
+            B = math.prod(batch_dims)
+            N = means.shape[-2]
         if not ctx.needs_input_grad[0]:
             v_means = None
         else:
@@ -1181,9 +1186,10 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
                 v_means = torch.sparse_coo_tensor(
                     indices=torch.stack([batch_ids, gaussian_ids]),
                     values=v_means,  # [nnz, 3]
-                    size=means.size(),  # [B, N, 3]
+                    size=(B, N, 3),
                     is_coalesced=len(viewmats) == 1,
                 )
+                v_means = v_means.reshape(batch_dims + (N, 3))
         if not ctx.needs_input_grad[1]:
             v_covars = None
         else:
@@ -1191,9 +1197,10 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
                 v_covars = torch.sparse_coo_tensor(
                     indices=torch.stack([batch_ids, gaussian_ids]),
                     values=v_covars,  # [nnz, 6]
-                    size=covars.size(),  # [B, N, 6]
+                    size=(B, N, 6),
                     is_coalesced=len(viewmats) == 1,
                 )
+                v_covars = v_covars.reshape(batch_dims + (N, 6))
         if not ctx.needs_input_grad[2]:
             v_quats = None
         else:
@@ -1201,9 +1208,10 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
                 v_quats = torch.sparse_coo_tensor(
                     indices=torch.stack([batch_ids, gaussian_ids]),
                     values=v_quats,  # [nnz, 4]
-                    size=quats.size(),  # [B, N, 4]
+                    size=(B, N, 4),
                     is_coalesced=len(viewmats) == 1,
                 )
+                v_quats = v_quats.reshape(batch_dims + (N, 4))
         if not ctx.needs_input_grad[3]:
             v_scales = None
         else:
@@ -1211,9 +1219,10 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
                 v_scales = torch.sparse_coo_tensor(
                     indices=torch.stack([batch_ids, gaussian_ids]),
                     values=v_scales,  # [nnz, 3]
-                    size=scales.size(),  # [B, N, 3]
+                    size=(B, N, 3),
                     is_coalesced=len(viewmats) == 1,
                 )
+                v_scales = v_scales.reshape(batch_dims + (N, 3))
         if not ctx.needs_input_grad[4]:
             v_viewmats = None
 

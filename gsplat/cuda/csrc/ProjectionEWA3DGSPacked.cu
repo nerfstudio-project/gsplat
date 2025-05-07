@@ -269,13 +269,13 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
 
 void launch_projection_ewa_3dgs_packed_fwd_kernel(
     // inputs
-    const at::Tensor means,                // [B, N, 3]
-    const at::optional<at::Tensor> covars, // [B, N, 6] optional
-    const at::optional<at::Tensor> quats,  // [B, N, 4] optional
-    const at::optional<at::Tensor> scales, // [B, N, 3] optional
-    const at::optional<at::Tensor> opacities, // [B, N] optional
-    const at::Tensor viewmats,             // [B, C, 4, 4]
-    const at::Tensor Ks,                   // [B, C, 3, 3]
+    const at::Tensor means,                // [..., N, 3]
+    const at::optional<at::Tensor> covars, // [..., N, 6] optional
+    const at::optional<at::Tensor> quats,  // [..., N, 4] optional
+    const at::optional<at::Tensor> scales, // [..., N, 3] optional
+    const at::optional<at::Tensor> opacities, // [..., N] optional
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
@@ -286,10 +286,10 @@ void launch_projection_ewa_3dgs_packed_fwd_kernel(
         block_accum, // [B * C * blocks_per_row] packing helper
     const CameraModelType camera_model,
     // outputs
-    at::optional<at::Tensor> block_cnts, // [B * C * blocks_per_row] packing helper
-    at::optional<at::Tensor> indptr,     // [B * C + 1]
-    at::optional<at::Tensor> batch_ids, // [nnz]
-    at::optional<at::Tensor> camera_ids, // [nnz]
+    at::optional<at::Tensor> block_cnts,   // [B * C * blocks_per_row] packing helper
+    at::optional<at::Tensor> indptr,       // [B * C + 1]
+    at::optional<at::Tensor> batch_ids,    // [nnz]
+    at::optional<at::Tensor> camera_ids,   // [nnz]
     at::optional<at::Tensor> gaussian_ids, // [nnz]
     at::optional<at::Tensor> radii,        // [nnz, 2]
     at::optional<at::Tensor> means2d,      // [nnz, 2]
@@ -297,9 +297,9 @@ void launch_projection_ewa_3dgs_packed_fwd_kernel(
     at::optional<at::Tensor> conics,       // [nnz, 3]
     at::optional<at::Tensor> compensations // [nnz] optional
 ) {
-    uint32_t B = means.size(0);    // number of batches
-    uint32_t N = means.size(1);    // number of gaussians
-    uint32_t C = viewmats.size(1); // number of cameras
+    uint32_t N = means.size(-2);          // number of gaussians
+    uint32_t C = viewmats.size(-3);       // number of cameras
+    uint32_t B = means.numel() / (N * 3); // number of batches
 
     uint32_t nrows = B * C;
     uint32_t ncols = N;
@@ -662,12 +662,12 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
 
 void launch_projection_ewa_3dgs_packed_bwd_kernel(
     // fwd inputs
-    const at::Tensor means,                // [B, N, 3]
-    const at::optional<at::Tensor> covars, // [B, N, 6]
-    const at::optional<at::Tensor> quats,  // [B, N, 4]
-    const at::optional<at::Tensor> scales, // [B, N, 3]
-    const at::Tensor viewmats,             // [B, C, 4, 4]
-    const at::Tensor Ks,                   // [B, C, 3, 3]
+    const at::Tensor means,                // [..., N, 3]
+    const at::optional<at::Tensor> covars, // [..., N, 6]
+    const at::optional<at::Tensor> quats,  // [..., N, 4]
+    const at::optional<at::Tensor> scales, // [..., N, 3]
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
@@ -685,15 +685,15 @@ void launch_projection_ewa_3dgs_packed_bwd_kernel(
     const at::optional<at::Tensor> v_compensations, // [nnz] optional
     const bool sparse_grad,
     // grad inputs
-    at::Tensor v_means,                 // [B, N, 3] or [nnz, 3]
-    at::optional<at::Tensor> v_covars,  // [B, N, 6] or [nnz, 6] Optional
-    at::optional<at::Tensor> v_quats,   // [B, N, 4] or [nnz, 4] Optional
-    at::optional<at::Tensor> v_scales,  // [B, N, 3] or [nnz, 3] Optional
-    at::optional<at::Tensor> v_viewmats // [B, C, 4, 4] Optional
+    at::Tensor v_means,                 // [..., N, 3] or [nnz, 3]
+    at::optional<at::Tensor> v_covars,  // [..., N, 6] or [nnz, 6] Optional
+    at::optional<at::Tensor> v_quats,   // [..., N, 4] or [nnz, 4] Optional
+    at::optional<at::Tensor> v_scales,  // [..., N, 3] or [nnz, 3] Optional
+    at::optional<at::Tensor> v_viewmats // [..., C, 4, 4] Optional
 ) {
-    uint32_t B = means.size(0);    // number of gaussians
-    uint32_t N = means.size(1);    // number of gaussians
-    uint32_t C = viewmats.size(1); // number of cameras
+    uint32_t N = means.size(-2);          // number of gaussians
+    uint32_t C = viewmats.size(-3);       // number of cameras
+    uint32_t B = means.numel() / (N * 3); // number of batches
     uint32_t nnz = batch_ids.size(0);
 
     dim3 threads(256);

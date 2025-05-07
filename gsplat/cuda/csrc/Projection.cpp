@@ -287,13 +287,13 @@ std::tuple<
     at::Tensor,
     at::Tensor>
 projection_ewa_3dgs_packed_fwd(
-    const at::Tensor means,                // [B, N, 3]
-    const at::optional<at::Tensor> covars, // [B, N, 6] optional
-    const at::optional<at::Tensor> quats,  // [B, N, 4] optional
-    const at::optional<at::Tensor> scales, // [B, N, 3] optional
-    const at::optional<at::Tensor> opacities, // [B, N] optional
-    const at::Tensor viewmats,             // [B, C, 4, 4]
-    const at::Tensor Ks,                   // [B, C, 3, 3]
+    const at::Tensor means,                // [..., N, 3]
+    const at::optional<at::Tensor> covars, // [..., N, 6] optional
+    const at::optional<at::Tensor> quats,  // [..., N, 4] optional
+    const at::optional<at::Tensor> scales, // [..., N, 3] optional
+    const at::optional<at::Tensor> opacities, // [..., N] optional
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
@@ -315,9 +315,9 @@ projection_ewa_3dgs_packed_fwd(
     CHECK_INPUT(viewmats);
     CHECK_INPUT(Ks);
 
-    uint32_t B = means.size(0);    // number of gaussians
-    uint32_t N = means.size(1);    // number of gaussians
-    uint32_t C = viewmats.size(1); // number of cameras
+    uint32_t N = means.size(-2);          // number of gaussians
+    uint32_t C = viewmats.size(-3);       // number of cameras
+    uint32_t B = means.numel() / (N * 3); // number of batches
     auto opt = means.options();
 
     uint32_t nrows = B * C;
@@ -433,22 +433,22 @@ projection_ewa_3dgs_packed_fwd(
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 projection_ewa_3dgs_packed_bwd(
     // fwd inputs
-    const at::Tensor means,                // [B, N, 3]
-    const at::optional<at::Tensor> covars, // [B, N, 6]
-    const at::optional<at::Tensor> quats,  // [B, N, 4]
-    const at::optional<at::Tensor> scales, // [B, N, 3]
-    const at::Tensor viewmats,             // [B, C, 4, 4]
-    const at::Tensor Ks,                   // [B, C, 3, 3]
+    const at::Tensor means,                // [..., N, 3]
+    const at::optional<at::Tensor> covars, // [..., N, 6]
+    const at::optional<at::Tensor> quats,  // [..., N, 4]
+    const at::optional<at::Tensor> scales, // [..., N, 3]
+    const at::Tensor viewmats,             // [..., C, 4, 4]
+    const at::Tensor Ks,                   // [..., C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
     const CameraModelType camera_model,
     // fwd outputs
-    const at::Tensor batch_ids,                   // [nnz]
-    const at::Tensor camera_ids,                  // [nnz]
-    const at::Tensor gaussian_ids,                // [nnz]
-    const at::Tensor conics,                      // [nnz, 3]
-    const at::optional<at::Tensor> compensations, // [nnz] optional
+    const at::Tensor batch_ids,                     // [nnz]
+    const at::Tensor camera_ids,                    // [nnz]
+    const at::Tensor gaussian_ids,                  // [nnz]
+    const at::Tensor conics,                        // [nnz, 3]
+    const at::optional<at::Tensor> compensations,   // [nnz] optional
     // grad outputs
     const at::Tensor v_means2d,                     // [nnz, 2]
     const at::Tensor v_depths,                      // [nnz]
@@ -483,11 +483,7 @@ projection_ewa_3dgs_packed_bwd(
         assert(compensations.has_value());
     }
 
-    uint32_t B = means.size(0);    // number of batches
-    // uint32_t N = means.size(1);    // number of gaussians
-    uint32_t C = viewmats.size(1); // number of cameras
-    uint32_t nnz = camera_ids.size(0);
-
+    uint32_t nnz = batch_ids.size(0);
     at::Tensor v_means, v_covars, v_quats, v_scales, v_viewmats;
     if (sparse_grad) {
         v_means = at::zeros({nnz, 3}, means.options());
@@ -498,7 +494,7 @@ projection_ewa_3dgs_packed_bwd(
             v_scales = at::zeros({nnz, 3}, scales.value().options());
         }
         if (viewmats_requires_grad) {
-            v_viewmats = at::zeros({B, C, 4, 4}, viewmats.options());
+            v_viewmats = at::zeros_like(viewmats);
         }
     } else {
         v_means = at::zeros_like(means);

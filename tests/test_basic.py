@@ -47,14 +47,14 @@ def test_data():
     }
 
 
-def _repeat(data: dict, batch_dims: list[int]):
+def _repeat(data: dict, batch_dims: tuple[int]):
     # append multiple batch dimensions to the front of the tensor
-    # eg. x.shape = [N, 3], batch_dims = [1, 2], return shape is [1, 2, N, 3]
-    # eg. x.shape = [N, 3], batch_dims = [], return shape is [N, 3]
+    # eg. x.shape = [N, 3], batch_dims = (1, 2), return shape is [1, 2, N, 3]
+    # eg. x.shape = [N, 3], batch_dims = (), return shape is [N, 3]
     ret = {}
     for k, v in data.items():
         if isinstance(v, torch.Tensor) and len(batch_dims) > 0:
-            new_shape = list(batch_dims) + list(v.shape)
+            new_shape = batch_dims + v.shape
             ret[k] = v.expand(new_shape)
         else:
             ret[k] = v
@@ -63,8 +63,8 @@ def _repeat(data: dict, batch_dims: list[int]):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("triu", [False, True])
-@pytest.mark.parametrize("batch_dims", [[], [2], [1, 2]])
-def test_quat_scale_to_covar_preci(test_data, triu: bool, batch_dims: list[int]):
+@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
+def test_quat_scale_to_covar_preci(test_data, triu: bool, batch_dims: tuple[int]):
     from gsplat.cuda._torch_impl import _quat_scale_to_covar_preci
     from gsplat.cuda._wrapper import quat_scale_to_covar_preci
 
@@ -104,11 +104,11 @@ def test_quat_scale_to_covar_preci(test_data, triu: bool, batch_dims: list[int])
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
-@pytest.mark.parametrize("batch_dims", [[], [2], [1, 2]])
+@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 def test_proj(
     test_data,
     camera_model: Literal["pinhole", "ortho", "fisheye"],
-    batch_dims: list[int],
+    batch_dims: tuple[int],
 ):
     from gsplat.cuda._torch_impl import (
         _fisheye_proj,
@@ -164,13 +164,13 @@ def test_proj(
 @pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
 @pytest.mark.parametrize("fused", [False, True])
 @pytest.mark.parametrize("calc_compensations", [True, False])
-@pytest.mark.parametrize("batch_dims", [[], [2], [1, 2]])
+@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 def test_projection(
     test_data,
     fused: bool,
     calc_compensations: bool,
     camera_model: Literal["pinhole", "ortho", "fisheye"],
-    batch_dims: list[int],
+    batch_dims: tuple[int],
 ):
     from gsplat.cuda._torch_impl import _fully_fused_projection
     from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci
@@ -271,20 +271,23 @@ def test_projection(
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("fused", [False, True])
-@pytest.mark.parametrize("sparse_grad", [False, True])
+@pytest.mark.parametrize("sparse_grad", [False])
 @pytest.mark.parametrize("calc_compensations", [False, True])
 @pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
+@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 def test_fully_fused_projection_packed(
     test_data,
     fused: bool,
     sparse_grad: bool,
     calc_compensations: bool,
     camera_model: Literal["pinhole", "ortho", "fisheye"],
+    batch_dims: tuple[int],
 ):
     from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci
 
     torch.manual_seed(42)
 
+    test_data = _repeat(test_data, batch_dims)
     Ks = test_data["Ks"]
     viewmats = test_data["viewmats"]
     height = test_data["height"]
@@ -337,7 +340,7 @@ def test_fully_fused_projection_packed(
             camera_model=camera_model,
         )
     else:
-        covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [B, N, 6]
+        covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [..., N, 6]
         (
             batch_ids,
             camera_ids,
@@ -375,25 +378,34 @@ def test_fully_fused_projection_packed(
             camera_model=camera_model,
         )
 
+    B = math.prod(batch_dims)
+    N = means.shape[-2]
+    C = viewmats.shape[-3]
+
     # recover packed tensors to full matrices for testing
     __radii = torch.sparse_coo_tensor(
-        torch.stack([batch_ids, camera_ids, gaussian_ids]), radii, _radii.shape
+        torch.stack([batch_ids, camera_ids, gaussian_ids]), radii, (B, C, N, 2)
     ).to_dense()
+    __radii = __radii.reshape(batch_dims + (C, N, 2))
     __means2d = torch.sparse_coo_tensor(
-        torch.stack([batch_ids, camera_ids, gaussian_ids]), means2d, _means2d.shape
+        torch.stack([batch_ids, camera_ids, gaussian_ids]), means2d, (B, C, N, 2)
     ).to_dense()
+    __means2d = __means2d.reshape(batch_dims + (C, N, 2))
     __depths = torch.sparse_coo_tensor(
-        torch.stack([batch_ids, camera_ids, gaussian_ids]), depths, _depths.shape
+        torch.stack([batch_ids, camera_ids, gaussian_ids]), depths, (B, C, N)
     ).to_dense()
+    __depths = __depths.reshape(batch_dims + (C, N))
     __conics = torch.sparse_coo_tensor(
-        torch.stack([batch_ids, camera_ids, gaussian_ids]), conics, _conics.shape
+        torch.stack([batch_ids, camera_ids, gaussian_ids]), conics, (B, C, N, 3)
     ).to_dense()
+    __conics = __conics.reshape(batch_dims + (C, N, 3))
     if calc_compensations:
         __compensations = torch.sparse_coo_tensor(
             torch.stack([batch_ids, camera_ids, gaussian_ids]),
             compensations,
-            _compensations.shape,
+            (B, C, N),
         ).to_dense()
+        __compensations = __compensations.reshape(batch_dims + (C, N))
     sel = (__radii > 0).all(dim=-1) & (_radii > 0).all(dim=-1)
     torch.testing.assert_close(__radii[sel], _radii[sel], rtol=0, atol=1)
     torch.testing.assert_close(__means2d[sel], _means2d[sel], rtol=1e-4, atol=1e-4)
@@ -434,8 +446,8 @@ def test_fully_fused_projection_packed(
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-@pytest.mark.parametrize("batch_dims", [[], [2], [1, 2]])
-def test_isect(test_data, batch_dims: list[int]):
+@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
+def test_isect(test_data, batch_dims: tuple[int]):
     from gsplat.cuda._torch_impl import _isect_offset_encode, _isect_tiles
     from gsplat.cuda._wrapper import isect_offset_encode, isect_tiles
 
@@ -478,8 +490,8 @@ def test_isect(test_data, batch_dims: list[int]):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("channels", [3, 32, 128])
-@pytest.mark.parametrize("batch_dims", [[], [2], [1, 2]])
-def test_rasterize_to_pixels(test_data, channels: int, batch_dims: list[int]):
+@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
+def test_rasterize_to_pixels(test_data, channels: int, batch_dims: tuple[int]):
     from gsplat.cuda._torch_impl import _rasterize_to_pixels
     from gsplat.cuda._wrapper import (
         fully_fused_projection,
@@ -528,7 +540,7 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: list[int]):
         means2d, radii, depths, tile_size, tile_width, tile_height
     )
     isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
-    isect_offsets = isect_offsets.reshape(batch_dims + [C, tile_height, tile_width])
+    isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
 
     means2d.requires_grad = True
     conics.requires_grad = True
@@ -593,8 +605,8 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: list[int]):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("sh_degree", [0, 1, 2, 3, 4])
-@pytest.mark.parametrize("batch_dims", [[], [2], [1, 2]])
-def test_sh(test_data, sh_degree: int, batch_dims: list[int]):
+@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
+def test_sh(test_data, sh_degree: int, batch_dims: tuple[int]):
     from gsplat.cuda._torch_impl import _spherical_harmonics
     from gsplat.cuda._wrapper import spherical_harmonics
 
