@@ -255,15 +255,15 @@ def _world_to_cam(
     """PyTorch implementation of world to camera transformation on Gaussians.
 
     Args:
-        means: Gaussian means in world coordinate system. [B, N, 3].
-        covars: Gaussian covariances in world coordinate system. [B, N, 3, 3].
-        viewmats: world to camera transformation matrices. [B, C, 4, 4].
+        means: Gaussian means in world coordinate system. [..., N, 3].
+        covars: Gaussian covariances in world coordinate system. [..., N, 3, 3].
+        viewmats: world to camera transformation matrices. [..., C, 4, 4].
 
     Returns:
         A tuple:
 
-        - **means_c**: Gaussian means in camera coordinate system. [B, C, N, 3].
-        - **covars_c**: Gaussian covariances in camera coordinate system. [B, C, N, 3, 3].
+        - **means_c**: Gaussian means in camera coordinate system. [..., C, N, 3].
+        - **covars_c**: Gaussian covariances in camera coordinate system. [..., C, N, 3, 3].
     """
     batch_dims = means.shape[:-2]
     N = means.shape[-2]

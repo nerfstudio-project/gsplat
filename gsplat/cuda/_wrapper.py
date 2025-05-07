@@ -18,22 +18,22 @@ def _make_lazy_cuda_func(name: str) -> Callable:
 
 
 def world_to_cam(
-    means: Tensor,  # [B, N, 3]
-    covars: Tensor,  # [B, N, 3, 3]
-    viewmats: Tensor,  # [B, C, 4, 4]
+    means: Tensor,  # [..., N, 3]
+    covars: Tensor,  # [..., N, 3, 3]
+    viewmats: Tensor,  # [..., C, 4, 4]
 ) -> Tuple[Tensor, Tensor]:
     """Transforms Gaussians from world to camera coordinate system.
 
     Args:
-        means: Gaussian means. [N, 3]
-        covars: Gaussian covariances. [N, 3, 3]
-        viewmats: World-to-camera transformation matrices. [C, 4, 4]
+        means: Gaussian means. [..., N, 3]
+        covars: Gaussian covariances. [..., N, 3, 3]
+        viewmats: World-to-camera transformation matrices. [..., C, 4, 4]
 
     Returns:
         A tuple:
 
-        - **Gaussian means in camera coordinate system**. [C, N, 3]
-        - **Gaussian covariances in camera coordinate system**. [C, N, 3, 3]
+        - **Gaussian means in camera coordinate system**. [..., C, N, 3]
+        - **Gaussian covariances in camera coordinate system**. [..., C, N, 3, 3]
     """
     from ._torch_impl import _world_to_cam
 
@@ -43,11 +43,12 @@ def world_to_cam(
         "This function will be completely removed in a future release.",
         DeprecationWarning,
     )
-    B, N, _ = means.shape
-    C = viewmats.shape[1]
-    assert means.shape == (B, N, 3), means.shape
-    assert covars.shape == (B, N, 3, 3), covars.shape
-    assert viewmats.shape == (B, C, 4, 4), viewmats.shape
+    batch_dims = means.shape[:-2]
+    N = means.shape[-2]
+    C = viewmats.shape[-3]
+    assert means.shape == batch_dims + (N, 3), means.shape
+    assert covars.shape == batch_dims + (N, 3, 3), covars.shape
+    assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     means = means.contiguous()
     covars = covars.contiguous()
     viewmats = viewmats.contiguous()
@@ -149,9 +150,9 @@ def quat_scale_to_covar_preci(
 
 
 def persp_proj(
-    means: Tensor,  # [B, C, N, 3]
-    covars: Tensor,  # [B, C, N, 3, 3]
-    Ks: Tensor,  # [B, C, 3, 3]
+    means: Tensor,  # [..., C, N, 3]
+    covars: Tensor,  # [..., C, N, 3, 3]
+    Ks: Tensor,  # [..., C, 3, 3]
     width: int,
     height: int,
 ) -> Tuple[Tensor, Tensor]:
@@ -159,17 +160,17 @@ def persp_proj(
     DEPRECATED: please use `proj` with `ortho=False` instead.
 
     Args:
-        means: Gaussian means. [B, C, N, 3]
-        covars: Gaussian covariances. [B, C, N, 3, 3]
-        Ks: Camera intrinsics. [B, C, 3, 3]
+        means: Gaussian means. [..., C, N, 3]
+        covars: Gaussian covariances. [..., C, N, 3, 3]
+        Ks: Camera intrinsics. [..., C, 3, 3]
         width: Image width.
         height: Image height.
 
     Returns:
         A tuple:
 
-        - **Projected means**. [B, C, N, 2]
-        - **Projected covariances**. [B, C, N, 2, 2]
+        - **Projected means**. [..., C, N, 2]
+        - **Projected covariances**. [..., C, N, 2, 2]
     """
     warnings.warn(
         "persp_proj is deprecated and will be removed in a future release. "
@@ -380,9 +381,9 @@ def isect_tiles(
     """Maps projected Gaussians to intersecting tiles.
 
     Args:
-        means2d: Projected Gaussian means. [B, C, N, 2] if packed is False, [nnz, 2] if packed is True.
-        radii: Maximum radii of the projected Gaussians. [B, C, N, 2] if packed is False, [nnz, 2] if packed is True.
-        depths: Z-depth of the projected Gaussians. [B, C, N] if packed is False, [nnz] if packed is True.
+        means2d: Projected Gaussian means. [..., N, 2] if packed is False, [nnz, 2] if packed is True.
+        radii: Maximum radii of the projected Gaussians. [..., N, 2] if packed is False, [nnz, 2] if packed is True.
+        depths: Z-depth of the projected Gaussians. [..., N] if packed is False, [nnz] if packed is True.
         tile_size: Tile size.
         tile_width: Tile width.
         tile_height: Tile height.
@@ -1698,7 +1699,7 @@ def rasterize_to_pixels_2dgs(
 
     Args:
         means2d: Projected Gaussian means. [..., N, 2] if packed is False, [nnz, 2] if packed is True.
-        ray_transforms: transformation matrices that transforms xy-planes in pixel spaces into splat coordinates. [B, C, N, 3, 3] if packed is False, [nnz, channels] if packed is True.
+        ray_transforms: transformation matrices that transforms xy-planes in pixel spaces into splat coordinates. [..., N, 3, 3] if packed is False, [nnz, channels] if packed is True.
         colors: Gaussian colors or ND features. [..., N, channels] if packed is False, [nnz, channels] if packed is True.
         opacities: Gaussian opacities that support per-view values. [..., N] if packed is False, [nnz] if packed is True.
         normals: The normals in camera space. [..., N, 3] if packed is False, [nnz, 3] if packed is True.
