@@ -4,7 +4,6 @@ from einops import repeat
 import pytest
 import torch
 
-from gsplat._helper import load_test_data
 from tests.test_basic import expand
 
 device = torch.device("cuda:0")
@@ -46,7 +45,7 @@ def test_data():
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
-def test_projection_2dgs(test_data, batch_dims):
+def test_projection_2dgs(test_data, batch_dims: tuple[int]):
     from gsplat.cuda._torch_impl_2dgs import _fully_fused_projection_2dgs
     from gsplat.cuda._wrapper import fully_fused_projection_2dgs
 
@@ -118,9 +117,7 @@ def test_projection_2dgs(test_data, batch_dims):
 @pytest.mark.parametrize("sparse_grad", [False])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 def test_fully_fused_projection_packed_2dgs(
-    test_data,
-    sparse_grad: bool,
-    batch_dims: tuple[int],
+    test_data, sparse_grad: bool, batch_dims: tuple[int]
 ):
     from gsplat.cuda._wrapper import fully_fused_projection_2dgs
 
@@ -241,8 +238,9 @@ def test_fully_fused_projection_packed_2dgs(
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-# @pytest.mark.parametrize("channels", [3, 32, 128])
-def test_rasterize_to_pixels_2dgs(test_data):
+@pytest.mark.parametrize("channels", [3, 31])
+@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
+def test_rasterize_to_pixels_2dgs(test_data, channels: int, batch_dims: tuple[int]):
     from gsplat.cuda._torch_impl_2dgs import _rasterize_to_pixels_2dgs
     from gsplat.cuda._wrapper import (
         fully_fused_projection_2dgs,
@@ -251,6 +249,19 @@ def test_rasterize_to_pixels_2dgs(test_data):
         rasterize_to_pixels_2dgs,
     )
 
+    torch.manual_seed(42)
+
+    N = test_data["means"].shape[-2]
+    C = test_data["viewmats"].shape[-3]
+    I = math.prod(batch_dims) * C
+    test_data.update(
+        {
+            "colors": torch.rand(C, N, channels, device=device),
+            "backgrounds": torch.rand(C, channels, device=device),
+        }
+    )
+
+    test_data = expand(test_data, batch_dims)
     Ks = test_data["Ks"]
     viewmats = test_data["viewmats"]
     height = test_data["height"]
@@ -258,19 +269,15 @@ def test_rasterize_to_pixels_2dgs(test_data):
     quats = test_data["quats"]
     scales = test_data["scales"]
     means = test_data["means"]
-    colors = test_data["colors"]
     opacities = test_data["opacities"]
-
-    B = means.shape[0]
-    N = means.shape[1]
-    C = viewmats.shape[1]
+    colors = test_data["colors"]
+    backgrounds = test_data["backgrounds"]
 
     radii, means2d, depths, ray_transforms, normals = fully_fused_projection_2dgs(
         means, quats, scales, viewmats, Ks, width, height
     )
-
-    colors = torch.concatenate((colors, depths.unsqueeze(-1)), dim=-1)
-    backgrounds = torch.zeros((B, C, colors.shape[-1]), device=device)
+    colors = torch.cat([colors, depths[..., None]], dim=-1)
+    backgrounds = torch.zeros(batch_dims + (C, channels + 1), device=device)
 
     # Identify intersecting tiles
     tile_size = 16
@@ -279,7 +286,8 @@ def test_rasterize_to_pixels_2dgs(test_data):
     _, isect_ids, flatten_ids = isect_tiles(
         means2d, radii, depths, tile_size, tile_width, tile_height
     )
-    isect_offsets = isect_offset_encode(isect_ids, B, C, tile_width, tile_height)
+    isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
+    isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
     densify = torch.zeros_like(means2d, device=means2d.device)
 
     means2d.requires_grad = True

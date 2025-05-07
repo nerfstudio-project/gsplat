@@ -14,32 +14,31 @@ namespace cg = cooperative_groups;
 
 template <uint32_t CDIM, typename scalar_t>
 __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
-    const uint32_t B,        // number of batches
-    const uint32_t C,        // number of cameras
+    const uint32_t I,        // number of images
     const uint32_t N,        // number of gaussians
     const uint32_t n_isects, // number of ray-primitive intersections.
     const bool packed,       // whether the input tensors are packed
     // fwd inputs
     const vec2
-        *__restrict__ means2d, // Projected Gaussian means. [B, C, N, 2] if
+        *__restrict__ means2d, // Projected Gaussian means. [..., N, 2] if
                                // packed is False, [nnz, 2] if packed is True.
     const scalar_t
         *__restrict__ ray_transforms, // transformation matrices that transforms
                                       // xy-planes in pixel spaces into splat
-                                      // coordinates. [B, C, N, 3, 3] if packed is
+                                      // coordinates. [..., N, 3, 3] if packed is
                                       // False, [nnz, channels] if packed is
                                       // True. This is (KWH)^{-1} in the paper
                                       // (takes screen [x,y] and map to [u,v])
-    const scalar_t *__restrict__ colors,  // [B, C, N, CDIM] or [nnz, CDIM]  //
+    const scalar_t *__restrict__ colors,  // [..., N, CDIM] or [nnz, CDIM]  //
                                           // Gaussian colors or ND features.
-    const scalar_t *__restrict__ normals, // [B, C, N, 3] or [nnz, 3] // The
+    const scalar_t *__restrict__ normals, // [..., N, 3] or [nnz, 3] // The
                                           // normals in camera space.
-    const scalar_t *__restrict__ opacities, // [B, C, N] or [nnz] // Gaussian
+    const scalar_t *__restrict__ opacities, // [..., N] or [nnz] // Gaussian
                                             // opacities that support per-view
                                             // values.
-    const scalar_t *__restrict__ backgrounds, // [B, C, CDIM] // Background colors
+    const scalar_t *__restrict__ backgrounds, // [..., CDIM] // Background colors
                                               // on camera basis
-    const bool *__restrict__ masks, // [B, C, tile_height, tile_width]     //
+    const bool *__restrict__ masks, // [..., tile_height, tile_width]     //
                                     // Optional tile mask to skip rendering GS
                                     // to masked tiles.
 
@@ -48,45 +47,45 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
     const uint32_t tile_size,
     const uint32_t tile_width,
     const uint32_t tile_height,
-    const int32_t *__restrict__ tile_offsets, // [B, C, tile_height, tile_width]
+    const int32_t *__restrict__ tile_offsets, // [..., tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
 
     // fwd outputs
-    const scalar_t *__restrict__ render_colors, // [B, C, image_height,
+    const scalar_t *__restrict__ render_colors, // [..., image_height,
                                                 // image_width, CDIM]
     const scalar_t
-        *__restrict__ render_alphas, // [B, C, image_height, image_width, 1]
+        *__restrict__ render_alphas, // [..., image_height, image_width, 1]
     const int32_t
-        *__restrict__ last_ids, // [B, C, image_height, image_width]     // the id
+        *__restrict__ last_ids, // [..., image_height, image_width]     // the id
                                 // to last gaussian that got intersected
-    const int32_t *__restrict__ median_ids, // [B, C, image_height, image_width] //
+    const int32_t *__restrict__ median_ids, // [..., image_height, image_width] //
                                             // the id to the gaussian that
                                             // brings the opacity over 0.5
 
     // grad outputs
     const scalar_t
-        *__restrict__ v_render_colors, // [B, C, image_height, image_width,     //
+        *__restrict__ v_render_colors, // [..., image_height, image_width,     //
                                        // RGB CDIM]
     const scalar_t
-        *__restrict__ v_render_alphas, // [B, C, image_height, image_width, 1]  //
+        *__restrict__ v_render_alphas, // [..., image_height, image_width, 1]  //
                                        // total opacities.
     const scalar_t
-        *__restrict__ v_render_normals, // [B, C, image_height, image_width, 3]  //
+        *__restrict__ v_render_normals, // [..., image_height, image_width, 3]  //
                                         // camera space normals
     const scalar_t
-        *__restrict__ v_render_distort, // [B, C, image_height, image_width, 1]  //
+        *__restrict__ v_render_distort, // [..., image_height, image_width, 1]  //
                                         // mip-nerf 360 distorts
     const scalar_t
-        *__restrict__ v_render_median, // [B, C, image_height, image_width, 1]  //
+        *__restrict__ v_render_median, // [..., image_height, image_width, 1]  //
                                        // the median depth
 
     // grad inputs
-    vec2 *__restrict__ v_means2d_abs,        // [B, C, N, 2] or [nnz, 2]
-    vec2 *__restrict__ v_means2d,            // [B, C, N, 2] or [nnz, 2]
-    scalar_t *__restrict__ v_ray_transforms, // [B, C, N, 3, 3] or [nnz, 3, 3]
-    scalar_t *__restrict__ v_colors,         // [B, C, N, CDIM] or [nnz, CDIM]
-    scalar_t *__restrict__ v_opacities,      // [B, C, N] or [nnz]
-    scalar_t *__restrict__ v_normals,        // [B, C, N, 3] or [nnz, 3]
+    vec2 *__restrict__ v_means2d_abs,        // [..., N, 2] or [nnz, 2]
+    vec2 *__restrict__ v_means2d,            // [..., N, 2] or [nnz, 2]
+    scalar_t *__restrict__ v_ray_transforms, // [..., N, 3, 3] or [nnz, 3, 3]
+    scalar_t *__restrict__ v_colors,         // [..., N, CDIM] or [nnz, CDIM]
+    scalar_t *__restrict__ v_opacities,      // [..., N] or [nnz]
+    scalar_t *__restrict__ v_normals,        // [..., N, 3] or [nnz, 3]
     scalar_t *__restrict__ v_densify
 ) {
     /**
@@ -96,32 +95,32 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
      * ==============================
      */
     auto block = cg::this_thread_block();
-    uint32_t batch_camera_id = block.group_index().x;
+    uint32_t image_id = block.group_index().x;
     uint32_t tile_id =
         block.group_index().y * tile_width + block.group_index().z;
     uint32_t i = block.group_index().y * tile_size + block.thread_index().y;
     uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
 
-    tile_offsets += batch_camera_id * tile_height * tile_width;
-    render_alphas += batch_camera_id * image_height * image_width;
-    render_colors += batch_camera_id * image_height * image_width * CDIM;
+    tile_offsets += image_id * tile_height * tile_width;
+    render_alphas += image_id * image_height * image_width;
+    render_colors += image_id * image_height * image_width * CDIM;
 
-    last_ids += batch_camera_id * image_height * image_width;
-    median_ids += batch_camera_id * image_height * image_width;
+    last_ids += image_id * image_height * image_width;
+    median_ids += image_id * image_height * image_width;
 
-    v_render_colors += batch_camera_id * image_height * image_width * CDIM;
-    v_render_alphas += batch_camera_id * image_height * image_width;
-    v_render_normals += batch_camera_id * image_height * image_width * 3;
-    v_render_median += batch_camera_id * image_height * image_width;
+    v_render_colors += image_id * image_height * image_width * CDIM;
+    v_render_alphas += image_id * image_height * image_width;
+    v_render_normals += image_id * image_height * image_width * 3;
+    v_render_median += image_id * image_height * image_width;
 
     if (backgrounds != nullptr) {
-        backgrounds += batch_camera_id * CDIM;
+        backgrounds += image_id * CDIM;
     }
     if (masks != nullptr) {
-        masks += batch_camera_id * tile_height * tile_width;
+        masks += image_id * tile_height * tile_width;
     }
     if (v_render_distort != nullptr) {
-        v_render_distort += batch_camera_id * image_height * image_width;
+        v_render_distort += image_id * image_height * image_width;
     }
 
     // when the mask is provided, do nothing and return if
@@ -144,7 +143,7 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
     // which gaussians to look through in this tile
     int32_t range_start = tile_offsets[tile_id];
     int32_t range_end =
-        (batch_camera_id == B * C - 1) && (tile_id == tile_width * tile_height - 1)
+        (image_id == I - 1) && (tile_id == tile_width * tile_height - 1)
             ? n_isects
             : tile_offsets[tile_id + 1];
     const uint32_t block_size = block.size();
@@ -275,7 +274,7 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
          * Fetch Gaussian Primitives and STORE THEM IN REVERSE ORDER
          */
         if (idx >= range_start) {
-            int32_t g = flatten_ids[idx]; // flatten index in [B * C * N] or [nnz]
+            int32_t g = flatten_ids[idx]; // flatten index in [I * N] or [nnz]
             id_batch[tr] = g;
             const vec2 xy = means2d[g];
             const float opac = opacities[g];
@@ -625,7 +624,7 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
                 warpSum(v_xy_abs_local, warp);
             }
             warpSum(v_opacity_local, warp);
-            int32_t g = id_batch[t]; // flatten index in [C * N] or [nnz]
+            int32_t g = id_batch[t]; // flatten index in [I * N] or [nnz]
 
             /**
              * ==================================================
@@ -685,54 +684,53 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
 template <uint32_t CDIM>
 void launch_rasterize_to_pixels_2dgs_bwd_kernel(
     // Gaussian parameters
-    const at::Tensor means2d,                   // [B, C, N, 2] or [nnz, 2]
-    const at::Tensor ray_transforms,            // [B, C, N, 3, 3] or [nnz, 3, 3]
-    const at::Tensor colors,                    // [B, C, N, 3] or [nnz, 3]
-    const at::Tensor opacities,                 // [B, C, N] or [nnz]
-    const at::Tensor normals,                   // [B, C, N, 3] or [nnz, 3]
-    const at::Tensor densify,                   // [B, C, N, 2] or [nnz, 2]
-    const at::optional<at::Tensor> backgrounds, // [B, C, 3]
-    const at::optional<at::Tensor> masks,       // [B, C, tile_height, tile_width]
+    const at::Tensor means2d,                   // [..., N, 2] or [nnz, 2]
+    const at::Tensor ray_transforms,            // [..., N, 3, 3] or [nnz, 3, 3]
+    const at::Tensor colors,                    // [..., N, 3] or [nnz, 3]
+    const at::Tensor opacities,                 // [..., N] or [nnz]
+    const at::Tensor normals,                   // [..., N, 3] or [nnz, 3]
+    const at::Tensor densify,                   // [..., N, 2] or [nnz, 2]
+    const at::optional<at::Tensor> backgrounds, // [..., CDIM]
+    const at::optional<at::Tensor> masks,       // [..., tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
     // ray_crossions
-    const at::Tensor tile_offsets, // [B, C, tile_height, tile_width]
+    const at::Tensor tile_offsets, // [..., tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     // forward outputs
-    const at::Tensor render_colors, // [B, C, image_height, image_width, CDIM]
-    const at::Tensor render_alphas, // [B, C, image_height, image_width, 1]
-    const at::Tensor last_ids,      // [B, C, image_height, image_width]
-    const at::Tensor median_ids,    // [B, C, image_height, image_width]
+    const at::Tensor render_colors, // [..., image_height, image_width, CDIM]
+    const at::Tensor render_alphas, // [..., image_height, image_width, 1]
+    const at::Tensor last_ids,      // [..., image_height, image_width]
+    const at::Tensor median_ids,    // [..., image_height, image_width]
     // gradients of outputs
-    const at::Tensor v_render_colors,  // [B, C, image_height, image_width, 3]
-    const at::Tensor v_render_alphas,  // [B, C, image_height, image_width, 1]
-    const at::Tensor v_render_normals, // [B, C, image_height, image_width, 3]
-    const at::Tensor v_render_distort, // [B, C, image_height, image_width, 1]
-    const at::Tensor v_render_median,  // [B, C, image_height, image_width, 1]
+    const at::Tensor v_render_colors,  // [..., image_height, image_width, 3]
+    const at::Tensor v_render_alphas,  // [..., image_height, image_width, 1]
+    const at::Tensor v_render_normals, // [..., image_height, image_width, 3]
+    const at::Tensor v_render_distort, // [..., image_height, image_width, 1]
+    const at::Tensor v_render_median,  // [..., image_height, image_width, 1]
     // outputs
-    at::optional<at::Tensor> v_means2d_abs, // [B, C, N, 2] or [nnz, 2]
-    at::Tensor v_means2d,                   // [B, C, N, 2] or [nnz, 2]
-    at::Tensor v_ray_transforms,            // [B, C, N, 3, 3] or [nnz, 3, 3]
-    at::Tensor v_colors,                    // [B, C, N, 3] or [nnz, 3]
-    at::Tensor v_opacities,                 // [B, C, N] or [nnz]
-    at::Tensor v_normals,                   // [B, C, N, 3] or [nnz, 3]
-    at::Tensor v_densify                    // [B, C, N, 2] or [nnz, 2]
+    at::optional<at::Tensor> v_means2d_abs, // [..., N, 2] or [nnz, 2]
+    at::Tensor v_means2d,                   // [..., N, 2] or [nnz, 2]
+    at::Tensor v_ray_transforms,            // [..., N, 3, 3] or [nnz, 3, 3]
+    at::Tensor v_colors,                    // [..., N, 3] or [nnz, 3]
+    at::Tensor v_opacities,                 // [..., N] or [nnz]
+    at::Tensor v_normals,                   // [..., N, 3] or [nnz, 3]
+    at::Tensor v_densify                    // [..., N, 2] or [nnz, 2]
 ) {
     bool packed = means2d.dim() == 2;
 
-    uint32_t B = tile_offsets.size(0);         // number of batches
-    uint32_t C = tile_offsets.size(1);         // number of cameras
-    uint32_t N = packed ? 0 : means2d.size(2); // number of gaussians
-    uint32_t tile_height = tile_offsets.size(2);
-    uint32_t tile_width = tile_offsets.size(3);
+    uint32_t N = packed ? 0 : means2d.size(-2); // number of gaussians
+    uint32_t I = means2d.numel() / (N * 2);     // number of images
+    uint32_t tile_height = tile_offsets.size(-2);
+    uint32_t tile_width = tile_offsets.size(-1);
     uint32_t n_isects = flatten_ids.size(0);
 
     // Each block covers a tile on the image. In total there are
-    // B * C * tile_height * tile_width blocks.
+    // I * tile_height * tile_width blocks.
     dim3 threads = {tile_size, tile_size, 1};
-    dim3 grid = {B * C, tile_height, tile_width};
+    dim3 grid = {I, tile_height, tile_width};
 
     int64_t shmem_size =
         tile_size * tile_size *
@@ -761,8 +759,7 @@ void launch_rasterize_to_pixels_2dgs_bwd_kernel(
 
     rasterize_to_pixels_2dgs_bwd_kernel<CDIM, float>
         <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
-            B,
-            C,
+            I,
             N,
             n_isects,
             packed,

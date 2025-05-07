@@ -503,12 +503,12 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: tuple[int]):
 
     torch.manual_seed(42)
 
-    N = test_data["means"].shape[0]
-    C = test_data["viewmats"].shape[0]
+    N = test_data["means"].shape[-2]
+    C = test_data["viewmats"].shape[-3]
     I = math.prod(batch_dims) * C
     test_data.update(
         {
-            "colors": torch.randn(C, N, channels, device=device),
+            "colors": torch.rand(C, N, channels, device=device),
             "backgrounds": torch.rand((C, channels), device=device),
         }
     )
