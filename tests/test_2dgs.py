@@ -45,14 +45,14 @@ def test_data():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-@pytest.mark.parametrize("batch_size", [(), (2,), (1, 2)])
-def test_projection_2dgs(test_data, batch_size):
+@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
+def test_projection_2dgs(test_data, batch_dims):
     from gsplat.cuda._torch_impl_2dgs import _fully_fused_projection_2dgs
     from gsplat.cuda._wrapper import fully_fused_projection_2dgs
 
     torch.manual_seed(42)
 
-    test_data = expand(test_data, batch_size)
+    test_data = expand(test_data, batch_dims)
     Ks = test_data["Ks"]  # [..., C, 3, 3]
     viewmats = test_data["viewmats"]  # [..., C, 4, 4]
     height = test_data["height"]
@@ -115,21 +115,18 @@ def test_projection_2dgs(test_data, batch_size):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-@pytest.mark.parametrize(
-    "sparse_grad",
-    [
-        False,
-        # True  No Sparse-grad for now
-    ],
-)
+@pytest.mark.parametrize("sparse_grad", [False])
+@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 def test_fully_fused_projection_packed_2dgs(
     test_data,
     sparse_grad: bool,
+    batch_dims: tuple[int],
 ):
     from gsplat.cuda._wrapper import fully_fused_projection_2dgs
 
     torch.manual_seed(42)
 
+    test_data = expand(test_data, batch_dims)
     Ks = test_data["Ks"]
     viewmats = test_data["viewmats"]
     height = test_data["height"]
@@ -173,24 +170,34 @@ def test_fully_fused_projection_packed_2dgs(
         height,
         packed=False,
     )
+
+    B = math.prod(batch_dims)
+    N = means.shape[-2]
+    C = viewmats.shape[-3]
+
     # recover packed tensors to full matrices for testing
     __radii = torch.sparse_coo_tensor(
-        torch.stack([batch_ids, camera_ids, gaussian_ids]), radii, _radii.shape
+        torch.stack([batch_ids, camera_ids, gaussian_ids]), radii, (B, C, N, 2)
     ).to_dense()
+    __radii = __radii.reshape(batch_dims + (C, N, 2))
     __means2d = torch.sparse_coo_tensor(
-        torch.stack([batch_ids, camera_ids, gaussian_ids]), means2d, _means2d.shape
+        torch.stack([batch_ids, camera_ids, gaussian_ids]), means2d, (B, C, N, 2)
     ).to_dense()
+    __means2d = __means2d.reshape(batch_dims + (C, N, 2))
     __depths = torch.sparse_coo_tensor(
-        torch.stack([batch_ids, camera_ids, gaussian_ids]), depths, _depths.shape
+        torch.stack([batch_ids, camera_ids, gaussian_ids]), depths, (B, C, N)
     ).to_dense()
+    __depths = __depths.reshape(batch_dims + (C, N))
     __ray_transforms = torch.sparse_coo_tensor(
         torch.stack([batch_ids, camera_ids, gaussian_ids]),
         ray_transforms,
-        _ray_transforms.shape,
+        (B, C, N, 3, 3),
     ).to_dense()
+    __ray_transforms = __ray_transforms.reshape(batch_dims + (C, N, 3, 3))
     __normals = torch.sparse_coo_tensor(
-        torch.stack([batch_ids, camera_ids, gaussian_ids]), normals, _normals.shape
+        torch.stack([batch_ids, camera_ids, gaussian_ids]), normals, (B, C, N, 3)
     ).to_dense()
+    __normals = __normals.reshape(batch_dims + (C, N, 3))
 
     sel = ((__radii > 0) & (_radii > 0)).all(dim=-1)
     torch.testing.assert_close(__radii[sel], _radii[sel], rtol=0, atol=1)

@@ -197,11 +197,11 @@ void launch_projection_2dgs_fused_bwd_kernel(
 
 void launch_projection_2dgs_packed_fwd_kernel(
     // inputs
-    const at::Tensor means,    // [B, N, 3]
-    const at::Tensor quats,    // [B, N, 4]
-    const at::Tensor scales,   // [B, N, 3]
-    const at::Tensor viewmats, // [B, C, 4, 4]
-    const at::Tensor Ks,       // [B, C, 3, 3]
+    const at::Tensor means,    // [..., N, 3]
+    const at::Tensor quats,    // [..., N, 4]
+    const at::Tensor scales,   // [..., N, 3]
+    const at::Tensor viewmats, // [..., C, 4, 4]
+    const at::Tensor Ks,       // [..., C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float near_plane,
@@ -223,11 +223,11 @@ void launch_projection_2dgs_packed_fwd_kernel(
 );
 void launch_projection_2dgs_packed_bwd_kernel(
     // fwd inputs
-    const at::Tensor means,    // [B, N, 3]
-    const at::Tensor quats,    // [B, N, 4]
-    const at::Tensor scales,   // [B, N, 3]
-    const at::Tensor viewmats, // [B, C, 4, 4]
-    const at::Tensor Ks,       // [B, C, 3, 3]
+    const at::Tensor means,    // [..., N, 3]
+    const at::Tensor quats,    // [..., N, 4]
+    const at::Tensor scales,   // [..., N, 3]
+    const at::Tensor viewmats, // [..., C, 4, 4]
+    const at::Tensor Ks,       // [..., C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     // fwd outputs
@@ -242,10 +242,10 @@ void launch_projection_2dgs_packed_bwd_kernel(
     const at::Tensor v_normals,        // [nnz, 3]
     const bool sparse_grad,
     // grad inputs
-    at::Tensor v_means,                 // [B, N, 3] or [nnz, 3]
-    at::Tensor v_quats,                 // [B, N, 4] or [nnz, 4]
-    at::Tensor v_scales,                // [B, N, 3] or [nnz, 3]
-    at::optional<at::Tensor> v_viewmats // [B, C, 4, 4] Optional
+    at::Tensor v_means,                 // [..., N, 3] or [nnz, 3]
+    at::Tensor v_quats,                 // [..., N, 4] or [nnz, 4]
+    at::Tensor v_scales,                // [..., N, 3] or [nnz, 3]
+    at::optional<at::Tensor> v_viewmats // [..., C, 4, 4] Optional
 );
 
 } // namespace gsplat

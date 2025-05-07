@@ -1188,7 +1188,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
                     values=v_means,  # [nnz, 3]
                     size=(B, N, 3),
                     is_coalesced=len(viewmats) == 1,
-                )
+                ).to_dense()
                 v_means = v_means.reshape(batch_dims + (N, 3))
         if not ctx.needs_input_grad[1]:
             v_covars = None
@@ -1199,7 +1199,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
                     values=v_covars,  # [nnz, 6]
                     size=(B, N, 6),
                     is_coalesced=len(viewmats) == 1,
-                )
+                ).to_dense()
                 v_covars = v_covars.reshape(batch_dims + (N, 6))
         if not ctx.needs_input_grad[2]:
             v_quats = None
@@ -1210,7 +1210,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
                     values=v_quats,  # [nnz, 4]
                     size=(B, N, 4),
                     is_coalesced=len(viewmats) == 1,
-                )
+                ).to_dense()
                 v_quats = v_quats.reshape(batch_dims + (N, 4))
         if not ctx.needs_input_grad[3]:
             v_scales = None
@@ -1221,7 +1221,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
                     values=v_scales,  # [nnz, 3]
                     size=(B, N, 3),
                     is_coalesced=len(viewmats) == 1,
-                )
+                ).to_dense()
                 v_scales = v_scales.reshape(batch_dims + (N, 3))
         if not ctx.needs_input_grad[4]:
             v_viewmats = None
@@ -1335,7 +1335,7 @@ def fully_fused_projection_2dgs(
         - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [..., C, N, 2].
         - **means**. Projected Gaussian means in 2D. [..., C, N, 2]
         - **depths**. The z-depth of the projected Gaussians. [..., C, N]
-        - **ray_transforms**. transformation matrices that transforms xy-planes in pixel spaces into splat coordinates.
+        - **ray_transforms**. transformation matrices that transforms xy-planes in pixel spaces into splat coordinates [..., C, N, 3, 3]
         - **normals**. The normals in camera spaces. [..., C, N, 3]
 
     """
@@ -1500,11 +1500,11 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        means: Tensor,  # [N, 3]
-        quats: Tensor,  # [N, 4]
-        scales: Tensor,  # [N, 3]
-        viewmats: Tensor,  # [C, 4, 4]
-        Ks: Tensor,  # [C, 3, 3]
+        means: Tensor,  # [..., N, 3]
+        quats: Tensor,  # [..., N, 4]
+        scales: Tensor,  # [..., N, 3]
+        viewmats: Tensor,  # [..., C, 4, 4]
+        Ks: Tensor,  # [..., C, 3, 3]
         width: int,
         height: int,
         near_plane: float,
@@ -1609,6 +1609,11 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
             sparse_grad,
         )
 
+        if sparse_grad:
+            batch_dims = means.shape[:-2]
+            B = math.prod(batch_dims)
+            N = means.shape[-2]
+
         if not ctx.needs_input_grad[0]:
             v_means = None
         else:
@@ -1618,31 +1623,34 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
                 # the tensor but this requires the tensor to be leaf node only. And
                 # a customized optimizer would be needed in this case.
                 v_means = torch.sparse_coo_tensor(
-                    indices=gaussian_ids[None],  # [1, nnz]
+                    indices=torch.stack([batch_ids, gaussian_ids]),
                     values=v_means,  # [nnz, 3]
-                    size=means.size(),  # [N, 3]
+                    size=(B, N, 3),
                     is_coalesced=len(viewmats) == 1,
-                )
+                ).to_dense()
+                v_means = v_means.reshape(batch_dims + (N, 3))
         if not ctx.needs_input_grad[1]:
             v_quats = None
         else:
             if sparse_grad:
                 v_quats = torch.sparse_coo_tensor(
-                    indices=gaussian_ids[None],  # [1, nnz]
+                    indices=torch.stack([batch_ids, gaussian_ids]),
                     values=v_quats,  # [nnz, 4]
-                    size=quats.size(),  # [N, 4]
+                    size=(B, N, 4),
                     is_coalesced=len(viewmats) == 1,
-                )
+                ).to_dense()
+                v_quats = v_quats.reshape(batch_dims + (N, 4))
         if not ctx.needs_input_grad[2]:
             v_scales = None
         else:
             if sparse_grad:
                 v_scales = torch.sparse_coo_tensor(
-                    indices=gaussian_ids[None],  # [1, nnz]
+                    indices=torch.stack([batch_ids, gaussian_ids]),
                     values=v_scales,  # [nnz, 3]
-                    size=scales.size(),  # [N, 3]
+                    size=(B, N, 3),
                     is_coalesced=len(viewmats) == 1,
-                )
+                ).to_dense()
+                v_scales = v_scales.reshape(batch_dims + (N, 3))
         if not ctx.needs_input_grad[3]:
             v_viewmats = None
 
