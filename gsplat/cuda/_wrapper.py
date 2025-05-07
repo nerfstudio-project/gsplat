@@ -908,11 +908,11 @@ class _RasterizeToPixels(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        means2d: Tensor,  # [..., N, 2]
-        conics: Tensor,  # [..., N, 3]
-        colors: Tensor,  # [..., N, D]
-        opacities: Tensor,  # [..., N]
-        backgrounds: Tensor,  # [..., D], Optional
+        means2d: Tensor,  # [..., N, 2] or [nnz, 2]
+        conics: Tensor,  # [..., N, 3] or [nnz, 3]
+        colors: Tensor,  # [..., N, channels] or [nnz, channels]
+        opacities: Tensor,  # [..., N] or [nnz]
+        backgrounds: Tensor,  # [..., channels], Optional
         masks: Tensor,  # [..., tile_height, tile_width], Optional
         width: int,
         height: int,
