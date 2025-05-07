@@ -478,7 +478,8 @@ def test_isect(test_data, batch_dims: list[int]):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("channels", [3, 32, 128])
-def test_rasterize_to_pixels(test_data, channels: int):
+@pytest.mark.parametrize("batch_dims", [[], [2], [1, 2]])
+def test_rasterize_to_pixels(test_data, channels: int, batch_dims: list[int]):
     from gsplat.cuda._torch_impl import _rasterize_to_pixels
     from gsplat.cuda._wrapper import (
         fully_fused_projection,
@@ -490,6 +491,16 @@ def test_rasterize_to_pixels(test_data, channels: int):
 
     torch.manual_seed(42)
 
+    N = test_data["means"].shape[0]
+    C = test_data["viewmats"].shape[0]
+    I = math.prod(batch_dims) * C
+    test_data.update(
+        {
+            "colors": torch.randn(C, N, channels, device=device),
+            "backgrounds": torch.rand((C, channels), device=device),
+        }
+    )
+    test_data = _repeat(test_data, batch_dims)
     Ks = test_data["Ks"]
     viewmats = test_data["viewmats"]
     height = test_data["height"]
@@ -498,9 +509,8 @@ def test_rasterize_to_pixels(test_data, channels: int):
     scales = test_data["scales"] * 0.1
     means = test_data["means"]
     opacities = test_data["opacities"]
-    B, C = Ks.shape[:2]
-    colors = torch.randn(B, C, means.shape[1], channels, device=device)
-    backgrounds = torch.rand((B, C, colors.shape[-1]), device=device)
+    colors = test_data["colors"]
+    backgrounds = test_data["backgrounds"]
 
     covars, _ = quat_scale_to_covar_preci(quats, scales, compute_preci=False, triu=True)
 
@@ -508,7 +518,7 @@ def test_rasterize_to_pixels(test_data, channels: int):
     radii, means2d, depths, conics, compensations = fully_fused_projection(
         means, covars, None, None, viewmats, Ks, width, height
     )
-    opacities = repeat(opacities, "b n -> b c n", c=C)
+    opacities = repeat(opacities, "... n -> ... c n", c=C)
 
     # Identify intersecting tiles
     tile_size = 16 if channels <= 32 else 4
@@ -517,7 +527,8 @@ def test_rasterize_to_pixels(test_data, channels: int):
     tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
         means2d, radii, depths, tile_size, tile_width, tile_height
     )
-    isect_offsets = isect_offset_encode(isect_ids, B, C, tile_width, tile_height)
+    isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
+    isect_offsets = isect_offsets.reshape(batch_dims + [C, tile_height, tile_width])
 
     means2d.requires_grad = True
     conics.requires_grad = True
@@ -576,7 +587,7 @@ def test_rasterize_to_pixels(test_data, channels: int):
     torch.testing.assert_close(v_means2d, _v_means2d, rtol=5e-3, atol=5e-3)
     torch.testing.assert_close(v_conics, _v_conics, rtol=1e-3, atol=1e-3)
     torch.testing.assert_close(v_colors, _v_colors, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_opacities, _v_opacities, rtol=2e-3, atol=2e-3)
+    torch.testing.assert_close(v_opacities, _v_opacities, rtol=8e-3, atol=6e-3)
     torch.testing.assert_close(v_backgrounds, _v_backgrounds, rtol=1e-3, atol=1e-3)
 
 

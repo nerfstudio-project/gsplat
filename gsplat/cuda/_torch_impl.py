@@ -504,21 +504,20 @@ def _isect_offset_encode(
 
 
 def accumulate(
-    means2d: Tensor,  # [B, C, N, 2]
-    conics: Tensor,  # [B, C, N, 3]
-    opacities: Tensor,  # [B, C, N]
-    colors: Tensor,  # [B, C, N, channels]
+    means2d: Tensor,  # [..., N, 2]
+    conics: Tensor,  # [..., N, 3]
+    opacities: Tensor,  # [..., N]
+    colors: Tensor,  # [..., N, channels]
     gaussian_ids: Tensor,  # [M]
     pixel_ids: Tensor,  # [M]
-    camera_ids: Tensor,  # [M]
-    batch_ids: Tensor,  # [M]
+    image_ids: Tensor,  # [M]
     image_width: int,
     image_height: int,
 ) -> Tuple[Tensor, Tensor]:
     """Alpah compositing of 2D Gaussians in Pure Pytorch.
 
     This function performs alpha compositing for Gaussians based on the pair of indices
-    {gaussian_ids, pixel_ids, camera_ids, batch_ids}, which annotates the intersection between all
+    {gaussian_ids, pixel_ids, image_ids}, which annotates the intersection between all
     pixels and Gaussians. These intersections can be accquired from
     `gsplat.rasterize_to_indices_in_range`.
 
@@ -536,22 +535,22 @@ def accumulate(
         using the following command `pip install nerfacc`.
 
     Args:
-        means2d: Gaussian means in 2D. [B, C, N, 2]
-        conics: Inverse of the 2D Gaussian covariance, Only upper triangle values. [B, C, N, 3]
+        means2d: Gaussian means in 2D. [..., N, 2]
+        conics: Inverse of the 2D Gaussian covariance, Only upper triangle values. [..., N, 3]
         opacities: Per-view Gaussian opacities (for example, when antialiasing is
-            enabled, Gaussian in each view would efficiently have different opacity). [B, C, N]
-        colors: Per-view Gaussian colors. Supports N-D features. [B, C, N, channels]
+            enabled, Gaussian in each view would efficiently have different opacity). [..., N]
+        colors: Per-view Gaussian colors. Supports N-D features. [..., N, channels]
         gaussian_ids: Collection of Gaussian indices to be rasterized. A flattened list of shape [M].
         pixel_ids: Collection of pixel indices (row-major) to be rasterized. A flattened list of shape [M].
-        camera_ids: Collection of camera indices to be rasterized. A flattened list of shape [M].
+        image_ids: Collection of image indices to be rasterized. A flattened list of shape [M].
         image_width: Image width.
         image_height: Image height.
 
     Returns:
         A tuple:
 
-        - **renders**: Accumulated colors. [B, C, image_height, image_width, channels]
-        - **alphas**: Accumulated opacities. [B, C, image_height, image_width, 1]
+        - **renders**: Accumulated colors. [..., image_height, image_width, channels]
+        - **alphas**: Accumulated opacities. [..., image_height, image_width, 1]
     """
 
     try:
@@ -559,56 +558,63 @@ def accumulate(
     except ImportError:
         raise ImportError("Please install nerfacc package: pip install nerfacc")
 
-    B, C, N = means2d.shape[:3]
+    image_dims = means2d.shape[:-2]
+    I = math.prod(image_dims)
+    N = means2d.shape[-2]
     channels = colors.shape[-1]
+    assert means2d.shape == image_dims + (N, 2), means2d.shape
+    assert conics.shape == image_dims + (N, 3), conics.shape
+    assert opacities.shape == image_dims + (N,), opacities.shape
+    assert colors.shape == image_dims + (N, channels), colors.shape
+
+    means2d = means2d.reshape(I, N, 2)
+    conics = conics.reshape(I, N, 3)
+    opacities = opacities.reshape(I, N)
+    colors = colors.reshape(I, N, channels)
 
     pixel_ids_x = pixel_ids % image_width
     pixel_ids_y = pixel_ids // image_width
     pixel_coords = torch.stack([pixel_ids_x, pixel_ids_y], dim=-1) + 0.5  # [M, 2]
-    deltas = pixel_coords - means2d[batch_ids, camera_ids, gaussian_ids]  # [M, 2]
-    c = conics[batch_ids, camera_ids, gaussian_ids]  # [M, 3]
+    deltas = pixel_coords - means2d[image_ids, gaussian_ids]  # [M, 2]
+    c = conics[image_ids, gaussian_ids]  # [M, 3]
     sigmas = (
         0.5 * (c[:, 0] * deltas[:, 0] ** 2 + c[:, 2] * deltas[:, 1] ** 2)
         + c[:, 1] * deltas[:, 0] * deltas[:, 1]
     )  # [M]
     alphas = torch.clamp_max(
-        opacities[batch_ids, camera_ids, gaussian_ids] * torch.exp(-sigmas), 0.999
+        opacities[image_ids, gaussian_ids] * torch.exp(-sigmas), 0.999
     )
 
-    indices = (
-        batch_ids * C * image_height * image_width
-        + camera_ids * image_height * image_width
-        + pixel_ids
-    )
-    total_pixels = B * C * image_height * image_width
+    indices = image_ids * image_height * image_width + pixel_ids
+    total_pixels = I * image_height * image_width
 
     weights, trans = render_weight_from_alpha(
         alphas, ray_indices=indices, n_rays=total_pixels
     )
     renders = accumulate_along_rays(
         weights,
-        colors[batch_ids, camera_ids, gaussian_ids],
+        colors[image_ids, gaussian_ids],
         ray_indices=indices,
         n_rays=total_pixels,
-    ).reshape(B, C, image_height, image_width, channels)
+    ).reshape(image_dims + (image_height, image_width, channels))
     alphas = accumulate_along_rays(
         weights, None, ray_indices=indices, n_rays=total_pixels
-    ).reshape(B, C, image_height, image_width, 1)
+    ).reshape(image_dims + (image_height, image_width, 1))
 
     return renders, alphas
 
 
 def _rasterize_to_pixels(
-    means2d: Tensor,  # [B, C, N, 2]
-    conics: Tensor,  # [B, C, N, 3]
-    colors: Tensor,  # [B, C, N, channels]
-    opacities: Tensor,  # [B, C, N]
+    means2d: Tensor,  # [..., N, 2]
+    conics: Tensor,  # [..., N, 3]
+    colors: Tensor,  # [..., N, channels]
+    opacities: Tensor,  # [..., N]
     image_width: int,
     image_height: int,
     tile_size: int,
-    isect_offsets: Tensor,  # [B, C, tile_height, tile_width]
+    isect_offsets: Tensor,  # [..., tile_height, tile_width]
     flatten_ids: Tensor,  # [n_isects]
-    backgrounds: Optional[Tensor] = None,  # [B, C, channels]
+    backgrounds: Optional[Tensor] = None,  # [..., channels]
     batch_per_iter: int = 100,
 ):
     """Pytorch implementation of `gsplat.cuda._wrapper.rasterize_to_pixels()`.
@@ -635,14 +641,29 @@ def _rasterize_to_pixels(
     """
     from ._wrapper import rasterize_to_indices_in_range
 
-    B, C, N = means2d.shape[:3]
+    image_dims = means2d.shape[:-2]
+    channels = colors.shape[-1]
+    N = means2d.shape[-2]
+    tile_height = isect_offsets.shape[-2]
+    tile_width = isect_offsets.shape[-1]
+
+    assert means2d.shape == image_dims + (N, 2), means2d.shape
+    assert conics.shape == image_dims + (N, 3), conics.shape
+    assert colors.shape == image_dims + (N, channels), colors.shape
+    assert opacities.shape == image_dims + (N,), opacities.shape
+    assert isect_offsets.shape == image_dims + (
+        tile_height,
+        tile_width,
+    ), isect_offsets.shape
     n_isects = len(flatten_ids)
     device = means2d.device
 
     render_colors = torch.zeros(
-        (B, C, image_height, image_width, colors.shape[-1]), device=device
+        image_dims + (image_height, image_width, channels), device=device
     )
-    render_alphas = torch.zeros((B, C, image_height, image_width, 1), device=device)
+    render_alphas = torch.zeros(
+        image_dims + (image_height, image_width, 1), device=device
+    )
 
     # Split Gaussians into batches and iteratively accumulate the renderings
     block_size = tile_size * tile_size
@@ -655,8 +676,8 @@ def _rasterize_to_pixels(
         transmittances = 1.0 - render_alphas[..., 0]
 
         # Find the M intersections between pixels and gaussians.
-        # Each intersection corresponds to a tuple (gs_id, pixel_id, camera_id, batch_id)
-        gs_ids, pixel_ids, camera_ids, batch_ids = rasterize_to_indices_in_range(
+        # Each intersection corresponds to a tuple (gs_id, pixel_id, image_id)
+        gs_ids, pixel_ids, image_ids = rasterize_to_indices_in_range(
             step,
             step + batch_per_iter,
             transmittances,
@@ -668,7 +689,7 @@ def _rasterize_to_pixels(
             tile_size,
             isect_offsets,
             flatten_ids,
-        )  # [M], [M], [M], [M]
+        )  # [M], [M], [M]
         if len(gs_ids) == 0:
             break
 
@@ -680,8 +701,7 @@ def _rasterize_to_pixels(
             colors,
             gs_ids,
             pixel_ids,
-            camera_ids,
-            batch_ids,
+            image_ids,
             image_width,
             image_height,
         )
@@ -690,7 +710,7 @@ def _rasterize_to_pixels(
 
     render_alphas = render_alphas
     if backgrounds is not None:
-        render_colors = render_colors + backgrounds[:, :, None, None, :] * (
+        render_colors = render_colors + backgrounds[..., None, None, :] * (
             1.0 - render_alphas
         )
 
