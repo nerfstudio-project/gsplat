@@ -211,7 +211,7 @@ void launch_rasterize_to_pixels_3dgs_fwd_kernel(
     bool packed = means2d.dim() == 2;
 
     uint32_t N = packed ? 0 : means2d.size(-2); // number of gaussians
-    uint32_t I = means2d.numel() / (N * 2);     // number of images
+    uint32_t I = alphas.numel() / (image_height * image_width); // number of images
     uint32_t tile_height = tile_offsets.size(-2);
     uint32_t tile_width = tile_offsets.size(-1);
     uint32_t n_isects = flatten_ids.size(0);

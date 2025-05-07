@@ -47,7 +47,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     }
     auto opt = means2d.options();
 
-    at::DimVector image_dims(means2d.sizes().slice(0, means2d.dim() - 2));
+    at::DimVector image_dims(tile_offsets.sizes().slice(0, tile_offsets.dim() - 2));
     uint32_t channels = colors.size(-1);
 
     at::DimVector renders_dims(image_dims);
@@ -357,7 +357,7 @@ rasterize_to_pixels_2dgs_fwd(
     }
     auto opt = means2d.options();
 
-    at::DimVector image_dims(means2d.sizes().slice(0, means2d.dim() - 2));
+    at::DimVector image_dims(tile_offsets.sizes().slice(0, tile_offsets.dim() - 2));
     uint32_t channels = colors.size(-1);
 
     at::DimVector renders_dims(image_dims);
