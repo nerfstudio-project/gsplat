@@ -13,7 +13,7 @@ gsplat is an open-source library for CUDA accelerated rasterization of gaussians
 
 ## News
 
-[April 2025] [NVIDIA 3DGUT](https://research.nvidia.com/labs/toronto-ai/3DGUT/) is not integrated in gsplat! Checkout [here](docs/3dgut.md) for more details.
+[April 2025] [NVIDIA 3DGUT](https://research.nvidia.com/labs/toronto-ai/3DGUT/) is now integrated in gsplat! Checkout [here](docs/3dgut.md) for more details.
 
 ## Installation
 
