@@ -1195,8 +1195,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
                     values=v_means,  # [nnz, 3]
                     size=means.shape,
                     is_coalesced=len(viewmats) == 1,
-                ).to_dense()
-                v_means = torch.reshape(v_means, batch_dims + (N, 3))
+                )
         if not ctx.needs_input_grad[1]:
             v_covars = None
         else:
@@ -1206,8 +1205,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
                     values=v_covars,  # [nnz, 6]
                     size=covars.shape,
                     is_coalesced=len(viewmats) == 1,
-                ).to_dense()
-                v_covars = torch.reshape(v_covars, batch_dims + (N, 6))
+                )
         if not ctx.needs_input_grad[2]:
             v_quats = None
         else:
@@ -1217,8 +1215,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
                     values=v_quats,  # [nnz, 4]
                     size=quats.shape,
                     is_coalesced=len(viewmats) == 1,
-                ).to_dense()
-                v_quats = torch.reshape(v_quats, batch_dims + (N, 4))
+                )
         if not ctx.needs_input_grad[3]:
             v_scales = None
         else:
@@ -1228,8 +1225,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
                     values=v_scales,  # [nnz, 3]
                     size=scales.shape,
                     is_coalesced=len(viewmats) == 1,
-                ).to_dense()
-                v_scales = torch.reshape(v_scales, batch_dims + (N, 3))
+                )
         if not ctx.needs_input_grad[4]:
             v_viewmats = None
 
@@ -1635,8 +1631,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
                     values=v_means,  # [nnz, 3]
                     size=means.shape,
                     is_coalesced=len(viewmats) == 1,
-                ).to_dense()
-                v_means = v_means.reshape(batch_dims + (N, 3))
+                )
         if not ctx.needs_input_grad[1]:
             v_quats = None
         else:
@@ -1646,8 +1641,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
                     values=v_quats,  # [nnz, 4]
                     size=quats.shape,
                     is_coalesced=len(viewmats) == 1,
-                ).to_dense()
-                v_quats = v_quats.reshape(batch_dims + (N, 4))
+                )
         if not ctx.needs_input_grad[2]:
             v_scales = None
         else:
@@ -1657,8 +1651,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
                     values=v_scales,  # [nnz, 3]
                     size=scales.shape,
                     is_coalesced=len(viewmats) == 1,
-                ).to_dense()
-                v_scales = v_scales.reshape(batch_dims + (N, 3))
+                )
         if not ctx.needs_input_grad[3]:
             v_viewmats = None
 
