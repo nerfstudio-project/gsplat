@@ -240,9 +240,9 @@ def proj(
     """
     batch_dims = means.shape[:-3]
     C, N = means.shape[-3:-1]
-    assert means.shape == batch_dims + (C, N, 3), means.size()
-    assert covars.shape == batch_dims + (C, N, 3, 3), covars.size()
-    assert Ks.shape == batch_dims + (C, 3, 3), Ks.size()
+    assert means.shape == batch_dims + (C, N, 3), means.shape
+    assert covars.shape == batch_dims + (C, N, 3, 3), covars.shape
+    assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
     means = means.contiguous()
     covars = covars.contiguous()
     Ks = Ks.contiguous()
@@ -337,25 +337,25 @@ def fully_fused_projection(
     batch_dims = means.shape[:-2]
     N = means.shape[-2]
     C = viewmats.shape[-3]
-    assert means.size() == batch_dims + (N, 3), means.size()
-    assert viewmats.size() == batch_dims + (C, 4, 4), viewmats.size()
-    assert Ks.size() == batch_dims + (C, 3, 3), Ks.size()
+    assert means.shape == batch_dims + (N, 3), means.shape
+    assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
+    assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
     means = means.contiguous()
     if covars is not None:
-        assert covars.size() == batch_dims + (N, 6), covars.size()
+        assert covars.shape == batch_dims + (N, 6), covars.shape
         covars = covars.contiguous()
     else:
         assert quats is not None, "covars or quats is required"
         assert scales is not None, "covars or scales is required"
-        assert quats.size() == batch_dims + (N, 4), quats.size()
-        assert scales.size() == batch_dims + (N, 3), scales.size()
+        assert quats.shape == batch_dims + (N, 4), quats.shape
+        assert scales.shape == batch_dims + (N, 3), scales.shape
         quats = quats.contiguous()
         scales = scales.contiguous()
     if sparse_grad:
         assert packed, "sparse_grad is only supported when packed is True"
         assert batch_dims == (), "sparse_grad does not support batch dimensions"
     if opacities is not None:
-        assert opacities.size() == batch_dims + (N,), opacities.size()
+        assert opacities.shape == batch_dims + (N,), opacities.shape
         opacities = opacities.contiguous()
 
     viewmats = viewmats.contiguous()
@@ -443,9 +443,9 @@ def isect_tiles(
     """
     if packed:
         nnz = means2d.size(0)
-        assert means2d.shape == (nnz, 2), means2d.size()
-        assert radii.shape == (nnz, 2), radii.size()
-        assert depths.shape == (nnz,), depths.size()
+        assert means2d.shape == (nnz, 2), means2d.shape
+        assert radii.shape == (nnz, 2), radii.shape
+        assert depths.shape == (nnz,), depths.shape
         assert image_ids is not None, "image_ids is required if packed is True"
         assert gaussian_ids is not None, "gaussian_ids is required if packed is True"
         assert n_images is not None, "n_images is required if packed is True"
@@ -457,9 +457,9 @@ def isect_tiles(
         image_dims = means2d.shape[:-2]
         I = math.prod(image_dims)
         N = means2d.shape[-2]
-        assert means2d.shape == image_dims + (N, 2), means2d.size()
-        assert radii.shape == image_dims + (N, 2), radii.size()
-        assert depths.shape == image_dims + (N,), depths.size()
+        assert means2d.shape == image_dims + (N, 2), means2d.shape
+        assert radii.shape == image_dims + (N, 2), radii.shape
+        assert depths.shape == image_dims + (N,), depths.shape
 
     tiles_per_gauss, isect_ids, flatten_ids = _make_lazy_cuda_func("intersect_tile")(
         means2d.contiguous(),
