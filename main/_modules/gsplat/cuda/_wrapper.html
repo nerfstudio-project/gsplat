@@ -311,6 +311,8 @@
         <article role="main" id="furo-main-content">
           <h1>Source code for gsplat.cuda._wrapper</h1><div class="highlight"><pre>
 <span></span><span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">enum</span><span class="w"> </span><span class="kn">import</span> <span class="n">Enum</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
@@ -326,6 +328,49 @@
         <span class="k">return</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">_C</span><span class="p">,</span> <span class="n">name</span><span class="p">)(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
 
     <span class="k">return</span> <span class="n">call_cuda</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_make_lazy_cuda_obj</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+    <span class="c1"># pylint: disable=import-outside-toplevel</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">._backend</span><span class="w"> </span><span class="kn">import</span> <span class="n">_C</span>
+
+    <span class="n">obj</span> <span class="o">=</span> <span class="n">_C</span>
+    <span class="k">for</span> <span class="n">name_split</span> <span class="ow">in</span> <span class="n">name</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;.&quot;</span><span class="p">):</span>
+        <span class="n">obj</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">_C</span><span class="p">,</span> <span class="n">name_split</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">obj</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">RollingShutterType</span><span class="p">(</span><span class="n">Enum</span><span class="p">):</span>
+    <span class="n">ROLLING_TOP_TO_BOTTOM</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">ROLLING_LEFT_TO_RIGHT</span> <span class="o">=</span> <span class="mi">1</span>
+    <span class="n">ROLLING_BOTTOM_TO_TOP</span> <span class="o">=</span> <span class="mi">2</span>
+    <span class="n">ROLLING_RIGHT_TO_LEFT</span> <span class="o">=</span> <span class="mi">3</span>
+    <span class="n">GLOBAL</span> <span class="o">=</span> <span class="mi">4</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">to_cpp</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;ShutterType.</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+
+<span class="nd">@dataclass</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">UnscentedTransformParameters</span><span class="p">:</span>
+    <span class="c1"># Sigma point parameters (see Gustafsson and Hendeby 2012, Wan and van der Merwe 2000)</span>
+    <span class="n">alpha</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.1</span>
+    <span class="n">beta</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">2.0</span>
+    <span class="n">kappa</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span>
+    <span class="c1"># Parameters controlling validity of the unscented transform results. Default 0.1</span>
+    <span class="c1"># is 10% margin.</span>
+    <span class="n">in_image_margin_factor</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.1</span>
+    <span class="c1"># True: all sigma points must be valid</span>
+    <span class="n">require_all_sigma_points_valid</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">to_cpp</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+        <span class="n">p</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span><span class="s2">&quot;UnscentedTransformParameters&quot;</span><span class="p">)()</span>
+        <span class="n">p</span><span class="o">.</span><span class="n">alpha</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">alpha</span>
+        <span class="n">p</span><span class="o">.</span><span class="n">beta</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">beta</span>
+        <span class="n">p</span><span class="o">.</span><span class="n">kappa</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">kappa</span>
+        <span class="n">p</span><span class="o">.</span><span class="n">in_image_margin_factor</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">in_image_margin_factor</span>
+        <span class="n">p</span><span class="o">.</span><span class="n">require_all_sigma_points_valid</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">require_all_sigma_points_valid</span>
+        <span class="k">return</span> <span class="n">p</span>
 
 
 <div class="viewcode-block" id="world_to_cam">
@@ -382,16 +427,6 @@
     <span class="n">_make_lazy_cuda_func</span><span class="p">(</span><span class="s2">&quot;adam&quot;</span><span class="p">)(</span>
         <span class="n">param</span><span class="p">,</span> <span class="n">param_grad</span><span class="p">,</span> <span class="n">exp_avg</span><span class="p">,</span> <span class="n">exp_avg_sq</span><span class="p">,</span> <span class="n">valid</span><span class="p">,</span> <span class="n">lr</span><span class="p">,</span> <span class="n">b1</span><span class="p">,</span> <span class="n">b2</span><span class="p">,</span> <span class="n">eps</span>
     <span class="p">)</span>
-
-
-<span class="k">def</span><span class="w"> </span><span class="nf">_make_lazy_cuda_obj</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
-    <span class="c1"># pylint: disable=import-outside-toplevel</span>
-    <span class="kn">from</span><span class="w"> </span><span class="nn">._backend</span><span class="w"> </span><span class="kn">import</span> <span class="n">_C</span>
-
-    <span class="n">obj</span> <span class="o">=</span> <span class="n">_C</span>
-    <span class="k">for</span> <span class="n">name_split</span> <span class="ow">in</span> <span class="n">name</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;.&quot;</span><span class="p">):</span>
-        <span class="n">obj</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">_C</span><span class="p">,</span> <span class="n">name_split</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">obj</span>
 
 
 <div class="viewcode-block" id="spherical_harmonics">
@@ -917,6 +952,149 @@
 
 
 
+<span class="k">def</span><span class="w"> </span><span class="nf">rasterize_to_pixels_eval3d</span><span class="p">(</span>
+    <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
+    <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 4]</span>
+    <span class="n">scales</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
+    <span class="n">colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, channels] or [nnz, channels]</span>
+    <span class="n">opacities</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N] or [nnz]</span>
+    <span class="n">viewmats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, 4, 4]</span>
+    <span class="n">Ks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, 3, 3]</span>
+    <span class="n">image_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">image_height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">isect_offsets</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, tile_height, tile_width]</span>
+    <span class="n">flatten_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [n_isects]</span>
+    <span class="n">backgrounds</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [C, channels]</span>
+    <span class="n">masks</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [C, tile_height, tile_width]</span>
+    <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
+    <span class="n">ut_params</span><span class="p">:</span> <span class="n">UnscentedTransformParameters</span> <span class="o">=</span> <span class="n">UnscentedTransformParameters</span><span class="p">(),</span>
+    <span class="c1"># distortion</span>
+    <span class="n">radial_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">tangential_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">thin_prism_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="c1"># rolling shutter</span>
+    <span class="n">rolling_shutter</span><span class="p">:</span> <span class="n">RollingShutterType</span> <span class="o">=</span> <span class="n">RollingShutterType</span><span class="o">.</span><span class="n">GLOBAL</span><span class="p">,</span>
+    <span class="n">viewmats_rs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [C, 4, 4]</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterizes Gaussians to pixels.</span>
+
+<span class="sd">    Similar to `rasterize_to_pixels()`, but compute the Gaussian responses in the</span>
+<span class="sd">    3D world space instead of the 2D image space. Supports rolling shutter and</span>
+<span class="sd">    camera distortion.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A tuple:</span>
+
+<span class="sd">        - **Rendered colors**. [C, image_height, image_width, channels]</span>
+<span class="sd">        - **Rendered alphas**. [C, image_height, image_width, 1]</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">C</span> <span class="o">=</span> <span class="n">isect_offsets</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">device</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">device</span>
+
+    <span class="n">N</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">assert</span> <span class="n">quats</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">quats</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">assert</span> <span class="n">scales</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">scales</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">assert</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">assert</span> <span class="n">Ks</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">Ks</span><span class="o">.</span><span class="n">shape</span>
+
+    <span class="k">assert</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">assert</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span>
+
+    <span class="k">if</span> <span class="n">backgrounds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">assert</span> <span class="n">backgrounds</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]),</span> <span class="n">backgrounds</span><span class="o">.</span><span class="n">shape</span>
+        <span class="n">backgrounds</span> <span class="o">=</span> <span class="n">backgrounds</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">masks</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">assert</span> <span class="n">masks</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">isect_offsets</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">masks</span><span class="o">.</span><span class="n">shape</span>
+        <span class="n">masks</span> <span class="o">=</span> <span class="n">masks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
+
+    <span class="c1"># Pad the channels to the nearest supported number if necessary</span>
+    <span class="n">channels</span> <span class="o">=</span> <span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+    <span class="k">if</span> <span class="n">channels</span> <span class="o">&gt;</span> <span class="mi">513</span> <span class="ow">or</span> <span class="n">channels</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="c1"># TODO: maybe worth to support zero channels?</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unsupported number of color channels: </span><span class="si">{</span><span class="n">channels</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">channels</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span>
+        <span class="mi">1</span><span class="p">,</span>
+        <span class="mi">2</span><span class="p">,</span>
+        <span class="mi">3</span><span class="p">,</span>
+        <span class="mi">4</span><span class="p">,</span>
+        <span class="mi">5</span><span class="p">,</span>
+        <span class="mi">8</span><span class="p">,</span>
+        <span class="mi">9</span><span class="p">,</span>
+        <span class="mi">16</span><span class="p">,</span>
+        <span class="mi">17</span><span class="p">,</span>
+        <span class="mi">32</span><span class="p">,</span>
+        <span class="mi">33</span><span class="p">,</span>
+        <span class="mi">64</span><span class="p">,</span>
+        <span class="mi">65</span><span class="p">,</span>
+        <span class="mi">128</span><span class="p">,</span>
+        <span class="mi">129</span><span class="p">,</span>
+        <span class="mi">256</span><span class="p">,</span>
+        <span class="mi">257</span><span class="p">,</span>
+        <span class="mi">512</span><span class="p">,</span>
+        <span class="mi">513</span><span class="p">,</span>
+    <span class="p">):</span>
+        <span class="n">padded_channels</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="p">(</span><span class="n">channels</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">bit_length</span><span class="p">())</span> <span class="o">-</span> <span class="n">channels</span>
+        <span class="n">colors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span>
+            <span class="p">[</span>
+                <span class="n">colors</span><span class="p">,</span>
+                <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="o">*</span><span class="n">colors</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">padded_channels</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">),</span>
+            <span class="p">],</span>
+            <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="n">backgrounds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">backgrounds</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span>
+                <span class="p">[</span>
+                    <span class="n">backgrounds</span><span class="p">,</span>
+                    <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span>
+                        <span class="o">*</span><span class="n">backgrounds</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">padded_channels</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
+                    <span class="p">),</span>
+                <span class="p">],</span>
+                <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span>
+            <span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">padded_channels</span> <span class="o">=</span> <span class="mi">0</span>
+
+    <span class="n">tile_height</span><span class="p">,</span> <span class="n">tile_width</span> <span class="o">=</span> <span class="n">isect_offsets</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">:</span><span class="mi">3</span><span class="p">]</span>
+    <span class="k">assert</span> <span class="p">(</span>
+        <span class="n">tile_height</span> <span class="o">*</span> <span class="n">tile_size</span> <span class="o">&gt;=</span> <span class="n">image_height</span>
+    <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Assert Failed: </span><span class="si">{</span><span class="n">tile_height</span><span class="si">}</span><span class="s2"> * </span><span class="si">{</span><span class="n">tile_size</span><span class="si">}</span><span class="s2"> &gt;= </span><span class="si">{</span><span class="n">image_height</span><span class="si">}</span><span class="s2">&quot;</span>
+    <span class="k">assert</span> <span class="p">(</span>
+        <span class="n">tile_width</span> <span class="o">*</span> <span class="n">tile_size</span> <span class="o">&gt;=</span> <span class="n">image_width</span>
+    <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Assert Failed: </span><span class="si">{</span><span class="n">tile_width</span><span class="si">}</span><span class="s2"> * </span><span class="si">{</span><span class="n">tile_size</span><span class="si">}</span><span class="s2"> &gt;= </span><span class="si">{</span><span class="n">image_width</span><span class="si">}</span><span class="s2">&quot;</span>
+
+    <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span> <span class="o">=</span> <span class="n">_RasterizeToPixelsEval3D</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span>
+        <span class="n">means</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">quats</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">scales</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">colors</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">opacities</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">backgrounds</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">backgrounds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">masks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">masks</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">viewmats</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">Ks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">image_width</span><span class="p">,</span>
+        <span class="n">image_height</span><span class="p">,</span>
+        <span class="n">tile_size</span><span class="p">,</span>
+        <span class="n">isect_offsets</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">flatten_ids</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">camera_model</span><span class="p">,</span>
+        <span class="n">ut_params</span><span class="p">,</span>
+        <span class="c1"># distortion</span>
+        <span class="n">radial_coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">radial_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">tangential_coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">tangential_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">thin_prism_coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">thin_prism_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="c1"># rolling shutter</span>
+        <span class="n">rolling_shutter</span><span class="p">,</span>
+        <span class="n">viewmats_rs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">viewmats_rs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">padded_channels</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">render_colors</span> <span class="o">=</span> <span class="n">render_colors</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span><span class="o">-</span><span class="n">padded_channels</span><span class="p">]</span>
+    <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span>
+
+
 <div class="viewcode-block" id="rasterize_to_indices_in_range">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.rasterize_to_indices_in_range">[docs]</a>
 <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
@@ -1215,6 +1393,69 @@
         <span class="p">)</span>
 
 
+<span class="k">def</span><span class="w"> </span><span class="nf">fully_fused_projection_with_ut</span><span class="p">(</span>
+    <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
+    <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 4]</span>
+    <span class="n">scales</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
+    <span class="n">opacities</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">],</span>  <span class="c1"># [N]</span>
+    <span class="n">viewmats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, 4, 4]</span>
+    <span class="n">Ks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, 3, 3]</span>
+    <span class="n">width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">eps2d</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.3</span><span class="p">,</span>
+    <span class="n">near_plane</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.01</span><span class="p">,</span>
+    <span class="n">far_plane</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e10</span><span class="p">,</span>
+    <span class="n">radius_clip</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+    <span class="n">calc_compensations</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
+    <span class="n">ut_params</span><span class="p">:</span> <span class="n">UnscentedTransformParameters</span> <span class="o">=</span> <span class="n">UnscentedTransformParameters</span><span class="p">(),</span>
+    <span class="c1"># distortion</span>
+    <span class="n">radial_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">tangential_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">thin_prism_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="c1"># rolling shutter</span>
+    <span class="n">rolling_shutter</span><span class="p">:</span> <span class="n">RollingShutterType</span> <span class="o">=</span> <span class="n">RollingShutterType</span><span class="o">.</span><span class="n">GLOBAL</span><span class="p">,</span>
+    <span class="n">viewmats_rs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [C, 4, 4]</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Projects Gaussians to 2D using Unscented Transform (UT).</span>
+
+<span class="sd">    similar to `fully_fused_projection()`, but supports camera distortion and</span>
+<span class="sd">    rolling shutter.</span>
+
+<span class="sd">    .. warning::</span>
+<span class="sd">        This function is not differentiable to any input.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="n">radii</span><span class="p">,</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">depths</span><span class="p">,</span> <span class="n">conics</span><span class="p">,</span> <span class="n">compensations</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
+        <span class="s2">&quot;projection_ut_3dgs_fused&quot;</span>
+    <span class="p">)(</span>
+        <span class="n">means</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">quats</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">scales</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">opacities</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">opacities</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">viewmats</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">viewmats_rs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">viewmats_rs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">Ks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">width</span><span class="p">,</span>
+        <span class="n">height</span><span class="p">,</span>
+        <span class="n">eps2d</span><span class="p">,</span>
+        <span class="n">near_plane</span><span class="p">,</span>
+        <span class="n">far_plane</span><span class="p">,</span>
+        <span class="n">radius_clip</span><span class="p">,</span>
+        <span class="n">calc_compensations</span><span class="p">,</span>
+        <span class="n">camera_model_type</span><span class="p">,</span>
+        <span class="n">ut_params</span><span class="o">.</span><span class="n">to_cpp</span><span class="p">(),</span>
+        <span class="n">rolling_shutter</span><span class="o">.</span><span class="n">to_cpp</span><span class="p">(),</span>
+        <span class="n">radial_coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">radial_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">tangential_coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">tangential_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">thin_prism_coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">thin_prism_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">calc_compensations</span><span class="p">:</span>
+        <span class="n">compensations</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="k">return</span> <span class="n">radii</span><span class="p">,</span> <span class="n">means2d</span><span class="p">,</span> <span class="n">depths</span><span class="p">,</span> <span class="n">conics</span><span class="p">,</span> <span class="n">compensations</span>
+
+
 <span class="k">class</span><span class="w"> </span><span class="nc">_RasterizeToPixels</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterize gaussians&quot;&quot;&quot;</span>
 
@@ -1335,6 +1576,193 @@
             <span class="n">v_colors</span><span class="p">,</span>
             <span class="n">v_opacities</span><span class="p">,</span>
             <span class="n">v_backgrounds</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>
+        <span class="p">)</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">_RasterizeToPixelsEval3D</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Rasterize gaussians&quot;&quot;&quot;</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span>
+        <span class="n">ctx</span><span class="p">,</span>
+        <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
+        <span class="n">quats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 4]</span>
+        <span class="n">scales</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [N, 3]</span>
+        <span class="n">colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N, D]</span>
+        <span class="n">opacities</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, N]</span>
+        <span class="n">backgrounds</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, D], Optional</span>
+        <span class="n">masks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, tile_height, tile_width], Optional</span>
+        <span class="n">viewmats</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, 4, 4]</span>
+        <span class="n">Ks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, 3, 3]</span>
+        <span class="n">width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">isect_offsets</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, tile_height, tile_width]</span>
+        <span class="n">flatten_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [n_isects]</span>
+        <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
+        <span class="n">ut_params</span><span class="p">:</span> <span class="n">UnscentedTransformParameters</span> <span class="o">=</span> <span class="n">UnscentedTransformParameters</span><span class="p">(),</span>
+        <span class="c1"># distortion</span>
+        <span class="n">radial_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">tangential_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">thin_prism_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="c1"># rolling shutter</span>
+        <span class="n">rolling_shutter</span><span class="p">:</span> <span class="n">RollingShutterType</span> <span class="o">=</span> <span class="n">RollingShutterType</span><span class="o">.</span><span class="n">GLOBAL</span><span class="p">,</span>
+        <span class="n">viewmats_rs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [C, 4, 4]</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+        <span class="n">ut_params</span> <span class="o">=</span> <span class="n">ut_params</span><span class="o">.</span><span class="n">to_cpp</span><span class="p">()</span>
+        <span class="n">rs_type</span> <span class="o">=</span> <span class="n">rolling_shutter</span><span class="o">.</span><span class="n">to_cpp</span><span class="p">()</span>
+        <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="p">)</span>
+
+        <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">last_ids</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
+            <span class="s2">&quot;rasterize_to_pixels_from_world_3dgs_fwd&quot;</span>
+        <span class="p">)(</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">quats</span><span class="p">,</span>
+            <span class="n">scales</span><span class="p">,</span>
+            <span class="n">colors</span><span class="p">,</span>
+            <span class="n">opacities</span><span class="p">,</span>
+            <span class="n">backgrounds</span><span class="p">,</span>
+            <span class="n">masks</span><span class="p">,</span>
+            <span class="n">width</span><span class="p">,</span>
+            <span class="n">height</span><span class="p">,</span>
+            <span class="n">tile_size</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">viewmats_rs</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">camera_model_type</span><span class="p">,</span>
+            <span class="n">ut_params</span><span class="p">,</span>
+            <span class="n">rs_type</span><span class="p">,</span>
+            <span class="n">radial_coeffs</span><span class="p">,</span>
+            <span class="n">tangential_coeffs</span><span class="p">,</span>
+            <span class="n">thin_prism_coeffs</span><span class="p">,</span>
+            <span class="n">isect_offsets</span><span class="p">,</span>
+            <span class="n">flatten_ids</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="n">ctx</span><span class="o">.</span><span class="n">save_for_backward</span><span class="p">(</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">quats</span><span class="p">,</span>
+            <span class="n">scales</span><span class="p">,</span>
+            <span class="n">colors</span><span class="p">,</span>
+            <span class="n">opacities</span><span class="p">,</span>
+            <span class="n">backgrounds</span><span class="p">,</span>
+            <span class="n">masks</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">viewmats_rs</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">radial_coeffs</span><span class="p">,</span>
+            <span class="n">tangential_coeffs</span><span class="p">,</span>
+            <span class="n">thin_prism_coeffs</span><span class="p">,</span>
+            <span class="n">isect_offsets</span><span class="p">,</span>
+            <span class="n">flatten_ids</span><span class="p">,</span>
+            <span class="n">render_alphas</span><span class="p">,</span>
+            <span class="n">last_ids</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">width</span> <span class="o">=</span> <span class="n">width</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">height</span> <span class="o">=</span> <span class="n">height</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">ut_params</span> <span class="o">=</span> <span class="n">ut_params</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">rs_type</span> <span class="o">=</span> <span class="n">rs_type</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">camera_model_type</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">tile_size</span> <span class="o">=</span> <span class="n">tile_size</span>
+
+        <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span>
+        <span class="n">ctx</span><span class="p">,</span>
+        <span class="n">v_render_colors</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, H, W, 3]</span>
+        <span class="n">v_render_alphas</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [C, H, W, 1]</span>
+    <span class="p">):</span>
+        <span class="p">(</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">quats</span><span class="p">,</span>
+            <span class="n">scales</span><span class="p">,</span>
+            <span class="n">colors</span><span class="p">,</span>
+            <span class="n">opacities</span><span class="p">,</span>
+            <span class="n">backgrounds</span><span class="p">,</span>
+            <span class="n">masks</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">viewmats_rs</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">radial_coeffs</span><span class="p">,</span>
+            <span class="n">tangential_coeffs</span><span class="p">,</span>
+            <span class="n">thin_prism_coeffs</span><span class="p">,</span>
+            <span class="n">isect_offsets</span><span class="p">,</span>
+            <span class="n">flatten_ids</span><span class="p">,</span>
+            <span class="n">render_alphas</span><span class="p">,</span>
+            <span class="n">last_ids</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
+        <span class="n">width</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">width</span>
+        <span class="n">height</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">height</span>
+        <span class="n">ut_params</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">ut_params</span>
+        <span class="n">rs_type</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">rs_type</span>
+        <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">camera_model_type</span>
+        <span class="n">tile_size</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">tile_size</span>
+
+        <span class="p">(</span><span class="n">v_means</span><span class="p">,</span> <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span><span class="p">,</span> <span class="n">v_colors</span><span class="p">,</span> <span class="n">v_opacities</span><span class="p">,)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
+            <span class="s2">&quot;rasterize_to_pixels_from_world_3dgs_bwd&quot;</span>
+        <span class="p">)(</span>
+            <span class="n">means</span><span class="p">,</span>
+            <span class="n">quats</span><span class="p">,</span>
+            <span class="n">scales</span><span class="p">,</span>
+            <span class="n">colors</span><span class="p">,</span>
+            <span class="n">opacities</span><span class="p">,</span>
+            <span class="n">backgrounds</span><span class="p">,</span>
+            <span class="n">masks</span><span class="p">,</span>
+            <span class="n">width</span><span class="p">,</span>
+            <span class="n">height</span><span class="p">,</span>
+            <span class="n">tile_size</span><span class="p">,</span>
+            <span class="n">viewmats</span><span class="p">,</span>
+            <span class="n">viewmats_rs</span><span class="p">,</span>
+            <span class="n">Ks</span><span class="p">,</span>
+            <span class="n">camera_model_type</span><span class="p">,</span>
+            <span class="n">ut_params</span><span class="p">,</span>
+            <span class="n">rs_type</span><span class="p">,</span>
+            <span class="n">radial_coeffs</span><span class="p">,</span>
+            <span class="n">tangential_coeffs</span><span class="p">,</span>
+            <span class="n">thin_prism_coeffs</span><span class="p">,</span>
+            <span class="n">isect_offsets</span><span class="p">,</span>
+            <span class="n">flatten_ids</span><span class="p">,</span>
+            <span class="n">render_alphas</span><span class="p">,</span>
+            <span class="n">last_ids</span><span class="p">,</span>
+            <span class="n">v_render_colors</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+            <span class="n">v_render_alphas</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">5</span><span class="p">]:</span>  <span class="c1"># backgrounds</span>
+            <span class="n">v_backgrounds</span> <span class="o">=</span> <span class="p">(</span><span class="n">v_render_colors</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">render_alphas</span><span class="p">)</span><span class="o">.</span><span class="n">float</span><span class="p">())</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span>
+                <span class="n">dim</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+            <span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">v_backgrounds</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="k">if</span> <span class="n">ctx</span><span class="o">.</span><span class="n">needs_input_grad</span><span class="p">[</span><span class="mi">7</span><span class="p">]:</span>  <span class="c1"># viewmats</span>
+            <span class="k">raise</span> <span class="ne">NotImplementedError</span>
+
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="n">v_means</span><span class="p">,</span>
+            <span class="n">v_quats</span><span class="p">,</span>
+            <span class="n">v_scales</span><span class="p">,</span>
+            <span class="n">v_colors</span><span class="p">,</span>
+            <span class="n">v_opacities</span><span class="p">,</span>
+            <span class="n">v_backgrounds</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>
             <span class="kc">None</span><span class="p">,</span>
             <span class="kc">None</span><span class="p">,</span>
             <span class="kc">None</span><span class="p">,</span>
