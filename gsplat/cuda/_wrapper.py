@@ -1082,12 +1082,12 @@ class _FullyFusedProjection(torch.autograd.Function):
 
 
 def fully_fused_projection_with_ut(
-    means: Tensor,  # [N, 3]
-    quats: Tensor,  # [N, 4]
-    scales: Tensor,  # [N, 3]
-    opacities: Optional[Tensor],  # [N]
-    viewmats: Tensor,  # [C, 4, 4]
-    Ks: Tensor,  # [C, 3, 3]
+    means: Tensor,  # [..., N, 3]
+    quats: Tensor,  # [..., N, 4]
+    scales: Tensor,  # [..., N, 3]
+    opacities: Optional[Tensor],  # [..., N]
+    viewmats: Tensor,  # [..., C, 4, 4]
+    Ks: Tensor,  # [..., C, 3, 3]
     width: int,
     height: int,
     eps2d: float = 0.3,
@@ -1098,12 +1098,12 @@ def fully_fused_projection_with_ut(
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
     ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
     # distortion
-    radial_coeffs: Optional[Tensor] = None,
-    tangential_coeffs: Optional[Tensor] = None,
-    thin_prism_coeffs: Optional[Tensor] = None,
+    radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
+    tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
+    thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 2]
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
-    viewmats_rs: Optional[Tensor] = None,  # [C, 4, 4]
+    viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Projects Gaussians to 2D using Unscented Transform (UT).
 
@@ -1113,6 +1113,27 @@ def fully_fused_projection_with_ut(
     .. warning::
         This function is not differentiable to any input.
     """
+    batch_dims = means.shape[:-2]
+    N = means.shape[-2]
+    C = viewmats.shape[-3]
+    assert means.shape == batch_dims + (N, 3), means.shape
+    assert quats.shape == batch_dims + (N, 4), quats.shape
+    assert scales.shape == batch_dims + (N, 3), scales.shape
+    if opacities is not None:
+        assert opacities.shape == batch_dims + (N,), opacities.shape
+    assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
+    assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
+    if radial_coeffs is not None:
+        assert radial_coeffs.shape[:-1] == batch_dims + (C,) and radial_coeffs.shape[
+            -1
+        ] in [6, 4], radial_coeffs.shape
+    if tangential_coeffs is not None:
+        assert tangential_coeffs.shape == batch_dims + (C, 2), tangential_coeffs.shape
+    if thin_prism_coeffs is not None:
+        assert thin_prism_coeffs.shape == batch_dims + (C, 2), thin_prism_coeffs.shape
+    if viewmats_rs is not None:
+        assert viewmats_rs.shape == batch_dims + (C, 4, 4), viewmats_rs.shape
+
     camera_model_type = _make_lazy_cuda_obj(f"CameraModelType.{camera_model.upper()}")
 
     radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
@@ -1396,9 +1417,13 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         camera_model_type = ctx.camera_model_type
         tile_size = ctx.tile_size
 
-        (v_means, v_quats, v_scales, v_colors, v_opacities,) = _make_lazy_cuda_func(
-            "rasterize_to_pixels_from_world_3dgs_bwd"
-        )(
+        (
+            v_means,
+            v_quats,
+            v_scales,
+            v_colors,
+            v_opacities,
+        ) = _make_lazy_cuda_func("rasterize_to_pixels_from_world_3dgs_bwd")(
             means,
             quats,
             scales,

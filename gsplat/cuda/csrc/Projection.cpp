@@ -904,13 +904,13 @@ std::tuple<
     at::Tensor,
     at::Tensor>
 projection_ut_3dgs_fused(
-    const at::Tensor means,                // [N, 3]
-    const at::Tensor quats,  // [N, 4]
-    const at::Tensor scales, // [N, 3]
-    const at::optional<at::Tensor> opacities, // [N] optional
-    const at::Tensor viewmats0,             // [C, 4, 4]
-    const at::optional<at::Tensor> viewmats1, // [C, 4, 4] optional for rolling shutter
-    const at::Tensor Ks,                   // [C, 3, 3]
+    const at::Tensor means,                   // [..., N, 3]
+    const at::Tensor quats,                   // [..., N, 4]
+    const at::Tensor scales,                  // [..., N, 3]
+    const at::optional<at::Tensor> opacities, // [..., N] optional
+    const at::Tensor viewmats0,               // [..., C, 4, 4]
+    const at::optional<at::Tensor> viewmats1, // [..., C, 4, 4] optional for rolling shutter
+    const at::Tensor Ks,                      // [..., C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
@@ -922,9 +922,9 @@ projection_ut_3dgs_fused(
     // uncented transform
     const UnscentedTransformParameters ut_params,
     ShutterType rs_type,
-    const at::optional<at::Tensor> radial_coeffs, // [C, 6] or [C, 4] optional
-    const at::optional<at::Tensor> tangential_coeffs, // [C, 2] optional
-    const at::optional<at::Tensor> thin_prism_coeffs  // [C, 2] optional
+    const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
+    const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
+    const at::optional<at::Tensor> thin_prism_coeffs  // [..., C, 2] optional
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -948,17 +948,33 @@ projection_ut_3dgs_fused(
         CHECK_INPUT(thin_prism_coeffs.value());
     }
 
-    uint32_t N = means.size(0);    // number of gaussians
-    uint32_t C = Ks.size(0);       // number of cameras
+    at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 2));
+    uint32_t N = means.size(-2);    // number of gaussians
+    uint32_t C = Ks.size(-3);       // number of cameras
+    auto opt = means.options();
 
-    at::Tensor radii = at::empty({C, N, 2}, means.options().dtype(at::kInt));
-    at::Tensor means2d = at::empty({C, N, 2}, means.options());
-    at::Tensor depths = at::empty({C, N}, means.options());
-    at::Tensor conics = at::empty({C, N, 3}, means.options());
+    at::DimVector radii_shape(batch_dims);
+    radii_shape.append({C, N, 2});
+    at::Tensor radii = at::empty(radii_shape, opt.dtype(at::kInt));
+
+    at::DimVector means2d_shape(batch_dims);
+    means2d_shape.append({C, N, 2});
+    at::Tensor means2d = at::empty(means2d_shape, opt);
+
+    at::DimVector depths_shape(batch_dims);
+    depths_shape.append({C, N});
+    at::Tensor depths = at::empty(depths_shape, opt);
+    
+    at::DimVector conics_shape(batch_dims);
+    conics_shape.append({C, N, 3});
+    at::Tensor conics = at::empty(conics_shape, opt);
+
     at::Tensor compensations;
     if (calc_compensations) {
         // we dont want NaN to appear in this tensor, so we zero intialize it
-        compensations = at::zeros({C, N}, means.options());
+        at::DimVector compensations_shape(batch_dims);
+        compensations_shape.append({C, N});
+        compensations = at::zeros(compensations_shape, opt);
     }
 
     launch_projection_ut_3dgs_fused_kernel(
