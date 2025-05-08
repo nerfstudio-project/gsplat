@@ -8,12 +8,15 @@ from torch import Tensor
 from typing_extensions import Literal
 
 from .cuda._wrapper import (
+    RollingShutterType,
     fully_fused_projection,
     fully_fused_projection_2dgs,
+    fully_fused_projection_with_ut,
     isect_offset_encode,
     isect_tiles,
     rasterize_to_pixels,
     rasterize_to_pixels_2dgs,
+    rasterize_to_pixels_eval3d,
     spherical_harmonics,
 )
 from .distributed import (
@@ -51,6 +54,15 @@ def rasterization(
     distributed: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
     covars: Optional[Tensor] = None,
+    with_ut: bool = False,
+    with_eval3d: bool = False,
+    # distortion
+    radial_coeffs: Optional[Tensor] = None,
+    tangential_coeffs: Optional[Tensor] = None,
+    thin_prism_coeffs: Optional[Tensor] = None,
+    # rolling shutter
+    rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
+    viewmats_rs: Optional[Tensor] = None,  # [C, 4, 4]
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -132,6 +144,13 @@ def rasterization(
         `AbsGS: Recovering Fine Details for 3D Gaussian Splatting <https://arxiv.org/abs/2404.10484>`_,
         which is shown to be more effective for splitting Gaussians during training.
 
+    .. note::
+        **Camera Distortion and Rolling Shutter**: The function supports rendering with opencv
+        distortion formula for pinhole and fisheye cameras (`radial_coeffs`, `tangential_coeffs`, `thin_prism_coeffs`).
+        It also supports rolling shutter rendering with the `rolling_shutter` argument. We take
+        reference from the paper `3DGUT: Enabling Distorted Cameras and Secondary Rays in Gaussian Splatting
+        <https://arxiv.org/abs/2412.12507>`_.
+
     .. warning::
         This function is currently not differentiable w.r.t. the camera intrinsics `Ks`.
 
@@ -181,6 +200,19 @@ def rasterization(
             and "fisheye". Default is "pinhole".
         covars: Optional covariance matrices of the Gaussians. If provided, the `quats` and
             `scales` will be ignored. [N, 3, 3], Default is None.
+        with_ut: Whether to use Unscented Transform (UT) for projection. Default is False.
+        with_eval3d: Whether to calculate Gaussian response in 3D world space, instead
+            of 2D image space. Default is False.
+        radial_coeffs: Opencv pinhole/fisheye radial distortion coefficients. Default is None.
+            For pinhole camera, the shape should be [C, 6]. For fisheye camera, the shape
+            should be [C, 4].
+        tangential_coeffs: Opencv pinhole tangential distortion coefficients. Default is None.
+            The shape should be [C, 2] if provided.
+        thin_prism_coeffs: Opencv pinhole thin prism distortion coefficients. Default is None.
+            The shape should be [C, 4] if provided.
+        rolling_shutter: The rolling shutter type. Default `RollingShutterType.GLOBAL` means
+            global shutter.
+        viewmats_rs: The second viewmat when rolling shutter is used. Default is None.
 
     Returns:
         A tuple:
@@ -276,6 +308,32 @@ def rasterization(
     if absgrad:
         assert not distributed, "AbsGrad is not supported in distributed mode."
 
+    if (
+        radial_coeffs is not None
+        or tangential_coeffs is not None
+        or thin_prism_coeffs is not None
+        or rolling_shutter != RollingShutterType.GLOBAL
+    ):
+        assert (
+            with_ut
+        ), "Distortion and rolling shutter are only supported with `with_ut=True`."
+
+    if rolling_shutter != RollingShutterType.GLOBAL:
+        assert (
+            viewmats_rs is not None
+        ), "Rolling shutter requires to provide viewmats_rs."
+    else:
+        assert (
+            viewmats_rs is None
+        ), "viewmats_rs should be None for global rolling shutter."
+
+    if with_ut or with_eval3d:
+        assert (quats is not None) and (
+            scales is not None
+        ), "UT and eval3d requires to provide quats and scales."
+        assert packed is False, "Packed mode is not supported with UT."
+        assert sparse_grad is False, "Sparse grad is not supported with UT."
+
     # Implement the multi-GPU strategy proposed in
     # `On Scaling Up 3D Gaussian Splatting Training <https://arxiv.org/abs/2406.18533>`.
     #
@@ -292,30 +350,56 @@ def rasterization(
         # Enforce that the number of cameras is the same across all ranks.
         C_world = [C] * world_size
         viewmats, Ks = all_gather_tensor_list(world_size, [viewmats, Ks])
+        if viewmats_rs is not None:
+            (viewmats_rs,) = all_gather_tensor_list(world_size, [viewmats_rs])
 
         # Silently change C from local #Cameras to global #Cameras.
         C = len(viewmats)
 
-    # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
-    proj_results = fully_fused_projection(
-        means,
-        covars,
-        quats,
-        scales,
-        viewmats,
-        Ks,
-        width,
-        height,
-        eps2d=eps2d,
-        packed=packed,
-        near_plane=near_plane,
-        far_plane=far_plane,
-        radius_clip=radius_clip,
-        sparse_grad=sparse_grad,
-        calc_compensations=(rasterize_mode == "antialiased"),
-        camera_model=camera_model,
-        opacities=opacities,  # use opacities to compute a tigher bound for radii.
-    )
+    if with_ut:
+        proj_results = fully_fused_projection_with_ut(
+            means,
+            quats,
+            scales,
+            opacities,  # use opacities to compute a tigher bound for radii.
+            viewmats,
+            Ks,
+            width,
+            height,
+            eps2d=eps2d,
+            near_plane=near_plane,
+            far_plane=far_plane,
+            radius_clip=radius_clip,
+            calc_compensations=(rasterize_mode == "antialiased"),
+            camera_model=camera_model,
+            radial_coeffs=radial_coeffs,
+            tangential_coeffs=tangential_coeffs,
+            thin_prism_coeffs=thin_prism_coeffs,
+            rolling_shutter=rolling_shutter,
+            viewmats_rs=viewmats_rs,
+        )
+
+    else:
+        # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
+        proj_results = fully_fused_projection(
+            means,
+            covars,
+            quats,
+            scales,
+            viewmats,
+            Ks,
+            width,
+            height,
+            eps2d=eps2d,
+            packed=packed,
+            near_plane=near_plane,
+            far_plane=far_plane,
+            radius_clip=radius_clip,
+            sparse_grad=sparse_grad,
+            calc_compensations=(rasterize_mode == "antialiased"),
+            camera_model=camera_model,
+            opacities=opacities,  # use opacities to compute a tigher bound for radii.
+        )
 
     if packed:
         # The results are packed into shape [nnz, ...]. All elements are valid.
@@ -371,9 +455,13 @@ def rasterization(
                 pass
     else:
         # Colors are SH coefficients, with shape [N, K, 3] or [C, N, K, 3]
-        camtoworlds = torch.inverse(viewmats)  # [C, 4, 4]
+        campos = torch.inverse(viewmats)[:, :3, 3]  # [C, 3]
+        if viewmats_rs is not None:
+            campos_rs = torch.inverse(viewmats_rs)[:, :3, 3]
+            campos = 0.5 * (campos + campos_rs)  # [C, 3]
+
         if packed:
-            dirs = means[gaussian_ids, :] - camtoworlds[camera_ids, :3, 3]  # [nnz, 3]
+            dirs = means[gaussian_ids, :] - campos[camera_ids, :]  # [nnz, 3]
             masks = (radii > 0).all(dim=-1)  # [nnz]
             if colors.dim() == 3:
                 # Turn [N, K, 3] into [nnz, 3]
@@ -383,7 +471,7 @@ def rasterization(
                 shs = colors[camera_ids, gaussian_ids, :, :]  # [nnz, K, 3]
             colors = spherical_harmonics(sh_degree, dirs, shs, masks=masks)  # [nnz, 3]
         else:
-            dirs = means[None, :, :] - camtoworlds[:, None, :3, 3]  # [C, N, 3]
+            dirs = means[None, :, :] - campos[:, None, :]  # [C, N, 3]
             masks = (radii > 0).all(dim=-1)  # [C, N]
             if colors.dim() == 3:
                 # Turn [N, K, 3] into [C, N, K, 3]
@@ -540,39 +628,85 @@ def rasterization(
                 if backgrounds is not None
                 else None
             )
-            render_colors_, render_alphas_ = rasterize_to_pixels(
+            if with_eval3d:
+                render_colors_, render_alphas_ = rasterize_to_pixels_eval3d(
+                    means,
+                    quats,
+                    scales,
+                    colors_chunk,
+                    opacities,
+                    viewmats,
+                    Ks,
+                    width,
+                    height,
+                    tile_size,
+                    isect_offsets,
+                    flatten_ids,
+                    backgrounds=backgrounds_chunk,
+                    camera_model=camera_model,
+                    radial_coeffs=radial_coeffs,
+                    tangential_coeffs=tangential_coeffs,
+                    thin_prism_coeffs=thin_prism_coeffs,
+                    rolling_shutter=rolling_shutter,
+                    viewmats_rs=viewmats_rs,
+                )
+            else:
+                render_colors_, render_alphas_ = rasterize_to_pixels(
+                    means2d,
+                    conics,
+                    colors_chunk,
+                    opacities,
+                    width,
+                    height,
+                    tile_size,
+                    isect_offsets,
+                    flatten_ids,
+                    backgrounds=backgrounds_chunk,
+                    packed=packed,
+                    absgrad=absgrad,
+                )
+            render_colors.append(render_colors_)
+            render_alphas.append(render_alphas_)
+        render_colors = torch.cat(render_colors, dim=-1)
+        render_alphas = render_alphas[0]  # discard the rest
+    else:
+        if with_eval3d:
+            render_colors, render_alphas = rasterize_to_pixels_eval3d(
+                means,
+                quats,
+                scales,
+                colors,
+                opacities,
+                viewmats,
+                Ks,
+                width,
+                height,
+                tile_size,
+                isect_offsets,
+                flatten_ids,
+                backgrounds=backgrounds,
+                camera_model=camera_model,
+                radial_coeffs=radial_coeffs,
+                tangential_coeffs=tangential_coeffs,
+                thin_prism_coeffs=thin_prism_coeffs,
+                rolling_shutter=rolling_shutter,
+                viewmats_rs=viewmats_rs,
+            )
+        else:
+            render_colors, render_alphas = rasterize_to_pixels(
                 means2d,
                 conics,
-                colors_chunk,
+                colors,
                 opacities,
                 width,
                 height,
                 tile_size,
                 isect_offsets,
                 flatten_ids,
-                backgrounds=backgrounds_chunk,
+                backgrounds=backgrounds,
                 packed=packed,
                 absgrad=absgrad,
             )
-            render_colors.append(render_colors_)
-            render_alphas.append(render_alphas_)
-        render_colors = torch.cat(render_colors, dim=-1)
-        render_alphas = render_alphas[0]  # discard the rest
-    else:
-        render_colors, render_alphas = rasterize_to_pixels(
-            means2d,
-            conics,
-            colors,
-            opacities,
-            width,
-            height,
-            tile_size,
-            isect_offsets,
-            flatten_ids,
-            backgrounds=backgrounds,
-            packed=packed,
-            absgrad=absgrad,
-        )
     if render_mode in ["ED", "RGB+ED"]:
         # normalize the accumulated depth to get the expected depth
         render_colors = torch.cat(

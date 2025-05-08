@@ -32,8 +32,8 @@ __global__ void projection_2dgs_fused_fwd_kernel(
                           // [0  f_y c_y]
                           // [0   0   1]  : f_x, f_y are focal lengths, c_x, c_y
                           // is coords for camera center on screen space
-    const int32_t image_width,  // Image width  pixels
-    const int32_t image_height, // Image height pixels
+    const uint32_t image_width,  // Image width  pixels
+    const uint32_t image_height, // Image height pixels
     const scalar_t
         near_plane, // Near clipping plane (for finite range used in z sorting)
     const scalar_t
@@ -328,8 +328,8 @@ __global__ void projection_2dgs_fused_bwd_kernel(
     const scalar_t *__restrict__ scales,   // [N, 3]
     const scalar_t *__restrict__ viewmats, // [C, 4, 4]
     const scalar_t *__restrict__ Ks,       // [C, 3, 3]
-    const int32_t image_width,
-    const int32_t image_height,
+    const uint32_t image_width,
+    const uint32_t image_height,
     // fwd outputs
     const int32_t *__restrict__ radii,           // [C, N, 2]
     const scalar_t *__restrict__ ray_transforms, // [C, N, 3, 3]
