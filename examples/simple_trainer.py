@@ -168,6 +168,10 @@ class Config:
 
     lpips_net: Literal["vgg", "alex"] = "alex"
 
+    # 3DGUT (uncented transform + eval 3D)
+    with_ut: bool = False
+    with_eval3d: bool = False
+
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
         self.save_steps = [int(i * factor) for i in self.save_steps]
@@ -503,6 +507,8 @@ class Runner:
             rasterize_mode=rasterize_mode,
             distributed=self.world_size > 1,
             camera_model=self.cfg.camera_model,
+            with_ut=self.cfg.with_ut,
+            with_eval3d=self.cfg.with_eval3d,
             **kwargs,
         )
         if masks is not None:

@@ -1,5 +1,7 @@
 import math
 import warnings
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Callable, Optional, Tuple
 
 import torch
@@ -15,6 +17,49 @@ def _make_lazy_cuda_func(name: str) -> Callable:
         return getattr(_C, name)(*args, **kwargs)
 
     return call_cuda
+
+
+def _make_lazy_cuda_obj(name: str) -> Any:
+    # pylint: disable=import-outside-toplevel
+    from ._backend import _C
+
+    obj = _C
+    for name_split in name.split("."):
+        obj = getattr(_C, name_split)
+    return obj
+
+
+class RollingShutterType(Enum):
+    ROLLING_TOP_TO_BOTTOM = 0
+    ROLLING_LEFT_TO_RIGHT = 1
+    ROLLING_BOTTOM_TO_TOP = 2
+    ROLLING_RIGHT_TO_LEFT = 3
+    GLOBAL = 4
+
+    def to_cpp(self) -> Any:
+        return _make_lazy_cuda_obj(f"ShutterType.{self.name}")
+
+
+@dataclass
+class UnscentedTransformParameters:
+    # Sigma point parameters (see Gustafsson and Hendeby 2012, Wan and van der Merwe 2000)
+    alpha: float = 0.1
+    beta: float = 2.0
+    kappa: float = 0.0
+    # Parameters controlling validity of the unscented transform results. Default 0.1
+    # is 10% margin.
+    in_image_margin_factor: float = 0.1
+    # True: all sigma points must be valid
+    require_all_sigma_points_valid: bool = True
+
+    def to_cpp(self) -> Any:
+        p = _make_lazy_cuda_obj("UnscentedTransformParameters")()
+        p.alpha = self.alpha
+        p.beta = self.beta
+        p.kappa = self.kappa
+        p.in_image_margin_factor = self.in_image_margin_factor
+        p.require_all_sigma_points_valid = self.require_all_sigma_points_valid
+        return p
 
 
 def world_to_cam(
@@ -69,16 +114,6 @@ def adam(
     _make_lazy_cuda_func("adam")(
         param, param_grad, exp_avg, exp_avg_sq, valid, lr, b1, b2, eps
     )
-
-
-def _make_lazy_cuda_obj(name: str) -> Any:
-    # pylint: disable=import-outside-toplevel
-    from ._backend import _C
-
-    obj = _C
-    for name_split in name.split("."):
-        obj = getattr(_C, name_split)
-    return obj
 
 
 def spherical_harmonics(
@@ -600,6 +635,149 @@ def rasterize_to_pixels(
     return render_colors, render_alphas
 
 
+def rasterize_to_pixels_eval3d(
+    means: Tensor,  # [N, 3]
+    quats: Tensor,  # [N, 4]
+    scales: Tensor,  # [N, 3]
+    colors: Tensor,  # [C, N, channels] or [nnz, channels]
+    opacities: Tensor,  # [C, N] or [nnz]
+    viewmats: Tensor,  # [C, 4, 4]
+    Ks: Tensor,  # [C, 3, 3]
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    isect_offsets: Tensor,  # [C, tile_height, tile_width]
+    flatten_ids: Tensor,  # [n_isects]
+    backgrounds: Optional[Tensor] = None,  # [C, channels]
+    masks: Optional[Tensor] = None,  # [C, tile_height, tile_width]
+    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+    ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
+    # distortion
+    radial_coeffs: Optional[Tensor] = None,
+    tangential_coeffs: Optional[Tensor] = None,
+    thin_prism_coeffs: Optional[Tensor] = None,
+    # rolling shutter
+    rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
+    viewmats_rs: Optional[Tensor] = None,  # [C, 4, 4]
+) -> Tuple[Tensor, Tensor]:
+    """Rasterizes Gaussians to pixels.
+
+    Similar to `rasterize_to_pixels()`, but compute the Gaussian responses in the
+    3D world space instead of the 2D image space. Supports rolling shutter and
+    camera distortion.
+
+    Returns:
+        A tuple:
+
+        - **Rendered colors**. [C, image_height, image_width, channels]
+        - **Rendered alphas**. [C, image_height, image_width, 1]
+    """
+    C = isect_offsets.size(0)
+    device = means.device
+
+    N = means.size(0)
+    assert means.shape == (N, 3), means.shape
+    assert quats.shape == (N, 4), quats.shape
+    assert scales.shape == (N, 3), scales.shape
+    assert viewmats.shape == (C, 4, 4), viewmats.shape
+    assert Ks.shape == (C, 3, 3), Ks.shape
+
+    assert colors.shape[:2] == (C, N), colors.shape
+    assert opacities.shape == (C, N), opacities.shape
+
+    if backgrounds is not None:
+        assert backgrounds.shape == (C, colors.shape[-1]), backgrounds.shape
+        backgrounds = backgrounds.contiguous()
+    if masks is not None:
+        assert masks.shape == isect_offsets.shape, masks.shape
+        masks = masks.contiguous()
+
+    # Pad the channels to the nearest supported number if necessary
+    channels = colors.shape[-1]
+    if channels > 513 or channels == 0:
+        # TODO: maybe worth to support zero channels?
+        raise ValueError(f"Unsupported number of color channels: {channels}")
+    if channels not in (
+        1,
+        2,
+        3,
+        4,
+        5,
+        8,
+        9,
+        16,
+        17,
+        32,
+        33,
+        64,
+        65,
+        128,
+        129,
+        256,
+        257,
+        512,
+        513,
+    ):
+        padded_channels = (1 << (channels - 1).bit_length()) - channels
+        colors = torch.cat(
+            [
+                colors,
+                torch.zeros(*colors.shape[:-1], padded_channels, device=device),
+            ],
+            dim=-1,
+        )
+        if backgrounds is not None:
+            backgrounds = torch.cat(
+                [
+                    backgrounds,
+                    torch.zeros(
+                        *backgrounds.shape[:-1], padded_channels, device=device
+                    ),
+                ],
+                dim=-1,
+            )
+    else:
+        padded_channels = 0
+
+    tile_height, tile_width = isect_offsets.shape[1:3]
+    assert (
+        tile_height * tile_size >= image_height
+    ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
+    assert (
+        tile_width * tile_size >= image_width
+    ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
+
+    render_colors, render_alphas = _RasterizeToPixelsEval3D.apply(
+        means.contiguous(),
+        quats.contiguous(),
+        scales.contiguous(),
+        colors.contiguous(),
+        opacities.contiguous(),
+        backgrounds.contiguous() if backgrounds is not None else None,
+        masks.contiguous() if masks is not None else None,
+        viewmats.contiguous(),
+        Ks.contiguous(),
+        image_width,
+        image_height,
+        tile_size,
+        isect_offsets.contiguous(),
+        flatten_ids.contiguous(),
+        camera_model,
+        ut_params,
+        # distortion
+        radial_coeffs.contiguous() if radial_coeffs is not None else None,
+        tangential_coeffs.contiguous() if tangential_coeffs is not None else None,
+        thin_prism_coeffs.contiguous() if thin_prism_coeffs is not None else None,
+        # rolling shutter
+        rolling_shutter,
+        viewmats_rs.contiguous() if viewmats_rs is not None else None,
+    )
+
+    if padded_channels > 0:
+        render_colors = render_colors[..., :-padded_channels]
+    return render_colors, render_alphas
+
+
 @torch.no_grad()
 def rasterize_to_indices_in_range(
     range_start: int,
@@ -903,6 +1081,69 @@ class _FullyFusedProjection(torch.autograd.Function):
         )
 
 
+def fully_fused_projection_with_ut(
+    means: Tensor,  # [N, 3]
+    quats: Tensor,  # [N, 4]
+    scales: Tensor,  # [N, 3]
+    opacities: Optional[Tensor],  # [N]
+    viewmats: Tensor,  # [C, 4, 4]
+    Ks: Tensor,  # [C, 3, 3]
+    width: int,
+    height: int,
+    eps2d: float = 0.3,
+    near_plane: float = 0.01,
+    far_plane: float = 1e10,
+    radius_clip: float = 0.0,
+    calc_compensations: bool = False,
+    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+    ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
+    # distortion
+    radial_coeffs: Optional[Tensor] = None,
+    tangential_coeffs: Optional[Tensor] = None,
+    thin_prism_coeffs: Optional[Tensor] = None,
+    # rolling shutter
+    rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
+    viewmats_rs: Optional[Tensor] = None,  # [C, 4, 4]
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """Projects Gaussians to 2D using Unscented Transform (UT).
+
+    similar to `fully_fused_projection()`, but supports camera distortion and
+    rolling shutter.
+
+    .. warning::
+        This function is not differentiable to any input.
+    """
+    camera_model_type = _make_lazy_cuda_obj(f"CameraModelType.{camera_model.upper()}")
+
+    radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
+        "projection_ut_3dgs_fused"
+    )(
+        means.contiguous(),
+        quats.contiguous(),
+        scales.contiguous(),
+        opacities.contiguous() if opacities is not None else None,
+        viewmats.contiguous(),
+        viewmats_rs.contiguous() if viewmats_rs is not None else None,
+        Ks.contiguous(),
+        width,
+        height,
+        eps2d,
+        near_plane,
+        far_plane,
+        radius_clip,
+        calc_compensations,
+        camera_model_type,
+        ut_params.to_cpp(),
+        rolling_shutter.to_cpp(),
+        radial_coeffs.contiguous() if radial_coeffs is not None else None,
+        tangential_coeffs.contiguous() if tangential_coeffs is not None else None,
+        thin_prism_coeffs.contiguous() if thin_prism_coeffs is not None else None,
+    )
+    if not calc_compensations:
+        compensations = None
+    return radii, means2d, depths, conics, compensations
+
+
 class _RasterizeToPixels(torch.autograd.Function):
     """Rasterize gaussians"""
 
@@ -1023,6 +1264,193 @@ class _RasterizeToPixels(torch.autograd.Function):
             v_colors,
             v_opacities,
             v_backgrounds,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+
+class _RasterizeToPixelsEval3D(torch.autograd.Function):
+    """Rasterize gaussians"""
+
+    @staticmethod
+    def forward(
+        ctx,
+        means: Tensor,  # [N, 3]
+        quats: Tensor,  # [N, 4]
+        scales: Tensor,  # [N, 3]
+        colors: Tensor,  # [C, N, D]
+        opacities: Tensor,  # [C, N]
+        backgrounds: Tensor,  # [C, D], Optional
+        masks: Tensor,  # [C, tile_height, tile_width], Optional
+        viewmats: Tensor,  # [C, 4, 4]
+        Ks: Tensor,  # [C, 3, 3]
+        width: int,
+        height: int,
+        tile_size: int,
+        isect_offsets: Tensor,  # [C, tile_height, tile_width]
+        flatten_ids: Tensor,  # [n_isects]
+        camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+        ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
+        # distortion
+        radial_coeffs: Optional[Tensor] = None,
+        tangential_coeffs: Optional[Tensor] = None,
+        thin_prism_coeffs: Optional[Tensor] = None,
+        # rolling shutter
+        rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
+        viewmats_rs: Optional[Tensor] = None,  # [C, 4, 4]
+    ) -> Tuple[Tensor, Tensor]:
+        ut_params = ut_params.to_cpp()
+        rs_type = rolling_shutter.to_cpp()
+        camera_model_type = _make_lazy_cuda_obj(
+            f"CameraModelType.{camera_model.upper()}"
+        )
+
+        render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
+            "rasterize_to_pixels_from_world_3dgs_fwd"
+        )(
+            means,
+            quats,
+            scales,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            width,
+            height,
+            tile_size,
+            viewmats,
+            viewmats_rs,
+            Ks,
+            camera_model_type,
+            ut_params,
+            rs_type,
+            radial_coeffs,
+            tangential_coeffs,
+            thin_prism_coeffs,
+            isect_offsets,
+            flatten_ids,
+        )
+
+        ctx.save_for_backward(
+            means,
+            quats,
+            scales,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            viewmats,
+            viewmats_rs,
+            Ks,
+            radial_coeffs,
+            tangential_coeffs,
+            thin_prism_coeffs,
+            isect_offsets,
+            flatten_ids,
+            render_alphas,
+            last_ids,
+        )
+        ctx.width = width
+        ctx.height = height
+        ctx.ut_params = ut_params
+        ctx.rs_type = rs_type
+        ctx.camera_model_type = camera_model_type
+        ctx.tile_size = tile_size
+
+        return render_colors, render_alphas
+
+    @staticmethod
+    def backward(
+        ctx,
+        v_render_colors: Tensor,  # [C, H, W, 3]
+        v_render_alphas: Tensor,  # [C, H, W, 1]
+    ):
+        (
+            means,
+            quats,
+            scales,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            viewmats,
+            viewmats_rs,
+            Ks,
+            radial_coeffs,
+            tangential_coeffs,
+            thin_prism_coeffs,
+            isect_offsets,
+            flatten_ids,
+            render_alphas,
+            last_ids,
+        ) = ctx.saved_tensors
+        width = ctx.width
+        height = ctx.height
+        ut_params = ctx.ut_params
+        rs_type = ctx.rs_type
+        camera_model_type = ctx.camera_model_type
+        tile_size = ctx.tile_size
+
+        (v_means, v_quats, v_scales, v_colors, v_opacities,) = _make_lazy_cuda_func(
+            "rasterize_to_pixels_from_world_3dgs_bwd"
+        )(
+            means,
+            quats,
+            scales,
+            colors,
+            opacities,
+            backgrounds,
+            masks,
+            width,
+            height,
+            tile_size,
+            viewmats,
+            viewmats_rs,
+            Ks,
+            camera_model_type,
+            ut_params,
+            rs_type,
+            radial_coeffs,
+            tangential_coeffs,
+            thin_prism_coeffs,
+            isect_offsets,
+            flatten_ids,
+            render_alphas,
+            last_ids,
+            v_render_colors.contiguous(),
+            v_render_alphas.contiguous(),
+        )
+
+        if ctx.needs_input_grad[5]:  # backgrounds
+            v_backgrounds = (v_render_colors * (1.0 - render_alphas).float()).sum(
+                dim=(1, 2)
+            )
+        else:
+            v_backgrounds = None
+
+        if ctx.needs_input_grad[7]:  # viewmats
+            raise NotImplementedError
+
+        return (
+            v_means,
+            v_quats,
+            v_scales,
+            v_colors,
+            v_opacities,
+            v_backgrounds,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
             None,
             None,
             None,

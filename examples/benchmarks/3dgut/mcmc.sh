@@ -1,40 +1,41 @@
-SCENE_DIR="data/zipnerf_undistorted"
-SCENE_LIST="berlin london nyc alameda"
-DATA_FACTOR=4
+SCENE_DIR="data/360_v2"
+RESULT_DIR="results/benchmark_mcmc_1M_3dgut"
+SCENE_LIST="garden bicycle stump bonsai counter kitchen room" # treehill flowers
 RENDER_TRAJ_PATH="ellipse"
 
-RESULT_DIR="results/benchmark_mcmc_2M_zipnerf_undistorted"
-CAP_MAX=2000000
+CAP_MAX=1000000
 
 for SCENE in $SCENE_LIST;
 do
+    if [ "$SCENE" = "bonsai" ] || [ "$SCENE" = "counter" ] || [ "$SCENE" = "kitchen" ] || [ "$SCENE" = "room" ]; then
+        DATA_FACTOR=2
+    else
+        DATA_FACTOR=4
+    fi
+
     echo "Running $SCENE"
 
     # train without eval
-    CUDA_VISIBLE_DEVICES=0 python simple_trainer.py mcmc --disable_viewer --data_factor $DATA_FACTOR \
+    CUDA_VISIBLE_DEVICES=0 python simple_trainer.py mcmc --eval_steps -1 --disable_viewer --data_factor $DATA_FACTOR \
+        --with_eval3d --with_ut \
         --strategy.cap-max $CAP_MAX \
-        --opacity_reg 0.001 \
-        --init_scale 0.5 \
-        --use_bilateral_grid \
         --render_traj_path $RENDER_TRAJ_PATH \
-        --camera_model pinhole \
         --data_dir $SCENE_DIR/$SCENE/ \
         --result_dir $RESULT_DIR/$SCENE/
 
+    # run eval and render
     for CKPT in $RESULT_DIR/$SCENE/ckpts/*;
     do
         CUDA_VISIBLE_DEVICES=0 python simple_trainer.py mcmc --disable_viewer --data_factor $DATA_FACTOR \
+            --with_eval3d --with_ut \
             --strategy.cap-max $CAP_MAX \
-            --opacity_reg 0.001 \
-            --init_scale 0.5 \
-            --use_bilateral_grid \
             --render_traj_path $RENDER_TRAJ_PATH \
-            --camera_model pinhole \
             --data_dir $SCENE_DIR/$SCENE/ \
             --result_dir $RESULT_DIR/$SCENE/ \
             --ckpt $CKPT
     done
 done
+
 
 for SCENE in $SCENE_LIST;
 do

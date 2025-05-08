@@ -25,8 +25,8 @@ __global__ void projection_ewa_3dgs_packed_fwd_kernel(
     const scalar_t *__restrict__ opacities, // [B, N] optional
     const scalar_t *__restrict__ viewmats, // [B, C, 4, 4]
     const scalar_t *__restrict__ Ks,       // [B, C, 3, 3]
-    const int32_t image_width,
-    const int32_t image_height,
+    const uint32_t image_width,
+    const uint32_t image_height,
     const float eps2d,
     const float near_plane,
     const float far_plane,
@@ -387,8 +387,8 @@ __global__ void projection_ewa_3dgs_packed_bwd_kernel(
     const scalar_t *__restrict__ scales,   // [B, N, 3] Optional
     const scalar_t *__restrict__ viewmats, // [B, C, 4, 4]
     const scalar_t *__restrict__ Ks,       // [B, C, 3, 3]
-    const int32_t image_width,
-    const int32_t image_height,
+    const uint32_t image_width,
+    const uint32_t image_height,
     const scalar_t eps2d,
     const CameraModelType camera_model,
     // fwd outputs
