@@ -636,29 +636,29 @@ def rasterize_to_pixels(
 
 
 def rasterize_to_pixels_eval3d(
-    means: Tensor,  # [N, 3]
-    quats: Tensor,  # [N, 4]
-    scales: Tensor,  # [N, 3]
-    colors: Tensor,  # [C, N, channels] or [nnz, channels]
-    opacities: Tensor,  # [C, N] or [nnz]
-    viewmats: Tensor,  # [C, 4, 4]
-    Ks: Tensor,  # [C, 3, 3]
+    means: Tensor,  # [..., N, 3]
+    quats: Tensor,  # [..., N, 4]
+    scales: Tensor,  # [..., N, 3]
+    colors: Tensor,  # [..., C, N, channels] or [nnz, channels]
+    opacities: Tensor,  # [..., C, N] or [nnz]
+    viewmats: Tensor,  # [..., C, 4, 4]
+    Ks: Tensor,  # [..., C, 3, 3]
     image_width: int,
     image_height: int,
     tile_size: int,
-    isect_offsets: Tensor,  # [C, tile_height, tile_width]
+    isect_offsets: Tensor,  # [..., C, tile_height, tile_width]
     flatten_ids: Tensor,  # [n_isects]
-    backgrounds: Optional[Tensor] = None,  # [C, channels]
-    masks: Optional[Tensor] = None,  # [C, tile_height, tile_width]
+    backgrounds: Optional[Tensor] = None,  # [..., C, channels]
+    masks: Optional[Tensor] = None,  # [..., C, tile_height, tile_width]
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
     ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
     # distortion
-    radial_coeffs: Optional[Tensor] = None,
-    tangential_coeffs: Optional[Tensor] = None,
-    thin_prism_coeffs: Optional[Tensor] = None,
+    radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
+    tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
+    thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 2]
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
-    viewmats_rs: Optional[Tensor] = None,  # [C, 4, 4]
+    viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
 ) -> Tuple[Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
@@ -669,28 +669,57 @@ def rasterize_to_pixels_eval3d(
     Returns:
         A tuple:
 
-        - **Rendered colors**. [C, image_height, image_width, channels]
-        - **Rendered alphas**. [C, image_height, image_width, 1]
+        - **Rendered colors**. [..., C, image_height, image_width, channels]
+        - **Rendered alphas**. [..., C, image_height, image_width, 1]
     """
-    C = isect_offsets.size(0)
+    batch_dims = means.shape[:-2]
+    num_batch_dims = len(batch_dims)
+    N = means.size(-2)
+    C = viewmats.size(-3)
+    channels = colors.shape[-1]
     device = means.device
 
-    N = means.size(0)
-    assert means.shape == (N, 3), means.shape
-    assert quats.shape == (N, 4), quats.shape
-    assert scales.shape == (N, 3), scales.shape
-    assert viewmats.shape == (C, 4, 4), viewmats.shape
-    assert Ks.shape == (C, 3, 3), Ks.shape
+    assert means.shape == batch_dims + (N, 3), means.shape
+    assert quats.shape == batch_dims + (N, 4), quats.shape
+    assert scales.shape == batch_dims + (N, 3), scales.shape
+    assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
+    assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
 
-    assert colors.shape[:2] == (C, N), colors.shape
-    assert opacities.shape == (C, N), opacities.shape
+    assert colors.ndim in (num_batch_dims + 2, num_batch_dims + 3), colors.shape
+    if colors.ndim == num_batch_dims + 2:
+        raise NotImplementedError("packed mode is not supported yet")
+        assert (
+            colors.shape[:-2] == batch_dims and colors.shape[-1] == channels
+        ), colors.shape
+    else:
+        assert colors.shape == batch_dims + (C, N, channels), colors.shape
+    assert opacities.shape == colors.shape[:-1], opacities.shape
 
     if backgrounds is not None:
-        assert backgrounds.shape == (C, colors.shape[-1]), backgrounds.shape
+        assert backgrounds.shape == batch_dims + (C, channels), backgrounds.shape
         backgrounds = backgrounds.contiguous()
+
     if masks is not None:
         assert masks.shape == isect_offsets.shape, masks.shape
         masks = masks.contiguous()
+
+    if radial_coeffs is not None:
+        assert radial_coeffs.shape[:-1] == batch_dims + (C,) and radial_coeffs.shape[
+            -1
+        ] in (6, 4), radial_coeffs.shape
+        radial_coeffs = radial_coeffs.contiguous()
+
+    if tangential_coeffs is not None:
+        assert tangential_coeffs.shape == batch_dims + (C, 2), tangential_coeffs.shape
+        tangential_coeffs = tangential_coeffs.contiguous()
+
+    if thin_prism_coeffs is not None:
+        assert thin_prism_coeffs.shape == batch_dims + (C, 2), thin_prism_coeffs.shape
+        thin_prism_coeffs = thin_prism_coeffs.contiguous()
+
+    if viewmats_rs is not None:
+        assert viewmats_rs.shape == batch_dims + (C, 4, 4), viewmats_rs.shape
+        viewmats_rs = viewmats_rs.contiguous()
 
     # Pad the channels to the nearest supported number if necessary
     channels = colors.shape[-1]
@@ -739,7 +768,7 @@ def rasterize_to_pixels_eval3d(
     else:
         padded_channels = 0
 
-    tile_height, tile_width = isect_offsets.shape[1:3]
+    tile_height, tile_width = isect_offsets.shape[-2:]
     assert (
         tile_height * tile_size >= image_height
     ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
@@ -1301,29 +1330,29 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        means: Tensor,  # [N, 3]
-        quats: Tensor,  # [N, 4]
-        scales: Tensor,  # [N, 3]
-        colors: Tensor,  # [C, N, D]
-        opacities: Tensor,  # [C, N]
-        backgrounds: Tensor,  # [C, D], Optional
-        masks: Tensor,  # [C, tile_height, tile_width], Optional
-        viewmats: Tensor,  # [C, 4, 4]
-        Ks: Tensor,  # [C, 3, 3]
+        means: Tensor,  # [..., N, 3]
+        quats: Tensor,  # [..., N, 4]
+        scales: Tensor,  # [..., N, 3]
+        colors: Tensor,  # [..., C, N, D] or [nnz, D]
+        opacities: Tensor,  # [..., C, N] or [nnz]
+        backgrounds: Tensor,  # [..., C, D], Optional
+        masks: Tensor,  # [..., C, tile_height, tile_width], Optional
+        viewmats: Tensor,  # [..., C, 4, 4]
+        Ks: Tensor,  # [..., C, 3, 3]
         width: int,
         height: int,
         tile_size: int,
-        isect_offsets: Tensor,  # [C, tile_height, tile_width]
-        flatten_ids: Tensor,  # [n_isects]
+        isect_offsets: Tensor,  # [..., C, tile_height, tile_width]
+        flatten_ids: Tensor,  # [..., n_isects]
         camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
         ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
         # distortion
-        radial_coeffs: Optional[Tensor] = None,
-        tangential_coeffs: Optional[Tensor] = None,
-        thin_prism_coeffs: Optional[Tensor] = None,
+        radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
+        tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
+        thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 2]
         # rolling shutter
         rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
-        viewmats_rs: Optional[Tensor] = None,  # [C, 4, 4]
+        viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
     ) -> Tuple[Tensor, Tensor]:
         ut_params = ut_params.to_cpp()
         rs_type = rolling_shutter.to_cpp()
@@ -1388,8 +1417,8 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
     @staticmethod
     def backward(
         ctx,
-        v_render_colors: Tensor,  # [C, H, W, 3]
-        v_render_alphas: Tensor,  # [C, H, W, 1]
+        v_render_colors: Tensor,  # [..., C, H, W, 3]
+        v_render_alphas: Tensor,  # [..., C, H, W, 1]
     ):
         (
             means,
@@ -1453,7 +1482,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
 
         if ctx.needs_input_grad[5]:  # backgrounds
             v_backgrounds = (v_render_colors * (1.0 - render_alphas).float()).sum(
-                dim=(1, 2)
+                dim=(-3, -2)
             )
         else:
             v_backgrounds = None
