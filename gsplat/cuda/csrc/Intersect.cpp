@@ -30,6 +30,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
     CHECK_INPUT(radii);
     CHECK_INPUT(depths);
 
+    auto opt = depths.options();
     uint32_t n_elements = means2d.numel() / 2;
     bool packed = means2d.dim() == 2;
     if (packed) {
@@ -53,8 +54,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
     assert(image_n_bits + tile_n_bits <= 32);
 
     // first pass: compute number of tiles per gaussian
-    at::Tensor tiles_per_gauss =
-        at::empty_like(depths, depths.options().dtype(at::kInt));
+    at::Tensor tiles_per_gauss = at::empty_like(depths, opt.dtype(at::kInt));
     int64_t n_isects;
     at::Tensor cum_tiles_per_gauss;
     at::Tensor offsets;
@@ -84,7 +84,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
                 at::sum(tiles_per_gauss, -1).view({-1}), 0
             );
             offsets = at::cat(
-                {at::tensor({0}, offsets.options().dtype(at::kInt)),
+                {at::tensor({0}, opt.dtype(at::kInt)),
                 offsets}
             );
         }
@@ -93,10 +93,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
     }
 
     // second pass: compute isect_ids and flatten_ids as a packed tensor
-    at::Tensor isect_ids =
-        at::empty({n_isects}, depths.options().dtype(at::kLong));
-    at::Tensor flatten_ids =
-        at::empty({n_isects}, depths.options().dtype(at::kInt));
+    at::Tensor isect_ids = at::empty({n_isects}, opt.dtype(at::kLong));
+    at::Tensor flatten_ids = at::empty({n_isects}, opt.dtype(at::kInt));
     if (n_isects) {
         launch_intersect_tile_kernel(
             // inputs
@@ -159,8 +157,9 @@ at::Tensor intersect_offset(
     DEVICE_GUARD(isect_ids);
     CHECK_INPUT(isect_ids);
 
+    auto opt = isect_ids.options();
     at::Tensor offsets = at::empty(
-        {I, tile_height, tile_width}, isect_ids.options().dtype(at::kInt)
+        {I, tile_height, tile_width}, opt.dtype(at::kInt)
     );
     launch_intersect_offset_kernel(
         isect_ids, I, tile_width, tile_height, offsets

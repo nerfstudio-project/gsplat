@@ -26,17 +26,18 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_fwd(
     CHECK_INPUT(covars);
     CHECK_INPUT(Ks);
 
+    auto opt = means.options();
     at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 3));
     uint32_t C = means.size(-3);
     uint32_t N = means.size(-2);
 
     at::DimVector means2d_shape(batch_dims);
     means2d_shape.append({C, N, 2});
-    at::Tensor means2d = at::empty(means2d_shape, means.options());
+    at::Tensor means2d = at::empty(means2d_shape, opt);
     
     at::DimVector covars2d_shape(batch_dims);
     covars2d_shape.append({C, N, 2, 2});
-    at::Tensor covars2d = at::empty(covars2d_shape, covars.options());
+    at::Tensor covars2d = at::empty(covars2d_shape, opt);
 
     launch_projection_ewa_simple_fwd_kernel(
         // inputs
@@ -70,17 +71,18 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_bwd(
     CHECK_INPUT(v_means2d);
     CHECK_INPUT(v_covars2d);
 
+    auto opt = means.options();
     at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 3));
     uint32_t C = means.size(-3);
     uint32_t N = means.size(-2);
 
     at::DimVector v_means_shape(batch_dims);
     v_means_shape.append({C, N, 3});
-    at::Tensor v_means = at::empty(v_means_shape, means.options());
+    at::Tensor v_means = at::empty(v_means_shape, opt);
 
     at::DimVector v_covars_shape(batch_dims);
     v_covars_shape.append({C, N, 3, 3});
-    at::Tensor v_covars = at::empty(v_covars_shape, means.options());
+    at::Tensor v_covars = at::empty(v_covars_shape, opt);
 
     launch_projection_ewa_simple_bwd_kernel(
         // inputs
@@ -134,28 +136,29 @@ projection_ewa_3dgs_fused_fwd(
     CHECK_INPUT(viewmats);
     CHECK_INPUT(Ks);
 
+    auto opt = means.options();
     at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 2));
     uint32_t N = means.size(-2);    // number of gaussians
     uint32_t C = viewmats.size(-3); // number of cameras
 
     at::DimVector radii_shape(batch_dims);
     radii_shape.append({C, N, 2});
-    at::Tensor radii = at::empty(radii_shape, means.options().dtype(at::kInt));
+    at::Tensor radii = at::empty(radii_shape, opt.dtype(at::kInt));
     at::DimVector means2d_shape(batch_dims);
     means2d_shape.append({C, N, 2});
-    at::Tensor means2d = at::empty(means2d_shape, means.options());
+    at::Tensor means2d = at::empty(means2d_shape, opt);
     at::DimVector depths_shape(batch_dims);
     depths_shape.append({C, N});
-    at::Tensor depths = at::empty(depths_shape, means.options());
+    at::Tensor depths = at::empty(depths_shape, opt);
     at::DimVector conics_shape(batch_dims);
     conics_shape.append({C, N, 3});
-    at::Tensor conics = at::empty(conics_shape, means.options());
+    at::Tensor conics = at::empty(conics_shape, opt);
     at::Tensor compensations;
     if (calc_compensations) {
         // we dont want NaN to appear in this tensor, so we zero intialize it
         at::DimVector compensations_shape(batch_dims);
         compensations_shape.append({C, N});
-        compensations = at::zeros(compensations_shape, means.options());
+        compensations = at::zeros(compensations_shape, opt);
     }
 
     launch_projection_ewa_3dgs_fused_fwd_kernel(
@@ -484,27 +487,28 @@ projection_ewa_3dgs_packed_bwd(
         assert(compensations.has_value());
     }
 
+    auto opt = means.options();
     uint32_t nnz = batch_ids.size(0);
     at::Tensor v_means, v_covars, v_quats, v_scales, v_viewmats;
     if (sparse_grad) {
-        v_means = at::zeros({nnz, 3}, means.options());
+        v_means = at::zeros({nnz, 3}, opt);
         if (covars.has_value()) {
-            v_covars = at::zeros({nnz, 6}, covars.value().options());
+            v_covars = at::zeros({nnz, 6}, opt);
         } else {
-            v_quats = at::zeros({nnz, 4}, quats.value().options());
-            v_scales = at::zeros({nnz, 3}, scales.value().options());
+            v_quats = at::zeros({nnz, 4}, opt);
+            v_scales = at::zeros({nnz, 3}, opt);
         }
     } else {
         v_means = at::zeros_like(means);
         if (covars.has_value()) {
-            v_covars = at::zeros_like(covars.value());
+            v_covars = at::zeros_like(covars.value(), opt);
         } else {
-            v_quats = at::zeros_like(quats.value());
-            v_scales = at::zeros_like(scales.value());
+            v_quats = at::zeros_like(quats.value(), opt);
+            v_scales = at::zeros_like(scales.value(), opt);
         }
     }
     if (viewmats_requires_grad) {
-        v_viewmats = at::zeros_like(viewmats);
+        v_viewmats = at::zeros_like(viewmats, opt);
     }
 
     launch_projection_ewa_3dgs_packed_bwd_kernel(
@@ -568,29 +572,30 @@ projection_2dgs_fused_fwd(
     CHECK_INPUT(viewmats);
     CHECK_INPUT(Ks);
 
+    auto opt = means.options();
     at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 2));
     uint32_t N = means.size(-2);          // number of gaussians
     uint32_t C = viewmats.size(-3);       // number of cameras
 
     at::DimVector radii_shape(batch_dims);
     radii_shape.append({C, N, 2});
-    at::Tensor radii = at::empty(radii_shape, means.options().dtype(at::kInt));
+    at::Tensor radii = at::empty(radii_shape, opt.dtype(at::kInt));
 
     at::DimVector means2d_shape(batch_dims);
     means2d_shape.append({C, N, 2});
-    at::Tensor means2d = at::empty(means2d_shape, means.options());
+    at::Tensor means2d = at::empty(means2d_shape, opt);
 
     at::DimVector depths_shape(batch_dims);
     depths_shape.append({C, N});
-    at::Tensor depths = at::empty(depths_shape, means.options());
+    at::Tensor depths = at::empty(depths_shape, opt);
 
     at::DimVector ray_transforms_shape(batch_dims);
     ray_transforms_shape.append({C, N, 3, 3});
-    at::Tensor ray_transforms = at::empty(ray_transforms_shape, means.options());
+    at::Tensor ray_transforms = at::empty(ray_transforms_shape, opt);
 
     at::DimVector normals_shape(batch_dims);
     normals_shape.append({C, N, 3});
-    at::Tensor normals = at::zeros(normals_shape, means.options());
+    at::Tensor normals = at::zeros(normals_shape, opt);
 
     launch_projection_2dgs_fused_fwd_kernel(
         // inputs
@@ -848,6 +853,7 @@ projection_2dgs_packed_bwd(
     CHECK_INPUT(v_normals);
     CHECK_INPUT(v_ray_transforms);
 
+    auto opt = means.options();
     uint32_t N = means.size(-2);          // number of gaussians
     uint32_t B = means.numel() / (N * 3); // number of batches
     uint32_t C = viewmats.size(-3);       // number of cameras
@@ -855,16 +861,16 @@ projection_2dgs_packed_bwd(
 
     at::Tensor v_means, v_quats, v_scales, v_viewmats;
     if (sparse_grad) {
-        v_means = at::zeros({nnz, 3}, means.options());
-        v_quats = at::zeros({nnz, 4}, quats.options());
-        v_scales = at::zeros({nnz, 3}, scales.options());
+        v_means = at::zeros({nnz, 3}, opt);
+        v_quats = at::zeros({nnz, 4}, opt);
+        v_scales = at::zeros({nnz, 3}, opt);
     } else {
-        v_means = at::zeros_like(means);
-        v_quats = at::zeros_like(quats);
-        v_scales = at::zeros_like(scales);
+        v_means = at::zeros_like(means, opt);
+        v_quats = at::zeros_like(quats, opt);
+        v_scales = at::zeros_like(scales, opt);
     }
     if (viewmats_requires_grad) {
-        v_viewmats = at::zeros_like(viewmats);
+        v_viewmats = at::zeros_like(viewmats, opt);
     }
     
     launch_projection_2dgs_packed_bwd_kernel(

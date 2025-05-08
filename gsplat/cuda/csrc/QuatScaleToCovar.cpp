@@ -25,6 +25,7 @@ std::tuple<at::Tensor, at::Tensor> quat_scale_to_covar_preci_fwd(
     CHECK_INPUT(quats);
     CHECK_INPUT(scales);
 
+    auto opt = quats.options();
     at::DimVector out_shape(quats.sizes().slice(0, quats.dim() - 1));
     if (triu) {
         out_shape.append({6});
@@ -33,8 +34,8 @@ std::tuple<at::Tensor, at::Tensor> quat_scale_to_covar_preci_fwd(
     }
 
     at::Tensor covars, precis;
-    if (compute_covar) covars = at::empty(out_shape, quats.options());
-    if (compute_preci) precis = at::empty(out_shape, quats.options());
+    if (compute_covar) covars = at::empty(out_shape, opt);
+    if (compute_preci) precis = at::empty(out_shape, opt);
 
     launch_quat_scale_to_covar_preci_fwd_kernel(
         quats,

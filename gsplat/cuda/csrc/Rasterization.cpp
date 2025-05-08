@@ -46,8 +46,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     if (masks.has_value()) {
         CHECK_INPUT(masks.value());
     }
-    auto opt = means2d.options();
 
+    auto opt = means2d.options();
     at::DimVector image_dims(tile_offsets.sizes().slice(0, tile_offsets.dim() - 2));
     uint32_t channels = colors.size(-1);
 
@@ -250,6 +250,7 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
     CHECK_INPUT(tile_offsets);
     CHECK_INPUT(flatten_ids);
 
+    auto opt = means2d.options();
     uint32_t N = means2d.size(-2); // number of gaussians
     uint32_t I = means2d.numel() / (2 * N); // number of images
 
@@ -260,7 +261,7 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
     at::Tensor chunk_starts;
     if (n_isects) {
         at::Tensor chunk_cnts = at::zeros(
-            {I * image_height * image_width}, means2d.options().dtype(at::kInt)
+            {I * image_height * image_width}, opt.dtype(at::kInt)
         );
         launch_rasterize_to_indices_3dgs_kernel(
             range_start,
@@ -287,10 +288,8 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
     }
 
     // Second pass: allocate memory and write out the gaussian and pixel ids.
-    at::Tensor gaussian_ids =
-        at::empty({n_elems}, means2d.options().dtype(at::kLong));
-    at::Tensor pixel_ids =
-        at::empty({n_elems}, means2d.options().dtype(at::kLong));
+    at::Tensor gaussian_ids = at::empty({n_elems}, opt.dtype(at::kLong));
+    at::Tensor pixel_ids = at::empty({n_elems}, opt.dtype(at::kLong));
     if (n_elems) {
         launch_rasterize_to_indices_3dgs_kernel(
             range_start,
@@ -627,6 +626,7 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
     CHECK_INPUT(tile_offsets);
     CHECK_INPUT(flatten_ids);
 
+    auto opt = means2d.options();
     uint32_t N = means2d.size(-2); // number of gaussians
     uint32_t I = means2d.numel() / (2 * N); // number of images
 
@@ -637,7 +637,7 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
     at::Tensor chunk_starts;
     if (n_isects) {
         at::Tensor chunk_cnts = at::zeros(
-            {I * image_height * image_width}, means2d.options().dtype(at::kInt)
+            {I * image_height * image_width}, opt.dtype(at::kInt)
         );
         launch_rasterize_to_indices_2dgs_kernel(
             range_start,
@@ -664,10 +664,8 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
     }
 
     // Second pass: allocate memory and write out the gaussian and pixel ids.
-    at::Tensor gaussian_ids =
-        at::empty({n_elems}, means2d.options().dtype(at::kLong));
-    at::Tensor pixel_ids =
-        at::empty({n_elems}, means2d.options().dtype(at::kLong));
+    at::Tensor gaussian_ids = at::empty({n_elems}, opt.dtype(at::kLong));
+    at::Tensor pixel_ids = at::empty({n_elems}, opt.dtype(at::kLong));
     if (n_elems) {
         launch_rasterize_to_indices_2dgs_kernel(
             range_start,
@@ -736,8 +734,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
     if (masks.has_value()) {
         CHECK_INPUT(masks.value());
     }
+    
     auto opt = means.options();
-
     at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 2));
     uint32_t C = viewmats0.size(-3);     // number of cameras
     // uint32_t N = means.size(-2);         // number of gaussians
