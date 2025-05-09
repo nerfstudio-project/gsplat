@@ -200,6 +200,9 @@ def rasterization(
         camera_model: The camera model to use. Supported models are "pinhole", "ortho",
             and "fisheye". Default is "pinhole".
         segmented: Whether to use segmented radix sort. Default is False.
+            Segmented radix sort performs sorting in segments, which is more efficient for the sorting operation itself.
+            However, since it requires offset indices as input, additional global memory access is needed, which results
+            in slower overall performance in most use cases.
         covars: Optional covariance matrices of the Gaussians. If provided, the `quats` and
             `scales` will be ignored. [..., N, 3, 3], Default is None.
         with_ut: Whether to use Unscented Transform (UT) for projection. Default is False.
