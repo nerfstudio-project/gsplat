@@ -891,7 +891,7 @@ class Runner:
 
             if not cfg.disable_viewer:
                 self.viewer.lock.release()
-                num_train_steps_per_sec = 1.0 / (time.time() - tic)
+                num_train_steps_per_sec = 1.0 / (max(time.time() - tic, 1e-10))
                 num_train_rays_per_sec = (
                     num_train_rays_per_step * num_train_steps_per_sec
                 )
@@ -936,7 +936,7 @@ class Runner:
                 masks=masks,
             )  # [1, H, W, 3]
             torch.cuda.synchronize()
-            ellipse_time += time.time() - tic
+            ellipse_time += max(time.time() - tic, 1e-10)
 
             colors = torch.clamp(colors, 0.0, 1.0)
             canvas_list = [pixels, colors]
@@ -1172,8 +1172,8 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
     else:
         runner.train()
 
-    runner.viewer.complete()
     if not cfg.disable_viewer:
+        runner.viewer.complete()
         print("Viewer running... Ctrl+C to exit.")
         time.sleep(1000000)
 
