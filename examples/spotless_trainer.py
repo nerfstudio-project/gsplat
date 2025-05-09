@@ -588,6 +588,8 @@ class Runner:
                 colors, depths = renders[..., 0:3], renders[..., 3:4]
             else:
                 colors, depths = renders, None
+           
+            colors = torch.clamp(colors, 0., 1.0)
 
             if cfg.random_bkgd:
                 bkgd = torch.rand(1, 3, device=device)
