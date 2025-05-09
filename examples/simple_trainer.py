@@ -128,6 +128,19 @@ class Config:
     # Use random background for training to discourage transparency
     random_bkgd: bool = False
 
+    # LR for 3D point positions
+    means_lr: float = 1.6e-4
+    # LR for Gaussian scale factors
+    scales_lr: float = 5e-3
+    # LR for alpha blending weights
+    opacities_lr: float = 5e-2
+    # LR for orientation (quaternions)
+    quats_lr: float = 1e-3
+    # LR for SH band 0 (brightness)
+    sh0_lr: float = 2.5e-3
+    # LR for higher-order SH (detail)
+    shN_lr: float = 2.5e-3 / 20
+
     # Opacity regularization
     opacity_reg: float = 0.0
     # Scale regularization
@@ -196,6 +209,12 @@ def create_splats_with_optimizers(
     init_extent: float = 3.0,
     init_opacity: float = 0.1,
     init_scale: float = 1.0,
+    means_lr: float = 1.6e-4,
+    scales_lr: float = 5e-3,
+    opacities_lr: float = 5e-2,
+    quats_lr: float = 1e-3,
+    sh0_lr: float = 2.5e-3,
+    shN_lr: float = 2.5e-3 / 20,
     scene_scale: float = 1.0,
     sh_degree: int = 3,
     sparse_grad: bool = False,
@@ -231,24 +250,24 @@ def create_splats_with_optimizers(
 
     params = [
         # name, value, lr
-        ("means", torch.nn.Parameter(points), 1.6e-4 * scene_scale),
-        ("scales", torch.nn.Parameter(scales), 5e-3),
-        ("quats", torch.nn.Parameter(quats), 1e-3),
-        ("opacities", torch.nn.Parameter(opacities), 5e-2),
+        ("means", torch.nn.Parameter(points), means_lr * scene_scale),
+        ("scales", torch.nn.Parameter(scales), scales_lr),
+        ("quats", torch.nn.Parameter(quats), quats_lr),
+        ("opacities", torch.nn.Parameter(opacities), opacities_lr),
     ]
 
     if feature_dim is None:
         # color is SH coefficients.
         colors = torch.zeros((N, (sh_degree + 1) ** 2, 3))  # [N, K, 3]
         colors[:, 0, :] = rgb_to_sh(rgbs)
-        params.append(("sh0", torch.nn.Parameter(colors[:, :1, :]), 2.5e-3))
-        params.append(("shN", torch.nn.Parameter(colors[:, 1:, :]), 2.5e-3 / 20))
+        params.append(("sh0", torch.nn.Parameter(colors[:, :1, :]), sh0_lr))
+        params.append(("shN", torch.nn.Parameter(colors[:, 1:, :]), shN_lr))
     else:
         # features will be used for appearance and view-dependent shading
         features = torch.rand(N, feature_dim)  # [N, feature_dim]
-        params.append(("features", torch.nn.Parameter(features), 2.5e-3))
+        params.append(("features", torch.nn.Parameter(features), sh0_lr))
         colors = torch.logit(rgbs)  # [N, 3]
-        params.append(("colors", torch.nn.Parameter(colors), 2.5e-3))
+        params.append(("colors", torch.nn.Parameter(colors), sh0_lr))
 
     splats = torch.nn.ParameterDict({n: v for n, v, _ in params}).to(device)
     # Scale learning rate based on batch size, reference:
@@ -331,6 +350,12 @@ class Runner:
             init_extent=cfg.init_extent,
             init_opacity=cfg.init_opa,
             init_scale=cfg.init_scale,
+            means_lr=cfg.means_lr,
+            scales_lr=cfg.scales_lr,
+            opacities_lr=cfg.opacities_lr,
+            quats_lr=cfg.quats_lr,
+            sh0_lr=cfg.sh0_lr,
+            shN_lr=cfg.shN_lr,
             scene_scale=self.scene_scale,
             sh_degree=cfg.sh_degree,
             sparse_grad=cfg.sparse_grad,
