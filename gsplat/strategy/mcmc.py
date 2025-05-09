@@ -14,6 +14,7 @@ class MCMCStrategy(Strategy):
     """Strategy that follows the paper:
 
     `3D Gaussian Splatting as Markov Chain Monte Carlo <https://arxiv.org/abs/2404.09591>`_
+    `Deformable Beta splatting <https://arxiv.org/abs/2501.18630>`_
 
     This strategy will:
 
@@ -56,12 +57,7 @@ class MCMCStrategy(Strategy):
 
     def initialize_state(self) -> Dict[str, Any]:
         """Initialize and return the running state for this strategy."""
-        n_max = 51
-        binoms = torch.zeros((n_max, n_max))
-        for n in range(n_max):
-            for k in range(n + 1):
-                binoms[n, k] = math.comb(n, k)
-        return {"binoms": binoms}
+        pass
 
     def check_sanity(
         self,
@@ -86,19 +82,8 @@ class MCMCStrategy(Strategy):
 
         super().check_sanity(params, optimizers)
         # The following keys are required for this strategy.
-        for key in ["means", "scales", "quats", "opacities"]:
+        for key in ["means", "opacities"]:
             assert key in params, f"{key} is required in params but missing."
-
-    # def step_pre_backward(
-    #     self,
-    #     params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-    #     optimizers: Dict[str, torch.optim.Optimizer],
-    #     # state: Dict[str, Any],
-    #     step: int,
-    #     info: Dict[str, Any],
-    # ):
-    #     """Callback function to be executed before the `loss.backward()` call."""
-    #     pass
 
     def step_post_backward(
         self,
@@ -114,42 +99,37 @@ class MCMCStrategy(Strategy):
         Args:
             lr (float): Learning rate for "means" attribute of the GS.
         """
-        # move to the correct device
-        state["binoms"] = state["binoms"].to(params["means"].device)
-
-        binoms = state["binoms"]
 
         if (
             step < self.refine_stop_iter
             and step > self.refine_start_iter
             and step % self.refine_every == 0
         ):
-            # teleport GSs
-            n_relocated_gs = self._relocate_gs(params, optimizers, binoms)
+            # teleport primitives
+            n_relocated_primitives = self._relocate_primitives(params, optimizers)
             if self.verbose:
-                print(f"Step {step}: Relocated {n_relocated_gs} GSs.")
+                print(f"Step {step}: Relocated {n_relocated_primitives} Primitives.")
 
-            # add new GSs
-            n_new_gs = self._add_new_gs(params, optimizers, binoms)
+            # add new primitives
+            n_new_gs = self._add_new_primitives(params, optimizers)
             if self.verbose:
                 print(
-                    f"Step {step}: Added {n_new_gs} GSs. "
-                    f"Now having {len(params['means'])} GSs."
+                    f"Step {step}: Added {n_new_gs} Primitives. "
+                    f"Now having {len(params['means'])} Primitives."
                 )
 
             torch.cuda.empty_cache()
 
-        # add noise to GSs
+        # add noise to primitives
         inject_noise_to_position(
             params=params, optimizers=optimizers, state={}, scaler=lr * self.noise_lr
         )
 
     @torch.no_grad()
-    def _relocate_gs(
+    def _relocate_primitives(
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
-        binoms: Tensor,
     ) -> int:
         opacities = torch.sigmoid(params["opacities"].flatten())
         dead_mask = opacities <= self.min_opacity
@@ -160,17 +140,15 @@ class MCMCStrategy(Strategy):
                 optimizers=optimizers,
                 state={},
                 mask=dead_mask,
-                binoms=binoms,
                 min_opacity=self.min_opacity,
             )
         return n_gs
 
     @torch.no_grad()
-    def _add_new_gs(
+    def _add_new_primitives(
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
-        binoms: Tensor,
     ) -> int:
         current_n_points = len(params["means"])
         n_target = min(self.cap_max, int(1.05 * current_n_points))
@@ -181,7 +159,6 @@ class MCMCStrategy(Strategy):
                 optimizers=optimizers,
                 state={},
                 n=n_gs,
-                binoms=binoms,
                 min_opacity=self.min_opacity,
             )
         return n_gs
