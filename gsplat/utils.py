@@ -133,6 +133,12 @@ def normalized_quat_to_rotmat(quat: Tensor) -> Tensor:
     return mat.reshape(quat.shape[:-1] + (3, 3))
 
 
+def xyz_to_polar(means):
+    x, y, z = means[:, 0], means[:, 1], means[:, 2]
+    r = torch.sqrt(x**2 + y**2 + z**2)
+    return 1 / r, r
+
+
 def log_transform(x):
     return torch.sign(x) * torch.log1p(torch.abs(x))
 

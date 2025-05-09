@@ -7,7 +7,7 @@ from torch import Tensor
 
 from gsplat import quat_scale_to_covar_preci
 from gsplat.relocation import compute_relocation
-from gsplat.utils import normalized_quat_to_rotmat
+from gsplat.utils import normalized_quat_to_rotmat, xyz_to_polar
 
 
 @torch.no_grad()
@@ -141,7 +141,11 @@ def split(
     sel = torch.where(mask)[0]
     rest = torch.where(~mask)[0]
 
-    scales = torch.exp(params["scales"][sel])
+    scales = torch.exp(params["scales"])
+    means = params["means"][sel]
+    if "w" in params:
+        w_inv = 1.0 / torch.exp(params["w"][sel]).unsqueeze(1)
+        scales *= w_inv
     quats = F.normalize(params["quats"][sel], dim=-1)
     rotmats = normalized_quat_to_rotmat(quats)  # [N, 3, 3]
     samples = torch.einsum(
@@ -151,15 +155,24 @@ def split(
         torch.randn(2, len(scales), 3, device=device),
     )  # [2, N, 3]
 
+    means = means + samples
+    if "w" in params:
+        w, _ = xyz_to_polar(means)
+        means = means * w.unsqueeze(1)
+
     def param_fn(name: str, p: Tensor) -> Tensor:
         repeats = [2] + [1] * (p.dim() - 1)
         if name == "means":
-            p_split = (p[sel] + samples).reshape(-1, 3)  # [2N, 3]
+            p_split = means.reshape(-1, 3)  # [2N, 3]
         elif name == "scales":
-            p_split = torch.log(scales / 1.6).repeat(2, 1)  # [2N, 3]
+            p_split = torch.log(torch.exp(params["scales"]) / 1.6).repeat(
+                2, 1
+            )  # [2N, 3]
         elif name == "opacities" and revised_opacity:
             new_opacities = 1.0 - torch.sqrt(1.0 - torch.sigmoid(p[sel]))
             p_split = torch.logit(new_opacities).repeat(repeats)  # [2N]
+        elif name == "w":
+            p_split = torch.log(w)
         else:
             p_split = p[sel].repeat(repeats)
         p_new = torch.cat([p[rest], p_split])

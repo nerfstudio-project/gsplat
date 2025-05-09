@@ -272,10 +272,12 @@ class DefaultStrategy(Strategy):
         device = grads.device
 
         is_grad_high = grads > self.grow_grad2d
-        is_small = (
-            torch.exp(params["scales"]).max(dim=-1).values
-            <= self.grow_scale3d * state["scene_scale"]
-        )
+        scales = torch.exp(params["scales"])
+        if "w" in params:
+            w_inv = 1.0 / torch.exp(params["w"]).unsqueeze(1)
+            scales *= w_inv
+
+        is_small = scales.max(dim=-1).values <= self.grow_scale3d * state["scene_scale"]
         is_dupli = is_grad_high & is_small
         n_dupli = is_dupli.sum().item()
 
