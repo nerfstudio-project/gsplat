@@ -58,12 +58,12 @@ def rasterization(
     with_ut: bool = False,
     with_eval3d: bool = False,
     # distortion
-    radial_coeffs: Optional[Tensor] = None,
-    tangential_coeffs: Optional[Tensor] = None,
-    thin_prism_coeffs: Optional[Tensor] = None,
+    radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
+    tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
+    thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
-    viewmats_rs: Optional[Tensor] = None,  # [C, 4, 4]
+    viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -206,12 +206,12 @@ def rasterization(
         with_eval3d: Whether to calculate Gaussian response in 3D world space, instead
             of 2D image space. Default is False.
         radial_coeffs: Opencv pinhole/fisheye radial distortion coefficients. Default is None.
-            For pinhole camera, the shape should be [C, 6]. For fisheye camera, the shape
-            should be [C, 4].
+            For pinhole camera, the shape should be [..., C, 6]. For fisheye camera, the shape
+            should be [..., C, 4].
         tangential_coeffs: Opencv pinhole tangential distortion coefficients. Default is None.
-            The shape should be [C, 2] if provided.
+            The shape should be [..., C, 2] if provided.
         thin_prism_coeffs: Opencv pinhole thin prism distortion coefficients. Default is None.
-            The shape should be [C, 4] if provided.
+            The shape should be [..., C, 4] if provided.
         rolling_shutter: The rolling shutter type. Default `RollingShutterType.GLOBAL` means
             global shutter.
         viewmats_rs: The second viewmat when rolling shutter is used. Default is None.
