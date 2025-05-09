@@ -54,13 +54,13 @@ class Config:
     render_traj_path: str = "interp"
 
     # Path to the Mip-NeRF 360 dataset
-    data_dir: str = "data/360_v2/garden"
+    data_dir: str = "/home/paja/data/bike_aliked"
     # Downsample factor for the dataset
-    data_factor: int = 4
+    data_factor: int = 1
     # Directory to save results
     result_dir: str = "results/garden"
     # Every N images there is a test image
-    test_every: int = 8
+    test_every: int = 300
     # Random crop size for training  (experimental)
     patch_size: Optional[int] = None
     # A global scaler that applies to the scene size related parameters
@@ -483,8 +483,8 @@ class Runner:
 
         if cfg.use_hom_coords:
             w_inv = 1.0 / torch.exp(self.splats["w"]).unsqueeze(1)
-            means *= w_inv
-            scales *= w_inv
+            means = means * w_inv
+            scales = scales * w_inv
 
         image_ids = kwargs.pop("image_ids", None)
         if self.cfg.app_opt:
@@ -1211,7 +1211,15 @@ if __name__ == "__main__":
             ),
         ),
     }
+
     cfg = tyro.extras.overridable_config_cli(configs)
+    if cfg.use_hom_coords:
+        cfg.max_steps = 50_000
+        if isinstance(cfg.strategy, DefaultStrategy):
+            cfg.strategy.refine_stop_iter = 30_000
+            cfg.strategy.refine_every = 200
+            cfg.strategy.reset_every = 6_000
+
     cfg.adjust_steps(cfg.steps_scaler)
 
     # try import extra dependencies

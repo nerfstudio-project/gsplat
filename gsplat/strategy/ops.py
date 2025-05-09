@@ -141,11 +141,11 @@ def split(
     sel = torch.where(mask)[0]
     rest = torch.where(~mask)[0]
 
-    scales = torch.exp(params["scales"])
+    scales = torch.exp(params["scales"][sel])
     means = params["means"][sel]
     if "w" in params:
         w_inv = 1.0 / torch.exp(params["w"][sel]).unsqueeze(1)
-        scales *= w_inv
+        scales = scales * w_inv
     quats = F.normalize(params["quats"][sel], dim=-1)
     rotmats = normalized_quat_to_rotmat(quats)  # [N, 3, 3]
     samples = torch.einsum(
@@ -157,13 +157,14 @@ def split(
 
     means = means + samples
     if "w" in params:
-        w, _ = xyz_to_polar(means)
-        means = means * w.unsqueeze(1)
+        flat_means = means.reshape(-1, 3)  # [2N, 3]
+        w, _ = xyz_to_polar(flat_means)  # [2N]
+        means = flat_means * w.unsqueeze(1)  # [2N, 3]
 
     def param_fn(name: str, p: Tensor) -> Tensor:
         repeats = [2] + [1] * (p.dim() - 1)
         if name == "means":
-            p_split = means.reshape(-1, 3)  # [2N, 3]
+            p_split = means  # [2N, 3]
         elif name == "scales":
             p_split = torch.log(torch.exp(params["scales"]) / 1.6).repeat(
                 2, 1
