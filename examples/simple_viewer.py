@@ -243,9 +243,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--with_ut", action="store_true", help="use uncentered transform"
     )
-    parser.add_argument(
-        "--with_eval3d", action="store_true", help="use eval 3D"
-    )
+    parser.add_argument("--with_eval3d", action="store_true", help="use eval 3D")
     args = parser.parse_args()
     assert args.scene_grid % 2 == 1, "scene_grid must be odd"
 
