@@ -326,8 +326,7 @@ class DefaultStrategy(Strategy):
                 w_inv = 1.0 / torch.exp(params["w"]).unsqueeze(1)
                 scales = scales * w_inv
             is_too_big = (
-                scales.max(dim=-1).values
-                > self.prune_scale3d * state["scene_scale"]
+                scales.max(dim=-1).values > self.prune_scale3d * state["scene_scale"]
             )
             # The official code also implements sreen-size pruning but
             # it's actually not being used due to a bug:
