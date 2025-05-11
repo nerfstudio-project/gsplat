@@ -146,6 +146,7 @@ def split(
     if "w" in params:
         w_inv = 1.0 / torch.exp(params["w"][sel]).unsqueeze(1)
         scales = scales * w_inv
+        means = means * w_inv
     quats = F.normalize(params["quats"][sel], dim=-1)
     rotmats = normalized_quat_to_rotmat(quats)  # [N, 3, 3]
     samples = torch.einsum(
@@ -165,15 +166,15 @@ def split(
         repeats = [2] + [1] * (p.dim() - 1)
         if name == "means":
             p_split = means  # [2N, 3]
+        elif name == "w":
+            p_split = torch.log(w)
         elif name == "scales":
-            p_split = torch.log(torch.exp(params["scales"]) / 1.6).repeat(
+            p_split = torch.log(torch.exp(params["scales"][sel]) / 1.6).repeat(
                 2, 1
             )  # [2N, 3]
         elif name == "opacities" and revised_opacity:
             new_opacities = 1.0 - torch.sqrt(1.0 - torch.sigmoid(p[sel]))
             p_split = torch.logit(new_opacities).repeat(repeats)  # [2N]
-        elif name == "w":
-            p_split = torch.log(w)
         else:
             p_split = p[sel].repeat(repeats)
         p_new = torch.cat([p[rest], p_split])

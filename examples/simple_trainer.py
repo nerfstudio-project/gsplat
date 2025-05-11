@@ -54,7 +54,7 @@ class Config:
     render_traj_path: str = "interp"
 
     # Path to the Mip-NeRF 360 dataset
-    data_dir: str = "/home/paja/data/bike_aliked"
+    data_dir: str = "/home/paja/data/alex_new"
     # Downsample factor for the dataset
     data_factor: int = 1
     # Directory to save results
@@ -552,7 +552,7 @@ class Runner:
         if cfg.use_hom_coords:
             schedulers.append(
                 torch.optim.lr_scheduler.ExponentialLR(
-                    self.optimizers["w"], gamma=0.1 ** (0.5 / max_steps)
+                    self.optimizers["w"], gamma=0.1 ** (0.005 / max_steps)
                 )
             )
         if cfg.pose_opt:
@@ -1219,6 +1219,8 @@ if __name__ == "__main__":
             cfg.strategy.refine_stop_iter = 30_000
             cfg.strategy.refine_every = 200
             cfg.strategy.reset_every = 6_000
+            cfg.strategy.refine_start_iter = 1_500
+            cfg.strategy.prune_too_big = False
 
     cfg.adjust_steps(cfg.steps_scaler)
 
