@@ -1,4 +1,4 @@
-""" 
+"""
 Trigger compiling (for debugging):
 
 VERBOSE=1 FAST_COMPILE=1 TORCH_CUDA_ARCH_LIST="8.9" python -c "from gsplat.cuda._backend import _C"
@@ -90,7 +90,9 @@ def load_extension(
                 is_standalone=False,
                 keep_intermediates=True,
             )
-        except TypeError as e: # torch>=2.7.0 has added arguments to _jit_compile to support SYCL.
+        except (
+            TypeError
+        ) as e:  # torch>=2.7.0 has added arguments to _jit_compile to support SYCL.
             # Narrow the scope of catch: only retry if it's due to unexpected argument(s)
             if "_jit_compile() missing" in str(e):
                 compiled = _jit_compile(
