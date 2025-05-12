@@ -402,8 +402,9 @@ def inject_noise_to_position(
     noise = torch.einsum("bij,bj->bi", covars, noise)
     means = means + noise
 
-    w, _ = xyz_to_polar(means)
-    means = means * w.unsqueeze(1)
+    if "w" in params:
+        w, _ = xyz_to_polar(means)
+        means = means * w.unsqueeze(1)
+        params["w"].data = torch.log(w.clamp_min(1e-8))
 
     params["means"].data = means
-    params["w"].data = torch.log(w.clamp_min(1e-8))
