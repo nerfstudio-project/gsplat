@@ -301,7 +301,10 @@ def relocate(
         if name == "opacities":
             p[sampled_idxs] = torch.logit(new_opacities)
         elif name == "scales":
-            p[sampled_idxs] = torch.log(new_scales * w)
+            if "w" in params:
+                p[sampled_idxs] = torch.log(new_scales * w)
+            else:
+                p[sampled_idxs] = torch.log(new_scales)
         p[dead_indices] = p[sampled_idxs]
         return torch.nn.Parameter(p, requires_grad=p.requires_grad)
 
