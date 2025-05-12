@@ -148,7 +148,7 @@ class Config:
     scale_reg: float = 0.0
 
     # Use homogeneous coordinates, 50k max_steps and 30k steps densifications recommended!
-    use_hom_coords: bool = True
+    use_hom_coords: bool = False
 
     # Enable camera optimization.
     pose_opt: bool = False
@@ -1252,6 +1252,12 @@ if __name__ == "__main__":
             cfg.strategy.reset_every = 6_000
             cfg.strategy.refine_start_iter = 1_500
             cfg.strategy.prune_too_big = False
+        elif isinstance(cfg.strategy, MCMCStrategy):
+            cfg.strategy.refine_start_iter: 1_500
+            cfg.strategy.refine_stop_iter: 40_000
+            cfg.strategy.refine_every: int = 200
+        else:
+            assert_never(cfg.strategy)
 
     cfg.adjust_steps(cfg.steps_scaler)
 
