@@ -1,9 +1,7 @@
-import math
 from dataclasses import dataclass
 from typing import Any, Dict, Union
 
 import torch
-from torch import Tensor
 
 from .base import Strategy
 from .ops import inject_noise_to_position, relocate, sample_add
@@ -18,17 +16,17 @@ class MCMCStrategy(Strategy):
 
     This strategy will:
 
-    - Periodically teleport GSs with low opacity to a place that has high opacity.
-    - Periodically introduce new GSs sampled based on the opacity distribution.
-    - Periodically perturb the GSs locations.
+    - Periodically teleport primitives with low opacity to a place that has high opacity.
+    - Periodically introduce new primitives sampled based on the opacity distribution.
+    - Periodically perturb the primitives locations.
 
     Args:
-        cap_max (int): Maximum number of GSs. Default to 1_000_000.
+        cap_max (int): Maximum number of primitives. Default to 1_000_000.
         noise_lr (float): MCMC samping noise learning rate. Default to 5e5.
-        refine_start_iter (int): Start refining GSs after this iteration. Default to 500.
-        refine_stop_iter (int): Stop refining GSs after this iteration. Default to 25_000.
-        refine_every (int): Refine GSs every this steps. Default to 100.
-        min_opacity (float): GSs with opacity below this value will be pruned. Default to 0.005.
+        refine_start_iter (int): Start refining primitives after this iteration. Default to 500.
+        refine_stop_iter (int): Stop refining primitives after this iteration. Default to 25_000.
+        refine_every (int): Refine primitives every this steps. Default to 100.
+        min_opacity (float): primitives with opacity below this value will be pruned. Default to 0.005.
         verbose (bool): Whether to print verbose information. Default to False.
 
     Examples:
@@ -97,7 +95,7 @@ class MCMCStrategy(Strategy):
         """Callback function to be executed after the `loss.backward()` call.
 
         Args:
-            lr (float): Learning rate for "means" attribute of the GS.
+            lr (float): Learning rate for "means" attribute of the primitive.
         """
 
         if (
@@ -111,10 +109,10 @@ class MCMCStrategy(Strategy):
                 print(f"Step {step}: Relocated {n_relocated_primitives} Primitives.")
 
             # add new primitives
-            n_new_gs = self._add_new_primitives(params, optimizers)
+            n_new_primitive = self._add_new_primitives(params, optimizers)
             if self.verbose:
                 print(
-                    f"Step {step}: Added {n_new_gs} Primitives. "
+                    f"Step {step}: Added {n_new_primitive} Primitives. "
                     f"Now having {len(params['means'])} Primitives."
                 )
 
@@ -133,8 +131,8 @@ class MCMCStrategy(Strategy):
     ) -> int:
         opacities = torch.sigmoid(params["opacities"].flatten())
         dead_mask = opacities <= self.min_opacity
-        n_gs = dead_mask.sum().item()
-        if n_gs > 0:
+        n_primitive = dead_mask.sum().item()
+        if n_primitive > 0:
             relocate(
                 params=params,
                 optimizers=optimizers,
@@ -142,7 +140,7 @@ class MCMCStrategy(Strategy):
                 mask=dead_mask,
                 min_opacity=self.min_opacity,
             )
-        return n_gs
+        return n_primitive
 
     @torch.no_grad()
     def _add_new_primitives(
@@ -152,13 +150,13 @@ class MCMCStrategy(Strategy):
     ) -> int:
         current_n_points = len(params["means"])
         n_target = min(self.cap_max, int(1.05 * current_n_points))
-        n_gs = max(0, n_target - current_n_points)
-        if n_gs > 0:
+        n_primitive = max(0, n_target - current_n_points)
+        if n_primitive > 0:
             sample_add(
                 params=params,
                 optimizers=optimizers,
                 state={},
-                n=n_gs,
+                n=n_primitive,
                 min_opacity=self.min_opacity,
             )
-        return n_gs
+        return n_primitive
