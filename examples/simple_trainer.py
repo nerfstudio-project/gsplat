@@ -829,7 +829,7 @@ class Runner:
                 scales = self.splats["scales"]
                 if cfg.use_hom_coords:
                     w_inv = 1.0 / torch.exp(self.splats["w"]).unsqueeze(1)
-                    means *= w_inv
+                    means = means * w_inv
                     scales = torch.log(torch.exp(scales) * w_inv)
 
                 quats = self.splats["quats"]
