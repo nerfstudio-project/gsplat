@@ -15,15 +15,16 @@ namespace cg = cooperative_groups;
 
 template <typename scalar_t>
 __global__ void projection_ut_3dgs_fused_kernel(
+    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
-    const scalar_t *__restrict__ means,    // [N, 3]
-    const scalar_t *__restrict__ quats,    // [N, 4]
-    const scalar_t *__restrict__ scales,   // [N, 3]
-    const scalar_t *__restrict__ opacities, // [N] optional
-    const scalar_t *__restrict__ viewmats0, // [C, 4, 4]
-    const scalar_t *__restrict__ viewmats1, // [C, 4, 4] optional for rolling shutter
-    const scalar_t *__restrict__ Ks,        // [C, 3, 3]
+    const scalar_t *__restrict__ means,     // [B, N, 3]
+    const scalar_t *__restrict__ quats,     // [B, N, 4]
+    const scalar_t *__restrict__ scales,    // [B, N, 3]
+    const scalar_t *__restrict__ opacities, // [B, N] optional
+    const scalar_t *__restrict__ viewmats0, // [B, C, 4, 4]
+    const scalar_t *__restrict__ viewmats1, // [B, C, 4, 4] optional for rolling shutter
+    const scalar_t *__restrict__ Ks,        // [B, C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
@@ -34,42 +35,43 @@ __global__ void projection_ut_3dgs_fused_kernel(
     // uncented transform
     const UnscentedTransformParameters ut_params,    
     const ShutterType rs_type,
-    const scalar_t *__restrict__ radial_coeffs, // [C, 6] or [C, 4] optional
-    const scalar_t *__restrict__ tangential_coeffs, // [C, 2] optional
-    const scalar_t *__restrict__ thin_prism_coeffs, // [C, 2] optional
+    const scalar_t *__restrict__ radial_coeffs,     // [B, C, 6] or [B, C, 4] optional
+    const scalar_t *__restrict__ tangential_coeffs, // [B, C, 2] optional
+    const scalar_t *__restrict__ thin_prism_coeffs, // [B, C, 2] optional
     // outputs
-    int32_t *__restrict__ radii,         // [C, N, 2]
-    scalar_t *__restrict__ means2d,      // [C, N, 2]
-    scalar_t *__restrict__ depths,       // [C, N]
-    scalar_t *__restrict__ conics,       // [C, N, 3]
-    scalar_t *__restrict__ compensations // [C, N] optional
+    int32_t *__restrict__ radii,         // [B, C, N, 2]
+    scalar_t *__restrict__ means2d,      // [B, C, N, 2]
+    scalar_t *__restrict__ depths,       // [B, C, N]
+    scalar_t *__restrict__ conics,       // [B, C, N, 3]
+    scalar_t *__restrict__ compensations // [B, C, N] optional
 ) {
-    // parallelize over C * N.
+    // parallelize over B * C * N.
     uint32_t idx = cg::this_grid().thread_rank();
-    if (idx >= C * N) {
+    if (idx >= B * C * N) {
         return;
     }
-    const uint32_t cid = idx / N; // camera id 
-    const uint32_t gid = idx % N; // gaussian id
+    const uint32_t bid = idx / (C * N);  // batch id
+    const uint32_t cid = (idx / N) % C;  // camera id 
+    const uint32_t gid = idx % N;        // gaussian id
 
     // shift pointers to the current gaussian
-    const glm::fvec3 mean = glm::make_vec3(means + gid * 3);
-    const glm::fvec3 scale = glm::make_vec3(scales + gid * 3);
+    const glm::fvec3 mean = glm::make_vec3(means + bid * N * 3 + gid * 3);
+    const glm::fvec3 scale = glm::make_vec3(scales + bid * N * 3 + gid * 3);
     glm::fquat quat = glm::fquat{
-        quats[gid * 4 + 0],
-        quats[gid * 4 + 1],
-        quats[gid * 4 + 2],
-        quats[gid * 4 + 3]};  // w,x,y,z quaternion
+        quats[bid * N * 4 + gid * 4 + 0],
+        quats[bid * N * 4 + gid * 4 + 1],
+        quats[bid * N * 4 + gid * 4 + 2],
+        quats[bid * N * 4 + gid * 4 + 3]};  // w,x,y,z quaternion
     quat = glm::normalize(quat);
 
     // shift pointers to the current camera. note that glm is colume-major.
-    const vec2 focal_length = {Ks[cid * 9 + 0], Ks[cid * 9 + 4]};
-    const vec2 principal_point = {Ks[cid * 9 + 2], Ks[cid * 9 + 5]};
+    const vec2 focal_length = {Ks[bid * C * 9 + cid * 9 + 0], Ks[bid * C * 9 + cid * 9 + 4]};
+    const vec2 principal_point = {Ks[bid * C * 9 + cid * 9 + 2], Ks[bid * C * 9 + cid * 9 + 5]};
 
     // Create rolling shutter parameter
     auto rs_params = RollingShutterParameters(
-        viewmats0 + cid * 16,
-        viewmats1 == nullptr ? nullptr : viewmats1 + cid * 16
+        viewmats0 + bid * C * 16 + cid * 16,
+        viewmats1 == nullptr ? nullptr : viewmats1 + bid * C * 16 + cid * 16
     );
 
     // transform Gaussian center to camera space
@@ -102,13 +104,13 @@ __global__ void projection_ut_3dgs_fused_kernel(
             cm_params.principal_point = { principal_point.x, principal_point.y };
             cm_params.focal_length = { focal_length.x, focal_length.y };
             if (radial_coeffs != nullptr) {
-                cm_params.radial_coeffs = make_array<float, 6>(radial_coeffs + cid * 6);
+                cm_params.radial_coeffs = make_array<float, 6>(radial_coeffs + bid * C * 6 + cid * 6);
             }
             if (tangential_coeffs != nullptr) {
-                cm_params.tangential_coeffs = make_array<float, 2>(tangential_coeffs + cid * 2);
+                cm_params.tangential_coeffs = make_array<float, 2>(tangential_coeffs + bid * C * 2 + cid * 2);
             }
             if (thin_prism_coeffs != nullptr) {
-                cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + cid * 4);
+                cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + bid * C * 2 + cid * 2);
             }
             OpenCVPinholeCameraModel camera_model(cm_params);
             image_gaussian_return =
@@ -122,7 +124,7 @@ __global__ void projection_ut_3dgs_fused_kernel(
         cm_params.principal_point = { principal_point.x, principal_point.y };
         cm_params.focal_length = { focal_length.x, focal_length.y };
         if (radial_coeffs != nullptr) {
-            cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + cid * 4);
+            cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + bid * C * 4 + cid * 4);
         }
         OpenCVFisheyeCameraModel camera_model(cm_params);
         image_gaussian_return =
@@ -154,7 +156,7 @@ __global__ void projection_ut_3dgs_fused_kernel(
 
     float extend = 3.33f;
     if (opacities != nullptr) {
-        float opacity = opacities[gid];
+        float opacity = opacities[bid * N + gid];
         opacity *= compensation;
         if (opacity < ALPHA_THRESHOLD) {
             radii[idx * 2] = 0;
@@ -205,13 +207,13 @@ __global__ void projection_ut_3dgs_fused_kernel(
 
 void launch_projection_ut_3dgs_fused_kernel(
     // inputs
-    const at::Tensor means,                // [N, 3]
-    const at::Tensor quats,  // [N, 4]
-    const at::Tensor scales, // [N, 3]
-    const at::optional<at::Tensor> opacities, // [N] optional
-    const at::Tensor viewmats0,             // [C, 4, 4]
-    const at::optional<at::Tensor> viewmats1, // [C, 4, 4] optional for rolling shutter
-    const at::Tensor Ks,                   // [C, 3, 3]
+    const at::Tensor means,                   // [..., N, 3]
+    const at::Tensor quats,                   // [..., N, 4]
+    const at::Tensor scales,                  // [..., N, 3]
+    const at::optional<at::Tensor> opacities, // [..., N] optional
+    const at::Tensor viewmats0,               // [..., C, 4, 4]
+    const at::optional<at::Tensor> viewmats1, // [..., C, 4, 4] optional for rolling shutter
+    const at::Tensor Ks,                      // [..., C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
@@ -222,20 +224,21 @@ void launch_projection_ut_3dgs_fused_kernel(
     // uncented transform
     const UnscentedTransformParameters ut_params,
     ShutterType rs_type,
-    const at::optional<at::Tensor> radial_coeffs, // [C, 6] or [C, 4] optional
-    const at::optional<at::Tensor> tangential_coeffs, // [C, 2] optional
-    const at::optional<at::Tensor> thin_prism_coeffs, // [C, 2] optional
+    const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
+    const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
+    const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 2] optional
     // outputs
-    at::Tensor radii,                      // [C, N, 2]
-    at::Tensor means2d,                    // [C, N, 2]
-    at::Tensor depths,                     // [C, N]
-    at::Tensor conics,                     // [C, N, 3]
-    at::optional<at::Tensor> compensations // [C, N] optional
+    at::Tensor radii,                      // [..., C, N, 2]
+    at::Tensor means2d,                    // [..., C, N, 2]
+    at::Tensor depths,                     // [..., C, N]
+    at::Tensor conics,                     // [..., C, N, 3]
+    at::optional<at::Tensor> compensations // [..., C, N] optional
 ) {
-    uint32_t N = means.size(0);    // number of gaussians
-    uint32_t C = Ks.size(0); // number of cameras
+    uint32_t N = means.size(-2);          // number of gaussians
+    uint32_t B = means.numel() / (N * 3); // number of batches
+    uint32_t C = Ks.size(-3);             // number of cameras
 
-    int64_t n_elements = C * N;
+    int64_t n_elements = B * C * N;
     dim3 threads(256);
     dim3 grid((n_elements + threads.x - 1) / threads.x);
     int64_t shmem_size = 0; // No shared memory used in this kernel
@@ -250,6 +253,7 @@ void launch_projection_ut_3dgs_fused_kernel(
         threads,
         shmem_size,
         at::cuda::getCurrentCUDAStream()>>>(
+            B,
             C,
             N,
             means.data_ptr<float>(),

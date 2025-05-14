@@ -1,6 +1,7 @@
 import struct
 from typing import Optional, Tuple
 
+import math
 import torch
 import torch.nn.functional as F
 from torch import Tensor
@@ -29,78 +30,88 @@ def _quat_to_rotmat(quats: Tensor) -> Tensor:
 
 
 def _quat_scale_to_matrix(
-    quats: Tensor,  # [N, 4],
-    scales: Tensor,  # [N, 3],
+    quats: Tensor,  # [..., 4],
+    scales: Tensor,  # [..., 3],
 ) -> Tensor:
     """Convert quaternion and scale to a 3x3 matrix (R * S)."""
-    R = _quat_to_rotmat(quats)  # (..., 3, 3)
-    M = R * scales[..., None, :]  # (..., 3, 3)
+    batch_dims = quats.shape[:-1]
+    assert quats.shape == batch_dims + (4,), quats.shape
+    assert scales.shape == batch_dims + (3,), scales.shape
+    R = _quat_to_rotmat(quats)  # [..., 3, 3]
+    M = R * scales[..., None, :]  # [..., 3, 3]
     return M
 
 
 def _quat_scale_to_covar_preci(
-    quats: Tensor,  # [N, 4],
-    scales: Tensor,  # [N, 3],
+    quats: Tensor,  # [..., 4],
+    scales: Tensor,  # [..., 3],
     compute_covar: bool = True,
     compute_preci: bool = True,
     triu: bool = False,
 ) -> Tuple[Optional[Tensor], Optional[Tensor]]:
     """PyTorch implementation of `gsplat.cuda._wrapper.quat_scale_to_covar_preci()`."""
-    R = _quat_to_rotmat(quats)  # (..., 3, 3)
+    batch_dims = quats.shape[:-1]
+    assert quats.shape == batch_dims + (4,), quats.shape
+    assert scales.shape == batch_dims + (3,), scales.shape
+    R = _quat_to_rotmat(quats)  # [..., 3, 3]
 
     if compute_covar:
-        M = R * scales[..., None, :]  # (..., 3, 3)
-        covars = torch.bmm(M, M.transpose(-1, -2))  # (..., 3, 3)
+        M = R * scales[..., None, :]  # [..., 3, 3]
+        covars = torch.einsum("...ij,...kj -> ...ik", M, M)  # [..., 3, 3]
         if triu:
-            covars = covars.reshape(covars.shape[:-2] + (9,))  # (..., 9)
+            covars = covars.reshape(batch_dims + (9,))  # [..., 9]
             covars = (
                 covars[..., [0, 1, 2, 4, 5, 8]] + covars[..., [0, 3, 6, 4, 7, 8]]
-            ) / 2.0  # (..., 6)
+            ) / 2.0  # [..., 6]
     if compute_preci:
-        P = R * (1 / scales[..., None, :])  # (..., 3, 3)
-        precis = torch.bmm(P, P.transpose(-1, -2))  # (..., 3, 3)
+        P = R * (1 / scales[..., None, :])  # [..., 3, 3]
+        precis = torch.einsum("...ij,...kj -> ...ik", P, P)  # [..., 3, 3]
         if triu:
-            precis = precis.reshape(precis.shape[:-2] + (9,))
+            precis = precis.reshape(batch_dims + (9,))  # [..., 9]
             precis = (
                 precis[..., [0, 1, 2, 4, 5, 8]] + precis[..., [0, 3, 6, 4, 7, 8]]
-            ) / 2.0
+            ) / 2.0  # [..., 6]
 
     return covars if compute_covar else None, precis if compute_preci else None
 
 
 def _persp_proj(
-    means: Tensor,  # [C, N, 3]
-    covars: Tensor,  # [C, N, 3, 3]
-    Ks: Tensor,  # [C, 3, 3]
+    means: Tensor,  # [..., C, N, 3]
+    covars: Tensor,  # [..., C, N, 3, 3]
+    Ks: Tensor,  # [..., C, 3, 3]
     width: int,
     height: int,
 ) -> Tuple[Tensor, Tensor]:
     """PyTorch implementation of perspective projection for 3D Gaussians.
 
     Args:
-        means: Gaussian means in camera coordinate system. [C, N, 3].
-        covars: Gaussian covariances in camera coordinate system. [C, N, 3, 3].
-        Ks: Camera intrinsics. [C, 3, 3].
+        means: Gaussian means in camera coordinate system. [..., C, N, 3].
+        covars: Gaussian covariances in camera coordinate system. [..., C, N, 3, 3].
+        Ks: Camera intrinsics. [..., C, 3, 3].
         width: Image width.
         height: Image height.
 
     Returns:
         A tuple:
 
-        - **means2d**: Projected means. [C, N, 2].
-        - **cov2d**: Projected covariances. [C, N, 2, 2].
+        - **means2d**: Projected means. [..., C, N, 2].
+        - **cov2d**: Projected covariances. [..., C, N, 2, 2].
     """
-    C, N, _ = means.shape
+    batch_dims = means.shape[:-3]
+    C, N = means.shape[-3:-1]
+    assert means.shape == batch_dims + (C, N, 3), means.shape
+    assert covars.shape == batch_dims + (C, N, 3, 3), covars.shape
+    assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
 
-    tx, ty, tz = torch.unbind(means, dim=-1)  # [C, N]
-    tz2 = tz**2  # [C, N]
+    tx, ty, tz = torch.unbind(means, dim=-1)  # [..., C, N]
+    tz2 = tz**2  # [..., C, N]
 
-    fx = Ks[..., 0, 0, None]  # [C, 1]
-    fy = Ks[..., 1, 1, None]  # [C, 1]
-    cx = Ks[..., 0, 2, None]  # [C, 1]
-    cy = Ks[..., 1, 2, None]  # [C, 1]
-    tan_fovx = 0.5 * width / fx  # [C, 1]
-    tan_fovy = 0.5 * height / fy  # [C, 1]
+    fx = Ks[..., 0, 0, None]  # [..., C, 1]
+    fy = Ks[..., 1, 1, None]  # [..., C, 1]
+    cx = Ks[..., 0, 2, None]  # [..., C, 1]
+    cy = Ks[..., 1, 2, None]  # [..., C, 1]
+    tan_fovx = 0.5 * width / fx  # [..., C, 1]
+    tan_fovy = 0.5 * height / fy  # [..., C, 1]
 
     lim_x_pos = (width - cx) / fx + 0.3 * tan_fovx
     lim_x_neg = cx / fx + 0.3 * tan_fovx
@@ -109,47 +120,53 @@ def _persp_proj(
     tx = tz * torch.clamp(tx / tz, min=-lim_x_neg, max=lim_x_pos)
     ty = tz * torch.clamp(ty / tz, min=-lim_y_neg, max=lim_y_pos)
 
-    O = torch.zeros((C, N), device=means.device, dtype=means.dtype)
+    O = torch.zeros(batch_dims + (C, N), device=means.device, dtype=means.dtype)
     J = torch.stack(
         [fx / tz, O, -fx * tx / tz2, O, fy / tz, -fy * ty / tz2], dim=-1
-    ).reshape(C, N, 2, 3)
+    ).reshape(batch_dims + (C, N, 2, 3))
 
     cov2d = torch.einsum("...ij,...jk,...kl->...il", J, covars, J.transpose(-1, -2))
-    means2d = torch.einsum("cij,cnj->cni", Ks[:, :2, :3], means)  # [C, N, 2]
-    means2d = means2d / tz[..., None]  # [C, N, 2]
-    return means2d, cov2d  # [C, N, 2], [C, N, 2, 2]
+    means2d = torch.einsum(
+        "...ij,...nj->...ni", Ks[..., :2, :3], means
+    )  # [..., C, N, 2]
+    means2d = means2d / tz[..., None]  # [..., C, N, 2]
+    return means2d, cov2d  # [..., C, N, 2], [..., C, N, 2, 2]
 
 
 def _fisheye_proj(
-    means: Tensor,  # [C, N, 3]
-    covars: Tensor,  # [C, N, 3, 3]
-    Ks: Tensor,  # [C, 3, 3]
+    means: Tensor,  # [..., C, N, 3]
+    covars: Tensor,  # [..., C, N, 3, 3]
+    Ks: Tensor,  # [..., C, 3, 3]
     width: int,
     height: int,
 ) -> Tuple[Tensor, Tensor]:
     """PyTorch implementation of fisheye projection for 3D Gaussians.
 
     Args:
-        means: Gaussian means in camera coordinate system. [C, N, 3].
-        covars: Gaussian covariances in camera coordinate system. [C, N, 3, 3].
-        Ks: Camera intrinsics. [C, 3, 3].
+        means: Gaussian means in camera coordinate system. [..., C, N, 3].
+        covars: Gaussian covariances in camera coordinate system. [..., C, N, 3, 3].
+        Ks: Camera intrinsics. [..., C, 3, 3].
         width: Image width.
         height: Image height.
 
     Returns:
         A tuple:
 
-        - **means2d**: Projected means. [C, N, 2].
-        - **cov2d**: Projected covariances. [C, N, 2, 2].
+        - **means2d**: Projected means. [..., C, N, 2].
+        - **cov2d**: Projected covariances. [..., C, N, 2, 2].
     """
-    C, N, _ = means.shape
+    batch_dims = means.shape[:-3]
+    C, N = means.shape[-3:-1]
+    assert means.shape == batch_dims + (C, N, 3), means.shape
+    assert covars.shape == batch_dims + (C, N, 3, 3), covars.shape
+    assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
 
-    x, y, z = torch.unbind(means, dim=-1)  # [C, N]
+    x, y, z = torch.unbind(means, dim=-1)  # [..., C, N]
 
-    fx = Ks[..., 0, 0, None]  # [C, 1]
-    fy = Ks[..., 1, 1, None]  # [C, 1]
-    cx = Ks[..., 0, 2, None]  # [C, 1]
-    cy = Ks[..., 1, 2, None]  # [C, 1]
+    fx = Ks[..., 0, 0, None]  # [..., C, 1]
+    fy = Ks[..., 1, 1, None]  # [..., C, 1]
+    cx = Ks[..., 0, 2, None]  # [..., C, 1]
+    cy = Ks[..., 1, 2, None]  # [..., C, 1]
 
     eps = 0.0000001
     xy_len = (x**2 + y**2) ** 0.5 + eps
@@ -160,7 +177,7 @@ def _fisheye_proj(
             y * fy * theta / xy_len + cy,
         ],
         dim=-1,
-    )
+    )  # [..., C, N, 2]
 
     x2 = x * x + eps
     y2 = y * y
@@ -179,79 +196,98 @@ def _fisheye_proj(
             -fy * y * x2y2z2_inv,
         ],
         dim=-1,
-    ).reshape(C, N, 2, 3)
+    ).reshape(batch_dims + (C, N, 2, 3))
 
     cov2d = torch.einsum("...ij,...jk,...kl->...il", J, covars, J.transpose(-1, -2))
-    return means2d, cov2d  # [C, N, 2], [C, N, 2, 2]
+    return means2d, cov2d  # [..., C, N, 2], [..., C, N, 2, 2]
 
 
 def _ortho_proj(
-    means: Tensor,  # [C, N, 3]
-    covars: Tensor,  # [C, N, 3, 3]
-    Ks: Tensor,  # [C, 3, 3]
+    means: Tensor,  # [..., C, N, 3]
+    covars: Tensor,  # [..., C, N, 3, 3]
+    Ks: Tensor,  # [..., C, 3, 3]
     width: int,
     height: int,
 ) -> Tuple[Tensor, Tensor]:
     """PyTorch implementation of orthographic projection for 3D Gaussians.
 
     Args:
-        means: Gaussian means in camera coordinate system. [C, N, 3].
-        covars: Gaussian covariances in camera coordinate system. [C, N, 3, 3].
-        Ks: Camera intrinsics. [C, 3, 3].
+        means: Gaussian means in camera coordinate system. [..., C, N, 3].
+        covars: Gaussian covariances in camera coordinate system. [..., C, N, 3, 3].
+        Ks: Camera intrinsics. [..., C, 3, 3].
         width: Image width.
         height: Image height.
 
     Returns:
         A tuple:
 
-        - **means2d**: Projected means. [C, N, 2].
-        - **cov2d**: Projected covariances. [C, N, 2, 2].
+        - **means2d**: Projected means. [..., C, N, 2].
+        - **cov2d**: Projected covariances. [..., C, N, 2, 2].
     """
-    C, N, _ = means.shape
+    batch_dims = means.shape[:-3]
+    C, N = means.shape[-3:-1]
+    assert means.shape == batch_dims + (C, N, 3), means.shape
+    assert covars.shape == batch_dims + (C, N, 3, 3), covars.shape
+    assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
 
-    fx = Ks[..., 0, 0, None]  # [C, 1]
-    fy = Ks[..., 1, 1, None]  # [C, 1]
+    fx = Ks[..., 0, 0, None]  # [..., C, 1]
+    fy = Ks[..., 1, 1, None]  # [..., C, 1]
 
-    O = torch.zeros((C, 1), device=means.device, dtype=means.dtype)
-    J = torch.stack([fx, O, O, O, fy, O], dim=-1).reshape(C, 1, 2, 3).repeat(1, N, 1, 1)
+    O = torch.zeros(batch_dims + (C, 1), device=means.device, dtype=means.dtype)
+    J = (
+        torch.stack([fx, O, O, O, fy, O], dim=-1)
+        .reshape(batch_dims + (C, 1, 2, 3))
+        .repeat([1] * len(batch_dims) + [1, N, 1, 1])
+    )
 
     cov2d = torch.einsum("...ij,...jk,...kl->...il", J, covars, J.transpose(-1, -2))
     means2d = (
-        means[..., :2] * Ks[:, None, [0, 1], [0, 1]] + Ks[:, None, [0, 1], [2, 2]]
-    )  # [C, N, 2]
-    return means2d, cov2d  # [C, N, 2], [C, N, 2, 2]
+        means[..., :2] * Ks[..., None, [0, 1], [0, 1]] + Ks[..., None, [0, 1], [2, 2]]
+    )  # [..., C, N, 2]
+    return means2d, cov2d  # [..., C, N, 2], [..., C, N, 2, 2]
 
 
 def _world_to_cam(
-    means: Tensor,  # [N, 3]
-    covars: Tensor,  # [N, 3, 3]
-    viewmats: Tensor,  # [C, 4, 4]
+    means: Tensor,  # [..., N, 3]
+    covars: Tensor,  # [..., N, 3, 3]
+    viewmats: Tensor,  # [..., C, 4, 4]
 ) -> Tuple[Tensor, Tensor]:
     """PyTorch implementation of world to camera transformation on Gaussians.
 
     Args:
-        means: Gaussian means in world coordinate system. [C, N, 3].
-        covars: Gaussian covariances in world coordinate system. [C, N, 3, 3].
-        viewmats: world to camera transformation matrices. [C, 4, 4].
+        means: Gaussian means in world coordinate system. [..., N, 3].
+        covars: Gaussian covariances in world coordinate system. [..., N, 3, 3].
+        viewmats: world to camera transformation matrices. [..., C, 4, 4].
 
     Returns:
         A tuple:
 
-        - **means_c**: Gaussian means in camera coordinate system. [C, N, 3].
-        - **covars_c**: Gaussian covariances in camera coordinate system. [C, N, 3, 3].
+        - **means_c**: Gaussian means in camera coordinate system. [..., C, N, 3].
+        - **covars_c**: Gaussian covariances in camera coordinate system. [..., C, N, 3, 3].
     """
-    R = viewmats[:, :3, :3]  # [C, 3, 3]
-    t = viewmats[:, :3, 3]  # [C, 3]
-    means_c = torch.einsum("cij,nj->cni", R, means) + t[:, None, :]  # (C, N, 3)
-    covars_c = torch.einsum("cij,njk,clk->cnil", R, covars, R)  # [C, N, 3, 3]
+    batch_dims = means.shape[:-2]
+    N = means.shape[-2]
+    C = viewmats.shape[-3]
+    assert means.shape == batch_dims + (N, 3), means.shape
+    assert covars.shape == batch_dims + (N, 3, 3), covars.shape
+    assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
+
+    R = viewmats[..., :3, :3]  # [..., C, 3, 3]
+    t = viewmats[..., :3, 3]  # [..., C, 3]
+    means_c = (
+        torch.einsum("...cij,...nj->...cni", R, means) + t[..., None, :]
+    )  # [..., C, N, 3]
+    covars_c = torch.einsum(
+        "...cij,...njk,...clk->...cnil", R, covars, R
+    )  # [..., C, N, 3, 3]
     return means_c, covars_c
 
 
 def _fully_fused_projection(
-    means: Tensor,  # [N, 3]
-    covars: Tensor,  # [N, 3, 3]
-    viewmats: Tensor,  # [C, 4, 4]
-    Ks: Tensor,  # [C, 3, 3]
+    means: Tensor,  # [..., N, 3]
+    covars: Tensor,  # [..., N, 3, 3]
+    viewmats: Tensor,  # [..., C, 4, 4]
+    Ks: Tensor,  # [..., C, 3, 3]
     width: int,
     height: int,
     eps2d: float = 0.3,
@@ -267,6 +303,14 @@ def _fully_fused_projection(
         This is a minimal implementation of fully fused version, which has more
         arguments. Not all arguments are supported.
     """
+    batch_dims = means.shape[:-2]
+    N = means.shape[-2]
+    C = viewmats.shape[-3]
+    assert means.shape == batch_dims + (N, 3), means.shape
+    assert covars.shape == batch_dims + (N, 3, 3), covars.shape
+    assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
+    assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
+
     means_c, covars_c = _world_to_cam(means, covars, viewmats)
 
     if camera_model == "ortho":
@@ -302,14 +346,14 @@ def _fully_fused_projection(
             covars2d[..., 0, 0] / det,
         ],
         dim=-1,
-    )  # [C, N, 3]
+    )  # [..., C, N, 3]
 
-    depths = means_c[..., 2]  # [C, N]
+    depths = means_c[..., 2]  # [..., C, N]
 
     radius_x = torch.ceil(3.33 * torch.sqrt(covars2d[..., 0, 0]))
     radius_y = torch.ceil(3.33 * torch.sqrt(covars2d[..., 1, 1]))
 
-    radius = torch.stack([radius_x, radius_y], dim=-1)  # (..., 2)
+    radius = torch.stack([radius_x, radius_y], dim=-1)  # [..., C, N, 2]
 
     valid = (det > 0) & (depths > near_plane) & (depths < far_plane)
     radius[~valid] = 0.0
@@ -328,9 +372,9 @@ def _fully_fused_projection(
 
 @torch.no_grad()
 def _isect_tiles(
-    means2d: Tensor,
-    radii: Tensor,
-    depths: Tensor,
+    means2d: Tensor,  # [..., N, 2]
+    radii: Tensor,  # [..., N, 2]
+    depths: Tensor,  # [..., N]
     tile_size: int,
     tile_width: int,
     tile_height: int,
@@ -343,8 +387,17 @@ def _isect_tiles(
         This is a minimal implementation of the fully fused version, which has more
         arguments. Not all arguments are supported.
     """
-    C, N = means2d.shape[:2]
+    image_dims = means2d.shape[:-2]
+    N = means2d.shape[-2]
+    assert means2d.shape == image_dims + (N, 2), means2d.shape
+    assert radii.shape == image_dims + (N, 2), radii.shape
+    assert depths.shape == image_dims + (N,), depths.shape
+
     device = means2d.device
+    I = math.prod(image_dims)
+    means2d = means2d.reshape(I, N, 2)
+    radii = radii.reshape(I, N, 2)
+    depths = depths.reshape(I, N)
 
     # compute tiles_per_gauss
     tile_means2d = means2d / tile_size
@@ -355,56 +408,70 @@ def _isect_tiles(
     tile_mins[..., 1] = torch.clamp(tile_mins[..., 1], 0, tile_height)
     tile_maxs[..., 0] = torch.clamp(tile_maxs[..., 0], 0, tile_width)
     tile_maxs[..., 1] = torch.clamp(tile_maxs[..., 1], 0, tile_height)
-    tiles_per_gauss = (tile_maxs - tile_mins).prod(dim=-1)  # [C, N]
+    tiles_per_gauss = (tile_maxs - tile_mins).prod(dim=-1)  # [..., C, N]
     tiles_per_gauss *= (radii > 0.0).all(dim=-1)
 
     n_isects = tiles_per_gauss.sum().item()
-    isect_ids = torch.empty(n_isects, dtype=torch.int64, device=device)
+    # store in two int32 tensors instead, otherwise it will trigger out of bounds error
+    # isect_ids = torch.empty(n_isects, dtype=torch.int64, device=device)
+    isect_ids_lo = torch.empty(n_isects, dtype=torch.int32, device=device)
+    isect_ids_hi = torch.empty(n_isects, dtype=torch.int32, device=device)
     flatten_ids = torch.empty(n_isects, dtype=torch.int32, device=device)
 
     cum_tiles_per_gauss = torch.cumsum(tiles_per_gauss.flatten(), dim=0)
+    image_n_bits = I.bit_length()
     tile_n_bits = (tile_width * tile_height).bit_length()
+    assert image_n_bits + tile_n_bits + 32 <= 64
 
     def binary(num):
         return "".join("{:0>8b}".format(c) for c in struct.pack("!f", num))
 
-    def kernel(cam_id, gauss_id):
-        if radii[cam_id, gauss_id, 0] <= 0.0 or radii[cam_id, gauss_id, 1] <= 0.0:
+    def kernel(image_id, gauss_id):
+        if radii[image_id, gauss_id, 0] <= 0.0 or radii[image_id, gauss_id, 1] <= 0.0:
             return
-        index = cam_id * N + gauss_id
+        index = image_id * N + gauss_id
         curr_idx = cum_tiles_per_gauss[index - 1] if index > 0 else 0
 
         # Reinterpret float bits as int32 (preserving bit pattern)
-        depth_f32 = depths[cam_id, gauss_id]
+        depth_f32 = depths[image_id, gauss_id]
         depth_id = struct.unpack("i", struct.pack("f", depth_f32))[0]
         # Store in a 64-bit int, zero-extending to lower 32 bits
         depth_id = int(depth_id) & 0xFFFFFFFF  # Ensures upper 32 bits are zero
 
-        tile_min = tile_mins[cam_id, gauss_id]
-        tile_max = tile_maxs[cam_id, gauss_id]
+        tile_min = tile_mins[image_id, gauss_id]
+        tile_max = tile_maxs[image_id, gauss_id]
         for y in range(tile_min[1], tile_max[1]):
             for x in range(tile_min[0], tile_max[0]):
                 tile_id = y * tile_width + x
-                isect_ids[curr_idx] = (
-                    (cam_id << 32 << tile_n_bits) | (tile_id << 32) | depth_id
-                )
+                # isect_ids[curr_idx] = (
+                #     (image_id << (tile_n_bits + 32))
+                #     | (tile_id << 32)
+                #     | depth_id
+                # )
+                isect_ids_lo[curr_idx] = depth_id
+                isect_ids_hi[curr_idx] = (image_id << tile_n_bits) | tile_id
                 flatten_ids[curr_idx] = index  # flattened index
                 curr_idx += 1
 
-    for cam_id in range(C):
+    for image_id in range(I):
         for gauss_id in range(N):
-            kernel(cam_id, gauss_id)
+            kernel(image_id, gauss_id)
+
+    isect_ids = (isect_ids_hi.to(torch.int64) << 32) | (
+        isect_ids_lo.to(torch.int64) & 0xFFFFFFFF
+    )
 
     if sort:
         isect_ids, sort_indices = torch.sort(isect_ids)
         flatten_ids = flatten_ids[sort_indices]
 
-    return tiles_per_gauss.int(), isect_ids, flatten_ids
+    tiles_per_gauss = tiles_per_gauss.reshape(image_dims + (N,)).int()
+    return tiles_per_gauss, isect_ids, flatten_ids
 
 
 @torch.no_grad()
 def _isect_offset_encode(
-    isect_ids: Tensor, C: int, tile_width: int, tile_height: int
+    isect_ids: Tensor, I: int, tile_width: int, tile_height: int
 ) -> Tensor:
     """Pytorch implementation of `gsplat.cuda._wrapper.isect_offset_encode()`.
 
@@ -415,17 +482,17 @@ def _isect_offset_encode(
     """
     tile_n_bits = (tile_width * tile_height).bit_length()
     tile_counts = torch.zeros(
-        (C, tile_height, tile_width), dtype=torch.int64, device=isect_ids.device
+        (I, tile_height, tile_width), dtype=torch.int64, device=isect_ids.device
     )
 
     isect_ids_uq, counts = torch.unique_consecutive(isect_ids >> 32, return_counts=True)
 
-    cam_ids_uq = isect_ids_uq >> tile_n_bits
+    image_ids_uq = isect_ids_uq >> tile_n_bits
     tile_ids_uq = isect_ids_uq & ((1 << tile_n_bits) - 1)
     tile_ids_x_uq = tile_ids_uq % tile_width
     tile_ids_y_uq = tile_ids_uq // tile_width
 
-    tile_counts[cam_ids_uq, tile_ids_y_uq, tile_ids_x_uq] = counts
+    tile_counts[image_ids_uq, tile_ids_y_uq, tile_ids_x_uq] = counts
 
     cum_tile_counts = torch.cumsum(tile_counts.flatten(), dim=0).reshape_as(tile_counts)
     offsets = cum_tile_counts - tile_counts
@@ -433,20 +500,20 @@ def _isect_offset_encode(
 
 
 def accumulate(
-    means2d: Tensor,  # [C, N, 2]
-    conics: Tensor,  # [C, N, 3]
-    opacities: Tensor,  # [C, N]
-    colors: Tensor,  # [C, N, channels]
+    means2d: Tensor,  # [..., N, 2]
+    conics: Tensor,  # [..., N, 3]
+    opacities: Tensor,  # [..., N]
+    colors: Tensor,  # [..., N, channels]
     gaussian_ids: Tensor,  # [M]
     pixel_ids: Tensor,  # [M]
-    camera_ids: Tensor,  # [M]
+    image_ids: Tensor,  # [M]
     image_width: int,
     image_height: int,
 ) -> Tuple[Tensor, Tensor]:
     """Alpah compositing of 2D Gaussians in Pure Pytorch.
 
     This function performs alpha compositing for Gaussians based on the pair of indices
-    {gaussian_ids, pixel_ids, camera_ids}, which annotates the intersection between all
+    {gaussian_ids, pixel_ids, image_ids}, which annotates the intersection between all
     pixels and Gaussians. These intersections can be accquired from
     `gsplat.rasterize_to_indices_in_range`.
 
@@ -464,22 +531,22 @@ def accumulate(
         using the following command `pip install nerfacc`.
 
     Args:
-        means2d: Gaussian means in 2D. [C, N, 2]
-        conics: Inverse of the 2D Gaussian covariance, Only upper triangle values. [C, N, 3]
+        means2d: Gaussian means in 2D. [..., N, 2]
+        conics: Inverse of the 2D Gaussian covariance, Only upper triangle values. [..., N, 3]
         opacities: Per-view Gaussian opacities (for example, when antialiasing is
-            enabled, Gaussian in each view would efficiently have different opacity). [C, N]
-        colors: Per-view Gaussian colors. Supports N-D features. [C, N, channels]
+            enabled, Gaussian in each view would efficiently have different opacity). [..., N]
+        colors: Per-view Gaussian colors. Supports N-D features. [..., N, channels]
         gaussian_ids: Collection of Gaussian indices to be rasterized. A flattened list of shape [M].
         pixel_ids: Collection of pixel indices (row-major) to be rasterized. A flattened list of shape [M].
-        camera_ids: Collection of camera indices to be rasterized. A flattened list of shape [M].
+        image_ids: Collection of image indices to be rasterized. A flattened list of shape [M].
         image_width: Image width.
         image_height: Image height.
 
     Returns:
         A tuple:
 
-        - **renders**: Accumulated colors. [C, image_height, image_width, channels]
-        - **alphas**: Accumulated opacities. [C, image_height, image_width, 1]
+        - **renders**: Accumulated colors. [..., image_height, image_width, channels]
+        - **alphas**: Accumulated opacities. [..., image_height, image_width, 1]
     """
 
     try:
@@ -487,52 +554,63 @@ def accumulate(
     except ImportError:
         raise ImportError("Please install nerfacc package: pip install nerfacc")
 
-    C, N = means2d.shape[:2]
+    image_dims = means2d.shape[:-2]
+    I = math.prod(image_dims)
+    N = means2d.shape[-2]
     channels = colors.shape[-1]
+    assert means2d.shape == image_dims + (N, 2), means2d.shape
+    assert conics.shape == image_dims + (N, 3), conics.shape
+    assert opacities.shape == image_dims + (N,), opacities.shape
+    assert colors.shape == image_dims + (N, channels), colors.shape
+
+    means2d = means2d.reshape(I, N, 2)
+    conics = conics.reshape(I, N, 3)
+    opacities = opacities.reshape(I, N)
+    colors = colors.reshape(I, N, channels)
 
     pixel_ids_x = pixel_ids % image_width
     pixel_ids_y = pixel_ids // image_width
     pixel_coords = torch.stack([pixel_ids_x, pixel_ids_y], dim=-1) + 0.5  # [M, 2]
-    deltas = pixel_coords - means2d[camera_ids, gaussian_ids]  # [M, 2]
-    c = conics[camera_ids, gaussian_ids]  # [M, 3]
+    deltas = pixel_coords - means2d[image_ids, gaussian_ids]  # [M, 2]
+    c = conics[image_ids, gaussian_ids]  # [M, 3]
     sigmas = (
         0.5 * (c[:, 0] * deltas[:, 0] ** 2 + c[:, 2] * deltas[:, 1] ** 2)
         + c[:, 1] * deltas[:, 0] * deltas[:, 1]
     )  # [M]
     alphas = torch.clamp_max(
-        opacities[camera_ids, gaussian_ids] * torch.exp(-sigmas), 0.999
+        opacities[image_ids, gaussian_ids] * torch.exp(-sigmas), 0.999
     )
 
-    indices = camera_ids * image_height * image_width + pixel_ids
-    total_pixels = C * image_height * image_width
+    indices = image_ids * image_height * image_width + pixel_ids
+    total_pixels = I * image_height * image_width
 
     weights, trans = render_weight_from_alpha(
         alphas, ray_indices=indices, n_rays=total_pixels
     )
     renders = accumulate_along_rays(
         weights,
-        colors[camera_ids, gaussian_ids],
+        colors[image_ids, gaussian_ids],
         ray_indices=indices,
         n_rays=total_pixels,
-    ).reshape(C, image_height, image_width, channels)
+    ).reshape(image_dims + (image_height, image_width, channels))
     alphas = accumulate_along_rays(
         weights, None, ray_indices=indices, n_rays=total_pixels
-    ).reshape(C, image_height, image_width, 1)
+    ).reshape(image_dims + (image_height, image_width, 1))
 
     return renders, alphas
 
 
 def _rasterize_to_pixels(
-    means2d: Tensor,  # [C, N, 2]
-    conics: Tensor,  # [C, N, 3]
-    colors: Tensor,  # [C, N, channels]
-    opacities: Tensor,  # [C, N]
+    means2d: Tensor,  # [..., N, 2]
+    conics: Tensor,  # [..., N, 3]
+    colors: Tensor,  # [..., N, channels]
+    opacities: Tensor,  # [..., N]
     image_width: int,
     image_height: int,
     tile_size: int,
-    isect_offsets: Tensor,  # [C, tile_height, tile_width]
+    isect_offsets: Tensor,  # [..., tile_height, tile_width]
     flatten_ids: Tensor,  # [n_isects]
-    backgrounds: Optional[Tensor] = None,  # [C, channels]
+    backgrounds: Optional[Tensor] = None,  # [..., channels]
     batch_per_iter: int = 100,
 ):
     """Pytorch implementation of `gsplat.cuda._wrapper.rasterize_to_pixels()`.
@@ -559,14 +637,29 @@ def _rasterize_to_pixels(
     """
     from ._wrapper import rasterize_to_indices_in_range
 
-    C, N = means2d.shape[:2]
+    image_dims = means2d.shape[:-2]
+    channels = colors.shape[-1]
+    N = means2d.shape[-2]
+    tile_height = isect_offsets.shape[-2]
+    tile_width = isect_offsets.shape[-1]
+
+    assert means2d.shape == image_dims + (N, 2), means2d.shape
+    assert conics.shape == image_dims + (N, 3), conics.shape
+    assert colors.shape == image_dims + (N, channels), colors.shape
+    assert opacities.shape == image_dims + (N,), opacities.shape
+    assert isect_offsets.shape == image_dims + (
+        tile_height,
+        tile_width,
+    ), isect_offsets.shape
     n_isects = len(flatten_ids)
     device = means2d.device
 
     render_colors = torch.zeros(
-        (C, image_height, image_width, colors.shape[-1]), device=device
+        image_dims + (image_height, image_width, channels), device=device
     )
-    render_alphas = torch.zeros((C, image_height, image_width, 1), device=device)
+    render_alphas = torch.zeros(
+        image_dims + (image_height, image_width, 1), device=device
+    )
 
     # Split Gaussians into batches and iteratively accumulate the renderings
     block_size = tile_size * tile_size
@@ -579,8 +672,8 @@ def _rasterize_to_pixels(
         transmittances = 1.0 - render_alphas[..., 0]
 
         # Find the M intersections between pixels and gaussians.
-        # Each intersection corresponds to a tuple (gs_id, pixel_id, camera_id)
-        gs_ids, pixel_ids, camera_ids = rasterize_to_indices_in_range(
+        # Each intersection corresponds to a tuple (gs_id, pixel_id, image_id)
+        gs_ids, pixel_ids, image_ids = rasterize_to_indices_in_range(
             step,
             step + batch_per_iter,
             transmittances,
@@ -592,7 +685,7 @@ def _rasterize_to_pixels(
             tile_size,
             isect_offsets,
             flatten_ids,
-        )  # [M], [M]
+        )  # [M], [M], [M]
         if len(gs_ids) == 0:
             break
 
@@ -604,7 +697,7 @@ def _rasterize_to_pixels(
             colors,
             gs_ids,
             pixel_ids,
-            camera_ids,
+            image_ids,
             image_width,
             image_height,
         )
@@ -613,7 +706,7 @@ def _rasterize_to_pixels(
 
     render_alphas = render_alphas
     if backgrounds is not None:
-        render_colors = render_colors + backgrounds[:, None, None, :] * (
+        render_colors = render_colors + backgrounds[..., None, None, :] * (
             1.0 - render_alphas
         )
 
@@ -705,13 +798,21 @@ def _eval_sh_bases_fast(basis_dim: int, dirs: Tensor):
 
 
 def _spherical_harmonics(
-    degree: int,
+    degrees_to_use: int,
     dirs: torch.Tensor,  # [..., 3]
     coeffs: torch.Tensor,  # [..., K, 3]
 ):
     """Pytorch implementation of `gsplat.cuda._wrapper.spherical_harmonics()`."""
+    assert (degrees_to_use + 1) ** 2 <= coeffs.shape[-2], coeffs.shape
+    batch_dims = dirs.shape[:-1]
+    assert dirs.shape == batch_dims + (3,), dirs.shape
+    assert (
+        (len(coeffs.shape) == len(batch_dims) + 2)
+        and coeffs.shape[:-2] == batch_dims
+        and coeffs.shape[-1] == 3
+    ), coeffs.shape
     dirs = F.normalize(dirs, p=2, dim=-1)
-    num_bases = (degree + 1) ** 2
+    num_bases = (degrees_to_use + 1) ** 2
     bases = torch.zeros_like(coeffs[..., 0])
     bases[..., :num_bases] = _eval_sh_bases_fast(num_bases, dirs)
     return (bases[..., None] * coeffs).sum(dim=-2)
