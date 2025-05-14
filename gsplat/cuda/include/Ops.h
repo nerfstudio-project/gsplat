@@ -277,16 +277,6 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
     const at::Tensor flatten_ids   // [n_isects]
 );
 
-// Relocate some Gaussians in the Densification Process.
-// Equation (9) in "3D Gaussian Splatting as Markov Chain Monte Carlo"
-std::tuple<at::Tensor, at::Tensor> relocation(
-    at::Tensor opacities, // [N]
-    at::Tensor scales,    // [N, 3]
-    at::Tensor ratios,    // [N]
-    at::Tensor binoms,    // [n_max, n_max]
-    const int n_max
-);
-
 // Projection for 2DGS
 std::tuple<
     at::Tensor,
