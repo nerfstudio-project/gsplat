@@ -156,11 +156,10 @@ def split(
         torch.randn(2, len(scales), 3, device=device),
     )  # [2, N, 3]
 
-    means = means + samples
+    means = (means + samples).reshape(-1, 3)
     if "w" in params:
-        flat_means = means.reshape(-1, 3)  # [2N, 3]
-        w, _ = xyz_to_polar(flat_means)  # [2N]
-        means = flat_means * w.unsqueeze(1)  # [2N, 3]
+        w, _ = xyz_to_polar(means)  # [2N]
+        means = means * w.unsqueeze(1)  # [2N, 3]
 
     def param_fn(name: str, p: Tensor) -> Tensor:
         repeats = [2] + [1] * (p.dim() - 1)
