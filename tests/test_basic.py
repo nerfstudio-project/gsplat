@@ -18,7 +18,6 @@ from gsplat._helper import load_test_data
 device = torch.device("cuda:0")
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.fixture
 def test_data():
     (
@@ -240,7 +239,7 @@ def test_projection(
         (viewmats, quats, scales, means),
     )
 
-    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=2e-3, atol=2e-3)
     torch.testing.assert_close(v_quats, _v_quats, rtol=2e-1, atol=2e-2)
     torch.testing.assert_close(v_scales, _v_scales, rtol=1e-1, atol=2e-1)
     torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=6e-2)

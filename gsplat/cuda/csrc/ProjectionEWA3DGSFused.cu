@@ -23,8 +23,8 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     const scalar_t *__restrict__ opacities, // [N] optional
     const scalar_t *__restrict__ viewmats, // [C, 4, 4]
     const scalar_t *__restrict__ Ks,       // [C, 3, 3]
-    const int32_t image_width,
-    const int32_t image_height,
+    const uint32_t image_width,
+    const uint32_t image_height,
     const float eps2d,
     const float near_plane,
     const float far_plane,
@@ -178,12 +178,8 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
 
     // compute tight rectangular bounding box (non differentiable)
     // https://arxiv.org/pdf/2402.00525
-    float b = 0.5f * (covar2d[0][0] + covar2d[1][1]);
-    float tmp = sqrtf(max(0.01f, b * b - det));
-    float v1 = b + tmp; // larger eigenvalue
-    float r1 = extend * sqrtf(v1);
-    float radius_x = ceilf(min(extend * sqrtf(covar2d[0][0]), r1));
-    float radius_y = ceilf(min(extend * sqrtf(covar2d[1][1]), r1));
+    float radius_x = ceilf(extend * sqrtf(covar2d[0][0]));
+    float radius_y = ceilf(extend * sqrtf(covar2d[1][1]));
 
     if (radius_x <= radius_clip && radius_y <= radius_clip) {
         radii[idx * 2] = 0;
@@ -301,8 +297,8 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
     const scalar_t *__restrict__ scales,   // [N, 3] optional
     const scalar_t *__restrict__ viewmats, // [C, 4, 4]
     const scalar_t *__restrict__ Ks,       // [C, 3, 3]
-    const int32_t image_width,
-    const int32_t image_height,
+    const uint32_t image_width,
+    const uint32_t image_height,
     const float eps2d,
     const CameraModelType camera_model,
     // fwd outputs

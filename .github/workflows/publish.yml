@@ -5,6 +5,7 @@ name: Build and Release Wheels
 on:
   release:
     types: [created]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -38,19 +39,29 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Upload packages to GitHub Release
-        id: upload_assets
+      - name: Upload packages to latest GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          for file in $(ls ./dist/*.*); do
+          echo "Fetching latest release info (unauthenticated)..."
+          release_info=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+            https://api.github.com/repos/nerfstudio-project/gsplat/releases/latest)
+
+          # Extract the "upload_url" field and strip the {?name,label} part
+          upload_url=$(echo "$release_info" | grep '"upload_url":' | cut -d '"' -f 4 | sed 's/{.*//')
+          echo "Upload URL: $upload_url"
+
+          for file in ./dist/*.*; do
             echo "Uploading $file..."
             filename=$(basename "$file")
             encoded_filename=$(echo "$filename" | sed 's/+/%2B/g')
             curl -X POST \
-              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Authorization: token $GITHUB_TOKEN" \
               -H "Content-Type: application/zip" \
               --data-binary @"$file" \
-              "${{ github.event.release.upload_url }}=$encoded_filename"
+              "$upload_url?name=$encoded_filename"
           done
+          echo "Upload complete." 
 
   generate_simple_index_pages:
     name: Generate Simple Index Pages
@@ -80,10 +91,8 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: pypi_packages
-          path: dist
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4

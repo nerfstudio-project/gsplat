@@ -63,7 +63,7 @@ def similarity_from_cameras(c2w, strict_scaling=False, center_method="focus"):
     return transform
 
 
-def align_principle_axes(point_cloud):
+def align_principal_axes(point_cloud):
     # Compute centroid
     centroid = np.median(point_cloud, axis=0)
 
@@ -135,7 +135,7 @@ def normalize(camtoworlds, points=None):
     camtoworlds = transform_cameras(T1, camtoworlds)
     if points is not None:
         points = transform_points(T1, points)
-        T2 = align_principle_axes(points)
+        T2 = align_principal_axes(points)
         camtoworlds = transform_cameras(T2, camtoworlds)
         points = transform_points(T2, points)
         return camtoworlds, points, T2 @ T1

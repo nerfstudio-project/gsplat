@@ -103,6 +103,7 @@ __global__ void rasterize_to_pixels_2dgs_bwd_kernel(
 
     tile_offsets += camera_id * tile_height * tile_width;
     render_alphas += camera_id * image_height * image_width;
+    render_colors += camera_id * image_height * image_width * CDIM;
 
     last_ids += camera_id * image_height * image_width;
     median_ids += camera_id * image_height * image_width;
