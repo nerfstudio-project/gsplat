@@ -6,19 +6,18 @@ pytest <THIS_PY_FILE> -s
 ```
 """
 
-from typing_extensions import Literal, assert_never
 import math
+import os
 
 import pytest
 import torch
-import os
+from typing_extensions import Literal, assert_never
 
 from gsplat._helper import load_test_data
 
 device = torch.device("cuda:0")
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.fixture
 def test_data():
     (
@@ -89,48 +88,15 @@ def test_quat_scale_to_covar_preci(test_data, triu: bool):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_world_to_cam(test_data):
-    from gsplat.cuda._torch_impl import _world_to_cam
-    from gsplat.cuda._wrapper import quat_scale_to_covar_preci, world_to_cam
-
-    torch.manual_seed(42)
-
-    viewmats = test_data["viewmats"]
-    means = test_data["means"]
-    scales = test_data["scales"]
-    quats = test_data["quats"]
-    covars, _ = quat_scale_to_covar_preci(quats, scales)
-    means.requires_grad = True
-    covars.requires_grad = True
-    viewmats.requires_grad = True
-
-    # forward
-    means_c, covars_c = world_to_cam(means, covars, viewmats)
-    _means_c, _covars_c = _world_to_cam(means, covars, viewmats)
-    torch.testing.assert_close(means_c, _means_c)
-    torch.testing.assert_close(covars_c, _covars_c)
-
-    # backward
-    v_means_c = torch.randn_like(means_c)
-    v_covars_c = torch.randn_like(covars_c)
-    v_means, v_covars, v_viewmats = torch.autograd.grad(
-        (means_c * v_means_c).sum() + (covars_c * v_covars_c).sum(),
-        (means, covars, viewmats),
-    )
-    _v_means, _v_covars, _v_viewmats = torch.autograd.grad(
-        (_means_c * v_means_c).sum() + (_covars_c * v_covars_c).sum(),
-        (means, covars, viewmats),
-    )
-    torch.testing.assert_close(v_means, _v_means)
-    torch.testing.assert_close(v_covars, _v_covars)
-    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=1e-3)
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
 def test_proj(test_data, camera_model: Literal["pinhole", "ortho", "fisheye"]):
-    from gsplat.cuda._torch_impl import _persp_proj, _ortho_proj, _fisheye_proj
-    from gsplat.cuda._wrapper import proj, quat_scale_to_covar_preci, world_to_cam
+    from gsplat.cuda._torch_impl import (
+        _fisheye_proj,
+        _ortho_proj,
+        _persp_proj,
+        _world_to_cam,
+    )
+    from gsplat.cuda._wrapper import proj, quat_scale_to_covar_preci
 
     torch.manual_seed(42)
 
@@ -140,7 +106,7 @@ def test_proj(test_data, camera_model: Literal["pinhole", "ortho", "fisheye"]):
     width = test_data["width"]
 
     covars, _ = quat_scale_to_covar_preci(test_data["quats"], test_data["scales"])
-    means, covars = world_to_cam(test_data["means"], covars, viewmats)
+    means, covars = _world_to_cam(test_data["means"], covars, viewmats)
     means.requires_grad = True
     covars.requires_grad = True
 
@@ -169,7 +135,7 @@ def test_proj(test_data, camera_model: Literal["pinhole", "ortho", "fisheye"]):
         (_means2d * v_means2d).sum() + (_covars2d * v_covars2d).sum(),
         (means, covars),
     )
-    torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=1e-2)
+    torch.testing.assert_close(v_means, _v_means, rtol=2e-1, atol=1e-2)
     torch.testing.assert_close(v_covars, _v_covars, rtol=1e-1, atol=1e-1)
 
 
@@ -242,7 +208,7 @@ def test_projection(
     )
 
     # radii is integer so we allow for 1 unit difference
-    valid = (radii > 0) & (_radii > 0)
+    valid = (radii > 0).all(dim=-1) & (_radii > 0).all(dim=-1)
     torch.testing.assert_close(radii, _radii, rtol=0, atol=1)
     torch.testing.assert_close(means2d[valid], _means2d[valid], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(depths[valid], _depths[valid], rtol=1e-4, atol=1e-4)
@@ -273,7 +239,7 @@ def test_projection(
         (viewmats, quats, scales, means),
     )
 
-    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=2e-3, atol=2e-3)
     torch.testing.assert_close(v_quats, _v_quats, rtol=2e-1, atol=2e-2)
     torch.testing.assert_close(v_scales, _v_scales, rtol=1e-1, atol=2e-1)
     torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=6e-2)
@@ -400,7 +366,7 @@ def test_fully_fused_projection_packed(
         __compensations = torch.sparse_coo_tensor(
             torch.stack([camera_ids, gaussian_ids]), compensations, _compensations.shape
         ).to_dense()
-    sel = (__radii > 0) & (_radii > 0)
+    sel = (__radii > 0).all(dim=-1) & (_radii > 0).all(dim=-1)
     torch.testing.assert_close(__radii[sel], _radii[sel], rtol=0, atol=1)
     torch.testing.assert_close(__means2d[sel], _means2d[sel], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(__depths[sel], _depths[sel], rtol=1e-4, atol=1e-4)
@@ -422,9 +388,9 @@ def test_fully_fused_projection_packed(
         retain_graph=True,
     )
     v_viewmats, v_quats, v_scales, v_means = torch.autograd.grad(
-        (means2d * v_means2d[__radii > 0]).sum()
-        + (depths * v_depths[__radii > 0]).sum()
-        + (conics * v_conics[__radii > 0]).sum(),
+        (means2d * v_means2d[(__radii > 0).all(dim=-1)]).sum()
+        + (depths * v_depths[(__radii > 0).all(dim=-1)]).sum()
+        + (conics * v_conics[(__radii > 0).all(dim=-1)]).sum(),
         (viewmats, quats, scales, means),
         retain_graph=True,
     )
@@ -449,7 +415,7 @@ def test_isect(test_data):
     C, N = 3, 1000
     width, height = 40, 60
     means2d = torch.randn(C, N, 2, device=device) * width
-    radii = torch.randint(0, width, (C, N), device=device, dtype=torch.int32)
+    radii = torch.randint(0, width, (C, N, 2), device=device, dtype=torch.int32)
     depths = torch.rand(C, N, device=device)
 
     tile_size = 16

@@ -1,26 +1,24 @@
 name: Build Wheels
 
-
 on: [workflow_call, workflow_dispatch]
 jobs:
   build_sdist:
     name: Build source distribution and no binary wheel
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - name: Strip unsupported tags in README
-      run: |
-        sed -i '/<!-- pypi-strip -->/,/<!-- \/pypi-strip -->/d' README.md
-    - name: Build sdist
-      run: BUILD_NO_CUDA=1 pipx run build --sdist
-    - name: Build wheel with no binaries
-      run:  BUILD_NO_CUDA=1 python setup.py bdist_wheel --dist-dir=dist
-    - uses: actions/upload-artifact@v3
-      with:
-        name: pypi_packages
-        path: dist/*.tar.gz
+      - uses: actions/checkout@v4
+      - name: Strip unsupported tags in README
+        run: |
+          sed -i '/<!-- pypi-strip -->/,/<!-- \/pypi-strip -->/d' README.md
+      - name: Build sdist
+        run: BUILD_NO_CUDA=1 pipx run build --sdist
+      - name: Build wheel with no binaries
+        run: BUILD_NO_CUDA=1 python setup.py bdist_wheel --dist-dir=dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pypi_packages
+          path: dist/*.tar.gz
  
-  
   build_wheels:
     runs-on: ${{ matrix.os }}
     environment: production
@@ -28,14 +26,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-20.04, windows-2019]
+        os: [ubuntu-22.04, windows-2019]
         python-version: ['3.10']
         torch-version: ['2.0.0', '2.1.0', '2.2.0', '2.3.0', '2.4.0']
         cuda-version: ['cu118', 'cu121', 'cu124']
-        # python-version: ['3.8']
-        # torch-version: ['2.0.0']
-        # cuda-version: ['cu118']
-
         exclude:
           - python-version: 3.12
             torch-version: 2.0.0
@@ -78,7 +72,7 @@ jobs:
           - torch-version: 2.4.0
             cuda-version: 'cu116'
           - torch-version: 2.4.0
-            cuda-version: 'cu117'          
+            cuda-version: 'cu117'
           - os: windows-2019
             torch-version: 2.0.0
             cuda-version: 'cu121'
@@ -149,12 +143,11 @@ jobs:
         shell: bash
 
       - name: Build wheel
-        # build against architectures >= 7.0 (required by cooperative_groups::labeled_partition in gsplat)
-        run: |          
+        run: |
           pip install wheel
           source .github/workflows/cuda/${{ runner.os }}-env.sh ${{ matrix.cuda-version }}
           MAX_JOBS=2 python setup.py bdist_wheel --dist-dir=dist
-        shell: bash  # `source` does not exist in windows powershell
+        shell: bash
 
       - name: Test wheel
         run: |
@@ -163,11 +156,10 @@ jobs:
           pip install *.whl
           python -c "import gsplat; print('gsplat:', gsplat.__version__)"
           cd ..
-        shell: bash  # `ls -lah` does not exist in windows powershell
+        shell: bash
 
-        # v4 does not allow writing into the same folder, so stick with v3
-        # https://github.com/actions/upload-artifact/issues/478
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
-          name: compiled_wheels_python${{ matrix.python-version }}
+          # Include unique matrix values to avoid name collisions.
+          name: compiled_wheels_python${{ matrix.python-version }}-${{ matrix.os }}-${{ matrix.torch-version }}-${{ matrix.cuda-version }}
           path: dist/*.whl

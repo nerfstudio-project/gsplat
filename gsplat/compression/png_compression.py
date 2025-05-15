@@ -348,7 +348,7 @@ def _compress_kmeans(
         from torchpq.clustering import KMeans
     except:
         raise ImportError(
-            "Please install torchpq with 'pip install torchpq' to use K-means clustering"
+            "Please install extra dependencies with 'pip install torchpq cupy' to use K-means clustering"
         )
 
     if torch.numel == 0:

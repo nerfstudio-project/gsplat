@@ -2,7 +2,6 @@ import math
 
 import pytest
 import torch
-import pdb
 
 from gsplat._helper import load_test_data
 
@@ -15,7 +14,7 @@ def test_data():
     N = 2
     xs = torch.linspace(-1, 1, N, device=device)
     ys = torch.linspace(-1, 1, N, device=device)
-    xys = torch.stack(torch.meshgrid(xs, ys), dim=-1).reshape(-1, 2)
+    xys = torch.stack(torch.meshgrid(xs, ys, indexing="ij"), dim=-1).reshape(-1, 2)
     zs = torch.ones_like(xys[:, :1]) * 3
     means = torch.cat([xys, zs], dim=-1)
     quats = torch.tensor([[1.0, 0.0, 0.0, 0]], device=device).repeat(len(means), 1)
@@ -76,7 +75,7 @@ def test_projection_2dgs(test_data):
 
     # TODO (WZ): is the following true for 2dgs as while?
     # radii is integer so we allow for 1 unit difference
-    valid = (radii > 0) & (_radii > 0)
+    valid = ((radii > 0) & (_radii > 0)).all(dim=-1)
     torch.testing.assert_close(radii, _radii, rtol=0, atol=1)
     torch.testing.assert_close(means2d[valid], _means2d[valid], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(depths[valid], _depths[valid], rtol=1e-4, atol=1e-4)
@@ -86,27 +85,27 @@ def test_projection_2dgs(test_data):
     torch.testing.assert_close(normals[valid], _normals[valid], rtol=1e-4, atol=1e-4)
 
     # backward
-    v_means2d = torch.randn_like(means2d) * radii[..., None]
-    v_depths = torch.randn_like(depths) * radii
-    v_ray_transforms = torch.randn_like(ray_transforms) * radii[..., None, None]
-    v_normals = torch.randn_like(normals) * radii[..., None]
+    v_means2d = torch.randn_like(means2d) * valid[..., None]
+    v_depths = torch.randn_like(depths) * valid
+    v_ray_transforms = torch.randn_like(ray_transforms) * valid[..., None, None]
+    v_normals = torch.randn_like(normals) * valid[..., None]
 
-    v_quats, v_scales, v_means = torch.autograd.grad(
+    v_viewmats, v_quats, v_scales, v_means = torch.autograd.grad(
         (means2d * v_means2d).sum()
         + (depths * v_depths).sum()
         + (ray_transforms * v_ray_transforms).sum()
         + (normals * v_normals).sum(),
-        (quats, scales, means),
+        (viewmats, quats, scales, means),
     )
-    _v_quats, _v_scales, _v_means = torch.autograd.grad(
+    _v_viewmats, _v_quats, _v_scales, _v_means = torch.autograd.grad(
         (_means2d * v_means2d).sum()
         + (_depths * v_depths).sum()
         + (_ray_transforms * v_ray_transforms).sum()
         + (_normals * v_normals).sum(),
-        (quats, scales, means),
+        (viewmats, quats, scales, means),
     )
 
-    # torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=1e-3)
     torch.testing.assert_close(v_quats, _v_quats, rtol=2e-1, atol=1e-2)
     torch.testing.assert_close(
         v_scales[..., :2], _v_scales[..., :2], rtol=1e-1, atol=2e-1
@@ -137,7 +136,7 @@ def test_fully_fused_projection_packed_2dgs(
     quats = test_data["quats"]
     scales = test_data["scales"]
     means = test_data["means"]
-    viewmats.requires_grad = False
+    viewmats.requires_grad = True
     quats.requires_grad = True
     scales.requires_grad = True
     means.requires_grad = True
@@ -189,7 +188,7 @@ def test_fully_fused_projection_packed_2dgs(
         torch.stack([camera_ids, gaussian_ids]), normals, _normals.shape
     ).to_dense()
 
-    sel = (__radii > 0) & (_radii > 0)
+    sel = ((__radii > 0) & (_radii > 0)).all(dim=-1)
     torch.testing.assert_close(__radii[sel], _radii[sel], rtol=0, atol=1)
     torch.testing.assert_close(__means2d[sel], _means2d[sel], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(__depths[sel], _depths[sel], rtol=1e-4, atol=1e-4)
@@ -203,20 +202,20 @@ def test_fully_fused_projection_packed_2dgs(
     v_depths = torch.randn_like(_depths) * sel
     v_ray_transforms = torch.randn_like(_ray_transforms) * sel[..., None, None]
     v_normals = torch.randn_like(_normals) * sel[..., None]
-    _v_quats, _v_scales, _v_means = torch.autograd.grad(
+    _v_viewmats, _v_quats, _v_scales, _v_means = torch.autograd.grad(
         (_means2d * v_means2d).sum()
         + (_depths * v_depths).sum()
         + (_ray_transforms * v_ray_transforms).sum()
         + (_normals * v_normals).sum(),
-        (quats, scales, means),
+        (viewmats, quats, scales, means),
         retain_graph=True,
     )
-    v_quats, v_scales, v_means = torch.autograd.grad(
-        (means2d * v_means2d[__radii > 0]).sum()
-        + (depths * v_depths[__radii > 0]).sum()
-        + (ray_transforms * v_ray_transforms[__radii > 0]).sum()
-        + (normals * v_normals[__radii > 0]).sum(),
-        (quats, scales, means),
+    v_viewmats, v_quats, v_scales, v_means = torch.autograd.grad(
+        (means2d * v_means2d[(__radii > 0).all(dim=-1)]).sum()
+        + (depths * v_depths[(__radii > 0).all(dim=-1)]).sum()
+        + (ray_transforms * v_ray_transforms[(__radii > 0).all(dim=-1)]).sum()
+        + (normals * v_normals[(__radii > 0).all(dim=-1)]).sum(),
+        (viewmats, quats, scales, means),
         retain_graph=True,
     )
     if sparse_grad:
@@ -224,6 +223,7 @@ def test_fully_fused_projection_packed_2dgs(
         v_scales = v_scales.to_dense()
         v_means = v_means.to_dense()
 
+    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-2, atol=1e-2)
     torch.testing.assert_close(v_scales, _v_scales, rtol=5e-2, atol=5e-2)
     torch.testing.assert_close(v_means, _v_means, rtol=1e-3, atol=1e-3)
     torch.testing.assert_close(v_quats, _v_quats, rtol=1e-2, atol=1e-2)
@@ -326,6 +326,7 @@ def test_rasterize_to_pixels_2dgs(test_data):
     if diff.max() > 1e-5:
         print(f"DIFF > 1e-5, {diff.max()=} {diff.mean()=}")
         import os
+
         import imageio
 
         os.makedirs("renders", exist_ok=True)

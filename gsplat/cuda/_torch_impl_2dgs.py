@@ -59,16 +59,16 @@ def _fully_fused_projection_2dgs(
     )  # [C, N, 2]
 
     depths = means_c[..., 2]  # [C, N]
-    radius = torch.ceil(3.0 * torch.max(extents, dim=-1).values)  # (C, N)
+    radius = torch.ceil(3.33 * extents)  # (C, N, 2)
 
     valid = valid.squeeze(-1) & (depths > near_plane) & (depths < far_plane)
     radius[~valid] = 0.0
 
     inside = (
-        (means2d[..., 0] + radius > 0)
-        & (means2d[..., 0] - radius < width)
-        & (means2d[..., 1] + radius > 0)
-        & (means2d[..., 1] - radius < height)
+        (means2d[..., 0] + radius[..., 0] > 0)
+        & (means2d[..., 0] - radius[..., 0] < width)
+        & (means2d[..., 1] + radius[..., 1] > 0)
+        & (means2d[..., 1] - radius[..., 1] < height)
     )
     radius[~inside] = 0.0
     radii = radius.int()

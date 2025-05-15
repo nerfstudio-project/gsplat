@@ -1,10 +1,10 @@
 import struct
 from typing import Optional, Tuple
-from typing_extensions import Literal, assert_never
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor
+from typing_extensions import Literal, assert_never
 
 
 def _quat_to_rotmat(quats: Tensor) -> Tensor:
@@ -306,20 +306,19 @@ def _fully_fused_projection(
 
     depths = means_c[..., 2]  # [C, N]
 
-    b = (covars2d[..., 0, 0] + covars2d[..., 1, 1]) / 2  # (...,)
-    v1 = b + torch.sqrt(torch.clamp(b**2 - det, min=0.01))  # (...,)
-    radius = torch.ceil(3.0 * torch.sqrt(v1))  # (...,)
-    # v2 = b - torch.sqrt(torch.clamp(b**2 - det, min=0.01))  # (...,)
-    # radius = torch.ceil(3.0 * torch.sqrt(torch.max(v1, v2)))  # (...,)
+    radius_x = torch.ceil(3.33 * torch.sqrt(covars2d[..., 0, 0]))
+    radius_y = torch.ceil(3.33 * torch.sqrt(covars2d[..., 1, 1]))
+
+    radius = torch.stack([radius_x, radius_y], dim=-1)  # (..., 2)
 
     valid = (det > 0) & (depths > near_plane) & (depths < far_plane)
     radius[~valid] = 0.0
 
     inside = (
-        (means2d[..., 0] + radius > 0)
-        & (means2d[..., 0] - radius < width)
-        & (means2d[..., 1] + radius > 0)
-        & (means2d[..., 1] - radius < height)
+        (means2d[..., 0] + radius[..., 0] > 0)
+        & (means2d[..., 0] - radius[..., 0] < width)
+        & (means2d[..., 1] + radius[..., 1] > 0)
+        & (means2d[..., 1] - radius[..., 1] < height)
     )
     radius[~inside] = 0.0
 
@@ -350,14 +349,14 @@ def _isect_tiles(
     # compute tiles_per_gauss
     tile_means2d = means2d / tile_size
     tile_radii = radii / tile_size
-    tile_mins = torch.floor(tile_means2d - tile_radii[..., None]).int()
-    tile_maxs = torch.ceil(tile_means2d + tile_radii[..., None]).int()
+    tile_mins = torch.floor(tile_means2d - tile_radii).int()
+    tile_maxs = torch.ceil(tile_means2d + tile_radii).int()
     tile_mins[..., 0] = torch.clamp(tile_mins[..., 0], 0, tile_width)
     tile_mins[..., 1] = torch.clamp(tile_mins[..., 1], 0, tile_height)
     tile_maxs[..., 0] = torch.clamp(tile_maxs[..., 0], 0, tile_width)
     tile_maxs[..., 1] = torch.clamp(tile_maxs[..., 1], 0, tile_height)
     tiles_per_gauss = (tile_maxs - tile_mins).prod(dim=-1)  # [C, N]
-    tiles_per_gauss *= radii > 0.0
+    tiles_per_gauss *= (radii > 0.0).all(dim=-1)
 
     n_isects = tiles_per_gauss.sum().item()
     isect_ids = torch.empty(n_isects, dtype=torch.int64, device=device)
@@ -370,12 +369,16 @@ def _isect_tiles(
         return "".join("{:0>8b}".format(c) for c in struct.pack("!f", num))
 
     def kernel(cam_id, gauss_id):
-        if radii[cam_id, gauss_id] <= 0.0:
+        if radii[cam_id, gauss_id, 0] <= 0.0 or radii[cam_id, gauss_id, 1] <= 0.0:
             return
         index = cam_id * N + gauss_id
         curr_idx = cum_tiles_per_gauss[index - 1] if index > 0 else 0
 
-        depth_id = struct.unpack("i", struct.pack("f", depths[cam_id, gauss_id]))[0]
+        # Reinterpret float bits as int32 (preserving bit pattern)
+        depth_f32 = depths[cam_id, gauss_id]
+        depth_id = struct.unpack("i", struct.pack("f", depth_f32))[0]
+        # Store in a 64-bit int, zero-extending to lower 32 bits
+        depth_id = int(depth_id) & 0xFFFFFFFF  # Ensures upper 32 bits are zero
 
         tile_min = tile_mins[cam_id, gauss_id]
         tile_max = tile_maxs[cam_id, gauss_id]
