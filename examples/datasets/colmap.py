@@ -28,7 +28,7 @@ def _get_rel_paths(path_dir: str) -> List[str]:
     return paths
 
 
-def _resize_image_folder(image_dir: str, resized_dir: str, factor: int) -> str:
+def _resize_image_folder(image_dir: str, resized_dir: str, factor: float) -> str:
     """Resize image folder."""
     print(f"Downscaling images by {factor}x from {image_dir} to {resized_dir}.")
     os.makedirs(resized_dir, exist_ok=True)
@@ -59,12 +59,11 @@ class Parser:
     def __init__(
         self,
         data_dir: str,
-        factor: int = 1,
+        factor: int = -1,
         normalize: bool = False,
         test_every: int = 8,
     ):
         self.data_dir = data_dir
-        self.factor = factor
         self.normalize = normalize
         self.test_every = test_every
 
@@ -104,7 +103,6 @@ class Parser:
             cam = manager.cameras[camera_id]
             fx, fy, cx, cy = cam.fx, cam.fy, cam.cx, cam.cy
             K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
-            K[:2, :] /= factor
             Ks_dict[camera_id] = K
 
             # Get distortion parameters.
@@ -132,7 +130,10 @@ class Parser:
             ), f"Only perspective and fisheye cameras are supported, got {type_}"
 
             params_dict[camera_id] = params
-            imsize_dict[camera_id] = (cam.width // factor, cam.height // factor)
+            imsize_dict[camera_id] = (
+                cam.width // abs(factor),
+                cam.height // abs(factor),
+            )
             mask_dict[camera_id] = None
         print(
             f"[Parser] {len(imdata)} images, taken by {len(set(camera_ids))} cameras."
@@ -195,8 +196,35 @@ class Parser:
                 colmap_image_dir, image_dir + "_png", factor=factor
             )
             image_files = sorted(_get_rel_paths(image_dir))
+
         colmap_to_image = dict(zip(colmap_files, image_files))
         image_paths = [os.path.join(image_dir, colmap_to_image[f]) for f in image_names]
+
+        # load one image to check the size.
+        actual_image = imageio.imread(image_paths[0])[..., :3]
+        actual_height, actual_width = actual_image.shape[:2]
+
+        # need to check image resolution, side length > 1600 should be downscaled
+        # based on https://github.com/graphdeco-inria/gaussian-splatting/blob/54c035f7834b564019656c3e3fcc3646292f727d/utils/camera_utils.py#L50
+        max_side = max(actual_width, actual_height)
+        global_down = max_side / 1600.0
+
+        if factor == -1 and max_side > 1600:
+            print(
+                "[ INFO ] Encountered quite large input images (>1.6K pixels width), rescaling to 1.6K.\n "
+                "If this is not desired, please explicitly specify '--data_factor' as 1"
+            )
+            factor = global_down
+            image_dir = _resize_image_folder(
+                colmap_image_dir, image_dir + "_1600px", factor=factor
+            )
+            image_files = sorted(_get_rel_paths(image_dir))
+            colmap_to_image = dict(zip(colmap_files, image_files))
+            image_paths = [
+                os.path.join(image_dir, colmap_to_image[f]) for f in image_names
+            ]
+
+        self.factor = factor
 
         # 3D points and {image_name -> [point_idx]}
         points = manager.points3D.astype(np.float32)
@@ -259,18 +287,18 @@ class Parser:
         self.point_indices = point_indices  # Dict[str, np.ndarray], image_name -> [M,]
         self.transform = transform  # np.ndarray, (4, 4)
 
-        # load one image to check the size. In the case of tanksandtemples dataset, the
-        # intrinsics stored in COLMAP corresponds to 2x upsampled images.
-        actual_image = imageio.imread(self.image_paths[0])[..., :3]
-        actual_height, actual_width = actual_image.shape[:2]
         colmap_width, colmap_height = self.imsize_dict[self.camera_ids[0]]
         s_height, s_width = actual_height / colmap_height, actual_width / colmap_width
         for camera_id, K in self.Ks_dict.items():
+            K[:2, :] /= factor
             K[0, :] *= s_width
             K[1, :] *= s_height
             self.Ks_dict[camera_id] = K
             width, height = self.imsize_dict[camera_id]
-            self.imsize_dict[camera_id] = (int(width * s_width), int(height * s_height))
+            self.imsize_dict[camera_id] = (
+                int(width * s_width / global_down),
+                int(height * s_height / global_down),
+            )
 
         # undistortion
         self.mapx_dict = dict()
