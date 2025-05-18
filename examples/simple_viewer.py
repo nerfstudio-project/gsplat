@@ -117,38 +117,6 @@ def main(local_rank: int, world_rank, world_size: int, args):
         shN = torch.cat(shN, dim=0)
         colors = torch.cat([sh0, shN], dim=-2)
         sh_degree = int(math.sqrt(colors.shape[-2]) - 1)
-
-        # # crop
-        # aabb = torch.tensor((-1.0, -1.0, -1.0, 1.0, 1.0, 0.7), device=device)
-        # edges = aabb[3:] - aabb[:3]
-        # sel = ((means >= aabb[:3]) & (means <= aabb[3:])).all(dim=-1)
-        # sel = torch.where(sel)[0]
-        # means, quats, scales, colors, opacities = (
-        #     means[sel],
-        #     quats[sel],
-        #     scales[sel],
-        #     colors[sel],
-        #     opacities[sel],
-        # )
-
-        # # repeat the scene into a grid (to mimic a large-scale setting)
-        # repeats = args.scene_grid
-        # gridx, gridy = torch.meshgrid(
-        #     [
-        #         torch.arange(-(repeats // 2), repeats // 2 + 1, device=device),
-        #         torch.arange(-(repeats // 2), repeats // 2 + 1, device=device),
-        #     ],
-        #     indexing="ij",
-        # )
-        # grid = torch.stack([gridx, gridy, torch.zeros_like(gridx)], dim=-1).reshape(
-        #     -1, 3
-        # )
-        # means = means[None, :, :] + grid[:, None, :] * edges[None, None, :]
-        # means = means.reshape(-1, 3)
-        # quats = quats.repeat(repeats**2, 1)
-        # scales = scales.repeat(repeats**2, 1)
-        # colors = colors.repeat(repeats**2, 1, 1)
-        # opacities = opacities.repeat(repeats**2)
         print("Number of Gaussians:", len(means))
 
     # register and open viewer
@@ -199,6 +167,8 @@ def main(local_rank: int, world_rank, world_size: int, args):
             rasterize_mode=render_tab_state.rasterize_mode,
             camera_model=render_tab_state.camera_model,
             packed=False,
+            with_ut=args.with_ut,
+            with_eval3d=args.with_eval3d,
         )
         render_tab_state.total_gs_count = len(means)
         render_tab_state.rendered_gs_count = (info["radii"] > 0).all(-1).sum().item()
@@ -270,6 +240,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--port", type=int, default=8080, help="port for the viewer server"
     )
+    parser.add_argument(
+        "--with_ut", action="store_true", help="use uncentered transform"
+    )
+    parser.add_argument("--with_eval3d", action="store_true", help="use eval 3D")
     args = parser.parse_args()
     assert args.scene_grid % 2 == 1, "scene_grid must be odd"
 

@@ -1,2 +1,3 @@
 recursive-include gsplat/cuda/csrc *
 recursive-include gsplat/cuda/include *
+include gsplat/cuda/ext.cpp

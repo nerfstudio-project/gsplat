@@ -1,4 +1,4 @@
-""" 
+"""
 Trigger compiling (for debugging):
 
 VERBOSE=1 FAST_COMPILE=1 TORCH_CUDA_ARCH_LIST="8.9" python -c "from gsplat.cuda._backend import _C"
@@ -75,20 +75,46 @@ def load_extension(
             head_file = os.path.join(_TORCH_PATH, "include", "torch", "extension.h")
             extra_cflags += ["-include", head_file, "-Winvalid-pch"]
 
-        return _jit_compile(
-            name,
-            sources,
-            extra_cflags,
-            extra_cuda_cflags,
-            extra_ldflags,
-            extra_include_paths,
-            build_directory,
-            verbose,
-            with_cuda=None,
-            is_python_module=True,
-            is_standalone=False,
-            keep_intermediates=True,
-        )
+        try:
+            compiled = _jit_compile(
+                name,
+                sources,
+                extra_cflags,
+                extra_cuda_cflags,
+                extra_ldflags,
+                extra_include_paths,
+                build_directory,
+                verbose,
+                with_cuda=None,
+                is_python_module=True,
+                is_standalone=False,
+                keep_intermediates=True,
+            )
+        except (
+            TypeError
+        ) as e:  # torch>=2.7.0 has added arguments to _jit_compile to support SYCL.
+            # Narrow the scope of catch: only retry if it's due to unexpected argument(s)
+            if "_jit_compile() missing" in str(e):
+                compiled = _jit_compile(
+                    name,
+                    sources,
+                    extra_cflags,
+                    extra_cuda_cflags,
+                    None,  # SYCL fallback
+                    extra_ldflags,
+                    extra_include_paths,
+                    build_directory,
+                    verbose,
+                    with_cuda=None,
+                    with_sycl=None,
+                    is_python_module=True,
+                    is_standalone=False,
+                    keep_intermediates=True,
+                )
+            else:
+                raise e
+
+        return compiled
     except OSError:
         # The module should already be compiled if we get OSError
         return _import_module_from_library(name, build_directory, True)
