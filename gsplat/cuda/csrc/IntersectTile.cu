@@ -222,7 +222,7 @@ __global__ void intersect_offset_kernel(
     if (idx >= n_isects)
         return;
 
-    uint32_t image_n_bits = (uint32_t)floor(log2(I)) + 1;
+    uint32_t image_n_bits = (uint32_t)floor(log2f(float(I))) + 1;
 
     int64_t isect_id_curr = isect_ids[idx] >> 32;
     int64_t iid_curr = isect_id_curr >> (tile_n_bits);
