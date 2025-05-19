@@ -1,6 +1,6 @@
 # Features: Render Multiple Scenes In a Batch
 
-https://github.com/user-attachments/assets/454ebbf6-daf2-44cd-b8a7-2889d0957b06
+https://github.com/user-attachments/assets/b66af568-a031-479f-a1b7-cf4a23512e2a
 
 `rasterization()` function now supports arbitrary batching. For example now you can render 16 scenes, each to 6 viewpoints in one go:
 
