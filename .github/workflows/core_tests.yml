@@ -1,0 +1,33 @@
+name: Core Tests.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: 'recursive'
+          
+      - name: Set up Python 3.8.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.8.12"
+      - name: Install dependencies
+        run: |
+          pip install black[jupyter]==22.3.0 pytest
+          pip install torch==2.0.0 --index-url https://download.pytorch.org/whl/cpu
+          BUILD_NO_CUDA=1 pip install .
+      - name: Run Black Format Check
+        run: black . gsplat/ tests/ examples/ profiling/ --check
+      - name: Run Tests.
+        run: pytest tests/
