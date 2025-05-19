@@ -36,13 +36,13 @@ class CameraOptModule(torch.nn.Module):
             updated camtoworlds: (..., 4, 4)
         """
         assert camtoworlds.shape[:-2] == embed_ids.shape
-        batch_shape = camtoworlds.shape[:-2]
+        batch_dims = camtoworlds.shape[:-2]
         pose_deltas = self.embeds(embed_ids)  # (..., 9)
         dx, drot = pose_deltas[..., :3], pose_deltas[..., 3:]
         rot = rotation_6d_to_matrix(
-            drot + self.identity.expand(*batch_shape, -1)
+            drot + self.identity.expand(*batch_dims, -1)
         )  # (..., 3, 3)
-        transform = torch.eye(4, device=pose_deltas.device).repeat((*batch_shape, 1, 1))
+        transform = torch.eye(4, device=pose_deltas.device).repeat((*batch_dims, 1, 1))
         transform[..., :3, :3] = rot
         transform[..., :3, 3] = dx
         return torch.matmul(camtoworlds, transform)
