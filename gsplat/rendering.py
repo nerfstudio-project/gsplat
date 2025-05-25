@@ -46,7 +46,9 @@ def rasterization(
     packed: bool = True,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
-    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED", "Diffuse", "Specular"] = "RGB",
+    render_mode: Literal[
+        "RGB", "D", "ED", "RGB+D", "RGB+ED", "Diffuse", "Specular"
+    ] = "RGB",
     sparse_grad: bool = False,
     absgrad: bool = False,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
@@ -280,7 +282,15 @@ def rasterization(
     assert opacities.shape == batch_dims + (N,), opacities.shape
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
-    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED", "Diffuse", "Specular"], render_mode
+    assert render_mode in [
+        "RGB",
+        "D",
+        "ED",
+        "RGB+D",
+        "RGB+ED",
+        "Diffuse",
+        "Specular",
+    ], render_mode
 
     def reshape_view(C: int, world_view: torch.Tensor, N_world: list) -> torch.Tensor:
         view_list = list(

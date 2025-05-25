@@ -174,7 +174,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
         )
         render_tab_state.total_gs_count = len(means)
         render_tab_state.rendered_gs_count = (info["radii"] > 0).all(-1).sum().item()
-            
+
         if render_tab_state.render_mode in ["depth(accumulated)", "depth(expected)"]:
             # normalize depth to [0, 1]
             depth = render_colors[0, ..., 0:1]
