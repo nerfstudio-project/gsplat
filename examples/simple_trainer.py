@@ -22,7 +22,6 @@ from datasets.traj import (
     generate_spiral_path,
 )
 from fused_ssim import fused_ssim
-from lib_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
@@ -443,20 +442,22 @@ class Runner:
             if cfg.use_fused_bilagrid:
                 cfg.use_bilateral_grid = True  # Activate use_bilateral_grid if use_fused_bilagrid is True
                 from fused_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
-                # Initialize BilateralGrid (either from fused_bilagrid or some_module)
-                self.bil_grids = BilateralGrid(
-                    len(self.trainset),
-                    grid_X=cfg.bilateral_grid_shape[0],
-                    grid_Y=cfg.bilateral_grid_shape[1],
-                    grid_W=cfg.bilateral_grid_shape[2],
-                ).to(self.device)
-                self.bil_grid_optimizers = [
-                    torch.optim.Adam(
-                        self.bil_grids.parameters(),
-                        lr=2e-3 * math.sqrt(cfg.batch_size),
-                        eps=1e-15,
-                    ),
-                ]
+            else:
+                from lib_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
+            # Initialize BilateralGrid (either from fused_bilagrid or some_module)
+            self.bil_grids = BilateralGrid(
+                len(self.trainset),
+                grid_X=cfg.bilateral_grid_shape[0],
+                grid_Y=cfg.bilateral_grid_shape[1],
+                grid_W=cfg.bilateral_grid_shape[2],
+            ).to(self.device)
+            self.bil_grid_optimizers = [
+                torch.optim.Adam(
+                    self.bil_grids.parameters(),
+                    lr=2e-3 * math.sqrt(cfg.batch_size),
+                    eps=1e-15,
+                ),
+            ]
 
         # Losses & Metrics.
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
@@ -663,13 +664,15 @@ class Runner:
                 if cfg.use_fused_bilagrid:
                     cfg.use_bilateral_grid = True  # Activate use_bilateral_grid if use_fused_bilagrid is True
                     from fused_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
-                    grid_y, grid_x = torch.meshgrid(
-                        (torch.arange(height, device=self.device) + 0.5) / height,
-                        (torch.arange(width, device=self.device) + 0.5) / width,
-                        indexing="ij",
-                    )
-                    grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
-                    colors = slice(self.bil_grids, grid_xy.expand(colors.shape[0], -1, -1, -1), colors, image_ids.unsqueeze(-1))["rgb"]
+                else:
+                    from lib_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
+                grid_y, grid_x = torch.meshgrid(
+                    (torch.arange(height, device=self.device) + 0.5) / height,
+                    (torch.arange(width, device=self.device) + 0.5) / width,
+                    indexing="ij",
+                )
+                grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
+                colors = slice(self.bil_grids, grid_xy.expand(colors.shape[0], -1, -1, -1), colors, image_ids.unsqueeze(-1))["rgb"]
 
             if cfg.random_bkgd:
                 bkgd = torch.rand(1, 3, device=device)
@@ -711,10 +714,12 @@ class Runner:
 
             if cfg.use_bilateral_grid or cfg.use_fused_bilagrid:
                 if cfg.use_fused_bilagrid:
-                    cfg.use_bilateral_grid = True
+                    cfg.use_bilateral_grid=True
                     from fused_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
-                    tvloss = 10 * total_variation_loss(self.bil_grids.grids)
-                    loss += tvloss
+                else:
+                    from lib_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
+                tvloss = 10 * total_variation_loss(self.bil_grids.grids)
+                loss += tvloss
 
             # regularizations
             if cfg.opacity_reg > 0.0:
