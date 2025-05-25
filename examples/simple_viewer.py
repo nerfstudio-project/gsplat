@@ -140,6 +140,8 @@ def main(local_rank: int, world_rank, world_size: int, args):
             "depth(accumulated)": "D",
             "depth(expected)": "ED",
             "alpha": "RGB",
+            "diffuse": "Diffuse",
+            "specular": "Specular",
         }
 
         render_colors, render_alphas, info = rasterization(
@@ -172,12 +174,8 @@ def main(local_rank: int, world_rank, world_size: int, args):
         )
         render_tab_state.total_gs_count = len(means)
         render_tab_state.rendered_gs_count = (info["radii"] > 0).all(-1).sum().item()
-
-        if render_tab_state.render_mode == "rgb":
-            # colors represented with sh are not guranteed to be in [0, 1]
-            render_colors = render_colors[0, ..., 0:3].clamp(0, 1)
-            renders = render_colors.cpu().numpy()
-        elif render_tab_state.render_mode in ["depth(accumulated)", "depth(expected)"]:
+            
+        if render_tab_state.render_mode in ["depth(accumulated)", "depth(expected)"]:
             # normalize depth to [0, 1]
             depth = render_colors[0, ..., 0:1]
             if render_tab_state.normalize_nearfar:
@@ -200,6 +198,10 @@ def main(local_rank: int, world_rank, world_size: int, args):
             renders = (
                 apply_float_colormap(alpha, render_tab_state.colormap).cpu().numpy()
             )
+        else:
+            # colors represented with sh are not guranteed to be in [0, 1]
+            render_colors = render_colors[0, ..., 0:3].clamp(0, 1)
+            renders = render_colors.cpu().numpy()
         return renders
 
     server = viser.ViserServer(port=args.port, verbose=False)
