@@ -987,7 +987,7 @@ class Runner:
                     "num_GS": len(self.splats["means"]),
                 }
             )
-           if cfg.use_bilateral_grid:
+            if cfg.use_bilateral_grid:
                 print(
                     f"PSNR: {stats['psnr']:.3f}, SSIM: {stats['ssim']:.4f}, LPIPS: {stats['lpips']:.3f} "
                     f"CC_PSNR: {stats['cc_psnr']:.3f}, CC_SSIM: {stats['cc_ssim']:.4f}, CC_LPIPS: {stats['cc_lpips']:.3f} "
