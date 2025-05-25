@@ -22,6 +22,7 @@ from datasets.traj import (
     generate_spiral_path,
 )
 from fused_ssim import fused_ssim
+from lib_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
