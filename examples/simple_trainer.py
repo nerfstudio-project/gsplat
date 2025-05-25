@@ -22,7 +22,6 @@ from datasets.traj import (
     generate_spiral_path,
 )
 from fused_ssim import fused_ssim
-from lib_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
@@ -207,8 +206,7 @@ class Config:
             strategy.refine_every = int(strategy.refine_every * factor)
         else:
             assert_never(strategy)
-
-
+            
 def create_splats_with_optimizers(
     parser: Parser,
     init_type: str = "sfm",
@@ -439,13 +437,7 @@ class Runner:
                 self.app_module = DDP(self.app_module)
 
         self.bil_grid_optimizers = []
-        if cfg.use_bilateral_grid or cfg.use_fused_bilagrid:
-            if cfg.use_fused_bilagrid:
-                cfg.use_bilateral_grid = True  # Activate use_bilateral_grid if use_fused_bilagrid is True
-                from fused_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
-            else:
-                from lib_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
-            # Initialize BilateralGrid (either from fused_bilagrid or some_module)
+        if cfg.use_bilateral_grid:
             self.bil_grids = BilateralGrid(
                 len(self.trainset),
                 grid_X=cfg.bilateral_grid_shape[0],
@@ -660,13 +652,7 @@ class Runner:
             else:
                 colors, depths = renders, None
 
-
-            if cfg.use_bilateral_grid or cfg.use_fused_bilagrid:
-                if cfg.use_fused_bilagrid:
-                    cfg.use_bilateral_grid = True  # Activate use_bilateral_grid if use_fused_bilagrid is True
-                    from fused_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
-                else:
-                    from lib_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
+            if cfg.use_bilateral_grid:
                 grid_y, grid_x = torch.meshgrid(
                     (torch.arange(height, device=self.device) + 0.5) / height,
                     (torch.arange(width, device=self.device) + 0.5) / width,
@@ -712,13 +698,7 @@ class Runner:
                 disp_gt = 1.0 / depths_gt  # [1, M]
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
-
-            if cfg.use_bilateral_grid or cfg.use_fused_bilagrid:
-                if cfg.use_fused_bilagrid:
-                    cfg.use_bilateral_grid=True
-                    from fused_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
-                else:
-                    from lib_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
+            if cfg.use_bilateral_grid:
                 tvloss = 10 * total_variation_loss(self.bil_grids.grids)
                 loss += tvloss
 
@@ -1244,6 +1224,13 @@ if __name__ == "__main__":
     }
     cfg = tyro.extras.overridable_config_cli(configs)
     cfg.adjust_steps(cfg.steps_scaler)
+
+    # Import BilateralGrid and related functions based on configuration
+    if cfg.use_bilateral_grid or cfg.use_fused_bilagrid:
+        if cfg.use_fused_bilagrid:
+            from fused_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
+        else:
+            from lib_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
 
     # try import extra dependencies
     if cfg.compression == "png":
