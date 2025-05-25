@@ -1228,8 +1228,10 @@ if __name__ == "__main__":
     # Import BilateralGrid and related functions based on configuration
     if cfg.use_bilateral_grid or cfg.use_fused_bilagrid:
         if cfg.use_fused_bilagrid:
+            cfg.use_bilateral_grid=True
             from fused_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
         else:
+            cfg.use_bilateral_grid=True
             from lib_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
 
     # try import extra dependencies
