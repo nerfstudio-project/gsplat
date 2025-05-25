@@ -46,7 +46,7 @@ def rasterization(
     packed: bool = True,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
-    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
+    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED", "Diffuse", "Specular"] = "RGB",
     sparse_grad: bool = False,
     absgrad: bool = False,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
@@ -280,7 +280,7 @@ def rasterization(
     assert opacities.shape == batch_dims + (N,), opacities.shape
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
-    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
+    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED", "Diffuse", "Specular"], render_mode
 
     def reshape_view(C: int, world_view: torch.Tensor, N_world: list) -> torch.Tensor:
         view_list = list(
@@ -481,6 +481,11 @@ def rasterization(
                 pass
     else:
         # Colors are SH coefficients, with shape [..., N, K, 3] or [..., C, N, K, 3]
+        colors = colors.clone()
+        if render_mode == "Diffuse":
+            colors[..., 1:, :] = 0.0
+        elif render_mode == "Specular":
+            colors[..., 0, :] = 0.0
         campos = torch.inverse(viewmats)[..., :3, 3]  # [..., C, 3]
         if viewmats_rs is not None:
             campos_rs = torch.inverse(viewmats_rs)[..., :3, 3]
@@ -515,7 +520,8 @@ def rasterization(
                 sh_degree, dirs, shs, masks=masks
             )  # [..., C, N, 3]
         # make it apple-to-apple with Inria's CUDA Backend.
-        colors = torch.clamp_min(colors + 0.5, 0.0)
+        if render_mode != "Specular":
+            colors = torch.clamp_min(colors + 0.5, 0.0)
 
     # If in distributed mode, we need to scatter the GSs to the destination ranks, based
     # on which cameras they are visible to, which we already figured out in the projection
