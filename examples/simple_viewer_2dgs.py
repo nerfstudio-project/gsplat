@@ -75,7 +75,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
                 min(render_tab_state.max_sh_degree, sh_degree)
                 if sh_degree is not None
                 else None
-            )
+            ),
         )
         render_tab_state.total_gs_count = len(means)
         render_tab_state.rendered_gs_count = (info["radii"] > 0).all(-1).sum().item()
