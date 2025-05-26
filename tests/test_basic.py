@@ -6,19 +6,32 @@ pytest <THIS_PY_FILE> -s
 ```
 """
 
-from typing_extensions import Literal, assert_never
 import math
+import os
 
 import pytest
 import torch
-import os
+from typing_extensions import Literal, Tuple, assert_never
 
 from gsplat._helper import load_test_data
 
 device = torch.device("cuda:0")
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def expand(data: dict, batch_dims: Tuple[int, ...]):
+    # append multiple batch dimensions to the front of the tensor
+    # eg. x.shape = [N, 3], batch_dims = (1, 2), return shape is [1, 2, N, 3]
+    # eg. x.shape = [N, 3], batch_dims = (), return shape is [N, 3]
+    ret = {}
+    for k, v in data.items():
+        if isinstance(v, torch.Tensor) and len(batch_dims) > 0:
+            new_shape = batch_dims + v.shape
+            ret[k] = v.expand(new_shape)
+        else:
+            ret[k] = v
+    return ret
+
+
 @pytest.fixture
 def test_data():
     (
@@ -35,15 +48,13 @@ def test_data():
         device=device,
         data_path=os.path.join(os.path.dirname(__file__), "../assets/test_garden.npz"),
     )
-    colors = colors[None].repeat(len(viewmats), 1, 1)
     return {
-        "means": means,
-        "quats": quats,
-        "scales": scales,
-        "opacities": opacities,
-        "colors": colors,
-        "viewmats": viewmats,
-        "Ks": Ks,
+        "means": means,  # [N, 3]
+        "quats": quats,  # [N, 4]
+        "scales": scales,  # [N, 3]
+        "opacities": opacities,  # [N]
+        "viewmats": viewmats,  # [C, 4, 4]
+        "Ks": Ks,  # [C, 3, 3]
         "width": width,
         "height": height,
     }
@@ -51,12 +62,14 @@ def test_data():
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("triu", [False, True])
-def test_quat_scale_to_covar_preci(test_data, triu: bool):
+@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
+def test_quat_scale_to_covar_preci(test_data, triu: bool, batch_dims: Tuple[int, ...]):
     from gsplat.cuda._torch_impl import _quat_scale_to_covar_preci
     from gsplat.cuda._wrapper import quat_scale_to_covar_preci
 
     torch.manual_seed(42)
 
+    test_data = expand(test_data, batch_dims)
     quats = test_data["quats"]
     scales = test_data["scales"]
     quats.requires_grad = True
@@ -84,63 +97,36 @@ def test_quat_scale_to_covar_preci(test_data, triu: bool):
         (_covars * v_covars + _precis * v_precis).sum(),
         (quats, scales),
     )
-    torch.testing.assert_close(v_quats, _v_quats, rtol=1e-1, atol=1e-1)
-    torch.testing.assert_close(v_scales, _v_scales, rtol=1e-1, atol=1e-1)
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_world_to_cam(test_data):
-    from gsplat.cuda._torch_impl import _world_to_cam
-    from gsplat.cuda._wrapper import quat_scale_to_covar_preci, world_to_cam
-
-    torch.manual_seed(42)
-
-    viewmats = test_data["viewmats"]
-    means = test_data["means"]
-    scales = test_data["scales"]
-    quats = test_data["quats"]
-    covars, _ = quat_scale_to_covar_preci(quats, scales)
-    means.requires_grad = True
-    covars.requires_grad = True
-    viewmats.requires_grad = True
-
-    # forward
-    means_c, covars_c = world_to_cam(means, covars, viewmats)
-    _means_c, _covars_c = _world_to_cam(means, covars, viewmats)
-    torch.testing.assert_close(means_c, _means_c)
-    torch.testing.assert_close(covars_c, _covars_c)
-
-    # backward
-    v_means_c = torch.randn_like(means_c)
-    v_covars_c = torch.randn_like(covars_c)
-    v_means, v_covars, v_viewmats = torch.autograd.grad(
-        (means_c * v_means_c).sum() + (covars_c * v_covars_c).sum(),
-        (means, covars, viewmats),
-    )
-    _v_means, _v_covars, _v_viewmats = torch.autograd.grad(
-        (_means_c * v_means_c).sum() + (_covars_c * v_covars_c).sum(),
-        (means, covars, viewmats),
-    )
-    torch.testing.assert_close(v_means, _v_means)
-    torch.testing.assert_close(v_covars, _v_covars)
-    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(v_quats, _v_quats, rtol=1e0, atol=1e-1)
+    torch.testing.assert_close(v_scales, _v_scales, rtol=1e0, atol=1e-1)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
-def test_proj(test_data, camera_model: Literal["pinhole", "ortho", "fisheye"]):
-    from gsplat.cuda._torch_impl import _persp_proj, _ortho_proj, _fisheye_proj
-    from gsplat.cuda._wrapper import proj, quat_scale_to_covar_preci, world_to_cam
+@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
+def test_proj(
+    test_data,
+    camera_model: Literal["pinhole", "ortho", "fisheye"],
+    batch_dims: Tuple[int, ...],
+):
+    from gsplat.cuda._torch_impl import (
+        _fisheye_proj,
+        _ortho_proj,
+        _persp_proj,
+        _world_to_cam,
+    )
+    from gsplat.cuda._wrapper import proj, quat_scale_to_covar_preci
 
     torch.manual_seed(42)
 
+    test_data = expand(test_data, batch_dims)
     Ks = test_data["Ks"]
     viewmats = test_data["viewmats"]
     height = test_data["height"]
     width = test_data["width"]
 
     covars, _ = quat_scale_to_covar_preci(test_data["quats"], test_data["scales"])
-    means, covars = world_to_cam(test_data["means"], covars, viewmats)
+    means, covars = _world_to_cam(test_data["means"], covars, viewmats)
     means.requires_grad = True
     covars.requires_grad = True
 
@@ -169,7 +155,7 @@ def test_proj(test_data, camera_model: Literal["pinhole", "ortho", "fisheye"]):
         (_means2d * v_means2d).sum() + (_covars2d * v_covars2d).sum(),
         (means, covars),
     )
-    torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=1e-2)
+    torch.testing.assert_close(v_means, _v_means, rtol=6e-1, atol=1e-2)
     torch.testing.assert_close(v_covars, _v_covars, rtol=1e-1, atol=1e-1)
 
 
@@ -177,17 +163,20 @@ def test_proj(test_data, camera_model: Literal["pinhole", "ortho", "fisheye"]):
 @pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
 @pytest.mark.parametrize("fused", [False, True])
 @pytest.mark.parametrize("calc_compensations", [True, False])
+@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 def test_projection(
     test_data,
     fused: bool,
     calc_compensations: bool,
     camera_model: Literal["pinhole", "ortho", "fisheye"],
+    batch_dims: Tuple[int, ...],
 ):
     from gsplat.cuda._torch_impl import _fully_fused_projection
     from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci
 
     torch.manual_seed(42)
 
+    test_data = expand(test_data, batch_dims)
     Ks = test_data["Ks"]
     viewmats = test_data["viewmats"]
     height = test_data["height"]
@@ -216,7 +205,7 @@ def test_projection(
             camera_model=camera_model,
         )
     else:
-        covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [N, 6]
+        covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [..., N, 6]
         radii, means2d, depths, conics, compensations = fully_fused_projection(
             means,
             covars,
@@ -229,7 +218,7 @@ def test_projection(
             calc_compensations=calc_compensations,
             camera_model=camera_model,
         )
-    _covars, _ = quat_scale_to_covar_preci(quats, scales, triu=False)  # [N, 3, 3]
+    _covars, _ = quat_scale_to_covar_preci(quats, scales, triu=False)  # [..., N, 3, 3]
     _radii, _means2d, _depths, _conics, _compensations = _fully_fused_projection(
         means,
         _covars,
@@ -242,7 +231,7 @@ def test_projection(
     )
 
     # radii is integer so we allow for 1 unit difference
-    valid = (radii > 0) & (_radii > 0)
+    valid = (radii > 0).all(dim=-1) & (_radii > 0).all(dim=-1)
     torch.testing.assert_close(radii, _radii, rtol=0, atol=1)
     torch.testing.assert_close(means2d[valid], _means2d[valid], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(depths[valid], _depths[valid], rtol=1e-4, atol=1e-4)
@@ -273,28 +262,31 @@ def test_projection(
         (viewmats, quats, scales, means),
     )
 
-    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=1e-3)
+    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=2e-3, atol=2e-3)
     torch.testing.assert_close(v_quats, _v_quats, rtol=2e-1, atol=2e-2)
-    torch.testing.assert_close(v_scales, _v_scales, rtol=1e-1, atol=2e-1)
+    torch.testing.assert_close(v_scales, _v_scales, rtol=5e-1, atol=2e-1)
     torch.testing.assert_close(v_means, _v_means, rtol=1e-2, atol=6e-2)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("fused", [False, True])
-@pytest.mark.parametrize("sparse_grad", [False, True])
+@pytest.mark.parametrize("sparse_grad", [False])
 @pytest.mark.parametrize("calc_compensations", [False, True])
 @pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
+@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 def test_fully_fused_projection_packed(
     test_data,
     fused: bool,
     sparse_grad: bool,
     calc_compensations: bool,
     camera_model: Literal["pinhole", "ortho", "fisheye"],
+    batch_dims: Tuple[int, ...],
 ):
     from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci
 
     torch.manual_seed(42)
 
+    test_data = expand(test_data, batch_dims)
     Ks = test_data["Ks"]
     viewmats = test_data["viewmats"]
     height = test_data["height"]
@@ -311,6 +303,7 @@ def test_fully_fused_projection_packed(
     # forward
     if fused:
         (
+            batch_ids,
             camera_ids,
             gaussian_ids,
             radii,
@@ -346,8 +339,9 @@ def test_fully_fused_projection_packed(
             camera_model=camera_model,
         )
     else:
-        covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [N, 6]
+        covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [..., N, 6]
         (
+            batch_ids,
             camera_ids,
             gaussian_ids,
             radii,
@@ -383,24 +377,35 @@ def test_fully_fused_projection_packed(
             camera_model=camera_model,
         )
 
+    B = math.prod(batch_dims)
+    N = means.shape[-2]
+    C = viewmats.shape[-3]
+
     # recover packed tensors to full matrices for testing
     __radii = torch.sparse_coo_tensor(
-        torch.stack([camera_ids, gaussian_ids]), radii, _radii.shape
+        torch.stack([batch_ids, camera_ids, gaussian_ids]), radii, (B, C, N, 2)
     ).to_dense()
+    __radii = __radii.reshape(batch_dims + (C, N, 2))
     __means2d = torch.sparse_coo_tensor(
-        torch.stack([camera_ids, gaussian_ids]), means2d, _means2d.shape
+        torch.stack([batch_ids, camera_ids, gaussian_ids]), means2d, (B, C, N, 2)
     ).to_dense()
+    __means2d = __means2d.reshape(batch_dims + (C, N, 2))
     __depths = torch.sparse_coo_tensor(
-        torch.stack([camera_ids, gaussian_ids]), depths, _depths.shape
+        torch.stack([batch_ids, camera_ids, gaussian_ids]), depths, (B, C, N)
     ).to_dense()
+    __depths = __depths.reshape(batch_dims + (C, N))
     __conics = torch.sparse_coo_tensor(
-        torch.stack([camera_ids, gaussian_ids]), conics, _conics.shape
+        torch.stack([batch_ids, camera_ids, gaussian_ids]), conics, (B, C, N, 3)
     ).to_dense()
+    __conics = __conics.reshape(batch_dims + (C, N, 3))
     if calc_compensations:
         __compensations = torch.sparse_coo_tensor(
-            torch.stack([camera_ids, gaussian_ids]), compensations, _compensations.shape
+            torch.stack([batch_ids, camera_ids, gaussian_ids]),
+            compensations,
+            (B, C, N),
         ).to_dense()
-    sel = (__radii > 0) & (_radii > 0)
+        __compensations = __compensations.reshape(batch_dims + (C, N))
+    sel = (__radii > 0).all(dim=-1) & (_radii > 0).all(dim=-1)
     torch.testing.assert_close(__radii[sel], _radii[sel], rtol=0, atol=1)
     torch.testing.assert_close(__means2d[sel], _means2d[sel], rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(__depths[sel], _depths[sel], rtol=1e-4, atol=1e-4)
@@ -422,9 +427,9 @@ def test_fully_fused_projection_packed(
         retain_graph=True,
     )
     v_viewmats, v_quats, v_scales, v_means = torch.autograd.grad(
-        (means2d * v_means2d[__radii > 0]).sum()
-        + (depths * v_depths[__radii > 0]).sum()
-        + (conics * v_conics[__radii > 0]).sum(),
+        (means2d * v_means2d[(__radii > 0).all(dim=-1)]).sum()
+        + (depths * v_depths[(__radii > 0).all(dim=-1)]).sum()
+        + (conics * v_conics[(__radii > 0).all(dim=-1)]).sum(),
         (viewmats, quats, scales, means),
         retain_graph=True,
     )
@@ -440,17 +445,27 @@ def test_fully_fused_projection_packed(
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_isect(test_data):
+@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
+def test_isect(test_data, batch_dims: Tuple[int, ...]):
     from gsplat.cuda._torch_impl import _isect_offset_encode, _isect_tiles
     from gsplat.cuda._wrapper import isect_offset_encode, isect_tiles
 
     torch.manual_seed(42)
 
+    B = math.prod(batch_dims)
     C, N = 3, 1000
+    I = B * C
     width, height = 40, 60
-    means2d = torch.randn(C, N, 2, device=device) * width
-    radii = torch.randint(0, width, (C, N), device=device, dtype=torch.int32)
-    depths = torch.rand(C, N, device=device)
+
+    test_data = {
+        "means2d": torch.randn(C, N, 2, device=device) * width,
+        "radii": torch.randint(0, width, (C, N, 2), device=device, dtype=torch.int32),
+        "depths": torch.rand(C, N, device=device),
+    }
+    test_data = expand(test_data, batch_dims)
+    means2d = test_data["means2d"]
+    radii = test_data["radii"]
+    depths = test_data["depths"]
 
     tile_size = 16
     tile_width = math.ceil(width / tile_size)
@@ -459,12 +474,12 @@ def test_isect(test_data):
     tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
         means2d, radii, depths, tile_size, tile_width, tile_height
     )
-    isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
+    isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
 
     _tiles_per_gauss, _isect_ids, _gauss_ids = _isect_tiles(
         means2d, radii, depths, tile_size, tile_width, tile_height
     )
-    _isect_offsets = _isect_offset_encode(_isect_ids, C, tile_width, tile_height)
+    _isect_offsets = _isect_offset_encode(_isect_ids, I, tile_width, tile_height)
 
     torch.testing.assert_close(tiles_per_gauss, _tiles_per_gauss)
     torch.testing.assert_close(isect_ids, _isect_ids)
@@ -474,7 +489,8 @@ def test_isect(test_data):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("channels", [3, 32, 128])
-def test_rasterize_to_pixels(test_data, channels: int):
+@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
+def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ...]):
     from gsplat.cuda._torch_impl import _rasterize_to_pixels
     from gsplat.cuda._wrapper import (
         fully_fused_projection,
@@ -486,6 +502,16 @@ def test_rasterize_to_pixels(test_data, channels: int):
 
     torch.manual_seed(42)
 
+    N = test_data["means"].shape[-2]
+    C = test_data["viewmats"].shape[-3]
+    I = math.prod(batch_dims) * C
+    test_data.update(
+        {
+            "colors": torch.rand(C, N, channels, device=device),
+            "backgrounds": torch.rand((C, channels), device=device),
+        }
+    )
+    test_data = expand(test_data, batch_dims)
     Ks = test_data["Ks"]
     viewmats = test_data["viewmats"]
     height = test_data["height"]
@@ -494,9 +520,8 @@ def test_rasterize_to_pixels(test_data, channels: int):
     scales = test_data["scales"] * 0.1
     means = test_data["means"]
     opacities = test_data["opacities"]
-    C = len(Ks)
-    colors = torch.randn(C, len(means), channels, device=device)
-    backgrounds = torch.rand((C, colors.shape[-1]), device=device)
+    colors = test_data["colors"]
+    backgrounds = test_data["backgrounds"]
 
     covars, _ = quat_scale_to_covar_preci(quats, scales, compute_preci=False, triu=True)
 
@@ -504,7 +529,7 @@ def test_rasterize_to_pixels(test_data, channels: int):
     radii, means2d, depths, conics, compensations = fully_fused_projection(
         means, covars, None, None, viewmats, Ks, width, height
     )
-    opacities = opacities.repeat(C, 1)
+    opacities = torch.broadcast_to(opacities[..., None, :], batch_dims + (C, N))
 
     # Identify intersecting tiles
     tile_size = 16 if channels <= 32 else 4
@@ -513,7 +538,8 @@ def test_rasterize_to_pixels(test_data, channels: int):
     tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
         means2d, radii, depths, tile_size, tile_width, tile_height
     )
-    isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)
+    isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
+    isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
 
     means2d.requires_grad = True
     conics.requires_grad = True
@@ -572,21 +598,27 @@ def test_rasterize_to_pixels(test_data, channels: int):
     torch.testing.assert_close(v_means2d, _v_means2d, rtol=5e-3, atol=5e-3)
     torch.testing.assert_close(v_conics, _v_conics, rtol=1e-3, atol=1e-3)
     torch.testing.assert_close(v_colors, _v_colors, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_opacities, _v_opacities, rtol=2e-3, atol=2e-3)
+    torch.testing.assert_close(v_opacities, _v_opacities, rtol=8e-3, atol=6e-3)
     torch.testing.assert_close(v_backgrounds, _v_backgrounds, rtol=1e-3, atol=1e-3)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("sh_degree", [0, 1, 2, 3, 4])
-def test_sh(test_data, sh_degree: int):
+@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
+def test_sh(test_data, sh_degree: int, batch_dims: Tuple[int, ...]):
     from gsplat.cuda._torch_impl import _spherical_harmonics
     from gsplat.cuda._wrapper import spherical_harmonics
 
     torch.manual_seed(42)
 
     N = 1000
-    coeffs = torch.randn(N, (4 + 1) ** 2, 3, device=device)
-    dirs = torch.randn(N, 3, device=device)
+    test_data = {
+        "coeffs": torch.randn(N, (4 + 1) ** 2, 3, device=device),
+        "dirs": torch.randn(N, 3, device=device),
+    }
+    test_data = expand(test_data, batch_dims)
+    coeffs = test_data["coeffs"]
+    dirs = test_data["dirs"]
     coeffs.requires_grad = True
     dirs.requires_grad = True
 

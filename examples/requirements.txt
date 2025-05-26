@@ -6,7 +6,7 @@ pycolmap
 # git+https://github.com/nerfstudio-project/nerfacc
 
 viser
-nerfview==0.0.2
+git+https://github.com/nerfstudio-project/nerfview@4538024fe0d15fd1a0e4d760f3695fc44ca72787
 imageio[ffmpeg]
 numpy<2.0.0
 scikit-learn
@@ -19,4 +19,5 @@ tensorboard
 tensorly
 pyyaml
 matplotlib
-git+https://github.com/rahul-goel/fused-ssim@1272e21a282342e89537159e4bad508b19b34157
+git+https://github.com/rahul-goel/fused-ssim@328dc9836f513d00c4b5bc38fe30478b4435cbb5
+splines

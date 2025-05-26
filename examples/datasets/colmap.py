@@ -1,19 +1,20 @@
 from collections import defaultdict
-import os
 import json
-from tqdm import tqdm
+import os
 from typing import Any, Dict, List, Optional
-from typing_extensions import assert_never
 
 import cv2
-from PIL import Image
 import imageio.v2 as imageio
 import numpy as np
 import torch
+
+from PIL import Image
 from pycolmap import Reconstruction, CameraModelId
+from tqdm import tqdm
+from typing_extensions import assert_never
 
 from .normalize import (
-    align_principle_axes,
+    align_principal_axes,
     similarity_from_cameras,
     transform_cameras,
     transform_points,
@@ -116,21 +117,27 @@ class Parser:
 
             # Get distortion parameters.
             type_ = cam.model
+            # SIMPLE_PINHOLE:     f, cx, cy
             if type_ == CameraModelId.SIMPLE_PINHOLE:
                 params = np.empty(0, dtype=np.float32)
                 camtype = "perspective"
+            # PINHOLE:            fx, fy, cx, cy
             elif type_ == CameraModelId.PINHOLE:
                 params = np.empty(0, dtype=np.float32)
                 camtype = "perspective"
+            # SIMPLE_RADIAL:      f, cx, cy, k
             if type_ == CameraModelId.SIMPLE_RADIAL:
-                params = np.array([cam.params[4], 0.0, 0.0, 0.0], dtype=np.float32)
+                params = np.array([cam.params[3], 0.0, 0.0, 0.0], dtype=np.float32)
                 camtype = "perspective"
+            # RADIAL:             f, cx, cy, k1, k2
             elif type_ == CameraModelId.RADIAL:
-                params = np.array([cam.params[4], cam.params[5], 0.0, 0.0], dtype=np.float32)
+                params = np.array([cam.params[3], cam.params[4], 0.0, 0.0], dtype=np.float32)
                 camtype = "perspective"
+            # OPENCV:             fx, fy, cx, cy, k1, k2, p1, p2
             elif type_ == CameraModelId.OPENCV:
                 params = np.array([cam.params[4], cam.params[5], cam.params[6], cam.params[7]], dtype=np.float32)
                 camtype = "perspective"
+            # OPENCV_FISHEYE:     fx, fy, cx, cy, k1, k2, k3, k4
             elif type_ == CameraModelId.OPENCV_FISHEYE:
                 params = np.array([cam.params[4], cam.params[5], cam.params[6], cam.params[7]], dtype=np.float32)
                 camtype = "fisheye"
@@ -220,11 +227,28 @@ class Parser:
             camtoworlds = transform_cameras(T1, camtoworlds)
             points = transform_points(T1, points)
 
-            T2 = align_principle_axes(points)
+            T2 = align_principal_axes(points)
             camtoworlds = transform_cameras(T2, camtoworlds)
             points = transform_points(T2, points)
 
             transform = T2 @ T1
+
+            # Fix for up side down. We assume more points towards
+            # the bottom of the scene which is true when ground floor is
+            # present in the images.
+            if np.median(points[:, 2]) > np.mean(points[:, 2]):
+                # rotate 180 degrees around x axis such that z is flipped
+                T3 = np.array(
+                    [
+                        [1.0, 0.0, 0.0, 0.0],
+                        [0.0, -1.0, 0.0, 0.0],
+                        [0.0, 0.0, -1.0, 0.0],
+                        [0.0, 0.0, 0.0, 1.0],
+                    ]
+                )
+                camtoworlds = transform_cameras(T3, camtoworlds)
+                points = transform_points(T3, points)
+                transform = T3 @ transform
         else:
             transform = np.eye(4)
 
