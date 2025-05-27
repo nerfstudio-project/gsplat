@@ -1226,4 +1226,7 @@ if __name__ == "__main__":
                 "and plas (via 'pip install git+https://github.com/fraunhoferhhi/PLAS.git') "
             )
 
+    if cfg.with_ut:
+        assert cfg.with_eval3d, "Training with UT requires setting `with_eval3d` flag."
+    
     cli(main, cfg, verbose=True)
