@@ -1227,6 +1227,8 @@ if __name__ == "__main__":
             )
 
     if cfg.with_ut:
-        assert cfg.with_eval3d, "Training with UT requires setting `with_eval3d` flag."
+        assert cfg.with_eval3d, (
+            "Training with UT requires setting `with_eval3d` flag."
+        )
     
     cli(main, cfg, verbose=True)
