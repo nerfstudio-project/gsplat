@@ -21,7 +21,7 @@ class GsplatRenderTabState(RenderTabState):
         "rgb", "depth(accumulated)", "depth(expected)", "alpha"
     ] = "rgb"
     normalize_nearfar: bool = False
-    inverse: bool = True
+    inverse: bool = False
     colormap: Literal[
         "turbo", "viridis", "magma", "inferno", "cividis", "gray"
     ] = "turbo"
@@ -150,12 +150,10 @@ class GsplatViewer(Viewer):
                 def _(_) -> None:
                     if "depth" in render_mode_dropdown.value:
                         normalize_nearfar_checkbox.disabled = False
+                        inverse_checkbox.disabled = False
                     else:
                         normalize_nearfar_checkbox.disabled = True
-                    if render_mode_dropdown.value == "rgb":
                         inverse_checkbox.disabled = True
-                    else:
-                        inverse_checkbox.disabled = False
                     self.render_tab_state.render_mode = render_mode_dropdown.value
                     self.rerender(_)
 
