@@ -100,8 +100,10 @@ def rasterization(
 
     .. note::
         **Depth Rendering**: This function supports colors or/and depths via `render_mode`.
-        The supported modes are "RGB", "D", "ED", "RGB+D", and "RGB+ED". "RGB" renders the
-        colored image that respects the `colors` argument. "D" renders the accumulated z-depth
+        The supported modes are "RGB", "D", "ED", "RGB+D", "RGB+ED", "Diffuse", and "Specular".
+        "RGB" renders the colored image that respects the `colors` argument.
+        "Diffuse" renders view-independent RGB components while "Specular" renders view-dependent RGB components.
+        "D" renders the accumulated z-depth
         :math:`\\sum_i w_i z_i`. "ED" renders the expected z-depth
         :math:`\\frac{\\sum_i w_i z_i}{\\sum_i w_i}`. "RGB+D" and "RGB+ED" render both
         the colored image and the depth, in which the depth is the last channel of the output.
@@ -183,8 +185,10 @@ def rasterization(
         tile_size: The size of the tiles for rasterization. Default is 16.
             (Note: other values are not tested)
         backgrounds: The background colors. [..., C, D]. Default is None.
-        render_mode: The rendering mode. Supported modes are "RGB", "D", "ED", "RGB+D",
-            and "RGB+ED". "RGB" renders the colored image, "D" renders the accumulated depth, and
+        render_mode: The rendering mode.
+            Supported modes are "RGB", "D", "ED", "RGB+D", "RGB+ED", "Diffuse", and "Specular".
+            "RGB" renders the colored image, "Diffuse" renders view-independent RGB,
+            "Specular" renders view-dependent RGB, "D" renders the accumulated depth, and
             "ED" renders the expected depth. Default is "RGB".
         sparse_grad: If true, the gradients for {means, quats, scales} will be stored in
             a COO sparse layout. This can be helpful for saving memory. Default is False.
@@ -491,11 +495,12 @@ def rasterization(
                 pass
     else:
         # Colors are SH coefficients, with shape [..., N, K, 3] or [..., C, N, K, 3]
+        # SH = 0 is the view-independent diffuse component, SH >= 1 are view-dependent specular components.
         colors = colors.clone()
         if render_mode == "Diffuse":
-            colors[..., 1:, :] = 0.0
+            colors[..., 1:, :] = 0.0  # Enbale the SH = 0 component only.
         elif render_mode == "Specular":
-            colors[..., 0, :] = 0.0
+            colors[..., 0, :] = 0.0  # Enbale the SH >= 1 components only.
         campos = torch.inverse(viewmats)[..., :3, 3]  # [..., C, 3]
         if viewmats_rs is not None:
             campos_rs = torch.inverse(viewmats_rs)[..., :3, 3]
@@ -530,6 +535,7 @@ def rasterization(
                 sh_degree, dirs, shs, masks=masks
             )  # [..., C, N, 3]
         # make it apple-to-apple with Inria's CUDA Backend.
+        # view-dependent components are in [0, 1]. No need to add and clamp.
         if render_mode != "Specular":
             colors = torch.clamp_min(colors + 0.5, 0.0)
 
