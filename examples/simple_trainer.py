@@ -206,7 +206,8 @@ class Config:
             strategy.refine_every = int(strategy.refine_every * factor)
         else:
             assert_never(strategy)
-            
+
+
 def create_splats_with_optimizers(
     parser: Parser,
     init_type: str = "sfm",
@@ -659,7 +660,12 @@ class Runner:
                     indexing="ij",
                 )
                 grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
-                colors = slice(self.bil_grids, grid_xy.expand(colors.shape[0], -1, -1, -1), colors, image_ids.unsqueeze(-1))["rgb"]
+                colors = slice(
+                    self.bil_grids,
+                    grid_xy.expand(colors.shape[0], -1, -1, -1),
+                    colors,
+                    image_ids.unsqueeze(-1),
+                )["rgb"]
 
             if cfg.random_bkgd:
                 bkgd = torch.rand(1, 3, device=device)
@@ -1228,11 +1234,21 @@ if __name__ == "__main__":
     # Import BilateralGrid and related functions based on configuration
     if cfg.use_bilateral_grid or cfg.use_fused_bilagrid:
         if cfg.use_fused_bilagrid:
-            cfg.use_bilateral_grid=True
-            from fused_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
+            cfg.use_bilateral_grid = True
+            from fused_bilagrid import (
+                BilateralGrid,
+                color_correct,
+                slice,
+                total_variation_loss,
+            )
         else:
-            cfg.use_bilateral_grid=True
-            from lib_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
+            cfg.use_bilateral_grid = True
+            from lib_bilagrid import (
+                BilateralGrid,
+                color_correct,
+                slice,
+                total_variation_loss,
+            )
 
     # try import extra dependencies
     if cfg.compression == "png":
