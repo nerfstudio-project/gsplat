@@ -40,5 +40,5 @@ To use the 3DGUT technique The relavant arguments in `rasterization()` function 
 - Setting `with_ut=True` and `with_eval3d=True` to enable 3DGUT (which is consist of two parts: using unscented transform to estimate the camera projection and evaluate Gaussian response in 3D space.)
 - To train/render pinhole camera with distortion, setting the distortion parameters to `radial_coeffs`, `tangential_coeffs`, `thin_prism_coeffs`.
 - To train/render fisheye camera with distortion, 
-setting the distortion parameters to `radial_coeffs` and set `camera_model="pinhole"`
+setting the distortion parameters to `radial_coeffs` and set `camera_model="fisheye"`
 - To enable rolling shutter effects, checks out `rolling_shutter` and `viewmats_rs` on the type of rolling shutters we supported.
