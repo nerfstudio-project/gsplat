@@ -965,6 +965,7 @@ class Runner:
             far_plane=render_tab_state.far_plane,
             radius_clip=render_tab_state.radius_clip,
             eps2d=render_tab_state.eps2d,
+            render_mode="RGB+ED",
             backgrounds=torch.tensor([render_tab_state.backgrounds], device=self.device)
             / 255.0,
         )  # [1, H, W, 3]

@@ -76,6 +76,13 @@ def main(local_rank: int, world_rank, world_size: int, args):
                 if sh_degree is not None
                 else None
             ),
+            near_plane=render_tab_state.near_plane,
+            far_plane=render_tab_state.far_plane,
+            radius_clip=render_tab_state.radius_clip,
+            eps2d=render_tab_state.eps2d,
+            render_mode="RGB+ED",
+            backgrounds=torch.tensor([render_tab_state.backgrounds], device=device)
+            / 255.0,
         )
         render_tab_state.total_gs_count = len(means)
         render_tab_state.rendered_gs_count = (info["radii"] > 0).all(-1).sum().item()
@@ -147,10 +154,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--port", type=int, default=8080, help="port for the viewer server"
     )
-    parser.add_argument(
-        "--with_ut", action="store_true", help="use uncentered transform"
-    )
-    parser.add_argument("--with_eval3d", action="store_true", help="use eval 3D")
     args = parser.parse_args()
     assert args.scene_grid % 2 == 1, "scene_grid must be odd"
 
