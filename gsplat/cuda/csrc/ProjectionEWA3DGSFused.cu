@@ -18,10 +18,8 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     const uint32_t C,
     const uint32_t N,
     const scalar_t *__restrict__ means,    // [B, N, 3]
-    const scalar_t *__restrict__ covars,   // [B, N, 6] optional
-    const scalar_t *__restrict__ quats,    // [B, N, 4] optional
-    const scalar_t *__restrict__ scales,   // [B, N, 3] optional
-    const scalar_t *__restrict__ opacities, // [B, N] optional
+    const scalar_t *__restrict__ quats,    // [B, N, 4]
+    const scalar_t *__restrict__ scales,   // [B, N, 3]
     const scalar_t *__restrict__ viewmats, // [B, C, 4, 4]
     const scalar_t *__restrict__ Ks,       // [B, C, 3, 3]
     const uint32_t image_width,
@@ -30,13 +28,11 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     const float near_plane,
     const float far_plane,
     const float radius_clip,
-    const CameraModelType camera_model,
     // outputs
     int32_t *__restrict__ radii,         // [B, C, N, 2]
     scalar_t *__restrict__ means2d,      // [B, C, N, 2]
     scalar_t *__restrict__ depths,       // [B, C, N]
     scalar_t *__restrict__ conics,       // [B, C, N, 3]
-    scalar_t *__restrict__ compensations // [B, C, N] optional
 ) {
     // parallelize over B * C * N.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -76,79 +72,31 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     }
 
     // transform Gaussian covariance to camera space
+    quats += bid * N * 4 + gid * 4;
+    scales += bid * N * 3 + gid * 3;
     mat3 covar;
-    if (covars != nullptr) {
-        covars += bid * N * 6 + gid * 6;
-        covar = mat3(
-            covars[0],
-            covars[1],
-            covars[2], // 1st column
-            covars[1],
-            covars[3],
-            covars[4], // 2nd column
-            covars[2],
-            covars[4],
-            covars[5] // 3rd column
-        );
-    } else {
-        // compute from quaternions and scales
-        quats += bid * N * 4 + gid * 4;
-        scales += bid * N * 3 + gid * 3;
-        quat_scale_to_covar_preci(
-            glm::make_vec4(quats), glm::make_vec3(scales), &covar, nullptr
-        );
-    }
+    quat_scale_to_covar_preci(
+        glm::make_vec4(quats), glm::make_vec3(scales), &covar, nullptr
+    );
+
     mat3 covar_c;
     covarW2C(R, covar, covar_c);
 
     // perspective projection
     mat2 covar2d;
     vec2 mean2d;
-
-    switch (camera_model) {
-    case CameraModelType::PINHOLE: // perspective projection
-        persp_proj(
-            mean_c,
-            covar_c,
-            Ks[0],
-            Ks[4],
-            Ks[2],
-            Ks[5],
-            image_width,
-            image_height,
-            covar2d,
-            mean2d
-        );
-        break;
-    case CameraModelType::ORTHO: // orthographic projection
-        ortho_proj(
-            mean_c,
-            covar_c,
-            Ks[0],
-            Ks[4],
-            Ks[2],
-            Ks[5],
-            image_width,
-            image_height,
-            covar2d,
-            mean2d
-        );
-        break;
-    case CameraModelType::FISHEYE: // fisheye projection
-        fisheye_proj(
-            mean_c,
-            covar_c,
-            Ks[0],
-            Ks[4],
-            Ks[2],
-            Ks[5],
-            image_width,
-            image_height,
-            covar2d,
-            mean2d
-        );
-        break;
-    }
+    persp_proj(
+        mean_c,
+        covar_c,
+        Ks[0],
+        Ks[4],
+        Ks[2],
+        Ks[5],
+        image_width,
+        image_height,
+        covar2d,
+        mean2d
+    );
 
     float compensation;
     float det = add_blur(eps2d, covar2d, compensation);
@@ -162,22 +110,6 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     mat2 covar2d_inv = glm::inverse(covar2d);
 
     float extend = 3.33f;
-    if (opacities != nullptr) {
-        float opacity = opacities[bid * N + gid];
-        if (compensations != nullptr) {
-            // we assume compensation term will be applied later on.
-            opacity *= compensation;
-        }
-        if (opacity < ALPHA_THRESHOLD) {
-            radii[idx * 2] = 0;
-            radii[idx * 2 + 1] = 0;
-            return;
-        }
-        // Compute opacity-aware bounding box.
-        // https://arxiv.org/pdf/2402.00525 Section B.2
-        extend = min(extend, sqrt(2.0f * __logf(opacity / ALPHA_THRESHOLD)));
-    }
-
     // compute tight rectangular bounding box (non differentiable)
     // https://arxiv.org/pdf/2402.00525
     float radius_x = ceilf(extend * sqrtf(covar2d[0][0]));
@@ -206,18 +138,13 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     conics[idx * 3] = covar2d_inv[0][0];
     conics[idx * 3 + 1] = covar2d_inv[0][1];
     conics[idx * 3 + 2] = covar2d_inv[1][1];
-    if (compensations != nullptr) {
-        compensations[idx] = compensation;
-    }
 }
 
 void launch_projection_ewa_3dgs_fused_fwd_kernel(
     // inputs
     const at::Tensor means,                // [..., N, 3]
-    const at::optional<at::Tensor> covars, // [..., N, 6] optional
-    const at::optional<at::Tensor> quats,  // [..., N, 4] optional
-    const at::optional<at::Tensor> scales, // [..., N, 3] optional
-    const at::optional<at::Tensor> opacities, // [..., N] optional
+    const at::optional<at::Tensor> quats,  // [..., N, 4] 
+    const at::optional<at::Tensor> scales, // [..., N, 3] 
     const at::Tensor viewmats,             // [..., C, 4, 4]
     const at::Tensor Ks,                   // [..., C, 3, 3]
     const uint32_t image_width,
@@ -226,13 +153,11 @@ void launch_projection_ewa_3dgs_fused_fwd_kernel(
     const float near_plane,
     const float far_plane,
     const float radius_clip,
-    const CameraModelType camera_model,
     // outputs
     at::Tensor radii,                      // [..., C, N, 2]
     at::Tensor means2d,                    // [..., C, N, 2]
     at::Tensor depths,                     // [..., C, N]
-    at::Tensor conics,                     // [..., C, N, 3]
-    at::optional<at::Tensor> compensations // [..., C, N] optional
+    at::Tensor conics                      // [..., C, N, 3]
 ) {
     uint32_t N = means.size(-2);    // number of gaussians
     uint32_t C = viewmats.size(-3); // number of cameras
@@ -261,14 +186,8 @@ void launch_projection_ewa_3dgs_fused_fwd_kernel(
                     C,
                     N,
                     means.data_ptr<scalar_t>(),
-                    covars.has_value() ? covars.value().data_ptr<scalar_t>()
-                                       : nullptr,
-                    quats.has_value() ? quats.value().data_ptr<scalar_t>()
-                                      : nullptr,
-                    scales.has_value() ? scales.value().data_ptr<scalar_t>()
-                                       : nullptr,
-                    opacities.has_value() ? opacities.value().data_ptr<scalar_t>()
-                                         : nullptr,
+                    quats.data_ptr<scalar_t>(),
+                    scales.data_ptr<scalar_t>(),
                     viewmats.data_ptr<scalar_t>(),
                     Ks.data_ptr<scalar_t>(),
                     image_width,
@@ -277,14 +196,10 @@ void launch_projection_ewa_3dgs_fused_fwd_kernel(
                     near_plane,
                     far_plane,
                     radius_clip,
-                    camera_model,
                     radii.data_ptr<int32_t>(),
                     means2d.data_ptr<scalar_t>(),
                     depths.data_ptr<scalar_t>(),
-                    conics.data_ptr<scalar_t>(),
-                    compensations.has_value()
-                        ? compensations.value().data_ptr<scalar_t>()
-                        : nullptr
+                    conics.data_ptr<scalar_t>()
                 );
         }
     );
@@ -297,30 +212,24 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
     const uint32_t C,
     const uint32_t N,
     const scalar_t *__restrict__ means,    // [B, N, 3]
-    const scalar_t *__restrict__ covars,   // [B, N, 6] optional
-    const scalar_t *__restrict__ quats,    // [B, N, 4] optional
-    const scalar_t *__restrict__ scales,   // [B, N, 3] optional
+    const scalar_t *__restrict__ quats,    // [B, N, 4]
+    const scalar_t *__restrict__ scales,   // [B, N, 3]
     const scalar_t *__restrict__ viewmats, // [B, C, 4, 4]
     const scalar_t *__restrict__ Ks,       // [B, C, 3, 3]
     const uint32_t image_width,
     const uint32_t image_height,
     const float eps2d,
-    const CameraModelType camera_model,
     // fwd outputs
     const int32_t *__restrict__ radii,          // [B, C, N, 2]
     const scalar_t *__restrict__ conics,        // [B, C, N, 3]
-    const scalar_t *__restrict__ compensations, // [B, C, N] optional
     // grad outputs
     const scalar_t *__restrict__ v_means2d,       // [B, C, N, 2]
     const scalar_t *__restrict__ v_depths,        // [B, C, N]
     const scalar_t *__restrict__ v_conics,        // [B, C, N, 3]
-    const scalar_t *__restrict__ v_compensations, // [B, C, N] optional
     // grad inputs
     scalar_t *__restrict__ v_means,   // [B, N, 3]
-    scalar_t *__restrict__ v_covars,  // [B, N, 6] optional
-    scalar_t *__restrict__ v_quats,   // [B, N, 4] optional
-    scalar_t *__restrict__ v_scales,  // [B, N, 3] optional
-    scalar_t *__restrict__ v_viewmats // [B, C, 4, 4] optional
+    scalar_t *__restrict__ v_quats,   // [B, N, 4]
+    scalar_t *__restrict__ v_scales   // [B, N, 3]
 ) {
     // parallelize over B * C * N.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -349,15 +258,6 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
     mat2 v_covar2d(0.f);
     inverse_vjp(covar2d_inv, v_covar2d_inv, v_covar2d);
 
-    if (v_compensations != nullptr) {
-        // vjp: compensation term
-        const float compensation = compensations[idx];
-        const float v_compensation = v_compensations[idx];
-        add_blur_vjp(
-            eps2d, covar2d_inv, compensation, v_compensation, v_covar2d
-        );
-    }
-
     // transform Gaussian to camera space
     mat3 R = mat3(
         viewmats[0],
@@ -372,28 +272,12 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
     );
     vec3 t = vec3(viewmats[3], viewmats[7], viewmats[11]);
 
+    // compute from quaternions and scales
+    vec4 quat = glm::make_vec4(quats + bid * N * 4 + gid * 4);
+    vec3 scale = glm::make_vec3(scales + bid * N * 3 + gid * 3);
     mat3 covar;
-    vec4 quat;
-    vec3 scale;
-    if (covars != nullptr) {
-        covars += bid * N * 6 + gid * 6;
-        covar = mat3(
-            covars[0],
-            covars[1],
-            covars[2], // 1st column
-            covars[1],
-            covars[3],
-            covars[4], // 2nd column
-            covars[2],
-            covars[4],
-            covars[5] // 3rd column
-        );
-    } else {
-        // compute from quaternions and scales
-        quat = glm::make_vec4(quats + bid * N * 4 + gid * 4);
-        scale = glm::make_vec3(scales + bid * N * 3 + gid * 3);
-        quat_scale_to_covar_preci(quat, scale, &covar, nullptr);
-    }
+    quat_scale_to_covar_preci(quat, scale, &covar, nullptr);
+
     vec3 mean_c;
     posW2C(R, t, glm::make_vec3(means), mean_c);
     mat3 covar_c;
@@ -404,56 +288,20 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
     mat3 v_covar_c(0.f);
     vec3 v_mean_c(0.f);
 
-    switch (camera_model) {
-    case CameraModelType::PINHOLE: // perspective projection
-        persp_proj_vjp(
-            mean_c,
-            covar_c,
-            fx,
-            fy,
-            cx,
-            cy,
-            image_width,
-            image_height,
-            v_covar2d,
-            glm::make_vec2(v_means2d),
-            v_mean_c,
-            v_covar_c
-        );
-        break;
-    case CameraModelType::ORTHO: // orthographic projection
-        ortho_proj_vjp(
-            mean_c,
-            covar_c,
-            fx,
-            fy,
-            cx,
-            cy,
-            image_width,
-            image_height,
-            v_covar2d,
-            glm::make_vec2(v_means2d),
-            v_mean_c,
-            v_covar_c
-        );
-        break;
-    case CameraModelType::FISHEYE: // fisheye projection
-        fisheye_proj_vjp(
-            mean_c,
-            covar_c,
-            fx,
-            fy,
-            cx,
-            cy,
-            image_width,
-            image_height,
-            v_covar2d,
-            glm::make_vec2(v_means2d),
-            v_mean_c,
-            v_covar_c
-        );
-        break;
-    }
+    persp_proj_vjp(
+        mean_c,
+        covar_c,
+        fx,
+        fy,
+        cx,
+        cy,
+        image_width,
+        image_height,
+        v_covar2d,
+        glm::make_vec2(v_means2d),
+        v_mean_c,
+        v_covar_c
+    );
 
     // add contribution from v_depths
     v_mean_c.z += v_depths[0];
@@ -480,53 +328,24 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
             }
         }
     }
-    if (v_covars != nullptr) {
-        // Output gradients w.r.t. the covariance matrix
-        warpSum(v_covar, warp_group_g);
-        if (warp_group_g.thread_rank() == 0) {
-            v_covars += bid * N * 6 + gid * 6;
-            gpuAtomicAdd(v_covars, v_covar[0][0]);
-            gpuAtomicAdd(v_covars + 1, v_covar[0][1] + v_covar[1][0]);
-            gpuAtomicAdd(v_covars + 2, v_covar[0][2] + v_covar[2][0]);
-            gpuAtomicAdd(v_covars + 3, v_covar[1][1]);
-            gpuAtomicAdd(v_covars + 4, v_covar[1][2] + v_covar[2][1]);
-            gpuAtomicAdd(v_covars + 5, v_covar[2][2]);
-        }
-    } else {
-        // Directly output gradients w.r.t. the quaternion and scale
-        mat3 rotmat = quat_to_rotmat(quat);
-        vec4 v_quat(0.f);
-        vec3 v_scale(0.f);
-        quat_scale_to_covar_vjp(quat, scale, rotmat, v_covar, v_quat, v_scale);
-        warpSum(v_quat, warp_group_g);
-        warpSum(v_scale, warp_group_g);
-        if (warp_group_g.thread_rank() == 0) {
-            v_quats += bid * N * 4 + gid * 4;
-            v_scales += bid * N * 3 + gid * 3;
-            gpuAtomicAdd(v_quats, v_quat[0]);
-            gpuAtomicAdd(v_quats + 1, v_quat[1]);
-            gpuAtomicAdd(v_quats + 2, v_quat[2]);
-            gpuAtomicAdd(v_quats + 3, v_quat[3]);
-            gpuAtomicAdd(v_scales, v_scale[0]);
-            gpuAtomicAdd(v_scales + 1, v_scale[1]);
-            gpuAtomicAdd(v_scales + 2, v_scale[2]);
-        }
-    }
-    if (v_viewmats != nullptr) {
-        auto warp_group_c = cg::labeled_partition(warp, cid);
-        warpSum(v_R, warp_group_c);
-        warpSum(v_t, warp_group_c);
-        if (warp_group_c.thread_rank() == 0) {
-            v_viewmats += bid * C * 16 + cid * 16;
-#pragma unroll
-            for (uint32_t i = 0; i < 3; i++) { // rows
-#pragma unroll
-                for (uint32_t j = 0; j < 3; j++) { // cols
-                    gpuAtomicAdd(v_viewmats + i * 4 + j, v_R[j][i]);
-                }
-                gpuAtomicAdd(v_viewmats + i * 4 + 3, v_t[i]);
-            }
-        }
+
+    // Directly output gradients w.r.t. the quaternion and scale
+    mat3 rotmat = quat_to_rotmat(quat);
+    vec4 v_quat(0.f);
+    vec3 v_scale(0.f);
+    quat_scale_to_covar_vjp(quat, scale, rotmat, v_covar, v_quat, v_scale);
+    warpSum(v_quat, warp_group_g);
+    warpSum(v_scale, warp_group_g);
+    if (warp_group_g.thread_rank() == 0) {
+        v_quats += bid * N * 4 + gid * 4;
+        v_scales += bid * N * 3 + gid * 3;
+        gpuAtomicAdd(v_quats, v_quat[0]);
+        gpuAtomicAdd(v_quats + 1, v_quat[1]);
+        gpuAtomicAdd(v_quats + 2, v_quat[2]);
+        gpuAtomicAdd(v_quats + 3, v_quat[3]);
+        gpuAtomicAdd(v_scales, v_scale[0]);
+        gpuAtomicAdd(v_scales + 1, v_scale[1]);
+        gpuAtomicAdd(v_scales + 2, v_scale[2]);
     }
 }
 
@@ -534,9 +353,8 @@ void launch_projection_ewa_3dgs_fused_bwd_kernel(
     // inputs
     // fwd inputs
     const at::Tensor means,                // [..., N, 3]
-    const at::optional<at::Tensor> covars, // [..., N, 6] optional
-    const at::optional<at::Tensor> quats,  // [..., N, 4] optional
-    const at::optional<at::Tensor> scales, // [..., N, 3] optional
+    const at::optional<at::Tensor> quats,  // [..., N, 4]
+    const at::optional<at::Tensor> scales, // [..., N, 3]
     const at::Tensor viewmats,             // [..., C, 4, 4]
     const at::Tensor Ks,                   // [..., C, 3, 3]
     const uint32_t image_width,

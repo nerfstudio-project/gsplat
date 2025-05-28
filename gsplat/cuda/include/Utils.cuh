@@ -756,19 +756,5 @@ inline __device__ void fisheye_proj_vjp(
     v_mean3d.z += dL_dtz_raw;
 }
 
-inline __device__ vec3 safe_normalize(vec3 v) {
-    const float l = v.x * v.x + v.y * v.y + v.z * v.z;
-    return l > 0.0f ? (v * rsqrtf(l)) : v;
-}
-
-inline __device__ vec3 safe_normalize_bw(const vec3 &v, const vec3 &d_out) {
-    const float l = v.x * v.x + v.y * v.y + v.z * v.z;
-    if (l > 0.0f) {
-        const float il = rsqrtf(l);
-        const float il3 = (il * il * il);
-        return il * d_out - il3 * glm::dot(d_out, v) * v;
-    }
-    return d_out;
-}
 
 } // namespace gsplat

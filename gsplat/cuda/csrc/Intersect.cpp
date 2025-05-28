@@ -22,8 +22,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
     const uint32_t tile_size,
     const uint32_t tile_width,
     const uint32_t tile_height,
-    const bool sort,
-    const bool segmented
+    const bool sort
 ) {
     DEVICE_GUARD(means2d);
     CHECK_INPUT(means2d);
@@ -119,29 +118,15 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
     if (n_isects && sort) {
         at::Tensor isect_ids_sorted = at::empty_like(isect_ids);
         at::Tensor flatten_ids_sorted = at::empty_like(flatten_ids);
-        if (segmented) {
-            segmented_radix_sort_double_buffer(
-                n_isects,
-                I,
-                image_n_bits,
-                tile_n_bits,
-                offsets,
-                isect_ids,
-                flatten_ids,
-                isect_ids_sorted,
-                flatten_ids_sorted
-            );
-        } else {
-            radix_sort_double_buffer(
-                n_isects,
-                image_n_bits,
-                tile_n_bits,
-                isect_ids,
-                flatten_ids,
-                isect_ids_sorted, 
-                flatten_ids_sorted
-            );
-        }
+        radix_sort_double_buffer(
+            n_isects,
+            image_n_bits,
+            tile_n_bits,
+            isect_ids,
+            flatten_ids,
+            isect_ids_sorted, 
+            flatten_ids_sorted
+        );
         return std::make_tuple(tiles_per_gauss, isect_ids_sorted, flatten_ids_sorted);
     } else {
         return std::make_tuple(tiles_per_gauss, isect_ids, flatten_ids);

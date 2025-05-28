@@ -46,16 +46,4 @@ void radix_sort_double_buffer(
     at::Tensor flatten_ids_sorted
 );
 
-void segmented_radix_sort_double_buffer(
-    const int64_t n_isects,
-    const uint32_t n_segments,
-    const uint32_t image_n_bits,
-    const uint32_t tile_n_bits,
-    const at::Tensor offsets,
-    at::Tensor isect_ids,
-    at::Tensor flatten_ids,
-    at::Tensor isect_ids_sorted,
-    at::Tensor flatten_ids_sorted
-);
-
 } // namespace gsplat

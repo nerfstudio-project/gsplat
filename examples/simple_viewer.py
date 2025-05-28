@@ -1,123 +1,34 @@
 import argparse
 import math
-import os
 import time
+import os
 
-import imageio
-import numpy as np
 import torch
 import torch.nn.functional as F
-import tqdm
 import viser
 from pathlib import Path
-from gsplat._helper import load_test_data
-from gsplat.distributed import cli
 from gsplat.rendering import rasterization
 
 from nerfview import CameraState, RenderTabState, apply_float_colormap
 from gsplat_viewer import GsplatViewer, GsplatRenderTabState
 
 
-def main(local_rank: int, world_rank, world_size: int, args):
+def main(args):
     torch.manual_seed(42)
-    device = torch.device("cuda", local_rank)
+    device = torch.device("cuda:0")
 
-    if args.ckpt is None:
-        (
-            means,
-            quats,
-            scales,
-            opacities,
-            colors,
-            viewmats,
-            Ks,
-            width,
-            height,
-        ) = load_test_data(device=device, scene_grid=args.scene_grid)
-
-        assert world_size <= 2
-        means = means[world_rank::world_size].contiguous()
-        means.requires_grad = True
-        quats = quats[world_rank::world_size].contiguous()
-        quats.requires_grad = True
-        scales = scales[world_rank::world_size].contiguous()
-        scales.requires_grad = True
-        opacities = opacities[world_rank::world_size].contiguous()
-        opacities.requires_grad = True
-        colors = colors[world_rank::world_size].contiguous()
-        colors.requires_grad = True
-
-        viewmats = viewmats[world_rank::world_size][:1].contiguous()
-        Ks = Ks[world_rank::world_size][:1].contiguous()
-
-        sh_degree = None
-        C = len(viewmats)
-        N = len(means)
-        print("rank", world_rank, "Number of Gaussians:", N, "Number of Cameras:", C)
-
-        # batched render
-        for _ in tqdm.trange(1):
-            render_colors, render_alphas, meta = rasterization(
-                means,  # [N, 3]
-                quats,  # [N, 4]
-                scales,  # [N, 3]
-                opacities,  # [N]
-                colors,  # [N, S, 3]
-                viewmats,  # [C, 4, 4]
-                Ks,  # [C, 3, 3]
-                width,
-                height,
-                render_mode="RGB+D",
-                packed=False,
-                distributed=world_size > 1,
-            )
-        C = render_colors.shape[0]
-        assert render_colors.shape == (C, height, width, 4)
-        assert render_alphas.shape == (C, height, width, 1)
-        render_colors.sum().backward()
-
-        render_rgbs = render_colors[..., 0:3]
-        render_depths = render_colors[..., 3:4]
-        render_depths = render_depths / render_depths.max()
-
-        # dump batch images
-        os.makedirs(args.output_dir, exist_ok=True)
-        canvas = (
-            torch.cat(
-                [
-                    render_rgbs.reshape(C * height, width, 3),
-                    render_depths.reshape(C * height, width, 1).expand(-1, -1, 3),
-                    render_alphas.reshape(C * height, width, 1).expand(-1, -1, 3),
-                ],
-                dim=1,
-            )
-            .detach()
-            .cpu()
-            .numpy()
-        )
-        imageio.imsave(
-            f"{args.output_dir}/render_rank{world_rank}.png",
-            (canvas * 255).astype(np.uint8),
-        )
-    else:
-        means, quats, scales, opacities, sh0, shN = [], [], [], [], [], []
-        for ckpt_path in args.ckpt:
-            ckpt = torch.load(ckpt_path, map_location=device)["splats"]
-            means.append(ckpt["means"])
-            quats.append(F.normalize(ckpt["quats"], p=2, dim=-1))
-            scales.append(torch.exp(ckpt["scales"]))
-            opacities.append(torch.sigmoid(ckpt["opacities"]))
-            sh0.append(ckpt["sh0"])
-            shN.append(ckpt["shN"])
-        means = torch.cat(means, dim=0)
-        quats = torch.cat(quats, dim=0)
-        scales = torch.cat(scales, dim=0)
-        opacities = torch.cat(opacities, dim=0)
-        sh0 = torch.cat(sh0, dim=0)
-        shN = torch.cat(shN, dim=0)
-        colors = torch.cat([sh0, shN], dim=-2)
-        sh_degree = int(math.sqrt(colors.shape[-2]) - 1)
-        print("Number of Gaussians:", len(means))
+    # load ckpt
+    assert os.path.exists(args.ckpt), f"ckpt file {args.ckpt} does not exist"
+    ckpt = torch.load(args.ckpt, map_location=device)["splats"]
+    means = ckpt["means"]
+    quats = F.normalize(ckpt["quats"], p=2, dim=-1)
+    scales = torch.exp(ckpt["scales"])
+    opacities = torch.sigmoid(ckpt["opacities"])
+    sh0 = ckpt["sh0"]
+    shN = ckpt["shN"]
+    colors = torch.cat([sh0, shN], dim=-2)
+    sh_degree = int(math.sqrt(colors.shape[-2]) - 1)
+    print("Number of Gaussians:", len(means))
 
     # register and open viewer
     @torch.no_grad()
@@ -167,8 +78,6 @@ def main(local_rank: int, world_rank, world_size: int, args):
             rasterize_mode=render_tab_state.rasterize_mode,
             camera_model=render_tab_state.camera_model,
             packed=False,
-            with_ut=args.with_ut,
-            with_eval3d=args.with_eval3d,
         )
         render_tab_state.total_gs_count = len(means)
         render_tab_state.rendered_gs_count = (info["radii"] > 0).all(-1).sum().item()
@@ -216,12 +125,8 @@ def main(local_rank: int, world_rank, world_size: int, args):
 if __name__ == "__main__":
     """
     # Use single GPU to view the scene
-    CUDA_VISIBLE_DEVICES=9 python -m simple_viewer \
+    python -m simple_viewer \
         --ckpt results/garden/ckpts/ckpt_6999_rank0.pt \
-        --output_dir results/garden/ \
-        --port 8082
-    
-    CUDA_VISIBLE_DEVICES=9 python -m simple_viewer \
         --output_dir results/garden/ \
         --port 8082
     """
@@ -230,19 +135,10 @@ if __name__ == "__main__":
         "--output_dir", type=str, default="results/", help="where to dump outputs"
     )
     parser.add_argument(
-        "--scene_grid", type=int, default=1, help="repeat the scene into a grid of NxN"
-    )
-    parser.add_argument(
         "--ckpt", type=str, nargs="+", default=None, help="path to the .pt file"
     )
     parser.add_argument(
         "--port", type=int, default=8080, help="port for the viewer server"
     )
-    parser.add_argument(
-        "--with_ut", action="store_true", help="use uncentered transform"
-    )
-    parser.add_argument("--with_eval3d", action="store_true", help="use eval 3D")
     args = parser.parse_args()
-    assert args.scene_grid % 2 == 1, "scene_grid must be odd"
-
-    cli(main, args, verbose=True)
+    main(args)
