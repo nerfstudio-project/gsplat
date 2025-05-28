@@ -22,7 +22,6 @@ from datasets.traj import (
     generate_spiral_path,
 )
 from fused_ssim import fused_ssim
-from lib_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
@@ -184,6 +183,9 @@ class Config:
     # 3DGUT (uncented transform + eval 3D)
     with_ut: bool = False
     with_eval3d: bool = False
+
+    # Whether use fused-bilateral grid
+    use_fused_bilagrid: bool = False
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -658,7 +660,12 @@ class Runner:
                     indexing="ij",
                 )
                 grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
-                colors = slice(self.bil_grids, grid_xy, colors, image_ids)["rgb"]
+                colors = slice(
+                    self.bil_grids,
+                    grid_xy.expand(colors.shape[0], -1, -1, -1),
+                    colors,
+                    image_ids.unsqueeze(-1),
+                )["rgb"]
 
             if cfg.random_bkgd:
                 bkgd = torch.rand(1, 3, device=device)
@@ -959,6 +966,8 @@ class Runner:
                     cc_colors = color_correct(colors, pixels)
                     cc_colors_p = cc_colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
                     metrics["cc_psnr"].append(self.psnr(cc_colors_p, pixels_p))
+                    metrics["cc_ssim"].append(self.ssim(cc_colors_p, pixels_p))
+                    metrics["cc_lpips"].append(self.lpips(cc_colors_p, pixels_p))
 
         if world_rank == 0:
             ellipse_time /= len(valloader)
@@ -970,11 +979,19 @@ class Runner:
                     "num_GS": len(self.splats["means"]),
                 }
             )
-            print(
-                f"PSNR: {stats['psnr']:.3f}, SSIM: {stats['ssim']:.4f}, LPIPS: {stats['lpips']:.3f} "
-                f"Time: {stats['ellipse_time']:.3f}s/image "
-                f"Number of GS: {stats['num_GS']}"
-            )
+            if cfg.use_bilateral_grid:
+                print(
+                    f"PSNR: {stats['psnr']:.3f}, SSIM: {stats['ssim']:.4f}, LPIPS: {stats['lpips']:.3f} "
+                    f"CC_PSNR: {stats['cc_psnr']:.3f}, CC_SSIM: {stats['cc_ssim']:.4f}, CC_LPIPS: {stats['cc_lpips']:.3f} "
+                    f"Time: {stats['ellipse_time']:.3f}s/image "
+                    f"Number of GS: {stats['num_GS']}"
+                )
+            else:
+                print(
+                    f"PSNR: {stats['psnr']:.3f}, SSIM: {stats['ssim']:.4f}, LPIPS: {stats['lpips']:.3f} "
+                    f"Time: {stats['ellipse_time']:.3f}s/image "
+                    f"Number of GS: {stats['num_GS']}"
+                )
             # save stats as json
             with open(f"{self.stats_dir}/{stage}_step{step:04d}.json", "w") as f:
                 json.dump(stats, f)
@@ -1213,6 +1230,25 @@ if __name__ == "__main__":
     }
     cfg = tyro.extras.overridable_config_cli(configs)
     cfg.adjust_steps(cfg.steps_scaler)
+
+    # Import BilateralGrid and related functions based on configuration
+    if cfg.use_bilateral_grid or cfg.use_fused_bilagrid:
+        if cfg.use_fused_bilagrid:
+            cfg.use_bilateral_grid = True
+            from fused_bilagrid import (
+                BilateralGrid,
+                color_correct,
+                slice,
+                total_variation_loss,
+            )
+        else:
+            cfg.use_bilateral_grid = True
+            from lib_bilagrid import (
+                BilateralGrid,
+                color_correct,
+                slice,
+                total_variation_loss,
+            )
 
     # try import extra dependencies
     if cfg.compression == "png":
