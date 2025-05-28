@@ -496,11 +496,10 @@ def rasterization(
     else:
         # Colors are SH coefficients, with shape [..., N, K, 3] or [..., C, N, K, 3]
         # SH = 0 is the view-independent diffuse component, SH >= 1 are view-dependent specular components.
-        colors = colors.clone()
-        if render_mode == "Diffuse":
-            colors[..., 1:, :] = 0.0  # Enbale the SH = 0 component only.
-        elif render_mode == "Specular":
-            colors[..., 0, :] = 0.0  # Enbale the SH >= 1 components only.
+        if render_mode in ("Diffuse", "Specular"):
+            colors = colors.clone()
+            sel = slice(1, None) if render_mode == "Diffuse" else slice(0, 1)
+            colors[..., sel, :] = 0.0  # Zero out the unwanted SH components.
         campos = torch.inverse(viewmats)[..., :3, 3]  # [..., C, 3]
         if viewmats_rs is not None:
             campos_rs = torch.inverse(viewmats_rs)[..., :3, 3]
