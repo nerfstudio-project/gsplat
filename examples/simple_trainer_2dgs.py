@@ -4,6 +4,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Literal, Optional, Tuple
+from pathlib import Path
 
 import imageio
 import nerfview
@@ -28,9 +29,10 @@ from utils import (
     rgb_to_sh,
     set_random_seed,
 )
-
+from gsplat_viewer_2dgs import GsplatViewer, GsplatRenderTabState
 from gsplat.rendering import rasterization_2dgs, rasterization_2dgs_inria_wrapper
 from gsplat.strategy import DefaultStrategy
+from nerfview import CameraState, RenderTabState, apply_float_colormap
 
 
 @dataclass
@@ -375,9 +377,10 @@ class Runner:
         # Viewer
         if not self.cfg.disable_viewer:
             self.server = viser.ViserServer(port=cfg.port, verbose=False)
-            self.viewer = nerfview.Viewer(
+            self.viewer = GsplatViewer(
                 server=self.server,
                 render_fn=self._viewer_render_fn,
+                output_dir=Path(cfg.result_dir),
                 mode="training",
             )
 
@@ -507,7 +510,7 @@ class Runner:
         pbar = tqdm.tqdm(range(init_step, max_steps))
         for step in pbar:
             if not cfg.disable_viewer:
-                while self.viewer.state.status == "paused":
+                while self.viewer.state == "paused":
                     time.sleep(0.01)
                 self.viewer.lock.acquire()
                 tic = time.time()
@@ -736,7 +739,9 @@ class Runner:
                     num_train_rays_per_step * num_train_steps_per_sec
                 )
                 # Update the viewer state.
-                self.viewer.state.num_train_rays_per_sec = num_train_rays_per_sec
+                self.viewer.render_tab_state.num_train_rays_per_sec = (
+                    num_train_rays_per_sec
+                )
                 # Update the scene.
                 self.viewer.update(step, num_train_rays_per_step)
 
@@ -795,7 +800,7 @@ class Runner:
             )
             # render_median = render_median.detach().cpu().squeeze(0).unsqueeze(-1).repeat(1, 1, 3).numpy()
             render_median = (
-                render_median.detach().cpu().squeeze(0).repeat(1, 1, 3).numpy()
+                apply_float_colormap(render_median).detach().cpu().squeeze(0).numpy()
             )
 
             imageio.imwrite(
@@ -831,13 +836,11 @@ class Runner:
             dist_min = torch.min(render_dist)
             render_dist = (render_dist - dist_min) / (dist_max - dist_min)
             render_dist = (
-                colormap(render_dist.cpu().numpy()[0])
-                .permute((1, 2, 0))
-                .numpy()
-                .astype(np.uint8)
+                apply_float_colormap(render_dist).detach().cpu().squeeze(0).numpy()
             )
             imageio.imwrite(
-                f"{self.render_dir}/val_{i:04d}_distortions_{step}.png", render_dist
+                f"{self.render_dir}/val_{i:04d}_distortions_{step}.png",
+                (render_dist * 255).astype(np.uint8),
             )
 
             pixels = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
@@ -930,24 +933,75 @@ class Runner:
 
     @torch.no_grad()
     def _viewer_render_fn(
-        self, camera_state: nerfview.CameraState, img_wh: Tuple[int, int]
+        self, camera_state: CameraState, render_tab_state: RenderTabState
     ):
-        """Callable function for the viewer."""
-        W, H = img_wh
+        assert isinstance(render_tab_state, GsplatRenderTabState)
+        if render_tab_state.preview_render:
+            width = render_tab_state.render_width
+            height = render_tab_state.render_height
+        else:
+            width = render_tab_state.viewer_width
+            height = render_tab_state.viewer_height
         c2w = camera_state.c2w
-        K = camera_state.get_K(img_wh)
+        K = camera_state.get_K((width, height))
         c2w = torch.from_numpy(c2w).float().to(self.device)
         K = torch.from_numpy(K).float().to(self.device)
 
-        render_colors, _, _, _, _, _, _ = self.rasterize_splats(
+        (
+            render_colors,
+            render_alphas,
+            render_normals,
+            normals_from_depth,
+            render_distort,
+            render_median,
+            info,
+        ) = self.rasterize_splats(
             camtoworlds=c2w[None],
             Ks=K[None],
-            width=W,
-            height=H,
-            sh_degree=self.cfg.sh_degree,  # active all SH degrees
-            radius_clip=3.0,  # skip GSs that have small image radius (in pixels)
+            width=width,
+            height=height,
+            sh_degree=min(render_tab_state.max_sh_degree, self.cfg.sh_degree),
+            near_plane=render_tab_state.near_plane,
+            far_plane=render_tab_state.far_plane,
+            radius_clip=render_tab_state.radius_clip,
+            eps2d=render_tab_state.eps2d,
+            render_mode="RGB+ED",
+            backgrounds=torch.tensor([render_tab_state.backgrounds], device=self.device)
+            / 255.0,
         )  # [1, H, W, 3]
-        return render_colors[0].cpu().numpy()
+        render_tab_state.total_gs_count = len(self.splats["means"])
+        render_tab_state.rendered_gs_count = (info["radii"] > 0).all(-1).sum().item()
+
+        if render_tab_state.render_mode == "depth":
+            # normalize depth to [0, 1]
+            depth = render_median
+            if render_tab_state.normalize_nearfar:
+                near_plane = render_tab_state.near_plane
+                far_plane = render_tab_state.far_plane
+            else:
+                near_plane = depth.min()
+                far_plane = depth.max()
+            depth_norm = (depth - near_plane) / (far_plane - near_plane + 1e-10)
+            depth_norm = torch.clip(depth_norm, 0, 1)
+            if render_tab_state.inverse:
+                depth_norm = 1 - depth_norm
+            renders = (
+                apply_float_colormap(depth_norm, render_tab_state.colormap)
+                .cpu()
+                .numpy()
+            )
+        elif render_tab_state.render_mode == "normal":
+            render_normals = render_normals * 0.5 + 0.5  # normalize to [0, 1]
+            renders = render_normals.cpu().numpy()
+        elif render_tab_state.render_mode == "alpha":
+            alpha = render_alphas[0, ..., 0:1]
+            renders = (
+                apply_float_colormap(alpha, render_tab_state.colormap).cpu().numpy()
+            )
+        else:
+            render_colors = render_colors[0, ..., 0:3].clamp(0, 1)
+            renders = render_colors.cpu().numpy()
+        return renders
 
 
 def main(cfg: Config):

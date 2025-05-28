@@ -1529,7 +1529,7 @@ def rasterization_2dgs(
 
         if backgrounds is not None:
             backgrounds = torch.cat(
-                (backgrounds, torch.zeros_like(depths[..., None])), dim=-1
+                (backgrounds, torch.zeros_like(backgrounds[..., :1])), dim=-1
             )
     elif render_mode in ["D", "ED"]:
         colors = depths[..., None]
