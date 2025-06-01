@@ -18,60 +18,61 @@ namespace cg = cooperative_groups;
 
 template <uint32_t CDIM, typename scalar_t>
 __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
+    const uint32_t B,
     const uint32_t C,
     const uint32_t N,
     const uint32_t n_isects,
     const bool packed,
-    const vec3 *__restrict__ means,       // [N, 3]
-    const vec4 *__restrict__ quats,       // [N, 4]
-    const vec3 *__restrict__ scales,      // [N, 3]
-    const scalar_t *__restrict__ colors,      // [C, N, CDIM] or [nnz, CDIM]
-    const scalar_t *__restrict__ opacities,   // [C, N] or [nnz]
-    const scalar_t *__restrict__ backgrounds, // [C, CDIM]
-    const bool *__restrict__ masks,           // [C, tile_height, tile_width]
+    const vec3 *__restrict__ means,           // [B, N, 3]
+    const vec4 *__restrict__ quats,           // [B, N, 4]
+    const vec3 *__restrict__ scales,          // [B, N, 3]
+    const scalar_t *__restrict__ colors,      // [B, C, N, CDIM] or [nnz, CDIM]
+    const scalar_t *__restrict__ opacities,   // [B, C, N] or [nnz]
+    const scalar_t *__restrict__ backgrounds, // [B, C, CDIM]
+    const bool *__restrict__ masks,           // [B, C, tile_height, tile_width]
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
     const uint32_t tile_width,
     const uint32_t tile_height,
     // camera model
-    const scalar_t *__restrict__ viewmats0, // [C, 4, 4]
-    const scalar_t *__restrict__ viewmats1, // [C, 4, 4] optional for rolling shutter
-    const scalar_t *__restrict__ Ks,        // [C, 3, 3]
+    const scalar_t *__restrict__ viewmats0, // [B, C, 4, 4]
+    const scalar_t *__restrict__ viewmats1, // [B, C, 4, 4] optional for rolling shutter
+    const scalar_t *__restrict__ Ks,        // [B, C, 3, 3]
     const CameraModelType camera_model_type,
     // uncented transform
     const UnscentedTransformParameters ut_params,    
     const ShutterType rs_type,
-    const scalar_t *__restrict__ radial_coeffs, // [C, 6] or [C, 4] optional
-    const scalar_t *__restrict__ tangential_coeffs, // [C, 2] optional
-    const scalar_t *__restrict__ thin_prism_coeffs, // [C, 2] optional
+    const scalar_t *__restrict__ radial_coeffs,     // [B, C, 6] or [B, C, 4] optional
+    const scalar_t *__restrict__ tangential_coeffs, // [B, C, 2] optional
+    const scalar_t *__restrict__ thin_prism_coeffs, // [B, C, 2] optional
     // intersections
-    const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
+    const int32_t *__restrict__ tile_offsets, // [B, C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
     scalar_t
-        *__restrict__ render_colors, // [C, image_height, image_width, CDIM]
-    scalar_t *__restrict__ render_alphas, // [C, image_height, image_width, 1]
-    int32_t *__restrict__ last_ids        // [C, image_height, image_width]
+        *__restrict__ render_colors,      // [B, C, image_height, image_width, CDIM]
+    scalar_t *__restrict__ render_alphas, // [B, C, image_height, image_width, 1]
+    int32_t *__restrict__ last_ids        // [B, C, image_height, image_width]
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
 
     auto block = cg::this_thread_block();
-    int32_t cid = block.group_index().x;
+    int32_t iid = block.group_index().x;
     int32_t tile_id =
         block.group_index().y * tile_width + block.group_index().z;
     uint32_t i = block.group_index().y * tile_size + block.thread_index().y;
     uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
 
-    tile_offsets += cid * tile_height * tile_width;
-    render_colors += cid * image_height * image_width * CDIM;
-    render_alphas += cid * image_height * image_width;
-    last_ids += cid * image_height * image_width;
+    tile_offsets += iid * tile_height * tile_width;
+    render_colors += iid * image_height * image_width * CDIM;
+    render_alphas += iid * image_height * image_width;
+    last_ids += iid * image_height * image_width;
     if (backgrounds != nullptr) {
-        backgrounds += cid * CDIM;
+        backgrounds += iid * CDIM;
     }
     if (masks != nullptr) {
-        masks += cid * tile_height * tile_width;
+        masks += iid * tile_height * tile_width;
     }
 
     float px = (float)j + 0.5f;
@@ -80,12 +81,12 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
 
     // Create rolling shutter parameter
     auto rs_params = RollingShutterParameters(
-        viewmats0 + cid * 16,
-        viewmats1 == nullptr ? nullptr : viewmats1 + cid * 16
+        viewmats0 + iid * 16,
+        viewmats1 == nullptr ? nullptr : viewmats1 + iid * 16
     );
     // shift pointers to the current camera. note that glm is colume-major.
-    const vec2 focal_length = {Ks[cid * 9 + 0], Ks[cid * 9 + 4]};
-    const vec2 principal_point = {Ks[cid * 9 + 2], Ks[cid * 9 + 5]};
+    const vec2 focal_length = {Ks[iid * 9 + 0], Ks[iid * 9 + 4]};
+    const vec2 principal_point = {Ks[iid * 9 + 2], Ks[iid * 9 + 5]};
     
     // Create ray from pixel
     WorldRay ray;
@@ -105,13 +106,13 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             cm_params.principal_point = { principal_point.x, principal_point.y };
             cm_params.focal_length = { focal_length.x, focal_length.y };
             if (radial_coeffs != nullptr) {
-                cm_params.radial_coeffs = make_array<float, 6>(radial_coeffs + cid * 6);
+                cm_params.radial_coeffs = make_array<float, 6>(radial_coeffs + iid * 6);
             }
             if (tangential_coeffs != nullptr) {
-                cm_params.tangential_coeffs = make_array<float, 2>(tangential_coeffs + cid * 2);
+                cm_params.tangential_coeffs = make_array<float, 2>(tangential_coeffs + iid * 2);
             }
             if (thin_prism_coeffs != nullptr) {
-                cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + cid * 4);
+                cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + iid * 4);
             }
             OpenCVPinholeCameraModel camera_model(cm_params);
             ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
@@ -123,7 +124,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         cm_params.principal_point = { principal_point.x, principal_point.y };
         cm_params.focal_length = { focal_length.x, focal_length.y };
         if (radial_coeffs != nullptr) {
-            cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + cid * 4);
+            cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + iid * 4);
         }
         OpenCVFisheyeCameraModel camera_model(cm_params);
         ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
@@ -156,7 +157,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     // which gaussians to look through in this tile
     int32_t range_start = tile_offsets[tile_id];
     int32_t range_end =
-        (cid == C - 1) && (tile_id == tile_width * tile_height - 1)
+        (iid == B * C - 1) && (tile_id == tile_width * tile_height - 1)
             ? n_isects
             : tile_offsets[tile_id + 1];
     const uint32_t block_size = block.size();
@@ -197,14 +198,17 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         uint32_t idx = batch_start + tr;
         if (idx < range_end) {
             // TODO: only support 1 camera for now so it is ok to abuse the index.
-            int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
-            id_batch[tr] = g;
-            const vec3 xyz = means[g];
-            const float opac = opacities[g];
+            int32_t isect_id = flatten_ids[idx]; // flatten index in [B * C * N] or [nnz]
+            int32_t isect_bid = isect_id / (C * N);   // intersection batch index
+            // int32_t isect_cid = (isect_id / N) % C;   // intersection camera index
+            int32_t isect_gid = isect_id % N;         // intersection gaussian index
+            id_batch[tr] = isect_id;
+            const vec3 xyz = means[isect_bid * N + isect_gid];
+            const float opac = opacities[isect_id];
             xyz_opacity_batch[tr] = {xyz.x, xyz.y, xyz.z, opac};
             
-            const vec4 quat = quats[g];
-            vec3 scale = scales[g];
+            const vec4 quat = quats[isect_bid * N + isect_gid];
+            vec3 scale = scales[isect_bid * N + isect_gid];
             
             mat3 R = quat_to_rotmat(quat);
             mat3 S = mat3(
@@ -250,9 +254,9 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
                 break;
             }
 
-            int32_t g = id_batch[t];
+            int32_t isect_id = id_batch[t];
             const float vis = alpha * T;
-            const float *c_ptr = colors + g * CDIM;
+            const float *c_ptr = colors + isect_id * CDIM;
 #pragma unroll
             for (uint32_t k = 0; k < CDIM; ++k) {
                 pix_out[k] += c_ptr[k] * vis;
@@ -284,51 +288,53 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
 template <uint32_t CDIM>
 void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     // Gaussian parameters
-    const at::Tensor means, // [N, 3]
-    const at::Tensor quats, // [N, 4]
-    const at::Tensor scales, // [N, 3]
-    const at::Tensor colors,    // [C, N, channels] or [nnz, channels]
-    const at::Tensor opacities, // [C, N]  or [nnz]
-    const at::optional<at::Tensor> backgrounds, // [C, channels]
-    const at::optional<at::Tensor> masks,       // [C, tile_height, tile_width]
+    const at::Tensor means,     // [..., N, 3]
+    const at::Tensor quats,     // [..., N, 4]
+    const at::Tensor scales,    // [..., N, 3]
+    const at::Tensor colors,    // [..., C, N, channels] or [nnz, channels]
+    const at::Tensor opacities, // [..., C, N] or [nnz]
+    const at::optional<at::Tensor> backgrounds, // [..., C, channels]
+    const at::optional<at::Tensor> masks,       // [..., C, tile_height, tile_width]
     // image size
     const uint32_t image_width,
     const uint32_t image_height,
     const uint32_t tile_size,
     // camera
-    const at::Tensor viewmats0,             // [C, 4, 4]
-    const at::optional<at::Tensor> viewmats1, // [C, 4, 4] optional for rolling shutter
-    const at::Tensor Ks,                   // [C, 3, 3]
+    const at::Tensor viewmats0,               // [..., C, 4, 4]
+    const at::optional<at::Tensor> viewmats1, // [..., C, 4, 4] optional for rolling shutter
+    const at::Tensor Ks,                      // [..., C, 3, 3]
     const CameraModelType camera_model,
     // uncented transform
     const UnscentedTransformParameters ut_params,
     ShutterType rs_type,
-    const at::optional<at::Tensor> radial_coeffs, // [C, 6] or [C, 4] optional
-    const at::optional<at::Tensor> tangential_coeffs, // [C, 2] optional
-    const at::optional<at::Tensor> thin_prism_coeffs, // [C, 2] optional
+    const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
+    const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
+    const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 2] optional
     // intersections
-    const at::Tensor tile_offsets, // [C, tile_height, tile_width]
+    const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
     // outputs
-    at::Tensor renders, // [C, image_height, image_width, channels]
-    at::Tensor alphas,  // [C, image_height, image_width]
-    at::Tensor last_ids // [C, image_height, image_width]
+    at::Tensor renders, // [..., C, image_height, image_width, channels]
+    at::Tensor alphas,  // [..., C, image_height, image_width]
+    at::Tensor last_ids // [..., C, image_height, image_width]
 ) {
     // Note: quats need to be normalized before passing in.
 
     bool packed = opacities.dim() == 1;
     assert (packed == false); // only support non-packed for now
 
-    uint32_t C = tile_offsets.size(0);         // number of cameras
-    uint32_t N = packed ? 0 : means.size(0);   // number of gaussians
-    uint32_t tile_height = tile_offsets.size(1);
-    uint32_t tile_width = tile_offsets.size(2);
+    uint32_t N = packed ? 0 : means.size(-2);   // number of gaussians
+    uint32_t B = means.numel() / (N * 3);       // number of batches
+    uint32_t C = viewmats0.size(-3);            // number of cameras
+    uint32_t I = B * C;                         // number of images
+    uint32_t tile_height = tile_offsets.size(-2);
+    uint32_t tile_width = tile_offsets.size(-1);
     uint32_t n_isects = flatten_ids.size(0);
 
     // Each block covers a tile on the image. In total there are
-    // C * tile_height * tile_width blocks.
+    // I * tile_height * tile_width blocks.
     dim3 threads = {tile_size, tile_size, 1};
-    dim3 grid = {C, tile_height, tile_width};
+    dim3 grid = {I, tile_height, tile_width};
 
     int64_t shmem_size =
         tile_size * tile_size * 
@@ -351,6 +357,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
 
     rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float>
         <<<grid, threads, shmem_size, at::cuda::getCurrentCUDAStream()>>>(
+            B,
             C,
             N,
             n_isects,

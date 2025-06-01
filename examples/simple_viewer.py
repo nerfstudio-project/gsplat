@@ -197,8 +197,6 @@ def main(local_rank: int, world_rank, world_size: int, args):
             )
         elif render_tab_state.render_mode == "alpha":
             alpha = render_alphas[0, ..., 0:1]
-            if render_tab_state.inverse:
-                alpha = 1 - alpha
             renders = (
                 apply_float_colormap(alpha, render_tab_state.colormap).cpu().numpy()
             )

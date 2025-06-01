@@ -284,7 +284,7 @@ inline __device__ auto interpolate_shutter_pose(
     // Interpolate a pose linearly for a relative frame time
     auto const t_rs =
         (1.f - relative_frame_time) * t_start + relative_frame_time * t_end;
-    auto const q_rs = glm::slerp(q_start, q_end, relative_frame_time);
+    auto const q_rs = glm::normalize(glm::slerp(q_start, q_end, relative_frame_time));
     return ShutterPose{t_rs, q_rs};
 }
 
@@ -413,7 +413,7 @@ template <class DerivedCameraModel> struct BaseCameraModel {
 
             t_rs = (1.f - relative_frame_time) * t_start +
                    relative_frame_time * t_end;
-            q_rs = glm::slerp(q_start, q_end, relative_frame_time);
+            q_rs = glm::normalize(glm::slerp(q_start, q_end, relative_frame_time));
 
             auto const [image_point_rs, valid_rs] =
                 derived->camera_ray_to_image_point(

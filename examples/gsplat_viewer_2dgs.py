@@ -25,13 +25,11 @@ class GsplatRenderTabState(RenderTabState):
     colormap: Literal[
         "turbo", "viridis", "magma", "inferno", "cividis", "gray"
     ] = "turbo"
-    rasterize_mode: Literal["classic", "antialiased"] = "classic"
-    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole"
 
 
 class GsplatViewer(Viewer):
     """
-    Viewer for gsplat.
+    Viewer for gsplat 2dgs.
     """
 
     def __init__(
@@ -42,7 +40,7 @@ class GsplatViewer(Viewer):
         mode: Literal["rendering", "training"] = "rendering",
     ):
         super().__init__(server, render_fn, output_dir, mode)
-        server.gui.set_panel_label("gsplat viewer")
+        server.gui.set_panel_label("gsplat 2dgs viewer")
 
     def _init_rendering_tab(self):
         self.render_tab_state = GsplatRenderTabState()
@@ -141,7 +139,7 @@ class GsplatViewer(Viewer):
 
                 render_mode_dropdown = server.gui.add_dropdown(
                     "Render Mode",
-                    ("rgb", "depth(accumulated)", "depth(expected)", "alpha"),
+                    ("rgb", "depth", "normal", "alpha"),
                     initial_value=self.render_tab_state.render_mode,
                     hint="Render mode to use.",
                 )
@@ -195,30 +193,6 @@ class GsplatViewer(Viewer):
                     self.render_tab_state.colormap = colormap_dropdown.value
                     self.rerender(_)
 
-                rasterize_mode_dropdown = server.gui.add_dropdown(
-                    "Anti-Aliasing",
-                    ("classic", "antialiased"),
-                    initial_value=self.render_tab_state.rasterize_mode,
-                    hint="Whether to use classic or antialiased rasterization.",
-                )
-
-                @rasterize_mode_dropdown.on_update
-                def _(_) -> None:
-                    self.render_tab_state.rasterize_mode = rasterize_mode_dropdown.value
-                    self.rerender(_)
-
-                camera_model_dropdown = server.gui.add_dropdown(
-                    "Camera",
-                    ("pinhole", "ortho", "fisheye"),
-                    initial_value=self.render_tab_state.camera_model,
-                    hint="Camera model used for rendering.",
-                )
-
-                @camera_model_dropdown.on_update
-                def _(_) -> None:
-                    self.render_tab_state.camera_model = camera_model_dropdown.value
-                    self.rerender(_)
-
         self._rendering_tab_handles.update(
             {
                 "total_gs_count_number": total_gs_count_number,
@@ -231,8 +205,6 @@ class GsplatViewer(Viewer):
                 "normalize_nearfar_checkbox": normalize_nearfar_checkbox,
                 "inverse_checkbox": inverse_checkbox,
                 "colormap_dropdown": colormap_dropdown,
-                "rasterize_mode_dropdown": rasterize_mode_dropdown,
-                "camera_model_dropdown": camera_model_dropdown,
             }
         )
         super()._populate_rendering_tab()

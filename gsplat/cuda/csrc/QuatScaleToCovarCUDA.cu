@@ -84,15 +84,15 @@ __global__ void quat_scale_to_covar_preci_fwd_kernel(
 
 void launch_quat_scale_to_covar_preci_fwd_kernel(
     // inputs
-    const at::Tensor quats,  // [N, 4]
-    const at::Tensor scales, // [N, 3]
+    const at::Tensor quats,  // [..., 4]
+    const at::Tensor scales, // [..., 3]
     const bool triu,
     // outputs
-    at::optional<at::Tensor> covars, // [N, 3, 3] or [N, 6]
-    at::optional<at::Tensor> precis  // [N, 3, 3] or [N, 6]
+    at::optional<at::Tensor> covars, // [..., 3, 3] or [..., 6]
+    at::optional<at::Tensor> precis  // [..., 3, 3] or [..., 6]
 ) {
 
-    uint32_t N = quats.size(0);
+    uint32_t N = quats.numel() / 4;
 
     int64_t n_elements = N;
     dim3 threads(256);
@@ -216,16 +216,16 @@ __global__ void quat_scale_to_covar_preci_bwd_kernel(
 
 void launch_quat_scale_to_covar_preci_bwd_kernel(
     // inputs
-    const at::Tensor quats,  // [N, 4]
-    const at::Tensor scales, // [N, 3]
+    const at::Tensor quats,  // [..., 4]
+    const at::Tensor scales, // [..., 3]
     const bool triu,
-    const at::optional<at::Tensor> v_covars, // [N, 3, 3] or [N, 6]
-    const at::optional<at::Tensor> v_precis, // [N, 3, 3] or [N, 6]
+    const at::optional<at::Tensor> v_covars, // [..., 3, 3] or [..., 6]
+    const at::optional<at::Tensor> v_precis, // [..., 3, 3] or [..., 6]
     // outputs
-    at::Tensor v_quats, // [N, 4]
-    at::Tensor v_scales // [N, 3]
+    at::Tensor v_quats, // [..., 4]
+    at::Tensor v_scales // [..., 3]
 ) {
-    uint32_t N = quats.size(0);
+    uint32_t N = quats.numel() / 4;
 
     int64_t n_elements = N;
     dim3 threads(256);
