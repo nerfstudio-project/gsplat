@@ -31,7 +31,7 @@ USE_PRECOMPILED_HEADERS = os.getenv("USE_PRECOMPILED_HEADERS", "0") == "1"
 need_to_unset_max_jobs = False
 if not MAX_JOBS:
     need_to_unset_max_jobs = True
-    os.environ["MAX_JOBS"] = "10"
+    os.environ["MAX_JOBS"] = str(max(10, os.cpu_count()))
 
 # torch has bugs on precompiled headers before 2.2, see:
 # https://github.com/nerfstudio-project/gsplat/pull/583#issuecomment-2732597080
