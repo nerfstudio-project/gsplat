@@ -945,7 +945,10 @@ class Runner:
             if cfg.process_to_perfect_camera:
                 radial_coeffs = None
             else:
-                radial_coeffs = data["radial_coeffs"].to(device)
+                if cfg.with_ut:
+                    radial_coeffs = data["radial_coeffs"].to(device)
+                else:
+                    radial_coeffs = None
 
             torch.cuda.synchronize()
             tic = time.time()

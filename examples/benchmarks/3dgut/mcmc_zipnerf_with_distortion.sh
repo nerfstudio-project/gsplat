@@ -22,6 +22,7 @@ do
         --data_dir $SCENE_DIR/$SCENE/ \
         --result_dir $RESULT_DIR/$SCENE/
 
+    # eval and render video
     for CKPT in $RESULT_DIR/$SCENE/ckpts/*;
     do
         CUDA_VISIBLE_DEVICES=1 python simple_trainer.py mcmc --disable_viewer --data_factor $DATA_FACTOR \
