@@ -517,7 +517,7 @@
                 <span class="n">state</span><span class="p">[</span><span class="s2">&quot;radii&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">zero_</span><span class="p">()</span>
             <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">empty_cache</span><span class="p">()</span>
 
-        <span class="k">if</span> <span class="n">step</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">reset_every</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">step</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">reset_every</span> <span class="o">==</span> <span class="mi">0</span> <span class="o">&amp;</span> <span class="n">step</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
             <span class="n">reset_opa</span><span class="p">(</span>
                 <span class="n">params</span><span class="o">=</span><span class="n">params</span><span class="p">,</span>
                 <span class="n">optimizers</span><span class="o">=</span><span class="n">optimizers</span><span class="p">,</span>
