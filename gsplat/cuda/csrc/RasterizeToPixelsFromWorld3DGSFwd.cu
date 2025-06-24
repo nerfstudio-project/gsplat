@@ -45,7 +45,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     const ShutterType rs_type,
     const scalar_t *__restrict__ radial_coeffs,     // [B, C, 6] or [B, C, 4] optional
     const scalar_t *__restrict__ tangential_coeffs, // [B, C, 2] optional
-    const scalar_t *__restrict__ thin_prism_coeffs, // [B, C, 2] optional
+    const scalar_t *__restrict__ thin_prism_coeffs, // [B, C, 4] optional
     // intersections
     const int32_t *__restrict__ tile_offsets, // [B, C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
