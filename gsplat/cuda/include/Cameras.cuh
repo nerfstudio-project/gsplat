@@ -870,7 +870,7 @@ struct OpenCVFisheyeCameraModel
         forward_poly_odd = {1.f, k1, k2, k3, k4};
 
         // eighth-degree differential of forward polynomial 1 + 3*k1*theta^2 +
-        // 5*k2*theta^4 + 7*k3*theta^8 + 9*k4*theta^8
+        // 5*k2*theta^4 + 7*k3*theta^6 + 9*k4*theta^8
         dforward_poly_even = {1, 3 * k1, 5 * k2, 7 * k3, 9 * k4};
 
         auto const max_diag_x =
@@ -888,7 +888,7 @@ struct OpenCVFisheyeCameraModel
             );
         } else {
             std::array<float, 4> ddforward_poly_odd = {
-                6 * k1, 20 * k2, 56 * k3, 72 * k4
+                6 * k1, 20 * k2, 42 * k3, 72 * k4
             };
             std::array<float, 1> approx = {1.57f};
 
