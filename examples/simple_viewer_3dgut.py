@@ -167,8 +167,8 @@ def main(local_rank: int, world_rank, world_size: int, args):
                     [
                         gui_slider_thin_prism_coeffs1.value,  # s1
                         gui_slider_thin_prism_coeffs2.value,  # s2
-                        0,  # s3
-                        0,  # s4
+                        0.0,  # s3
+                        0.0,  # s4
                     ]
                 ],
                 device=device,
