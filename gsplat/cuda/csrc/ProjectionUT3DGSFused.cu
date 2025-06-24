@@ -110,7 +110,7 @@ __global__ void projection_ut_3dgs_fused_kernel(
                 cm_params.tangential_coeffs = make_array<float, 2>(tangential_coeffs + bid * C * 2 + cid * 2);
             }
             if (thin_prism_coeffs != nullptr) {
-                cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + bid * C * 2 + cid * 2);
+                cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + bid * C * 4 + cid * 4);
             }
             OpenCVPinholeCameraModel camera_model(cm_params);
             image_gaussian_return =
