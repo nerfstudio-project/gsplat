@@ -575,6 +575,10 @@ def rasterization(
                 output_splits=collected_splits,
             )
 
+            # since distributed mode does not support batch dimensions, it is safe
+            # to set image_ids to camera_ids.
+            image_ids = camera_ids
+
             # Silently change C from global #Cameras to local #Cameras.
             C = C_world[world_rank]
 
