@@ -41,4 +41,5 @@ To use the 3DGUT technique The relavant arguments in `rasterization()` function 
 - To train/render pinhole camera with distortion, setting the distortion parameters to `radial_coeffs`, `tangential_coeffs`, `thin_prism_coeffs`.
 - To train/render fisheye camera with distortion, 
 setting the distortion parameters to `radial_coeffs` and set `camera_model="fisheye"`
+- To train/render f-theta camera with distortion, setting the distortion parameters to `ftheta_coeffs` and set `camera_model="ftheta"`
 - To enable rolling shutter effects, checks out `rolling_shutter` and `viewmats_rs` on the type of rolling shutters we supported.
