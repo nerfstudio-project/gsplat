@@ -60,6 +60,35 @@ class UnscentedTransformParameters:
         p.in_image_margin_factor = self.in_image_margin_factor
         p.require_all_sigma_points_valid = self.require_all_sigma_points_valid
         return p
+    
+@dataclass
+class FThetaPolynomialType(Enum):
+    PIXELDIST_TO_ANGLE = 0
+    ANGLE_TO_PIXELDIST = 1
+
+    def to_cpp(self) -> Any:
+        return _make_lazy_cuda_obj(f"FThetaPolynomialType.{self.name}")
+    
+@dataclass
+class FThetaCameraDistortionParameters:
+    reference_poly: FThetaPolynomialType
+    pixeldist_to_angle_poly: Tuple[float, float, float, float, float, float] # [6]
+    angle_to_pixeldist_poly: Tuple[float, float, float, float, float, float] # [6]
+    max_angle: float
+    linear_cde: Tuple[float, float, float] # [3]
+
+    def to_cpp(self) -> Any:
+        p = _make_lazy_cuda_obj("FThetaCameraDistortionParameters")()
+        p.reference_poly = self.reference_poly.to_cpp()
+        p.pixeldist_to_angle_poly = self.pixeldist_to_angle_poly
+        p.angle_to_pixeldist_poly = self.angle_to_pixeldist_poly
+        p.max_angle = self.max_angle
+        p.linear_cde = self.linear_cde
+
+    @classmethod
+    def to_cpp_default(cls) -> Any:
+        p = _make_lazy_cuda_obj("FThetaCameraDistortionParameters")()
+        return p
 
 
 def world_to_cam(
@@ -1130,6 +1159,7 @@ def fully_fused_projection_with_ut(
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
     thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
+    ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
@@ -1188,6 +1218,7 @@ def fully_fused_projection_with_ut(
         radial_coeffs.contiguous() if radial_coeffs is not None else None,
         tangential_coeffs.contiguous() if tangential_coeffs is not None else None,
         thin_prism_coeffs.contiguous() if thin_prism_coeffs is not None else None,
+        ftheta_coeffs.to_cpp() if ftheta_coeffs is not None else FThetaCameraDistortionParameters.to_cpp_default(),
     )
     if not calc_compensations:
         compensations = None

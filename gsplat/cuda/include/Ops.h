@@ -489,7 +489,8 @@ projection_ut_3dgs_fused(
     ShutterType rs_type,
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
-    const at::optional<at::Tensor> thin_prism_coeffs  // [..., C, 4] optional
+    const at::optional<at::Tensor> thin_prism_coeffs,  // [..., C, 4] optional
+    const FThetaCameraDistortionParameters ftheta_coeffs // shared parameters for all cameras
 );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor>
