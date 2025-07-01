@@ -1045,7 +1045,6 @@ struct OpenCVFisheyeCameraModel
 };
 
 
-
 template <size_t N_NEWTON_ITERATIONS = 3>
 struct FThetaCameraModel : BaseCameraModel<FThetaCameraModel<N_NEWTON_ITERATIONS>> {
     // FTheta camera model

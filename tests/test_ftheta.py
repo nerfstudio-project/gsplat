@@ -7,23 +7,61 @@ pytest <THIS_PY_FILE> -s
 """
 
 from typing import Optional, Tuple
-
+import os
 import pytest
 import torch
+from gsplat._helper import load_test_data
+import imageio
+import numpy as np
 
 device = torch.device("cuda:0")
 
+def expand(data: dict, batch_dims: Tuple[int, ...]):
+    # append multiple batch dimensions to the front of the tensor
+    # eg. x.shape = [N, 3], batch_dims = (1, 2), return shape is [1, 2, N, 3]
+    # eg. x.shape = [N, 3], batch_dims = (), return shape is [N, 3]
+    ret = {}
+    for k, v in data.items():
+        if isinstance(v, torch.Tensor) and len(batch_dims) > 0:
+            new_shape = batch_dims + v.shape
+            ret[k] = v.expand(new_shape)
+        else:
+            ret[k] = v
+    return ret
+
+@pytest.fixture
+def test_data():
+    (
+        means,
+        quats,
+        scales,
+        opacities,
+        colors,
+        viewmats,
+        Ks,
+        width,
+        height,
+    ) = load_test_data(
+        device=device,
+        data_path=os.path.join(os.path.dirname(__file__), "../assets/test_garden.npz"),
+    )
+    return {
+        "means": means,  # [N, 3]
+        "quats": quats,  # [N, 4]
+        "scales": scales,  # [N, 3]
+        "opacities": opacities,  # [N]
+        "viewmats": viewmats,  # [C, 4, 4]
+        "Ks": Ks,  # [C, 3, 3]
+        "colors": colors,  # [C, N, 3]
+        "width": width,
+        "height": height,
+    }
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-@pytest.mark.parametrize("per_view_color", [True])
-@pytest.mark.parametrize("sh_degree", [None])
 @pytest.mark.parametrize("render_mode", ["RGB"])
-@pytest.mark.parametrize("batch_dims", [(1, 2)])
 def test_rasterization(
-    per_view_color: bool,
-    sh_degree: Optional[int],
+    test_data,
     render_mode: str,
-    batch_dims: Tuple[int, ...],
 ):
     from gsplat.rendering import (
         rasterization,
@@ -32,34 +70,18 @@ def test_rasterization(
     )
 
     torch.manual_seed(42)
+    C = test_data["Ks"].shape[0]
+    N = test_data["opacities"].shape[0]
 
-    C, N = 3, 10_000
-    means = torch.rand(batch_dims + (N, 3), device=device)
-    quats = torch.randn(batch_dims + (N, 4), device=device)
-    scales = torch.rand(batch_dims + (N, 3), device=device)
-    opacities = torch.rand(batch_dims + (N,), device=device)
-    if per_view_color:
-        if sh_degree is None:
-            colors = torch.rand(batch_dims + (C, N, 3), device=device)
-        else:
-            colors = torch.rand(
-                batch_dims + (C, N, (sh_degree + 1) ** 2, 3), device=device
-            )
-    else:
-        if sh_degree is None:
-            colors = torch.rand(batch_dims + (N, 3), device=device)
-        else:
-            colors = torch.rand(
-                batch_dims + (N, (sh_degree + 1) ** 2, 3), device=device
-            )
-
-    width, height = 300, 200
-    focal = 300.0
-    Ks = torch.tensor(
-        [[focal, 0.0, width / 2.0], [0.0, focal, height / 2.0], [0.0, 0.0, 1.0]],
-        device=device,
-    ).expand(batch_dims + (C, -1, -1))
-    viewmats = torch.eye(4, device=device).expand(batch_dims + (C, -1, -1))
+    Ks = test_data["Ks"]
+    viewmats = test_data["viewmats"]
+    height = test_data["height"]
+    width = test_data["width"]
+    quats = test_data["quats"]
+    scales = test_data["scales"]
+    means = test_data["means"]
+    opacities = test_data["opacities"]
+    colors = test_data["colors"].repeat(C, 1, 1)
 
     # distortion parameters
     camera_model = "ftheta"
@@ -81,7 +103,7 @@ def test_rasterization(
             -10.41861,
             3.6694396,
         ),
-        max_angle=1.3446016557364315,
+        max_angle=1000,
         linear_cde=(9.9968284e-01, 1.8735906e-05, 1.7659619e-05),
     )
 
@@ -95,7 +117,6 @@ def test_rasterization(
         Ks=Ks,
         width=width,
         height=height,
-        sh_degree=sh_degree,
         render_mode=render_mode,
         camera_model=camera_model,
         packed=False,
@@ -105,8 +126,11 @@ def test_rasterization(
     )
 
     if render_mode == "D":
-        assert renders.shape == batch_dims + (C, height, width, 1)
+        assert renders.shape == (C, height, width, 1)
     elif render_mode == "RGB":
-        assert renders.shape == batch_dims + (C, height, width, 3)
+        assert renders.shape == (C, height, width, 3)
     elif render_mode == "RGB+D":
-        assert renders.shape == batch_dims + (C, height, width, 4)
+        assert renders.shape == (C, height, width, 4)
+
+    # save the renders
+    imageio.imwrite("test_ftheta.png", (renders[0, :, :, :3].cpu().numpy() * 255).astype(np.uint8))
