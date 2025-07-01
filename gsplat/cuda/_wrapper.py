@@ -84,6 +84,7 @@ class FThetaCameraDistortionParameters:
         p.angle_to_pixeldist_poly = self.angle_to_pixeldist_poly
         p.max_angle = self.max_angle
         p.linear_cde = self.linear_cde
+        return p
 
     @classmethod
     def to_cpp_default(cls) -> Any:
@@ -1401,6 +1402,10 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
         )
+        ftheta_coeffs = (
+            ftheta_coeffs.to_cpp() if ftheta_coeffs is not None 
+            else FThetaCameraDistortionParameters.to_cpp_default()
+        )
 
         render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
             "rasterize_to_pixels_from_world_3dgs_fwd"
@@ -1424,6 +1429,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             radial_coeffs,
             tangential_coeffs,
             thin_prism_coeffs,
+            ftheta_coeffs,
             isect_offsets,
             flatten_ids,
         )
