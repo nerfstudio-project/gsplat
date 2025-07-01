@@ -218,7 +218,7 @@ def rasterization(
             The shape should be [..., C, 2] if provided.
         thin_prism_coeffs: Opencv pinhole thin prism distortion coefficients. Default is None.
             The shape should be [..., C, 4] if provided.
-        ftheta_coeffs: F-Theta camera distortion coefficients shared for all cameras. 
+        ftheta_coeffs: F-Theta camera distortion coefficients shared for all cameras.
             Default is None. See `FThetaCameraDistortionParameters` for details.
         rolling_shutter: The rolling shutter type. Default `RollingShutterType.GLOBAL` means
             global shutter.

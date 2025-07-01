@@ -25,7 +25,11 @@ def test_rasterization(
     render_mode: str,
     batch_dims: Tuple[int, ...],
 ):
-    from gsplat.rendering import rasterization, FThetaCameraDistortionParameters, FThetaPolynomialType
+    from gsplat.rendering import (
+        rasterization,
+        FThetaCameraDistortionParameters,
+        FThetaPolynomialType,
+    )
 
     torch.manual_seed(42)
 
@@ -61,10 +65,24 @@ def test_rasterization(
     camera_model = "fisheye"
     distortion_params = FThetaCameraDistortionParameters(
         reference_poly=FThetaPolynomialType.ANGLE_TO_PIXELDIST,
-        pixeldist_to_angle_poly=(0.,  8.4335003e-03,  2.3174282e-06, -5.0478608e-08, 6.1392608e-10, -1.7447865e-12),
-        angle_to_pixeldist_poly=(0.       , 118.43232  ,  -2.562147 ,   6.317949 , -10.41861  , 3.6694396),
+        pixeldist_to_angle_poly=(
+            0.0,
+            8.4335003e-03,
+            2.3174282e-06,
+            -5.0478608e-08,
+            6.1392608e-10,
+            -1.7447865e-12,
+        ),
+        angle_to_pixeldist_poly=(
+            0.0,
+            118.43232,
+            -2.562147,
+            6.317949,
+            -10.41861,
+            3.6694396,
+        ),
         max_angle=1.3446016557364315,
-        linear_cde=(9.9968284e-01, 1.8735906e-05, 1.7659619e-05)
+        linear_cde=(9.9968284e-01, 1.8735906e-05, 1.7659619e-05),
     )
 
     renders, alphas, meta = rasterization(
@@ -92,4 +110,3 @@ def test_rasterization(
         assert renders.shape == batch_dims + (C, height, width, 3)
     elif render_mode == "RGB+D":
         assert renders.shape == batch_dims + (C, height, width, 4)
-

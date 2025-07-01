@@ -60,7 +60,8 @@ class UnscentedTransformParameters:
         p.in_image_margin_factor = self.in_image_margin_factor
         p.require_all_sigma_points_valid = self.require_all_sigma_points_valid
         return p
-    
+
+
 @dataclass
 class FThetaPolynomialType(Enum):
     PIXELDIST_TO_ANGLE = 0
@@ -68,14 +69,15 @@ class FThetaPolynomialType(Enum):
 
     def to_cpp(self) -> Any:
         return _make_lazy_cuda_obj(f"FThetaPolynomialType.{self.name}")
-    
+
+
 @dataclass
 class FThetaCameraDistortionParameters:
     reference_poly: FThetaPolynomialType
-    pixeldist_to_angle_poly: Tuple[float, float, float, float, float, float] # [6]
-    angle_to_pixeldist_poly: Tuple[float, float, float, float, float, float] # [6]
+    pixeldist_to_angle_poly: Tuple[float, float, float, float, float, float]  # [6]
+    angle_to_pixeldist_poly: Tuple[float, float, float, float, float, float]  # [6]
     max_angle: float
-    linear_cde: Tuple[float, float, float] # [3]
+    linear_cde: Tuple[float, float, float]  # [3]
 
     def to_cpp(self) -> Any:
         p = _make_lazy_cuda_obj("FThetaCameraDistortionParameters")()
@@ -268,7 +270,9 @@ def proj(
         - **Projected means**. [..., C, N, 2]
         - **Projected covariances**. [..., C, N, 2, 2]
     """
-    assert camera_model != "ftheta", "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
+    assert (
+        camera_model != "ftheta"
+    ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
 
     batch_dims = means.shape[:-3]
     C, N = means.shape[-3:-1]
@@ -390,7 +394,9 @@ def fully_fused_projection(
         assert opacities.shape == batch_dims + (N,), opacities.shape
         opacities = opacities.contiguous()
 
-    assert camera_model != "ftheta", "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
+    assert (
+        camera_model != "ftheta"
+    ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
 
     viewmats = viewmats.contiguous()
     Ks = Ks.contiguous()
@@ -980,8 +986,10 @@ class _Proj(torch.autograd.Function):
         height: int,
         camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
     ) -> Tuple[Tensor, Tensor]:
-        assert camera_model != "ftheta", "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
-    
+        assert (
+            camera_model != "ftheta"
+        ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
+
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
         )
@@ -1041,8 +1049,10 @@ class _FullyFusedProjection(torch.autograd.Function):
         camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
         opacities: Optional[Tensor] = None,  # [..., N] or None
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
-        assert camera_model != "ftheta", "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
-    
+        assert (
+            camera_model != "ftheta"
+        ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
+
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
         )
@@ -1229,7 +1239,9 @@ def fully_fused_projection_with_ut(
         radial_coeffs.contiguous() if radial_coeffs is not None else None,
         tangential_coeffs.contiguous() if tangential_coeffs is not None else None,
         thin_prism_coeffs.contiguous() if thin_prism_coeffs is not None else None,
-        ftheta_coeffs.to_cpp() if ftheta_coeffs is not None else FThetaCameraDistortionParameters.to_cpp_default(),
+        ftheta_coeffs.to_cpp()
+        if ftheta_coeffs is not None
+        else FThetaCameraDistortionParameters.to_cpp_default(),
     )
     if not calc_compensations:
         compensations = None
@@ -1403,7 +1415,8 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             f"CameraModelType.{camera_model.upper()}"
         )
         ftheta_coeffs = (
-            ftheta_coeffs.to_cpp() if ftheta_coeffs is not None 
+            ftheta_coeffs.to_cpp()
+            if ftheta_coeffs is not None
             else FThetaCameraDistortionParameters.to_cpp_default()
         )
 
@@ -1586,8 +1599,10 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
         opacities: Optional[Tensor] = None,  # [..., N] or None
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
-        assert camera_model != "ftheta", "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
-    
+        assert (
+            camera_model != "ftheta"
+        ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
+
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
         )

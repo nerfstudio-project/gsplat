@@ -311,7 +311,9 @@ def _fully_fused_projection(
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
 
-    assert camera_model != "ftheta", "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
+    assert (
+        camera_model != "ftheta"
+    ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
 
     means_c, covars_c = _world_to_cam(means, covars, viewmats)
 
