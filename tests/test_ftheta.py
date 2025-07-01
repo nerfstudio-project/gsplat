@@ -62,7 +62,7 @@ def test_rasterization(
     viewmats = torch.eye(4, device=device).expand(batch_dims + (C, -1, -1))
 
     # distortion parameters
-    camera_model = "fisheye"
+    camera_model = "ftheta"
     distortion_params = FThetaCameraDistortionParameters(
         reference_poly=FThetaPolynomialType.ANGLE_TO_PIXELDIST,
         pixeldist_to_angle_poly=(
