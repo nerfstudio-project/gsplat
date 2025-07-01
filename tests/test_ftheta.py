@@ -6,13 +6,13 @@ pytest <THIS_PY_FILE> -s
 ```
 """
 
-from typing import Optional, Tuple
 import os
+from typing import Tuple
+
 import pytest
 import torch
+
 from gsplat._helper import load_test_data
-import imageio
-import numpy as np
 
 device = torch.device("cuda:0")
 
@@ -136,6 +136,8 @@ def test_rasterization(
         assert renders.shape == (C, height, width, 4)
 
     # save the renders
-    imageio.imwrite(
-        "test_ftheta.png", (renders[0, :, :, :3].cpu().numpy() * 255).astype(np.uint8)
-    )
+    # import imageio
+    # import numpy as np
+    # imageio.imwrite(
+    #     "test_ftheta.png", (renders[0, :, :, :3].cpu().numpy() * 255).astype(np.uint8)
+    # )
