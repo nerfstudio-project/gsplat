@@ -16,6 +16,7 @@ import numpy as np
 
 device = torch.device("cuda:0")
 
+
 def expand(data: dict, batch_dims: Tuple[int, ...]):
     # append multiple batch dimensions to the front of the tensor
     # eg. x.shape = [N, 3], batch_dims = (1, 2), return shape is [1, 2, N, 3]
@@ -28,6 +29,7 @@ def expand(data: dict, batch_dims: Tuple[int, ...]):
         else:
             ret[k] = v
     return ret
+
 
 @pytest.fixture
 def test_data():
@@ -56,6 +58,7 @@ def test_data():
         "width": width,
         "height": height,
     }
+
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("render_mode", ["RGB"])
@@ -133,4 +136,6 @@ def test_rasterization(
         assert renders.shape == (C, height, width, 4)
 
     # save the renders
-    imageio.imwrite("test_ftheta.png", (renders[0, :, :, :3].cpu().numpy() * 255).astype(np.uint8))
+    imageio.imwrite(
+        "test_ftheta.png", (renders[0, :, :, :3].cpu().numpy() * 255).astype(np.uint8)
+    )
