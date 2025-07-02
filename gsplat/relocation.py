@@ -34,12 +34,6 @@ def compute_relocation(
         **new_scales**: The scales of the Gaussians. [N, 3]
     """
 
-    N_MAX = 51
-    BINOMS = torch.zeros((N_MAX, N_MAX), device=opacities.device)
-    for n in range(N_MAX):
-        for k in range(n + 1):
-            BINOMS[n, k] = math.comb(n, k)
-
     N = opacities.shape[0]
     n_max, _ = binoms.shape
     assert scales.shape == (N, 3), scales.shape
@@ -49,7 +43,7 @@ def compute_relocation(
     ratios.clamp_(min=1, max=n_max)
     ratios = ratios.int().contiguous()
 
-    new_opacities, new_scales = _make_lazy_cuda_func("compute_relocation")(
+    new_opacities, new_scales = _make_lazy_cuda_func("relocation")(
         opacities, scales, ratios, binoms, n_max
     )
     return new_opacities, new_scales

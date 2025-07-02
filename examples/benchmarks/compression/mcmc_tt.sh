@@ -7,7 +7,7 @@ SCENE_LIST="train truck"
 # CAP_MAX=360000
 
 # # 0.49M GSs
-# RESULT_DIR="results/benchmark_tt_mcmc_tt_0_49M_png_compression"
+# RESULT_DIR="results/benchmark_tt_mcmc_0_49M_png_compression"
 # CAP_MAX=490000
 
 # 1M GSs

@@ -1,16 +1,18 @@
-import os
 import json
+import os
 from typing import Any, Dict, List, Optional
-from typing_extensions import assert_never
 
 import cv2
 import imageio.v2 as imageio
 import numpy as np
 import torch
+from PIL import Image
 from pycolmap import SceneManager
+from tqdm import tqdm
+from typing_extensions import assert_never
 
 from .normalize import (
-    align_principle_axes,
+    align_principal_axes,
     similarity_from_cameras,
     transform_cameras,
     transform_points,
@@ -24,6 +26,31 @@ def _get_rel_paths(path_dir: str) -> List[str]:
         for f in fn:
             paths.append(os.path.relpath(os.path.join(dp, f), path_dir))
     return paths
+
+
+def _resize_image_folder(image_dir: str, resized_dir: str, factor: int) -> str:
+    """Resize image folder."""
+    print(f"Downscaling images by {factor}x from {image_dir} to {resized_dir}.")
+    os.makedirs(resized_dir, exist_ok=True)
+
+    image_files = _get_rel_paths(image_dir)
+    for image_file in tqdm(image_files):
+        image_path = os.path.join(image_dir, image_file)
+        resized_path = os.path.join(
+            resized_dir, os.path.splitext(image_file)[0] + ".png"
+        )
+        if os.path.isfile(resized_path):
+            continue
+        image = imageio.imread(image_path)[..., :3]
+        resized_size = (
+            int(round(image.shape[1] / factor)),
+            int(round(image.shape[0] / factor)),
+        )
+        resized_image = np.array(
+            Image.fromarray(image).resize(resized_size, Image.BICUBIC)
+        )
+        imageio.imwrite(resized_path, resized_image)
+    return resized_dir
 
 
 class Parser:
@@ -163,6 +190,11 @@ class Parser:
         # so we need to map between the two sorted lists of files.
         colmap_files = sorted(_get_rel_paths(colmap_image_dir))
         image_files = sorted(_get_rel_paths(image_dir))
+        if factor > 1 and os.path.splitext(image_files[0])[1].lower() == ".jpg":
+            image_dir = _resize_image_folder(
+                colmap_image_dir, image_dir + "_png", factor=factor
+            )
+            image_files = sorted(_get_rel_paths(image_dir))
         colmap_to_image = dict(zip(colmap_files, image_files))
         image_paths = [os.path.join(image_dir, colmap_to_image[f]) for f in image_names]
 
@@ -188,11 +220,28 @@ class Parser:
             camtoworlds = transform_cameras(T1, camtoworlds)
             points = transform_points(T1, points)
 
-            T2 = align_principle_axes(points)
+            T2 = align_principal_axes(points)
             camtoworlds = transform_cameras(T2, camtoworlds)
             points = transform_points(T2, points)
 
             transform = T2 @ T1
+
+            # Fix for up side down. We assume more points towards
+            # the bottom of the scene which is true when ground floor is
+            # present in the images.
+            if np.median(points[:, 2]) > np.mean(points[:, 2]):
+                # rotate 180 degrees around x axis such that z is flipped
+                T3 = np.array(
+                    [
+                        [1.0, 0.0, 0.0, 0.0],
+                        [0.0, -1.0, 0.0, 0.0],
+                        [0.0, 0.0, -1.0, 0.0],
+                        [0.0, 0.0, 0.0, 1.0],
+                    ]
+                )
+                camtoworlds = transform_cameras(T3, camtoworlds)
+                points = transform_points(T3, points)
+                transform = T3 @ transform
         else:
             transform = np.eye(4)
 
@@ -266,8 +315,8 @@ class Parser:
                     + params[2] * theta**6
                     + params[3] * theta**8
                 )
-                mapx = fx * x1 * r + width // 2
-                mapy = fy * y1 * r + height // 2
+                mapx = (fx * x1 * r + width // 2).astype(np.float32)
+                mapy = (fy * y1 * r + height // 2).astype(np.float32)
 
                 # Use mask to define ROI
                 mask = np.logical_and(
@@ -389,7 +438,6 @@ if __name__ == "__main__":
     import argparse
 
     import imageio.v2 as imageio
-    import tqdm
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", type=str, default="data/360_v2/garden")
@@ -404,7 +452,7 @@ if __name__ == "__main__":
     print(f"Dataset: {len(dataset)} images.")
 
     writer = imageio.get_writer("results/points.mp4", fps=30)
-    for data in tqdm.tqdm(dataset, desc="Plotting points"):
+    for data in tqdm(dataset, desc="Plotting points"):
         image = data["image"].numpy().astype(np.uint8)
         points = data["points"].numpy()
         depths = data["depths"].numpy()
