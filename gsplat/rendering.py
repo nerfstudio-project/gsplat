@@ -9,6 +9,8 @@ from typing_extensions import Literal
 
 from .cuda._wrapper import (
     RollingShutterType,
+    FThetaCameraDistortionParameters,
+    FThetaPolynomialType,
     fully_fused_projection,
     fully_fused_projection_2dgs,
     fully_fused_projection_with_ut,
@@ -52,7 +54,7 @@ def rasterization(
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
     channel_chunk: int = 32,
     distributed: bool = False,
-    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+    camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
     segmented: bool = False,
     covars: Optional[Tensor] = None,
     with_ut: bool = False,
@@ -61,6 +63,7 @@ def rasterization(
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
     thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
+    ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
@@ -198,7 +201,7 @@ def rasterization(
             The input Gaussians are expected to be a subset of scene in each rank, and
             the function will collaboratively render the images for all ranks.
         camera_model: The camera model to use. Supported models are "pinhole", "ortho",
-            and "fisheye". Default is "pinhole".
+            "fisheye", and "ftheta". Default is "pinhole".
         segmented: Whether to use segmented radix sort. Default is False.
             Segmented radix sort performs sorting in segments, which is more efficient for the sorting operation itself.
             However, since it requires offset indices as input, additional global memory access is needed, which results
@@ -215,6 +218,8 @@ def rasterization(
             The shape should be [..., C, 2] if provided.
         thin_prism_coeffs: Opencv pinhole thin prism distortion coefficients. Default is None.
             The shape should be [..., C, 4] if provided.
+        ftheta_coeffs: F-Theta camera distortion coefficients shared for all cameras.
+            Default is None. See `FThetaCameraDistortionParameters` for details.
         rolling_shutter: The rolling shutter type. Default `RollingShutterType.GLOBAL` means
             global shutter.
         viewmats_rs: The second viewmat when rolling shutter is used. Default is None.
@@ -329,6 +334,7 @@ def rasterization(
         radial_coeffs is not None
         or tangential_coeffs is not None
         or thin_prism_coeffs is not None
+        or ftheta_coeffs is not None
         or rolling_shutter != RollingShutterType.GLOBAL
     ):
         assert (
@@ -393,6 +399,7 @@ def rasterization(
             radial_coeffs=radial_coeffs,
             tangential_coeffs=tangential_coeffs,
             thin_prism_coeffs=thin_prism_coeffs,
+            ftheta_coeffs=ftheta_coeffs,
             rolling_shutter=rolling_shutter,
             viewmats_rs=viewmats_rs,
         )
@@ -688,6 +695,7 @@ def rasterization(
                     radial_coeffs=radial_coeffs,
                     tangential_coeffs=tangential_coeffs,
                     thin_prism_coeffs=thin_prism_coeffs,
+                    ftheta_coeffs=ftheta_coeffs,
                     rolling_shutter=rolling_shutter,
                     viewmats_rs=viewmats_rs,
                 )
@@ -730,6 +738,7 @@ def rasterization(
                 radial_coeffs=radial_coeffs,
                 tangential_coeffs=tangential_coeffs,
                 thin_prism_coeffs=thin_prism_coeffs,
+                ftheta_coeffs=ftheta_coeffs,
                 rolling_shutter=rolling_shutter,
                 viewmats_rs=viewmats_rs,
             )
