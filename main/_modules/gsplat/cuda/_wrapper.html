@@ -374,6 +374,38 @@
         <span class="k">return</span> <span class="n">p</span>
 
 
+<span class="nd">@dataclass</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">FThetaPolynomialType</span><span class="p">(</span><span class="n">Enum</span><span class="p">):</span>
+    <span class="n">PIXELDIST_TO_ANGLE</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">ANGLE_TO_PIXELDIST</span> <span class="o">=</span> <span class="mi">1</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">to_cpp</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;FThetaPolynomialType.</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+
+<span class="nd">@dataclass</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">FThetaCameraDistortionParameters</span><span class="p">:</span>
+    <span class="n">reference_poly</span><span class="p">:</span> <span class="n">FThetaPolynomialType</span>
+    <span class="n">pixeldist_to_angle_poly</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span>  <span class="c1"># [6]</span>
+    <span class="n">angle_to_pixeldist_poly</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span>  <span class="c1"># [6]</span>
+    <span class="n">max_angle</span><span class="p">:</span> <span class="nb">float</span>
+    <span class="n">linear_cde</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span>  <span class="c1"># [3]</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">to_cpp</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+        <span class="n">p</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span><span class="s2">&quot;FThetaCameraDistortionParameters&quot;</span><span class="p">)()</span>
+        <span class="n">p</span><span class="o">.</span><span class="n">reference_poly</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">reference_poly</span><span class="o">.</span><span class="n">to_cpp</span><span class="p">()</span>
+        <span class="n">p</span><span class="o">.</span><span class="n">pixeldist_to_angle_poly</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">pixeldist_to_angle_poly</span>
+        <span class="n">p</span><span class="o">.</span><span class="n">angle_to_pixeldist_poly</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">angle_to_pixeldist_poly</span>
+        <span class="n">p</span><span class="o">.</span><span class="n">max_angle</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_angle</span>
+        <span class="n">p</span><span class="o">.</span><span class="n">linear_cde</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">linear_cde</span>
+        <span class="k">return</span> <span class="n">p</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">to_cpp_default</span><span class="p">(</span><span class="bp">cls</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+        <span class="n">p</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span><span class="s2">&quot;FThetaCameraDistortionParameters&quot;</span><span class="p">)()</span>
+        <span class="k">return</span> <span class="n">p</span>
+
+
 <div class="viewcode-block" id="world_to_cam">
 <a class="viewcode-back" href="../../../apis/utils.html#gsplat.world_to_cam">[docs]</a>
 <span class="k">def</span><span class="w"> </span><span class="nf">world_to_cam</span><span class="p">(</span>
@@ -544,7 +576,7 @@
     <span class="n">Ks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, 3, 3]</span>
     <span class="n">width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-    <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
+    <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">,</span> <span class="s2">&quot;ftheta&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Projection of Gaussians (perspective or orthographic).</span>
 
@@ -561,6 +593,10 @@
 <span class="sd">        - **Projected means**. [..., C, N, 2]</span>
 <span class="sd">        - **Projected covariances**. [..., C, N, 2, 2]</span>
 <span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">assert</span> <span class="p">(</span>
+        <span class="n">camera_model</span> <span class="o">!=</span> <span class="s2">&quot;ftheta&quot;</span>
+    <span class="p">),</span> <span class="s2">&quot;ftheta camera is only supported via UT, please set with_ut=True in the rasterization()&quot;</span>
+
     <span class="n">batch_dims</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">3</span><span class="p">]</span>
     <span class="n">C</span><span class="p">,</span> <span class="n">N</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">3</span><span class="p">:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
     <span class="k">assert</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span>
@@ -591,7 +627,7 @@
     <span class="n">packed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">sparse_grad</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">calc_compensations</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-    <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
+    <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">,</span> <span class="s2">&quot;ftheta&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
     <span class="n">opacities</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., N] or None</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Projects Gaussians to 2D.</span>
@@ -683,6 +719,10 @@
     <span class="k">if</span> <span class="n">opacities</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">assert</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">N</span><span class="p">,),</span> <span class="n">opacities</span><span class="o">.</span><span class="n">shape</span>
         <span class="n">opacities</span> <span class="o">=</span> <span class="n">opacities</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
+
+    <span class="k">assert</span> <span class="p">(</span>
+        <span class="n">camera_model</span> <span class="o">!=</span> <span class="s2">&quot;ftheta&quot;</span>
+    <span class="p">),</span> <span class="s2">&quot;ftheta camera is only supported via UT, please set with_ut=True in the rasterization()&quot;</span>
 
     <span class="n">viewmats</span> <span class="o">=</span> <span class="n">viewmats</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="n">Ks</span> <span class="o">=</span> <span class="n">Ks</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
@@ -986,12 +1026,13 @@
     <span class="n">flatten_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [n_isects]</span>
     <span class="n">backgrounds</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, channels]</span>
     <span class="n">masks</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, tile_height, tile_width]</span>
-    <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
+    <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">,</span> <span class="s2">&quot;ftheta&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
     <span class="n">ut_params</span><span class="p">:</span> <span class="n">UnscentedTransformParameters</span> <span class="o">=</span> <span class="n">UnscentedTransformParameters</span><span class="p">(),</span>
     <span class="c1"># distortion</span>
     <span class="n">radial_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 6] or [..., C, 4]</span>
     <span class="n">tangential_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 2]</span>
     <span class="n">thin_prism_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4]</span>
+    <span class="n">ftheta_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FThetaCameraDistortionParameters</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="c1"># rolling shutter</span>
     <span class="n">rolling_shutter</span><span class="p">:</span> <span class="n">RollingShutterType</span> <span class="o">=</span> <span class="n">RollingShutterType</span><span class="o">.</span><span class="n">GLOBAL</span><span class="p">,</span>
     <span class="n">viewmats_rs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
@@ -1133,6 +1174,7 @@
         <span class="n">radial_coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">radial_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">tangential_coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">tangential_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">thin_prism_coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">thin_prism_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">ftheta_coeffs</span><span class="p">,</span>
         <span class="c1"># rolling shutter</span>
         <span class="n">rolling_shutter</span><span class="p">,</span>
         <span class="n">viewmats_rs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">viewmats_rs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
@@ -1281,8 +1323,12 @@
         <span class="n">Ks</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, 3, 3]</span>
         <span class="n">width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
         <span class="n">height</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-        <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
+        <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">,</span> <span class="s2">&quot;ftheta&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+        <span class="k">assert</span> <span class="p">(</span>
+            <span class="n">camera_model</span> <span class="o">!=</span> <span class="s2">&quot;ftheta&quot;</span>
+        <span class="p">),</span> <span class="s2">&quot;ftheta camera is only supported via UT, please set with_ut=True in the rasterization()&quot;</span>
+
         <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span>
             <span class="sa">f</span><span class="s2">&quot;CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span>
         <span class="p">)</span>
@@ -1339,9 +1385,13 @@
         <span class="n">far_plane</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
         <span class="n">radius_clip</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
         <span class="n">calc_compensations</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
-        <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
+        <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">,</span> <span class="s2">&quot;ftheta&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
         <span class="n">opacities</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., N] or None</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+        <span class="k">assert</span> <span class="p">(</span>
+            <span class="n">camera_model</span> <span class="o">!=</span> <span class="s2">&quot;ftheta&quot;</span>
+        <span class="p">),</span> <span class="s2">&quot;ftheta camera is only supported via UT, please set with_ut=True in the rasterization()&quot;</span>
+
         <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span>
             <span class="sa">f</span><span class="s2">&quot;CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span>
         <span class="p">)</span>
@@ -1463,12 +1513,13 @@
     <span class="n">far_plane</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e10</span><span class="p">,</span>
     <span class="n">radius_clip</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
     <span class="n">calc_compensations</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-    <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
+    <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">,</span> <span class="s2">&quot;ftheta&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
     <span class="n">ut_params</span><span class="p">:</span> <span class="n">UnscentedTransformParameters</span> <span class="o">=</span> <span class="n">UnscentedTransformParameters</span><span class="p">(),</span>
     <span class="c1"># distortion</span>
     <span class="n">radial_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 6] or [..., C, 4]</span>
     <span class="n">tangential_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 2]</span>
     <span class="n">thin_prism_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4]</span>
+    <span class="n">ftheta_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FThetaCameraDistortionParameters</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="c1"># rolling shutter</span>
     <span class="n">rolling_shutter</span><span class="p">:</span> <span class="n">RollingShutterType</span> <span class="o">=</span> <span class="n">RollingShutterType</span><span class="o">.</span><span class="n">GLOBAL</span><span class="p">,</span>
     <span class="n">viewmats_rs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
@@ -1527,6 +1578,9 @@
         <span class="n">radial_coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">radial_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">tangential_coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">tangential_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">thin_prism_coeffs</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span> <span class="k">if</span> <span class="n">thin_prism_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">ftheta_coeffs</span><span class="o">.</span><span class="n">to_cpp</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">ftheta_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+        <span class="k">else</span> <span class="n">FThetaCameraDistortionParameters</span><span class="o">.</span><span class="n">to_cpp_default</span><span class="p">(),</span>
     <span class="p">)</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="n">calc_compensations</span><span class="p">:</span>
         <span class="n">compensations</span> <span class="o">=</span> <span class="kc">None</span>
@@ -1683,12 +1737,13 @@
         <span class="n">tile_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
         <span class="n">isect_offsets</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, tile_height, tile_width]</span>
         <span class="n">flatten_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., n_isects]</span>
-        <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
+        <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">,</span> <span class="s2">&quot;ftheta&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
         <span class="n">ut_params</span><span class="p">:</span> <span class="n">UnscentedTransformParameters</span> <span class="o">=</span> <span class="n">UnscentedTransformParameters</span><span class="p">(),</span>
         <span class="c1"># distortion</span>
         <span class="n">radial_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 6] or [..., C, 4]</span>
         <span class="n">tangential_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 2]</span>
         <span class="n">thin_prism_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4]</span>
+        <span class="n">ftheta_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FThetaCameraDistortionParameters</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="c1"># rolling shutter</span>
         <span class="n">rolling_shutter</span><span class="p">:</span> <span class="n">RollingShutterType</span> <span class="o">=</span> <span class="n">RollingShutterType</span><span class="o">.</span><span class="n">GLOBAL</span><span class="p">,</span>
         <span class="n">viewmats_rs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
@@ -1697,6 +1752,11 @@
         <span class="n">rs_type</span> <span class="o">=</span> <span class="n">rolling_shutter</span><span class="o">.</span><span class="n">to_cpp</span><span class="p">()</span>
         <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span>
             <span class="sa">f</span><span class="s2">&quot;CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="p">)</span>
+        <span class="n">ftheta_coeffs</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">ftheta_coeffs</span><span class="o">.</span><span class="n">to_cpp</span><span class="p">()</span>
+            <span class="k">if</span> <span class="n">ftheta_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="k">else</span> <span class="n">FThetaCameraDistortionParameters</span><span class="o">.</span><span class="n">to_cpp_default</span><span class="p">()</span>
         <span class="p">)</span>
 
         <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span><span class="p">,</span> <span class="n">last_ids</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
@@ -1721,6 +1781,7 @@
             <span class="n">radial_coeffs</span><span class="p">,</span>
             <span class="n">tangential_coeffs</span><span class="p">,</span>
             <span class="n">thin_prism_coeffs</span><span class="p">,</span>
+            <span class="n">ftheta_coeffs</span><span class="p">,</span>
             <span class="n">isect_offsets</span><span class="p">,</span>
             <span class="n">flatten_ids</span><span class="p">,</span>
         <span class="p">)</span>
@@ -1750,6 +1811,7 @@
         <span class="n">ctx</span><span class="o">.</span><span class="n">rs_type</span> <span class="o">=</span> <span class="n">rs_type</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">camera_model_type</span>
         <span class="n">ctx</span><span class="o">.</span><span class="n">tile_size</span> <span class="o">=</span> <span class="n">tile_size</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">ftheta_coeffs</span> <span class="o">=</span> <span class="n">ftheta_coeffs</span>
 
         <span class="k">return</span> <span class="n">render_colors</span><span class="p">,</span> <span class="n">render_alphas</span>
 
@@ -1784,6 +1846,7 @@
         <span class="n">rs_type</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">rs_type</span>
         <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">camera_model_type</span>
         <span class="n">tile_size</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">tile_size</span>
+        <span class="n">ftheta_coeffs</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">ftheta_coeffs</span>
 
         <span class="p">(</span><span class="n">v_means</span><span class="p">,</span> <span class="n">v_quats</span><span class="p">,</span> <span class="n">v_scales</span><span class="p">,</span> <span class="n">v_colors</span><span class="p">,</span> <span class="n">v_opacities</span><span class="p">,)</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_func</span><span class="p">(</span>
             <span class="s2">&quot;rasterize_to_pixels_from_world_3dgs_bwd&quot;</span>
@@ -1807,6 +1870,7 @@
             <span class="n">radial_coeffs</span><span class="p">,</span>
             <span class="n">tangential_coeffs</span><span class="p">,</span>
             <span class="n">thin_prism_coeffs</span><span class="p">,</span>
+            <span class="n">ftheta_coeffs</span><span class="p">,</span>
             <span class="n">isect_offsets</span><span class="p">,</span>
             <span class="n">flatten_ids</span><span class="p">,</span>
             <span class="n">render_alphas</span><span class="p">,</span>
@@ -1847,6 +1911,7 @@
             <span class="kc">None</span><span class="p">,</span>
             <span class="kc">None</span><span class="p">,</span>
             <span class="kc">None</span><span class="p">,</span>
+            <span class="kc">None</span><span class="p">,</span>
         <span class="p">)</span>
 
 
@@ -1870,9 +1935,13 @@
         <span class="n">radius_clip</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
         <span class="n">sparse_grad</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
         <span class="n">calc_compensations</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
-        <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
+        <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">,</span> <span class="s2">&quot;ftheta&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
         <span class="n">opacities</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., N] or None</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+        <span class="k">assert</span> <span class="p">(</span>
+            <span class="n">camera_model</span> <span class="o">!=</span> <span class="s2">&quot;ftheta&quot;</span>
+        <span class="p">),</span> <span class="s2">&quot;ftheta camera is only supported via UT, please set with_ut=True in the rasterization()&quot;</span>
+
         <span class="n">camera_model_type</span> <span class="o">=</span> <span class="n">_make_lazy_cuda_obj</span><span class="p">(</span>
             <span class="sa">f</span><span class="s2">&quot;CameraModelType.</span><span class="si">{</span><span class="n">camera_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span>
         <span class="p">)</span>

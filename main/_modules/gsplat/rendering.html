@@ -321,6 +321,8 @@
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">.cuda._wrapper</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">RollingShutterType</span><span class="p">,</span>
+    <span class="n">FThetaCameraDistortionParameters</span><span class="p">,</span>
+    <span class="n">FThetaPolynomialType</span><span class="p">,</span>
     <span class="n">fully_fused_projection</span><span class="p">,</span>
     <span class="n">fully_fused_projection_2dgs</span><span class="p">,</span>
     <span class="n">fully_fused_projection_with_ut</span><span class="p">,</span>
@@ -366,7 +368,7 @@
     <span class="n">rasterize_mode</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;classic&quot;</span><span class="p">,</span> <span class="s2">&quot;antialiased&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;classic&quot;</span><span class="p">,</span>
     <span class="n">channel_chunk</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">32</span><span class="p">,</span>
     <span class="n">distributed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-    <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
+    <span class="n">camera_model</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pinhole&quot;</span><span class="p">,</span> <span class="s2">&quot;ortho&quot;</span><span class="p">,</span> <span class="s2">&quot;fisheye&quot;</span><span class="p">,</span> <span class="s2">&quot;ftheta&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;pinhole&quot;</span><span class="p">,</span>
     <span class="n">segmented</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">covars</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">with_ut</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
@@ -375,6 +377,7 @@
     <span class="n">radial_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 6] or [..., C, 4]</span>
     <span class="n">tangential_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 2]</span>
     <span class="n">thin_prism_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4]</span>
+    <span class="n">ftheta_coeffs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FThetaCameraDistortionParameters</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="c1"># rolling shutter</span>
     <span class="n">rolling_shutter</span><span class="p">:</span> <span class="n">RollingShutterType</span> <span class="o">=</span> <span class="n">RollingShutterType</span><span class="o">.</span><span class="n">GLOBAL</span><span class="p">,</span>
     <span class="n">viewmats_rs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># [..., C, 4, 4]</span>
@@ -512,7 +515,7 @@
 <span class="sd">            The input Gaussians are expected to be a subset of scene in each rank, and</span>
 <span class="sd">            the function will collaboratively render the images for all ranks.</span>
 <span class="sd">        camera_model: The camera model to use. Supported models are &quot;pinhole&quot;, &quot;ortho&quot;,</span>
-<span class="sd">            and &quot;fisheye&quot;. Default is &quot;pinhole&quot;.</span>
+<span class="sd">            &quot;fisheye&quot;, and &quot;ftheta&quot;. Default is &quot;pinhole&quot;.</span>
 <span class="sd">        segmented: Whether to use segmented radix sort. Default is False.</span>
 <span class="sd">            Segmented radix sort performs sorting in segments, which is more efficient for the sorting operation itself.</span>
 <span class="sd">            However, since it requires offset indices as input, additional global memory access is needed, which results</span>
@@ -529,6 +532,8 @@
 <span class="sd">            The shape should be [..., C, 2] if provided.</span>
 <span class="sd">        thin_prism_coeffs: Opencv pinhole thin prism distortion coefficients. Default is None.</span>
 <span class="sd">            The shape should be [..., C, 4] if provided.</span>
+<span class="sd">        ftheta_coeffs: F-Theta camera distortion coefficients shared for all cameras.</span>
+<span class="sd">            Default is None. See `FThetaCameraDistortionParameters` for details.</span>
 <span class="sd">        rolling_shutter: The rolling shutter type. Default `RollingShutterType.GLOBAL` means</span>
 <span class="sd">            global shutter.</span>
 <span class="sd">        viewmats_rs: The second viewmat when rolling shutter is used. Default is None.</span>
@@ -643,6 +648,7 @@
         <span class="n">radial_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
         <span class="ow">or</span> <span class="n">tangential_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
         <span class="ow">or</span> <span class="n">thin_prism_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+        <span class="ow">or</span> <span class="n">ftheta_coeffs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
         <span class="ow">or</span> <span class="n">rolling_shutter</span> <span class="o">!=</span> <span class="n">RollingShutterType</span><span class="o">.</span><span class="n">GLOBAL</span>
     <span class="p">):</span>
         <span class="k">assert</span> <span class="p">(</span>
@@ -707,6 +713,7 @@
             <span class="n">radial_coeffs</span><span class="o">=</span><span class="n">radial_coeffs</span><span class="p">,</span>
             <span class="n">tangential_coeffs</span><span class="o">=</span><span class="n">tangential_coeffs</span><span class="p">,</span>
             <span class="n">thin_prism_coeffs</span><span class="o">=</span><span class="n">thin_prism_coeffs</span><span class="p">,</span>
+            <span class="n">ftheta_coeffs</span><span class="o">=</span><span class="n">ftheta_coeffs</span><span class="p">,</span>
             <span class="n">rolling_shutter</span><span class="o">=</span><span class="n">rolling_shutter</span><span class="p">,</span>
             <span class="n">viewmats_rs</span><span class="o">=</span><span class="n">viewmats_rs</span><span class="p">,</span>
         <span class="p">)</span>
@@ -1002,6 +1009,7 @@
                     <span class="n">radial_coeffs</span><span class="o">=</span><span class="n">radial_coeffs</span><span class="p">,</span>
                     <span class="n">tangential_coeffs</span><span class="o">=</span><span class="n">tangential_coeffs</span><span class="p">,</span>
                     <span class="n">thin_prism_coeffs</span><span class="o">=</span><span class="n">thin_prism_coeffs</span><span class="p">,</span>
+                    <span class="n">ftheta_coeffs</span><span class="o">=</span><span class="n">ftheta_coeffs</span><span class="p">,</span>
                     <span class="n">rolling_shutter</span><span class="o">=</span><span class="n">rolling_shutter</span><span class="p">,</span>
                     <span class="n">viewmats_rs</span><span class="o">=</span><span class="n">viewmats_rs</span><span class="p">,</span>
                 <span class="p">)</span>
@@ -1044,6 +1052,7 @@
                 <span class="n">radial_coeffs</span><span class="o">=</span><span class="n">radial_coeffs</span><span class="p">,</span>
                 <span class="n">tangential_coeffs</span><span class="o">=</span><span class="n">tangential_coeffs</span><span class="p">,</span>
                 <span class="n">thin_prism_coeffs</span><span class="o">=</span><span class="n">thin_prism_coeffs</span><span class="p">,</span>
+                <span class="n">ftheta_coeffs</span><span class="o">=</span><span class="n">ftheta_coeffs</span><span class="p">,</span>
                 <span class="n">rolling_shutter</span><span class="o">=</span><span class="n">rolling_shutter</span><span class="p">,</span>
                 <span class="n">viewmats_rs</span><span class="o">=</span><span class="n">viewmats_rs</span><span class="p">,</span>
             <span class="p">)</span>
