@@ -85,7 +85,7 @@ def get_extensions():
     extra_compile_args["nvcc"] = nvcc_flags
     if sys.platform == "win32":
         extra_compile_args["nvcc"] += [
-            "-DWIN32_LEAN_AND_MEAN", 
+            "-DWIN32_LEAN_AND_MEAN",
             "-allow-unsupported-compiler",
         ]
 
