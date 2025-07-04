@@ -75,9 +75,10 @@ jobs:
             cuda-version: 'cu116'
           - torch-version: 2.4.0
             cuda-version: 'cu117'
-          - os: windows-2019
-            torch-version: 2.0.0
+          - os: windows-2022
             cuda-version: 'cu121'
+          - os: windows-2022
+            cuda-version: 'cu118'
 
     steps:
       - name: Checkout repository
