@@ -96,7 +96,7 @@ class Parser:
         bottom = np.array([0, 0, 0, 1]).reshape(1, 4)
         for k in imdata:
             im = imdata[k]
-            w2c = im.cam_from_world.matrix()
+            w2c = im.cam_from_world().matrix()
             w2c = np.concatenate([w2c, bottom], axis=0)
             w2c_mats.append(w2c)
 
