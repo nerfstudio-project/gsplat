@@ -870,7 +870,7 @@ struct OpenCVFisheyeCameraModel
         forward_poly_odd = {1.f, k1, k2, k3, k4};
 
         // eighth-degree differential of forward polynomial 1 + 3*k1*theta^2 +
-        // 5*k2*theta^4 + 7*k3*theta^8 + 9*k4*theta^8
+        // 5*k2*theta^4 + 7*k3*theta^6 + 9*k4*theta^8
         dforward_poly_even = {1, 3 * k1, 5 * k2, 7 * k3, 9 * k4};
 
         auto const max_diag_x =
@@ -888,7 +888,7 @@ struct OpenCVFisheyeCameraModel
             );
         } else {
             std::array<float, 4> ddforward_poly_odd = {
-                6 * k1, 20 * k2, 56 * k3, 72 * k4
+                6 * k1, 20 * k2, 42 * k3, 72 * k4
             };
             std::array<float, 1> approx = {1.57f};
 
@@ -1022,6 +1022,149 @@ struct OpenCVFisheyeCameraModel
 
         // Flipped points is not physically meaningful.
         if (theta < 0.f || theta >= max_angle || !converged) {
+            return {glm::fvec3{0.f, 0.f, 1.f}, false};
+        }
+
+        // Compute the camera ray and set the ones at the image center to
+        // [0,0,1]
+        if (delta >= min_2d_norm) {
+            // Scale the uv coordinates by the sine of the angle theta
+            auto const scale_factor = std::sin(theta) / delta;
+            return {
+                glm::fvec3{
+                    scale_factor * uv.x, scale_factor * uv.y, std::cos(theta)
+                },
+                true
+            };
+        } else {
+            // For points at the image center, return a ray pointing straight
+            // ahead
+            return {glm::fvec3{0.f, 0.f, 1.f}, true};
+        }
+    }
+};
+
+
+template <size_t N_NEWTON_ITERATIONS = 3>
+struct FThetaCameraModel : BaseCameraModel<FThetaCameraModel<N_NEWTON_ITERATIONS>> {
+    // FTheta camera model
+public:
+    using Base = BaseCameraModel<FThetaCameraModel<N_NEWTON_ITERATIONS>>;
+
+    struct Parameters : Base::Parameters {
+        FThetaCameraDistortionParameters dist;
+        std::array<float, 2> principal_point;
+    };
+
+    __host__ __device__ FThetaCameraModel(
+        Parameters const& parameters, float min_2d_norm = 1e-6f
+    )
+        : parameters(parameters), min_2d_norm(min_2d_norm), dreference_poly{} {
+
+        auto const dist = parameters.dist;
+
+        if (dist.reference_poly == FThetaCameraDistortionParameters::PolynomialType::PIXELDIST_TO_ANGLE)
+            // compute first derivative of the backwards polynomial
+            dreference_poly = {1.f * dist.pixeldist_to_angle_poly.at(1), 2.f * dist.pixeldist_to_angle_poly.at(2), 3.f * dist.pixeldist_to_angle_poly.at(3), 4.f * dist.pixeldist_to_angle_poly.at(4), 5.f * dist.pixeldist_to_angle_poly.at(5)};
+        else
+            // compute first derivative of the forward polynomial
+            dreference_poly = {1.f * dist.angle_to_pixeldist_poly.at(1), 2.f * dist.angle_to_pixeldist_poly.at(2), 3.f * dist.angle_to_pixeldist_poly.at(3), 4.f * dist.angle_to_pixeldist_poly.at(4), 5.f * dist.angle_to_pixeldist_poly.at(5)};
+
+        // FThetaCameraModelParameters are defined such that the image coordinate origin corresponds to
+        // the center of the first pixel. We therefore need to offset the principal point by half a pixel.
+        this->parameters.principal_point[0] += .5f;
+        this->parameters.principal_point[1] += .5f;
+    }
+
+    Parameters parameters;
+    float min_2d_norm;
+    std::array<float, 5> dreference_poly; // coefficient of first derivative of the reference polynomial
+
+    inline __device__ auto camera_ray_to_image_point(
+        glm::fvec3 const &cam_ray, float margin_factor
+    ) const -> typename Base::ImagePointReturn {
+        if (cam_ray.z <= 0.f)
+            return {{0.f, 0.f}, false};
+
+        // Make sure norm is non-vanishing (norm vanishes for points along the principal-axis)
+        auto cam_ray_xy_norm = numerically_stable_norm2(cam_ray.x, cam_ray.y);
+        if (cam_ray_xy_norm <= 0.f)
+            cam_ray_xy_norm = std::numeric_limits<float>::epsilon();
+
+        auto const theta_full = atan2f(cam_ray_xy_norm, cam_ray.z);
+
+        // Limit angles to max_angle to prevent projected points to leave valid cone around max_angle.
+        // In particular for omnidirectional cameras, this prevents points outside the FOV to be
+        // wrongly projected to in-image-domain points because of badly constrained polynomials outside
+        // the effective FOV (which is different to the image boundaries).
+
+        // These FOV-clamped projections will be marked as *invalid*
+        auto const theta = theta_full < parameters.dist.max_angle ? theta_full : parameters.dist.max_angle;
+
+        // Evaluate forward polynomial, giving delta = f(theta) factors
+        bool converged;
+        float delta;
+        if (parameters.dist.reference_poly == FThetaCameraDistortionParameters::PolynomialType::PIXELDIST_TO_ANGLE) {
+            // bw poly is reference, evaluate its inverse via Newton-based inversion
+            converged = false;
+            delta = eval_poly_inverse_horner_newton<N_NEWTON_ITERATIONS>( 
+                      PolynomialProxy<PolynomialType::FULL, 6>{parameters.dist.pixeldist_to_angle_poly},
+                      PolynomialProxy<PolynomialType::FULL, 5>{dreference_poly},
+                      PolynomialProxy<PolynomialType::FULL, 6>{parameters.dist.angle_to_pixeldist_poly},
+                      theta, converged);
+        } else {
+            // fw is reference, evaluate it directly
+            converged = true;
+            delta = eval_poly_horner(parameters.dist.angle_to_pixeldist_poly, theta); 
+        }
+
+        if (!converged) {
+            return {{0.f, 0.f}, false};
+        }
+
+        // Apply linear term A=[c,d;e,1] to f(theta)-weighted normalized 2d vectors, relative to principal point
+        auto const& [c, d, e] = parameters.dist.linear_cde;
+        auto image_point      = delta * (glm::fvec2{cam_ray.x, cam_ray.y} / cam_ray_xy_norm);
+        image_point           = glm::fvec2{c * image_point.x + d * image_point.y, e * image_point.x + image_point.y} +
+                      glm::fvec2{parameters.principal_point[0], parameters.principal_point[1]};
+
+        auto valid = true;
+        valid &= image_point_in_image_bounds_margin(
+            image_point, parameters.resolution, margin_factor
+        );
+        valid &= theta <= parameters.dist.max_angle;
+
+        return {image_point, valid};
+    }
+
+    inline __device__ CameraRay image_point_to_camera_ray(glm::fvec2 image_point) const {
+        // Get f(theta)-weighted normalized 2d vectors around principal point,
+        // undoing linear term A = [c,d;e;1] via A^-1 = [1,-d;-e,c] / (c-e*d)
+        auto const& [c, d, e] = parameters.dist.linear_cde;
+        image_point -= glm::fvec2{parameters.principal_point[0], parameters.principal_point[1]};
+        auto const uv = glm::fvec2{image_point.x - d * image_point.y, -e * image_point.x + c * image_point.y} / (c - e * d);
+
+        // Compute the radial distance from the principal point
+        auto const delta = length(uv);
+
+        // Evaluate backward polynomial to get theta = f^-1(delta) factor
+        bool converged;
+        float theta;
+        if (parameters.dist.reference_poly == FThetaCameraDistortionParameters::PolynomialType::PIXELDIST_TO_ANGLE) {
+            // bw is reference, evaluate it directly
+            converged = true;
+            theta = eval_poly_horner(parameters.dist.pixeldist_to_angle_poly, delta);
+        } else {
+            // fw is reference, evaluate its inverse via Newton-based inversion
+            converged = false;
+            theta = eval_poly_inverse_horner_newton<N_NEWTON_ITERATIONS>(
+                      PolynomialProxy<PolynomialType::FULL, 6>{parameters.dist.angle_to_pixeldist_poly},
+                      PolynomialProxy<PolynomialType::FULL, 5>{dreference_poly},
+                      PolynomialProxy<PolynomialType::FULL, 6>{parameters.dist.pixeldist_to_angle_poly},
+                      delta, converged);
+        }
+
+        if (!converged) {
             return {glm::fvec3{0.f, 0.f, 1.f}, false};
         }
 

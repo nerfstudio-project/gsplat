@@ -715,7 +715,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
     ShutterType rs_type,
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
-    const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 2] optional
+    const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
+    const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
     // intersections
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids   // [n_isects]
@@ -776,6 +777,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
             radial_coeffs,                                                     \
             tangential_coeffs,                                                 \
             thin_prism_coeffs,                                                 \
+            ftheta_coeffs,                                                     \
             tile_offsets,                                                      \
             flatten_ids,                                                       \
             renders,                                                           \
@@ -840,7 +842,8 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     ShutterType rs_type,
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
-    const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 2] optional
+    const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
+    const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
     // intersections
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
@@ -900,6 +903,7 @@ rasterize_to_pixels_from_world_3dgs_bwd(
             radial_coeffs,                                                    \
             tangential_coeffs,                                                \
             thin_prism_coeffs,                                               \
+            ftheta_coeffs,                                                     \
             tile_offsets,                                                      \
             flatten_ids,                                                       \
             render_alphas,                                                     \
