@@ -1,0 +1,31 @@
+disable_viewer = false  # Disable viewer
+port = 8080  # Port for the viewer server
+
+render_traj_path = "interp"  # Render trajectory path
+render_traj_fps = 3  # Render trajectory FPS
+
+data_dir = "/bigdata2/rajrup/datasets/gsplat_data/360_v2/garden"
+scene_id = 0
+data_factor = 4  # Downsample factor for the dataset
+
+batch_size = 1  # Batch size for training
+steps_scaler = 1.0  # Global factor to scale the number of training steps
+
+max_steps = 30000  # Total number of training steps
+eval_steps = [7000, 30000]  # Steps to evaluate the model
+save_steps = [7000, 30000]  # Steps to save the model
+
+save_ply = false
+ply_steps = [7000, 30000]  # Steps to save the Gaussian parameters
+
+init_type = "sfm"  # Initialization strategy
+init_num_pts = 100000  # Initial number of GSs (ignored if using sfm)
+init_extent = 3.0  # Initial extent of GSs (ignored if using sfm)
+sh_degree = 3  # Degree of spherical harmonics
+sh_degree_interval = 1000  # Interval to increase SH degree
+init_opa = 0.1  # Initial opacity of GS
+init_scale = 1.0  # Initial scale of GS
+ssim_lambda = 0.2  # Weight for SSIM loss
+
+near_plane = 0.01  # Near plane clipping distance
+far_plane = 1e10  # Far plane clipping distance

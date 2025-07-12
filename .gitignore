@@ -121,7 +121,10 @@ venv.bak/
 compile_commands.json
 *.dump
 
+# Other files and folders
 data
 results
+.cursorignore
+*.code-workspace
 
 !examples/benchmarks/compression/results/

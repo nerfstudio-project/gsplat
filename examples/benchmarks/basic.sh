@@ -1,7 +1,7 @@
 DATA_DIR="/bigdata2/rajrup/datasets/gsplat_data/"
 SCENE_DIR="$DATA_DIR/360_v2"
 RESULT_DIR="results/benchmark"
-SCENE_LIST="garden bicycle stump bonsai counter kitchen room" # treehill flowers
+SCENE_LIST="garden" # bicycle stump bonsai counter kitchen room treehill flowers
 RENDER_TRAJ_PATH="ellipse"
 
 for SCENE in $SCENE_LIST;

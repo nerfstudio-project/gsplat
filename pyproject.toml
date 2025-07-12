@@ -1,0 +1,37 @@
+[build-system]
+requires = [
+    "setuptools>=64",
+    "wheel", 
+    "ninja",
+    "numpy==1.26.4",
+    "torch==2.1.2+cu118",
+    "torchvision==0.16.2+cu118"
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gsplat"
+dynamic = ["version"]
+description = "Python package for differentiable rasterization of gaussians"
+keywords = ["gaussian", "splatting", "cuda"]
+readme = "README.md"
+requires-python = ">=3.7"
+license = "Apache-2.0"
+authors = [
+    {name = "nerfstudio-project"},
+]
+
+dependencies = [
+    "ninja",
+    "rich>=12",
+    "numpy==1.26.4",
+    "torch==2.1.2+cu118",
+    "torchvision==0.16.2+cu118"
+]
+
+[tool.setuptools]
+packages = ["gsplat"]
+include-package-data = true
+
+[tool.setuptools.dynamic]
+version = {attr = "gsplat.version.__version__"}
