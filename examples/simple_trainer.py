@@ -31,7 +31,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from typing_extensions import Literal, assert_never
-from examples.utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
+from examples.utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed, filter_outlier_points, get_color, fused_ssim_map
 
 from gsplat import export_splats
 from gsplat.compression import PngCompression
@@ -51,6 +51,7 @@ def create_splats_with_optimizers(
     init_extent: float = 3.0,
     init_opacity: float = 0.1,
     init_scale: float = 1.0,
+    init_scale_avg_dist: bool = True,
     means_lr: float = 1.6e-4,
     scales_lr: float = 5e-3,
     opacities_lr: float = 5e-2,
@@ -66,20 +67,34 @@ def create_splats_with_optimizers(
     device: str = "cuda",
     world_rank: int = 0,
     world_size: int = 1,
+    filter_outliers: bool = False,
+    outlier_nb_neighbors: int = 20,
+    outlier_std_ratio: float = 2.0,
 ) -> Tuple[torch.nn.ParameterDict, Dict[str, torch.optim.Optimizer]]:
     if init_type == "sfm":
         points = torch.from_numpy(parser.points).float()
         rgbs = torch.from_numpy(parser.points_rgb / 255.0).float()
+        
+        # Filter outlier points
+        if filter_outliers:
+            points, rgbs, _ = filter_outlier_points(points, rgbs, nb_neighbors=outlier_nb_neighbors, std_ratio=outlier_std_ratio)
+        else:
+            print("Outlier filtering disabled")
+        
     elif init_type == "random":
         points = init_extent * scene_scale * (torch.rand((init_num_pts, 3)) * 2 - 1)
         rgbs = torch.rand((init_num_pts, 3))
     else:
         raise ValueError("Please specify a correct init_type: sfm or random")
-
-    # Initialize the GS size to be the average dist of the 3 nearest neighbors
-    dist2_avg = (knn(points, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
-    dist_avg = torch.sqrt(dist2_avg)
-    scales = torch.log(dist_avg * init_scale).unsqueeze(-1).repeat(1, 3)  # [N, 3]
+    
+    if init_scale_avg_dist:
+        # Initialize the GS size to be the average dist of the 3 nearest neighbors
+        dist2_avg = (knn(points, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
+        dist_avg = torch.sqrt(dist2_avg)
+        scales = torch.log(dist_avg * init_scale).unsqueeze(-1).repeat(1, 3)  # [N, 3]
+    else:
+        # Initialize the GS size to be fixed
+        scales = torch.log(torch.ones_like(points) * init_scale) # [N, 3]
 
     # Distribute the GSs to different ranks (also works for single rank)
     points = points[world_rank::world_size]
@@ -192,6 +207,7 @@ class Runner:
             init_extent=cfg.init_extent,
             init_opacity=cfg.init_opa,
             init_scale=cfg.init_scale,
+            init_scale_avg_dist=cfg.init_scale_avg_dist,
             means_lr=cfg.means_lr,
             scales_lr=cfg.scales_lr,
             opacities_lr=cfg.opacities_lr,
@@ -207,6 +223,9 @@ class Runner:
             device=self.device,
             world_rank=world_rank,
             world_size=world_size,
+            filter_outliers=cfg.filter_outliers,
+            outlier_nb_neighbors=cfg.outlier_nb_neighbors,
+            outlier_std_ratio=cfg.outlier_std_ratio,
         )
         print("Model initialized. Number of GS:", len(self.splats["means"]))
 
@@ -314,6 +333,8 @@ class Runner:
                 output_dir=Path(cfg.result_dir),
                 mode="training",
             )
+            # Set initial background color from config
+            self.viewer.render_tab_state.backgrounds = get_color(cfg.viewer_bkgd_color)
 
     def rasterize_splats(
         self,
@@ -456,6 +477,8 @@ class Runner:
             )
             image_ids = data["image_id"].to(device)
             masks = data["mask"].to(device) if "mask" in data else None  # [1, H, W]
+            alphas_gt = data["alpha_gt"].to(device) if "alpha_gt" in data else None # [1, H, W]
+            masks_gt = data["mask_gt"].to(device) if "mask_gt" in data else None # [1, H, W]
             if cfg.depth_loss:
                 points = data["points"].to(device)  # [1, M, 2]
                 depths_gt = data["depths"].to(device)  # [1, M]
@@ -521,6 +544,25 @@ class Runner:
                 colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2), padding="valid"
             )
             loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
+            
+            if masks_gt is not None and cfg.masked_l1_loss:
+                l1loss_masked = F.l1_loss(colors[masks_gt], pixels[masks_gt])
+                loss += l1loss_masked * cfg.masked_l1_lambda
+                
+            if masks_gt is not None and cfg.masked_ssim_loss:
+                per_pixel_ssim = fused_ssim_map(colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2), padding="same")
+                ssim_masked_loss = 1.0 - per_pixel_ssim.mean(dim=1)[masks_gt].mean()
+                
+                loss += ssim_masked_loss * cfg.masked_ssim_lambda
+            
+            if alphas_gt is not None and cfg.alpha_loss:
+                alpha_loss = F.l1_loss(alphas.squeeze(-1), alphas_gt)
+                loss += alpha_loss * cfg.alpha_lambda
+            
+            if cfg.scale_var_loss:
+                scale_var_loss = torch.var(self.splats["scales"], dim=-1).mean()
+                loss += scale_var_loss * cfg.scale_var_lambda
+            
             if cfg.depth_loss:
                 # query depths from depth map
                 points = torch.stack(
@@ -552,13 +594,22 @@ class Runner:
 
             loss.backward()
 
-            desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
+            desc = f"loss={loss.item():.3f}| "
+            if masks_gt is not None and cfg.masked_l1_loss:
+                desc += f"masked l1 loss={l1loss_masked.item():.3f}| "
+            if masks_gt is not None and cfg.masked_ssim_loss:
+                desc += f"masked ssim loss={ssim_masked_loss.item():.3f}| "
+            if alphas_gt is not None and cfg.alpha_loss:
+                desc += f"alpha loss={alpha_loss.item():.3f}| "
+            if cfg.scale_var_loss:
+                desc += f"scale var loss={scale_var_loss.item():.3f}| "
             if cfg.depth_loss:
                 desc += f"depth loss={depthloss.item():.6f}| "
             if cfg.pose_opt and cfg.pose_noise:
                 # monitor the pose error if we inject noise
                 pose_err = F.l1_loss(camtoworlds_gt, camtoworlds)
                 desc += f"pose err={pose_err.item():.6f}| "
+            desc += f"sh degree={sh_degree_to_use}| "
             pbar.set_description(desc)
 
             # write images (gt and render)
@@ -575,6 +626,12 @@ class Runner:
                 self.writer.add_scalar("train/loss", loss.item(), step)
                 self.writer.add_scalar("train/l1loss", l1loss.item(), step)
                 self.writer.add_scalar("train/ssimloss", ssimloss.item(), step)
+                if alphas_gt is not None and cfg.alpha_loss:
+                    self.writer.add_scalar("train/alpha_loss", alpha_loss.item(), step)
+                if masks_gt is not None and cfg.masked_ssim_loss:
+                    self.writer.add_scalar("train/masked_ssim_loss", ssim_masked_loss.item(), step)
+                if masks_gt is not None and cfg.masked_l1_loss:
+                    self.writer.add_scalar("train/masked_l1_loss", l1loss_masked.item(), step)
                 self.writer.add_scalar("train/num_GS", len(self.splats["means"]), step)
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.depth_loss:
@@ -719,7 +776,8 @@ class Runner:
             # eval the full set
             if step in [i - 1 for i in cfg.eval_steps]:
                 self.eval(step)
-                self.render_traj(step)
+                if cfg.render_traj_path is not None:
+                    self.render_traj(step)
 
             # run compression
             if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:
@@ -1058,10 +1116,6 @@ def main2(local_rank: int, world_rank, world_size: int, cfg: Config):
             print(f"Unknown run mode: {cfg.run_mode}")
             return
 
-    # Finish wandb run
-    if world_rank == 0 and runner.wdb_logger is not None:
-        runner.wdb_logger.finish()
-
     if not cfg.disable_viewer:
         print("Viewer running... Ctrl+C to exit.")
         time.sleep(1000000)
@@ -1084,7 +1138,8 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
             runner.splats[k].data = torch.cat([ckpt["splats"][k] for ckpt in ckpts])
         step = ckpts[0]["step"]
         runner.eval(step=step)
-        runner.render_traj(step=step)
+        if cfg.render_traj_path is not None:
+            runner.render_traj(step=step)
         if cfg.compression is not None:
             runner.run_compression(step=step)
     else:

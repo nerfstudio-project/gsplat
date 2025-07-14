@@ -181,6 +181,7 @@ class Parser:
         else:
             image_dir_suffix = ""
         colmap_image_dir = os.path.join(data_dir, "images")
+        colmap_mask_dir = os.path.join(data_dir, "masks")
         image_dir = os.path.join(data_dir, "images" + image_dir_suffix)
         for d in [image_dir, colmap_image_dir]:
             if not os.path.exists(d):
@@ -197,6 +198,10 @@ class Parser:
             image_files = sorted(_get_rel_paths(image_dir))
         colmap_to_image = dict(zip(colmap_files, image_files))
         image_paths = [os.path.join(image_dir, colmap_to_image[f]) for f in image_names]
+        if os.path.exists(colmap_mask_dir):
+            mask_paths = [os.path.join(colmap_mask_dir, colmap_to_image[f].replace("rgb", "mask")) for f in image_names]  
+        else:
+            mask_paths = None
 
         # 3D points and {image_name -> [point_idx]}
         points = manager.points3D.astype(np.float32)
@@ -247,6 +252,7 @@ class Parser:
 
         self.image_names = image_names  # List[str], (num_images,)
         self.image_paths = image_paths  # List[str], (num_images,)
+        self.mask_paths = mask_paths  # List[str], (num_images,)
         self.camtoworlds = camtoworlds  # np.ndarray, (num_images, 4, 4)
         self.camera_ids = camera_ids  # List[int], (num_images,)
         self.Ks_dict = Ks_dict  # Dict of camera_id -> K
@@ -379,6 +385,12 @@ class Dataset:
         params = self.parser.params_dict[camera_id]
         camtoworlds = self.parser.camtoworlds[index]
         mask = self.parser.mask_dict[camera_id]
+        if self.parser.mask_paths is not None:
+            mask_gt = imageio.imread(self.parser.mask_paths[index]) / 255.0 # (H, W)
+            alpha_gt = np.copy(mask_gt) # (H, W)
+        else:
+            mask_gt = None
+            alpha_gt = None
 
         if len(params) > 0:
             # Images are distorted. Undistort them.
@@ -404,6 +416,8 @@ class Dataset:
             "camtoworld": torch.from_numpy(camtoworlds).float(),
             "image": torch.from_numpy(image).float(),
             "image_id": item,  # the index of the image in the dataset
+            "alpha_gt": torch.from_numpy(alpha_gt).float(),
+            "mask_gt": torch.from_numpy(mask_gt).bool()
         }
         if mask is not None:
             data["mask"] = torch.from_numpy(mask).bool()

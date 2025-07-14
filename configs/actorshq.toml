@@ -1,0 +1,96 @@
+# wandb
+# use_wandb = true
+
+# Viewer
+disable_viewer = false  # Disable viewer
+viewer_bkgd_color = "white"  # Background color for the viewer, Options: "green", "white", "black" (default)
+# radius_clip = 0.0001  # Radius clip for the viewer (default: 3.0), smaller than panoptic point cloud
+
+render_traj_path = "interp"  # Render trajectory path, Options: "interp", "ellipse", "spiral", None for no trajectory
+render_traj_fps = 3  # Render trajectory FPS
+# compression = null  # Name of compression strategy (e.g., png)
+
+data_dir = "/main/rajrup/Dropbox/Project/GsplatStream/gsplat/data/Actor01/Sequence1/"
+scene_id = 0
+resolution = 2 # Resolution of the actorshq dataset (1, 2, 4)
+data_factor = 1  # Downsample factor for the dataset. ActorsHQ dataset is already downsampled with correct intrinsics.
+test_every = 8  # Every N images is a test image
+# patch_size = null  # Random crop size for training (experimental)
+# global_scale = 1.0  # Global scale factor for scene size
+# normalize_world_space = true  # Normalize the world space
+# camera_model = "pinhole"  # Camera model: pinhole, ortho, fisheye
+
+port = 8080  # Port for the viewer server
+
+batch_size = 1  # Batch size for training
+steps_scaler = 1.0  # Global factor to scale the number of training steps
+
+max_steps = 30000  # Total number of training steps
+
+eval_steps = [7000, 30000]  # Steps to evaluate the model
+
+save_steps = [7000, 30000]  # Steps to save the model
+
+save_ply = true
+ply_steps = [7000, 30000]  # Steps to save the Gaussian parameters
+
+init_type = "sfm"  # Initialization strategy
+init_num_pts = 100_000  # Initial number of GSs (if init_num_pts < num_sfm_points, then subsample sfm points)
+init_extent = 3.0  # Initial extent of GSs (ignored if using sfm)
+sh_degree = 3  # Degree of spherical harmonics
+sh_degree_interval = 1000  # Interval to increase SH degree
+init_opa = 0.5  # Initial opacity of GS
+init_scale_avg_dist = true # # Initial scale based on Avg Distance
+init_scale = 0.4  # Initial scale of GS
+filter_outliers = true  # Outlier filtering for point cloud (if using sfm)
+outlier_nb_neighbors = 100
+outlier_std_ratio = 0.01
+
+near_plane = 0.01  # Near plane clipping distance
+far_plane = 1e10  # Far plane clipping distance
+
+# packed = false  # Use packed mode for rasterization (less memory, slower)
+# sparse_grad = false  # Use sparse gradients for optimization (experimental)
+# visible_adam = false  # Use visible Adam optimization (experimental)
+antialiased = false # Anti-aliasing in rasterization. Might slightly hurt quantitative metrics.
+
+# bkgd_color = "green"  # Add background to the training images
+random_bkgd = false  # Use random background during training
+
+opacity_reg = 0.01  # Opacity regularization weight
+scale_reg = 0.001  # Scale regularization weight
+
+# pose_opt = false  # Enable camera optimization
+# pose_opt_lr = 1e-5  # Learning rate for camera optimization
+# pose_opt_reg = 1e-6  # Weight decay for camera optimization
+# pose_noise = 0.0  # Noise added to camera extrinsics (for testing optimization)
+
+# app_opt = false  # Enable appearance optimization (experimental)
+# app_embed_dim = 16  # Dimension of appearance embeddings
+# app_opt_lr = 1e-3  # Learning rate for appearance optimization
+# app_opt_reg = 1e-6  # Weight decay for appearance optimization
+
+# Enable Experimental Losses. 
+masked_l1_loss = false # our experiment
+masked_ssim_loss = false # our experiment
+alpha_loss = true # our experiment
+scale_var_loss = false # our experiment
+depth_loss = false    # Enable disparity loss (experimental from gsplat)
+
+# Weights of different losses
+ssim_lambda = 0.5   # Weight for SSIM loss
+masked_l1_lambda = 1.0 # Weight for masked L1 loss
+masked_ssim_lambda = 1.0 # Weight for masked SSIM loss
+alpha_lambda = 1.0 # Weight for alpha loss
+scale_var_lambda = 0.01 # Weight for scale variance loss
+depth_lambda = 0.01  # Weight for disparity loss
+
+[strategy]  # Strategy for GS densification
+# refine_start_iter = 500  # Iteration to start refinement
+# refine_stop_iter = 15000  # Iteration to stop refinement
+# reset_every = 3000  # Iteration to reset the strategy
+# refine_every = 100  # Iteration interval for refinement
+prune_opa = 0.1  # Prune gaussians with opacity below this threshold (higher = more aggressive pruning)
+# grow_grad2d = 0.0005  # Threshold for growing gaussians (higher = more conservative)
+# prune_scale3d = 0.05  # Prune gaussians with 3D scale above this threshold (lower = more aggressive pruning)
+# verbose = true  # Print verbose information about densification

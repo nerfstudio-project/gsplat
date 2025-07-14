@@ -1,12 +1,21 @@
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import ClassVar, Optional
 import os
 
 from examples.simple_trainer import main, main2
 from gsplat.distributed import cli
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 
-from examples.config import Config, load_config_from_toml, merge_config, set_result_dir
+from examples.config import Config, load_config_from_toml, merge_config
+
+def set_result_dir(config: Config, exp_name: Optional[str] = None):
+    data_dir = config.data_dir
+    scene_id = config.scene_id
+    scene_name = os.path.basename(data_dir)
+    if exp_name:
+        config.result_dir = f"./results/{exp_name}/{scene_name}/{scene_id}"
+    else:
+        config.result_dir = f"./results/{scene_name}/{scene_id}"
 
 def run_experiment(config: Config, dist=False):
     print(

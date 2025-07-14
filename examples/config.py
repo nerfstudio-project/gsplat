@@ -1,3 +1,4 @@
+import argparse
 from dataclasses import dataclass, field, fields, is_dataclass
 from typing import Optional, List, Union, Literal, Tuple, Any
 from typing_extensions import Literal, assert_never
@@ -33,6 +34,8 @@ class Config:
     data_dir: str = "data/360_v2/garden"
     # Scene ID/Frame ID
     scene_id: int = 0
+    # Resolution of the dataset, only used for actorshq dataset
+    resolution: int = 1
     # Downsample factor for the dataset
     data_factor: int = 4
     # Directory to save results
@@ -50,6 +53,8 @@ class Config:
 
     # Port for the viewer server
     port: int = 8080
+    # Background color for the viewer
+    viewer_bkgd_color: Literal["", "green", "red", "blue", "white", "black", "random"] = ""
 
     # Batch size for training. Learning rates are scaled automatically
     batch_size: int = 1
@@ -81,10 +86,37 @@ class Config:
     sh_degree_interval: int = 1000
     # Initial opacity of GS
     init_opa: float = 0.1
+    # Initial scale based on Avg Distance
+    init_scale_avg_dist: bool = True
     # Initial scale of GS
     init_scale: float = 1.0
+    
+    # Enable Experimental Losses. 
+    masked_l1_loss: bool = False    # our experiment
+    masked_ssim_loss: bool = False    # our experiment
+    alpha_loss: bool = False    # our experiment
+    scale_var_loss: bool = False    # our experiment
+    # Enable depth loss. (experimental)
+    depth_loss: bool = False
+    
+    # Weights of different losses
     # Weight for SSIM loss
     ssim_lambda: float = 0.2
+    # Weight for masked L1 loss
+    masked_l1_lambda: float = 1.0
+    # Weight for masked SSIM loss
+    masked_ssim_lambda: float = 1.0
+    # Weight for alpha loss
+    alpha_lambda: float = 1.0
+    # Weight for scale variance loss
+    scale_var_lambda: float = 0.01
+    # Weight for depth loss
+    depth_lambda: float = 1e-2
+    
+    # Outlier filtering for point cloud (if using sfm)
+    filter_outliers: bool = False
+    outlier_nb_neighbors: int = 20
+    outlier_std_ratio: float = 2.0
 
     # Near plane clipping distance
     near_plane: float = 0.01
@@ -148,11 +180,6 @@ class Config:
     # Shape of the bilateral grid (X, Y, W)
     bilateral_grid_shape: Tuple[int, int, int] = (16, 16, 8)
 
-    # Enable depth loss. (experimental)
-    depth_loss: bool = False
-    # Weight for depth loss
-    depth_lambda: float = 1e-2
-
     # Dump information to tensorboard every this steps
     tb_every: int = 100
     # Save training images to tensorboard
@@ -187,24 +214,32 @@ class Config:
         else:
             assert_never(strategy)
 
-def set_result_dir(config: Config, exp_name: Optional[str] = None, sub_exp_name: Optional[str] = None):
-    data_dir = config.data_dir
-    scene_id = config.scene_id
-    scene_name = os.path.basename(data_dir)
-    if exp_name:
-        if sub_exp_name:
-            config.result_dir = f"results/{exp_name}/{scene_name}/{scene_id}/{sub_exp_name}"
-        else:
-            config.result_dir = f"results/{exp_name}/{scene_name}/{scene_id}"
-    else:
-        config.result_dir = f"results/{scene_name}/{scene_id}"
-
 def load_config_from_toml(path: str) -> Config:
     with open(path, 'r') as file:
         config_dict = toml.load(file)
+    
+    # Handle strategy section separately
+    if 'strategy' in config_dict:
+        strategy_dict = config_dict.pop('strategy')
+        # Check if strategy type is specified, default to DefaultStrategy
+        strategy_type = strategy_dict.pop('type', 'default')
+        
+        try:
+            if strategy_type.lower() in ['default', 'defaultstrategy']:
+                strategy = DefaultStrategy(**strategy_dict)
+            elif strategy_type.lower() in ['mcmc', 'mcmcstrategy']:
+                strategy = MCMCStrategy(**strategy_dict)
+            else:
+                print(f"Unknown strategy type '{strategy_type}', defaulting to DefaultStrategy")
+                strategy = DefaultStrategy(**strategy_dict)
+        except Exception as e:
+            print(f"Error creating strategy with parameters {strategy_dict}: {e}")
+            print("Using default strategy parameters")
+            strategy = DefaultStrategy()
+            
+        config_dict['strategy'] = strategy
+    
     config = Config(**config_dict)
-    if config.result_dir is None:
-        set_result_dir(config)
     return config
         
 
@@ -229,7 +264,11 @@ def merge_config(config_a: Config, config_b: Config) -> Config:
             # Determine if the field in B has been explicitly set (i.e., differs from default)
             if should_update(field_name, b_value, default_b):
                 if is_dataclass(a_value) and is_dataclass(b_value):
-                    recursive_merge(a_value, b_value, a_defaults, b_defaults)
+                    # For nested dataclasses, we need to get the correct default instances
+                    # of the actual dataclass types, not the parent's defaults
+                    a_nested_defaults = get_default_instance(type(a_value))
+                    b_nested_defaults = get_default_instance(type(b_value))
+                    recursive_merge(a_value, b_value, a_nested_defaults, b_nested_defaults)
                 else:
                     setattr(a, field_name, b_value)
     
@@ -238,3 +277,83 @@ def merge_config(config_a: Config, config_b: Config) -> Config:
     recursive_merge(config_a, config_b, config_a_defaults, config_b_defaults)
     
     return config_a
+
+def main():
+    parser = argparse.ArgumentParser(description="Train with TOML configuration")
+    parser.add_argument("--config", type=str, required=True, help="Path to TOML configuration file")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+    args = parser.parse_args()
+    
+    default_cfg = Config(strategy=DefaultStrategy(verbose=True))
+    
+    # Load configuration from TOML file
+    cfg = load_config_from_toml(args.config)
+    cfg = merge_config(default_cfg, cfg)
+    
+    # Adjust steps based on steps_scaler
+    cfg.adjust_steps(cfg.steps_scaler)
+    
+    # Import BilateralGrid and related functions based on configuration
+    if cfg.use_bilateral_grid or cfg.use_fused_bilagrid:
+        if cfg.use_fused_bilagrid:
+            cfg.use_bilateral_grid = True
+            from fused_bilagrid import (
+                BilateralGrid,
+                color_correct,
+                slice,
+                total_variation_loss,
+            )
+        else:
+            cfg.use_bilateral_grid = True
+            from lib_bilagrid import (
+                BilateralGrid,
+                color_correct,
+                slice,
+                total_variation_loss,
+            )
+
+    # try import extra dependencies
+    if cfg.compression == "png":
+        try:
+            import plas
+            import torchpq
+        except:
+            raise ImportError(
+                "To use PNG compression, you need to install "
+                "torchpq (instruction at https://github.com/DeMoriarty/TorchPQ?tab=readme-ov-file#install) "
+                "and plas (via 'pip install git+https://github.com/fraunhoferhhi/PLAS.git') "
+            )
+    
+    # Print loaded configuration for debugging
+    if args.verbose:
+        print(f"Loaded configuration from {args.config}")
+        print(f"Strategy type: {type(cfg.strategy)}")
+        print(f"Strategy parameters:")
+        if isinstance(cfg.strategy, DefaultStrategy):
+            print(f"  prune_opa: {cfg.strategy.prune_opa}")
+            print(f"  grow_grad2d: {cfg.strategy.grow_grad2d}")
+            print(f"  prune_scale3d: {cfg.strategy.prune_scale3d}")
+            print(f"  refine_start_iter: {cfg.strategy.refine_start_iter}")
+            print(f"  refine_stop_iter: {cfg.strategy.refine_stop_iter}")
+            print(f"  reset_every: {cfg.strategy.reset_every}")
+            print(f"  refine_every: {cfg.strategy.refine_every}")
+            print(f"  verbose: {cfg.strategy.verbose}")
+        elif isinstance(cfg.strategy, MCMCStrategy):
+            print(f"  min_opacity: {cfg.strategy.min_opacity}")
+            print(f"  refine_start_iter: {cfg.strategy.refine_start_iter}")
+            print(f"  refine_stop_iter: {cfg.strategy.refine_stop_iter}")
+            print(f"  refine_every: {cfg.strategy.refine_every}")
+        print(cfg)
+    
+    # Run the training
+    # cli(main2, cfg, verbose=args.verbose)
+
+if __name__ == "__main__":
+    main()
+    
+"""
+Script to train using a TOML configuration file.
+
+Usage:
+    python examples/config.py --config configs/actorshq.toml --verbose  
+"""

@@ -16,7 +16,7 @@ class GsplatRenderTabState(RenderTabState):
     far_plane: float = 1e2
     radius_clip: float = 0.0
     eps2d: float = 0.3
-    backgrounds: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    backgrounds: Tuple[float, float, float] = (0.0, 0.0, 0.0)  # Default black background
     render_mode: Literal[
         "rgb", "depth(accumulated)", "depth(expected)", "alpha"
     ] = "rgb"

@@ -7,6 +7,7 @@ from torch import Tensor
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from matplotlib import colormaps
+from fused_ssim import FusedSSIMMap
 
 
 class CameraOptModule(torch.nn.Module):
@@ -222,3 +223,75 @@ def apply_depth_colormap(
     if acc is not None:
         img = img * acc + (1.0 - acc)
     return img
+
+def filter_outlier_points(points, colors, nb_neighbors=20, std_ratio=2.0):
+    """
+    Filter outlier points using statistical outlier removal.
+    
+    Args:
+        points: torch.Tensor of shape [N, 3] - 3D point coordinates
+        colors: torch.Tensor of shape [N, 3] - RGB colors corresponding to points
+        nb_neighbors: int - number of neighbors to consider for each point
+        std_ratio: float - standard deviation ratio threshold
+        
+    Returns:
+        filtered_points: torch.Tensor - points after outlier removal
+        filtered_colors: torch.Tensor - colors after outlier removal
+        inlier_mask: torch.Tensor - boolean mask indicating inlier points
+    """
+    if points.shape[0] <= nb_neighbors:
+        print(f"Warning: Not enough points ({points.shape[0]}) for outlier filtering (need > {nb_neighbors})")
+        return points, colors, torch.ones(points.shape[0], dtype=torch.bool)
+    
+    # Calculate distances to k nearest neighbors for each point
+    k = min(nb_neighbors + 1, points.shape[0])  # +1 because first neighbor is the point itself
+    distances = knn(points, k)  # [N, k]
+    
+    # Calculate mean distance to neighbors (excluding self at index 0)
+    mean_distances = distances[:, 1:].mean(dim=1)  # [N]
+    
+    # Calculate global mean and standard deviation of mean distances
+    global_mean = mean_distances.mean()
+    global_std = mean_distances.std()
+    
+    # Define outlier threshold
+    threshold = global_mean + std_ratio * global_std
+    
+    # Create inlier mask
+    inlier_mask = mean_distances <= threshold
+    
+    # Filter points and colors
+    filtered_points = points[inlier_mask]
+    filtered_colors = colors[inlier_mask]
+    
+    num_outliers = (~inlier_mask).sum().item()
+    print(f"Filtered out {num_outliers} outlier points ({num_outliers/points.shape[0]*100:.2f}%)")
+    print(f"Remaining points: {filtered_points.shape[0]}/{points.shape[0]}")
+    
+    return filtered_points, filtered_colors, inlier_mask
+
+def get_color(bkgd_color: str):
+    if bkgd_color == "green":
+        return (0.0, 255.0, 0.0)  # Green background [R, G, B]
+    elif bkgd_color == "red":
+        return (255.0, 0.0, 0.0)  # Red background [R, G, B]
+    elif bkgd_color == "blue":
+        return (0.0, 0.0, 255.0)  # Blue background [R, G, B]
+    elif bkgd_color == "white":
+        return (255.0, 255.0, 255.0)  # White background [R, G, B]
+    elif bkgd_color == "black":
+        return (0.0, 0.0, 0.0)  # Black background [R, G, B]
+    elif bkgd_color == "random":
+        return (np.random.randint(0, 255), np.random.randint(0, 255), np.random.randint(0, 255))  # Random background [R, G, B]
+    else:
+        return (0.0, 0.0, 0.0)  # Black background [R, G, B]
+    
+def fused_ssim_map(img1, img2, padding="same", train=True):
+    C1 = 0.01 ** 2
+    C2 = 0.03 ** 2
+
+    assert padding in ["same", "valid"]
+
+    img1 = img1.contiguous()
+    map = FusedSSIMMap.apply(C1, C2, img1, img2, padding, train)
+    return map
