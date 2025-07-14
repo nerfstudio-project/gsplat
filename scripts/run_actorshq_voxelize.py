@@ -92,22 +92,12 @@ if __name__ == '__main__':
     default_cfg.adjust_steps(default_cfg.steps_scaler)
     
     # read the template of yaml from file
-    template_path = "./configs/actorshq.toml"
+    template_path = "./configs/voxelize.toml"
     cfg = load_config_from_toml(template_path)
     cfg = merge_config(default_cfg, cfg)
     
     if method == Method.eval:
-        exp_name = f"actorshq_l1_{1.0 - cfg.ssim_lambda}_ssim_{cfg.ssim_lambda}"
-        if cfg.masked_l1_loss:
-            exp_name += f"_ml1_{cfg.masked_l1_lambda}"
-        if cfg.masked_ssim_loss:
-            exp_name += f"_mssim_{cfg.masked_ssim_lambda}"
-        if cfg.alpha_loss:
-            exp_name += f"_alpha_{cfg.alpha_lambda}"
-        if cfg.scale_var_loss:
-            exp_name += f"_svar_{cfg.scale_var_lambda}"
-        if cfg.random_bkgd:
-            exp_name += "_rbkgd"
+        exp_name = "test"
         cfg.exp_name = exp_name
         
         cfg.disable_viewer = False
@@ -119,17 +109,7 @@ if __name__ == '__main__':
             print(f"\nEvaluating frame {frame_id}")
             evaluate_frame(frame_id, iter, cfg, exp_name)
     elif method == Method.train:
-        exp_name = f"actorshq_l1_{1.0 - cfg.ssim_lambda}_ssim_{cfg.ssim_lambda}"
-        if cfg.masked_l1_loss:
-            exp_name += f"_ml1_{cfg.masked_l1_lambda}"
-        if cfg.masked_ssim_loss:
-            exp_name += f"_mssim_{cfg.masked_ssim_lambda}"
-        if cfg.alpha_loss:
-            exp_name += f"_alpha_{cfg.alpha_lambda}"
-        if cfg.scale_var_loss:
-            exp_name += f"_svar_{cfg.scale_var_lambda}"
-        if cfg.random_bkgd:
-            exp_name += "_rbkgd"
+        exp_name = "test"
         cfg.exp_name = exp_name
         
         cfg.disable_viewer = True

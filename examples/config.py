@@ -9,6 +9,17 @@ import toml
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 
 @dataclass
+class FreezeParams:
+    means: bool = False
+    quats: bool = False
+    scales: bool = False
+    opacities: bool = False
+    sh0: bool = False
+    shN: bool = False
+    colors: bool = False
+    features: bool = False
+
+@dataclass
 class Config:
     # Experiment name
     exp_name: str = "test"
@@ -90,6 +101,10 @@ class Config:
     init_scale_avg_dist: bool = True
     # Initial scale of GS
     init_scale: float = 1.0
+    
+    # Parameters to freeze during training or finetuning
+    freeze_splats: bool = False
+    freeze_params: Optional[FreezeParams] = None
     
     # Enable Experimental Losses. 
     masked_l1_loss: bool = False    # our experiment
@@ -239,6 +254,18 @@ def load_config_from_toml(path: str) -> Config:
             
         config_dict['strategy'] = strategy
     
+    # Handle freeze_params section separately
+    if 'freeze_params' in config_dict:
+        freeze_params_dict = config_dict.pop('freeze_params')
+        try:
+            freeze_params = FreezeParams(**freeze_params_dict)
+        except Exception as e:
+            print(f"Error creating freeze_params with parameters {freeze_params_dict}: {e}")
+            print("Using default freeze_params parameters")
+            freeze_params = FreezeParams()
+        
+        config_dict['freeze_params'] = freeze_params
+    
     config = Config(**config_dict)
     return config
         
@@ -343,6 +370,10 @@ def main():
             print(f"  refine_start_iter: {cfg.strategy.refine_start_iter}")
             print(f"  refine_stop_iter: {cfg.strategy.refine_stop_iter}")
             print(f"  refine_every: {cfg.strategy.refine_every}")
+        if cfg.freeze_splats and cfg.freeze_params:
+            print(f"Freeze params: {cfg.freeze_params}")
+        else:
+            print("Freeze params: No parameters frozen")
         print(cfg)
     
     # Run the training
@@ -355,5 +386,6 @@ if __name__ == "__main__":
 Script to train using a TOML configuration file.
 
 Usage:
-    python examples/config.py --config configs/actorshq.toml --verbose  
+    python examples/config.py --config configs/actorshq.toml --verbose
+    python examples/config.py --config configs/voxelize.toml --verbose
 """

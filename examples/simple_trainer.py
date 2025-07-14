@@ -42,7 +42,7 @@ from gsplat.strategy import DefaultStrategy, MCMCStrategy
 from examples.gsplat_viewer import GsplatViewer, GsplatRenderTabState
 from nerfview import CameraState, RenderTabState, apply_float_colormap
 
-from examples.config import Config, load_config_from_toml, merge_config
+from examples.config import Config, load_config_from_toml, merge_config, FreezeParams
 
 def create_splats_with_optimizers(
     parser: Parser,
@@ -70,6 +70,8 @@ def create_splats_with_optimizers(
     filter_outliers: bool = False,
     outlier_nb_neighbors: int = 20,
     outlier_std_ratio: float = 2.0,
+    freeze_splats: bool = False,
+    freeze_params: FreezeParams = None
 ) -> Tuple[torch.nn.ParameterDict, Dict[str, torch.optim.Optimizer]]:
     if init_type == "sfm":
         points = torch.from_numpy(parser.points).float()
@@ -125,6 +127,15 @@ def create_splats_with_optimizers(
         params.append(("features", torch.nn.Parameter(features), sh0_lr))
         colors = torch.logit(rgbs)  # [N, 3]
         params.append(("colors", torch.nn.Parameter(colors), sh0_lr))
+    
+    # Freeze parameters if required
+    if freeze_splats:
+        if freeze_params is not None:
+            for name, param, _ in params:
+                if getattr(freeze_params, name):
+                    param.requires_grad = False
+        else:
+            raise ValueError("Freezing splats but freeze_params is not set")
 
     splats = torch.nn.ParameterDict({n: v for n, v, _ in params}).to(device)
     # Scale learning rate based on batch size, reference:
@@ -226,6 +237,8 @@ class Runner:
             filter_outliers=cfg.filter_outliers,
             outlier_nb_neighbors=cfg.outlier_nb_neighbors,
             outlier_std_ratio=cfg.outlier_std_ratio,
+            freeze_splats=cfg.freeze_splats,
+            freeze_params=cfg.freeze_params,
         )
         print("Model initialized. Number of GS:", len(self.splats["means"]))
 

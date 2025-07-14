@@ -337,3 +337,53 @@ class DefaultStrategy(Strategy):
             remove(params=params, optimizers=optimizers, state=state, mask=is_prune)
 
         return n_prune
+
+@dataclass
+class StaticPointsStrategy(DefaultStrategy):
+    """A strategy that maintains a constant number of Gaussian points by disabling all
+    point generation and pruning operations.
+    
+    This strategy extends DefaultStrategy but completely disables the densification
+    (duplication and splitting) and pruning operations, ensuring the total number
+    of points remains exactly the same throughout training.
+    
+    The strategy still inherits other functionality from DefaultStrategy, such as
+    opacity resetting, but skips any operations that would change the point count.
+    
+    Args:
+        All parameters from DefaultStrategy are inherited but many will be unused.
+    """
+    
+    def step_post_backward(
+        self,
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+        optimizers: Dict[str, torch.optim.Optimizer],
+        state: Dict[str, Any],
+        step: int,
+        info: Dict[str, Any],
+        packed: bool = False,
+    ):
+        """Callback function to be executed after the `loss.backward()` call.
+        Maintains a constant number of points by skipping growth and pruning operations.
+        """
+        if step >= self.refine_stop_iter:
+            return
+
+        # Update state for tracking purposes (even though we won't use it for refinement)
+        self._update_state(params, state, info, packed=packed)
+        
+        # Skip the growth and pruning operations to maintain constant point count
+        if (
+            step > self.refine_start_iter
+            and step % self.refine_every == 0
+            and step % self.reset_every >= self.pause_refine_after_reset
+        ):
+            if self.verbose:
+                print(f"Step {step}: Skipping densification and pruning to maintain {len(params['means'])} points.")
+            
+            # Reset running stats (needed for next iteration)
+            state["grad2d"].zero_()
+            state["count"].zero_()
+            if self.refine_scale2d_stop_iter > 0:
+                state["radii"].zero_()
+            torch.cuda.empty_cache()
