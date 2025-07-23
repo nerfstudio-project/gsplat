@@ -1,6 +1,9 @@
 SCENE_DIR="data/360_v2"
-RESULT_DIR="results/benchmark_4gpus"
-SCENE_LIST="garden bicycle stump bonsai counter kitchen room" # treehill flowers
+RESULT_DIR="results/benchmark_mcmc_1M_4gpus"
+SCENE_LIST="bonsai" # treehill flowers
+RENDER_TRAJ_PATH="ellipse"
+
+CAP_MAX=250000
 
 for SCENE in $SCENE_LIST;
 do
@@ -13,11 +16,10 @@ do
     echo "Running $SCENE"
 
     # train and eval at the last step (30000)
-    # 4 GPUs is effectively 4x batch size so we scale down the steps by 4x as well.
-    # "--packed" reduces the data transfer between GPUs, which leads to faster training. 
-    CUDA_VISIBLE_DEVICES=0,1,2,3 python simple_trainer.py default --eval_steps 30000 --disable_viewer --data_factor $DATA_FACTOR \
+    CUDA_VISIBLE_DEVICES=0,1,2,3 python simple_trainer.py mcmc --eval_steps 30000 --disable_viewer --data_factor $DATA_FACTOR \
         --steps_scaler 0.25 --packed \
-        --data_dir data/360_v2/$SCENE/ \
+        --strategy.cap-max $CAP_MAX \
+        --data_dir $SCENE_DIR/$SCENE/ \
         --result_dir $RESULT_DIR/$SCENE/
 
 done
