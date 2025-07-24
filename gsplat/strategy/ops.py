@@ -6,7 +6,6 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from gsplat import quat_scale_to_covar_preci
-from gsplat.relocation import compute_relocation
 from gsplat.utils import normalized_quat_to_rotmat
 
 
@@ -247,10 +246,13 @@ def relocate(
     optimizers: Dict[str, torch.optim.Optimizer],
     state: Dict[str, Tensor],
     mask: Tensor,
-    binoms: Tensor,
     min_opacity: float = 0.005,
 ):
     """Inplace relocate some dead Gaussians to the lives ones.
+
+    `Deformable Beta splatting <https://arxiv.org/abs/2501.18630>`_
+    Given opacity regularization, adjusting the opacity alone guarantees distribution-preserved densification,
+    regardless of how many primitives densified or which splatting kernel is chosen.
 
     Args:
         params: A dictionary of parameters.
@@ -269,19 +271,14 @@ def relocate(
     probs = opacities[alive_indices].flatten()  # ensure its shape is [N,]
     sampled_idxs = _multinomial_sample(probs, n, replacement=True)
     sampled_idxs = alive_indices[sampled_idxs]
-    new_opacities, new_scales = compute_relocation(
-        opacities=opacities[sampled_idxs],
-        scales=torch.exp(params["scales"])[sampled_idxs],
-        ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
-        binoms=binoms,
-    )
+    opacities = opacities[sampled_idxs]
+    ratios = torch.bincount(sampled_idxs)[sampled_idxs] + 1
+    new_opacities = 1.0 - torch.pow(1.0 - opacities, 1.0 / ratios)
     new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
 
     def param_fn(name: str, p: Tensor) -> Tensor:
         if name == "opacities":
             p[sampled_idxs] = torch.logit(new_opacities)
-        elif name == "scales":
-            p[sampled_idxs] = torch.log(new_scales)
         p[dead_indices] = p[sampled_idxs]
         return torch.nn.Parameter(p, requires_grad=p.requires_grad)
 
@@ -303,7 +300,6 @@ def sample_add(
     optimizers: Dict[str, torch.optim.Optimizer],
     state: Dict[str, Tensor],
     n: int,
-    binoms: Tensor,
     min_opacity: float = 0.005,
 ):
     opacities = torch.sigmoid(params["opacities"])
@@ -311,19 +307,14 @@ def sample_add(
     eps = torch.finfo(torch.float32).eps
     probs = opacities.flatten()
     sampled_idxs = _multinomial_sample(probs, n, replacement=True)
-    new_opacities, new_scales = compute_relocation(
-        opacities=opacities[sampled_idxs],
-        scales=torch.exp(params["scales"])[sampled_idxs],
-        ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
-        binoms=binoms,
-    )
+    opacities = opacities[sampled_idxs]
+    ratios = torch.bincount(sampled_idxs)[sampled_idxs] + 1
+    new_opacities = 1.0 - torch.pow(1.0 - opacities, 1.0 / ratios)
     new_opacities = torch.clamp(new_opacities, max=1.0 - eps, min=min_opacity)
 
     def param_fn(name: str, p: Tensor) -> Tensor:
         if name == "opacities":
             p[sampled_idxs] = torch.logit(new_opacities)
-        elif name == "scales":
-            p[sampled_idxs] = torch.log(new_scales)
         p_new = torch.cat([p, p[sampled_idxs]])
         return torch.nn.Parameter(p_new, requires_grad=p.requires_grad)
 
@@ -357,12 +348,9 @@ def inject_noise_to_position(
         triu=False,
     )
 
-    def op_sigmoid(x, k=100, x0=0.995):
-        return 1 / (1 + torch.exp(-k * (x - x0)))
-
     noise = (
         torch.randn_like(params["means"])
-        * (op_sigmoid(1 - opacities)).unsqueeze(-1)
+        * (torch.pow(1 - opacities, 100)).unsqueeze(-1)
         * scaler
     )
     noise = torch.einsum("bij,bj->bi", covars, noise)
