@@ -4,21 +4,12 @@ import os
 import sys
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from examples.simple_trainer import main, main2
+from examples.simple_trainer import main2
 from gsplat.distributed import cli
-from gsplat.strategy import DefaultStrategy, MCMCStrategy
+from gsplat.strategy import DefaultStrategy
 
 from examples.config import Config, load_config_from_toml, merge_config
-from scripts.utils import extract_path_components
-
-def set_result_dir(config: Config, exp_name: Optional[str] = None):
-    data_dir = config.data_dir
-    scene_id = config.scene_id
-    actor, sequence, resolution = extract_path_components(data_dir)
-    if exp_name:
-        config.result_dir = f"./results/{exp_name}/{actor}/{sequence}/{resolution}/{scene_id}"
-    else:
-        config.result_dir = f"./results/{actor}/{sequence}/{resolution}/{scene_id}"
+from scripts.utils import set_result_dir
 
 def run_experiment(config: Config, dist=False):
     print(
@@ -35,7 +26,7 @@ def run_experiment(config: Config, dist=False):
         main2(0, 0, 1, config) # single GPU training
 
 def train_frame(frame_id, config: Config, exp_name=None):
-    config.data_dir = os.path.join(config.data_dir, f"{frame_id}", f"resolution_{config.resolution}")
+    config.data_dir = os.path.join(config.actorshq_data_dir, f"{frame_id}", f"resolution_{config.resolution}")
     config.exp_name = exp_name
     config.scene_id = frame_id
     set_result_dir(config, exp_name)
@@ -53,7 +44,7 @@ def train_frame(frame_id, config: Config, exp_name=None):
     run_experiment(config, dist=False)
 
 def evaluate_frame(frame_id, iter, config: Config, exp_name, sub_exp_name=None):
-    config.data_dir = os.path.join(config.data_dir, f"{frame_id}", f"resolution_{config.resolution}")
+    config.data_dir = os.path.join(config.actorshq_data_dir, f"{frame_id}", f"resolution_{config.resolution}")
     config.exp_name = exp_name
     if sub_exp_name is not None:
         config.exp_name = f"{exp_name}_{sub_exp_name}"
@@ -82,7 +73,7 @@ class Method:
     """
 
 # ================= Global Configurations =================
-method = Method.train
+method = Method.eval
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 # =========================================================
 

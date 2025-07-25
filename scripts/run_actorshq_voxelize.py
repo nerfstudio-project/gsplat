@@ -1,120 +1,105 @@
-from dataclasses import dataclass
-from typing import ClassVar, Optional
 import os
+import numpy as np
 import sys
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from examples.simple_trainer import main, main2
-from gsplat.distributed import cli
-from gsplat.strategy import DefaultStrategy, MCMCStrategy
+from lod.voxelization.voxelization import Voxelization, read_gs_frame
+from lod.voxelization.voxel_methods import AggregationMethod
+from lod.camera_bounds_from_colmap import CameraBounds
 
 from examples.config import Config, load_config_from_toml, merge_config
-from scripts.utils import extract_path_components
+from scripts.utils import set_result_dir, set_result_dir_voxelize
 
-def set_result_dir(config: Config, exp_name: Optional[str] = None):
-    data_dir = config.data_dir
-    scene_id = config.scene_id
-    actor, sequence, resolution = extract_path_components(data_dir)
-    if exp_name:
-        config.result_dir = f"./results/{exp_name}/{actor}/{sequence}/{resolution}/{scene_id}"
-    else:
-        config.result_dir = f"./results/{actor}/{sequence}/{resolution}/{scene_id}"
-
-def run_experiment(config: Config, dist=False):
-    print(
-            f"------- Running: "
-            f"exp_name={config.exp_name}, "
-            f"scene_id={config.scene_id}, "
-            f"run_mode={config.run_mode}, "
-            f"ckpt={config.ckpt} "
-            f"---------"
-        )
-    if dist is True:
-        cli(main2, config, verbose=True) # distributed training
-    else:
-        main2(0, 0, 1, config) # single GPU training
-
-def train_frame(frame_id, config: Config, exp_name=None):
-    config.data_dir = os.path.join(config.data_dir, f"{frame_id}", f"resolution_{config.resolution}")
-    config.exp_name = exp_name
-    config.scene_id = frame_id
-    set_result_dir(config, exp_name)
-    config.run_mode = "train"
-    config.save_ply = False
-    config.save_steps = [7000, 10000, 20000, 30000]
-    config.max_steps = 30000
-    config.ply_steps = [0, 10000, 20000, 30000]
-    # config.eval_steps = [0, 10000, 20000, 30000]
-    config.eval_steps = list(sorted(set(range(0, 30001, 10000))))
-    
-    config.init_type = "sfm"
-    config.strategy = DefaultStrategy(verbose=True)
-    # config.strategy = StaticPointsStrategy(verbose=False)
-    run_experiment(config, dist=False)
-
-def evaluate_frame(frame_id, iter, config: Config, exp_name, sub_exp_name=None):
-    config.data_dir = os.path.join(config.data_dir, f"{frame_id}", f"resolution_{config.resolution}")
-    config.exp_name = exp_name
-    if sub_exp_name is not None:
-        config.exp_name = f"{exp_name}_{sub_exp_name}"
-    config.run_mode = "eval"
-    config.init_type = "sfm"
-    config.save_ply = False
-    config.scene_id = frame_id
-    set_result_dir(config, exp_name=exp_name, sub_exp_name=sub_exp_name)
-    ckpt = os.path.join(f"{config.result_dir}/ckpts/ckpt_{iter - 1}_rank0.pt")
-    config.ckpt = ckpt
-    
-    run_experiment(config, dist=False)
-
-@dataclass(frozen=True)
-class Method:
-    train: ClassVar[str] = "train"
-    """ 
-    **Training**:  
-    Train a gsplat model.
-    """
-    
-    eval: ClassVar[str] = "eval"
-    """ 
-    **Evaluation**:  
-    Evaluate a trained gsplat model.
-    """
-
-# ================= Global Configurations =================
-method = Method.train
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-# =========================================================
-
-if __name__ == '__main__':    
+if __name__ == "__main__":
     # build default config
-    default_cfg = Config(strategy=DefaultStrategy(verbose=True))
-    default_cfg.adjust_steps(default_cfg.steps_scaler)
+    default_cfg = Config(strategy=None)
     
     # read the template of yaml from file
-    template_path = "./configs/voxelize.toml"
+    template_path = "./configs/actorshq_voxelize.toml"
     cfg = load_config_from_toml(template_path)
     cfg = merge_config(default_cfg, cfg)
+    trained_iter = 30000
+
+    start_frame_id = 0
+    end_frame_id = 0
     
-    if method == Method.eval:
-        exp_name = "test"
+    # Test some effective methods
+    # aggregate_methods = [
+    #     AggregationMethod.scales_voxel_width
+    # ]
+    aggregate_methods = [
+                            AggregationMethod.sum,  # Sum of gaussians
+                            AggregationMethod.dominant,  # Dominant gaussian
+                            AggregationMethod.mean,  # Mean of gaussians
+                            AggregationMethod.kl_moment,  # KL(p||q) first‑/second‑moment match
+                            AggregationMethod.kl_moment_hybrid_mean_moment,  # KL(p||q) for 1st moment
+                            AggregationMethod.h3dgs,  # H3DGS aggregation method
+                            AggregationMethod.h3dgs_hybrid_mean_moment,  # H3DGS for 1st moment
+                            # AggregationMethod.w2  # Wasserstein-2 distance aggregation method (Not working)
+                        ]
+    
+    # Test all other methods
+    # aggregate_methods = [
+    #     AggregationMethod.geometric,
+    #     AggregationMethod.adaptive,
+    #     AggregationMethod.covariance_weighted,  # Mathematical covariance combination
+    #     AggregationMethod.gaussian_mixture,  # Proper Gaussian mixture reduction
+    #     AggregationMethod.opacity_preserved,  # Focus on opacity preservation
+    #     AggregationMethod.hybrid_dominant,  # Hybrid approach
+    #     AggregationMethod.volume_weighted  # Volume-based weighting
+    # ]
+    
+    voxel_sizes = [0.001, 0.0025, 0.005, 0.01]
+    for frame_id in range(start_frame_id, end_frame_id + 1):
+        cfg.data_dir = os.path.join(cfg.actorshq_data_dir, f"{frame_id}", f"resolution_{cfg.resolution}")
+        exp_name = f"actorshq_l1_{1.0 - cfg.ssim_lambda}_ssim_{cfg.ssim_lambda}"
+        if cfg.masked_l1_loss:
+            exp_name += f"_ml1_{cfg.masked_l1_lambda}"
+        if cfg.masked_ssim_loss:
+            exp_name += f"_mssim_{cfg.masked_ssim_lambda}"
+        if cfg.alpha_loss:
+            exp_name += f"_alpha_{cfg.alpha_lambda}"
+        if cfg.scale_var_loss:
+            exp_name += f"_svar_{cfg.scale_var_lambda}"
+        if cfg.random_bkgd:
+            exp_name += "_rbkgd"
         cfg.exp_name = exp_name
+        cfg.scene_id = frame_id
         
-        cfg.disable_viewer = False
-        iter = cfg.max_steps
-        start_frame_id = 0
-        end_frame_id = 0
+        set_result_dir(cfg, exp_name=exp_name)
+        trained_model_path = cfg.result_dir
         
-        for frame_id in range(start_frame_id, end_frame_id + 1):
-            print(f"\nEvaluating frame {frame_id}")
-            evaluate_frame(frame_id, iter, cfg, exp_name)
-    elif method == Method.train:
-        exp_name = "test"
-        cfg.exp_name = exp_name
+        print(f"Reading gsplat frame at highest resolution for frame {frame_id} ...")
+        trained_model = read_gs_frame(trained_model_path, trained_iter)
         
-        cfg.disable_viewer = True
-        start_frame_id = 0
-        end_frame_id = 0
-        for frame_id in range(start_frame_id, end_frame_id + 1):
-            print(f"\nTraining frame {frame_id}")
-            train_frame(frame_id, cfg, exp_name)
+        for voxel_size in voxel_sizes:
+            print(f"\nVoxelizing at size: {voxel_size}")
+            bounds_calculator = CameraBounds(cfg.data_dir, factor=cfg.data_factor, normalize=False)
+            bounds = bounds_calculator.get_scene_center_bounds(radius_multiplier=1.5, padding=0.5)
+            voxelizer = Voxelization(voxel_size, bounds=bounds)
+            voxelizer.read_gs(trained_model)
+
+            for aggregate_method in aggregate_methods:
+                print(f"\nVoxelizing with aggregate method: {aggregate_method}")
+                voxelized_model = voxelizer.voxelize(aggregate_method)
+            
+                # Save voxelized model
+                set_result_dir_voxelize(cfg, exp_name=exp_name, voxel_size=voxel_size, aggregate_method=aggregate_method)
+                save_model_path = os.path.join(cfg.result_dir, "ckpts/ckpt_0_rank0.pt")
+                voxelizer.save_voxelized_gs(save_model_path)
+                
+                # Save voxelization statistics
+                voxelizer.voxel_stats(save_dir=cfg.result_dir)
+                
+                # Print statistics
+                print(f"Original gaussians: {len(trained_model['splats']['means'])}")
+                print(f"Voxelized gaussians: {len(voxelized_model['splats']['means'])}")
+
+
+
+
+
+
+
+
+

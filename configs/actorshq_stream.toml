@@ -1,0 +1,34 @@
+# Viewer
+disable_viewer = false  # Disable viewer
+with_ut = false
+with_eval3d = false
+port = 8080
+viewer_bkgd_color = "white"  # Background color for the viewer, Options: "green", "white", "black" (default)
+near_plane = 0.01  # Near plane clipping distance
+far_plane = 1e10  # Far plane clipping distance
+
+# Dataset
+actorshq_data_dir = "/main/rajrup/Dropbox/Project/GsplatStream/gsplat/data/Actor01/Sequence1/"
+scene_id = 0
+resolution = 2 # Resolution of the actorshq dataset (1, 2, 4)
+data_factor = 1  # Downsample factor for the dataset. ActorsHQ dataset is already downsampled with correct intrinsics.
+
+# Model
+max_steps = 30000  # Total number of training steps
+
+random_bkgd = false  # Use random background during training
+
+# Enable Experimental Losses. 
+masked_l1_loss = false # our experiment
+masked_ssim_loss = false # our experiment
+alpha_loss = true # our experiment
+scale_var_loss = false # our experiment
+depth_loss = false    # Enable disparity loss (experimental from gsplat)
+
+# Weights of different losses
+ssim_lambda = 0.5   # Weight for SSIM loss
+masked_l1_lambda = 1.0 # Weight for masked L1 loss
+masked_ssim_lambda = 1.0 # Weight for masked SSIM loss
+alpha_lambda = 1.0 # Weight for alpha loss
+scale_var_lambda = 0.01 # Weight for scale variance loss
+depth_lambda = 0.01  # Weight for disparity loss

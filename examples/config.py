@@ -27,11 +27,13 @@ class Config:
     # Disable viewer
     disable_viewer: bool = False
     # running mode
-    run_mode: Literal["train", "eval", "ft", "ft_mv", "ft_of", "resume"] = "train"
+    run_mode: Literal["train", "eval", "render", "ft", "ft_mv", "ft_of", "resume"] = "train"
     # Path to the .pt files. If provide, it will skip training and run evaluation only.
     ckpt: Optional[List[str]] = None
     # Whether to freeze the splats
-    flag_freeze_splats: bool = False
+    freeze_splats: bool = False
+    # Parameters to freeze during training or finetuning
+    freeze_params: Optional[FreezeParams] = None
     # Whether to concatenate the splats from previous checkpoint
     flag_concat_splats: bool = False
     # Name of compression strategy to use
@@ -43,6 +45,8 @@ class Config:
 
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
+    # Path to the actorshq dataset
+    actorshq_data_dir: str = "data/Actor01/Sequence1/"
     # Scene ID/Frame ID
     scene_id: int = 0
     # Resolution of the dataset, only used for actorshq dataset
@@ -101,10 +105,6 @@ class Config:
     init_scale_avg_dist: bool = True
     # Initial scale of GS
     init_scale: float = 1.0
-    
-    # Parameters to freeze during training or finetuning
-    freeze_splats: bool = False
-    freeze_params: Optional[FreezeParams] = None
     
     # Enable Experimental Losses. 
     masked_l1_loss: bool = False    # our experiment

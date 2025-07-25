@@ -1,12 +1,17 @@
+# Configuration for voxelize experiment
+exp_name = "voxelize"
+
 # wandb
 # use_wandb = true
 
+run_mode = "eval"   # Options: "eval", "ft" for voxelization
+
 # Viewer
-disable_viewer = false  # Disable viewer
+disable_viewer = true  # Disable viewer
 viewer_bkgd_color = "white"  # Background color for the viewer, Options: "green", "white", "black" (default)
 # radius_clip = 0.0001  # Radius clip for the viewer (default: 3.0), smaller than panoptic point cloud
 
-render_traj_path = "interp"  # Render trajectory path, Options: "interp", "ellipse", "spiral", None for no trajectory
+# render_traj_path = "interp"  # Render trajectory path, Options: "interp", "ellipse", "spiral", None for no trajectory
 render_traj_fps = 3  # Render trajectory FPS
 # compression = null  # Name of compression strategy (e.g., png)
 
@@ -25,7 +30,7 @@ port = 8080  # Port for the viewer server
 batch_size = 1  # Batch size for training
 steps_scaler = 1.0  # Global factor to scale the number of training steps
 
-max_steps = 30000  # Total number of training steps
+max_steps = 10000  # Total number of training steps
 
 eval_steps = [7000, 30000]  # Steps to evaluate the model
 
@@ -42,7 +47,7 @@ sh_degree_interval = 1000  # Interval to increase SH degree
 init_opa = 0.5  # Initial opacity of GS
 init_scale_avg_dist = true # # Initial scale based on Avg Distance
 init_scale = 0.4  # Initial scale of GS
-filter_outliers = true  # Outlier filtering for point cloud (if using sfm)
+filter_outliers = false  # Outlier filtering for point cloud (if using sfm)
 outlier_nb_neighbors = 100
 outlier_std_ratio = 0.01
 
@@ -85,12 +90,12 @@ alpha_lambda = 1.0 # Weight for alpha loss
 scale_var_lambda = 0.01 # Weight for scale variance loss
 depth_lambda = 0.01  # Weight for disparity loss
 
-[strategy]  # Strategy for GS densification
-# refine_start_iter = 500  # Iteration to start refinement
-# refine_stop_iter = 15000  # Iteration to stop refinement
-# reset_every = 3000  # Iteration to reset the strategy
-# refine_every = 100  # Iteration interval for refinement
-prune_opa = 0.1  # Prune gaussians with opacity below this threshold (higher = more aggressive pruning)
-# grow_grad2d = 0.0005  # Threshold for growing gaussians (higher = more conservative)
-# prune_scale3d = 0.05  # Prune gaussians with 3D scale above this threshold (lower = more aggressive pruning)
-# verbose = true  # Print verbose information about densification
+# Freeze parameters configuration
+freeze_splats = true
+[freeze_params]
+means = true
+quats = false
+scales = false
+opacities = false
+sh0 = false
+shN = false
