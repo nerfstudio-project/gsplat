@@ -60,18 +60,22 @@ class SelectiveAdam(torch.optim.Adam):
             # Lazy state initialization
             state = self.state[param]
             if len(state) == 0:
-                state["step"] = torch.tensor(0.0, dtype=torch.float32)
                 state["exp_avg"] = torch.zeros_like(
                     param, memory_format=torch.preserve_format
                 )
                 state["exp_avg_sq"] = torch.zeros_like(
                     param, memory_format=torch.preserve_format
                 )
+                state["step_per_gaussian"] = torch.zeros(
+                    param.shape[0],
+                    device=param.device,
+                    dtype=torch.float32
+                )
 
             stored_state = self.state.get(param, None)
             exp_avg = stored_state["exp_avg"]
             exp_avg_sq = stored_state["exp_avg_sq"]
-            M = param.numel() // N
+            step_per_gaussian = stored_state["step_per_gaussian"]
 
             adam(
                 param,
@@ -79,6 +83,7 @@ class SelectiveAdam(torch.optim.Adam):
                 exp_avg,
                 exp_avg_sq,
                 visibility,
+                step_per_gaussian,
                 lr,
                 beta1,
                 beta2,
