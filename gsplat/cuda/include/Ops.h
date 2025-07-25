@@ -176,6 +176,7 @@ void adam(
     at::Tensor &exp_avg,                  // [..., D]
     at::Tensor &exp_avg_sq,               // [..., D]
     const at::optional<at::Tensor> valid, // [...]
+    at::Tensor &step_per_gaussian,        // [N]
     const float lr,
     const float b1,
     const float b2,

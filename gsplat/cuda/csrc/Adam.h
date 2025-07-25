@@ -14,6 +14,7 @@ void launch_adam_kernel(
     at::Tensor &exp_avg,                  // [N, ...]
     at::Tensor &exp_avg_sq,               // [N, ...]
     const at::optional<at::Tensor> valid, // [N]
+    at::Tensor &step_per_gaussian,        // [N]
     const float lr,
     const float b1,
     const float b2,

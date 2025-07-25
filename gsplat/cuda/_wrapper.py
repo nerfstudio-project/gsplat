@@ -138,13 +138,14 @@ def adam(
     exp_avg: Tensor,
     exp_avg_sq: Tensor,
     valid: Tensor,
+    step_per_gaussian: Tensor, # Float[Tensor, N]
     lr: float,
     b1: float,
     b2: float,
     eps: float,
 ) -> None:
     _make_lazy_cuda_func("adam")(
-        param, param_grad, exp_avg, exp_avg_sq, valid, lr, b1, b2, eps
+        param, param_grad, exp_avg, exp_avg_sq, valid, step_per_gaussian, lr, b1, b2, eps
     )
 
 

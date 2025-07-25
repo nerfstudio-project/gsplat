@@ -18,6 +18,7 @@ void adam(
     at::Tensor &exp_avg,                  // [N, ...]
     at::Tensor &exp_avg_sq,               // [N, ...]
     const at::optional<at::Tensor> valid, // [N]
+    at::Tensor &step_per_gaussian,        // [N]
     const float lr,
     const float b1,
     const float b2,
@@ -28,6 +29,7 @@ void adam(
     CHECK_INPUT(param_grad);
     CHECK_INPUT(exp_avg);
     CHECK_INPUT(exp_avg_sq);
+    CHECK_INPUT(step_per_gaussian);
     if (valid.has_value()) {
         CHECK_INPUT(valid.value());
         TORCH_CHECK(valid.value().dim() == 1, "valid should be 1D tensor");
@@ -38,7 +40,7 @@ void adam(
     }
 
     launch_adam_kernel(
-        param, param_grad, exp_avg, exp_avg_sq, valid, lr, b1, b2, eps
+        param, param_grad, exp_avg, exp_avg_sq, valid, step_per_gaussian, lr, b1, b2, eps
     );
 }
 
