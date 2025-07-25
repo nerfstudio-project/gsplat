@@ -7,6 +7,9 @@ viewer_bkgd_color = "white"  # Background color for the viewer, Options: "green"
 near_plane = 0.01  # Near plane clipping distance
 far_plane = 1e10  # Far plane clipping distance
 
+# Rendering
+frustum_culling = true
+
 # Dataset
 actorshq_data_dir = "/main/rajrup/Dropbox/Project/GsplatStream/gsplat/data/Actor01/Sequence1/"
 scene_id = 0

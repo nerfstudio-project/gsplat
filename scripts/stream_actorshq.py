@@ -68,7 +68,7 @@ if __name__ == '__main__':
     iter = cfg.max_steps
     frame_id = 0
     
-    print(f"\nEvaluating frame {frame_id}")
+    print(f"\nRendering frame {frame_id}")
     render_frame(frame_id, iter, cfg, exp_name)
 
 '''

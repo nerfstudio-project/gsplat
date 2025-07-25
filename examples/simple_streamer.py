@@ -24,6 +24,14 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from examples.gsplat_viewer import GsplatViewer, GsplatRenderTabState
 from examples.config import Config, load_config_from_toml, merge_config
 from examples.utils import get_color
+from stream import frustum_culling
+
+RENDER_MODE_MAP = {
+                    "rgb": "RGB",
+                    "depth(accumulated)": "D",
+                    "depth(expected)": "ED",
+                    "alpha": "RGB",
+                }
 
 def main(local_rank: int, world_rank, world_size: int, cfg: Config):
     torch.manual_seed(42)
@@ -67,20 +75,45 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         c2w = torch.from_numpy(c2w).float().to(device)
         K = torch.from_numpy(K).float().to(device)
         viewmat = c2w.inverse()
+        print(f"Rendering Image - Height: {height}, Width: {width}, Near Plane: {render_tab_state.near_plane}, Far Plane: {render_tab_state.far_plane}")
 
-        RENDER_MODE_MAP = {
-            "rgb": "RGB",
-            "depth(accumulated)": "D",
-            "depth(expected)": "ED",
-            "alpha": "RGB",
-        }
+        # Create local copies for rendering (and potential frustum culling)
+        render_means = means
+        render_quats = quats
+        render_scales = scales
+        render_opacities = opacities
+        render_colors = colors
 
+        # Perform frustum culling
+        if cfg.frustum_culling:
+            num_original = render_means.shape[0]
+            culling_mask = frustum_culling(
+                render_means, render_scales, viewmat, K, width, height, 
+                near=render_tab_state.near_plane, far=render_tab_state.far_plane
+            )
+            
+            # Filter Gaussians based on culling mask
+            render_means = render_means[culling_mask]
+            render_quats = render_quats[culling_mask]
+            render_scales = render_scales[culling_mask]
+            render_opacities = render_opacities[culling_mask]
+            render_colors = render_colors[culling_mask]
+            
+            num_after_cull = render_means.shape[0]
+            culling_ratio = (num_original - num_after_cull) / num_original * 100.0 # avoid division by zero
+            
+            print(f"#Gaussians: {num_original}, #Culled Gaussians: {num_original - num_after_cull}, #Rendered Gaussians: {num_after_cull}, Culling Ratio: {culling_ratio:.1f}%")
+
+        if render_means.shape[0] == 0: # Otherwise, the rendering will crash
+            print("No Gaussians left after frustum culling. Returning empty image.")
+            return np.zeros((height, width, 3), dtype=np.uint8)
+        
         render_colors, render_alphas, info = rasterization(
-            means,  # [N, 3]
-            quats,  # [N, 4]
-            scales,  # [N, 3]
-            opacities,  # [N]
-            colors,  # [N, S, 3]
+            render_means,  # [N, 3]
+            render_quats,  # [N, 4]
+            render_scales,  # [N, 3]
+            render_opacities,  # [N]
+            render_colors,  # [N, S, 3]
             viewmat[None],  # [1, 4, 4]
             K[None],  # [1, 3, 3]
             width,
@@ -103,7 +136,7 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
             with_ut=cfg.with_ut,
             with_eval3d=cfg.with_eval3d,
         )
-        render_tab_state.total_gs_count = len(means)
+        render_tab_state.total_gs_count = len(render_means)
         render_tab_state.rendered_gs_count = (info["radii"] > 0).all(-1).sum().item()
 
         if render_tab_state.render_mode == "rgb":
@@ -144,9 +177,10 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
     )
     # Set initial background color from config
     viewer.render_tab_state.backgrounds = get_color(cfg.viewer_bkgd_color)
+    viewer.render_tab_state.near_plane = cfg.near_plane
+    viewer.render_tab_state.far_plane = cfg.far_plane
     print("Viewer running... Ctrl+C to exit.")
     time.sleep(100000)
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
