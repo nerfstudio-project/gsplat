@@ -31,12 +31,14 @@ def train_frame(frame_id, config: Config, exp_name=None):
     config.scene_id = frame_id
     set_result_dir(config, exp_name)
     config.run_mode = "train"
-    config.save_ply = False
-    config.save_steps = [7000, 10000, 20000, 30000]
+    config.save_ply = True
     config.max_steps = 30000
-    config.ply_steps = [0, 10000, 20000, 30000]
+    config.save_steps = list(sorted(set(range(0, config.max_steps + 1, 10000)) | {1}))
+    print(config.save_steps)
+    config.ply_steps = config.save_steps
     # config.eval_steps = [0, 10000, 20000, 30000]
-    config.eval_steps = list(sorted(set(range(0, 30001, 10000))))
+    config.eval_steps = config.save_steps
+    # print(config.eval_steps)
     
     config.init_type = "sfm"
     config.strategy = DefaultStrategy(verbose=True)
@@ -73,7 +75,7 @@ class Method:
     """
 
 # ================= Global Configurations =================
-method = Method.eval
+method = Method.train
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 # =========================================================
 
@@ -99,7 +101,7 @@ if __name__ == '__main__':
             exp_name += f"_svar_{cfg.scale_var_lambda}"
         if cfg.random_bkgd:
             exp_name += "_rbkgd"
-        cfg.exp_name = exp_name
+        # exp_name = exp_name + "_test"
         
         cfg.disable_viewer = False
         iter = cfg.max_steps
@@ -121,9 +123,9 @@ if __name__ == '__main__':
             exp_name += f"_svar_{cfg.scale_var_lambda}"
         if cfg.random_bkgd:
             exp_name += "_rbkgd"
-        cfg.exp_name = exp_name
+        # exp_name = exp_name + "_test"
         
-        cfg.disable_viewer = True
+        cfg.disable_viewer = False
         start_frame_id = 0
         end_frame_id = 0
         for frame_id in range(start_frame_id, end_frame_id + 1):

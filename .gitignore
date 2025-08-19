@@ -127,5 +127,6 @@ results
 .cursorignore
 *.code-workspace
 colmap/actorshq/backup/
+scripts/plots/*/
 
 !examples/benchmarks/compression/results/

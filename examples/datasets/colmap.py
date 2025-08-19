@@ -18,7 +18,6 @@ from .normalize import (
     transform_points,
 )
 
-
 def _get_rel_paths(path_dir: str) -> List[str]:
     """Recursively get relative paths of files in a directory."""
     paths = []
@@ -54,7 +53,14 @@ def _resize_image_folder(image_dir: str, resized_dir: str, factor: int) -> str:
 
 
 class Parser:
-    """COLMAP parser."""
+    """COLMAP parser.
+    
+    Args:
+        data_dir: Path to the COLMAP dataset directory.
+        factor: Downsampling factor for images.
+        normalize: Whether to normalize the scene.
+        test_every: Interval for splitting train/validation sets.
+    """
 
     def __init__(
         self,
@@ -265,6 +271,12 @@ class Parser:
         self.point_indices = point_indices  # Dict[str, np.ndarray], image_name -> [M,]
         self.transform = transform  # np.ndarray, (4, 4)
 
+        # Randomly select validation indices to avoid systematic bias in selecting validation cameras
+        indices = np.arange(len(self.image_names))
+        num_val = len(self.image_names) // self.test_every
+        self.val_indices = np.random.choice(indices, size=num_val, replace=False)
+        print(f"Randomly selected {num_val} validation cameras to avoid systematic bias")
+
         # load one image to check the size. In the case of tanksandtemples dataset, the
         # intrinsics stored in COLMAP corresponds to 2x upsampled images.
         actual_image = imageio.imread(self.image_paths[0])[..., :3]
@@ -355,7 +367,14 @@ class Parser:
 
 
 class Dataset:
-    """A simple dataset class."""
+    """A simple dataset class.
+    
+    Args:
+        parser: COLMAP parser instance.
+        split: Dataset split, either "train" or "val".
+        patch_size: If specified, randomly crop patches of this size.
+        load_depths: Whether to load depth information.
+    """
 
     def __init__(
         self,
@@ -369,10 +388,16 @@ class Dataset:
         self.patch_size = patch_size
         self.load_depths = load_depths
         indices = np.arange(len(self.parser.image_names))
+        
+        # Use pre-computed validation indices from parser
+        val_mask = np.isin(indices, self.parser.val_indices)
+        
         if split == "train":
-            self.indices = indices[indices % self.parser.test_every != 0]
+            self.indices = indices[~val_mask]
+            # print(f"train indices: {sorted(self.indices)}")
         else:
-            self.indices = indices[indices % self.parser.test_every == 0]
+            self.indices = indices[val_mask]
+            # print(f"val indices: {sorted(self.indices)}")
 
     def __len__(self):
         return len(self.indices)

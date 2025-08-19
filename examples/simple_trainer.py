@@ -1074,8 +1074,8 @@ def main2(local_rank: int, world_rank, world_size: int, cfg: Config):
 
     if cfg.run_mode == "train":
         runner.train()
-        if cfg.render_traj_path is not None:
-            runner.render_traj(step=cfg.max_steps-1)
+        # if cfg.render_traj_path is not None:
+        #     runner.render_traj(step=cfg.max_steps-1)
     else:
         assert cfg.ckpt is not None, "Must provide a checkpoint for this mode."
         print(f"Loading checkpoint from {cfg.ckpt}")

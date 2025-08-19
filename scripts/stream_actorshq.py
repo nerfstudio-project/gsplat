@@ -49,8 +49,6 @@ if __name__ == '__main__':
     cfg = load_config_from_toml(template_path)
     cfg = merge_config(default_cfg, cfg)
 
-    print(cfg)
-
     exp_name = f"actorshq_l1_{1.0 - cfg.ssim_lambda}_ssim_{cfg.ssim_lambda}"
     if cfg.masked_l1_loss:
         exp_name += f"_ml1_{cfg.masked_l1_lambda}"

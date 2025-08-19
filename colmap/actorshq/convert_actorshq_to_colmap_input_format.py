@@ -38,7 +38,7 @@ COLMAP format:
     │   │       │   ├── calibration.csv
     │   │       │   └── light_annotations.csv
     │   │       ├── calibration_gt_2/
-    │   │       ├── calibration_gt/
+    │   │       ├── calibration_gt_1/
     │   │       └── frames/
     │   │           ├── frame0/
     │   │           │   ├── occupancy_grid000000.npz
@@ -46,10 +46,10 @@ COLMAP format:
     │   │           │   │   ├── Cam001_rgb000000.png
     │   │           │   │   └── ...
     │   │           │   ├── images_2/
-    │   │           │   ├── images/
+    │   │           │   ├── images_1/
     │   │           │   ├── masks_4/
     │   │           │   ├── masks_2/
-    │   │           │   └── masks/
+    │   │           │   └── masks_1/
     │   │           ├── frame1/
     │   │           │   ├── occupancy_grid000001.npz
     │   │           │   └── ...
@@ -93,7 +93,7 @@ class ActorsHQToColmapConverter:
         self.res_mappings = {
             '4x': {'cal_dir': 'calibration_gt_4', 'img_dir': 'images_4', 'mask_dir': 'masks_4'},
             '2x': {'cal_dir': 'calibration_gt_2', 'img_dir': 'images_2', 'mask_dir': 'masks_2'},
-            '1x': {'cal_dir': 'calibration_gt', 'img_dir': 'images', 'mask_dir': 'masks'}
+            '1x': {'cal_dir': 'calibration_gt_1', 'img_dir': 'images_1', 'mask_dir': 'masks_1'}
         }
         
     def create_directory_structure(self, actor: str, sequence: str) -> Path:
@@ -251,6 +251,7 @@ class ActorsHQToColmapConverter:
         
         for frame_idx in tqdm(range(num_frames), desc="Copying occupancy grids"):
             frame_dir = dst_sequence_path / "frames" / f"frame{frame_idx}"
+            os.makedirs(frame_dir, exist_ok=True)
             
             # Copy occupancy grid file
             src_occupancy_file = src_occupancy_dir / f"occupancy_grid{frame_idx:06d}.npz"

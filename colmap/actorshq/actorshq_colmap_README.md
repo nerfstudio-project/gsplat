@@ -112,7 +112,7 @@ actorshq/
    │   │   ├── calibration_gt_2/                   # GT Calibration and light for half resolution
    │   │   │   ├── calibration.csv                 # Camera intrinsics & extrinsics (160 cameras)
    │   │   │   └── light_annotations.csv           # Light annotations
-   │   │   ├── calibration_gt/                     # GT Calibration and light for full resolution
+   │   │   ├── calibration_gt_1/                   # GT Calibration and light for full resolution
    │   │   │   ├── calibration.csv                 # Camera intrinsics & extrinsics (160 cameras)
    │   │   │   └── light_annotations.csv           # Light annotations
    │   │   └── frames/
@@ -128,7 +128,7 @@ actorshq/
    │   │       │   │   ├── Cam002_rgb000000.png
    │   │       │   │   └── ...
    │   │       │   │   └── Cam160_rgb000000.png
-   │   │       │   ├── images/                         # Full resolution
+   │   │       │   ├── images_1/                       # Full resolution
    │   │       │   │   ├── Cam001_rgb000000.png
    │   │       │   │   ├── Cam002_rgb000000.png
    │   │       │   │   └── ...
@@ -143,7 +143,7 @@ actorshq/
    │   │       │   │   ├── Cam002_mask000000.png
    │   │       │   │   └── ...
    │   │       │   │   └── Cam160_mask000000.png
-   │   │       │   └── masks/                          # Full resolution
+   │   │       │   └── masks_1/                        # Full resolution
    │   │       │       ├── Cam001_mask000000.png
    │   │       │       ├── Cam002_mask000000.png
    │   │       │       └── ...
@@ -185,6 +185,13 @@ bash export_actorshq_to_colmap.sh # From https://github.com/synthesiaresearch/hu
 # Change parameters to export_actorshq_to_colmap.sh to export the correct resolution.
 ## Note that camera id is 1-indexed in COLMAP. Check the camera.txt file to see the camera ids start from 1. Also, check the images.txt file to see the camera ids are 1-indexed.
 ## Otherwise, the point triangulation will fail.
+```
+
+Or use the script to export and run COLMAP with known poses.
+
+```bash
+cd colmap/actorshq/
+bash export_and_run_colmap.sh # Change parameters to export_and_run_colmap.sh and export_actorshq_to_colmap.sh to run the correct resolution and path to the dataset.
 ```
 
 ### Run COLMAP
@@ -361,4 +368,17 @@ colmap model_converter \
 cd colmap/actorshq/
 
 python visualize_model.py --input_model /main/rajrup/Dropbox/Project/GsplatStream/gsplat/data/Actor01/Sequence1/frames/frame0/resolution_4/sparse/0 --input_format .bin
+```
+
+
+### Copy files and folders to the correct path
+
+```bash
+mkdir -p /main/rajrup/Dropbox/Project/GsplatStream/gsplat/data/Actor01/Sequence1/0/resolution_4/images/
+mkdir -p /main/rajrup/Dropbox/Project/GsplatStream/gsplat/data/Actor01/Sequence1/0/resolution_4/masks/
+mkdir -p /main/rajrup/Dropbox/Project/GsplatStream/gsplat/data/Actor01/Sequence1/0/resolution_4/sparse/0/
+
+cp -r /bigdata2/rajrup/datasets/actorshq/colmap/Actor01/Sequence1/frames/frame0/triangulated_4/* /main/rajrup/Dropbox/Project/GsplatStream/gsplat/data/Actor01/Sequence1/0/resolution_4/sparse/0/
+cp -r /bigdata2/rajrup/datasets/actorshq/colmap/Actor01/Sequence1/frames/frame0/images_4/* /main/rajrup/Dropbox/Project/GsplatStream/gsplat/data/Actor01/Sequence1/0/resolution_4/images/
+cp -r /bigdata2/rajrup/datasets/actorshq/colmap/Actor01/Sequence1/frames/frame0/masks_4/* /main/rajrup/Dropbox/Project/GsplatStream/gsplat/data/Actor01/Sequence1/0/resolution_4/masks/
 ```

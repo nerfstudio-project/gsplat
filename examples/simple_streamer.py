@@ -3,10 +3,12 @@ A fork from simple_viewer.py to stream the scene.
 '''
 
 import argparse
+import json
 import math
 import os
 import sys
 import time
+import shutil
 
 import imageio
 import numpy as np
@@ -24,7 +26,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from examples.gsplat_viewer import GsplatViewer, GsplatRenderTabState
 from examples.config import Config, load_config_from_toml, merge_config
 from examples.utils import get_color
-from stream import frustum_culling
+from stream import frustum_culling, distance_culling
 
 RENDER_MODE_MAP = {
                     "rgb": "RGB",
@@ -32,6 +34,27 @@ RENDER_MODE_MAP = {
                     "depth(expected)": "ED",
                     "alpha": "RGB",
                 }
+
+def save_viewer_poses(poses_dir, saved_poses, only_highest_res=True):
+
+    # Only save the highest resolution poses
+    max_width = max(pose["width"] for pose in saved_poses)
+    max_height = max(pose["height"] for pose in saved_poses)
+    print(f"Max height: {max_height}, Max width: {max_width}")
+
+    # Filter for highest resolution if requested
+    if only_highest_res:
+        saved_poses = [pose for pose in saved_poses if pose["width"] == max_width and pose["height"] == max_height]
+
+    # Add sequential pose_id to each pose
+    for i, pose in enumerate(saved_poses):
+        pose["pose_id"] = i
+
+    # Save all poses to a single JSON file
+    poses_file = os.path.join(poses_dir, "viewer_poses.json")
+    with open(poses_file, 'w') as f:
+        json.dump(saved_poses, f, indent=2)
+    print(f"Saved {len(saved_poses)} poses to {poses_file}")
 
 def main(local_rank: int, world_rank, world_size: int, cfg: Config):
     torch.manual_seed(42)
@@ -50,15 +73,34 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
     opacities.append(torch.sigmoid(ckpt["opacities"]))
     sh0.append(ckpt["sh0"])
     shN.append(ckpt["shN"])
-    means = torch.cat(means, dim=0)
-    quats = torch.cat(quats, dim=0)
-    scales = torch.cat(scales, dim=0)
-    opacities = torch.cat(opacities, dim=0)
-    sh0 = torch.cat(sh0, dim=0)
-    shN = torch.cat(shN, dim=0)
-    colors = torch.cat([sh0, shN], dim=-2)
+    means = torch.cat(means, dim=0) # [N, 3]
+    quats = torch.cat(quats, dim=0) # [N, 4]
+    scales = torch.cat(scales, dim=0) # [N, 3]
+    opacities = torch.cat(opacities, dim=0) # [N]
+    sh0 = torch.cat(sh0, dim=0) # [N, 1, 3]
+    shN = torch.cat(shN, dim=0) # [N, S, 3], e.g. S = 15
+    colors = torch.cat([sh0, shN], dim=-2) # [N, K, 3], e.g. K = 1 + S = 16
     sh_degree = int(math.sqrt(colors.shape[-2]) - 1)
     print("Number of Gaussians:", means.shape[0])
+
+    # Create distance culling directory
+    distance_culling_dir = os.path.join(cfg.result_dir, "distance_culling")
+    if os.path.exists(distance_culling_dir):
+        shutil.rmtree(distance_culling_dir)
+    os.makedirs(distance_culling_dir)
+    
+    # Create directory and storage for viewer poses (if enabled)
+    if cfg.save_viewer_poses:
+        poses_dir = os.path.join(cfg.result_dir, "viewer_poses")
+        if os.path.exists(poses_dir):
+            shutil.rmtree(poses_dir)
+        os.makedirs(poses_dir)
+        
+        # Storage for all poses
+        saved_poses = []
+    else:
+        poses_dir = None
+        saved_poses = []
 
     # register and open viewer
     @torch.no_grad()
@@ -71,11 +113,38 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
             width = render_tab_state.viewer_width
             height = render_tab_state.viewer_height
         c2w = camera_state.c2w
-        K = camera_state.get_K((width, height))
-        c2w = torch.from_numpy(c2w).float().to(device)
-        K = torch.from_numpy(K).float().to(device)
-        viewmat = c2w.inverse()
+        K = camera_state.get_K((width, height)) # [3, 3]
+        c2w = torch.from_numpy(c2w).float().to(device) # [4, 4]
+        K = torch.from_numpy(K).float().to(device) # [3, 3]
+        viewmat = c2w.inverse() # [4, 4]
         print(f"Rendering Image - Height: {height}, Width: {width}, Near Plane: {render_tab_state.near_plane}, Far Plane: {render_tab_state.far_plane}")
+
+        # Calculate bounding box of all gaussians
+        bbox_min = torch.min(means, dim=0)[0]  # [3]
+        bbox_max = torch.max(means, dim=0)[0]  # [3]
+        bbox_center = (bbox_min + bbox_max) / 2.0  # [3]
+        
+        # Calculate distance from camera to bounding box center
+        distance_to_bbox_center = torch.norm(c2w[:3, 3] - bbox_center).item()
+        print(f"Distance to bbox center: {distance_to_bbox_center:.3f} m")
+
+        if cfg.save_viewer_poses:
+            # Save current viewer pose for later evaluation
+            pose_data = {
+                "timestamp": time.time(),
+                "frame_id": len(saved_poses),
+                "c2w_matrix": c2w.cpu().numpy().tolist(),  # Camera-to-world transformation
+                "K_matrix": K.cpu().numpy().tolist(),      # Intrinsic matrix
+                "width": width,
+                "height": height,
+                "near_plane": render_tab_state.near_plane,
+                "far_plane": render_tab_state.far_plane,
+                "render_mode": render_tab_state.render_mode,
+                "max_sh_degree": render_tab_state.max_sh_degree,
+                "bbox_center": bbox_center.cpu().numpy().tolist(),
+                "distance_to_bbox_center": distance_to_bbox_center,
+            }
+            saved_poses.append(pose_data)
 
         # Create local copies for rendering (and potential frustum culling)
         render_means = means
@@ -83,10 +152,10 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         render_scales = scales
         render_opacities = opacities
         render_colors = colors
-
+        num_original = render_means.shape[0]
         # Perform frustum culling
         if cfg.frustum_culling:
-            num_original = render_means.shape[0]
+            start_time = time.time()
             culling_mask = frustum_culling(
                 render_means, render_scales, viewmat, K, width, height, 
                 near=render_tab_state.near_plane, far=render_tab_state.far_plane
@@ -98,11 +167,33 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
             render_scales = render_scales[culling_mask]
             render_opacities = render_opacities[culling_mask]
             render_colors = render_colors[culling_mask]
+            end_time = time.time()
+            print(f"Frustum culling time: {(end_time - start_time) * 1000:.2f}ms")
             
             num_after_cull = render_means.shape[0]
             culling_ratio = (num_original - num_after_cull) / num_original * 100.0 # avoid division by zero
             
-            print(f"#Gaussians: {num_original}, #Culled Gaussians: {num_original - num_after_cull}, #Rendered Gaussians: {num_after_cull}, Culling Ratio: {culling_ratio:.1f}%")
+            print(f"#Gaussians: {num_original}, #Frustum Culled Gaussians: {num_original - num_after_cull}, #Rendered Gaussians: {num_after_cull}, #Frustum Culling Ratio: {culling_ratio:.1f}%")
+
+        if cfg.distance_culling:
+            start_time = time.time()
+
+            culling_mask = distance_culling(
+                render_means, render_quats, render_scales, render_opacities, viewmat, K, width, height, dump_file=None
+            )
+            render_means = render_means[culling_mask]
+            render_quats = render_quats[culling_mask]
+            render_scales = render_scales[culling_mask]
+            render_opacities = render_opacities[culling_mask]
+            render_colors = render_colors[culling_mask]
+            end_time = time.time()
+            print(f"Distance culling time: {(end_time - start_time) * 1000:.2f}ms")
+
+            num_after_cull = render_means.shape[0]
+            culling_ratio = (num_original - num_after_cull) / num_original * 100.0 # avoid division by zero
+            print(f"#Gaussians: {num_original}, #Distance Culled Gaussians: {num_original - num_after_cull}, #Rendered Gaussians: {num_after_cull}, #Distance Culling Ratio: {culling_ratio:.1f}%")
+        
+        print(f"#Gaussians: {num_original}, #Culled Gaussians: {num_original - render_means.shape[0]}, #Rendered Gaussians: {render_means.shape[0]}, #Total Culling Ratio: {(num_original - render_means.shape[0]) / num_original * 100:.1f}%\n")
 
         if render_means.shape[0] == 0: # Otherwise, the rendering will crash
             print("No Gaussians left after frustum culling. Returning empty image.")
@@ -113,9 +204,9 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
             render_quats,  # [N, 4]
             render_scales,  # [N, 3]
             render_opacities,  # [N]
-            render_colors,  # [N, S, 3]
-            viewmat[None],  # [1, 4, 4]
-            K[None],  # [1, 3, 3]
+            render_colors,  # [N, K, 3]
+            viewmat[None],  # [4, 4]
+            K[None],  # [3, 3]
             width,
             height,
             sh_degree=(
@@ -180,7 +271,31 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
     viewer.render_tab_state.near_plane = cfg.near_plane
     viewer.render_tab_state.far_plane = cfg.far_plane
     print("Viewer running... Ctrl+C to exit.")
-    time.sleep(100000)
+    
+    try:
+        time.sleep(100000)
+    except KeyboardInterrupt:
+        print("\nReceived interrupt signal, saving poses...")
+    finally:
+        # Final cleanup and save all poses
+        if cfg.save_viewer_poses and saved_poses:
+            save_viewer_poses(poses_dir, saved_poses, only_highest_res=True)
+            
+            # Save summary file with statistics
+            summary_file = os.path.join(poses_dir, "poses_summary.json")
+            summary = {
+                "total_poses": len(saved_poses),
+                "first_timestamp": saved_poses[0]["timestamp"] if saved_poses else None,
+                "last_timestamp": saved_poses[-1]["timestamp"] if saved_poses else None,
+                "duration_seconds": (saved_poses[-1]["timestamp"] - saved_poses[0]["timestamp"]) if len(saved_poses) > 1 else 0,
+                "unique_resolutions": list(set(f"{pose['width']}x{pose['height']}" for pose in saved_poses)),
+                "render_modes_used": list(set(pose["render_mode"] for pose in saved_poses)),
+                "poses_file": "viewer_poses.json"
+            }
+            with open(summary_file, 'w') as f:
+                json.dump(summary, f, indent=2)
+            print(f"Pose summary saved to {summary_file}")
+        print("Cleanup completed.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

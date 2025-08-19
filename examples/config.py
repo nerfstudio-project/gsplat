@@ -210,8 +210,17 @@ class Config:
     use_fused_bilagrid: bool = False
 
     # Streaming and Rendering
+    render_height: int = 1422   # render height for evaluation
+    render_width: int = 2048    # render width for evaluation
+
     # Frustum culling
     frustum_culling: bool = False
+    # Distance culling
+    distance_culling: bool = False
+    pixel_threshold: float = 2.0
+
+    # Save viewer poses
+    save_viewer_poses: bool = False
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
