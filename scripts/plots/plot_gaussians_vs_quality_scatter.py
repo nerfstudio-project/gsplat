@@ -23,7 +23,7 @@ from matplotlib.colors import Normalize
 from matplotlib.cm import ScalarMappable
 from matplotlib.patches import Patch
 
-WORK_DIR = "/main/rajrup/Dropbox/Project/GsplatStream/gsplat"
+WORK_DIR = "/ssd1/rajrup/Project/gsplat"
 
 def discover_pixel_sizes(culling_evaluation_dir):
     """
@@ -384,7 +384,9 @@ def generate_all_gaussians_vs_quality_plots(culling_evaluation_dir, base_save_di
         ("ssim", "SSIM"),
         ("masked_ssim", "Masked SSIM"),
         ("lpips", "LPIPS"),
-        ("cropped_lpips", "Cropped LPIPS")
+        ("cropped_lpips", "Cropped LPIPS"),
+        ("masked_se", "Masked SE"),
+        ("masked_rmse", "Masked RMSE")
     ]
     
     # Generate both variable size and uniform size plots for each quality metric
@@ -410,22 +412,22 @@ if __name__ == "__main__":
     seq_name = "Sequence1"
     resolution = 4
     frame_id = 0
-    # render_height = 1422   # 1422
-    # render_width = 2048    # 2048
+    render_height = 1422   # 1422
+    render_width = 2048    # 2048
     # render_height = 711   # 1/2 of 1422
     # render_width = 1024   # 1/2 of 2048
-    render_height = 356   # 1/4 of 1422
-    render_width = 512   # 1/4 of 2048
+    # render_height = 356   # 1/4 of 1422
+    # render_width = 512   # 1/4 of 2048
 
     print(f"{'='*80}")
     print(f"Plotting gaussians vs quality scatter plots for {model_name}/{actor_name}/{seq_name}/{resolution}x/{frame_id} with render resolution {render_width}x{render_height}")
     print(f"{'='*80}")
 
-    base_save_dir = os.path.join(WORK_DIR, f"scripts/plots/culling_gaussians_vs_quality_scatter_plots/{model_name}/{actor_name}_{seq_name}_{resolution}x_{frame_id}", f"render_hxw_{render_width}x{render_height}")
+    base_save_dir = os.path.join(WORK_DIR, f"scripts/plots/static_culling_gaussians_vs_quality_scatter_plots/{model_name}/{actor_name}_{seq_name}_{resolution}x_{frame_id}", f"render_hxw_{render_width}x{render_height}")
     print(f"Gaussians vs Quality plots will be saved to: {base_save_dir}")
     
     # Path to the culling evaluation directory
-    culling_evaluation_dir = os.path.join(WORK_DIR, f"results/{model_name}/{actor_name}/{seq_name}/resolution_{resolution}/{frame_id}/viewer_poses/render_hxw_{render_width}x{render_height}/culling_evaluation")
+    culling_evaluation_dir = os.path.join(WORK_DIR, f"results/{model_name}/{actor_name}/{seq_name}/resolution_{resolution}/{frame_id}/viewer_poses/render_hxw_{render_width}x{render_height}/static_dist_culling/culling_evaluation")
     
     # Define all culling methods to generate plots for
     culling_methods = ["frustum_only", "distance_only", "both_culling"]

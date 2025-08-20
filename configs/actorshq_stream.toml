@@ -14,20 +14,20 @@ lpips_net = "vgg"
 save_viewer_poses = true
 
 # Rendering
-render_height = 1422
-render_width = 2048
+# render_height = 1422
+# render_width = 2048
 # render_height = 711   # 1/2 of 1422
 # render_width = 1024   # 1/2 of 2048
-# render_height = 356   # 1/4 of 1422
-# render_width = 512   # 1/4 of 2048
+render_height = 356   # 1/4 of 1422
+render_width = 512   # 1/4 of 2048
 
 frustum_culling = true
 distance_culling = true
 pixel_threshold = 0.5
 
 # Dataset
-actorshq_data_dir = "/main/rajrup/Dropbox/Project/GsplatStream/gsplat/data/Actor01/Sequence1/"
-# actorshq_data_dir = "/main/rajrup/Dropbox/Project/GsplatStream/gsplat/data/Actor08/Sequence1/"
+actorshq_data_dir = "/ssd1/rajrup/Project/gsplat/data/Actor01/Sequence1/"
+# actorshq_data_dir = "/ssd1/rajrup/Project/gsplat/data/Actor08/Sequence1/"
 scene_id = 0
 resolution = 4 # Resolution of the actorshq dataset (1, 2, 4)
 data_factor = 1  # Downsample factor for the dataset. ActorsHQ dataset is already downsampled with correct intrinsics.

@@ -12,7 +12,7 @@ import glob
 import re
 from pathlib import Path
 
-WORK_DIR = "/main/rajrup/Dropbox/Project/GsplatStream/gsplat"
+WORK_DIR = "/ssd1/rajrup/Project/gsplat"
 FIG_SIZE = (8, 6)
 
 def discover_base_pixel_thresholds(dynamic_culling_evaluation_dir):
@@ -454,7 +454,7 @@ if __name__ == "__main__":
     print(f"Plots will be saved to: {save_dir}")
     
     # Path to the dynamic culling evaluation directory
-    dynamic_culling_evaluation_dir = os.path.join(WORK_DIR, f"results/{model_name}/{actor_name}/{seq_name}/resolution_{resolution}/{frame_id}/viewer_poses/render_hxw_{render_width}x{render_height}/dynamic_culling_evaluation")
+    dynamic_culling_evaluation_dir = os.path.join(WORK_DIR, f"results/{model_name}/{actor_name}/{seq_name}/resolution_{resolution}/{frame_id}/viewer_poses/render_hxw_{render_width}x{render_height}/dynamic_dist_culling/culling_evaluation")
     
     # Check if directory exists
     if not os.path.exists(dynamic_culling_evaluation_dir):

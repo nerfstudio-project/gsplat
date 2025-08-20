@@ -229,7 +229,7 @@ def evaluate_culling_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name
     masks_output_dir = None
     
     if save_images:
-        images_output_dir = os.path.join(poses_dir, f"render_hxw_{cfg.render_width}x{cfg.render_height}", "evaluation_images")
+        images_output_dir = os.path.join(poses_dir, f"render_hxw_{cfg.render_width}x{cfg.render_height}", "static_dist_culling", "evaluation_images")
         os.makedirs(images_output_dir, exist_ok=True)
         
         # Create subdirectories for each configuration (stacked GT|Culled images)
@@ -264,11 +264,13 @@ def evaluate_culling_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name
         gt_mask_binary = (gt_alpha > ALPHA_MASK_THRESHOLD).bool()  # [1, H, W]
         
         # Convert ground truth to numpy for image stacking (only if saving images)
-        if save_images:
-            gt_image_np = (gt_image[0].cpu().numpy() * 255).astype(np.uint8)  # [H, W, 3]
-            # gt_mask_binary_np = (gt_mask_binary[0, :, :].cpu().numpy() * 255.0).astype(np.uint8)  # [H, W]
-            # mask_path = os.path.join(masks_output_dir, f"pose_{pose_id:06d}_mask.png")
-            # imageio.imwrite(mask_path, gt_mask_binary_np)
+        gt_image_np = (gt_image[0].cpu().numpy() * 255).astype(np.uint8)  # [H, W, 3]
+
+        # Save GT masks for evaluation later
+        if save_images and cfg.pixel_threshold == 0.0:
+            gt_mask_binary_np = (gt_mask_binary[0, :, :].cpu().numpy() * 255.0).astype(np.uint8)  # [H, W]
+            mask_path = os.path.join(masks_output_dir, f"pose_{pose_id:06d}_mask.png")
+            imageio.imwrite(mask_path, gt_mask_binary_np)
         
         # Evaluate each culling configuration
         for config in eval_configs:
@@ -338,7 +340,7 @@ def evaluate_culling_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name
             print(f"Progress: {i+1}/{len(poses)} ({100*(i+1)/len(poses):.1f}%) - ETA: {eta:.1f}s")
     
     # Calculate and save summary statistics
-    pixel_sizes_dir = os.path.join(poses_dir, f"render_hxw_{cfg.render_width}x{cfg.render_height}", "pixel_sizes")
+    pixel_sizes_dir = os.path.join(poses_dir, f"render_hxw_{cfg.render_width}x{cfg.render_height}", "static_dist_culling", "pixel_sizes")
     os.makedirs(pixel_sizes_dir, exist_ok=True)
     for config_name, pose_results in results.items():
         if config_name == f"distance_only_px_{cfg.pixel_threshold}":
@@ -439,7 +441,7 @@ def evaluate_culling_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name
         }
     
     # Save detailed results
-    output_dir = os.path.join(poses_dir, f"render_hxw_{cfg.render_width}x{cfg.render_height}", "culling_evaluation")
+    output_dir = os.path.join(poses_dir, f"render_hxw_{cfg.render_width}x{cfg.render_height}", "static_dist_culling", "culling_evaluation")
     os.makedirs(output_dir, exist_ok=True)
     
     # Save detailed results (pose_id-keyed format for easy lookup)

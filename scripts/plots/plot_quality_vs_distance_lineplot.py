@@ -12,7 +12,7 @@ import glob
 import re
 from pathlib import Path
 
-WORK_DIR = "/main/rajrup/Dropbox/Project/GsplatStream/gsplat"
+WORK_DIR = "/ssd1/rajrup/Project/gsplat"
 FIG_SIZE = (8, 6)
 
 def discover_pixel_sizes_threshold(culling_evaluation_dir):
@@ -413,26 +413,26 @@ def generate_all_plots_for_method(culling_evaluation_dir, base_save_dir, culling
 if __name__ == "__main__":
 
     model_name = "actorshq_l1_0.5_ssim_0.5_alpha_1.0"
-    actor_name = "Actor08"
+    actor_name = "Actor01"
     seq_name = "Sequence1"
     resolution = 4
     frame_id = 0
-    # render_height = 1422   # 1422
-    # render_width = 2048    # 2048
+    render_height = 1422   # 1422
+    render_width = 2048    # 2048
     # render_height = 711   # 1/2 of 1422
     # render_width = 1024   # 1/2 of 2048
-    render_height = 356   # 1/4 of 1422
-    render_width = 512   # 1/4 of 2048
+    # render_height = 356   # 1/4 of 1422
+    # render_width = 512   # 1/4 of 2048
 
     print(f"{'='*80}")
     print(f"Plotting PSNR vs Distance for {model_name}/{actor_name}/{seq_name}/{resolution}x/{frame_id} with render resolution {render_width}x{render_height}")
     print(f"{'='*80}")
 
-    base_save_dir = os.path.join(WORK_DIR, f"scripts/plots/culling_quality_vs_distance_line_plots/{model_name}/{actor_name}_{seq_name}_{resolution}x_{frame_id}", f"render_hxw_{render_width}x{render_height}")
+    base_save_dir = os.path.join(WORK_DIR, f"scripts/plots/static_culling_quality_vs_distance_line_plots/{model_name}/{actor_name}_{seq_name}_{resolution}x_{frame_id}", f"render_hxw_{render_width}x{render_height}")
     print(f"Plots will be saved to: {base_save_dir}")
     
     # Path to the culling evaluation directory (now includes render resolution)
-    culling_evaluation_dir = os.path.join(WORK_DIR, f"results/{model_name}/{actor_name}/{seq_name}/resolution_{resolution}/{frame_id}/viewer_poses/render_hxw_{render_width}x{render_height}/culling_evaluation")
+    culling_evaluation_dir = os.path.join(WORK_DIR, f"results/{model_name}/{actor_name}/{seq_name}/resolution_{resolution}/{frame_id}/viewer_poses/render_hxw_{render_width}x{render_height}/static_dist_culling/culling_evaluation")
     
     # Define all culling methods to generate plots for
     culling_methods = ["frustum_only", "distance_only", "both_culling"]

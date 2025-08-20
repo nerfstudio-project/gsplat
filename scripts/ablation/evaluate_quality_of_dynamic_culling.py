@@ -218,7 +218,7 @@ def evaluate_dynamic_culling_quality(frame_id, iter, cfg: Config, exp_name, sub_
     masks_output_dir = None
     
     if save_images:
-        images_output_dir = os.path.join(poses_dir, f"render_hxw_{cfg.render_width}x{cfg.render_height}", "dynamic_culling_evaluation_images")
+        images_output_dir = os.path.join(poses_dir, f"render_hxw_{cfg.render_width}x{cfg.render_height}", "dynamic_dist_culling", "evaluation_images")
         os.makedirs(images_output_dir, exist_ok=True)
         
         # Create subdirectory for dynamic culling (stacked GT|Culled images)
@@ -325,7 +325,7 @@ def evaluate_dynamic_culling_quality(frame_id, iter, cfg: Config, exp_name, sub_
             print(f"Progress: {i+1}/{len(poses)} ({100*(i+1)/len(poses):.1f}%) - ETA: {eta:.1f}s")
 
     # Calculate and save summary statistics
-    pixel_sizes_dir = os.path.join(poses_dir, f"render_hxw_{cfg.render_width}x{cfg.render_height}", "dynamic_culling_evaluation_images", f"pixel_sizes_{cfg.pixel_threshold}")
+    pixel_sizes_dir = os.path.join(poses_dir, f"render_hxw_{cfg.render_width}x{cfg.render_height}", "dynamic_dist_culling", f"pixel_sizes")
     os.makedirs(pixel_sizes_dir, exist_ok=True)
     for pose_id, pose_data in results.items():
         # Pixel sizes are same across any pixel_threshold, so we overwrite the file
@@ -431,7 +431,7 @@ def evaluate_dynamic_culling_quality(frame_id, iter, cfg: Config, exp_name, sub_
     }
     
     # Save detailed results
-    output_dir = os.path.join(poses_dir, f"render_hxw_{cfg.render_width}x{cfg.render_height}", "dynamic_culling_evaluation")
+    output_dir = os.path.join(poses_dir, f"render_hxw_{cfg.render_width}x{cfg.render_height}", "dynamic_dist_culling", "culling_evaluation")
     os.makedirs(output_dir, exist_ok=True)
     
     # Save detailed results (pose_id-keyed format for easy lookup)

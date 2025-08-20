@@ -289,7 +289,7 @@ def get_color(bkgd_color: str):
     else:
         return (0.0, 0.0, 0.0)  # Black background [R, G, B]
     
-def fused_ssim_map(self, img1, img2, padding="same", train=True):
+def fused_ssim_map(img1, img2, padding="same", train=True):
     """SSIM map calculation."""
     C1 = 0.01 ** 2
     C2 = 0.03 ** 2

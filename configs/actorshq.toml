@@ -10,8 +10,8 @@ render_traj_path = "interp"  # Render trajectory path, Options: "interp", "ellip
 render_traj_fps = 3  # Render trajectory FPS
 # compression = null  # Name of compression strategy (e.g., png)
 
-actorshq_data_dir = "/ssd1/rajrup/Project/gsplat/data/Actor01/Sequence1/"
-# actorshq_data_dir = "/ssd1/rajrup/Project/gsplat/data/Actor08/Sequence1/"
+# actorshq_data_dir = "/ssd1/rajrup/Project/gsplat/data/Actor01/Sequence1/"
+actorshq_data_dir = "/ssd1/rajrup/Project/gsplat/data/Actor08/Sequence1/"
 scene_id = 0
 resolution = 4 # Resolution of the actorshq dataset (1, 2, 4)
 data_factor = 1  # Downsample factor for the dataset. ActorsHQ dataset is already downsampled with correct intrinsics.

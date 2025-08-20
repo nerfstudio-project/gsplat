@@ -23,7 +23,7 @@ from matplotlib.colors import Normalize
 from matplotlib.cm import ScalarMappable
 from matplotlib.patches import Patch
 
-WORK_DIR = "/main/rajrup/Dropbox/Project/GsplatStream/gsplat"
+WORK_DIR = "/ssd1/rajrup/Project/gsplat"
 
 def discover_pixel_sizes(culling_evaluation_dir):
     """
@@ -421,11 +421,11 @@ if __name__ == "__main__":
     print(f"Plotting quality vs gaussians scatter plots for {model_name}/{actor_name}/{seq_name}/{resolution}x/{frame_id} with render resolution {render_width}x{render_height}")
     print(f"{'='*80}")
 
-    base_save_dir = os.path.join(WORK_DIR, f"scripts/plots/culling_quality_vs_gaussians_scatter_plots/{model_name}/{actor_name}_{seq_name}_{resolution}x_{frame_id}", f"render_hxw_{render_width}x{render_height}")
+    base_save_dir = os.path.join(WORK_DIR, f"scripts/plots/static_culling_quality_vs_gaussians_scatter_plots/{model_name}/{actor_name}_{seq_name}_{resolution}x_{frame_id}", f"render_hxw_{render_width}x{render_height}")
     print(f"Quality vs Gaussians plots will be saved to: {base_save_dir}")
     
     # Path to the culling evaluation directory
-    culling_evaluation_dir = os.path.join(WORK_DIR, f"results/{model_name}/{actor_name}/{seq_name}/resolution_{resolution}/{frame_id}/viewer_poses/render_hxw_{render_width}x{render_height}/culling_evaluation")
+    culling_evaluation_dir = os.path.join(WORK_DIR, f"results/{model_name}/{actor_name}/{seq_name}/resolution_{resolution}/{frame_id}/viewer_poses/render_hxw_{render_width}x{render_height}/static_dist_culling/culling_evaluation")
     
     # Define all culling methods to generate plots for
     culling_methods = ["frustum_only", "distance_only", "both_culling"]

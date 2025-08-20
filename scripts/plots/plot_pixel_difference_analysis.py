@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import imageio
 import re
 
-WORK_DIR = "/main/rajrup/Dropbox/Project/GsplatStream/gsplat"
+WORK_DIR = "/ssd1/rajrup/Project/gsplat"
 
 def load_stacked_image(image_path):
     """
@@ -192,10 +192,10 @@ def main():
     seq_name = "Sequence1"
     resolution = 4
     frame_id = 0
-    # render_height = 1422
-    # render_width = 2048
-    render_height = 356 # 1/4 of 1422
-    render_width = 512  # 1/4 of 2048
+    render_height = 1422
+    render_width = 2048
+    # render_height = 356 # 1/4 of 1422
+    # render_width = 512  # 1/4 of 2048
     
     print(f"{'='*80}")
     print(f"Processing pixel differences for {model_name}/{actor_name}/{seq_name}/{resolution}x/{frame_id}")
@@ -205,14 +205,14 @@ def main():
     # Paths
     evaluation_images_dir = os.path.join(
         WORK_DIR, 
-        f"results/{model_name}/{actor_name}/{seq_name}/resolution_{resolution}/{frame_id}/viewer_poses/render_hxw_{render_width}x{render_height}/evaluation_images"
+        f"results/{model_name}/{actor_name}/{seq_name}/resolution_{resolution}/{frame_id}/viewer_poses/render_hxw_{render_width}x{render_height}/static_dist_culling/evaluation_images"
     )
     
     gt_masks_dir = os.path.join(evaluation_images_dir, "gt_masks")
     
     save_dir = os.path.join(
         WORK_DIR, 
-        f"scripts/plots/pixel_difference_analysis/{model_name}/{actor_name}_{seq_name}_{resolution}x_{frame_id}/render_hxw_{render_width}x{render_height}"
+        f"scripts/plots/static_culling_pixel_difference_analysis/{model_name}/{actor_name}_{seq_name}_{resolution}x_{frame_id}/render_hxw_{render_width}x{render_height}"
     )
     os.makedirs(save_dir, exist_ok=True)
     

@@ -12,7 +12,7 @@ import numpy as np
 import glob
 from pathlib import Path
 
-WORK_DIR = "/main/rajrup/Dropbox/Project/GsplatStream/gsplat"
+WORK_DIR = "/ssd1/rajrup/Project/gsplat"
 
 def load_poses(poses_file: str) -> list:
     """Load viewer poses from JSON file."""
@@ -286,16 +286,16 @@ def main():
     
     # Configuration - match the structure from plot_psnr_vs_distance.py
     model_name = "actorshq_l1_0.5_ssim_0.5_alpha_1.0"
-    actor_name = "Actor08"
+    actor_name = "Actor01"
     seq_name = "Sequence1"
     resolution = 4
     frame_id = 0
-    # render_height = 1422   # 1422
-    # render_width = 2048    # 2048
+    render_height = 1422   # 1422
+    render_width = 2048    # 2048
     # render_height = 711   # 1/2 of 1422
     # render_width = 1024   # 1/2 of 2048
-    render_height = 356   # 1/4 of 1422
-    render_width = 512   # 1/4 of 2048
+    # render_height = 356   # 1/4 of 1422
+    # render_width = 512   # 1/4 of 2048
 
     print(f"{'='*80}")
     print(f"Plotting pixel size histograms for {model_name}/{actor_name}/{seq_name}/{resolution}x/{frame_id} with render resolution {render_width}x{render_height}")
@@ -304,10 +304,10 @@ def main():
     # Base directories
     base_result_dir = os.path.join(WORK_DIR, f"results/{model_name}/{actor_name}/{seq_name}/resolution_{resolution}/{frame_id}")
     poses_dir = os.path.join(base_result_dir, "viewer_poses")
-    pixel_sizes_dir = os.path.join(poses_dir, f"render_hxw_{render_width}x{render_height}", "pixel_sizes")
+    pixel_sizes_dir = os.path.join(poses_dir, f"render_hxw_{render_width}x{render_height}", "static_dist_culling/pixel_sizes")
     
     # Output directory for histograms
-    base_save_dir = os.path.join(WORK_DIR, f"scripts/plots/culling_pixel_size_histograms/{model_name}/{actor_name}_{seq_name}_{resolution}x_{frame_id}", f"render_hxw_{render_width}x{render_height}")
+    base_save_dir = os.path.join(WORK_DIR, f"scripts/plots/static_culling_pixel_size_histograms/{model_name}/{actor_name}_{seq_name}_{resolution}x_{frame_id}", f"render_hxw_{render_width}x{render_height}")
     os.makedirs(base_save_dir, exist_ok=True)
     
     print(f"Base result directory: {base_result_dir}")
