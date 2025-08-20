@@ -3,7 +3,7 @@
 ## Setup Environment
 
 ```bash
-# Ubuntu 18.04 and CUDA 11.8
+# Ubuntu 18.04/20.04 and CUDA 11.8
 conda create -n gsplat python=3.10
 conda activate gsplat
 python -m pip install --upgrade pip
@@ -20,6 +20,7 @@ pip install -e . --no-build-isolation
 pip install -r examples/requirements.txt
 pip install jaxtyping
 pip install toml ipykernel jupyter wandb
+pip install open3d
 ```
 
 ## Installing COLMAP 3.12.0

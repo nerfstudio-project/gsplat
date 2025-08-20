@@ -288,6 +288,18 @@ def get_color(bkgd_color: str):
         return (np.random.randint(0, 255), np.random.randint(0, 255), np.random.randint(0, 255))  # Random background [R, G, B]
     else:
         return (0.0, 0.0, 0.0)  # Black background [R, G, B]
+    
+def fused_ssim_map(self, img1, img2, padding="same", train=True):
+    """SSIM map calculation."""
+    C1 = 0.01 ** 2
+    C2 = 0.03 ** 2
+
+    assert padding in ["same", "valid"]
+
+    img1 = img1.contiguous()
+    map = FusedSSIMMap.apply(C1, C2, img1, img2, padding, train)
+    return map
+
 class Metrics:
     """Comprehensive metrics calculator for image quality evaluation."""
     
@@ -318,17 +330,6 @@ class Metrics:
             ).to(device)
         else:
             raise ValueError(f"Unknown LPIPS network: {lpips_net}")
-    
-    def _fused_ssim_map(self, img1, img2, padding="same", train=True):
-        """Private method for SSIM map calculation."""
-        C1 = 0.01 ** 2
-        C2 = 0.03 ** 2
-
-        assert padding in ["same", "valid"]
-
-        img1 = img1.contiguous()
-        map = FusedSSIMMap.apply(C1, C2, img1, img2, padding, train)
-        return map
     
     def _get_tight_bbox(self, mask: torch.Tensor, padding: int = 16) -> tuple:
         """Get tight bounding box around masked region with optional padding."""
@@ -460,7 +461,7 @@ class Metrics:
         pixels_perm = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
         
         # Calculate per-pixel SSIM map
-        per_pixel_ssim = self._fused_ssim_map(colors_perm, pixels_perm, padding="same")  # [1, 3, H, W] or [1, H, W]
+        per_pixel_ssim = fused_ssim_map(colors_perm, pixels_perm, padding="same")  # [1, 3, H, W] or [1, H, W]
         
         # Handle different output shapes from fused_ssim_map
         if per_pixel_ssim.dim() == 4:  # [1, 3, H, W]
