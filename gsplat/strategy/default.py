@@ -159,6 +159,8 @@ class DefaultStrategy(Strategy):
         packed: bool = False,
     ):
         """Callback function to be executed after the `loss.backward()` call."""
+        if "absgrad_hook" in info:
+            info["absgrad_hook"].remove()
         if step >= self.refine_stop_iter:
             return
 
