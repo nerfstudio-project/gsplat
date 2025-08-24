@@ -4,47 +4,14 @@ import time
 import numpy as np
 import os
 import shutil
+import math
 from typing import Tuple, Optional
 
 from gsplat.cuda._wrapper import quat_scale_to_covar_preci, proj
 # world_to_cam is deprecated in CUDA backend, but we still need it for the PyTorch implementation. Check the implementation in _wrapper.py for more details.
 from gsplat.cuda._torch_impl import _world_to_cam, _quat_scale_to_covar_preci, _persp_proj
 
-def calc_pixel_size(
-    means: Tensor,  # [N, 3]
-    quats: Tensor,  # [N, 4]
-    scales: Tensor,  # [N, 3]
-    opacities: Tensor,  # [N]
-    viewmat: Tensor,  # [4, 4]
-    K: Tensor,  # [3, 3]
-    width: int, height: int,
-    scale_modifier: float = 1.0, eps2d: float = 0.3, method: str = "cuda"
-) -> Tensor:
-    """
-    Calculate the pixel size of a Gaussian in the image plane.
 
-    Args:
-        means: [N, 3] - Gaussian centers in world coordinates
-        quats: [N, 4] - Gaussian quaternions
-        scales: [N, 3] - Gaussian scales
-        opacities: [N] - Gaussian opacities
-        viewmat: [4, 4] - view matrix (world to camera)
-        K: [3, 3] - camera intrinsic matrix
-        width: int - image width
-        height: int - image height
-        scale_modifier: float - scale modifier applied to Gaussian scales
-        eps2d: float - low-pass filter value added to 2D covariance diagonal (default: 0.3, not used in pixel size calculation)
-        method: str - method to use for pixel size calculation ("cuda" or "torch")
-
-    Returns:
-        pixel_size: [N] - pixel size of each Gaussian in the image plane
-    """
-    if method == "cuda":
-        return calc_pixel_size_torch_cuda(means, quats, scales, opacities, viewmat, K, width, height, scale_modifier, eps2d)
-    elif method == "torch":
-        return calc_pixel_size_torch_only(means, quats, scales, opacities, viewmat, K, width, height, scale_modifier, eps2d)
-    else:
-        raise ValueError(f"Invalid method: {method}")
 
 
 def calc_pixel_size_torch_only(
@@ -104,8 +71,8 @@ def calc_pixel_size_torch_only(
     det_orig = torch.clamp(det_orig, min=1e-10)
     
     # Compute conic_ori (precision matrix without low-pass filter)
-    conic_ori_xx = covars2d[..., 1, 1] / det_orig
-    conic_ori_zz = covars2d[..., 0, 0] / det_orig
+    conic_ori_xx = covars2d[..., 1, 1] / det_orig   # covars2d^(-1)[0][0]
+    conic_ori_zz = covars2d[..., 0, 0] / det_orig   # covars2d^(-1)[1][1]
     
     # 7. Calculate pixel size using level set
     # level_set = -2 * log(1 / (255.0 * opacity))
@@ -204,6 +171,256 @@ def calc_pixel_size_torch_cuda(
     
     return pixel_size
 
+def calc_pixel_size(
+    means: Tensor,  # [N, 3]
+    quats: Tensor,  # [N, 4]
+    scales: Tensor,  # [N, 3]
+    opacities: Tensor,  # [N]
+    viewmat: Tensor,  # [4, 4]
+    K: Tensor,  # [3, 3]
+    width: int, height: int,
+    scale_modifier: float = 1.0, eps2d: float = 0.3, method: str = "cuda"
+) -> Tensor:
+    """
+    Calculate the pixel size of a Gaussian in the image plane.
+
+    Args:
+        means: [N, 3] - Gaussian centers in world coordinates
+        quats: [N, 4] - Gaussian quaternions
+        scales: [N, 3] - Gaussian scales
+        opacities: [N] - Gaussian opacities
+        viewmat: [4, 4] - view matrix (world to camera)
+        K: [3, 3] - camera intrinsic matrix
+        width: int - image width
+        height: int - image height
+        scale_modifier: float - scale modifier applied to Gaussian scales
+        eps2d: float - low-pass filter value added to 2D covariance diagonal (default: 0.3, not used in pixel size calculation)
+        method: str - method to use for pixel size calculation ("cuda" or "torch")
+
+    Returns:
+        pixel_size: [N] - pixel size of each Gaussian in the image plane
+    """
+    if method == "cuda":
+        return calc_pixel_size_torch_cuda(means, quats, scales, opacities, viewmat, K, width, height, scale_modifier, eps2d)
+    elif method == "torch":
+        return calc_pixel_size_torch_only(means, quats, scales, opacities, viewmat, K, width, height, scale_modifier, eps2d)
+    else:
+        raise ValueError(f"Invalid method: {method}")
+
+
+def calc_pixel_area_torch_only(
+    means: Tensor,  # [N, 3]
+    quats: Tensor,  # [N, 4]
+    scales: Tensor,  # [N, 3]
+    opacities: Tensor,  # [N]
+    viewmat: Tensor,  # [4, 4]
+    K: Tensor,  # [3, 3]
+    width: int, 
+    height: int,
+    scale_modifier: float = 1.0,
+    eps2d: float = 0.3
+) -> Tensor:
+    """
+    PyTorch-only implementation of pixel area calculation.
+    Calculates the area of 2D projected Gaussian ellipse in screen space.
+    """
+    
+    N = means.shape[0]
+    device = means.device
+    
+    # Apply scale modifier to scales (same as CUDA implementation)
+    modified_scales = scales * scale_modifier
+    
+    # Add batch dimension consistently from the start
+    means_batch = means.unsqueeze(0)  # [1, N, 3]
+    quats_batch = quats.unsqueeze(0)  # [1, N, 4] 
+    scales_batch = modified_scales.unsqueeze(0)  # [1, N, 3]
+    
+    # 1. Convert quaternions and scales to 3D covariance matrices with batched inputs
+    covars_3d_batch, _ = _quat_scale_to_covar_preci(
+        quats_batch, scales_batch, compute_covar=True, compute_preci=False, triu=False
+    )  # [1, N, 3, 3]
+    
+    # 2. Transform to camera coordinate system
+    viewmat_batch = viewmat.unsqueeze(0).unsqueeze(0)  # [1, 1, 4, 4] - batch_dims + (C, 4, 4)
+    
+    means_cam_batch, covars_cam_batch = _world_to_cam(means_batch, covars_3d_batch, viewmat_batch) # Output: [1, 1, N, 3], [1, 1, N, 3, 3]
+    
+    # 3. Project to 2D screen space - keep batch dimensions
+    K_batch = K.unsqueeze(0).unsqueeze(0)  # [1, 1, 3, 3]
+    
+    _, covars2d_batch = _persp_proj(means_cam_batch, covars_cam_batch, K_batch, width, height) # Output: [1, 1, N, 2], [1, 1, N, 2, 2]
+    
+    # 4. Remove all batch dimensions at once
+    covars2d = covars2d_batch.squeeze(0).squeeze(0)  # [N, 2, 2]
+    
+    # 5. Calculate level set (same as pixel size calculation)
+    level_set = -2.0 * torch.log(1.0 / (255.0 * opacities))
+    level_set = torch.clamp(level_set, min=0.0)  # negative level set when gaussian opacity is too low
+    
+    # 6. Compute determinant of original covariance (without low-pass filter) for area calculation
+    det_cov = (covars2d[..., 0, 0] * covars2d[..., 1, 1] - 
+               covars2d[..., 0, 1] * covars2d[..., 1, 0])
+    det_cov = torch.clamp(det_cov, min=1e-10)
+    
+    # 7. Calculate pixel area using the derived formula: Area = π * level_set * sqrt(det(covariance))
+    pixel_area = math.pi * level_set * torch.sqrt(det_cov)
+    
+    # Apply scale modifier division (same as CUDA implementation)
+    pixel_area = pixel_area / (scale_modifier * scale_modifier)  # Area scales with scale_modifier²
+    
+    return pixel_area
+
+
+def calc_pixel_area_torch_cuda(
+    means: Tensor,  # [N, 3]
+    quats: Tensor,  # [N, 4]
+    scales: Tensor,  # [N, 3]
+    opacities: Tensor,  # [N]
+    viewmat: Tensor,  # [4, 4]
+    K: Tensor,  # [3, 3]
+    width: int, 
+    height: int,
+    scale_modifier: float = 1.0,
+    eps2d: float = 0.3
+) -> Tensor:
+    """
+    PyTorch + CUDA implementation of pixel area calculation.
+    Calculates the area of 2D projected Gaussian ellipse in screen space.
+    """
+    
+    N = means.shape[0]
+    device = means.device
+    
+    # Apply scale modifier to scales (same as CUDA implementation)
+    modified_scales = scales * scale_modifier
+    
+    # Add batch dimension consistently from the start
+    means_batch = means.unsqueeze(0)  # [1, N, 3]
+    quats_batch = quats.unsqueeze(0)  # [1, N, 4] 
+    scales_batch = modified_scales.unsqueeze(0)  # [1, N, 3]
+    
+    # 1. Convert quaternions and scales to 3D covariance matrices using CUDA with batched inputs
+    covars_3d_batch, _ = _quat_scale_to_covar_preci(
+        quats_batch, scales_batch, compute_covar=True, compute_preci=False, triu=False
+    )  # [1, N, 3, 3]
+    
+    # 2. Transform to camera coordinate system
+    viewmat_batch = viewmat.unsqueeze(0).unsqueeze(0)  # [1, 1, 4, 4] - batch_dims + (C, 4, 4)
+    
+    means_cam_batch, covars_cam_batch = _world_to_cam(means_batch, covars_3d_batch, viewmat_batch)
+    # Output: [1, 1, N, 3], [1, 1, N, 3, 3]
+    
+    # 3. Project to 2D screen space using CUDA - keep batch dimensions
+    K_batch = K.unsqueeze(0).unsqueeze(0)  # [1, 1, 3, 3]
+    
+    _, covars2d_batch = proj(means_cam_batch, covars_cam_batch, K_batch, width, height, camera_model="pinhole")
+    # Output: [1, 1, N, 2], [1, 1, N, 2, 2]
+    
+    # 4. Remove all batch dimensions at once
+    covars2d = covars2d_batch.squeeze(0).squeeze(0)  # [N, 2, 2]
+    
+    # 5. Calculate level set (same as pixel size calculation)
+    level_set = -2.0 * torch.log(1.0 / (255.0 * opacities))
+    level_set = torch.clamp(level_set, min=0.0)  # negative level set when gaussian opacity is too low
+    
+    # 6. Compute determinant of original covariance (without low-pass filter) for area calculation
+    det_cov = (covars2d[..., 0, 0] * covars2d[..., 1, 1] - 
+               covars2d[..., 0, 1] * covars2d[..., 1, 0])
+    det_cov = torch.clamp(det_cov, min=1e-10)
+    
+    # 7. Calculate pixel area using the derived formula: Area = π * level_set * sqrt(det(covariance))
+    pixel_area = math.pi * level_set * torch.sqrt(det_cov)
+    
+    # Apply scale modifier division (same as CUDA implementation)
+    pixel_area = pixel_area / (scale_modifier * scale_modifier)  # Area scales with scale_modifier²
+    
+    return pixel_area
+
+
+def calc_pixel_area(
+    means: Tensor,  # [N, 3]
+    quats: Tensor,  # [N, 4]
+    scales: Tensor,  # [N, 3]
+    opacities: Tensor,  # [N]
+    viewmat: Tensor,  # [4, 4]
+    K: Tensor,  # [3, 3]
+    width: int, height: int,
+    scale_modifier: float = 1.0, eps2d: float = 0.3, method: str = "cuda"
+) -> Tensor:
+    """
+    Calculate the pixel area coverage of a Gaussian in the image plane.
+
+    Args:
+        means: [N, 3] - Gaussian centers in world coordinates
+        quats: [N, 4] - Gaussian quaternions
+        scales: [N, 3] - Gaussian scales
+        opacities: [N] - Gaussian opacities
+        viewmat: [4, 4] - view matrix (world to camera)
+        K: [3, 3] - camera intrinsic matrix
+        width: int - image width
+        height: int - image height
+        scale_modifier: float - scale modifier applied to Gaussian scales
+        eps2d: float - low-pass filter value added to 2D covariance diagonal (not used in area calculation)
+        method: str - method to use for pixel area calculation ("cuda" or "torch")
+
+    Returns:
+        pixel_area: [N] - pixel area coverage of each Gaussian in the image plane (in pixels²)
+    """
+    if method == "cuda":
+        return calc_pixel_area_torch_cuda(means, quats, scales, opacities, viewmat, K, width, height, scale_modifier, eps2d)
+    elif method == "torch":
+        return calc_pixel_area_torch_only(means, quats, scales, opacities, viewmat, K, width, height, scale_modifier, eps2d)
+    else:
+        raise ValueError(f"Invalid method: {method}")
+
+# TODO: Later merge this with distance_culling using a flag for using pixel size or pixel area
+def distance_culling_area(
+    means: Tensor,  # [N, 3]
+    quats: Tensor,  # [N, 4]
+    scales: Tensor,  # [N, 3]
+    opacities: Tensor,  # [N]
+    viewmat: Tensor,  # [4, 4]
+    K: Tensor,  # [3, 3]
+    width: int, height: int,
+    scale_modifier: float = 1.0,
+    eps2d: float = 0.3, 
+    pixel_area_threshold: float = 4.0,  # ~π pixels² (equivalent to 2-pixel diameter circle)
+    method: str = "cuda",
+    return_pixel_areas: bool = False
+) -> Tuple[Tensor, Optional[np.ndarray]]:
+    """
+    Perform distance culling on Gaussian splats using pixel area coverage.
+    
+    Args:
+        means: [N, 3] - Gaussian centers in world coordinates
+        quats: [N, 4] - Gaussian quaternions
+        scales: [N, 3] - Gaussian scales
+        opacities: [N] - Gaussian opacities
+        viewmat: [4, 4] - view matrix (world to camera)
+        K: [3, 3] - camera intrinsic matrix
+        width: int - image width
+        height: int - image height
+        scale_modifier: float - scale modifier applied to Gaussian scales
+        eps2d: float - low-pass filter value
+        pixel_area_threshold: float - minimum pixel area to prevent aliasing (in pixels²)
+        method: str - method to use for pixel area calculation
+        return_pixel_areas: bool - if True, return pixel areas as numpy array
+        
+    Returns:
+        mask: [N] - boolean mask for gaussians with pixel_area >= area_threshold
+        pixel_areas: Optional[np.ndarray] - pixel areas if return_pixel_areas=True
+    """
+    # Calculate pixel areas
+    pixel_areas = calc_pixel_area(means, quats, scales, opacities, viewmat, K, width, height, scale_modifier, eps2d, method)
+    mask = pixel_areas >= pixel_area_threshold  # pixel_area_threshold is the minimum pixel area to prevent aliasing
+    if return_pixel_areas:
+        return mask, pixel_areas.detach().cpu().numpy() # [N]
+    else:
+        return mask, None # [N]
+
+
+# TODO: Later merge this with distance_culling_area using a flag for using pixel size or pixel area
 def distance_culling(
     means: Tensor,  # [N, 3]
     quats: Tensor,  # [N, 4]
@@ -216,9 +433,7 @@ def distance_culling(
     eps2d: float = 0.3, 
     pixel_threshold: float = 2.0,
     method: str = "cuda",
-    return_pixel_sizes: bool = False,
-    dump_file: str = "pixel_sizes_vs_distance.npz",
-    use_timestamps: bool = True
+    return_pixel_sizes: bool = False
 ) -> Tuple[Tensor, Optional[np.ndarray]]:
     """
     Perform distance culling on Gaussian splats.
@@ -236,8 +451,6 @@ def distance_culling(
         eps2d: float - low-pass filter value
         method: str - method to use for pixel size calculation
         return_pixel_sizes: bool - if True, return pixel sizes as numpy array
-        dump_file: str - base file path to dump data (NPZ format), Pass None to disable dumping
-        use_timestamps: bool - if True, append timestamp to filename to avoid overwriting
         
     Returns:
         mask: [N] - boolean mask for gaussians with pixel_size >= 2.0

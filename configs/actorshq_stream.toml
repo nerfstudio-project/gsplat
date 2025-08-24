@@ -14,12 +14,12 @@ lpips_net = "vgg"
 save_viewer_poses = true
 
 # Rendering
-# render_height = 1422
-# render_width = 2048
+render_height = 1422
+render_width = 2048
 # render_height = 711   # 1/2 of 1422
 # render_width = 1024   # 1/2 of 2048
-render_height = 356   # 1/4 of 1422
-render_width = 512   # 1/4 of 2048
+# render_height = 356   # 1/4 of 1422
+# render_width = 512   # 1/4 of 2048
 
 frustum_culling = true
 distance_culling = true

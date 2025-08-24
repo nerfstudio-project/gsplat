@@ -1,1 +1,1 @@
-from .culling import frustum_culling, distance_culling, calc_pixel_size
+from .culling import frustum_culling, distance_culling, calc_pixel_size, distance_culling_area, calc_pixel_area
