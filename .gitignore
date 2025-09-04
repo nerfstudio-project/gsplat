@@ -125,3 +125,5 @@ data
 results
 
 !examples/benchmarks/compression/results/
+
+*.hip

@@ -55,22 +55,22 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     );
     m.def("rasterize_to_indices_3dgs", &gsplat::rasterize_to_indices_3dgs);
 
-    m.def("projection_2dgs_fused_fwd", &gsplat::projection_2dgs_fused_fwd);
-    m.def("projection_2dgs_fused_bwd", &gsplat::projection_2dgs_fused_bwd);
-    m.def("projection_2dgs_packed_fwd", &gsplat::projection_2dgs_packed_fwd);
-    m.def("projection_2dgs_packed_bwd", &gsplat::projection_2dgs_packed_bwd);
+    // m.def("projection_2dgs_fused_fwd", &gsplat::projection_2dgs_fused_fwd);
+    // m.def("projection_2dgs_fused_bwd", &gsplat::projection_2dgs_fused_bwd);
+    // m.def("projection_2dgs_packed_fwd", &gsplat::projection_2dgs_packed_fwd);
+    // m.def("projection_2dgs_packed_bwd", &gsplat::projection_2dgs_packed_bwd);
 
-    m.def(
-        "rasterize_to_pixels_2dgs_fwd", &gsplat::rasterize_to_pixels_2dgs_fwd
-    );
-    m.def(
-        "rasterize_to_pixels_2dgs_bwd", &gsplat::rasterize_to_pixels_2dgs_bwd
-    );
-    m.def("rasterize_to_indices_2dgs", &gsplat::rasterize_to_indices_2dgs);
+    // m.def(
+    //     "rasterize_to_pixels_2dgs_fwd", &gsplat::rasterize_to_pixels_2dgs_fwd
+    // );
+    // m.def(
+    //     "rasterize_to_pixels_2dgs_bwd", &gsplat::rasterize_to_pixels_2dgs_bwd
+    // );
+    // m.def("rasterize_to_indices_2dgs", &gsplat::rasterize_to_indices_2dgs);
 
-    m.def("projection_ut_3dgs_fused", &gsplat::projection_ut_3dgs_fused);
-    m.def("rasterize_to_pixels_from_world_3dgs_fwd", &gsplat::rasterize_to_pixels_from_world_3dgs_fwd);
-    m.def("rasterize_to_pixels_from_world_3dgs_bwd", &gsplat::rasterize_to_pixels_from_world_3dgs_bwd);
+    // m.def("projection_ut_3dgs_fused", &gsplat::projection_ut_3dgs_fused);
+    // m.def("rasterize_to_pixels_from_world_3dgs_fwd", &gsplat::rasterize_to_pixels_from_world_3dgs_fwd);
+    // m.def("rasterize_to_pixels_from_world_3dgs_bwd", &gsplat::rasterize_to_pixels_from_world_3dgs_bwd);
 
     // Cameras from 3DGUT
     py::enum_<ShutterType>(m, "ShutterType")

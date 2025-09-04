@@ -52,11 +52,12 @@ class Config:
     render_traj_path: str = "interp"
 
     # Path to the Mip-NeRF 360 dataset
-    data_dir: str = "data/360_v2/garden"
+    # data_dir: str = "data/360_v2/garden"
+    data_dir: str = "/home/pxlth/Videos/gs-videos/pidhaytsi/entrance-1"
     # Downsample factor for the dataset
-    data_factor: int = 4
+    data_factor: int = 2
     # Directory to save results
-    result_dir: str = "results/garden"
+    result_dir: str = "results/pidhaytsi-entrance-1"
     # Every N images there is a test image
     test_every: int = 8
     # Random crop size for training  (experimental)
@@ -116,7 +117,7 @@ class Config:
         default_factory=DefaultStrategy
     )
     # Use packed mode for rasterization, this leads to less memory usage but slightly slower.
-    packed: bool = False
+    packed: bool = True
     # Use sparse gradients for optimization. (experimental)
     sparse_grad: bool = False
     # Use visible adam from Taming 3DGS. (experimental)
@@ -1217,7 +1218,7 @@ if __name__ == "__main__":
                 init_scale=0.1,
                 opacity_reg=0.01,
                 scale_reg=0.01,
-                strategy=MCMCStrategy(verbose=True),
+                strategy=MCMCStrategy(verbose=True, cap_max=3_000_000),
             ),
         ),
     }

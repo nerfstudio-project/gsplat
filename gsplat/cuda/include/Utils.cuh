@@ -1,9 +1,11 @@
 #pragma once
 
-#include "Common.h"
-
 #include <cooperative_groups.h>
+#if !defined(__HIP__)
 #include <cooperative_groups/reduce.h>
+#endif
+#include <thrust/functional.h>
+#include "Common.h"
 
 namespace gsplat {
 
@@ -83,6 +85,59 @@ inline __device__ void covarW2C_VJP(
 // Reduce
 ///////////////////////////////
 
+#if defined(__HIP__)
+
+// inline __device__ _labeledWarpReduce(WarpT &warp, T val, int label) {
+//     const unsigned full_mask = __activemask();
+//     const int lane = warp.thread_rank();
+
+//     const unsigned grop_mask = __ballot_sync(full_mask, );
+// }
+
+template <class WarpT, typename T, typename Op>
+inline __device__ T _warpReduce(WarpT &warp, T val, Op op) {
+    for (int offset = warp.size() / 2; offset > 0; offset /= 2) {
+        val = op(val, warp.shfl_down(val, offset));
+    }
+    return warp.shfl(val, 0);
+}
+
+template <uint32_t DIM, class WarpT>
+inline __device__ void warpSum(float *val, WarpT &warp) {
+#pragma unroll
+    for (uint32_t i = 0; i < DIM; i++) {
+        val[i] = _warpReduce(warp, val[i], thrust::plus<float>());
+    }
+}
+
+template <class WarpT> inline __device__ void warpSum(float &val, WarpT &warp) {
+    val = _warpReduce(warp, val, thrust::plus<float>());
+}
+
+template <class WarpT> inline __device__ void warpSum(vec4 &val, WarpT &warp) {
+    val.x = _warpReduce(warp, val.x, thrust::plus<float>());
+    val.y = _warpReduce(warp, val.y, thrust::plus<float>());
+    val.z = _warpReduce(warp, val.z, thrust::plus<float>());
+    val.w = _warpReduce(warp, val.w, thrust::plus<float>());
+}
+
+template <class WarpT> inline __device__ void warpSum(vec3 &val, WarpT &warp) {
+    val.x = _warpReduce(warp, val.x, thrust::plus<float>());
+    val.y = _warpReduce(warp, val.y, thrust::plus<float>());
+    val.z = _warpReduce(warp, val.z, thrust::plus<float>());
+}
+
+template <class WarpT> inline __device__ void warpSum(vec2 &val, WarpT &warp) {
+    val.x = _warpReduce(warp, val.x, thrust::plus<float>());
+    val.y = _warpReduce(warp, val.y, thrust::plus<float>());
+}
+
+template <class WarpT, typename T> inline __device__ T warpMax(T val, WarpT &warp) {
+    return _warpReduce(warp, val, thrust::maximum<T>());
+}
+
+#else
+
 template <uint32_t DIM, class WarpT>
 inline __device__ void warpSum(float *val, WarpT &warp) {
 #pragma unroll
@@ -113,6 +168,17 @@ template <class WarpT> inline __device__ void warpSum(vec2 &val, WarpT &warp) {
     val.y = cg::reduce(warp, val.y, cg::plus<float>());
 }
 
+// TODO not used?
+// template <class WarpT> inline __device__ void warpMax(float &val, WarpT &warp) {
+//     val = cg::reduce(warp, val, cg::greater<float>());
+// }
+
+template <class WarpT, typename T> inline __device__ T warpMax(T val, WarpT &warp) {
+    return cg::reduce(warp, val, cg::greater<T>());
+}
+
+#endif
+
 template <class WarpT> inline __device__ void warpSum(mat4 &val, WarpT &warp) {
     warpSum(val[0], warp);
     warpSum(val[1], warp);
@@ -129,10 +195,6 @@ template <class WarpT> inline __device__ void warpSum(mat3 &val, WarpT &warp) {
 template <class WarpT> inline __device__ void warpSum(mat2 &val, WarpT &warp) {
     warpSum(val[0], warp);
     warpSum(val[1], warp);
-}
-
-template <class WarpT> inline __device__ void warpMax(float &val, WarpT &warp) {
-    val = cg::reduce(warp, val, cg::greater<float>());
 }
 
 ///////////////////////////////
