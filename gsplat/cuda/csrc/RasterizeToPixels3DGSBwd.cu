@@ -180,11 +180,13 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
                 }
             }
 
-            // TODO causes exception on AMD
             // if all threads are inactive in this warp, skip this loop
-            // if (!warp.any(valid)) {
-            //     continue;
-            // }
+            #if !FOR_HIP
+            if (!warp.any(valid)) {
+                continue;
+            }
+            #endif
+
             float v_rgb_local[CDIM] = {0.f};
             vec3 v_conic_local = {0.f, 0.f, 0.f};
             vec2 v_xy_local = {0.f, 0.f};

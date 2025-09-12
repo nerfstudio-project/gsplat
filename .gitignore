@@ -126,4 +126,5 @@ results
 
 !examples/benchmarks/compression/results/
 
+gsplat/hip/
 *.hip

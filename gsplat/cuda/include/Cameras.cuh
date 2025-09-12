@@ -1065,10 +1065,10 @@ public:
 
         if (dist.reference_poly == FThetaCameraDistortionParameters::PolynomialType::PIXELDIST_TO_ANGLE)
             // compute first derivative of the backwards polynomial
-            dreference_poly = {1.f * dist.pixeldist_to_angle_poly.at(1), 2.f * dist.pixeldist_to_angle_poly.at(2), 3.f * dist.pixeldist_to_angle_poly.at(3), 4.f * dist.pixeldist_to_angle_poly.at(4), 5.f * dist.pixeldist_to_angle_poly.at(5)};
+            dreference_poly = {1.f * dist.pixeldist_to_angle_poly[1], 2.f * dist.pixeldist_to_angle_poly[2], 3.f * dist.pixeldist_to_angle_poly[3], 4.f * dist.pixeldist_to_angle_poly[4], 5.f * dist.pixeldist_to_angle_poly[5]};
         else
             // compute first derivative of the forward polynomial
-            dreference_poly = {1.f * dist.angle_to_pixeldist_poly.at(1), 2.f * dist.angle_to_pixeldist_poly.at(2), 3.f * dist.angle_to_pixeldist_poly.at(3), 4.f * dist.angle_to_pixeldist_poly.at(4), 5.f * dist.angle_to_pixeldist_poly.at(5)};
+            dreference_poly = {1.f * dist.angle_to_pixeldist_poly[1], 2.f * dist.angle_to_pixeldist_poly[2], 3.f * dist.angle_to_pixeldist_poly[3], 4.f * dist.angle_to_pixeldist_poly[4], 5.f * dist.angle_to_pixeldist_poly[5]};
 
         // FThetaCameraModelParameters are defined such that the image coordinate origin corresponds to
         // the center of the first pixel. We therefore need to offset the principal point by half a pixel.
