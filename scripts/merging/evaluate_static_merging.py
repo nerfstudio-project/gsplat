@@ -19,7 +19,6 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-
 # Add parent directories to path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from gsplat.rendering import rasterization
