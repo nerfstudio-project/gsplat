@@ -27,8 +27,7 @@ from stream.culling import frustum_culling, distance_culling
 
 from examples.config import Config, load_config_from_toml, merge_config
 from examples.utils import get_color, Metrics
-from scripts.utils import set_result_dir
-from scripts.culling.utils import load_checkpoint, load_poses
+from scripts.utils import set_result_dir, load_checkpoint, load_poses
 
 ALPHA_MASK_THRESHOLD = 0.5
 

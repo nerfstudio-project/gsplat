@@ -11,9 +11,6 @@ from gsplat.cuda._wrapper import quat_scale_to_covar_preci, proj
 # world_to_cam is deprecated in CUDA backend, but we still need it for the PyTorch implementation. Check the implementation in _wrapper.py for more details.
 from gsplat.cuda._torch_impl import _world_to_cam, _quat_scale_to_covar_preci, _persp_proj
 
-
-
-
 def calc_pixel_size_torch_only(
     means: Tensor,  # [N, 3]
     quats: Tensor,  # [N, 4]
