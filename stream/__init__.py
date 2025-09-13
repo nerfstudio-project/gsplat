@@ -1,1 +1,2 @@
 from .culling import frustum_culling, distance_culling, calc_pixel_size, distance_culling_area, calc_pixel_area
+from .merging import merge_gaussians, find_merge_candidates, cluster_gaussians, merge_cluster
