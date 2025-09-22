@@ -409,7 +409,8 @@ def generate_all_plots_for_method(merging_evaluation_dir, base_save_dir, method_
 if __name__ == "__main__":
 
     model_name = "actorshq_l1_0.5_ssim_0.5_alpha_1.0"
-    actor_name = "Actor01"
+    # actor_name = "Actor01"
+    actor_name = "Actor08"
     seq_name = "Sequence1"
     resolution = 4
     frame_id = 0

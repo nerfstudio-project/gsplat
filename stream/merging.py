@@ -85,6 +85,7 @@ def cluster_gaussians(
     if not candidate_mask.any():
         return []
     
+    # TODO: If we use the python version of the clustering, we can avoid the conversion to numpy and back
     candidate_indices = torch.where(candidate_mask)[0].cpu().numpy()
     candidate_means = means[candidate_mask]  # [M, 3] - keep as tensor for center_in_pixel
     
@@ -361,9 +362,10 @@ def _cluster_center_in_pixel(
                 # Add to current cluster
                 current_cluster.append(pixel_group[j])
             else:
-                # Start new cluster
+                # If the current cluster is valid, add it to the depth clusters, otherwise discard it
                 if len(current_cluster) >= min_cluster_size:
                     depth_clusters.append(current_cluster)
+                # Start new cluster
                 current_cluster = [pixel_group[j]]
         
         # Don't forget the last cluster
@@ -664,9 +666,6 @@ def merge_gaussians(
         
         # Merge each cluster
         for cluster_indices in clusters:
-            if len(cluster_indices) < 2:
-                continue
-                
             # Merge the cluster
             merged_mean, merged_quat, merged_scale, merged_opacity, merged_color = merge_cluster(
                 cluster_indices, current_means, current_quats, current_scales,
