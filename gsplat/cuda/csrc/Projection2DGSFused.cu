@@ -345,7 +345,8 @@ __global__ void projection_2dgs_fused_bwd_kernel(
     scalar_t *__restrict__ v_means,          // [B, N, 3]
     scalar_t *__restrict__ v_quats,          // [B, N, 4]
     scalar_t *__restrict__ v_scales,         // [B, N, 3]
-    scalar_t *__restrict__ v_viewmats        // [B, C, 4, 4]
+    scalar_t *__restrict__ v_viewmats,       // [B, C, 4, 4]
+    scalar_t *__restrict__ v_Ks              // [B, C, 3, 3]
 ) {
     // parallelize over C * N.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -411,6 +412,12 @@ __global__ void projection_2dgs_fused_bwd_kernel(
     vec4 v_quat(0.f);
     mat3 v_R(0.f);
     vec3 v_t(0.f);
+    float v_fx(0.f);
+    float v_fy(0.f);
+    float v_cx(0.f);
+    float v_cy(0.f);
+    
+    // Use the overloaded version that computes intrinsics gradients
     compute_ray_transforms_aabb_vjp(
         ray_transforms,
         v_means2d,
@@ -427,7 +434,11 @@ __global__ void projection_2dgs_fused_bwd_kernel(
         v_scale,
         v_mean,
         v_R,
-        v_t
+        v_t,
+        v_fx,
+        v_fy,
+        v_cx,
+        v_cy
     );
 
     // #if __CUDA_ARCH__ >= 700
@@ -475,6 +486,22 @@ __global__ void projection_2dgs_fused_bwd_kernel(
             }
         }
     }
+
+    // Write intrinsics gradients if needed
+    if (v_Ks != nullptr) {
+        auto warp_group_c = cg::labeled_partition(warp, cid);
+        warpSum(v_fx, warp_group_c);
+        warpSum(v_fy, warp_group_c);
+        warpSum(v_cx, warp_group_c);
+        warpSum(v_cy, warp_group_c);
+        if (warp_group_c.thread_rank() == 0) {
+            v_Ks += bid * C * 9 + cid * 9;
+            gpuAtomicAdd(v_Ks + 0, v_fx);  // [0,0] = fx
+            gpuAtomicAdd(v_Ks + 4, v_fy);  // [1,1] = fy
+            gpuAtomicAdd(v_Ks + 2, v_cx);  // [0,2] = cx
+            gpuAtomicAdd(v_Ks + 5, v_cy);  // [1,2] = cy
+        }
+    }
 }
 
 void launch_projection_2dgs_fused_bwd_kernel(
@@ -495,11 +522,13 @@ void launch_projection_2dgs_fused_bwd_kernel(
     const at::Tensor v_normals,        // [..., C, N, 3]
     const at::Tensor v_ray_transforms, // [..., C, N, 3, 3]
     const bool viewmats_requires_grad,
+    const bool Ks_requires_grad,
     // outputs
     at::Tensor v_means,   // [..., N, 3]
     at::Tensor v_quats,   // [..., N, 4]
     at::Tensor v_scales,  // [..., N, 3]
-    at::Tensor v_viewmats // [..., C, 4, 4]
+    at::Tensor v_viewmats, // [..., C, 4, 4]
+    at::Tensor v_Ks      // [..., C, 3, 3]
 ) {
     uint32_t N = means.size(-2);          // number of gaussians
     uint32_t B = means.numel() / (N * 3); // number of batches
@@ -536,7 +565,8 @@ void launch_projection_2dgs_fused_bwd_kernel(
             v_means.data_ptr<float>(),
             v_quats.data_ptr<float>(),
             v_scales.data_ptr<float>(),
-            viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr
+            viewmats_requires_grad ? v_viewmats.data_ptr<float>() : nullptr,
+            Ks_requires_grad ? v_Ks.data_ptr<float>() : nullptr
         );
 }
 

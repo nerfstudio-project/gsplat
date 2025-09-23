@@ -320,7 +320,8 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
     scalar_t *__restrict__ v_covars,  // [B, N, 6] optional
     scalar_t *__restrict__ v_quats,   // [B, N, 4] optional
     scalar_t *__restrict__ v_scales,  // [B, N, 3] optional
-    scalar_t *__restrict__ v_viewmats // [B, C, 4, 4] optional
+    scalar_t *__restrict__ v_viewmats, // [B, C, 4, 4] optional
+    scalar_t *__restrict__ v_Ks       // [B, C, 3, 3] optional
 ) {
     // parallelize over B * C * N.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -403,55 +404,119 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
     float fx = Ks[0], cx = Ks[2], fy = Ks[4], cy = Ks[5];
     mat3 v_covar_c(0.f);
     vec3 v_mean_c(0.f);
+    float v_fx(0.f), v_fy(0.f), v_cx(0.f), v_cy(0.f);
 
     switch (camera_model) {
     case CameraModelType::PINHOLE: // perspective projection
-        persp_proj_vjp(
-            mean_c,
-            covar_c,
-            fx,
-            fy,
-            cx,
-            cy,
-            image_width,
-            image_height,
-            v_covar2d,
-            glm::make_vec2(v_means2d),
-            v_mean_c,
-            v_covar_c
-        );
+        if (v_Ks != nullptr) {
+            persp_proj_vjp(
+                mean_c,
+                covar_c,
+                fx,
+                fy,
+                cx,
+                cy,
+                image_width,
+                image_height,
+                v_covar2d,
+                glm::make_vec2(v_means2d),
+                v_mean_c,
+                v_covar_c,
+                v_fx,
+                v_fy,
+                v_cx,
+                v_cy
+            );
+        } else {
+            persp_proj_vjp(
+                mean_c,
+                covar_c,
+                fx,
+                fy,
+                cx,
+                cy,
+                image_width,
+                image_height,
+                v_covar2d,
+                glm::make_vec2(v_means2d),
+                v_mean_c,
+                v_covar_c
+            );
+        }
         break;
     case CameraModelType::ORTHO: // orthographic projection
-        ortho_proj_vjp(
-            mean_c,
-            covar_c,
-            fx,
-            fy,
-            cx,
-            cy,
-            image_width,
-            image_height,
-            v_covar2d,
-            glm::make_vec2(v_means2d),
-            v_mean_c,
-            v_covar_c
-        );
+        if (v_Ks != nullptr) {
+            ortho_proj_vjp(
+                mean_c,
+                covar_c,
+                fx,
+                fy,
+                cx,
+                cy,
+                image_width,
+                image_height,
+                v_covar2d,
+                glm::make_vec2(v_means2d),
+                v_mean_c,
+                v_covar_c,
+                v_fx,
+                v_fy,
+                v_cx,
+                v_cy
+            );
+        } else {
+            ortho_proj_vjp(
+                mean_c,
+                covar_c,
+                fx,
+                fy,
+                cx,
+                cy,
+                image_width,
+                image_height,
+                v_covar2d,
+                glm::make_vec2(v_means2d),
+                v_mean_c,
+                v_covar_c
+            );
+        }
         break;
     case CameraModelType::FISHEYE: // fisheye projection
-        fisheye_proj_vjp(
-            mean_c,
-            covar_c,
-            fx,
-            fy,
-            cx,
-            cy,
-            image_width,
-            image_height,
-            v_covar2d,
-            glm::make_vec2(v_means2d),
-            v_mean_c,
-            v_covar_c
-        );
+        if (v_Ks != nullptr) {
+            fisheye_proj_vjp(
+                mean_c,
+                covar_c,
+                fx,
+                fy,
+                cx,
+                cy,
+                image_width,
+                image_height,
+                v_covar2d,
+                glm::make_vec2(v_means2d),
+                v_mean_c,
+                v_covar_c,
+                v_fx,
+                v_fy,
+                v_cx,
+                v_cy
+            );
+        } else {
+            fisheye_proj_vjp(
+                mean_c,
+                covar_c,
+                fx,
+                fy,
+                cx,
+                cy,
+                image_width,
+                image_height,
+                v_covar2d,
+                glm::make_vec2(v_means2d),
+                v_mean_c,
+                v_covar_c
+            );
+        }
         break;
     }
 
@@ -528,6 +593,21 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
             }
         }
     }
+    if (v_Ks != nullptr) {
+        // Only one thread per camera accumulates intrinsics gradients
+        auto warp_group_c = cg::labeled_partition(warp, cid);
+        warpSum(v_fx, warp_group_c);
+        warpSum(v_fy, warp_group_c);
+        warpSum(v_cx, warp_group_c);
+        warpSum(v_cy, warp_group_c);
+        if (warp_group_c.thread_rank() == 0) {
+            v_Ks += bid * C * 9 + cid * 9;
+            gpuAtomicAdd(v_Ks + 0, v_fx); // fx
+            gpuAtomicAdd(v_Ks + 2, v_cx); // cx
+            gpuAtomicAdd(v_Ks + 4, v_fy); // fy
+            gpuAtomicAdd(v_Ks + 5, v_cy); // cy
+        }
+    }
 }
 
 void launch_projection_ewa_3dgs_fused_bwd_kernel(
@@ -553,12 +633,14 @@ void launch_projection_ewa_3dgs_fused_bwd_kernel(
     const at::Tensor v_conics,                      // [..., C, N, 3]
     const at::optional<at::Tensor> v_compensations, // [..., C, N] optional
     const bool viewmats_requires_grad,
+    const bool Ks_requires_grad,
     // outputs
     at::Tensor v_means,   // [..., N, 3]
     at::Tensor v_covars,  // [..., N, 3, 3]
     at::Tensor v_quats,   // [..., N, 4]
     at::Tensor v_scales,  // [..., N, 3]
-    at::Tensor v_viewmats // [..., C, 4, 4]
+    at::Tensor v_viewmats, // [..., C, 4, 4]
+    at::Tensor v_Ks       // [..., C, 3, 3]
 ) {
     uint32_t N = means.size(-2);    // number of gaussians
     uint32_t C = viewmats.size(-3); // number of cameras
@@ -617,7 +699,9 @@ void launch_projection_ewa_3dgs_fused_bwd_kernel(
                     covars.has_value() ? nullptr
                                        : v_scales.data_ptr<scalar_t>(),
                     viewmats_requires_grad ? v_viewmats.data_ptr<scalar_t>()
-                                           : nullptr
+                                           : nullptr,
+                    Ks_requires_grad ? v_Ks.data_ptr<scalar_t>()
+                                     : nullptr
                 );
         }
     );

@@ -308,7 +308,8 @@ __global__ void projection_2dgs_packed_bwd_kernel(
     scalar_t *__restrict__ v_means,   // [B, N, 3] or [nnz, 3]
     scalar_t *__restrict__ v_quats,   // [B, N, 4] or [nnz, 4] Optional
     scalar_t *__restrict__ v_scales,  // [B, N, 3] or [nnz, 3] Optional
-    scalar_t *__restrict__ v_viewmats // [B, C, 4, 4] Optional
+    scalar_t *__restrict__ v_viewmats, // [B, C, 4, 4] Optional
+    scalar_t *__restrict__ v_Ks       // [B, C, 3, 3] Optional
 ) {
     // parallelize over nnz.
     uint32_t idx = cg::this_grid().thread_rank();
@@ -373,6 +374,7 @@ __global__ void projection_2dgs_packed_bwd_kernel(
     vec4 v_quat(0.f);
     mat3 v_R(0.f);
     vec3 v_t(0.f);
+    float v_fx(0.f), v_fy(0.f), v_cx(0.f), v_cy(0.f);
     compute_ray_transforms_aabb_vjp(
         ray_transforms,
         v_means2d,
@@ -389,7 +391,11 @@ __global__ void projection_2dgs_packed_bwd_kernel(
         v_scale,
         v_mean,
         v_R,
-        v_t
+        v_t,
+        v_fx,
+        v_fy,
+        v_cx,
+        v_cy
     );
 
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
@@ -456,6 +462,24 @@ __global__ void projection_2dgs_packed_bwd_kernel(
             }
         }
     }
+
+    if (v_Ks != nullptr) {
+        auto warp_group_c = cg::labeled_partition(warp, cid);
+        // Sum intrinsic gradients across warp for the same camera
+        float warp_v_fx = v_fx, warp_v_fy = v_fy, warp_v_cx = v_cx, warp_v_cy = v_cy;
+        warpSum(warp_v_fx, warp_group_c);
+        warpSum(warp_v_fy, warp_group_c);
+        warpSum(warp_v_cx, warp_group_c);
+        warpSum(warp_v_cy, warp_group_c);
+        if (warp_group_c.thread_rank() == 0) {
+            v_Ks += bid * C * 9 + cid * 9;
+            // Accumulate gradients into the Ks matrix [fx, 0, cx; 0, fy, cy; 0, 0, 1]
+            gpuAtomicAdd(v_Ks + 0, warp_v_fx);  // [0,0] = fx
+            gpuAtomicAdd(v_Ks + 2, warp_v_cx);  // [0,2] = cx
+            gpuAtomicAdd(v_Ks + 4, warp_v_fy);  // [1,1] = fy
+            gpuAtomicAdd(v_Ks + 5, warp_v_cy);  // [1,2] = cy
+        }
+    }
 }
 
 void launch_projection_2dgs_packed_bwd_kernel(
@@ -482,7 +506,8 @@ void launch_projection_2dgs_packed_bwd_kernel(
     at::Tensor v_means,                 // [..., N, 3] or [nnz, 3]
     at::Tensor v_quats,                 // [..., N, 4] or [nnz, 4]
     at::Tensor v_scales,                // [..., N, 3] or [nnz, 3]
-    at::optional<at::Tensor> v_viewmats // [..., C, 4, 4] Optional
+    at::optional<at::Tensor> v_viewmats, // [..., C, 4, 4] Optional
+    at::optional<at::Tensor> v_Ks      // [..., C, 3, 3] Optional
 ) {
     uint32_t N = means.size(-2);          // number of gaussians
     uint32_t B = means.numel() / (N * 3); // number of batches
@@ -524,7 +549,8 @@ void launch_projection_2dgs_packed_bwd_kernel(
             v_quats.data_ptr<float>(),
             v_scales.data_ptr<float>(),
             v_viewmats.has_value() ? v_viewmats.value().data_ptr<float>()
-                                   : nullptr
+                                   : nullptr,
+            v_Ks.has_value() ? v_Ks.value().data_ptr<float>() : nullptr
         );
 }
 

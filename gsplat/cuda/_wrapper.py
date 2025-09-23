@@ -1108,7 +1108,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         camera_model_type = ctx.camera_model_type
         if v_compensations is not None:
             v_compensations = v_compensations.contiguous()
-        v_means, v_covars, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
+        v_means, v_covars, v_quats, v_scales, v_viewmats, v_Ks = _make_lazy_cuda_func(
             "projection_ewa_3dgs_fused_bwd"
         )(
             means,
@@ -1129,6 +1129,7 @@ class _FullyFusedProjection(torch.autograd.Function):
             v_conics.contiguous(),
             v_compensations,
             ctx.needs_input_grad[4],  # viewmats_requires_grad
+            ctx.needs_input_grad[5],  # Ks_requires_grad
         )
         if not ctx.needs_input_grad[0]:
             v_means = None
@@ -1140,12 +1141,15 @@ class _FullyFusedProjection(torch.autograd.Function):
             v_scales = None
         if not ctx.needs_input_grad[4]:
             v_viewmats = None
+        if not ctx.needs_input_grad[5]:
+            v_Ks = None
         return (
             v_means,
             v_covars,
             v_quats,
             v_scales,
             v_viewmats,
+            v_Ks,
             None,
             None,
             None,
@@ -2002,7 +2006,7 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
         width = ctx.width
         height = ctx.height
         eps2d = ctx.eps2d
-        v_means, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
+        v_means, v_quats, v_scales, v_viewmats, v_Ks = _make_lazy_cuda_func(
             "projection_2dgs_fused_bwd"
         )(
             means,
@@ -2019,6 +2023,7 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
             v_normals.contiguous(),
             v_ray_transforms.contiguous(),
             ctx.needs_input_grad[3],  # viewmats_requires_grad
+            ctx.needs_input_grad[4],  # Ks_requires_grad
         )
         if not ctx.needs_input_grad[0]:
             v_means = None
@@ -2028,12 +2033,15 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
             v_scales = None
         if not ctx.needs_input_grad[3]:
             v_viewmats = None
+        if not ctx.needs_input_grad[4]:
+            v_Ks = None
 
         return (
             v_means,
             v_quats,
             v_scales,
             v_viewmats,
+            v_Ks,
             None,
             None,
             None,

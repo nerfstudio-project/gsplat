@@ -188,7 +188,7 @@ projection_ewa_3dgs_fused_fwd(
     return std::make_tuple(radii, means2d, depths, conics, compensations);
 }
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 projection_ewa_3dgs_fused_bwd(
     // fwd inputs
     const at::Tensor means,                // [..., N, 3]
@@ -210,7 +210,8 @@ projection_ewa_3dgs_fused_bwd(
     const at::Tensor v_depths,                      // [..., C, N]
     const at::Tensor v_conics,                      // [..., C, N, 3]
     const at::optional<at::Tensor> v_compensations, // [..., C, N] optional
-    const bool viewmats_requires_grad
+    const bool viewmats_requires_grad,
+    const bool Ks_requires_grad
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -248,6 +249,10 @@ projection_ewa_3dgs_fused_bwd(
     if (viewmats_requires_grad) {
         v_viewmats = at::zeros_like(viewmats);
     }
+    at::Tensor v_Ks;
+    if (Ks_requires_grad) {
+        v_Ks = at::zeros_like(Ks);
+    }
 
     launch_projection_ewa_3dgs_fused_bwd_kernel(
         // inputs
@@ -269,15 +274,17 @@ projection_ewa_3dgs_fused_bwd(
         v_conics,
         v_compensations,
         viewmats_requires_grad,
+        Ks_requires_grad,
         // outputs
         v_means,
         v_covars,
         v_quats,
         v_scales,
-        v_viewmats
+        v_viewmats,
+        v_Ks
     );
 
-    return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats);
+    return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats, v_Ks);
 }
 
 std::tuple<
@@ -619,7 +626,7 @@ projection_2dgs_fused_fwd(
     return std::make_tuple(radii, means2d, depths, ray_transforms, normals);
 }
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 projection_2dgs_fused_bwd(
     // fwd inputs
     const at::Tensor means,    // [..., N, 3]
@@ -637,7 +644,8 @@ projection_2dgs_fused_bwd(
     const at::Tensor v_depths,         // [..., C, N]
     const at::Tensor v_normals,        // [..., C, N, 3]
     const at::Tensor v_ray_transforms, // [..., C, N, 3, 3]
-    const bool viewmats_requires_grad
+    const bool viewmats_requires_grad,
+    const bool Ks_requires_grad
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -659,6 +667,10 @@ projection_2dgs_fused_bwd(
     if (viewmats_requires_grad) {
         v_viewmats = at::zeros_like(viewmats);
     }
+    at::Tensor v_Ks;
+    if (Ks_requires_grad) {
+        v_Ks = at::zeros_like(Ks);
+    }
 
     launch_projection_2dgs_fused_bwd_kernel(
         // inputs
@@ -676,14 +688,16 @@ projection_2dgs_fused_bwd(
         v_normals,
         v_ray_transforms,
         viewmats_requires_grad,
+        Ks_requires_grad,
         // outputs
         v_means,
         v_quats,
         v_scales,
-        v_viewmats
+        v_viewmats,
+        v_Ks
     );
 
-    return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
+    return std::make_tuple(v_means, v_quats, v_scales, v_viewmats, v_Ks);
 }
 
 std::tuple<
@@ -815,7 +829,7 @@ projection_2dgs_packed_fwd(
     );
 }
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 projection_2dgs_packed_bwd(
     // fwd inputs
     const at::Tensor means,    // [..., N, 3]
@@ -836,6 +850,7 @@ projection_2dgs_packed_bwd(
     const at::Tensor v_ray_transforms, // [nnz, 3, 3]
     const at::Tensor v_normals,        // [nnz, 3]
     const bool viewmats_requires_grad,
+    const bool Ks_requires_grad,
     const bool sparse_grad
 ) {
     DEVICE_GUARD(means);
@@ -859,7 +874,7 @@ projection_2dgs_packed_bwd(
     uint32_t C = viewmats.size(-3);       // number of cameras
     uint32_t nnz = batch_ids.size(0);
 
-    at::Tensor v_means, v_quats, v_scales, v_viewmats;
+    at::Tensor v_means, v_quats, v_scales, v_viewmats, v_Ks;
     if (sparse_grad) {
         v_means = at::zeros({nnz, 3}, opt);
         v_quats = at::zeros({nnz, 4}, opt);
@@ -871,6 +886,9 @@ projection_2dgs_packed_bwd(
     }
     if (viewmats_requires_grad) {
         v_viewmats = at::zeros_like(viewmats, opt);
+    }
+    if (Ks_requires_grad) {
+        v_Ks = at::zeros_like(Ks, opt);
     }
     
     launch_projection_2dgs_packed_bwd_kernel(
@@ -898,9 +916,11 @@ projection_2dgs_packed_bwd(
         v_quats,
         v_scales,
         v_viewmats.defined() ? at::optional<at::Tensor>(v_viewmats)
-                             : c10::nullopt
+                             : c10::nullopt,
+        v_Ks.defined() ? at::optional<at::Tensor>(v_Ks)
+                       : c10::nullopt
     );
-    return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
+    return std::make_tuple(v_means, v_quats, v_scales, v_viewmats, v_Ks);
 }
 
 std::tuple<
