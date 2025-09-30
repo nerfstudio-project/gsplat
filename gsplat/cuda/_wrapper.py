@@ -62,6 +62,38 @@ class UnscentedTransformParameters:
         return p
 
 
+@dataclass
+class FThetaPolynomialType(Enum):
+    PIXELDIST_TO_ANGLE = 0
+    ANGLE_TO_PIXELDIST = 1
+
+    def to_cpp(self) -> Any:
+        return _make_lazy_cuda_obj(f"FThetaPolynomialType.{self.name}")
+
+
+@dataclass
+class FThetaCameraDistortionParameters:
+    reference_poly: FThetaPolynomialType
+    pixeldist_to_angle_poly: Tuple[float, float, float, float, float, float]  # [6]
+    angle_to_pixeldist_poly: Tuple[float, float, float, float, float, float]  # [6]
+    max_angle: float
+    linear_cde: Tuple[float, float, float]  # [3]
+
+    def to_cpp(self) -> Any:
+        p = _make_lazy_cuda_obj("FThetaCameraDistortionParameters")()
+        p.reference_poly = self.reference_poly.to_cpp()
+        p.pixeldist_to_angle_poly = self.pixeldist_to_angle_poly
+        p.angle_to_pixeldist_poly = self.angle_to_pixeldist_poly
+        p.max_angle = self.max_angle
+        p.linear_cde = self.linear_cde
+        return p
+
+    @classmethod
+    def to_cpp_default(cls) -> Any:
+        p = _make_lazy_cuda_obj("FThetaCameraDistortionParameters")()
+        return p
+
+
 def world_to_cam(
     means: Tensor,  # [..., N, 3]
     covars: Tensor,  # [..., N, 3, 3]
@@ -221,7 +253,7 @@ def proj(
     Ks: Tensor,  # [..., C, 3, 3]
     width: int,
     height: int,
-    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+    camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
 ) -> Tuple[Tensor, Tensor]:
     """Projection of Gaussians (perspective or orthographic).
 
@@ -238,6 +270,10 @@ def proj(
         - **Projected means**. [..., C, N, 2]
         - **Projected covariances**. [..., C, N, 2, 2]
     """
+    assert (
+        camera_model != "ftheta"
+    ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
+
     batch_dims = means.shape[:-3]
     C, N = means.shape[-3:-1]
     assert means.shape == batch_dims + (C, N, 3), means.shape
@@ -265,7 +301,7 @@ def fully_fused_projection(
     packed: bool = False,
     sparse_grad: bool = False,
     calc_compensations: bool = False,
-    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+    camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
     opacities: Optional[Tensor] = None,  # [..., N] or None
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Projects Gaussians to 2D.
@@ -357,6 +393,10 @@ def fully_fused_projection(
     if opacities is not None:
         assert opacities.shape == batch_dims + (N,), opacities.shape
         opacities = opacities.contiguous()
+
+    assert (
+        camera_model != "ftheta"
+    ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
 
     viewmats = viewmats.contiguous()
     Ks = Ks.contiguous()
@@ -650,12 +690,13 @@ def rasterize_to_pixels_eval3d(
     flatten_ids: Tensor,  # [n_isects]
     backgrounds: Optional[Tensor] = None,  # [..., C, channels]
     masks: Optional[Tensor] = None,  # [..., C, tile_height, tile_width]
-    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+    camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
     ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
     # distortion
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
-    thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 2]
+    thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
+    ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
@@ -714,7 +755,7 @@ def rasterize_to_pixels_eval3d(
         tangential_coeffs = tangential_coeffs.contiguous()
 
     if thin_prism_coeffs is not None:
-        assert thin_prism_coeffs.shape == batch_dims + (C, 2), thin_prism_coeffs.shape
+        assert thin_prism_coeffs.shape == batch_dims + (C, 4), thin_prism_coeffs.shape
         thin_prism_coeffs = thin_prism_coeffs.contiguous()
 
     if viewmats_rs is not None:
@@ -797,6 +838,7 @@ def rasterize_to_pixels_eval3d(
         radial_coeffs.contiguous() if radial_coeffs is not None else None,
         tangential_coeffs.contiguous() if tangential_coeffs is not None else None,
         thin_prism_coeffs.contiguous() if thin_prism_coeffs is not None else None,
+        ftheta_coeffs,
         # rolling shutter
         rolling_shutter,
         viewmats_rs.contiguous() if viewmats_rs is not None else None,
@@ -942,8 +984,12 @@ class _Proj(torch.autograd.Function):
         Ks: Tensor,  # [..., C, 3, 3]
         width: int,
         height: int,
-        camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+        camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
     ) -> Tuple[Tensor, Tensor]:
+        assert (
+            camera_model != "ftheta"
+        ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
+
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
         )
@@ -1000,9 +1046,13 @@ class _FullyFusedProjection(torch.autograd.Function):
         far_plane: float,
         radius_clip: float,
         calc_compensations: bool,
-        camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+        camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
         opacities: Optional[Tensor] = None,  # [..., N] or None
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        assert (
+            camera_model != "ftheta"
+        ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
+
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
         )
@@ -1124,12 +1174,13 @@ def fully_fused_projection_with_ut(
     far_plane: float = 1e10,
     radius_clip: float = 0.0,
     calc_compensations: bool = False,
-    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+    camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
     ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
     # distortion
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
-    thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 2]
+    thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
+    ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
@@ -1159,7 +1210,7 @@ def fully_fused_projection_with_ut(
     if tangential_coeffs is not None:
         assert tangential_coeffs.shape == batch_dims + (C, 2), tangential_coeffs.shape
     if thin_prism_coeffs is not None:
-        assert thin_prism_coeffs.shape == batch_dims + (C, 2), thin_prism_coeffs.shape
+        assert thin_prism_coeffs.shape == batch_dims + (C, 4), thin_prism_coeffs.shape
     if viewmats_rs is not None:
         assert viewmats_rs.shape == batch_dims + (C, 4, 4), viewmats_rs.shape
 
@@ -1188,6 +1239,9 @@ def fully_fused_projection_with_ut(
         radial_coeffs.contiguous() if radial_coeffs is not None else None,
         tangential_coeffs.contiguous() if tangential_coeffs is not None else None,
         thin_prism_coeffs.contiguous() if thin_prism_coeffs is not None else None,
+        ftheta_coeffs.to_cpp()
+        if ftheta_coeffs is not None
+        else FThetaCameraDistortionParameters.to_cpp_default(),
     )
     if not calc_compensations:
         compensations = None
@@ -1344,12 +1398,13 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         tile_size: int,
         isect_offsets: Tensor,  # [..., C, tile_height, tile_width]
         flatten_ids: Tensor,  # [..., n_isects]
-        camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+        camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
         ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
         # distortion
         radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
         tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
-        thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 2]
+        thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
+        ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
         # rolling shutter
         rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
         viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
@@ -1358,6 +1413,11 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         rs_type = rolling_shutter.to_cpp()
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
+        )
+        ftheta_coeffs = (
+            ftheta_coeffs.to_cpp()
+            if ftheta_coeffs is not None
+            else FThetaCameraDistortionParameters.to_cpp_default()
         )
 
         render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
@@ -1382,6 +1442,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             radial_coeffs,
             tangential_coeffs,
             thin_prism_coeffs,
+            ftheta_coeffs,
             isect_offsets,
             flatten_ids,
         )
@@ -1411,6 +1472,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         ctx.rs_type = rs_type
         ctx.camera_model_type = camera_model_type
         ctx.tile_size = tile_size
+        ctx.ftheta_coeffs = ftheta_coeffs
 
         return render_colors, render_alphas
 
@@ -1445,6 +1507,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         rs_type = ctx.rs_type
         camera_model_type = ctx.camera_model_type
         tile_size = ctx.tile_size
+        ftheta_coeffs = ctx.ftheta_coeffs
 
         (v_means, v_quats, v_scales, v_colors, v_opacities,) = _make_lazy_cuda_func(
             "rasterize_to_pixels_from_world_3dgs_bwd"
@@ -1468,6 +1531,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             radial_coeffs,
             tangential_coeffs,
             thin_prism_coeffs,
+            ftheta_coeffs,
             isect_offsets,
             flatten_ids,
             render_alphas,
@@ -1508,6 +1572,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             None,
             None,
             None,
+            None,
         )
 
 
@@ -1531,9 +1596,13 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         radius_clip: float,
         sparse_grad: bool,
         calc_compensations: bool,
-        camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+        camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
         opacities: Optional[Tensor] = None,  # [..., N] or None
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        assert (
+            camera_model != "ftheta"
+        ), "ftheta camera is only supported via UT, please set with_ut=True in the rasterization()"
+
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
         )

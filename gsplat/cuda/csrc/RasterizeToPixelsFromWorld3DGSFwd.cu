@@ -45,7 +45,8 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     const ShutterType rs_type,
     const scalar_t *__restrict__ radial_coeffs,     // [B, C, 6] or [B, C, 4] optional
     const scalar_t *__restrict__ tangential_coeffs, // [B, C, 2] optional
-    const scalar_t *__restrict__ thin_prism_coeffs, // [B, C, 2] optional
+    const scalar_t *__restrict__ thin_prism_coeffs, // [B, C, 4] optional
+    const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
     // intersections
     const int32_t *__restrict__ tile_offsets, // [B, C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
@@ -127,6 +128,14 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + iid * 4);
         }
         OpenCVFisheyeCameraModel camera_model(cm_params);
+        ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
+    } else if (camera_model_type == CameraModelType::FTHETA) {
+        FThetaCameraModel<>::Parameters cm_params = {};
+        cm_params.resolution = {image_width, image_height};
+        cm_params.shutter_type = rs_type;
+        cm_params.principal_point = { principal_point.x, principal_point.y };
+        cm_params.dist = ftheta_coeffs;
+        FThetaCameraModel camera_model(cm_params);
         ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
     } else {
         // should never reach here
@@ -309,7 +318,8 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     ShutterType rs_type,
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
-    const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 2] optional
+    const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
+    const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
     // intersections
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
@@ -392,6 +402,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             thin_prism_coeffs.has_value()
                 ? thin_prism_coeffs.value().data_ptr<float>()
                 : nullptr,
+            ftheta_coeffs,
             // intersections
             tile_offsets.data_ptr<int32_t>(),
             flatten_ids.data_ptr<int32_t>(),
@@ -425,6 +436,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         const at::optional<at::Tensor> radial_coeffs,                         \
         const at::optional<at::Tensor> tangential_coeffs,                     \
         const at::optional<at::Tensor> thin_prism_coeffs,                     \
+        const FThetaCameraDistortionParameters ftheta_coeffs,                 \
         const at::Tensor tile_offsets,                                         \
         const at::Tensor flatten_ids,                                          \
         const at::Tensor renders,                                              \
