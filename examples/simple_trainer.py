@@ -38,7 +38,7 @@ from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 from gsplat_viewer import GsplatViewer, GsplatRenderTabState
 from nerfview import CameraState, RenderTabState, apply_float_colormap
-
+from datetime import datetime
 
 @dataclass
 class Config:
@@ -58,7 +58,7 @@ class Config:
     # Directory to save results
     result_dir: str = "results/garden"
     # Every N images there is a test image
-    test_every: int = 8
+    test_every: int = 22
     # Random crop size for training  (experimental)
     patch_size: Optional[int] = None
     # A global scaler that applies to the scene size related parameters
@@ -79,13 +79,13 @@ class Config:
     # Number of training steps
     max_steps: int = 30_000
     # Steps to evaluate the model
-    eval_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    eval_steps: List[int] = field(default_factory=lambda: [7_000, 30_000, 50_000, 100_000, 150_000, 200_000])
     # Steps to save the model
-    save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000, 50_000, 100_000, 150_000, 200_000])
     # Whether to save ply file (storage size can be large)
     save_ply: bool = False
     # Steps to save the model as ply
-    ply_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    ply_steps: List[int] = field(default_factory=lambda: [7_000, 30_000, 50_000, 100_000, 150_000, 200_000])
     # Whether to disable video generation during training and evaluation
     disable_video: bool = False
 
@@ -186,6 +186,7 @@ class Config:
 
     # Whether use fused-bilateral grid
     use_fused_bilagrid: bool = False
+    debug_vram: bool = False  # Enable CUDA memory profiling
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -735,12 +736,14 @@ class Runner:
             #     )
 
             if world_rank == 0 and cfg.tb_every > 0 and step % cfg.tb_every == 0:
-                mem = torch.cuda.max_memory_allocated() / 1024**3
+                allocated = torch.cuda.max_memory_allocated() / 1024**2
+                reserved = torch.cuda.max_memory_reserved() / 1024**2
                 self.writer.add_scalar("train/loss", loss.item(), step)
                 self.writer.add_scalar("train/l1loss", l1loss.item(), step)
                 self.writer.add_scalar("train/ssimloss", ssimloss.item(), step)
                 self.writer.add_scalar("train/num_GS", len(self.splats["means"]), step)
-                self.writer.add_scalar("train/mem", mem, step)
+                self.writer.add_scalar("train/mem_allocated", allocated, step)
+                self.writer.add_scalar("train/mem_reserved", reserved, step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
                 if cfg.use_bilateral_grid:
@@ -883,7 +886,7 @@ class Runner:
             # eval the full set
             if step in [i - 1 for i in cfg.eval_steps]:
                 self.eval(step)
-                self.render_traj(step)
+                # self.render_traj(step)
 
             # run compression
             if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:
@@ -901,7 +904,7 @@ class Runner:
                 )
                 # Update the scene.
                 self.viewer.update(step, num_train_rays_per_step)
-
+        
     @torch.no_grad()
     def eval(self, step: int, stage: str = "val"):
         """Entry for evaluation."""
@@ -1176,11 +1179,26 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
             runner.splats[k].data = torch.cat([ckpt["splats"][k] for ckpt in ckpts])
         step = ckpts[0]["step"]
         runner.eval(step=step)
-        runner.render_traj(step=step)
+        # runner.render_traj(step=step)
         if cfg.compression is not None:
             runner.run_compression(step=step)
     else:
+        if cfg.debug_vram:
+            torch.cuda.memory._record_memory_history(
+                max_entries=100_000
+            )
+            
         runner.train()
+        
+        if cfg.debug_vram:
+            snapshot_path = os.path.join(
+                cfg.result_dir, 
+                f"vram_snapshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pickle"
+            )
+            torch.cuda.memory._dump_snapshot(snapshot_path)
+            torch.cuda.memory._record_memory_history(enabled=None)  # Stop recording
+            print(f"VRAM snapshot saved to: {snapshot_path}")
+
 
     if not cfg.disable_viewer:
         runner.viewer.complete()
