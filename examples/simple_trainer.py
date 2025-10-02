@@ -316,6 +316,11 @@ class Runner:
         self.device = f"cuda:{local_rank}"
 
         # Where to dump results.
+        if os.path.exists(cfg.result_dir) and os.listdir(cfg.result_dir):
+            raise ValueError(
+                f"Result directory '{cfg.result_dir}' already exists and is not empty. "
+                "Please specify a different directory or remove/rename the existing one."
+            )
         os.makedirs(cfg.result_dir, exist_ok=True)
 
         # Setup output directories.
