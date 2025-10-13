@@ -30,6 +30,25 @@ from examples.config import Config, load_config_from_toml, merge_config
 from examples.utils import get_color, Metrics
 from scripts.utils import set_result_dir, load_checkpoint, load_poses
 
+import logging
+log = logging.getLogger() # Use root logger
+log.setLevel(logging.DEBUG)
+
+# Create the handler for console output (stdout)
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.DEBUG)  # Log INFO and higher levels to console
+console_formatter = logging.Formatter('%(name)-12s: %(levelname)-8s - %(funcName)s - %(message)s')
+console_handler.setFormatter(console_formatter)
+
+# Create the handler for file output
+file_handler = logging.FileHandler(f"{__name__}.log")
+file_handler.setLevel(logging.DEBUG)
+file_formatter = logging.Formatter('%(name)-12s: %(levelname)-8s - %(funcName)s - %(message)s')
+file_handler.setFormatter(file_formatter)
+
+# Add the handlers to the logger
+log.addHandler(console_handler)
+log.addHandler(file_handler)
 
 def save_comparison_image_with_overlay(
     gt_image: torch.Tensor,
@@ -37,7 +56,7 @@ def save_comparison_image_with_overlay(
     save_path: str,
     pose_id: int,
     distance_to_bbox: float,
-    masked_psnr: float
+    metrics: Dict
 ) -> None:
     """
     Save a comparison image with GT | Processed | Error Heatmap and overlay metrics.
@@ -48,7 +67,7 @@ def save_comparison_image_with_overlay(
         save_path: Path to save the comparison image
         pose_id: Pose identifier to overlay
         distance_to_bbox: Distance to bounding box to overlay
-        masked_psnr: Masked PSNR value to overlay
+        metrics: Metrics dictionary to overlay
     """
     # Convert to numpy arrays
     gt_image_np = (gt_image[0].cpu().numpy() * 255).astype(np.uint8)  # [H, W, 3]
@@ -87,7 +106,8 @@ def save_comparison_image_with_overlay(
     text_lines = [
         f"Pose ID: {pose_id}",
         f"Distance: {distance_to_bbox:.2f} m",
-        f"mPSNR: {masked_psnr:.2f} dB"
+        f"mPSNR: {metrics['masked_psnr']:.2f} dB",
+        f"PSNR: {metrics['psnr']:.2f} dB",
     ]
     
     # Position text over heatmap section
@@ -216,14 +236,14 @@ def render_image(
             render_opacities = merged_opacities
             render_colors = merged_colors
         except RecursionError as e:
-            print(f"    WARNING: RecursionError during merging - skipping merging for this pose")
-            print(f"    Error: {str(e)[:100]}...")
+            log.error(f"    WARNING: RecursionError during merging - skipping merging for this pose")
+            log.error(f"    Error: {str(e)[:100]}...")
             # Continue without merging - use original Gaussians
             merge_info = {"error": "RecursionError", "error_message": str(e)[:200]}
     
     # Handle case where all Gaussians are processed away
     if render_means.shape[0] == 0:
-        print(f"Warning: All Gaussians processed away, returning background image")
+        log.warning(f"Warning: All Gaussians processed away, returning background image")
         background_color = torch.tensor(get_color("white"), dtype=torch.float32, device=device) / 255.0
         background_image = background_color.view(1, 1, 1, 3).expand(1, height, width, 3)
         background_alpha = torch.ones((1, height, width, 1), dtype=torch.float32, device=device)
@@ -273,7 +293,7 @@ def render_image(
     return rendered_image, rendered_alpha, num_original, num_after_processing, processing_ratio, merge_info
 
 
-def evaluate_merging_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name=None, save_images=True, measure_lpips=False):
+def evaluate_merging_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name=None, save_images=True, measure_lpips=False, merge_accelerated=False):
     """Main evaluation function for merging quality."""
 
     cfg.data_dir = os.path.join(cfg.actorshq_data_dir, f"{frame_id}", f"resolution_{cfg.resolution}")
@@ -285,9 +305,10 @@ def evaluate_merging_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name
     set_result_dir(cfg, exp_name=exp_name, sub_exp_name=sub_exp_name)
     ckpt = os.path.join(f"{cfg.result_dir}/ckpts/ckpt_{iter - 1}_rank0.pt")
     cfg.ckpt = ckpt
+    method = "cuda" if merge_accelerated else "torch"
 
-    print(f"  Checkpoint: {cfg.ckpt}")
-    print(f"  Result dir: {cfg.result_dir}")
+    log.info(f"  Checkpoint: {cfg.ckpt}")
+    log.info(f"  Result dir: {cfg.result_dir}")
 
     torch.manual_seed(42)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -306,8 +327,8 @@ def evaluate_merging_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name
     poses_file = os.path.join(poses_dir, "viewer_poses.json")
     poses = load_poses(poses_file)
     
-    print(f"Using custom rendering resolution: {cfg.render_width}x{cfg.render_height}")
-    print(f"Original pose resolution will be scaled accordingly")
+    log.info(f"Using custom rendering resolution: {cfg.render_width}x{cfg.render_height}")
+    log.info(f"Original pose resolution will be scaled accordingly")
     
     if len(poses) == 0:
         raise ValueError("No poses found for evaluation")
@@ -318,6 +339,7 @@ def evaluate_merging_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name
             "pixel_size_threshold": cfg.pixel_threshold,
             "use_pixel_area": False,
             "clustering_method": "knn",
+            "accelerated": merge_accelerated,
             "merge_strategy": "weighted_mean",
             "clustering_kwargs": {"k_neighbors": 3, "max_distance": 0.1, "min_cluster_size": 2},
             "merge_kwargs": {"weight_by_opacity": True}
@@ -326,6 +348,7 @@ def evaluate_merging_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name
             "pixel_area_threshold": cfg.pixel_threshold,
             "use_pixel_area": True,
             "clustering_method": "knn",
+            "accelerated": merge_accelerated,
             "merge_strategy": "weighted_mean",
             "clustering_kwargs": {"k_neighbors": 3, "max_distance": 0.1, "min_cluster_size": 2},
             "merge_kwargs": {"weight_by_opacity": True}
@@ -334,6 +357,7 @@ def evaluate_merging_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name
             "pixel_size_threshold": cfg.pixel_threshold,
             "use_pixel_area": False,
             "clustering_method": "knn",
+            "accelerated": merge_accelerated,
             "merge_strategy": "moment_matching",
             "clustering_kwargs": {"k_neighbors": 3, "max_distance": 0.1, "min_cluster_size": 2},
             "merge_kwargs": {"preserve_volume": True}
@@ -342,6 +366,7 @@ def evaluate_merging_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name
             "pixel_area_threshold": cfg.pixel_threshold,
             "use_pixel_area": True,
             "clustering_method": "knn",
+            "accelerated": merge_accelerated,
             "merge_strategy": "moment_matching",
             "clustering_kwargs": {"k_neighbors": 3, "max_distance": 0.1, "min_cluster_size": 2},
             "merge_kwargs": {"preserve_volume": True}
@@ -350,6 +375,7 @@ def evaluate_merging_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name
             "pixel_size_threshold": cfg.pixel_threshold,
             "use_pixel_area": False,
             "clustering_method": "dbscan",
+            "accelerated": merge_accelerated,
             "merge_strategy": "weighted_mean",
             "clustering_kwargs": {"eps": 0.1, "min_samples": 2},
             "merge_kwargs": {"weight_by_opacity": True}
@@ -358,6 +384,7 @@ def evaluate_merging_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name
             "pixel_area_threshold": cfg.pixel_threshold,
             "use_pixel_area": True,
             "clustering_method": "dbscan",
+            "accelerated": merge_accelerated,
             "merge_strategy": "weighted_mean",
             "clustering_kwargs": {"eps": 0.1, "min_samples": 2},
             "merge_kwargs": {"weight_by_opacity": True}
@@ -366,6 +393,7 @@ def evaluate_merging_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name
             "pixel_size_threshold": cfg.pixel_threshold,
             "use_pixel_area": False,
             "clustering_method": "center_in_pixel",
+            "accelerated": merge_accelerated,
             "merge_strategy": "weighted_mean",
             "clustering_kwargs": {"depth_threshold": 0.1, "min_cluster_size": 2},
             "merge_kwargs": {"weight_by_opacity": True}
@@ -374,6 +402,7 @@ def evaluate_merging_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name
             "pixel_area_threshold": cfg.pixel_threshold,
             "use_pixel_area": True,
             "clustering_method": "center_in_pixel",
+            "accelerated": merge_accelerated,
             "merge_strategy": "weighted_mean",
             "clustering_kwargs": {"depth_threshold": 0.1, "min_cluster_size": 2},
             "merge_kwargs": {"weight_by_opacity": True}
@@ -426,7 +455,7 @@ def evaluate_merging_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name
     masks_output_dir = None
     
     if save_images:
-        images_output_dir = os.path.join(poses_dir, f"render_hxw_{cfg.render_width}x{cfg.render_height}", "static_merging", "evaluation_images")
+        images_output_dir = os.path.join(poses_dir, f"render_hxw_{cfg.render_width}x{cfg.render_height}", f"static_merging/{method}/", "evaluation_images")
         os.makedirs(images_output_dir, exist_ok=True)
         
         # Create subdirectories for each configuration (stacked GT|Merged images)
@@ -440,11 +469,11 @@ def evaluate_merging_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name
         masks_output_dir = os.path.join(images_output_dir, "gt_masks")
         os.makedirs(masks_output_dir, exist_ok=True)
     
-    print(f"\nStarting merging evaluation on {len(poses)} poses, pixel threshold: {cfg.pixel_threshold} px ...")
+    log.info(f"\nStarting merging evaluation on {len(poses)} poses, pixel threshold: {cfg.pixel_threshold} px ...")
     start_time = time.time()
     
     for i, pose_data in enumerate(poses):
-        print(f"\nEvaluating pose {i+1}/{len(poses)} (pose_id: {pose_data['pose_id']})")
+        log.info(f"\nEvaluating pose {i+1}/{len(poses)} (pose_id: {pose_data['pose_id']})")
         
         # Get pose_id and distance for consistent naming and result mapping
         pose_id = pose_data['pose_id']
@@ -480,7 +509,7 @@ def evaluate_merging_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name
                 merging_config=config["config"]
             ) # [1, H, W, 3], [1, H, W, 1]
             render_time_ms = (time.time() - render_start_time) * 1000.0  # Convert to milliseconds
-            print(f"    Time taken: {render_time_ms:.1f}ms")
+            log.info(f"    Time taken: {render_time_ms:.1f}ms")
 
             # Calculate all metrics using the Metrics class
             metric_results = metrics_calculator.calculate_all_metrics(
@@ -511,13 +540,13 @@ def evaluate_merging_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name
                     save_path=stacked_image_path,
                     pose_id=pose_id,
                     distance_to_bbox=distance_to_bbox,
-                    masked_psnr=metric_results['masked_psnr']
+                    metrics=metric_results
                 )
             
             # Print formatted metrics
             lpips_reliability = "✓" if metric_results['lpips_reliable'] else "⚠"
             processing_type = "Merged" if config["merging"] else "Culled"
-            print(f"  {config['name'], config['param_str']}: PSNR={metric_results['psnr']:.2f}, SSIM={metric_results['ssim']:.4f}, LPIPS={metric_results['lpips']:.3f}, " 
+            log.info(f"  {config['name'], config['param_str']}: PSNR={metric_results['psnr']:.2f}, SSIM={metric_results['ssim']:.4f}, LPIPS={metric_results['lpips']:.3f}, " 
             f"MaskedPSNR={metric_results['masked_psnr']:.2f}, MaskedSSIM={metric_results['masked_ssim']:.4f}, MaskedSE={metric_results['masked_se']:.2f}, MaskedRMSE={metric_results['masked_rmse']:.4f}, "
             f"CroppedLPIPS={metric_results['cropped_lpips']:.3f}{lpips_reliability}, "
             f"{processing_type}={processing_ratio:.1f}%, Coverage={metric_results['mask_coverage']:.1%}, Dist={distance_to_bbox:.3f}m, Valid={metric_results['num_valid_pixels']:.0f}, Time={render_time_ms:.1f}ms\n")
@@ -526,7 +555,7 @@ def evaluate_merging_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name
         if (i + 1) % 10 == 0 or i == len(poses) - 1:
             elapsed = time.time() - start_time
             eta = elapsed / (i + 1) * (len(poses) - i - 1)
-            print(f"Progress: {i+1}/{len(poses)} ({100*(i+1)/len(poses):.1f}%) - ETA: {eta:.1f}s")
+            log.info(f"Progress: {i+1}/{len(poses)} ({100*(i+1)/len(poses):.1f}%) - ETA: {eta:.1f}s")
     
     # Calculate and save summary statistics (simplified merge_info handling)
     for config_name, config_results in results.items():
@@ -548,7 +577,7 @@ def evaluate_merging_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name
     # Save detailed results
     output_dir = {}
     for config_name in results:
-        output_dir[config_name] = os.path.join(poses_dir, f"render_hxw_{cfg.render_width}x{cfg.render_height}", "static_merging", "merging_evaluation", config_name, config_results["param_str"])
+        output_dir[config_name] = os.path.join(poses_dir, f"render_hxw_{cfg.render_width}x{cfg.render_height}", f"static_merging/{method}/", "merging_evaluation", config_name, config_results["param_str"])
         os.makedirs(output_dir[config_name], exist_ok=True)
     
     # Save detailed results (pose_id-keyed format for easy lookup)
@@ -558,21 +587,21 @@ def evaluate_merging_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name
             json.dump(results[config_name], f, indent=2)
     
     # Print summary
-    print(f"\n{'='*80}")
-    print("MERGING QUALITY EVALUATION SUMMARY")
-    print(f"{'='*80}")
-    print(f"Total poses: {len(poses)}")
-    print(f"Total time: {time.time() - start_time:.1f}s")
-    print()
+    log.info(f"\n{'='*80}")
+    log.info("MERGING QUALITY EVALUATION SUMMARY")
+    log.info(f"{'='*80}")
+    log.info(f"Total poses: {len(poses)}")
+    log.info(f"Total time: {time.time() - start_time:.1f}s")
+    log.info(f"\n")
     
     if save_images and len(poses) > 0:  # Only print image info if poses were processed and images were saved
-        print(f"  - Ground truth masks: {masks_output_dir}")
+        log.info(f"  - Ground truth masks: {masks_output_dir}")
         for config in eval_configs:
             if config["merging"]:
                 assert config["name"] in merged_images_dirs, f"Config {config['name']} not found in merged_images_dirs"
-                print(f"    - {config['name'], config['param_str']} (GT|Merged|Heatmap): {merged_images_dirs[config['name']]}")
+                log.info(f"    - {config['name'], config['param_str']} (GT|Merged|Heatmap): {merged_images_dirs[config['name']]}")
     elif not save_images:
-        print(f"  - Images not saved (use --save-images to enable image output)")
+        log.info(f"  - Images not saved (use --save-images to enable image output)")
 
 
 def main():
@@ -630,11 +659,12 @@ def main():
     cfg.disable_viewer = False
     iter = cfg.max_steps
     frame_id = 0
+    merge_accelerated = True
     
-    print(f"Image saving: {'Enabled' if args.save_images else 'Disabled'}")
-    print(f"Baseline pixel size threshold: {cfg.pixel_threshold}")    
+    log.info(f"Image saving: {'Enabled' if args.save_images else 'Disabled'}")
+    log.info(f"Baseline pixel size threshold: {cfg.pixel_threshold}")    
     # Run evaluation
-    evaluate_merging_quality(frame_id, iter, cfg, exp_name, measure_lpips=args.lpips, save_images=args.save_images)
+    evaluate_merging_quality(frame_id, iter, cfg, exp_name, measure_lpips=args.lpips, save_images=args.save_images, merge_accelerated=merge_accelerated)
 
 if __name__ == "__main__":
     main()

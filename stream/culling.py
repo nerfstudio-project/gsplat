@@ -285,7 +285,6 @@ def calc_pixel_area_torch_cuda(
     PyTorch + CUDA implementation of pixel area calculation.
     Calculates the area of 2D projected Gaussian ellipse in screen space.
     """
-    
     N = means.shape[0]
     device = means.device
     

@@ -21,6 +21,7 @@ pip install -r examples/requirements.txt
 pip install jaxtyping
 pip install toml ipykernel jupyter wandb
 pip install open3d
+conda install -c conda-forge libboost-devel
 ```
 
 ## Installing COLMAP 3.12.0

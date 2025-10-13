@@ -1,105 +1,16 @@
 import torch
 from torch import Tensor
-from typing import Tuple, List, Dict, Optional, Union, Callable
+from typing import Tuple, List, Dict, Optional, Callable
 import numpy as np
 import math
 from sklearn.neighbors import NearestNeighbors
 from sklearn.cluster import DBSCAN
+import time
 
 from .culling import calc_pixel_size, calc_pixel_area
-from gsplat.cuda._torch_impl import _world_to_cam
-from gsplat.cuda._wrapper import proj
-
-
-def find_merge_candidates(
-    means: Tensor,  # [N, 3]
-    quats: Tensor,  # [N, 4]
-    scales: Tensor,  # [N, 3]
-    opacities: Tensor,  # [N]
-    viewmat: Tensor,  # [4, 4]
-    K: Tensor,  # [3, 3]
-    width: int,
-    height: int,
-    pixel_size_threshold: float = 2.0,
-    use_pixel_area: bool = False,
-    pixel_area_threshold: float = 2.0,
-    scale_modifier: float = 1.0,
-    eps2d: float = 0.3,
-    method: str = "cuda"
-) -> Tensor:
-    """
-    Find Gaussians that are candidates for merging based on their projected size.
-    
-    Args:
-        means: [N, 3] - Gaussian centers in world coordinates
-        quats: [N, 4] - Gaussian quaternions
-        scales: [N, 3] - Gaussian scales
-        opacities: [N] - Gaussian opacities
-        viewmat: [4, 4] - view matrix (world to camera)
-        K: [3, 3] - camera intrinsic matrix
-        width: int - image width
-        height: int - image height
-        pixel_size_threshold: float - minimum pixel size for merging
-        use_pixel_area: bool - whether to use pixel area instead of pixel size
-        pixel_area_threshold: float - minimum pixel area for merging
-        scale_modifier: float - scale modifier applied to Gaussian scales
-        eps2d: float - low-pass filter value
-        method: str - method to use for calculation ("cuda" or "torch")
-        
-    Returns:
-        merge_candidates: [N] - boolean mask for candidates
-    """
-    if use_pixel_area:
-        pixel_metrics = calc_pixel_area(
-            means, quats, scales, opacities, viewmat, K, width, height,
-            scale_modifier, eps2d, method
-        )
-        merge_candidates = pixel_metrics < pixel_area_threshold
-    else:
-        pixel_metrics = calc_pixel_size(
-            means, quats, scales, opacities, viewmat, K, width, height,
-            scale_modifier, eps2d, method
-        )
-        merge_candidates = pixel_metrics < pixel_size_threshold
-    return merge_candidates
-
-
-def cluster_gaussians(
-    means: Tensor,  # [N, 3]
-    candidate_mask: Tensor,  # [N] boolean
-    clustering_method: str = "knn",
-    **clustering_kwargs
-) -> List[np.ndarray]:
-    """
-    Cluster candidate Gaussians for merging using various methods.
-    
-    Args:
-        means: [N, 3] - Gaussian centers in world coordinates
-        candidate_mask: [N] - boolean mask for merge candidates
-        clustering_method: str - clustering method ("knn", "dbscan", "distance_based", "center_in_pixel")
-        **clustering_kwargs: additional arguments for clustering methods
-        
-    Returns:
-        clusters: List of arrays containing indices of Gaussians in each cluster
-    """
-    if not candidate_mask.any():
-        return []
-    
-    # TODO: If we use the python version of the clustering, we can avoid the conversion to numpy and back
-    candidate_indices = torch.where(candidate_mask)[0].cpu().numpy()
-    candidate_means = means[candidate_mask]  # [M, 3] - keep as tensor for center_in_pixel
-    
-    if clustering_method == "knn":
-        return _cluster_knn(candidate_means.cpu().numpy(), candidate_indices, **clustering_kwargs)
-    elif clustering_method == "dbscan":
-        return _cluster_dbscan(candidate_means.cpu().numpy(), candidate_indices, **clustering_kwargs)
-    elif clustering_method == "distance_based":
-        return _cluster_distance_based(candidate_means.cpu().numpy(), candidate_indices, **clustering_kwargs)
-    elif clustering_method == "center_in_pixel":
-        return _cluster_center_in_pixel(candidate_means, candidate_indices, **clustering_kwargs)
-    else:
-        raise ValueError(f"Unknown clustering method: {clustering_method}")
-
+from .clustering_cuda import cluster_center_in_pixel_cuda, cluster_center_in_pixel_torch
+import logging
+log = logging.getLogger(__name__)
 
 def _cluster_knn(
     candidate_means: np.ndarray,  # [M, 3]
@@ -161,7 +72,6 @@ def _cluster_knn(
     
     return clusters
 
-
 def _cluster_dbscan(
     candidate_means: np.ndarray,  # [M, 3]
     candidate_indices: np.ndarray,  # [M]
@@ -197,7 +107,6 @@ def _cluster_dbscan(
             clusters.append(cluster_indices)
     
     return clusters
-
 
 def _cluster_distance_based(
     candidate_means: np.ndarray,  # [M, 3]
@@ -245,193 +154,6 @@ def _cluster_distance_based(
             clusters.append(original_cluster)
     
     return clusters
-
-
-def _cluster_center_in_pixel(
-    candidate_means: Tensor,  # [M, 3]
-    candidate_indices: np.ndarray,  # [M]
-    viewmat: Tensor,  # [4, 4]
-    K: Tensor,  # [3, 3]
-    width: int,
-    height: int,
-    depth_threshold: float = 0.1,
-    min_cluster_size: int = 2
-) -> List[np.ndarray]:
-    """
-    Cluster using center-in-pixel approach with depth sub-clustering.
-    
-    This clustering method implements the "Center-in-Pixel Merging" strategy:
-    1. Projects Gaussian centers to pixel coordinates using the same projection as gsplat rasterizer
-    2. Groups Gaussians that fall into the same pixel 
-    3. Within each pixel group, sub-clusters by camera depth using threshold
-    4. Returns clusters that respect pixel boundaries and depth locality
-    
-    This approach ensures merged Gaussians maintain visual coherence from
-    the current viewpoint, avoiding artifacts from 3D spatial clustering.
-    Uses gsplat's standard proj() function for consistent projection behavior.
-    
-    Args:
-        candidate_means: [M, 3] - positions of candidate Gaussians (torch tensor)
-        candidate_indices: [M] - original indices of candidates
-        viewmat: [4, 4] - view matrix (world to camera)
-        K: [3, 3] - camera intrinsic matrix
-        width: int - image width
-        height: int - image height
-        depth_threshold: float - maximum depth difference for clustering within pixel
-        min_cluster_size: int - minimum Gaussians per cluster
-        
-    Returns:
-        clusters: List of arrays containing original indices
-    """
-    if len(candidate_means) < min_cluster_size:
-        print("Not enough candidate means for center-in-pixel clustering")
-        return []
-    
-    device = candidate_means.device
-    M = len(candidate_means)
-    
-    # 1. Transform to camera coordinates
-    # Add batch dimension for compatibility with _world_to_cam
-    means_batch = candidate_means.unsqueeze(0)  # [1, M, 3]
-    viewmat_batch = viewmat.unsqueeze(0).unsqueeze(0)  # [1, 1, 4, 4]
-    
-    # Transform to camera coordinates (no covariances needed, just pass dummy ones)
-    dummy_covars = torch.eye(3, device=device).unsqueeze(0).unsqueeze(0).expand(1, M, 3, 3)  # [1, M, 3, 3]
-    means_cam_batch, _ = _world_to_cam(means_batch, dummy_covars, viewmat_batch)
-    
-    # Remove batch dimensions
-    means_cam = means_cam_batch.squeeze(0).squeeze(0)  # [M, 3]
-    
-    # 2. Project to 2D pixel coordinates
-    # Add batch dimension for projection
-    means_cam_proj = means_cam.unsqueeze(0).unsqueeze(0)  # [1, 1, M, 3]
-    K_batch = K.unsqueeze(0).unsqueeze(0)  # [1, 1, 3, 3]
-    
-    # Project to 2D (again, we only need means2d, not covariances)
-    dummy_covars_cam = torch.eye(3, device=device).unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(1, 1, M, 3, 3)
-    means2d_batch, _ = proj(means_cam_proj, dummy_covars_cam, K_batch, width, height)
-    
-    # Remove batch dimensions
-    means2d = means2d_batch.squeeze(0).squeeze(0)  # [M, 2]
-    
-    # 3. Convert to discrete pixel coordinates
-    pixel_coords = torch.floor(means2d).long()  # [M, 2]
-    
-    # Filter out points outside image bounds
-    valid_mask = (
-        (pixel_coords[:, 0] >= 0) & (pixel_coords[:, 0] < width) &
-        (pixel_coords[:, 1] >= 0) & (pixel_coords[:, 1] < height) &
-        (means_cam[:, 2] > 0)  # Points must be in front of camera
-    )
-    
-    if not valid_mask.any():
-        print("No valid points found for center-in-pixel clustering")
-        return []
-    
-    # Apply valid mask
-    valid_indices = torch.where(valid_mask)[0]
-    valid_pixel_coords = pixel_coords[valid_mask]  # [V, 2]
-    valid_depths = means_cam[valid_mask, 2]  # [V] - camera Z coordinate (depth)
-    valid_candidate_indices = candidate_indices[valid_indices.cpu().numpy()]
-    
-    # 4. Group by pixel coordinates
-    pixel_groups = {}
-    for i, (pixel_coord, depth, orig_idx) in enumerate(zip(valid_pixel_coords, valid_depths, valid_candidate_indices)):
-        pixel_key = (pixel_coord[0].item(), pixel_coord[1].item())
-        if pixel_key not in pixel_groups:
-            pixel_groups[pixel_key] = []
-        pixel_groups[pixel_key].append((i, depth.item(), orig_idx))
-    
-    # 5. Sub-cluster by depth within each pixel
-    clusters = []
-    for pixel_key, pixel_group in pixel_groups.items():
-        if len(pixel_group) < min_cluster_size:
-            continue
-        
-        # Sort by depth
-        pixel_group.sort(key=lambda x: x[1])  # Sort by depth (x[1])
-        
-        # Perform depth clustering using simple distance threshold
-        depth_clusters = []
-        current_cluster = [pixel_group[0]]
-        
-        for j in range(1, len(pixel_group)):
-            depth_diff = abs(pixel_group[j][1] - pixel_group[j-1][1])
-            
-            if depth_diff <= depth_threshold:
-                # Add to current cluster
-                current_cluster.append(pixel_group[j])
-            else:
-                # If the current cluster is valid, add it to the depth clusters, otherwise discard it
-                if len(current_cluster) >= min_cluster_size:
-                    depth_clusters.append(current_cluster)
-                # Start new cluster
-                current_cluster = [pixel_group[j]]
-        
-        # Don't forget the last cluster
-        if len(current_cluster) >= min_cluster_size:
-            depth_clusters.append(current_cluster)
-        
-        # Convert depth clusters to original indices
-        for depth_cluster in depth_clusters:
-            if len(depth_cluster) >= min_cluster_size:
-                original_cluster = np.array([item[2] for item in depth_cluster])  # Extract original indices
-                clusters.append(original_cluster)
-    
-    return clusters
-
-
-def merge_cluster(
-    cluster_indices: np.ndarray,  # [C] - indices of Gaussians in cluster
-    means: Tensor,  # [N, 3]
-    quats: Tensor,  # [N, 4]
-    scales: Tensor,  # [N, 3] - in linear space
-    opacities: Tensor,  # [N] - in linear space
-    colors: Tensor,  # [N, K, 3] or [N, 3]
-    merge_strategy: str = "weighted_mean",
-    **merge_kwargs
-) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
-    """
-    Merge a cluster of Gaussians into a single Gaussian.
-    
-    Args:
-        cluster_indices: [C] - indices of Gaussians to merge
-        means: [N, 3] - all Gaussian centers
-        quats: [N, 4] - all Gaussian quaternions
-        scales: [N, 3] - all Gaussian scales in linear space
-        opacities: [N] - all Gaussian opacities in linear space
-        colors: [N, K, 3] or [N, 3] - all Gaussian colors
-        merge_strategy: str - merging strategy ("weighted_mean", "moment_matching")
-        **merge_kwargs: additional arguments for merging strategies
-        
-    Returns:
-        merged_mean: [3] - merged Gaussian center
-        merged_quat: [4] - merged Gaussian quaternion
-        merged_scale: [3] - merged Gaussian scale in linear space
-        merged_opacity: [] - merged Gaussian opacity in linear space
-        merged_color: [K, 3] or [3] - merged Gaussian color
-    """
-    cluster_indices = torch.from_numpy(cluster_indices).to(means.device)
-    
-    cluster_means = means[cluster_indices]  # [C, 3]
-    cluster_quats = quats[cluster_indices]  # [C, 4]
-    cluster_scales = scales[cluster_indices]  # [C, 3]
-    cluster_opacities = opacities[cluster_indices]  # [C]
-    cluster_colors = colors[cluster_indices]  # [C, K, 3] or [C, 3]
-    
-    if merge_strategy == "weighted_mean":
-        return _merge_weighted_mean(
-            cluster_means, cluster_quats, cluster_scales, 
-            cluster_opacities, cluster_colors, **merge_kwargs
-        )
-    elif merge_strategy == "moment_matching":
-        return _merge_moment_matching(
-            cluster_means, cluster_quats, cluster_scales,
-            cluster_opacities, cluster_colors, **merge_kwargs
-        )
-    else:
-        raise ValueError(f"Unknown merge strategy: {merge_strategy}")
-
 
 def _merge_weighted_mean(
     cluster_means: Tensor,  # [C, 3]
@@ -481,7 +203,6 @@ def _merge_weighted_mean(
         merged_color = (weights.unsqueeze(-1) * cluster_colors).sum(dim=0)
     
     return merged_mean, merged_quat, merged_scales, merged_opacities, merged_color
-
 
 def _merge_moment_matching(
     cluster_means: Tensor,  # [C, 3]
@@ -535,6 +256,267 @@ def _merge_moment_matching(
     
     return merged_mean, merged_quat, merged_scales, merged_opacities, merged_color
 
+def find_merge_candidates(
+    means: Tensor,  # [N, 3]
+    quats: Tensor,  # [N, 4]
+    scales: Tensor,  # [N, 3]
+    opacities: Tensor,  # [N]
+    viewmat: Tensor,  # [4, 4]
+    K: Tensor,  # [3, 3]
+    width: int,
+    height: int,
+    pixel_size_threshold: float = 2.0,
+    use_pixel_area: bool = False,
+    pixel_area_threshold: float = 2.0,
+    scale_modifier: float = 1.0,
+    eps2d: float = 0.3,
+    method: str = "cuda"
+) -> Tensor:
+    """
+    Find Gaussians that are candidates for merging based on their projected size.
+    
+    Args:
+        means: [N, 3] - Gaussian centers in world coordinates
+        quats: [N, 4] - Gaussian quaternions
+        scales: [N, 3] - Gaussian scales
+        opacities: [N] - Gaussian opacities
+        viewmat: [4, 4] - view matrix (world to camera)
+        K: [3, 3] - camera intrinsic matrix
+        width: int - image width
+        height: int - image height
+        pixel_size_threshold: float - minimum pixel size for merging
+        use_pixel_area: bool - whether to use pixel area instead of pixel size
+        pixel_area_threshold: float - minimum pixel area for merging
+        scale_modifier: float - scale modifier applied to Gaussian scales
+        eps2d: float - low-pass filter value
+        method: str - method to use for calculation ("cuda" or "torch")
+        
+    Returns:
+        merge_candidates: [N] - boolean mask for candidates
+    """
+    if use_pixel_area:
+        pixel_metrics = calc_pixel_area(
+            means, quats, scales, opacities, viewmat, K, width, height,
+            scale_modifier, eps2d, method
+        )
+        merge_candidates = pixel_metrics < pixel_area_threshold
+    else:
+        pixel_metrics = calc_pixel_size(
+            means, quats, scales, opacities, viewmat, K, width, height,
+            scale_modifier, eps2d, method
+        )
+        merge_candidates = pixel_metrics < pixel_size_threshold
+    return merge_candidates
+
+
+def cluster_gaussians(
+    means: Tensor,  # [N, 3]
+    candidate_mask: Tensor,  # [N] boolean
+    clustering_method: str = "center_in_pixel",
+    method: str = "cuda",
+    **clustering_kwargs
+) -> List[np.ndarray]:
+    """
+    Cluster candidate Gaussians for merging using various methods.
+    
+    Args:
+        means: [N, 3] - Gaussian centers in world coordinates
+        candidate_mask: [N] - boolean mask for merge candidates
+        clustering_method: str - clustering method ("knn", "dbscan", "distance_based", "center_in_pixel")
+        method: str - method to use for clustering ("cuda" or "torch")
+        **clustering_kwargs: additional arguments for clustering methods
+        
+    Returns:
+        clusters: List of arrays containing indices of Gaussians in each cluster
+    """
+    if not candidate_mask.any():
+        return []
+    
+    # Keep candidate_indices as torch tensor for faster processing
+    candidate_indices = torch.where(candidate_mask)[0]  # Keep as tensor on GPU
+    candidate_means = means[candidate_mask]  # [M, 3] - keep as tensor for center_in_pixel
+    
+    if clustering_method == "knn":
+        # Convert to numpy only for numpy-based methods
+        candidate_indices_np = candidate_indices.cpu().numpy()
+        return _cluster_knn(candidate_means.cpu().numpy(), candidate_indices_np, **clustering_kwargs)
+    elif clustering_method == "dbscan":
+        # Convert to numpy only for numpy-based methods
+        candidate_indices_np = candidate_indices.cpu().numpy()
+        return _cluster_dbscan(candidate_means.cpu().numpy(), candidate_indices_np, **clustering_kwargs)
+    elif clustering_method == "distance_based":
+        # Convert to numpy only for numpy-based methods
+        candidate_indices_np = candidate_indices.cpu().numpy()
+        return _cluster_distance_based(candidate_means.cpu().numpy(), candidate_indices_np, **clustering_kwargs)
+    elif clustering_method == "center_in_pixel":
+        if method == "cuda":
+            return cluster_center_in_pixel_cuda(candidate_means, candidate_indices, **clustering_kwargs)
+        else:
+            return cluster_center_in_pixel_torch(candidate_means, candidate_indices, **clustering_kwargs)
+    else:
+        raise ValueError(f"Unknown clustering method: {clustering_method}")
+
+def _merge_cluster_torch(
+    cluster_indices: Tensor,  # [C] - indices of Gaussians in cluster
+    means: Tensor,  # [N, 3]
+    quats: Tensor,  # [N, 4]
+    scales: Tensor,  # [N, 3] - in linear space
+    opacities: Tensor,  # [N] - in linear space
+    colors: Tensor,  # [N, K, 3] or [N, 3]
+    merge_strategy: str = "weighted_mean",
+    **merge_kwargs
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """
+    Merge a cluster of Gaussians into a single Gaussian.
+    
+    Args:
+        cluster_indices: [C] - indices of Gaussians to merge
+        means: [N, 3] - all Gaussian centers
+        quats: [N, 4] - all Gaussian quaternions
+        scales: [N, 3] - all Gaussian scales in linear space
+        opacities: [N] - all Gaussian opacities in linear space
+        colors: [N, K, 3] or [N, 3] - all Gaussian colors
+        merge_strategy: str - merging strategy ("weighted_mean", "moment_matching")
+        **merge_kwargs: additional arguments for merging strategies
+        
+    Returns:
+        merged_mean: [3] - merged Gaussian center
+        merged_quat: [4] - merged Gaussian quaternion
+        merged_scale: [3] - merged Gaussian scale in linear space
+        merged_opacity: [] - merged Gaussian opacity in linear space
+        merged_color: [K, 3] or [3] - merged Gaussian color
+    """
+    # Strict tensor-only enforcement - no numpy fallbacks
+    if not isinstance(cluster_indices, torch.Tensor):
+        raise TypeError(f"cluster_indices must be a torch.Tensor, got {type(cluster_indices)}. "
+                       f"Use torch.from_numpy() to convert numpy arrays to tensors before calling this function.")
+    
+    cluster_means = means[cluster_indices]  # [C, 3]
+    cluster_quats = quats[cluster_indices]  # [C, 4]
+    cluster_scales = scales[cluster_indices]  # [C, 3]
+    cluster_opacities = opacities[cluster_indices]  # [C]
+    cluster_colors = colors[cluster_indices]  # [C, K, 3] or [C, 3]
+    
+    if merge_strategy == "weighted_mean":
+        return _merge_weighted_mean(
+            cluster_means, cluster_quats, cluster_scales, 
+            cluster_opacities, cluster_colors, **merge_kwargs
+        )
+    elif merge_strategy == "moment_matching":
+        return _merge_moment_matching(
+            cluster_means, cluster_quats, cluster_scales,
+            cluster_opacities, cluster_colors, **merge_kwargs
+        )
+    else:
+        raise ValueError(f"Unknown merge strategy: {merge_strategy}")
+
+def merge_clusters_torch(
+    clusters: List[Tensor],
+    current_means: Tensor,
+    current_quats: Tensor,
+    current_scales: Tensor,
+    current_opacities: Tensor,
+    current_colors: Tensor,
+    merge_strategy: str = "weighted_mean",
+    **merge_kwargs
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """Merge clusters using PyTorch.
+
+    Args:
+        clusters (List[Tensor]): List of cluster indices
+        current_means (Tensor): Current means
+        current_quats (Tensor): Current quaternions
+        current_scales (Tensor): Current scales
+        current_opacities (Tensor): Current opacities
+        current_colors (Tensor): Current colors
+        merge_strategy (str, optional): Merging strategy ("weighted_mean", "moment_matching"). Defaults to "weighted_mean".
+        **merge_kwargs: Additional arguments for merging strategies
+
+    Returns:
+        merged_means: [M, 3] - merged Gaussian centers
+        merged_quats: [M, 4] - merged Gaussian quaternions
+        merged_scales: [M, 3] - merged Gaussian scales in linear space
+        merged_opacities: [M] - merged Gaussian opacities in linear space
+        merged_colors: [M, K, 3] or [M, 3] - merged Gaussian colors
+    """
+    # Prepare for merging
+    device = current_means.device
+    merged_gaussians = []
+    cluster_indices_to_remove = []  # Collect tensor indices for vectorized removal
+
+    # Merge each cluster
+    for cluster_indices in clusters:
+        # Strict tensor-only enforcement - no numpy fallbacks
+        if not isinstance(cluster_indices, torch.Tensor):
+            raise TypeError(f"All cluster_indices must be torch.Tensor, got {type(cluster_indices)} in clusters list. "
+                           f"Use torch.from_numpy() to convert numpy arrays to tensors before calling this function.")
+        
+        # Merge the cluster
+        merged_mean, merged_quat, merged_scale, merged_opacity, merged_color = _merge_cluster_torch(
+            cluster_indices, current_means, current_quats, current_scales,
+            current_opacities, current_colors, merge_strategy, **merge_kwargs
+        )
+        
+        merged_gaussians.append({
+            "mean": merged_mean,
+            "quat": merged_quat,
+            "scale": merged_scale,
+            "opacity": merged_opacity,
+            "color": merged_color
+        })
+        
+        # Collect tensor indices for vectorized removal - no CPU conversion!
+        cluster_indices_to_remove.append(cluster_indices)
+    
+    if not merged_gaussians:
+        log.info(f"No successful merges")
+        return current_means, current_quats, current_scales, current_opacities, current_colors
+    
+    # Create new parameter tensors using vectorized tensor operations
+    # Keep non-merged Gaussians - vectorized approach, no CPU operations
+    keep_mask = torch.ones(current_means.shape[0], dtype=torch.bool, device=device)
+    
+    if cluster_indices_to_remove:
+        # Concatenate all cluster indices into a single tensor - fully vectorized
+        all_indices_to_remove = torch.cat(cluster_indices_to_remove, dim=0)  # Stay on GPU
+        
+        # Vectorized mask update - much faster than Python loop
+        keep_mask[all_indices_to_remove] = False
+    
+    kept_means = current_means[keep_mask]
+    kept_quats = current_quats[keep_mask]
+    kept_scales = current_scales[keep_mask]
+    kept_opacities = current_opacities[keep_mask]
+    kept_colors = current_colors[keep_mask]
+    
+    # Add merged Gaussians
+    if merged_gaussians:
+        merged_means_list = [g["mean"] for g in merged_gaussians]
+        merged_quats_list = [g["quat"] for g in merged_gaussians]
+        merged_scales_list = [g["scale"] for g in merged_gaussians]
+        merged_opacities_list = [g["opacity"] for g in merged_gaussians]
+        merged_colors_list = [g["color"] for g in merged_gaussians]
+        
+        new_merged_means = torch.stack(merged_means_list)
+        new_merged_quats = torch.stack(merged_quats_list)
+        new_merged_scales = torch.stack(merged_scales_list)
+        new_merged_opacities = torch.stack(merged_opacities_list)
+        new_merged_colors = torch.stack(merged_colors_list)
+        
+        # Combine kept and merged
+        merged_means = torch.cat([kept_means, new_merged_means], dim=0)
+        merged_quats = torch.cat([kept_quats, new_merged_quats], dim=0)
+        merged_scales = torch.cat([kept_scales, new_merged_scales], dim=0)
+        merged_opacities = torch.cat([kept_opacities, new_merged_opacities], dim=0)
+        merged_colors = torch.cat([kept_colors, new_merged_colors], dim=0)
+    else:
+        merged_means = kept_means
+        merged_quats = kept_quats
+        merged_scales = kept_scales
+        merged_opacities = kept_opacities
+        merged_colors = kept_colors
+    
+    return merged_means, merged_quats, merged_scales, merged_opacities, merged_colors
 
 def merge_gaussians(
     means: Tensor,  # [N, 3]
@@ -553,7 +535,7 @@ def merge_gaussians(
     merge_strategy: str = "weighted_mean",
     scale_modifier: float = 1.0,
     eps2d: float = 0.3,
-    method: str = "cuda",
+    accelerated: bool = True,
     clustering_kwargs: Optional[Dict] = None,
     merge_kwargs: Optional[Dict] = None,
     max_iterations: int = 1,
@@ -579,7 +561,7 @@ def merge_gaussians(
         merge_strategy: str - merging strategy ("weighted_mean", "moment_matching")
         scale_modifier: float - scale modifier applied to Gaussian scales
         eps2d: float - low-pass filter value
-        method: str - method to use for calculation ("cuda" or "torch")
+        accelerated: bool - whether to use accelerated clustering (True for CUDA, False for PyTorch)
         clustering_kwargs: Dict - additional arguments for clustering
         merge_kwargs: Dict - additional arguments for merging
         max_iterations: int - maximum number of merging iterations
@@ -593,6 +575,8 @@ def merge_gaussians(
         merged_colors: [M, K, 3] or [M, 3] - merged Gaussian colors
         merge_info: Dict - information about the merging process
     """
+
+    start_time = time.time()
     if clustering_kwargs is None:
         raise ValueError("clustering_kwargs must be provided and cannot be None.")
     if merge_kwargs is None:
@@ -606,14 +590,13 @@ def merge_gaussians(
     # elif clustering_method == "distance_based" and not clustering_kwargs:
     #     clustering_kwargs = {"max_distance": 0.1, "min_cluster_size": 2}
     
-    device = means.device
     original_count = means.shape[0]
     current_means = means.clone()
     current_quats = quats.clone()
     current_scales = scales.clone()
     current_opacities = opacities.clone()
     current_colors = colors.clone()
-    
+
     merge_info = {
         "original_count": original_count,
         "iterations": 0,
@@ -623,20 +606,28 @@ def merge_gaussians(
         "clusters_per_iteration": []
     }
     
+    end_time = time.time()
+    log.info(f"Preprocess time: {(end_time - start_time)*1000:.2f} ms")
+
     for iteration in range(max_iterations):
         # breakpoint()
         # Find merge candidates
+        start_time = time.time()
         candidate_mask = find_merge_candidates(
             current_means, current_quats, current_scales, current_opacities,
             viewmat, K, width, height, pixel_size_threshold, use_pixel_area, pixel_area_threshold,
-            scale_modifier, eps2d, method
+            scale_modifier, eps2d, method="cuda" if accelerated else "torch"
         )
         
         if not candidate_mask.any():
-            print(f"No merge candidates found at iteration {iteration}")
+            log.warning(f"No merge candidates found at iteration {iteration}")
             break
         
+        end_time = time.time()
+        log.info(f"Find Merge Candidates time: {(end_time - start_time)*1000:.2f} ms")
+
         # Cluster candidates
+        start_time = time.time()
         if clustering_method == "center_in_pixel":
             # Add camera parameters for center_in_pixel clustering
             clustering_kwargs_with_camera = clustering_kwargs.copy()
@@ -647,88 +638,41 @@ def merge_gaussians(
                 "height": height
             })
             clusters = cluster_gaussians(
-                current_means, candidate_mask, clustering_method, **clustering_kwargs_with_camera
+                current_means, candidate_mask, clustering_method,
+                method="cuda" if accelerated else "torch",
+                **clustering_kwargs_with_camera
             )
         else:
             clusters = cluster_gaussians(
-                current_means, candidate_mask, clustering_method, **clustering_kwargs
+                current_means, candidate_mask, clustering_method, method="torch", **clustering_kwargs
             )
         
         if not clusters:
-            print(f"No clusters found at iteration {iteration}")
+            log.warning(f"No clusters found at iteration {iteration}")
             break
         
         merge_info["clusters_per_iteration"].append(len(clusters))
+
+        end_time = time.time()
+        log.info(f"Cluster Candidates time: {(end_time - start_time)*1000:.2f} ms")
         
-        # Prepare for merging
-        merged_gaussians = []
-        indices_to_remove = set()
-        
-        # Merge each cluster
-        for cluster_indices in clusters:
-            # Merge the cluster
-            merged_mean, merged_quat, merged_scale, merged_opacity, merged_color = merge_cluster(
-                cluster_indices, current_means, current_quats, current_scales,
-                current_opacities, current_colors, merge_strategy, **merge_kwargs
-            )
-            
-            merged_gaussians.append({
-                "mean": merged_mean,
-                "quat": merged_quat,
-                "scale": merged_scale,
-                "opacity": merged_opacity,
-                "color": merged_color
-            })
-            
-            # Mark original Gaussians for removal
-            indices_to_remove.update(cluster_indices)
-        
-        if not merged_gaussians:
-            print(f"No successful merges at iteration {iteration}")
-            break
-        
-        # Create new parameter tensors
-        # Keep non-merged Gaussians
-        keep_mask = torch.ones(current_means.shape[0], dtype=torch.bool, device=device)
-        for idx in indices_to_remove:
-            keep_mask[idx] = False
-        
-        kept_means = current_means[keep_mask]
-        kept_quats = current_quats[keep_mask]
-        kept_scales = current_scales[keep_mask]
-        kept_opacities = current_opacities[keep_mask]
-        kept_colors = current_colors[keep_mask]
-        
-        # Add merged Gaussians
-        if merged_gaussians:
-            merged_means_list = [g["mean"] for g in merged_gaussians]
-            merged_quats_list = [g["quat"] for g in merged_gaussians]
-            merged_scales_list = [g["scale"] for g in merged_gaussians]
-            merged_opacities_list = [g["opacity"] for g in merged_gaussians]
-            merged_colors_list = [g["color"] for g in merged_gaussians]
-            
-            new_merged_means = torch.stack(merged_means_list)
-            new_merged_quats = torch.stack(merged_quats_list)
-            new_merged_scales = torch.stack(merged_scales_list)
-            new_merged_opacities = torch.stack(merged_opacities_list)
-            new_merged_colors = torch.stack(merged_colors_list)
-            
-            # Combine kept and merged
-            current_means = torch.cat([kept_means, new_merged_means], dim=0)
-            current_quats = torch.cat([kept_quats, new_merged_quats], dim=0)
-            current_scales = torch.cat([kept_scales, new_merged_scales], dim=0)
-            current_opacities = torch.cat([kept_opacities, new_merged_opacities], dim=0)
-            current_colors = torch.cat([kept_colors, new_merged_colors], dim=0)
-        else:
-            current_means = kept_means
-            current_quats = kept_quats
-            current_scales = kept_scales
-            current_opacities = kept_opacities
-            current_colors = kept_colors
-        
+        start_time = time.time()
+        merged_means, merged_quats, merged_scales, merged_opacities, merged_colors = merge_clusters_torch(
+            clusters, current_means, current_quats, current_scales, current_opacities, current_colors, merge_strategy, **merge_kwargs
+        )
+
+        current_means = merged_means
+        current_quats = merged_quats
+        current_scales = merged_scales
+        current_opacities = merged_opacities
+        current_colors = merged_colors
+
+        end_time = time.time()
+        log.info(f"Merge Clusters time: {(end_time - start_time)*1000:.2f} ms")
+
         # Update merge info
-        current_count = current_means.shape[0]
-        merged_this_iteration = len(indices_to_remove) - len(merged_gaussians)
+        current_count = merged_means.shape[0]
+        merged_this_iteration = original_count - current_count
         merge_info["total_merged"] += merged_this_iteration
         merge_info["iterations"] += 1
         
@@ -736,19 +680,19 @@ def merge_gaussians(
         if iteration > 0:
             reduction_this_iteration = merged_this_iteration / original_count
             if reduction_this_iteration < min_reduction_ratio:
-                print(f"Reduction ratio {reduction_this_iteration:.4f} below threshold {min_reduction_ratio}, stopping")
+                log.info(f"Reduction ratio {reduction_this_iteration:.4f} below threshold {min_reduction_ratio}, stopping")
                 break
         
-        print(f"Iteration {iteration}: {len(clusters)} clusters, "
-              f"{len(indices_to_remove)} → {len(merged_gaussians)} "
+        log.info(f"Iteration {iteration}: {len(clusters)} clusters, "
+              f"{original_count} → {current_count} "
               f"(net reduction: {merged_this_iteration}), "
               f"total count: {current_count}")
     
     # Final merge info
-    merge_info["final_count"] = current_means.shape[0]
-    merge_info["reduction_ratio"] = (original_count - merge_info["final_count"]) / original_count
+    merge_info["final_count"] = current_count
+    merge_info["reduction_ratio"] = (original_count - current_count) / original_count
     
-    print(f"Merging complete: {original_count} → {merge_info['final_count']} "
+    log.info(f"Merging complete: {original_count} → {merge_info['final_count']} "
           f"({merge_info['reduction_ratio']:.1%} reduction)")
     
     return current_means, current_quats, current_scales, current_opacities, current_colors, merge_info
