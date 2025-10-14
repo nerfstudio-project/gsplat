@@ -427,6 +427,56 @@ def plot_reduction_ratio_cuda_vs_torch(merging_evaluation_dir, save_dir, method_
     plt.close()
 
 
+def plot_render_time_cuda_vs_torch(merging_evaluation_dir, save_dir, method_name):
+    """Plot Render Time comparison between CUDA and Torch."""
+    
+    cuda_data = load_implementation_data(merging_evaluation_dir, "cuda", method_name, "render_time_ms")
+    torch_data = load_implementation_data(merging_evaluation_dir, "torch", method_name, "render_time_ms")
+    
+    if not cuda_data and not torch_data:
+        print(f"No data found for render time")
+        return
+    
+    all_thresholds = sorted(list(set(list(cuda_data.keys()) + list(torch_data.keys()))))
+    colors = plt.cm.viridis(np.linspace(0, 1, len(all_thresholds)))
+    color_map = {threshold: colors[i] for i, threshold in enumerate(all_thresholds)}
+    markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', '*', 'h']
+    marker_map = {threshold: markers[i % len(markers)] for i, threshold in enumerate(all_thresholds)}
+    
+    plt.figure(figsize=(14, 8))
+    
+    # Plot CUDA data
+    for pixel_threshold in all_thresholds:
+        if pixel_threshold in cuda_data:
+            data = cuda_data[pixel_threshold]
+            label = f'CUDA - Threshold {pixel_threshold}'
+            plt.plot(data['distances'], data['values'], 
+                    color=color_map[pixel_threshold], marker=marker_map[pixel_threshold],
+                    linestyle='-', linewidth=2.5, markersize=6, alpha=0.8, label=label)
+    
+    # Plot Torch data
+    for pixel_threshold in all_thresholds:
+        if pixel_threshold in torch_data:
+            data = torch_data[pixel_threshold]
+            label = f'Torch - Threshold {pixel_threshold}'
+            plt.plot(data['distances'], data['values'], 
+                    color=color_map[pixel_threshold], marker=marker_map[pixel_threshold],
+                    linestyle='--', linewidth=2.5, markersize=6, alpha=0.8, label=label)
+    
+    plt.xlabel('Distance to Bounding Box Center (m)', fontsize=12)
+    plt.ylabel('Render Time (ms) [log scale]', fontsize=12)
+    plt.title(f'Render Time vs Camera Distance - CUDA vs Torch\n{method_name.replace("_", " ").title()}', fontsize=14)
+    plt.yscale('log')
+    plt.grid(True, alpha=0.3, which='both')  # Show grid for both major and minor ticks
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.tight_layout()
+    
+    plot_path = os.path.join(save_dir, "render_time_cuda_vs_torch.png")
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    print(f"Render Time comparison plot saved to: {plot_path}")
+    plt.close()
+
+
 def generate_all_cuda_torch_plots(merging_evaluation_dir, base_save_dir, method_name):
     """Generate all comparison plots for CUDA vs Torch."""
     
@@ -465,6 +515,7 @@ def generate_all_cuda_torch_plots(merging_evaluation_dir, base_save_dir, method_
     # Generate special analysis plots
     plot_gaussians_cuda_vs_torch(merging_evaluation_dir, method_save_dir, method_name)
     plot_reduction_ratio_cuda_vs_torch(merging_evaluation_dir, method_save_dir, method_name)
+    plot_render_time_cuda_vs_torch(merging_evaluation_dir, method_save_dir, method_name)
 
 
 if __name__ == "__main__":

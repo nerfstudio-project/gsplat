@@ -32,12 +32,14 @@ def _cluster_center_in_pixel_cuda(
     height: int,
     depth_threshold: float = 0.1,
     min_cluster_size: int = 2
-) -> List[Tensor]:
+) -> Dict[str, Tensor]:
     """
     Perform center-in-pixel clustering using CUDA acceleration.
     
     This function implements the same algorithm as the Python version but uses
     GPU parallelization for improved performance on large datasets.
+    
+    Returns flat tensor format optimized for CUDA merging pipeline.
     
     Args:
         means_cam: [M, 3] - Gaussian centers in camera coordinates
@@ -51,11 +53,20 @@ def _cluster_center_in_pixel_cuda(
         min_cluster_size: int - Minimum Gaussians per cluster
         
     Returns:
-        clusters: List of tensors containing original indices for each cluster
+        Dict containing:
+            'cluster_indices': [total_clustered] - Flat array of original indices
+            'cluster_offsets': [num_clusters + 1] - Cluster boundary offsets  
+            'num_clusters': int - Total number of clusters found
+            'total_clustered': int - Total number of clustered Gaussians
     """
     start_time = time.time()
     if means_cam.shape[0] == 0:
-        return []
+        return {
+            'cluster_indices': torch.empty(0, dtype=torch.int32, device=means_cam.device),
+            'cluster_offsets': torch.zeros(1, dtype=torch.int32, device=means_cam.device),
+            'num_clusters': 0,
+            'total_clustered': 0
+        }
     
     # Ensure inputs are on GPU and have correct dtypes
     means_cam = means_cam.cuda().contiguous().float()
@@ -75,31 +86,24 @@ def _cluster_center_in_pixel_cuda(
         )
     end_time = time.time()
     log.debug(f"Clustering CUDA wrapper time: {(end_time - start_time)*1000:.2f} ms")
-    if num_clusters == 0:
-        return []
     
-    # PERFORMANCE TEST: Back to optimized torch.split() - measure actual cost
+    # ULTRA-FAST: Return native CUDA format - no postprocessing needed!
     start_time = time.time()
     
-    if num_clusters == 0:
-        end_time = time.time()
-        log.debug(f"Postproc Output time: {(end_time - start_time)*1000:.2f} ms")
-        return []
-    
-    # OPTIMIZED: Use torch.split() but with better memory management
-    cluster_sizes = cluster_offsets[1:] - cluster_offsets[:-1]  # [num_clusters] on GPU
-    
-    # CRITICAL: Try to make torch.split() more efficient
-    size_list = cluster_sizes.cpu().tolist()  # Single GPU→CPU transfer
-    
-    # Use torch.split - but profile exactly where the time goes
-    clusters = list(torch.split(cluster_indices, size_list))
+    result = {
+        'cluster_indices': cluster_indices,     # [total_clustered] - already on GPU
+        'cluster_offsets': cluster_offsets,     # [num_clusters + 1] - already on GPU  
+        'num_clusters': num_clusters,           # int
+        'total_clustered': total_clustered      # int
+    }
     
     end_time = time.time()
     log.debug(f"Postproc Output time: {(end_time - start_time)*1000:.2f} ms")
-    log.debug(f"  - GPU→CPU transfer: {len(size_list)} values")
-    log.debug(f"  - Tensor objects created: {len(clusters)}")
-    return clusters
+    log.debug(f"  - No GPU→CPU transfers!")
+    log.debug(f"  - No tensor object creation!")
+    log.debug(f"  - Native CUDA format returned")
+    
+    return result
 
 def extract_pixel_groups_step2_cuda(
     means_cam: Tensor,
@@ -204,6 +208,85 @@ def extract_cluster_assignments_step7_cuda(
         'num_groups': num_groups,
         'num_valid': num_valid,
         'total_clusters': total_clusters
+    }
+
+def _merge_clusters_cuda(
+    cluster_indices: Tensor,        # [total_clustered] - flat array of original indices
+    cluster_offsets: Tensor,        # [num_clusters + 1] - cluster boundaries  
+    means: Tensor,                  # [N, 3] - all Gaussian centers
+    quats: Tensor,                  # [N, 4] - all Gaussian quaternions
+    scales: Tensor,                 # [N, 3] - all Gaussian scales
+    opacities: Tensor,              # [N] - all Gaussian opacities
+    colors: Tensor,                 # [N, color_dim] - all Gaussian colors
+    strategy: str = "weighted_mean", # "weighted_mean" or "moment_matching"
+    weight_by_opacity: bool = True,  # For weighted_mean strategy
+    preserve_volume: bool = True     # For moment_matching strategy
+) -> Dict[str, Tensor]:
+    """
+    CUDA accelerated cluster merging.
+    
+    Args:
+        cluster_indices: [total_clustered] - flat array of original indices from clustering
+        cluster_offsets: [num_clusters + 1] - cluster boundaries (from clustering)
+        means: [N, 3] - all Gaussian centers
+        quats: [N, 4] - all Gaussian quaternions  
+        scales: [N, 3] - all Gaussian scales (linear space)
+        opacities: [N] - all Gaussian opacities (linear space)
+        colors: [N, color_dim] - all Gaussian colors
+        strategy: merging strategy ("weighted_mean" or "moment_matching")
+        weight_by_opacity: whether to weight by opacity (weighted_mean only)
+        preserve_volume: whether to preserve volume (moment_matching only)
+        
+    Returns:
+        Dict containing merged Gaussian parameters:
+            'means': [num_clusters, 3] - merged centers
+            'quats': [num_clusters, 4] - merged quaternions
+            'scales': [num_clusters, 3] - merged scales 
+            'opacities': [num_clusters] - merged opacities
+            'colors': [num_clusters, color_dim] - merged colors
+    """
+    start_time = time.time()
+    
+    if cluster_indices.shape[0] == 0:
+        # Return empty results
+        device = means.device
+        color_dim = colors.shape[1]
+        return {
+            'means': torch.empty(0, 3, device=device, dtype=torch.float32),
+            'quats': torch.empty(0, 4, device=device, dtype=torch.float32),
+            'scales': torch.empty(0, 3, device=device, dtype=torch.float32),
+            'opacities': torch.empty(0, device=device, dtype=torch.float32),
+            'colors': torch.empty(0, color_dim, device=device, dtype=torch.float32)
+        }
+    
+    # Ensure inputs are on GPU and have correct dtypes
+    cluster_indices = cluster_indices.cuda().contiguous().int()
+    cluster_offsets = cluster_offsets.cuda().contiguous().int()
+    means = means.cuda().contiguous().float()
+    quats = quats.cuda().contiguous().float()
+    scales = scales.cuda().contiguous().float()
+    opacities = opacities.cuda().contiguous().float()
+    colors = colors.cuda().contiguous().float()
+    
+    end_time = time.time()
+    log.debug(f"Merging CUDA preproc time: {(end_time - start_time)*1000:.2f} ms")
+    
+    # Call CUDA extension
+    start_time = time.time()
+    merged_means, merged_quats, merged_scales, merged_opacities, merged_colors = \
+        stream_cuda_ext.merge_clusters_cuda(
+            cluster_indices, cluster_offsets, means, quats, scales, opacities, colors,
+            strategy, weight_by_opacity, preserve_volume
+        )
+    end_time = time.time()
+    log.debug(f"Merging CUDA kernel time: {(end_time - start_time)*1000:.2f} ms")
+    
+    return {
+        'means': merged_means,
+        'quats': merged_quats, 
+        'scales': merged_scales,
+        'opacities': merged_opacities,
+        'colors': merged_colors
     }
 
 def _is_cuda_available() -> bool:

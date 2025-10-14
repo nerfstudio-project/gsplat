@@ -4,6 +4,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include "include/clustering.cuh"
+#include "include/merging.cuh"
 #include "include/timer.h"
 
 using namespace std;
@@ -299,6 +300,164 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
     return std::make_tuple(group_starts_tensor, group_sizes_tensor, sorted_pixel_hashes_tensor, sorted_depths_tensor, sorted_indices_tensor, cluster_assignments_tensor, num_groups, num_valid, total_clusters);
 }
 
+// CUDA merging function
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+merge_clusters_cuda(
+    torch::Tensor cluster_indices,     // [total_clustered] - flat array of original indices
+    torch::Tensor cluster_offsets,     // [num_clusters + 1] - cluster boundaries
+    torch::Tensor means,               // [N, 3] - all Gaussian centers
+    torch::Tensor quats,               // [N, 4] - all Gaussian quaternions
+    torch::Tensor scales,              // [N, 3] - all Gaussian scales
+    torch::Tensor opacities,           // [N] - all Gaussian opacities
+    torch::Tensor colors,              // [N, color_dim] - all Gaussian colors
+    std::string strategy,              // "weighted_mean" or "moment_matching"
+    bool weight_by_opacity,            // For weighted_mean
+    bool preserve_volume               // For moment_matching
+) {
+    cout << "--------------------------------" << endl;
+    cout << "Entering merge_clusters_cuda ext.cpp" << endl;
+    StopWatch sw;
+    sw.Restart();
+
+    // Input validation
+    TORCH_CHECK(cluster_indices.is_cuda(), "cluster_indices must be on CUDA");
+    TORCH_CHECK(cluster_offsets.is_cuda(), "cluster_offsets must be on CUDA");
+    TORCH_CHECK(means.is_cuda(), "means must be on CUDA");
+    TORCH_CHECK(quats.is_cuda(), "quats must be on CUDA");
+    TORCH_CHECK(scales.is_cuda(), "scales must be on CUDA");
+    TORCH_CHECK(opacities.is_cuda(), "opacities must be on CUDA");
+    TORCH_CHECK(colors.is_cuda(), "colors must be on CUDA");
+    
+    TORCH_CHECK(cluster_indices.dtype() == torch::kInt32, "cluster_indices must be int32");
+    TORCH_CHECK(cluster_offsets.dtype() == torch::kInt32, "cluster_offsets must be int32");
+    TORCH_CHECK(means.dtype() == torch::kFloat32, "means must be float32");
+    TORCH_CHECK(quats.dtype() == torch::kFloat32, "quats must be float32");
+    TORCH_CHECK(scales.dtype() == torch::kFloat32, "scales must be float32");
+    TORCH_CHECK(opacities.dtype() == torch::kFloat32, "opacities must be float32");
+    TORCH_CHECK(colors.dtype() == torch::kFloat32, "colors must be float32");
+    
+    TORCH_CHECK(cluster_indices.dim() == 1, "cluster_indices must be 1D");
+    TORCH_CHECK(cluster_offsets.dim() == 1, "cluster_offsets must be 1D");
+    TORCH_CHECK(means.dim() == 2 && means.size(1) == 3, "means must be [N, 3]");
+    TORCH_CHECK(quats.dim() == 2 && quats.size(1) == 4, "quats must be [N, 4]");
+    TORCH_CHECK(scales.dim() == 2 && scales.size(1) == 3, "scales must be [N, 3]");
+    TORCH_CHECK(opacities.dim() == 1, "opacities must be 1D");
+    TORCH_CHECK(colors.dim() == 2, "colors must be 2D");
+    
+    int total_clustered = cluster_indices.size(0);
+    int num_clusters = cluster_offsets.size(0) - 1;
+    int num_gaussians = means.size(0);
+    int color_dim = colors.size(1);
+    
+    TORCH_CHECK(num_gaussians == quats.size(0), "Gaussian count mismatch between means and quats");
+    TORCH_CHECK(num_gaussians == scales.size(0), "Gaussian count mismatch between means and scales");
+    TORCH_CHECK(num_gaussians == opacities.size(0), "Gaussian count mismatch between means and opacities");
+    TORCH_CHECK(num_gaussians == colors.size(0), "Gaussian count mismatch between means and colors");
+    
+    // Configure merging strategy
+    stream::MergingConfig config;
+    if (strategy == "weighted_mean") {
+        config.strategy = stream::MergeStrategy::WEIGHTED_MEAN;
+        config.weight_by_opacity = weight_by_opacity;
+    } else if (strategy == "moment_matching") {
+        config.strategy = stream::MergeStrategy::MOMENT_MATCHING;
+        config.preserve_volume = preserve_volume;
+    } else {
+        TORCH_CHECK(false, "Unknown merging strategy: " + strategy + ". Use 'weighted_mean' or 'moment_matching'");
+    }
+    
+    // Prepare result structure
+    stream::MergeResult result;
+    result.merged_means = nullptr;
+    result.merged_quats = nullptr;
+    result.merged_scales = nullptr;
+    result.merged_opacities = nullptr;
+    result.merged_colors = nullptr;
+    result.num_merged = 0;
+    result.color_dim = 0;
+    
+    cout << "Preproc CUDA merging time: " << sw.ElapsedMs() << " ms" << endl;
+    
+    sw.Restart();
+    // Call CUDA function
+    cudaError_t cuda_err = stream::merge_clusters_cuda(
+        cluster_indices.data_ptr<int>(),
+        cluster_offsets.data_ptr<int>(),
+        num_clusters,
+        total_clustered,
+        
+        means.data_ptr<float>(),
+        quats.data_ptr<float>(),
+        scales.data_ptr<float>(),
+        opacities.data_ptr<float>(),
+        colors.data_ptr<float>(),
+        num_gaussians,
+        color_dim,
+        
+        config,
+        result
+    );
+    cout << "Merging CUDA kernel time: " << sw.ElapsedMs() << " ms" << endl;
+
+    sw.Restart();
+    TORCH_CHECK(cuda_err == cudaSuccess, "CUDA error in merge_clusters: ", cudaGetErrorString(cuda_err));
+    
+    // Convert result to PyTorch tensors
+    auto tensor_options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
+    
+    torch::Tensor merged_means_tensor = torch::empty({0, 3}, tensor_options);
+    torch::Tensor merged_quats_tensor = torch::empty({0, 4}, tensor_options);
+    torch::Tensor merged_scales_tensor = torch::empty({0, 3}, tensor_options);
+    torch::Tensor merged_opacities_tensor = torch::empty({0}, tensor_options);
+    torch::Tensor merged_colors_tensor = torch::empty({0, color_dim}, tensor_options);
+    
+    if (result.num_merged > 0) {
+        // Create tensors from device pointers and clone to take ownership
+        merged_means_tensor = torch::from_blob(
+            result.merged_means, 
+            {result.num_merged, 3}, 
+            tensor_options
+        ).clone();
+        
+        merged_quats_tensor = torch::from_blob(
+            result.merged_quats,
+            {result.num_merged, 4},
+            tensor_options
+        ).clone();
+        
+        merged_scales_tensor = torch::from_blob(
+            result.merged_scales,
+            {result.num_merged, 3},
+            tensor_options
+        ).clone();
+        
+        merged_opacities_tensor = torch::from_blob(
+            result.merged_opacities,
+            {result.num_merged},
+            tensor_options
+        ).clone();
+        
+        merged_colors_tensor = torch::from_blob(
+            result.merged_colors,
+            {result.num_merged, color_dim},
+            tensor_options
+        ).clone();
+    }
+    
+    // Clean up device memory
+    stream::free_merge_result(result);
+    cout << "Postproc CUDA merging time: " << sw.ElapsedMs() << " ms" << endl;
+    cout << "--------------------------------" << endl;
+    
+    return std::make_tuple(
+        merged_means_tensor,
+        merged_quats_tensor,
+        merged_scales_tensor,
+        merged_opacities_tensor,
+        merged_colors_tensor
+    );
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("cluster_center_in_pixel", &cluster_center_in_pixel, 
           "Center-in-pixel clustering using CUDA");
@@ -306,4 +465,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "Extract pixel groups after step 2 (grouping + sorting) for debugging");
     m.def("extract_cluster_assignments_step7", &extract_cluster_assignments_step7,
           "Extract cluster assignments after step 7 (depth clustering) for debugging");
+    m.def("merge_clusters_cuda", &merge_clusters_cuda,
+          "CUDA accelerated cluster merging using weighted mean or moment matching strategies");
 }

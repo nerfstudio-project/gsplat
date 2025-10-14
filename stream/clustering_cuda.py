@@ -22,8 +22,9 @@ def cluster_center_in_pixel_cuda(
     width: int,
     height: int,
     depth_threshold: float = 0.1,
-    min_cluster_size: int = 2
-) -> List[Tensor]:
+    min_cluster_size: int = 2,
+    return_flat_format: bool = False
+):
     """
     CUDA-accelerated center-in-pixel clustering.
     
@@ -40,9 +41,11 @@ def cluster_center_in_pixel_cuda(
         height: int - image height
         depth_threshold: float - maximum depth difference for clustering within pixel
         min_cluster_size: int - minimum Gaussians per cluster
+        return_flat_format: bool - if True, return flat format for CUDA merging; if False, return List[Tensor]
         
     Returns:
-        clusters: List of tensors containing original indices
+        If return_flat_format=False: List of tensors containing original indices (backward compatibility)
+        If return_flat_format=True: Dict with 'cluster_indices', 'cluster_offsets', 'num_clusters', 'total_clustered'
     """
 
     start_time = time.time()
@@ -101,13 +104,37 @@ def cluster_center_in_pixel_cuda(
     
     # Call CUDA clustering function with filtered, discrete data
     start_time = time.time()
-    clusters = _cluster_center_in_pixel_cuda(
+    cluster_result = _cluster_center_in_pixel_cuda(
         valid_means_cam, valid_pixel_coords, valid_candidate_indices_tensor, viewmat, K,
         width, height, depth_threshold, min_cluster_size
     )
-    end_time = time.time()
-    log.debug(f"Clustering time: {(end_time - start_time)*1000:.2f} ms")
-    return clusters
+    
+    # Return format based on parameter
+    if return_flat_format:
+        # Return flat format directly for CUDA merging pipeline (ultra-fast)
+        end_time = time.time()
+        log.debug(f"Clustering time: {(end_time - start_time)*1000:.2f} ms")
+        log.debug("Returning flat format - no postprocessing needed!")
+        return cluster_result
+    else:
+        # Convert dictionary format back to List[Tensor] for backward compatibility
+        if cluster_result['num_clusters'] == 0:
+            clusters = []
+        else:
+            # Extract cluster indices using offsets (equivalent to torch.split but manual)
+            cluster_indices = cluster_result['cluster_indices']
+            cluster_offsets = cluster_result['cluster_offsets']
+            
+            clusters = []
+            for i in range(cluster_result['num_clusters']):
+                start_idx = cluster_offsets[i].item()
+                end_idx = cluster_offsets[i + 1].item()
+                cluster_tensor = cluster_indices[start_idx:end_idx]
+                clusters.append(cluster_tensor)
+        
+        end_time = time.time()
+        log.debug(f"Clustering time: {(end_time - start_time)*1000:.2f} ms")
+        return clusters
 
 def cluster_center_in_pixel_torch(
     candidate_means: Tensor,  # [M, 3]

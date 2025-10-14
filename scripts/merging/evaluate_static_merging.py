@@ -509,7 +509,7 @@ def evaluate_merging_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name
                 merging_config=config["config"]
             ) # [1, H, W, 3], [1, H, W, 1]
             render_time_ms = (time.time() - render_start_time) * 1000.0  # Convert to milliseconds
-            log.info(f"    Time taken: {render_time_ms:.1f}ms")
+            log.info(f"    Time taken: {render_time_ms:.1f} ms")
 
             # Calculate all metrics using the Metrics class
             metric_results = metrics_calculator.calculate_all_metrics(
@@ -549,7 +549,7 @@ def evaluate_merging_quality(frame_id, iter, cfg: Config, exp_name, sub_exp_name
             log.info(f"  {config['name'], config['param_str']}: PSNR={metric_results['psnr']:.2f}, SSIM={metric_results['ssim']:.4f}, LPIPS={metric_results['lpips']:.3f}, " 
             f"MaskedPSNR={metric_results['masked_psnr']:.2f}, MaskedSSIM={metric_results['masked_ssim']:.4f}, MaskedSE={metric_results['masked_se']:.2f}, MaskedRMSE={metric_results['masked_rmse']:.4f}, "
             f"CroppedLPIPS={metric_results['cropped_lpips']:.3f}{lpips_reliability}, "
-            f"{processing_type}={processing_ratio:.1f}%, Coverage={metric_results['mask_coverage']:.1%}, Dist={distance_to_bbox:.3f}m, Valid={metric_results['num_valid_pixels']:.0f}, Time={render_time_ms:.1f}ms\n")
+            f"{processing_type}={processing_ratio:.1f}%, Coverage={metric_results['mask_coverage']:.1%}, Dist={distance_to_bbox:.3f}m, Valid={metric_results['num_valid_pixels']:.0f}, Time={render_time_ms:.1f} ms\n")
         
         # Progress update
         if (i + 1) % 10 == 0 or i == len(poses) - 1:

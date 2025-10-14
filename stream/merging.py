@@ -9,6 +9,7 @@ import time
 
 from .culling import calc_pixel_size, calc_pixel_area
 from .clustering_cuda import cluster_center_in_pixel_cuda, cluster_center_in_pixel_torch
+from .merging_cuda import merge_clusters_cuda
 import logging
 log = logging.getLogger(__name__)
 
@@ -518,7 +519,7 @@ def merge_clusters_torch(
     
     return merged_means, merged_quats, merged_scales, merged_opacities, merged_colors
 
-def merge_gaussians(
+def merge_gaussians_torch(
     means: Tensor,  # [N, 3]
     quats: Tensor,  # [N, 4]
     scales: Tensor,  # [N, 3]
@@ -696,3 +697,256 @@ def merge_gaussians(
           f"({merge_info['reduction_ratio']:.1%} reduction)")
     
     return current_means, current_quats, current_scales, current_opacities, current_colors, merge_info
+
+def merge_gaussians_cuda(
+    means: Tensor,  # [N, 3]
+    quats: Tensor,  # [N, 4]
+    scales: Tensor,  # [N, 3]
+    opacities: Tensor,  # [N]
+    colors: Tensor,  # [N, K, 3] or [N, 3]
+    viewmat: Tensor,  # [4, 4]
+    K: Tensor,  # [3, 3]
+    width: int,
+    height: int,
+    pixel_size_threshold: float = 2.0,
+    pixel_area_threshold: float = 4.0,
+    use_pixel_area: bool = False,
+    clustering_method: str = "center_in_pixel",
+    merge_strategy: str = "weighted_mean",
+    scale_modifier: float = 1.0,
+    eps2d: float = 0.3,
+    clustering_kwargs: Optional[Dict] = None,
+    merge_kwargs: Optional[Dict] = None,
+    max_iterations: int = 1,
+    min_reduction_ratio: float = 0.01
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Dict]:
+    """
+    CUDA-accelerated function to merge small Gaussians.
+    
+    This function implements the high-performance GPU pipeline for Gaussian merging.
+    Currently optimized for center_in_pixel clustering method.
+    
+    Args:
+        means: [N, 3] - Gaussian centers in world coordinates
+        quats: [N, 4] - Gaussian quaternions
+        scales: [N, 3] - Gaussian scales in linear space
+        opacities: [N] - Gaussian opacities in linear space
+        colors: [N, K, 3] or [N, 3] - Gaussian colors (SH coefficients or RGB)
+        viewmat: [4, 4] - view matrix (world to camera)
+        K: [3, 3] - camera intrinsic matrix
+        width: int - image width
+        height: int - image height
+        pixel_size_threshold: float - minimum pixel size for merging
+        pixel_area_threshold: float - minimum pixel area for merging
+        use_pixel_area: bool - whether to use pixel area instead of pixel size
+        clustering_method: str - clustering method (currently only "center_in_pixel" supported for CUDA)
+        merge_strategy: str - merging strategy ("weighted_mean", "moment_matching")
+        scale_modifier: float - scale modifier applied to Gaussian scales
+        eps2d: float - low-pass filter value
+        clustering_kwargs: Dict - additional arguments for clustering
+        merge_kwargs: Dict - additional arguments for merging
+        max_iterations: int - maximum number of merging iterations
+        min_reduction_ratio: float - minimum reduction ratio to continue iterating
+        
+    Returns:
+        merged_means: [M, 3] - merged Gaussian centers
+        merged_quats: [M, 4] - merged Gaussian quaternions
+        merged_scales: [M, 3] - merged Gaussian scales in linear space
+        merged_opacities: [M] - merged Gaussian opacities in linear space
+        merged_colors: [M, K, 3] or [M, 3] - merged Gaussian colors
+        merge_info: Dict - information about the merging process
+    """
+    
+    start_time = time.time()
+    if clustering_kwargs is None:
+        raise ValueError("clustering_kwargs must be provided and cannot be None.")
+    if merge_kwargs is None:
+        raise ValueError("merge_kwargs must be provided and cannot be None.")
+    
+    # Currently only center_in_pixel clustering is supported for CUDA acceleration
+    if clustering_method != "center_in_pixel":
+        raise ValueError(f"CUDA acceleration currently only supports 'center_in_pixel' clustering method, got '{clustering_method}'")
+    
+    original_count = means.shape[0]
+    current_means = means.clone()
+    current_quats = quats.clone()
+    current_scales = scales.clone()
+    current_opacities = opacities.clone()
+    current_colors = colors.clone()  # Color format conversion will be handled by merge_clusters_cuda()
+
+    merge_info = {
+        "original_count": original_count,
+        "iterations": 0,
+        "total_merged": 0,
+        "final_count": 0,
+        "reduction_ratio": 0.0,
+        "clusters_per_iteration": []
+    }
+    
+    end_time = time.time()
+    log.info(f"Preprocess time: {(end_time - start_time)*1000:.2f} ms")
+
+    for iteration in range(max_iterations):
+        # Find merge candidates
+        start_time = time.time()
+        candidate_mask = find_merge_candidates(
+            current_means, current_quats, current_scales, current_opacities,
+            viewmat, K, width, height, pixel_size_threshold, use_pixel_area, pixel_area_threshold,
+            scale_modifier, eps2d, method="cuda"
+        )
+        
+        if not candidate_mask.any():
+            log.warning(f"No merge candidates found at iteration {iteration}")
+            break
+        
+        candidate_indices = torch.where(candidate_mask)[0]  # Keep as tensor on GPU
+        candidate_means = current_means[candidate_mask]
+        
+        end_time = time.time()
+        log.info(f"Find Merge Candidates time: {(end_time - start_time)*1000:.2f} ms")
+
+        # CUDA-accelerated clustering
+        start_time = time.time()
+        clusters_result = cluster_center_in_pixel_cuda(
+            candidate_means, candidate_indices,
+            viewmat, K, width, height,
+            return_flat_format=True,  # Return flat format for CUDA merging
+            **clustering_kwargs
+        )
+        
+        if clusters_result['num_clusters'] == 0:
+            log.warning(f"No clusters found at iteration {iteration}")
+            break
+        
+        merge_info["clusters_per_iteration"].append(clusters_result['num_clusters'])
+        
+        end_time = time.time()
+        log.info(f"Cluster Candidates time: {(end_time - start_time)*1000:.2f} ms")
+        
+        # CUDA-accelerated merging
+        start_time = time.time()
+        current_means, current_quats, current_scales, current_opacities, current_colors = merge_clusters_cuda(
+            cluster_indices=clusters_result['cluster_indices'],
+            cluster_offsets=clusters_result['cluster_offsets'],
+            current_means=current_means,
+            current_quats=current_quats,
+            current_scales=current_scales,
+            current_opacities=current_opacities,
+            current_colors=current_colors,
+            merge_strategy=merge_strategy,
+            **merge_kwargs
+        )
+
+        end_time = time.time()
+        log.info(f"Merge Clusters time: {(end_time - start_time)*1000:.2f} ms")
+
+        # Update merge info
+        current_count = current_means.shape[0]
+        merged_this_iteration = original_count - current_count
+        merge_info["total_merged"] += merged_this_iteration
+        merge_info["iterations"] += 1
+        
+        # Check if we should continue iterating
+        if iteration > 0:
+            reduction_this_iteration = merged_this_iteration / original_count
+            if reduction_this_iteration < min_reduction_ratio:
+                log.info(f"Reduction ratio {reduction_this_iteration:.4f} below threshold {min_reduction_ratio}, stopping")
+                break
+        
+        log.info(f"Iteration {iteration}: {clusters_result['num_clusters']} clusters, "
+              f"{original_count} → {current_count} "
+              f"(net reduction: {merged_this_iteration}), "
+              f"total count: {current_count}")
+    
+    # Final merge info
+    merge_info["final_count"] = current_count
+    merge_info["reduction_ratio"] = (original_count - current_count) / original_count
+    
+    log.info(f"CUDA merging complete: {original_count} → {merge_info['final_count']} "
+          f"({merge_info['reduction_ratio']:.1%} reduction)")
+    
+    return current_means, current_quats, current_scales, current_opacities, current_colors, merge_info
+
+def merge_gaussians(
+    means: Tensor,  # [N, 3]
+    quats: Tensor,  # [N, 4]
+    scales: Tensor,  # [N, 3]
+    opacities: Tensor,  # [N]
+    colors: Tensor,  # [N, K, 3] or [N, 3]
+    viewmat: Tensor,  # [4, 4]
+    K: Tensor,  # [3, 3]
+    width: int,
+    height: int,
+    pixel_size_threshold: float = 2.0,
+    pixel_area_threshold: float = 4.0,
+    use_pixel_area: bool = False,
+    clustering_method: str = "knn",
+    merge_strategy: str = "weighted_mean",
+    scale_modifier: float = 1.0,
+    eps2d: float = 0.3,
+    accelerated: bool = True,
+    clustering_kwargs: Optional[Dict] = None,
+    merge_kwargs: Optional[Dict] = None,
+    max_iterations: int = 1,
+    min_reduction_ratio: float = 0.01
+) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Dict]:
+    """
+    Main dispatcher function to merge small Gaussians using either CPU or GPU implementation.
+    
+    This function automatically dispatches to the appropriate implementation based on the
+    `accelerated` parameter and clustering method:
+    - When accelerated=True and clustering_method="center_in_pixel": Uses CUDA pipeline
+    - Otherwise: Uses PyTorch CPU pipeline
+    
+    Args:
+        means: [N, 3] - Gaussian centers in world coordinates
+        quats: [N, 4] - Gaussian quaternions
+        scales: [N, 3] - Gaussian scales in linear space
+        opacities: [N] - Gaussian opacities in linear space
+        colors: [N, K, 3] or [N, 3] - Gaussian colors (SH coefficients or RGB)
+        viewmat: [4, 4] - view matrix (world to camera)
+        K: [3, 3] - camera intrinsic matrix
+        width: int - image width
+        height: int - image height
+        pixel_size_threshold: float - minimum pixel size for merging
+        pixel_area_threshold: float - minimum pixel area for merging
+        use_pixel_area: bool - whether to use pixel area instead of pixel size
+        clustering_method: str - clustering method ("knn", "dbscan", "distance_based", "center_in_pixel")
+        merge_strategy: str - merging strategy ("weighted_mean", "moment_matching")
+        scale_modifier: float - scale modifier applied to Gaussian scales
+        eps2d: float - low-pass filter value
+        accelerated: bool - whether to use GPU acceleration (True for CUDA, False for CPU)
+        clustering_kwargs: Dict - additional arguments for clustering
+        merge_kwargs: Dict - additional arguments for merging
+        max_iterations: int - maximum number of merging iterations
+        min_reduction_ratio: float - minimum reduction ratio to continue iterating
+        
+    Returns:
+        merged_means: [M, 3] - merged Gaussian centers
+        merged_quats: [M, 4] - merged Gaussian quaternions
+        merged_scales: [M, 3] - merged Gaussian scales in linear space
+        merged_opacities: [M] - merged Gaussian opacities in linear space
+        merged_colors: [M, K, 3] or [M, 3] - merged Gaussian colors
+        merge_info: Dict - information about the merging process
+    """
+    
+    # Dispatch to appropriate implementation
+    if accelerated and clustering_method == "center_in_pixel":
+        log.info("Using CUDA-accelerated merging pipeline")
+        return merge_gaussians_cuda(
+            means, quats, scales, opacities, colors, viewmat, K, width, height,
+            pixel_size_threshold, pixel_area_threshold, use_pixel_area,
+            clustering_method, merge_strategy, scale_modifier, eps2d,
+            clustering_kwargs, merge_kwargs, max_iterations, min_reduction_ratio
+        )
+    else:
+        if accelerated and clustering_method != "center_in_pixel":
+            log.warning(f"CUDA acceleration only supports 'center_in_pixel' clustering. "
+                       f"Falling back to PyTorch implementation for '{clustering_method}'")
+        log.info("Using PyTorch CPU merging pipeline")
+        return merge_gaussians_torch(
+            means, quats, scales, opacities, colors, viewmat, K, width, height,
+            pixel_size_threshold, pixel_area_threshold, use_pixel_area,
+            clustering_method, merge_strategy, scale_modifier, eps2d,
+            accelerated, clustering_kwargs, merge_kwargs, max_iterations, min_reduction_ratio
+        )

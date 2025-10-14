@@ -66,7 +66,8 @@ cpp_sources = [
 ]
 
 cuda_sources = [
-    "csrc/clustering.cu"
+    "csrc/clustering.cu",
+    "csrc/merging.cu"
 ]
 
 # Combine all sources
