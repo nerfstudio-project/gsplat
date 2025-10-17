@@ -84,7 +84,10 @@ def get_extensions():
     nvcc_flags += ["-diag-suppress", "20012,186"]
     extra_compile_args["nvcc"] = nvcc_flags
     if sys.platform == "win32":
-        extra_compile_args["nvcc"] += ["-DWIN32_LEAN_AND_MEAN"]
+        extra_compile_args["nvcc"] += [
+            "-DWIN32_LEAN_AND_MEAN",
+            "-allow-unsupported-compiler",
+        ]
 
     current_dir = pathlib.Path(__file__).parent.resolve()
     glm_path = osp.join(current_dir, "gsplat", "cuda", "csrc", "third_party", "glm")

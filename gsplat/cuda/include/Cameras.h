@@ -42,3 +42,17 @@ struct UnscentedTransformParameters {
                // "valid" false: a single valid sigma point is sufficient to
                // mark a projection as "valid"
 };
+
+// FTheta Camera Support
+struct FThetaCameraDistortionParameters {
+    static constexpr size_t PolynomialDegree = 6;
+    enum class PolynomialType {
+        PIXELDIST_TO_ANGLE,
+        ANGLE_TO_PIXELDIST,
+    };
+    PolynomialType reference_poly;
+    std::array<float, PolynomialDegree> pixeldist_to_angle_poly; // backward polynomial
+    std::array<float, PolynomialDegree> angle_to_pixeldist_poly; // forward polynomial
+    float max_angle;
+    std::array<float, 3> linear_cde;
+};
