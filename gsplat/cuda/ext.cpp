@@ -9,6 +9,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .value("PINHOLE", gsplat::CameraModelType::PINHOLE)
         .value("ORTHO", gsplat::CameraModelType::ORTHO)
         .value("FISHEYE", gsplat::CameraModelType::FISHEYE)
+        .value("FTHETA", gsplat::CameraModelType::FTHETA)
         .export_values();
 
     m.def("null", &gsplat::null);
@@ -88,5 +89,16 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("in_image_margin_factor", &UnscentedTransformParameters::in_image_margin_factor)
         .def_readwrite("require_all_sigma_points_valid", &UnscentedTransformParameters::require_all_sigma_points_valid);
 
-
+    // FTheta Camera support
+    py::enum_<FThetaCameraDistortionParameters::PolynomialType>(m, "FThetaPolynomialType")
+        .value("PIXELDIST_TO_ANGLE", FThetaCameraDistortionParameters::PolynomialType::PIXELDIST_TO_ANGLE)
+        .value("ANGLE_TO_PIXELDIST", FThetaCameraDistortionParameters::PolynomialType::ANGLE_TO_PIXELDIST)
+        .export_values();
+    py::class_<FThetaCameraDistortionParameters>(m, "FThetaCameraDistortionParameters")
+        .def(py::init<>())
+        .def_readwrite("reference_poly", &FThetaCameraDistortionParameters::reference_poly)
+        .def_readwrite("pixeldist_to_angle_poly", &FThetaCameraDistortionParameters::pixeldist_to_angle_poly)
+        .def_readwrite("angle_to_pixeldist_poly", &FThetaCameraDistortionParameters::angle_to_pixeldist_poly)
+        .def_readwrite("max_angle", &FThetaCameraDistortionParameters::max_angle)
+        .def_readwrite("linear_cde", &FThetaCameraDistortionParameters::linear_cde);
 }

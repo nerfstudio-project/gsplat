@@ -11,7 +11,7 @@ from torch import Tensor
 def save_ply(splats: torch.nn.ParameterDict, dir: str, colors: torch.Tensor = None):
     warnings.warn(
         "save_ply() is deprecated and may be removed in a future release. "
-        "Please use the new export_gaussian_splats() function instead.",
+        "Please use the new export_splats() function instead.",
         DeprecationWarning,
         stacklevel=2,
     )

@@ -22,32 +22,33 @@ namespace cg = cooperative_groups;
 
 template <typename scalar_t>
 __global__ void intersect_tile_kernel(
-    // if the data is [C, N, ...] or [nnz, ...] (packed)
+    // if the data is [...,  N, ...] or [nnz, ...] (packed)
     const bool packed,
-    // parallelize over C * N, only used if packed is False
-    const uint32_t C,
+    // parallelize over I * N, only used if packed is False
+    const uint32_t I,
     const uint32_t N,
     // parallelize over nnz, only used if packed is True
     const uint32_t nnz,
-    const int64_t *__restrict__ camera_ids,   // [nnz] optional
+    const int64_t *__restrict__ image_ids,    // [nnz] optional
     const int64_t *__restrict__ gaussian_ids, // [nnz] optional
     // data
-    const scalar_t *__restrict__ means2d,            // [C, N, 2] or [nnz, 2]
-    const int32_t *__restrict__ radii,               // [C, N, 2] or [nnz, 2]
-    const scalar_t *__restrict__ depths,             // [C, N] or [nnz]
-    const int64_t *__restrict__ cum_tiles_per_gauss, // [C, N] or [nnz]
+    const scalar_t *__restrict__ means2d,            // [..., N, 2] or [nnz, 2]
+    const int32_t *__restrict__ radii,               // [..., N, 2] or [nnz, 2]
+    const scalar_t *__restrict__ depths,             // [..., N] or [nnz]
+    const int64_t *__restrict__ cum_tiles_per_gauss, // [..., N] or [nnz]
     const uint32_t tile_size,
     const uint32_t tile_width,
     const uint32_t tile_height,
     const uint32_t tile_n_bits,
-    int32_t *__restrict__ tiles_per_gauss, // [C, N] or [nnz]
+    const uint32_t image_n_bits,
+    int32_t *__restrict__ tiles_per_gauss, // [..., N] or [nnz]
     int64_t *__restrict__ isect_ids,       // [n_isects]
     int32_t *__restrict__ flatten_ids      // [n_isects]
 ) {
-    // parallelize over C * N.
+    // parallelize over I * N.
     uint32_t idx = cg::this_grid().thread_rank();
     bool first_pass = cum_tiles_per_gauss == nullptr;
-    if (idx >= (packed ? nnz : C * N)) {
+    if (idx >= (packed ? nnz : I * N)) {
         return;
     }
 
@@ -83,17 +84,15 @@ __global__ void intersect_tile_kernel(
         return;
     }
 
-    int64_t cid; // camera id
+    int64_t iid; // image id
     if (packed) {
         // parallelize over nnz
-        cid = camera_ids[idx];
-        // gid = gaussian_ids[idx];
+        iid = image_ids[idx];
     } else {
-        // parallelize over C * N
-        cid = idx / N;
-        // gid = idx % N;
+        // parallelize over I * N
+        iid = idx / N;
     }
-    const int64_t cid_enc = cid << (32 + tile_n_bits);
+    const int64_t iid_enc = iid << (32 + tile_n_bits);
 
     // tolerance for negative depth
     int32_t depth_i32 = *(int32_t *)&(depths[idx]);  // Bit-level reinterpret
@@ -105,9 +104,9 @@ __global__ void intersect_tile_kernel(
         for (int32_t j = tile_min.x; j < tile_max.x; ++j) {
             int64_t tile_id = i * tile_width + j;
             // e.g. tile_n_bits = 22:
-            // camera id (10 bits) | tile id (22 bits) | depth (32 bits)
-            isect_ids[cur_idx] = cid_enc | (tile_id << 32) | depth_id_enc;
-            // the flatten index in [C * N] or [nnz]
+            // image id (10 bits) | tile id (22 bits) | depth (32 bits)
+            isect_ids[cur_idx] = iid_enc | (tile_id << 32) | depth_id_enc;
+            // the flatten index in [I * N] or [nnz]
             flatten_ids[cur_idx] = static_cast<int32_t>(idx);
             ++cur_idx;
         }
@@ -116,18 +115,18 @@ __global__ void intersect_tile_kernel(
 
 void launch_intersect_tile_kernel(
     // inputs
-    const at::Tensor means2d,                    // [C, N, 2] or [nnz, 2]
-    const at::Tensor radii,                      // [C, N, 2] or [nnz, 2]
-    const at::Tensor depths,                     // [C, N] or [nnz]
-    const at::optional<at::Tensor> camera_ids,   // [nnz]
+    const at::Tensor means2d,                    // [..., N, 2] or [nnz, 2]
+    const at::Tensor radii,                      // [..., N, 2] or [nnz, 2]
+    const at::Tensor depths,                     // [..., N] or [nnz]
+    const at::optional<at::Tensor> image_ids,    // [nnz]
     const at::optional<at::Tensor> gaussian_ids, // [nnz]
-    const uint32_t C,
+    const uint32_t I,
     const uint32_t tile_size,
     const uint32_t tile_width,
     const uint32_t tile_height,
-    const at::optional<at::Tensor> cum_tiles_per_gauss, // [C, N] or [nnz]
+    const at::optional<at::Tensor> cum_tiles_per_gauss, // [..., N] or [nnz]
     // outputs
-    at::optional<at::Tensor> tiles_per_gauss, // [C, N] or [nnz]
+    at::optional<at::Tensor> tiles_per_gauss, // [..., N] or [nnz]
     at::optional<at::Tensor> isect_ids,       // [n_isects]
     at::optional<at::Tensor> flatten_ids      // [n_isects]
 ) {
@@ -139,20 +138,20 @@ void launch_intersect_tile_kernel(
         nnz = means2d.size(0); // total number of gaussians
         n_elements = nnz;
     } else {
-        N = means2d.size(1); // number of gaussians per camera
-        n_elements = C * N;
+        N = means2d.size(-2); // number of gaussians per image
+        n_elements = I * N;
     }
 
     uint32_t n_tiles = tile_width * tile_height;
-    // the number of bits needed to encode the camera id and tile id
+    // the number of bits needed to encode the image id and tile id
     // Note: std::bit_width requires C++20
     // uint32_t tile_n_bits = std::bit_width(n_tiles);
-    // uint32_t cam_n_bits = std::bit_width(C);
+    // uint32_t image_n_bits = std::bit_width(I);
+    uint32_t image_n_bits = (uint32_t)floor(log2(I)) + 1;
     uint32_t tile_n_bits = (uint32_t)floor(log2(n_tiles)) + 1;
-    uint32_t cam_n_bits = (uint32_t)floor(log2(C)) + 1;
-    // the first 32 bits are used for the camera id and tile id altogether, so
+    // the first 32 bits are used for the image id and tile id altogether, so
     // check if we have enough bits for them.
-    assert(tile_n_bits + cam_n_bits <= 32);
+    assert(image_n_bits + tile_n_bits <= 32);
 
     dim3 threads(256);
     dim3 grid((n_elements + threads.x - 1) / threads.x);
@@ -173,11 +172,11 @@ void launch_intersect_tile_kernel(
                    shmem_size,
                    at::cuda::getCurrentCUDAStream()>>>(
                     packed,
-                    C,
+                    I,
                     N,
                     nnz,
-                    camera_ids.has_value()
-                        ? camera_ids.value().data_ptr<int64_t>()
+                    image_ids.has_value()
+                        ? image_ids.value().data_ptr<int64_t>()
                         : nullptr,
                     gaussian_ids.has_value()
                         ? gaussian_ids.value().data_ptr<int64_t>()
@@ -192,6 +191,7 @@ void launch_intersect_tile_kernel(
                     tile_width,
                     tile_height,
                     tile_n_bits,
+                    image_n_bits,
                     tiles_per_gauss.has_value()
                         ? tiles_per_gauss.value().data_ptr<int32_t>()
                         : nullptr,
@@ -209,10 +209,10 @@ void launch_intersect_tile_kernel(
 __global__ void intersect_offset_kernel(
     const uint32_t n_isects,
     const int64_t *__restrict__ isect_ids,
-    const uint32_t C,
+    const uint32_t I,
     const uint32_t n_tiles,
     const uint32_t tile_n_bits,
-    int32_t *__restrict__ offsets // [C, n_tiles]
+    int32_t *__restrict__ offsets // [I, n_tiles]
 ) {
     // e.g., ids: [1, 1, 1, 3, 3], n_tiles = 6
     // counts: [0, 3, 0, 2, 0, 0]
@@ -222,10 +222,12 @@ __global__ void intersect_offset_kernel(
     if (idx >= n_isects)
         return;
 
+    uint32_t image_n_bits = (uint32_t)floor(log2f(float(I))) + 1;
+
     int64_t isect_id_curr = isect_ids[idx] >> 32;
-    int64_t cid_curr = isect_id_curr >> tile_n_bits;
+    int64_t iid_curr = isect_id_curr >> (tile_n_bits);
     int64_t tid_curr = isect_id_curr & ((1 << tile_n_bits) - 1);
-    int64_t id_curr = cid_curr * n_tiles + tid_curr;
+    int64_t id_curr = iid_curr * n_tiles + tid_curr;
 
     if (idx == 0) {
         // write out the offsets until the first valid tile (inclusive)
@@ -234,21 +236,21 @@ __global__ void intersect_offset_kernel(
     }
     if (idx == n_isects - 1) {
         // write out the rest of the offsets
-        for (uint32_t i = id_curr + 1; i < C * n_tiles; ++i)
+        for (uint32_t i = id_curr + 1; i < I * n_tiles; ++i)
             offsets[i] = static_cast<int32_t>(n_isects);
     }
 
     if (idx > 0) {
-        // visit the current and previous isect_id and check if the (cid,
-        // tile_id) pair changes.
+        // visit the current and previous isect_id and check if the (bid, cid,
+        // tile_id) tuple changes.
         int64_t isect_id_prev = isect_ids[idx - 1] >> 32; // shift out the depth
         if (isect_id_prev == isect_id_curr)
             return;
 
         // write out the offsets between the previous and current tiles
-        int64_t cid_prev = isect_id_prev >> tile_n_bits;
+        int64_t iid_prev = isect_id_prev >> (tile_n_bits);
         int64_t tid_prev = isect_id_prev & ((1 << tile_n_bits) - 1);
-        int64_t id_prev = cid_prev * n_tiles + tid_prev;
+        int64_t id_prev = iid_prev * n_tiles + tid_prev;
         for (uint32_t i = id_prev + 1; i < id_curr + 1; ++i)
             offsets[i] = static_cast<int32_t>(idx);
     }
@@ -257,11 +259,11 @@ __global__ void intersect_offset_kernel(
 void launch_intersect_offset_kernel(
     // inputs
     const at::Tensor isect_ids, // [n_isects]
-    const uint32_t C,
+    const uint32_t I,
     const uint32_t tile_width,
     const uint32_t tile_height,
     // outputs
-    at::Tensor offsets // [C, tile_height, tile_width]
+    at::Tensor offsets // [I, tile_height, tile_width]
 ) {
     int64_t n_elements = isect_ids.size(0); // total number of intersections
     dim3 threads(256);
@@ -282,7 +284,7 @@ void launch_intersect_offset_kernel(
         at::cuda::getCurrentCUDAStream()>>>(
         n_elements,
         isect_ids.data_ptr<int64_t>(),
-        C,
+        I,
         n_tiles,
         tile_n_bits,
         offsets.data_ptr<int32_t>()
@@ -293,8 +295,8 @@ void launch_intersect_offset_kernel(
 // DoubleBuffer reduce the auxiliary memory usage from O(N+P) to O(P)
 void radix_sort_double_buffer(
     const int64_t n_isects,
+    const uint32_t image_n_bits,
     const uint32_t tile_n_bits,
-    const uint32_t cam_n_bits,
     at::Tensor isect_ids,
     at::Tensor flatten_ids,
     at::Tensor isect_ids_sorted,
@@ -317,7 +319,7 @@ void radix_sort_double_buffer(
         d_values,
         n_isects,
         0,
-        32 + tile_n_bits + cam_n_bits,
+        32 + tile_n_bits + image_n_bits,
         at::cuda::getCurrentCUDAStream()
     );
     switch (d_keys.selector) {
@@ -334,19 +336,61 @@ void radix_sort_double_buffer(
     case 1: // sorted items are stored in flatten_ids_sorted
         break;
     }
+}
 
-    // Double buffer is better than naive radix sort, in terms of mem usage.
-    // CUB_WRAPPER(
-    //     cub::DeviceRadixSort::SortPairs,
-    //     isect_ids,
-    //     isect_ids_sorted,
-    //     flatten_ids,
-    //     flatten_ids_sorted,
-    //     n_isects,
-    //     0,
-    //     32 + tile_n_bits + cam_n_bits,
-    //     stream
-    // );
+// https://nvidia.github.io/cccl/cub/api/structcub_1_1DeviceSegmentedRadixSort.html
+// DoubleBuffer reduce the auxiliary memory usage from O(N+P) to O(P)
+void segmented_radix_sort_double_buffer(
+    const int64_t n_isects,
+    const uint32_t n_segments,
+    const uint32_t image_n_bits,
+    const uint32_t tile_n_bits,
+    const at::Tensor offsets,
+    at::Tensor isect_ids,
+    at::Tensor flatten_ids,
+    at::Tensor isect_ids_sorted,
+    at::Tensor flatten_ids_sorted
+) {
+    if (n_isects <= 0) {
+        return;
+    }
+
+    // Create a set of DoubleBuffers to wrap pairs of device pointers
+    cub::DoubleBuffer<int64_t> d_keys(
+        isect_ids.data_ptr<int64_t>(), isect_ids_sorted.data_ptr<int64_t>()
+    );
+    cub::DoubleBuffer<int32_t> d_values(
+        flatten_ids.data_ptr<int32_t>(), flatten_ids_sorted.data_ptr<int32_t>()
+    );
+    // image dimensions are contiguous in the isect_ids, 
+    // so we can use DeviceSegmentedRadixSort to only sort the lower 
+    // (tile_n_bits + 32) bits
+    CUB_WRAPPER(
+        cub::DeviceSegmentedRadixSort::SortPairs,
+        d_keys,
+        d_values,
+        n_isects,
+        n_segments, // number of segments
+        offsets.data_ptr<int64_t>(),
+        offsets.data_ptr<int64_t>() + 1,
+        0,
+        32 + tile_n_bits,
+        at::cuda::getCurrentCUDAStream()
+    );
+    switch (d_keys.selector) {
+    case 0: // sorted items are stored in isect_ids
+        isect_ids_sorted.set_(isect_ids);
+        break;
+    case 1: // sorted items are stored in isect_ids_sorted
+        break;
+    }
+    switch (d_values.selector) {
+    case 0: // sorted items are stored in flatten_ids
+        flatten_ids_sorted.set_(flatten_ids);
+        break;
+    case 1: // sorted items are stored in flatten_ids_sorted
+        break;
+    }
 }
 
 } // namespace gsplat
