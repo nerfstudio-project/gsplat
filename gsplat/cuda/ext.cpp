@@ -1,13 +1,14 @@
 /*
  * SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  * http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -22,7 +23,12 @@
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
-    py::enum_<gsplat::CameraModelType>(m, "CameraModelType")
+    // We define exported types as being "module_local"
+    // so that they don't clash with other modules that export
+    // types with the same name as ours.
+    // Ref: https://pybind11.readthedocs.io/en/stable/advanced/classes.html#module-local-class-bindings
+
+    py::enum_<gsplat::CameraModelType>(m, "CameraModelType", py::module_local())
         .value("PINHOLE", gsplat::CameraModelType::PINHOLE)
         .value("ORTHO", gsplat::CameraModelType::ORTHO)
         .value("FISHEYE", gsplat::CameraModelType::FISHEYE)
@@ -90,7 +96,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("rasterize_to_pixels_from_world_3dgs_bwd", &gsplat::rasterize_to_pixels_from_world_3dgs_bwd);
 
     // Cameras from 3DGUT
-    py::enum_<ShutterType>(m, "ShutterType")
+    py::enum_<ShutterType>(m, "ShutterType", py::module_local())
         .value("ROLLING_TOP_TO_BOTTOM", ShutterType::ROLLING_TOP_TO_BOTTOM)
         .value("ROLLING_LEFT_TO_RIGHT", ShutterType::ROLLING_LEFT_TO_RIGHT)
         .value("ROLLING_BOTTOM_TO_TOP", ShutterType::ROLLING_BOTTOM_TO_TOP)
@@ -98,7 +104,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .value("GLOBAL", ShutterType::GLOBAL)
         .export_values();
 
-    py::class_<UnscentedTransformParameters>(m, "UnscentedTransformParameters")
+    py::class_<UnscentedTransformParameters>(m, "UnscentedTransformParameters", py::module_local())
         .def(py::init<>())
         .def_readwrite("alpha", &UnscentedTransformParameters::alpha)
         .def_readwrite("beta", &UnscentedTransformParameters::beta)
@@ -107,11 +113,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("require_all_sigma_points_valid", &UnscentedTransformParameters::require_all_sigma_points_valid);
 
     // FTheta Camera support
-    py::enum_<FThetaCameraDistortionParameters::PolynomialType>(m, "FThetaPolynomialType")
+    py::enum_<FThetaCameraDistortionParameters::PolynomialType>(m, "FThetaPolynomialType", py::module_local())
         .value("PIXELDIST_TO_ANGLE", FThetaCameraDistortionParameters::PolynomialType::PIXELDIST_TO_ANGLE)
         .value("ANGLE_TO_PIXELDIST", FThetaCameraDistortionParameters::PolynomialType::ANGLE_TO_PIXELDIST)
         .export_values();
-    py::class_<FThetaCameraDistortionParameters>(m, "FThetaCameraDistortionParameters")
+    py::class_<FThetaCameraDistortionParameters>(m, "FThetaCameraDistortionParameters", py::module_local())
         .def(py::init<>())
         .def_readwrite("reference_poly", &FThetaCameraDistortionParameters::reference_poly)
         .def_readwrite("pixeldist_to_angle_poly", &FThetaCameraDistortionParameters::pixeldist_to_angle_poly)
