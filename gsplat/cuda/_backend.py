@@ -77,14 +77,14 @@ def load_extension(
 
         try:
             compiled = _jit_compile(
-                name,
-                sources,
-                extra_cflags,
-                extra_cuda_cflags,
-                extra_ldflags,
-                extra_include_paths,
-                build_directory,
-                verbose,
+                name=name,
+                sources=sources,
+                extra_cflags=extra_cflags,
+                extra_cuda_cflags=extra_cuda_cflags,
+                extra_ldflags=extra_ldflags,
+                extra_include_paths=extra_include_paths,
+                build_directory=build_directory,
+                verbose=verbose,
                 with_cuda=None,
                 is_python_module=True,
                 is_standalone=False,
@@ -96,15 +96,15 @@ def load_extension(
             # Narrow the scope of catch: only retry if it's due to unexpected argument(s)
             if "_jit_compile() missing" in str(e):
                 compiled = _jit_compile(
-                    name,
-                    sources,
-                    extra_cflags,
-                    extra_cuda_cflags,
-                    None,  # SYCL fallback
-                    extra_ldflags,
-                    extra_include_paths,
-                    build_directory,
-                    verbose,
+                    name=name,
+                    sources=sources,
+                    extra_cflags=extra_cflags,
+                    extra_cuda_cflags=extra_cuda_cflags,
+                    extra_sycl_cflags=None,
+                    extra_ldflags=extra_ldflags,
+                    extra_include_paths=extra_include_paths,
+                    build_directory=build_directory,
+                    verbose=verbose,
                     with_cuda=None,
                     with_sycl=None,
                     is_python_module=True,
