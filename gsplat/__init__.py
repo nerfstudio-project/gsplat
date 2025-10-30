@@ -45,6 +45,7 @@ from .cuda._wrapper import (
 from .exporter import export_splats
 from .optimizers import SelectiveAdam
 from .rendering import (
+    RasterizeMode,
     RenderMode,
     rasterization,
     rasterization_2dgs,
@@ -61,6 +62,7 @@ all = [
     "DefaultStrategy",
     "MCMCStrategy",
     "Strategy",
+    "RasterizeMode",
     "RenderMode",
     "rasterization",
     "rasterization_2dgs",

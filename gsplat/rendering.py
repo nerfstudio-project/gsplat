@@ -47,6 +47,7 @@ from .distributed import (
 from .utils import depth_to_normal, get_projection_matrix
 
 RenderMode = Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"]
+RasterizeMode = Literal["classic", "antialiased"]
 
 def _compute_view_dirs_packed(
     means: Tensor,  # [..., N, 3]
@@ -144,7 +145,7 @@ def rasterization(
     render_mode: RenderMode = "RGB",
     sparse_grad: bool = False,
     absgrad: bool = False,
-    rasterize_mode: Literal["classic", "antialiased"] = "classic",
+    rasterize_mode: RasterizeMode = "classic",
     channel_chunk: int = 32,
     distributed: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
@@ -902,7 +903,7 @@ def _rasterization(
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
     render_mode: RenderMode = "RGB",
-    rasterize_mode: Literal["classic", "antialiased"] = "classic",
+    rasterize_mode: RasterizeMode = "classic",
     channel_chunk: int = 32,
     batch_per_iter: int = 100,
     with_eval3d: bool = False,
