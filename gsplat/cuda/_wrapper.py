@@ -700,6 +700,7 @@ def rasterize_to_pixels_eval3d(
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
+    use_hit_distance: bool = False,
 ) -> Tuple[Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
@@ -725,7 +726,8 @@ def rasterize_to_pixels_eval3d(
         ut_params=ut_params,
         radial_coeffs=radial_coeffs, tangential_coeffs=tangential_coeffs, thin_prism_coeffs=thin_prism_coeffs, ftheta_coeffs=ftheta_coeffs,
         rolling_shutter=rolling_shutter, viewmats_rs=viewmats_rs,
-        return_sample_counts=False
+        return_sample_counts=False,
+        use_hit_distance=use_hit_distance,
     )
     return colors, alphas
 
@@ -755,7 +757,8 @@ def rasterize_to_pixels_eval3d_extra(
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
-    return_sample_counts: bool = False
+    return_sample_counts: bool = False,
+    use_hit_distance: bool = False,
 ) -> Tuple[Tensor, Tensor, Tuple, Optional[Tuple]]:
     """Rasterizes Gaussians to pixels, returning extra information for debugging.
 
@@ -906,6 +909,7 @@ def rasterize_to_pixels_eval3d_extra(
         # Forward is always collecting the last_ids for the backward pass,
         # no need to tell it to do it.
         return_sample_counts,  # Pass flag to forward
+        use_hit_distance,
     )
 
     if padded_channels > 0:
@@ -1496,6 +1500,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
         viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
         return_sample_counts: bool = False,
+        use_hit_distance: bool = False,
     ) -> Tuple[Tensor, Tensor, Tensor, Optional[Tensor]]:
         ut_params = ut_params.to_cpp()
         rs_type = rolling_shutter.to_cpp()
@@ -1548,6 +1553,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             ftheta_coeffs,
             isect_offsets,
             flatten_ids,
+            use_hit_distance,
             sample_counts,
         )
 
@@ -1577,6 +1583,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         ctx.camera_model_type = camera_model_type
         ctx.tile_size = tile_size
         ctx.ftheta_coeffs = ftheta_coeffs
+        ctx.use_hit_distance = use_hit_distance
 
         return render_colors, render_alphas, last_ids, sample_counts
 
@@ -1614,6 +1621,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         camera_model_type = ctx.camera_model_type
         tile_size = ctx.tile_size
         ftheta_coeffs = ctx.ftheta_coeffs
+        use_hit_distance = ctx.use_hit_distance
 
         (v_means, v_quats, v_scales, v_colors, v_opacities,) = _make_lazy_cuda_func(
             "rasterize_to_pixels_from_world_3dgs_bwd"
@@ -1640,6 +1648,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             ftheta_coeffs,
             isect_offsets,
             flatten_ids,
+            use_hit_distance,
             render_alphas,
             last_ids,
             v_render_colors.contiguous(),
@@ -1680,6 +1689,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             None,  # rolling_shutter
             None,  # viewmats_rs
             None,  # return_sample_counts (flag, no gradient)
+            None,  # use_hit_distance
         )
 
 

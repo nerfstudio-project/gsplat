@@ -785,11 +785,13 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
 @pytest.mark.parametrize("channels", [3])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 @pytest.mark.parametrize("rs_type", [RollingShutterType.GLOBAL, RollingShutterType.ROLLING_TOP_TO_BOTTOM])
+@pytest.mark.parametrize("use_hit_distance", [True,False])
 def test_rasterize_to_pixels_eval3d(
     test_data,
     channels: int,
     batch_dims: Tuple[int, ...],
-    rs_type: RollingShutterType
+    rs_type: RollingShutterType,
+    use_hit_distance: bool,
 ):
     from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
     from gsplat.cuda._wrapper import (
@@ -887,6 +889,7 @@ def test_rasterize_to_pixels_eval3d(
         return_sample_counts=True,
         rolling_shutter=rs_type,
         viewmats_rs=viewmats_rs,
+        use_hit_distance=use_hit_distance,
     )
 
     # forward - PyTorch reference implementation (with tiling optimization)
@@ -908,6 +911,7 @@ def test_rasterize_to_pixels_eval3d(
         return_sample_counts=True,
         rs_type=rs_type,
         viewmats_rs=viewmats_rs,
+        use_hit_distance=use_hit_distance,
     )
 
     # Validate: last_ids and alpha must be consistent
@@ -1049,9 +1053,13 @@ def test_rasterize_to_pixels_eval3d(
     # Compare backward gradients, excluding the ones that fall above the quantile threshold.
     torch.testing.assert_close(v_means * means_mask.float(), _v_means * means_mask.float(), rtol=0, atol=4e-2)
     torch.testing.assert_close(v_scales * scales_mask.float(), _v_scales * scales_mask.float(), rtol=0, atol=5e-2)
-    torch.testing.assert_close(v_quats * quats_mask.float(), _v_quats * quats_mask.float(), rtol=0, atol=5e-4)
+    # Relax quat/opacity tolerances when use_hit_distance=True due to accumulated floating-point errors
+    # in hit distance calculation (normalize + dot product + length operations)
+    quat_atol = 6e-3 if use_hit_distance else 5e-4
+    opacity_atol = 1e-3 if use_hit_distance else 1.5e-4
+    torch.testing.assert_close(v_quats * quats_mask.float(), _v_quats * quats_mask.float(), rtol=0, atol=quat_atol)
     torch.testing.assert_close(v_colors * colors_mask.float(), _v_colors * colors_mask.float(), rtol=0, atol=1e-4)
-    torch.testing.assert_close(v_opacities * opacities_mask.float(), _v_opacities * opacities_mask.float(), rtol=0, atol=1.5e-4)
+    torch.testing.assert_close(v_opacities * opacities_mask.float(), _v_opacities * opacities_mask.float(), rtol=0, atol=opacity_atol)
     torch.testing.assert_close(v_backgrounds * backgrounds_mask.float(), _v_backgrounds * backgrounds_mask.float(), rtol=0, atol=1.6e-2)
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")

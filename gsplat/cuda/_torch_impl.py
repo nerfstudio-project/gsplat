@@ -8,7 +8,7 @@ from torch import Tensor
 from typing_extensions import Literal, assert_never
 
 from ._wrapper import RollingShutterType
-from .math import (
+from ._math import (
     _safe_normalize,
     _rotmat_to_quat,
     _quat_inverse,

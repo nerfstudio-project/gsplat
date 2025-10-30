@@ -720,6 +720,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
     // intersections
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
+    const bool use_hit_distance,
     const at::optional<at::Tensor> sample_counts // [..., C, image_height, image_width] optional
 ) {
     DEVICE_GUARD(means);
@@ -784,6 +785,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
             ftheta_coeffs,                                                     \
             tile_offsets,                                                      \
             flatten_ids,                                                       \
+            use_hit_distance,                                                  \
             renders,                                                           \
             alphas,                                                            \
             last_ids,                                                          \
@@ -852,6 +854,7 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     // intersections
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
+    const bool use_hit_distance,
     // forward outputs
     const at::Tensor render_alphas, // [..., C, image_height, image_width, 1]
     const at::Tensor last_ids,      // [..., C, image_height, image_width]
@@ -911,6 +914,7 @@ rasterize_to_pixels_from_world_3dgs_bwd(
             ftheta_coeffs,                                                     \
             tile_offsets,                                                      \
             flatten_ids,                                                       \
+            use_hit_distance,                                                  \
             render_alphas,                                                     \
             last_ids,                                                          \
             v_render_colors,                                                   \
