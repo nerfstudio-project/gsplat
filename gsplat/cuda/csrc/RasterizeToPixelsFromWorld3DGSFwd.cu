@@ -73,6 +73,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     // intersections
     const int32_t *__restrict__ tile_offsets, // [B, C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
+    const bool use_hit_distance,
     scalar_t
         *__restrict__ render_colors,      // [B, C, image_height, image_width, CDIM]
     scalar_t *__restrict__ render_alphas, // [B, C, image_height, image_width, 1]
@@ -206,6 +207,8 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         reinterpret_cast<vec4 *>(&id_batch[block_size]); // [block_size]
     mat3 *iscl_rot_batch =
         reinterpret_cast<mat3 *>(&xyz_opacity_batch[block_size]); // [block_size]
+    vec3 *scale_batch =
+        reinterpret_cast<vec3 *>(&iscl_rot_batch[block_size]); // [block_size]
 
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
@@ -262,6 +265,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             );
             mat3 iscl_rot = S * glm::transpose(R);
             iscl_rot_batch[tr] = iscl_rot;
+            scale_batch[tr] = scale;
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -274,6 +278,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             const float opac = xyz_opac[3];
             const vec3 xyz = {xyz_opac[0], xyz_opac[1], xyz_opac[2]};            
             const mat3 iscl_rot = iscl_rot_batch[t];
+            const vec3 scale = scale_batch[t];
 
             const vec3 gro = iscl_rot * (ray_o - xyz);
             const vec3 grd = safe_normalize(iscl_rot * ray_d);
@@ -286,6 +291,14 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
                 continue;
             }
 
+            // Compute hit distance if needed
+            float hit_distance = 0.0f;
+            if (use_hit_distance) {
+                const float hit_t = glm::dot(grd, -gro);
+                const vec3 grds = scale * (grd * hit_t);
+                hit_distance = glm::length(grds);
+            }
+
             const float next_T = T * (1.0f - alpha);
             if (next_T <= 1e-4f) { // this pixel is done: exclusive
                 done = true;
@@ -295,9 +308,20 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             int32_t isect_id = id_batch[t];
             const float vis = alpha * T;
             const float *c_ptr = colors + isect_id * CDIM;
+
+            if (use_hit_distance) {
+                // Use hit distance for depth channel
 #pragma unroll
-            for (uint32_t k = 0; k < CDIM; ++k) {
-                pix_out[k] += c_ptr[k] * vis;
+                for (uint32_t k = 0; k < CDIM; ++k) {
+                    const float value = (k == CDIM - 1) ? hit_distance : c_ptr[k];
+                    pix_out[k] += value * vis;
+                }
+            } else {
+                // Use stored depth from colors
+#pragma unroll
+                for (uint32_t k = 0; k < CDIM; ++k) {
+                    pix_out[k] += c_ptr[k] * vis;
+                }
             }
             cur_idx = batch_start + t;
             n_accumulated++;  // Increment sample count
@@ -357,6 +381,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     // intersections
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
+    const bool use_hit_distance,
     // outputs
     at::Tensor renders, // [..., C, image_height, image_width, channels]
     at::Tensor alphas,  // [..., C, image_height, image_width]
@@ -383,7 +408,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
 
     int64_t shmem_size =
         tile_size * tile_size * 
-        (sizeof(int32_t) + sizeof(vec4) + sizeof(mat3));
+        (sizeof(int32_t) + sizeof(vec4) + sizeof(mat3) + sizeof(vec3));
 
     // TODO: an optimization can be done by passing the actual number of
     // channels into the kernel functions and avoid necessary global memory
@@ -441,6 +466,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             // intersections
             tile_offsets.data_ptr<int32_t>(),
             flatten_ids.data_ptr<int32_t>(),
+            use_hit_distance,
             renders.data_ptr<float>(),
             alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
@@ -475,6 +501,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         const FThetaCameraDistortionParameters ftheta_coeffs,                 \
         const at::Tensor tile_offsets,                                         \
         const at::Tensor flatten_ids,                                          \
+        const bool use_hit_distance,                                           \
         const at::Tensor renders,                                              \
         const at::Tensor alphas,                                               \
         const at::Tensor last_ids,                                             \
