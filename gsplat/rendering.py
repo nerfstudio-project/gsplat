@@ -45,6 +45,7 @@ from .distributed import (
 )
 from .utils import depth_to_normal, get_projection_matrix
 
+RenderMode = Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"]
 
 def _compute_view_dirs_packed(
     means: Tensor,  # [..., N, 3]
@@ -139,7 +140,7 @@ def rasterization(
     packed: bool = True,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
-    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
+    render_mode: RenderMode = "RGB",
     sparse_grad: bool = False,
     absgrad: bool = False,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
@@ -899,7 +900,7 @@ def _rasterization(
     sh_degree: Optional[int] = None,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
-    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
+    render_mode: RenderMode = "RGB",
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
     channel_chunk: int = 32,
     batch_per_iter: int = 100,
@@ -1459,7 +1460,7 @@ def rasterization_2dgs(
     packed: bool = False,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
-    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
+    render_mode: RenderMode = "RGB",
     sparse_grad: bool = False,
     absgrad: bool = False,
     distloss: bool = False,
