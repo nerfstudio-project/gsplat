@@ -8,6 +8,7 @@ import torch
 from torch import Tensor
 from typing_extensions import Literal
 
+CameraModel = Literal["pinhole", "ortho", "fisheye", "ftheta"]
 
 def _make_lazy_cuda_func(name: str) -> Callable:
     def call_cuda(*args, **kwargs):
@@ -252,7 +253,7 @@ def proj(
     Ks: Tensor,  # [..., C, 3, 3]
     width: int,
     height: int,
-    camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+    camera_model: CameraModel = "pinhole",
 ) -> Tuple[Tensor, Tensor]:
     """Projection of Gaussians (perspective or orthographic).
 
@@ -300,7 +301,7 @@ def fully_fused_projection(
     packed: bool = False,
     sparse_grad: bool = False,
     calc_compensations: bool = False,
-    camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+    camera_model: CameraModel = "pinhole",
     opacities: Optional[Tensor] = None,  # [..., N] or None
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Projects Gaussians to 2D.
@@ -689,7 +690,7 @@ def rasterize_to_pixels_eval3d(
     flatten_ids: Tensor,  # [n_isects]
     backgrounds: Optional[Tensor] = None,  # [..., C, channels]
     masks: Optional[Tensor] = None,  # [..., C, tile_height, tile_width]
-    camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+    camera_model: CameraModel = "pinhole",
     ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
     # distortion
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
@@ -744,7 +745,7 @@ def rasterize_to_pixels_eval3d_extra(
     flatten_ids: Tensor,  # [n_isects]
     backgrounds: Optional[Tensor] = None,  # [..., C, channels]
     masks: Optional[Tensor] = None,  # [..., C, tile_height, tile_width]
-    camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+    camera_model: CameraModel = "pinhole",
     ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
     # distortion
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
@@ -1054,7 +1055,7 @@ class _Proj(torch.autograd.Function):
         Ks: Tensor,  # [..., C, 3, 3]
         width: int,
         height: int,
-        camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+        camera_model: CameraModel = "pinhole",
     ) -> Tuple[Tensor, Tensor]:
         assert (
             camera_model != "ftheta"
@@ -1123,7 +1124,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         far_plane: float,
         radius_clip: float,
         calc_compensations: bool,
-        camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+        camera_model: CameraModel = "pinhole",
         opacities: Optional[Tensor] = None,  # [..., N] or None
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         assert (
@@ -1251,7 +1252,7 @@ def fully_fused_projection_with_ut(
     far_plane: float = 1e10,
     radius_clip: float = 0.0,
     calc_compensations: bool = False,
-    camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+    camera_model: CameraModel = "pinhole",
     ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
     # distortion
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
@@ -1484,7 +1485,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         tile_size: int,
         isect_offsets: Tensor,  # [..., C, tile_height, tile_width]
         flatten_ids: Tensor,  # [..., n_isects]
-        camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+        camera_model: CameraModel = "pinhole",
         ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
         # distortion
         radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
@@ -1702,7 +1703,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         radius_clip: float,
         sparse_grad: bool,
         calc_compensations: bool,
-        camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+        camera_model: CameraModel = "pinhole",
         opacities: Optional[Tensor] = None,  # [..., N] or None
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         assert (

@@ -35,6 +35,7 @@ from gsplat.compression import PngCompression
 from gsplat.distributed import cli
 from gsplat.optimizers import SelectiveAdam
 from gsplat.rendering import rasterization, RasterizeMode
+from gsplat.cuda._wrapper import CameraModel
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 from gsplat_viewer import GsplatViewer, GsplatRenderTabState
 from nerfview import CameraState, RenderTabState, apply_float_colormap
@@ -66,7 +67,7 @@ class Config:
     # Normalize the world space
     normalize_world_space: bool = True
     # Camera model
-    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole"
+    camera_model: CameraModel = "pinhole"
 
     # Port for the viewer server
     port: int = 8080
@@ -487,7 +488,7 @@ class Runner:
         height: int,
         masks: Optional[Tensor] = None,
         rasterize_mode: Optional[RasterizeMode] = None,
-        camera_model: Optional[Literal["pinhole", "ortho", "fisheye"]] = None,
+        camera_model: Optional[CameraModel] = None,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         means = self.splats["means"]  # [N, 3]

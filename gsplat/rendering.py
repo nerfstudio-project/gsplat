@@ -9,6 +9,7 @@ from typing_extensions import Literal
 
 from .cuda._wrapper import (
     RollingShutterType,
+    CameraModel,
     FThetaCameraDistortionParameters,
     FThetaPolynomialType,
     UnscentedTransformParameters,
@@ -59,7 +60,7 @@ def rasterization(
     rasterize_mode: RasterizeMode = "classic",
     channel_chunk: int = 32,
     distributed: bool = False,
-    camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+    camera_model: CameraModel = "pinhole",
     segmented: bool = False,
     covars: Optional[Tensor] = None,
     with_ut: bool = False,
