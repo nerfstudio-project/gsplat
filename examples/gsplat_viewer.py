@@ -19,6 +19,8 @@ from typing import Literal
 from typing import Tuple, Callable
 from nerfview import Viewer, RenderTabState
 
+from gsplat.rendering import RasterizeMode
+
 
 class GsplatRenderTabState(RenderTabState):
     # non-controlable parameters
@@ -40,7 +42,7 @@ class GsplatRenderTabState(RenderTabState):
     colormap: Literal[
         "turbo", "viridis", "magma", "inferno", "cividis", "gray"
     ] = "turbo"
-    rasterize_mode: Literal["classic", "antialiased"] = "classic"
+    rasterize_mode: RasterizeMode = "classic"
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole"
 
 

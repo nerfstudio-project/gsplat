@@ -50,7 +50,7 @@ from gsplat import export_splats
 from gsplat.compression import PngCompression
 from gsplat.distributed import cli
 from gsplat.optimizers import SelectiveAdam
-from gsplat.rendering import rasterization
+from gsplat.rendering import rasterization, RasterizeMode
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 from gsplat_viewer import GsplatViewer, GsplatRenderTabState
 from nerfview import CameraState, RenderTabState, apply_float_colormap
@@ -575,7 +575,7 @@ class Runner:
         width: int,
         height: int,
         masks: Optional[Tensor] = None,
-        rasterize_mode: Optional[Literal["classic", "antialiased"]] = None,
+        rasterize_mode: Optional[RasterizeMode] = None,
         camera_model: Optional[Literal["pinhole", "ortho", "fisheye"]] = None,
         frame_idcs: Optional[Tensor] = None,
         camera_idcs: Optional[Tensor] = None,
