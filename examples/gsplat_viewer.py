@@ -20,6 +20,7 @@ from typing import Tuple, Callable
 from nerfview import Viewer, RenderTabState
 
 from gsplat.rendering import RasterizeMode
+from gsplat.cuda._wrapper import CameraModel
 
 
 class GsplatRenderTabState(RenderTabState):
@@ -43,7 +44,7 @@ class GsplatRenderTabState(RenderTabState):
         "turbo", "viridis", "magma", "inferno", "cividis", "gray"
     ] = "turbo"
     rasterize_mode: RasterizeMode = "classic"
-    camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole"
+    camera_model: CameraModel = "pinhole"
 
 
 class GsplatViewer(Viewer):
