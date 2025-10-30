@@ -37,7 +37,11 @@ from gsplat._helper import (
     assert_mismatch_ratio,
 )
 import gsplat
-from gsplat.cuda._wrapper import RollingShutterType, UnscentedTransformParameters
+from gsplat.cuda._wrapper import (
+    CameraModel,
+    RollingShutterType,
+    UnscentedTransformParameters,
+)
 
 device = torch.device("cuda:0")
 
@@ -132,7 +136,7 @@ def test_quat_scale_to_covar_preci(test_data, triu: bool, batch_dims: Tuple[int,
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 def test_proj(
     test_data,
-    camera_model: Literal["pinhole", "ortho", "fisheye"],
+    camera_model: CameraModel,
     batch_dims: Tuple[int, ...],
 ):
     from gsplat.cuda._torch_impl import (
@@ -195,7 +199,7 @@ def test_projection(
     test_data,
     fused: bool,
     calc_compensations: bool,
-    camera_model: Literal["pinhole", "ortho", "fisheye"],
+    camera_model: CameraModel,
     batch_dims: Tuple[int, ...],
 ):
     from gsplat.cuda._torch_impl import _fully_fused_projection
@@ -310,7 +314,7 @@ def test_fully_fused_projection_packed(
     fused: bool,
     sparse_grad: bool,
     calc_compensations: bool,
-    camera_model: Literal["pinhole", "ortho", "fisheye"],
+    camera_model: CameraModel,
     batch_dims: Tuple[int, ...],
 ):
     from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci

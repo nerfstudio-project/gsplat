@@ -22,6 +22,8 @@ import torch.nn.functional as F
 from torch import Tensor
 from typing_extensions import Literal, assert_never
 
+from ._wrapper import CameraModel
+
 
 def _persp_proj(
     means: Tensor,  # [..., C, N, 3]
@@ -242,7 +244,7 @@ def _fully_fused_projection(
     near_plane: float = 0.01,
     far_plane: float = 1e10,
     calc_compensations: bool = False,
-    camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+    camera_model: CameraModel = "pinhole",
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Optional[Tensor]]:
     """PyTorch implementation of `gsplat.cuda._wrapper.fully_fused_projection()`
 

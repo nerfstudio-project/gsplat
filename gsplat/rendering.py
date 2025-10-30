@@ -24,6 +24,7 @@ from typing_extensions import Literal
 
 from .cuda._wrapper import (
     RollingShutterType,
+    CameraModel,
     FThetaCameraDistortionParameters,
     FThetaPolynomialType,
     UnscentedTransformParameters,
@@ -47,6 +48,7 @@ from .utils import depth_to_normal, get_projection_matrix
 
 RenderMode = Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"]
 RasterizeMode = Literal["classic", "antialiased"]
+
 
 def _compute_view_dirs_packed(
     means: Tensor,  # [..., N, 3]
@@ -147,7 +149,7 @@ def rasterization(
     rasterize_mode: RasterizeMode = "classic",
     channel_chunk: int = 32,
     distributed: bool = False,
-    camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+    camera_model: CameraModel = "pinhole",
     segmented: bool = False,
     covars: Optional[Tensor] = None,
     with_ut: bool = False,

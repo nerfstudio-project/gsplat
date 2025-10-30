@@ -25,6 +25,7 @@ from torch import Tensor
 from gsplat._helper import assert_shape
 
 from ._wrapper import (
+    CameraModel,
     RollingShutterType,
     UnscentedTransformParameters,
     FThetaCameraDistortionParameters,
@@ -291,7 +292,7 @@ def _fully_fused_projection_with_ut(
     far_plane: float = 1e10,
     radius_clip: float = 0.0,
     calc_compensations: bool = False,
-    camera_model: Literal["pinhole", "fisheye", "ftheta"] = "pinhole",
+    camera_model: CameraModel = "pinhole",
     ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
     radial_coeffs: Optional[Tensor] = None,
     tangential_coeffs: Optional[Tensor] = None,
