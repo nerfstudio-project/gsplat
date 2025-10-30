@@ -132,9 +132,11 @@ def _compute_ray_gaussian_distance(
     ray_d: Tensor,  # [..., N, 3]
     xyz: Tensor,  # [..., N, 3]
     iscl_rot: Tensor,  # [..., N, 3, 3]
-) -> Tensor:
+    scale: Tensor,  # [..., N, 3]
+) -> Tuple[Tensor, Tensor]:
     """
-    Compute squared distance from ray to Gaussian center in transformed space.
+    Compute squared distance from ray to Gaussian center in transformed space,
+    and hit distance in camera space.
 
     Uses the inverse scale-rotation matrix to transform the ray into
     Gaussian-local space, then computes the minimum distance from the
@@ -148,6 +150,7 @@ def _compute_ray_gaussian_distance(
 
     Returns:
         grayDist: [..., N] - Squared distance from ray to Gaussian center
+        hitDist: [..., N] - Hit distance in camera space
     """
     # Transform ray origin and direction to Gaussian space
     gro = torch.matmul(iscl_rot, (ray_o - xyz)[..., None]).squeeze(-1)  # [..., 3]
@@ -158,9 +161,14 @@ def _compute_ray_gaussian_distance(
 
     # Compute distance via cross product
     gcrod = torch.linalg.cross(grd, gro)  # [..., 3]
-    grayDist = torch.sum(gcrod * gcrod, dim=-1)  # [..., 1]
+    grayDist = torch.sum(gcrod * gcrod, dim=-1)  # [...]
 
-    return grayDist
+    # Compute hit distance (matches CUDA: hit_t = dot(grd, -gro), grds = scale * grd * hit_t)
+    hit_t = torch.sum(grd * (-gro), dim=-1)  # [...]
+    grds = scale * (grd * hit_t[..., None])  # [..., 3]
+    hitDist = torch.linalg.vector_norm(grds, dim=-1)  # [...]
+
+    return grayDist, hitDist
 
 
 def _compute_gaussian_alphas(
@@ -219,6 +227,7 @@ def accumulate_eval3d(
     base_transmittance: Optional[
         Tensor
     ] = None,  # [I, image_height, image_width] - base transmittance for batched accumulation
+    use_hit_distance: bool = False,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
     """Alpha compositing with ray-based 3D Gaussian evaluation in Pure PyTorch.
 
@@ -321,11 +330,19 @@ def accumulate_eval3d(
     batch_ids = image_ids // C
     xyz = means_flat[batch_ids, gaussian_ids]  # [M, 3]
     iscl_rot = iscl_rot[batch_ids, gaussian_ids]  # [M, 3, 3]
+    scale_per_gauss = scales_flat[batch_ids, gaussian_ids]  # [M, 3]
     opac = opacities[image_ids, gaussian_ids]
     gauss_colors = colors[image_ids, gaussian_ids]
 
     # 7. Compute ray-Gaussian distances
-    grayDist = _compute_ray_gaussian_distance(ray_o, ray_d, xyz, iscl_rot)
+    grayDist, hitDist = _compute_ray_gaussian_distance(
+        ray_o, ray_d, xyz, iscl_rot, scale_per_gauss
+    )
+
+    # 7b. Replace last channel with hit distance if requested (matches CUDA behavior)
+    # CUDA: const float value = (k == CDIM - 1) ? hit_distance : c_ptr[k];
+    if use_hit_distance:
+        gauss_colors = torch.cat([gauss_colors[..., :-1], hitDist[..., None]], dim=-1)
 
     # 8. Compute Gaussian alphas
     trans_threshold = 1e-4
@@ -443,6 +460,7 @@ def _rasterize_to_pixels_eval3d(
     ] = None,  # [..., C, 4, 4] - optional for rolling shutter
     return_last_ids: bool = False,
     return_sample_counts: bool = False,
+    use_hit_distance: bool = False,
 ):
     """PyTorch reference implementation of rasterize_to_pixels_eval3d().
 
@@ -688,6 +706,7 @@ def _rasterize_to_pixels_eval3d(
             rs_type,
             viewmats_rs_exp,
             base_transmittance=transmittances,  # Pass current transmittance
+            use_hit_distance=use_hit_distance,
         )
 
         # Composite results using transmittance
