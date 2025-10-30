@@ -30,6 +30,7 @@ import torch
 import gsplat
 
 from gsplat._helper import load_test_data
+from gsplat.rendering import RenderMode
 
 device = torch.device("cuda:0")
 
@@ -82,7 +83,7 @@ def test_data():
 @pytest.mark.parametrize("render_mode", ["RGB"])
 def test_rasterization(
     test_data,
-    render_mode: str,
+    render_mode: RenderMode,
 ):
     from gsplat.rendering import (
         rasterization,
