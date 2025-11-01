@@ -41,6 +41,7 @@ __global__ void projection_2dgs_fused_fwd_kernel(
         far_plane, // Far clipping plane (for finite range used in z sorting)
     const scalar_t radius_clip, // Radius clipping threshold (through away small
                                 // primitives)
+    const bool dual_visible, // Flag to enable dual-visibility
     // outputs
     int32_t *__restrict__ radii, // [B, C, N, 2]   The maximum radius of the projected
                                  // Gaussians in pixel unit. Int32 tensor.
@@ -234,11 +235,17 @@ __global__ void projection_2dgs_fused_fwd_kernel(
         return;
     }
 
-    // normals dual visible
+    // normals dual visible (optional)
     vec3 normal = RS_camera[2];
+    float multiplier = glm::dot(-normal, mean_c) > 0 ? 1 : -1;
+    if (!dual_visible && multiplier < 0.f){
+        // mask out back-facing gaussians
+        radii[idx * 2] = 0;
+        radii[idx * 2 + 1] = 0;
+        return;
+    }
     // flip normal if it is pointing away from the camera
-    float multipler = glm::dot(-normal, mean_c) > 0 ? 1 : -1;
-    normal *= multipler;
+    normal *= multiplier;
 
     // write to outputs
     radii[idx * 2] = (int32_t)radius_x;
@@ -276,6 +283,7 @@ void launch_projection_2dgs_fused_fwd_kernel(
     const float near_plane,
     const float far_plane,
     const float radius_clip,
+    const bool dual_visible,
     // outputs
     at::Tensor radii,          // [..., C, N, 2]
     at::Tensor means2d,        // [..., C, N, 2]
@@ -312,6 +320,7 @@ void launch_projection_2dgs_fused_fwd_kernel(
             near_plane,
             far_plane,
             radius_clip,
+            dual_visible,
             radii.data_ptr<int32_t>(),
             means2d.data_ptr<float>(),
             depths.data_ptr<float>(),
