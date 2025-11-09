@@ -41,7 +41,8 @@ console_formatter = logging.Formatter('%(name)-12s: %(levelname)-8s - %(funcName
 console_handler.setFormatter(console_formatter)
 
 # Create the handler for file output
-file_handler = logging.FileHandler(f"{__name__}.log")
+log_filename = os.path.splitext(os.path.basename(__file__ if "__file__" in globals() else sys.argv[0]))[0] + ".log"
+file_handler = logging.FileHandler(log_filename)
 file_handler.setLevel(logging.DEBUG)
 file_formatter = logging.Formatter('%(name)-12s: %(levelname)-8s - %(funcName)s - %(message)s')
 file_handler.setFormatter(file_formatter)
