@@ -65,6 +65,10 @@ CompressionResult compress_draco(const std::vector<Point3D>& points) {
     result.compressed_data.resize(buffer.size());
     std::memcpy(result.compressed_data.data(), buffer.data(), buffer.size());
     
+    // Calculate sizes (geometry only: 3 uint32_t = 12 bytes per point)
+    result.original_size_bytes = points.size() * 3 * sizeof(uint32_t);
+    result.compressed_size_bytes = result.compressed_data.size();
+    
     return result;
 }
 
@@ -77,13 +81,11 @@ DecompressionResult decompress_draco(const std::vector<uint8_t>& compressed_data
     // Create decoder
     draco::Decoder decoder;
     
-    // Measure decompression time (excluding file I/O)
-    StopWatch sw;
-    
     // Decode
     draco::DecoderBuffer decoder_buffer;
     decoder_buffer.Init(reinterpret_cast<const char*>(compressed_data.data()), compressed_data.size());
-    
+
+    StopWatch sw;
     draco::StatusOr<std::unique_ptr<draco::PointCloud>> status_or_pc = decoder.DecodePointCloudFromBuffer(&decoder_buffer);
     if (!status_or_pc.ok()) {
         std::cerr << "Error: Failed to decode point cloud" << std::endl;
@@ -98,6 +100,8 @@ DecompressionResult decompress_draco(const std::vector<uint8_t>& compressed_data
         std::cerr << "Error: Point cloud has no position attribute" << std::endl;
         return result;
     }
+
+    result.decompression_time_ms = sw.ElapsedMs();
     
     std::vector<Point3D> points;
     points.reserve(pc->num_points());
@@ -116,8 +120,6 @@ DecompressionResult decompress_draco(const std::vector<uint8_t>& compressed_data
                            static_cast<uint32_t>(pos[1]), 
                            static_cast<uint32_t>(pos[2]));
     }
-    
-    result.decompression_time_ms = sw.ElapsedMs();
     
     // Save decompressed point cloud using unified PLY writer (file I/O excluded from timing)
     if (!save_ply_geometry(points, output_path)) {

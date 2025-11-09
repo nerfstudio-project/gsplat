@@ -22,6 +22,8 @@ struct Point3D {
 struct CompressionResult {
     std::vector<uint8_t> compressed_data;
     double compression_time_ms;
+    size_t original_size_bytes;     // Original point cloud size (geometry only)
+    size_t compressed_size_bytes;   // Compressed data size
 };
 
 /**

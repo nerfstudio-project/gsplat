@@ -34,7 +34,7 @@ void check_(T result, char const *const func, const char *const file, int const 
 // --- Device Functions: Morton Encoding ---
 
 // Expands a 10-bit integer into 30 bits by inserting 2 zeros after each bit.
-__device__ __host__ uint32_t expandBits(uint32_t v) {
+__device__ __inline__ uint32_t expandBits(uint32_t v) {
     v = (v * 0x00010001u) & 0xFF0000FFu;
     v = (v * 0x00000101u) & 0x0F00F00Fu;
     v = (v * 0x00000011u) & 0xC30C30C3u;
@@ -43,7 +43,7 @@ __device__ __host__ uint32_t expandBits(uint32_t v) {
 }
 
 // Inverse of expandBits: extracts coordinates from Morton code
-__device__ __host__ uint32_t compactBits(uint32_t v) {
+__device__ __inline__ uint32_t compactBits(uint32_t v) {
     v &= 0x49249249u; // Keep only every 3rd bit (x: bits 0,3,6,9...)
     v = (v | (v >> 2)) & 0xC30C30C3u;
     v = (v | (v >> 4)) & 0x0F00F00Fu;
@@ -53,7 +53,7 @@ __device__ __host__ uint32_t compactBits(uint32_t v) {
 }
 
 // Extracts x, y, z integer coordinates from Morton code (optimized for voxelized coordinates)
-__device__ __host__ void morton3D_decode(uint32_t code, uint32_t& x, uint32_t& y, uint32_t& z) {
+__device__ __inline__ void morton3D_decode(uint32_t code, uint32_t& x, uint32_t& y, uint32_t& z) {
     x = compactBits(code);
     y = compactBits(code >> 1);
     z = compactBits(code >> 2);
@@ -96,14 +96,15 @@ __global__ void compute_occupancy_kernel(
 
 // --- CUDA Kernel: Compute Morton codes (optimized for integer voxelized coordinates) ---
 __global__ void compute_morton_codes(const uint32_t* points_x, const uint32_t* points_y, const uint32_t* points_z,
-                                     int num_points, 
+                                     int num_points, int shift,
                                      uint32_t* codes, int* original_indices) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < num_points) {
         // Compute Morton code directly (inline computation)
-        uint32_t x = points_x[idx];
-        uint32_t y = points_y[idx];
-        uint32_t z = points_z[idx];
+        // Quantize coordinates by shifting right based on requested depth
+        uint32_t x = points_x[idx] >> shift;
+        uint32_t y = points_y[idx] >> shift;
+        uint32_t z = points_z[idx] >> shift;
         codes[idx] = expandBits(x) | (expandBits(y) << 1) | (expandBits(z) << 2);
         original_indices[idx] = idx;
     }
@@ -111,12 +112,17 @@ __global__ void compute_morton_codes(const uint32_t* points_x, const uint32_t* p
 
 // --- CUDA Kernel: Reconstruct points from octree levels (optimized for integer voxelized coordinates) ---
 __global__ void reconstruct_points_kernel(
-    const uint32_t* leaf_codes, int num_leaves,
+    const uint32_t* leaf_codes, int num_leaves, int shift,
     uint32_t* output_x, uint32_t* output_y, uint32_t* output_z)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < num_leaves) {
-        morton3D_decode(leaf_codes[idx], output_x[idx], output_y[idx], output_z[idx]);
+        uint32_t x, y, z;
+        morton3D_decode(leaf_codes[idx], x, y, z);
+        // Restore scale by shifting left
+        output_x[idx] = x << shift;
+        output_y[idx] = y << shift;
+        output_z[idx] = z << shift;
     }
 }
 
@@ -131,9 +137,12 @@ CompressionResult compress_gpu_octree(const std::vector<Point3D>& points, uint32
         return result;
     }
 
-    StopWatch sw;
     int N = points.size();
-    // grid_dim = 2^octree_depth, min_b = (0,0,0), max_b = (2^octree_depth-1, 2^octree_depth-1, 2^octree_depth-1) - fixed
+    
+    StopWatch sw;
+    // Calculate quantization shift for depths < 10
+    const int MAX_DEPTH = 10;
+    int shift = (octree_depth < MAX_DEPTH) ? (MAX_DEPTH - octree_depth) : 0;
 
     // Convert points to uint32_t format for GPU (coordinates are already integers)
     std::vector<uint32_t> h_points_x(N), h_points_y(N), h_points_z(N);
@@ -157,7 +166,7 @@ CompressionResult compress_gpu_octree(const std::vector<Point3D>& points, uint32
         thrust::raw_pointer_cast(d_points_x.data()),
         thrust::raw_pointer_cast(d_points_y.data()),
         thrust::raw_pointer_cast(d_points_z.data()),
-        N,
+        N, shift,
         thrust::raw_pointer_cast(d_morton_codes.data()),
         thrust::raw_pointer_cast(d_indices.data())
     );
@@ -235,6 +244,10 @@ CompressionResult compress_gpu_octree(const std::vector<Point3D>& points, uint32
 
     result.compression_time_ms = sw.ElapsedMs();
 
+    // Calculate sizes (geometry only: 3 uint32_t = 12 bytes per point)
+    result.original_size_bytes = points.size() * 3 * sizeof(uint32_t);
+    result.compressed_size_bytes = result.compressed_data.size();
+
     return result;
 }
 
@@ -252,6 +265,10 @@ DecompressionResult decompress_gpu_octree(const std::vector<uint8_t>& compressed
 
     StopWatch sw;
     size_t offset = 0;
+
+    // Calculate reconstruction shift for depths < 10
+    const int MAX_DEPTH = 10;
+    int shift = (octree_depth < MAX_DEPTH) ? (MAX_DEPTH - octree_depth) : 0;
 
     // Read metadata (optimized format for voxelized coordinates)
     if (compressed_data.size() < sizeof(uint32_t)) {
@@ -360,7 +377,7 @@ DecompressionResult decompress_gpu_octree(const std::vector<uint8_t>& compressed
     int blocks = (num_leaves + threads - 1) / threads;
     reconstruct_points_kernel<<<blocks, threads>>>(
         thrust::raw_pointer_cast(all_levels[octree_depth].data()),
-        num_leaves,
+        num_leaves, shift,
         thrust::raw_pointer_cast(d_reconstructed_x.data()),
         thrust::raw_pointer_cast(d_reconstructed_y.data()),
         thrust::raw_pointer_cast(d_reconstructed_z.data())
@@ -390,4 +407,3 @@ DecompressionResult decompress_gpu_octree(const std::vector<uint8_t>& compressed
     result.success = true;
     return result;
 }
-

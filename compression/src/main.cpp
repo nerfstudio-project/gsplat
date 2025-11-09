@@ -69,6 +69,12 @@ int main() {
         std::cout << "\n--- PCL Compression ---" << std::endl;
         CompressionResult pcl_result = compress_pcl(points);
         if (pcl_result.compression_time_ms > 0) {
+            std::cout << "Original size: " << pcl_result.original_size_bytes << " bytes (" 
+                      << (pcl_result.original_size_bytes / 1024.0) << " KB)" << std::endl;
+            std::cout << "Compressed size: " << pcl_result.compressed_size_bytes << " bytes (" 
+                      << (pcl_result.compressed_size_bytes / 1024.0) << " KB)" << std::endl;
+            std::cout << "Compression ratio: " << (double)pcl_result.original_size_bytes / pcl_result.compressed_size_bytes 
+                      << ":1" << std::endl;
             std::cout << "Compression time: " << pcl_result.compression_time_ms << " ms" << std::endl;
             std::string pcl_output = output_base + "/pcl/" + ptcl_number + ".ply";
             DecompressionResult pcl_decomp = decompress_pcl(pcl_result.compressed_data, pcl_output);
@@ -86,6 +92,12 @@ int main() {
         std::cout << "\n--- Open3D Compression ---" << std::endl;
         CompressionResult open3d_result = compress_open3d(points);
         if (open3d_result.compression_time_ms > 0) {
+            std::cout << "Original size: " << open3d_result.original_size_bytes << " bytes (" 
+                      << (open3d_result.original_size_bytes / 1024.0) << " KB)" << std::endl;
+            std::cout << "Compressed size: " << open3d_result.compressed_size_bytes << " bytes (" 
+                      << (open3d_result.compressed_size_bytes / 1024.0) << " KB)" << std::endl;
+            std::cout << "Compression ratio: " << (double)open3d_result.original_size_bytes / open3d_result.compressed_size_bytes 
+                      << ":1" << std::endl;
             std::cout << "Compression time: " << open3d_result.compression_time_ms << " ms" << std::endl;
             std::string open3d_output = output_base + "/open3d/" + ptcl_number + ".ply";
             DecompressionResult open3d_decomp = decompress_open3d(open3d_result.compressed_data, open3d_output);
@@ -103,6 +115,12 @@ int main() {
         std::cout << "\n--- Draco Compression ---" << std::endl;
         CompressionResult draco_result = compress_draco(points);
         if (draco_result.compression_time_ms > 0) {
+            std::cout << "Original size: " << draco_result.original_size_bytes << " bytes (" 
+                      << (draco_result.original_size_bytes / 1024.0) << " KB)" << std::endl;
+            std::cout << "Compressed size: " << draco_result.compressed_size_bytes << " bytes (" 
+                      << (draco_result.compressed_size_bytes / 1024.0) << " KB)" << std::endl;
+            std::cout << "Compression ratio: " << (double)draco_result.original_size_bytes / draco_result.compressed_size_bytes 
+                      << ":1" << std::endl;
             std::cout << "Compression time: " << draco_result.compression_time_ms << " ms" << std::endl;
             std::string draco_output = output_base + "/draco/" + ptcl_number + ".ply";
             DecompressionResult draco_decomp = decompress_draco(draco_result.compressed_data, draco_output);
@@ -118,9 +136,15 @@ int main() {
         
         // GPU Octree Compression
         std::cout << "\n--- GPU Octree Compression ---" << std::endl;
-        const uint32_t octree_depth = 10;  // For 1024x1024x1024 voxelized coordinates (2^10 = 1024)
+        const uint32_t octree_depth = 10;  // 2^octree_depth
         CompressionResult gpu_octree_result = compress_gpu_octree(points, octree_depth);
         if (gpu_octree_result.compression_time_ms > 0) {
+            std::cout << "Original size: " << gpu_octree_result.original_size_bytes << " bytes (" 
+                      << (gpu_octree_result.original_size_bytes / 1024.0) << " KB)" << std::endl;
+            std::cout << "Compressed size: " << gpu_octree_result.compressed_size_bytes << " bytes (" 
+                      << (gpu_octree_result.compressed_size_bytes / 1024.0) << " KB)" << std::endl;
+            std::cout << "Compression ratio: " << (double)gpu_octree_result.original_size_bytes / gpu_octree_result.compressed_size_bytes 
+                      << ":1" << std::endl;
             std::cout << "Compression time: " << gpu_octree_result.compression_time_ms << " ms" << std::endl;
             std::string gpu_octree_output = output_base + "/gpu_octree/" + ptcl_number + ".ply";
             DecompressionResult gpu_octree_decomp = decompress_gpu_octree(gpu_octree_result.compressed_data, gpu_octree_output, octree_depth);

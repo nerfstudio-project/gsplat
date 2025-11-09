@@ -49,6 +49,10 @@ CompressionResult compress_pcl(const std::vector<Point3D>& points) {
     result.compressed_data.resize(compressed_str.size());
     std::memcpy(result.compressed_data.data(), compressed_str.data(), compressed_str.size());
     
+    // Calculate sizes (geometry only: 3 uint32_t = 12 bytes per point)
+    result.original_size_bytes = points.size() * 3 * sizeof(uint32_t);
+    result.compressed_size_bytes = result.compressed_data.size();
+    
     delete pointCloudEncoder;
     
     return result;
