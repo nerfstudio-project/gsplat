@@ -19,7 +19,6 @@ This implementation achieves **32:1 compression ratio** with **~4ms compression*
 cd gsplat/compression
 mkdir build && cd build
 # check below for cmake options
-make
 ```
 
 The CMakeLists.txt now supports 3 ways to specify CUDA installation:
