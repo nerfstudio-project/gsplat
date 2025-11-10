@@ -4,10 +4,62 @@
 #include <string>
 #include <algorithm>
 #include <cassert>
+#include <set>
 #include "utils.h"
 #include "compression.h"
 
 namespace fs = std::filesystem;
+
+// Helper function to validate lossless compression
+bool validate_lossless_compression(const std::vector<Point3D>& original, const std::string& decompressed_path) {
+    // Read decompressed points
+    std::vector<Point3D> decompressed = read_ply_geometry(decompressed_path);
+
+    if (decompressed.empty()) {
+        std::cerr << "  [VALIDATION FAILED] Could not read decompressed file" << std::endl;
+        return false;
+    }
+
+    // Create sets for comparison (octree compression deduplicates identical voxel positions)
+    std::set<Point3D> original_set(original.begin(), original.end());
+    std::set<Point3D> decompressed_set(decompressed.begin(), decompressed.end());
+
+    // Check if sets match
+    if (original_set == decompressed_set) {
+        std::cout << "  [VALIDATION PASSED] Compression is LOSSLESS" << std::endl;
+        std::cout << "  Original unique points: " << original_set.size() << std::endl;
+        std::cout << "  Decompressed points: " << decompressed_set.size() << std::endl;
+        if (original.size() != original_set.size()) {
+            std::cout << "  Note: Original had " << (original.size() - original_set.size())
+                      << " duplicate voxel positions (expected for voxelized data)" << std::endl;
+        }
+        return true;
+    } else {
+        std::cerr << "  [VALIDATION FAILED] Point sets do not match!" << std::endl;
+        std::cerr << "  Original unique points: " << original_set.size() << std::endl;
+        std::cerr << "  Decompressed points: " << decompressed_set.size() << std::endl;
+
+        // Find differences
+        std::set<Point3D> missing_in_decompressed;
+        std::set_difference(original_set.begin(), original_set.end(),
+                           decompressed_set.begin(), decompressed_set.end(),
+                           std::inserter(missing_in_decompressed, missing_in_decompressed.begin()));
+
+        std::set<Point3D> extra_in_decompressed;
+        std::set_difference(decompressed_set.begin(), decompressed_set.end(),
+                           original_set.begin(), original_set.end(),
+                           std::inserter(extra_in_decompressed, extra_in_decompressed.begin()));
+
+        if (!missing_in_decompressed.empty()) {
+            std::cerr << "  Missing in decompressed: " << missing_in_decompressed.size() << " points" << std::endl;
+        }
+        if (!extra_in_decompressed.empty()) {
+            std::cerr << "  Extra in decompressed: " << extra_in_decompressed.size() << " points" << std::endl;
+        }
+
+        return false;
+    }
+}
 
 void print_usage(const char* program_name) {
     std::cout << "Usage: " << program_name << " -i <input_folder> -o <output_folder> [options]\n\n";
@@ -223,6 +275,10 @@ int main(int argc, char* argv[]) {
             if (gpu_octree_decomp.success) {
                 std::cout << "Decompression time: " << gpu_octree_decomp.decompression_time_ms << " ms" << std::endl;
                 std::cout << "Decompressed and saved to: " << gpu_octree_output << std::endl;
+
+                // Validate lossless compression
+                std::cout << "\n  Validating lossless compression..." << std::endl;
+                validate_lossless_compression(points, gpu_octree_output);
             } else {
                 std::cerr << "Failed to decompress GPU Octree" << std::endl;
             }

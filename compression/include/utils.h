@@ -11,9 +11,20 @@
  */
 struct Point3D {
     uint32_t x, y, z;
-    
+
     Point3D() : x(0), y(0), z(0) {}
     Point3D(uint32_t x, uint32_t y, uint32_t z) : x(x), y(y), z(z) {}
+
+    // Comparison operators for std::set
+    bool operator<(const Point3D& other) const {
+        if (x != other.x) return x < other.x;
+        if (y != other.y) return y < other.y;
+        return z < other.z;
+    }
+
+    bool operator==(const Point3D& other) const {
+        return x == other.x && y == other.y && z == other.z;
+    }
 };
 
 /**
