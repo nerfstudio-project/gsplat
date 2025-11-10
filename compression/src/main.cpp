@@ -9,17 +9,84 @@
 
 namespace fs = std::filesystem;
 
-int main() {
-    // Paths
-    std::string input_folder = "/ssd1/rajrup/Project/gsplat/data/redandblack/Ply";
-    std::string output_base = "/ssd1/rajrup/Project/gsplat/results/redandblack";
-    
+void print_usage(const char* program_name) {
+    std::cout << "Usage: " << program_name << " -i <input_folder> -o <output_folder> [options]\n\n";
+    std::cout << "Required arguments:\n";
+    std::cout << "  -i, --input <folder>     Input folder containing PLY files\n";
+    std::cout << "  -o, --output <folder>    Output base folder for compressed results\n\n";
+    std::cout << "Optional arguments:\n";
+    std::cout << "  -n, --num <count>        Max number of files to process (default: 10)\n";
+    std::cout << "  -h, --help               Show this help message\n\n";
+    std::cout << "Example:\n";
+    std::cout << "  " << program_name << " -i ./input_ply -o ./results -n 5\n\n";
+    std::cout << "Note: PLY files must have point coordinates in [0, 1023] range.\n";
+}
+
+int main(int argc, char* argv[]) {
+    // Parse command-line arguments
+    std::string input_folder;
+    std::string output_base;
+    int max_files = 10;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "-h" || arg == "--help") {
+            print_usage(argv[0]);
+            return 0;
+        } else if (arg == "-i" || arg == "--input") {
+            if (i + 1 < argc) {
+                input_folder = argv[++i];
+            } else {
+                std::cerr << "Error: -i requires an argument\n";
+                print_usage(argv[0]);
+                return 1;
+            }
+        } else if (arg == "-o" || arg == "--output") {
+            if (i + 1 < argc) {
+                output_base = argv[++i];
+            } else {
+                std::cerr << "Error: -o requires an argument\n";
+                print_usage(argv[0]);
+                return 1;
+            }
+        } else if (arg == "-n" || arg == "--num") {
+            if (i + 1 < argc) {
+                max_files = std::stoi(argv[++i]);
+            } else {
+                std::cerr << "Error: -n requires an argument\n";
+                print_usage(argv[0]);
+                return 1;
+            }
+        } else {
+            std::cerr << "Error: Unknown argument " << arg << "\n";
+            print_usage(argv[0]);
+            return 1;
+        }
+    }
+
+    // Validate required arguments
+    if (input_folder.empty() || output_base.empty()) {
+        std::cerr << "Error: Missing required arguments\n\n";
+        print_usage(argv[0]);
+        return 1;
+    }
+
+    // Validate input folder exists
+    if (!fs::exists(input_folder) || !fs::is_directory(input_folder)) {
+        std::cerr << "Error: Input folder does not exist or is not a directory: " << input_folder << "\n";
+        return 1;
+    }
+
     // Create output directories
     fs::create_directories(output_base + "/pcl");
     fs::create_directories(output_base + "/open3d");
     fs::create_directories(output_base + "/draco");
     fs::create_directories(output_base + "/gpu_octree");
-    
+
+    std::cout << "Input folder: " << input_folder << "\n";
+    std::cout << "Output folder: " << output_base << "\n";
+    std::cout << "Max files to process: " << max_files << "\n\n";
+
     // Get list of PLY files and sort them
     std::vector<std::string> ply_files;
     for (const auto& entry : fs::directory_iterator(input_folder)) {
@@ -27,12 +94,17 @@ int main() {
             ply_files.push_back(entry.path().string());
         }
     }
-    
-    // Sort files to get first 10
+
+    if (ply_files.empty()) {
+        std::cerr << "Error: No PLY files found in " << input_folder << "\n";
+        return 1;
+    }
+
+    // Sort files to get first N
     std::sort(ply_files.begin(), ply_files.end());
-    
-    // Process first 10 files
-    int num_files = std::min(10, static_cast<int>(ply_files.size()));
+
+    // Process first N files
+    int num_files = std::min(max_files, static_cast<int>(ply_files.size()));
     
     std::cout << "Processing " << num_files << " PLY files..." << std::endl;
     std::cout << "=========================================" << std::endl;
