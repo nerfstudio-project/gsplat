@@ -500,11 +500,12 @@ def rasterization(
 
             # Compute dirs in B*C steps to avoid many-to-one indexing of cameras in backward pass
             dirs = torch.empty((nnz, 3), dtype=means.dtype, device=device)
+            indptr_cpu = indptr.cpu()
             for b_idx in range(B):
                 for c_idx in range(C):
                     bc_idx = b_idx * C + c_idx
-                    start_idx = indptr[bc_idx].item()
-                    end_idx = indptr[bc_idx + 1].item()
+                    start_idx = indptr_cpu[bc_idx].item()
+                    end_idx = indptr_cpu[bc_idx + 1].item()
                     if start_idx == end_idx:
                         continue
 
