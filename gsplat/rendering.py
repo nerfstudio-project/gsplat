@@ -432,6 +432,7 @@ def rasterization(
             batch_ids,
             camera_ids,
             gaussian_ids,
+            indptr,
             radii,
             means2d,
             depths,
@@ -446,7 +447,7 @@ def rasterization(
         opacities = torch.broadcast_to(
             opacities[..., None, :], batch_dims + (C, N)
         )  # [..., C, N]
-        batch_ids, camera_ids, gaussian_ids = None, None, None
+        indptr, batch_ids, camera_ids, gaussian_ids = None, None, None, None
         image_ids = None
 
     if compensations is not None:
@@ -493,10 +494,26 @@ def rasterization(
             campos_rs = torch.inverse(viewmats_rs)[..., :3, 3]
             campos = 0.5 * (campos + campos_rs)  # [..., C, 3]
         if packed:
-            dirs = (
-                means.view(B, N, 3)[batch_ids, gaussian_ids]
-                - campos.view(B, C, 3)[batch_ids, camera_ids]
-            )  # [nnz, 3]
+            nnz = batch_ids.shape[0]
+            means_flat = means.view(B, N, 3)
+            campos_flat = campos.view(B, C, 3)
+
+            # Compute dirs in B*C steps to avoid many-to-one indexing of cameras in backward pass
+            dirs = torch.empty((nnz, 3), dtype=means.dtype, device=device)
+            for b_idx in range(B):
+                for c_idx in range(C):
+                    bc_idx = b_idx * C + c_idx
+                    start_idx = indptr[bc_idx].item()
+                    end_idx = indptr[bc_idx + 1].item()
+                    if start_idx == end_idx:
+                        continue
+
+                    # Get the gaussian indices for this batch-camera pair and compute dirs
+                    gids = gaussian_ids[start_idx:end_idx]
+                    dirs[start_idx:end_idx] = (
+                        means_flat[b_idx, gids] - campos_flat[b_idx, c_idx]
+                    )
+
             masks = (radii > 0).all(dim=-1)  # [nnz]
             if colors.dim() == num_batch_dims + 3:
                 # Turn [..., N, K, 3] into [nnz, 3]
