@@ -31,7 +31,6 @@ FAST_MATH = os.getenv("FAST_MATH", "1") == "1"
 WITH_SYMBOLS = os.getenv("WITH_SYMBOLS", "0") == "1"
 NVCC_FLAGS = os.getenv("NVCC_FLAGS", "")
 MAX_JOBS = os.getenv("MAX_JOBS")
-USE_PRECOMPILED_HEADERS = os.getenv("USE_PRECOMPILED_HEADERS", "0") == "1"
 NINJA_STATUS = os.getenv("NINJA_STATUS")
 VERBOSE = os.getenv("VERBOSE", "0") == "1"
 
@@ -58,8 +57,10 @@ def get_build_parameters():
     extra_ldflags = []
 
     if sys.platform == "win32":
-        extra_cflags += ["-DWIN32_LEAN_AND_MEAN"]
+        extra_cflags += ["/std=c++20", "-DWIN32_LEAN_AND_MEAN"]
         extra_cuda_cflags += ["-allow-unsupported-compiler"]
+    else:
+        extra_cflags = ["-std=c++20"]
 
     # Compile for mac arm64
     if sys.platform == "darwin" and platform.machine() == "arm64":
@@ -149,19 +150,6 @@ def build_and_load_gsplat():
     module_exists = os.path.exists(os.path.join(build_dir, f"{build_params.name}.so")) or os.path.exists(os.path.join(build_dir, f"{build_params.name}.lib"))
 
     with status_context() if not module_exists else nullcontext():
-        if USE_PRECOMPILED_HEADERS:
-            from torch.utils.cpp_extension import (
-                _check_and_build_extension_h_precompiler_headers,
-            )
-
-            # Using PreCompiled Header('torch/extension.h') to reduce compile time.
-            # remove: remove_extension_h_precompiler_headers()
-            _check_and_build_extension_h_precompiler_headers(
-                extra_cflags, extra_include_paths
-            )
-            head_file = os.path.join(_TORCH_PATH, "include", "torch", "extension.h")
-            extra_cflags += ["-include", head_file, "-Winvalid-pch"]
-
         # If the JIT build happens concurrently in multiple processes,
         # race conditions can occur when removing the lock file at:
         # https://github.com/pytorch/pytorch/blob/e3513fb2af7951ddf725d8c5b6f6d962a053c9da/torch/utils/cpp_extension.py#L1736
