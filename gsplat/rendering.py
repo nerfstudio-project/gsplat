@@ -67,7 +67,7 @@ def _compute_view_dirs_packed(
     campos_flat = campos.view(B, C, 3)
 
     if B * C == 1:
-        # Single batch-camera pair, no indexed lookup for camposneeded
+        # Single batch-camera pair. No indexed lookup for campos is needed.
         dirs = means_flat[0, gaussian_ids] - campos_flat[0, 0]  # [nnz, 3]
     else:
         avg_means_per_camera = nnz / (B * C)
