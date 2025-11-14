@@ -25,6 +25,7 @@ from torch.utils.cpp_extension import (
 PATH = os.path.dirname(os.path.abspath(__file__))
 NO_FAST_MATH = os.getenv("NO_FAST_MATH", "0") == "1"
 FAST_COMPILE = os.getenv("FAST_COMPILE", "0") == "1"
+DEBUG = os.getenv("DEBUG", "0") == "1"
 VERBOSE = os.getenv("VERBOSE", "0") == "1"
 MAX_JOBS = os.getenv("MAX_JOBS")
 USE_PRECOMPILED_HEADERS = os.getenv("USE_PRECOMPILED_HEADERS", "0") == "1"
@@ -172,10 +173,11 @@ except ImportError:
         current_dir = os.path.dirname(os.path.abspath(__file__))
         glm_path = os.path.join(current_dir, "csrc", "third_party", "glm")
 
+        debug_flags = "-g" if DEBUG else "-DNDEBUG"
         extra_include_paths = [os.path.join(PATH, "include/"), glm_path]
-        opt_level = "-O0" if FAST_COMPILE else "-O3"
-        extra_cflags = [opt_level, "-Wno-attributes"]
-        extra_cuda_cflags = [opt_level]
+        opt_level = "-O0" if FAST_COMPILE or DEBUG else "-O3"
+        extra_cflags = [opt_level, debug_flags, "-Wno-attributes"]
+        extra_cuda_cflags = [opt_level, debug_flags]
         if not NO_FAST_MATH:
             extra_cuda_cflags += ["-use_fast_math"]
         sources = (
