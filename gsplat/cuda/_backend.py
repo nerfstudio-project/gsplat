@@ -176,8 +176,8 @@ except ImportError:
         debug_flags = "-g" if DEBUG else "-DNDEBUG"
         extra_include_paths = [os.path.join(PATH, "include/"), glm_path]
         opt_level = "-O0" if FAST_COMPILE or DEBUG else "-O3"
-        extra_cflags = [opt_level, debug_flags, "-Wno-attributes"]
-        extra_cuda_cflags = [opt_level, debug_flags]
+        extra_cflags = [opt_level, debug_flags, "-Wno-attributes", "-std=c++20"]
+        extra_cuda_cflags = [opt_level, debug_flags, "-std=c++20"]
         if not NO_FAST_MATH:
             extra_cuda_cflags += ["-use_fast_math"]
         sources = (

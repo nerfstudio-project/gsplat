@@ -48,6 +48,11 @@ def get_extensions():
         extra_compile_args["cxx"] += ["-Wno-sign-compare"]
     extra_link_args = [] if WITH_SYMBOLS else ["-s"]
 
+    if sys.platform == "win32":
+        extra_compile_flags["cxx"] += ["/std:c++20"]
+    else:
+        extra_compile_flags["cxx"] += ["-std=c++20"]
+
     info = parallel_info()
     if (
         "backend: OpenMP" in info
@@ -69,7 +74,7 @@ def get_extensions():
 
     nvcc_flags = os.getenv("NVCC_FLAGS", "")
     nvcc_flags = [] if nvcc_flags == "" else nvcc_flags.split(" ")
-    nvcc_flags += ["-O3", "--use_fast_math", "-std=c++17"]
+    nvcc_flags += ["-O3", "--use_fast_math", "-std=c++20"]
     if LINE_INFO:
         nvcc_flags += ["-lineinfo"]
     if torch.version.hip:
