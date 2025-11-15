@@ -1016,7 +1016,13 @@ class _QuatScaleToCovarPreci(torch.autograd.Function):
             v_covars.contiguous() if compute_covar else None,
             v_precis.contiguous() if compute_preci else None,
         )
-        return v_quats, v_scales, None, None, None
+        return (
+            v_quats,
+            v_scales,
+            None,  # compute_covar
+            None,  # compute_preci
+            None,  # triu
+        )
 
 
 class _Proj(torch.autograd.Function):
@@ -1070,7 +1076,14 @@ class _Proj(torch.autograd.Function):
             v_means2d.contiguous(),
             v_covars2d.contiguous(),
         )
-        return v_means, v_covars, None, None, None, None
+        return (
+            v_means,
+            v_covars,
+            None,  # Ks
+            None,  # width
+            None,  # height
+            None,  # camera_model
+        )
 
 
 class _FullyFusedProjection(torch.autograd.Function):
@@ -1192,17 +1205,17 @@ class _FullyFusedProjection(torch.autograd.Function):
             v_quats,
             v_scales,
             v_viewmats,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            None,  # Ks
+            None,  # width
+            None,  # height
+            None,  # eps2d
+            None,  # near_plane
+            None,  # far_plane
+            None,  # radius_clip
+            None,  # calc_compensations
+            None,  # camera_model
+            None,  # ut_params
+            None,  # radial_coeffs
         )
 
 
@@ -1416,13 +1429,13 @@ class _RasterizeToPixels(torch.autograd.Function):
             v_colors,
             v_opacities,
             v_backgrounds,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            None,  # masks
+            None,  # width
+            None,  # height
+            None,  # tile_size
+            None,  # isect_offsets
+            None,  # flatten_ids
+            None,  # absgrad
         )
 
 
@@ -1605,22 +1618,22 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             v_colors,
             v_opacities,
             v_backgrounds,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            None,  # masks
+            None,  # viewmats
+            None,  # Ks
+            None,  # width
+            None,  # height
+            None,  # tile_size
+            None,  # isect_offsets
+            None,  # flatten_ids
+            None,  # camera_model
+            None,  # ut_params
+            None,  # radial_coeffs
+            None,  # tangential_coeffs
+            None,  # thin_prism_coeffs
+            None,  # ftheta_coeffs
+            None,  # rolling_shutter
+            None,  # viewmats_rs
         )
 
 
@@ -1832,17 +1845,17 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             v_quats,
             v_scales,
             v_viewmats,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            None,  # Ks
+            None,  # width
+            None,  # height
+            None,  # eps2d
+            None,  # near_plane
+            None,  # far_plane
+            None,  # radius_clip
+            None,  # calc_compensations
+            None,  # sparse_grad
+            None,  # camera_model
+            None,  # ut_params
         )
 
 
@@ -1878,7 +1891,12 @@ class _SphericalHarmonics(torch.autograd.Function):
         )
         if not compute_v_dirs:
             v_dirs = None
-        return None, v_dirs, v_coeffs, None
+        return (
+            None,  # sh_degree
+            v_dirs,
+            v_coeffs,
+            None,  # masks
+        )
 
 
 ###### 2DGS ######
@@ -2084,14 +2102,14 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
             v_quats,
             v_scales,
             v_viewmats,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            None,  # Ks
+            None,  # width
+            None,  # height
+            None,  # eps2d
+            None,  # near_plane
+            None,  # far_plane
+            None,  # radius_clip
+            None,  # camera_model
         )
 
 
@@ -2257,15 +2275,15 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
             v_quats,
             v_scales,
             v_viewmats,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            None,  # Ks
+            None,  # width
+            None,  # height
+            None,  # eps2d
+            None,  # near_plane
+            None,  # far_plane
+            None,  # radius_clip
+            None,  # sparse_grad
+            None,  # camera_model
         )
 
 
@@ -2646,12 +2664,12 @@ class _RasterizeToPixels2DGS(torch.autograd.Function):
             v_normals,
             v_densify,
             v_backgrounds,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            None,  # masks
+            None,  # width
+            None,  # height
+            None,  # tile_size
+            None,  # isect_offsets
+            None,  # flatten_ids
+            None,  # absgrad
+            None,  # distloss
         )
