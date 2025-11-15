@@ -98,8 +98,8 @@ __global__ void projection_ut_3dgs_fused_kernel(
     );
 
     // transform Gaussian center to camera space
-	// Interpolate to *center* shutter pose as single per-Gaussian camera pose
-	const auto shutter_pose = interpolate_shutter_pose(0.5f, rs_params);
+    // Interpolate to *center* shutter pose as single per-Gaussian camera pose
+    const auto shutter_pose = interpolate_shutter_pose(0.5f, rs_params);
     const vec3 mean_c = glm::rotate(shutter_pose.q, mean) + shutter_pose.t;
     if (mean_c.z < near_plane || mean_c.z > far_plane) {
         radii[idx * 2] = 0;
