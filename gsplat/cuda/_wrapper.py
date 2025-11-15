@@ -759,6 +759,67 @@ def rasterize_to_pixels_eval3d(
         - **Rendered colors**. [..., C, image_height, image_width, channels]
         - **Rendered alphas**. [..., C, image_height, image_width, 1]
     """
+
+    colors, alphas, *_ = rasterize_to_pixels_eval3d_extra(
+        means=means, quats=quats, scales=scales, colors=colors, opacities=opacities,
+        viewmats=viewmats, Ks=Ks,
+        image_width=image_width, image_height=image_height,
+        tile_size=tile_size, isect_offsets=isect_offsets, flatten_ids=flatten_ids,
+        backgrounds=backgrounds,
+        masks=masks,
+        camera_model=camera_model,
+        ut_params=ut_params,
+        radial_coeffs=radial_coeffs, tangential_coeffs=tangential_coeffs, thin_prism_coeffs=thin_prism_coeffs, ftheta_coeffs=ftheta_coeffs,
+        rolling_shutter=rolling_shutter, viewmats_rs=viewmats_rs,
+        return_sample_counts=False
+    )
+    return colors, alphas
+
+
+def rasterize_to_pixels_eval3d_extra(
+    means: Tensor,  # [..., N, 3]
+    quats: Tensor,  # [..., N, 4]
+    scales: Tensor,  # [..., N, 3]
+    colors: Tensor,  # [..., C, N, channels] or [nnz, channels]
+    opacities: Tensor,  # [..., C, N] or [nnz]
+    viewmats: Tensor,  # [..., C, 4, 4]
+    Ks: Tensor,  # [..., C, 3, 3]
+    image_width: int,
+    image_height: int,
+    tile_size: int,
+    isect_offsets: Tensor,  # [..., C, tile_height, tile_width]
+    flatten_ids: Tensor,  # [n_isects]
+    backgrounds: Optional[Tensor] = None,  # [..., C, channels]
+    masks: Optional[Tensor] = None,  # [..., C, tile_height, tile_width]
+    camera_model: Literal["pinhole", "ortho", "fisheye", "ftheta"] = "pinhole",
+    ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
+    # distortion
+    radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
+    tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
+    thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
+    ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
+    # rolling shutter
+    rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
+    viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
+    return_sample_counts: bool = False
+) -> Tuple[Tensor, Tensor, Tuple, Optional[Tuple]]:
+    """Rasterizes Gaussians to pixels, returning extra information for debugging.
+
+    Similar to `rasterize_to_pixels_eval3d()`, but returns turns the last gaussian id
+    accumulated in a pixel, and optionally the number of accumulated samples per pixel.
+
+    Args:
+        return_last_ids: If True, also return last flatten_idx per pixel. Default: False.
+        return_sample_counts: If True, also return number of accumulated samples per pixel. Default: False.
+
+    Returns:
+        A tuple (contents depend on return flags):
+
+        - **Rendered colors**. [..., C, image_height, image_width, channels]
+        - **Rendered alphas**. [..., C, image_height, image_width, 1]
+        - **Last flatten_idx**. [..., C, image_height, image_width]
+        - **Sample counts** (optional). [..., C, image_height, image_width]. If return_sample_counts=True.
+    """
     batch_dims = means.shape[:-2]
     num_batch_dims = len(batch_dims)
     N = means.size(-2)
@@ -863,7 +924,7 @@ def rasterize_to_pixels_eval3d(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-    render_colors, render_alphas = _RasterizeToPixelsEval3D.apply(
+    render_colors, render_alphas, last_ids, sample_counts = _RasterizeToPixelsEval3D.apply(
         means.contiguous(),
         quats.contiguous(),
         scales.contiguous(),
@@ -888,11 +949,15 @@ def rasterize_to_pixels_eval3d(
         # rolling shutter
         rolling_shutter,
         viewmats_rs.contiguous() if viewmats_rs is not None else None,
+        # Forward is always collecting the last_ids for the backward pass,
+        # no need to tell it to do it.
+        return_sample_counts,  # Pass flag to forward
     )
 
     if padded_channels > 0:
         render_colors = render_colors[..., :-padded_channels]
-    return render_colors, render_alphas
+
+    return render_colors, render_alphas, last_ids, sample_counts
 
 
 @torch.no_grad()
@@ -1469,7 +1534,8 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         # rolling shutter
         rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
         viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
-    ) -> Tuple[Tensor, Tensor]:
+        return_sample_counts: bool = False,
+    ) -> Tuple[Tensor, Tensor, Tensor, Optional[Tensor]]:
         ut_params = ut_params.to_cpp()
         rs_type = rolling_shutter.to_cpp()
         camera_model_type = _make_lazy_cuda_obj(
@@ -1480,6 +1546,21 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             if ftheta_coeffs is not None
             else FThetaCameraDistortionParameters.to_cpp_default()
         )
+
+        # Conditionally allocate sample_counts based on flag
+        if return_sample_counts:
+            # Extract batch_dims for sample_counts allocation
+            batch_dims = means.shape[:-2]
+            C = viewmats.size(-3)
+
+            # Allocate with correct final shape (batch_dims, C, H, W)
+            sample_counts = torch.empty(
+                batch_dims + (C, height, width),
+                dtype=torch.int32,
+                device=means.device
+            )
+        else:
+            sample_counts = None
 
         render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
             "rasterize_to_pixels_from_world_3dgs_fwd"
@@ -1506,6 +1587,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             ftheta_coeffs,
             isect_offsets,
             flatten_ids,
+            sample_counts,
         )
 
         ctx.save_for_backward(
@@ -1535,13 +1617,15 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         ctx.tile_size = tile_size
         ctx.ftheta_coeffs = ftheta_coeffs
 
-        return render_colors, render_alphas
+        return render_colors, render_alphas, last_ids, sample_counts
 
     @staticmethod
     def backward(
         ctx,
         v_render_colors: Tensor,  # [..., C, H, W, 3]
         v_render_alphas: Tensor,  # [..., C, H, W, 1]
+        v_last_ids: Optional[Tensor],  # None - last_ids is integer (non-differentiable)
+        v_sample_counts: Optional[Tensor],  # None - sample_counts is integer (non-differentiable)
     ):
         (
             means,
@@ -1634,6 +1718,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             None,  # ftheta_coeffs
             None,  # rolling_shutter
             None,  # viewmats_rs
+            None,  # return_sample_counts (flag, no gradient)
         )
 
 

@@ -245,7 +245,8 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     // outputs
     at::Tensor renders, // [..., C, image_height, image_width, channels]
     at::Tensor alphas,  // [..., C, image_height, image_width]
-    at::Tensor last_ids // [..., C, image_height, image_width]
+    at::Tensor last_ids, // [..., C, image_height, image_width]
+    at::optional<at::Tensor> sample_counts // [..., C, image_height, image_width]
 );
 
 template <uint32_t CDIM>

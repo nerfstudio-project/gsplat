@@ -539,7 +539,8 @@ rasterize_to_pixels_from_world_3dgs_fwd(
     const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
     // intersections
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
-    const at::Tensor flatten_ids   // [n_isects]
+    const at::Tensor flatten_ids,  // [n_isects]
+    const at::optional<at::Tensor> sample_counts // [..., C, image_height, image_width]
 );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
