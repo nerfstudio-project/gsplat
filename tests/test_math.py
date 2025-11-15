@@ -13,7 +13,7 @@ device = torch.device("cuda:0")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_quat_to_rotmat():
     """Test _quat_to_rotmat converts quaternions correctly."""
-    from gsplat.cuda._torch_impl import _quat_to_rotmat
+    from gsplat.cuda._math import _quat_to_rotmat
 
     # Test 1: Identity quaternion → identity matrix
     q_identity = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device)

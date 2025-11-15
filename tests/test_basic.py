@@ -83,7 +83,7 @@ def test_data():
 @pytest.mark.parametrize("triu", [False, True])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 def test_quat_scale_to_covar_preci(test_data, triu: bool, batch_dims: Tuple[int, ...]):
-    from gsplat.cuda._torch_impl import _quat_scale_to_covar_preci
+    from gsplat.cuda._math import _quat_scale_to_covar_preci
     from gsplat.cuda._wrapper import quat_scale_to_covar_preci
 
     torch.manual_seed(42)

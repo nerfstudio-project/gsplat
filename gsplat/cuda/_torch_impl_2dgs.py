@@ -19,7 +19,7 @@ from typing import Optional, Tuple
 import torch
 from torch import Tensor
 
-from gsplat.cuda._torch_impl import _quat_scale_to_matrix
+from gsplat.cuda._math import _quat_scale_to_matrix
 
 
 def _fully_fused_projection_2dgs(

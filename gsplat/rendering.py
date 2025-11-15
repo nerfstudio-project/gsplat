@@ -914,9 +914,9 @@ def _rasterization(
     """
     from gsplat.cuda._torch_impl import (
         _fully_fused_projection,
-        _quat_scale_to_covar_preci,
         _rasterize_to_pixels,
     )
+    from gsplat.cuda._math import _quat_scale_to_covar_preci
 
     batch_dims = means.shape[:-2]
     num_batch_dims = len(batch_dims)
