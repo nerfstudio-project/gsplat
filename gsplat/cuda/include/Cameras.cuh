@@ -22,6 +22,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <cuda_runtime.h>
 
 // Silence warnings / errors of the form
 //
@@ -52,6 +53,9 @@ struct RollingShutterParameters {
     glm::fquat q_start;
     glm::fvec3 t_end;
     glm::fquat q_end;
+
+    __device__
+    RollingShutterParameters() = default;
 
     __device__
     RollingShutterParameters(const float *se3_start, const float *se3_end) {

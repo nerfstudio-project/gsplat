@@ -665,3 +665,4 @@ def test_sh(test_data, sh_degree: int, batch_dims: Tuple[int, ...]):
     torch.testing.assert_close(v_coeffs, _v_coeffs, rtol=1e-4, atol=1e-4)
     if sh_degree > 0:
         torch.testing.assert_close(v_dirs, _v_dirs, rtol=1e-4, atol=1e-4)
+

@@ -21,6 +21,27 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+def expand_named_params(named_params):
+    """
+    Expand a list of (name, value) tuples into pytest.param objects with IDs.
+
+    Args:
+        named_params: List of (name, value) tuples where name is the test ID
+                     and value is the parameter value.
+
+    Returns:
+        List of pytest.param objects with IDs set.
+
+    Example:
+        >>> ROLLING_SHUTTER_TYPES = [
+        ...     ("L2R", RollingShutterType.ROLLING_LEFT_TO_RIGHT),
+        ...     ("R2L", RollingShutterType.ROLLING_RIGHT_TO_LEFT),
+        ... ]
+        >>> @pytest.mark.parametrize("rs_type", expand_named_params(ROLLING_SHUTTER_TYPES))
+    """
+    import pytest
+    return [pytest.param(value, id=name) for name, value in named_params]
+
 
 def load_test_data(
     data_path: Optional[str] = None,
@@ -74,3 +95,60 @@ def load_test_data(
     opacities = torch.rand((N,), device=device)
 
     return means, quats, scales, opacities, colors, viewmats, Ks, width, height
+
+
+def assert_shape(name: str, t: torch.Tensor, shape: tuple):
+    """
+    Check if the shape of a tensor matches a given shape.
+
+    Args:
+        name: Name of the tensor
+        t: Tensor to check
+        shape: Shape to check against
+    """
+    if t.ndim != len(shape):
+        raise ValueError(f"{name} must have rank {len(shape)} like {shape}, got {t.shape}")
+
+    try:
+        torch.broadcast_shapes(t.shape, shape)
+        return True
+    except Exception:
+        raise ValueError(f"{name} must have shape {shape}, got {t.shape}")
+
+
+def assert_close(actual, expected,
+                 *,
+                 allow_subclasses=True,
+                 rtol=None, atol=None,
+                 equal_nan=False,
+                 check_device=True, check_dtype=True, check_layout=True, check_stride=False,
+                 msg=None
+):
+    #rtol, atol = 0,0
+
+    torch.testing.assert_close(actual, expected,
+                               allow_subclasses=allow_subclasses,
+                               rtol=rtol, atol=atol,
+                               equal_nan=equal_nan,
+                               check_device=check_device, check_dtype=check_dtype, check_layout=check_layout, check_stride=check_stride,
+                               msg=msg
+    )
+
+
+def assert_mismatch_ratio(actual, expected, *, max=1e-5):
+    """
+    Assert that the mismatch ratio is less than a given tolerance.
+    """
+    if max is None:
+        max = 1e-5
+
+    #max=0
+
+    assert actual.shape == expected.shape
+
+    mismatch = (actual != expected).sum().item()
+    total = expected.numel()
+    mismatch_ratio = mismatch / total if total > 0 else 1
+    assert mismatch_ratio <= max, (
+        f"Too many validity mismatches: {mismatch}/{total} ({mismatch_ratio*100:.2f}%) "
+    )

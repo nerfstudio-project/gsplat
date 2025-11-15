@@ -21,6 +21,7 @@
 #include "Ops.h"
 #include "Cameras.h"
 #include "csrc/Config.h"
+#include "CameraWrappers.h"
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
@@ -138,4 +139,80 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("angle_to_pixeldist_poly", &FThetaCameraDistortionParameters::angle_to_pixeldist_poly)
         .def_readwrite("max_angle", &FThetaCameraDistortionParameters::max_angle)
         .def_readwrite("linear_cde", &FThetaCameraDistortionParameters::linear_cde);
+
+    // ==================== Camera Model Bindings ====================
+
+    py::class_<gsplat::PyBaseCameraModel<>, std::shared_ptr<gsplat::PyBaseCameraModel<>>>(m, "BaseCameraModel", py::module_local())
+        .def("camera_ray_to_image_point", &gsplat::PyBaseCameraModel<>::camera_ray_to_image_point,
+             py::arg("camera_ray"), py::arg("margin_factor") = 0.0f)
+        .def("image_point_to_camera_ray", &gsplat::PyBaseCameraModel<>::image_point_to_camera_ray,
+             py::arg("image_points"))
+        .def("shutter_relative_frame_time", &gsplat::PyBaseCameraModel<>::shutter_relative_frame_time,
+             py::arg("image_points"))
+        .def("image_point_to_world_ray_shutter_pose",
+             &gsplat::PyBaseCameraModel<>::image_point_to_world_ray_shutter_pose,
+             py::arg("image_points"),
+             py::arg("pose_start"), py::arg("pose_end"))
+        .def("world_point_to_image_point_shutter_pose",
+             &gsplat::PyBaseCameraModel<>::world_point_to_image_point_shutter_pose,
+             py::arg("world_points"),
+             py::arg("pose_start"), py::arg("pose_end"),
+             py::arg("margin_factor") = 0.0f)
+        .def_property_readonly("width", &gsplat::PyBaseCameraModel<>::width)
+        .def_property_readonly("height", &gsplat::PyBaseCameraModel<>::height)
+        .def_property_readonly("rs_type", &gsplat::PyBaseCameraModel<>::rs_type)
+        .def_property_readonly("principal_points", &gsplat::PyBaseCameraModel<>::principal_points)
+        .def_property_readonly("focal_lengths", &gsplat::PyBaseCameraModel<>::focal_lengths)
+        .def_static("create", &gsplat::PyBaseCameraModel<>::create,
+             py::arg("width"),
+             py::arg("height"),
+             py::arg("camera_model"),
+             py::arg("principal_points"),
+             py::arg("focal_lengths") = std::nullopt,
+             py::arg("radial_coeffs") = std::nullopt,
+             py::arg("tangential_coeffs") = std::nullopt,
+             py::arg("thin_prism_coeffs") = std::nullopt,
+             py::arg("ftheta_coeffs") = std::nullopt,
+             py::arg("rs_type") = ShutterType::GLOBAL);
+
+    py::class_<gsplat::PyPerfectPinholeCameraModel, gsplat::PyBaseCameraModel<>,
+               std::shared_ptr<gsplat::PyPerfectPinholeCameraModel>>(m, "PerfectPinholeCameraModel", py::module_local())
+        .def(py::init<int, int, const torch::Tensor&, const torch::Tensor&, ShutterType>(),
+             py::arg("width"), py::arg("height"),
+             py::arg("focal_lengths"), py::arg("principal_points"),
+             py::arg("rs_type"));
+
+    py::class_<gsplat::PyOpenCVPinholeCameraModel, gsplat::PyBaseCameraModel<>,
+               std::shared_ptr<gsplat::PyOpenCVPinholeCameraModel>>(m, "OpenCVPinholeCameraModel", py::module_local())
+        .def(py::init<int, int, const torch::Tensor&, const torch::Tensor&,
+                      std::optional<torch::Tensor>, std::optional<torch::Tensor>,
+                      std::optional<torch::Tensor>, ShutterType>(),
+             py::arg("width"), py::arg("height"),
+             py::arg("focal_lengths"), py::arg("principal_points"),
+             py::arg("radial_coeffs") = std::nullopt,
+             py::arg("tangential_coeffs") = std::nullopt,
+             py::arg("thin_prism_coeffs") = std::nullopt,
+             py::arg("rs_type"));
+
+    py::class_<gsplat::PyOpenCVFisheyeCameraModel, gsplat::PyBaseCameraModel<>,
+               std::shared_ptr<gsplat::PyOpenCVFisheyeCameraModel>>(m, "OpenCVFisheyeCameraModel", py::module_local())
+        .def(py::init<int, int, const torch::Tensor&, const torch::Tensor&,
+                      std::optional<torch::Tensor>, ShutterType>(),
+             py::arg("width"), py::arg("height"),
+             py::arg("focal_lengths"), py::arg("principal_points"),
+             py::arg("radial_coeffs") = std::nullopt,
+             py::arg("rs_type"));
+
+    py::class_<gsplat::PyFThetaCameraModel, gsplat::PyBaseCameraModel<>,
+               std::shared_ptr<gsplat::PyFThetaCameraModel>>(m, "FThetaCameraModel", py::module_local())
+        .def(py::init<int, int, const torch::Tensor&, const torch::Tensor&,
+                      const torch::Tensor&, const torch::Tensor&, FThetaCameraDistortionParameters::PolynomialType, const torch::Tensor &, ShutterType>(),
+             py::arg("width"), py::arg("height"),
+             py::arg("principal_points"),
+             py::arg("pixeldist_to_angle_poly"),
+             py::arg("angle_to_pixeldist_poly"),
+             py::arg("linear_cde"),
+             py::arg("reference_poly"),
+             py::arg("max_angle"),
+             py::arg("rs_type"));
 }
