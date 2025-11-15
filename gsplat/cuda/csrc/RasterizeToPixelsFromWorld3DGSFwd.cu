@@ -53,7 +53,8 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     scalar_t
         *__restrict__ render_colors,      // [B, C, image_height, image_width, CDIM]
     scalar_t *__restrict__ render_alphas, // [B, C, image_height, image_width, 1]
-    int32_t *__restrict__ last_ids        // [B, C, image_height, image_width]
+    int32_t *__restrict__ last_ids,       // [B, C, image_height, image_width]
+    int32_t *__restrict__ sample_counts   // [B, C, image_height, image_width] optional (can be nullptr)
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
@@ -69,6 +70,9 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     render_colors += iid * image_height * image_width * CDIM;
     render_alphas += iid * image_height * image_width;
     last_ids += iid * image_height * image_width;
+    if (sample_counts != nullptr) {
+        sample_counts += iid * image_height * image_width;
+    }
     if (backgrounds != nullptr) {
         backgrounds += iid * CDIM;
     }
@@ -187,6 +191,8 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     float T = 1.0f;
     // index of most recent gaussian to write to this thread's pixel
     uint32_t cur_idx = 0;
+    // count of samples accumulated (only tracked if sample_counts != nullptr)
+    int32_t n_accumulated = 0;
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing its
@@ -271,6 +277,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
                 pix_out[k] += c_ptr[k] * vis;
             }
             cur_idx = batch_start + t;
+            n_accumulated++;  // Increment sample count
 
             T = next_T;
         }
@@ -291,6 +298,10 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         }
         // index in bin of last gaussian in this pixel
         last_ids[pix_id] = static_cast<int32_t>(cur_idx);
+        // number of samples accumulated (only write if requested)
+        if (sample_counts != nullptr) {
+            sample_counts[pix_id] = n_accumulated;
+        }
     }
 }
 
@@ -326,7 +337,8 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     // outputs
     at::Tensor renders, // [..., C, image_height, image_width, channels]
     at::Tensor alphas,  // [..., C, image_height, image_width]
-    at::Tensor last_ids // [..., C, image_height, image_width]
+    at::Tensor last_ids, // [..., C, image_height, image_width]
+    at::optional<at::Tensor> sample_counts // [..., C, image_height, image_width]
 ) {
     // Note: quats need to be normalized before passing in.
 
@@ -408,7 +420,8 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(),
             alphas.data_ptr<float>(),
-            last_ids.data_ptr<int32_t>()
+            last_ids.data_ptr<int32_t>(),
+            sample_counts.has_value() ? sample_counts.value().data_ptr<int32_t>() : nullptr
         );
 }
 
@@ -441,8 +454,9 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         const at::Tensor flatten_ids,                                          \
         const at::Tensor renders,                                              \
         const at::Tensor alphas,                                               \
-        const at::Tensor last_ids                                               \
-    );                                                                        
+        const at::Tensor last_ids,                                             \
+        const at::optional<at::Tensor> sample_counts                           \
+    );
 
 __INS__(1)
 __INS__(2)
