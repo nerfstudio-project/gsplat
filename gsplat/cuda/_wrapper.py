@@ -108,7 +108,6 @@ class UnscentedTransformParameters:
         return p
 
 
-@dataclass
 class FThetaPolynomialType(Enum):
     PIXELDIST_TO_ANGLE = 0
     ANGLE_TO_PIXELDIST = 1
