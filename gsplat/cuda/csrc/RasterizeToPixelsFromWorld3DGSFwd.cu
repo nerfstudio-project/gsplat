@@ -206,14 +206,14 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         reinterpret_cast<vec4 *>(&id_batch[block_size]); // [block_size]
     mat3 *iscl_rot_batch =
         reinterpret_cast<mat3 *>(&xyz_opacity_batch[block_size]); // [block_size]
-    
+
     // current visibility left to render
     // transmittance is gonna be used in the backward pass which requires a high
     // numerical precision so we use double for it. However double make bwd 1.5x
     // slower so we stick with float for now.
     float T = 1.0f;
     // index of most recent gaussian to write to this thread's pixel
-    uint32_t cur_idx = 0;
+    int32_t cur_idx = -1;
     // count of samples accumulated (only tracked if sample_counts != nullptr)
     int32_t n_accumulated = 0;
 
