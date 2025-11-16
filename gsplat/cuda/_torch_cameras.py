@@ -609,11 +609,16 @@ class _BaseCameraModel(ABC):
 
             image_points_rs_prev = image_points_rs
 
-        # Points with all valid iterations return image_points_rs_prev with true
-        # points with any invalid iteration return init_image_points with false
+        # Points that went through iterative refinement are returned as is.
+        # Only the onles that were not valid before the loop are returned as init_image_points.
         final_image_points = torch.where(
             valid[..., None], image_points_rs_prev, init_image_points
         )
+
+        # If the point in the last iteration was invalid, the point is marked as invalid.
+        # It'll be returned as is.
+        valid = valid & valid_rs
+
         # Postconditions
         assert_shape("final_image_points", final_image_points, B + M + (2,))
         assert_shape("valid", valid, B + M)
