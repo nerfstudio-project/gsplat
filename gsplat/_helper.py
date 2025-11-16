@@ -184,7 +184,7 @@ def assert_mismatch_ratio(actual, expected, *, max=1e-5):
 
     #max=0
 
-    assert actual.shape == expected.shape
+    assert actual.shape == expected.shape, f"{actual.shape=} {expected.shape=}"
 
     mismatch = (actual != expected).sum().item()
     total = expected.numel()
