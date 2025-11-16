@@ -97,6 +97,46 @@ def load_test_data(
     return means, quats, scales, opacities, colors, viewmats, Ks, width, height
 
 
+def get_inlier_abserror_mask(actual, expected, *, quantile=None, atol=None, rtol=None):
+    """
+    Create mask for inliers based on error thresholds.
+
+    Combines quantile-based filtering with absolute/relative tolerance checks.
+    Uses the same condition as torch.testing.assert_close.
+
+    Args:
+        actual: Actual tensor (e.g., CUDA implementation)
+        expected: Expected tensor (e.g., reference implementation)
+        quantile: Quantile threshold in [0, 1] (e.g., 0.99 = mask out worst 1%). Optional.
+        atol: Absolute tolerance. Optional.
+        rtol: Relative tolerance (relative to expected). Optional. Requires atol if specified.
+
+    Returns:
+        Boolean mask same shape as inputs, True for inliers (values within all specified thresholds)
+    """
+    # Validate arguments
+    assert rtol is None or atol is not None, "If rtol is specified, atol must also be specified"
+
+    abs_diff = (actual - expected).abs()
+
+    # Build mask by combining conditions
+    mask = torch.ones_like(abs_diff, dtype=torch.bool)
+
+    # Apply quantile threshold if specified
+    if quantile is not None:
+        quantile_threshold = torch.quantile(abs_diff, quantile).item()
+        mask = mask & (abs_diff <= quantile_threshold)
+
+    # Apply atol/rtol threshold if specified
+    if atol is not None:
+        rtol_val = rtol if rtol is not None else 0
+        # Relative tolerance (element-wise, depends on expected values)
+        threshold = atol + rtol_val * expected.abs()
+        mask = mask & (abs_diff <= threshold)
+
+    return mask
+
+
 def assert_shape(name: str, t: torch.Tensor, shape: tuple):
     """
     Check if the shape of a tensor matches a given shape.
