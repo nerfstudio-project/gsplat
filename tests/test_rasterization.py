@@ -22,6 +22,7 @@ pytest <THIS_PY_FILE> -s
 ```
 """
 
+from itertools import product
 from typing import Optional, Tuple
 
 import pytest
@@ -34,17 +35,39 @@ device = torch.device("cuda:0")
 # Only 3dgs is being tested as per default args with_ut==False and with_eval3d==False
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
-@pytest.mark.parametrize("per_view_color", [True, False])
-@pytest.mark.parametrize("sh_degree", [None, 3])
-@pytest.mark.parametrize("render_mode", ["RGB", "RGB+D", "D"])
-@pytest.mark.parametrize("packed", [True, False])
-@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
+@pytest.mark.parametrize(
+    "per_view_color,sh_degree,render_mode,packed,batch_dims,with_eval3d,with_ut",
+    [
+        # Standard tests: all combinations with with_eval3d=False
+        *product(
+            [True, False],           # per_view_color
+            [None, 3],               # sh_degree
+            ["RGB", "RGB+D", "D"],   # render_mode
+            [True, False],           # packed
+            [(), (2,), (1, 2)],      # batch_dims
+            [False],                 # with_eval3d
+            [False]                  # with_ut
+        ),
+        # 3DGUT
+        *product(
+            [True, False],           # per_view_color
+            [None, 3],               # sh_degree
+            ["RGB"],                 # render_mode (only RGB)
+            [False],                 # packed (must be False)
+            [(), (2,)],              # batch_dims (reduced subset)
+            [True],                  # with_eval3d
+            [True]                   # with_ut
+        ),
+    ]
+)
 def test_rasterization(
     per_view_color: bool,
     sh_degree: Optional[int],
     render_mode: str,
     packed: bool,
     batch_dims: Tuple[int, ...],
+    with_eval3d: bool,
+    with_ut: bool,
 ):
     from gsplat.rendering import _rasterization, rasterization
 
@@ -91,6 +114,8 @@ def test_rasterization(
         sh_degree=sh_degree,
         render_mode=render_mode,
         packed=packed,
+        with_eval3d=with_eval3d,
+        with_ut=with_ut
     )
 
     if render_mode == "D":
@@ -112,6 +137,12 @@ def test_rasterization(
         height=height,
         sh_degree=sh_degree,
         render_mode=render_mode,
+        with_eval3d=with_eval3d,
+        with_ut=with_ut,
     )
-    torch.testing.assert_close(renders, _renders, rtol=1e-4, atol=1e-4)
-    torch.testing.assert_close(alphas, _alphas, rtol=1e-4, atol=1e-4)
+    # Use more lenient tolerances for eval3d implementation
+    rtol = 5e-4 if with_eval3d else 1e-4
+    atol = 5e-4 if with_eval3d else 1e-4
+    torch.testing.assert_close(renders, _renders, rtol=rtol, atol=atol)
+    torch.testing.assert_close(alphas, _alphas, rtol=rtol, atol=atol)
+
