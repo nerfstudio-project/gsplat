@@ -1,13 +1,13 @@
 <!doctype html>
 <html class="no-js" lang="en" data-content_root="../../">
-  <head><meta charset="utf-8"/>
-    <meta name="viewport" content="width=device-width,initial-scale=1"/>
-    <meta name="color-scheme" content="light dark"><link rel="index" title="Index" href="../../genindex.html" /><link rel="search" title="Search" href="../../search.html" />
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark"><link rel="index" title="Index" href="../../genindex.html"><link rel="search" title="Search" href="../../search.html">
 
-    <!-- Generated with Sphinx 7.4.7 and Furo 2025.07.19 -->
+    <!-- Generated with Sphinx 7.4.7 and Furo 2025.09.25 -->
         <title>gsplat.rendering - gsplat documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
-    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=25af2a20" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=580074bf" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
     
     
@@ -21,14 +21,14 @@
   }
   @media not print {
     body[data-theme="dark"] {
-      --color-code-background: #2b2b2b;
-  --color-code-foreground: #f8f8f2;
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
   
     }
     @media (prefers-color-scheme: dark) {
       body:not([data-theme="light"]) {
-        --color-code-background: #2b2b2b;
-  --color-code-foreground: #f8f8f2;
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
   
       }
     }
@@ -143,14 +143,10 @@
   </symbol>
 </svg>
 
-<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation">
-<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc">
-<label class="overlay sidebar-overlay" for="__navigation">
-  <div class="visually-hidden">Hide navigation sidebar</div>
-</label>
-<label class="overlay toc-overlay" for="__toc">
-  <div class="visually-hidden">Hide table of contents sidebar</div>
-</label>
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
 
 <a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
 
@@ -160,8 +156,7 @@
   <header class="mobile-header">
     <div class="header-left">
       <label class="nav-overlay-icon" for="__navigation">
-        <div class="visually-hidden">Toggle site navigation sidebar</div>
-        <i class="icon"><svg><use href="#svg-menu"></use></svg></i>
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
       </label>
     </div>
     <div class="header-center">
@@ -169,8 +164,7 @@
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
-        <button class="theme-toggle">
-          <div class="visually-hidden">Toggle Light / Dark / Auto color theme</div>
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
           <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
           <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
           <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
@@ -178,8 +172,7 @@
         </button>
       </div>
       <label class="toc-overlay-icon toc-header-icon no-toc" for="__toc">
-        <div class="visually-hidden">Toggle table of contents sidebar</div>
-        <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
       </label>
     </div>
   </header>
@@ -295,8 +288,7 @@
         </a>
         <div class="content-icon-container">
           <div class="theme-toggle-container theme-toggle-content">
-            <button class="theme-toggle">
-              <div class="visually-hidden">Toggle Light / Dark / Auto color theme</div>
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
               <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
               <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
               <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
@@ -304,8 +296,7 @@
             </button>
           </div>
           <label class="toc-overlay-icon toc-content-icon no-toc" for="__toc">
-            <div class="visually-hidden">Toggle table of contents sidebar</div>
-            <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
           </label>
         </div>
         <article role="main" id="furo-main-content">
@@ -340,6 +331,81 @@
     <span class="n">all_to_all_tensor_list</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">depth_to_normal</span><span class="p">,</span> <span class="n">get_projection_matrix</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_compute_view_dirs_packed</span><span class="p">(</span>
+    <span class="n">means</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., N, 3]</span>
+    <span class="n">campos</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [..., C, 3]</span>
+    <span class="n">batch_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [nnz]</span>
+    <span class="n">camera_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [nnz]</span>
+    <span class="n">gaussian_ids</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [nnz]</span>
+    <span class="n">indptr</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>  <span class="c1"># [B*C+1]</span>
+    <span class="n">B</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">C</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute view directions for packed Gaussian-camera pairs.</span>
+
+<span class="sd">    This function computes the view directions (means - campos) for each</span>
+<span class="sd">    Gaussian-camera pair in the packed format. It automatically selects between</span>
+<span class="sd">    a simple vectorized approach or an optimized loop-based approach based on</span>
+<span class="sd">    the data size and whether campos requires gradients.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        means: The 3D centers of the Gaussians. [..., N, 3]</span>
+<span class="sd">        campos: Camera positions in world coordinates [..., C, 3]</span>
+<span class="sd">        batch_ids: The batch indices of the projected Gaussians. Int32 tensor of shape [nnz].</span>
+<span class="sd">        camera_ids: The camera indices of the projected Gaussians. Int32 tensor of shape [nnz].</span>
+<span class="sd">        gaussian_ids: The column indices of the projected Gaussians. Int32 tensor of shape [nnz].</span>
+<span class="sd">        indptr: CSR-style index pointer into gaussian_ids for batch-camera pairs. Int32 tensor of shape [B*C+1].</span>
+<span class="sd">        B: Number of batches</span>
+<span class="sd">        C: Number of cameras</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        dirs: View directions [nnz, 3]</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">N</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
+    <span class="n">nnz</span> <span class="o">=</span> <span class="n">batch_ids</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">device</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">device</span>
+    <span class="n">means_flat</span> <span class="o">=</span> <span class="n">means</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
+    <span class="n">campos_flat</span> <span class="o">=</span> <span class="n">campos</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">B</span> <span class="o">*</span> <span class="n">C</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="c1"># Single batch-camera pair. No indexed lookup for campos is needed.</span>
+        <span class="n">dirs</span> <span class="o">=</span> <span class="n">means_flat</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="n">gaussian_ids</span><span class="p">]</span> <span class="o">-</span> <span class="n">campos_flat</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>  <span class="c1"># [nnz, 3]</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">avg_means_per_camera</span> <span class="o">=</span> <span class="n">nnz</span> <span class="o">/</span> <span class="p">(</span><span class="n">B</span> <span class="o">*</span> <span class="n">C</span><span class="p">)</span>
+        <span class="n">split_batch_camera_ops</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">avg_means_per_camera</span> <span class="o">&gt;</span> <span class="mi">10000</span>
+            <span class="ow">and</span> <span class="n">campos_flat</span><span class="o">.</span><span class="n">is_cuda</span>
+            <span class="ow">and</span> <span class="n">campos_flat</span><span class="o">.</span><span class="n">requires_grad</span>
+        <span class="p">)</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">split_batch_camera_ops</span><span class="p">:</span>
+            <span class="c1"># Simple vectorized indexing for campos.</span>
+            <span class="n">dirs</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">means_flat</span><span class="p">[</span><span class="n">batch_ids</span><span class="p">,</span> <span class="n">gaussian_ids</span><span class="p">]</span> <span class="o">-</span> <span class="n">campos_flat</span><span class="p">[</span><span class="n">batch_ids</span><span class="p">,</span> <span class="n">camera_ids</span><span class="p">]</span>
+            <span class="p">)</span>  <span class="c1"># [nnz, 3]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># For large N with pose optimization: split into B*C separate operations</span>
+            <span class="c1"># to avoid many-to-one indexing of campos in backward pass. This speeds up the</span>
+            <span class="c1"># backwards pass and is more impactful when GPU occupancy is high.</span>
+            <span class="n">dirs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">nnz</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">means_flat</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+            <span class="n">indptr_cpu</span> <span class="o">=</span> <span class="n">indptr</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span>
+            <span class="k">for</span> <span class="n">b_idx</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">B</span><span class="p">):</span>
+                <span class="k">for</span> <span class="n">c_idx</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">C</span><span class="p">):</span>
+                    <span class="n">bc_idx</span> <span class="o">=</span> <span class="n">b_idx</span> <span class="o">*</span> <span class="n">C</span> <span class="o">+</span> <span class="n">c_idx</span>
+                    <span class="n">start_idx</span> <span class="o">=</span> <span class="n">indptr_cpu</span><span class="p">[</span><span class="n">bc_idx</span><span class="p">]</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
+                    <span class="n">end_idx</span> <span class="o">=</span> <span class="n">indptr_cpu</span><span class="p">[</span><span class="n">bc_idx</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
+                    <span class="k">if</span> <span class="n">start_idx</span> <span class="o">==</span> <span class="n">end_idx</span><span class="p">:</span>
+                        <span class="k">continue</span>
+
+                    <span class="c1"># Get the gaussian indices for this batch-camera pair and compute dirs</span>
+                    <span class="n">gids</span> <span class="o">=</span> <span class="n">gaussian_ids</span><span class="p">[</span><span class="n">start_idx</span><span class="p">:</span><span class="n">end_idx</span><span class="p">]</span>
+                    <span class="n">dirs</span><span class="p">[</span><span class="n">start_idx</span><span class="p">:</span><span class="n">end_idx</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+                        <span class="n">means_flat</span><span class="p">[</span><span class="n">b_idx</span><span class="p">,</span> <span class="n">gids</span><span class="p">]</span> <span class="o">-</span> <span class="n">campos_flat</span><span class="p">[</span><span class="n">b_idx</span><span class="p">,</span> <span class="n">c_idx</span><span class="p">]</span>
+                    <span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">dirs</span>
 
 
 <div class="viewcode-block" id="rasterization">
@@ -746,6 +812,7 @@
             <span class="n">batch_ids</span><span class="p">,</span>
             <span class="n">camera_ids</span><span class="p">,</span>
             <span class="n">gaussian_ids</span><span class="p">,</span>
+            <span class="n">indptr</span><span class="p">,</span>
             <span class="n">radii</span><span class="p">,</span>
             <span class="n">means2d</span><span class="p">,</span>
             <span class="n">depths</span><span class="p">,</span>
@@ -760,7 +827,7 @@
         <span class="n">opacities</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">broadcast_to</span><span class="p">(</span>
             <span class="n">opacities</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:],</span> <span class="n">batch_dims</span> <span class="o">+</span> <span class="p">(</span><span class="n">C</span><span class="p">,</span> <span class="n">N</span><span class="p">)</span>
         <span class="p">)</span>  <span class="c1"># [..., C, N]</span>
-        <span class="n">batch_ids</span><span class="p">,</span> <span class="n">camera_ids</span><span class="p">,</span> <span class="n">gaussian_ids</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
+        <span class="n">indptr</span><span class="p">,</span> <span class="n">batch_ids</span><span class="p">,</span> <span class="n">camera_ids</span><span class="p">,</span> <span class="n">gaussian_ids</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
         <span class="n">image_ids</span> <span class="o">=</span> <span class="kc">None</span>
 
     <span class="k">if</span> <span class="n">compensations</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
@@ -807,10 +874,17 @@
             <span class="n">campos_rs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">inverse</span><span class="p">(</span><span class="n">viewmats_rs</span><span class="p">)[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
             <span class="n">campos</span> <span class="o">=</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">campos</span> <span class="o">+</span> <span class="n">campos_rs</span><span class="p">)</span>  <span class="c1"># [..., C, 3]</span>
         <span class="k">if</span> <span class="n">packed</span><span class="p">:</span>
-            <span class="n">dirs</span> <span class="o">=</span> <span class="p">(</span>
-                <span class="n">means</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="mi">3</span><span class="p">)[</span><span class="n">batch_ids</span><span class="p">,</span> <span class="n">gaussian_ids</span><span class="p">]</span>
-                <span class="o">-</span> <span class="n">campos</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="mi">3</span><span class="p">)[</span><span class="n">batch_ids</span><span class="p">,</span> <span class="n">camera_ids</span><span class="p">]</span>
+            <span class="n">dirs</span> <span class="o">=</span> <span class="n">_compute_view_dirs_packed</span><span class="p">(</span>
+                <span class="n">means</span><span class="p">,</span>
+                <span class="n">campos</span><span class="p">,</span>
+                <span class="n">batch_ids</span><span class="p">,</span>
+                <span class="n">camera_ids</span><span class="p">,</span>
+                <span class="n">gaussian_ids</span><span class="p">,</span>
+                <span class="n">indptr</span><span class="p">,</span>
+                <span class="n">B</span><span class="p">,</span>
+                <span class="n">C</span><span class="p">,</span>
             <span class="p">)</span>  <span class="c1"># [nnz, 3]</span>
+
             <span class="n">masks</span> <span class="o">=</span> <span class="p">(</span><span class="n">radii</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>  <span class="c1"># [nnz]</span>
             <span class="k">if</span> <span class="n">colors</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="n">num_batch_dims</span> <span class="o">+</span> <span class="mi">3</span><span class="p">:</span>
                 <span class="c1"># Turn [..., N, K, 3] into [nnz, 3]</span>
