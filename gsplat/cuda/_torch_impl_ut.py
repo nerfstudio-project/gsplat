@@ -315,6 +315,7 @@ def _fully_fused_projection_with_ut(
     ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
+    global_z_order: bool = True,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Optional[Tensor]]:
     """PyTorch reference implementation of fully_fused_projection_with_ut().
 
@@ -546,7 +547,12 @@ def _fully_fused_projection_with_ut(
 
     means2d = torch.where(valid_gaussian[..., None], mean_2d, torch.zeros_like(mean_2d))
 
-    depths = torch.where(valid_gaussian, center_z, torch.zeros_like(center_z))
+    if global_z_order:
+        depth = center_z
+    else:
+        depth = torch.norm(means_cam, dim=-1)  # [B, C, N]
+
+    depths = torch.where(valid_gaussian, depth, torch.zeros_like(depth))
 
     # Extract conics as [xx, xy, yy] (symmetric representation)
     conics_computed = torch.stack(

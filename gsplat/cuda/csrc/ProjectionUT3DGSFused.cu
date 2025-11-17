@@ -54,6 +54,7 @@ __global__ void projection_ut_3dgs_fused_kernel(
     const float far_plane,
     const float radius_clip,
     const CameraModelType camera_model_type,
+    const bool global_z_order,
     // uncented transform
     const UnscentedTransformParameters ut_params,    
     const ShutterType rs_type,
@@ -101,6 +102,7 @@ __global__ void projection_ut_3dgs_fused_kernel(
     // Interpolate to *center* shutter pose as single per-Gaussian camera pose
     const auto shutter_pose = interpolate_shutter_pose(0.5f, rs_params);
     const vec3 mean_c = glm::rotate(shutter_pose.q, mean) + shutter_pose.t;
+
     if (mean_c.z < near_plane || mean_c.z > far_plane) {
         radii[idx * 2] = 0;
         radii[idx * 2 + 1] = 0;
@@ -225,12 +227,15 @@ __global__ void projection_ut_3dgs_fused_kernel(
         return;
     }
 
+    // Depth for sorting: z-depth (global_z_order=true) or Euclidean distance (global_z_order=false)
+    float depth = global_z_order ? mean_c.z : glm::length(mean_c);
+
     // write to outputs
     radii[idx * 2] = (int32_t)radius_x;
     radii[idx * 2 + 1] = (int32_t)radius_y;
     means2d[idx * 2] = mean2d.x;
     means2d[idx * 2 + 1] = mean2d.y;
-    depths[idx] = mean_c.z;
+    depths[idx] = depth;
     conics[idx * 3] = covar2d_inv[0][0];
     conics[idx * 3 + 1] = covar2d_inv[0][1];
     conics[idx * 3 + 2] = covar2d_inv[1][1];
@@ -255,6 +260,7 @@ void launch_projection_ut_3dgs_fused_kernel(
     const float far_plane,
     const float radius_clip,
     const CameraModelType camera_model,
+    const bool global_z_order,
     // uncented transform
     const UnscentedTransformParameters ut_params,
     ShutterType rs_type,
@@ -305,6 +311,7 @@ void launch_projection_ut_3dgs_fused_kernel(
             far_plane,
             radius_clip,
             camera_model,
+            global_z_order,
             // uncented transform
             ut_params,
             rs_type,
