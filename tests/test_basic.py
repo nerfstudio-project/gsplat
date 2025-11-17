@@ -488,11 +488,13 @@ def test_fully_fused_projection_packed(
     "rolling_shutter",
     [RollingShutterType.GLOBAL, RollingShutterType.ROLLING_TOP_TO_BOTTOM],
 )
+@pytest.mark.parametrize("global_z_order", [True, False])
 def test_fully_fused_projection_ut(
     test_data,
     batch_dims: Tuple[int, ...],
     require_all_valid: bool,
     rolling_shutter: RollingShutterType,
+    global_z_order: bool,
 ):
     """Unified test for UT projection with CUDA vs PyTorch reference.
 
@@ -557,6 +559,7 @@ def test_fully_fused_projection_ut(
         "ut_params": ut_params,
         "rolling_shutter": rolling_shutter,
         "viewmats_rs": viewmats_rs,
+        "global_z_order": global_z_order,
     }
 
     # Run CUDA implementation

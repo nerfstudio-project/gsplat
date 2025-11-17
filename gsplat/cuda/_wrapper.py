@@ -1325,6 +1325,7 @@ def fully_fused_projection_with_ut(
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
+    global_z_order: bool = True,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Projects Gaussians to 2D using Unscented Transform (UT).
 
@@ -1333,6 +1334,13 @@ def fully_fused_projection_with_ut(
 
     .. warning::
         This function is not differentiable to any input.
+
+    Args:
+        global_z_order: Defines how Gaussians are sorted for depth ordering. If True (default),
+            Gaussians are sorted by their z-coordinate in camera space. If False, they are sorted
+            by their Euclidean distance from the camera origin. The z-coordinate sorting is typically
+            faster and sufficient for most cases, while Euclidean distance can be useful for scenes
+            with wide field-of-view or non-standard camera models. Default: True.
     """
     batch_dims = means.shape[:-2]
     N = means.shape[-2]
@@ -1375,6 +1383,7 @@ def fully_fused_projection_with_ut(
         radius_clip,
         calc_compensations,
         camera_model_type,
+        global_z_order,
         ut_params.to_cpp(),
         rolling_shutter.to_cpp(),
         radial_coeffs.contiguous() if radial_coeffs is not None else None,

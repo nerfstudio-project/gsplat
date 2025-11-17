@@ -282,6 +282,7 @@ void launch_projection_ut_3dgs_fused_kernel(
     const float far_plane,
     const float radius_clip,
     const CameraModelType camera_model,
+    const bool global_z_order,
     // uncented transform
     const UnscentedTransformParameters ut_params,
     ShutterType rs_type,

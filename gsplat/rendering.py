@@ -150,6 +150,7 @@ def rasterization(
     covars: Optional[Tensor] = None,
     with_ut: bool = False,
     with_eval3d: bool = False,
+    global_z_order: bool = True,
     # distortion
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
@@ -304,6 +305,10 @@ def rasterization(
         with_ut: Whether to use Unscented Transform (UT) for projection. Default is False.
         with_eval3d: Whether to calculate Gaussian response in 3D world space, instead
             of 2D image space. Default is False.
+        global_z_order: Whether to use z-depth (True) or Euclidean distance (False) for
+            sorting Gaussians during rasterization. When True, Gaussians are sorted by their
+            z-coordinate in camera space. When False, they are sorted by their Euclidean
+            distance from the camera origin. Default is True.
         radial_coeffs: Opencv pinhole/fisheye radial distortion coefficients. Default is None.
             For pinhole camera, the shape should be [..., C, 6]. For fisheye camera, the shape
             should be [..., C, 4].
@@ -379,6 +384,7 @@ def rasterization(
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
     assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
+    assert global_z_order or with_ut, "global_z_order can be false only if with_ut=True"
 
     def reshape_view(C: int, world_view: torch.Tensor, N_world: list) -> torch.Tensor:
         view_list = list(
@@ -500,6 +506,7 @@ def rasterization(
             ftheta_coeffs=ftheta_coeffs,
             rolling_shutter=rolling_shutter,
             viewmats_rs=viewmats_rs,
+            global_z_order=global_z_order,
         )
 
     else:
