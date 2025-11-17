@@ -925,6 +925,7 @@ projection_ut_3dgs_fused(
     const float radius_clip,
     const bool calc_compensations,
     const CameraModelType camera_model,
+    const bool global_z_order,
     // uncented transform
     const UnscentedTransformParameters ut_params,
     ShutterType rs_type,
@@ -1000,6 +1001,7 @@ projection_ut_3dgs_fused(
         far_plane,
         radius_clip,
         camera_model,
+        global_z_order,
         // uncented transform
         ut_params,
         rs_type,
