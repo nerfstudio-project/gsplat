@@ -658,6 +658,9 @@ def rasterization(
                 output_splits=collected_splits,
             )
 
+            # image_ids must be updated after sparse_all_to_all, which is used in isect_tiles()
+            image_ids = camera_ids
+
             # Silently change C from global #Cameras to local #Cameras.
             C = C_world[world_rank]
 
