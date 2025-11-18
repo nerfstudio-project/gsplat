@@ -1363,6 +1363,7 @@ def rasterization_2dgs(
     near_plane: float = 0.01,
     far_plane: float = 1e10,
     radius_clip: float = 0.0,
+    dual_visible: bool = True,
     eps2d: float = 0.3,
     sh_degree: Optional[int] = None,
     packed: bool = False,
@@ -1396,6 +1397,7 @@ def rasterization_2dgs(
         radius_clip: Gaussians with 2D radius smaller or equal than this value will be
             skipped. This is extremely helpful for speeding up large scale scenes.
             Default is 0.0.
+        dual_visible: Whether the 2dgs should be visible from both the front and the back. Default: True.
         eps2d: An epsilon added to the egienvalues of projected 2D covariance matrices.
             This will prevents the projected GS to be too small. For example eps2d=0.3
             leads to minimal 3 pixel unit. Default is 0.3.
@@ -1524,19 +1526,20 @@ def rasterization_2dgs(
 
     # Compute Ray-Splat intersection transformation.
     proj_results = fully_fused_projection_2dgs(
-        means,
-        quats,
-        scales,
-        viewmats,
-        Ks,
-        width,
-        height,
-        eps2d,
-        near_plane,
-        far_plane,
-        radius_clip,
-        packed,
-        sparse_grad,
+        means=means,
+        quats=quats,
+        scales=scales,
+        viewmats=viewmats,
+        Ks=Ks,
+        width=width,
+        height=height,
+        eps2d=eps2d,
+        near_plane=near_plane,
+        far_plane=far_plane,
+        radius_clip=radius_clip,
+        dual_visible=dual_visible,
+        packed=packed,
+        sparse_grad=sparse_grad,
     )
 
     if packed:
