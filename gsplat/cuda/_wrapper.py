@@ -596,7 +596,9 @@ def rasterize_to_pixels(
         assert colors.shape == image_dims + (N, channels), colors.shape
         assert opacities.shape == image_dims + (N,), opacities.shape
     if backgrounds is not None:
-        assert backgrounds.shape == image_dims + (channels,), backgrounds.shape
+        assert backgrounds.shape == (image_dims or (1,)) + (
+            channels,
+        ), backgrounds.shape
         backgrounds = backgrounds.contiguous()
     if masks is not None:
         assert masks.shape == isect_offsets.shape, masks.shape
@@ -2284,7 +2286,9 @@ def rasterize_to_pixels_2dgs(
         assert colors.shape[:-2] == image_dims, colors.shape
         assert opacities.shape == image_dims + (N,), opacities.shape
     if backgrounds is not None:
-        assert backgrounds.shape == image_dims + (channels,), backgrounds.shape
+        assert backgrounds.shape == (image_dims or (1,)) + (
+            channels,
+        ), backgrounds.shape
         backgrounds = backgrounds.contiguous()
 
     # Pad the channels to the nearest supported number if necessary
