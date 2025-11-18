@@ -439,7 +439,17 @@ class Runner:
                 self.app_module = DDP(self.app_module)
 
         self.bil_grid_optimizers = []
-        if cfg.use_bilateral_grid:
+        if cfg.use_bilateral_grid or cfg.use_fused_bilagrid:
+            if cfg.use_fused_bilagrid:
+                cfg.use_bilateral_grid = True
+                from fused_bilagrid import (
+                    BilateralGrid,
+                )
+            else:
+                cfg.use_bilateral_grid = True
+                from lib_bilagrid import (
+                    BilateralGrid,
+                )
             self.bil_grids = BilateralGrid(
                 len(self.trainset),
                 grid_X=cfg.bilateral_grid_shape[0],
@@ -654,7 +664,17 @@ class Runner:
             else:
                 colors, depths = renders, None
 
-            if cfg.use_bilateral_grid:
+            if cfg.use_bilateral_grid or cfg.use_fused_bilagrid:
+                if cfg.use_fused_bilagrid:
+                    cfg.use_bilateral_grid = True
+                    from fused_bilagrid import (
+                        slice,
+                    )
+                else:
+                    cfg.use_bilateral_grid = True
+                    from lib_bilagrid import (
+                        slice,
+                    )
                 grid_y, grid_x = torch.meshgrid(
                     (torch.arange(height, device=self.device) + 0.5) / height,
                     (torch.arange(width, device=self.device) + 0.5) / width,
@@ -705,7 +725,17 @@ class Runner:
                 disp_gt = 1.0 / depths_gt  # [1, M]
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
-            if cfg.use_bilateral_grid:
+            if cfg.use_bilateral_grid or cfg.use_fused_bilagrid:
+                if cfg.use_fused_bilagrid:
+                    cfg.use_bilateral_grid = True
+                    from fused_bilagrid import (
+                        total_variation_loss,
+                    )
+                else:
+                    cfg.use_bilateral_grid = True
+                    from lib_bilagrid import (
+                        total_variation_loss,
+                    )
                 tvloss = 10 * total_variation_loss(self.bil_grids.grids)
                 loss += tvloss
 
@@ -956,7 +986,17 @@ class Runner:
                 metrics["psnr"].append(self.psnr(colors_p, pixels_p))
                 metrics["ssim"].append(self.ssim(colors_p, pixels_p))
                 metrics["lpips"].append(self.lpips(colors_p, pixels_p))
-                if cfg.use_bilateral_grid:
+                if cfg.use_bilateral_grid or cfg.use_fused_bilagrid:
+                    if cfg.use_fused_bilagrid:
+                        cfg.use_bilateral_grid = True
+                        from fused_bilagrid import (
+                            color_correct,
+                        )
+                    else:
+                        cfg.use_bilateral_grid = True
+                        from lib_bilagrid import (
+                            color_correct,
+                        )
                     cc_colors = color_correct(colors, pixels)
                     cc_colors_p = cc_colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
                     metrics["cc_psnr"].append(self.psnr(cc_colors_p, pixels_p))
