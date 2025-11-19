@@ -1,23 +1,22 @@
-SCENE_DIR="../data/360_v2"
-# eval all 9 scenes for benchmarking
-SCENE_LIST="garden bicycle stump bonsai counter kitchen room treehill flowers"
+SCENE_DIR="data/db"
+# eval all 2 scenes for benchmarking
+SCENE_LIST="playroom drjohnson"
 
 # # 0.36M GSs
-# RESULT_DIR="results/benchmark_mcmc_0_36M_png_compression"
+# RESULT_DIR="results/benchmark_db_mcmc_0_36M_png_compression"
 # CAP_MAX=360000
 
 # # 0.49M GSs
-# RESULT_DIR="results/benchmark_mcmc_0_49M_png_compression"
+# RESULT_DIR="results/benchmark_db_mcmc_0_49M_png_compression"
 # CAP_MAX=490000
 
 # 1M GSs
-RESULT_DIR="results/benchmark_mcmc_1M_png_compression"
+RESULT_DIR="results/benchmark_db_mcmc_1M_png_compression"
 CAP_MAX=1000000
 
 # # 4M GSs
-# RESULT_DIR="results/benchmark_mcmc_4M_png_compression"
+# RESULT_DIR="results/benchmark_db_mcmc_4M_png_compression"
 # CAP_MAX=4000000
-
 
 for SCENE in $SCENE_LIST;
 do
@@ -26,11 +25,12 @@ do
     # train without eval
     CUDA_VISIBLE_DEVICES=0 python simple_trainer.py mcmc --eval_steps -1 --disable_viewer --data_factor -1 \
         --strategy.cap-max $CAP_MAX \
+        --opacity_reg 0.001 \
         --data_dir $SCENE_DIR/$SCENE/ \
         --result_dir $RESULT_DIR/$SCENE/
 
     # eval: use vgg for lpips to align with other benchmarks
-    CUDA_VISIBLE_DEVICES=0 python simple_trainer.py mcmc --disable_viewer --data_factor -1\
+    CUDA_VISIBLE_DEVICES=0 python simple_trainer.py mcmc --disable_viewer --data_factor -1 \
         --strategy.cap-max $CAP_MAX \
         --data_dir $SCENE_DIR/$SCENE/ \
         --result_dir $RESULT_DIR/$SCENE/ \
@@ -43,7 +43,7 @@ done
 if command -v zip &> /dev/null
 then
     echo "Zipping results"
-    python benchmarks/compression/summarize_stats.py --results_dir $RESULT_DIR --scenes $SCENE_LIST
+    python benchmarks/compression/summarize_stats.py --results_dir $RESULT_DIR --scenes $SCENE_LIST --scenes $SCENE_LIST
 else
     echo "zip command not found, skipping zipping"
 fi
