@@ -69,19 +69,22 @@ def get_extensions():
 
     nvcc_flags = os.getenv("NVCC_FLAGS", "")
     nvcc_flags = [] if nvcc_flags == "" else nvcc_flags.split(" ")
-    nvcc_flags += ["-O3", "--use_fast_math", "-std=c++17"]
+    nvcc_flags += ["-O3", "-std=c++17"]
     if LINE_INFO:
         nvcc_flags += ["-lineinfo"]
+
     if torch.version.hip:
+        nvcc_flags.append("-munsafe-fp-atomics")
         # USE_ROCM was added to later versions of PyTorch.
         # Define here to support older PyTorch versions as well:
-        define_macros += [("USE_ROCM", None)]
-        undef_macros += ["__HIP_NO_HALF_CONVERSIONS__"]
+        define_macros.append(("USE_ROCM", None))
+        undef_macros.append("__HIP_NO_HALF_CONVERSIONS__")
+        # Enable warp sync builtins such as `cooperative_groups::thread_block_tile<32>.any()`.
+        define_macros.append(("HIP_ENABLE_WARP_SYNC_BUILTINS", None))
     else:
-        nvcc_flags += ["--expt-relaxed-constexpr"]
+        nvcc_flags += ["--use_fast_math", "--expt-relaxed-constexpr", "-diag-suppress", "20012,186"]
 
     # GLM/Torch has spammy and very annoyingly verbose warnings that this suppresses
-    nvcc_flags += ["-diag-suppress", "20012,186"]
     extra_compile_args["nvcc"] = nvcc_flags
     if sys.platform == "win32":
         extra_compile_args["nvcc"] += [
@@ -90,8 +93,10 @@ def get_extensions():
         ]
 
     current_dir = pathlib.Path(__file__).parent.resolve()
-    glm_path = osp.join(current_dir, "gsplat", "cuda", "csrc", "third_party", "glm")
-    include_dirs = [glm_path, osp.join(current_dir, "gsplat", "cuda", "include")]
+    glm_path = osp.join(current_dir, "third_party", "glm")
+    nvcc_flags += [f"-I{glm_path}"]
+
+    include_dirs = [osp.join(current_dir, "gsplat", "cuda", "include")]
 
     extension = CUDAExtension(
         "gsplat.csrc",

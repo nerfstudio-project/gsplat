@@ -11,6 +11,14 @@
 #include "Intersect.h"
 #include "Utils.cuh"
 
+#if defined(__HIP__)
+template <typename T>
+using DB = hipcub::DoubleBuffer<T>;
+#else
+template <typename T>
+using DB = cub::DoubleBuffer<T>;
+#endif
+
 namespace gsplat {
 
 namespace cg = cooperative_groups;
@@ -307,10 +315,10 @@ void radix_sort_double_buffer(
     }
 
     // Create a set of DoubleBuffers to wrap pairs of device pointers
-    cub::DoubleBuffer<int64_t> d_keys(
+    DB<int64_t> d_keys(
         isect_ids.data_ptr<int64_t>(), isect_ids_sorted.data_ptr<int64_t>()
     );
-    cub::DoubleBuffer<int32_t> d_values(
+    DB<int32_t> d_values(
         flatten_ids.data_ptr<int32_t>(), flatten_ids_sorted.data_ptr<int32_t>()
     );
     CUB_WRAPPER(
@@ -356,10 +364,10 @@ void segmented_radix_sort_double_buffer(
     }
 
     // Create a set of DoubleBuffers to wrap pairs of device pointers
-    cub::DoubleBuffer<int64_t> d_keys(
+    DB<int64_t> d_keys(
         isect_ids.data_ptr<int64_t>(), isect_ids_sorted.data_ptr<int64_t>()
     );
-    cub::DoubleBuffer<int32_t> d_values(
+    DB<int32_t> d_values(
         flatten_ids.data_ptr<int32_t>(), flatten_ids_sorted.data_ptr<int32_t>()
     );
     // image dimensions are contiguous in the isect_ids, 

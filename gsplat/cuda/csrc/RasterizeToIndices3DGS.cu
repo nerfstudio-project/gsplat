@@ -214,7 +214,7 @@ void launch_rasterize_to_indices_3dgs_kernel(
     // channels into the kernel functions and avoid necessary global memory
     // writes. This requires moving the channel padding from python to C side.
     if (cudaFuncSetAttribute(
-            rasterize_to_indices_3dgs_kernel<float>,
+            (const void*)rasterize_to_indices_3dgs_kernel<float>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
             shmem_size
         ) != cudaSuccess) {
