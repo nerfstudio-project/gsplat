@@ -82,12 +82,14 @@ void launch_projection_ewa_3dgs_fused_bwd_kernel(
     const at::Tensor v_conics,                      // [..., C, N, 3]
     const at::optional<at::Tensor> v_compensations, // [..., C, N] optional
     const bool viewmats_requires_grad,
+    const bool Ks_requires_grad,
     // outputs
     at::Tensor v_means,   // [..., N, 3]
     at::Tensor v_covars,  // [..., N, 3, 3]
     at::Tensor v_quats,   // [..., N, 4]
     at::Tensor v_scales,  // [..., N, 3]
-    at::Tensor v_viewmats // [..., C, 4, 4]
+    at::Tensor v_viewmats, // [..., C, 4, 4]
+    at::Tensor v_Ks      // [..., C, 3, 3]
 );
 
 void launch_projection_ewa_3dgs_packed_fwd_kernel(
@@ -189,11 +191,13 @@ void launch_projection_2dgs_fused_bwd_kernel(
     const at::Tensor v_normals,        // [..., C, N, 3]
     const at::Tensor v_ray_transforms, // [..., C, N, 3, 3]
     const bool viewmats_requires_grad,
+    const bool Ks_requires_grad,
     // outputs
     at::Tensor v_means,   // [..., N, 3]
     at::Tensor v_quats,   // [..., N, 4]
     at::Tensor v_scales,  // [..., N, 3]
-    at::Tensor v_viewmats // [..., C, 4, 4]
+    at::Tensor v_viewmats, // [..., C, 4, 4]
+    at::Tensor v_Ks      // [..., C, 3, 3]
 );
 
 void launch_projection_2dgs_packed_fwd_kernel(
@@ -246,7 +250,8 @@ void launch_projection_2dgs_packed_bwd_kernel(
     at::Tensor v_means,                 // [..., N, 3] or [nnz, 3]
     at::Tensor v_quats,                 // [..., N, 4] or [nnz, 4]
     at::Tensor v_scales,                // [..., N, 3] or [nnz, 3]
-    at::optional<at::Tensor> v_viewmats // [..., C, 4, 4] Optional
+    at::optional<at::Tensor> v_viewmats, // [..., C, 4, 4] Optional
+    at::optional<at::Tensor> v_Ks      // [..., C, 3, 3] Optional
 );
 
 void launch_projection_ut_3dgs_fused_kernel(

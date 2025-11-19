@@ -23,7 +23,11 @@ inline __device__ void compute_ray_transforms_aabb_vjp(
     vec2 &v_scale,
     vec3 &v_mean,
     mat3 &v_R,
-    vec3 &v_t
+    vec3 &v_t,
+    float &v_fx,
+    float &v_fy,
+    float &v_cx,
+    float &v_cy
 ) {
     if (v_means2d[0] != 0 || v_means2d[1] != 0) {
         const float distance = ray_transforms[6] * ray_transforms[6] +
@@ -81,12 +85,25 @@ inline __device__ void compute_ray_transforms_aabb_vjp(
 
     v_R += glm::outerProduct(v_M[2], mean_w);
 
-    mat3 RS = quat_to_rotmat(quat) * 
+    mat3 RS = R * 
         mat3(scale[0], 0.0, 0.0, 0.0, scale[1], 0.0, 0.0, 0.0, 1.0);
     mat3 v_RS_cam = mat3(v_M[0], v_M[1], v_normals * multiplier);
     
     v_R += v_RS_cam * glm::transpose(RS);
     v_t += v_M[2];
+   
+    // From forward pass: M = ray_transforms = (WH)^T * K^T
+    // where W is the camera rotation matrix R (not full projection like in paper)
+    // and WH represents Gaussian geometry in camera coordinates
+    // So ∂M/∂K^T = (WH)^T  
+    // Therefore ∂L/∂K^T = (∂L/∂M)^T * (WH)^T = _v_ray_transforms^T * (WH)^T
+    mat3 RS_camera = W * RS;
+    mat3 WH = mat3(RS_camera[0], RS_camera[1], mean_c);
+    mat3 v_K_T = glm::transpose(WH * _v_ray_transforms);
+    v_fx += v_K_T[0][0];
+    v_fy += v_K_T[1][1]; 
+    v_cx += v_K_T[2][0];
+    v_cy += v_K_T[2][1];
 }
 
 } // namespace gsplat
