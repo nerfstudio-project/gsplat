@@ -32,7 +32,35 @@ def get_ext():
 def get_extensions():
     import torch
     from torch.__config__ import parallel_info
-    from torch.utils.cpp_extension import CUDAExtension
+    from torch.utils.cpp_extension import CppExtension, CUDAExtension
+
+    if torch.backends.mps.is_available():
+        extensions_dir = osp.join("gsplat", "mps")
+        sources = glob.glob(osp.join(extensions_dir, "csrc", "*.mm")) + glob.glob(
+            osp.join(extensions_dir, "csrc", "*.cpp")
+        )
+        sources += [osp.join(extensions_dir, "csrc", "ext.cpp")]
+
+        extra_compile_args = {"cxx": ["-O3", "-std=c++17"]}
+        extra_link_args = [] if WITH_SYMBOLS else ["-s"]
+
+        # Compile for mac arm64
+        if sys.platform == "darwin" and platform.machine() == "arm64":
+            extra_compile_args["cxx"] += ["-arch", "arm64"]
+            extra_link_args += ["-arch", "arm64"]
+
+        current_dir = pathlib.Path(__file__).parent.resolve()
+        # glm_path = osp.join(current_dir, "gsplat", "mps", "csrc", "third_party", "glm")
+        include_dirs = []
+
+        extension = CppExtension(
+            "gsplat.csrc",
+            sources,
+            include_dirs=include_dirs,
+            extra_compile_args=extra_compile_args,
+            extra_link_args=extra_link_args,
+        )
+        return [extension]
 
     extensions_dir = osp.join("gsplat", "cuda")
     sources = glob.glob(osp.join(extensions_dir, "csrc", "*.cu")) + glob.glob(

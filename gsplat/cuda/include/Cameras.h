@@ -51,8 +51,10 @@ struct FThetaCameraDistortionParameters {
         ANGLE_TO_PIXELDIST,
     };
     PolynomialType reference_poly;
-    std::array<float, PolynomialDegree> pixeldist_to_angle_poly; // backward polynomial
-    std::array<float, PolynomialDegree> angle_to_pixeldist_poly; // forward polynomial
+    std::array<float, PolynomialDegree>
+        pixeldist_to_angle_poly; // backward polynomial
+    std::array<float, PolynomialDegree>
+        angle_to_pixeldist_poly; // forward polynomial
     float max_angle;
     std::array<float, 3> linear_cde;
 };
