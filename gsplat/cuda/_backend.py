@@ -28,10 +28,13 @@ DEBUG = os.getenv("DEBUG", "0") == "1"
 VERBOSE = os.getenv("VERBOSE", "0") == "1"
 MAX_JOBS = os.getenv("MAX_JOBS")
 USE_PRECOMPILED_HEADERS = os.getenv("USE_PRECOMPILED_HEADERS", "0") == "1"
+BUILD_CAMERA_WRAPPERS = os.getenv("BUILD_CAMERA_WRAPPERS", "1" if DEBUG else "0") == "1"
 need_to_unset_max_jobs = False
 if not MAX_JOBS:
     need_to_unset_max_jobs = True
     os.environ["MAX_JOBS"] = "10"
+
+
 
 # torch has bugs on precompiled headers before 2.2, see:
 # https://github.com/nerfstudio-project/gsplat/pull/583#issuecomment-2732597080
@@ -184,6 +187,13 @@ except ImportError:
             + list(glob.glob(os.path.join(PATH, "csrc/*.cpp")))
             + [os.path.join(PATH, "ext.cpp")]
         )
+
+        if BUILD_CAMERA_WRAPPERS:
+            extra_cuda_cflags += ["-DBUILD_CAMERA_WRAPPERS=1"]
+            extra_cflags += ["-DBUILD_CAMERA_WRAPPERS=1"]
+        else:
+            # Remove 'csrc/CameraWrappers.cu' from the sources list if it exists
+            sources = [s for s in sources if not s.endswith("csrc/CameraWrappers.cu")]
 
         # If JIT is interrupted it might leave a lock in the build directory.
         # We dont want it to exist in any case.

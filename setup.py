@@ -14,8 +14,9 @@ URL = "https://github.com/nerfstudio-project/gsplat"
 
 BUILD_NO_CUDA = os.getenv("BUILD_NO_CUDA", "0") == "1"
 WITH_SYMBOLS = os.getenv("WITH_SYMBOLS", "0") == "1"
-LINE_INFO = os.getenv("LINE_INFO", "0") == "1"
 MAX_JOBS = os.getenv("MAX_JOBS")
+DEBUG = os.getenv("DEBUG", "0") == "1"
+BUILD_CAMERA_WRAPPERS = os.getenv("BUILD_CAMERA_WRAPPERS", "1" if DEBUG else "0") == "1"
 need_to_unset_max_jobs = False
 if not MAX_JOBS:
     need_to_unset_max_jobs = True
@@ -38,15 +39,23 @@ def get_extensions():
     sources = glob.glob(osp.join(extensions_dir, "csrc", "*.cu")) + glob.glob(
         osp.join(extensions_dir, "csrc", "*.cpp")
     )
+
     sources += [osp.join(extensions_dir, "ext.cpp")]
 
     undef_macros = []
     define_macros = []
 
-    extra_compile_args = {"cxx": ["-O3"]}
+    extra_compile_args = {"cxx": ["-O3"]} if not DEBUG else {"cxx": ["-O0", "-g"]}
     if not os.name == "nt":  # Not on Windows:
         extra_compile_args["cxx"] += ["-Wno-sign-compare"]
     extra_link_args = [] if WITH_SYMBOLS else ["-s"]
+
+    # Remove 'csrc/CameraWrappers.cu' from the sources list if it exists
+    if BUILD_CAMERA_WRAPPERS:
+        extra_compile_args["cxx"] += ["-DBUILD_CAMERA_WRAPPERS=1"]
+    else:
+        sources = [s for s in sources if not s.endswith("csrc/CameraWrappers.cu")]
+
 
     if sys.platform == "win32":
         extra_compile_flags["cxx"] += ["/std:c++20"]
@@ -75,7 +84,7 @@ def get_extensions():
     nvcc_flags = os.getenv("NVCC_FLAGS", "")
     nvcc_flags = [] if nvcc_flags == "" else nvcc_flags.split(" ")
     nvcc_flags += ["-O3", "--use_fast_math", "-std=c++20"]
-    if LINE_INFO:
+    if DEBUG:
         nvcc_flags += ["-lineinfo"]
     if torch.version.hip:
         # USE_ROCM was added to later versions of PyTorch.
