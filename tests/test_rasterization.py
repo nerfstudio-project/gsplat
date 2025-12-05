@@ -12,6 +12,8 @@ from typing import Optional, Tuple
 import pytest
 import torch
 
+from gsplat.rendering import RenderMode
+
 device = torch.device("cuda:0")
 
 
@@ -44,7 +46,7 @@ device = torch.device("cuda:0")
 def test_rasterization(
     per_view_color: bool,
     sh_degree: Optional[int],
-    render_mode: str,
+    render_mode: RenderMode,
     packed: bool,
     batch_dims: Tuple[int, ...],
     with_eval3d: bool,
