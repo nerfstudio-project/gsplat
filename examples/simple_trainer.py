@@ -811,8 +811,8 @@ class Runner:
                     opacities=opacities,
                     sh0=sh0,
                     shN=shN,
-                    format="ply",
-                    save_to=f"{self.ply_dir}/point_cloud_{step}.ply",
+                    format="splat",
+                    save_to=f"{self.ply_dir}/point_cloud_{step}.splat",
                 )
 
             # Turn Gradients into Sparse Tensor before running optimizer
@@ -917,6 +917,9 @@ class Runner:
         )
         ellipse_time = 0
         metrics = defaultdict(list)
+        all_camtoworlds = []
+        all_Ks = []
+        all_sizes = []
         for i, data in enumerate(valloader):
             camtoworlds = data["camtoworld"].to(device)
             Ks = data["K"].to(device)
@@ -941,6 +944,11 @@ class Runner:
 
             colors = torch.clamp(colors, 0.0, 1.0)
             canvas_list = [pixels, colors]
+
+            # Collect camera data
+            all_camtoworlds.append(camtoworlds.cpu())
+            all_Ks.append(Ks.cpu())
+            all_sizes.append((width, height))
 
             if world_rank == 0:
                 # write images
@@ -994,6 +1002,28 @@ class Runner:
                 self.writer.add_scalar(f"{stage}/{k}", v, step)
             self.writer.flush()
 
+            # Save camera poses and intrinsics for renders
+            camtoworlds_all = torch.cat(all_camtoworlds, dim=0).numpy()  # [N, 4, 4]
+            Ks_all = torch.cat(all_Ks, dim=0).numpy()  # [N, 3, 3]
+            np.save(
+                f"{self.render_dir}/{stage}_camera_poses_step{step}.npy",
+                camtoworlds_all,
+            )
+            np.save(
+                f"{self.render_dir}/{stage}_camera_intrinsics_step{step}.npy",
+                Ks_all,
+            )
+            # Save image sizes
+            np.save(
+                f"{self.render_dir}/{stage}_image_sizes_step{step}.npy",
+                np.array(all_sizes),
+            )
+            print(
+                f"Camera poses and intrinsics saved to {self.render_dir}/"
+                f"{stage}_camera_poses_step{step}.npy and "
+                f"{stage}_camera_intrinsics_step{step}.npy"
+            )
+
     @torch.no_grad()
     def render_traj(self, step: int):
         """Entry for trajectory rendering."""
@@ -1003,10 +1033,18 @@ class Runner:
         cfg = self.cfg
         device = self.device
 
-        camtoworlds_all = self.parser.camtoworlds[5:-5]
-        if cfg.render_traj_path == "interp":
+        # Use ALL training camera poses (no skipping)
+        # parser.camtoworlds is [N, 4, 4], extract [N, 3, 4] for trajectory functions
+        camtoworlds_all = self.parser.camtoworlds[:, :3, :]  # [N, 3, 4]
+        print(f"Using {len(camtoworlds_all)} original training camera poses")
+
+        if cfg.render_traj_path == "original":
+            # Keep original poses as-is, no interpolation
+            pass
+        elif cfg.render_traj_path == "interp":
+            # Smooth interpolation between all training poses
             camtoworlds_all = generate_interpolated_path(
-                camtoworlds_all, 1
+                camtoworlds_all, n_interp=2, smoothness=0.03
             )  # [N, 3, 4]
         elif cfg.render_traj_path == "ellipse":
             height = camtoworlds_all[:, 2, 3].mean()
@@ -1024,6 +1062,7 @@ class Runner:
                 f"Render trajectory type not supported: {cfg.render_traj_path}"
             )
 
+        # Convert [N, 3, 4] to [N, 4, 4] by adding homogeneous row
         camtoworlds_all = np.concatenate(
             [
                 camtoworlds_all,
@@ -1037,6 +1076,19 @@ class Runner:
         camtoworlds_all = torch.from_numpy(camtoworlds_all).float().to(device)
         K = torch.from_numpy(list(self.parser.Ks_dict.values())[0]).float().to(device)
         width, height = list(self.parser.imsize_dict.values())[0]
+
+        # save camera trajectory
+        video_dir = f"{cfg.result_dir}/videos"
+        os.makedirs(video_dir, exist_ok=True)
+        traj_save_path = f"{video_dir}/camera_trajectory_{step}.npy"
+        np.save(traj_save_path, camtoworlds_all.cpu().numpy())
+        print(f"Camera trajectory saved to {traj_save_path}")
+
+        # Also save intrinsics for completeness
+        intrinsics_save_path = f"{video_dir}/camera_intrinsics_{step}.npy"
+        np.save(intrinsics_save_path, K.cpu().numpy())
+        print(f"Camera intrinsics saved to {intrinsics_save_path}")
+        print(f"Image size: {width} x {height}")
 
         # save to video
         video_dir = f"{cfg.result_dir}/videos"
