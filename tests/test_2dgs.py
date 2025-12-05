@@ -39,7 +39,6 @@ def expand(data: dict, batch_dims: Tuple[int, ...]):
 
 
 @pytest.fixture
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_data():
     C = 3
     N = 1000

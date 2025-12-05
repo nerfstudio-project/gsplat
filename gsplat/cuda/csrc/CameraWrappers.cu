@@ -1,7 +1,9 @@
 /**
- * @file CameraWrappers.cpp
+ * @file CameraWrappers.cu
  * @brief C++ camera model implementations with CUDA kernels
  */
+
+#if BUILD_CAMERA_WRAPPERS
 
 #include "CameraWrappers.h"
 #include "TensorView.h"
@@ -921,3 +923,5 @@ PyFThetaCameraModel::PyFThetaCameraModel(
 }
 
 } // namespace gsplat
+
+#endif

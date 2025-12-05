@@ -21,7 +21,10 @@
 #include "Ops.h"
 #include "Cameras.h"
 #include "csrc/Config.h"
+
+#if BUILD_CAMERA_WRAPPERS
 #include "CameraWrappers.h"
+#endif
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
@@ -142,6 +145,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // ==================== Camera Model Bindings ====================
 
+#if BUILD_CAMERA_WRAPPERS
     py::class_<gsplat::PyBaseCameraModel<>, std::shared_ptr<gsplat::PyBaseCameraModel<>>>(m, "BaseCameraModel", py::module_local())
         .def("camera_ray_to_image_point", &gsplat::PyBaseCameraModel<>::camera_ray_to_image_point,
              py::arg("camera_ray"), py::arg("margin_factor") = 0.0f)
@@ -215,4 +219,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
              py::arg("reference_poly"),
              py::arg("max_angle"),
              py::arg("rs_type"));
+#endif
 }
