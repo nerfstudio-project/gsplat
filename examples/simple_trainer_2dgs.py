@@ -112,6 +112,8 @@ class Config:
     # Refine GSs every this steps
     refine_every: int = 100
 
+    # Weather GSs should be visible from the back
+    dual_visible: bool = True
     # Use packed mode for rasterization, this leads to less memory usage but slightly slower.
     packed: bool = False
     # Use sparse gradients for optimization. (experimental)
@@ -435,6 +437,7 @@ class Runner:
                 Ks=Ks,  # [C, 3, 3]
                 width=width,
                 height=height,
+                dual_visible=self.cfg.dual_visible,
                 packed=self.cfg.packed,
                 absgrad=self.cfg.absgrad,
                 sparse_grad=self.cfg.sparse_grad,
