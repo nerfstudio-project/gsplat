@@ -1,0 +1,46 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "en-US"
+early_access: false
+tone_instructions: |
+  Be casual, friendly and egoless, using approachable, clear and conversational language that feels warm and engaging.
+  Keep the writing light, concise and positive, as if speaking to a peer.
+reviews:
+  pre_merge_checks:
+    custom_checks:
+      - name: "Require tests for changes"
+        mode: "warning"
+        instructions:  "If no test file is added or modified in this merge request, raise a warning."
+  profile: "chill"
+  request_changes_workflow: false
+  changed_files_summary: true
+  high_level_summary: true
+  sequence_diagrams: true
+  poem: false
+  related_issues: true
+  suggested_reviewers: true
+  review_status: true
+  commit_status: true
+  fail_commit_status: false
+  collapse_walkthrough: false
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+    base_branches:
+      - "^main$"
+  path_filters:
+    - "!assets/**"
+    - "!gsplat/cuda/csrc/third_party/**"
+    - "!.venv/**"
+    - "!**/*.bin"
+    - "!**/*.so"
+    - "!**/*.npz"
+  path_instructions:
+    - path: "**/*.sh"
+      instructions: |
+        Review the shell scripts, point out issues relative to security,
+        performance, and maintainability. Trim trailing spaces.
+    - path: "**/*.py"
+      instructions: |
+        Check for major PEP 8 violations and Python best practices. Ignore trivial formatting issues. Trim trailing spaces.
+
