@@ -58,9 +58,9 @@ def get_extensions():
 
 
     if sys.platform == "win32":
-        extra_compile_flags["cxx"] += ["/std:c++20"]
+        extra_compile_args["cxx"] += ["/std:c++20"]
     else:
-        extra_compile_flags["cxx"] += ["-std=c++20"]
+        extra_compile_args["cxx"] += ["-std=c++20"]
 
     info = parallel_info()
     if (
