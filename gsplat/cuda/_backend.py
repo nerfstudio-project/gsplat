@@ -19,37 +19,54 @@ from rich.console import Console
 import torch.utils.cpp_extension as jit
 
 PATH = os.path.dirname(os.path.abspath(__file__))
-NO_FAST_MATH = os.getenv("NO_FAST_MATH", "0") == "1"
 DEBUG = os.getenv("DEBUG", "0") == "1"
 VERBOSE = os.getenv("VERBOSE", "0") == "1"
+FAST_MATH = os.getenv("FAST_MATH", "1") == "1"
 MAX_JOBS = os.getenv("MAX_JOBS")
+NINJA_STATUS = os.getenv("NINJA_STATUS")
 BUILD_CAMERA_WRAPPERS = os.getenv("BUILD_CAMERA_WRAPPERS", "1" if DEBUG else "0") == "1"
 
 def build_gsplat():
     name = "gsplat_cuda"
     build_dir = jit._get_build_directory(name, verbose=False)
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    glm_path = os.path.join(current_dir, "csrc", "third_party", "glm")
 
-    debug_flags = "-g" if DEBUG else "-DNDEBUG"
-    extra_include_paths = [os.path.join(PATH, "include/"), glm_path]
-    opt_level = "-O0" if DEBUG else "-O3"
-    extra_cflags = [opt_level, debug_flags, "-Wno-attributes", "-std=c++20"]
-    extra_cuda_cflags = [opt_level, debug_flags, "-std=c++20"]
-    if not NO_FAST_MATH:
-        extra_cuda_cflags += ["-use_fast_math"]
+    # Make sure the build directory exists.
+    if build_dir:
+        os.makedirs(build_dir, exist_ok=True)
+
+    # Include paths -----------------------------------
+    extra_include_paths = [
+        os.path.join(PATH, "include/"),
+        os.path.join(current_dir, "csrc", "third_party", "glm")
+    ]
+
+    # Source files ------------------------------------
     sources = (
         list(glob.glob(os.path.join(PATH, "csrc/*.cu")))
         + list(glob.glob(os.path.join(PATH, "csrc/*.cpp")))
         + [os.path.join(PATH, "ext.cpp")]
     )
 
+    # Compiler flags ----------------------------------
+    extra_cflags = ["-std=c++20"]
+    extra_cuda_cflags = ["--forward-unknown-opts"]
+
+    # Debug/Release mode
+    extra_cflags += ["-g","-O0"] if DEBUG else ["-O3", "-DNDEBUG"]
+    extra_cuda_cflags += ["-use_fast_math"] if FAST_MATH else []
+
+    # Silencing of warnings
+    extra_cflags += ["-Wno-attributes"]
+
+    # Whether to build the camera wrappers or not (for tests)
     if BUILD_CAMERA_WRAPPERS:
-        extra_cuda_cflags += ["-DBUILD_CAMERA_WRAPPERS=1"]
         extra_cflags += ["-DBUILD_CAMERA_WRAPPERS=1"]
     else:
         # Remove 'csrc/CameraWrappers.cu' from the sources list if it exists
         sources = [s for s in sources if not s.endswith("csrc/CameraWrappers.cu")]
+
+    extra_cuda_cflags += extra_cflags
 
     # If JIT is interrupted it might leave a lock in the build directory.
     # We dont want it to exist in any case.
@@ -80,20 +97,20 @@ def build_gsplat():
     module_exists = os.path.exists(os.path.join(build_dir, f"{name}.so")) or os.path.exists(os.path.join(build_dir, f"{name}.lib"))
 
     with status_context() if not module_exists else nullcontext():
-        # Make sure the build directory exists.
-        if build_dir:
-            os.makedirs(build_dir, exist_ok=True)
-
-        need_to_unset_max_jobs = False
-        if not MAX_JOBS:
-            need_to_unset_max_jobs = True
-            os.environ["MAX_JOBS"] = "10"
-
         # If the JIT build happens concurrently in multiple processes,
         # race conditions can occur when removing the lock file at:
         # https://github.com/pytorch/pytorch/blob/e3513fb2af7951ddf725d8c5b6f6d962a053c9da/torch/utils/cpp_extension.py#L1736
         # But it's ok so we catch this exception and ignore it.
+        envvars_to_remove = []
         try:
+            if not MAX_JOBS:
+                envvars_to_remove.append("MAX_JOBS")
+                os.environ["MAX_JOBS"] = "10"
+
+            if not NINJA_STATUS:
+                envvars_to_remove.append("NINJA_STATUS")
+                os.environ["NINJA_STATUS"] = "[%f/%t %r %es] "
+
             gsplat_module = jit.load(
                 name=name,
                 sources=sources,
@@ -108,8 +125,8 @@ def build_gsplat():
             # The module should already be compiled if we get OSError
             return jit._import_module_from_library(name, build_dir, True)
         finally:
-            if need_to_unset_max_jobs:
-                os.environ.pop("MAX_JOBS")
+            for envvar in envvars_to_remove:
+                os.environ.pop(envvar)
 
 def cuda_toolkit_available():
     """
