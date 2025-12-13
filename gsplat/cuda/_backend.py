@@ -10,18 +10,13 @@ import os
 import shutil
 import time
 from subprocess import DEVNULL, call
+from contextlib import nullcontext, contextmanager
 
 import torch
 from packaging import version
 from rich.console import Console
-from torch.utils.cpp_extension import _find_cuda_home  # <--- For robust CUDA detection
-from torch.utils.cpp_extension import (
-    _TORCH_PATH,
-    _get_build_directory,
-    _import_module_from_library,
-)
 
-from torch.utils.cpp_extension import load as jit_load
+import torch.utils.cpp_extension as jit
 
 PATH = os.path.dirname(os.path.abspath(__file__))
 NO_FAST_MATH = os.getenv("NO_FAST_MATH", "0") == "1"
@@ -29,48 +24,92 @@ DEBUG = os.getenv("DEBUG", "0") == "1"
 VERBOSE = os.getenv("VERBOSE", "0") == "1"
 MAX_JOBS = os.getenv("MAX_JOBS")
 BUILD_CAMERA_WRAPPERS = os.getenv("BUILD_CAMERA_WRAPPERS", "1" if DEBUG else "0") == "1"
-need_to_unset_max_jobs = False
-if not MAX_JOBS:
-    need_to_unset_max_jobs = True
-    os.environ["MAX_JOBS"] = "10"
 
+def build_gsplat():
+    name = "gsplat_cuda"
+    build_dir = jit._get_build_directory(name, verbose=False)
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    glm_path = os.path.join(current_dir, "csrc", "third_party", "glm")
 
-def load_extension(
-    name,
-    sources,
-    extra_cflags=None,
-    extra_cuda_cflags=None,
-    extra_ldflags=None,
-    extra_include_paths=None,
-    build_directory=None,
-    verbose=False,
-):
-    """Load a JIT compiled extension."""
-    # Make sure the build directory exists.
-    if build_directory:
-        os.makedirs(build_directory, exist_ok=True)
+    debug_flags = "-g" if DEBUG else "-DNDEBUG"
+    extra_include_paths = [os.path.join(PATH, "include/"), glm_path]
+    opt_level = "-O0" if DEBUG else "-O3"
+    extra_cflags = [opt_level, debug_flags, "-Wno-attributes", "-std=c++20"]
+    extra_cuda_cflags = [opt_level, debug_flags, "-std=c++20"]
+    if not NO_FAST_MATH:
+        extra_cuda_cflags += ["-use_fast_math"]
+    sources = (
+        list(glob.glob(os.path.join(PATH, "csrc/*.cu")))
+        + list(glob.glob(os.path.join(PATH, "csrc/*.cpp")))
+        + [os.path.join(PATH, "ext.cpp")]
+    )
 
-    # If the JIT build happens concurrently in multiple processes,
-    # race conditions can occur when removing the lock file at:
-    # https://github.com/pytorch/pytorch/blob/e3513fb2af7951ddf725d8c5b6f6d962a053c9da/torch/utils/cpp_extension.py#L1736
-    # But it's ok so we catch this exception and ignore it.
+    if BUILD_CAMERA_WRAPPERS:
+        extra_cuda_cflags += ["-DBUILD_CAMERA_WRAPPERS=1"]
+        extra_cflags += ["-DBUILD_CAMERA_WRAPPERS=1"]
+    else:
+        # Remove 'csrc/CameraWrappers.cu' from the sources list if it exists
+        sources = [s for s in sources if not s.endswith("csrc/CameraWrappers.cu")]
+
+    # If JIT is interrupted it might leave a lock in the build directory.
+    # We dont want it to exist in any case.
     try:
-        compiled = jit_load(
-            name=name,
-            sources=sources,
-            extra_cflags=extra_cflags,
-            extra_cuda_cflags=extra_cuda_cflags,
-            extra_ldflags=extra_ldflags,
-            extra_include_paths=extra_include_paths,
-            build_directory=build_directory,
-            verbose=verbose,
+        os.remove(os.path.join(build_dir, "lock"))
+    except OSError:
+        pass
+
+    @contextmanager
+    def status_context():
+        # Build from scratch. Remove the build directory just to be safe: pytorch jit might stuck
+        # if the build directory exists with a lock file in it.
+        shutil.rmtree(build_dir)
+        tic = time.time()
+        with Console().status(
+            f"[bold yellow]gsplat: Setting up CUDA with MAX_JOBS={os.environ['MAX_JOBS']} (This may take a few minutes the first time)",
+            spinner="bouncingBall",
+        ):
+            yield
+
+        toc = time.time()
+        Console().print(
+            f"[green]gsplat: CUDA extension has been set up successfully in {toc - tic:.2f} seconds.[/green]"
         )
 
-        return compiled
-    except OSError:
-        # The module should already be compiled if we get OSError
-        return _import_module_from_library(name, build_directory, True)
+    # If the build exists, we assume the extension has been built
+    # and we can load it.
+    module_exists = os.path.exists(os.path.join(build_dir, f"{name}.so")) or os.path.exists(os.path.join(build_dir, f"{name}.lib"))
 
+    with status_context() if not module_exists else nullcontext():
+        # Make sure the build directory exists.
+        if build_dir:
+            os.makedirs(build_dir, exist_ok=True)
+
+        need_to_unset_max_jobs = False
+        if not MAX_JOBS:
+            need_to_unset_max_jobs = True
+            os.environ["MAX_JOBS"] = "10"
+
+        # If the JIT build happens concurrently in multiple processes,
+        # race conditions can occur when removing the lock file at:
+        # https://github.com/pytorch/pytorch/blob/e3513fb2af7951ddf725d8c5b6f6d962a053c9da/torch/utils/cpp_extension.py#L1736
+        # But it's ok so we catch this exception and ignore it.
+        try:
+            gsplat_module = jit.load(
+                name=name,
+                sources=sources,
+                extra_cflags=extra_cflags,
+                extra_cuda_cflags=extra_cuda_cflags,
+                extra_include_paths=extra_include_paths,
+                build_directory=build_dir,
+                verbose=VERBOSE,
+            )
+            return gsplat_module
+        except OSError:
+            # The module should already be compiled if we get OSError
+            return jit._import_module_from_library(name, build_dir, True)
+        finally:
+            if need_to_unset_max_jobs:
+                os.environ.pop("MAX_JOBS")
 
 def cuda_toolkit_available():
     """
@@ -78,7 +117,7 @@ def cuda_toolkit_available():
     1. Attempt to locate `CUDA_HOME` using PyTorch’s internal method.
     2. Check if nvcc is present in that location.
     """
-    cuda_home = _find_cuda_home()  # This tries various heuristics
+    cuda_home = jit._find_cuda_home()  # This tries various heuristics
     if not cuda_home:
         return False
 
@@ -93,24 +132,6 @@ def cuda_toolkit_available():
             return False
     return True
 
-
-def cuda_toolkit_version():
-    """Get the CUDA toolkit version if we found CUDA home."""
-    cuda_home = _find_cuda_home()
-    if not cuda_home:
-        return None
-
-    if os.path.exists(os.path.join(cuda_home, "version.txt")):
-        with open(os.path.join(cuda_home, "version.txt")) as f:
-            cuda_version = f.read().strip().split()[-1]
-    elif os.path.exists(os.path.join(cuda_home, "version.json")):
-        with open(os.path.join(cuda_home, "version.json")) as f:
-            cuda_version = json.load(f)["cuda"]["version"]
-    else:
-        raise RuntimeError("Cannot find the CUDA version file in CUDA_HOME.")
-    return cuda_version
-
-
 _C = None
 
 try:
@@ -119,82 +140,10 @@ try:
 except ImportError:
     # if that fails, try with JIT compilation
     if cuda_toolkit_available():
-        name = "gsplat_cuda"
-        build_dir = _get_build_directory(name, verbose=False)
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        glm_path = os.path.join(current_dir, "csrc", "third_party", "glm")
-
-        debug_flags = "-g" if DEBUG else "-DNDEBUG"
-        extra_include_paths = [os.path.join(PATH, "include/"), glm_path]
-        opt_level = "-O0" if DEBUG else "-O3"
-        extra_cflags = [opt_level, debug_flags, "-Wno-attributes", "-std=c++20"]
-        extra_cuda_cflags = [opt_level, debug_flags, "-std=c++20"]
-        if not NO_FAST_MATH:
-            extra_cuda_cflags += ["-use_fast_math"]
-        sources = (
-            list(glob.glob(os.path.join(PATH, "csrc/*.cu")))
-            + list(glob.glob(os.path.join(PATH, "csrc/*.cpp")))
-            + [os.path.join(PATH, "ext.cpp")]
-        )
-
-        if BUILD_CAMERA_WRAPPERS:
-            extra_cuda_cflags += ["-DBUILD_CAMERA_WRAPPERS=1"]
-            extra_cflags += ["-DBUILD_CAMERA_WRAPPERS=1"]
-        else:
-            # Remove 'csrc/CameraWrappers.cu' from the sources list if it exists
-            sources = [s for s in sources if not s.endswith("csrc/CameraWrappers.cu")]
-
-        # If JIT is interrupted it might leave a lock in the build directory.
-        # We dont want it to exist in any case.
-        try:
-            os.remove(os.path.join(build_dir, "lock"))
-        except OSError:
-            pass
-
-        if os.path.exists(os.path.join(build_dir, f"{name}.so")) or os.path.exists(
-            os.path.join(build_dir, f"{name}.lib")
-        ):
-            # If the build exists, we assume the extension has been built
-            # and we can load it.
-            _C = load_extension(
-                name=name,
-                sources=sources,
-                extra_cflags=extra_cflags,
-                extra_cuda_cflags=extra_cuda_cflags,
-                extra_include_paths=extra_include_paths,
-                build_directory=build_dir,
-                verbose=VERBOSE,
-            )
-        else:
-            # Build from scratch. Remove the build directory just to be safe: pytorch jit might stuck
-            # if the build directory exists with a lock file in it.
-            shutil.rmtree(build_dir)
-            tic = time.time()
-            with Console().status(
-                f"[bold yellow]gsplat: Setting up CUDA with MAX_JOBS={os.environ['MAX_JOBS']} (This may take a few minutes the first time)",
-                spinner="bouncingBall",
-            ):
-                _C = load_extension(
-                    name=name,
-                    sources=sources,
-                    extra_cflags=extra_cflags,
-                    extra_cuda_cflags=extra_cuda_cflags,
-                    extra_include_paths=extra_include_paths,
-                    build_directory=build_dir,
-                    verbose=VERBOSE,
-                )
-            toc = time.time()
-            Console().print(
-                f"[green]gsplat: CUDA extension has been set up successfully in {toc - tic:.2f} seconds.[/green]"
-            )
-
+        _C = build_gsplat()
     else:
         Console().print(
             "[yellow]gsplat: No CUDA toolkit found. gsplat will be disabled.[/yellow]"
         )
-
-if need_to_unset_max_jobs:
-    os.environ.pop("MAX_JOBS")
-
 
 __all__ = ["_C"]
