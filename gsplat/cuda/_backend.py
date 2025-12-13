@@ -19,8 +19,9 @@ from torch.utils.cpp_extension import (
     _TORCH_PATH,
     _get_build_directory,
     _import_module_from_library,
-    _jit_compile,
 )
+
+from torch.utils.cpp_extension import load as jit_load
 
 PATH = os.path.dirname(os.path.abspath(__file__))
 NO_FAST_MATH = os.getenv("NO_FAST_MATH", "0") == "1"
@@ -78,44 +79,16 @@ def load_extension(
             head_file = os.path.join(_TORCH_PATH, "include", "torch", "extension.h")
             extra_cflags += ["-include", head_file, "-Winvalid-pch"]
 
-        try:
-            compiled = _jit_compile(
-                name=name,
-                sources=sources,
-                extra_cflags=extra_cflags,
-                extra_cuda_cflags=extra_cuda_cflags,
-                extra_ldflags=extra_ldflags,
-                extra_include_paths=extra_include_paths,
-                build_directory=build_directory,
-                verbose=verbose,
-                with_cuda=None,
-                is_python_module=True,
-                is_standalone=False,
-                keep_intermediates=True,
-            )
-        except (
-            TypeError
-        ) as e:  # torch>=2.7.0 has added arguments to _jit_compile to support SYCL.
-            # Narrow the scope of catch: only retry if it's due to unexpected argument(s)
-            if "_jit_compile() missing" in str(e):
-                compiled = _jit_compile(
-                    name=name,
-                    sources=sources,
-                    extra_cflags=extra_cflags,
-                    extra_cuda_cflags=extra_cuda_cflags,
-                    extra_sycl_cflags=None,
-                    extra_ldflags=extra_ldflags,
-                    extra_include_paths=extra_include_paths,
-                    build_directory=build_directory,
-                    verbose=verbose,
-                    with_cuda=None,
-                    with_sycl=None,
-                    is_python_module=True,
-                    is_standalone=False,
-                    keep_intermediates=True,
-                )
-            else:
-                raise e
+        compiled = jit_load(
+            name=name,
+            sources=sources,
+            extra_cflags=extra_cflags,
+            extra_cuda_cflags=extra_cuda_cflags,
+            extra_ldflags=extra_ldflags,
+            extra_include_paths=extra_include_paths,
+            build_directory=build_directory,
+            verbose=verbose,
+        )
 
         return compiled
     except OSError:
