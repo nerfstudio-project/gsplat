@@ -162,7 +162,7 @@ def build_and_load_gsplat():
     def status_context():
         tic = time.time()
         with Console().status(
-            f"[bold yellow]gsplat: Setting up CUDA with MAX_JOBS={os.environ['MAX_JOBS']} (This may take a few minutes the first time)",
+                f"[bold yellow]gsplat: Setting up CUDA with MAX_JOBS={MAX_JOBS if MAX_JOBS else "max"} (This may take a few minutes the first time)",
             spinner="bouncingBall",
         ):
             yield
@@ -183,10 +183,6 @@ def build_and_load_gsplat():
         # But it's ok so we catch this exception and ignore it.
         envvars_to_remove = []
         try:
-            if not MAX_JOBS:
-                envvars_to_remove.append("MAX_JOBS")
-                os.environ["MAX_JOBS"] = "10"
-
             if not NINJA_STATUS:
                 envvars_to_remove.append("NINJA_STATUS")
                 os.environ["NINJA_STATUS"] = "[%f/%t %r %es] "
