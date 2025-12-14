@@ -1,3 +1,7 @@
+#include "Config.h"
+
+#if GSPLAT_BUILD_3DGS
+
 #include <ATen/TensorUtils.h>
 #include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAGuard.h> // for DEVICE_GUARD
@@ -84,3 +88,5 @@ std::tuple<at::Tensor, at::Tensor> quat_scale_to_covar_preci_bwd(
 }
 
 } // namespace gsplat
+
+#endif

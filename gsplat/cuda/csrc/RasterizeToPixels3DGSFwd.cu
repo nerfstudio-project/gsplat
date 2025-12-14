@@ -1,3 +1,7 @@
+#include "Config.h"
+
+#if GSPLAT_BUILD_3DGS
+
 #include <ATen/Dispatch.h>
 #include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAStream.h>
@@ -308,3 +312,5 @@ __INS__(513)
 #undef __INS__
 
 } // namespace gsplat
+
+#endif

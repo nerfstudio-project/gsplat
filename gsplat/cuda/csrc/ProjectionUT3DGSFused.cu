@@ -1,3 +1,7 @@
+#include "Config.h"
+
+#if GSPLAT_BUILD_3DGUT
+
 #include <ATen/Dispatch.h>
 #include <ATen/core/Tensor.h>
 #include <ATen/cuda/Atomic.cuh>
@@ -313,5 +317,6 @@ void launch_projection_ut_3dgs_fused_kernel(
         );
 }
 
-
 } // namespace gsplat
+
+#endif

@@ -6,12 +6,15 @@
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
 
+#include "Config.h"
 #include "Common.h"
 #include "Ops.h"
 #include "Rasterization.h"
 #include "Cameras.h"
 
 namespace gsplat {
+
+#if GSPLAT_BUILD_3DGS
 
 ////////////////////////////////////////////////////
 // 3DGS
@@ -311,6 +314,11 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_3dgs(
     }
     return std::make_tuple(gaussian_ids, pixel_ids);
 }
+
+#endif
+
+
+#if GSPLAT_BUILD_2DGS
 
 ////////////////////////////////////////////////////
 // 2DGS
@@ -688,6 +696,10 @@ std::tuple<at::Tensor, at::Tensor> rasterize_to_indices_2dgs(
     return std::make_tuple(gaussian_ids, pixel_ids);
 }
 
+#endif
+
+#if GSPLAT_BUILD_3DGUT
+
 ////////////////////////////////////////////////////
 // 3DGS (from world)
 ////////////////////////////////////////////////////
@@ -959,5 +971,7 @@ rasterize_to_pixels_from_world_3dgs_bwd(
         v_means, v_quats, v_scales, v_colors, v_opacities
     );
 }
+
+#endif
 
 } // namespace gsplat

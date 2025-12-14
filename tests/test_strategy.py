@@ -8,11 +8,13 @@ pytest <THIS_PY_FILE> -s
 
 import pytest
 import torch
+import gsplat
 
 device = torch.device("cuda:0")
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_strategy():
     from gsplat.rendering import rasterization
     from gsplat.strategy import DefaultStrategy, MCMCStrategy
@@ -63,6 +65,7 @@ def test_strategy():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_strategy_requires_grad():
     from gsplat.rendering import rasterization
     from gsplat.strategy import DefaultStrategy, MCMCStrategy

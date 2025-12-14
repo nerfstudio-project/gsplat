@@ -1,3 +1,7 @@
+#include "Config.h"
+
+#if GSPLAT_BUILD_ADAM
+
 #include <ATen/TensorUtils.h>
 #include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAGuard.h> // for DEVICE_GUARD
@@ -43,3 +47,5 @@ void adam(
 }
 
 } // namespace gsplat
+
+#endif

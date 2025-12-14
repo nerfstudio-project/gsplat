@@ -1,3 +1,7 @@
+#include "Config.h"
+
+#if GSPLAT_BUILD_2DGS
+
 #include <ATen/Dispatch.h>
 #include <ATen/core/Tensor.h>
 #include <ATen/cuda/Atomic.cuh>
@@ -529,3 +533,5 @@ void launch_projection_2dgs_packed_bwd_kernel(
 }
 
 } // namespace gsplat
+
+#endif

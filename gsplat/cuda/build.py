@@ -14,12 +14,18 @@ from rich.console import Console
 PATH = os.path.dirname(os.path.abspath(__file__))
 DEBUG = os.getenv("DEBUG", "0") == "1"
 FAST_MATH = os.getenv("FAST_MATH", "1") == "1"
-BUILD_CAMERA_WRAPPERS = os.getenv("BUILD_CAMERA_WRAPPERS", "1" if DEBUG else "0") == "1"
 WITH_SYMBOLS = os.getenv("WITH_SYMBOLS", "0") == "1"
 NVCC_FLAGS = os.getenv("NVCC_FLAGS", "")
 MAX_JOBS = os.getenv("MAX_JOBS")
 NINJA_STATUS = os.getenv("NINJA_STATUS")
 VERBOSE = os.getenv("VERBOSE", "0") == "1"
+
+BUILD_CAMERA_WRAPPERS = os.getenv("BUILD_CAMERA_WRAPPERS", "1" if DEBUG else "0") == "1"
+BUILD_3DGUT = os.getenv("BUILD_3DGUT")
+BUILD_3DGS = os.getenv("BUILD_3DGS")
+BUILD_2DGS = os.getenv("BUILD_2DGS")
+BUILD_ADAM = os.getenv("BUILD_ADAM")
+BUILD_RELOC = os.getenv("BUILD_RELOC")
 
 def get_build_parameters():
     name = "gsplat_cuda"
@@ -69,10 +75,21 @@ def get_build_parameters():
 
     # Whether to build the camera wrappers or not (for tests)
     if BUILD_CAMERA_WRAPPERS:
-        extra_cflags += ["-DBUILD_CAMERA_WRAPPERS=1"]
+        extra_cflags += ["-DGSPLAT_BUILD_CAMERA_WRAPPERS=1"]
     else:
         # Remove 'csrc/CameraWrappers.cu' from the sources list if it exists
         sources = [s for s in sources if not s.endswith("csrc/CameraWrappers.cu")]
+
+    if BUILD_2DGS is not None:
+        extra_cflags += [f"-DGSPLAT_BUILD_2DGS={BUILD_2DGS}"]
+    if BUILD_3DGS is not None:
+        extra_cflags += [f"-DGSPLAT_BUILD_3DGS={BUILD_3DGS}"]
+    if BUILD_3DGUT is not None:
+        extra_cflags += [f"-DGSPLAT_BUILD_3DGUT={BUILD_3DGUT}"]
+    if BUILD_ADAM is not None:
+        extra_cflags += [f"-DGSPLAT_BUILD_ADAM={BUILD_ADAM}"]
+    if BUILD_RELOC is not None:
+        extra_cflags += [f"-DGSPLAT_BUILD_RELOC={BUILD_RELOC}"]
 
     extra_ldflags += [] if WITH_SYMBOLS else ["-s"]
 
@@ -171,6 +188,9 @@ def build_and_load_gsplat():
         Console().print(
             f"[green]gsplat: CUDA extension has been set up successfully in {toc - tic:.2f} seconds.[/green]"
         )
+
+    with open(saved_build_params_fname, "wb") as f:
+        pickle.dump(build_params, f)
 
     # If the build exists, we assume the extension has been built
     # and we can load it.

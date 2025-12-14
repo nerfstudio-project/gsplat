@@ -1,3 +1,7 @@
+#include "Config.h"
+
+#if GSPLAT_BUILD_3DGUT
+
 #include <ATen/Dispatch.h>
 #include <ATen/core/Tensor.h>
 #include <ATen/cuda/Atomic.cuh>
@@ -633,3 +637,5 @@ __INS__(513)
 #undef __INS__
 
 } // namespace gsplat
+
+#endif
