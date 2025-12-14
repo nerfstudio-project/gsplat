@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,6 +44,25 @@ def _make_lazy_cuda_obj(name: str) -> Any:
         obj = getattr(_C, name_split)
     return obj
 
+def has_2dgs():
+    from ._backend import _C
+    return hasattr(_C, "projection_2dgs_fused_fwd")
+
+def has_3dgs():
+    from ._backend import _C
+    return hasattr(_C, "projection_ewa_simple_fwd")
+
+def has_3dgut():
+    from ._backend import _C
+    return hasattr(_C, "projection_ut_3dgs_fused")
+
+def has_adam():
+    from ._backend import _C
+    return hasattr(_C, "adam")
+
+def has_reloc():
+    from ._backend import _C
+    return hasattr(_C, "relocation")
 
 class RollingShutterType(Enum):
     ROLLING_TOP_TO_BOTTOM = 0

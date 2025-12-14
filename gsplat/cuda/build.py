@@ -35,6 +35,12 @@ MAX_JOBS = os.getenv("MAX_JOBS")
 NINJA_STATUS = os.getenv("NINJA_STATUS")
 VERBOSE = os.getenv("VERBOSE", "0") == "1"
 
+BUILD_3DGUT = os.getenv("BUILD_3DGUT")
+BUILD_3DGS = os.getenv("BUILD_3DGS")
+BUILD_2DGS = os.getenv("BUILD_2DGS")
+BUILD_ADAM = os.getenv("BUILD_ADAM")
+BUILD_RELOC = os.getenv("BUILD_RELOC")
+
 def get_build_parameters():
     name = "gsplat_cuda"
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -80,6 +86,17 @@ def get_build_parameters():
     extra_cuda_cflags += ["-diag-suppress", "20012,186"]
     if not os.name == "nt":
         extra_cflags += ["-Wno-sign-compare"]
+
+    if BUILD_2DGS is not None:
+        extra_cflags += [f"-DGSPLAT_BUILD_2DGS={BUILD_2DGS}"]
+    if BUILD_3DGS is not None:
+        extra_cflags += [f"-DGSPLAT_BUILD_3DGS={BUILD_3DGS}"]
+    if BUILD_3DGUT is not None:
+        extra_cflags += [f"-DGSPLAT_BUILD_3DGUT={BUILD_3DGUT}"]
+    if BUILD_ADAM is not None:
+        extra_cflags += [f"-DGSPLAT_BUILD_ADAM={BUILD_ADAM}"]
+    if BUILD_RELOC is not None:
+        extra_cflags += [f"-DGSPLAT_BUILD_RELOC={BUILD_RELOC}"]
 
     extra_ldflags += [] if WITH_SYMBOLS else ["-s"]
 
@@ -178,6 +195,9 @@ def build_and_load_gsplat():
         Console().print(
             f"[green]gsplat: CUDA extension has been set up successfully in {toc - tic:.2f} seconds.[/green]"
         )
+
+    with open(saved_build_params_fname, "wb") as f:
+        pickle.dump(build_params, f)
 
     # If the build exists, we assume the extension has been built
     # and we can load it.

@@ -1,13 +1,14 @@
 /*
  * SPDX-FileCopyrightText: Copyright 2023-2026 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  * http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -27,8 +28,11 @@
 #include "Ops.h"        // a collection of all gsplat operators
 #include "Projection.h" // where the launch function is declared
 #include "Cameras.h"
+#include "Config.h"
 
 namespace gsplat {
+
+#if GSPLAT_BUILD_3DGS
 
 std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_fwd(
     const at::Tensor means,  // [..., C, N, 3]
@@ -563,6 +567,10 @@ projection_ewa_3dgs_packed_bwd(
     return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats);
 }
 
+#endif
+
+#if GSPLAT_BUILD_2DGS
+
 std::tuple<
     at::Tensor,
     at::Tensor,
@@ -920,6 +928,10 @@ projection_2dgs_packed_bwd(
     return std::make_tuple(v_means, v_quats, v_scales, v_viewmats);
 }
 
+#endif
+
+#if GSPLAT_BUILD_3DGUT
+
 std::tuple<
     at::Tensor,
     at::Tensor,
@@ -1034,5 +1046,7 @@ projection_ut_3dgs_fused(
     );
     return std::make_tuple(radii, means2d, depths, conics, compensations);
 }
+
+#endif
 
 } // namespace gsplat

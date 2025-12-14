@@ -20,6 +20,7 @@
 
 #include "Ops.h"
 #include "Cameras.h"
+#include "csrc/Config.h"
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
@@ -37,22 +38,30 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("null", &gsplat::null);
 
+#if GSPLAT_BUILD_3DGS
     m.def(
         "quat_scale_to_covar_preci_fwd", &gsplat::quat_scale_to_covar_preci_fwd
     );
     m.def(
         "quat_scale_to_covar_preci_bwd", &gsplat::quat_scale_to_covar_preci_bwd
     );
+#endif
 
     m.def("spherical_harmonics_fwd", &gsplat::spherical_harmonics_fwd);
     m.def("spherical_harmonics_bwd", &gsplat::spherical_harmonics_bwd);
 
+#if GSPLAT_BUILD_ADAM
     m.def("adam", &gsplat::adam);
+#endif
+
+#if GSPLAT_BUILD_RELOC
     m.def("relocation", &gsplat::relocation);
+#endif
 
     m.def("intersect_tile", &gsplat::intersect_tile);
     m.def("intersect_offset", &gsplat::intersect_offset);
 
+#if GSPLAT_BUILD_3DGS
     m.def("projection_ewa_simple_fwd", &gsplat::projection_ewa_simple_fwd);
     m.def("projection_ewa_simple_bwd", &gsplat::projection_ewa_simple_bwd);
     m.def(
@@ -77,7 +86,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "rasterize_to_pixels_3dgs_bwd", &gsplat::rasterize_to_pixels_3dgs_bwd
     );
     m.def("rasterize_to_indices_3dgs", &gsplat::rasterize_to_indices_3dgs);
+#endif
 
+#if GSPLAT_BUILD_2DGS
     m.def("projection_2dgs_fused_fwd", &gsplat::projection_2dgs_fused_fwd);
     m.def("projection_2dgs_fused_bwd", &gsplat::projection_2dgs_fused_bwd);
     m.def("projection_2dgs_packed_fwd", &gsplat::projection_2dgs_packed_fwd);
@@ -90,10 +101,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "rasterize_to_pixels_2dgs_bwd", &gsplat::rasterize_to_pixels_2dgs_bwd
     );
     m.def("rasterize_to_indices_2dgs", &gsplat::rasterize_to_indices_2dgs);
+#endif
 
+#if GSPLAT_BUILD_3DGUT
     m.def("projection_ut_3dgs_fused", &gsplat::projection_ut_3dgs_fused);
     m.def("rasterize_to_pixels_from_world_3dgs_fwd", &gsplat::rasterize_to_pixels_from_world_3dgs_fwd);
     m.def("rasterize_to_pixels_from_world_3dgs_bwd", &gsplat::rasterize_to_pixels_from_world_3dgs_bwd);
+#endif
 
     // Cameras from 3DGUT
     py::enum_<ShutterType>(m, "ShutterType", py::module_local())
