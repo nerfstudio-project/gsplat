@@ -20,6 +20,7 @@ import glob
 import sys
 import torch
 import platform
+import pickle
 from types import SimpleNamespace
 import torch.utils.cpp_extension as jit
 from contextlib import nullcontext, contextmanager
@@ -116,10 +117,6 @@ def build_and_load_gsplat():
     build_params = get_build_parameters()
 
     build_dir = jit._get_build_directory(build_params.name, verbose=False)
-    # Make sure the build directory exists.
-    if build_dir:
-        os.makedirs(build_dir, exist_ok=True)
-
 
     # If JIT is interrupted it might leave a lock in the build directory.
     # We dont want it to exist in any case.
@@ -128,11 +125,48 @@ def build_and_load_gsplat():
     except OSError:
         pass
 
+    # Check if the build parameters have changed since last build (if any
+    saved_build_params_fname = os.path.join(build_dir, "build_params.pkl")
+    saved_build_params = None
+    build_params_changed = False
+    try:
+        if os.path.exists(saved_build_params_fname):
+            with open(saved_build_params_fname, "rb") as f:
+                saved_build_params = pickle.load(f)
+            build_params_changed = saved_build_params!=build_params
+    except Exception as e:
+        Console().print(
+            f"[bold yellow]gsplat: rebuilding due to error loading saved build parameters: {e}"
+        )
+
+    # If parameters have changed,
+    if build_params_changed:
+        # Build gsplat from scratch
+        shutil.rmtree(build_dir)
+        # Print out what triggered the rebuild (for debugging...)
+        if saved_build_params is not None:
+            Console().print(
+                f"[bold yellow]gsplat: rebuilding due to build parameter change"
+            )
+            saved_dict = saved_build_params.__dict__
+            current_dict = build_params.__dict__
+            for k in sorted(set(saved_dict) | set(current_dict)):
+                saved_val = saved_dict.get(k, "<missing>")
+                current_val = current_dict.get(k, "<missing>")
+                if saved_val != current_val:
+                    Console().print(f"[white] old {k}: {saved_val}")
+                    Console().print(f"[white] new {k}: {current_val}")
+
+    # Make sure the build directory exists.
+    if build_dir:
+        os.makedirs(build_dir, exist_ok=True)
+
+    # Save our current build parameters
+    with open(saved_build_params_fname, "wb") as f:
+        pickle.dump(build_params, f)
+
     @contextmanager
     def status_context():
-        # Build from scratch. Remove the build directory just to be safe: pytorch jit might stuck
-        # if the build directory exists with a lock file in it.
-        shutil.rmtree(build_dir)
         tic = time.time()
         with Console().status(
             f"[bold yellow]gsplat: Setting up CUDA with MAX_JOBS={os.environ['MAX_JOBS']} (This may take a few minutes the first time)",
@@ -149,7 +183,7 @@ def build_and_load_gsplat():
     # and we can load it.
     module_exists = os.path.exists(os.path.join(build_dir, f"{build_params.name}.so")) or os.path.exists(os.path.join(build_dir, f"{build_params.name}.lib"))
 
-    with status_context() if not module_exists else nullcontext():
+    with status_context() if not module_exists or build_params_changed else nullcontext():
         # If the JIT build happens concurrently in multiple processes,
         # race conditions can occur when removing the lock file at:
         # https://github.com/pytorch/pytorch/blob/e3513fb2af7951ddf725d8c5b6f6d962a053c9da/torch/utils/cpp_extension.py#L1736
