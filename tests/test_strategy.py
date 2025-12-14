@@ -30,7 +30,6 @@ device = torch.device("cuda:0")
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-@pytest.mark.skipif(not gsplat.has_reloc(), reason="Relocation support isn't built in")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_strategy():
     from gsplat.rendering import rasterization
@@ -82,7 +81,6 @@ def test_strategy():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-@pytest.mark.skipif(not gsplat.has_reloc(), reason="Relocation support isn't built in")
 @pytest.mark.skipif(not gsplat.has_3dgs(), reason="3DGS support isn't built in")
 def test_strategy_requires_grad():
     from gsplat.rendering import rasterization

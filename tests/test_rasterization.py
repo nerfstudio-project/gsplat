@@ -22,7 +22,7 @@ pytest <THIS_PY_FILE> -s
 ```
 """
 
-from itertools import product
+from itertools import product, chain
 from typing import Optional, Tuple
 
 import pytest
@@ -40,26 +40,43 @@ device = torch.device("cuda:0")
 @pytest.mark.parametrize(
     "per_view_color,sh_degree,render_mode,packed,batch_dims,with_eval3d,with_ut",
     [
+        pytest.param(
+            *params,
+            marks=[
+                # test based on with_eval3d (5)  and with_ut (6)
+                pytest.mark.skipif(
+                    (params[5] == True or params[6] == True) and not gsplat.has_3dgut(),
+                    reason="3DGUT support isn't built in",
+                ),
+                pytest.mark.skipif(
+                    (params[5] == False or params[6] == False)
+                    and not gsplat.has_3dgs(),
+                    reason="3DGS support isn't built in",
+                ),
+            ],
+        )
         # Standard tests: all combinations with with_eval3d=False
-        *product(
-            [True, False],  # per_view_color
-            [None, 3],  # sh_degree
-            ["RGB", "RGB+D", "D"],  # render_mode
-            [True, False],  # packed
-            [(), (2,), (1, 2)],  # batch_dims
-            [False],  # with_eval3d
-            [False],  # with_ut
-        ),
-        # 3DGUT
-        *product(
-            [True, False],  # per_view_color
-            [None, 3],  # sh_degree
-            ["RGB"],  # render_mode (only RGB)
-            [False],  # packed (must be False)
-            [(), (2,)],  # batch_dims (reduced subset)
-            [True],  # with_eval3d
-            [True],  # with_ut
-        ),
+        for params in chain(
+            product(
+                [True, False],  # per_view_color
+                [None, 3],  # sh_degree
+                ["RGB", "RGB+D", "D"],  # render_mode
+                [True, False],  # packed
+                [(), (2,), (1, 2)],  # batch_dims
+                [False],  # with_eval3d
+                [False],  # with_ut
+            ),
+            # 3DGUT
+            product(
+                [True, False],  # per_view_color
+                [None, 3],  # sh_degree
+                ["RGB"],  # render_mode (only RGB)
+                [False],  # packed (must be False)
+                [(), (2,)],  # batch_dims (reduced subset)
+                [True],  # with_eval3d
+                [True],  # with_ut
+            ),
+        )
     ],
 )
 def test_rasterization(
