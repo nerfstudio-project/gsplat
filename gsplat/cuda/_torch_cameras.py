@@ -1804,3 +1804,294 @@ def _interpolate_shutter_pose(
     assert_shape("result", result, B + (7,))
 
     return result
+
+
+class _LidarCameraModel(_BaseCameraModel):
+    """PyTorch reference implementation of Lidar camera model.
+
+    This provides a minimal reference implementation for lidar sensors
+    following the NREND/NCore architecture.
+    """
+
+    # Must match CUDA implementation in Cameras.h
+    ANGLE_TO_PIXEL_SCALING_FACTOR = 1024.0
+
+    def __init__(
+        self,
+        width: int,
+        height: int,
+        fov_elevation_range: tuple[float, float],  # (min, max) in radians
+        fov_azimuth_range: tuple[float, float],    # (min, max) in radians
+        spin_clockwise: bool,
+        rs_type: int,
+        angle_to_column_map: Optional[Tensor] = None,
+        angle_to_column_map_resolution_factor: int = 1,
+        device: str = 'cuda',  # Default to CUDA for consistency with other test fixtures
+        **kwargs
+    ):
+        """Initialize lidar camera model.
+
+        Args:
+            width: Number of columns in lidar scan
+            height: Number of rows in lidar scan
+            fov_elevation_range: FOV elevation range (min, max) in radians
+            fov_azimuth_range: FOV azimuth range (min, max) in radians
+            spin_clockwise: True if sensor spins clockwise
+            rs_type: Rolling shutter type (from RollingShutterType enum)
+            angle_to_column_map: Optional 1D lookup table (in row-major order) for angleToColumnMap
+            angle_to_column_map_resolution_factor: Resolution factor for the lookup table
+            device: Device to place internal tensors on ('cuda' or 'cpu')
+        """
+        super().__init__(width=width, height=height, shutter_type=rs_type)
+
+        # Store as tuples and compute fov_start/fov_span for internal use
+        self.fov_elevation_range = fov_elevation_range
+        self.fov_azimuth_range = fov_azimuth_range
+
+        # Convert ranges to start/span for internal computations (matching C++ internal representation)
+        # Store on specified device
+        self.fov_start = torch.tensor([fov_azimuth_range[0], fov_elevation_range[0]],
+                                      dtype=torch.float32, device=device)
+        self.fov_span = torch.tensor([fov_azimuth_range[1] - fov_azimuth_range[0],
+                                      fov_elevation_range[1] - fov_elevation_range[0]],
+                                      dtype=torch.float32, device=device)
+
+        self.spin_clockwise = spin_clockwise
+        self.angle_to_column_map = angle_to_column_map
+        self.angle_to_column_map_resolution_factor = angle_to_column_map_resolution_factor
+
+        # Compute map resolution if angle_to_column_map is provided
+        if angle_to_column_map is not None:
+            map_height = self.angle_to_column_map_resolution_factor * self.height
+            map_width = self.angle_to_column_map_resolution_factor * self.width
+            # Validate shape
+            expected_numel = map_width * map_height
+            assert angle_to_column_map.numel() == expected_numel, \
+                f"angle_to_column_map should have {expected_numel} elements (map_width={map_width} * map_height={map_height}), " \
+                f"but got {angle_to_column_map.numel()}"
+            self.map_resolution = [
+                abs(self.fov_span[0].item()) / (map_width - 1),  # azimuth
+                abs(self.fov_span[1].item()) / (map_height - 1)   # elevation
+            ]
+
+    @property
+    def focal_lengths(self) -> Tensor:
+        """Lidar doesn't have focal lengths, return dummy values."""
+        device = self.fov_start.device
+        return torch.ones(2, dtype=torch.float32, device=device)
+
+    @property
+    def principal_points(self) -> Tensor:
+        """Lidar doesn't have principal points, return center of image."""
+        device = self.fov_start.device
+        return torch.tensor([self.width / 2, self.height / 2], dtype=torch.float32, device=device)
+
+    def camera_ray_to_image_point(
+        self,
+        camera_ray: Tensor,
+        margin_factor: float = 0.0
+    ) -> tuple[Tensor, Tensor]:
+        """Forward projection: 3D camera ray → 2D image point.
+
+        Args:
+            camera_ray: Camera rays [..., 3] (x, y, z direction vectors)
+            margin_factor: Margin factor for FOV bounds checking
+
+        Returns:
+            image_points: Image points [..., 2] with [column, row]
+            valid_flags: Boolean flags [...] indicating if projection is valid
+        """
+        device = camera_ray.device
+
+        # Normalize rays
+        ray_normalized = _safe_normalize(camera_ray)
+
+        # Convert to spherical coordinates (same as CUDA implementation)
+        elevation = torch.asin(ray_normalized[..., 2])
+        azimuth = torch.atan2(ray_normalized[..., 1], ray_normalized[..., 0])
+
+        # Scale angles to pixel space (NREND approach - line 378)
+        # image_point.x = azimuth * ANGLE_TO_PIXEL_SCALING_FACTOR
+        # image_point.y = elevation * ANGLE_TO_PIXEL_SCALING_FACTOR
+        column = azimuth * self.ANGLE_TO_PIXEL_SCALING_FACTOR
+        row = elevation * self.ANGLE_TO_PIXEL_SCALING_FACTOR
+
+        image_point = torch.stack([column, row], dim=-1)
+
+        # Move FOV parameters to the same device
+        fov_start = self.fov_start.to(device)
+        fov_span = self.fov_span.to(device)
+
+        # Validation: compute relative angles for FOV checking
+        # Helper to compute relative angle (matches CUDA implementation)
+        def relative_clock_rotation(start, angle):
+            """Compute clockwise relative angle using remainder.
+            Maps equality to 0 (not 2π), outputs in [0, 2π).
+            """
+            return torch.remainder(start - angle, 2 * torch.pi)
+
+        def relative_angle(start, angle, spin_clockwise):
+            """Compute relative angle based on spin direction using remainder.
+            Outputs in [0, 2π) range.
+            """
+            if spin_clockwise:
+                return torch.remainder(start - angle, 2 * torch.pi)
+            else:
+                return torch.remainder(angle - start, 2 * torch.pi)
+
+        # Compute relative angles from FOV start
+        rel_elevation = relative_clock_rotation(fov_start[1], elevation)
+        rel_azimuth = relative_angle(fov_start[0], azimuth, self.spin_clockwise)
+
+        # Apply margin for FOV checking
+        margin_vert = margin_factor * abs(fov_span[1])
+        margin_horiz = margin_factor * abs(fov_span[0])
+
+        # Check if within FOV (with margin)
+        valid = (rel_elevation >= -margin_vert) & (rel_elevation <= abs(fov_span[1]) + margin_vert) & \
+                (rel_azimuth >= -margin_horiz) & (rel_azimuth <= abs(fov_span[0]) + margin_horiz)
+
+        return image_point, valid
+
+    def image_point_to_camera_ray(
+        self,
+        image_point: Tensor
+    ) -> tuple[Tensor, Tensor]:
+        """Inverse projection: 2D image point → 3D camera ray.
+
+        Args:
+            image_point: Image points [..., 2] with [column, row] in scaled angle space
+
+        Returns:
+            camera_rays: Camera rays [..., 3] (x, y, z direction vectors)
+            valid_flags: Boolean flags [...] indicating if point is valid
+        """
+        device = image_point.device
+        column = image_point[..., 0]
+        row = image_point[..., 1]
+
+        # Convert from scaled angle space to angles (NREND approach)
+        kToAngle = 1.0 / self.ANGLE_TO_PIXEL_SCALING_FACTOR
+        elevation = row * kToAngle
+        azimuth = column * kToAngle
+
+        # Move FOV parameters to the same device
+        fov_start = self.fov_start.to(device)
+        fov_span = self.fov_span.to(device)
+
+        # Helper functions (matching CUDA implementation)
+        def relative_clock_rotation(start, angle):
+            """Compute clockwise relative angle using remainder.
+            Maps equality to 0 (not 2π), outputs in [0, 2π).
+            """
+            return torch.remainder(start - angle, 2 * torch.pi)
+
+        def relative_angle(start, angle, spin_clockwise):
+            """Compute relative angle based on spin direction using remainder.
+            Outputs in [0, 2π) range.
+            """
+            if spin_clockwise:
+                return torch.remainder(start - angle, 2 * torch.pi)
+            else:
+                return torch.remainder(angle - start, 2 * torch.pi)
+
+        # Compute relative angles
+        rel_elevation = relative_clock_rotation(fov_start[1], elevation)
+        rel_azimuth = relative_angle(fov_start[0], azimuth, self.spin_clockwise)
+
+        # Validate: check FOV bounds (STRICT - no margin)
+        # Image points should be within sensor FOV by definition
+        valid = (rel_elevation >= 0) & (rel_elevation <= abs(fov_span[1])) & \
+                (rel_azimuth >= 0) & (rel_azimuth <= abs(fov_span[0]))
+
+        # Convert to Cartesian coordinates
+        cos_elevation = torch.cos(elevation)
+        camera_ray = torch.stack([
+            torch.cos(azimuth) * cos_elevation,
+            torch.sin(azimuth) * cos_elevation,
+            torch.sin(elevation)
+        ], dim=-1)
+
+        camera_ray = _safe_normalize(camera_ray)
+
+        return camera_ray, valid
+
+    def shutter_relative_frame_time(
+        self,
+        image_point: Tensor
+    ) -> Tensor:
+        """Compute relative frame time for rolling shutter.
+
+        Args:
+            image_point: Image points [..., 2] with [column, row] in scaled angle space
+
+        Returns:
+            relative_times: Relative frame times [...] in range [0, 1]
+        """
+        if self.angle_to_column_map is None:
+            # Fallback to base class implementation (linear timing based on column)
+            return super().shutter_relative_frame_time(image_point)
+
+        # Use angleToColumnMap for accurate timing
+        device = image_point.device
+        column = image_point[..., 0]
+        row = image_point[..., 1]
+
+        # Convert from scaled angle space back to angles
+        kToAngle = 1.0 / self.ANGLE_TO_PIXEL_SCALING_FACTOR
+        elevation = row * kToAngle
+        azimuth = column * kToAngle
+
+        # Move FOV parameters to device
+        fov_start = self.fov_start.to(device)
+
+        # Helper functions (matching CUDA implementation exactly)
+        def relative_clock_rotation(start, angle):
+            """Compute clockwise relative angle using remainder.
+            Maps equality to 0 (not 2π), outputs in [0, 2π).
+            """
+            return torch.remainder(start - angle, 2 * torch.pi)
+
+        def relative_angle(start, angle, spin_clockwise):
+            """Compute relative angle based on spin direction using remainder.
+            Outputs in [0, 2π) range.
+            """
+            if spin_clockwise:
+                return torch.remainder(start - angle, 2 * torch.pi)
+            else:
+                return torch.remainder(angle - start, 2 * torch.pi)
+
+        # Compute relative angles (within sensor FOV)
+        rel_elevation = relative_clock_rotation(fov_start[1], elevation)
+        rel_azimuth = relative_angle(fov_start[0], azimuth, self.spin_clockwise)
+
+        # Compute lookup grid dimensions
+        n_pts_horiz = self.width * self.angle_to_column_map_resolution_factor
+        n_pts_vert = self.height * self.angle_to_column_map_resolution_factor
+
+        # Find indices in the lookup grid
+        # The grid cells have size map_resolution (in radians)
+        horizontal_idx_float = rel_azimuth / self.map_resolution[0] + 0.5
+        vertical_idx_float = rel_elevation / self.map_resolution[1] + 0.5
+
+        # Clamp to valid range
+        horizontal_idx = torch.clamp(
+            horizontal_idx_float.long(),
+            0, n_pts_horiz - 1
+        )
+        vertical_idx = torch.clamp(
+            vertical_idx_float.long(),
+            0, n_pts_vert - 1
+        )
+
+        # Move angle_to_column_map to device if needed
+        angle_to_column_map = self.angle_to_column_map.to(device)
+
+        # Lookup column index from the angle-to-column map
+        # angle_to_column_map is a 1D array stored in row-major order
+        linear_idx = vertical_idx * n_pts_horiz + horizontal_idx
+        column_idx = angle_to_column_map[linear_idx].float()
+
+        # Compute relative frame time
+        return column_idx / (self.width - 1)
+

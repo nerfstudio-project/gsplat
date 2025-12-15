@@ -9,7 +9,7 @@ from torch import Tensor
 from typing_extensions import Literal
 from gsplat._helper import assert_shape
 
-CameraModel = Literal["pinhole", "ortho", "fisheye", "ftheta"]
+CameraModel = Literal["pinhole", "ortho", "fisheye", "ftheta", "lidar"]
 
 def _make_lazy_cuda_func(name: str) -> Callable:
     def call_cuda(*args, **kwargs):
@@ -112,6 +112,79 @@ class FThetaCameraDistortionParameters:
     def to_cpp_default(cls) -> Any:
         p = _make_lazy_cuda_obj("FThetaCameraDistortionParameters")()
         return p
+
+    @classmethod
+    def to_cpp_optional(cls, obj: Optional["FThetaCameraDistortionParameters"]) -> Any:
+        """Convert an optional FThetaCameraDistortionParameters to C++ representation.
+
+        Args:
+            obj: Optional FThetaCameraDistortionParameters instance
+
+        Returns:
+            C++ representation (either from obj.to_cpp() or default)
+        """
+        return obj.to_cpp() if obj is not None else cls.to_cpp_default()
+
+
+class SpinningDirection(Enum):
+    CLOCKWISE = 0
+    COUNTER_CLOCKWISE = 1
+
+    def to_cpp(self) -> Any:
+        return _make_lazy_cuda_obj(f"SpinningDirection.{self.name}")
+
+
+@dataclass
+class LidarSensorParameters:
+    fov_elevation_range: Tuple[float, float]  # min/max angle in radians
+    fov_azimuth_range: Tuple[float, float]  # min/max angle in radians
+
+    spin_direction: SpinningDirection
+
+    row_elevations: Tensor
+    column_azimuths: Tensor
+    row_azimuth_offsets: Tensor
+
+    # These attributes are actually acceleration structures that are
+    # internal detail of the lidar model. Eventually it'll be part of
+    # the internal implementation of the sensor model.
+    # TODO: there might be more attributes needed here.
+    angle_to_column_map: Tensor  # torch.int32 (nRows,nColumns,angleToColumnMapResolutionFactor^2]
+
+    def to_cpp(self) -> Any:
+        p = _make_lazy_cuda_obj("LidarSensorParameters")()
+        p.fov_elevation_range = self.fov_elevation_range
+        p.fov_azimuth_range = self.fov_azimuth_range
+        p.spin_direction = self.spin_direction.to_cpp()
+        p.row_elevations = self.row_elevations
+        p.column_azimuths = self.column_azimuths
+        p.row_azimuth_offsets = self.row_azimuth_offsets
+        p.angle_to_column_map = self.angle_to_column_map
+        return p
+
+    @staticmethod
+    def to_cpp_default() -> Any:
+        p = _make_lazy_cuda_obj("LidarSensorParameters")()
+        p.fov_elevation_range = (0.0, 0.0)
+        p.fov_azimuth_range = (0.0, 0.0)
+        p.spin_direction = _make_lazy_cuda_obj("SpinningDirection.CLOCKWISE")
+        p.row_elevations = torch.empty(0, dtype=torch.float32)
+        p.column_azimuths = torch.empty(0, dtype=torch.float32)
+        p.row_azimuth_offsets = torch.empty(0, dtype=torch.float32)
+        p.angle_to_column_map = torch.empty(0, dtype=torch.int32)
+        return p
+
+    @classmethod
+    def to_cpp_optional(cls, obj: Optional["LidarSensorParameters"]) -> Any:
+        """Convert an optional LidarSensorParameters to C++ representation.
+
+        Args:
+            obj: Optional LidarSensorParameters instance
+
+        Returns:
+            C++ representation (either from obj.to_cpp() or default)
+        """
+        return obj.to_cpp() if obj is not None else cls.to_cpp_default()
 
 
 def world_to_cam(
@@ -1291,6 +1364,7 @@ def fully_fused_projection_with_ut(
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
     thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
     ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
+    lidar_coeffs: Optional[LidarSensorParameters] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
@@ -1303,12 +1377,12 @@ def fully_fused_projection_with_ut(
 
     .. warning::
         This function is not differentiable to any input.
-    
+
     Args:
-        global_z_order: Defines how Gaussians are sorted for depth ordering. If True (default), 
-            Gaussians are sorted by their z-coordinate in camera space. If False, they are sorted 
-            by their Euclidean distance from the camera origin. The z-coordinate sorting is typically 
-            faster and sufficient for most cases, while Euclidean distance can be useful for scenes 
+        global_z_order: Defines how Gaussians are sorted for depth ordering. If True (default),
+            Gaussians are sorted by their z-coordinate in camera space. If False, they are sorted
+            by their Euclidean distance from the camera origin. The z-coordinate sorting is typically
+            faster and sufficient for most cases, while Euclidean distance can be useful for scenes
             with wide field-of-view or non-standard camera models. Default: True.
     """
     batch_dims = means.shape[:-2]
@@ -1358,9 +1432,8 @@ def fully_fused_projection_with_ut(
         radial_coeffs.contiguous() if radial_coeffs is not None else None,
         tangential_coeffs.contiguous() if tangential_coeffs is not None else None,
         thin_prism_coeffs.contiguous() if thin_prism_coeffs is not None else None,
-        ftheta_coeffs.to_cpp()
-        if ftheta_coeffs is not None
-        else FThetaCameraDistortionParameters.to_cpp_default(),
+        FThetaCameraDistortionParameters.to_cpp_optional(ftheta_coeffs),
+        LidarSensorParameters.to_cpp_optional(lidar_coeffs),
     )
     if not calc_compensations:
         compensations = None
@@ -1536,11 +1609,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
         )
-        ftheta_coeffs = (
-            ftheta_coeffs.to_cpp()
-            if ftheta_coeffs is not None
-            else FThetaCameraDistortionParameters.to_cpp_default()
-        )
+        ftheta_coeffs_cpp = FThetaCameraDistortionParameters.to_cpp_optional(ftheta_coeffs)
 
         # Conditionally allocate sample_counts based on flag
         if return_sample_counts:
@@ -1580,7 +1649,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             radial_coeffs,
             tangential_coeffs,
             thin_prism_coeffs,
-            ftheta_coeffs,
+            ftheta_coeffs_cpp,
             isect_offsets,
             flatten_ids,
             use_hit_distance,
@@ -1613,7 +1682,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         ctx.rs_type = rs_type
         ctx.camera_model_type = camera_model_type
         ctx.tile_size = tile_size
-        ctx.ftheta_coeffs = ftheta_coeffs
+        ctx.ftheta_coeffs = ftheta_coeffs_cpp
         ctx.use_hit_distance = use_hit_distance
 
         return render_colors, render_alphas, last_ids, sample_counts

@@ -13,6 +13,7 @@ from .cuda._wrapper import (
     CameraModel,
     FThetaCameraDistortionParameters,
     FThetaPolynomialType,
+    LidarSensorParameters,
     UnscentedTransformParameters,
     fully_fused_projection,
     fully_fused_projection_2dgs,
@@ -75,6 +76,7 @@ def rasterization(
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
     thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
     ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
+    lidar_coeffs: Optional[LidarSensorParameters] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
@@ -114,19 +116,19 @@ def rasterization(
 
     .. note::
         **Depth Rendering**: This function supports colors or/and depths via `render_mode`.
-        
+
         **Gaussian Depth Modes** (use projection depth, controlled by `global_z_order`):
         - "D": Accumulated Gaussian depth :math:`\\sum_i w_i z_i`
         - "ED": Expected Gaussian depth :math:`\\frac{\\sum_i w_i z_i}{\\sum_i w_i}`
         - "RGB+D": RGB + accumulated Gaussian depth
         - "RGB+ED": RGB + expected Gaussian depth
-        
+
         **Hit Distance Modes** (compute along-ray distance in rasterization):
         - "d": Accumulated hit distance :math:`\\sum_i w_i d_i`
         - "Ed": Expected hit distance :math:`\\frac{\\sum_i w_i d_i}{\\sum_i w_i}`
         - "RGB-d": RGB + accumulated hit distance
         - "RGB-Ed": RGB + expected hit distance
-        
+
         "RGB" renders only the colored image. For combined modes, depth is the last channel.
 
     .. note::
@@ -206,10 +208,10 @@ def rasterization(
         tile_size: The size of the tiles for rasterization. Default is 16.
             (Note: other values are not tested)
         backgrounds: The background colors. [..., C, D]. Default is None.
-        render_mode: The rendering mode. Supported modes are "RGB", "d", "Ed", "D", "ED", 
-            "RGB-d", "RGB-Ed", "RGB+D", and "RGB+ED". "RGB" renders the colored image. 
-            Gaussian depth modes (D, ED, RGB+D, RGB+ED) use projection depth. Hit distance 
-            modes (d, Ed, RGB-d, RGB-Ed) compute along-ray distance. Expected modes (Ed, ED) 
+        render_mode: The rendering mode. Supported modes are "RGB", "d", "Ed", "D", "ED",
+            "RGB-d", "RGB-Ed", "RGB+D", and "RGB+ED". "RGB" renders the colored image.
+            Gaussian depth modes (D, ED, RGB+D, RGB+ED) use projection depth. Hit distance
+            modes (d, Ed, RGB-d, RGB-Ed) compute along-ray distance. Expected modes (Ed, ED)
             are normalized by opacity. Default is "RGB".
         sparse_grad: If true, the gradients for {means, quats, scales} will be stored in
             a COO sparse layout. This can be helpful for saving memory. Default is False.
@@ -235,9 +237,9 @@ def rasterization(
         with_ut: Whether to use Unscented Transform (UT) for projection. Default is False.
         with_eval3d: Whether to calculate Gaussian response in 3D world space, instead
             of 2D image space. Default is False.
-        global_z_order: Whether to use z-depth (True) or Euclidean distance (False) for 
-            sorting Gaussians during rasterization. When True, Gaussians are sorted by their 
-            z-coordinate in camera space. When False, they are sorted by their Euclidean 
+        global_z_order: Whether to use z-depth (True) or Euclidean distance (False) for
+            sorting Gaussians during rasterization. When True, Gaussians are sorted by their
+            z-coordinate in camera space. When False, they are sorted by their Euclidean
             distance from the camera origin. Default is True.
         radial_coeffs: Opencv pinhole/fisheye radial distortion coefficients. Default is None.
             For pinhole camera, the shape should be [..., C, 6]. For fisheye camera, the shape
@@ -319,6 +321,8 @@ def rasterization(
         assert_shape("rays", rays, batch_dims + (C, H, W, 6))
     assert render_mode in ["RGB", "d", "Ed", "D", "ED", "RGB-d", "RGB-Ed", "RGB+D", "RGB+ED"], render_mode
     assert global_z_order or with_ut, "global_z_order can be false only if with_ut=True"
+    assert camera_model != "lidar" or lidar_coeffs is not None, "Lidar coefficients given but camera model is not lidar"
+    assert camera_model == "lidar" or lidar_coeffs is None, "Lidar coefficients not given but camera model is lidar"
 
     def reshape_view(C: int, world_view: torch.Tensor, N_world: list) -> torch.Tensor:
         view_list = list(
@@ -430,7 +434,7 @@ def rasterization(
         # Use provided UT parameters or create default
         if ut_params is None:
             ut_params = UnscentedTransformParameters()
-        
+
         proj_results = fully_fused_projection_with_ut(
             means=means,
             quats=quats,
@@ -451,12 +455,16 @@ def rasterization(
             tangential_coeffs=tangential_coeffs,
             thin_prism_coeffs=thin_prism_coeffs,
             ftheta_coeffs=ftheta_coeffs,
+            lidar_coeffs=lidar_coeffs,
             rolling_shutter=rolling_shutter,
             viewmats_rs=viewmats_rs,
             global_z_order=global_z_order,
         )
 
     else:
+        if lidar_coeffs is not None:
+            raise ValueError("Lidar coefficients given but with_ut=False. Lidar camera model requires with_ut=True.")
+
         # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
         proj_results = fully_fused_projection(
             means,
@@ -665,7 +673,7 @@ def rasterization(
     # Determine if we need hit distance (computed in rasterization) or Gaussian depth (from projection)
     # (hit_distance_modes already defined at validation stage)
     use_hit_distance = render_mode in hit_distance_modes
-    
+
     # Rasterize to pixels
     if render_mode in ["RGB+D", "RGB+ED", "RGB-d", "RGB-Ed"]:
         if use_hit_distance:
@@ -1474,10 +1482,10 @@ def rasterization_2dgs(
         tile_size: The size of the tiles for rasterization. Default is 16.
             (Note: other values are not tested)
         backgrounds: The background colors. [C, D]. Default is None.
-        render_mode: The rendering mode. Supported modes are "RGB", "d", "Ed", "D", "ED", 
-            "RGB-d", "RGB-Ed", "RGB+D", and "RGB+ED". "RGB" renders the colored image. 
-            Gaussian depth modes (D, ED, RGB+D, RGB+ED) use projection depth. Hit distance 
-            modes (d, Ed, RGB-d, RGB-Ed) compute along-ray distance. Expected modes (Ed, ED) 
+        render_mode: The rendering mode. Supported modes are "RGB", "d", "Ed", "D", "ED",
+            "RGB-d", "RGB-Ed", "RGB+D", and "RGB+ED". "RGB" renders the colored image.
+            Gaussian depth modes (D, ED, RGB+D, RGB+ED) use projection depth. Hit distance
+            modes (d, Ed, RGB-d, RGB-Ed) compute along-ray distance. Expected modes (Ed, ED)
             are normalized by opacity. Default is "RGB".
         sparse_grad (Experimental): If true, the gradients for {means, quats, scales} will be stored in
             a COO sparse layout. This can be helpful for saving memory. Default is False.

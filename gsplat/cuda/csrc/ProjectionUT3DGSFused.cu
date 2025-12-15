@@ -38,12 +38,13 @@ __global__ void projection_ut_3dgs_fused_kernel(
     const CameraModelType camera_model_type,
     const bool global_z_order,
     // uncented transform
-    const UnscentedTransformParameters ut_params,    
+    const UnscentedTransformParameters ut_params,
     const ShutterType rs_type,
     const scalar_t *__restrict__ radial_coeffs,     // [B, C, 6] or [B, C, 4] optional
     const scalar_t *__restrict__ tangential_coeffs, // [B, C, 2] optional
     const scalar_t *__restrict__ thin_prism_coeffs, // [B, C, 4] optional
     const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
+    const LidarCameraParameters lidar_params, // lidar sensor parameters (device-side)
     // outputs
     int32_t *__restrict__ radii,         // [B, C, N, 2]
     scalar_t *__restrict__ means2d,      // [B, C, N, 2]
@@ -57,7 +58,7 @@ __global__ void projection_ut_3dgs_fused_kernel(
         return;
     }
     const uint32_t bid = idx / (C * N);  // batch id
-    const uint32_t cid = (idx / N) % C;  // camera id 
+    const uint32_t cid = (idx / N) % C;  // camera id
     const uint32_t gid = idx % N;        // gaussian id
 
     // shift pointers to the current gaussian
@@ -145,6 +146,15 @@ __global__ void projection_ut_3dgs_fused_kernel(
         cm_params.principal_point = { principal_point.x, principal_point.y };
         cm_params.dist = ftheta_coeffs;
         FThetaCameraModel camera_model(cm_params);
+        image_gaussian_return =
+            world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
+                camera_model, rs_params, ut_params, mean, scale, quat);
+    } else if (camera_model_type == CameraModelType::LIDAR) {
+        LidarCameraModel::Parameters cm_params = {};
+        cm_params.resolution = {image_width, image_height};
+        cm_params.shutter_type = rs_type;
+        cm_params.lidar = lidar_params;
+        LidarCameraModel camera_model(cm_params);
         image_gaussian_return =
             world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
                 camera_model, rs_params, ut_params, mean, scale, quat);
@@ -250,6 +260,7 @@ void launch_projection_ut_3dgs_fused_kernel(
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
     const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
+    const LidarCameraParameters lidar_params, // lidar sensor parameters (device-side)
     // outputs
     at::Tensor radii,                      // [..., C, N, 2]
     at::Tensor means2d,                    // [..., C, N, 2]
@@ -307,6 +318,7 @@ void launch_projection_ut_3dgs_fused_kernel(
                 ? thin_prism_coeffs.value().data_ptr<float>()
                 : nullptr,
             ftheta_coeffs,
+            lidar_params,
             radii.data_ptr<int32_t>(),
             means2d.data_ptr<float>(),
             depths.data_ptr<float>(),
