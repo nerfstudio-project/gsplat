@@ -23,6 +23,7 @@ from typing import Any, Callable, Optional, Tuple
 import torch
 from torch import Tensor
 from typing_extensions import Literal
+from gsplat._helper import assert_shape
 
 CameraModel = Literal["pinhole", "ortho", "fisheye", "ftheta"]
 
@@ -740,6 +741,7 @@ def rasterize_to_pixels_eval3d(
     masks: Optional[Tensor] = None,  # [..., C, tile_height, tile_width]
     camera_model: CameraModel = "pinhole",
     ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
+    rays: Optional[Tensor] = None,  # [..., C, H, W, 6]
     # distortion
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
@@ -771,6 +773,7 @@ def rasterize_to_pixels_eval3d(
         opacities=opacities,
         viewmats=viewmats,
         Ks=Ks,
+        rays=rays,
         image_width=image_width,
         image_height=image_height,
         tile_size=tile_size,
@@ -809,6 +812,7 @@ def rasterize_to_pixels_eval3d_extra(
     masks: Optional[Tensor] = None,  # [..., C, tile_height, tile_width]
     camera_model: CameraModel = "pinhole",
     ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
+    rays: Optional[Tensor] = None,  # [..., C, P, 6]
     # distortion
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
@@ -841,6 +845,7 @@ def rasterize_to_pixels_eval3d_extra(
     num_batch_dims = len(batch_dims)
     N = means.size(-2)
     C = viewmats.size(-3)
+    P = rays.shape[-2] if rays is not None else 0
     channels = colors.shape[-1]
     device = means.device
 
@@ -849,6 +854,8 @@ def rasterize_to_pixels_eval3d_extra(
     assert scales.shape == batch_dims + (N, 3), scales.shape
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
+    if rays is not None:
+        assert_shape("rays", rays, batch_dims + (C, P, 6))
 
     assert colors.ndim in (num_batch_dims + 2, num_batch_dims + 3), colors.shape
     if colors.ndim == num_batch_dims + 2:
@@ -963,6 +970,7 @@ def rasterize_to_pixels_eval3d_extra(
         flatten_ids.contiguous(),
         camera_model,
         ut_params,
+        rays.contiguous() if rays is not None else None,
         # distortion
         radial_coeffs.contiguous() if radial_coeffs is not None else None,
         tangential_coeffs.contiguous() if tangential_coeffs is not None else None,
@@ -1558,6 +1566,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         flatten_ids: Tensor,  # [..., n_isects]
         camera_model: CameraModel = "pinhole",
         ut_params: UnscentedTransformParameters = UnscentedTransformParameters(),
+        rays: Optional[Tensor] = None,  # [..., C, P, 6]
         # distortion
         radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
         tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
@@ -1612,6 +1621,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             camera_model_type,
             ut_params,
             rs_type,
+            rays,
             radial_coeffs,
             tangential_coeffs,
             thin_prism_coeffs,
@@ -1633,6 +1643,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             viewmats,
             viewmats_rs,
             Ks,
+            rays,
             radial_coeffs,
             tangential_coeffs,
             thin_prism_coeffs,
@@ -1673,6 +1684,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             viewmats,
             viewmats_rs,
             Ks,
+            rays,
             radial_coeffs,
             tangential_coeffs,
             thin_prism_coeffs,
@@ -1709,6 +1721,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             camera_model_type,
             ut_params,
             rs_type,
+            rays,
             radial_coeffs,
             tangential_coeffs,
             thin_prism_coeffs,
@@ -1749,6 +1762,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             None,  # flatten_ids
             None,  # camera_model
             None,  # ut_params
+            None,  # rays
             None,  # radial_coeffs
             None,  # tangential_coeffs
             None,  # thin_prism_coeffs

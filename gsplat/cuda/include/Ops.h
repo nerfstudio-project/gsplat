@@ -535,6 +535,7 @@ rasterize_to_pixels_from_world_3dgs_fwd(
     // uncented transform
     const UnscentedTransformParameters ut_params,
     ShutterType rs_type,
+    const at::optional<at::Tensor> rays, // [..., C, H, W, 6]
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
@@ -569,6 +570,7 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     // uncented transform
     const UnscentedTransformParameters ut_params,
     ShutterType rs_type,
+    const at::optional<at::Tensor> rays, // [..., C, H, W, 6]
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
