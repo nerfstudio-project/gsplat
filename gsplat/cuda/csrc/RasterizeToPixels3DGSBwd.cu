@@ -29,6 +29,7 @@
 #include "Common.h"
 #include "Rasterization.h"
 #include "Utils.cuh"
+#include "MacroUtils.h"
 
 namespace gsplat {
 
@@ -428,25 +429,7 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
         at::Tensor v_opacities                                                 \
     );
 
-__INS__(1)
-__INS__(2)
-__INS__(3)
-__INS__(4)
-__INS__(5)
-__INS__(8)
-__INS__(9)
-__INS__(16)
-__INS__(17)
-__INS__(32)
-__INS__(33)
-__INS__(64)
-__INS__(65)
-__INS__(128)
-__INS__(129)
-__INS__(256)
-__INS__(257)
-__INS__(512)
-__INS__(513)
+GSPLAT_FOR_EACH(__INS__, GSPLAT_NUM_CHANNELS)
 #undef __INS__
 
 } // namespace gsplat

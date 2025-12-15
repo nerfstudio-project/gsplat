@@ -29,6 +29,7 @@
 #include "Ops.h"
 #include "Rasterization.h"
 #include "Cameras.h"
+#include "MacroUtils.h"
 
 namespace gsplat {
 
@@ -108,25 +109,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_3dgs_fwd(
     // channels into the kernel functions and avoid necessary global memory
     // writes. This requires moving the channel padding from python to C side.
     switch (channels) {
-        __LAUNCH_KERNEL__(1)
-        __LAUNCH_KERNEL__(2)
-        __LAUNCH_KERNEL__(3)
-        __LAUNCH_KERNEL__(4)
-        __LAUNCH_KERNEL__(5)
-        __LAUNCH_KERNEL__(8)
-        __LAUNCH_KERNEL__(9)
-        __LAUNCH_KERNEL__(16)
-        __LAUNCH_KERNEL__(17)
-        __LAUNCH_KERNEL__(32)
-        __LAUNCH_KERNEL__(33)
-        __LAUNCH_KERNEL__(64)
-        __LAUNCH_KERNEL__(65)
-        __LAUNCH_KERNEL__(128)
-        __LAUNCH_KERNEL__(129)
-        __LAUNCH_KERNEL__(256)
-        __LAUNCH_KERNEL__(257)
-        __LAUNCH_KERNEL__(512)
-        __LAUNCH_KERNEL__(513)
+        GSPLAT_FOR_EACH(__LAUNCH_KERNEL__, GSPLAT_NUM_CHANNELS)
     default:
         AT_ERROR("Unsupported number of channels: ", channels);
     }
@@ -219,25 +202,7 @@ rasterize_to_pixels_3dgs_bwd(
     // channels into the kernel functions and avoid necessary global memory
     // writes. This requires moving the channel padding from python to C side.
     switch (channels) {
-        __LAUNCH_KERNEL__(1)
-        __LAUNCH_KERNEL__(2)
-        __LAUNCH_KERNEL__(3)
-        __LAUNCH_KERNEL__(4)
-        __LAUNCH_KERNEL__(5)
-        __LAUNCH_KERNEL__(8)
-        __LAUNCH_KERNEL__(9)
-        __LAUNCH_KERNEL__(16)
-        __LAUNCH_KERNEL__(17)
-        __LAUNCH_KERNEL__(32)
-        __LAUNCH_KERNEL__(33)
-        __LAUNCH_KERNEL__(64)
-        __LAUNCH_KERNEL__(65)
-        __LAUNCH_KERNEL__(128)
-        __LAUNCH_KERNEL__(129)
-        __LAUNCH_KERNEL__(256)
-        __LAUNCH_KERNEL__(257)
-        __LAUNCH_KERNEL__(512)
-        __LAUNCH_KERNEL__(513)
+        GSPLAT_FOR_EACH(__LAUNCH_KERNEL__, GSPLAT_NUM_CHANNELS)
     default:
         AT_ERROR("Unsupported number of channels: ", channels);
     }
@@ -443,25 +408,7 @@ rasterize_to_pixels_2dgs_fwd(
     // channels into the kernel functions and avoid necessary global memory
     // writes. This requires moving the channel padding from python to C side.
     switch (channels) {
-        __LAUNCH_KERNEL__(1)
-        __LAUNCH_KERNEL__(2)
-        __LAUNCH_KERNEL__(3)
-        __LAUNCH_KERNEL__(4)
-        __LAUNCH_KERNEL__(5)
-        __LAUNCH_KERNEL__(8)
-        __LAUNCH_KERNEL__(9)
-        __LAUNCH_KERNEL__(16)
-        __LAUNCH_KERNEL__(17)
-        __LAUNCH_KERNEL__(32)
-        __LAUNCH_KERNEL__(33)
-        __LAUNCH_KERNEL__(64)
-        __LAUNCH_KERNEL__(65)
-        __LAUNCH_KERNEL__(128)
-        __LAUNCH_KERNEL__(129)
-        __LAUNCH_KERNEL__(256)
-        __LAUNCH_KERNEL__(257)
-        __LAUNCH_KERNEL__(512)
-        __LAUNCH_KERNEL__(513)
+        GSPLAT_FOR_EACH(__LAUNCH_KERNEL__, GSPLAT_NUM_CHANNELS)
     default:
         AT_ERROR("Unsupported number of channels: ", channels);
     }
@@ -594,25 +541,7 @@ rasterize_to_pixels_2dgs_bwd(
     // channels into the kernel functions and avoid necessary global memory
     // writes. This requires moving the channel padding from python to C side.
     switch (channels) {
-        __LAUNCH_KERNEL__(1)
-        __LAUNCH_KERNEL__(2)
-        __LAUNCH_KERNEL__(3)
-        __LAUNCH_KERNEL__(4)
-        __LAUNCH_KERNEL__(5)
-        __LAUNCH_KERNEL__(8)
-        __LAUNCH_KERNEL__(9)
-        __LAUNCH_KERNEL__(16)
-        __LAUNCH_KERNEL__(17)
-        __LAUNCH_KERNEL__(32)
-        __LAUNCH_KERNEL__(33)
-        __LAUNCH_KERNEL__(64)
-        __LAUNCH_KERNEL__(65)
-        __LAUNCH_KERNEL__(128)
-        __LAUNCH_KERNEL__(129)
-        __LAUNCH_KERNEL__(256)
-        __LAUNCH_KERNEL__(257)
-        __LAUNCH_KERNEL__(512)
-        __LAUNCH_KERNEL__(513)
+        GSPLAT_FOR_EACH(__LAUNCH_KERNEL__, GSPLAT_NUM_CHANNELS)
     default:
         AT_ERROR("Unsupported number of channels: ", channels);
     }
@@ -820,25 +749,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
     // channels into the kernel functions and avoid necessary global memory
     // writes. This requires moving the channel padding from python to C side.
     switch (channels) {
-        __LAUNCH_KERNEL__(1)
-        __LAUNCH_KERNEL__(2)
-        __LAUNCH_KERNEL__(3)
-        __LAUNCH_KERNEL__(4)
-        __LAUNCH_KERNEL__(5)
-        __LAUNCH_KERNEL__(8)
-        __LAUNCH_KERNEL__(9)
-        __LAUNCH_KERNEL__(16)
-        __LAUNCH_KERNEL__(17)
-        __LAUNCH_KERNEL__(32)
-        __LAUNCH_KERNEL__(33)
-        __LAUNCH_KERNEL__(64)
-        __LAUNCH_KERNEL__(65)
-        __LAUNCH_KERNEL__(128)
-        __LAUNCH_KERNEL__(129)
-        __LAUNCH_KERNEL__(256)
-        __LAUNCH_KERNEL__(257)
-        __LAUNCH_KERNEL__(512)
-        __LAUNCH_KERNEL__(513)
+        GSPLAT_FOR_EACH(__LAUNCH_KERNEL__, GSPLAT_NUM_CHANNELS)
     default:
         AT_ERROR("Unsupported number of channels: ", channels);
     }
@@ -952,25 +863,7 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     // channels into the kernel functions and avoid necessary global memory
     // writes. This requires moving the channel padding from python to C side.
     switch (channels) {
-        __LAUNCH_KERNEL__(1)
-        __LAUNCH_KERNEL__(2)
-        __LAUNCH_KERNEL__(3)
-        __LAUNCH_KERNEL__(4)
-        __LAUNCH_KERNEL__(5)
-        __LAUNCH_KERNEL__(8)
-        __LAUNCH_KERNEL__(9)
-        __LAUNCH_KERNEL__(16)
-        __LAUNCH_KERNEL__(17)
-        __LAUNCH_KERNEL__(32)
-        __LAUNCH_KERNEL__(33)
-        __LAUNCH_KERNEL__(64)
-        __LAUNCH_KERNEL__(65)
-        __LAUNCH_KERNEL__(128)
-        __LAUNCH_KERNEL__(129)
-        __LAUNCH_KERNEL__(256)
-        __LAUNCH_KERNEL__(257)
-        __LAUNCH_KERNEL__(512)
-        __LAUNCH_KERNEL__(513)
+        GSPLAT_FOR_EACH(__LAUNCH_KERNEL__, GSPLAT_NUM_CHANNELS)
     default:
         AT_ERROR("Unsupported number of channels: ", channels);
     }
