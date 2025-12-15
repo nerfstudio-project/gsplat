@@ -37,11 +37,17 @@ from gsplat._helper import (
     assert_mismatch_ratio,
 )
 import gsplat
+
 from gsplat.cuda._wrapper import (
     CameraModel,
     RollingShutterType,
     UnscentedTransformParameters,
+    _make_lazy_cuda_obj,
 )
+from gsplat.cuda._math import _safe_normalize
+from gsplat.cuda._torch_cameras import _viewmat_to_pose
+
+BaseCameraModelCUDA = _make_lazy_cuda_obj("BaseCameraModel")
 
 device = torch.device("cuda:0")
 
@@ -838,13 +844,15 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
 @pytest.mark.parametrize(
     "rs_type", [RollingShutterType.GLOBAL, RollingShutterType.ROLLING_TOP_TO_BOTTOM]
 )
-@pytest.mark.parametrize("use_hit_distance", [True, False])
+@pytest.mark.parametrize("use_hit_distance", [True, False], ids=["hitdist", "depth"])
+@pytest.mark.parametrize("use_rays", [True, False], ids=["rays", "sensor"])
 def test_rasterize_to_pixels_eval3d(
     test_data,
     channels: int,
     batch_dims: Tuple[int, ...],
     rs_type: RollingShutterType,
     use_hit_distance: bool,
+    use_rays: bool,
 ):
     from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
     from gsplat.cuda._wrapper import (
@@ -899,6 +907,46 @@ def test_rasterize_to_pixels_eval3d(
     else:
         viewmats_rs = None
 
+    if use_rays:
+        camera = BaseCameraModelCUDA.create(
+            width=width,
+            height=height,
+            camera_model="pinhole",
+            focal_lengths=Ks[..., [0, 1], [0, 1]].contiguous(),
+            principal_points=Ks[..., [0, 1], [2, 2]].contiguous(),
+            rs_type=rs_type.to_cpp(),
+        )
+
+        gridx, gridy = torch.meshgrid(
+            [
+                torch.arange(0, width, device=device, dtype=torch.float32),
+                torch.arange(0, height, device=device, dtype=torch.float32),
+            ],
+            indexing="ij",
+        )
+
+        batch_shape = Ks.shape[:-2]
+
+        grid = torch.stack([gridx, gridy], dim=-1)
+        grid = grid.expand(*batch_shape, *grid.shape).reshape(
+            *batch_shape, width * height, 2
+        )
+
+        pose_start = _viewmat_to_pose(viewmats)
+        if viewmats_rs is None:
+            pose_end = pose_start
+        else:
+            pose_end = _viewmat_to_pose(viewmats_rs)
+
+        rori, rdir, rvalid = camera.image_point_to_world_ray_shutter_pose(
+            grid, pose_start, pose_end
+        )
+        assert (rvalid == False).sum() == 0
+        rays = torch.cat([rori, rdir], -1)
+        rays.reshape(*batch_shape, height, width, 6)
+    else:
+        rays = None
+
     # Project Gaussians to 2D for tile intersections
     radii, means2d, depths, conics, compensations = fully_fused_projection_with_ut(
         means, quats, scales, opacities, viewmats, Ks, width, height
@@ -948,6 +996,7 @@ def test_rasterize_to_pixels_eval3d(
         rolling_shutter=rs_type,
         viewmats_rs=viewmats_rs,
         use_hit_distance=use_hit_distance,
+        rays=rays,
     )
 
     # forward - PyTorch reference implementation (with tiling optimization)
@@ -975,6 +1024,7 @@ def test_rasterize_to_pixels_eval3d(
         rs_type=rs_type,
         viewmats_rs=viewmats_rs,
         use_hit_distance=use_hit_distance,
+        rays=rays,
     )
 
     # Validate: last_ids and alpha must be consistent

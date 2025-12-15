@@ -66,6 +66,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     // uncented transform
     const UnscentedTransformParameters ut_params,    
     const ShutterType rs_type,
+    const float *__restrict__ rays,                  // [B, C, H, W, 6]
     const scalar_t *__restrict__ radial_coeffs,     // [B, C, 6] or [B, C, 4] optional
     const scalar_t *__restrict__ tangential_coeffs, // [B, C, 2] optional
     const scalar_t *__restrict__ thin_prism_coeffs, // [B, C, 4] optional
@@ -90,6 +91,8 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     uint32_t i = block.group_index().y * tile_size + block.thread_index().y;
     uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
 
+    bool inside = (i < image_height && j < image_width);
+
     tile_offsets += iid * tile_height * tile_width;
     render_colors += iid * image_height * image_width * CDIM;
     render_alphas += iid * image_height * image_width;
@@ -103,6 +106,9 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     if (masks != nullptr) {
         masks += iid * tile_height * tile_width;
     }
+    if(rays != nullptr) {
+        rays += iid * image_height * image_width * 6;
+    }
 
     float px = (float)j + 0.5f;
     float py = (float)i + 0.5f;
@@ -113,69 +119,86 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         viewmats0 + iid * 16,
         viewmats1 == nullptr ? nullptr : viewmats1 + iid * 16
     );
-    // shift pointers to the current camera. note that glm is colume-major.
-    const vec2 focal_length = {Ks[iid * 9 + 0], Ks[iid * 9 + 4]};
-    const vec2 principal_point = {Ks[iid * 9 + 2], Ks[iid * 9 + 5]};
-    
-    // Create ray from pixel
+
     WorldRay ray;
-    if (camera_model_type == CameraModelType::PINHOLE) {
-        if (radial_coeffs == nullptr && tangential_coeffs == nullptr && thin_prism_coeffs == nullptr) {
-            PerfectPinholeCameraModel::Parameters cm_params = {};
-            cm_params.resolution = {image_width, image_height};
-            cm_params.shutter_type = rs_type;
-            cm_params.principal_point = { principal_point.x, principal_point.y };
-            cm_params.focal_length = { focal_length.x, focal_length.y };
-            PerfectPinholeCameraModel camera_model(cm_params);
-            ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
-        } else {
-            OpenCVPinholeCameraModel<>::Parameters cm_params = {};
+
+    // TODO: this should be templated on the sensor type or whether we're using rays as input.
+    if(rays == nullptr)
+    {
+        // shift pointers to the current camera. note that glm is colume-major.
+        const vec2 focal_length = {Ks[iid * 9 + 0], Ks[iid * 9 + 4]};
+        const vec2 principal_point = {Ks[iid * 9 + 2], Ks[iid * 9 + 5]};
+
+        // Create ray from pixel
+        if (camera_model_type == CameraModelType::PINHOLE) {
+            if (radial_coeffs == nullptr && tangential_coeffs == nullptr && thin_prism_coeffs == nullptr) {
+                PerfectPinholeCameraModel::Parameters cm_params = {};
+                cm_params.resolution = {image_width, image_height};
+                cm_params.shutter_type = rs_type;
+                cm_params.principal_point = { principal_point.x, principal_point.y };
+                cm_params.focal_length = { focal_length.x, focal_length.y };
+                PerfectPinholeCameraModel camera_model(cm_params);
+                ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
+            } else {
+                OpenCVPinholeCameraModel<>::Parameters cm_params = {};
+                cm_params.resolution = {image_width, image_height};
+                cm_params.shutter_type = rs_type;
+                cm_params.principal_point = { principal_point.x, principal_point.y };
+                cm_params.focal_length = { focal_length.x, focal_length.y };
+                if (radial_coeffs != nullptr) {
+                    cm_params.radial_coeffs = make_array<float, 6>(radial_coeffs + iid * 6);
+                }
+                if (tangential_coeffs != nullptr) {
+                    cm_params.tangential_coeffs = make_array<float, 2>(tangential_coeffs + iid * 2);
+                }
+                if (thin_prism_coeffs != nullptr) {
+                    cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + iid * 4);
+                }
+                OpenCVPinholeCameraModel camera_model(cm_params);
+                ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
+            }
+        } else if (camera_model_type == CameraModelType::FISHEYE) {
+            OpenCVFisheyeCameraModel<>::Parameters cm_params = {};
             cm_params.resolution = {image_width, image_height};
             cm_params.shutter_type = rs_type;
             cm_params.principal_point = { principal_point.x, principal_point.y };
             cm_params.focal_length = { focal_length.x, focal_length.y };
             if (radial_coeffs != nullptr) {
-                cm_params.radial_coeffs = make_array<float, 6>(radial_coeffs + iid * 6);
+                cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + iid * 4);
             }
-            if (tangential_coeffs != nullptr) {
-                cm_params.tangential_coeffs = make_array<float, 2>(tangential_coeffs + iid * 2);
-            }
-            if (thin_prism_coeffs != nullptr) {
-                cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + iid * 4);
-            }
-            OpenCVPinholeCameraModel camera_model(cm_params);
+            OpenCVFisheyeCameraModel camera_model(cm_params);
             ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
+        } else if (camera_model_type == CameraModelType::FTHETA) {
+            FThetaCameraModel<>::Parameters cm_params = {};
+            cm_params.resolution = {image_width, image_height};
+            cm_params.shutter_type = rs_type;
+            cm_params.principal_point = { principal_point.x, principal_point.y };
+            cm_params.dist = ftheta_coeffs;
+            FThetaCameraModel camera_model(cm_params);
+            ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
+        } else {
+            // should never reach here
+            assert(false);
+            return;
         }
-    } else if (camera_model_type == CameraModelType::FISHEYE) {
-        OpenCVFisheyeCameraModel<>::Parameters cm_params = {};
-        cm_params.resolution = {image_width, image_height};
-        cm_params.shutter_type = rs_type;
-        cm_params.principal_point = { principal_point.x, principal_point.y };
-        cm_params.focal_length = { focal_length.x, focal_length.y };
-        if (radial_coeffs != nullptr) {
-            cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + iid * 4);
+    }
+    else
+    {
+        assert(rays != nullptr);
+        ray.valid_flag = false;
+        if(inside)
+        {
+            // TODO: use at least 3x64b loads instead of 6x32b
+            ray.ray_org = {rays[pix_id*6+0], rays[pix_id*6+1], rays[pix_id*6+2]};
+            ray.ray_dir = {rays[pix_id*6+3], rays[pix_id*6+4], rays[pix_id*6+5]};
+            ray.valid_flag = true;
         }
-        OpenCVFisheyeCameraModel camera_model(cm_params);
-        ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
-    } else if (camera_model_type == CameraModelType::FTHETA) {
-        FThetaCameraModel<>::Parameters cm_params = {};
-        cm_params.resolution = {image_width, image_height};
-        cm_params.shutter_type = rs_type;
-        cm_params.principal_point = { principal_point.x, principal_point.y };
-        cm_params.dist = ftheta_coeffs;
-        FThetaCameraModel camera_model(cm_params);
-        ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
-    } else {
-        // should never reach here
-        assert(false);
-        return;
     }
     const vec3 ray_d = ray.ray_dir;
     const vec3 ray_o = ray.ray_org;
 
     // return if out of bounds
     // keep not rasterizing threads around for reading data
-    bool inside = (i < image_height && j < image_width);
     bool done = (!inside) || (!ray.valid_flag);
 
     // when the mask is provided, render the background color and return
@@ -374,6 +397,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     // uncented transform
     const UnscentedTransformParameters ut_params,
     ShutterType rs_type,
+    const at::optional<at::Tensor> rays,              // [...., C, H, W, 6]
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
@@ -454,6 +478,8 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             // uncented transform
             ut_params,
             rs_type,
+            rays.has_value() ? rays.value().data_ptr<float>()
+                             : nullptr,
             radial_coeffs.has_value() ? radial_coeffs.value().data_ptr<float>()
                                       : nullptr,
             tangential_coeffs.has_value()
@@ -495,6 +521,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         const CameraModelType camera_model,                                    \
         const UnscentedTransformParameters ut_params,                         \
         const ShutterType rs_type,                                             \
+        const at::optional<at::Tensor> rays,                                   \
         const at::optional<at::Tensor> radial_coeffs,                         \
         const at::optional<at::Tensor> tangential_coeffs,                     \
         const at::optional<at::Tensor> thin_prism_coeffs,                     \

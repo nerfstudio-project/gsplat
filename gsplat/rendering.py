@@ -21,6 +21,7 @@ import torch.distributed
 import torch.nn.functional as F
 from torch import Tensor
 from typing_extensions import Literal
+from ._helper import assert_shape
 
 from .cuda._wrapper import (
     RollingShutterType,
@@ -158,6 +159,9 @@ def rasterization(
     with_ut: bool = False,
     with_eval3d: bool = False,
     global_z_order: bool = True,
+    rays: Optional[
+        Tensor
+    ] = None,  # [..., C, H, W, 6] -> ox, oy, oz, dx*spread, dy*spread, dz*spread
     # distortion
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
@@ -387,6 +391,8 @@ def rasterization(
     N = means.shape[-2]
     C = viewmats.shape[-3]
     I = B * C
+    H = height
+    W = width
     device = means.device
     assert means.shape == batch_dims + (N, 3), means.shape
     if covars is None:
@@ -401,6 +407,8 @@ def rasterization(
     assert opacities.shape == batch_dims + (N,), opacities.shape
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
+    if rays is not None:
+        assert_shape("rays", rays, batch_dims + (C, H, W, 6))
     assert render_mode in [
         "RGB",
         "d",
@@ -510,8 +518,12 @@ def rasterization(
         # Enforce that the number of cameras is the same across all ranks.
         C_world = [C] * world_size
         viewmats, Ks = all_gather_tensor_list(world_size, [viewmats, Ks])
+
         if viewmats_rs is not None:
             (viewmats_rs,) = all_gather_tensor_list(world_size, [viewmats_rs])
+
+        if rays is not None:
+            (rays,) = all_gather_tensor_list(world_size, [rays])
 
         # Silently change C from local #Cameras to global #Cameras.
         C = len(viewmats)
@@ -522,14 +534,14 @@ def rasterization(
             ut_params = UnscentedTransformParameters()
 
         proj_results = fully_fused_projection_with_ut(
-            means,
-            quats,
-            scales,
-            opacities,  # use opacities to compute a tigher bound for radii.
-            viewmats,
-            Ks,
-            width,
-            height,
+            means=means,
+            quats=quats,
+            scales=scales,
+            opacities=opacities,  # use opacities to compute a tigher bound for radii.
+            viewmats=viewmats,
+            Ks=Ks,
+            width=width,
+            height=height,
             eps2d=eps2d,
             near_plane=near_plane,
             far_plane=far_plane,
@@ -842,18 +854,19 @@ def rasterization(
             )
             if with_eval3d:
                 render_colors_, render_alphas_ = rasterize_to_pixels_eval3d(
-                    means,
-                    quats,
-                    scales,
-                    colors_chunk,
-                    opacities,
-                    viewmats,
-                    Ks,
-                    width,
-                    height,
-                    tile_size,
-                    isect_offsets,
-                    flatten_ids,
+                    means=means,
+                    quats=quats,
+                    scales=scales,
+                    colors_chunk=colors_chunk,
+                    opacities=opacities,
+                    viewmats=viewmats,
+                    Ks=Ks,
+                    rays=rays,
+                    image_width=width,
+                    image_height=height,
+                    tile_size=tile_size,
+                    isect_offsets=isect_offsets,
+                    flatten_ids=flatten_ids,
                     backgrounds=backgrounds_chunk,
                     camera_model=camera_model,
                     radial_coeffs=radial_coeffs,
@@ -865,6 +878,11 @@ def rasterization(
                     use_hit_distance=use_hit_distance,
                 )
             else:
+                if rays is not None:
+                    raise ValueError(
+                        "Rays input is only supported with with_eval3d=True"
+                    )
+
                 render_colors_, render_alphas_ = rasterize_to_pixels(
                     means2d,
                     conics,
@@ -886,18 +904,19 @@ def rasterization(
     else:
         if with_eval3d:
             render_colors, render_alphas = rasterize_to_pixels_eval3d(
-                means,
-                quats,
-                scales,
-                colors,
-                opacities,
-                viewmats,
-                Ks,
-                width,
-                height,
-                tile_size,
-                isect_offsets,
-                flatten_ids,
+                means=means,
+                quats=quats,
+                scales=scales,
+                colors=colors,
+                opacities=opacities,
+                viewmats=viewmats,
+                Ks=Ks,
+                rays=rays,
+                image_width=width,
+                image_height=height,
+                tile_size=tile_size,
+                isect_offsets=isect_offsets,
+                flatten_ids=flatten_ids,
                 backgrounds=backgrounds,
                 camera_model=camera_model,
                 radial_coeffs=radial_coeffs,
@@ -909,6 +928,8 @@ def rasterization(
                 use_hit_distance=use_hit_distance,
             )
         else:
+            if rays is not None:
+                raise ValueError("Rays input is only supported with with_eval3d=True")
             render_colors, render_alphas = rasterize_to_pixels(
                 means2d,
                 conics,
@@ -952,6 +973,9 @@ def _rasterization(
     eps2d: float = 0.3,
     sh_degree: Optional[int] = None,
     tile_size: int = 16,
+    rays: Optional[
+        Tensor
+    ] = None,  # [..., C, H, W, 6] -> ox, oy, oz, dx*spread, dy*spread, dz*spread
     backgrounds: Optional[Tensor] = None,
     render_mode: RenderMode = "RGB",
     rasterize_mode: RasterizeMode = "classic",
@@ -989,6 +1013,8 @@ def _rasterization(
     N = means.shape[-2]
     C = viewmats.shape[-3]
     I = B * C
+    H = height
+    W = width
     device = means.device
     assert means.shape == batch_dims + (N, 3), means.shape
     assert quats.shape == batch_dims + (N, 4), quats.shape
@@ -1007,6 +1033,7 @@ def _rasterization(
         "RGB+D",
         "RGB+ED",
     ], render_mode
+    assert rays is None or rays.shape == batch_dims + (C, H, W, 6), rays.shape
 
     if sh_degree is None:
         # treat colors as post-activation values, should be in shape [..., N, D] or [..., C, N, D]
@@ -1033,20 +1060,23 @@ def _rasterization(
 
     if with_ut:
         radii, means2d, depths, conics, compensations = _fully_fused_projection_with_ut(
-            means,
-            quats,
-            scales,
-            opacities,
-            viewmats,
-            Ks,
-            width,
-            height,
+            means=means,
+            quats=quats,
+            scales=scales,
+            opacities=opacities,
+            viewmats=viewmats,
+            Ks=Ks,
+            width=width,
+            height=height,
             eps2d=eps2d,
             near_plane=near_plane,
             far_plane=far_plane,
             calc_compensations=(rasterize_mode == "antialiased"),
         )
     else:
+        if rays is not None:
+            raise ValueError("Rays input is only supported with with_eval3d=True")
+
         # Project Gaussians to 2D.
         # The results are with shape [..., C, N, ...]. Only the elements with radii > 0 are valid.
         covars, _ = _quat_scale_to_covar_preci(quats, scales, True, False, triu=False)
@@ -1153,21 +1183,26 @@ def _rasterization(
                 # Using CUDA code due to its speed. This function is already
                 # being thoroughtly tested in test_basic.py
                 render_colors_, render_alphas_ = rasterize_to_pixels_eval3d(
-                    means,
-                    quats,
-                    scales,
-                    colors_chunk,
-                    opacities,
-                    viewmats,
-                    Ks,
-                    width,
-                    height,
+                    means=means,
+                    quats=quats,
+                    scales=scales,
+                    colors_chunk=colors_chunk,
+                    opacities=opacities,
+                    viewmats=viewmats,
+                    Ks=Ks,
+                    image_width=width,
+                    image_height=height,
+                    rays=rays,
                     tile_size=tile_size,
                     isect_offsets=isect_offsets,
                     flatten_ids=flatten_ids,
                     backgrounds=backgrounds_chunk,
                 )
             else:
+                if rays is not None:
+                    raise ValueError(
+                        "Rays input is only supported with with_eval3d=True"
+                    )
                 render_colors_, render_alphas_ = _rasterize_to_pixels(
                     means2d,
                     conics,
@@ -1191,21 +1226,24 @@ def _rasterization(
             # Using CUDA code due to its speed. This function is already
             # being thoroughtly tested in test_basic.py
             render_colors, render_alphas = rasterize_to_pixels_eval3d(
-                means,
-                quats,
-                scales,
-                colors,
-                opacities,
-                viewmats,
-                Ks,
-                width,
-                height,
+                means=means,
+                quats=quats,
+                scales=scales,
+                colors=colors,
+                opacities=opacities,
+                viewmats=viewmats,
+                Ks=Ks,
+                image_width=width,
+                image_height=height,
+                rays=rays,
                 tile_size=tile_size,
                 isect_offsets=isect_offsets,
                 flatten_ids=flatten_ids,
                 backgrounds=backgrounds,
             )
         else:
+            if rays is not None:
+                raise ValueError("Rays input is only supported with with_eval3d=True")
             render_colors, render_alphas = _rasterize_to_pixels(
                 means2d,
                 conics,
