@@ -27,6 +27,8 @@ BUILD_2DGS = os.getenv("BUILD_2DGS")
 BUILD_ADAM = os.getenv("BUILD_ADAM")
 BUILD_RELOC = os.getenv("BUILD_RELOC")
 
+NUM_CHANNELS = os.getenv("NUM_CHANNELS")
+
 def get_build_parameters():
     name = "gsplat_cuda"
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -112,6 +114,13 @@ def get_build_parameters():
         print("Compiling without OpenMP...")
 
     extra_cuda_cflags += extra_cflags
+
+    if NUM_CHANNELS is not None:
+        # nvcc has a bug where you need to escape the commas in macro values defined with -D.
+        extra_cuda_cflags += [f"-DGSPLAT_NUM_CHANNELS=\"{NUM_CHANNELS.replace(",","\\,")}\""]
+        # gcc would not grok the backslash, so here we just pass NUM_CHANNELS as is.
+        extra_cflags += [f"-DGSPLAT_NUM_CHANNELS={NUM_CHANNELS}"]
+
     extra_cuda_cflags += [] if NVCC_FLAGS == "" else NVCC_FLAGS.split(" ")
 
     return SimpleNamespace(
