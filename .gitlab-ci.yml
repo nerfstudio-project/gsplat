@@ -1,0 +1,70 @@
+variables:
+  GIT_SUBMODULE_STRATEGY: recursive
+  GIT_CLEAN_FLAGS: -ffdx -e .ci-keep
+  FF_TIMESTAMPS: true # Enable timestamps in job logs
+
+include:
+  - config.yaml
+
+workflow:
+  auto_cancel:
+    on_new_commit: interruptible
+  rules:
+    # Those rules follow this logic:
+    # Phase 1: No open merge request, user pushes to a branch: --> Run branch pipeline
+    # Phase 2: Open merge request: --> Do not run branch pipeline, but run merge result pipeline
+    # Phase 3: Open merge request, user pushes to the branch: --> Re-run merge result pipeline
+    # Phase 4: Branch is merged into protected branch: --> Run branch pipeline
+    #
+    # Additionally we do not allow auto-cancel of outdated pipelines on protected branches, we want to collect all
+    # possible data points on these post-merge pipelines.
+    - if: $CI_COMMIT_REF_PROTECTED == "true" # Run branch pipeline on protected branches (main or release)
+      auto_cancel:
+        on_new_commit: none
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" # Run merge request or merge result pipelines (if merge result pipelines are configured in gitlab)
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS && $CI_PIPELINE_SOURCE != "web" # Do not run branch pipelines if merge request is open, but still allow web use
+      when: never
+    - if: $CI_COMMIT_BRANCH # Run branch pipelines for all branches when triggered by a branch push and no merge request is open
+      auto_cancel:
+        on_new_commit: none
+
+default:
+  image: ${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
+  tags:
+    - type/docker
+    - os/linux
+    - arch/x86_64
+    - gpu
+
+  interruptible: true
+  before_script:
+    - nvidia-smi -L
+    - nvidia-smi
+    # Free up local disk space if filled up by cache
+    - |
+      # Check if $HOME disk usage is over 90%
+      USAGE=$(df "$HOME" | awk 'NR==2 {print $5}' | sed 's/%//')
+      if [ "$USAGE" -gt 90 ]; then
+        echo "Running low on disk space, $USAGE% full. Cleaning disk-cache."
+        rm -rf "$CI_BUILDS_DIR/.ci-keep"
+      fi
+      df -h "$HOME" | awk 'NR==2 {print "Disk usage now: "$3" used of "$2", "$5" full"}'
+    # Determine GPU architecture of current CI machine
+    # (only log result, not used to tweak build / test settings)
+    - CUDA_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits | head -1)
+    - echo "Determined CUDA Architecture ${CUDA_ARCH}"
+
+test:
+  variables:
+    VERBOSE: 1
+    DEBUG: 1
+    CCACHE_STATSLOG: $CI_BUILDS_DIR/ccache_stats.log
+
+  script:
+    # Load some envvars that depend on gitlab variables
+    - source ~/.profile
+    - 'echo "ccache directory: ${CCACHE_DIR}"'
+
+    - rm -f "$CCACHE_STATSLOG"
+    - pytest -sv
+    - ccache --show-log-stats -v
