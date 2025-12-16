@@ -11,6 +11,7 @@ from typing import Tuple
 
 import pytest
 import torch
+import gsplat
 
 from gsplat._helper import load_test_data
 from gsplat.rendering import RenderMode
@@ -62,6 +63,7 @@ def test_data():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize("render_mode", ["RGB"])
 def test_rasterization(
     test_data,

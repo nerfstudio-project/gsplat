@@ -20,6 +20,11 @@ from .cuda._wrapper import (
     rasterize_to_pixels_eval3d,
     spherical_harmonics,
     world_to_cam,
+    has_2dgs,
+    has_3dgs,
+    has_3dgut,
+    has_adam,
+    has_reloc,
 )
 from .exporter import export_splats
 from .optimizers import SelectiveAdam
@@ -65,4 +70,9 @@ all = [
     "rasterize_to_pixels_eval3d",
     "export_splats",
     "__version__",
+    "has_2dgs",
+    "has_3dgs",
+    "has_3dgut",
+    "has_adam",
+    "has_reloc",
 ]

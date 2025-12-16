@@ -1,3 +1,7 @@
+#include "Config.h"
+
+#if GSPLAT_BUILD_ADAM
+
 #include <ATen/Dispatch.h> // AT_DISPATCH_XXX
 #include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAStream.h> // at::cuda::getCurrentCUDAStream
@@ -90,3 +94,5 @@ void launch_adam_kernel(
 }
 
 } // namespace gsplat
+
+#endif

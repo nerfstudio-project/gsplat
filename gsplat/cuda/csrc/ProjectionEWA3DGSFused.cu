@@ -1,3 +1,7 @@
+#include "Config.h"
+
+#if GSPLAT_BUILD_3DGS
+
 #include <ATen/Dispatch.h>
 #include <ATen/core/Tensor.h>
 #include <ATen/cuda/Atomic.cuh>
@@ -624,3 +628,5 @@ void launch_projection_ewa_3dgs_fused_bwd_kernel(
 }
 
 } // namespace gsplat
+
+#endif

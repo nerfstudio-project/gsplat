@@ -3,9 +3,9 @@ import math
 import pytest
 import torch
 from typing_extensions import Tuple
+import gsplat
 
 device = torch.device("cuda:0")
-
 
 def expand(data: dict, batch_dims: Tuple[int, ...]):
     # append multiple batch dimensions to the front of the tensor
@@ -52,8 +52,8 @@ def test_data():
         "height": H,
     }
 
-
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 def test_projection_2dgs(test_data, batch_dims: Tuple[int, ...]):
     from gsplat.cuda._torch_impl_2dgs import _fully_fused_projection_2dgs
@@ -124,6 +124,7 @@ def test_projection_2dgs(test_data, batch_dims: Tuple[int, ...]):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
 @pytest.mark.parametrize("sparse_grad", [False])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 def test_fully_fused_projection_packed_2dgs(
@@ -248,6 +249,7 @@ def test_fully_fused_projection_packed_2dgs(
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_2dgs(), reason="2DGS support wasn't built")
 @pytest.mark.parametrize("channels", [3, 31])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 def test_rasterize_to_pixels_2dgs(

@@ -1,3 +1,7 @@
+#include "Config.h"
+
+#if GSPLAT_BUILD_3DGS
+
 #include <ATen/Dispatch.h>
 #include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAStream.h>
@@ -255,3 +259,5 @@ void launch_rasterize_to_indices_3dgs_kernel(
 }
 
 } // namespace gsplat
+
+#endif

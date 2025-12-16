@@ -29,6 +29,25 @@ def _make_lazy_cuda_obj(name: str) -> Any:
         obj = getattr(_C, name_split)
     return obj
 
+def has_2dgs():
+    from ._backend import _C
+    return hasattr(_C, "projection_2dgs_fused_fwd")
+
+def has_3dgs():
+    from ._backend import _C
+    return hasattr(_C, "projection_ewa_simple_fwd")
+
+def has_3dgut():
+    from ._backend import _C
+    return hasattr(_C, "projection_ut_3dgs_fused")
+
+def has_adam():
+    from ._backend import _C
+    return hasattr(_C, "adam")
+
+def has_reloc():
+    from ._backend import _C
+    return hasattr(_C, "relocation")
 
 class RollingShutterType(Enum):
     ROLLING_TOP_TO_BOTTOM = 0
@@ -605,27 +624,7 @@ def rasterize_to_pixels(
     if channels > 513 or channels == 0:
         # TODO: maybe worth to support zero channels?
         raise ValueError(f"Unsupported number of color channels: {channels}")
-    if channels not in (
-        1,
-        2,
-        3,
-        4,
-        5,
-        8,
-        9,
-        16,
-        17,
-        32,
-        33,
-        64,
-        65,
-        128,
-        129,
-        256,
-        257,
-        512,
-        513,
-    ):
+    if channels != 0:
         padded_channels = (1 << (channels - 1).bit_length()) - channels
         colors = torch.cat(
             [
@@ -831,27 +830,7 @@ def rasterize_to_pixels_eval3d_extra(
     if channels > 513 or channels == 0:
         # TODO: maybe worth to support zero channels?
         raise ValueError(f"Unsupported number of color channels: {channels}")
-    if channels not in (
-        1,
-        2,
-        3,
-        4,
-        5,
-        8,
-        9,
-        16,
-        17,
-        32,
-        33,
-        64,
-        65,
-        128,
-        129,
-        256,
-        257,
-        512,
-        513,
-    ):
+    if channels != 0:
         padded_channels = (1 << (channels - 1).bit_length()) - channels
         colors = torch.cat(
             [

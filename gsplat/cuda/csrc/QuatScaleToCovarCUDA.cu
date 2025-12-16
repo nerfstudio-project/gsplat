@@ -1,3 +1,7 @@
+#include "Config.h"
+
+#if GSPLAT_BUILD_3DGS
+
 #include <ATen/Dispatch.h>
 #include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAStream.h>
@@ -266,3 +270,5 @@ void launch_quat_scale_to_covar_preci_bwd_kernel(
 }
 
 } // namespace gsplat
+
+#endif
