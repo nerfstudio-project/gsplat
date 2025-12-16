@@ -460,9 +460,9 @@ def test_fully_fused_projection_packed(
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for UT projection")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1,2)])
-@pytest.mark.parametrize("require_all_valid", [True, False])
+@pytest.mark.parametrize("require_all_valid", [True, False], ids=["allvalid","somevalid"])
 @pytest.mark.parametrize("rolling_shutter", [RollingShutterType.GLOBAL, RollingShutterType.ROLLING_TOP_TO_BOTTOM])
-@pytest.mark.parametrize("global_z_order", [True, False])
+@pytest.mark.parametrize("global_z_order", [True, False], ids=["globalz","distsensor"])
 def test_fully_fused_projection_ut(
     test_data,
     batch_dims: Tuple[int, ...],
@@ -794,7 +794,7 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
 @pytest.mark.parametrize("channels", [3])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 @pytest.mark.parametrize("rs_type", [RollingShutterType.GLOBAL, RollingShutterType.ROLLING_TOP_TO_BOTTOM])
-@pytest.mark.parametrize("use_hit_distance", [True,False])
+@pytest.mark.parametrize("use_hit_distance", [True,False], ids=["hitdist", "depth"])
 def test_rasterize_to_pixels_eval3d(
     test_data,
     channels: int,
