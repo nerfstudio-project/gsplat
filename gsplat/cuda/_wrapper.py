@@ -624,7 +624,27 @@ def rasterize_to_pixels(
     if channels > 513 or channels == 0:
         # TODO: maybe worth to support zero channels?
         raise ValueError(f"Unsupported number of color channels: {channels}")
-    if channels != 0:
+    if channels not in (
+        1,
+        2,
+        3,
+        4,
+        5,
+        8,
+        9,
+        16,
+        17,
+        32,
+        33,
+        64,
+        65,
+        128,
+        129,
+        256,
+        257,
+        512,
+        513,
+    ):
         padded_channels = (1 << (channels - 1).bit_length()) - channels
         colors = torch.cat(
             [
@@ -830,7 +850,27 @@ def rasterize_to_pixels_eval3d_extra(
     if channels > 513 or channels == 0:
         # TODO: maybe worth to support zero channels?
         raise ValueError(f"Unsupported number of color channels: {channels}")
-    if channels != 0:
+    if channels not in (
+        1,
+        2,
+        3,
+        4,
+        5,
+        8,
+        9,
+        16,
+        17,
+        32,
+        33,
+        64,
+        65,
+        128,
+        129,
+        256,
+        257,
+        512,
+        513,
+    ):
         padded_channels = (1 << (channels - 1).bit_length()) - channels
         colors = torch.cat(
             [

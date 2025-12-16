@@ -119,7 +119,7 @@ def get_build_parameters():
 
     if NUM_CHANNELS is not None:
         # nvcc has a bug where you need to escape the commas in macro values defined with -D.
-        extra_cuda_cflags += ['-DGSPLAT_NUM_CHANNELS="'+NUM_CHANNELS.replace(',','\,')+'"']
+        extra_cuda_cflags += ['-DGSPLAT_NUM_CHANNELS="'+NUM_CHANNELS.replace(',','\\,')+'"']
         # gcc would not grok the backslash, so here we just pass NUM_CHANNELS as is.
         extra_cflags += [f"-DGSPLAT_NUM_CHANNELS={NUM_CHANNELS}"]
 
