@@ -475,7 +475,7 @@ def test_fully_fused_projection_packed(
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for UT projection")
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1,2)])
-@pytest.mark.parametrize("require_all_valid", [True, False])
+@pytest.mark.parametrize("require_all_valid", [True, False], ids=["allvalid","somevalid"])
 @pytest.mark.parametrize("rolling_shutter", [RollingShutterType.GLOBAL, RollingShutterType.ROLLING_TOP_TO_BOTTOM])
 def test_fully_fused_projection_ut(
     test_data,
