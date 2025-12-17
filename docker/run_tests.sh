@@ -100,10 +100,16 @@ if $do_3dgs; then
     run_args+=(-e BUILD_3DGS=1)
 fi
 
-if $runshell; then
+if $runshell && [[ $# == 0 ]]; then
+    # If we want an interactive shell...
     cmd='/bin/bash --login -i'
 else
-    cmd='/bin/bash --login -c pytest'
+    if [[ $# == 0 ]]; then
+        cmd=pytest
+    fi
+    # We're not launching a login shell, but we still need
+    # to process .profile so that the ccache envvars are read.
+    run_args+=(-e BASH_ENV=~/.profile)
 fi
 
 docker run "${run_args[@]}" "$DOCKER_REGISTRY/$IMAGE_NAME:$IMAGE_TAG" $cmd "$@"

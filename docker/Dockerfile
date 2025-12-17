@@ -2,6 +2,17 @@
 
 # Fix the base image to avoid spurious rebuilds
 ARG BASE_IMAGE=nvidia/cuda:12.9.0-devel-ubuntu24.04@sha256:f418bff454b1ac74a4d9d39279f2cf664fbb9b5d5f21de104b79745ea29bf2cb
+
+# We need a recent ccache for nvcc support.
+FROM alpine:3.19.1 as ccache
+ARG CCACHE_VERSION=4.12.2
+ARG CCACHE_SHA256=sha256:630c34ec94d451b200f5b14a6a25580d6a45bc80c394b7e0b93e33556eee5d32
+ADD --link --checksum=$CCACHE_SHA256 https://github.com/ccache/ccache/releases/download/v${CCACHE_VERSION}/ccache-${CCACHE_VERSION}-linux-x86_64.tar.xz .
+RUN <<EOS
+    tar xf ccache-${CCACHE_VERSION}-linux-x86_64.tar.xz --strip-components=1
+    chmod a+x ccache
+EOS
+
 FROM ${BASE_IMAGE}
 
 SHELL ["/bin/bash", "-ex", "-o", "pipefail", "-c"]
@@ -13,7 +24,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 # It also tries to make the layers stable to avoid
 # spurious downloads when we regenerate the image.
 COPY --link apt /etc/apt
-
 # Install everything we need from apt to install the dependencies
 RUN --mount=type=cache,id=aptcache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=aptcache,target=/var/lib/apt,sharing=locked \
@@ -61,6 +71,8 @@ RUN --mount=type=cache,id=pipcache,target=/root/.cache/pip,sharing=locked \
     rm -rf deps
 EOS
 
+COPY --link --from=ccache ccache /usr/local/bin/ccache
+
 # Now install everything else we need from apt
 RUN --mount=type=cache,id=aptcache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=aptcache,target=/var/lib/apt,sharing=locked \
@@ -76,6 +88,33 @@ RUN --mount=type=cache,id=aptcache,target=/var/cache/apt,sharing=locked \
     )
     apt-get install "${packages[@]}"
 EOS
+
+# Set up ccache
+ENV CCACHE_CONFIGPATH=/etc/ccache.conf
+ENV PATH=/usr/local/bin:$PATH
+RUN <<EOS
+    cat <<'EOF' >> /root/.profile
+
+if [[ $CI_BUILDS_DIR ]]; then
+    export CCACHE_DIR=$CI_BUILDS_DIR/.ci-keep/ccache
+else
+    export CCACHE_DIR=/var/cache/ccache
+fi
+EOF
+    mkdir -p /var/cache/ccache
+
+    ccache --max-size=20G
+
+    for compiler in c++ g++ cpp cc gcc-13 g++-13; do
+        ln -sf /usr/local/bin/ccache /usr/local/bin/$compiler
+    done
+
+    # Run nvcc via ccache.
+    # We can't use a symlink like we did with the host compilers or else
+    # cuda sdk path detection done by setuptools won't work.
+    mv /usr/local/cuda/bin/nvcc{,-real}
+EOS
+COPY --link cuda/nvcc_wrapper.sh /usr/local/cuda/bin/nvcc
 
 # Local cache volume, they're not meant to be in the CI cache
 RUN <<EOS

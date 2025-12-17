@@ -1,7 +1,9 @@
-#!/bin/bash -e
+#!/bin/bash
+
+set -euo pipefail
 
 SDIR=$(dirname "$(readlink -f "$0")")
-REPOROOT=$SDIR/..
+REPOROOT="$SDIR/.."
 
 source "$SDIR/utils.sh"
 
