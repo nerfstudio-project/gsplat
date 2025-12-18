@@ -65,6 +65,7 @@ fi
 
 build_args=(
   --build-context "gsplatrepo=$REPOROOT"
+  --target main
   -t "$IMAGE_URL"
 )
 

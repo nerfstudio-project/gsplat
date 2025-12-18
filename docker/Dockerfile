@@ -3,7 +3,7 @@
 # Fix the base image to avoid spurious rebuilds
 ARG BASE_IMAGE=nvidia/cuda:12.9.0-devel-ubuntu24.04@sha256:f418bff454b1ac74a4d9d39279f2cf664fbb9b5d5f21de104b79745ea29bf2cb
 
-# We need a recent ccache for nvcc support.
+# We need a recent ccache for nvcc support. ----------------------------------
 FROM alpine:3.19.1 as ccache
 ARG CCACHE_VERSION=4.12.2
 ARG CCACHE_SHA256=sha256:630c34ec94d451b200f5b14a6a25580d6a45bc80c394b7e0b93e33556eee5d32
@@ -13,11 +13,12 @@ RUN <<EOS
     chmod a+x ccache
 EOS
 
-FROM ${BASE_IMAGE}
-
+# Common base stage with python installed -----------------------------------
+FROM ${BASE_IMAGE} as python
 SHELL ["/bin/bash", "-ex", "-o", "pipefail", "-c"]
-
 ENV DEBIAN_FRONTEND=noninteractive
+
+ENV PYTHONPYCACHEPREFIX=/var/cache/python
 
 # Add some apt config overrides to avoid
 # storing unneeded files in the image.
@@ -29,6 +30,8 @@ RUN --mount=type=cache,id=aptcache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=aptcache,target=/var/lib/apt,sharing=locked \
     --mount=type=tmpfs,target=/tmp \
 <<EOS
+    mkdir -p "$PYTHONPYCACHEPREFIX"
+
     apt-get update
 
     packages=(
@@ -44,18 +47,19 @@ RUN --mount=type=cache,id=aptcache,target=/var/cache/apt,sharing=locked \
 EOS
 
 # Sets up python's virtual environment
-ARG VIRTUAL_ENV=~/.venv
-ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+ENV PATH="~/.venv/bin:$PATH"
 RUN --mount=type=tmpfs,target=/tmp \
 <<EOS
     python3 -m venv ~/.venv
 EOS
 
+# Stage where we install gsplat dependencies ----------------------------------
+FROM python as gsplat-deps
+
 # Install all gsplat dependencies
 COPY --link --from=gsplatrepo setup.py deps/
 COPY --link --from=gsplatrepo gsplat/version.py deps/gsplat/
-RUN --mount=type=cache,id=pipcache,target=/root/.cache/pip,sharing=locked \
-    --mount=type=tmpfs,target=/tmp \
+RUN --mount=type=tmpfs,target=/tmp \
 <<EOS
 
     pushd deps
@@ -68,9 +72,17 @@ RUN --mount=type=cache,id=pipcache,target=/root/.cache/pip,sharing=locked \
       pip install -e .[dev]
 
     popd
+
+    # To save space, we can remove the python cache files
+    rm -rf $PYTHONPYCACHEPREFIX/*
+
     rm -rf deps
 EOS
 
+# Main image ============================================================
+FROM python as main
+
+COPY --link --from=gsplat-deps /root/.venv/ /root/.venv/
 COPY --link --from=ccache ccache /usr/local/bin/ccache
 
 # Now install everything else we need from apt
