@@ -2,6 +2,8 @@
 
 #include "Ops.h"
 #include "Cameras.h"
+#include "CameraTypes.h"
+#include "ExternalDistortion.h"
 #include "csrc/Config.h"
 
 #if GSPLAT_BUILD_CAMERA_WRAPPERS
@@ -20,6 +22,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .value("ORTHO", gsplat::CameraModelType::ORTHO)
         .value("FISHEYE", gsplat::CameraModelType::FISHEYE)
         .value("FTHETA", gsplat::CameraModelType::FTHETA)
+        .export_values();
+
+    py::enum_<gsplat::extdist::ModelType>(m, "ExternalDistortionModelType", py::module_local())
+        .value("BIVARIATE_WINDSHIELD", gsplat::extdist::ModelType::BIVARIATE_WINDSHIELD)
         .export_values();
 
     m.def("null", &gsplat::null);
@@ -96,34 +102,50 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 #endif
 
     // Cameras from 3DGUT
-    py::enum_<ShutterType>(m, "ShutterType", py::module_local())
-        .value("ROLLING_TOP_TO_BOTTOM", ShutterType::ROLLING_TOP_TO_BOTTOM)
-        .value("ROLLING_LEFT_TO_RIGHT", ShutterType::ROLLING_LEFT_TO_RIGHT)
-        .value("ROLLING_BOTTOM_TO_TOP", ShutterType::ROLLING_BOTTOM_TO_TOP)
-        .value("ROLLING_RIGHT_TO_LEFT", ShutterType::ROLLING_RIGHT_TO_LEFT)
-        .value("GLOBAL", ShutterType::GLOBAL)
+    py::enum_<gsplat::ShutterType>(m, "ShutterType", py::module_local())
+        .value("ROLLING_TOP_TO_BOTTOM", gsplat::ShutterType::ROLLING_TOP_TO_BOTTOM)
+        .value("ROLLING_LEFT_TO_RIGHT", gsplat::ShutterType::ROLLING_LEFT_TO_RIGHT)
+        .value("ROLLING_BOTTOM_TO_TOP", gsplat::ShutterType::ROLLING_BOTTOM_TO_TOP)
+        .value("ROLLING_RIGHT_TO_LEFT", gsplat::ShutterType::ROLLING_RIGHT_TO_LEFT)
+        .value("GLOBAL", gsplat::ShutterType::GLOBAL)
         .export_values();
 
-    py::class_<UnscentedTransformParameters>(m, "UnscentedTransformParameters", py::module_local())
+    py::class_<gsplat::UnscentedTransformParameters>(m, "UnscentedTransformParameters", py::module_local())
         .def(py::init<>())
-        .def_readwrite("alpha", &UnscentedTransformParameters::alpha)
-        .def_readwrite("beta", &UnscentedTransformParameters::beta)
-        .def_readwrite("kappa", &UnscentedTransformParameters::kappa)
-        .def_readwrite("in_image_margin_factor", &UnscentedTransformParameters::in_image_margin_factor)
-        .def_readwrite("require_all_sigma_points_valid", &UnscentedTransformParameters::require_all_sigma_points_valid);
+        .def_readwrite("alpha", &gsplat::UnscentedTransformParameters::alpha)
+        .def_readwrite("beta", &gsplat::UnscentedTransformParameters::beta)
+        .def_readwrite("kappa", &gsplat::UnscentedTransformParameters::kappa)
+        .def_readwrite("in_image_margin_factor", &gsplat::UnscentedTransformParameters::in_image_margin_factor)
+        .def_readwrite("require_all_sigma_points_valid", &gsplat::UnscentedTransformParameters::require_all_sigma_points_valid);
 
     // FTheta Camera support
-    py::enum_<FThetaCameraDistortionParameters::PolynomialType>(m, "FThetaPolynomialType", py::module_local())
-        .value("PIXELDIST_TO_ANGLE", FThetaCameraDistortionParameters::PolynomialType::PIXELDIST_TO_ANGLE)
-        .value("ANGLE_TO_PIXELDIST", FThetaCameraDistortionParameters::PolynomialType::ANGLE_TO_PIXELDIST)
+    py::enum_<gsplat::FThetaCameraDistortionParameters::PolynomialType>(m, "FThetaPolynomialType", py::module_local())
+        .value("PIXELDIST_TO_ANGLE", gsplat::FThetaCameraDistortionParameters::PolynomialType::PIXELDIST_TO_ANGLE)
+        .value("ANGLE_TO_PIXELDIST", gsplat::FThetaCameraDistortionParameters::PolynomialType::ANGLE_TO_PIXELDIST)
         .export_values();
-    py::class_<FThetaCameraDistortionParameters>(m, "FThetaCameraDistortionParameters", py::module_local())
+    py::class_<gsplat::FThetaCameraDistortionParameters>(m, "FThetaCameraDistortionParameters", py::module_local())
         .def(py::init<>())
-        .def_readwrite("reference_poly", &FThetaCameraDistortionParameters::reference_poly)
-        .def_readwrite("pixeldist_to_angle_poly", &FThetaCameraDistortionParameters::pixeldist_to_angle_poly)
-        .def_readwrite("angle_to_pixeldist_poly", &FThetaCameraDistortionParameters::angle_to_pixeldist_poly)
-        .def_readwrite("max_angle", &FThetaCameraDistortionParameters::max_angle)
-        .def_readwrite("linear_cde", &FThetaCameraDistortionParameters::linear_cde);
+        .def_readwrite("reference_poly", &gsplat::FThetaCameraDistortionParameters::reference_poly)
+        .def_readwrite("pixeldist_to_angle_poly", &gsplat::FThetaCameraDistortionParameters::pixeldist_to_angle_poly)
+        .def_readwrite("angle_to_pixeldist_poly", &gsplat::FThetaCameraDistortionParameters::angle_to_pixeldist_poly)
+        .def_readwrite("max_angle", &gsplat::FThetaCameraDistortionParameters::max_angle)
+        .def_readwrite("linear_cde", &gsplat::FThetaCameraDistortionParameters::linear_cde);
+
+    // External Distortion support
+    py::enum_<gsplat::extdist::ReferencePolynomialType>(m, "ExternalDistortionReferencePolynomial", py::module_local())
+        .value("FORWARD", gsplat::extdist::ReferencePolynomialType::FORWARD)
+        .value("BACKWARD", gsplat::extdist::ReferencePolynomialType::BACKWARD)
+        .export_values();
+    
+    py::class_<gsplat::extdist::BivariateWindshieldModelParameters>(m, "BivariateWindshieldModelParameters", py::module_local())
+        .def(py::init<>())
+        .def_readonly_static("MAX_ORDER", &gsplat::extdist::BivariateWindshieldModelParameters::MAX_ORDER)
+        .def_readonly_static("MAX_COEFFS", &gsplat::extdist::BivariateWindshieldModelParameters::MAX_COEFFS)
+        .def_readwrite("reference_poly", &gsplat::extdist::BivariateWindshieldModelParameters::reference_poly)
+        .def_readwrite("horizontal_poly", &gsplat::extdist::BivariateWindshieldModelParameters::horizontal_poly)
+        .def_readwrite("vertical_poly", &gsplat::extdist::BivariateWindshieldModelParameters::vertical_poly)
+        .def_readwrite("horizontal_poly_inverse", &gsplat::extdist::BivariateWindshieldModelParameters::horizontal_poly_inverse)
+        .def_readwrite("vertical_poly_inverse", &gsplat::extdist::BivariateWindshieldModelParameters::vertical_poly_inverse);
 
     // ==================== Camera Model Bindings ====================
 
@@ -159,11 +181,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
              py::arg("tangential_coeffs") = std::nullopt,
              py::arg("thin_prism_coeffs") = std::nullopt,
              py::arg("ftheta_coeffs") = std::nullopt,
-             py::arg("rs_type") = ShutterType::GLOBAL);
+             py::arg("rs_type") = gsplat::ShutterType::GLOBAL);
 
     py::class_<gsplat::PyPerfectPinholeCameraModel, gsplat::PyBaseCameraModel<>,
                std::shared_ptr<gsplat::PyPerfectPinholeCameraModel>>(m, "PerfectPinholeCameraModel", py::module_local())
-        .def(py::init<int, int, const torch::Tensor&, const torch::Tensor&, ShutterType>(),
+        .def(py::init<int, int, const torch::Tensor&, const torch::Tensor&, gsplat::ShutterType>(),
              py::arg("width"), py::arg("height"),
              py::arg("focal_lengths"), py::arg("principal_points"),
              py::arg("rs_type"));
@@ -172,7 +194,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
                std::shared_ptr<gsplat::PyOpenCVPinholeCameraModel>>(m, "OpenCVPinholeCameraModel", py::module_local())
         .def(py::init<int, int, const torch::Tensor&, const torch::Tensor&,
                       std::optional<torch::Tensor>, std::optional<torch::Tensor>,
-                      std::optional<torch::Tensor>, ShutterType>(),
+                      std::optional<torch::Tensor>, gsplat::ShutterType>(),
              py::arg("width"), py::arg("height"),
              py::arg("focal_lengths"), py::arg("principal_points"),
              py::arg("radial_coeffs") = std::nullopt,
@@ -183,7 +205,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     py::class_<gsplat::PyOpenCVFisheyeCameraModel, gsplat::PyBaseCameraModel<>,
                std::shared_ptr<gsplat::PyOpenCVFisheyeCameraModel>>(m, "OpenCVFisheyeCameraModel", py::module_local())
         .def(py::init<int, int, const torch::Tensor&, const torch::Tensor&,
-                      std::optional<torch::Tensor>, ShutterType>(),
+                      std::optional<torch::Tensor>, gsplat::ShutterType>(),
              py::arg("width"), py::arg("height"),
              py::arg("focal_lengths"), py::arg("principal_points"),
              py::arg("radial_coeffs") = std::nullopt,
@@ -192,7 +214,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     py::class_<gsplat::PyFThetaCameraModel, gsplat::PyBaseCameraModel<>,
                std::shared_ptr<gsplat::PyFThetaCameraModel>>(m, "FThetaCameraModel", py::module_local())
         .def(py::init<int, int, const torch::Tensor&, const torch::Tensor&,
-                      const torch::Tensor&, const torch::Tensor&, FThetaCameraDistortionParameters::PolynomialType, const torch::Tensor &, ShutterType>(),
+                      const torch::Tensor&, const torch::Tensor&, gsplat::FThetaCameraDistortionParameters::PolynomialType, const torch::Tensor &, gsplat::ShutterType>(),
              py::arg("width"), py::arg("height"),
              py::arg("principal_points"),
              py::arg("pixeldist_to_angle_poly"),
