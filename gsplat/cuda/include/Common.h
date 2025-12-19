@@ -40,16 +40,6 @@ using mat3 = glm::mat<3, 3, float>;
 using mat4 = glm::mat<4, 4, float>;
 using mat3x2 = glm::mat<3, 2, float>;
 
-//
-// Legacy Camera Types
-//
-enum CameraModelType {
-    PINHOLE = 0,
-    ORTHO = 1,
-    FISHEYE = 2,
-    FTHETA = 3,
-};
-
 #define N_THREADS_PACKED 256
 #define ALPHA_THRESHOLD (1.f / 255.f)
 

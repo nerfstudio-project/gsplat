@@ -11,9 +11,12 @@ from ._helper import assert_shape
 from .cuda._wrapper import (
     RollingShutterType,
     CameraModel,
+    ExternalDistortionModelMeta,
     FThetaCameraDistortionParameters,
     FThetaPolynomialType,
     UnscentedTransformParameters,
+    ExternalDistortionReferencePolynomial,
+    BivariateWindshieldModelParameters,
     fully_fused_projection,
     fully_fused_projection_2dgs,
     fully_fused_projection_with_ut,
@@ -70,11 +73,13 @@ def rasterization(
     with_eval3d: bool = False,
     global_z_order: bool = True,
     rays: Optional[Tensor] = None, # [..., C, H, W, 6] -> ox, oy, oz, dx*spread, dy*spread, dz*spread
-    # distortion
+    # camera lens distortion
     radial_coeffs: Optional[Tensor] = None,  # [..., C, 6] or [..., C, 4]
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
     thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
     ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
+    # external distortion
+    external_distortion_coeffs: Optional[BivariateWindshieldModelParameters] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
@@ -451,6 +456,7 @@ def rasterization(
             tangential_coeffs=tangential_coeffs,
             thin_prism_coeffs=thin_prism_coeffs,
             ftheta_coeffs=ftheta_coeffs,
+            external_distortion_coeffs=external_distortion_coeffs,
             rolling_shutter=rolling_shutter,
             viewmats_rs=viewmats_rs,
             global_z_order=global_z_order,
@@ -763,6 +769,7 @@ def rasterization(
                     tangential_coeffs=tangential_coeffs,
                     thin_prism_coeffs=thin_prism_coeffs,
                     ftheta_coeffs=ftheta_coeffs,
+                    external_distortion_coeffs=external_distortion_coeffs,
                     rolling_shutter=rolling_shutter,
                     viewmats_rs=viewmats_rs,
                     use_hit_distance=use_hit_distance,
@@ -811,6 +818,7 @@ def rasterization(
                 tangential_coeffs=tangential_coeffs,
                 thin_prism_coeffs=thin_prism_coeffs,
                 ftheta_coeffs=ftheta_coeffs,
+                external_distortion_coeffs=external_distortion_coeffs,
                 rolling_shutter=rolling_shutter,
                 viewmats_rs=viewmats_rs,
                 use_hit_distance=use_hit_distance,

@@ -20,6 +20,7 @@
 #pragma nv_diag_default = esa_on_defaulted_function_ignored
 
 #include "Cameras.h"
+#include "ExternalDistortion.cuh"
 
 template <typename T, std::size_t N>
 __device__ std::array<T, N> make_array(const T *ptr) {
@@ -297,8 +298,50 @@ template <class DerivedCameraModel> struct BaseCameraModel {
 
     struct Parameters {
         std::array<uint32_t, 2> resolution;
-        ShutterType shutter_type;
+        gsplat::ShutterType shutter_type;
+        const gsplat::extdist::BivariateWindshieldModelDeviceParams* external_distortion_params = nullptr;
     };
+
+    __host__ __device__ BaseCameraModel(const Parameters& camera_model_parameters) 
+        : external_distortion_params(camera_model_parameters.external_distortion_params)
+    {
+    }
+
+    const gsplat::extdist::BivariateWindshieldModelDeviceParams* external_distortion_params;
+
+    struct ImagePointReturn {
+        glm::fvec2 imagePoint;
+        bool valid_flag;
+    };
+
+    // Apply external distortion before camera projection (forward)
+    inline __device__ auto camera_ray_to_image_point(
+        const glm::fvec3& cam_ray, 
+        float margin_factor
+    ) const -> ImagePointReturn {
+        auto derived = static_cast<DerivedCameraModel const*>(this);
+        auto distorted_ray = cam_ray;
+
+        if (external_distortion_params != nullptr) {
+            gsplat::extdist::BivariateWindshieldModel distortion_model(*external_distortion_params);
+            distorted_ray = distortion_model.distort_camera_ray(cam_ray);
+        }
+        
+        return derived->camera_ray_to_image_point_impl(distorted_ray, margin_factor);
+    }
+
+    // Undo external distortion after camera unprojection (inverse)
+    inline __device__ CameraRay image_point_to_camera_ray(glm::fvec2 image_point) const {
+        auto derived = static_cast<DerivedCameraModel const*>(this);
+        auto cam_ray = derived->image_point_to_camera_ray_impl(image_point);
+        
+        if (cam_ray.valid_flag && external_distortion_params != nullptr) {
+            gsplat::extdist::BivariateWindshieldModel distortion_model(*external_distortion_params);
+            cam_ray.ray_dir = distortion_model.undistort_camera_ray(cam_ray.ray_dir);
+        }
+        
+        return cam_ray;
+    }
 
     // Function to compute the relative frame time for a given image point based
     // on the shutter type
@@ -309,20 +352,20 @@ template <class DerivedCameraModel> struct BaseCameraModel {
         auto t = 0.f;
         auto const &resolution = derived->parameters.resolution;
         switch (derived->parameters.shutter_type) {
-        case ShutterType::ROLLING_TOP_TO_BOTTOM:
+        case gsplat::ShutterType::ROLLING_TOP_TO_BOTTOM:
             t = std::floor(image_point.y) / (resolution[1] - 1);
             break;
 
-        case ShutterType::ROLLING_LEFT_TO_RIGHT:
+        case gsplat::ShutterType::ROLLING_LEFT_TO_RIGHT:
             t = std::floor(image_point.x) / (resolution[0] - 1);
             break;
 
-        case ShutterType::ROLLING_BOTTOM_TO_TOP:
+        case gsplat::ShutterType::ROLLING_BOTTOM_TO_TOP:
             t = (resolution[1] - std::ceil(image_point.y)) /
                 (resolution[1] - 1);
             break;
 
-        case ShutterType::ROLLING_RIGHT_TO_LEFT:
+        case gsplat::ShutterType::ROLLING_RIGHT_TO_LEFT:
             t = (resolution[0] - std::ceil(image_point.x)) /
                 (resolution[0] - 1);
             break;
@@ -350,12 +393,7 @@ template <class DerivedCameraModel> struct BaseCameraModel {
                    rolling_shutter_parameters
         )
             .camera_ray_to_world_ray(camera_ray.ray_dir);
-    };
-
-    struct ImagePointReturn {
-        glm::fvec2 imagePoint;
-        bool valid_flag;
-    };
+    }
 
     template <size_t N_ROLLING_SHUTTER_ITERATIONS = 10>
     inline __device__ auto world_point_to_image_point_shutter_pose(
@@ -379,7 +417,7 @@ template <class DerivedCameraModel> struct BaseCameraModel {
                 glm::rotate(q_start, world_point) + t_start, margin_factor
             );
 
-        if (derived->parameters.shutter_type == ShutterType::GLOBAL) {
+        if (derived->parameters.shutter_type == gsplat::ShutterType::GLOBAL) {
             // Exit early if we have a global shutter sensor
             return {{image_point_start.x, image_point_start.y}, valid_start};
         }
@@ -444,11 +482,12 @@ struct PerfectPinholeCameraModel : BaseCameraModel<PerfectPinholeCameraModel> {
     };
 
     __device__ PerfectPinholeCameraModel(Parameters const &parameters)
-        : parameters(parameters) {}
+        : Base(parameters),
+          parameters(parameters) {}
 
     Parameters parameters;
 
-    inline __device__ auto camera_ray_to_image_point(
+    inline __device__ auto camera_ray_to_image_point_impl(
         glm::fvec3 const &cam_ray, float margin_factor
     ) const -> typename Base::ImagePointReturn {
         auto image_point = glm::fvec2{0.f, 0.f};
@@ -478,7 +517,7 @@ struct PerfectPinholeCameraModel : BaseCameraModel<PerfectPinholeCameraModel> {
         return {image_point, valid};
     }
 
-    inline __device__ CameraRay image_point_to_camera_ray(glm::fvec2 image_point
+    inline __device__ CameraRay image_point_to_camera_ray_impl(glm::fvec2 image_point
     ) const {
         // Transform the image point to uv coordinate
         auto const uv =
@@ -516,7 +555,8 @@ struct OpenCVPinholeCameraModel
         Parameters const &parameters,
         float stop_undistortion_square_error_px2 = 1e-12
     )
-        : parameters(parameters),
+        : Base(parameters),
+          parameters(parameters),
           undistortion_stop_square_error_px2(stop_undistortion_square_error_px2
           ) {}
 
@@ -561,7 +601,7 @@ struct OpenCVPinholeCameraModel
         return {icD, glm::fvec2{delta_x, delta_y}, r2};
     }
 
-    inline __device__ auto camera_ray_to_image_point(
+    inline __device__ auto camera_ray_to_image_point_impl(
         glm::fvec3 const &cam_ray, float margin_factor
     ) const -> typename Base::ImagePointReturn {
         auto image_point = glm::fvec2{0.f, 0.f};
@@ -776,7 +816,7 @@ struct OpenCVPinholeCameraModel
         return {x, y};
     }
 
-    inline __device__ CameraRay image_point_to_camera_ray(glm::fvec2 image_point
+    inline __device__ CameraRay image_point_to_camera_ray_impl(glm::fvec2 image_point
     ) const {
         // Undistort the image point to uv coordinate. Newton method is more
         // accurate than iterative method, but slower.
@@ -868,7 +908,7 @@ struct OpenCVFisheyeCameraModel
     __host__ __device__ OpenCVFisheyeCameraModel(
         Parameters const &parameters, float min_2d_norm = 1e-6f
     )
-        : parameters(parameters), min_2d_norm(min_2d_norm) {
+        : Base(parameters), parameters(parameters), min_2d_norm(min_2d_norm) {
         // initialize ninth-degree odd-only forward polynomial (mapping angles
         // to normalized distances) theta + k1*theta^3 + k2*theta^5 + k3*theta^7
         // + k4*theta^9
@@ -933,7 +973,7 @@ struct OpenCVFisheyeCameraModel
     std::array<float, 2> approx_backward_poly;
     float max_angle;
 
-    inline __device__ auto camera_ray_to_image_point(
+    inline __device__ auto camera_ray_to_image_point_impl(
         glm::fvec3 const &cam_ray, float margin_factor
     ) const -> typename Base::ImagePointReturn {
         if (cam_ray.z <= 0.f)
@@ -1003,7 +1043,7 @@ struct OpenCVFisheyeCameraModel
         return {image_point, valid};
     }
 
-    inline __device__ CameraRay image_point_to_camera_ray(glm::fvec2 image_point
+    inline __device__ CameraRay image_point_to_camera_ray_impl(glm::fvec2 image_point
     ) const {
         // Normalize the image point coordinates
         auto const uv =
@@ -1058,18 +1098,18 @@ public:
     using Base = BaseCameraModel<FThetaCameraModel<N_NEWTON_ITERATIONS>>;
 
     struct Parameters : Base::Parameters {
-        FThetaCameraDistortionParameters dist;
+        gsplat::FThetaCameraDistortionParameters dist;
         std::array<float, 2> principal_point;
     };
 
     __host__ __device__ FThetaCameraModel(
         Parameters const& parameters, float min_2d_norm = 1e-6f
     )
-        : parameters(parameters), min_2d_norm(min_2d_norm), dreference_poly{} {
+        : Base(parameters), parameters(parameters), min_2d_norm(min_2d_norm), dreference_poly{} {
 
         auto const dist = parameters.dist;
 
-        if (dist.reference_poly == FThetaCameraDistortionParameters::PolynomialType::PIXELDIST_TO_ANGLE)
+        if (dist.reference_poly == gsplat::FThetaCameraDistortionParameters::PolynomialType::PIXELDIST_TO_ANGLE)
             // compute first derivative of the backwards polynomial
             dreference_poly = {1.f * dist.pixeldist_to_angle_poly.at(1), 2.f * dist.pixeldist_to_angle_poly.at(2), 3.f * dist.pixeldist_to_angle_poly.at(3), 4.f * dist.pixeldist_to_angle_poly.at(4), 5.f * dist.pixeldist_to_angle_poly.at(5)};
         else
@@ -1086,7 +1126,7 @@ public:
     float min_2d_norm;
     std::array<float, 5> dreference_poly; // coefficient of first derivative of the reference polynomial
 
-    inline __device__ auto camera_ray_to_image_point(
+    inline __device__ auto camera_ray_to_image_point_impl(
         glm::fvec3 const &cam_ray, float margin_factor
     ) const -> typename Base::ImagePointReturn {
         if (cam_ray.z <= 0.f)
@@ -1110,7 +1150,7 @@ public:
         // Evaluate forward polynomial, giving delta = f(theta) factors
         bool converged;
         float delta;
-        if (parameters.dist.reference_poly == FThetaCameraDistortionParameters::PolynomialType::PIXELDIST_TO_ANGLE) {
+        if (parameters.dist.reference_poly == gsplat::FThetaCameraDistortionParameters::PolynomialType::PIXELDIST_TO_ANGLE) {
             // bw poly is reference, evaluate its inverse via Newton-based inversion
             converged = false;
             delta = eval_poly_inverse_horner_newton<N_NEWTON_ITERATIONS>( 
@@ -1143,7 +1183,7 @@ public:
         return {image_point, valid};
     }
 
-    inline __device__ CameraRay image_point_to_camera_ray(glm::fvec2 image_point) const {
+    inline __device__ CameraRay image_point_to_camera_ray_impl(glm::fvec2 image_point) const {
         // Get f(theta)-weighted normalized 2d vectors around principal point,
         // undoing linear term A = [c,d;e;1] via A^-1 = [1,-d;-e,c] / (c-e*d)
         auto const& [c, d, e] = parameters.dist.linear_cde;
@@ -1156,7 +1196,7 @@ public:
         // Evaluate backward polynomial to get theta = f^-1(delta) factor
         bool converged;
         float theta;
-        if (parameters.dist.reference_poly == FThetaCameraDistortionParameters::PolynomialType::PIXELDIST_TO_ANGLE) {
+        if (parameters.dist.reference_poly == gsplat::FThetaCameraDistortionParameters::PolynomialType::PIXELDIST_TO_ANGLE) {
             // bw is reference, evaluate it directly
             converged = true;
             theta = eval_poly_horner(parameters.dist.pixeldist_to_angle_poly, delta);
@@ -1225,7 +1265,7 @@ struct SigmaPoints {
 };
 
 inline __device__ auto world_gaussian_sigma_points(
-    UnscentedTransformParameters const &unscented_transform_parameters,
+    gsplat::UnscentedTransformParameters const &unscented_transform_parameters,
     glm::fvec3 const &gaussian_world_mean,
     glm::fvec3 const &gaussian_world_scale,
     glm::fquat const &gaussian_world_rot
@@ -1287,7 +1327,7 @@ inline __device__ auto
 world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
     CameraModel const &camera_model,
     RollingShutterParameters const &rolling_shutter_parameters,
-    UnscentedTransformParameters const &unscented_transform_parameters,
+    gsplat::UnscentedTransformParameters const &unscented_transform_parameters,
     glm::fvec3 const &gaussian_world_mean,
     glm::fvec3 const &gaussian_world_scale,
     glm::fquat const &gaussian_world_rot

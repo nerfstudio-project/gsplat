@@ -1,16 +1,17 @@
-#include <ATen/TensorUtils.h>
-#include <ATen/core/Tensor.h>
 #include <c10/cuda/CUDAGuard.h> // for DEVICE_GUARD
-#include <tuple>
 
+#include <ATen/core/Tensor.h>
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
+#include <ATen/TensorUtils.h>
 
+#include <tuple>
+
+#include "Cameras.h"
 #include "Config.h"
 #include "Common.h"
 #include "Ops.h"
 #include "Rasterization.h"
-#include "Cameras.h"
 #include "MacroUtils.h"
 
 namespace gsplat {
@@ -655,10 +656,13 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
     const UnscentedTransformParameters ut_params,
     ShutterType rs_type,
     const at::optional<at::Tensor> rays, // [..., C, H, W, 6]
+    // camera lens distortion
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
     const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
+    // external distortion
+    const std::optional<extdist::BivariateWindshieldModelParameters> external_distortion_params,
     // intersections
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
@@ -679,6 +683,14 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
     if (masks.has_value()) {
         CHECK_INPUT(masks.value());
     }
+
+    if (external_distortion_params.has_value()) {
+        CHECK_INPUT(external_distortion_params->horizontal_poly);
+        CHECK_INPUT(external_distortion_params->vertical_poly);
+        CHECK_INPUT(external_distortion_params->horizontal_poly_inverse);
+        CHECK_INPUT(external_distortion_params->vertical_poly_inverse);
+    }
+
     if (sample_counts.has_value()) {
         CHECK_INPUT(sample_counts.value());
     }
@@ -726,6 +738,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
             tangential_coeffs,                                                 \
             thin_prism_coeffs,                                                 \
             ftheta_coeffs,                                                     \
+            external_distortion_params,                                        \
             tile_offsets,                                                      \
             flatten_ids,                                                       \
             use_hit_distance,                                                  \
@@ -773,10 +786,13 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     const UnscentedTransformParameters ut_params,
     ShutterType rs_type,
     const at::optional<at::Tensor> rays,    // [..., C, H, W, 6]
+    // camera lens distortion
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
     const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
+    // external distortion
+    const std::optional<extdist::BivariateWindshieldModelParameters> external_distortion_params,
     // intersections
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
@@ -810,6 +826,13 @@ rasterize_to_pixels_from_world_3dgs_bwd(
         CHECK_INPUT(rays.value());
     }
 
+    if (external_distortion_params.has_value()) {
+        CHECK_INPUT(external_distortion_params->horizontal_poly);
+        CHECK_INPUT(external_distortion_params->vertical_poly);
+        CHECK_INPUT(external_distortion_params->horizontal_poly_inverse);
+        CHECK_INPUT(external_distortion_params->vertical_poly_inverse);
+    }
+
     uint32_t channels = colors.size(-1);
 
     at::Tensor v_means = at::zeros_like(means);
@@ -834,14 +857,15 @@ rasterize_to_pixels_from_world_3dgs_bwd(
             viewmats0,                                                         \
             viewmats1,                                                         \
             Ks,                                                                \
-            camera_model,                                                     \
-            ut_params,                                                        \
-            rs_type,                                                       \
+            camera_model,                                                      \
+            ut_params,                                                         \
+            rs_type,                                                           \
             rays,                                                              \
-            radial_coeffs,                                                    \
-            tangential_coeffs,                                                \
-            thin_prism_coeffs,                                               \
+            radial_coeffs,                                                     \
+            tangential_coeffs,                                                 \
+            thin_prism_coeffs,                                                 \
             ftheta_coeffs,                                                     \
+            external_distortion_params,                                        \
             tile_offsets,                                                      \
             flatten_ids,                                                       \
             use_hit_distance,                                                  \
