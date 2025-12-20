@@ -9,7 +9,6 @@
 #include <cooperative_groups.h>
 #include <cub/cub.cuh>
 
-#include "CameraTypes.h"
 #include "Common.h"
 #include "Projection.h"
 #include "Utils.cuh"
