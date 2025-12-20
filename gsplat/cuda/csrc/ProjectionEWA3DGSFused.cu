@@ -8,8 +8,6 @@
 #include <c10/cuda/CUDAStream.h>
 #include <cooperative_groups.h>
 
-#include "Cameras.h"
-#include "CameraTypes.h"
 #include "Common.h"
 #include "Projection.h"
 #include "Utils.cuh"

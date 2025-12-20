@@ -8,12 +8,10 @@
 #include <c10/cuda/CUDAStream.h>
 #include <cooperative_groups.h>
 
-#include "Cameras.cuh"
-#include "CameraTypes.h"
 #include "Common.h"
-#include "ExternalDistortion.cuh"
 #include "Projection.h"
 #include "Utils.cuh"
+#include "Cameras.cuh"
 
 namespace gsplat {
 
@@ -46,7 +44,6 @@ __global__ void projection_ut_3dgs_fused_kernel(
     const scalar_t *__restrict__ tangential_coeffs, // [B, C, 2] optional
     const scalar_t *__restrict__ thin_prism_coeffs, // [B, C, 4] optional
     const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
-    const cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params,
     // outputs
     int32_t *__restrict__ radii,         // [B, C, N, 2]
     scalar_t *__restrict__ means2d,      // [B, C, N, 2]
@@ -103,8 +100,6 @@ __global__ void projection_ut_3dgs_fused_kernel(
             cm_params.shutter_type = rs_type;
             cm_params.principal_point = { principal_point.x, principal_point.y };
             cm_params.focal_length = { focal_length.x, focal_length.y };
-            cm_params.external_distortion_params = external_distortion_device_params.has_value() ? 
-                &external_distortion_device_params.value() : nullptr;
             PerfectPinholeCameraModel camera_model(cm_params);
             image_gaussian_return =
                 world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
@@ -124,8 +119,6 @@ __global__ void projection_ut_3dgs_fused_kernel(
             if (thin_prism_coeffs != nullptr) {
                 cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + bid * C * 4 + cid * 4);
             }
-            cm_params.external_distortion_params = external_distortion_device_params.has_value() ? 
-                &external_distortion_device_params.value() : nullptr;
             OpenCVPinholeCameraModel camera_model(cm_params);
             image_gaussian_return =
                 world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
@@ -140,8 +133,6 @@ __global__ void projection_ut_3dgs_fused_kernel(
         if (radial_coeffs != nullptr) {
             cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + bid * C * 4 + cid * 4);
         }
-        cm_params.external_distortion_params = external_distortion_device_params.has_value() ? 
-            &external_distortion_device_params.value() : nullptr;
         OpenCVFisheyeCameraModel camera_model(cm_params);
         image_gaussian_return =
             world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
@@ -153,8 +144,6 @@ __global__ void projection_ut_3dgs_fused_kernel(
         cm_params.shutter_type = rs_type;
         cm_params.principal_point = { principal_point.x, principal_point.y };
         cm_params.dist = ftheta_coeffs;
-        cm_params.external_distortion_params = external_distortion_device_params.has_value() ? 
-            &external_distortion_device_params.value() : nullptr;
         FThetaCameraModel camera_model(cm_params);
         image_gaussian_return =
             world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
@@ -261,7 +250,6 @@ void launch_projection_ut_3dgs_fused_kernel(
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
     const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
-    const std::optional<extdist::BivariateWindshieldModelParameters> external_distortion_params,
     // outputs
     at::Tensor radii,                      // [..., C, N, 2]
     at::Tensor means2d,                    // [..., C, N, 2]
@@ -281,11 +269,6 @@ void launch_projection_ut_3dgs_fused_kernel(
     if (n_elements == 0) {
         // skip the kernel launch if there are no elements
         return;
-    }
-
-    cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params = cuda::std::nullopt;
-    if (external_distortion_params.has_value()) {
-        external_distortion_device_params = extdist::BivariateWindshieldModelDeviceParams(external_distortion_params.value());
     }
 
     projection_ut_3dgs_fused_kernel<float>
@@ -324,7 +307,6 @@ void launch_projection_ut_3dgs_fused_kernel(
                 ? thin_prism_coeffs.value().data_ptr<float>()
                 : nullptr,
             ftheta_coeffs,
-            external_distortion_device_params,
             radii.data_ptr<int32_t>(),
             means2d.data_ptr<float>(),
             depths.data_ptr<float>(),

@@ -1,10 +1,14 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
+#include <cstdint>
+#include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <limits>
+#include <variant>
 
 // ---------------------------------------------------------------------------------------------
-
-namespace gsplat {
 
 // Camera-specific types (camera model parameters and returns)
 
@@ -41,16 +45,14 @@ struct UnscentedTransformParameters {
 
 // FTheta Camera Support
 struct FThetaCameraDistortionParameters {
-    static constexpr size_t POLYNOMIAL_DEGREE = 6;
+    static constexpr size_t PolynomialDegree = 6;
     enum class PolynomialType {
         PIXELDIST_TO_ANGLE,
         ANGLE_TO_PIXELDIST,
     };
     PolynomialType reference_poly;
-    std::array<float, POLYNOMIAL_DEGREE> pixeldist_to_angle_poly; // backward polynomial
-    std::array<float, POLYNOMIAL_DEGREE> angle_to_pixeldist_poly; // forward polynomial
+    std::array<float, PolynomialDegree> pixeldist_to_angle_poly; // backward polynomial
+    std::array<float, PolynomialDegree> angle_to_pixeldist_poly; // forward polynomial
     float max_angle;
     std::array<float, 3> linear_cde;
 };
-
-} // namespace gsplat
