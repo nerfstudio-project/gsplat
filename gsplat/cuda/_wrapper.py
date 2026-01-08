@@ -815,6 +815,7 @@ def rasterize_to_pixels_eval3d_extra(
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
     if rays is not None:
         assert_shape("rays", rays, batch_dims + (C, P, 6))
+        assert rays.dtype == torch.float32, f"rays must be torch.float32, got {rays.dtype}"
 
     assert colors.ndim in (num_batch_dims + 2, num_batch_dims + 3), colors.shape
     if colors.ndim == num_batch_dims + 2:
@@ -1654,7 +1655,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         ftheta_coeffs = ctx.ftheta_coeffs
         use_hit_distance = ctx.use_hit_distance
 
-        (v_means, v_quats, v_scales, v_colors, v_opacities,) = _make_lazy_cuda_func(
+        (v_means, v_quats, v_scales, v_colors, v_opacities, v_rays) = _make_lazy_cuda_func(
             "rasterize_to_pixels_from_world_3dgs_bwd"
         )(
             means,
@@ -1694,8 +1695,9 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         else:
             v_backgrounds = None
 
-        if ctx.needs_input_grad[7]:  # viewmats
-            raise NotImplementedError
+        # Check not needed anymore because we return v_rays directly
+        # if ctx.needs_input_grad[7]:  # viewmats
+        #    raise NotImplementedError
 
         return (
             v_means,
@@ -1714,7 +1716,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             None,  # flatten_ids
             None,  # camera_model
             None,  # ut_params
-            None,  # rays
+            v_rays, # rays
             None,  # radial_coeffs
             None,  # tangential_coeffs
             None,  # thin_prism_coeffs
