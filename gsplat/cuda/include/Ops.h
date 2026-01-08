@@ -546,7 +546,7 @@ rasterize_to_pixels_from_world_3dgs_fwd(
     const at::optional<at::Tensor> sample_counts // [..., C, image_height, image_width]
 );
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::optional<at::Tensor>>
 rasterize_to_pixels_from_world_3dgs_bwd(
     // Gaussian parameters
     const at::Tensor means,                     // [..., N, 3]
