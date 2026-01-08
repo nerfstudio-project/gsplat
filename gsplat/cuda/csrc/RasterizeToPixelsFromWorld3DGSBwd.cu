@@ -87,7 +87,8 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     vec4 *__restrict__ v_quats,        // [B, N, 4]
     vec3 *__restrict__ v_scales,       // [B, N, 3]
     scalar_t *__restrict__ v_colors,   // [B, C, N, CDIM] or [nnz, CDIM]
-    scalar_t *__restrict__ v_opacities // [B, C, N] or [nnz]
+    scalar_t *__restrict__ v_opacities, // [B, C, N] or [nnz]
+    scalar_t *__restrict__ v_rays      // [B, C, image_height, image_width, 6]
 ) {
     auto block = cg::this_thread_block();
     uint32_t iid = block.group_index().x;
@@ -111,6 +112,9 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     }
     if(rays != nullptr) {
         rays += iid*image_height*image_width*6;
+    }
+    if (v_rays != nullptr) {
+        v_rays += iid*image_height*image_width*6;
     }
 
     // when the mask is provided, do nothing and return if
@@ -248,6 +252,9 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     }
     const float v_render_a = v_render_alphas[pix_id];
 
+    vec3 v_ray_o = {0.f, 0.f, 0.f};
+    vec3 v_ray_d = {0.f, 0.f, 0.f};
+
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing
     const uint32_t tr = block.thread_rank();
@@ -357,6 +364,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             vec3 v_scale_local = {0.f, 0.f, 0.f};
             vec4 v_quat_local = {0.f, 0.f, 0.f, 0.f};
             float v_opacity_local = 0.f;
+
             // initialize everything to 0, only set if the lane is valid
             if (valid) {
                 // compute the current T for this gaussian
@@ -429,6 +437,13 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                     vec3 v_o_minus_mu = glm::transpose(Mt) * v_gro;
 
                     v_mean_local += -v_o_minus_mu;
+                    
+                    // Compute ray gradients
+                    // From o_minus_mu = ray_o - xyz, we get:
+                    v_ray_o += v_o_minus_mu;
+                    // From grd = Mt * ray_d, we get:
+                    v_ray_d += glm::transpose(Mt) * v_grd;
+
                     quat_scale_to_preci_half_vjp(
                         quat, scale, R, glm::transpose(v_Mt), v_quat_local, v_scale_local
                     );
@@ -476,6 +491,16 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             }
         }
     }
+
+    if (v_rays != nullptr && inside) {
+        float *v_ray_ptr = (float *)(v_rays) + 6 * pix_id;
+        v_ray_ptr[0] = v_ray_o.x;
+        v_ray_ptr[1] = v_ray_o.y;
+        v_ray_ptr[2] = v_ray_o.z;
+        v_ray_ptr[3] = v_ray_d.x;
+        v_ray_ptr[4] = v_ray_d.y;
+        v_ray_ptr[5] = v_ray_d.z;
+    }
 }
 
 template <uint32_t CDIM>
@@ -520,7 +545,8 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     at::Tensor v_quats,      // [..., N, 4]
     at::Tensor v_scales,     // [..., N, 3]
     at::Tensor v_colors,     // [..., C, N, 3] or [nnz, 3]
-    at::Tensor v_opacities   // [..., C, N] or [nnz]
+    at::Tensor v_opacities,  // [..., C, N] or [nnz]
+    at::optional<at::Tensor> v_rays // [..., C, image_height, image_width, 6]
 ) {
     bool packed = opacities.dim() == 1;
     assert (packed == false); // only support non-packed for now
@@ -615,7 +641,8 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             reinterpret_cast<vec4 *>(v_quats.data_ptr<float>()),
             reinterpret_cast<vec3 *>(v_scales.data_ptr<float>()),
             v_colors.data_ptr<float>(),
-            v_opacities.data_ptr<float>()
+            v_opacities.data_ptr<float>(),
+            v_rays.has_value() ? v_rays.value().data_ptr<float>() : nullptr
         );
 }
 
@@ -656,7 +683,8 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         at::Tensor v_quats,                                                    \
         at::Tensor v_scales,                                                   \
         at::Tensor v_colors,                                                   \
-        at::Tensor v_opacities                                                 \
+        at::Tensor v_opacities,                                                \
+        at::optional<at::Tensor> v_rays                                        \
     );
 
 GSPLAT_FOR_EACH(__INS__, GSPLAT_NUM_CHANNELS)
