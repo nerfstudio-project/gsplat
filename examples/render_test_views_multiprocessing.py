@@ -114,38 +114,50 @@ def render_test_views(
         far_plane=cfg.far_plane,
         masks=masks,
     )
-    colors = torch.clamp(colors, 0.0, 1.0)
+    renders_rgb = torch.clamp(colors, 0.0, 1.0)
 
-    # Concatenate renders and alphas to get RGBA only if original had alpha
-    if pixels.shape[-1] == 4:
-        renders = torch.cat([colors, alphas], dim=-1)
-    else:
-        renders = colors
-    return renders
+    # Combine colors and alphas into RGBA format
+    renders_rgba = torch.cat([renders_rgb, alphas], dim=-1)
+    return renders_rgb, renders_rgba
 
 
 def save_rendered_images(
-    renders: torch.Tensor,
+    renders_rgb: torch.Tensor,
+    renders_rgba: torch.Tensor,
     test_data_dir: str,
     experiment: str,
     frame: str,
     camera_ids: list,
 ) -> None:
     """Save rendered images to disk."""
-    renders_np = renders.cpu().detach().numpy()
-    renders_np = (renders_np * 255.0).astype("uint8")
+    # Convert RGB renders
+    renders_rgb_np = renders_rgb.cpu().detach().numpy()
+    renders_rgb_np = (renders_rgb_np * 255.0).astype("uint8")
 
-    save_dir = os.path.join(test_data_dir, "gsplat_renders", experiment)
-    os.makedirs(save_dir, exist_ok=True)
+    # Convert RGBA renders
+    renders_rgba_np = renders_rgba.cpu().detach().numpy()
+    renders_rgba_np = (renders_rgba_np * 255.0).astype("uint8")
+
+    # Create save directories
+    save_rgb_dir = os.path.join(test_data_dir, "gsplat_renders", experiment, "rgb")
+    save_rgba_dir = os.path.join(test_data_dir, "gsplat_renders", experiment, "rgba")
+    os.makedirs(save_rgb_dir, exist_ok=True)
+    os.makedirs(save_rgba_dir, exist_ok=True)
 
     for i, camera_id in enumerate(camera_ids):
-        print(f"Saving rendered image for camera {camera_id}...")
+        print(f"Saving rendered images for camera {camera_id}...")
         img_name = f"{frame}_{camera_id:03d}.png"
-        render = renders_np[i, ...]
-        iio.imwrite(os.path.join(save_dir, img_name), render)
+
+        # Save RGB image
+        render_rgb = renders_rgb_np[i, ...]
+        iio.imwrite(os.path.join(save_rgb_dir, img_name), render_rgb)
+
+        # Save RGBA image
+        render_rgba = renders_rgba_np[i, ...]
+        iio.imwrite(os.path.join(save_rgba_dir, img_name), render_rgba)
 
 
-def process_single_experiment(task_info: tuple) -> tuple[str, bool]:
+def process_single_experiment(task_info: tuple) -> tuple[str, str | None, bool]:
     """Process a single experiment for a given frame. Returns (run_info, success)."""
     data_type, experiment, frame_str = task_info
 
@@ -179,7 +191,7 @@ def process_single_experiment(task_info: tuple) -> tuple[str, bool]:
 
         # Render test views
         data = next(iter(test_loader))
-        renders_rgba = render_test_views(runner, data, cfg, device)
+        renders_rgb, renders_rgba = render_test_views(runner, data, cfg, device)
 
         # Save rendered images
         test_parser = Parser(
@@ -189,18 +201,23 @@ def process_single_experiment(task_info: tuple) -> tuple[str, bool]:
             test_every=1,
         )
         save_rendered_images(
-            renders_rgba, test_data_dir, experiment, frame_str, test_parser.camera_ids
+            renders_rgb,
+            renders_rgba,
+            test_data_dir,
+            experiment,
+            frame_str,
+            test_parser.camera_ids,
         )
 
         run_info = f"{data_type}/{experiment}/frame_{frame_str}"
         print(f"Successfully processed {run_info}")
-        return (run_info, True)
+        return (run_info, None, True)
 
     except Exception as e:
         run_info = f"{data_type}/{experiment}/frame_{frame_str}"
         print(f"ERROR processing {run_info}: {str(e)}")
         print(f"Traceback: {traceback.format_exc()}")
-        return (run_info, False)
+        return (run_info, str(e), False)
 
 
 def main():
@@ -222,9 +239,10 @@ def main():
     # Track results
     successful_runs = []
     failed_runs = []
+    failed_runs_with_errors = []  # Store failed runs with their error messages
 
     # Process tasks in parallel using ProcessPoolExecutor
-    with ProcessPoolExecutor(max_workers=3) as executor:
+    with ProcessPoolExecutor(max_workers=2) as executor:
         # Submit all tasks
         future_to_task = {
             executor.submit(process_single_experiment, task): task for task in tasks
@@ -232,12 +250,24 @@ def main():
 
         # Process completed tasks
         for future in as_completed(future_to_task):
-            run_info, success = future.result()
+            run_info, error_message, success = future.result()
 
             if success:
                 successful_runs.append(run_info)
             else:
                 failed_runs.append(run_info)
+                # Store the error info for this failed run
+                failed_runs_with_errors.append((run_info, error_message))
+
+    # Save failed runs to text file
+    if failed_runs:
+        failed_runs_file = "failed_runs.txt"
+        with open(failed_runs_file, "w") as f:
+            f.write("FAILED RUNS SUMMARY\n")
+            f.write("=" * 50 + "\n\n")
+            for failed_run in failed_runs_with_errors:
+                f.write(f"- {failed_run[0]}: {failed_run[1]}\n")
+        print(f"\nFailed runs saved to: {failed_runs_file}")
 
     # Print summary
     print("\n" + "=" * 80)
@@ -260,28 +290,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-# TODO: Check these failed experiments
-
-# FAILED RUNS:
-#   - rgb/default/frame_00000000
-#   - rgb/mcmc/frame_00000000
-#   - rgb/default/frame_00000003
-#   - rgb/mcmc/frame_00000003
-#   - rgba/mcmc_random_bkgd/frame_00000008
-#   - rgba/mcmc_alpha_loss/frame_00000008
-#   - rgba/default_random_bkgd/frame_00000008
-#   - rgba/default_alpha_loss/frame_00000008
-#   - rgb/default/frame_00000008
-#   - rgb/mcmc/frame_00000008
-#   - rgba/mcmc_random_bkgd/frame_00000009
-#   - rgba/mcmc_alpha_loss/frame_00000009
-#   - rgba/default_random_bkgd/frame_00000009
-#   - rgba/default_alpha_loss/frame_00000009
-#   - rgb/default/frame_00000009
-#   - rgb/mcmc/frame_00000009
-#   - rgb/default/frame_00000014
-#   - rgb/mcmc/frame_00000014
-#   - rgb/default/frame_00000034
-#   - rgb/mcmc/frame_00000034
