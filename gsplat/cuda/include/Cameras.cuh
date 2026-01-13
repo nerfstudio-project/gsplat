@@ -1050,6 +1050,291 @@ struct OpenCVFisheyeCameraModel
     }
 };
 
+struct LidarCameraModel : BaseCameraModel<LidarCameraModel> {
+    // Lidar camera model for spinning lidar sensors (e.g., Hesai Pandar128, AT128)
+    //
+    // IMPLEMENTATION NOTES:
+    // - Forward projection (3D→2D): Based on nre/libs/nrend/include/nrend/kernels/cuda/sensors/sensorsProjection.cuh
+    //   This implements the projectPoint() function for RowOffsetStructuredSpinningLidarProjectionParameters
+    //   Converts 3D camera rays to [column, row] image coordinates
+    //   TODO: Could be enhanced to use ROW_AZIMUTHS_RAD and ROW_ELEVATIONS_RAD lookup tables (as done in nre/libs/vren)
+    //   for more accurate row→elevation and row→azimuth mapping, but currently uses linear interpolation,
+    //   following nrend's implementation.
+    //
+    // - Inverse projection (2D→3D): New implementation (not present in nrend)
+    //   This is the inverse of the forward projection
+    //   Converts [column, row] image coordinates back to 3D camera rays
+    //   TODO: Could be enhanced to use COLUMN_AZIMUTHS_RAD lookup tables (as done in nre/libs/vren)
+    //   for more accurate column→azimuth mapping, but currently uses linear interpolation.
+
+    using Base = BaseCameraModel<LidarCameraModel>;
+
+    struct Parameters : Base::Parameters {
+        gsplat::LidarCameraParameters lidar;
+    };
+
+    __device__ LidarCameraModel(Parameters const &parameters)
+        : parameters(parameters) {}
+
+    Parameters parameters;
+
+    // Helper function: wrap azimuth angle to the interval (-π, π]
+    inline __device__ float normalize_angle(float angle) const {
+        constexpr float k3Pi = 3.f * PI; // 3π constant
+        constexpr float k2Pi = 2.f * PI; // 2π constant
+        // branch-less execution of azimuth wrapping
+        if (-k3Pi < angle && angle <= k3Pi) {
+            angle = (angle > PI) ? angle - k2Pi : angle;
+            angle = (angle <= -PI) ? angle + k2Pi : angle;
+            return angle;
+        } else {
+            angle = std::fmod(angle + PI, k2Pi);
+            angle = (angle <= 0) ? (angle + k2Pi) : angle;
+            return angle - PI;
+        }
+    }
+
+    // Helper function: compute relative clock rotation
+    inline __device__ float relative_clock_rotation(float begin, float end, gsplat::SpinningDirection direction) const {
+        return (direction == gsplat::SpinningDirection::CLOCKWISE) ? (begin - end) : (end - begin);
+    }
+
+    // Helper function: compute relative angle
+    inline __device__ float relative_angle(float angle_start, float angle_end, gsplat::SpinningDirection direction) const {
+        constexpr float k2Pi = 2.f * PI; // 2π constant
+        constexpr float k4Pi = 4.f * PI; // 4π constant
+        float relative_angle_val = relative_clock_rotation(angle_start, angle_end, direction);
+        // Avoid expensive fmod if the angle is already in a reasonable range
+        // Similar optimization as in normalize_angle
+        if (-k2Pi < relative_angle_val && relative_angle_val < k4Pi) {
+            // Fast path: handle common cases without fmod
+            relative_angle_val = (relative_angle_val >= k2Pi) ? relative_angle_val - k2Pi : relative_angle_val;
+            relative_angle_val = (relative_angle_val < 0.f) ? relative_angle_val + k2Pi : relative_angle_val;
+            return relative_angle_val;
+        } else {
+            // Slow path: use fmod for values outside the fast range
+            relative_angle_val = std::fmod(relative_angle_val, k2Pi);
+            // output range [0, 2π)
+            return (relative_angle_val < 0.f) ? (relative_angle_val + k2Pi) : relative_angle_val;
+        }
+    }
+
+    inline __device__ float inverse_relative_angle(float angle_start, float relative_angle_val, gsplat::SpinningDirection direction) const {
+        // Inverse of relative_angle: given start angle and relative angle, compute end angle
+        // Based on Python implementation in test_lidar.py lines 413-420
+        if (direction == gsplat::SpinningDirection::CLOCKWISE) {
+            // CLOCKWISE: relative = (start - end) mod 2π
+            // So: end = start - relative
+            return normalize_angle(angle_start - relative_angle_val);
+        } else {
+            // COUNTER_CLOCKWISE: relative = (end - start) mod 2π
+            // So: end = start + relative
+            return normalize_angle(angle_start + relative_angle_val);
+        }
+    }
+
+    // Override shutter_relative_frame_time for lidar-specific rolling shutter timing
+    // This matches NREND's relativeShutterTime implementation for spinning lidars
+    inline __device__ auto
+    shutter_relative_frame_time(glm::fvec2 const &image_point) const -> float {
+        // ====================================================================
+        // LIDAR ROLLING SHUTTER TIMING
+        // Based on nre/libs/nrend relativeShutterTime() for RowOffsetStructuredSpinningLidarProjectionParameters
+        // Lines 125-152 in sensorsProjection.cuh
+        //
+        // Unlike cameras with simple linear rolling shutter (top-to-bottom, left-to-right),
+        // spinning lidars have complex timing patterns:
+        // - The sensor spins (clockwise or counter-clockwise)
+        // - Each column corresponds to a specific capture time
+        // - The mapping from (elevation, azimuth) angles to column (time) is non-linear
+        //   due to mechanical characteristics and row-specific azimuth offsets
+        //
+        // This function uses the angleToColumnMap lookup table (computed in NCORE)
+        // to determine the correct capture time for a given image point.
+        // ====================================================================
+
+        // If angleToColumnMap is not provided, fall back to base class implementation
+        if (parameters.lidar.angle_to_column_map == nullptr) {
+            return Base::shutter_relative_frame_time(image_point);
+        }
+
+        // ACCURATE TIMING using angleToColumnMap
+        constexpr float kToAngle = 1.f / gsplat::LidarCameraParameters::ANGLE_TO_PIXEL_SCALING_FACTOR;
+
+        // Convert image point (in scaled pixel space) back to angles
+        // image_point.x = column (scaled azimuth), image_point.y = row (scaled elevation)
+        float const elevation = image_point.y * kToAngle;
+        float const azimuth = image_point.x * kToAngle;
+
+        // Get FOV parameters (min, max) from tuples
+        float const elevation_start = std::get<0>(parameters.lidar.fov_elevation_range);
+        float const azimuth_start = std::get<0>(parameters.lidar.fov_azimuth_range);
+
+        // Compute relative angles (within sensor FOV)
+        float const relative_elevation = relative_clock_rotation(elevation_start, elevation, gsplat::SpinningDirection::CLOCKWISE);
+        float const relative_azimuth = relative_angle(azimuth_start, azimuth, parameters.lidar.spin_direction);
+
+        // Compute lookup grid dimensions
+        int const n_pts_horiz = parameters.lidar.n_columns * parameters.lidar.angle_to_column_map_resolution_factor;
+        int const n_pts_vert = parameters.lidar.n_rows * parameters.lidar.angle_to_column_map_resolution_factor;
+
+        // Find indices in the lookup grid
+        // The grid cells have size map_resolution (in radians)
+        float const horizontal_idx_float = relative_azimuth / parameters.lidar.map_resolution[0] + 0.5f;
+        float const vertical_idx_float = relative_elevation / parameters.lidar.map_resolution[1] + 0.5f;
+
+        // Clamp to valid range
+        int const horizontal_idx = static_cast<int>(
+            std::max(0.f, std::min(static_cast<float>(n_pts_horiz - 1), horizontal_idx_float))
+        );
+        int const vertical_idx = static_cast<int>(
+            std::max(0.f, std::min(static_cast<float>(n_pts_vert - 1), vertical_idx_float))
+        );
+
+        // Lookup column index from the angle-to-column map
+        int const linear_idx = vertical_idx * n_pts_horiz + horizontal_idx;
+        float const column_idx = static_cast<float>(parameters.lidar.angle_to_column_map[linear_idx]);
+
+        // Normalize to [0, 1] range (relative frame time)
+        return column_idx / static_cast<float>(parameters.lidar.n_columns - 1);
+    }
+
+    inline __device__ auto camera_ray_to_image_point(
+        glm::fvec3 const &cam_ray, float margin_factor
+    ) const -> typename Base::ImagePointReturn {
+        // ====================================================================
+        // FORWARD PROJECTION: 3D Camera Ray → 2D Image Point [column, row]
+        // Based on nre/libs/nrend projectPoint() for RowOffsetStructuredSpinningLidarProjectionParameters
+        // Line 378: projected = angle * ANGLE_TO_PIXEL_SCALING_FACTOR
+        // Lines 391-399: Validation uses relative angles
+        //
+        // IMPORTANT: image_point represents CONTINUOUS ANGULAR SPACE, not discrete pixels.
+        // - image_point.x (column) = azimuth * ANGLE_TO_PIXEL_SCALING_FACTOR
+        // - image_point.y (row) = elevation * ANGLE_TO_PIXEL_SCALING_FACTOR
+        // To convert to pixel indices, discretize: pixel_col = round(column), pixel_row = round(row)
+        //
+        // FOV VALIDATION ASYMMETRY:
+        // - Forward projection: Uses margin_factor for tolerant FOV gating
+        //   * Allows points slightly outside FOV (by margin_factor * span)
+        //   * Rationale: Continuous ray angles may map to valid pixels after discretization
+        //   * Example: Ray at azimuth = fov_start - 0.01 might round to pixel 0
+        // - Inverse projection: Uses strict [0, span] bounds (no margin)
+        //   * Rationale: Image points are already in sensor coordinate system
+        //   * Any point outside [0, span] is definitionally out-of-sensor
+        // This asymmetry is INTENTIONAL and correct for the projection model.
+        // ====================================================================
+
+        // Normalize the camera ray (lidar uses normalized rays)
+        float const ray_length = glm::length(cam_ray);
+        if (ray_length < 1e-6f) {
+            return {{0.f, 0.f}, false};
+        }
+
+        glm::fvec3 const ray_normalized = cam_ray / ray_length;
+
+        // Convert 3D ray to spherical coordinates (elevation, azimuth)
+        // This follows the same convention as NREND:
+        //   elevation = asin(ray.z)  - vertical angle
+        //   azimuth = atan2(ray.y, ray.x)  - horizontal angle
+        // From nrend/kernels/cuda/sensors/sensorsProjection.cuh line 376
+        float const elevation = std::asin(ray_normalized.z);
+        float const azimuth = std::atan2(ray_normalized.y, ray_normalized.x);
+
+        // NREND approach (line 378): apply same scale to raw angles, no FOV offsets
+        float const row = elevation * parameters.lidar.ANGLE_TO_PIXEL_SCALING_FACTOR;
+        float const column = azimuth * parameters.lidar.ANGLE_TO_PIXEL_SCALING_FACTOR;
+
+        // Image point: [column, row] (in scaled angle space)
+        glm::fvec2 image_point = glm::fvec2{column, row};
+
+        // Get FOV parameters from tuples (min, max)
+        float const elevation_min = std::get<0>(parameters.lidar.fov_elevation_range);
+        float const elevation_max = std::get<1>(parameters.lidar.fov_elevation_range);
+        float const azimuth_min = std::get<0>(parameters.lidar.fov_azimuth_range);
+        float const azimuth_max = std::get<1>(parameters.lidar.fov_azimuth_range);
+
+        float const azimuth_span = azimuth_max - azimuth_min;
+        float const elevation_span = elevation_max - elevation_min;
+
+        // VALIDATION ONLY: Compute relative angles (matching NREND lines 391-399)
+        float const relative_elevation = relative_clock_rotation(elevation_min, elevation, gsplat::SpinningDirection::CLOCKWISE);
+        float const relative_azimuth = relative_angle(azimuth_min, azimuth, parameters.lidar.spin_direction);
+
+        // Check FOV bounds with margin (matching NREND lines 394-399)
+        // The margin allows rays slightly outside FOV that might round to valid pixels
+        float const tolerance_azimuth = margin_factor * azimuth_span;
+        float const tolerance_elevation = margin_factor * elevation_span;
+
+        bool valid = true;
+        valid &= (relative_elevation <= elevation_span + tolerance_elevation);
+        valid &= (relative_azimuth <= azimuth_span + tolerance_azimuth);
+        valid &= (relative_elevation >= -tolerance_elevation);
+        valid &= (relative_azimuth >= -tolerance_azimuth);
+
+        return {image_point, valid};
+    }
+
+    inline __device__ CameraRay image_point_to_camera_ray(glm::fvec2 image_point) const {
+        // ====================================================================
+        // INVERSE PROJECTION: 2D Image Point [column, row] → 3D Camera Ray
+        // Reverses: row = elevation * scale, column = azimuth * scale
+        //
+        // IMPORTANT: image_point represents CONTINUOUS ANGULAR SPACE, not discrete pixels.
+        // - image_point.x (column) comes from continuous sensor angular coordinate
+        // - image_point.y (row) comes from continuous sensor angular coordinate
+        // If you have discrete pixel indices, convert: column = pixel_col + 0.5, row = pixel_row + 0.5
+        // (the +0.5 maps from pixel corner to pixel center)
+        //
+        // FOV VALIDATION ASYMMETRY:
+        // - Forward projection: Uses margin_factor for tolerant FOV gating
+        // - Inverse projection: Uses strict [0, span] bounds (NO margin)
+        //   * Rationale: Image points are in sensor coordinate system by definition
+        //   * Any image_point outside [0, span] cannot physically correspond to sensor data
+        //   * The sensor's FOV is absolute; there's no "maybe valid" for image coordinates
+        // This stricter validation is CORRECT - inverse projection assumes you're starting
+        // from a point that should already be within sensor bounds.
+        // ====================================================================
+
+        float const column = image_point.x;
+        float const row = image_point.y;
+
+        // Inverse of forward projection: elevation = row / scale
+        float const elevation = row / parameters.lidar.ANGLE_TO_PIXEL_SCALING_FACTOR;
+        float const azimuth = column / parameters.lidar.ANGLE_TO_PIXEL_SCALING_FACTOR;
+
+        // Convert spherical coordinates (elevation, azimuth) to 3D ray
+        float const sin_elevation = std::sin(elevation);
+        float const cos_elevation = std::cos(elevation);
+        float const sin_azimuth = std::sin(azimuth);
+        float const cos_azimuth = std::cos(azimuth);
+
+        glm::fvec3 const camera_ray = glm::fvec3{
+            cos_azimuth * cos_elevation,  // x component
+            sin_azimuth * cos_elevation,  // y component
+            sin_elevation                 // z component
+        };
+
+        // Validate: check FOV bounds (STRICT - no margin)
+        // Image points should be within sensor FOV by definition
+        float const elevation_min = std::get<0>(parameters.lidar.fov_elevation_range);
+        float const elevation_max = std::get<1>(parameters.lidar.fov_elevation_range);
+        float const azimuth_min = std::get<0>(parameters.lidar.fov_azimuth_range);
+        float const azimuth_max = std::get<1>(parameters.lidar.fov_azimuth_range);
+
+        float const elevation_span = elevation_max - elevation_min;
+        float const azimuth_span = azimuth_max - azimuth_min;
+
+        float const relative_elevation = relative_clock_rotation(elevation_min, elevation, gsplat::SpinningDirection::CLOCKWISE);
+        float const relative_azimuth = relative_angle(azimuth_min, azimuth, parameters.lidar.spin_direction);
+
+        bool valid = true;
+        valid &= (relative_elevation >= 0.f) && (relative_elevation <= elevation_span);
+        valid &= (relative_azimuth >= 0.f) && (relative_azimuth <= azimuth_span);
+
+        // Normalize and return
+        return {camera_ray / glm::length(camera_ray), valid};
+    }
+};
 
 template <size_t N_NEWTON_ITERATIONS = 3>
 struct FThetaCameraModel : BaseCameraModel<FThetaCameraModel<N_NEWTON_ITERATIONS>> {
@@ -1113,7 +1398,7 @@ public:
         if (parameters.dist.reference_poly == FThetaCameraDistortionParameters::PolynomialType::PIXELDIST_TO_ANGLE) {
             // bw poly is reference, evaluate its inverse via Newton-based inversion
             converged = false;
-            delta = eval_poly_inverse_horner_newton<N_NEWTON_ITERATIONS>( 
+            delta = eval_poly_inverse_horner_newton<N_NEWTON_ITERATIONS>(
                       PolynomialProxy<PolynomialType::FULL, 6>{parameters.dist.pixeldist_to_angle_poly},
                       PolynomialProxy<PolynomialType::FULL, 5>{dreference_poly},
                       PolynomialProxy<PolynomialType::FULL, 6>{parameters.dist.angle_to_pixeldist_poly},
@@ -1121,7 +1406,7 @@ public:
         } else {
             // fw is reference, evaluate it directly
             converged = true;
-            delta = eval_poly_horner(parameters.dist.angle_to_pixeldist_poly, theta); 
+            delta = eval_poly_horner(parameters.dist.angle_to_pixeldist_poly, theta);
         }
 
         if (!converged) {
