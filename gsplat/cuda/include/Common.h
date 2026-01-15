@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/glm.hpp>
 
 namespace gsplat {
 

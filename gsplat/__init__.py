@@ -22,6 +22,7 @@ from .cuda._torch_impl import accumulate
 from .cuda._torch_impl_2dgs import accumulate_2dgs
 from .cuda._wrapper import (
     CameraModel,
+    ExternalDistortionModelMeta,
     RollingShutterType,
     fully_fused_projection,
     fully_fused_projection_2dgs,
@@ -64,6 +65,7 @@ all = [
     "MCMCStrategy",
     "Strategy",
     "CameraModel",
+    "ExternalDistortionModelMeta",
     "RasterizeMode",
     "RenderMode",
     "rasterization",

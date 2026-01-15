@@ -961,7 +961,8 @@ projection_ut_3dgs_fused(
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs,  // [..., C, 4] optional
-    const FThetaCameraDistortionParameters ftheta_coeffs // shared parameters for all cameras
+    const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
+    const std::optional<extdist::BivariateWindshieldModelParameters> external_distortion_params // external distortion parameters
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -983,6 +984,13 @@ projection_ut_3dgs_fused(
     }
     if (thin_prism_coeffs.has_value()) {
         CHECK_INPUT(thin_prism_coeffs.value());
+    }
+
+    if (external_distortion_params.has_value()) {
+        CHECK_INPUT(external_distortion_params->horizontal_poly);
+        CHECK_INPUT(external_distortion_params->vertical_poly);
+        CHECK_INPUT(external_distortion_params->horizontal_poly_inverse); // Could be omitted for projection
+        CHECK_INPUT(external_distortion_params->vertical_poly_inverse); // Could be omitted for projection
     }
 
     at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 2));
@@ -1038,6 +1046,7 @@ projection_ut_3dgs_fused(
         tangential_coeffs,
         thin_prism_coeffs,
         ftheta_coeffs,
+        external_distortion_params,
         // outputs
         radii,
         means2d,
