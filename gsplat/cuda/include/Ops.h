@@ -23,6 +23,9 @@
 
 #include "Cameras.h"
 #include "Common.h"
+#include "ExternalDistortion.h"
+
+#include <optional>
 
 namespace gsplat {
 
@@ -509,7 +512,8 @@ projection_ut_3dgs_fused(
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs,  // [..., C, 4] optional
-    const FThetaCameraDistortionParameters ftheta_coeffs // shared parameters for all cameras
+    const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
+    const std::optional<extdist::BivariateWindshieldModelParameters> external_distortion_params // external distortion parameters
 );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor>
@@ -540,6 +544,7 @@ rasterize_to_pixels_from_world_3dgs_fwd(
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
     const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
+    const std::optional<extdist::BivariateWindshieldModelParameters> external_distortion_params,
     // intersections
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
@@ -576,6 +581,7 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
     const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
+    const std::optional<extdist::BivariateWindshieldModelParameters> external_distortion_params,
     // intersections
     const at::Tensor tile_offsets,    // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,     // [n_isects]
@@ -588,5 +594,4 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     const at::Tensor v_render_alphas, // [..., C, image_height, image_width, 1]
     const at::optional<at::Tensor> v_render_normals // [..., C, image_height, image_width, 3]
 );
-
 } // namespace gsplat

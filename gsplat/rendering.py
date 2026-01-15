@@ -30,6 +30,9 @@ from .cuda._wrapper import (
     FThetaCameraDistortionParameters,
     FThetaPolynomialType,
     UnscentedTransformParameters,
+    ExternalDistortionModelMeta,
+    ExternalDistortionReferencePolynomial,
+    BivariateWindshieldModelParameters,
     fully_fused_projection,
     fully_fused_projection_2dgs,
     fully_fused_projection_with_ut,
@@ -170,6 +173,7 @@ def rasterization(
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
     thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
     ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
+    external_distortion_coeffs: Optional[BivariateWindshieldModelParameters] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
@@ -566,6 +570,7 @@ def rasterization(
             tangential_coeffs=tangential_coeffs,
             thin_prism_coeffs=thin_prism_coeffs,
             ftheta_coeffs=ftheta_coeffs,
+            external_distortion_coeffs=external_distortion_coeffs,
             rolling_shutter=rolling_shutter,
             viewmats_rs=viewmats_rs,
             global_z_order=global_z_order,
@@ -895,6 +900,7 @@ def rasterization(
                     tangential_coeffs=tangential_coeffs,
                     thin_prism_coeffs=thin_prism_coeffs,
                     ftheta_coeffs=ftheta_coeffs,
+                    external_distortion_coeffs=external_distortion_coeffs,
                     rolling_shutter=rolling_shutter,
                     viewmats_rs=viewmats_rs,
                     use_hit_distance=use_hit_distance,
@@ -955,6 +961,7 @@ def rasterization(
                 tangential_coeffs=tangential_coeffs,
                 thin_prism_coeffs=thin_prism_coeffs,
                 ftheta_coeffs=ftheta_coeffs,
+                external_distortion_coeffs=external_distortion_coeffs,
                 rolling_shutter=rolling_shutter,
                 viewmats_rs=viewmats_rs,
                 use_hit_distance=use_hit_distance,
