@@ -35,11 +35,11 @@
 namespace gsplat {
 
 std::tuple<at::Tensor, at::Tensor> relocation(
-    at::Tensor opacities, // [N]
-    at::Tensor scales,    // [N, 3]
-    at::Tensor ratios,    // [N]
-    at::Tensor binoms,    // [n_max, n_max]
-    const int n_max
+    const at::Tensor &opacities, // [N]
+    const at::Tensor &scales,    // [N, 3]
+    const at::Tensor &ratios,    // [N]
+    const at::Tensor &binoms,    // [n_max, n_max]
+    int64_t n_max
 ) {
     DEVICE_GUARD(opacities);
     CHECK_INPUT(opacities);

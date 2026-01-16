@@ -37,11 +37,11 @@
 namespace gsplat {
 
 std::tuple<at::Tensor, at::Tensor> quat_scale_to_covar_preci_fwd(
-    const at::Tensor quats,  // [..., 4]
-    const at::Tensor scales, // [..., 3]
-    const bool compute_covar,
-    const bool compute_preci,
-    const bool triu
+    const at::Tensor &quats,  // [..., 4]
+    const at::Tensor &scales, // [..., 3]
+    bool compute_covar,
+    bool compute_preci,
+    bool triu
 ) {
     DEVICE_GUARD(quats);
     CHECK_INPUT(quats);
@@ -71,11 +71,11 @@ std::tuple<at::Tensor, at::Tensor> quat_scale_to_covar_preci_fwd(
 }
 
 std::tuple<at::Tensor, at::Tensor> quat_scale_to_covar_preci_bwd(
-    const at::Tensor quats,  // [..., 4]
-    const at::Tensor scales, // [..., 3]
-    const bool triu,
-    const at::optional<at::Tensor> v_covars, // [..., 3, 3] or [..., 6]
-    const at::optional<at::Tensor> v_precis  // [..., 3, 3] or [..., 6]
+    const at::Tensor &quats,  // [..., 4]
+    const at::Tensor &scales, // [..., 3]
+    bool triu,
+    const at::optional<at::Tensor> &v_covars, // [..., 3, 3] or [..., 6]
+    const at::optional<at::Tensor> &v_precis  // [..., 3, 3] or [..., 6]
 ) {
     DEVICE_GUARD(quats);
     CHECK_INPUT(quats);

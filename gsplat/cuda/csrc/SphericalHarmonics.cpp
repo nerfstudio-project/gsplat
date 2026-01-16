@@ -30,10 +30,10 @@
 namespace gsplat {
 
 at::Tensor spherical_harmonics_fwd(
-    const uint32_t degrees_to_use,
-    const at::Tensor dirs,               // [..., 3]
-    const at::Tensor coeffs,             // [..., K, 3]
-    const at::optional<at::Tensor> masks // [...]
+    int64_t degrees_to_use,
+    const at::Tensor &dirs,               // [..., 3]
+    const at::Tensor &coeffs,             // [..., K, 3]
+    const at::optional<at::Tensor> &masks // [...]
 ) {
     DEVICE_GUARD(dirs);
     CHECK_INPUT(dirs);
@@ -53,12 +53,12 @@ at::Tensor spherical_harmonics_fwd(
 }
 
 std::tuple<at::Tensor, at::Tensor> spherical_harmonics_bwd(
-    const uint32_t K,
-    const uint32_t degrees_to_use,
-    const at::Tensor dirs,                // [..., 3]
-    const at::Tensor coeffs,              // [..., K, 3]
-    const at::optional<at::Tensor> masks, // [...]
-    const at::Tensor v_colors,            // [..., 3]
+    int64_t K,
+    int64_t degrees_to_use,
+    const at::Tensor &dirs,                // [..., 3]
+    const at::Tensor &coeffs,              // [..., K, 3]
+    const at::optional<at::Tensor> &masks, // [...]
+    const at::Tensor &v_colors,            // [..., 3]
     bool compute_v_dirs
 ) {
     DEVICE_GUARD(dirs);
