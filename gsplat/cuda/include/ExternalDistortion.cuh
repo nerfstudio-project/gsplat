@@ -12,6 +12,13 @@ namespace gsplat::extdist
 
 class BivariateWindshieldModelDeviceParams;
 
+// NOTE: Some of the device functions herein are marked GSPLAT_NOINLINE to prevent compilation
+// combinatorial explosion. e.g. eval_bivariate_poly and distort_camera_ray in ProjectionUT3DGSFused.cu:
+// - 7 sigma points (unrolled loop - inside world_gaussian_to_image_gaussian_unscented_transform_shutter_pose)
+// - 5 camera models
+// - N CUDA architectures/compute capability targets (e.g. 80, 86, 89, 90, 100, 120)
+// - Inlining into all contexts creates O(n³) register allocation complexity
+
 inline __host__ __device__ int32_t compute_order(int32_t num_coeffs) {
     // For bivariate polynomial: num_coeffs = (order + 1) * (order + 2) / 2
     // Solve: order^2 + 3*order + 2 - 2*num_coeffs = 0
@@ -21,7 +28,7 @@ inline __host__ __device__ int32_t compute_order(int32_t num_coeffs) {
 }
 
 // Evaluate 2D bivariate polynomial at (x, y)
-inline __device__ float eval_bivariate_poly(
+inline __device__ GSPLAT_NOINLINE float eval_bivariate_poly(
     const float* poly_coeffs,
     int32_t order,
     float x,
@@ -76,27 +83,16 @@ struct BivariateWindshieldModelDeviceParams {
 
 // External Distortion Models
 
-template <class DerivedExternalDistortionModel>
-struct ExternalDistortionModel {
-    // CRTP base class for all external distortion types
-    inline __device__ glm::fvec3 distort_camera_ray(glm::fvec3 ray) const {
-        return static_cast<DerivedExternalDistortionModel const*>(this)->distort_camera_ray(ray);
-    }
-    inline __device__ glm::fvec3 undistort_camera_ray(glm::fvec3 ray) const {
-        return static_cast<DerivedExternalDistortionModel const*>(this)->undistort_camera_ray(ray);
-    }
-};
-
-struct BivariateWindshieldModel : ExternalDistortionModel<BivariateWindshieldModel> {
+struct BivariateWindshieldModel {
     gsplat::extdist::BivariateWindshieldModelDeviceParams params;
 
-    __device__ BivariateWindshieldModel(const gsplat::extdist::BivariateWindshieldModelDeviceParams& device_params) 
+    __device__ BivariateWindshieldModel(const gsplat::extdist::BivariateWindshieldModelDeviceParams& device_params)
         : params(device_params)
     {
     }
 
-    static __device__ glm::fvec3 distort_camera_ray(
-        const glm::fvec3& ray, 
+    static __device__ GSPLAT_NOINLINE glm::fvec3 distort_camera_ray(
+        const glm::fvec3& ray,
         const float* horizontal_poly,
         const float* vertical_poly,
         int32_t horizontal_order,

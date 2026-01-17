@@ -339,8 +339,13 @@ template <class DerivedCameraModel> struct BaseCameraModel {
         auto distorted_ray = cam_ray;
 
         if (external_distortion_params != nullptr) {
-            gsplat::extdist::BivariateWindshieldModel distortion_model(*external_distortion_params);
-            distorted_ray = distortion_model.distort_camera_ray(cam_ray);
+            distorted_ray = gsplat::extdist::BivariateWindshieldModel::distort_camera_ray(
+                cam_ray,
+                external_distortion_params->horizontal_poly_ptr,
+                external_distortion_params->vertical_poly_ptr,
+                external_distortion_params->horizontal_poly_order,
+                external_distortion_params->vertical_poly_order
+            );
         }
         
         return derived->camera_ray_to_image_point_impl(distorted_ray, margin_factor);
@@ -352,8 +357,13 @@ template <class DerivedCameraModel> struct BaseCameraModel {
         auto cam_ray = derived->image_point_to_camera_ray_impl(image_point);
         
         if (cam_ray.valid_flag && external_distortion_params != nullptr) {
-            gsplat::extdist::BivariateWindshieldModel distortion_model(*external_distortion_params);
-            cam_ray.ray_dir = distortion_model.undistort_camera_ray(cam_ray.ray_dir);
+            cam_ray.ray_dir = gsplat::extdist::BivariateWindshieldModel::distort_camera_ray(
+                cam_ray.ray_dir,
+                external_distortion_params->horizontal_poly_inverse_ptr,
+                external_distortion_params->vertical_poly_inverse_ptr,
+                external_distortion_params->horizontal_poly_inverse_order,
+                external_distortion_params->vertical_poly_inverse_order
+            );
         }
         
         return cam_ray;
