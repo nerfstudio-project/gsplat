@@ -359,7 +359,7 @@ def _fully_fused_projection(
 
     radius = torch.stack([radius_x, radius_y], dim=-1)  # [..., C, N, 2]
 
-    valid = (det > 0) & (depths > near_plane) & (depths < far_plane)
+    valid = (depths > near_plane) & (depths < far_plane)
     radius[~valid] = 0.0
 
     inside = (
@@ -514,7 +514,7 @@ def accumulate(
     image_width: int,
     image_height: int,
 ) -> Tuple[Tensor, Tensor]:
-    """Alpah compositing of 2D Gaussians in Pure Pytorch.
+    """Alpha compositing of 2D Gaussians in Pure Pytorch.
 
     This function performs alpha compositing for Gaussians based on the pair of indices
     {gaussian_ids, pixel_ids, image_ids}, which annotates the intersection between all
