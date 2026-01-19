@@ -356,6 +356,7 @@ def fully_fused_projection(
         - **batch_ids**. The batch indices of the projected Gaussians. Int32 tensor of shape [nnz].
         - **camera_ids**. The camera indices of the projected Gaussians. Int32 tensor of shape [nnz].
         - **gaussian_ids**. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].
+        - **indptr**. CSR-style index pointer into gaussian_ids for batch-camera pairs. Int32 tensor of shape [B*C+1].
         - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz, 2].
         - **means**. Projected Gaussian means in 2D. [nnz, 2]
         - **depths**. The z-depth of the projected Gaussians. [nnz]
@@ -1659,6 +1660,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             batch_ids,
             camera_ids,
             gaussian_ids,
+            indptr,
             radii,
             means2d,
             depths,
@@ -1672,6 +1674,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         v_batch_ids,
         v_camera_ids,
         v_gaussian_ids,
+        v_indptr,
         v_radii,
         v_means2d,
         v_depths,
