@@ -616,7 +616,7 @@ def _rasterize_to_pixels(
     flatten_ids: Tensor,  # [n_isects]
     backgrounds: Optional[Tensor] = None,  # [..., channels]
     batch_per_iter: int = 100,
-):
+) -> Tuple[Tensor, Tensor]:
     """Pytorch implementation of `gsplat.cuda._wrapper.rasterize_to_pixels()`.
 
     This function rasterizes 2D Gaussians to pixels in a Pytorch-friendly way. It
