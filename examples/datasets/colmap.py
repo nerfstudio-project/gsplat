@@ -182,19 +182,32 @@ class Parser:
             image_dir_suffix = ""
         colmap_image_dir = os.path.join(data_dir, "images")
         image_dir = os.path.join(data_dir, "images" + image_dir_suffix)
-        for d in [image_dir, colmap_image_dir]:
-            if not os.path.exists(d):
-                raise ValueError(f"Image folder {d} does not exist.")
+        
+        # Check if original images folder exists
+        if not os.path.exists(colmap_image_dir):
+            raise ValueError(f"Image folder {colmap_image_dir} does not exist.")
 
         # Downsampled images may have different names vs images used for COLMAP,
         # so we need to map between the two sorted lists of files.
         colmap_files = sorted(_get_rel_paths(colmap_image_dir))
+        
+        # Handle image resizing if needed
+        if factor > 1 and not os.path.exists(image_dir):
+            # Check if we need to resize from JPG to PNG
+            if os.path.splitext(colmap_files[0])[1].lower() == ".jpg":
+                image_dir = _resize_image_folder(
+                    colmap_image_dir, image_dir + "_png", factor=factor
+                )
+            else:
+                image_dir = _resize_image_folder(
+                    colmap_image_dir, image_dir, factor=factor
+                )
+        
+        # Check if the final image directory exists
+        if not os.path.exists(image_dir):
+            raise ValueError(f"Image folder {image_dir} does not exist.")
+            
         image_files = sorted(_get_rel_paths(image_dir))
-        if factor > 1 and os.path.splitext(image_files[0])[1].lower() == ".jpg":
-            image_dir = _resize_image_folder(
-                colmap_image_dir, image_dir + "_png", factor=factor
-            )
-            image_files = sorted(_get_rel_paths(image_dir))
         colmap_to_image = dict(zip(colmap_files, image_files))
         image_paths = [os.path.join(image_dir, colmap_to_image[f]) for f in image_names]
 
