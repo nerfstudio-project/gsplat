@@ -15,6 +15,7 @@ import tqdm
 import tyro
 import viser
 import yaml
+from gsplat.color_correct import color_correct_affine, color_correct_quadratic
 from datasets.colmap import Dataset, Parser
 from datasets.traj import (
     generate_ellipse_path_z,
@@ -67,6 +68,8 @@ class Config:
     normalize_world_space: bool = True
     # Camera model
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole"
+    # Load EXIF exposure metadata from images (if available)
+    load_exposure: bool = True
 
     # Port for the viewer server
     port: int = 8080
@@ -163,10 +166,22 @@ class Config:
     # Regularization for appearance optimization as weight decay
     app_opt_reg: float = 1e-6
 
-    # Enable bilateral grid. (experimental)
-    use_bilateral_grid: bool = False
+    # Post-processing method for appearance correction (experimental)
+    post_processing: Optional[Literal["bilateral_grid", "ppisp"]] = None
+    # Use fused implementation for bilateral grid (only applies when post_processing="bilateral_grid")
+    bilateral_grid_fused: bool = False
     # Shape of the bilateral grid (X, Y, W)
     bilateral_grid_shape: Tuple[int, int, int] = (16, 16, 8)
+    # Enable PPISP controller
+    ppisp_use_controller: bool = True
+    # Use controller distillation in PPISP (only applies when post_processing="ppisp" and ppisp_use_controller=True)
+    ppisp_controller_distillation: bool = True
+    # Controller activation ratio for PPISP (only applies when post_processing="ppisp" and ppisp_use_controller=True)
+    ppisp_controller_activation_num_steps: int = 25_000
+    # Color correction method for cc_* metrics (only applies when post_processing is set)
+    color_correct_method: Literal["affine", "quadratic"] = "affine"
+    # Compute color-corrected metrics (cc_psnr, cc_ssim, cc_lpips) during evaluation
+    use_color_correction_metric: bool = False
 
     # Enable depth loss. (experimental)
     depth_loss: bool = False
@@ -183,9 +198,6 @@ class Config:
     # 3DGUT (uncented transform + eval 3D)
     with_ut: bool = False
     with_eval3d: bool = False
-
-    # Whether use fused-bilateral grid
-    use_fused_bilagrid: bool = False
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -204,6 +216,10 @@ class Config:
             strategy.refine_start_iter = int(strategy.refine_start_iter * factor)
             strategy.refine_stop_iter = int(strategy.refine_stop_iter * factor)
             strategy.refine_every = int(strategy.refine_every * factor)
+            if strategy.noise_injection_stop_iter >= 0:
+                strategy.noise_injection_stop_iter = int(
+                    strategy.noise_injection_stop_iter * factor
+                )
         else:
             assert_never(strategy)
 
@@ -337,6 +353,7 @@ class Runner:
             factor=cfg.data_factor,
             normalize=cfg.normalize_world_space,
             test_every=cfg.test_every,
+            load_exposure=cfg.load_exposure,
         )
         self.trainset = Dataset(
             self.parser,
@@ -347,6 +364,21 @@ class Runner:
         self.valset = Dataset(self.parser, split="val")
         self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
         print("Scene scale:", self.scene_scale)
+
+        if self.parser.num_cameras > 1 and cfg.batch_size != 1:
+            raise ValueError(
+                f"When using multiple cameras ({self.parser.num_cameras} found), batch_size must be 1, "
+                f"but got batch_size={cfg.batch_size}."
+            )
+        if cfg.post_processing == "ppisp" and cfg.batch_size != 1:
+            raise ValueError(
+                f"PPISP post-processing requires batch_size=1, got batch_size={cfg.batch_size}"
+            )
+        if cfg.post_processing is not None and world_size > 1:
+            raise ValueError(
+                f"Post-processing ({cfg.post_processing}) requires single-GPU training, "
+                f"but world_size={world_size}."
+            )
 
         # Model
         feature_dim = 32 if cfg.app_opt else None
@@ -438,21 +470,40 @@ class Runner:
             if world_size > 1:
                 self.app_module = DDP(self.app_module)
 
-        self.bil_grid_optimizers = []
-        if cfg.use_bilateral_grid:
-            self.bil_grids = BilateralGrid(
+        self.post_processing_module = None
+        if cfg.post_processing == "bilateral_grid":
+            self.post_processing_module = BilateralGrid(
                 len(self.trainset),
                 grid_X=cfg.bilateral_grid_shape[0],
                 grid_Y=cfg.bilateral_grid_shape[1],
                 grid_W=cfg.bilateral_grid_shape[2],
             ).to(self.device)
-            self.bil_grid_optimizers = [
+        elif cfg.post_processing == "ppisp":
+            ppisp_config = PPISPConfig(
+                use_controller=cfg.ppisp_use_controller,
+                controller_distillation=cfg.ppisp_controller_distillation,
+                controller_activation_ratio=cfg.ppisp_controller_activation_num_steps
+                / cfg.max_steps,
+            )
+            self.post_processing_module = PPISP(
+                num_cameras=self.parser.num_cameras,
+                num_frames=len(self.trainset),
+                config=ppisp_config,
+            ).to(self.device)
+
+        self.post_processing_optimizers = []
+        if cfg.post_processing == "bilateral_grid":
+            self.post_processing_optimizers = [
                 torch.optim.Adam(
-                    self.bil_grids.parameters(),
+                    self.post_processing_module.parameters(),
                     lr=2e-3 * math.sqrt(cfg.batch_size),
                     eps=1e-15,
                 ),
             ]
+        elif cfg.post_processing == "ppisp":
+            self.post_processing_optimizers = (
+                self.post_processing_module.create_optimizers()
+            )
 
         # Losses & Metrics.
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
@@ -480,6 +531,24 @@ class Runner:
                 mode="training",
             )
 
+        # Track if Gaussians are frozen (for controller distillation)
+        self._gaussians_frozen = False
+
+    def freeze_gaussians(self):
+        """Freeze all Gaussian parameters for controller distillation.
+
+        This prevents Gaussians from being updated by any loss (including regularization)
+        while the controller learns to predict per-frame corrections.
+        """
+        if self._gaussians_frozen:
+            return
+
+        for name, param in self.splats.items():
+            param.requires_grad = False
+
+        self._gaussians_frozen = True
+        print("[Distillation] Gaussian parameters frozen")
+
     def rasterize_splats(
         self,
         camtoworlds: Tensor,
@@ -489,6 +558,9 @@ class Runner:
         masks: Optional[Tensor] = None,
         rasterize_mode: Optional[Literal["classic", "antialiased"]] = None,
         camera_model: Optional[Literal["pinhole", "ortho", "fisheye"]] = None,
+        frame_idcs: Optional[Tensor] = None,
+        camera_idcs: Optional[Tensor] = None,
+        exposure: Optional[Tensor] = None,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         means = self.splats["means"]  # [N, 3]
@@ -541,6 +613,47 @@ class Runner:
         )
         if masks is not None:
             render_colors[~masks] = 0
+
+        if self.cfg.post_processing is not None:
+            # Create pixel coordinates [H, W, 2] with +0.5 center offset
+            pixel_y, pixel_x = torch.meshgrid(
+                torch.arange(height, device=self.device) + 0.5,
+                torch.arange(width, device=self.device) + 0.5,
+                indexing="ij",
+            )
+            pixel_coords = torch.stack([pixel_x, pixel_y], dim=-1)  # [H, W, 2]
+
+            # Split RGB from extra channels (e.g. depth) for post-processing
+            rgb = render_colors[..., :3]
+            extra = render_colors[..., 3:] if render_colors.shape[-1] > 3 else None
+
+            if self.cfg.post_processing == "bilateral_grid":
+                if frame_idcs is not None:
+                    grid_xy = (
+                        pixel_coords / torch.tensor([width, height], device=self.device)
+                    ).unsqueeze(0)
+                    rgb = slice(
+                        self.post_processing_module,
+                        grid_xy.expand(rgb.shape[0], -1, -1, -1),
+                        rgb,
+                        frame_idcs.unsqueeze(-1),
+                    )["rgb"]
+            elif self.cfg.post_processing == "ppisp":
+                camera_idx = camera_idcs.item() if camera_idcs is not None else None
+                frame_idx = frame_idcs.item() if frame_idcs is not None else None
+                rgb = self.post_processing_module(
+                    rgb=rgb,
+                    pixel_coords=pixel_coords,
+                    resolution=(width, height),
+                    camera_idx=camera_idx,
+                    frame_idx=frame_idx,
+                    exposure_prior=exposure,
+                )
+
+            render_colors = (
+                torch.cat([rgb, extra], dim=-1) if extra is not None else rgb
+            )
+
         return render_colors, render_alphas, info
 
     def train(self):
@@ -570,22 +683,30 @@ class Runner:
                     self.pose_optimizers[0], gamma=0.01 ** (1.0 / max_steps)
                 )
             )
-        if cfg.use_bilateral_grid:
-            # bilateral grid has a learning rate schedule. Linear warmup for 1000 steps.
+        # Post-processing module has a learning rate schedule
+        if cfg.post_processing == "bilateral_grid":
+            # Linear warmup + exponential decay
             schedulers.append(
                 torch.optim.lr_scheduler.ChainedScheduler(
                     [
                         torch.optim.lr_scheduler.LinearLR(
-                            self.bil_grid_optimizers[0],
+                            self.post_processing_optimizers[0],
                             start_factor=0.01,
                             total_iters=1000,
                         ),
                         torch.optim.lr_scheduler.ExponentialLR(
-                            self.bil_grid_optimizers[0], gamma=0.01 ** (1.0 / max_steps)
+                            self.post_processing_optimizers[0],
+                            gamma=0.01 ** (1.0 / max_steps),
                         ),
                     ]
                 )
             )
+        elif cfg.post_processing == "ppisp":
+            ppisp_schedulers = self.post_processing_module.create_schedulers(
+                self.post_processing_optimizers,
+                max_optimization_iters=max_steps,
+            )
+            schedulers.extend(ppisp_schedulers)
 
         trainloader = torch.utils.data.DataLoader(
             self.trainset,
@@ -607,6 +728,15 @@ class Runner:
                 self.viewer.lock.acquire()
                 tic = time.time()
 
+            # Freeze Gaussians when PPISP controller distillation starts
+            if (
+                cfg.post_processing == "ppisp"
+                and cfg.ppisp_use_controller
+                and cfg.ppisp_controller_distillation
+                and step >= cfg.ppisp_controller_activation_num_steps
+            ):
+                self.freeze_gaussians()
+
             try:
                 data = next(trainloader_iter)
             except StopIteration:
@@ -621,6 +751,9 @@ class Runner:
             )
             image_ids = data["image_id"].to(device)
             masks = data["mask"].to(device) if "mask" in data else None  # [1, H, W]
+            exposure = (
+                data["exposure"].to(device) if "exposure" in data else None
+            )  # [B,]
             if cfg.depth_loss:
                 points = data["points"].to(device)  # [1, M, 2]
                 depths_gt = data["depths"].to(device)  # [1, M]
@@ -648,25 +781,14 @@ class Runner:
                 image_ids=image_ids,
                 render_mode="RGB+ED" if cfg.depth_loss else "RGB",
                 masks=masks,
+                frame_idcs=image_ids,
+                camera_idcs=data["camera_idx"].to(device),
+                exposure=exposure,
             )
             if renders.shape[-1] == 4:
                 colors, depths = renders[..., 0:3], renders[..., 3:4]
             else:
                 colors, depths = renders, None
-
-            if cfg.use_bilateral_grid:
-                grid_y, grid_x = torch.meshgrid(
-                    (torch.arange(height, device=self.device) + 0.5) / height,
-                    (torch.arange(width, device=self.device) + 0.5) / width,
-                    indexing="ij",
-                )
-                grid_xy = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
-                colors = slice(
-                    self.bil_grids,
-                    grid_xy.expand(colors.shape[0], -1, -1, -1),
-                    colors,
-                    image_ids.unsqueeze(-1),
-                )["rgb"]
 
             if cfg.random_bkgd:
                 bkgd = torch.rand(1, 3, device=device)
@@ -705,9 +827,16 @@ class Runner:
                 disp_gt = 1.0 / depths_gt  # [1, M]
                 depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depthloss * cfg.depth_lambda
-            if cfg.use_bilateral_grid:
-                tvloss = 10 * total_variation_loss(self.bil_grids.grids)
-                loss += tvloss
+            if cfg.post_processing == "bilateral_grid":
+                post_processing_reg_loss = 10 * total_variation_loss(
+                    self.post_processing_module.grids
+                )
+                loss += post_processing_reg_loss
+            elif cfg.post_processing == "ppisp":
+                post_processing_reg_loss = (
+                    self.post_processing_module.get_regularization_loss()
+                )
+                loss += post_processing_reg_loss
 
             # regularizations
             if cfg.opacity_reg > 0.0:
@@ -744,8 +873,12 @@ class Runner:
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.depth_loss:
                     self.writer.add_scalar("train/depthloss", depthloss.item(), step)
-                if cfg.use_bilateral_grid:
-                    self.writer.add_scalar("train/tvloss", tvloss.item(), step)
+                if cfg.post_processing is not None:
+                    self.writer.add_scalar(
+                        "train/post_processing_reg_loss",
+                        post_processing_reg_loss.item(),
+                        step,
+                    )
                 if cfg.tb_save_image:
                     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
                     canvas = canvas.reshape(-1, *canvas.shape[2:])
@@ -777,6 +910,8 @@ class Runner:
                         data["app_module"] = self.app_module.module.state_dict()
                     else:
                         data["app_module"] = self.app_module.state_dict()
+                if self.post_processing_module is not None:
+                    data["post_processing"] = self.post_processing_module.state_dict()
                 torch.save(
                     data, f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt"
                 )
@@ -853,7 +988,7 @@ class Runner:
             for optimizer in self.app_optimizers:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
-            for optimizer in self.bil_grid_optimizers:
+            for optimizer in self.post_processing_optimizers:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
             for scheduler in schedulers:
@@ -924,6 +1059,9 @@ class Runner:
             masks = data["mask"].to(device) if "mask" in data else None
             height, width = pixels.shape[1:3]
 
+            # Exposure metadata is available for any image with EXIF data (train or val)
+            exposure = data["exposure"].to(device) if "exposure" in data else None
+
             torch.cuda.synchronize()
             tic = time.time()
             colors, _, _ = self.rasterize_splats(
@@ -935,6 +1073,9 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 masks=masks,
+                frame_idcs=None,  # For novel views, pass None (no per-frame parameters available)
+                camera_idcs=data["camera_idx"].to(device),
+                exposure=exposure,
             )  # [1, H, W, 3]
             torch.cuda.synchronize()
             ellipse_time += max(time.time() - tic, 1e-10)
@@ -956,8 +1097,12 @@ class Runner:
                 metrics["psnr"].append(self.psnr(colors_p, pixels_p))
                 metrics["ssim"].append(self.ssim(colors_p, pixels_p))
                 metrics["lpips"].append(self.lpips(colors_p, pixels_p))
-                if cfg.use_bilateral_grid:
-                    cc_colors = color_correct(colors, pixels)
+                # Compute color-corrected metrics for fair comparison across methods
+                if cfg.use_color_correction_metric:
+                    if cfg.color_correct_method == "affine":
+                        cc_colors = color_correct_affine(colors, pixels)
+                    else:
+                        cc_colors = color_correct_quadratic(colors, pixels)
                     cc_colors_p = cc_colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
                     metrics["cc_psnr"].append(self.psnr(cc_colors_p, pixels_p))
                     metrics["cc_ssim"].append(self.ssim(cc_colors_p, pixels_p))
@@ -973,7 +1118,7 @@ class Runner:
                     "num_GS": len(self.splats["means"]),
                 }
             )
-            if cfg.use_bilateral_grid:
+            if cfg.use_color_correction_metric:
                 print(
                     f"PSNR: {stats['psnr']:.3f}, SSIM: {stats['ssim']:.4f}, LPIPS: {stats['lpips']:.3f} "
                     f"CC_PSNR: {stats['cc_psnr']:.3f}, CC_SSIM: {stats['cc_ssim']:.4f}, CC_LPIPS: {stats['cc_lpips']:.3f} "
@@ -1069,6 +1214,37 @@ class Runner:
         print(f"Video saved to {video_dir}/traj_{step}.mp4")
 
     @torch.no_grad()
+    def export_ppisp_reports(self) -> None:
+        """Export PPISP visualization reports (PDF) and parameter JSON."""
+        if self.cfg.post_processing != "ppisp":
+            return
+        print("Exporting PPISP reports...")
+
+        # Compute frames per camera from training dataset
+        num_cameras = self.parser.num_cameras
+        frames_per_camera = [0] * num_cameras
+        for idx in self.trainset.indices:
+            cam_idx = self.parser.camera_indices[idx]
+            frames_per_camera[cam_idx] += 1
+
+        # Generate camera names from COLMAP camera IDs
+        # camera_id_to_idx maps COLMAP ID -> 0-based index
+        idx_to_camera_id = {v: k for k, v in self.parser.camera_id_to_idx.items()}
+        camera_names = [f"camera_{idx_to_camera_id[i]}" for i in range(num_cameras)]
+
+        # Export reports
+        output_dir = Path(self.cfg.result_dir) / "ppisp_reports"
+        pdf_paths = export_ppisp_report(
+            self.post_processing_module,
+            frames_per_camera,
+            output_dir,
+            camera_names=camera_names,
+        )
+        print(f"PPISP reports saved to {output_dir}")
+        for path in pdf_paths:
+            print(f"  - {path.name}")
+
+    @torch.no_grad()
     def run_compression(self, step: int):
         """Entry for running compression."""
         print("Running compression...")
@@ -1160,6 +1336,27 @@ class Runner:
 
 
 def main(local_rank: int, world_rank, world_size: int, cfg: Config):
+    # Import post-processing modules based on configuration
+    # These imports must be here (not in __main__) for distributed workers
+    if cfg.post_processing == "bilateral_grid":
+        global BilateralGrid, slice, total_variation_loss
+        if cfg.bilateral_grid_fused:
+            from fused_bilagrid import (
+                BilateralGrid,
+                slice,
+                total_variation_loss,
+            )
+        else:
+            from lib_bilagrid import (
+                BilateralGrid,
+                slice,
+                total_variation_loss,
+            )
+    elif cfg.post_processing == "ppisp":
+        global PPISP, PPISPConfig, export_ppisp_report
+        from ppisp import PPISP, PPISPConfig
+        from ppisp.report import export_ppisp_report
+
     if world_size > 1 and not cfg.disable_viewer:
         cfg.disable_viewer = True
         if world_rank == 0:
@@ -1175,6 +1372,10 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         ]
         for k in runner.splats.keys():
             runner.splats[k].data = torch.cat([ckpt["splats"][k] for ckpt in ckpts])
+        if runner.post_processing_module is not None:
+            pp_state = ckpts[0].get("post_processing")
+            if pp_state is not None:
+                runner.post_processing_module.load_state_dict(pp_state)
         step = ckpts[0]["step"]
         runner.eval(step=step)
         runner.render_traj(step=step)
@@ -1182,6 +1383,7 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
             runner.run_compression(step=step)
     else:
         runner.train()
+        runner.export_ppisp_reports()
 
     if not cfg.disable_viewer:
         runner.viewer.complete()
@@ -1224,25 +1426,6 @@ if __name__ == "__main__":
     }
     cfg = tyro.extras.overridable_config_cli(configs)
     cfg.adjust_steps(cfg.steps_scaler)
-
-    # Import BilateralGrid and related functions based on configuration
-    if cfg.use_bilateral_grid or cfg.use_fused_bilagrid:
-        if cfg.use_fused_bilagrid:
-            cfg.use_bilateral_grid = True
-            from fused_bilagrid import (
-                BilateralGrid,
-                color_correct,
-                slice,
-                total_variation_loss,
-            )
-        else:
-            cfg.use_bilateral_grid = True
-            from lib_bilagrid import (
-                BilateralGrid,
-                color_correct,
-                slice,
-                total_variation_loss,
-            )
 
     # try import extra dependencies
     if cfg.compression == "png":
