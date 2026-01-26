@@ -18,21 +18,18 @@ from gsplat.cuda._torch_cameras import (  # PyTorch reference
     _OpenCVPinholeCameraModel,
     _OpenCVFisheyeCameraModel,
     _FThetaCameraModel,
-    _LidarCameraModel,
 )
 from gsplat._helper import assert_mismatch_ratio, assert_close
 from gsplat.cuda._wrapper import (
     RollingShutterType,
     _make_lazy_cuda_obj,
     FThetaPolynomialType,
-    FThetaCameraDistortionParameters,
+    FThetaCameraDistortionParameters
 )
-ShutterType = _make_lazy_cuda_obj("ShutterType")
 from gsplat.cuda._math import _quat_multiply, _safe_normalize, compute_inverse_polynomial
 
 BaseCameraModelCUDA = _make_lazy_cuda_obj("BaseCameraModel")
 FThetaCameraModelCUDA = _make_lazy_cuda_obj("FThetaCameraModel")
-LidarCameraModelCUDA = _make_lazy_cuda_obj("LidarCameraModel")
 
 SEED = 42
 
@@ -46,9 +43,7 @@ CAMERA_MODELS = [
     "ftheta[pinhole+a2p]",
     "ftheta[pinhole+p2a]",
     "ftheta[a2p]",
-    "ftheta[p2a]",
-    "lidar[pandar128]",
-    "lidar[at128]",
+    "ftheta[p2a]"
 ]
 
 ROLLING_SHUTTER_TYPES = [
@@ -118,28 +113,21 @@ def parse_camera(camera_def: str, batch_dims: tuple, width: int, height: int, rs
         camera_parser = parse_opencv_fisheye_camera
     elif model_type == "ftheta":
         camera_parser = parse_ftheta_camera
-    elif model_type == "lidar":
-        camera_parser = parse_lidar_camera
     else:
         raise ValueError(f"Unknown camera model: {model_type}")
 
     # Get model-specific parameters from concrete class
     params = camera_parser(param_str, batch_dims, width, height, device)
 
-    # For lidar, width and height are overridden in the parser
-    actual_width = params.get('width', width)
-    actual_height = params.get('height', height)
-
-    # Generate principal points (common to non-lidar models)
-    if model_type != "lidar":
-        resolution = torch.tensor([actual_width, actual_height], dtype=torch.float32).cuda()
-        principal_points = (torch.randn(*batch_dims, 2, dtype=torch.float32, device=device)*0.05 + 0.5)*resolution
-        params['principal_points'] = principal_points
+    # Generate principal points (common to all models)
+    resolution = torch.tensor([width, height], dtype=torch.float32).cuda()
+    principal_points = (torch.randn(*batch_dims, 2, dtype=torch.float32, device=device)*0.05 + 0.5)*resolution
 
     params.update({
-        'width': actual_width,
-        'height': actual_height,
+        'width': width,
+        'height': height,
         'camera_model': model_type,
+        'principal_points': principal_points,
         'rs_type': rs_type.to_cpp() if hasattr(rs_type, 'to_cpp') else rs_type,
     })
 
@@ -327,176 +315,8 @@ def parse_ftheta_camera(param_str: str, batch_dims: tuple, width: int, height: i
     return {'ftheta_coeffs': ftheta_coeffs}
 
 # ==================================================
-# Lidar sensor configurations and parser
+# Fixtures used
 # ==================================================
-
-def get_lidar_sensor_data(sensor_name: str, seed: int = 42):
-    """Get lidar sensor configuration data (row elevations, azimuth offsets, etc.).
-
-    Generates random but valid sensor parameters for testing.
-    """
-    torch.manual_seed(seed)
-
-    if sensor_name == "pandar128":
-        n_rows = 128
-        n_columns = 3600
-        fov_start_azimuth = -math.pi
-        fov_span_azimuth = 2 * math.pi
-        fov_start_elevation = 0.25
-        fov_span_elevation = 0.69
-        spin_clockwise = True
-
-        # Generate random row elevations within FOV (sorted descending for typical lidar)
-        row_elevations_rad = torch.linspace(
-            fov_start_elevation,
-            fov_start_elevation - fov_span_elevation,
-            n_rows,
-            dtype=torch.float32
-        ) + (torch.rand(n_rows, dtype=torch.float32) - 0.5) * 0.001  # Add small noise
-
-        # Generate small random azimuth offsets per row
-        row_azimuth_offsets_rad = (torch.rand(n_rows, dtype=torch.float32) - 0.5) * 0.04  # ±0.02 rad
-
-        return {
-            'n_rows': n_rows,
-            'n_columns': n_columns,
-            'fov_start_azimuth': fov_start_azimuth,
-            'fov_span_azimuth': fov_span_azimuth,
-            'fov_start_elevation': fov_start_elevation,
-            'fov_span_elevation': fov_span_elevation,
-            'spin_clockwise': spin_clockwise,
-            'row_elevations_rad': row_elevations_rad,
-            'row_azimuth_offsets_rad': row_azimuth_offsets_rad,
-        }
-    elif sensor_name == "at128":
-        n_rows = 128
-        n_columns = 1200
-        fov_start_azimuth = -1.047
-        fov_span_azimuth = 2.094
-        fov_start_elevation = 0.226
-        fov_span_elevation = 0.662
-        spin_clockwise = True
-
-        # Generate random row elevations within FOV (sorted descending for typical lidar)
-        row_elevations_rad = torch.linspace(
-            fov_start_elevation,
-            fov_start_elevation - fov_span_elevation,
-            n_rows,
-            dtype=torch.float32
-        ) + (torch.rand(n_rows, dtype=torch.float32) - 0.5) * 0.001  # Add small noise
-
-        # For this sensor, use zero azimuth offsets (uniform azimuth distribution)
-        row_azimuth_offsets_rad = torch.zeros(n_rows, dtype=torch.float32)
-
-        return {
-            'n_rows': n_rows,
-            'n_columns': n_columns,
-            'fov_start_azimuth': fov_start_azimuth,
-            'fov_span_azimuth': fov_span_azimuth,
-            'fov_start_elevation': fov_start_elevation,
-            'fov_span_elevation': fov_span_elevation,
-            'spin_clockwise': spin_clockwise,
-            'row_elevations_rad': row_elevations_rad,
-            'row_azimuth_offsets_rad': row_azimuth_offsets_rad,
-        }
-    else:
-        raise ValueError(f"Unknown lidar sensor: {sensor_name}")
-
-
-def _generate_random_angle_to_column_map(n_rows, n_columns, resolution_factor=2,
-                                          device='cuda', seed=42):
-    """Generate a random but realistic angle_to_column_map for testing.
-
-    This avoids the expensive KD-tree computation in tests. The map should be:
-    1. Monotonically increasing (roughly) from left to right
-    2. Values in range [0, n_columns-1]
-    3. Shape: (resolution_factor * n_rows * resolution_factor * n_columns,) - 1D array in row-major order
-    4. Pure integer arithmetic to avoid floating-point differences between CUDA/PyTorch
-    """
-    torch.manual_seed(seed)
-
-    map_height = resolution_factor * n_rows
-    map_width = resolution_factor * n_columns
-
-    # Create base linear mapping: each horizontal index maps to a column
-    # Use linspace to get evenly distributed float values, then round to int
-    base_indices = torch.linspace(0, n_columns - 1, map_width, device=device)
-    base_map = base_indices.round().to(torch.int32)
-
-    # Tile vertically to create 2D map
-    angle_to_column_map_2d = base_map.unsqueeze(0).repeat(map_height, 1)
-
-    # Add small integer perturbations per row to simulate row-specific azimuth offsets
-    # Use a fixed pattern to ensure identical results on CUDA and PyTorch
-    max_perturbation = max(1, n_columns // 100)  # ±1% of columns
-    row_perturbations = torch.randint(
-        -max_perturbation,
-        max_perturbation + 1,
-        (map_height, 1),
-        device=device,
-        dtype=torch.int32
-    )
-
-    # Apply perturbations and clamp to valid range
-    angle_to_column_map_2d = angle_to_column_map_2d + row_perturbations
-    angle_to_column_map_2d = torch.clamp(angle_to_column_map_2d, 0, n_columns - 1)
-
-    # Flatten to 1D array in row-major order (matching CUDA expectation)
-    angle_to_column_map = angle_to_column_map_2d.reshape(-1)
-
-    return angle_to_column_map
-
-
-def parse_lidar_camera(param_str: str, batch_dims: tuple, width: int, height: int, device: torch.device):
-    """Parse parameters for lidar camera model."""
-
-    # Get sensor configuration
-    sensor_data = get_lidar_sensor_data(param_str)
-
-    # Override width/height with sensor's n_columns/n_rows
-    # (lidar sensors have fixed resolutions)
-    actual_width = sensor_data['n_columns']
-    actual_height = sensor_data['n_rows']
-
-    # Generate a random angle_to_column_map for testing
-    # This is much faster than the accurate KD-tree based computation
-    # Use a fixed seed to ensure CUDA and PyTorch get the same map
-    resolution_factor = 2
-    angle_to_column_map = _generate_random_angle_to_column_map(
-        n_rows=sensor_data['n_rows'],
-        n_columns=sensor_data['n_columns'],
-        resolution_factor=resolution_factor,
-        device=device,
-        seed=42
-    )
-
-    # Compute map resolution (same as in _LidarCameraModel.__init__)
-    map_height = resolution_factor * sensor_data['n_rows']
-    map_width = resolution_factor * sensor_data['n_columns']
-    map_resolution = [
-        abs(sensor_data['fov_span_azimuth']) / (map_width - 1),
-        abs(sensor_data['fov_span_elevation']) / (map_height - 1)
-    ]
-
-    # Convert to ranges (min/max tuples)
-    # For elevation: start is at the top, span goes downward, so max=start, min=start-span
-    # For azimuth: start is the beginning, span goes in spin direction, so min=start, max=start+span
-    fov_elevation_max = sensor_data['fov_start_elevation']
-    fov_elevation_min = sensor_data['fov_start_elevation'] - sensor_data['fov_span_elevation']
-    fov_azimuth_min = sensor_data['fov_start_azimuth']
-    fov_azimuth_max = sensor_data['fov_start_azimuth'] + sensor_data['fov_span_azimuth']
-
-    return {
-        'width': actual_width,
-        'height': actual_height,
-        'fov_elevation_range': (fov_elevation_min, fov_elevation_max),
-        'fov_azimuth_range': (fov_azimuth_min, fov_azimuth_max),
-        'spin_clockwise': sensor_data['spin_clockwise'],
-        'angle_to_column_map': angle_to_column_map,
-        'angle_to_column_map_resolution_factor': resolution_factor,
-        'map_resolution': map_resolution,
-    }
-
 
 @pytest.fixture
 def camera_rays(batch_dims, image_dims, ref_camera):
@@ -513,49 +333,15 @@ def camera_rays(batch_dims, image_dims, ref_camera):
 
 
 @pytest.fixture
-def image_points(batch_dims, image_dims, ref_camera):
+def image_points(batch_dims, image_dims):
     """Generate random image points for testing."""
     torch.manual_seed(SEED)
 
     n_points = image_dims[0] * image_dims[1]
     height, width = image_dims
     shape = list(batch_dims) + [n_points]
-
-    # Lidar cameras use scaled angle space, not pixel coordinates
-    if isinstance(ref_camera, _LidarCameraModel):
-        # Generate points in scaled angle space
-        # For lidar: image_point = angle * ANGLE_TO_PIXEL_SCALING_FACTOR
-        device = 'cuda'
-
-        # Get fov_start and fov_span from the stored internal representation
-        fov_start = ref_camera.fov_start if isinstance(ref_camera.fov_start, torch.Tensor) else torch.tensor(ref_camera.fov_start)
-        fov_span = ref_camera.fov_span if isinstance(ref_camera.fov_span, torch.Tensor) else torch.tensor(ref_camera.fov_span)
-
-        # Generate random angles within FOV
-        # Azimuth: depends on spin direction
-        random_factor = torch.rand(*shape, device=device)
-        if ref_camera.spin_clockwise:
-            # Clockwise: azimuth decreases
-            azimuth = fov_start[0] - random_factor * abs(fov_span[0])
-        else:
-            # Counter-clockwise: azimuth increases
-            azimuth = fov_start[0] + random_factor * abs(fov_span[0])
-
-        # Elevation decreases (clockwise convention)
-        elevation = fov_start[1] - torch.rand(*shape, device=device) * abs(fov_span[1])
-
-        # Scale to image point space
-        ANGLE_TO_PIXEL_SCALING_FACTOR = 1024.0
-        column = azimuth * ANGLE_TO_PIXEL_SCALING_FACTOR
-        row = elevation * ANGLE_TO_PIXEL_SCALING_FACTOR
-
-        points = torch.stack([column, row], dim=-1)
-    else:
-        # Regular cameras use pixel coordinates
-        points = torch.rand(*shape, 2) * torch.tensor([height-1, width-1])
-        points = points.cuda()
-
-    return points
+    points = torch.rand(*shape, 2)*torch.tensor([height-1, width-1])
+    return points.cuda()
 
 
 @pytest.fixture
@@ -641,31 +427,7 @@ def test_camera(camera_model, batch_dims, image_dims, rs_type):
     """Create C++ camera (primary implementation)"""
     height, width = image_dims
     params = parse_camera(camera_model, batch_dims, width=width, height=height, rs_type=rs_type, seed=SEED)
-
-    # Lidar cameras need special handling - must pass args in correct order
-    if params.get('camera_model') == 'lidar':
-        # For lidar, we need to pass ALL optional parameters in order because pybind11
-        # doesn't allow skipping parameters with defaults when using kwargs
-        # Use empty tensors for omitted optional tensor parameters
-        import torch
-        empty_tensor = torch.empty(0)
-
-        return LidarCameraModelCUDA(
-            params['width'],
-            params['height'],
-            params['fov_elevation_range'],
-            params['fov_azimuth_range'],
-            params.get('spin_clockwise', True),
-            params.get('rs_type', ShutterType.GLOBAL),
-            params.get('row_elevations', empty_tensor),
-            params.get('column_azimuths', empty_tensor),
-            params.get('row_azimuth_offsets', empty_tensor),
-            params.get('angle_to_column_map', empty_tensor),
-            params.get('angle_to_column_map_resolution_factor', 1),
-            params.get('map_resolution', [0.001, 0.001]),
-        )
-    else:
-        return BaseCameraModelCUDA.create(**params)
+    return BaseCameraModelCUDA.create(**params)
 
 
 @pytest.fixture
@@ -673,12 +435,7 @@ def ref_camera(camera_model, batch_dims, image_dims, rs_type):
     """Create PyTorch reference camera"""
     height, width = image_dims
     params = parse_camera(camera_model, batch_dims, width=width, height=height, rs_type=rs_type, seed=SEED)
-
-    # Lidar cameras need special handling
-    if params.get('camera_model') == 'lidar':
-        return _LidarCameraModel(**{k: v for k, v in params.items() if k != 'camera_model'})
-    else:
-        return _BaseCameraModel.create(**params)
+    return _BaseCameraModel.create(**params)
 
 
 @pytest.fixture
@@ -702,7 +459,7 @@ class TestCameraModels:
     Validate C++ camera models against PyTorch reference.
     """
 
-    def test_camera_ray_to_image_point(self, batch_dims, camera_rays, test_camera, ref_camera):
+    def test_camera_ray_to_image_point(self, camera_rays, test_camera, ref_camera):
         test_imgpt, test_valid = test_camera.camera_ray_to_image_point(camera_rays, 0.0)
         ref_imgpt, ref_valid = ref_camera.camera_ray_to_image_point(camera_rays, 0.0)
 
@@ -740,7 +497,7 @@ class TestCameraModels:
 
         assert_mismatch_ratio(test_valid, ref_valid, max=validity_tol)
 
-    def test_image_point_to_camera_ray(self, batch_dims, image_points, test_camera, ref_camera):
+    def test_image_point_to_camera_ray(self, image_points, test_camera, ref_camera):
         test_rays, test_valid = test_camera.image_point_to_camera_ray(image_points)
         ref_rays, ref_valid = ref_camera.image_point_to_camera_ray(image_points)
 
@@ -784,38 +541,12 @@ class TestCameraModels:
             validity_tol = 3e-02  # Fallback
         assert_mismatch_ratio(test_valid, ref_valid, max=validity_tol)
 
-    def test_shutter_relative_frame_time(self, camera_model, batch_dims, image_points, test_camera, ref_camera):
-        # Lidar doesn't support batched cameras, but does support batched rays
-        # Reshape batch dimensions into ray dimension for lidar
-        if 'lidar' in camera_model and batch_dims != ():
-            # Flatten batch dims: [B1, B2, N, 2] -> [B1*B2*N, 2]
-            original_shape = image_points.shape
-            image_points_flat = image_points.reshape(-1, 2)
+    def test_shutter_relative_frame_time(self, image_points, test_camera, ref_camera):
+        test_times = test_camera.shutter_relative_frame_time(image_points)
+        ref_times = ref_camera.shutter_relative_frame_time(image_points)
 
-            test_times_flat = test_camera.shutter_relative_frame_time(image_points_flat)
-            ref_times_flat = ref_camera.shutter_relative_frame_time(image_points_flat)
-
-            # Reshape back to original batch shape: [B1*B2*N] -> [B1, B2, N]
-            test_times = test_times_flat.reshape(original_shape[:-1])
-            ref_times = ref_times_flat.reshape(original_shape[:-1])
-        else:
-            test_times = test_camera.shutter_relative_frame_time(image_points)
-            ref_times = ref_camera.shutter_relative_frame_time(image_points)
-
-        # Tolerances based on camera type
-        # Values set ~20% above observed maximums for tight margin
-        if isinstance(ref_camera, _LidarCameraModel):
-            # lidar: using pure integer arithmetic for angle_to_column_map
-            # Remaining differences are due to:
-            # - Floating-point angle calculations (asin, atan2)
-            # - Grid index rounding differences
-            # Expected: very small differences, <0.001 relative
-            atol, rtol = 5e-03, 5e-03
-        else:
-            # Other cameras: observed atol ~1e-06, rtol ~1e-06
-            atol, rtol = 2e-06, 2e-06
-
-        assert_close(test_times, ref_times, atol=atol, rtol=rtol)
+        # Observed: max abs diff ~1e-06, max rel diff ~1e-06
+        assert_close(test_times, ref_times, atol=2e-06, rtol=2e-06)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")

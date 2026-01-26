@@ -37,7 +37,7 @@ std::tuple<at::Tensor, at::Tensor> projection_ewa_simple_fwd(
     at::DimVector means2d_shape(batch_dims);
     means2d_shape.append({C, N, 2});
     at::Tensor means2d = at::empty(means2d_shape, opt);
-
+    
     at::DimVector covars2d_shape(batch_dims);
     covars2d_shape.append({C, N, 2, 2});
     at::Tensor covars2d = at::empty(covars2d_shape, opt);
@@ -879,7 +879,7 @@ projection_2dgs_packed_bwd(
     if (viewmats_requires_grad) {
         v_viewmats = at::zeros_like(viewmats, opt);
     }
-
+    
     launch_projection_2dgs_packed_bwd_kernel(
         // fwd inputs
         means,
@@ -943,8 +943,7 @@ projection_ut_3dgs_fused(
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs,  // [..., C, 4] optional
-    const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
-    const LidarSensorParameters lidar_coeffs              // lidar sensor parameters
+    const FThetaCameraDistortionParameters ftheta_coeffs // shared parameters for all cameras
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -968,24 +967,6 @@ projection_ut_3dgs_fused(
         CHECK_INPUT(thin_prism_coeffs.value());
     }
 
-    // Convert Python-side LidarSensorParameters to device-side LidarCameraParameters
-    LidarCameraParameters lidar_device_params = {};
-    lidar_device_params.n_rows = image_height;
-    lidar_device_params.n_columns = image_width;
-    lidar_device_params.fov_elevation_range = lidar_coeffs.fov_elevation_range;
-    lidar_device_params.fov_azimuth_range = lidar_coeffs.fov_azimuth_range;
-    lidar_device_params.spin_direction = lidar_coeffs.spin_direction;
-    lidar_device_params.row_elevations = lidar_coeffs.row_elevations.defined() && lidar_coeffs.row_elevations.numel() > 0
-        ? lidar_coeffs.row_elevations.data_ptr<float>() : nullptr;
-    lidar_device_params.column_azimuths = lidar_coeffs.column_azimuths.defined() && lidar_coeffs.column_azimuths.numel() > 0
-        ? lidar_coeffs.column_azimuths.data_ptr<float>() : nullptr;
-    lidar_device_params.row_azimuth_offsets = lidar_coeffs.row_azimuth_offsets.defined() && lidar_coeffs.row_azimuth_offsets.numel() > 0
-        ? lidar_coeffs.row_azimuth_offsets.data_ptr<float>() : nullptr;
-    lidar_device_params.angle_to_column_map = lidar_coeffs.angle_to_column_map.defined() && lidar_coeffs.angle_to_column_map.numel() > 0
-        ? lidar_coeffs.angle_to_column_map.data_ptr<int>() : nullptr;
-    lidar_device_params.angle_to_column_map_resolution_factor = 1;
-    lidar_device_params.map_resolution = {0.001f, 0.001f};
-
     at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 2));
     uint32_t N = means.size(-2);    // number of gaussians
     uint32_t C = Ks.size(-3);       // number of cameras
@@ -1002,7 +983,7 @@ projection_ut_3dgs_fused(
     at::DimVector depths_shape(batch_dims);
     depths_shape.append({C, N});
     at::Tensor depths = at::empty(depths_shape, opt);
-
+    
     at::DimVector conics_shape(batch_dims);
     conics_shape.append({C, N, 3});
     at::Tensor conics = at::empty(conics_shape, opt);
@@ -1039,7 +1020,6 @@ projection_ut_3dgs_fused(
         tangential_coeffs,
         thin_prism_coeffs,
         ftheta_coeffs,
-        lidar_device_params,
         // outputs
         radii,
         means2d,
