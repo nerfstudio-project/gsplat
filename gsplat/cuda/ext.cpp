@@ -20,7 +20,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .value("ORTHO", gsplat::CameraModelType::ORTHO)
         .value("FISHEYE", gsplat::CameraModelType::FISHEYE)
         .value("FTHETA", gsplat::CameraModelType::FTHETA)
-        .value("LIDAR", gsplat::CameraModelType::LIDAR)
         .export_values();
 
     m.def("null", &gsplat::null);
@@ -126,21 +125,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("max_angle", &FThetaCameraDistortionParameters::max_angle)
         .def_readwrite("linear_cde", &FThetaCameraDistortionParameters::linear_cde);
 
-    // Lidar sensor support
-    py::enum_<gsplat::SpinningDirection>(m, "SpinningDirection", py::module_local())
-        .value("CLOCKWISE", gsplat::SpinningDirection::CLOCKWISE)
-        .value("COUNTER_CLOCKWISE", gsplat::SpinningDirection::COUNTER_CLOCKWISE)
-        .export_values();
-    py::class_<gsplat::LidarSensorParameters>(m, "LidarSensorParameters", py::module_local())
-        .def(py::init<>())
-        .def_readwrite("fov_elevation_range", &gsplat::LidarSensorParameters::fov_elevation_range)
-        .def_readwrite("fov_azimuth_range", &gsplat::LidarSensorParameters::fov_azimuth_range)
-        .def_readwrite("spin_direction", &gsplat::LidarSensorParameters::spin_direction)
-        .def_readwrite("row_elevations", &gsplat::LidarSensorParameters::row_elevations)
-        .def_readwrite("column_azimuths", &gsplat::LidarSensorParameters::column_azimuths)
-        .def_readwrite("row_azimuth_offsets", &gsplat::LidarSensorParameters::row_azimuth_offsets)
-        .def_readwrite("angle_to_column_map", &gsplat::LidarSensorParameters::angle_to_column_map);
-
     // ==================== Camera Model Bindings ====================
 
 #if GSPLAT_BUILD_CAMERA_WRAPPERS
@@ -217,24 +201,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
              py::arg("reference_poly"),
              py::arg("max_angle"),
              py::arg("rs_type"));
-
-    py::class_<gsplat::PyLidarCameraModel, gsplat::PyBaseCameraModel<>,
-               std::shared_ptr<gsplat::PyLidarCameraModel>>(m, "LidarCameraModel", py::module_local())
-                .def(py::init<int, int,
-                      std::tuple<float, float>, std::tuple<float, float>,
-                      bool, ShutterType,
-                      torch::Tensor, torch::Tensor, torch::Tensor,
-                      torch::Tensor, int, std::array<float, 2>>(),
-             py::arg("width"), py::arg("height"),
-             py::arg("fov_elevation_range"),
-             py::arg("fov_azimuth_range"),
-             py::arg("spin_clockwise") = true,
-             py::arg("rs_type") = ShutterType::GLOBAL,
-             py::arg("row_elevations") = torch::Tensor(),
-             py::arg("column_azimuths") = torch::Tensor(),
-             py::arg("row_azimuth_offsets") = torch::Tensor(),
-             py::arg("angle_to_column_map") = torch::Tensor(),
-             py::arg("angle_to_column_map_resolution_factor") = 1,
-             py::arg("map_resolution") = std::array<float, 2>{0.001f, 0.001f});
 #endif
 }
