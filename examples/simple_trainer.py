@@ -217,7 +217,9 @@ class Config:
             strategy.refine_stop_iter = int(strategy.refine_stop_iter * factor)
             strategy.refine_every = int(strategy.refine_every * factor)
             if strategy.noise_injection_stop_iter >= 0:
-                strategy.noise_injection_stop_iter = int(strategy.noise_injection_stop_iter * factor)
+                strategy.noise_injection_stop_iter = int(
+                    strategy.noise_injection_stop_iter * factor
+                )
         else:
             assert_never(strategy)
 
@@ -480,7 +482,8 @@ class Runner:
             ppisp_config = PPISPConfig(
                 use_controller=cfg.ppisp_use_controller,
                 controller_distillation=cfg.ppisp_controller_distillation,
-                controller_activation_ratio=cfg.ppisp_controller_activation_num_steps/cfg.max_steps,
+                controller_activation_ratio=cfg.ppisp_controller_activation_num_steps
+                / cfg.max_steps,
             )
             self.post_processing_module = PPISP(
                 num_cameras=self.parser.num_cameras,
@@ -627,8 +630,7 @@ class Runner:
             if self.cfg.post_processing == "bilateral_grid":
                 if frame_idcs is not None:
                     grid_xy = (
-                        pixel_coords
-                        / torch.tensor([width, height], device=self.device)
+                        pixel_coords / torch.tensor([width, height], device=self.device)
                     ).unsqueeze(0)
                     rgb = slice(
                         self.post_processing_module,
@@ -648,7 +650,9 @@ class Runner:
                     exposure_prior=exposure,
                 )
 
-            render_colors = torch.cat([rgb, extra], dim=-1) if extra is not None else rgb
+            render_colors = (
+                torch.cat([rgb, extra], dim=-1) if extra is not None else rgb
+            )
 
         return render_colors, render_alphas, info
 
@@ -747,7 +751,9 @@ class Runner:
             )
             image_ids = data["image_id"].to(device)
             masks = data["mask"].to(device) if "mask" in data else None  # [1, H, W]
-            exposure = data["exposure"].to(device) if "exposure" in data else None  # [B,]
+            exposure = (
+                data["exposure"].to(device) if "exposure" in data else None
+            )  # [B,]
             if cfg.depth_loss:
                 points = data["points"].to(device)  # [1, M, 2]
                 depths_gt = data["depths"].to(device)  # [1, M]
@@ -1067,7 +1073,7 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 masks=masks,
-                frame_idcs=None, # For novel views, pass None (no per-frame parameters available)
+                frame_idcs=None,  # For novel views, pass None (no per-frame parameters available)
                 camera_idcs=data["camera_idx"].to(device),
                 exposure=exposure,
             )  # [1, H, W, 3]

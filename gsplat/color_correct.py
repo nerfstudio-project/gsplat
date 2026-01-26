@@ -56,7 +56,7 @@ def color_correct_quadratic(
         a_mat = []
         for c in range(num_channels):
             # Quadratic term.
-            a_mat.append(img_mat[:, c: (c + 1)] * img_mat[:, c:])
+            a_mat.append(img_mat[:, c : (c + 1)] * img_mat[:, c:])
         a_mat.append(img_mat)  # Linear term.
         a_mat.append(torch.ones_like(img_mat[:, :1]))  # Bias term.
         a_mat = torch.cat(a_mat, dim=-1)

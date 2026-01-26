@@ -143,10 +143,17 @@ class MCMCStrategy(Strategy):
             torch.cuda.empty_cache()
 
         # add noise to GSs (stop after noise_injection_stop_iter if set)
-        noise_stop = self.noise_injection_stop_iter if self.noise_injection_stop_iter >= 0 else float("inf")
+        noise_stop = (
+            self.noise_injection_stop_iter
+            if self.noise_injection_stop_iter >= 0
+            else float("inf")
+        )
         if step < noise_stop:
             inject_noise_to_position(
-                params=params, optimizers=optimizers, state={}, scaler=lr * self.noise_lr
+                params=params,
+                optimizers=optimizers,
+                state={},
+                scaler=lr * self.noise_lr,
             )
 
     @torch.no_grad()
