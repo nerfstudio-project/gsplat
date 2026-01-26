@@ -26,6 +26,8 @@ class MCMCStrategy(Strategy):
         noise_lr (float): MCMC samping noise learning rate. Default to 5e5.
         refine_start_iter (int): Start refining GSs after this iteration. Default to 500.
         refine_stop_iter (int): Stop refining GSs after this iteration. Default to 25_000.
+        noise_injection_stop_iter (int): Stop injecting noise after this iteration. Default to -1 (never stop).
+            Use this to stop noise injection during controller distillation while keeping refine_stop_iter separate.
         refine_every (int): Refine GSs every this steps. Default to 100.
         min_opacity (float): GSs with opacity below this value will be pruned. Default to 0.005.
         verbose (bool): Whether to print verbose information. Default to False.
@@ -50,6 +52,7 @@ class MCMCStrategy(Strategy):
     noise_lr: float = 5e5
     refine_start_iter: int = 500
     refine_stop_iter: int = 25_000
+    noise_injection_stop_iter: int = -1
     refine_every: int = 100
     min_opacity: float = 0.005
     verbose: bool = False
@@ -139,10 +142,12 @@ class MCMCStrategy(Strategy):
 
             torch.cuda.empty_cache()
 
-        # add noise to GSs
-        inject_noise_to_position(
-            params=params, optimizers=optimizers, state={}, scaler=lr * self.noise_lr
-        )
+        # add noise to GSs (stop after noise_injection_stop_iter if set)
+        noise_stop = self.noise_injection_stop_iter if self.noise_injection_stop_iter >= 0 else float("inf")
+        if step < noise_stop:
+            inject_noise_to_position(
+                params=params, optimizers=optimizers, state={}, scaler=lr * self.noise_lr
+            )
 
     @torch.no_grad()
     def _relocate_gs(

@@ -130,7 +130,7 @@ setup(
             "pytest==7.1.2",
             "pytest-xdist==2.5.0",
             "typeguard>=2.13.3",
-            "pyyaml==6.0",
+            "pyyaml>=6.0.1",
             "build",
             "twine",
         ],
