@@ -383,7 +383,7 @@ class Runner:
             raise ValueError(
                 f"PPISP post-processing requires MCMCStrategy at the moment."
             )
-            
+
         # Model
         feature_dim = 32 if cfg.app_opt else None
         self.splats, self.optimizers = create_splats_with_optimizers(
