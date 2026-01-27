@@ -88,6 +88,7 @@ run_args=(
     -ti
     -v "$REPOROOT:/root/gsplat"
     -v "$LOCAL_CACHE_NAME:/var/cache"
+    --entrypoint /bin/bash # To avoid the CUDA banner when the container starts.
 )
 
 if $do_3dgut; then
