@@ -62,6 +62,9 @@ is specified in `config.yaml`.
 # useful if it needs to be given every time.
 export GSPLAT_TEST_PARAMS='--gpus=device=1 --3dgut'
 ./run_tests.sh
+
+# Run a subset of tests under CUDA compute-sanitizer
+./run_tests.sh --sanitize --3dgut -k 'test_shutter_relative_frame_time'
 ```
 
 ### Available Flags
@@ -69,6 +72,7 @@ export GSPLAT_TEST_PARAMS='--gpus=device=1 --3dgut'
 **Global Flags:**
 - `--shell`: Enter interactive shell instead of running tests
 - `--reset`: Delete the internal build cache volume
+- `--sanitize`: Run tests under CUDA compute-sanitizer
 - `--gpus=device=<id1,id2,...>`: enable the given GPUs inside the container
 - `--gpus=<count>`: enable this many GPUs inside the container
 - `--help` or `-h`: Show help message

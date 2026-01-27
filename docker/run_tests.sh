@@ -16,6 +16,7 @@ usage()
     echo "Usage: ${0##*/} [global flags] [feature flags] [ENVVAR=value ...] [extra shell/pytest args]"
     echo "global flags:"
     echo "   --shell    Enter into the shell inside the container."
+    echo "   --sanitize Run tests under CUDA compute-sanitizer"
     echo "   --reset    Delete the internal build cache"
     echo "   --gpus=spec Use the given GPUs inside the container."
     echo "              The syntax is:"
@@ -54,6 +55,7 @@ do_3dgut=false
 do_3dgs=false
 do_2dgs=false
 do_reset=false
+do_sanitize=false
 gpus=all
 
 envvars=()
@@ -70,6 +72,9 @@ while (( $# >= 1 )); do
         ;;
     --reset)
         do_reset=true
+        ;;
+    --sanitize)
+        do_sanitize=true
         ;;
     --3dgut)
         do_3dgut=true
@@ -155,8 +160,15 @@ if $runshell; then
         shell_args+=(-c "$*")
     fi
 else
-    # We want to run pytest, possibly with users' parameters
-    shell_args+=(-c "pytest $*")
+    if $do_sanitize; then
+        # CUDA compute-sanitizer needs the full path of the program to be analyzed
+        shell_args+=(-c "/usr/local/cuda/bin/compute-sanitizer \$(command -v pytest) $*")
+        run_args+=(-e DEBUG=1) # it's helpful for triggering asserts and full symbol info
+        run_args+=(--privileged) # compute-sanitizer sometimes segfaults if not running on privileged container
+    else
+        # We want to run pytest, possibly with users' parameters
+        shell_args+=(-c "pytest $*")
+    fi
 fi
 
 docker run "${run_args[@]}" "$DOCKER_REGISTRY/$IMAGE_NAME:$IMAGE_TAG" "${shell_args[@]}"
