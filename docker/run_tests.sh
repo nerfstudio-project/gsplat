@@ -13,7 +13,7 @@ usage()
 {
     echo "Build gsplat and run its tests inside its docker container"
     echo
-    echo "Usage: ${0##*/} [global flags] [feature flags] [extra docker/pytest args]"
+    echo "Usage: ${0##*/} [global flags] [feature flags] [extra shell/pytest args]"
     echo "global flags:"
     echo "   --shell    Enter into the shell inside the container."
     echo "              You then can run 'pytest' to run the tests"
@@ -86,7 +86,7 @@ run_args=(
     --gpus=all
     --rm
     -ti
-    -v $REPOROOT:/root/gsplat
+    -v "$REPOROOT:/root/gsplat"
     -v "$LOCAL_CACHE_NAME:/var/cache"
 )
 
@@ -100,17 +100,22 @@ if $do_3dgs; then
     run_args+=(-e BUILD_3DGS=1)
 fi
 
-if $runshell && [[ $# == 0 ]]; then
-    # If we want an interactive shell...
-    cmd='/bin/bash --login -i'
-else
+# We need a login shell in order to load ~/.profile, it loads up the python venv.
+shell_args=(--login)
+
+if $runshell; then
+    # No arguments given?
     if [[ $# == 0 ]]; then
-        cmd=pytest
+        # Drop us into an interactive shell in the container
+        shell_args+=(-i)
+    else
+        # Execute user's commands inside the container
+        shell_args+=(-c "$*")
     fi
-    # We're not launching a login shell, but we still need
-    # to process .profile so that the ccache envvars are read.
-    run_args+=(-e BASH_ENV=~/.profile)
+else
+    # We want to run pytest, possibly with users' parameters
+    shell_args+=(-c "pytest $*")
 fi
 
-docker run "${run_args[@]}" "$DOCKER_REGISTRY/$IMAGE_NAME:$IMAGE_TAG" $cmd "$@"
+docker run "${run_args[@]}" "$DOCKER_REGISTRY/$IMAGE_NAME:$IMAGE_TAG" "${shell_args[@]}"
 

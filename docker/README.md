@@ -35,6 +35,9 @@ is specified in `config.yaml`.
 ### Basic Usage
 
 ```bash
+# Show the help screen
+./run_tests.sh --help
+
 # Build all features and run all tests
 ./run_tests.sh
 
@@ -102,6 +105,18 @@ pre-configure the build environment:
 ```bash
 # Shell with only 3DGUT feature built
 ./run_tests.sh --shell --3dgut
+```
+
+### Running arbitrary commands
+
+To run any command without dropping into a shell inside the container,
+pass the command and its arguments after `--shell`:
+
+```bash
+# Execute a simple command, with arguments
+./run_tests.sh --shell echo this is a test
+# Execute a more complex bash shell pipeline.
+./run_tests.sh --shell 'if command -v myprog; then myprog; else echo failure; exit 1; fi'
 ```
 
 ## 3. Building and Pushing the Image to GitLab
