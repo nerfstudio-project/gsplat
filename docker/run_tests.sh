@@ -171,5 +171,6 @@ else
     fi
 fi
 
+set -x
 docker run "${run_args[@]}" "$DOCKER_REGISTRY/$IMAGE_NAME:$IMAGE_TAG" "${shell_args[@]}"
 
