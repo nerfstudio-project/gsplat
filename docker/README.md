@@ -57,6 +57,11 @@ is specified in `config.yaml`.
 
 # Use the 2nd gpu in the system
 ./run_tests.sh --gpus=device=1
+
+# Define the test parameters once in the environment variable,
+# useful if it needs to be given every time.
+export GSPLAT_TEST_PARAMS='--gpus=device=1 --3dgut'
+./run_tests.sh
 ```
 
 ### Available Flags
@@ -81,6 +86,9 @@ builds.
 
 Users can pass environment variables NAME=value, they will be
 set inside the container.
+
+The flags used can also be defined in `GSPLAT_TEST_PARAMS` environment variable
+on host. The flags given in the command line have precedence, though.
 
 ## 2. Shell Access to Dev Container
 

@@ -33,6 +33,9 @@ usage()
     echo "only the selected features will be built."
     echo "If none are given, all features will be built."
     echo
+    echo "Parameters can be given via the envvar GSPLAT_TEST_PARAMS."
+    echo "The parameters given in the command line have precedence."
+    echo
     echo "Examples:"
     echo "- Build everything and run all tests with all features:"
     echo "    ${0##*/}"
@@ -40,6 +43,9 @@ usage()
     echo "    ${0##*/} --3dgut tests/test_basic.py"
     echo "- Build 3dgut and 3dgs only and run the rasterization tests:"
     echo "    ${0##*/} --3dgut --3dgs tests/test_rasterization.py"
+    echo "- Set parameters via environment variable:"
+    echo "    export GSPLAT_TEST_PARAMS='--gpus=device=1 --3dgut'"
+    echo "    ${0##*/}"
 }
 
 runshell=false
@@ -51,6 +57,11 @@ do_reset=false
 gpus=all
 
 envvars=()
+
+# Prepend the parameters given by the environment variable, if any.
+if [[ -v GSPLAT_TEST_PARAMS ]]; then
+    set -- ${GSPLAT_TEST_PARAMS} "$@"
+fi
 
 while (( $# >= 1 )); do
     case $1 in
