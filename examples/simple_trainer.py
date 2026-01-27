@@ -379,6 +379,10 @@ class Runner:
                 f"Post-processing ({cfg.post_processing}) requires single-GPU training, "
                 f"but world_size={world_size}."
             )
+        if cfg.post_processing == "ppisp" and isinstance(cfg.strategy, DefaultStrategy):
+            raise ValueError(
+                f"PPISP post-processing requires MCMCStrategy at the moment."
+            )
 
         # Model
         feature_dim = 32 if cfg.app_opt else None
