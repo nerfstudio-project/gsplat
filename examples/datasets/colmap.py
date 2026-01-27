@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import cv2
@@ -11,6 +12,7 @@ from pycolmap import SceneManager
 from tqdm import tqdm
 from typing_extensions import assert_never
 
+from exif import compute_exposure_from_exif
 from .normalize import (
     align_principal_axes,
     similarity_from_cameras,
@@ -62,11 +64,13 @@ class Parser:
         factor: int = 1,
         normalize: bool = False,
         test_every: int = 8,
+        load_exposure: bool = False,
     ):
         self.data_dir = data_dir
         self.factor = factor
         self.normalize = normalize
         self.test_every = test_every
+        self.load_exposure = load_exposure
 
         colmap_dir = os.path.join(data_dir, "sparse/0/")
         if not os.path.exists(colmap_dir):
@@ -259,6 +263,39 @@ class Parser:
         self.point_indices = point_indices  # Dict[str, np.ndarray], image_name -> [M,]
         self.transform = transform  # np.ndarray, (4, 4)
 
+        # Create 0-based contiguous camera indices from COLMAP camera_ids.
+        # This is useful for camera-based embeddings/modules.
+        unique_camera_ids = sorted(set(camera_ids))
+        self.camera_id_to_idx = {cid: idx for idx, cid in enumerate(unique_camera_ids)}
+        self.camera_indices = [self.camera_id_to_idx[cid] for cid in camera_ids]
+        self.num_cameras = len(unique_camera_ids)
+
+        # Load EXIF exposure data if requested.
+        # Always read from original (non-downscaled) images since PNG doesn't support EXIF.
+        if load_exposure:
+            exposure_values: List[Optional[float]] = []
+            for image_name in tqdm(image_names, desc="Loading EXIF exposure"):
+                original_path = Path(colmap_image_dir) / image_name
+                exposure_values.append(compute_exposure_from_exif(original_path))
+
+            # Compute mean across all valid exposures and subtract
+            valid_exposures = [e for e in exposure_values if e is not None]
+            if valid_exposures:
+                exposure_mean = sum(valid_exposures) / len(valid_exposures)
+                self.exposure_values: List[Optional[float]] = [
+                    (e - exposure_mean) if e is not None else None
+                    for e in exposure_values
+                ]
+                print(
+                    f"[Parser] Loaded exposure for {len(valid_exposures)}/{len(exposure_values)} images "
+                    f"(mean={exposure_mean:.3f} EV)"
+                )
+            else:
+                self.exposure_values = [None] * len(exposure_values)
+                print("[Parser] No valid EXIF exposure data found in any image.")
+        else:
+            self.exposure_values = [None] * len(image_paths)
+
         # load one image to check the size. In the case of tanksandtemples dataset, the
         # intrinsics stored in COLMAP corresponds to 2x upsampled images.
         actual_image = imageio.imread(self.image_paths[0])[..., :3]
@@ -404,9 +441,17 @@ class Dataset:
             "camtoworld": torch.from_numpy(camtoworlds).float(),
             "image": torch.from_numpy(image).float(),
             "image_id": item,  # the index of the image in the dataset
+            "camera_idx": self.parser.camera_indices[
+                index
+            ],  # 0-based contiguous camera index
         }
         if mask is not None:
             data["mask"] = torch.from_numpy(mask).bool()
+
+        # Add exposure if available for this image
+        exposure = self.parser.exposure_values[index]
+        if exposure is not None:
+            data["exposure"] = torch.tensor(exposure, dtype=torch.float32)
 
         if self.load_depths:
             # projected points to image plane to get depths
