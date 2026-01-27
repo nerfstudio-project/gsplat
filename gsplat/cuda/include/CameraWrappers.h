@@ -28,6 +28,7 @@
 #include <torch/extension.h>
 #include <memory>
 #include "Cameras.cuh"
+#include "Ops.h"
 
 namespace gsplat {
 
@@ -312,6 +313,19 @@ public:
         const torch::Tensor &max_angle,                // [...]
         ShutterType rs_type
     );
+};
+
+/**
+ * @brief Lidar camera model for spinning lidar sensors
+ */
+class PyLidarCameraModel : public PyBaseCameraModel<LidarCameraModel>
+{
+public:
+    PyLidarCameraModel(LidarCameraParameters params);
+
+private:
+    // Store the parameters to keep its tensors.
+    LidarCameraParameters m_params;
 };
 
 } // namespace gsplat

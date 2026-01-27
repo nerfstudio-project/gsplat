@@ -43,6 +43,8 @@ from .cuda._wrapper import (
     has_3dgut,
     has_adam,
     has_reloc,
+    LidarCameraParameters,
+    LidarCameraParametersExt,
 )
 from .exporter import export_splats
 from .optimizers import SelectiveAdam
@@ -56,6 +58,10 @@ from .rendering import (
 )
 from .strategy import DefaultStrategy, MCMCStrategy, Strategy
 from .version import __version__
+from .cuda._lidar import (
+    compute_angles_to_columns_map as compute_lidar_angles_to_columns_map,
+    SpinningDirection,
+)
 
 all = [
     "color_correct_affine",
@@ -96,4 +102,8 @@ all = [
     "has_3dgut",
     "has_adam",
     "has_reloc",
+    "LidarCameraParameters",
+    "LidarCameraParametersExt",
+    "compute_lidar_angles_to_columns_map",
+    "SpinningDirection",
 ]

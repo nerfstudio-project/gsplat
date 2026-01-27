@@ -40,6 +40,11 @@
 #include "Cameras.h"
 #include "ExternalDistortion.cuh"
 
+namespace gsplat
+{
+    class LidarCameraParameters;
+}
+
 template <typename T, std::size_t N>
 __device__ std::array<T, N> make_array(const T *ptr) {
     std::array<T, N> arr;
@@ -416,7 +421,7 @@ template <class DerivedCameraModel> struct BaseCameraModel {
         }
 
         return interpolate_shutter_pose(
-                   shutter_relative_frame_time(image_point),
+                   derived->shutter_relative_frame_time(image_point),
                    rolling_shutter_parameters
         )
             .camera_ray_to_world_ray(camera_ray.ray_dir);
@@ -479,7 +484,7 @@ template <class DerivedCameraModel> struct BaseCameraModel {
 #pragma unroll
         for (auto j = 0; j < N_ROLLING_SHUTTER_ITERATIONS; ++j) {
             relative_frame_time =
-                shutter_relative_frame_time(image_points_rs_prev);
+                derived->shutter_relative_frame_time(image_points_rs_prev);
 
             t_rs = (1.f - relative_frame_time) * t_start +
                    relative_frame_time * t_end;
@@ -1117,6 +1122,266 @@ struct OpenCVFisheyeCameraModel
     }
 };
 
+struct FOVCUDA
+{
+    FOVCUDA(const c10::intrusive_ptr<gsplat::FOV> &fov)
+        : start{fov->start}
+        , span{fov->span}
+    {
+    }
+
+    float start;
+    float span;
+};
+
+// Lidar camera parameters struct (device-side)
+struct LidarCameraParametersCUDA
+{
+    LidarCameraParametersCUDA(const gsplat::LidarCameraParameters &params);
+
+    // Sensor dimensions
+    int n_rows;
+    int n_columns;
+
+    FOVCUDA fov_vert_rad;
+    FOVCUDA fov_horiz_rad;
+    float fov_eps_rad;
+
+    // Not adding row_elevations_rad/column_azimuth_rad/... because
+    // angles_to_columns_map has everything we need from them.
+
+    // Spinning direction and frequency of the lidar
+    gsplat::SpinningDirection spinning_direction;
+    float spinning_frequency_hz;
+
+    // Precomputed acceleration structure for rolling shutter timing
+    // Maps (.x=azimuth, .y=elevation) angles to actual column indices.
+    const int32_t* angles_to_columns_map = nullptr;
+    int2 map_dim;              // Dimensions of the map grid
+    float2 map_resolution_rad; // Grid cell size in radians [.x=azimuth, .y=elevation]
+
+    // Angle to pixel scaling factor (NREND assumes fixed LUT resolution of 1024 for both)
+    static constexpr float ANGLE_TO_PIXEL_SCALING_FACTOR = 1024.f;
+};
+
+
+// Lidar camera model for spinning lidar sensors (e.g., Hesai Pandar128, AT128)
+struct LidarCameraModel : BaseCameraModel<LidarCameraModel>
+{
+    using Base = BaseCameraModel<LidarCameraModel>;
+
+    struct Parameters : Base::Parameters
+    {
+        __device__
+        explicit Parameters(LidarCameraParametersCUDA lidar_params)
+            // TODO: We're mapping n_rows->width and n_columns->height to conform with nrend, but this should be reverted
+            : Base::Parameters{{static_cast<unsigned int>(lidar_params.n_rows), static_cast<unsigned int>(lidar_params.n_columns)}}
+            , lidar(std::move(lidar_params))
+        {
+        }
+
+        LidarCameraParametersCUDA lidar;
+    };
+
+    __device__
+    explicit LidarCameraModel(LidarCameraParametersCUDA params)
+        : parameters(std::move(params))
+    {
+    }
+
+    Parameters parameters;
+
+public:
+    // Override shutter_relative_frame_time for lidar-specific rolling shutter timing
+    __device__
+    float shutter_relative_frame_time(const glm::fvec2 &image_point) const
+    {
+        // Unlike cameras with simple linear rolling shutter (top-to-bottom, left-to-right),
+        // spinning lidars have complex timing patterns:
+        // - The sensor spins (clockwise or counter-clockwise)
+        // - Each column corresponds to a specific capture time
+        // - The mapping from (elevation, azimuth) angles to column (time) is non-linear
+        //   due to mechanical characteristics and row-specific azimuth offsets
+        //
+        // This function uses the angleToColumnMap lookup table
+        // to determine the correct capture time for a given image point.
+
+        const LidarCameraParametersCUDA &lidar = parameters.lidar;
+
+        assert(lidar.angles_to_columns_map != nullptr);
+
+        // Convert image point (in scaled pixel space) back to angles
+        // TODO: transposing here to make it compatible with nrend/vren, this needs to be reverted later.
+        constexpr float kToAngle = 1.f / LidarCameraParametersCUDA::ANGLE_TO_PIXEL_SCALING_FACTOR;
+        const float elevation = image_point.x * kToAngle;
+        const float azimuth = image_point.y * kToAngle;
+
+        // Compute relative angles (within sensor FOV)
+        const auto [rel_elevation, rel_azimuth] = _relative_sensor_angles(elevation, azimuth);
+
+        assert(_valid_relative_sensor_angles(rel_elevation, rel_azimuth));
+
+        // Compute the index into the map and clamp it to valid range
+        const int ihoriz = static_cast<int>(std::clamp<float>(
+                rel_azimuth/lidar.map_resolution_rad.x + 0.5f,
+                0,
+                lidar.map_dim.x-1));
+
+        const int ivert = static_cast<int>(std::clamp<float>(
+                rel_elevation/lidar.map_resolution_rad.y + 0.5f,
+                0,
+                lidar.map_dim.y-1));
+
+        // Lookup column index from the angle-to-column map
+        // Note: map is on row-major layout
+        const int column_idx = lidar.angles_to_columns_map[ivert*lidar.map_dim.x + ihoriz];
+
+        // Normalize to [0, 1] range (relative frame time)
+        return static_cast<float>(column_idx)/(lidar.n_columns - 1);
+    }
+
+    __device__
+    auto camera_ray_to_image_point(glm::fvec3 const &cam_ray, float margin_factor) const
+        -> typename Base::ImagePointReturn
+    {
+        const LidarCameraParametersCUDA &lidar = parameters.lidar;
+
+        // Normalize the camera ray (lidar uses normalized rays)
+        const float ray_length = glm::length(cam_ray);
+        if (ray_length < 1e-6f)
+        {
+            return {{0.f, 0.f}, false};
+        }
+
+        glm::fvec3 const ray_normalized = cam_ray / ray_length;
+
+        // Convert 3D ray to spherical coordinates (elevation, azimuth)
+        const float elevation = std::asin(ray_normalized.z);
+        const float azimuth = std::atan2(ray_normalized.y, ray_normalized.x);
+
+        // Image point: [row, column] (in scaled angle space)
+        // TODO: Must undo this swap once the current code is confirmed to be 1:1 with nrend.
+        const float row = elevation * lidar.ANGLE_TO_PIXEL_SCALING_FACTOR;
+        const float column = azimuth * lidar.ANGLE_TO_PIXEL_SCALING_FACTOR;
+        const glm::fvec2 image_point = glm::fvec2{row, column};
+
+        // For validation, compute relative angles
+        auto [rel_elevation, rel_azimuth] = _relative_sensor_angles(elevation, azimuth);
+
+        // Check FOV bounds with margin
+        // The margin allows rays slightly outside FOV that might round to valid pixels
+        const float tol_azimuth = margin_factor * lidar.fov_horiz_rad.span;
+        const float tol_elevation = margin_factor * lidar.fov_vert_rad.span;
+
+        bool valid = rel_elevation >= -tol_elevation &&
+                     rel_azimuth >= -tol_azimuth &&
+                     rel_elevation < lidar.fov_vert_rad.span + tol_elevation &&
+                     rel_azimuth < lidar.fov_horiz_rad.span + tol_azimuth &&
+                     _valid_relative_sensor_angles(rel_elevation, rel_azimuth);
+
+        return {image_point, valid};
+    }
+
+    __device__
+    CameraRay image_point_to_camera_ray(glm::fvec2 image_point) const
+    {
+        const LidarCameraParametersCUDA &lidar = parameters.lidar;
+
+        // TODO: transposing to be compatible with nrend, but this must be reverted later.
+        const float row = image_point.x;
+        const float col = image_point.y;
+
+        // Inverse of forward projection: elevation = row / scale
+        const float elevation = row / lidar.ANGLE_TO_PIXEL_SCALING_FACTOR;
+        const float azimuth = col / lidar.ANGLE_TO_PIXEL_SCALING_FACTOR;
+
+        // Convert spherical coordinates (elevation, azimuth) to 3D ray
+        const float sin_elevation = std::sin(elevation);
+        const float cos_elevation = std::cos(elevation);
+        const float sin_azimuth = std::sin(azimuth);
+        const float cos_azimuth = std::cos(azimuth);
+
+        const glm::fvec3 camera_ray = glm::fvec3
+        {
+            cos_azimuth * cos_elevation,  // x component
+            sin_azimuth * cos_elevation,  // y component
+            sin_elevation                 // z component
+        };
+
+        return {
+            camera_ray / glm::length(camera_ray),
+            _valid_sensor_angles(elevation, azimuth)
+        };
+    }
+
+private:
+    __device__
+    float _relative_clock_rotation(float begin, float end, gsplat::SpinningDirection direction) const
+    {
+        return (direction == gsplat::SpinningDirection::CLOCKWISE) ? (begin - end) : (end - begin);
+    }
+
+    __device__
+    float _relative_angle(float angle_start, float angle_end, gsplat::SpinningDirection direction) const
+    {
+        float rel_angle = _relative_clock_rotation(angle_start, angle_end, direction);
+        // Avoid expensive fmod if the angle is already in a reasonable range
+        // Similar optimization as in normalize_angle
+        if (-2*PI < rel_angle && rel_angle < 4*PI)
+        {
+            // Fast path: handle common cases without fmod
+            rel_angle = (rel_angle >= 2*PI) ? rel_angle - 2*PI : rel_angle;
+            rel_angle = (rel_angle < 0.f) ? rel_angle + 2*PI : rel_angle;
+            return rel_angle;
+        }
+        else
+        {
+            // Slow path: use fmod for values outside the fast range
+            rel_angle = std::fmod(rel_angle, 2*PI);
+            // output range [0, 2π)
+            return (rel_angle < 0.f) ? (rel_angle + 2*PI) : rel_angle;
+        }
+    }
+
+    __device__
+    std::tuple<float,float> _relative_sensor_angles(float elevation, float azimuth) const
+    {
+        const LidarCameraParametersCUDA &lidar = parameters.lidar;
+
+        // Account for accumulated numerical errors via some epsilon in FOV check (1x eps on the start of the FOV)
+        const float fov_vert_start_adj = lidar.fov_vert_rad.start + lidar.fov_eps_rad;
+        const float fov_horiz_start_adj = lidar.spinning_direction == gsplat::SpinningDirection::CLOCKWISE
+                                            ? lidar.fov_horiz_rad.start + lidar.fov_eps_rad
+                                            : lidar.fov_horiz_rad.start - lidar.fov_eps_rad;
+
+        const float rel_elevation = _relative_clock_rotation(fov_vert_start_adj, elevation, gsplat::SpinningDirection::CLOCKWISE);
+        const float rel_azimuth = _relative_angle(fov_horiz_start_adj, azimuth, lidar.spinning_direction);
+
+        return {rel_elevation, rel_azimuth};
+    }
+
+    // Checks if relative sensor angles are within the FOV of the sensor.
+    // Relative angle inputs should be computed with _relative_sensor_angles to include eps corrections
+    __device__
+    bool _valid_relative_sensor_angles(float rel_elevation, float rel_azimuth) const
+    {
+        const LidarCameraParametersCUDA &lidar = parameters.lidar;
+
+        // Also account for accumulated numerical errors via some epsilon in FOV check
+        // (using 2x eps as 1x eps is "inherited" from the start of the FOV in the relative angles,
+        //  so effectively this checks 1x eps on the end of the FOV)
+        return (rel_elevation <= lidar.fov_vert_rad.span + lidar.fov_eps_rad*2) &&
+               (rel_azimuth <= lidar.fov_horiz_rad.span + lidar.fov_eps_rad*2);
+    }
+
+    // Checks if sensor angles are within the FOV of the sensor.
+    __device__
+    bool _valid_sensor_angles(float elevation, float azimuth) const
+    {
+        auto [rel_elevation, rel_azimuth] = _relative_sensor_angles(elevation, azimuth);
+        return _valid_relative_sensor_angles(rel_elevation, rel_azimuth);
+    }
+};
 
 struct FThetaCameraDistortionDeviceParams {
     inline __device__ FThetaCameraDistortionDeviceParams(){}

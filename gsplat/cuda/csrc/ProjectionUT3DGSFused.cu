@@ -32,6 +32,7 @@
 #include "Projection.h"
 #include "Utils.cuh"
 #include "Cameras.cuh"
+#include "Ops.h"
 
 namespace gsplat {
 
@@ -64,6 +65,7 @@ __global__ void projection_ut_3dgs_fused_kernel(
     const scalar_t *__restrict__ tangential_coeffs, // [B, C, 2] optional
     const scalar_t *__restrict__ thin_prism_coeffs, // [B, C, 4] optional
     const FThetaCameraDistortionDeviceParams ftheta_device_coeffs, // shared parameters for all cameras
+    const cuda::std::optional<LidarCameraParametersCUDA> lidar_coeffs,
     const cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params, // external distortion parameters
     // outputs
     int32_t *__restrict__ radii,         // [B, C, N, 2]
@@ -177,6 +179,12 @@ __global__ void projection_ut_3dgs_fused_kernel(
         image_gaussian_return =
             world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
                 camera_model, rs_params, ut_params, mean, scale, quat);
+    } else if (camera_model_type == CameraModelType::LIDAR) {
+        assert(lidar_coeffs);
+        LidarCameraModel camera_model(*lidar_coeffs);
+        image_gaussian_return =
+            world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
+                camera_model, rs_params, ut_params, mean, scale, quat);
     } else {
         // should never reach here
         assert(false);
@@ -230,12 +238,18 @@ __global__ void projection_ut_3dgs_fused_kernel(
         return;
     }
 
-    // mask out gaussians outside the image region
-    if (mean2d.x + radius_x <= 0 || mean2d.x - radius_x >= image_width ||
-        mean2d.y + radius_y <= 0 || mean2d.y - radius_y >= image_height) {
-        radii[idx * 2] = 0;
-        radii[idx * 2 + 1] = 0;
-        return;
+    if(camera_model_type == CameraModelType::LIDAR) {
+        // LIDAR culling is performed inside world_gaussian_to_image_gaussian_unscented_transform_shutter_pose,
+        // so no additional 2D image-region masking is needed here.
+    }
+    else {
+        // mask out gaussians outside the image region
+        if (mean2d.x + radius_x <= 0 || mean2d.x - radius_x >= image_width ||
+            mean2d.y + radius_y <= 0 || mean2d.y - radius_y >= image_height) {
+            radii[idx * 2] = 0;
+            radii[idx * 2 + 1] = 0;
+            return;
+        }
     }
 
     // Depth for sorting: z-depth (global_z_order=true) or Euclidean distance (global_z_order=false)
@@ -279,6 +293,7 @@ void launch_projection_ut_3dgs_fused_kernel(
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
     const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs, // shared parameters for all cameras
+    const at::optional<c10::intrusive_ptr<LidarCameraParameters>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params, // external distortion parameters
     // outputs
     at::Tensor radii,                      // [..., C, N, 2]
@@ -305,6 +320,15 @@ void launch_projection_ut_3dgs_fused_kernel(
     cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params = cuda::std::nullopt;
     if (external_distortion_params.has_value()) {
         external_distortion_device_params = extdist::BivariateWindshieldModelDeviceParams(*external_distortion_params.value());
+    }
+
+    cuda::std::optional<LidarCameraParametersCUDA> lidar_device_coeffs = cuda::std::nullopt;
+    if (lidar_coeffs.has_value()) {
+        TORCH_CHECK(camera_model == CameraModelType::LIDAR, "If lidar sensor coefficients are given, the camera model must be lidar");
+        lidar_device_coeffs = *lidar_coeffs.value();
+    }
+    else {
+        TORCH_CHECK(camera_model != CameraModelType::LIDAR, "If the sensor isn't lidar, lidar coefficients must not be given");
     }
 
     projection_ut_3dgs_fused_kernel<float>
@@ -343,6 +367,7 @@ void launch_projection_ut_3dgs_fused_kernel(
                 ? thin_prism_coeffs.value().data_ptr<float>()
                 : nullptr,
             ftheta_device_coeffs,
+            lidar_device_coeffs,
             external_distortion_device_params,
             radii.data_ptr<int32_t>(),
             means2d.data_ptr<float>(),

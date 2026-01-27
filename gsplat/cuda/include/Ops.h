@@ -20,6 +20,8 @@
 #pragma once
 
 #include <ATen/core/Tensor.h>
+#include <ATen/core/ivalue.h>
+#include <string>
 
 #include "Cameras.h"
 #include "Common.h"
@@ -28,6 +30,51 @@
 #include <optional>
 
 namespace gsplat {
+
+struct LidarCameraParameters : public torch::CustomClassHolder
+{
+    LidarCameraParameters() = default;
+
+    LidarCameraParameters(
+        at::Tensor row_elevations_rad,
+        at::Tensor column_azimuths_rad,
+        at::Tensor row_azimuth_offsets_rad,
+        SpinningDirection spinning_direction,
+        float spinning_frequency_hz,
+        c10::intrusive_ptr<FOV> fov_vert_rad,
+        c10::intrusive_ptr<FOV> fov_horiz_rad,
+        float fov_eps_rad,
+        at::Tensor angles_to_columns_map
+    )
+        : row_elevations_rad(std::move(row_elevations_rad)),
+          column_azimuths_rad(std::move(column_azimuths_rad)),
+          row_azimuth_offsets_rad(std::move(row_azimuth_offsets_rad)),
+          spinning_direction(spinning_direction),
+          spinning_frequency_hz(spinning_frequency_hz),
+          fov_vert_rad(std::move(fov_vert_rad)),
+          fov_horiz_rad(std::move(fov_horiz_rad)),
+          fov_eps_rad(fov_eps_rad),
+          angles_to_columns_map(std::move(angles_to_columns_map))
+    {}
+
+    // Actual parameters directly related to the lidar model
+    at::Tensor row_elevations_rad;
+    at::Tensor column_azimuths_rad;
+    at::Tensor row_azimuth_offsets_rad;
+
+    SpinningDirection spinning_direction;
+    float spinning_frequency_hz;
+
+    // Now some values computed elsewhere from the above parameters.
+    c10::intrusive_ptr<FOV> fov_vert_rad;
+    c10::intrusive_ptr<FOV> fov_horiz_rad;
+    float fov_eps_rad;
+
+    at::Tensor angles_to_columns_map;
+
+    int n_rows() const { return this->row_elevations_rad.size(0); }
+    int n_columns() const { return this->column_azimuths_rad.size(0); }
+};
 
 // null operator for tutorial. Does nothing.
 at::Tensor null(const at::Tensor input);
@@ -511,6 +558,7 @@ projection_ut_3dgs_fused(
     const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> &thin_prism_coeffs,  // [..., C, 4] optional
     const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<LidarCameraParameters>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params
 );
 

@@ -25,8 +25,10 @@ import torch
 import torch.nn.functional as F
 from abc import ABC, abstractmethod
 from typing import Optional, Tuple
+from dataclasses import dataclass
 from torch import Tensor
 from gsplat._helper import assert_shape
+from gsplat.cuda._lidar import SpinningDirection, LidarCameraParameters
 
 import numpy as np
 
@@ -244,30 +246,32 @@ class _BaseCameraModel(ABC):
 
     @staticmethod
     def create(
-        width: int,
-        height: int,
-        camera_model: str,
-        principal_points: Tensor,  # [B, 2]
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        camera_model: str = "pinhole",
+        principal_points: Optional[Tensor] = None,  # [B, 2]
         focal_lengths: Optional[Tensor] = None,  # [B, 2]
         radial_coeffs: Optional[Tensor] = None,
         tangential_coeffs: Optional[Tensor] = None,
         thin_prism_coeffs: Optional[Tensor] = None,
         ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
         rs_type: RollingShutterType = RollingShutterType.GLOBAL,
+        lidar_coeffs: Optional[LidarCameraParameters] = None,
     ) -> "_BaseCameraModel":
         """
         Factory method to create appropriate camera model.
             Args:
-            width: Image width
-            height: Image height
-            camera_model: "pinhole", "fisheye", or "ftheta"
-            principal_points: Principal points [B, 2] (cx, cy) - required for all models
+            width: Image width (required for non-lidar models)
+            height: Image height (required for non-lidar models)
+            camera_model: "pinhole", "fisheye", "ftheta", or "lidar"
+            principal_points: Principal points [B, 2] (cx, cy) - required for non-lidar models
             focal_lengths: Focal lengths [B, 2] (fx, fy) - required for pinhole and fisheye
             radial_coeffs: [B, 6] or [B, 4] radial distortion coefficients (pinhole/fisheye)
             tangential_coeffs: [B, 2] tangential distortion coefficients (pinhole only)
             thin_prism_coeffs: [B, 4] thin prism distortion coefficients (pinhole only)
             ftheta_coeffs: F-theta parameters (ftheta only)
             rs_type: Rolling shutter type (default: GLOBAL)
+            lidar_coeffs: Lidar camera parameters (lidar only)
 
         Returns:
             Camera model instance
@@ -276,7 +280,18 @@ class _BaseCameraModel(ABC):
             For ftheta model, focal_lengths parameter is not used as focal length
             is embedded in the polynomial distortion model.
         """
-        # Preconditions
+        if camera_model == "lidar":
+            assert (
+                lidar_coeffs is not None
+            ), "lidar_coeffs is required for lidar camera model"
+            return _LidarCameraModel(lidar_coeffs)
+
+        # Preconditions for non-lidar models
+        assert width is not None, "width is required for non-lidar camera models"
+        assert height is not None, "height is required for non-lidar camera models"
+        assert (
+            principal_points is not None
+        ), "principal_points is required for non-lidar camera models"
         B = principal_points.shape[:-1]
         assert_shape("principal_points", principal_points, B + (2,))
         focal_lengths is None or assert_shape("focal_lengths", focal_lengths, B + (2,))
@@ -369,7 +384,7 @@ class _BaseCameraModel(ABC):
         else:
             raise ValueError(
                 f"Unsupported camera model: {camera_model}. "
-                f"Supported: pinhole, fisheye, ftheta"
+                f"Supported: pinhole, fisheye, ftheta, lidar"
             )
 
     def shutter_relative_frame_time(
@@ -2014,3 +2029,383 @@ def _interpolate_shutter_pose(
     assert_shape("result", result, B + (7,))
 
     return result
+
+
+class _LidarCameraModel(_BaseCameraModel):
+    """PyTorch reference implementation of Lidar camera model.
+
+    This provides a minimal reference implementation for lidar sensors
+    following the NREND/NCore architecture.
+    """
+
+    # Must match CUDA implementation in Cameras.h
+    ANGLE_TO_PIXEL_SCALING_FACTOR = 1024.0
+
+    def __init__(
+        self,
+        params: LidarCameraParameters,
+    ):
+        """Initialize lidar camera model.
+
+        Args:
+            params: Lidar camera parameters dataclass containing sensor configuration.
+        """
+        # TODO: passing shutter type because the base expects it, but Lidar doesn't use it.
+        # This is a clear sign of design smell, the camera/sensor class hierarchy needs a revamp
+        # to properly support lidar sensors.
+        # TODO: we're transposing rows and columns like nrend does.
+        # This needs to be reverted once we validate that gsplat is a drop-in replacement for nrend.
+        super().__init__(
+            width=params.row_elevations_rad.shape[0],
+            height=params.column_azimuths_rad.shape[0],
+            shutter_type=RollingShutterType.GLOBAL,
+        )
+
+        self._params = params
+
+        # Check if lidar parameters are consistent with what we expect
+        assert params.spinning_frequency_hz > 0.0
+
+        assert params.row_elevations_rad.dtype == torch.float32
+        assert params.row_elevations_rad.shape == (self.n_rows,)
+        assert params.row_azimuth_offsets_rad.dtype == torch.float32
+        assert params.row_azimuth_offsets_rad.shape == (self.n_rows,)
+        assert params.column_azimuths_rad.dtype == torch.float32
+        assert params.column_azimuths_rad.shape == (self.n_columns,)
+
+        # Check elevation angles are sorted consistently
+        relative_row_elevations_rad = self._relative_angle(
+            params.row_elevations_rad[0],
+            params.row_elevations_rad,
+            SpinningDirection.CLOCKWISE,
+        )
+        assert torch.all(
+            torch.diff(relative_row_elevations_rad) > 0
+        ), "Row elevation angles must be sorted in descending order (cw)"
+        assert torch.all(
+            ~self._angle_range_wrap_around(
+                params.row_elevations_rad[0], params.row_elevations_rad
+            )
+        ), "Row elevation angles must not wrap around the start element"
+
+        # Check order of column azimuth angles is consistent with spinning direction
+        relative_column_azimuths_rad = self._relative_angle(
+            params.column_azimuths_rad[0],
+            params.column_azimuths_rad,
+            params.spinning_direction,
+        )
+
+        assert torch.all(
+            torch.diff(relative_column_azimuths_rad) > 0
+        ), "Column azimuth angles must be sorted in the spinning direction so the diff between relative angles of consecutive columns should always be positive"
+
+        assert torch.all(
+            ~self._angle_range_wrap_around(
+                params.column_azimuths_rad[0], params.column_azimuths_rad
+            )
+        ), "Column azimuth angles (without offsets) must not wrap around the start element"
+
+        assert (
+            params.angles_to_columns_map.shape[0] % params.row_elevations_rad.shape[0]
+            == 0
+        )
+        assert (
+            params.angles_to_columns_map.shape[1] % params.column_azimuths_rad.shape[0]
+            == 0
+        )
+        a2cmap_resfactor = (
+            params.angles_to_columns_map.shape[0] / params.row_elevations_rad.shape[0]
+        )
+        assert (
+            a2cmap_resfactor
+            == params.angles_to_columns_map.shape[1]
+            / params.column_azimuths_rad.shape[0]
+        )
+
+    def __getattr__(self, name):
+        params = object.__getattribute__(self, "_params")
+        if hasattr(params, name):
+            return getattr(params, name)
+        raise AttributeError(
+            f"'{type(self).__name__}' object has no attribute '{name}'"
+        )
+
+    @dataclass
+    class FOV:
+        """Represents a field-of-view with start and span in radians"""
+
+        def __post_init__(self):
+            assert self.span >= 0, self.span
+
+        # Start angle of the field-of-view in radians
+        start: float
+        # Span of the valid field-of-view region in radians in [0, 2π]
+        span: float
+        # Direction of the valid field-of-view region, either clockwise or counter-clockwise
+        direction: SpinningDirection
+
+        @property
+        def end_rad(self) -> float:
+            if self.direction == SpinningDirection.COUNTER_CLOCKWISE:
+                return self.start + self.span
+            else:
+                return self.start - self.span
+
+    @property
+    def n_rows(self) -> int:
+        # TODO: Transposing to conform with nrend, this must be undone later
+        return self.width
+
+    @property
+    def n_columns(self) -> int:
+        # TODO: Transposing to conform with nrend, this must be undone later
+        return self.height
+
+    @property
+    def focal_lengths(self) -> Tensor:
+        # Just a dummy focal length.
+        # TODO: fix the class hierarchy to properly accomodate lidar sensors
+        return torch.ones(2, dtype=torch.float32, device=self.row_elevations_rad.device)
+
+    @property
+    def fov_vert_rad(self):
+        start = self.row_elevations_rad[0].item()
+        span = start - self.row_elevations_rad[-1].item()
+        return self.FOV(start=start, span=span, direction=SpinningDirection.CLOCKWISE)
+
+    @property
+    def fov_horiz_rad(self):
+        # Reconstruct first and last (wrapped) element azimuths per elevation once to obtain FoV bounds
+        azimuth_extremes = (
+            self.column_azimuths_rad[None, [0, self.n_columns - 1]]
+            + self.row_azimuth_offsets_rad[:, None]
+        )
+
+        # Determine extremum in first element
+        if self.spinning_direction == SpinningDirection.COUNTER_CLOCKWISE:
+            # azimuths are in increasing order
+            start = azimuth_extremes[:, 0].min().item()
+            span = azimuth_extremes[:, -1].max().item() - start
+        else:
+            # azimuths are in decreasing order
+            start = azimuth_extremes[:, 0].max().item()
+            span = start - azimuth_extremes[:, -1].min().item()
+        return self.FOV(
+            start=start, span=min(span, 2 * math.pi), direction=self.spinning_direction
+        )
+
+    @property
+    def principal_points(self) -> Tensor:
+        # Just return a dummy tensor, as Lidar doesn't have principal point.
+        # TODO: fix the class hierarchy to properly accomidate lidar sensors
+        return torch.tensor(
+            [self.width / 2, self.height / 2],
+            dtype=torch.float32,
+            device=self.row_elevations_rad.device,
+        )
+
+    def _relative_clock_rotation(
+        self, angle_ref, angle, spinning_direction: SpinningDirection
+    ):
+        if spinning_direction == SpinningDirection.CLOCKWISE:
+            # Clockwise: going from ref to angle in CW direction
+            return angle_ref - angle
+        else:
+            # Counter-clockwise: going from ref to angle in CCW direction
+            return angle - angle_ref
+
+    def _relative_angle(
+        self, angle_ref, angle, spinning_direction: SpinningDirection
+    ) -> float:
+        """Normalize angle to the interval (-pi, pi]"""
+        rel_angle = self._relative_clock_rotation(angle_ref, angle, spinning_direction)
+        return torch.remainder(rel_angle, 2 * math.pi)
+
+    def _angle_range_wrap_around(self, start_angle, end_angle) -> bool:
+        return torch.abs(end_angle - start_angle) >= 2 * math.pi
+
+    def _relative_sensor_angles(
+        self, *, elevation: Tensor, azimuth: Tensor
+    ) -> tuple[Tensor, Tensor]:
+        # Account for accumulated numerical errors via some epsilon in FOV check (1x eps on the start of the FOV)
+        fov_vert_start_adj = self.fov_vert_rad.start + self.fov_eps_rad
+        if self.spinning_direction == SpinningDirection.CLOCKWISE:
+            fov_horiz_start_adj = self.fov_horiz_rad.start + self.fov_eps_rad
+        else:
+            fov_horiz_start_adj = self.fov_horiz_rad.start - self.fov_eps_rad
+
+        rel_elevation = self._relative_clock_rotation(
+            fov_vert_start_adj, elevation, SpinningDirection.CLOCKWISE
+        )
+        rel_azimuth = self._relative_angle(
+            fov_horiz_start_adj, azimuth, self.spinning_direction
+        )
+
+        return rel_elevation, rel_azimuth
+
+    def _valid_relative_sensor_angles(
+        self, *, rel_elevation: Tensor, rel_azimuth: Tensor
+    ) -> Tensor:
+        """Checks if relative sensor angles are within the FOV of the sensor.
+        Relative angle inputs should be computed with _relative_sensor_angles to include eps corrections"""
+
+        # Also account for accumulated numerical errors via some epsilon in FOV check
+        # (using 2x eps as 1x eps is "inherited" from the start of the FOV in the relative angles,
+        #  so effectively this checks 1x eps on the end of the FOV)
+        return (rel_elevation <= self.fov_vert_rad.span + self.fov_eps_rad * 2) & (
+            rel_azimuth <= self.fov_horiz_rad.span + self.fov_eps_rad * 2
+        )
+
+    def _valid_sensor_angles(self, *, elevation: Tensor, azimuth: Tensor) -> Tensor:
+        rel_elevation, rel_azimuth = self._relative_sensor_angles(
+            elevation=elevation, azimuth=azimuth
+        )
+        return self._valid_relative_sensor_angles(
+            rel_elevation=rel_elevation, rel_azimuth=rel_azimuth
+        )
+
+    def camera_ray_to_image_point(
+        self, camera_ray: Tensor, margin_factor: float = 0.0
+    ) -> tuple[Tensor, Tensor]:
+        """Forward projection: 3D camera ray → 2D image point.
+
+        Args:
+            camera_ray: Camera rays [..., 3] (x, y, z direction vectors)
+            margin_factor: Margin factor for FOV bounds checking
+
+        Returns:
+            image_points: Image points [..., 2] with [row, column]
+            valid_flags: Boolean flags [...] indicating if projection is valid
+        """
+        device = camera_ray.device
+
+        # Normalize rays
+        ray_normalized = _safe_normalize(camera_ray)
+
+        # Convert to spherical coordinates (same as CUDA implementation)
+        elevation = torch.asin(ray_normalized[..., 2])
+        azimuth = torch.atan2(ray_normalized[..., 1], ray_normalized[..., 0])
+
+        # Scale angles to pixel space
+        column = azimuth * self.ANGLE_TO_PIXEL_SCALING_FACTOR
+        row = elevation * self.ANGLE_TO_PIXEL_SCALING_FACTOR
+
+        # NOTE: here the image point is (elevation, azimuth)
+        # TODO: this is following nrend/vren, but it should be the other way around.
+        image_point = torch.stack([row, column], dim=-1)
+
+        # Validation: compute relative angles for FOV checking
+
+        # Compute relative angles from FOV start
+        rel_elevation, rel_azimuth = self._relative_sensor_angles(
+            elevation=elevation, azimuth=azimuth
+        )
+
+        # Apply margin for FOV checking
+        margin_elevation = margin_factor * self.fov_vert_rad.span
+        margin_azimuth = margin_factor * self.fov_horiz_rad.span
+
+        # Check if within FOV+margin
+        valid = (
+            self._valid_relative_sensor_angles(
+                rel_elevation=rel_elevation, rel_azimuth=rel_azimuth
+            )
+            & (rel_elevation < self.fov_vert_rad.span + margin_elevation)
+            & (rel_azimuth < self.fov_horiz_rad.span + margin_azimuth)
+            & (rel_elevation >= -margin_elevation)
+            & (rel_azimuth >= -margin_azimuth)
+        )
+
+        return image_point, valid
+
+    def image_point_to_camera_ray(self, image_point: Tensor) -> tuple[Tensor, Tensor]:
+        """Inverse projection: 2D image point → 3D camera ray.
+
+        Args:
+            image_point: Image points [..., 2] with [row, column] in scaled angle space
+
+        Returns:
+            camera_rays: Camera rays [..., 3] (x, y, z direction vectors)
+            valid_flags: Boolean flags [...] indicating if point is valid
+        """
+        device = image_point.device
+        row = image_point[..., 0]
+        column = image_point[..., 1]
+
+        # Convert from scaled angle space to angles (NREND approach)
+        kToAngle = 1.0 / self.ANGLE_TO_PIXEL_SCALING_FACTOR
+        elevation = row * kToAngle
+        azimuth = column * kToAngle
+
+        # Convert to Cartesian coordinates
+        cos_elevation = torch.cos(elevation)
+        camera_ray = torch.stack(
+            [
+                torch.cos(azimuth) * cos_elevation,
+                torch.sin(azimuth) * cos_elevation,
+                torch.sin(elevation),
+            ],
+            dim=-1,
+        )
+
+        camera_ray = _safe_normalize(camera_ray)
+
+        return camera_ray, self._valid_sensor_angles(
+            elevation=elevation, azimuth=azimuth
+        )
+
+    def shutter_relative_frame_time(self, image_point: Tensor) -> Tensor:
+        """Compute relative frame time for rolling shutter.
+
+        Args:
+            image_point: Image points [..., 2] with [row, column] in scaled angle space
+
+        Returns:
+            relative_times: Relative frame times [...] in range [0, 1]
+        """
+        row = image_point[..., 0]
+        column = image_point[..., 1]
+
+        # Convert from scaled angle space back to angles
+        kToAngle = 1.0 / self.ANGLE_TO_PIXEL_SCALING_FACTOR
+        elevation = row * kToAngle
+        azimuth = column * kToAngle
+
+        # 0. Compute the map resolution in radians
+        map_resolution_horiz_rad: float = self.fov_horiz_rad.span / (
+            self.angles_to_columns_map.shape[1] - 1
+        )
+        map_resolution_vert_rad: float = self.fov_vert_rad.span / (
+            self.angles_to_columns_map.shape[0] - 1
+        )
+
+        # 1.compute relative angles wrt. FOV start
+        rel_elevation, rel_azimuth = self._relative_sensor_angles(
+            elevation=elevation, azimuth=azimuth
+        )
+
+        assert torch.all(
+            self._valid_relative_sensor_angles(
+                rel_elevation=rel_elevation, rel_azimuth=rel_azimuth
+            )
+        )
+
+        # 2. Compute the indices into the lookup map
+        ivert = torch.clamp(
+            rel_elevation / map_resolution_vert_rad + 0.5,
+            0,
+            self.angles_to_columns_map.shape[0] - 1,
+        ).to(torch.int)
+        ihoriz = torch.clamp(
+            rel_azimuth / map_resolution_horiz_rad + 0.5,
+            0,
+            self.angles_to_columns_map.shape[1] - 1,
+        ).to(torch.int)
+
+        # 3. Lookup column index from the angle-to-column map
+        col_idx = self.angles_to_columns_map[ivert, ihoriz]
+
+        # Compute relative frame time
+        # We're assuming that the lidar captures the whole row instantly,
+        # so the relative frame time is basically the column index.
+        return col_idx.to(image_point.dtype) / (self.n_columns - 1)

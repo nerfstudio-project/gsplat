@@ -26,6 +26,7 @@
 #include "CameraWrappers.h"
 #include "TensorView.h"
 #include <c10/cuda/CUDAStream.h>
+#include "Ops.h"
 
 namespace gsplat {
 /**
@@ -233,6 +234,9 @@ c10::intrusive_ptr<PyBaseCameraModel<>> PyBaseCameraModel<>::create(
             rs_type
         );
     }
+    // TODO: Lidar camera model is not supported through the generic create() method.
+    // This needs to be added.
+    // For now, use PyLidarCameraModel constructor directly with all required parameters.
     else
     {
         throw std::invalid_argument("Unknown camera model: " + camera_model);
@@ -937,6 +941,42 @@ PyFThetaCameraModel::PyFThetaCameraModel(
         make_tensor_view<const float, CAMERA>(max_angle, m_num_cameras, "max_angle"),
         m_width, m_height, m_rs_type
     );
+
+    CUDA_CHECK(cudaGetLastError());
+}
+
+// ================================== Lidar Implementation ==================================
+
+__global__ void construct_lidar_cameras_kernel(
+    TensorView<LidarCameraModel, CAMERA> cameras, LidarCameraParametersCUDA lidar_params)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= cameras.shape(0))
+    {
+        return;
+    }
+
+    // Create the camera with initialized parameters
+    new (&cameras(idx)) LidarCameraModel(lidar_params);
+}
+
+PyLidarCameraModel::PyLidarCameraModel(LidarCameraParameters params)
+    // TODO: We're mapping n_rows->width and n_columns->height to conform with nrend, but this should be reverted
+    // once we validate that gsplat is 1:1 replacement of nrend.
+    : PyBaseCameraModel(1, params.n_rows(), params.n_columns(),
+                      // Lidar doesn't use traditional focal lengths, principal points and shutter_type.
+                      // Let's use dummy values that hopefully will trigger an error if used.
+                      // TODO: need to improve the camera model hierarchy to avoid this hack.
+                      ShutterType::GLOBAL, torch::zeros({0}), torch::zeros({0}))
+    , m_params(std::move(params))
+{
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream(m_params.row_elevations_rad.device().index());
+
+    int threads = 256;
+    int blocks = (m_num_cameras + threads - 1) / threads;
+
+    construct_lidar_cameras_kernel<<<blocks, threads, 0, stream>>>(
+        make_tensor_view<CAMERA>(this->dev_cameras(), {m_num_cameras}, {1}, "cameras"), m_params);
 
     CUDA_CHECK(cudaGetLastError());
 }

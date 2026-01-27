@@ -23,12 +23,14 @@
 
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
+#include <torch/torch.h>
 
 #include "Common.h"     // where all the macros are defined
 #include "Ops.h"        // a collection of all gsplat operators
 #include "Projection.h" // where the launch function is declared
 #include "Cameras.h"
 #include "Config.h"
+
 
 namespace gsplat {
 
@@ -962,6 +964,7 @@ projection_ut_3dgs_fused_impl(
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs,  // [..., C, 4] optional
     const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs, // shared parameters for all cameras
+    const at::optional<c10::intrusive_ptr<LidarCameraParameters>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params
 ) {
     DEVICE_GUARD(means);
@@ -1046,6 +1049,7 @@ projection_ut_3dgs_fused_impl(
         tangential_coeffs,
         thin_prism_coeffs,
         ftheta_coeffs,
+        lidar_coeffs,
         external_distortion_params,
         // outputs
         radii,
@@ -1057,6 +1061,7 @@ projection_ut_3dgs_fused_impl(
     );
     return std::make_tuple(radii, means2d, depths, conics, compensations);
 }
+
 
 std::tuple<
     at::Tensor,
@@ -1087,6 +1092,7 @@ projection_ut_3dgs_fused(
     const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> &thin_prism_coeffs,  // [..., C, 4] optional
     const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<LidarCameraParameters>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params
 ) {
     return projection_ut_3dgs_fused_impl(
@@ -1112,6 +1118,7 @@ projection_ut_3dgs_fused(
         tangential_coeffs,
         thin_prism_coeffs,
         ftheta_coeffs,
+        lidar_coeffs,
         external_distortion_params
     );
 }
@@ -1119,3 +1126,29 @@ projection_ut_3dgs_fused(
 #endif
 
 } // namespace gsplat
+
+#if GSPLAT_BUILD_3DGUT
+
+LidarCameraParametersCUDA::LidarCameraParametersCUDA(const gsplat::LidarCameraParameters &params)
+    : n_rows{static_cast<int>(params.row_elevations_rad.size(0))}
+    , n_columns{static_cast<int>(params.column_azimuths_rad.size(0))}
+    , fov_vert_rad{params.fov_vert_rad}
+    , fov_horiz_rad{params.fov_horiz_rad}
+    , fov_eps_rad{params.fov_eps_rad}
+    , spinning_direction{params.spinning_direction}
+    , spinning_frequency_hz{params.spinning_frequency_hz}
+    , angles_to_columns_map{params.angles_to_columns_map.data_ptr<int32_t>()}
+    , map_dim{static_cast<int>(params.angles_to_columns_map.size(1)), // .x=width
+              static_cast<int>(params.angles_to_columns_map.size(0))} // .h=height
+    , map_resolution_rad{params.fov_horiz_rad->span/(params.angles_to_columns_map.size(1)-1),
+                         params.fov_vert_rad->span/(params.angles_to_columns_map.size(0)-1)}
+{
+    CHECK_INPUT(params.angles_to_columns_map);
+
+    if(params.angles_to_columns_map.dtype() != torch::kInt32)
+    {
+        throw std::invalid_argument("angles_to_columns_map dtype must be torch.int32");
+    }
+}
+
+#endif

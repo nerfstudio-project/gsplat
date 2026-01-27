@@ -29,6 +29,7 @@ from .cuda._wrapper import (
     CameraModel,
     FThetaCameraDistortionParameters,
     FThetaPolynomialType,
+    LidarCameraParametersExt,
     UnscentedTransformParameters,
     ExternalDistortionModelMeta,
     ExternalDistortionReferencePolynomial,
@@ -278,6 +279,7 @@ def rasterization(
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
     thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
     ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
+    lidar_coeffs: Optional[LidarCameraParametersExt] = None,
     external_distortion_coeffs: Optional[BivariateWindshieldModelParameters] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
@@ -541,6 +543,9 @@ def rasterization(
     if rays is not None:
         assert_shape("rays", rays, batch_dims + (C, H, W, 6))
     assert global_z_order or with_ut, "global_z_order can be false only if with_ut=True"
+    assert (camera_model == "lidar") == (
+        lidar_coeffs is not None
+    ), "Lidar coefficients must be given if and only if camera model is lidar"
 
     def reshape_view(C: int, world_view: torch.Tensor, N_world: list) -> torch.Tensor:
         view_list = list(
@@ -684,6 +689,7 @@ def rasterization(
             tangential_coeffs=tangential_coeffs,
             thin_prism_coeffs=thin_prism_coeffs,
             ftheta_coeffs=ftheta_coeffs,
+            lidar_coeffs=lidar_coeffs,
             external_distortion_coeffs=external_distortion_coeffs,
             rolling_shutter=rolling_shutter,
             viewmats_rs=viewmats_rs,
@@ -691,6 +697,11 @@ def rasterization(
         )
 
     else:
+        if lidar_coeffs is not None:
+            raise ValueError(
+                "Lidar coefficients given but with_ut=False. Lidar camera model requires with_ut=True."
+            )
+
         # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
         proj_results = fully_fused_projection(
             means,
