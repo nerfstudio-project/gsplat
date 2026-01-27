@@ -13,12 +13,13 @@ usage()
 {
     echo "Build gsplat and run its tests inside its docker container"
     echo
-    echo "Usage: ${0##*/} [global flags] [feature flags] [extra shell/pytest args]"
+    echo "Usage: ${0##*/} [global flags] [feature flags] [ENVVAR=value ...] [extra shell/pytest args]"
     echo "global flags:"
     echo "   --shell    Enter into the shell inside the container."
-    echo "              You then can run 'pytest' to run the tests"
     echo "   --reset    Delete the internal build cache"
     echo "   --help|-h  Show this help message"
+    echo "ENVVAR=value:"
+    echo "   Environment variables can be passed to the container."
     echo "feature flags"
     echo "   --2dgs     Build 2dgs"
     echo "   --3dgs     Build 3dgs"
@@ -43,6 +44,8 @@ do_3dgs=false
 do_2dgs=false
 do_reset=false
 
+envvars=()
+
 while (( $# >= 1 )); do
     case $1 in
     --shell)
@@ -64,8 +67,20 @@ while (( $# >= 1 )); do
         usage
         exit 0
         ;;
-    *)
+    --)
+        # All remaining parameters will be given to the container
+        shift
         break
+        ;;
+    *)
+        # Is it a envvar spec?
+        if [[ $1 =~ ^[a-zA-Z_]+[a-zA-Z0-9_]*= ]]; then
+            envvars+=("$1")
+        else
+            # If not, end processing, current parameter will be given
+            # to the container
+            break
+        fi
         ;;
     esac
     shift
@@ -90,6 +105,12 @@ run_args=(
     -v "$LOCAL_CACHE_NAME:/var/cache"
     --entrypoint /bin/bash # To avoid the CUDA banner when the container starts.
 )
+
+# Add user envvars as -e KEY=VALUE pairs without breaking on spaces
+for kv in "${envvars[@]}"; do
+    run_args+=(-e "$kv")
+done
+
 
 if $do_3dgut; then
     run_args+=(-e BUILD_3DGUT=1)

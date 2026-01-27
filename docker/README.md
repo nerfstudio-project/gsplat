@@ -51,6 +51,9 @@ is specified in `config.yaml`.
 
 # Pass pytest arguments
 ./run_tests.sh -v -k "test_specific"
+
+# Run tests in debug mode
+./run_tests.sh DEBUG=1
 ```
 
 ### Available Flags
@@ -69,6 +72,9 @@ is specified in `config.yaml`.
 The test container automatically cleans up after completion,
 but the build cache volume persists for faster subsequent
 builds.
+
+Users can pass environment variables NAME=value, they will be
+set inside the container.
 
 ## 2. Shell Access to Dev Container
 
