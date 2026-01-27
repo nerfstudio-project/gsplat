@@ -54,6 +54,9 @@ is specified in `config.yaml`.
 
 # Run tests in debug mode
 ./run_tests.sh DEBUG=1
+
+# Use the 2nd gpu in the system
+./run_tests.sh --gpus=device=1
 ```
 
 ### Available Flags
@@ -61,7 +64,10 @@ is specified in `config.yaml`.
 **Global Flags:**
 - `--shell`: Enter interactive shell instead of running tests
 - `--reset`: Delete the internal build cache volume
+- `--gpus=device=<id1,id2,...>`: enable the given GPUs inside the container
+- `--gpus=<count>`: enable this many GPUs inside the container
 - `--help` or `-h`: Show help message
+- If `--gpus` isn't given, it defaults to all GPUs.
 
 **Feature Flags:**
 - `--2dgs`: Build 2DGS feature

@@ -17,6 +17,11 @@ usage()
     echo "global flags:"
     echo "   --shell    Enter into the shell inside the container."
     echo "   --reset    Delete the internal build cache"
+    echo "   --gpus=spec Use the given GPUs inside the container."
+    echo "              The syntax is:"
+    echo "                 --gpus=<count>              - use this many GPUs"
+    echo "                 --gpus=device=<id1,id2,...> - use the GPUs given by their device index"
+    echo "                 --gpus=all                  - use all GPUs (default)"
     echo "   --help|-h  Show this help message"
     echo "ENVVAR=value:"
     echo "   Environment variables can be passed to the container."
@@ -43,6 +48,7 @@ do_3dgut=false
 do_3dgs=false
 do_2dgs=false
 do_reset=false
+gpus=all
 
 envvars=()
 
@@ -62,6 +68,9 @@ while (( $# >= 1 )); do
         ;;
     --2dgs)
         do_2dgs=true
+        ;;
+    --gpus=*)
+        gpus=${1#--gpus=}
         ;;
     --help|-h)
         usage
@@ -98,7 +107,7 @@ if $do_reset; then
 fi
 
 run_args=(
-    --gpus=all
+    "--gpus=$gpus"
     --rm
     -ti
     -v "$REPOROOT:/root/gsplat"
