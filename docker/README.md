@@ -1,219 +1,163 @@
 # GSplat Docker Infrastructure
 
-This directory contains Docker infrastructure for GSplat
-development and testing.
+This directory contains Docker infrastructure to define and build
+the Docker container used for GSplat development and testing.
 
-It is designed for faster code-build-test cycles.
-You update the code locally and run the tests to see the
-results right away.
+For details on using the container to run tests and access development
+shells, see [`tests/README.md`](../tests/README.md).
 
-## 0. Prerequisites
+## Dockerfile Structure
 
-The scripts require the following tools to be installed:
+The Dockerfile uses a multi-stage build composed of multiple layers.
+This layered approach optimizes build times, image size, and caching
+efficiency.
+
+### Layer Organization Criteria
+
+Layers are organized based on these principles:
+
+1. **Change Frequency**: Rarely-changing layers (base images,
+   system packages) come before frequently-changing ones (source code)
+2. **Build vs Runtime**: Separates build-time dependencies from
+   runtime requirements
+3. **Cache Optimization**: Groups operations that should be cached
+   together
+4. **Size Efficiency**: Intermediate build artifacts are kept in
+   separate stages and not carried to the final image
+
+### Build Stages
+
+1. **`ccache` stage**: Downloads and installs ccache for build
+   acceleration
+2. **`python` stage**: Base layer with Python, apt configuration,
+   and virtual environment setup
+3. **`gsplat-deps` stage**: Installs all GSplat dependencies
+   (including dev dependencies)
+4. **`main` stage**: Final image combining Python environment,
+   dependencies, ccache, and development tools
+
+This structure ensures that dependency installation (the most
+time-consuming step) is cached effectively and only rebuilt when
+`setup.py` changes.
+
+## Building the Image Locally
+
+The `build_image.sh` script builds the Docker image from the Dockerfile.
+
+### Prerequisites
+
+The script requires the following tools to be installed:
 - `yq`: YAML processor for reading config.yaml
 - `docker`: Docker engine with buildx support
 - `nvidia-container-runtime`: NVIDIA GPU support for containers
 
-The scripts will automatically check for these dependencies
+The script will automatically check for these dependencies
 and report if any are missing.
 
-## 1. Running Tests
-
-To run the GSplat test suite inside a Docker container:
+### Build Command
 
 ```bash
-./run_tests.sh
-```
-
-This script builds GSplat and runs its tests inside a Docker
-container with GPU support.
-
-The Docker image is automatically pulled from the GitLab
-registry if it doesn't exist locally. The image version used
-is specified in `config.yaml`.
-
-### Basic Usage
-
-```bash
-# Show the help screen
-./run_tests.sh --help
-
-# Build all features and run all tests
-./run_tests.sh
-
-# Build only specific features
-./run_tests.sh --3dgut
-./run_tests.sh --3dgs --2dgs
-
-# Run specific test files
-./run_tests.sh tests/test_basic.py
-./run_tests.sh --3dgut tests/test_rasterization.py
-
-# Pass pytest arguments
-./run_tests.sh -v -k "test_specific"
-
-# Run tests in debug mode
-./run_tests.sh DEBUG=1
-
-# Use the 2nd gpu in the system
-./run_tests.sh --gpus=device=1
-
-# Define the test parameters once in the environment variable,
-# useful if it needs to be given every time.
-export GSPLAT_TEST_PARAMS='--gpus=device=1 --3dgut'
-./run_tests.sh
-
-# Run a subset of tests under CUDA compute-sanitizer
-./run_tests.sh --sanitize --3dgut -k 'test_shutter_relative_frame_time'
-```
-
-### Available Flags
-
-**Global Flags:**
-- `--shell`: Enter interactive shell instead of running tests
-- `--reset`: Delete the internal build cache volume
-- `--sanitize`: Run tests under CUDA compute-sanitizer
-- `--gpus=device=<id1,id2,...>`: enable the given GPUs inside the container
-- `--gpus=<count>`: enable this many GPUs inside the container
-- `--help` or `-h`: Show help message
-- If `--gpus` isn't given, it defaults to all GPUs.
-
-**Feature Flags:**
-- `--2dgs`: Build 2DGS feature
-- `--3dgs`: Build 3DGS feature
-- `--3dgut`: Build 3DGUT feature
-- If no feature flags are given, all features are built
-
-The test container automatically cleans up after completion,
-but the build cache volume persists for faster subsequent
-builds.
-
-Users can pass environment variables NAME=value, they will be
-set inside the container.
-
-The flags used can also be defined in `GSPLAT_TEST_PARAMS` environment variable
-on host. The flags given in the command line have precedence, though.
-
-## 2. Shell Access to Dev Container
-
-To access an interactive shell in the development container:
-
-```bash
-./run_tests.sh --shell
-```
-
-This provides a development environment with:
-- All GSplat dependencies pre-installed
-- GPU access enabled
-- Your local source code mounted at `/root/gsplat`
-- Persistent build cache at `/root/.cache`
-- Ability to manually run pytest, build features, and debug
-
-### Example Shell Session
-
-```bash
-# Enter the container
-./run_tests.sh --shell
-
-# Inside the container, you can:
-pytest -v                           # Run all tests
-pytest tests/test_basic.py          # Run specific tests
-pip list                            # Check installed packages
-python -c "import gsplat"           # Test imports
-exit                                # Leave the container
-```
-
-You can also combine `--shell` with feature flags to
-pre-configure the build environment:
-
-```bash
-# Shell with only 3DGUT feature built
-./run_tests.sh --shell --3dgut
-```
-
-### Running arbitrary commands
-
-To run any command without dropping into a shell inside the container,
-pass the command and its arguments after `--shell`:
-
-```bash
-# Execute a simple command, with arguments
-./run_tests.sh --shell echo this is a test
-# Execute a more complex bash shell pipeline.
-./run_tests.sh --shell 'if command -v myprog; then myprog; else echo failure; exit 1; fi'
-```
-
-## 3. Building and Pushing the Image to GitLab
-
-### ⚠️ IMPORTANT: Update IMAGE_TAG Before Building
-
-**When pushing a new Docker image to the registry, you MUST
-increment the `IMAGE_TAG` in `config.yaml` if the current tag
-is already used in a protected branch.** For local builds and
-testing, bumping the tag is optional; the push safety check
-already prevents overwriting existing tags unless `--force` is used.
-
-**Versioning:** The `IMAGE_TAG` is a simple incrementing
-number. When you make changes to the Docker image (update
-dependencies, modify Dockerfile, etc.), increment this number.
-
-The build script includes a safety check: it will **fail if
-the image tag already exists** in the registry (unless you
-explicitly use `--force` to overwrite). This prevents
-accidental overwrites of production images.
-
-You should update the tag before pushing to:
-- Maintain proper version history
-- Avoid confusion about which version contains which changes
-- Enable rollback to previous versions if needed
-- Follow proper release management practices
-
-### Build and Push
-
-```bash
-# Build locally only
+# Build the image with the current configuration
 ./build_image.sh
+```
 
-# Build and push to GitLab registry
+The build script automatically:
+- Reads configuration from `config.yaml`
+- Tags the image as `$DOCKER_REGISTRY/$IMAGE_NAME:$IMAGE_TAG`
+- Builds using `docker buildx` with multi-stage optimization
+- Uses build caching for faster subsequent builds
+
+## Updating the Dockerfile
+
+When making changes to the Dockerfile (updating dependencies,
+modifying base images, changing CUDA versions, etc.), you must
+follow the versioning workflow to maintain proper image tracking
+and avoid accidental image overwrites.
+
+### Steps to Update
+
+1. Make your changes to the Dockerfile or related files
+2. Increment `IMAGE_TAG` in `config.yaml`
+3. Build locally (see "Building the Image Locally" section for details)
+4. Test the image (see below)
+
+### Test the Image
+
+After building, test the image:
+
+```bash
+../tests/run_tests.sh
+```
+
+This runs the complete test suite and verifies that the Docker
+image works correctly with your changes. See [`../tests/README.md`](../tests/README.md)
+for more details on test options.
+
+### Versioning Requirements
+
+**Versioning Policy:**
+- The `IMAGE_TAG` is a simple incrementing number (e.g., 42, 43, 44)
+- Increment this number for ANY change to the Docker image:
+  - Dependency updates in `setup.py`
+  - Dockerfile modifications
+  - Base image version changes
+  - CUDA version changes
+  - New system packages
+
+## Uploading to the Registry
+
+Once you've built and tested the image locally, you can push it
+to the GitLab registry.
+
+**⚠️ IMPORTANT**: When pushing a new Docker image to the registry,
+you **MUST increment the `IMAGE_TAG` in `config.yaml`** if the
+current tag is already used in a protected branch.
+
+**⚠️ IMPORTANT**: If another developer is working on a Dockerfile update
+theirselves, some coordination is required to define the container version each
+one will use, thus avoiding accidental image overwrites.
+
+### Push to Registry
+
+```bash
+# Push the built image to GitLab registry
 ./build_image.sh --push
+```
 
-# Force overwrite if image already exists in registry
+**Safety Check**: The script will **fail if the image tag already
+exists** in the registry. This prevents accidental overwrites of
+images that may be in use.
+
+### Force Overwrite (Use with Caution)
+
+If you need to overwrite an existing image tag (e.g., for local
+development or fixing a broken image):
+
+```bash
 ./build_image.sh --push --force
 ```
 
-The script automatically:
-- Reads configuration from `config.yaml`
-- Tags the image as `$DOCKER_REGISTRY/$IMAGE_NAME:$IMAGE_TAG`
-- Builds using `docker buildx`
-- Checks if the image already exists in the registry
-- Pushes to registry if `--push` flag is given
-- **Fails if image already exists** unless `--force` is used
+⚠️ **Warning**: Only use `--force` when you're certain the existing
+image is not being used in any protected branches, production
+environments or by another active development branch.
 
-This safety check prevents accidentally overwriting existing
-images in the registry.
+## Committing Changes to GitLab
 
-### Complete Workflow Example
+After successfully pushing the image to the registry, commit your
+changes to the Git repository.
+
+### Example
 
 ```bash
-# 1. Update the image tag in config.yaml
-# Change IMAGE_TAG: 42 -> 43
-vim ../config.yaml
-
-# 2. Build the image locally
-./build_image.sh
-
-# 3. Test the image
-./run_tests.sh
-
-# 4. If tests pass, push to registry
-./build_image.sh --push
-
-# Note: If the image version already exists in the registry,
-# the script will fail. Use --force to overwrite:
-# ./build_image.sh --push --force
-
-# 5. Commit the config.yaml and Dockerfile changes
+# Commit the changes
 git add ../config.yaml Dockerfile
-git commit -m "Update GSplat Docker image to version 43"
+git commit -m "Update GSplat Docker image to version 43
+
+- Updated CUDA to version X.Y
+- Added dependency Z for feature W
+- Fixed issue with build caching"
+
+# Push to GitLab
+git push origin your-branch-name
 ```
 

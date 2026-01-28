@@ -5,7 +5,7 @@ set -euo pipefail
 SDIR=$(dirname "$(readlink -f "$0")")
 REPOROOT=$SDIR/..
 
-source "$SDIR/utils.sh"
+source "$REPOROOT/docker/utils.sh"
 
 LOCAL_CACHE_NAME=gsplat_cache
 
