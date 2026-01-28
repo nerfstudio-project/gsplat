@@ -125,7 +125,6 @@ fi
 run_args=(
     "--gpus=$gpus"
     --rm
-    -ti
     -v "$REPOROOT:/root/gsplat"
     -v "$LOCAL_CACHE_NAME:/var/cache"
     --entrypoint /bin/bash # To avoid the CUDA banner when the container starts.
@@ -155,6 +154,7 @@ if $runshell; then
     if [[ $# == 0 ]]; then
         # Drop us into an interactive shell in the container
         shell_args+=(-i)
+        run_args+=(-ti)
     else
         # Execute user's commands inside the container
         shell_args+=(-c "$*")
