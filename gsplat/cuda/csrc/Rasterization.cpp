@@ -741,7 +741,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
     uint32_t C = viewmats0.size(-3);     // number of cameras
     // uint32_t N = means.size(-2);         // number of gaussians
     uint32_t channels = colors.size(-1);
-    assert (channels == 3); // only support RGB for now
+    // assert (channels == 3); // only support RGB for now
 
     at::DimVector renders_shape(batch_dims);
     renders_shape.append({C, image_height, image_width, channels});
