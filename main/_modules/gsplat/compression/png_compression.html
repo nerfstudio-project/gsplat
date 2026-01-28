@@ -637,6 +637,7 @@
     <span class="n">params</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
     <span class="n">n_clusters</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">65536</span><span class="p">,</span>
     <span class="n">quantization</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">6</span><span class="p">,</span>
+    <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-6</span><span class="p">,</span>
     <span class="n">verbose</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
     <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
@@ -651,6 +652,7 @@
 <span class="sd">        params (Tensor): parameters to compress</span>
 <span class="sd">        n_clusters (int): number of K-means clusters</span>
 <span class="sd">        quantization (int): number of bits in quantization</span>
+<span class="sd">        eps (float, optional): small value to avoid numerical issues. Default to 1e-6.</span>
 <span class="sd">        verbose (bool, optional): Whether to print verbose information. Default to True.</span>
 
 <span class="sd">    Returns:</span>
@@ -676,7 +678,7 @@
     <span class="n">labels</span> <span class="o">=</span> <span class="n">labels</span><span class="o">.</span><span class="n">detach</span><span class="p">()</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
     <span class="n">centroids</span> <span class="o">=</span> <span class="n">kmeans</span><span class="o">.</span><span class="n">centroids</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
 
-    <span class="n">mins</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">min</span><span class="p">(</span><span class="n">centroids</span><span class="p">)</span>
+    <span class="n">mins</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">min</span><span class="p">(</span><span class="n">centroids</span><span class="p">)</span> <span class="o">+</span> <span class="n">eps</span>
     <span class="n">maxs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">centroids</span><span class="p">)</span>
     <span class="n">centroids_norm</span> <span class="o">=</span> <span class="p">(</span><span class="n">centroids</span> <span class="o">-</span> <span class="n">mins</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="n">maxs</span> <span class="o">-</span> <span class="n">mins</span><span class="p">)</span>
     <span class="n">centroids_norm</span> <span class="o">=</span> <span class="n">centroids_norm</span><span class="o">.</span><span class="n">detach</span><span class="p">()</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
