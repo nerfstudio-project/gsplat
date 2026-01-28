@@ -21,6 +21,7 @@ from torch.utils.cpp_extension import (
     _import_module_from_library,
     _jit_compile,
 )
+import sys, warnings
 
 PATH = os.path.dirname(os.path.abspath(__file__))
 NO_FAST_MATH = os.getenv("NO_FAST_MATH", "0") == "1"
@@ -40,6 +41,43 @@ if version.parse(torch.__version__) < version.parse("2.2") and USE_PRECOMPILED_H
         "[yellow]gsplat: Precompiled headers are enabled but torch version is lower than 2.2. Disabling it.[/yellow]"
     )
     USE_PRECOMPILED_HEADERS = False
+
+
+def _get_extra_path_for_msvc():
+    "copied from cupy/cuda/compiler.py"
+
+    cl_exe = shutil.which("cl.exe")
+    if cl_exe:
+        # The compiler is already on PATH, no extra path needed.
+        return None
+    try:
+        import setuptools
+        import platform
+
+        vctools = setuptools.msvc.EnvironmentInfo(platform.machine()).VCTools
+    except Exception as e:
+        warnings.warn(f"Failed to auto-detect cl.exe path: {type(e)}: {e}")
+        return None
+
+    for path in vctools:
+        cl_exe = os.path.join(path, "cl.exe")
+        if os.path.exists(cl_exe):
+            return path
+    warnings.warn(f"cl.exe could not be found in {vctools}")
+    return None
+
+
+def add_msvc_path():
+    """Add MSVC path to PATH."""
+    extra_path = _get_extra_path_for_msvc()
+    if extra_path is not None:
+        # add path to PATH
+        os.environ["PATH"] = os.pathsep.join([extra_path, os.environ["PATH"]])
+    assert shutil.which("cl.exe") is not None, "cl.exe not found in PATH"
+
+
+if sys.platform == "win32":
+    add_msvc_path()
 
 
 def load_extension(
