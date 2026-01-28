@@ -354,7 +354,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     // channels into the kernel functions and avoid necessary global memory
     // writes. This requires moving the channel padding from python to C side.
     if (cudaFuncSetAttribute(
-        rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float>,
+        (const void*)rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float>,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
         shmem_size
     ) != cudaSuccess) {
