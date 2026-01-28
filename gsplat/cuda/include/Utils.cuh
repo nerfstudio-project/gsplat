@@ -495,6 +495,64 @@ inline __device__ void ortho_proj_vjp(
     v_mean3d += vec3(fx * v_mean2d[0], fy * v_mean2d[1], 0.f);
 }
 
+// Overloaded version that also computes gradients w.r.t. intrinsics
+inline __device__ void ortho_proj_vjp(
+    // fwd inputs
+    const vec3 mean3d,
+    const mat3 cov3d,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
+    const uint32_t width,
+    const uint32_t height,
+    // grad outputs
+    const mat2 v_cov2d,
+    const vec2 v_mean2d,
+    // grad inputs
+    vec3 &v_mean3d,
+    mat3 &v_cov3d,
+    float &v_fx,
+    float &v_fy,
+    float &v_cx,
+    float &v_cy
+) {
+    float x = mean3d[0], y = mean3d[1], z = mean3d[2];
+
+    // mat3x2 is 3 columns x 2 rows.
+    mat3x2 J = mat3x2(
+        fx,
+        0.f, // 1st column
+        0.f,
+        fy, // 2nd column
+        0.f,
+        0.f // 3rd column
+    );
+
+    // cov = J * V * Jt; G = df/dcov = v_cov
+    // -> df/dV = Jt * G * J
+    // -> df/dJ = G * J * Vt + Gt * J * V
+    v_cov3d += glm::transpose(J) * v_cov2d * J;
+
+    // Gradients w.r.t. mean
+    v_mean3d += vec3(fx * v_mean2d[0], fy * v_mean2d[1], 0.f);
+
+    // Gradients w.r.t. intrinsics from mean2d = [fx * x + cx, fy * y + cy]
+    v_fx += x * v_mean2d[0];  // d(mean2d.x)/dfx = x
+    v_fy += y * v_mean2d[1];  // d(mean2d.y)/dfy = y
+    v_cx += v_mean2d[0];      // d(mean2d.x)/dcx = 1
+    v_cy += v_mean2d[1];      // d(mean2d.y)/dcy = 1
+
+    // Gradients from covariance through Jacobian
+    mat3x2 v_J = v_cov2d * J * glm::transpose(cov3d) +
+                 glm::transpose(v_cov2d) * J * cov3d;
+
+    // Gradients w.r.t. intrinsics from Jacobian elements
+    // J = [fx, 0; 0, fy; 0, 0]
+    v_fx += v_J[0][0];
+    v_fy += v_J[1][1];
+}
+
 inline __device__ void persp_proj(
     // inputs
     const vec3 mean3d,
@@ -598,6 +656,100 @@ inline __device__ void persp_proj_vjp(
     float rz3 = rz2 * rz;
     mat3x2 v_J = v_cov2d * J * glm::transpose(cov3d) +
                  glm::transpose(v_cov2d) * J * cov3d;
+
+    // fov clipping
+    if (x * rz <= lim_x_pos && x * rz >= -lim_x_neg) {
+        v_mean3d.x += -fx * rz2 * v_J[2][0];
+    } else {
+        v_mean3d.z += -fx * rz3 * v_J[2][0] * tx;
+    }
+    if (y * rz <= lim_y_pos && y * rz >= -lim_y_neg) {
+        v_mean3d.y += -fy * rz2 * v_J[2][1];
+    } else {
+        v_mean3d.z += -fy * rz3 * v_J[2][1] * ty;
+    }
+    v_mean3d.z += -fx * rz2 * v_J[0][0] - fy * rz2 * v_J[1][1] +
+                  2.f * fx * tx * rz3 * v_J[2][0] +
+                  2.f * fy * ty * rz3 * v_J[2][1];
+}
+
+// Overloaded version that also computes gradients w.r.t. intrinsics
+inline __device__ void persp_proj_vjp(
+    // fwd inputs
+    const vec3 mean3d,
+    const mat3 cov3d,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
+    const uint32_t width,
+    const uint32_t height,
+    // grad outputs
+    const mat2 v_cov2d,
+    const vec2 v_mean2d,
+    // grad inputs
+    vec3 &v_mean3d,
+    mat3 &v_cov3d,
+    float &v_fx,
+    float &v_fy,
+    float &v_cx,
+    float &v_cy
+) {
+    float x = mean3d[0], y = mean3d[1], z = mean3d[2];
+
+    float tan_fovx = 0.5f * width / fx;
+    float tan_fovy = 0.5f * height / fy;
+    float lim_x_pos = (width - cx) / fx + 0.3f * tan_fovx;
+    float lim_x_neg = cx / fx + 0.3f * tan_fovx;
+    float lim_y_pos = (height - cy) / fy + 0.3f * tan_fovy;
+    float lim_y_neg = cy / fy + 0.3f * tan_fovy;
+
+    float rz = 1.f / z;
+    float rz2 = rz * rz;
+    float tx = z * min(lim_x_pos, max(-lim_x_neg, x * rz));
+    float ty = z * min(lim_y_pos, max(-lim_y_neg, y * rz));
+
+    // mat3x2 is 3 columns x 2 rows.
+    mat3x2 J = mat3x2(
+        fx * rz,
+        0.f, // 1st column
+        0.f,
+        fy * rz, // 2nd column
+        -fx * tx * rz2,
+        -fy * ty * rz2 // 3rd column
+    );
+
+    // cov = J * V * Jt; G = df/dcov = v_cov
+    // -> df/dV = Jt * G * J
+    // -> df/dJ = G * J * Vt + Gt * J * V
+    v_cov3d += glm::transpose(J) * v_cov2d * J;
+
+    // Gradients w.r.t. mean
+    v_mean3d += vec3(
+        fx * rz * v_mean2d[0],
+        fy * rz * v_mean2d[1],
+        -(fx * x * v_mean2d[0] + fy * y * v_mean2d[1]) * rz2
+    );
+
+    // Gradients w.r.t. intrinsics from mean2d = [fx * x * rz + cx, fy * y * rz + cy]
+    v_fx += x * rz * v_mean2d[0];  // d(mean2d.x)/dfx = x * rz
+    v_fy += y * rz * v_mean2d[1];  // d(mean2d.y)/dfy = y * rz  
+    v_cx += v_mean2d[0];           // d(mean2d.x)/dcx = 1
+    v_cy += v_mean2d[1];           // d(mean2d.y)/dcy = 1
+
+    // Gradients from covariance through Jacobian
+    float rz3 = rz2 * rz;
+    mat3x2 v_J = v_cov2d * J * glm::transpose(cov3d) +
+                 glm::transpose(v_cov2d) * J * cov3d;
+
+    // Gradients w.r.t. intrinsics from Jacobian elements
+    // J = [fx*rz, 0; 0, fy*rz; -fx*tx*rz2, -fy*ty*rz2]
+    v_fx += rz * v_J[0][0] - tx * rz2 * v_J[2][0];
+    v_fy += rz * v_J[1][1] - ty * rz2 * v_J[2][1];
+
+    // Additional gradients from fov clipping limits
+    // The clipping limits depend on fx, fy, cx, cy but for simplicity
+    // we'll ignore these higher-order effects for now
 
     // fov clipping
     if (x * rz <= lim_x_pos && x * rz >= -lim_x_neg) {
@@ -754,6 +906,41 @@ inline __device__ void fisheye_proj_vjp(
     v_mean3d.x += dL_dtx_raw;
     v_mean3d.y += dL_dty_raw;
     v_mean3d.z += dL_dtz_raw;
+}
+
+// Overloaded version that also computes gradients w.r.t. intrinsics
+// Note: For fisheye projection, intrinsics gradients are complex and not implemented yet
+inline __device__ void fisheye_proj_vjp(
+    // fwd inputs
+    const vec3 mean3d,
+    const mat3 cov3d,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
+    const uint32_t width,
+    const uint32_t height,
+    // grad outputs
+    const mat2 v_cov2d,
+    const vec2 v_mean2d,
+    // grad inputs
+    vec3 &v_mean3d,
+    mat3 &v_cov3d,
+    float &v_fx,
+    float &v_fy,
+    float &v_cx,
+    float &v_cy
+) {
+    // For now, call the original version and set intrinsics gradients to zero
+    fisheye_proj_vjp(mean3d, cov3d, fx, fy, cx, cy, width, height, v_cov2d, v_mean2d, v_mean3d, v_cov3d);
+    
+    // TODO: Implement proper fisheye intrinsics gradients
+    // For now, only handle the simple parts
+    v_cx += v_mean2d[0];  // d(mean2d.x)/dcx = 1
+    v_cy += v_mean2d[1];  // d(mean2d.y)/dcy = 1
+    // fx, fy gradients are more complex for fisheye - set to 0 for now
+    v_fx += 0.0f;
+    v_fy += 0.0f;
 }
 
 inline __device__ vec3 safe_normalize(vec3 v) {
