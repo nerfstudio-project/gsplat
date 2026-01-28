@@ -325,6 +325,7 @@ def _compress_kmeans(
     params: Tensor,
     n_clusters: int = 65536,
     quantization: int = 6,
+    eps: float = 1e-6,
     verbose: bool = True,
     **kwargs,
 ) -> Dict[str, Any]:
@@ -339,6 +340,7 @@ def _compress_kmeans(
         params (Tensor): parameters to compress
         n_clusters (int): number of K-means clusters
         quantization (int): number of bits in quantization
+        eps (float, optional): small value to avoid numerical issues. Default to 1e-6.
         verbose (bool, optional): Whether to print verbose information. Default to True.
 
     Returns:
@@ -364,7 +366,7 @@ def _compress_kmeans(
     labels = labels.detach().cpu().numpy()
     centroids = kmeans.centroids.permute(1, 0)
 
-    mins = torch.min(centroids)
+    mins = torch.min(centroids) + eps
     maxs = torch.max(centroids)
     centroids_norm = (centroids - mins) / (maxs - mins)
     centroids_norm = centroids_norm.detach().cpu().numpy()
