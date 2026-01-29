@@ -38,6 +38,7 @@ from .cuda._wrapper import (
     rasterize_to_pixels,
     rasterize_to_pixels_2dgs,
     rasterize_to_pixels_eval3d,
+    rasterize_to_pixels_eval3d_extra,
     spherical_harmonics,
 )
 from .distributed import (
@@ -159,6 +160,7 @@ def rasterization(
     covars: Optional[Tensor] = None,
     with_ut: bool = False,
     with_eval3d: bool = False,
+    return_normals: bool = False,
     global_z_order: bool = True,
     rays: Optional[
         Tensor
@@ -328,6 +330,10 @@ def rasterization(
         with_ut: Whether to use Unscented Transform (UT) for projection. Default is False.
         with_eval3d: Whether to calculate Gaussian response in 3D world space, instead
             of 2D image space. Default is False.
+        return_normals: Whether to compute and return accumulated normals per pixel.
+            Normals are computed from Gaussian quaternions (canonical normal = (0,0,1)
+            transformed by rotation, flipped if facing away from ray). Requires
+            with_eval3d=True. Default is False.
         global_z_order: Whether to use z-depth (True) or Euclidean distance (False) for
             sorting Gaussians during rasterization. When True, Gaussians are sorted by their
             z-coordinate in camera space. When False, they are sorted by their Euclidean
@@ -492,6 +498,12 @@ def rasterization(
         ), "UT and eval3d requires to provide quats and scales."
         assert packed is False, "Packed mode is not supported with UT."
         assert sparse_grad is False, "Sparse grad is not supported with UT."
+
+    if return_normals and not with_eval3d:
+        raise ValueError(
+            "return_normals=True requires with_eval3d=True. "
+            "Normal computation is only supported in eval3d mode."
+        )
 
     # Validate hit distance modes require eval3d
     hit_distance_modes = {"d", "Ed", "RGB-d", "RGB-Ed"}
@@ -846,6 +858,7 @@ def rasterization(
         # slice into chunks
         n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk
         render_colors, render_alphas = [], []
+        render_normals = None  # Only compute normals in first chunk
         for i in range(n_chunks):
             colors_chunk = colors[..., i * channel_chunk : (i + 1) * channel_chunk]
             backgrounds_chunk = (
@@ -854,11 +867,19 @@ def rasterization(
                 else None
             )
             if with_eval3d:
-                render_colors_, render_alphas_ = rasterize_to_pixels_eval3d(
+                # Only compute normals in first chunk (normals don't depend on colors)
+                return_normals_chunk = return_normals if i == 0 else False
+                (
+                    render_colors_,
+                    render_alphas_,
+                    _,
+                    _,
+                    render_normals_,
+                ) = rasterize_to_pixels_eval3d_extra(
                     means=means,
                     quats=quats,
                     scales=scales,
-                    colors_chunk=colors_chunk,
+                    colors=colors_chunk,
                     opacities=opacities,
                     viewmats=viewmats,
                     Ks=Ks,
@@ -877,7 +898,10 @@ def rasterization(
                     rolling_shutter=rolling_shutter,
                     viewmats_rs=viewmats_rs,
                     use_hit_distance=use_hit_distance,
+                    return_normals=return_normals_chunk,
                 )
+                if i == 0 and render_normals_ is not None:
+                    render_normals = render_normals_
             else:
                 if rays is not None:
                     raise ValueError(
@@ -903,8 +927,15 @@ def rasterization(
         render_colors = torch.cat(render_colors, dim=-1)
         render_alphas = render_alphas[0]  # discard the rest
     else:
+        render_normals = None
         if with_eval3d:
-            render_colors, render_alphas = rasterize_to_pixels_eval3d(
+            (
+                render_colors,
+                render_alphas,
+                _,
+                _,
+                render_normals,
+            ) = rasterize_to_pixels_eval3d_extra(
                 means=means,
                 quats=quats,
                 scales=scales,
@@ -927,6 +958,7 @@ def rasterization(
                 rolling_shutter=rolling_shutter,
                 viewmats_rs=viewmats_rs,
                 use_hit_distance=use_hit_distance,
+                return_normals=return_normals,
             )
         else:
             if rays is not None:
@@ -955,6 +987,10 @@ def rasterization(
             ],
             dim=-1,
         )
+
+    # Add normals to meta if computed
+    if return_normals:
+        meta["normals"] = render_normals
 
     return render_colors, render_alphas, meta
 

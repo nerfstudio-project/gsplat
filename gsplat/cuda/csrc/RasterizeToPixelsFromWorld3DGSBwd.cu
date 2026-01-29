@@ -82,6 +82,8 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                                                   // image_width, CDIM]
     const scalar_t
         *__restrict__ v_render_alphas, // [B, C, image_height, image_width, 1]
+    const scalar_t
+        *__restrict__ v_render_normals, // [B, C, image_height, image_width, 3] optional
     // grad inputs
     vec3 *__restrict__ v_means,        // [B, N, 3]
     vec4 *__restrict__ v_quats,        // [B, N, 4]
@@ -104,6 +106,9 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     last_ids += iid * image_height * image_width;
     v_render_colors += iid * image_height * image_width * CDIM;
     v_render_alphas += iid * image_height * image_width;
+    if (v_render_normals != nullptr) {
+        v_render_normals += iid * image_height * image_width * 3;
+    }
     if (backgrounds != nullptr) {
         backgrounds += iid * CDIM;
     }
@@ -241,6 +246,8 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     float T = T_final;
     // the contribution from gaussians behind the current one
     float buffer[CDIM] = {0.f};
+    // the contribution from gaussians behind the current one (for normals)
+    vec3 normal_buffer = {0.f, 0.f, 0.f};
     // index of last gaussian to contribute to this pixel
     const int32_t bin_final = done ? last_ids[pix_id] : 0;
 
@@ -251,6 +258,14 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         v_render_c[k] = v_render_colors[pix_id * CDIM + k];
     }
     const float v_render_a = v_render_alphas[pix_id];
+    
+    // df/d_normal for this pixel (only if computing normals)
+    vec3 v_render_n = vec3(0.f, 0.f, 0.f);
+    if (v_render_normals != nullptr) {
+        v_render_n.x = v_render_normals[pix_id * 3 + 0];
+        v_render_n.y = v_render_normals[pix_id * 3 + 1];
+        v_render_n.z = v_render_normals[pix_id * 3 + 2];
+    }
 
     vec3 v_ray_o = {0.f, 0.f, 0.f};
     vec3 v_ray_d = {0.f, 0.f, 0.f};
@@ -366,6 +381,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             float v_opacity_local = 0.f;
 
             // initialize everything to 0, only set if the lane is valid
+            vec3 normal = {0.f, 0.f, 0.f};  // pre-declare for use in v_alpha and later
             if (valid) {
                 // compute the current T for this gaussian
                 float ra = 1.0f / (1.0f - alpha);
@@ -376,6 +392,22 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                 for (uint32_t k = 0; k < CDIM; ++k) {
                     v_rgb_local[k] = fac * v_render_c[k];
                 }
+                
+                // Precompute normal if needed (for both v_alpha contribution and gradient)
+                bool flipped = false;
+                if (v_render_normals != nullptr) {
+                    // Recompute normal from forward pass
+                    // normal = R * (0, 0, 1) = R[:, 2] (third column)
+                    const vec3 unnormalized_normal = R[2];
+                    
+                    // Direction resolution: flip if facing away from ray
+                    flipped = glm::dot(unnormalized_normal, ray_d) > 0.0f;
+                    const vec3 unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal;
+                    
+                    // Normalize
+                    normal = safe_normalize(unnormalized_flipped);
+                }
+                
                 // contribution from this pixel
                 float v_alpha = 0.f;
 #pragma unroll
@@ -393,6 +425,13 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                         accum += backgrounds[k] * v_render_c[k];
                     }
                     v_alpha += -T_final * ra * accum;
+                }
+                
+                // Add contribution from normals to v_alpha (product rule term)
+                // Forward: render_normals += normal * vis (where vis = alpha * T)
+                // So v_alpha_normals = dot(normal * T - normal_buffer * ra, v_render_n)
+                if (v_render_normals != nullptr) {
+                    v_alpha += glm::dot(normal * T - normal_buffer * ra, v_render_n);
                 }
 
                 // Add contribution from hit distance (if enabled)
@@ -448,11 +487,38 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                         quat, scale, R, glm::transpose(v_Mt), v_quat_local, v_scale_local
                     );
                     v_opacity_local = vis * v_alpha;
+                    
+                    // Compute normal gradient contribution (if computing normals)
+                    // Note: normal was precomputed above for v_alpha contribution
+                    if (v_render_normals != nullptr) {
+                        // Compute gradient contribution
+                        // Forward: render_normals += normal * fac (where fac = alpha * T)
+                        const vec3 v_normal_local = v_render_n * fac;
+                        
+                        // Forward: normal = safe_normalize(unnormalized_flipped)
+                        const vec3 unnormalized_normal = R[2];
+                        const vec3 unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal;
+                        const vec3 v_unnormalized_flipped = safe_normalize_bw(unnormalized_flipped, v_normal_local);
+                        
+                        // Forward: unnormalized_flipped = flipped ? -unnormalized_normal : unnormalized_normal
+                        const vec3 v_unnormalized = flipped ? -v_unnormalized_flipped : v_unnormalized_flipped;
+
+                        // Forward: R[2][:] = unnormalized_normal
+                        const mat3 v_R = mat3(vec3(0.f, 0.f, 0.f), vec3(0.f, 0.f, 0.f), v_unnormalized);
+
+                        // backward through R = quat_to_rotmat(quat)
+                        quat_to_rotmat_vjp(quat, v_R, v_quat_local);
+                    }
                 }
 
 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
                     buffer[k] += rgbs_batch[t * CDIM + k] * fac;
+                }
+                
+                // Update normal buffer (for product rule in next iterations)
+                if (v_render_normals != nullptr) {
+                    normal_buffer += normal * fac;
                 }
             }
             warpSum<CDIM>(v_rgb_local, warp);
@@ -540,6 +606,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     // gradients of outputs
     const at::Tensor v_render_colors, // [..., C, image_height, image_width, 3]
     const at::Tensor v_render_alphas, // [..., C, image_height, image_width, 1]
+    const at::optional<at::Tensor> v_render_normals, // [..., C, image_height, image_width, 3]
     // outputs
     at::Tensor v_means,      // [..., N, 3]
     at::Tensor v_quats,      // [..., N, 4]
@@ -636,6 +703,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             last_ids.data_ptr<int32_t>(),
             v_render_colors.data_ptr<float>(),
             v_render_alphas.data_ptr<float>(),
+            v_render_normals.has_value() ? v_render_normals.value().data_ptr<float>() : nullptr,
             // outputs
             reinterpret_cast<vec3 *>(v_means.data_ptr<float>()),
             reinterpret_cast<vec4 *>(v_quats.data_ptr<float>()),
@@ -679,6 +747,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         const at::Tensor last_ids,                                             \
         const at::Tensor v_render_colors,                                      \
         const at::Tensor v_render_alphas,                                      \
+        const at::optional<at::Tensor> v_render_normals,                       \
         at::Tensor v_means,                                                    \
         at::Tensor v_quats,                                                    \
         at::Tensor v_scales,                                                   \
