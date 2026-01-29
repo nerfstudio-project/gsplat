@@ -64,6 +64,7 @@ export GSPLAT_TEST_PARAMS='--gpus=device=1 --3dgut'
 - `--gpus=device=<id1,id2,...>`: enable the given GPUs inside the container
 - `--gpus=<count>`: enable this many GPUs inside the container
 - `--help` or `-h`: Show help message
+- `--debug`: Build and run everything in debug mode.
 - If `--gpus` isn't given, it defaults to all GPUs.
 
 **Feature Flags:**

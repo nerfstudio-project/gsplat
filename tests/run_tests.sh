@@ -24,6 +24,7 @@ usage()
     echo "                 --gpus=device=<id1,id2,...> - use the GPUs given by their device index"
     echo "                 --gpus=all                  - use all GPUs (default)"
     echo "   --help|-h  Show this help message"
+    echo "   --debug    Show the docker run invocation"
     echo "ENVVAR=value:"
     echo "   Environment variables can be passed to the container."
     echo "feature flags"
@@ -56,6 +57,7 @@ do_3dgs=false
 do_2dgs=false
 do_reset=false
 do_sanitize=false
+do_debug=false
 gpus=all
 
 envvars=()
@@ -84,6 +86,9 @@ while (( $# >= 1 )); do
         ;;
     --2dgs)
         do_2dgs=true
+        ;;
+    --debug)
+        do_debug=true
         ;;
     --gpus=*)
         gpus=${1#--gpus=}
@@ -146,6 +151,10 @@ if $do_3dgs; then
     run_args+=(-e BUILD_3DGS=1)
 fi
 
+if $do_debug; then
+    run_args+=(-e DEBUG=1)
+fi
+
 # We need a login shell in order to load ~/.profile, it loads up the python venv.
 shell_args=(--login)
 
@@ -171,6 +180,9 @@ else
     fi
 fi
 
-set -x
+if $do_debug; then
+    # Show the whole docker run invocation
+    set -x
+fi
 docker run "${run_args[@]}" "$DOCKER_REGISTRY/$IMAGE_NAME:$IMAGE_TAG" "${shell_args[@]}"
 
