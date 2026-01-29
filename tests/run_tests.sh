@@ -166,17 +166,24 @@ if $runshell; then
         run_args+=(-ti)
     else
         # Execute user's commands inside the container
-        shell_args+=(-c "$*")
+        # Example: --shell pytest -k "foo and bar" stays intact
+        cmd=$1
+        user_cmd=("$@")
+        shift $#
+        shell_args+=(-c 'exec "$@"' "$cmd" "${user_cmd[@]}")
     fi
 else
+    pytest_args=("$@")
+    shift $#
+
     if $do_sanitize; then
         # CUDA compute-sanitizer needs the full path of the program to be analyzed
-        shell_args+=(-c "/usr/local/cuda/bin/compute-sanitizer \$(command -v pytest) $*")
+        shell_args+=(-c '/usr/local/cuda/bin/compute-sanitizer "$(command -v pytest)" "$@"' pytest "${pytest_args[@]}")
         run_args+=(-e DEBUG=1) # it's helpful for triggering asserts and full symbol info
         run_args+=(--privileged) # compute-sanitizer sometimes segfaults if not running on privileged container
     else
         # We want to run pytest, possibly with users' parameters
-        shell_args+=(-c "pytest $*")
+        shell_args+=(-c 'pytest "$@"' pytest "${pytest_args[@]}")
     fi
 fi
 
