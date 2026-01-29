@@ -248,7 +248,8 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
     at::Tensor renders, // [..., C, image_height, image_width, channels]
     at::Tensor alphas,  // [..., C, image_height, image_width]
     at::Tensor last_ids, // [..., C, image_height, image_width]
-    at::optional<at::Tensor> sample_counts // [..., C, image_height, image_width]
+    at::optional<at::Tensor> sample_counts, // [..., C, image_height, image_width]
+    at::optional<at::Tensor> normals // [..., C, image_height, image_width, 3]
 );
 
 template <uint32_t CDIM>
@@ -288,6 +289,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     // gradients of outputs
     const at::Tensor v_render_colors, // [..., C, image_height, image_width, 3]
     const at::Tensor v_render_alphas, // [..., C, image_height, image_width, 1]
+    const at::optional<at::Tensor> v_render_normals, // [..., C, image_height, image_width, 3]
     // outputs
     at::Tensor v_means,      // [..., N, 3]
     at::Tensor v_quats,      // [..., N, 4]

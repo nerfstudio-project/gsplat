@@ -24,7 +24,7 @@ pytest <THIS_PY_FILE> -s
 
 import math
 import os
-from itertools import product
+from itertools import chain, product
 
 import pytest
 import torch
@@ -839,13 +839,27 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
 # a camera model axis to this test. We use perfect pinhole model instead.
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
-@pytest.mark.parametrize("channels", [3])
-@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
 @pytest.mark.parametrize(
-    "rs_type", [RollingShutterType.GLOBAL, RollingShutterType.ROLLING_TOP_TO_BOTTOM]
+    "channels,batch_dims,rs_type,use_hit_distance,use_rays,return_normals",
+    list(
+        chain(
+            # Main test combinations with return_normals=False
+            product(
+                [3],  # channels
+                [(), (2,), (1, 2)],  # batch_dims
+                [
+                    RollingShutterType.GLOBAL,
+                    RollingShutterType.ROLLING_TOP_TO_BOTTOM,
+                ],  # rs_type
+                [True, False],  # use_hit_distance
+                [True, False],  # use_rays
+                [False],  # return_normals
+            ),
+            # Dedicated test for return_normals=True with one configuration
+            [(3, (), RollingShutterType.ROLLING_TOP_TO_BOTTOM, True, True, True)],
+        )
+    ),
 )
-@pytest.mark.parametrize("use_hit_distance", [True, False], ids=["hitdist", "depth"])
-@pytest.mark.parametrize("use_rays", [True, False], ids=["rays", "sensor"])
 def test_rasterize_to_pixels_eval3d(
     test_data,
     channels: int,
@@ -853,6 +867,7 @@ def test_rasterize_to_pixels_eval3d(
     rs_type: RollingShutterType,
     use_hit_distance: bool,
     use_rays: bool,
+    return_normals: bool,
 ):
     from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
     from gsplat.cuda._wrapper import (
@@ -980,6 +995,7 @@ def test_rasterize_to_pixels_eval3d(
         render_alphas,
         render_last_ids,
         render_sample_counts,
+        render_normals,
     ) = rasterize_to_pixels_eval3d_extra(
         means,
         quats,
@@ -999,6 +1015,7 @@ def test_rasterize_to_pixels_eval3d(
         viewmats_rs=viewmats_rs,
         use_hit_distance=use_hit_distance,
         rays=rays,
+        return_normals=return_normals,
     )
 
     # forward - PyTorch reference implementation (with tiling optimization)
@@ -1007,6 +1024,7 @@ def test_rasterize_to_pixels_eval3d(
         _render_alphas,
         _render_last_ids,
         _render_sample_counts,
+        *_render_normals,
     ) = _rasterize_to_pixels_eval3d(
         means,
         quats,
@@ -1027,7 +1045,10 @@ def test_rasterize_to_pixels_eval3d(
         viewmats_rs=viewmats_rs,
         use_hit_distance=use_hit_distance,
         rays=rays,
+        return_normals=return_normals,
     )
+
+    _render_normals = _render_normals[0] if return_normals else None
 
     # Validate: last_ids and alpha must be consistent
     # Alpha > 0 if and only if there's a Gaussian intersecting with the pixel's ray (last_ids >= 0)
@@ -1141,10 +1162,53 @@ def test_rasterize_to_pixels_eval3d(
         atol=3e-3,
     )
 
+    # Compare normals if computed
+    if return_normals:
+        assert (
+            render_normals is not None
+        ), "CUDA render_normals should not be None when return_normals=True"
+        assert (
+            _render_normals is not None
+        ), "PyTorch render_normals should not be None when return_normals=True"
+
+        # With the default tolerances, the error is quite small:
+        # Greatest absolute difference: 5.447864532470703e-05 at index (2, 11, 16, 2) (up to 1e-05 allowed)
+        # Greatest relative difference: 0.00024596037110313773 at index (0, 27, 39, 1) (up to 1.3e-06 allowed)
+        # Setting tolerances small enough to ignore these errors.
+        torch.testing.assert_close(
+            render_normals, _render_normals, rtol=3e-4, atol=6e-5
+        )
+    else:
+        assert (
+            render_normals is None
+        ), "CUDA render_normals should be None when return_normals=False"
+        assert (
+            _render_normals is None
+        ), "PyTorch render_normals should be None when return_normals=False"
+
     # Test the gradients now
 
     v_render_colors = torch.randn_like(render_colors)
     v_render_alphas = torch.randn_like(render_alphas)
+    v_render_normals = torch.randn_like(render_normals) if return_normals else None
+
+    torch.manual_seed(42)
+    perm_idx = torch.randperm(render_colors.shape[0])
+
+    def randperm(x):
+        return x[perm_idx]
+
+    # Build the loss for backward pass
+    loss_cuda = randperm(
+        render_colors * v_render_colors
+        + render_alphas * v_render_alphas
+        + (render_normals * v_render_normals if return_normals else 0)
+    ).sum()
+    loss_ref = randperm(
+        _render_colors * v_render_colors
+        + _render_alphas * v_render_alphas
+        + (_render_normals * v_render_normals if return_normals else 0)
+    ).sum()
 
     if use_rays:
         (
@@ -1156,8 +1220,7 @@ def test_rasterize_to_pixels_eval3d(
             v_backgrounds,
             v_rays,
         ) = torch.autograd.grad(
-            (render_colors * v_render_colors).sum()
-            + (render_alphas * v_render_alphas).sum(),
+            loss_cuda,
             (means, quats, scales, colors, opacities_broadcast, backgrounds, rays),
             retain_graph=True,
         )
@@ -1171,8 +1234,7 @@ def test_rasterize_to_pixels_eval3d(
             _v_backgrounds,
             _v_rays,
         ) = torch.autograd.grad(
-            (_render_colors * v_render_colors).sum()
-            + (_render_alphas * v_render_alphas).sum(),
+            loss_ref,
             (means, quats, scales, colors, opacities_broadcast, backgrounds, rays),
             retain_graph=True,
         )
@@ -1185,8 +1247,7 @@ def test_rasterize_to_pixels_eval3d(
             v_opacities,
             v_backgrounds,
         ) = torch.autograd.grad(
-            (render_colors * v_render_colors).sum()
-            + (render_alphas * v_render_alphas).sum(),
+            loss_cuda,
             (means, quats, scales, colors, opacities_broadcast, backgrounds),
             retain_graph=True,
         )
@@ -1199,8 +1260,7 @@ def test_rasterize_to_pixels_eval3d(
             _v_opacities,
             _v_backgrounds,
         ) = torch.autograd.grad(
-            (_render_colors * v_render_colors).sum()
-            + (_render_alphas * v_render_alphas).sum(),
+            loss_ref,
             (means, quats, scales, colors, opacities_broadcast, backgrounds),
             retain_graph=True,
         )
