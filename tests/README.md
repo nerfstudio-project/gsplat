@@ -5,6 +5,53 @@ This directory contains the GSplat test suite and test running infrastructure.
 The `run_tests.sh` script is designed for faster code-build-test cycles.
 You update the code locally and run the tests to see the results right away.
 
+[TOC]
+
+## Key Features
+
+### Fast Development Iterations
+
+- **Accelerated Build Performance**: Persistent build cache via
+  [ccache](https://ccache.dev/) enables faster development iteration by
+  caching compiled objects between builds
+- **Selective Feature Building**: Configure build scope to include only
+  specific features (e.g., `--3dgut`, `--3dgs --2dgs`) for faster compilation
+  and targeted testing
+- **Mounted Source Code**: Local source code mounted at `/root/gsplat` allows
+  immediate testing of code changes without rebuild delays
+
+### Reproducibility
+
+- **Consistent Test Environment**: Identical Docker container used locally
+  and in CI pipelines ensures reproducible test results across all
+  environments
+- **Automated Container Management**: Docker images automatically pulled from
+  GitLab registry based on commit-specific versions defined in `config.yaml`
+
+### Local Debugging & Testing
+
+- **Interactive Development Shell**: Launch an interactive shell inside the
+  container (`--shell`) with GPU access, mounted source code, and all
+  dependencies pre-installed; ideal for running tests under debuggers like
+  `pdb`, `ipdb`, or `gdb`
+- **CUDA Debugging Support**: Run tests under CUDA compute-sanitizer
+  (`--sanitize`) to detect memory errors and race conditions
+- **Debug Mode Support**: Enable debug builds with `--debug` flag for
+  additional diagnostic information and symbol visibility
+- **Verbose Output Mode**: Display intermediate build information and docker
+  invocation details with `--verbose` flag for troubleshooting
+- **Direct pytest Integration**: Pass pytest arguments directly to filter
+  tests, adjust verbosity, or configure test execution (`-v`, `-k`, `-x`, etc.)
+
+### Flexibility & Configuration
+
+- **GPU Device Selection**: Specify which GPUs to use for testing
+  (`--gpus=<filter>`) when multiple GPUs are available
+- **Persistent Environment Configuration**: Set test parameters once via
+  `GSPLAT_TEST_PARAMS` environment variable for repeated use
+- **Arbitrary Command Execution**: Run any command inside the containerized
+  environment without dropping into an interactive shell
+
 ## Running Tests
 
 To run the GSplat test suite:
@@ -18,14 +65,20 @@ container with GPU support.
 
 The Docker image is automatically pulled from the GitLab
 registry if it doesn't exist locally. The image version used
-is specified in `config.yaml`.
+is specified in `../config.yaml` and is associated with
+the current commit.
 
 ### Basic Usage
 
-```bash
-# Show the help screen
-./run_tests.sh --help
+To show the full list of parameters accepted, run:
 
+```bash
+./run_tests.sh --help
+```
+
+Here are some common usage examples:
+
+```bash
 # Build all features and run all tests
 ./run_tests.sh
 
@@ -37,11 +90,8 @@ is specified in `config.yaml`.
 ./run_tests.sh tests/test_basic.py
 ./run_tests.sh --3dgut tests/test_rasterization.py
 
-# Pass pytest arguments
+# Filter tests to be executed.
 ./run_tests.sh -v -k "test_specific"
-
-# Run tests in debug mode
-./run_tests.sh DEBUG=1
 
 # Use the 2nd gpu in the system
 ./run_tests.sh --gpus=device=1
@@ -53,35 +103,10 @@ export GSPLAT_TEST_PARAMS='--gpus=device=1 --3dgut'
 
 # Run a subset of tests under CUDA compute-sanitizer
 ./run_tests.sh --sanitize --3dgut -k 'test_shutter_relative_frame_time'
+
+# Combine flags for detailed troubleshooting
+./run_tests.sh --debug --verbose --3dgut -k 'test_specific'
 ```
-
-### Available Flags
-
-**Global Flags:**
-- `--shell`: Enter interactive shell instead of running tests
-- `--reset`: Delete the internal build cache volume
-- `--sanitize`: Run tests under CUDA compute-sanitizer
-- `--gpus=device=<id1,id2,...>`: enable the given GPUs inside the container
-- `--gpus=<count>`: enable this many GPUs inside the container
-- `--help` or `-h`: Show help message
-- `--debug`: Build and run everything in debug mode.
-- If `--gpus` isn't given, it defaults to all GPUs.
-
-**Feature Flags:**
-- `--2dgs`: Build 2DGS feature
-- `--3dgs`: Build 3DGS feature
-- `--3dgut`: Build 3DGUT feature
-- If no feature flags are given, all features are built
-
-The test container automatically cleans up after completion,
-but the build cache volume persists for faster subsequent
-builds.
-
-Users can pass environment variables NAME=value, they will be
-set inside the container.
-
-The flags used can also be defined in `GSPLAT_TEST_PARAMS` environment variable
-on host. The flags given in the command line have precedence, though.
 
 ## Shell Access to Dev Container
 
@@ -95,8 +120,11 @@ This provides a development environment with:
 - All GSplat dependencies pre-installed
 - GPU access enabled
 - Your local source code mounted at `/root/gsplat`
-- Persistent build cache at `/root/.cache`
-- Ability to manually run pytest, build features, and debug
+- Persistent build cache at `/var/cache/ccache`
+- Ability to manually run pytest with debuggers attached.
+
+The container automatically cleans up after completion, but the /var/cache
+directory inside the container persists for faster subsequent builds.
 
 ### Example Shell Session
 
@@ -104,12 +132,17 @@ This provides a development environment with:
 # Enter the container
 ./run_tests.sh --shell
 
-# Inside the container, you can:
-pytest -v                           # Run all tests
-pytest tests/test_basic.py          # Run specific tests
-pip list                            # Check installed packages
-python -c "import gsplat"           # Test imports
-exit                                # Leave the container
+# Check installed packages
+pip list
+
+# Test imports
+python -c "import gsplat"
+
+# Run a test under a debugger
+python -m pdb -m pytest test_rasterization.py -k testname -s
+
+# Leave the container
+exit
 ```
 
 You can also combine `--shell` with feature flags to
@@ -126,8 +159,6 @@ To run any command without dropping into a shell inside the container,
 pass the command and its arguments after `--shell`:
 
 ```bash
-# Execute a simple command, with arguments
-./run_tests.sh --shell echo this is a test
-# Execute a more complex bash shell pipeline.
-./run_tests.sh --shell 'if command -v myprog; then myprog; else echo failure; exit 1; fi'
+# Execute a command, with arguments
+./run_tests.sh --shell python -c "import gsplat"
 ```

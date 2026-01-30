@@ -39,16 +39,7 @@ usage()
     echo "Parameters can be given via the envvar GSPLAT_TEST_PARAMS."
     echo "The parameters given in the command line have precedence."
     echo
-    echo "Examples:"
-    echo "- Build everything and run all tests with all features:"
-    echo "    ${0##*/}"
-    echo "- Build only 3dgut and run only the basic tests:"
-    echo "    ${0##*/} --3dgut tests/test_basic.py"
-    echo "- Build 3dgut and 3dgs only and run the rasterization tests:"
-    echo "    ${0##*/} --3dgut --3dgs tests/test_rasterization.py"
-    echo "- Set parameters via environment variable:"
-    echo "    export GSPLAT_TEST_PARAMS='--gpus=device=1 --3dgut'"
-    echo "    ${0##*/}"
+    echo "Refer to README.md for usage examples."
 }
 
 runshell=false
