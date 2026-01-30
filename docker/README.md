@@ -6,6 +6,8 @@ the Docker container used for GSplat development and testing.
 For details on using the container to run tests and access development
 shells, see [`tests/README.md`](../tests/README.md).
 
+[TOC]
+
 ## Dockerfile Structure
 
 The Dockerfile uses a multi-stage build composed of multiple layers.
@@ -14,31 +16,27 @@ efficiency.
 
 ### Layer Organization Criteria
 
-Layers are organized based on these principles:
+When organizing Docker layers, use these criteria to determine what
+belongs together and what should be separated:
 
-1. **Change Frequency**: Rarely-changing layers (base images,
-   system packages) come before frequently-changing ones (source code)
-2. **Build vs Runtime**: Separates build-time dependencies from
-   runtime requirements
-3. **Cache Optimization**: Groups operations that should be cached
-   together
-4. **Size Efficiency**: Intermediate build artifacts are kept in
-   separate stages and not carried to the final image
+**Put in the SAME layer if:**
+- Components change together (e.g., `setup.py` and dependency
+  installation always change together)
+- Operations are part of a single logical step (e.g., updating
+  package lists and installing packages)
+- Combined size is reasonable and caching benefit is maintained
+- Components have the same lifecycle (e.g., all build-time tools,
+  or all runtime dependencies)
 
-### Build Stages
-
-1. **`ccache` stage**: Downloads and installs ccache for build
-   acceleration
-2. **`python` stage**: Base layer with Python, apt configuration,
-   and virtual environment setup
-3. **`gsplat-deps` stage**: Installs all GSplat dependencies
-   (including dev dependencies)
-4. **`main` stage**: Final image combining Python environment,
-   dependencies, ccache, and development tools
-
-This structure ensures that dependency installation (the most
-time-consuming step) is cached effectively and only rebuilt when
-`setup.py` changes.
+**Put in DIFFERENT layers if:**
+- Components have different change frequencies (e.g., base OS
+  packages vs. application source code)
+- One is needed only at build-time while the other is needed at
+  runtime (e.g., compilers vs. compiled binaries)
+- Separating them improves cache utilization (e.g., system packages
+  that rarely change vs. application dependencies that change often)
+- One contains large intermediate artifacts that should not be in
+  the final image (e.g., build artifacts vs. runtime binaries)
 
 ## Building the Image Locally
 
@@ -113,8 +111,8 @@ to the GitLab registry.
 you **MUST increment the `IMAGE_TAG` in `config.yaml`** if the
 current tag is already used in a protected branch.
 
-**⚠️ IMPORTANT**: If another developer is working on a Dockerfile update
-theirselves, some coordination is required to define the container version each
+**⚠️ IMPORTANT**: If another developer is working on a Dockerfile update,
+some coordination is required to define the container version each
 one will use, thus avoiding accidental image overwrites.
 
 ### Push to Registry
@@ -146,13 +144,30 @@ environments or by another active development branch.
 After successfully pushing the image to the registry, commit your
 changes to the Git repository.
 
-### Example
+### Commit Requirements
+
+**IMPORTANT**: Docker changes and corresponding GSplat code changes must be committed together:
+
+- The Dockerfile/config changes **MUST** be in the same commit as the
+  GSplat code changes that require them
+- The GSplat code in the commit **MUST** build successfully with the new
+  Docker image
+- All tests **MUST** pass using the updated Docker image
+- **DO NOT** create separate commits for Docker changes and corresponding GSplat code changes
+
+### Commit Message Format
+
+When committing, include the new Docker image version in the commit body,
+and describe the changes made, together with the changes made in GSplat code, if any.
 
 ```bash
-# Commit the changes
-git add ../config.yaml Dockerfile
-git commit -m "Update GSplat Docker image to version 43
+# Stage your changes
+git add ../config.yaml Dockerfile ../setup.py
 
+# Commit with descriptive message
+git commit -m "Upgrade CUDA to X.Y
+
+- Docker image version updated to 25
 - Updated CUDA to version X.Y
 - Added dependency Z for feature W
 - Fixed issue with build caching"
