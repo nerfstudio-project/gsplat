@@ -21,6 +21,6 @@ tensorly
 pyyaml
 matplotlib
 git+https://github.com/rahul-goel/fused-ssim@328dc9836f513d00c4b5bc38fe30478b4435cbb5
-git+https://github.com/harry7557558/fused-bilagrid@90f9788e57d3545e3a033c1038bb9986549632fe
+git+https://github.com/harry7557558/fused-bilagrid@49f0ef06c9f81810fb9b5dd9027cf1844950cc16
 splines
 ppisp @ git+https://github.com/nv-tlabs/ppisp@v1.0.0
