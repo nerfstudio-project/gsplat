@@ -164,6 +164,7 @@ void launch_projection_2dgs_fused_fwd_kernel(
     const float near_plane,
     const float far_plane,
     const float radius_clip,
+    const bool dual_visible,
     // outputs
     at::Tensor radii,          // [..., C, N, 2]
     at::Tensor means2d,        // [..., C, N, 2]
@@ -208,6 +209,7 @@ void launch_projection_2dgs_packed_fwd_kernel(
     const float near_plane,
     const float far_plane,
     const float radius_clip,
+    const bool dual_visible,
     const at::optional<at::Tensor>
         block_accum, // [B * C * blocks_per_row] packing helper
     // outputs
