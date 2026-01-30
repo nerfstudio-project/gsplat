@@ -123,7 +123,9 @@ def rasterization(
     packed: bool = True,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
-    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
+    render_mode: Literal[
+        "RGB", "D", "ED", "RGB+D", "RGB+ED", "Diffuse", "Specular"
+    ] = "RGB",
     sparse_grad: bool = False,
     absgrad: bool = False,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
@@ -176,8 +178,10 @@ def rasterization(
 
     .. note::
         **Depth Rendering**: This function supports colors or/and depths via `render_mode`.
-        The supported modes are "RGB", "D", "ED", "RGB+D", and "RGB+ED". "RGB" renders the
-        colored image that respects the `colors` argument. "D" renders the accumulated z-depth
+        The supported modes are "RGB", "D", "ED", "RGB+D", "RGB+ED", "Diffuse", and "Specular".
+        "RGB" renders the colored image that respects the `colors` argument.
+        "Diffuse" renders view-independent RGB components while "Specular" renders view-dependent RGB components.
+        "D" renders the accumulated z-depth
         :math:`\\sum_i w_i z_i`. "ED" renders the expected z-depth
         :math:`\\frac{\\sum_i w_i z_i}{\\sum_i w_i}`. "RGB+D" and "RGB+ED" render both
         the colored image and the depth, in which the depth is the last channel of the output.
@@ -259,8 +263,10 @@ def rasterization(
         tile_size: The size of the tiles for rasterization. Default is 16.
             (Note: other values are not tested)
         backgrounds: The background colors. [..., C, D]. Default is None.
-        render_mode: The rendering mode. Supported modes are "RGB", "D", "ED", "RGB+D",
-            and "RGB+ED". "RGB" renders the colored image, "D" renders the accumulated depth, and
+        render_mode: The rendering mode.
+            Supported modes are "RGB", "D", "ED", "RGB+D", "RGB+ED", "Diffuse", and "Specular".
+            "RGB" renders the colored image, "Diffuse" renders view-independent RGB,
+            "Specular" renders view-dependent RGB, "D" renders the accumulated depth, and
             "ED" renders the expected depth. Default is "RGB".
         sparse_grad: If true, the gradients for {means, quats, scales} will be stored in
             a COO sparse layout. This can be helpful for saving memory. Default is False.
@@ -360,7 +366,15 @@ def rasterization(
     assert opacities.shape == batch_dims + (N,), opacities.shape
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
-    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
+    assert render_mode in [
+        "RGB",
+        "D",
+        "ED",
+        "RGB+D",
+        "RGB+ED",
+        "Diffuse",
+        "Specular",
+    ], render_mode
 
     def reshape_view(C: int, world_view: torch.Tensor, N_world: list) -> torch.Tensor:
         view_list = list(
@@ -564,6 +578,11 @@ def rasterization(
                 pass
     else:
         # Colors are SH coefficients, with shape [..., N, K, 3] or [..., C, N, K, 3]
+        # SH = 0 is the view-independent diffuse component, SH >= 1 are view-dependent specular components.
+        if render_mode in ("Diffuse", "Specular"):
+            colors = colors.clone()
+            sel = slice(1, None) if render_mode == "Diffuse" else slice(0, 1)
+            colors[..., sel, :] = 0.0  # Zero out the unwanted SH components.
         campos = torch.inverse(viewmats)[..., :3, 3]  # [..., C, 3]
         if viewmats_rs is not None:
             campos_rs = torch.inverse(viewmats_rs)[..., :3, 3]
@@ -605,7 +624,9 @@ def rasterization(
                 sh_degree, dirs, shs, masks=masks
             )  # [..., C, N, 3]
         # make it apple-to-apple with Inria's CUDA Backend.
-        colors = torch.clamp_min(colors + 0.5, 0.0)
+        # view-dependent components are in [0, 1]. No need to add and clamp.
+        if render_mode != "Specular":
+            colors = torch.clamp_min(colors + 0.5, 0.0)
 
     # If in distributed mode, we need to scatter the GSs to the destination ranks, based
     # on which cameras they are visible to, which we already figured out in the projection
