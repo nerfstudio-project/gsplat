@@ -37,6 +37,7 @@ from gsplat.distributed import cli
 from gsplat.optimizers import SelectiveAdam
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
+from gsplat.utils import xyz_to_polar
 from gsplat_viewer import GsplatViewer, GsplatRenderTabState
 from nerfview import CameraState, RenderTabState, apply_float_colormap
 
@@ -148,6 +149,9 @@ class Config:
     # Scale regularization
     scale_reg: float = 0.0
 
+    # Use homogeneous coordinates, 50k max_steps and 30k steps densifications recommended!
+    use_hom_coords: bool = False
+
     # Enable camera optimization.
     pose_opt: bool = False
     # Learning rate for camera optimization
@@ -243,6 +247,7 @@ def create_splats_with_optimizers(
     visible_adam: bool = False,
     batch_size: int = 1,
     feature_dim: Optional[int] = None,
+    use_hom_coords: bool = False,
     device: str = "cuda",
     world_rank: int = 0,
     world_size: int = 1,
@@ -255,6 +260,12 @@ def create_splats_with_optimizers(
         rgbs = torch.rand((init_num_pts, 3))
     else:
         raise ValueError("Please specify a correct init_type: sfm or random")
+
+    if use_hom_coords:
+        w, _ = xyz_to_polar(points)
+        points *= w.unsqueeze(1)
+        w = torch.log(w)
+        w = w[world_rank::world_size]
 
     # Initialize the GS size to be the average dist of the 3 nearest neighbors
     dist2_avg = (knn(points, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
@@ -277,6 +288,9 @@ def create_splats_with_optimizers(
         ("quats", torch.nn.Parameter(quats), quats_lr),
         ("opacities", torch.nn.Parameter(opacities), opacities_lr),
     ]
+
+    if use_hom_coords:
+        params.append(("w", torch.nn.Parameter(w), 0.0002 * scene_scale))
 
     if feature_dim is None:
         # color is SH coefficients.
@@ -405,6 +419,7 @@ class Runner:
             visible_adam=cfg.visible_adam,
             batch_size=cfg.batch_size,
             feature_dim=feature_dim,
+            use_hom_coords=cfg.use_hom_coords,
             device=self.device,
             world_rank=world_rank,
             world_size=world_size,
@@ -574,6 +589,11 @@ class Runner:
         scales = torch.exp(self.splats["scales"])  # [N, 3]
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
 
+        if cfg.use_hom_coords:
+            w_inv = 1.0 / torch.exp(self.splats["w"]).unsqueeze(1)
+            means = means * w_inv
+            scales = scales * w_inv
+
         image_ids = kwargs.pop("image_ids", None)
         if self.cfg.app_opt:
             colors = self.app_module(
@@ -680,6 +700,12 @@ class Runner:
                 self.optimizers["means"], gamma=0.01 ** (1.0 / max_steps)
             ),
         ]
+        if cfg.use_hom_coords:
+            schedulers.append(
+                torch.optim.lr_scheduler.ExponentialLR(
+                    self.optimizers["w"], gamma=0.1 ** (0.005 / max_steps)
+                )
+            )
         if cfg.pose_opt:
             # pose optimization has a learning rate schedule
             schedulers.append(
@@ -941,6 +967,11 @@ class Runner:
 
                 means = self.splats["means"]
                 scales = self.splats["scales"]
+                if cfg.use_hom_coords:
+                    w_inv = 1.0 / torch.exp(self.splats["w"]).unsqueeze(1)
+                    means = means * w_inv
+                    scales = torch.log(torch.exp(scales) * w_inv)
+
                 quats = self.splats["quats"]
                 opacities = self.splats["opacities"]
                 export_splats(
@@ -1428,7 +1459,23 @@ if __name__ == "__main__":
             ),
         ),
     }
+
     cfg = tyro.extras.overridable_config_cli(configs)
+    if cfg.use_hom_coords:
+        cfg.max_steps = 50_000
+        if isinstance(cfg.strategy, DefaultStrategy):
+            cfg.strategy.refine_stop_iter = 30_000
+            cfg.strategy.refine_every = 200
+            cfg.strategy.reset_every = 6_000
+            cfg.strategy.refine_start_iter = 1_500
+            cfg.strategy.prune_too_big = False
+        elif isinstance(cfg.strategy, MCMCStrategy):
+            cfg.strategy.refine_start_iter: 1_500
+            cfg.strategy.refine_stop_iter: 40_000
+            cfg.strategy.refine_every: int = 200
+        else:
+            assert_never(cfg.strategy)
+
     cfg.adjust_steps(cfg.steps_scaler)
 
     # try import extra dependencies
