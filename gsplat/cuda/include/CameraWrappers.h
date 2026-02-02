@@ -12,6 +12,7 @@
 #include "Cameras.cuh"
 #include "ExternalDistortion.h"
 #include "ExternalDistortion.cuh"
+#include "Lidars.cuh"
 #include "Ops.h"
 
 namespace gsplat {
@@ -329,14 +330,14 @@ public:
 /**
  * @brief Lidar camera model for spinning lidar sensors
  */
-class PyLidarCameraModel : public PyBaseCameraModel<LidarCameraModel>
+class PyRowOffsetStructuredSpinningLidarModel : public PyBaseCameraModel<RowOffsetStructuredSpinningLidarModel>
 {
 public:
-    PyLidarCameraModel(LidarCameraParameters params);
+    explicit PyRowOffsetStructuredSpinningLidarModel(RowOffsetStructuredSpinningLidarModelParametersExt params);
 
 private:
     // Store the parameters to keep its tensors.
-    LidarCameraParameters m_params;
+    RowOffsetStructuredSpinningLidarModelParametersExt m_params;
 };
 
 } // namespace gsplat

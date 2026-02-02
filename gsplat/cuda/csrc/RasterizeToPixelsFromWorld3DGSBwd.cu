@@ -14,6 +14,7 @@
 #include "Rasterization.h"
 #include "Utils.cuh"
 #include "Cameras.cuh"
+#include "Lidars.cuh"
 #include "MacroUtils.h"
 
 namespace gsplat {

@@ -28,8 +28,8 @@ from .cuda._wrapper import (
     has_adam,
     has_camera_wrappers,
     has_reloc,
-    LidarCameraParameters,
-    LidarCameraParametersExt,
+    RowOffsetStructuredSpinningLidarModelParameters,
+    RowOffsetStructuredSpinningLidarModelParametersExt,
 )
 from .exporter import export_splats
 from .optimizers import SelectiveAdam
@@ -88,8 +88,8 @@ all = [
     "has_adam",
     "has_camera_wrappers",
     "has_reloc",
-    "LidarCameraParameters",
-    "LidarCameraParametersExt",
-    "compute_lidar_angles_to_columns_map",
+    "RowOffsetStructuredSpinningLidarModelParameters",
+    "RowOffsetStructuredSpinningLidarModelParametersExt",
+    "compute_lidar_angles_to_columns_map"
     "SpinningDirection",
 ]
