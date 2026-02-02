@@ -295,7 +295,7 @@ void launch_projection_ut_3dgs_fused_kernel(
     const at::optional<at::Tensor> tangential_coeffs, // [C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [C, 4] optional
     const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs, // shared parameters for all cameras
-    const at::optional<c10::intrusive_ptr<LidarCameraParameters>> &lidar_coeffs,
+    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params, // external distortion parameters
     // outputs
     at::Tensor radii,                      // [C, N, 2]

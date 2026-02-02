@@ -29,7 +29,7 @@ from .cuda._wrapper import (
     CameraModel,
     FThetaCameraDistortionParameters,
     FThetaPolynomialType,
-    LidarCameraParametersExt,
+    RowOffsetStructuredSpinningLidarModelParametersExt,
     UnscentedTransformParameters,
     ExternalDistortionModelMeta,
     ExternalDistortionReferencePolynomial,
@@ -279,7 +279,7 @@ def rasterization(
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
     thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
     ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
-    lidar_coeffs: Optional[LidarCameraParametersExt] = None,
+    lidar_coeffs: Optional[RowOffsetStructuredSpinningLidarModelParametersExt] = None,
     external_distortion_coeffs: Optional[BivariateWindshieldModelParameters] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,

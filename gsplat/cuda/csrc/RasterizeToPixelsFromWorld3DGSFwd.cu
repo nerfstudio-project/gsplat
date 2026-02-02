@@ -30,6 +30,7 @@
 #include "ExternalDistortion.cuh"
 #include "Rasterization.h"
 #include "Cameras.cuh"
+#include "Lidars.cuh"
 #include "Utils.cuh"
 #include "MacroUtils.h"
 

@@ -100,25 +100,3 @@ struct FThetaCameraDistortionParameters : public torch::CustomClassHolder {
     float max_angle;
     std::array<float, 3> linear_cde;
 };
-
-// ---------------------------------------------------------------------------------------------
-
-namespace gsplat {
-
-// Lidar Camera Model Support
-
-// Spinning direction enum
-enum class SpinningDirection {
-    CLOCKWISE = 0,
-    COUNTER_CLOCKWISE = 1
-};
-
-struct FOV : public torch::CustomClassHolder
-{
-    FOV(float start = 0.f, float span = 0.f) : start(start), span(span) {}
-
-    float start;
-    float span;
-};
-
-} // namespace gsplat

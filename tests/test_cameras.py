@@ -45,7 +45,9 @@ from gsplat.cuda._torch_cameras import (  # PyTorch reference
     _OpenCVPinholeCameraModel,
     _OpenCVFisheyeCameraModel,
     _FThetaCameraModel,
-    _LidarCameraModel,
+)
+from gsplat.cuda._torch_lidars import (  # PyTorch reference
+    _RowOffsetStructuredSpinningLidarModel,
 )
 from gsplat._helper import assert_mismatch_ratio, assert_close
 from gsplat.cuda._wrapper import (
@@ -57,15 +59,14 @@ from gsplat.cuda._wrapper import (
 )
 from gsplat import (
     compute_lidar_angles_to_columns_map,
-    LidarCameraParameters,
-    LidarCameraParametersExt,
+    RowOffsetStructuredSpinningLidarModelParameters,
+    RowOffsetStructuredSpinningLidarModelParametersExt,
 )
 from gsplat.cuda._math import (
     _quat_multiply,
     _safe_normalize,
     compute_inverse_polynomial,
 )
-
 
 SEED = 42
 
@@ -166,10 +167,12 @@ def parse_camera(
     params = camera_parser(param_str, batch_dims, width, height, device)
 
     if model_type == "lidar":
-        # Wrap lidar-specific params into a LidarCameraParametersExt object
+        # Wrap lidar-specific params into a RowOffsetStructuredSpinningLidarModelParametersExt object
         return {
             "camera_model": model_type,
-            "lidar_coeffs": LidarCameraParametersExt(**params),
+            "lidar_coeffs": RowOffsetStructuredSpinningLidarModelParametersExt(
+                **params
+            ),
         }
     else:
         resolution = torch.tensor([width, height], dtype=torch.float32).cuda()
@@ -459,7 +462,7 @@ def parse_lidar_camera(
     ) * 0.2
 
     params.angles_to_columns_map = compute_lidar_angles_to_columns_map(
-        LidarCameraParameters(**vars(params))
+        RowOffsetStructuredSpinningLidarModelParameters(**vars(params))
     )
 
     return vars(params)
@@ -494,33 +497,39 @@ def image_points(batch_dims, image_dims, ref_camera):
     shape = list(batch_dims) + [n_points]
 
     # Lidar cameras use scaled angle space, not pixel coordinates
-    if isinstance(ref_camera, _LidarCameraModel):
+    if isinstance(ref_camera, _RowOffsetStructuredSpinningLidarModel):
         # Generate points in scaled angle space
         # For lidar: image_point = angle * ANGLE_TO_PIXEL_SCALING_FACTOR
         device = "cuda"
 
-        if ref_camera.spinning_direction == SpinningDirection.CLOCKWISE:
+        params = ref_camera.params
+        if params.spinning_direction == SpinningDirection.CLOCKWISE:
             # Clockwise: azimuth decreases
             azimuth = (
-                ref_camera.fov_horiz_rad.start
-                - ref_camera.fov_horiz_rad.span * torch.rand(*shape, device=device)
+                params.fov_horiz_rad.start
+                - params.fov_horiz_rad.span * torch.rand(*shape, device=device)
             )
         else:
             # Counter-clockwise: azimuth increases
             azimuth = (
-                ref_camera.fov_horiz_rad.start
-                + ref_camera.fov_ohriz_rad.span * torch.rand(*shape, device=device)
+                params.fov_horiz_rad.start
+                + params.fov_horiz_rad.span * torch.rand(*shape, device=device)
             )
 
         # Elevation decreases, always clockwise
-        elevation = (
-            ref_camera.fov_vert_rad.start
-            - ref_camera.fov_vert_rad.span * torch.rand(*shape, device=device)
+        elevation = params.fov_vert_rad.start - params.fov_vert_rad.span * torch.rand(
+            *shape, device=device
         )
 
         # Scale to image point space
-        column = azimuth * _LidarCameraModel.ANGLE_TO_PIXEL_SCALING_FACTOR
-        row = elevation * _LidarCameraModel.ANGLE_TO_PIXEL_SCALING_FACTOR
+        column = (
+            azimuth
+            * _RowOffsetStructuredSpinningLidarModel.ANGLE_TO_PIXEL_SCALING_FACTOR
+        )
+        row = (
+            elevation
+            * _RowOffsetStructuredSpinningLidarModel.ANGLE_TO_PIXEL_SCALING_FACTOR
+        )
 
         points = torch.stack([row, column], dim=-1)
     else:
@@ -706,7 +715,7 @@ class TestCameraModels:
         elif isinstance(ref_camera, _FThetaCameraModel):
             # ftheta: observed atol=1.53e-05, rtol=1.69e-07
             atol, rtol = 1.9e-05, 2.5e-07
-        elif isinstance(ref_camera, _LidarCameraModel):
+        elif isinstance(ref_camera, _RowOffsetStructuredSpinningLidarModel):
             atol, rtol = 5e-03, 5e-03
         else:  # Fallback
             atol, rtol = None, None
@@ -782,7 +791,7 @@ class TestCameraModels:
 
         # Tolerances based on camera type
         # Values set ~20% above observed maximums for tight margin
-        if isinstance(ref_camera, _LidarCameraModel):
+        if isinstance(ref_camera, _RowOffsetStructuredSpinningLidarModel):
             # Only 1 mismatched element (out of 3252. It could be due to
             # the angles_to_columns_map covering the angle 0 (==2*pi) twice
             # The expectation is that once this is fixed, the atol can be set back to 5e-3.

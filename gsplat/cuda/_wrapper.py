@@ -24,7 +24,13 @@ import torch
 from torch import Tensor
 from typing_extensions import Literal
 from gsplat._helper import assert_shape
-from gsplat.cuda._lidar import SpinningDirection, LidarCameraParameters, FOV as FOVBase
+from gsplat.cuda._lidar import (
+    SpinningDirection,
+    LidarModelParameters,
+    RowOffsetStructuredSpinningLidarModelParameters,
+    RowOffsetStructuredSpinningLidarModelParametersExt as RowOffsetStructuredSpinningLidarModelParametersExtBase,
+    FOV as FOVBase,
+)
 
 ExternalDistortionModelMeta = Literal["bivariate-windshield"]
 CameraModel = Literal["pinhole", "ortho", "fisheye", "ftheta", "lidar"]
@@ -120,9 +126,29 @@ class ExternalDistortionReferencePolynomial(IntEnum):
     BACKWARD = 2
 
 
-BivariateWindshieldModelParameters = _make_lazy_cuda_cls(
-    "BivariateWindshieldModelParameters"
-)
+class BivariateWindshieldModelParameters:
+    """Thin wrapper around the CUDA BivariateWindshieldModelParameters class.
+
+    torch::Library bindings does not allow standalone constants. This
+    wrapper fetches MAX_ORDER and MAX_COEFFS from the C++ static getters
+    and exposes them as class-level attributes, preserving the existing
+    attribute-access calling convention.
+    """
+
+    _cuda_cls = None
+    MAX_ORDER: int = 5  # default, overriden by C++ value
+    MAX_COEFFS: int = 21  # default, overriden by C++ value
+
+    @classmethod
+    def _ensure_cuda_cls(cls):
+        if cls._cuda_cls is None:
+            cls._cuda_cls = _make_lazy_cuda_cls("BivariateWindshieldModelParameters")
+            cls.MAX_ORDER = cls._cuda_cls.get_max_order()
+            cls.MAX_COEFFS = cls._cuda_cls.get_max_coeffs()
+
+    def __new__(cls):
+        cls._ensure_cuda_cls()
+        return cls._cuda_cls()
 
 
 def has_camera_wrappers():
@@ -177,14 +203,16 @@ def create_camera_model(
     thin_prism_coeffs: Optional[Tensor] = None,
     ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
     rs_type: RollingShutterType = RollingShutterType.GLOBAL,
-    lidar_coeffs: Optional["LidarCameraParametersExt"] = None,
+    lidar_coeffs: Optional["RowOffsetStructuredSpinningLidarModelParametersExt"] = None,
 ):
     if camera_model == "lidar":
         assert (
             lidar_coeffs is not None
         ), "lidar_coeffs is required for lidar camera model"
-        LidarCameraModelCUDA = _make_lazy_cuda_cls("LidarCameraModel")
-        return LidarCameraModelCUDA(lidar_coeffs.to_cpp())
+        RowOffsetStructuredSpinningLidarModelCUDA = _make_lazy_cuda_cls(
+            "RowOffsetStructuredSpinningLidarModel"
+        )
+        return RowOffsetStructuredSpinningLidarModelCUDA(lidar_coeffs.to_cpp())
     else:
         assert width is not None, "width is required for non-lidar camera models"
         assert height is not None, "height is required for non-lidar camera models"
@@ -216,16 +244,17 @@ class FOV(FOVBase):
         return FOVCUDA(start=self.start, span=self.span)
 
 
-@dataclass(eq=True, frozen=True)
-class LidarCameraParametersExt(LidarCameraParameters):
+class RowOffsetStructuredSpinningLidarModelParametersExt(
+    RowOffsetStructuredSpinningLidarModelParametersExtBase
+):
     """Lidar camera parameters extended with acceleration structures"""
-
-    angles_to_columns_map: Tensor
 
     def to_cpp(self) -> Any:
         """Convert to C++ custom class instance."""
-        LidarCameraParametersCUDA = _make_lazy_cuda_cls("LidarCameraParameters")
-        return LidarCameraParametersCUDA(
+        LidarParamsCUDA = _make_lazy_cuda_cls(
+            "RowOffsetStructuredSpinningLidarModelParametersExt"
+        )
+        return LidarParamsCUDA(
             row_elevations_rad=self.row_elevations_rad,
             column_azimuths_rad=self.column_azimuths_rad,
             row_azimuth_offsets_rad=self.row_azimuth_offsets_rad,
@@ -236,9 +265,6 @@ class LidarCameraParametersExt(LidarCameraParameters):
             fov_eps_rad=self.fov_eps_rad,
             angles_to_columns_map=self.angles_to_columns_map,
         )
-
-    def __hash__(self) -> int:
-        return super().__hash__()
 
 
 def world_to_cam(
@@ -1466,7 +1492,7 @@ def fully_fused_projection_with_ut(
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
     thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
     ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
-    lidar_coeffs: Optional[LidarCameraParameters] = None,
+    lidar_coeffs: Optional[RowOffsetStructuredSpinningLidarModelParametersExt] = None,
     external_distortion_coeffs: Optional[BivariateWindshieldModelParameters] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
@@ -1511,6 +1537,11 @@ def fully_fused_projection_with_ut(
         assert thin_prism_coeffs.shape == batch_dims + (C, 4), thin_prism_coeffs.shape
     if viewmats_rs is not None:
         assert viewmats_rs.shape == batch_dims + (C, 4, 4), viewmats_rs.shape
+
+    if lidar_coeffs is not None:
+        assert isinstance(
+            lidar_coeffs, RowOffsetStructuredSpinningLidarModelParametersExt
+        )
 
     camera_model_type = _make_lazy_cuda_obj(f"CameraModelType.{camera_model.upper()}")
     ftheta_coeffs = (

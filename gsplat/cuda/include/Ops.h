@@ -23,6 +23,7 @@
 #include <ATen/core/ivalue.h>
 #include <string>
 
+#include "Lidars.h"
 #include "Cameras.h"
 #include "Common.h"
 #include "ExternalDistortion.h"
@@ -31,11 +32,11 @@
 
 namespace gsplat {
 
-struct LidarCameraParameters : public torch::CustomClassHolder
+struct RowOffsetStructuredSpinningLidarModelParametersExt : public torch::CustomClassHolder
 {
-    LidarCameraParameters() = default;
+    RowOffsetStructuredSpinningLidarModelParametersExt() = default;
 
-    LidarCameraParameters(
+    RowOffsetStructuredSpinningLidarModelParametersExt(
         at::Tensor row_elevations_rad,
         at::Tensor column_azimuths_rad,
         at::Tensor row_azimuth_offsets_rad,
@@ -57,6 +58,9 @@ struct LidarCameraParameters : public torch::CustomClassHolder
           angles_to_columns_map(std::move(angles_to_columns_map))
     {}
 
+    int n_rows() const { return this->row_elevations_rad.size(0); }
+    int n_columns() const { return this->column_azimuths_rad.size(0); }
+
     // Actual parameters directly related to the lidar model
     at::Tensor row_elevations_rad;
     at::Tensor column_azimuths_rad;
@@ -71,9 +75,6 @@ struct LidarCameraParameters : public torch::CustomClassHolder
     float fov_eps_rad;
 
     at::Tensor angles_to_columns_map;
-
-    int n_rows() const { return this->row_elevations_rad.size(0); }
-    int n_columns() const { return this->column_azimuths_rad.size(0); }
 };
 
 // null operator for tutorial. Does nothing.
@@ -558,7 +559,7 @@ projection_ut_3dgs_fused(
     const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> &thin_prism_coeffs,  // [..., C, 4] optional
     const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
-    const at::optional<c10::intrusive_ptr<LidarCameraParameters>> &lidar_coeffs,
+    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params
 );
 

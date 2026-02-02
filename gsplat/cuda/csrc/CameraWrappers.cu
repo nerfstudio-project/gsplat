@@ -236,7 +236,7 @@ c10::intrusive_ptr<PyBaseCameraModel<>> PyBaseCameraModel<>::create(
     }
     // TODO: Lidar camera model is not supported through the generic create() method.
     // This needs to be added.
-    // For now, use PyLidarCameraModel constructor directly with all required parameters.
+    // For now, use PyRowOffsetStructuredSpinningLidarModel constructor directly with all required parameters.
     else
     {
         throw std::invalid_argument("Unknown camera model: " + camera_model);
@@ -948,7 +948,7 @@ PyFThetaCameraModel::PyFThetaCameraModel(
 // ================================== Lidar Implementation ==================================
 
 __global__ void construct_lidar_cameras_kernel(
-    TensorView<LidarCameraModel, CAMERA> cameras, LidarCameraParametersCUDA lidar_params)
+    TensorView<RowOffsetStructuredSpinningLidarModel, CAMERA> cameras, RowOffsetStructuredSpinningLidarModelParametersExtDevice lidar_params)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= cameras.shape(0))
@@ -957,10 +957,10 @@ __global__ void construct_lidar_cameras_kernel(
     }
 
     // Create the camera with initialized parameters
-    new (&cameras(idx)) LidarCameraModel(lidar_params);
+    new (&cameras(idx)) RowOffsetStructuredSpinningLidarModel(lidar_params);
 }
 
-PyLidarCameraModel::PyLidarCameraModel(LidarCameraParameters params)
+PyRowOffsetStructuredSpinningLidarModel::PyRowOffsetStructuredSpinningLidarModel(RowOffsetStructuredSpinningLidarModelParametersExt params)
     // TODO: We're mapping n_rows->width and n_columns->height to conform with nrend, but this should be reverted
     // once we validate that gsplat is 1:1 replacement of nrend.
     : PyBaseCameraModel(1, params.n_rows(), params.n_columns(),
