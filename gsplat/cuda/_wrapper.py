@@ -722,6 +722,7 @@ def rasterize_to_pixels_eval3d(
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
     use_hit_distance: bool = False,
+    return_normals: bool = False,
 ) -> Tuple[Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
@@ -750,6 +751,7 @@ def rasterize_to_pixels_eval3d(
         rolling_shutter=rolling_shutter, viewmats_rs=viewmats_rs,
         return_sample_counts=False,
         use_hit_distance=use_hit_distance,
+        return_normals=return_normals,
     )
     return colors, alphas
 
@@ -782,7 +784,8 @@ def rasterize_to_pixels_eval3d_extra(
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
     return_sample_counts: bool = False,
     use_hit_distance: bool = False,
-) -> Tuple[Tensor, Tensor, Tuple, Optional[Tuple]]:
+    return_normals: bool = False,
+) -> Tuple[Tensor, Tensor, Tensor, Optional[Tensor], Optional[Tensor]]:
     """Rasterizes Gaussians to pixels, returning extra information for debugging.
 
     Similar to `rasterize_to_pixels_eval3d()`, but returns turns the last gaussian id
@@ -791,6 +794,9 @@ def rasterize_to_pixels_eval3d_extra(
     Args:
         return_last_ids: If True, also return last flatten_idx per pixel. Default: False.
         return_sample_counts: If True, also return number of accumulated samples per pixel. Default: False.
+        return_normals: If True, compute and return accumulated normals per pixel.
+            Normals are computed from Gaussian quaternions (canonical normal = (0,0,1)
+            transformed by rotation, flipped if facing away from ray). Default: False.
 
     Returns:
         A tuple (contents depend on return flags):
@@ -799,6 +805,7 @@ def rasterize_to_pixels_eval3d_extra(
         - **Rendered alphas**. [..., C, image_height, image_width, 1]
         - **Last flatten_idx**. [..., C, image_height, image_width]
         - **Sample counts** (optional). [..., C, image_height, image_width]. If return_sample_counts=True.
+        - **Rendered normals** (optional). [..., C, image_height, image_width, 3]. If return_normals=True.
     """
     batch_dims = means.shape[:-2]
     num_batch_dims = len(batch_dims)
@@ -908,7 +915,7 @@ def rasterize_to_pixels_eval3d_extra(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-    render_colors, render_alphas, last_ids, sample_counts = _RasterizeToPixelsEval3D.apply(
+    render_colors, render_alphas, last_ids, sample_counts, render_normals = _RasterizeToPixelsEval3D.apply(
         means.contiguous(),
         quats.contiguous(),
         scales.contiguous(),
@@ -938,12 +945,13 @@ def rasterize_to_pixels_eval3d_extra(
         # no need to tell it to do it.
         return_sample_counts,  # Pass flag to forward
         use_hit_distance,
+        return_normals,  # Pass return_normals flag to forward
     )
 
     if padded_channels > 0:
         render_colors = render_colors[..., :-padded_channels]
 
-    return render_colors, render_alphas, last_ids, sample_counts
+    return render_colors, render_alphas, last_ids, sample_counts, render_normals
 
 
 @torch.no_grad()
@@ -1530,7 +1538,8 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
         return_sample_counts: bool = False,
         use_hit_distance: bool = False,
-    ) -> Tuple[Tensor, Tensor, Tensor, Optional[Tensor]]:
+        return_normals: bool = False,
+    ) -> Tuple[Tensor, Tensor, Tensor, Optional[Tensor], Optional[Tensor]]:
         ut_params = ut_params.to_cpp()
         rs_type = rolling_shutter.to_cpp()
         camera_model_type = _make_lazy_cuda_obj(
@@ -1542,12 +1551,12 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             else FThetaCameraDistortionParameters.to_cpp_default()
         )
 
+        # Extract batch_dims for sample_counts allocation
+        batch_dims = means.shape[:-2]
+        C = viewmats.size(-3)
+
         # Conditionally allocate sample_counts based on flag
         if return_sample_counts:
-            # Extract batch_dims for sample_counts allocation
-            batch_dims = means.shape[:-2]
-            C = viewmats.size(-3)
-
             # Allocate with correct final shape (batch_dims, C, H, W)
             sample_counts = torch.empty(
                 batch_dims + (C, height, width),
@@ -1556,6 +1565,16 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             )
         else:
             sample_counts = None
+
+        # Conditionally allocate normals based on flag
+        if return_normals:
+            render_normals = torch.empty(
+                batch_dims + (C, height, width, 3),
+                dtype=torch.float32,
+                device=means.device
+            )
+        else:
+            render_normals = None
 
         render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
             "rasterize_to_pixels_from_world_3dgs_fwd"
@@ -1585,6 +1604,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             flatten_ids,
             use_hit_distance,
             sample_counts,
+            render_normals,
         )
 
         ctx.save_for_backward(
@@ -1616,7 +1636,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         ctx.ftheta_coeffs = ftheta_coeffs
         ctx.use_hit_distance = use_hit_distance
 
-        return render_colors, render_alphas, last_ids, sample_counts
+        return render_colors, render_alphas, last_ids, sample_counts, render_normals
 
     @staticmethod
     def backward(
@@ -1625,6 +1645,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         v_render_alphas: Tensor,  # [..., C, H, W, 1]
         v_last_ids: Optional[Tensor],  # None - last_ids is integer (non-differentiable)
         v_sample_counts: Optional[Tensor],  # None - sample_counts is integer (non-differentiable)
+        v_render_normals: Optional[Tensor],  # [..., C, H, W, 3]
     ):
         (
             means,
@@ -1686,6 +1707,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             last_ids,
             v_render_colors.contiguous(),
             v_render_alphas.contiguous(),
+            v_render_normals.contiguous() if v_render_normals is not None else None,
         )
 
         if ctx.needs_input_grad[5]:  # backgrounds
@@ -1725,6 +1747,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             None,  # viewmats_rs
             None,  # return_sample_counts (flag, no gradient)
             None,  # use_hit_distance
+            None,  # return_normals (flag, no gradient)
         )
 
 
