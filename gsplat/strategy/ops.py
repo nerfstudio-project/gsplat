@@ -186,13 +186,16 @@ def remove(
     optimizers: Dict[str, torch.optim.Optimizer],
     state: Dict[str, Tensor],
     mask: Tensor,
+    names: Union[List[str], None] = None,
 ):
     """Inplace remove the Gaussian with the given mask.
 
     Args:
         params: A dictionary of parameters.
         optimizers: A dictionary of optimizers, each corresponding to a parameter.
+        state: A dictionary of extra state tensors.
         mask: A boolean mask to remove the Gaussians.
+        names: A list of key names to update. If None, update all. Default: None.
     """
     sel = torch.where(~mask)[0]
 
@@ -203,7 +206,7 @@ def remove(
         return v[sel]
 
     # update the parameters and the state in the optimizers
-    _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
+    _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers, names)
     # update the extra running state
     for k, v in state.items():
         if isinstance(v, torch.Tensor):
@@ -271,7 +274,7 @@ def relocate(
     sampled_idxs = alive_indices[sampled_idxs]
     new_opacities, new_scales = compute_relocation(
         opacities=opacities[sampled_idxs],
-        scales=torch.exp(params["scales"])[sampled_idxs],
+        scales=torch.exp(params["scales"][:, :3])[sampled_idxs],
         ratios=torch.bincount(sampled_idxs)[sampled_idxs] + 1,
         binoms=binoms,
     )
@@ -281,20 +284,26 @@ def relocate(
         if name == "opacities":
             p[sampled_idxs] = torch.logit(new_opacities)
         elif name == "scales":
-            p[sampled_idxs] = torch.log(new_scales)
+            p[sampled_idxs][:, :3] = torch.log(new_scales)
         p[dead_indices] = p[sampled_idxs]
         return torch.nn.Parameter(p, requires_grad=p.requires_grad)
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
         v[sampled_idxs] = 0
+        v[dead_indices] = 0
         return v
 
     # update the parameters and the state in the optimizers
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
     # update the extra running state
     for k, v in state.items():
-        if isinstance(v, torch.Tensor):
-            v[sampled_idxs] = 0
+        if isinstance(v, torch.Tensor) and k != "binoms":
+            if k == "anchor_count" or k == "anchor_opacity":
+                v[sampled_idxs] = 0
+                v[dead_indices] = 0
+            else:
+                v.view(-1, state["n_feat_offsets"])[sampled_idxs] = 0
+                v.view(-1, state["n_feat_offsets"])[dead_indices] = 0
 
 
 @torch.no_grad()
@@ -365,5 +374,147 @@ def inject_noise_to_position(
         * (op_sigmoid(1 - opacities)).unsqueeze(-1)
         * scaler
     )
-    noise = torch.einsum("bij,bj->bi", covars, noise)
     params["means"].add_(noise)
+
+
+@torch.no_grad()
+def grow_anchors(
+    params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+    optimizers: Dict[str, torch.optim.Optimizer],
+    state: Dict[str, Tensor],
+    anchors: torch.Tensor,
+    gradient_mask: torch.Tensor,
+    remove_duplicates_mask: torch.Tensor,
+    inv_idx: torch.Tensor,
+    voxel_size: float,
+    n_feat_offsets: int,
+    feat_dim: int,
+):
+    """Inplace add new Gaussians (anchors) to the parameters.
+
+    Args:
+        params: A dictionary of parameters.
+        optimizers: A dictionary of optimizers, each corresponding to a parameter.
+        state: A dictionary of extra state tensors.
+        anchors: Positions of new anchors to be added.
+        gradient_mask: A mask to select gradients.
+        remove_duplicates_mask: A mask to remove duplicates.
+        inv_idx: Indices for inverse mapping.
+        voxel_size: The size of the voxel.
+        n_feat_offsets: Number of feature offsets.
+        feat_dim: Dimension of features.
+    """
+    device = anchors.device
+    num_new = anchors.size(0)
+
+    # Scale anchors
+    anchors = anchors * voxel_size  # [N_new, 3]
+
+    # Initialize new parameters
+    log_voxel_size = torch.log(torch.tensor(voxel_size, device=device))
+    scaling = log_voxel_size.expand(num_new, anchors.size(1) * 2)  # [N_new, 6]
+
+    rotation = torch.ones((num_new, 4), device=device)
+
+    # Prepare new features
+    existing_features = params["features"]  # [N_existing, feat_dim]
+    repeated_features = (
+        existing_features.unsqueeze(1)
+        .expand(-1, n_feat_offsets, -1)
+        .reshape(-1, existing_features.shape[1])
+    )  # [N_existing * n_feat_offsets, feat_dim]
+
+    selected_features = repeated_features[gradient_mask]  # [N_selected, feat_dim]
+
+    # Use inverse_indices to aggregate features
+    scattered_features = torch.segment_reduce(
+        data=selected_features, reduce="amax", lengths=torch.bincount(inv_idx)
+    )
+    feat = scattered_features[remove_duplicates_mask]  # [N_new, feat_dim]
+
+    def inverse_sigmoid(x):
+        return torch.log(x / (1 - x))
+
+    opacities = inverse_sigmoid(
+        0.1 * torch.ones((anchors.shape[0], 1), dtype=torch.float, device="cuda")
+    )
+    # Initialize new offsets
+    offsets = torch.zeros(
+        (num_new, n_feat_offsets, 3), device=device
+    )  # [N_new, n_feat_offsets, 3]
+
+    def param_fn(name: str, p: Tensor) -> Tensor:
+        if name == "anchors":
+            p_new = torch.cat([p, anchors], dim=0)
+        elif name == "scales":
+            p_new = torch.cat([p, scaling], dim=0)
+        elif name == "quats":
+            p_new = torch.cat([p, rotation], dim=0)
+        elif name == "features":
+            p_new = torch.cat([p, feat], dim=0)
+        elif name == "offsets":
+            p_new = torch.cat([p, offsets], dim=0)
+        elif name == "opacities":
+            p_new = torch.cat([p, opacities], dim=0)
+        else:
+            raise ValueError(f"Parameter '{name}' not recognized.")
+        return torch.nn.Parameter(p_new)
+
+    def optimizer_fn(key: str, v: Tensor) -> Tensor:
+        # Extend optimizer state tensors with zeros
+        zeros = torch.zeros((num_new, *v.shape[1:]), device=device)
+        v_new = torch.cat([v, zeros], dim=0)
+        return v_new
+
+    # Update parameters and optimizer states
+    _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
+
+    # Update the extra running state
+    for k, v in state.items():
+        if isinstance(v, torch.Tensor) and k != "binoms":
+            if k == "anchor_count" or k == "anchor_opacity":
+                zeros = torch.zeros((num_new, *v.shape[1:]), device=device)
+            else:
+                zeros = torch.zeros(
+                    (num_new * n_feat_offsets, *v.shape[1:]), device=device
+                )
+            state[k] = torch.cat([v, zeros], dim=0)
+
+
+@torch.no_grad()
+def remove_anchors(
+    params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+    optimizers: Dict[str, torch.optim.Optimizer],
+    n_feat_offsets: int,
+    state: Dict[str, Tensor],
+    mask: Tensor,
+    names: Union[List[str], None] = None,
+):
+    """Inplace remove the Gaussian with the given mask.
+
+    Args:
+        params: A dictionary of parameters.
+        optimizers: A dictionary of optimizers, each corresponding to a parameter.
+        n_feat_offsets: Number of feature offsets.
+        state: A dictionary of extra state tensors.
+        mask: A boolean mask to remove the Gaussians.
+        names: A list of parameter names to update. If None, update all. Default: None.
+    """
+    sel = torch.where(~mask)[0]
+
+    def param_fn(name: str, p: Tensor) -> Tensor:
+        return torch.nn.Parameter(p[sel])
+
+    def optimizer_fn(key: str, v: Tensor) -> Tensor:
+        return v[sel]
+
+    # update the parameters and the state in the optimizers
+    _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers, names)
+    # update the extra running state
+    for k, v in state.items():
+        if isinstance(v, torch.Tensor) and k != "binoms":
+            if k in ["anchor_count", "anchor_opacity"]:
+                state[k] = v[sel]
+            else:
+                offset_sel = sel.unsqueeze(dim=1).repeat([1, n_feat_offsets]).view(-1)
+                state[k] = v[offset_sel]
