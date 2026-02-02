@@ -18,6 +18,7 @@ usage()
     echo "   --shell    Enter into the shell inside the container."
     echo "   --sanitize Run tests under CUDA compute-sanitizer"
     echo "   --reset    Delete the internal build cache"
+    echo "   --verbose  Show intermediate information"
     echo "   --gpus=spec Use the given GPUs inside the container."
     echo "              The syntax is:"
     echo "                 --gpus=<count>              - use this many GPUs"
@@ -58,6 +59,7 @@ do_2dgs=false
 do_reset=false
 do_sanitize=false
 do_debug=false
+do_verbose=false
 gpus=all
 
 envvars=()
@@ -89,6 +91,9 @@ while (( $# >= 1 )); do
         ;;
     --debug)
         do_debug=true
+        ;;
+    --verbose)
+        do_verbose=true
         ;;
     --gpus=*)
         gpus=${1#--gpus=}
@@ -176,6 +181,10 @@ else
     pytest_args=("$@")
     shift $#
 
+    if $do_verbose; then
+        pytest_args+=(-sv) # show C++ build as it happens
+    fi
+
     if $do_sanitize; then
         # CUDA compute-sanitizer needs the full path of the program to be analyzed
         shell_args+=(-c '/usr/local/cuda/bin/compute-sanitizer "$(command -v pytest)" "$@"' pytest "${pytest_args[@]}")
@@ -187,7 +196,7 @@ else
     fi
 fi
 
-if $do_debug; then
+if $do_verbose; then
     # Show the whole docker run invocation
     set -x
 fi
