@@ -3,8 +3,9 @@
 # Fix the base image to avoid spurious rebuilds
 ARG BASE_IMAGE=nvidia/cuda:12.9.0-devel-ubuntu24.04@sha256:f418bff454b1ac74a4d9d39279f2cf664fbb9b5d5f21de104b79745ea29bf2cb
 
-# We need a recent ccache for nvcc support. ----------------------------------
+# Downloads and installs ccache for build acceleration --------------------------------
 FROM alpine:3.19.1 as ccache
+# We need a fairly recent ccache recent ccache with proper nvcc support.
 ARG CCACHE_VERSION=4.12.2
 ARG CCACHE_SHA256=sha256:630c34ec94d451b200f5b14a6a25580d6a45bc80c394b7e0b93e33556eee5d32
 ADD --link --checksum=$CCACHE_SHA256 https://github.com/ccache/ccache/releases/download/v${CCACHE_VERSION}/ccache-${CCACHE_VERSION}-linux-x86_64.tar.xz .
@@ -13,7 +14,7 @@ RUN <<EOS
     chmod a+x ccache
 EOS
 
-# Common base stage with python installed -----------------------------------
+# Base layer with Python, apt configuration, and virtual environment setup ------------
 FROM ${BASE_IMAGE} as python
 SHELL ["/bin/bash", "-ex", "-o", "pipefail", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive
@@ -53,10 +54,9 @@ RUN --mount=type=tmpfs,target=/tmp \
     python3 -m venv ~/.venv
 EOS
 
-# Stage where we install gsplat dependencies ----------------------------------
+# Installs all GSplat dependencies (including dev dependencies) -----------
 FROM python as gsplat-deps
 
-# Install all gsplat dependencies
 COPY --link --from=gsplatrepo setup.py deps/
 COPY --link --from=gsplatrepo gsplat/version.py deps/gsplat/
 RUN --mount=type=tmpfs,target=/tmp \
@@ -80,6 +80,9 @@ RUN --mount=type=tmpfs,target=/tmp \
 EOS
 
 # Main image ============================================================
+# It combines the Python environment, development toolchain
+# and all gsplat dependencies into an image.
+
 FROM python as main
 
 COPY --link --from=gsplat-deps /root/.venv/ /root/.venv/
