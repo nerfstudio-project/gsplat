@@ -1615,6 +1615,31 @@ def rasterization_2dgs(
         # make it apple-to-apple with Inria's CUDA Backend.
         colors = torch.clamp_min(colors + 0.5, 0.0)
 
+    ###################################################################################
+    ### Added by Yuwei Lin (ywlin@stanford.edu) on Aug28, 2025 to fix gsplat [#765] ###
+    ###################################################################################
+    if sh_degree is None:  # SH coefficients
+    # Colors are post-activation values, with shape [..., N, D] or [..., C, N, D]
+        if packed:
+            if colors.dim() == num_batch_dims + 2:
+                # Turn [..., N, D] into [nnz, D]
+             colors = colors.view(B, N, -1)[batch_ids, gaussian_ids]
+            else:
+                # Turn [..., C, N, D] into [nnz, D]
+                colors = colors.view(B, C, N, -1)[batch_ids, camera_ids, gaussian_ids]
+        else:
+            if colors.dim() == num_batch_dims + 2:
+                # Turn [..., N, D] into [..., C, N, D]
+                colors = torch.broadcast_to(
+                    colors[..., None, :, :], batch_dims + (C, N, -1)
+                )
+            else:
+                # colors is already [..., C, N, D]
+                pass
+    ###################################################################################
+    ### Added by Yuwei Lin (ywlin@stanford.edu) on Aug28, 2025 to fix gsplat [#765] ###
+    ###################################################################################
+
     # Rasterize to pixels
     if render_mode in ["RGB+D", "RGB+ED"]:
         colors = torch.cat((colors, depths[..., None]), dim=-1)
