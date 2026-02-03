@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/glm.hpp>
 
 namespace gsplat {
 
@@ -52,5 +53,11 @@ enum CameraModelType {
 
 #define N_THREADS_PACKED 256
 #define ALPHA_THRESHOLD (1.f / 255.f)
+
+#ifdef __CUDACC__
+#   define GSPLAT_NOINLINE __noinline__
+#else
+#   define GSPLAT_NOINLINE
+#endif
 
 } // namespace gsplat

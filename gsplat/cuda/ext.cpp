@@ -2,6 +2,7 @@
 
 #include "Ops.h"
 #include "Cameras.h"
+#include "ExternalDistortion.h"
 #include "csrc/Config.h"
 
 #if GSPLAT_BUILD_CAMERA_WRAPPERS
@@ -20,6 +21,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .value("ORTHO", gsplat::CameraModelType::ORTHO)
         .value("FISHEYE", gsplat::CameraModelType::FISHEYE)
         .value("FTHETA", gsplat::CameraModelType::FTHETA)
+        .export_values();
+
+    py::enum_<gsplat::extdist::ModelType>(m, "ExternalDistortionModelType", py::module_local())
+        .value("BIVARIATE_WINDSHIELD", gsplat::extdist::ModelType::BIVARIATE_WINDSHIELD)
         .export_values();
 
     m.def("null", &gsplat::null);
@@ -124,6 +129,22 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readwrite("angle_to_pixeldist_poly", &FThetaCameraDistortionParameters::angle_to_pixeldist_poly)
         .def_readwrite("max_angle", &FThetaCameraDistortionParameters::max_angle)
         .def_readwrite("linear_cde", &FThetaCameraDistortionParameters::linear_cde);
+
+    // External Distortion support
+    py::enum_<gsplat::extdist::ReferencePolynomialType>(m, "ExternalDistortionReferencePolynomial", py::module_local())
+        .value("FORWARD", gsplat::extdist::ReferencePolynomialType::FORWARD)
+        .value("BACKWARD", gsplat::extdist::ReferencePolynomialType::BACKWARD)
+        .export_values();
+    
+    py::class_<gsplat::extdist::BivariateWindshieldModelParameters>(m, "BivariateWindshieldModelParameters", py::module_local())
+        .def(py::init<>())
+        .def_readonly_static("MAX_ORDER", &gsplat::extdist::BivariateWindshieldModelParameters::MAX_ORDER)
+        .def_readonly_static("MAX_COEFFS", &gsplat::extdist::BivariateWindshieldModelParameters::MAX_COEFFS)
+        .def_readwrite("reference_poly", &gsplat::extdist::BivariateWindshieldModelParameters::reference_poly)
+        .def_readwrite("horizontal_poly", &gsplat::extdist::BivariateWindshieldModelParameters::horizontal_poly)
+        .def_readwrite("vertical_poly", &gsplat::extdist::BivariateWindshieldModelParameters::vertical_poly)
+        .def_readwrite("horizontal_poly_inverse", &gsplat::extdist::BivariateWindshieldModelParameters::horizontal_poly_inverse)
+        .def_readwrite("vertical_poly_inverse", &gsplat::extdist::BivariateWindshieldModelParameters::vertical_poly_inverse);
 
     // ==================== Camera Model Bindings ====================
 
