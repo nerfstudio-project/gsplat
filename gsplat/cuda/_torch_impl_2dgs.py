@@ -21,6 +21,7 @@ import torch
 from torch import Tensor
 
 from gsplat.cuda._math import _quat_scale_to_matrix
+from gsplat.cuda._constants import MAX_ALPHA
 
 
 def _fully_fused_projection_2dgs(
@@ -183,7 +184,7 @@ def accumulate_2dgs(
     sigmas = 0.5 * torch.minimum(sigmas_3d, sigmas_2d)  # [M]
 
     alphas = torch.clamp_max(
-        opacities[image_ids, gaussian_ids] * torch.exp(-sigmas), 0.999
+        opacities[image_ids, gaussian_ids] * torch.exp(-sigmas), MAX_ALPHA
     )
 
     indices = image_ids * image_height * image_width + pixel_ids

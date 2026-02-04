@@ -71,6 +71,13 @@ enum CameraModelType {
 
 #define N_THREADS_PACKED 256
 #define ALPHA_THRESHOLD (1.f / 255.f)
+// MAX_ALPHA and TRANSMITTANCE_THRESHOLD are chosen so that the equivalent of
+// a maximal opacity Gaussian has to be rasterized twice to reach the threshold,
+// without getting the transmittance too small for numerical stability of
+// the backward pass.
+// i.e. TRANSMITTANCE_THRESHOLD = (1 - MAX_ALPHA)^2
+#define MAX_ALPHA 0.99f
+#define TRANSMITTANCE_THRESHOLD 1e-4f
 
 #ifdef __CUDACC__
 #   define GSPLAT_NOINLINE __noinline__

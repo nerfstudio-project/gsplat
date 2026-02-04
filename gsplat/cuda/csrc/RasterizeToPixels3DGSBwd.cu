@@ -197,7 +197,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
                                       conic.z * delta.y * delta.y) +
                               conic.y * delta.x * delta.y;
                 vis = __expf(-sigma);
-                alpha = min(0.999f, opac * vis);
+                alpha = min(MAX_ALPHA, opac * vis);
                 if (sigma < 0.f || alpha < ALPHA_THRESHOLD) {
                     valid = false;
                 }
@@ -242,7 +242,7 @@ __global__ void rasterize_to_pixels_3dgs_bwd_kernel(
                     v_alpha += -T_final * ra * accum;
                 }
 
-                if (opac * vis <= 0.999f) {
+                if (opac * vis <= MAX_ALPHA) {
                     const float v_sigma = -opac * vis * v_alpha;
                     v_conic_local = {
                         0.5f * v_sigma * delta.x * delta.x,

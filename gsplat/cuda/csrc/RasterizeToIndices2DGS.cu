@@ -198,14 +198,14 @@ __global__ void rasterize_to_indices_2dgs_kernel(
             const float gauss_weight = min(gauss_weight_3d, gauss_weight_2d);
 
             const float sigma = 0.5f * gauss_weight;
-            float alpha = min(0.999f, opac * __expf(-sigma));
+            float alpha = min(MAX_ALPHA, opac * __expf(-sigma));
 
             if (sigma < 0.f || alpha < ALPHA_THRESHOLD) {
                 continue;
             }
 
             next_trans = trans * (1.0f - alpha);
-            if (next_trans <= 1e-4) { // this pixel is done: exclusive
+            if (next_trans <= TRANSMITTANCE_THRESHOLD) { // this pixel is done: exclusive
                 done = true;
                 break;
             }

@@ -366,7 +366,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                 power = -0.5f * grayDist;
 
                 vis = __expf(power);
-                alpha = min(0.999f, opac * vis);
+                alpha = min(MAX_ALPHA, opac * vis);
                 if (power > 0.f || alpha < 1.f / 255.f) {
                     valid = false;
                 }
@@ -475,7 +475,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
                     v_gro_hit = -grd_n * v_hit_t;
                 }
 
-                if (opac * vis <= 0.999f) {
+                if (opac * vis <= MAX_ALPHA) {
                     const float v_vis = opac * v_alpha;
                     float v_gradDist = -0.5f * vis * v_vis;
                     vec3 v_gcrod = 2.0f * v_gradDist * gcrod;
