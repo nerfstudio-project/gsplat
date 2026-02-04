@@ -317,7 +317,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             const float grayDist = glm::dot(gcrod, gcrod);
             const float power = -0.5f * grayDist;
 
-            float alpha = min(0.999f, opac * __expf(power));
+            float alpha = min(MAX_ALPHA, opac * __expf(power));
             if (alpha < 1.f / 255.f) {
                 continue;
             }
@@ -331,7 +331,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             }
 
             const float next_T = T * (1.0f - alpha);
-            if (next_T <= 1e-4f) { // this pixel is done: exclusive
+            if (next_T <= TRANSMITTANCE_THRESHOLD) { // this pixel is done: exclusive
                 done = true;
                 break;
             }

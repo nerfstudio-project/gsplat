@@ -21,6 +21,7 @@ from ._math import (
     _quat_scale_to_covar_preci,
 )
 from ._wrapper import CameraModel, RollingShutterType
+from ._constants import MAX_ALPHA
 
 def _persp_proj(
     means: Tensor,  # [..., C, N, 3]
@@ -529,7 +530,7 @@ def accumulate(
         + c[:, 1] * deltas[:, 0] * deltas[:, 1]
     )  # [M]
     alphas = torch.clamp_max(
-        opacities[image_ids, gaussian_ids] * torch.exp(-sigmas), 0.999
+        opacities[image_ids, gaussian_ids] * torch.exp(-sigmas), MAX_ALPHA
     )
 
     indices = image_ids * image_height * image_width + pixel_ids
