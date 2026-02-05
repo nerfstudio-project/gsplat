@@ -19,11 +19,12 @@ import gsplat
 
 from gsplat._helper import load_test_data, get_inlier_abserror_mask, assert_mismatch_ratio
 
-from gsplat.cuda._wrapper import CameraModel, RollingShutterType, UnscentedTransformParameters, _make_lazy_cuda_obj
+from gsplat.cuda._wrapper import CameraModel, RollingShutterType, UnscentedTransformParameters, _make_lazy_cuda_obj, has_camera_wrappers
 from gsplat.cuda._math import _safe_normalize
 from gsplat.cuda._torch_cameras import _viewmat_to_pose
 
-BaseCameraModelCUDA = _make_lazy_cuda_obj("BaseCameraModel")
+if has_camera_wrappers():
+    BaseCameraModelCUDA = _make_lazy_cuda_obj("BaseCameraModel")
 
 device = torch.device("cuda:0")
 
