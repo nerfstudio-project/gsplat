@@ -48,11 +48,13 @@ from gsplat.cuda._wrapper import (
     RollingShutterType,
     UnscentedTransformParameters,
     _make_lazy_cuda_obj,
+    has_camera_wrappers,
 )
 from gsplat.cuda._math import _safe_normalize
 from gsplat.cuda._torch_cameras import _viewmat_to_pose
 
-BaseCameraModelCUDA = _make_lazy_cuda_obj("BaseCameraModel")
+if has_camera_wrappers():
+    BaseCameraModelCUDA = _make_lazy_cuda_obj("BaseCameraModel")
 
 device = torch.device("cuda:0")
 
