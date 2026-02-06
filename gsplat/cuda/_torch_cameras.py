@@ -36,7 +36,6 @@ from ._wrapper import (
 )
 
 ShutterType = _make_lazy_cuda_obj("ShutterType")
-BaseCameraModel = _make_lazy_cuda_obj("BaseCameraModel")
 FThetaPolynomialTypeCUDA = _make_lazy_cuda_obj("FThetaPolynomialType")
 
 def _project_to_image(

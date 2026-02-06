@@ -31,6 +31,10 @@ def _make_lazy_cuda_obj(name: str) -> Any:
         obj = getattr(_C, name_split)
     return obj
 
+def has_camera_wrappers():
+    from ._backend import _C
+    return hasattr(_C, "BaseCameraModel")
+
 def has_2dgs():
     from ._backend import _C
     return hasattr(_C, "projection_2dgs_fused_fwd")
