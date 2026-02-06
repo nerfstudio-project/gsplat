@@ -53,9 +53,6 @@ from gsplat.cuda._wrapper import (
 from gsplat.cuda._math import _safe_normalize
 from gsplat.cuda._torch_cameras import _viewmat_to_pose
 
-if has_camera_wrappers():
-    BaseCameraModelCUDA = _make_lazy_cuda_obj("BaseCameraModel")
-
 device = torch.device("cuda:0")
 
 
@@ -848,8 +845,18 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
 @pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
 @pytest.mark.parametrize(
     "channels,batch_dims,rs_type,use_hit_distance,use_rays,return_normals",
-    list(
-        chain(
+    [
+        pytest.param(
+            *params,
+            marks=[
+                # test based on use_rays (4)
+                pytest.mark.skipif(
+                    params[4] and not has_camera_wrappers(),
+                    reason="Camera wrapper support isn't built in",
+                )
+            ],
+        )
+        for params in chain(
             # Main test combinations with return_normals=False
             product(
                 [3],  # channels
@@ -865,7 +872,7 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
             # Dedicated test for return_normals=True with one configuration
             [(3, (), RollingShutterType.ROLLING_TOP_TO_BOTTOM, True, True, True)],
         )
-    ),
+    ],
 )
 def test_rasterize_to_pixels_eval3d(
     test_data,
@@ -930,6 +937,8 @@ def test_rasterize_to_pixels_eval3d(
         viewmats_rs = None
 
     if use_rays:
+        BaseCameraModelCUDA = _make_lazy_cuda_obj("BaseCameraModel")
+
         camera = BaseCameraModelCUDA.create(
             width=width,
             height=height,
