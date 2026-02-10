@@ -27,7 +27,11 @@ struct RowOffsetStructuredSpinningLidarModelParametersExt : public torch::Custom
         c10::intrusive_ptr<FOV> fov_vert_rad,
         c10::intrusive_ptr<FOV> fov_horiz_rad,
         float fov_eps_rad,
-        at::Tensor angles_to_columns_map
+        at::Tensor angles_to_columns_map,
+        int n_bins_azimuth,
+        int n_bins_elevation,
+        at::Tensor cdf_elevation,
+        at::Tensor cdf_dense_ray_mask
     )
         : row_elevations_rad(std::move(row_elevations_rad)),
           column_azimuths_rad(std::move(column_azimuths_rad)),
@@ -37,7 +41,11 @@ struct RowOffsetStructuredSpinningLidarModelParametersExt : public torch::Custom
           fov_vert_rad(std::move(fov_vert_rad)),
           fov_horiz_rad(std::move(fov_horiz_rad)),
           fov_eps_rad(fov_eps_rad),
-          angles_to_columns_map(std::move(angles_to_columns_map))
+          angles_to_columns_map(std::move(angles_to_columns_map)),
+          n_bins_azimuth(n_bins_azimuth),
+          n_bins_elevation(n_bins_elevation),
+          cdf_elevation(cdf_elevation),
+          cdf_dense_ray_mask(cdf_dense_ray_mask)
     {}
 
     int n_rows() const { return this->row_elevations_rad.size(0); }
@@ -57,6 +65,14 @@ struct RowOffsetStructuredSpinningLidarModelParametersExt : public torch::Custom
     float fov_eps_rad;
 
     at::Tensor angles_to_columns_map;
+
+    // Lidar Tiling info
+    int n_bins_azimuth;
+    int n_bins_elevation;
+    at::Tensor cdf_elevation;
+    at::Tensor cdf_dense_ray_mask;
+    int cdf_resolution_elevation() const { return this->cdf_dense_ray_mask.size(-1)-1; }
+    int cdf_resolution_azimuth() const { return this->cdf_dense_ray_mask.size(-2)-1; }
 };
 
 // null operator for tutorial. Does nothing.
@@ -246,6 +262,17 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile(
     int64_t tile_height,
     bool sort,
     bool segmented
+);
+std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile_lidar(
+    const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &lidar,
+    const at::Tensor means2d,                    // [..., C, N, 2] or [nnz, 2]
+    const at::Tensor radii,                      // [..., C, N, 2] or [nnz, 2]
+    const at::Tensor depths,                     // [..., C, N] or [nnz]
+    const at::optional<at::Tensor> image_ids,    // [nnz]
+    const at::optional<at::Tensor> gaussian_ids, // [nnz]
+    const int64_t I,
+    const bool sort,
+    const bool segmented
 );
 at::Tensor intersect_offset(
     const at::Tensor &isect_ids, // [n_isects]
