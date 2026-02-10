@@ -33,10 +33,10 @@ namespace gsplat {
 template <typename scalar_t>
 __global__ void relocation_kernel(
     int N,
-    scalar_t *opacities,
-    scalar_t *scales,
-    int *ratios,
-    scalar_t *binoms,
+    const scalar_t *opacities,
+    const scalar_t *scales,
+    const int *ratios,
+    const scalar_t *binoms,
     int n_max,
     scalar_t *new_opacities,
     scalar_t *new_scales
@@ -98,10 +98,10 @@ void launch_relocation_kernel(
                    shmem_size,
                    at::cuda::getCurrentCUDAStream()>>>(
                     N,
-                    opacities.data_ptr<scalar_t>(),
-                    scales.data_ptr<scalar_t>(),
-                    ratios.data_ptr<int>(),
-                    binoms.data_ptr<scalar_t>(),
+                    opacities.const_data_ptr<scalar_t>(),
+                    scales.const_data_ptr<scalar_t>(),
+                    ratios.const_data_ptr<int>(),
+                    binoms.const_data_ptr<scalar_t>(),
                     n_max,
                     new_opacities.data_ptr<scalar_t>(),
                     new_scales.data_ptr<scalar_t>()

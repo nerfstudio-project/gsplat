@@ -570,50 +570,53 @@ void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             N,
             n_isects,
             packed,
-            reinterpret_cast<vec3 *>(means.data_ptr<float>()),
-            reinterpret_cast<vec4 *>(quats.data_ptr<float>()),
-            reinterpret_cast<vec3 *>(scales.data_ptr<float>()),
-            colors.data_ptr<float>(),
-            opacities.data_ptr<float>(),
-            backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                    : nullptr,
-            masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
+            reinterpret_cast<const vec3 *>(means.const_data_ptr<float>()),
+            reinterpret_cast<const vec4 *>(quats.const_data_ptr<float>()),
+            reinterpret_cast<const vec3 *>(scales.const_data_ptr<float>()),
+            colors.const_data_ptr<float>(),
+            opacities.const_data_ptr<float>(),
+            backgrounds.has_value()
+                ? backgrounds.value().const_data_ptr<float>()
+                : nullptr,
+            masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr,
             image_width,
             image_height,
             tile_size,
             tile_width,
             tile_height,
             // camera model
-            viewmats0.data_ptr<float>(),
-            viewmats1.has_value() ? viewmats1.value().data_ptr<float>()
+            viewmats0.const_data_ptr<float>(),
+            viewmats1.has_value() ? viewmats1.value().const_data_ptr<float>()
                                   : nullptr,
-            Ks.data_ptr<float>(),
+            Ks.const_data_ptr<float>(),
             camera_model,
             // uncented transform
             *ut_params,
             rs_type,
-            rays.has_value() ? rays.value().data_ptr<float>()
-                             : nullptr,
-            radial_coeffs.has_value() ? radial_coeffs.value().data_ptr<float>()
-                                      : nullptr,
+            rays.has_value() ? rays.value().const_data_ptr<float>() : nullptr,
+            radial_coeffs.has_value()
+                ? radial_coeffs.value().const_data_ptr<float>()
+                : nullptr,
             tangential_coeffs.has_value()
-                ? tangential_coeffs.value().data_ptr<float>()
+                ? tangential_coeffs.value().const_data_ptr<float>()
                 : nullptr,
             thin_prism_coeffs.has_value()
-                ? thin_prism_coeffs.value().data_ptr<float>()
+                ? thin_prism_coeffs.value().const_data_ptr<float>()
                 : nullptr,
             ftheta_device_coeffs,
             lidar_device_coeffs,
             external_distortion_device_params,
             // intersections
-            tile_offsets.data_ptr<int32_t>(),
-            flatten_ids.data_ptr<int32_t>(),
+            tile_offsets.const_data_ptr<int32_t>(),
+            flatten_ids.const_data_ptr<int32_t>(),
             use_hit_distance,
             renders.data_ptr<float>(),
             alphas.data_ptr<float>(),
             normals.has_value() ? normals.value().data_ptr<float>() : nullptr,
             last_ids.data_ptr<int32_t>(),
-            sample_counts.has_value() ? sample_counts.value().data_ptr<int32_t>() : nullptr
+            sample_counts.has_value()
+                ? sample_counts.value().data_ptr<int32_t>()
+                : nullptr
         );
 }
 

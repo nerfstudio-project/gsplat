@@ -372,24 +372,25 @@ void launch_rasterize_to_pixels_3dgs_bwd_kernel(
             N,
             n_isects,
             packed,
-            reinterpret_cast<vec2 *>(means2d.data_ptr<float>()),
-            reinterpret_cast<vec3 *>(conics.data_ptr<float>()),
-            colors.data_ptr<float>(),
-            opacities.data_ptr<float>(),
-            backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                    : nullptr,
-            masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
+            reinterpret_cast<const vec2 *>(means2d.const_data_ptr<float>()),
+            reinterpret_cast<const vec3 *>(conics.const_data_ptr<float>()),
+            colors.const_data_ptr<float>(),
+            opacities.const_data_ptr<float>(),
+            backgrounds.has_value()
+                ? backgrounds.value().const_data_ptr<float>()
+                : nullptr,
+            masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr,
             image_width,
             image_height,
             tile_size,
             tile_width,
             tile_height,
-            tile_offsets.data_ptr<int32_t>(),
-            flatten_ids.data_ptr<int32_t>(),
-            render_alphas.data_ptr<float>(),
-            last_ids.data_ptr<int32_t>(),
-            v_render_colors.data_ptr<float>(),
-            v_render_alphas.data_ptr<float>(),
+            tile_offsets.const_data_ptr<int32_t>(),
+            flatten_ids.const_data_ptr<int32_t>(),
+            render_alphas.const_data_ptr<float>(),
+            last_ids.const_data_ptr<int32_t>(),
+            v_render_colors.const_data_ptr<float>(),
+            v_render_alphas.const_data_ptr<float>(),
             v_means2d_abs.has_value()
                 ? reinterpret_cast<vec2 *>(
                       v_means2d_abs.value().data_ptr<float>()
