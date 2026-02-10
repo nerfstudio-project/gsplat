@@ -60,6 +60,7 @@ from gsplat.cuda._wrapper import (
 from gsplat.cuda._math import _safe_normalize
 from gsplat.cuda._torch_cameras import _viewmat_to_pose
 from gsplat.cuda._constants import ALPHA_THRESHOLD
+from tests.test_cameras import parse_lidar_camera
 
 device = torch.device("cuda:0")
 
@@ -729,6 +730,55 @@ def test_isect(test_data, batch_dims: Tuple[int, ...]):
     torch.testing.assert_close(isect_ids, _isect_ids)
     torch.testing.assert_close(flatten_ids, _gauss_ids)
     torch.testing.assert_close(isect_offsets, _isect_offsets)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
+@pytest.mark.parametrize("lidar_model", ["pandar128", "at128"])
+def test_isect_lidar(lidar_model, batch_dims: Tuple[int, ...]):
+    from gsplat.cuda._torch_impl_lidar import (
+        _isect_tiles_lidar,
+        ANGLE_TO_PIXEL_SCALING_FACTOR,
+    )
+    from gsplat.cuda._wrapper import isect_offset_encode, isect_tiles_lidar
+
+    torch.manual_seed(42)
+
+    params = parse_lidar_camera(lidar_model, batch_dims, 0, 0, device=device)
+    lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(**params)
+
+    B = math.prod(batch_dims)
+    C, N = 3, 1000  # cameras and gaussians
+    nrows, ncols = lidar.n_rows, lidar.n_columns
+
+    test_data = {
+        "means2d": torch.randn(C, N, 2, device=device)
+        * torch.tensor([nrows, ncols], device=device),
+        "radii": torch.randint(
+            0,
+            max(1, min(ncols, nrows) // 2),
+            (C, N, 2),
+            device=device,
+            dtype=torch.int32,
+        ),
+        "depths": torch.rand(C, N, device=device),
+    }
+    test_data = expand(test_data, batch_dims)
+    means2d = test_data["means2d"] * ANGLE_TO_PIXEL_SCALING_FACTOR
+    radii = test_data["radii"] * ANGLE_TO_PIXEL_SCALING_FACTOR
+    depths = test_data["depths"]
+
+    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles_lidar(
+        lidar, means2d, radii, depths, sort=False
+    )
+
+    _tiles_per_gauss, _isect_ids, _flatten_ids = _isect_tiles_lidar(
+        lidar, means2d, radii, depths, sort=False
+    )
+
+    torch.testing.assert_close(tiles_per_gauss, _tiles_per_gauss)
+    torch.testing.assert_close(isect_ids, _isect_ids)
+    torch.testing.assert_close(flatten_ids, _flatten_ids)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")

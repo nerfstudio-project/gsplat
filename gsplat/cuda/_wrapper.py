@@ -264,6 +264,10 @@ class RowOffsetStructuredSpinningLidarModelParametersExt(
             fov_horiz_rad=FOV.from_base(self.fov_horiz_rad).to_cpp(),
             fov_eps_rad=self.fov_eps_rad,
             angles_to_columns_map=self.angles_to_columns_map,
+            n_bins_azimuth=self.tiling.n_bins_azimuth,
+            n_bins_elevation=self.tiling.n_bins_elevation,
+            cdf_elevation=self.tiling.cdf_elevation,
+            cdf_dense_ray_mask=self.tiling.cdf_dense_ray_mask.contiguous(),
         )
 
 
@@ -685,6 +689,79 @@ def isect_tiles(
         tile_size,
         tile_width,
         tile_height,
+        sort,
+        segmented,
+    )
+    return tiles_per_gauss, isect_ids, flatten_ids
+
+
+@torch.no_grad()
+def isect_tiles_lidar(
+    lidar: RowOffsetStructuredSpinningLidarModelParametersExt,
+    means2d: Tensor,  # [..., N, 2] or [nnz, 2]
+    radii: Tensor,  # [..., N, 2] or [nnz, 2]
+    depths: Tensor,  # [..., N] or [nnz]
+    sort: bool = True,
+    segmented: bool = False,
+    packed: bool = False,
+    n_images: Optional[int] = None,
+    image_ids: Optional[Tensor] = None,
+    gaussian_ids: Optional[Tensor] = None,
+) -> Tuple[Tensor, Tensor, Tensor]:
+    """Maps projected Gaussians to intersecting tiles.
+
+    Args:
+        means2d: Projected Gaussian means. [..., N, 2] if packed is False, [nnz, 2] if packed is True.
+        radii: Maximum radii of the projected Gaussians. [..., N, 2] if packed is False, [nnz, 2] if packed is True.
+        depths: Z-depth of the projected Gaussians. [..., N] if packed is False, [nnz] if packed is True.
+        sort: If True, the returned intersections will be sorted by the intersection ids. Default: True.
+        segmented: If True, segmented radix sort will be used to sort the intersections. Default: False.
+        packed: If True, the input tensors are packed. Default: False.
+        n_images: Number of images. Required if packed is True.
+        image_ids: The image indices of the projected Gaussians. Required if packed is True.
+        gaussian_ids: The column indices of the projected Gaussians. Required if packed is True.
+
+    Returns:
+        A tuple:
+
+        - **Tiles per Gaussian**. The number of tiles intersected by each Gaussian.
+          Int32 [..., N] if packed is False, Int32 [nnz] if packed is True.
+        - **Intersection ids**. Each id is an 64-bit integer with the following
+          information: image_id (Xc bits) | tile_id (Xt bits) | depth (32 bits).
+          Xc and Xt are the maximum number of bits required to represent the image and
+          tile ids, respectively. Int64 [n_isects]
+        - **Flatten ids**. The global flatten indices in [I * N] or [nnz] (packed). [n_isects]
+    """
+    if packed:
+        nnz = means2d.size(0)
+        assert means2d.shape == (nnz, 2), means2d.shape
+        assert radii.shape == (nnz, 2), radii.shape
+        assert depths.shape == (nnz,), depths.shape
+        assert image_ids is not None, "image_ids is required if packed is True"
+        assert gaussian_ids is not None, "gaussian_ids is required if packed is True"
+        assert n_images is not None, "n_images is required if packed is True"
+        image_ids = image_ids.contiguous()
+        gaussian_ids = gaussian_ids.contiguous()
+        I = n_images
+
+    else:
+        image_dims = means2d.shape[:-2]
+        I = math.prod(image_dims)
+        N = means2d.shape[-2]
+        assert means2d.shape == (*image_dims, N, 2), means2d.shape
+        assert radii.shape == (*image_dims, N, 2), radii.shape
+        assert depths.shape == (*image_dims, N), depths.shape
+
+    tiles_per_gauss, isect_ids, flatten_ids = _make_lazy_cuda_func(
+        "intersect_tile_lidar"
+    )(
+        lidar.to_cpp(),
+        means2d.contiguous(),
+        radii.contiguous(),
+        depths.contiguous(),
+        image_ids,
+        gaussian_ids,
+        I,
         sort,
         segmented,
     )

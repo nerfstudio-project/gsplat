@@ -32,8 +32,16 @@ RowOffsetStructuredSpinningLidarModelParametersExtDevice::RowOffsetStructuredSpi
     , angles_to_columns_map{params.angles_to_columns_map.data_ptr<int32_t>()}
     , map_dim{static_cast<int>(params.angles_to_columns_map.size(1)), // .x=width
               static_cast<int>(params.angles_to_columns_map.size(0))} // .y=height
+    , n_bins_azimuth{params.n_bins_azimuth}
+    , n_bins_elevation{params.n_bins_elevation}
+    , cdf_resolution_elevation{params.cdf_resolution_elevation()}
+    , cdf_resolution_azimuth{params.cdf_resolution_azimuth()}
+    , cdf_elevation{params.cdf_elevation.data_ptr<int32_t>()}
+    , cdf_dense_ray_mask{params.cdf_dense_ray_mask.data_ptr<int32_t>()}
 {
     CHECK_INPUT(params.angles_to_columns_map);
+    CHECK_INPUT(params.cdf_elevation);
+    CHECK_INPUT(params.cdf_dense_ray_mask);
 
     TORCH_CHECK(params.angles_to_columns_map.size(0) > 1 && params.angles_to_columns_map.size(1) > 1,
                 "angles_to_columns_map dimensions must be > 1");

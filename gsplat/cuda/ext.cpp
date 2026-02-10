@@ -269,7 +269,11 @@ TORCH_LIBRARY(gsplat, m) {
                            c10::intrusive_ptr<gsplat::FOV> fov_vert_rad,
                            c10::intrusive_ptr<gsplat::FOV> fov_horiz_rad,
                            double fov_eps_rad,
-                           at::Tensor angles_to_columns_map) {
+                           at::Tensor angles_to_columns_map,
+                           int64_t n_bins_azimuth,
+                           int64_t n_bins_elevation,
+                           at::Tensor cdf_elevation,
+                           at::Tensor cdf_dense_ray_mask) {
                 return c10::make_intrusive<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt>(
                     std::move(row_elevations_rad),
                     std::move(column_azimuths_rad),
@@ -279,8 +283,11 @@ TORCH_LIBRARY(gsplat, m) {
                     std::move(fov_vert_rad),
                     std::move(fov_horiz_rad),
                     static_cast<float>(fov_eps_rad),
-                    std::move(angles_to_columns_map)
-                );
+                    std::move(angles_to_columns_map),
+                    static_cast<int>(n_bins_azimuth),
+                    static_cast<int>(n_bins_elevation),
+                    std::move(cdf_elevation),
+                    std::move(cdf_dense_ray_mask));
             }),
             "Constructor",
             {torch::arg("row_elevations_rad"),
@@ -291,7 +298,11 @@ TORCH_LIBRARY(gsplat, m) {
              torch::arg("fov_vert_rad"),
              torch::arg("fov_horiz_rad"),
              torch::arg("fov_eps_rad"),
-             torch::arg("angles_to_columns_map")}
+             torch::arg("angles_to_columns_map"),
+             torch::arg("n_bins_azimuth"),
+             torch::arg("n_bins_elevation"),
+             torch::arg("cdf_elevation"),
+             torch::arg("cdf_dense_ray_mask")}
         )
         .def_readwrite("row_elevations_rad", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::row_elevations_rad)
         .def_readwrite("column_azimuths_rad", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::column_azimuths_rad)
@@ -336,6 +347,38 @@ TORCH_LIBRARY(gsplat, m) {
             "n_columns",
             [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self) {
                 return static_cast<int64_t>(self->n_columns());
+            }
+        )
+        .def_property(
+            "n_bins_azimuth",
+            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self) {
+                return static_cast<int64_t>(self->n_bins_azimuth);
+            },
+            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self, int64_t v) {
+                self->n_bins_azimuth = static_cast<int>(v);
+            }
+        )
+        .def_property(
+            "n_bins_elevation",
+            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self) {
+                return static_cast<int64_t>(self->n_bins_elevation);
+            },
+            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self, int64_t v) {
+                self->n_bins_elevation = static_cast<int>(v);
+            }
+        )
+        .def_readwrite("cdf_elevation", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::cdf_elevation)
+        .def_readwrite("cdf_dense_ray_mask", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::cdf_dense_ray_mask)
+        .def_property(
+            "cdf_resolution_elevation",
+            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self) {
+                return static_cast<int64_t>(self->cdf_resolution_elevation());
+            }
+        )
+        .def_property(
+            "cdf_resolution_azimuth",
+            [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self) {
+                return static_cast<int64_t>(self->cdf_resolution_azimuth());
             }
         );
 
@@ -637,6 +680,9 @@ TORCH_LIBRARY(gsplat, m) {
 
     m.def("intersect_tile(Tensor means2d, Tensor radii, Tensor depths, Tensor? image_ids, Tensor? gaussian_ids, int I, int tile_size, int tile_width, int tile_height, bool sort, bool segmented) -> (Tensor, Tensor, Tensor)");
     m.def("intersect_offset(Tensor isect_ids, int I, int tile_width, int tile_height) -> Tensor");
+#if GSPLAT_BUILD_3DGUT
+    m.def("intersect_tile_lidar(__torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt lidar, Tensor means2d, Tensor radii, Tensor depths, Tensor? image_ids, Tensor? gaussian_ids, int I, bool sort, bool segmented) -> (Tensor, Tensor, Tensor)");
+#endif
 
 #if GSPLAT_BUILD_3DGS
     m.def("projection_ewa_simple_fwd(Tensor means, Tensor covars, Tensor Ks, int width, int height, int camera_model) -> (Tensor, Tensor)");
@@ -726,5 +772,6 @@ TORCH_LIBRARY_IMPL(gsplat, CUDA, m) {
     m.impl("projection_ut_3dgs_fused", &gsplat::projection_ut_3dgs_fused);
     m.impl("rasterize_to_pixels_from_world_3dgs_fwd", &gsplat::rasterize_to_pixels_from_world_3dgs_fwd);
     m.impl("rasterize_to_pixels_from_world_3dgs_bwd", &gsplat::rasterize_to_pixels_from_world_3dgs_bwd);
+    m.impl("intersect_tile_lidar", &gsplat::intersect_tile_lidar);
 #endif
 }

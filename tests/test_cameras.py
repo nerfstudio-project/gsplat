@@ -59,6 +59,7 @@ from gsplat.cuda._wrapper import (
 )
 from gsplat import (
     compute_lidar_angles_to_columns_map,
+    compute_lidar_tiling,
     RowOffsetStructuredSpinningLidarModelParameters,
     RowOffsetStructuredSpinningLidarModelParametersExt,
 )
@@ -461,8 +462,15 @@ def parse_lidar_camera(
         torch.rand(n_rows, dtype=torch.float32, device=device) - 0.5
     ) * 0.2
 
-    params.angles_to_columns_map = compute_lidar_angles_to_columns_map(
-        RowOffsetStructuredSpinningLidarModelParameters(**vars(params))
+    lidar_params = RowOffsetStructuredSpinningLidarModelParameters(**vars(params))
+
+    params.angles_to_columns_map = compute_lidar_angles_to_columns_map(lidar_params)
+    params.tiling = compute_lidar_tiling(
+        lidar_params,
+        n_bins_elevation=16,
+        max_pts_per_tile=16 * 16,
+        resolution_elevation=1600,
+        densification_factor_azimuth=8,
     )
 
     return vars(params)

@@ -53,6 +53,14 @@ struct RowOffsetStructuredSpinningLidarModelParametersExtDevice
 
     // Angle to pixel scaling factor
     static constexpr int ANGLE_TO_PIXEL_SCALING_FACTOR = 1024;
+
+    // Tiling info
+    int n_bins_azimuth;
+    int n_bins_elevation;
+    int cdf_resolution_elevation;
+    int cdf_resolution_azimuth;
+    const int32_t *cdf_elevation;
+    const int32_t *cdf_dense_ray_mask;
 };
 
 

@@ -15,6 +15,7 @@
 from torch import Tensor
 import torch
 import math
+import numpy as np
 from scipy import spatial as scipy_spatial
 from enum import Enum
 from dataclasses import dataclass, field, InitVar
@@ -300,9 +301,10 @@ class RowOffsetStructuredSpinningLidarModelParameters(
             )
 
     def create_elements(self) -> SphericalUnitCoord:
-        """Create all element indices [relative to the static model]
-        Element: each elevation/azimuth pair in the quantized grid, i.e. each cell."""
-
+        """Create all element indices [relative to the static model].
+        Element: each elevation/azimuth pair in the quantized grid, i.e. each cell.
+        Flat order is row-major (flat_idx = row * n_columns + col)
+        """
         idxelevations = torch.arange(self.n_rows, device=self.device, dtype=torch.int32)
         idxazimuths = torch.arange(
             self.n_columns, device=self.device, dtype=torch.int32
@@ -369,15 +371,53 @@ class RowOffsetStructuredSpinningLidarModelParameters(
         )
 
 
+# TODO: merge this class into RowOffsetStructuredSpinningLidarModelParametersExt
+@dataclass
+class LidarTiling:
+    n_bins_azimuth: int
+    n_bins_elevation: int
+    cdf_elevation: torch.Tensor
+    cdf_dense_ray_mask: torch.Tensor  # [azimuth, elevation]
+
+    def __post_init__(self):
+        assert self.cdf_elevation.dtype == torch.int32, self.cdf_elevation.dtype
+        assert self.cdf_elevation.ndim == 1, self.cdf_elevation.ndim
+        n = float(self.cdf_elevation[-1].item())
+        assert (
+            n == self.n_bins_elevation
+        ), "n_bins_elevation must be equal to cdf_elevation[-1]"
+
+        assert (
+            self.cdf_dense_ray_mask.dtype == torch.int32
+        ), self.cdf_dense_ray_mask.dtype
+        assert self.cdf_dense_ray_mask.ndim == 2, self.cdf_dense_ray_mask.ndim
+        assert self.cdf_dense_ray_mask.shape[-1] == self.cdf_elevation.shape[0], (
+            self.cdf_dense_ray_mask.shape,
+            self.cdf_elevation.shape,
+        )
+
+    @property
+    def cdf_resolution_elevation(self) -> int:
+        return self.cdf_dense_ray_mask.shape[-1] - 1
+
+    @property
+    def cdf_resolution_azimuth(self) -> int:
+        return self.cdf_dense_ray_mask.shape[-2] - 1
+
+
 class RowOffsetStructuredSpinningLidarModelParametersExt(
     RowOffsetStructuredSpinningLidarModelParameters
 ):
     """Lidar camera parameters extended with acceleration structures"""
 
     angles_to_columns_map: Tensor
+    tiling: LidarTiling
 
-    def __init__(self, angles_to_columns_map: Tensor, **kwargs) -> None:
+    def __init__(
+        self, angles_to_columns_map: Tensor, tiling: LidarTiling, **kwargs
+    ) -> None:
         self.angles_to_columns_map = angles_to_columns_map
+        self.tiling = tiling
         super().__init__(**kwargs)
 
         assert (
@@ -559,5 +599,242 @@ def compute_angles_to_columns_map(
     _, idxs = kdtree.query(grid_rays.sensor_rays.contiguous().cpu().numpy())
     idxs = torch.from_numpy(idxs).to(device=lidar.device, dtype=torch.int32)
 
-    # Map the indices to the columns by dividing with the total number of rows and (implicit) flooring
-    return (idxs / lidar.n_rows).to(dtype).reshape(grid_angles.shape)
+    # Elements are in row-major order (flat_idx = row * n_columns + col), so column index = idx % n_columns.
+    return (idxs % lidar.n_columns).to(dtype).reshape(grid_angles.shape)
+
+
+# --------------------- Computation of LidarTiling structures ---------------------------
+
+
+@torch.no_grad()
+def angles_to_dense_ray_mask_cdf(
+    parameters: RowOffsetStructuredSpinningLidarModelParameters,
+    angles: torch.Tensor,
+    *,
+    resolution_elevation: int,
+    resolution_azimuth: int,
+) -> Tensor:  # [res_elev+1, res_azim+1]
+
+    # dense tile indices
+    def uniform_quantization(x: torch.Tensor, n_bins: int):
+        return (x * n_bins).int() % n_bins
+
+    relative_angles = relative_sensor_angles(parameters, angles)
+
+    normalized_angles = SphericalUnitCoord(
+        elevation=relative_angles.elevation / parameters.fov_vert_rad.span,
+        azimuth=relative_angles.azimuth / parameters.fov_horiz_rad.span,
+    )
+
+    elevations_indices = uniform_quantization(
+        normalized_angles.elevation, resolution_elevation
+    )
+    azimuths_indices = uniform_quantization(
+        normalized_angles.azimuth, resolution_azimuth
+    )
+    indices = elevations_indices + azimuths_indices * resolution_elevation
+
+    masks = torch.zeros(
+        resolution_azimuth * resolution_elevation,
+        device=angles.device,
+        dtype=torch.int32,
+    )
+    masks[indices] = 1
+
+    masks2d = masks.reshape(resolution_azimuth, resolution_elevation)
+    masks2d_padded = torch.zeros(
+        resolution_azimuth + 1,
+        resolution_elevation + 1,
+        device=angles.device,
+        dtype=torch.int32,
+    )
+
+    masks2d_padded[1:, 1:] = masks2d
+    masks2d_integral = masks2d_padded.cumsum(dim=0).cumsum(dim=1)
+
+    # Return ([azimuth+1, elevation+1)
+    return masks2d_integral.int()
+
+
+def angles_to_tile_indices(
+    parameters: RowOffsetStructuredSpinningLidarModelParameters,
+    angles: SphericalUnitCoord,
+    *,
+    n_bins_azimuth: int,
+    n_bins_elevation: int,
+    cdf_elevation: torch.Tensor,
+):
+    # the length of cdf_elevation is one plus the number of bins, so we need to subtract one here
+    resolution = len(cdf_elevation) - 1
+
+    relative_angles = relative_sensor_angles(parameters, angles)
+
+    normalized_angles = SphericalUnitCoord(
+        elevation=relative_angles.elevation / parameters.fov_vert_rad.span * resolution,
+        azimuth=relative_angles.azimuth
+        / parameters.fov_horiz_rad.span
+        * n_bins_azimuth,
+    )
+
+    # compute the azimuth tile indices directly
+    azimuths_indices = normalized_angles.azimuth.int() % n_bins_azimuth
+
+    # remap the elevations
+    elevations_indices_cdf = torch.clamp(
+        normalized_angles.elevation, 0, resolution - 1
+    ).int()
+    elevations_indices = cdf_elevation[elevations_indices_cdf].int()
+
+    # NOTE: tile indices are row-major
+    return elevations_indices + azimuths_indices * n_bins_elevation
+
+
+def compute_cdf_dense_ray_mask(
+    parameters: RowOffsetStructuredSpinningLidarModelParameters,
+    *,
+    n_bins_azimuth: int,
+    densification_factor_azimuth: float,
+    cdf_elevation: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Computes the mapping from tiles to elements for the given lidar model and parameters"""
+
+    # compute the number of bins for elevation
+    n_bins_elevation = cdf_elevation[-1].item()
+    assert n_bins_elevation.is_integer(), "CDF elevation must be an integer"
+
+    # create all element indices [relative to the static model]
+    elements = parameters.create_elements()
+    angles = parameters.elements_to_sensor_angles(elements)
+
+    # compute the dense mask
+    return angles_to_dense_ray_mask_cdf(
+        parameters,
+        angles,
+        resolution_elevation=len(cdf_elevation) - 1,
+        resolution_azimuth=n_bins_azimuth * densification_factor_azimuth,
+    )
+
+
+def compute_histogram_equalization(
+    parameters: RowOffsetStructuredSpinningLidarModelParameters,
+    *,
+    n_bins_elevation: int,
+    max_pts_per_tile: int,
+    resolution_elevation: int,
+) -> tuple[int, torch.Tensor]:
+
+    elements = parameters.create_elements()
+    angles = parameters.elements_to_sensor_angles(elements).reshape(
+        parameters.n_rows, parameters.n_columns
+    )
+    angles = relative_sensor_angles(parameters, angles)
+
+    ranges_azimuth = (0.0, parameters.fov_horiz_rad.span)
+    ranges_elevation = (0.0, parameters.fov_vert_rad.span)
+    assert torch.all(
+        torch.logical_and(
+            # TODO: use parameters.fov_eps_rad
+            angles.elevation
+            <= parameters.fov_vert_rad.span + 4 * torch.finfo(torch.float32).eps,
+            angles.azimuth
+            <= parameters.fov_horiz_rad.span + 4 * torch.finfo(torch.float32).eps,
+        )
+    ), f"angles are out of bounds, angles_elevation {angles.elevation.max()} > {parameters.fov_vert_rad.span}, angles_azimuth {angles.azimuth.max()} > {parameters.fov_horiz_rad.span}"
+
+    # --------------------------------
+    # Histogram Equalization
+    # --------------------------------
+    def compute_hist1d(
+        data: torch.Tensor,
+        bins: int | np.ndarray | torch.Tensor,
+        range: tuple[float, float],
+    ):
+        if isinstance(bins, torch.Tensor):
+            bins = bins.cpu().numpy()
+        hist, *others = np.histogram(data.cpu().numpy(), bins=bins)
+        return torch.tensor(hist, device=data.device, dtype=torch.int32), *others
+
+    # 1. compute the prefix sum of data
+    hist, _ = compute_hist1d(
+        angles.elevation, bins=resolution_elevation, range=ranges_elevation
+    )
+
+    tot = torch.sum(hist)
+    cdf = torch.zeros((len(hist) + 1), device=parameters.device)
+    cdf[1:] = torch.cumsum(hist, dim=0)
+    cdf = cdf / tot * (n_bins_elevation)
+
+    # 2. interpolate the new values
+    edges_list = [0]
+    curr = 1
+    for i in range(len(cdf)):
+        if cdf[i] >= curr:
+            edges_list.append(i)
+            curr += 1
+    edges_list[-1] = len(cdf) - 1
+    edges = torch.tensor(edges_list, device=parameters.device, dtype=torch.float32)
+
+    # recompute the histograms
+    edges_elevation = edges / resolution_elevation * parameters.fov_vert_rad.span
+    hist_elevations, _ = compute_hist1d(
+        angles.elevation, bins=edges_elevation, range=ranges_elevation
+    )
+
+    n_bins_azimuth = int(
+        torch.ceil(hist_elevations.float().mean() / max_pts_per_tile)
+    )  # estimate the number of bins for azimuths
+    assert n_bins_azimuth > 0
+
+    # now we need to find the smallest number of bins that satisfies the max_pts_per_tile
+    angles_azimuth_np = angles.azimuth.flatten().cpu().numpy()
+    angles_elevation_np = angles.elevation.flatten().cpu().numpy()
+    edges_elevation_np = edges_elevation.cpu().numpy()
+
+    def compute_hist2d(n_bins_azimuth):
+        return np.histogram2d(
+            angles_azimuth_np,
+            angles_elevation_np,
+            bins=[n_bins_azimuth, edges_elevation_np],
+            range=[ranges_azimuth, ranges_elevation],
+        )
+
+    hist2d, _, _ = compute_hist2d(n_bins_azimuth)
+    while hist2d.max() > max_pts_per_tile:
+        n_bins_azimuth += 1
+        hist2d, _, _ = compute_hist2d(n_bins_azimuth)
+
+    assert isinstance(cdf, torch.Tensor)
+
+    return (
+        n_bins_azimuth,
+        cdf,
+    )
+
+
+def compute_tiling(
+    lidar_params: RowOffsetStructuredSpinningLidarModelParameters,
+    n_bins_elevation: int = 16,
+    max_pts_per_tile=16 * 16,
+    resolution_elevation: int = 1600,
+    densification_factor_azimuth: int = 8,
+) -> LidarTiling:
+    params = SimpleNamespace()
+    params.n_bins_elevation = n_bins_elevation
+
+    (params.n_bins_azimuth, params.cdf_elevation,) = compute_histogram_equalization(
+        lidar_params,
+        n_bins_elevation=n_bins_elevation,
+        max_pts_per_tile=max_pts_per_tile,
+        resolution_elevation=resolution_elevation,
+    )
+
+    (params.cdf_dense_ray_mask) = compute_cdf_dense_ray_mask(
+        lidar_params,
+        n_bins_azimuth=params.n_bins_azimuth,
+        densification_factor_azimuth=densification_factor_azimuth,
+        cdf_elevation=params.cdf_elevation,
+    )
+
+    params.cdf_elevation = params.cdf_elevation.int()
+
+    return LidarTiling(**vars(params))
