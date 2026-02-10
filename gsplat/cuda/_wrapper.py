@@ -194,6 +194,8 @@ class RowOffsetStructuredSpinningLidarModelParametersExt(RowOffsetStructuredSpin
             n_bins_elevation=self.tiling.n_bins_elevation,
             cdf_elevation=self.tiling.cdf_elevation,
             cdf_dense_ray_mask=self.tiling.cdf_dense_ray_mask.contiguous(),
+            tiles_to_elements_map=self.tiling.tiles_to_elements_map,
+            tiles_pack_info=self.tiling.tiles_pack_info,
         )
 
 def world_to_cam(
@@ -870,6 +872,7 @@ def rasterize_to_pixels_eval3d(
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
     thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
     ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
+    lidar_coeffs: Optional[RowOffsetStructuredSpinningLidarModelParametersExt] = None,
     external_distortion_coeffs: Optional[BivariateWindshieldModelParameters] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
@@ -901,6 +904,7 @@ def rasterize_to_pixels_eval3d(
         camera_model=camera_model,
         ut_params=ut_params,
         radial_coeffs=radial_coeffs, tangential_coeffs=tangential_coeffs, thin_prism_coeffs=thin_prism_coeffs, ftheta_coeffs=ftheta_coeffs,
+        lidar_coeffs=lidar_coeffs,
         external_distortion_coeffs=external_distortion_coeffs,
         rolling_shutter=rolling_shutter, viewmats_rs=viewmats_rs,
         return_sample_counts=False,
@@ -933,6 +937,7 @@ def rasterize_to_pixels_eval3d_extra(
     tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
     thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
     ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
+    lidar_coeffs: Optional[RowOffsetStructuredSpinningLidarModelParametersExt] = None,
     external_distortion_coeffs: Optional[BivariateWindshieldModelParameters] = None,
     # rolling shutter
     rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
@@ -1070,12 +1075,19 @@ def rasterize_to_pixels_eval3d_extra(
         padded_channels = 0
 
     tile_height, tile_width = isect_offsets.shape[-2:]
-    assert (
-        tile_height * tile_size >= image_height
-    ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
-    assert (
-        tile_width * tile_size >= image_width
-    ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
+    if camera_model == "lidar":
+        assert tile_width == lidar_coeffs.tiling.n_bins_elevation
+        assert tile_height == lidar_coeffs.tiling.n_bins_azimuth
+        # TODO: improve checks. Right now we don't have access to max_pts_per_tile used,
+        # hence this assert needs to be commented out.
+        #assert tile_width*tile_height*lidar_coeffs.tiling.max_pts_per_tile >= lidar_coeffs.n_rows*lidar_coeffs.n_columns
+    else:
+        assert (
+            tile_height * tile_size >= image_height
+        ), f"Assert Failed: {tile_height} * {tile_size} >= {image_height}"
+        assert (
+            tile_width * tile_size >= image_width
+        ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
     render_colors, render_alphas, last_ids, sample_counts, render_normals = _RasterizeToPixelsEval3D.apply(
         means.contiguous(),
@@ -1100,6 +1112,7 @@ def rasterize_to_pixels_eval3d_extra(
         tangential_coeffs.contiguous() if tangential_coeffs is not None else None,
         thin_prism_coeffs.contiguous() if thin_prism_coeffs is not None else None,
         ftheta_coeffs,
+        lidar_coeffs,
         external_distortion_coeffs,
         # rolling shutter
         rolling_shutter,
@@ -1705,6 +1718,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         tangential_coeffs: Optional[Tensor] = None,  # [..., C, 2]
         thin_prism_coeffs: Optional[Tensor] = None,  # [..., C, 4]
         ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
+        lidar_coeffs: Optional[RowOffsetStructuredSpinningLidarModelParametersExt] = None,
         external_distortion_coeffs: Optional[BivariateWindshieldModelParameters] = None,
         # rolling shutter
         rolling_shutter: RollingShutterType = RollingShutterType.GLOBAL,
@@ -1767,6 +1781,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             tangential_coeffs,
             thin_prism_coeffs,
             ftheta_coeffs,
+            lidar_coeffs.to_cpp(),
             external_distortion_coeffs,
             isect_offsets,
             flatten_ids,
@@ -1802,6 +1817,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         ctx.camera_model_type = camera_model_type
         ctx.tile_size = tile_size
         ctx.ftheta_coeffs = ftheta_coeffs
+        ctx.lidar_coeffs = lidar_coeffs
         ctx.external_distortion_coeffs = external_distortion_coeffs
         ctx.use_hit_distance = use_hit_distance
 
@@ -1843,6 +1859,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         camera_model_type = ctx.camera_model_type
         tile_size = ctx.tile_size
         ftheta_coeffs = ctx.ftheta_coeffs
+        lidar_coeffs = ctx.lidar_coeffs
         external_distortion_coeffs = ctx.external_distortion_coeffs
         use_hit_distance = ctx.use_hit_distance
 
@@ -1870,6 +1887,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             tangential_coeffs,
             thin_prism_coeffs,
             ftheta_coeffs,
+            lidar_coeffs.to_cpp(),
             external_distortion_coeffs,
             isect_offsets,
             flatten_ids,
@@ -1914,6 +1932,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             None,  # tangential_coeffs
             None,  # thin_prism_coeffs
             None,  # ftheta_coeffs
+            None,  # lidar_coeffs
             None,  # external_distortion_coeffs
             None,  # rolling_shutter
             None,  # viewmats_rs
