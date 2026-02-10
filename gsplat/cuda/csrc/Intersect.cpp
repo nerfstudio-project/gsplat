@@ -225,7 +225,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> intersect_tile_lidar(
             I,
             c10::nullopt, // cum_tiles_per_gauss
             // outputs
-            at::optional<at::Tensor>(tiles_per_gauss),
+            tiles_per_gauss,
             c10::nullopt, // isect_ids
             c10::nullopt  // flatten_ids
         );

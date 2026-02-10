@@ -39,6 +39,7 @@ from .cuda._wrapper import (
     fully_fused_projection_with_ut,
     isect_offset_encode,
     isect_tiles,
+    isect_tiles_lidar,
     rasterize_to_pixels,
     rasterize_to_pixels_2dgs,
     rasterize_to_pixels_eval3d,
@@ -409,7 +410,9 @@ def rasterization(
         viewmats: The world-to-cam transformation of the cameras. [..., C, 4, 4]
         Ks: The camera intrinsics. [..., C, 3, 3]
         width: The width of the image.
+          For lidar sensors, this is ignored. The width is taken from lidar_coeffs.n_rows.
         height: The height of the image.
+          For lidar sensors, this is ignored. The width is taken from lidar_coeffs.n_columns.
         near_plane: The near plane for clipping. Default is 0.01.
         far_plane: The far plane for clipping. Default is 1e10.
         radius_clip: Gaussians with 2D radius smaller or equal than this value will be
@@ -516,6 +519,10 @@ def rasterization(
 
     """
     meta = {}
+
+    if lidar_coeffs is not None:
+        width = lidar_coeffs.n_rows
+        height = lidar_coeffs.n_columns
 
     batch_dims = means.shape[:-2]
     num_batch_dims = len(batch_dims)
@@ -975,22 +982,38 @@ def rasterization(
     else:
         assert render_mode_has_only_color(render_mode)
 
-    # Identify intersecting tiles
-    tile_width = math.ceil(width / float(tile_size))
-    tile_height = math.ceil(height / float(tile_size))
-    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
-        means2d,
-        radii,
-        depths,
-        tile_size,
-        tile_width,
-        tile_height,
-        segmented=segmented,
-        packed=packed,
-        n_images=I,
-        image_ids=image_ids,
-        gaussian_ids=gaussian_ids,
-    )
+    if lidar_coeffs is not None:
+        tile_width = lidar_coeffs.tiling.n_bins_elevation
+        tile_height = lidar_coeffs.tiling.n_bins_azimuth
+        tiles_per_gauss, isect_ids, flatten_ids = isect_tiles_lidar(
+            lidar_coeffs,
+            means2d,
+            radii,
+            depths,
+            segmented=segmented,
+            packed=packed,
+            n_images=I,
+            image_ids=image_ids,
+            gaussian_ids=gaussian_ids,
+        )
+    else:
+        # Identify intersecting tiles
+        tile_width = math.ceil(width / float(tile_size))
+        tile_height = math.ceil(height / float(tile_size))
+        tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
+            means2d,
+            radii,
+            depths,
+            tile_size,
+            tile_width,
+            tile_height,
+            segmented=segmented,
+            packed=packed,
+            n_images=I,
+            image_ids=image_ids,
+            gaussian_ids=gaussian_ids,
+        )
+
     # print("rank", world_rank, "Before isect_offset_encode")
     isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
     isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
@@ -1053,6 +1076,7 @@ def rasterization(
                     tangential_coeffs=tangential_coeffs,
                     thin_prism_coeffs=thin_prism_coeffs,
                     ftheta_coeffs=ftheta_coeffs,
+                    lidar_coeffs=lidar_coeffs,
                     external_distortion_coeffs=external_distortion_coeffs,
                     rolling_shutter=rolling_shutter,
                     viewmats_rs=viewmats_rs,
@@ -1114,6 +1138,7 @@ def rasterization(
                 tangential_coeffs=tangential_coeffs,
                 thin_prism_coeffs=thin_prism_coeffs,
                 ftheta_coeffs=ftheta_coeffs,
+                lidar_coeffs=lidar_coeffs,
                 external_distortion_coeffs=external_distortion_coeffs,
                 rolling_shutter=rolling_shutter,
                 viewmats_rs=viewmats_rs,
@@ -1237,6 +1262,8 @@ def _rasterization(
     batch_per_iter: int = 100,
     with_eval3d: bool = False,
     with_ut: bool = False,
+    camera_model: CameraModel = "pinhole",
+    lidar_coeffs: Optional[RowOffsetStructuredSpinningLidarModelParametersExt] = None,
     extra_signals: Optional[
         Tensor
     ] = None,  # [..., (C,) N, 3] or [..., (C,) N, K, 3] when extra_signals_sh_degree set
@@ -1264,6 +1291,10 @@ def _rasterization(
     from gsplat.cuda._torch_impl_eval3d import _rasterize_to_pixels_eval3d
     from gsplat.cuda._torch_impl_ut import _fully_fused_projection_with_ut
     from gsplat.cuda._math import _quat_scale_to_covar_preci
+
+    if lidar_coeffs is not None:
+        width = lidar_coeffs.n_rows
+        height = lidar_coeffs.n_columns
 
     batch_dims = means.shape[:-2]
     num_batch_dims = len(batch_dims)
@@ -1320,10 +1351,13 @@ def _rasterization(
             near_plane=near_plane,
             far_plane=far_plane,
             calc_compensations=(rasterize_mode == "antialiased"),
+            camera_model=camera_model,
+            lidar_coeffs=lidar_coeffs,
         )
     else:
         if rays is not None:
             raise ValueError("Rays input is only supported with with_eval3d=True")
+        assert camera_model == "pinhole", camera_model
 
         # Project Gaussians to 2D.
         # The results are with shape [..., C, N, ...]. Only the elements with radii > 0 are valid.
@@ -1350,20 +1384,34 @@ def _rasterization(
         opacities = opacities * compensations
 
     # Identify intersecting tiles
-    tile_width = math.ceil(width / float(tile_size))
-    tile_height = math.ceil(height / float(tile_size))
-    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
-        means2d,
-        radii,
-        depths,
-        tile_size,
-        tile_width,
-        tile_height,
-        packed=False,
-        n_images=I,
-        image_ids=image_ids,
-        gaussian_ids=gaussian_ids,
-    )
+    if lidar_coeffs is not None:
+        tile_width = lidar_coeffs.tiling.n_bins_elevation
+        tile_height = lidar_coeffs.tiling.n_bins_azimuth
+        tiles_per_gauss, isect_ids, flatten_ids = isect_tiles_lidar(
+            lidar_coeffs,
+            means2d,
+            radii,
+            depths,
+            packed=False,
+            n_images=I,
+            image_ids=image_ids,
+            gaussian_ids=gaussian_ids,
+        )
+    else:
+        tile_width = math.ceil(width / float(tile_size))
+        tile_height = math.ceil(height / float(tile_size))
+        tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
+            means2d,
+            radii,
+            depths,
+            tile_size,
+            tile_width,
+            tile_height,
+            packed=False,
+            n_images=I,
+            image_ids=image_ids,
+            gaussian_ids=gaussian_ids,
+        )
     isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
     isect_offsets = isect_offsets.reshape(batch_dims + (C, tile_height, tile_width))
 
@@ -1437,10 +1485,12 @@ def _rasterization(
                     colors_chunk=colors_chunk,
                     opacities=opacities,
                     viewmats=viewmats,
+                    camera_model=camera_model,
                     Ks=Ks,
                     image_width=width,
                     image_height=height,
                     rays=rays,
+                    lidar_coeffs=lidar_coeffs,
                     tile_size=tile_size,
                     isect_offsets=isect_offsets,
                     flatten_ids=flatten_ids,
@@ -1451,6 +1501,7 @@ def _rasterization(
                     raise ValueError(
                         "Rays input is only supported with with_eval3d=True"
                     )
+                assert camera_model == "pinhole", camera_model
                 render_colors_, render_alphas_ = _rasterize_to_pixels(
                     means2d,
                     conics,
@@ -1484,6 +1535,8 @@ def _rasterization(
                 image_width=width,
                 image_height=height,
                 rays=rays,
+                camera_model=camera_model,
+                lidar_coeffs=lidar_coeffs,
                 tile_size=tile_size,
                 isect_offsets=isect_offsets,
                 flatten_ids=flatten_ids,
@@ -1492,6 +1545,7 @@ def _rasterization(
         else:
             if rays is not None:
                 raise ValueError("Rays input is only supported with with_eval3d=True")
+            assert camera_model == "pinhole", camera_model
             render_colors, render_alphas = _rasterize_to_pixels(
                 means2d,
                 conics,

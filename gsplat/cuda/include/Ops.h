@@ -49,7 +49,9 @@ struct RowOffsetStructuredSpinningLidarModelParametersExt : public torch::Custom
         int n_bins_azimuth,
         int n_bins_elevation,
         at::Tensor cdf_elevation,
-        at::Tensor cdf_dense_ray_mask
+        at::Tensor cdf_dense_ray_mask,
+        at::Tensor tiles_pack_info,
+        at::Tensor tiles_to_elements_map
     )
         : row_elevations_rad(std::move(row_elevations_rad)),
           column_azimuths_rad(std::move(column_azimuths_rad)),
@@ -63,7 +65,9 @@ struct RowOffsetStructuredSpinningLidarModelParametersExt : public torch::Custom
           n_bins_azimuth(n_bins_azimuth),
           n_bins_elevation(n_bins_elevation),
           cdf_elevation(cdf_elevation),
-          cdf_dense_ray_mask(cdf_dense_ray_mask)
+          cdf_dense_ray_mask(cdf_dense_ray_mask),
+          tiles_pack_info(std::move(tiles_pack_info)),
+          tiles_to_elements_map(std::move(tiles_to_elements_map))
     {}
 
     int n_rows() const { return this->row_elevations_rad.size(0); }
@@ -89,6 +93,8 @@ struct RowOffsetStructuredSpinningLidarModelParametersExt : public torch::Custom
     int n_bins_elevation;
     at::Tensor cdf_elevation;
     at::Tensor cdf_dense_ray_mask;
+    at::Tensor tiles_pack_info;
+    at::Tensor tiles_to_elements_map;
     int cdf_resolution_elevation() const { return this->cdf_dense_ray_mask.size(-1)-1; }
     int cdf_resolution_azimuth() const { return this->cdf_dense_ray_mask.size(-2)-1; }
 };
@@ -617,6 +623,7 @@ rasterize_to_pixels_from_world_3dgs_fwd(
     const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> &thin_prism_coeffs,  // [..., C, 4] optional
     const c10::intrusive_ptr<FThetaCameraDistortionParameters>& ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
     // intersections
     const at::Tensor &tile_offsets, // [..., C, tile_height, tile_width]
@@ -653,6 +660,7 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> &thin_prism_coeffs,  // [..., C, 4] optional
     const c10::intrusive_ptr<FThetaCameraDistortionParameters>& ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<RowOffsetStructuredSpinningLidarModelParametersExt>> &lidar_coeffs,
     const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
     // intersections
     const at::Tensor &tile_offsets, // [..., C, tile_height, tile_width]

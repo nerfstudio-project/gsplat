@@ -38,10 +38,14 @@ RowOffsetStructuredSpinningLidarModelParametersExtDevice::RowOffsetStructuredSpi
     , cdf_resolution_azimuth{params.cdf_resolution_azimuth()}
     , cdf_elevation{params.cdf_elevation.data_ptr<int32_t>()}
     , cdf_dense_ray_mask{params.cdf_dense_ray_mask.data_ptr<int32_t>()}
+    , tiles_pack_info{reinterpret_cast<const glm::ivec2 *>(params.tiles_pack_info.data_ptr<int32_t>())}
+    , tiles_to_elements_map{reinterpret_cast<const glm::ivec2 *>(params.tiles_to_elements_map.data_ptr<int32_t>())}
 {
     CHECK_INPUT(params.angles_to_columns_map);
     CHECK_INPUT(params.cdf_elevation);
     CHECK_INPUT(params.cdf_dense_ray_mask);
+    CHECK_INPUT(params.tiles_pack_info);
+    CHECK_INPUT(params.tiles_to_elements_map);
 
     TORCH_CHECK(params.angles_to_columns_map.size(0) > 1 && params.angles_to_columns_map.size(1) > 1,
                 "angles_to_columns_map dimensions must be > 1");
@@ -54,5 +58,15 @@ RowOffsetStructuredSpinningLidarModelParametersExtDevice::RowOffsetStructuredSpi
     if(params.angles_to_columns_map.dtype() != torch::kInt32)
     {
         throw std::invalid_argument("angles_to_columns_map dtype must be torch.int32");
+    }
+
+    if(params.tiles_pack_info.dtype() != torch::kInt32)
+    {
+        throw std::invalid_argument("tiles_pack_info dtype must be torch.int32");
+    }
+
+    if(params.tiles_to_elements_map.dtype() != torch::kInt32)
+    {
+        throw std::invalid_argument("tiles_to_elements_map dtype must be torch.int32");
     }
 }

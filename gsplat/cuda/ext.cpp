@@ -273,7 +273,9 @@ TORCH_LIBRARY(gsplat, m) {
                            int64_t n_bins_azimuth,
                            int64_t n_bins_elevation,
                            at::Tensor cdf_elevation,
-                           at::Tensor cdf_dense_ray_mask) {
+                           at::Tensor cdf_dense_ray_mask,
+                           at::Tensor tiles_pack_info,
+                           at::Tensor tiles_to_elements_map) {
                 return c10::make_intrusive<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt>(
                     std::move(row_elevations_rad),
                     std::move(column_azimuths_rad),
@@ -287,7 +289,9 @@ TORCH_LIBRARY(gsplat, m) {
                     static_cast<int>(n_bins_azimuth),
                     static_cast<int>(n_bins_elevation),
                     std::move(cdf_elevation),
-                    std::move(cdf_dense_ray_mask));
+                    std::move(cdf_dense_ray_mask),
+                    std::move(tiles_pack_info),
+                    std::move(tiles_to_elements_map));
             }),
             "Constructor",
             {torch::arg("row_elevations_rad"),
@@ -302,7 +306,9 @@ TORCH_LIBRARY(gsplat, m) {
              torch::arg("n_bins_azimuth"),
              torch::arg("n_bins_elevation"),
              torch::arg("cdf_elevation"),
-             torch::arg("cdf_dense_ray_mask")}
+             torch::arg("cdf_dense_ray_mask"),
+             torch::arg("tiles_pack_info"),
+             torch::arg("tiles_to_elements_map")}
         )
         .def_readwrite("row_elevations_rad", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::row_elevations_rad)
         .def_readwrite("column_azimuths_rad", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::column_azimuths_rad)
@@ -369,6 +375,8 @@ TORCH_LIBRARY(gsplat, m) {
         )
         .def_readwrite("cdf_elevation", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::cdf_elevation)
         .def_readwrite("cdf_dense_ray_mask", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::cdf_dense_ray_mask)
+        .def_readwrite("tiles_pack_info", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::tiles_pack_info)
+        .def_readwrite("tiles_to_elements_map", &gsplat::RowOffsetStructuredSpinningLidarModelParametersExt::tiles_to_elements_map)
         .def_property(
             "cdf_resolution_elevation",
             [](const c10::intrusive_ptr<gsplat::RowOffsetStructuredSpinningLidarModelParametersExt> &self) {
@@ -721,8 +729,8 @@ TORCH_LIBRARY(gsplat, m) {
 
 #if GSPLAT_BUILD_3DGUT
     m.def("projection_ut_3dgs_fused(Tensor means, Tensor quats, Tensor scales, Tensor? opacities, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int image_width, int image_height, float eps2d, float near_plane, float far_plane, float radius_clip, bool calc_compensations, int camera_model, bool global_z_order, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
-    m.def("rasterize_to_pixels_from_world_3dgs_fwd(Tensor means, Tensor quats, Tensor scales, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int camera_model, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? rays, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor tile_offsets, Tensor flatten_ids, bool use_hit_distance, Tensor? sample_counts, Tensor? normals) -> (Tensor, Tensor, Tensor)");
-    m.def("rasterize_to_pixels_from_world_3dgs_bwd(Tensor means, Tensor quats, Tensor scales, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int camera_model, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? rays, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor tile_offsets, Tensor flatten_ids, bool use_hit_distance, Tensor render_alphas, Tensor last_ids, Tensor v_render_colors, Tensor v_render_alphas, Tensor? v_render_normals) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor?)");
+    m.def("rasterize_to_pixels_from_world_3dgs_fwd(Tensor means, Tensor quats, Tensor scales, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int camera_model, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? rays, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor tile_offsets, Tensor flatten_ids, bool use_hit_distance, Tensor? sample_counts, Tensor? normals) -> (Tensor, Tensor, Tensor)");
+    m.def("rasterize_to_pixels_from_world_3dgs_bwd(Tensor means, Tensor quats, Tensor scales, Tensor colors, Tensor opacities, Tensor? backgrounds, Tensor? masks, int image_width, int image_height, int tile_size, Tensor viewmats0, Tensor? viewmats1, Tensor Ks, int camera_model, __torch__.torch.classes.gsplat.UnscentedTransformParameters ut_params, int rs_type, Tensor? rays, Tensor? radial_coeffs, Tensor? tangential_coeffs, Tensor? thin_prism_coeffs, __torch__.torch.classes.gsplat.FThetaCameraDistortionParameters ftheta_coeffs, __torch__.torch.classes.gsplat.RowOffsetStructuredSpinningLidarModelParametersExt? lidar_coeffs, __torch__.torch.classes.gsplat.BivariateWindshieldModelParameters? external_distortion_params, Tensor tile_offsets, Tensor flatten_ids, bool use_hit_distance, Tensor render_alphas, Tensor last_ids, Tensor v_render_colors, Tensor v_render_alphas, Tensor? v_render_normals) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor?)");
 #endif
 }
 

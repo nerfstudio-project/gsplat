@@ -61,6 +61,8 @@ struct RowOffsetStructuredSpinningLidarModelParametersExtDevice
     int cdf_resolution_azimuth;
     const int32_t *cdf_elevation;
     const int32_t *cdf_dense_ray_mask;
+    const glm::ivec2 *tiles_pack_info;
+    const glm::ivec2 *tiles_to_elements_map;
 };
 
 

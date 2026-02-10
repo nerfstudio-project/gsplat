@@ -379,6 +379,15 @@ class LidarTiling:
     cdf_elevation: torch.Tensor
     cdf_dense_ray_mask: torch.Tensor  # [azimuth, elevation]
 
+    # tiles_pack_info maps each tileid to the range of elements in it,
+    # expressed as .x=offset into tiles_to_elements_map and .y=number of
+    # elements (rays) in that tile.
+    tiles_pack_info: torch.Tensor
+    # List of (ray) elements, ordered by tile.
+    # Each element is represented as the (row,col) of the ray
+    # in the lidar sensor space.
+    tiles_to_elements_map: torch.Tensor
+
     def __post_init__(self):
         assert self.cdf_elevation.dtype == torch.int32, self.cdf_elevation.dtype
         assert self.cdf_elevation.ndim == 1, self.cdf_elevation.ndim
@@ -395,6 +404,23 @@ class LidarTiling:
             self.cdf_dense_ray_mask.shape,
             self.cdf_elevation.shape,
         )
+
+        assert self.tiles_pack_info.ndim == 2, self.tiles_pack_info.ndim
+        assert self.tiles_pack_info.shape == (
+            self.n_bins_azimuth * self.n_bins_elevation,
+            2,
+        ), self.tiles_pack_info.shape
+        assert self.tiles_pack_info.dtype == torch.int32, self.tiles_pack_info.dtype
+
+        assert self.tiles_to_elements_map.ndim == 2, self.tiles_to_elements_map.ndim
+        assert (
+            self.tiles_to_elements_map.dtype == torch.int32
+        ), self.tiles_to_elements_map.dtype
+
+        # TODO: These asserts are important, but we don't have the needed variables at this point.
+        # These checks need improvement.
+        # assert self.tiles_to_elements_map.shape == (self.n_rows*self.n_columns,2)
+        # assert self.tiles_to_elements_map.shape[0] <= self.max_pts_per_tile*self.tiles_pack_info.shape[0]
 
     @property
     def cdf_resolution_elevation(self) -> int:
@@ -416,6 +442,9 @@ class RowOffsetStructuredSpinningLidarModelParametersExt(
     def __init__(
         self, angles_to_columns_map: Tensor, tiling: LidarTiling, **kwargs
     ) -> None:
+        assert angles_to_columns_map is not None
+        assert tiling is not None
+
         self.angles_to_columns_map = angles_to_columns_map
         self.tiling = tiling
         super().__init__(**kwargs)
@@ -689,7 +718,7 @@ def angles_to_tile_indices(
     return elevations_indices + azimuths_indices * n_bins_elevation
 
 
-def compute_cdf_dense_ray_mask(
+def compute_tiles_to_elements_map(
     parameters: RowOffsetStructuredSpinningLidarModelParameters,
     *,
     n_bins_azimuth: int,
@@ -701,18 +730,47 @@ def compute_cdf_dense_ray_mask(
     # compute the number of bins for elevation
     n_bins_elevation = cdf_elevation[-1].item()
     assert n_bins_elevation.is_integer(), "CDF elevation must be an integer"
+    n_bins_elevation = int(n_bins_elevation)
 
     # create all element indices [relative to the static model]
     elements = parameters.create_elements()
     angles = parameters.elements_to_sensor_angles(elements)
 
+    tile_indices = angles_to_tile_indices(
+        parameters,
+        angles,
+        n_bins_azimuth=n_bins_azimuth,
+        n_bins_elevation=n_bins_elevation,
+        cdf_elevation=cdf_elevation,
+    )
+
+    tile_counts = torch.bincount(
+        tile_indices, minlength=n_bins_azimuth * n_bins_elevation
+    )
+    tile_starts = torch.cumsum(tile_counts, dim=0) - tile_counts
+    tiles_pack_info = (
+        torch.stack([tile_starts, tile_counts], dim=-1)
+        .int()
+        .to(device=elements.device)
+        .contiguous()
+    )
+
+    # sort the elements by tile indices
+    sorted_element_indices = torch.argsort(tile_indices)
+    sorted_elements = elements[sorted_element_indices]
+    sorted_elements = torch.stack(
+        [sorted_elements.elevation, sorted_elements.azimuth], dim=-1
+    )
+
     # compute the dense mask
-    return angles_to_dense_ray_mask_cdf(
+    cdf_dense_ray_mask = angles_to_dense_ray_mask_cdf(
         parameters,
         angles,
         resolution_elevation=len(cdf_elevation) - 1,
         resolution_azimuth=n_bins_azimuth * densification_factor_azimuth,
     )
+
+    return sorted_elements, tiles_pack_info, cdf_dense_ray_mask
 
 
 def compute_histogram_equalization(
@@ -828,7 +886,11 @@ def compute_tiling(
         resolution_elevation=resolution_elevation,
     )
 
-    (params.cdf_dense_ray_mask) = compute_cdf_dense_ray_mask(
+    (
+        params.tiles_to_elements_map,
+        params.tiles_pack_info,
+        params.cdf_dense_ray_mask,
+    ) = compute_tiles_to_elements_map(
         lidar_params,
         n_bins_azimuth=params.n_bins_azimuth,
         densification_factor_azimuth=densification_factor_azimuth,
