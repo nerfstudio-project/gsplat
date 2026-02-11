@@ -59,6 +59,20 @@ def _make_lazy_cuda_obj(name: str) -> Any:
     return obj
 
 
+RollingShutterType = _make_lazy_cuda_obj("ShutterType")
+FThetaPolynomialType = _make_lazy_cuda_obj("FThetaPolynomialType")
+UnscentedTransformParameters = _make_lazy_cuda_obj("UnscentedTransformParameters")
+FThetaCameraDistortionParameters = _make_lazy_cuda_obj(
+    "FThetaCameraDistortionParameters"
+)
+ExternalDistortionReferencePolynomial = _make_lazy_cuda_obj(
+    "ExternalDistortionReferencePolynomial"
+)
+BivariateWindshieldModelParameters = _make_lazy_cuda_obj(
+    "BivariateWindshieldModelParameters"
+)
+
+
 def has_camera_wrappers():
     from ._backend import _C
 
@@ -93,113 +107,6 @@ def has_reloc():
     from ._backend import _C
 
     return hasattr(torch.ops.gsplat, "relocation")
-
-
-class RollingShutterType(Enum):
-    ROLLING_TOP_TO_BOTTOM = 0
-    ROLLING_LEFT_TO_RIGHT = 1
-    ROLLING_BOTTOM_TO_TOP = 2
-    ROLLING_RIGHT_TO_LEFT = 3
-    GLOBAL = 4
-
-    def to_cpp(self) -> Any:
-        return _make_lazy_cuda_obj(f"ShutterType.{self.name}")
-
-
-@dataclass
-class UnscentedTransformParameters:
-    # Sigma point parameters (see Gustafsson and Hendeby 2012, Wan and van der Merwe 2000)
-    alpha: float = 0.1
-    beta: float = 2.0
-    kappa: float = 0.0
-    # Parameters controlling validity of the unscented transform results. Default 0.1
-    # is 10% margin.
-    in_image_margin_factor: float = 0.1
-    # True: all sigma points must be valid
-    require_all_sigma_points_valid: bool = True
-
-    def to_cpp(self) -> Any:
-        p = _make_lazy_cuda_obj("UnscentedTransformParameters")()
-        p.alpha = self.alpha
-        p.beta = self.beta
-        p.kappa = self.kappa
-        p.in_image_margin_factor = self.in_image_margin_factor
-        p.require_all_sigma_points_valid = self.require_all_sigma_points_valid
-        return p
-
-
-class ExternalDistortionReferencePolynomial(Enum):
-    FORWARD = 1
-    BACKWARD = 2
-
-    def to_cpp(self) -> Any:
-        return _make_lazy_cuda_obj(f"ExternalDistortionReferencePolynomial.{self.name}")
-
-
-@dataclass
-class BivariateWindshieldModelParameters:
-    MAX_ORDER = 5
-    MAX_COEFFS = 21
-
-    reference_poly: ExternalDistortionReferencePolynomial
-    horizontal_poly: Tensor  # [..., (N + 1) * (N + 2) / 2]
-    vertical_poly: Tensor  # [..., (N + 1) * (N + 2) / 2]
-    horizontal_poly_inverse: Tensor  # [..., (N + 1) * (N + 2) / 2]
-    vertical_poly_inverse: Tensor  # [..., (N + 1) * (N + 2) / 2]
-
-    def __init__(
-        self,
-        reference_poly: ExternalDistortionReferencePolynomial,
-        horizontal_poly: Tensor,
-        vertical_poly: Tensor,
-        horizontal_poly_inverse: Tensor,
-        vertical_poly_inverse: Tensor,
-    ):
-        self.reference_poly = reference_poly
-        self.horizontal_poly = horizontal_poly
-        self.vertical_poly = vertical_poly
-        self.horizontal_poly_inverse = horizontal_poly_inverse
-        self.vertical_poly_inverse = vertical_poly_inverse
-
-    def to_cpp(self) -> Any:
-        p = _make_lazy_cuda_obj("BivariateWindshieldModelParameters")()
-        p.reference_poly = self.reference_poly.to_cpp()
-        p.horizontal_poly = self.horizontal_poly.contiguous()
-        p.vertical_poly = self.vertical_poly.contiguous()
-        p.horizontal_poly_inverse = self.horizontal_poly_inverse.contiguous()
-        p.vertical_poly_inverse = self.vertical_poly_inverse.contiguous()
-        return p
-
-
-class FThetaPolynomialType(Enum):
-    PIXELDIST_TO_ANGLE = 0
-    ANGLE_TO_PIXELDIST = 1
-
-    def to_cpp(self) -> Any:
-        return _make_lazy_cuda_obj(f"FThetaPolynomialType.{self.name}")
-
-
-@dataclass
-class FThetaCameraDistortionParameters:
-    reference_poly: FThetaPolynomialType
-    pixeldist_to_angle_poly: Tuple[float, float, float, float, float, float]  # [6]
-    angle_to_pixeldist_poly: Tuple[float, float, float, float, float, float]  # [6]
-    max_angle: float
-    linear_cde: Tuple[float, float, float]  # [3]
-
-    def to_cpp(self) -> Any:
-        p = _make_lazy_cuda_obj("FThetaCameraDistortionParameters")()
-        p.reference_poly = self.reference_poly.to_cpp()
-        p.pixeldist_to_angle_poly = self.pixeldist_to_angle_poly
-        p.angle_to_pixeldist_poly = self.angle_to_pixeldist_poly
-        p.max_angle = self.max_angle
-        p.linear_cde = self.linear_cde
-        return p
-
-    @classmethod
-    def to_cpp_default(cls) -> Any:
-        p = _make_lazy_cuda_obj("FThetaCameraDistortionParameters")()
-        return p
 
 
 def world_to_cam(
@@ -1456,15 +1363,7 @@ def fully_fused_projection_with_ut(
 
     camera_model_type = _make_lazy_cuda_obj(f"CameraModelType.{camera_model.upper()}")
     ftheta_coeffs = (
-        ftheta_coeffs.to_cpp()
-        if ftheta_coeffs is not None
-        else FThetaCameraDistortionParameters.to_cpp_default()
-    )
-
-    external_distortion_coeffs = (
-        external_distortion_coeffs.to_cpp()
-        if external_distortion_coeffs is not None
-        else None
+        ftheta_coeffs if ftheta_coeffs else FThetaCameraDistortionParameters()
     )
 
     external_distortion_reference_poly = (
@@ -1505,7 +1404,7 @@ def fully_fused_projection_with_ut(
         ut_params.kappa,
         ut_params.in_image_margin_factor,
         ut_params.require_all_sigma_points_valid,
-        rolling_shutter.to_cpp(),
+        rolling_shutter,
         radial_coeffs.contiguous() if radial_coeffs is not None else None,
         tangential_coeffs.contiguous() if tangential_coeffs is not None else None,
         thin_prism_coeffs.contiguous() if thin_prism_coeffs is not None else None,
@@ -1688,21 +1587,11 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         use_hit_distance: bool = False,
         return_normals: bool = False,
     ) -> Tuple[Tensor, Tensor, Tensor, Optional[Tensor], Optional[Tensor]]:
-        ut_params = ut_params.to_cpp()
-        rs_type = rolling_shutter.to_cpp()
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
         )
         ftheta_coeffs = (
-            ftheta_coeffs.to_cpp()
-            if ftheta_coeffs is not None
-            else FThetaCameraDistortionParameters.to_cpp_default()
-        )
-
-        external_distortion_coeffs = (
-            external_distortion_coeffs.to_cpp()
-            if external_distortion_coeffs is not None
-            else None
+            ftheta_coeffs if ftheta_coeffs else FThetaCameraDistortionParameters()
         )
 
         external_distortion_reference_poly = (
@@ -1766,7 +1655,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             ut_params.kappa,
             ut_params.in_image_margin_factor,
             ut_params.require_all_sigma_points_valid,
-            rs_type,
+            rolling_shutter,
             rays,
             radial_coeffs,
             tangential_coeffs,
@@ -1808,7 +1697,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         ctx.width = width
         ctx.height = height
         ctx.ut_params = ut_params
-        ctx.rs_type = rs_type
+        ctx.rs_type = rolling_shutter
         ctx.camera_model_type = camera_model_type
         ctx.tile_size = tile_size
         ctx.ftheta_coeffs = ftheta_coeffs

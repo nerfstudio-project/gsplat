@@ -945,7 +945,7 @@ def test_rasterize_to_pixels_eval3d(
             camera_model="pinhole",
             focal_lengths=Ks[..., [0, 1], [0, 1]].contiguous(),
             principal_points=Ks[..., [0, 1], [2, 2]].contiguous(),
-            rs_type=rs_type.to_cpp(),
+            rs_type=rs_type,
         )
 
         gridx, gridy = torch.meshgrid(

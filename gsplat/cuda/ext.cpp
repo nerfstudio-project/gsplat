@@ -42,8 +42,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .export_values();
 
     py::enum_<gsplat::extdist::ModelType>(m, "ExternalDistortionModelType", py::module_local())
-        .value("BIVARIATE_WINDSHIELD", gsplat::extdist::ModelType::BIVARIATE_WINDSHIELD)
-        .export_values();
+        .value("BIVARIATE_WINDSHIELD", gsplat::extdist::ModelType::BIVARIATE_WINDSHIELD);
 
     m.def("null", &gsplat::null);
 
@@ -53,11 +52,20 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .value("ROLLING_LEFT_TO_RIGHT", ShutterType::ROLLING_LEFT_TO_RIGHT)
         .value("ROLLING_BOTTOM_TO_TOP", ShutterType::ROLLING_BOTTOM_TO_TOP)
         .value("ROLLING_RIGHT_TO_LEFT", ShutterType::ROLLING_RIGHT_TO_LEFT)
-        .value("GLOBAL", ShutterType::GLOBAL)
-        .export_values();
+        .value("GLOBAL", ShutterType::GLOBAL);
 
     py::class_<UnscentedTransformParameters>(m, "UnscentedTransformParameters", py::module_local())
         .def(py::init<>())
+        .def(py::init([](
+            float alpha, float beta, float kappa, float in_image_margin_factor, bool require_all_sigma_points_valid) {
+                return UnscentedTransformParameters {alpha, beta, kappa, in_image_margin_factor, require_all_sigma_points_valid};
+            }),
+            "Dataclass constructor for UnscentedTransformParameters",
+            py::arg("alpha") = 0.1,
+            py::arg("beta") = 2.0,
+            py::arg("kappa") = 0.0,
+            py::arg("in_image_margin_factor") = 0.1,
+            py::arg("require_all_sigma_points_valid") = true)
         .def_readwrite("alpha", &UnscentedTransformParameters::alpha)
         .def_readwrite("beta", &UnscentedTransformParameters::beta)
         .def_readwrite("kappa", &UnscentedTransformParameters::kappa)
@@ -67,10 +75,24 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // FTheta Camera support
     py::enum_<FThetaCameraDistortionParameters::PolynomialType>(m, "FThetaPolynomialType", py::module_local())
         .value("PIXELDIST_TO_ANGLE", FThetaCameraDistortionParameters::PolynomialType::PIXELDIST_TO_ANGLE)
-        .value("ANGLE_TO_PIXELDIST", FThetaCameraDistortionParameters::PolynomialType::ANGLE_TO_PIXELDIST)
-        .export_values();
+        .value("ANGLE_TO_PIXELDIST", FThetaCameraDistortionParameters::PolynomialType::ANGLE_TO_PIXELDIST);
+
     py::class_<FThetaCameraDistortionParameters>(m, "FThetaCameraDistortionParameters", py::module_local())
         .def(py::init<>())
+        .def(py::init([](
+            const FThetaCameraDistortionParameters::PolynomialType& reference_poly,
+            const std::array<float, FThetaCameraDistortionParameters::PolynomialDegree>& pixeldist_to_angle_poly,
+            const std::array<float, FThetaCameraDistortionParameters::PolynomialDegree>& angle_to_pixeldist_poly,
+            float max_angle,
+            const std::array<float, 3>& linear_cde) {
+                return FThetaCameraDistortionParameters {reference_poly, pixeldist_to_angle_poly, angle_to_pixeldist_poly, max_angle, linear_cde};
+            }),
+            "Dataclass constructor for FThetaCameraDistortionParameters",
+            py::arg("reference_poly"),
+            py::arg("pixeldist_to_angle_poly"),
+            py::arg("angle_to_pixeldist_poly"),
+            py::arg("max_angle"),
+            py::arg("linear_cde"))
         .def_readwrite("reference_poly", &FThetaCameraDistortionParameters::reference_poly)
         .def_readwrite("pixeldist_to_angle_poly", &FThetaCameraDistortionParameters::pixeldist_to_angle_poly)
         .def_readwrite("angle_to_pixeldist_poly", &FThetaCameraDistortionParameters::angle_to_pixeldist_poly)
@@ -80,8 +102,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // External Distortion support
     py::enum_<gsplat::extdist::ReferencePolynomialType>(m, "ExternalDistortionReferencePolynomial", py::module_local())
         .value("FORWARD", gsplat::extdist::ReferencePolynomialType::FORWARD)
-        .value("BACKWARD", gsplat::extdist::ReferencePolynomialType::BACKWARD)
-        .export_values();
+        .value("BACKWARD", gsplat::extdist::ReferencePolynomialType::BACKWARD);
     
     py::class_<gsplat::extdist::BivariateWindshieldModelParameters>(m, "BivariateWindshieldModelParameters", py::module_local())
         .def(py::init<>())
