@@ -661,49 +661,52 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             N,
             n_isects,
             packed,
-            reinterpret_cast<vec3 *>(means.data_ptr<float>()),
-            reinterpret_cast<vec4 *>(quats.data_ptr<float>()),
-            reinterpret_cast<vec3 *>(scales.data_ptr<float>()),
-            colors.data_ptr<float>(),
-            opacities.data_ptr<float>(),
-            backgrounds.has_value() ? backgrounds.value().data_ptr<float>()
-                                    : nullptr,
-            masks.has_value() ? masks.value().data_ptr<bool>() : nullptr,
+            reinterpret_cast<const vec3 *>(means.const_data_ptr<float>()),
+            reinterpret_cast<const vec4 *>(quats.const_data_ptr<float>()),
+            reinterpret_cast<const vec3 *>(scales.const_data_ptr<float>()),
+            colors.const_data_ptr<float>(),
+            opacities.const_data_ptr<float>(),
+            backgrounds.has_value()
+                ? backgrounds.value().const_data_ptr<float>()
+                : nullptr,
+            masks.has_value() ? masks.value().const_data_ptr<bool>() : nullptr,
             image_width,
             image_height,
             tile_size,
             tile_width,
             tile_height,
             // camera model
-            viewmats0.data_ptr<float>(),
-            viewmats1.has_value() ? viewmats1.value().data_ptr<float>()
-                                : nullptr,
-            Ks.data_ptr<float>(),
+            viewmats0.const_data_ptr<float>(),
+            viewmats1.has_value() ? viewmats1.value().const_data_ptr<float>()
+                                  : nullptr,
+            Ks.const_data_ptr<float>(),
             camera_model,
             // uncented transform
             ut_params,
             rs_type,
-            rays.has_value() ? rays.value().data_ptr<float>()
-                           : nullptr,
-            radial_coeffs.has_value() ? radial_coeffs.value().data_ptr<float>()
-                                    : nullptr,
+            rays.has_value() ? rays.value().const_data_ptr<float>() : nullptr,
+            radial_coeffs.has_value()
+                ? radial_coeffs.value().const_data_ptr<float>()
+                : nullptr,
             tangential_coeffs.has_value()
-                ? tangential_coeffs.value().data_ptr<float>()
+                ? tangential_coeffs.value().const_data_ptr<float>()
                 : nullptr,
             thin_prism_coeffs.has_value()
-                ? thin_prism_coeffs.value().data_ptr<float>()
+                ? thin_prism_coeffs.value().const_data_ptr<float>()
                 : nullptr,
             ftheta_coeffs,
             external_distortion_device_params,
             // intersections
-            tile_offsets.data_ptr<int32_t>(),
-            flatten_ids.data_ptr<int32_t>(),
+            tile_offsets.const_data_ptr<int32_t>(),
+            flatten_ids.const_data_ptr<int32_t>(),
             use_hit_distance,
-            render_alphas.data_ptr<float>(),
-            last_ids.data_ptr<int32_t>(),
-            v_render_colors.data_ptr<float>(),
-            v_render_alphas.data_ptr<float>(),
-            v_render_normals.has_value() ? v_render_normals.value().data_ptr<float>() : nullptr,
+            render_alphas.const_data_ptr<float>(),
+            last_ids.const_data_ptr<int32_t>(),
+            v_render_colors.const_data_ptr<float>(),
+            v_render_alphas.const_data_ptr<float>(),
+            v_render_normals.has_value()
+                ? v_render_normals.value().const_data_ptr<float>()
+                : nullptr,
             // outputs
             reinterpret_cast<vec3 *>(v_means.data_ptr<float>()),
             reinterpret_cast<vec4 *>(v_quats.data_ptr<float>()),

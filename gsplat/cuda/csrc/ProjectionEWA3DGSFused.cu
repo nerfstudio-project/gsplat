@@ -264,17 +264,20 @@ void launch_projection_ewa_3dgs_fused_fwd_kernel(
                     B,
                     C,
                     N,
-                    means.data_ptr<scalar_t>(),
-                    covars.has_value() ? covars.value().data_ptr<scalar_t>()
-                                       : nullptr,
-                    quats.has_value() ? quats.value().data_ptr<scalar_t>()
+                    means.const_data_ptr<scalar_t>(),
+                    covars.has_value()
+                        ? covars.value().const_data_ptr<scalar_t>()
+                        : nullptr,
+                    quats.has_value() ? quats.value().const_data_ptr<scalar_t>()
                                       : nullptr,
-                    scales.has_value() ? scales.value().data_ptr<scalar_t>()
-                                       : nullptr,
-                    opacities.has_value() ? opacities.value().data_ptr<scalar_t>()
-                                         : nullptr,
-                    viewmats.data_ptr<scalar_t>(),
-                    Ks.data_ptr<scalar_t>(),
+                    scales.has_value()
+                        ? scales.value().const_data_ptr<scalar_t>()
+                        : nullptr,
+                    opacities.has_value()
+                        ? opacities.value().const_data_ptr<scalar_t>()
+                        : nullptr,
+                    viewmats.const_data_ptr<scalar_t>(),
+                    Ks.const_data_ptr<scalar_t>(),
                     image_width,
                     image_height,
                     eps2d,
@@ -587,32 +590,35 @@ void launch_projection_ewa_3dgs_fused_bwd_kernel(
                    threads,
                    shmem_size,
                    at::cuda::getCurrentCUDAStream()>>>(
-                    B, 
+                    B,
                     C,
                     N,
-                    means.data_ptr<scalar_t>(),
-                    covars.has_value() ? covars.value().data_ptr<scalar_t>()
-                                       : nullptr,
-                    covars.has_value() ? nullptr
-                                       : quats.value().data_ptr<scalar_t>(),
-                    covars.has_value() ? nullptr
-                                       : scales.value().data_ptr<scalar_t>(),
-                    viewmats.data_ptr<scalar_t>(),
-                    Ks.data_ptr<scalar_t>(),
+                    means.const_data_ptr<scalar_t>(),
+                    covars.has_value()
+                        ? covars.value().const_data_ptr<scalar_t>()
+                        : nullptr,
+                    covars.has_value()
+                        ? nullptr
+                        : quats.value().const_data_ptr<scalar_t>(),
+                    covars.has_value()
+                        ? nullptr
+                        : scales.value().const_data_ptr<scalar_t>(),
+                    viewmats.const_data_ptr<scalar_t>(),
+                    Ks.const_data_ptr<scalar_t>(),
                     image_width,
                     image_height,
                     eps2d,
                     camera_model,
-                    radii.data_ptr<int32_t>(),
-                    conics.data_ptr<scalar_t>(),
+                    radii.const_data_ptr<int32_t>(),
+                    conics.const_data_ptr<scalar_t>(),
                     compensations.has_value()
-                        ? compensations.value().data_ptr<scalar_t>()
+                        ? compensations.value().const_data_ptr<scalar_t>()
                         : nullptr,
-                    v_means2d.data_ptr<scalar_t>(),
-                    v_depths.data_ptr<scalar_t>(),
-                    v_conics.data_ptr<scalar_t>(),
+                    v_means2d.const_data_ptr<scalar_t>(),
+                    v_depths.const_data_ptr<scalar_t>(),
+                    v_conics.const_data_ptr<scalar_t>(),
                     v_compensations.has_value()
-                        ? v_compensations.value().data_ptr<scalar_t>()
+                        ? v_compensations.value().const_data_ptr<scalar_t>()
                         : nullptr,
                     v_means.data_ptr<scalar_t>(),
                     covars.has_value() ? v_covars.data_ptr<scalar_t>()
