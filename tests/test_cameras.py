@@ -29,7 +29,6 @@ from gsplat.cuda._wrapper import (
 from gsplat.cuda._math import _quat_multiply, _safe_normalize, compute_inverse_polynomial
 
 BaseCameraModelCUDA = _make_lazy_cuda_obj("BaseCameraModel")
-FThetaCameraModelCUDA = _make_lazy_cuda_obj("FThetaCameraModel")
 
 SEED = 42
 
@@ -128,7 +127,7 @@ def parse_camera(camera_def: str, batch_dims: tuple, width: int, height: int, rs
         'height': height,
         'camera_model': model_type,
         'principal_points': principal_points,
-        'rs_type': rs_type.to_cpp() if hasattr(rs_type, 'to_cpp') else rs_type,
+        'rs_type': rs_type,
     })
 
     return params
@@ -310,7 +309,7 @@ def parse_ftheta_camera(param_str: str, batch_dims: tuple, width: int, height: i
         angle_to_pixeldist_poly=angle_to_pixeldist_poly,
         max_angle=float(max_angle),
         linear_cde=linear_cde
-    ).to_cpp()
+    )
 
     return {'ftheta_coeffs': ftheta_coeffs}
 
