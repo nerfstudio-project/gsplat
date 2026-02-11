@@ -253,11 +253,13 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
 
     // when the mask is provided, render the background color and return
     // if this tile is labeled as False
-    if (masks != nullptr && inside && !masks[tile_id]) {
+    if (masks != nullptr && !masks[tile_id]) {
+        if (inside) {
 #pragma unroll
-        for (uint32_t k = 0; k < CDIM; ++k) {
-            render_colors[pix_id * CDIM + k] =
-                backgrounds == nullptr ? 0.0f : backgrounds[k];
+            for (uint32_t k = 0; k < CDIM; ++k) {
+                render_colors[pix_id * CDIM + k] =
+                    backgrounds == nullptr ? 0.0f : backgrounds[k];
+            }
         }
         return;
     }
