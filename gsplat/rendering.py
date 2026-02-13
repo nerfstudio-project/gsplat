@@ -58,6 +58,35 @@ RenderMode = Literal["RGB", "d", "Ed", "D", "ED", "RGB-d", "RGB-Ed", "RGB+D", "R
 
 RasterizeMode = Literal["classic", "antialiased"]
 
+# TODO: RenderMode should be an enum so that we can add these query methods to it.
+# The problem is that it'd break backward compatibllity due to some symbols used, e.g. RGB+D or RGB-d.
+def render_mode_has_color(mode: RenderMode) -> bool:
+    return mode in {"RGB", "RGB-d", "RGB-Ed", "RGB+D", "RGB+ED"}
+
+
+def render_mode_has_hit_distance(mode: RenderMode) -> bool:
+    return mode in {"d", "Ed", "RGB-d", "RGB-Ed"}
+
+
+def render_mode_has_depth(mode: RenderMode) -> bool:
+    return mode in {"D", "ED", "RGB+D", "RGB+ED"}
+
+
+def render_mode_has_expected_depth(mode: RenderMode) -> bool:
+    return mode in {"Ed", "ED", "RGB-Ed", "RGB+ED"}
+
+
+def render_mode_has_depth_channel(mode: RenderMode) -> bool:
+    return render_mode_has_depth(mode) or render_mode_has_hit_distance(mode)
+
+
+def render_mode_has_only_depth_channel(mode: RenderMode) -> bool:
+    return render_mode_has_depth_channel(mode) and not render_mode_has_color(mode)
+
+
+def render_mode_has_only_color(mode: RenderMode) -> bool:
+    return not render_mode_has_depth_channel(mode) and render_mode_has_color(mode)
+
 
 def _compute_view_dirs_packed(
     means: Tensor,  # [..., N, 3]
@@ -420,17 +449,6 @@ def rasterization(
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
     if rays is not None:
         assert_shape("rays", rays, batch_dims + (C, H, W, 6))
-    assert render_mode in [
-        "RGB",
-        "d",
-        "Ed",
-        "D",
-        "ED",
-        "RGB-d",
-        "RGB-Ed",
-        "RGB+D",
-        "RGB+ED",
-    ], render_mode
     assert global_z_order or with_ut, "global_z_order can be false only if with_ut=True"
 
     def reshape_view(C: int, world_view: torch.Tensor, N_world: list) -> torch.Tensor:
@@ -510,8 +528,7 @@ def rasterization(
         )
 
     # Validate hit distance modes require eval3d
-    hit_distance_modes = {"d", "Ed", "RGB-d", "RGB-Ed"}
-    if render_mode in hit_distance_modes and not with_eval3d:
+    if render_mode_has_hit_distance(render_mode) and not with_eval3d:
         raise ValueError(
             f"Hit distance mode '{render_mode}' requires with_eval3d=True. "
             f"Classic mode only supports Gaussian depth modes ('D', 'ED', 'RGB+D', 'RGB+ED'). "
@@ -790,13 +807,13 @@ def rasterization(
             opacities = reshape_view(C, opacities, N_world)
             colors = reshape_view(C, colors, N_world)
 
-    # Determine if we need hit distance (computed in rasterization) or Gaussian depth (from projection)
-    # (hit_distance_modes already defined at validation stage)
-    use_hit_distance = render_mode in hit_distance_modes
-
     # Rasterize to pixels
-    if render_mode in ["RGB+D", "RGB+ED", "RGB-d", "RGB-Ed"]:
-        if use_hit_distance:
+
+    # Determine if we need hit distance (computed in rasterization) or Gaussian depth (from projection)
+    if render_mode_has_depth_channel(render_mode) and render_mode_has_color(
+        render_mode
+    ):
+        if render_mode_has_hit_distance(render_mode):
             # Hit distance modes: use zeros as placeholder (kernel will overwrite with hit distance)
             colors = torch.cat((colors, torch.zeros_like(depths[..., None])), dim=-1)
         else:
@@ -810,8 +827,8 @@ def rasterization(
                 ],
                 dim=-1,
             )
-    elif render_mode in ["D", "ED", "d", "Ed"]:
-        if use_hit_distance:
+    elif render_mode_has_only_depth_channel(render_mode):
+        if render_mode_has_hit_distance(render_mode):
             # Hit distance modes: zeros as placeholder (kernel will overwrite)
             colors = torch.zeros_like(depths[..., None])
         else:
@@ -819,8 +836,8 @@ def rasterization(
             colors = depths[..., None]
         if backgrounds is not None:
             backgrounds = torch.zeros(batch_dims + (C, 1), device=backgrounds.device)
-    else:  # RGB
-        pass
+    else:
+        assert render_mode_has_only_color(render_mode)
 
     # Identify intersecting tiles
     tile_width = math.ceil(width / float(tile_size))
@@ -903,7 +920,7 @@ def rasterization(
                     external_distortion_coeffs=external_distortion_coeffs,
                     rolling_shutter=rolling_shutter,
                     viewmats_rs=viewmats_rs,
-                    use_hit_distance=use_hit_distance,
+                    use_hit_distance=render_mode_has_hit_distance(render_mode),
                     return_normals=return_normals_chunk,
                 )
                 if i == 0 and render_normals_ is not None:
@@ -964,7 +981,7 @@ def rasterization(
                 external_distortion_coeffs=external_distortion_coeffs,
                 rolling_shutter=rolling_shutter,
                 viewmats_rs=viewmats_rs,
-                use_hit_distance=use_hit_distance,
+                use_hit_distance=render_mode_has_hit_distance(render_mode),
                 return_normals=return_normals,
             )
         else:
@@ -985,7 +1002,7 @@ def rasterization(
                 absgrad=absgrad,
             )
     # Normalize depth for expected modes (Ed, ED, RGB-Ed, RGB+ED)
-    if render_mode in ["Ed", "ED", "RGB-Ed", "RGB+ED"]:
+    if render_mode_has_expected_depth(render_mode):
         # normalize the accumulated depth to get the expected depth
         render_colors = torch.cat(
             [
@@ -1066,17 +1083,6 @@ def _rasterization(
     assert opacities.shape == batch_dims + (N,), opacities.shape
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
-    assert render_mode in [
-        "RGB",
-        "d",
-        "Ed",
-        "D",
-        "ED",
-        "RGB-d",
-        "RGB-Ed",
-        "RGB+D",
-        "RGB+ED",
-    ], render_mode
     assert rays is None or rays.shape == batch_dims + (C, H, W, 6), rays.shape
 
     if sh_degree is None:
@@ -1194,7 +1200,9 @@ def _rasterization(
         colors = torch.clamp_min(colors + 0.5, 0.0)
 
     # Rasterize to pixels
-    if render_mode in ["RGB+D", "RGB+ED"]:
+    if render_mode_has_depth_channel(render_mode) and render_mode_has_color(
+        render_mode
+    ):
         colors = torch.cat((colors, depths[..., None]), dim=-1)
         if backgrounds is not None:
             backgrounds = torch.cat(
@@ -1204,7 +1212,7 @@ def _rasterization(
                 ],
                 dim=-1,
             )
-    elif render_mode in ["D", "ED"]:
+    elif render_mode_has_only_depth_channel(render_mode):
         colors = depths[..., None]
         if backgrounds is not None:
             backgrounds = torch.zeros(batch_dims + (C, 1), device=backgrounds.device)
@@ -1301,7 +1309,7 @@ def _rasterization(
                 backgrounds=backgrounds,
                 batch_per_iter=batch_per_iter,
             )
-    if render_mode in ["ED", "RGB+ED"]:
+    if render_mode_has_expected_depth(render_mode):
         # normalize the accumulated depth to get the expected depth
         render_colors = torch.cat(
             [
@@ -1729,28 +1737,10 @@ def rasterization_2dgs(
     assert opacities.shape == batch_dims + (N,), opacities.shape
     assert viewmats.shape == batch_dims + (C, 4, 4), viewmats.shape
     assert Ks.shape == batch_dims + (C, 3, 3), Ks.shape
-    assert render_mode in [
-        "RGB",
-        "d",
-        "Ed",
-        "D",
-        "ED",
-        "RGB-d",
-        "RGB-Ed",
-        "RGB+D",
-        "RGB+ED",
-    ], render_mode
     if distloss:
-        assert render_mode in [
-            "d",
-            "Ed",
-            "D",
-            "ED",
-            "RGB-d",
-            "RGB-Ed",
-            "RGB+D",
-            "RGB+ED",
-        ], f"distloss requires depth rendering, render_mode should be d, Ed, D, ED, RGB-d, RGB-Ed, RGB+D, or RGB+ED, but got {render_mode}"
+        assert render_mode_has_depth(
+            render_mode
+        ), f"distloss requires depth rendering, but render mode is {render_mode}"
 
     if sh_degree is None:
         # treat colors as post-activation values, should be in shape [..., N, D] or [..., C, N, D]
@@ -1869,14 +1859,16 @@ def rasterization_2dgs(
         colors = torch.clamp_min(colors + 0.5, 0.0)
 
     # Rasterize to pixels
-    if render_mode in ["RGB+D", "RGB+ED"]:
+    if render_mode_has_depth_channel(render_mode) and render_mode_has_color(
+        render_mode
+    ):
         colors = torch.cat((colors, depths[..., None]), dim=-1)
 
         if backgrounds is not None:
             backgrounds = torch.cat(
                 (backgrounds, torch.zeros_like(backgrounds[..., :1])), dim=-1
             )
-    elif render_mode in ["D", "ED"]:
+    elif render_mode_has_only_depth_channel(render_mode):
         colors = depths[..., None]
     else:  # RGB
         pass
@@ -1905,7 +1897,7 @@ def rasterization_2dgs(
         distloss=distloss,
     )
     render_normals_from_depth = None
-    if render_mode in ["ED", "RGB+ED"]:
+    if render_mode_has_expected_depth(render_mode):
         # normalize the accumulated depth to get the expected depth
         render_colors = torch.cat(
             [
@@ -1914,7 +1906,7 @@ def rasterization_2dgs(
             ],
             dim=-1,
         )
-    if render_mode in ["RGB+ED", "RGB+D"]:
+    if render_mode_has_depth(render_mode) and render_mode_has_color(render_mode):
         # render_depths = render_colors[..., -1:]
         if depth_mode == "expected":
             depth_for_normal = render_colors[..., -1:]
