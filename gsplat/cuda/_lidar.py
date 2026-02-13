@@ -787,17 +787,18 @@ def compute_histogram_equalization(
     )
     angles = relative_sensor_angles(parameters, angles)
 
-    ranges_azimuth = (0.0, parameters.fov_horiz_rad.span)
-    ranges_elevation = (0.0, parameters.fov_vert_rad.span)
+    # TODO: use parameters.fov_eps_rad
+    fov_eps_rad = 2 * torch.finfo(torch.float32).eps
+    ranges_azimuth = (-fov_eps_rad, parameters.fov_horiz_rad.span + fov_eps_rad)
+    ranges_elevation = (-fov_eps_rad, parameters.fov_vert_rad.span + fov_eps_rad)
     assert torch.all(
-        torch.logical_and(
-            # TODO: use parameters.fov_eps_rad
-            angles.elevation
-            <= parameters.fov_vert_rad.span + 4 * torch.finfo(torch.float32).eps,
-            angles.azimuth
-            <= parameters.fov_horiz_rad.span + 4 * torch.finfo(torch.float32).eps,
-        )
-    ), f"angles are out of bounds, angles_elevation {angles.elevation.max()} > {parameters.fov_vert_rad.span}, angles_azimuth {angles.azimuth.max()} > {parameters.fov_horiz_rad.span}"
+        (angles.elevation >= ranges_elevation[0])
+        & (angles.elevation <= ranges_elevation[1])
+    ), f"elevations are out of bounds, {angles.elevation.min()} < {ranges_elevation[0]},  {angles.elevation.max()} > {ranges_elevation[1]}"
+
+    assert torch.all(
+        (angles.azimuth >= ranges_azimuth[0]) & (angles.azimuth <= ranges_azimuth[1])
+    ), f"azimuths are out of bounds, {angles.azimuth.min()} < {ranges_azimuth[0]},  {angles.azimuth.max()} > {ranges_azimuth[1]}"
 
     # --------------------------------
     # Histogram Equalization
@@ -809,7 +810,7 @@ def compute_histogram_equalization(
     ):
         if isinstance(bins, torch.Tensor):
             bins = bins.cpu().numpy()
-        hist, *others = np.histogram(data.cpu().numpy(), bins=bins)
+        hist, *others = np.histogram(data.cpu().numpy(), bins=bins, range=range)
         return torch.tensor(hist, device=data.device, dtype=torch.int32), *others
 
     # 1. compute the prefix sum of data
