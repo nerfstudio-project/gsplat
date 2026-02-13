@@ -123,7 +123,7 @@ struct BivariateWindshieldModel {
 
         const float x = std::sin(eval_bivariate_poly(horizontal_poly, horizontal_order, phi, theta));
         const float y = std::sin(eval_bivariate_poly(vertical_poly, vertical_order, phi, theta));
-        const float z = std::sqrt(1.f - std::clamp(x * x + y * y, 0.f, 1.f)) * (ray.z < 0.f ? -1.f : 1.f);
+        const float z = std::sqrt(1.f - std::min(x * x + y * y, 1.f)) * (ray.z < 0.f ? -1.f : 1.f);
 
         return glm::fvec3(x, y, z);
     }
