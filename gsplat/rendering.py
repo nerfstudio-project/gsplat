@@ -283,6 +283,13 @@ def rasterization(
     viewmats_rs: Optional[Tensor] = None,  # [..., C, 4, 4]
     # unscented transform (for 3DGUT)
     ut_params: Optional[UnscentedTransformParameters] = None,
+    # extra signal channels (order in output: RGB, depth, extra)
+    extra_signals: Optional[
+        Tensor
+    ] = None,  # [..., (C,) N, E] or [..., (C,) N, K, 3] when extra_signals_sh_degree set
+    extra_signals_sh_degree: Optional[
+        int
+    ] = None,  # Currently only None or 3 is accepted.
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -331,6 +338,13 @@ def rasterization(
         - "RGB-Ed": RGB + expected hit distance
 
         "RGB" renders only the colored image. For combined modes, depth is the last channel.
+        When extra_signals are present, render_colors is RGB + depth only (4 channels);
+        extra channels are returned in ``meta["render_extra_signals"]``.
+
+    .. note::
+        **Extra signals**: Optional `extra_signals` are rendered and returned in ``meta["render_extra_signals"]``
+        (shape [..., C, height, width, E]). If `extra_signals_sh_degree` is set, extra_signals are
+        SH coefficients [..., N, K, 3] evaluated per view.
 
     .. note::
         **Memory-Speed Trade-off**: The `packed` argument provides a trade-off between
@@ -505,6 +519,7 @@ def rasterization(
     B = math.prod(batch_dims)
     N = means.shape[-2]
     C = viewmats.shape[-3]
+    D = colors.shape[-1]  # Number of input color channels
     I = B * C
     H = height
     W = width
@@ -568,6 +583,9 @@ def rasterization(
                 ), f"Distributed mode only supports per-Gaussian {name}."
 
     check_features(colors, sh_degree, "colors")
+
+    if extra_signals is not None:
+        check_features(extra_signals, extra_signals_sh_degree, "extra signals")
 
     if absgrad:
         assert not distributed, "AbsGrad is not supported in distributed mode."
@@ -737,8 +755,13 @@ def rasterization(
         }
     )
 
-    # Turn colors into [..., C, N, D] or [nnz, D] to pass into rasterize_to_pixels()
-    if sh_degree is None:
+    # If both colors and extra-signals don't require SH evaluation,
+    if sh_degree is None and extra_signals_sh_degree is None:
+        # We can process both at once
+        if extra_signals is not None:
+            colors = torch.cat([colors, extra_signals], dim=-1)
+
+        # Turn colors into [..., C, N, D] or [nnz, D] to pass into rasterize_to_pixels()
         colors = normalize_features_layout(
             colors,
             batch_dims,
@@ -749,17 +772,6 @@ def rasterization(
             gaussian_ids,
         )
     else:
-        assert colors.shape[-1] == 3, colors.shape
-        colors = normalize_features_layout(
-            colors,
-            batch_dims,
-            C,
-            colors.shape[-2:],
-            batch_ids,
-            camera_ids,
-            gaussian_ids,
-        )
-
         # Calculate the view directions from camera to gaussians
         dirs = compute_directions(
             batch_dims,
@@ -772,9 +784,66 @@ def rasterization(
             viewmats_rs=viewmats_rs,
         )
 
-        colors = spherical_harmonics(sh_degree, dirs, colors, masks=valid_gaussians)
-        # Make sure colors >= 0 so that it's apples-to-apples with Inria CUDA backend
-        colors = torch.clamp_min(colors + 0.5, 0.0)
+        if sh_degree is None:
+            colors = normalize_features_layout(
+                colors,
+                batch_dims,
+                C,
+                colors.shape[-1:],
+                batch_ids,
+                camera_ids,
+                gaussian_ids,
+            )
+        else:
+            colors = normalize_features_layout(
+                colors,
+                batch_dims,
+                C,
+                colors.shape[-2:],
+                batch_ids,
+                camera_ids,
+                gaussian_ids,
+            )
+
+            colors = spherical_harmonics(sh_degree, dirs, colors, masks=valid_gaussians)
+            # Make sure colors >= 0 so that it's apples-to-apples with Inria CUDA backend
+            colors = torch.clamp_min(colors + 0.5, 0.0)
+
+        # Process extra signals, if any
+        if extra_signals is not None:
+            if extra_signals_sh_degree is None:
+                extra_signals = normalize_features_layout(
+                    extra_signals,
+                    batch_dims,
+                    C,
+                    extra_signals.shape[-1:],
+                    batch_ids,
+                    camera_ids,
+                    gaussian_ids,
+                )
+            else:
+                extra_signals = normalize_features_layout(
+                    extra_signals,
+                    batch_dims,
+                    C,
+                    extra_signals.shape[-2:],
+                    batch_ids,
+                    camera_ids,
+                    gaussian_ids,
+                )
+
+                extra_signals = spherical_harmonics(
+                    extra_signals_sh_degree, dirs, extra_signals, masks=valid_gaussians
+                )
+                extra_signals = extra_signals + 0.5
+
+            # Now that colors and extra_signals are view-dependent, we can concatenate them
+            # and process them both together.
+            assert colors.shape[:-1] == extra_signals.shape[:-1], (
+                colors.shape,
+                extra_signals.shape,
+            )
+            colors = torch.cat([colors, extra_signals], dim=-1)
 
     # If in distributed mode, we need to scatter the GSs to the destination ranks, based
     # on which cameras they are visible to, which we already figured out in the projection
@@ -1056,16 +1125,33 @@ def rasterization(
                 packed=packed,
                 absgrad=absgrad,
             )
-    # Normalize depth for expected modes (Ed, ED, RGB-Ed, RGB+ED)
-    if render_mode_has_expected_depth(render_mode):
-        # normalize the accumulated depth to get the expected depth
-        render_colors = torch.cat(
-            [
-                render_colors[..., :-1],
-                render_colors[..., -1:] / render_alphas.clamp(min=1e-10),
-            ],
-            dim=-1,
-        )
+
+    if extra_signals is not None:
+        # Extract the extra signals (per ray) from render_colors
+        E = extra_signals.shape[-1]
+        meta["render_extra_signals"] = render_colors[..., D : D + E]
+        # Leave only colors (and possibly depth)
+        if render_mode_has_depth_channel(render_mode):
+            render_depth = render_colors[..., -1:]
+
+            # Normalize depth for expected modes (Ed, ED, RGB-Ed, RGB+ED)
+            if render_mode_has_expected_depth(render_mode):
+                render_depth = render_depth / render_alphas.clamp(min=1e-10)
+
+            render_colors = torch.cat([render_colors[..., 0:D], render_depth], dim=-1)
+        else:
+            render_colors = render_colors[..., 0:D]
+    else:
+        # Normalize depth for expected modes (Ed, ED, RGB-Ed, RGB+ED)
+        if render_mode_has_expected_depth(render_mode):
+            # normalize the accumulated depth to get the expected depth
+            render_colors = torch.cat(
+                [
+                    render_colors[..., :-1],
+                    render_colors[..., -1:] / render_alphas.clamp(min=1e-10),
+                ],
+                dim=-1,
+            )
 
     # Add normals to meta if computed
     if return_normals:
@@ -1139,6 +1225,10 @@ def _rasterization(
     batch_per_iter: int = 100,
     with_eval3d: bool = False,
     with_ut: bool = False,
+    extra_signals: Optional[
+        Tensor
+    ] = None,  # [..., (C,) N, 3] or [..., (C,) N, K, 3] when extra_signals_sh_degree set
+    extra_signals_sh_degree: Optional[int] = None,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """A version of rasterization() that utilies on PyTorch's autograd.
 
@@ -1168,6 +1258,7 @@ def _rasterization(
     B = math.prod(batch_dims)
     N = means.shape[-2]
     C = viewmats.shape[-3]
+    D = colors.shape[-1]  # Number of input color channels
     I = B * C
     H = height
     W = width
@@ -1269,6 +1360,28 @@ def _rasterization(
     colors = _maybe_evaluate_sh(
         sh_degree, colors, means, radii, viewmats, batch_dims, C, N, True
     )
+
+    # Now do the same to the extra signals.
+    if extra_signals is not None:
+        # Do not clamp it.
+        extra_signals = _maybe_evaluate_sh(
+            extra_signals_sh_degree,
+            extra_signals,
+            means,
+            radii,
+            viewmats,
+            batch_dims,
+            C,
+            N,
+            False,
+        )
+        # Now that colors and extra_signals are view-dependent, we can concatenate them
+        # and process them both together.
+        assert colors.shape[:-1] == extra_signals.shape[:-1], (
+            colors.shape,
+            extra_signals.shape,
+        )
+        colors = torch.cat([colors, extra_signals], dim=-1)
 
     # Rasterize to pixels
     if render_mode_has_depth_channel(render_mode) and render_mode_has_color(
@@ -1380,15 +1493,29 @@ def _rasterization(
                 backgrounds=backgrounds,
                 batch_per_iter=batch_per_iter,
             )
-    if render_mode_has_expected_depth(render_mode):
-        # normalize the accumulated depth to get the expected depth
-        render_colors = torch.cat(
-            [
-                render_colors[..., :-1],
-                render_colors[..., -1:] / render_alphas.clamp(min=1e-10),
-            ],
-            dim=-1,
-        )
+
+    if extra_signals is not None:
+        # Extract the extra signals (per ray) from render_colors
+        E = extra_signals.shape[-1]
+        render_extra_signals = render_colors[..., D : D + E]
+        # Leave only colors (and possibly depth)
+        if render_mode_has_depth_channel(render_mode):
+            render_depth = render_colors[..., -1:]
+
+            # Normalize depth for expected modes (Ed, ED, RGB-Ed, RGB+ED)
+            if render_mode_has_expected_depth(render_mode):
+                render_depth = render_depth / render_alphas.clamp(min=1e-10)
+
+            render_colors = torch.cat([render_colors[..., 0:D], render_depth], dim=-1)
+        else:
+            render_colors = render_colors[..., 0:D]
+    else:
+        render_extra_signals = None
+        # Normalize depth for expected modes (Ed, ED, RGB-Ed, RGB+ED)
+        if render_mode_has_expected_depth(render_mode):
+            # normalize the accumulated depth to get the expected depth
+            render_depth = render_colors[..., -1:] / render_alphas.clamp(min=1e-10)
+            render_colors = torch.cat([render_colors[..., :D], render_depth], dim=-1)
 
     meta = {
         "batch_ids": batch_ids,
@@ -1411,6 +1538,10 @@ def _rasterization(
         "n_batches": B,
         "n_cameras": C,
     }
+
+    if render_extra_signals is not None:
+        meta["render_extra_signals"] = render_extra_signals
+
     return render_colors, render_alphas, meta
 
 
