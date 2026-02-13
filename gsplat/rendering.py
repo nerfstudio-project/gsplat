@@ -212,6 +212,17 @@ def normalize_features_layout(
             )
 
 
+def viewmat_to_camera_position(viewmats: Tensor) -> Tensor:
+    """Camera position in world from world-to-camera 4x4 matrix without full inverse.
+
+    For V = [R | t; 0 1], inv(V) has translation -R^T t, so camera position is -R^T t.
+    This avoids torch.inverse and does not fail on singular 4x4 (e.g. degenerate poses).
+    """
+    R = viewmats[..., :3, :3]
+    t = viewmats[..., :3, 3]
+    return -(R.mT @ t.unsqueeze(-1)).squeeze(-1)
+
+
 def compute_directions(
     batch_dims: tuple,
     means: Tensor,
@@ -223,10 +234,10 @@ def compute_directions(
     *,
     viewmats_rs: Optional[Tensor] = None,
 ) -> Tensor:
-    # Compute cameras' absolute positions
-    campos = torch.inverse(viewmats)[..., :3, 3]
+    # Compute cameras' absolute positions (no 4x4 inverse; robust to singular viewmats)
+    campos = viewmat_to_camera_position(viewmats)
     if viewmats_rs is not None:
-        campos_rs = torch.inverse(viewmats_rs)[..., :3, 3]
+        campos_rs = viewmat_to_camera_position(viewmats_rs)
         campos = 0.5 * (campos + campos_rs)
 
     # Compute the direction of each gaussian wrt. its camera
