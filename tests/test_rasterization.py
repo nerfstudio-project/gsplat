@@ -20,7 +20,7 @@ device = torch.device("cuda:0")
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize(
-    "per_view_color,sh_degree,render_mode,packed,batch_dims,with_eval3d,with_ut",
+    "per_view_color,sh_degree,render_mode,packed,batch_dims,with_eval3d,with_ut,extra_signals_info",
     [
         pytest.param(*params, marks=[
             # test based on with_eval3d (5)  and with_ut (6)
@@ -37,7 +37,8 @@ device = torch.device("cuda:0")
                     [True, False],           # packed
                     [(), (2,), (1, 2)],      # batch_dims
                     [False],                 # with_eval3d
-                    [False]                  # with_ut
+                    [False],                 # with_ut
+                    [None],                  # extra_signals_info
                 ),
                 # 3DGUT
                 product(
@@ -47,8 +48,9 @@ device = torch.device("cuda:0")
                     [False],                 # packed (must be False)
                     [(), (2,)],              # batch_dims (reduced subset)
                     [True],                  # with_eval3d
-                    [True]                   # with_ut
-                )
+                    [True],                  # with_ut
+                    [None,(None,20),(3,3)],  # extra_signals_info (extra_signals_sh_degree,extra_signals_size)
+                ),
             )
     ]
 )
@@ -60,6 +62,7 @@ def test_rasterization(
     batch_dims: Tuple[int, ...],
     with_eval3d: bool,
     with_ut: bool,
+    extra_signals_info: Optional[tuple],
 ):
     from gsplat.rendering import _rasterization, rasterization
 
@@ -87,6 +90,29 @@ def test_rasterization(
 
     width, height = 300, 200
     focal = 300.0
+
+    if extra_signals_info is None:
+        extra_signals_sh_degree = None
+        extra_signals = None
+    else:
+        extra_signals_sh_degree = extra_signals_info[0]
+        extra_signals_size = extra_signals_info[1]
+
+        if per_view_color:
+            if extra_signals_sh_degree is None:
+                extra_signals = torch.rand(batch_dims + (C, N, extra_signals_size), device=device)
+            else:
+                extra_signals = torch.rand(
+                    batch_dims + (C, N, (extra_signals_sh_degree + 1) ** 2, extra_signals_size), device=device
+                )
+        else:
+            if extra_signals_sh_degree is None:
+                extra_signals = torch.rand(batch_dims + (N, extra_signals_size), device=device)
+            else:
+                extra_signals = torch.rand(
+                    batch_dims + (N, (extra_signals_sh_degree + 1) ** 2, extra_signals_size), device=device
+                )
+
     Ks = torch.tensor(
         [[focal, 0.0, width / 2.0], [0.0, focal, height / 2.0], [0.0, 0.0, 1.0]],
         device=device,
@@ -107,7 +133,9 @@ def test_rasterization(
         render_mode=render_mode,
         packed=packed,
         with_eval3d=with_eval3d,
-        with_ut=with_ut
+        with_ut=with_ut,
+        extra_signals=extra_signals,
+        extra_signals_sh_degree=extra_signals_sh_degree,
     )
 
     if render_mode == "D":
@@ -131,10 +159,14 @@ def test_rasterization(
         render_mode=render_mode,
         with_eval3d=with_eval3d,
         with_ut=with_ut,
+        extra_signals=extra_signals,
+        extra_signals_sh_degree=extra_signals_sh_degree,
     )
-    # Use more lenient tolerances for eval3d implementation
-    rtol = 5e-4 if with_eval3d else 1e-4
-    atol = 5e-4 if with_eval3d else 1e-4
+
+    rtol = 1e-4
+    atol = 1e-4
     torch.testing.assert_close(renders, _renders, rtol=rtol, atol=atol)
     torch.testing.assert_close(alphas, _alphas, rtol=rtol, atol=atol)
+    if extra_signals is not None:
+        torch.testing.assert_close(meta["render_extra_signals"], _meta["render_extra_signals"], rtol=rtol, atol=atol)
 
