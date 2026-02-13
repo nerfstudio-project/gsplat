@@ -202,12 +202,15 @@ def test_rasterization(
         extra_signals=extra_signals,
         extra_signals_sh_degree=extra_signals_sh_degree,
     )
-    # Use more lenient tolerances for eval3d implementation
-    rtol = 5e-4 if with_eval3d else 1e-4
-    atol = 5e-4 if with_eval3d else 1e-4
+
+    rtol = 1e-4
+    atol = 1e-4
     torch.testing.assert_close(renders, _renders, rtol=rtol, atol=atol)
     torch.testing.assert_close(alphas, _alphas, rtol=rtol, atol=atol)
     if extra_signals is not None:
         torch.testing.assert_close(
-            meta["render_extra_signals"], _meta["render_extra_signals"]
+            meta["render_extra_signals"],
+            _meta["render_extra_signals"],
+            rtol=rtol,
+            atol=atol,
         )
