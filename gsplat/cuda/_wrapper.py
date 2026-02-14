@@ -202,6 +202,7 @@ def create_camera_model(
     tangential_coeffs: Optional[Tensor] = None,
     thin_prism_coeffs: Optional[Tensor] = None,
     ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
+    external_distortion_coeffs: Optional[BivariateWindshieldModelParameters] = None,
     rs_type: RollingShutterType = RollingShutterType.GLOBAL,
     lidar_coeffs: Optional["RowOffsetStructuredSpinningLidarModelParametersExt"] = None,
 ):
@@ -230,6 +231,7 @@ def create_camera_model(
             tangential_coeffs,
             thin_prism_coeffs,
             ftheta_coeffs,
+            external_distortion_coeffs,
             rs_type,
         )
 

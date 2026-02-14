@@ -153,11 +153,12 @@ c10::intrusive_ptr<PyBaseCameraModel<>> PyBaseCameraModel<>::create(
     int height,
     const std::string& camera_model,
     const torch::Tensor& principal_points,
-    const std::optional<torch::Tensor> &focal_lengths,
-    const std::optional<torch::Tensor> &radial_coeffs,
-    const std::optional<torch::Tensor> &tangential_coeffs,
-    const std::optional<torch::Tensor> &thin_prism_coeffs,
-    const std::optional<c10::intrusive_ptr<FThetaCameraDistortionParameters>> &ftheta_coeffs,
+    const std::optional<torch::Tensor>& focal_lengths,
+    const std::optional<torch::Tensor>& radial_coeffs,
+    const std::optional<torch::Tensor>& tangential_coeffs,
+    const std::optional<torch::Tensor>& thin_prism_coeffs,
+    const std::optional<c10::intrusive_ptr<FThetaCameraDistortionParameters>>& ftheta_coeffs,
+    const std::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>>& external_distortion_coeffs,
     ShutterType rs_type
 )
 {
@@ -169,13 +170,13 @@ c10::intrusive_ptr<PyBaseCameraModel<>> PyBaseCameraModel<>::create(
         if(radial_coeffs || tangential_coeffs || thin_prism_coeffs)
         {
             return c10::make_intrusive<PyOpenCVPinholeCameraModel>(
-                width, height, *focal_lengths, principal_points, radial_coeffs, tangential_coeffs, thin_prism_coeffs, rs_type
+                width, height, *focal_lengths, principal_points, radial_coeffs, tangential_coeffs, thin_prism_coeffs, rs_type, external_distortion_coeffs
             );
         }
         else
         {
             return c10::make_intrusive<PyPerfectPinholeCameraModel>(
-                width, height, *focal_lengths, principal_points, rs_type
+                width, height, *focal_lengths, principal_points, rs_type, external_distortion_coeffs
             );
         }
     }
@@ -187,7 +188,7 @@ c10::intrusive_ptr<PyBaseCameraModel<>> PyBaseCameraModel<>::create(
         TORCH_CHECK_ARG(focal_lengths, "focal_lengths", "required for fisheye camera model");
 
         return c10::make_intrusive<PyOpenCVFisheyeCameraModel>(
-            width, height, *focal_lengths, principal_points, radial_coeffs, rs_type
+            width, height, *focal_lengths, principal_points, radial_coeffs, rs_type, external_distortion_coeffs
         );
     }
     else if (camera_model == "ftheta")
@@ -231,7 +232,8 @@ c10::intrusive_ptr<PyBaseCameraModel<>> PyBaseCameraModel<>::create(
             linear_cde,
             params.reference_poly,
             max_angle,
-            rs_type
+            rs_type,
+            external_distortion_coeffs
         );
     }
     // TODO: Lidar camera model is not supported through the generic create() method.
@@ -264,6 +266,32 @@ PyBaseCameraModel<CameraModel>::PyBaseCameraModel(int num_cameras, int width, in
     CameraModel* d_cameras;
     CUDA_CHECK(cudaMalloc(&d_cameras,num_cameras * sizeof(CameraModel)));
     m_dev_cameras.reset(d_cameras);
+}
+
+template <typename CameraModel>
+void PyBaseCameraModel<CameraModel>::init_external_distortion(
+    const gsplat::extdist::BivariateWindshieldModelParameters& params)
+{
+    // Store the params to keep tensors alive (they own the GPU data)
+    m_ext_dist_params_storage = params;
+    auto& stored = *m_ext_dist_params_storage;
+
+    // Ensure tensors are contiguous and on CUDA
+    stored.horizontal_poly = stored.horizontal_poly.contiguous().cuda();
+    stored.vertical_poly = stored.vertical_poly.contiguous().cuda();
+    stored.horizontal_poly_inverse = stored.horizontal_poly_inverse.contiguous().cuda();
+    stored.vertical_poly_inverse = stored.vertical_poly_inverse.contiguous().cuda();
+
+    // Build the host-side device params (contains raw pointers into the tensor data)
+    gsplat::extdist::BivariateWindshieldModelDeviceParams host_params(stored);
+
+    // Allocate device memory and copy
+    gsplat::extdist::BivariateWindshieldModelDeviceParams* d_params;
+    CUDA_CHECK(cudaMalloc(&d_params, sizeof(gsplat::extdist::BivariateWindshieldModelDeviceParams)));
+    CUDA_CHECK(cudaMemcpy(d_params, &host_params,
+                          sizeof(gsplat::extdist::BivariateWindshieldModelDeviceParams),
+                          cudaMemcpyHostToDevice));
+    m_dev_ext_dist_params.reset(d_params);
 }
 
 /**
@@ -659,7 +687,8 @@ __global__ void construct_perfect_pinhole_cameras_kernel(
     TensorView<PerfectPinholeCameraModel, CAMERA> cameras,
     TensorView<const float, CAMERA, 2> focal_lengths,
     TensorView<const float, CAMERA, 2> principal_points,
-    int width, int height, ShutterType rs_type
+    int width, int height, ShutterType rs_type,
+    const gsplat::extdist::BivariateWindshieldModelDeviceParams* ext_dist_params
 )
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -679,6 +708,7 @@ __global__ void construct_perfect_pinhole_cameras_kernel(
     params.principal_point = {principal_point(0), principal_point(1)};
 
     params.shutter_type = rs_type;
+    params.external_distortion_params = ext_dist_params;
 
     // Construct camera in-place
     new (&cameras(idx)) PerfectPinholeCameraModel(params);
@@ -688,9 +718,13 @@ __global__ void construct_perfect_pinhole_cameras_kernel(
 PyPerfectPinholeCameraModel::PyPerfectPinholeCameraModel(
     int width, int height,
     const torch::Tensor& focal_lengths, const torch::Tensor& principal_points,
-    ShutterType rs_type
+    ShutterType rs_type,
+    const std::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>>& external_distortion_coeffs
 ) : PyBaseCameraModel(normalize_shape<CAMERA, 2>(focal_lengths).size(0), width, height, rs_type, focal_lengths, principal_points)
 {
+    if (external_distortion_coeffs)
+        init_external_distortion(*external_distortion_coeffs.value());
+
     cudaStream_t stream = at::cuda::getCurrentCUDAStream(focal_lengths.device().index());
 
     int threads = 256;
@@ -700,7 +734,8 @@ PyPerfectPinholeCameraModel::PyPerfectPinholeCameraModel(
         make_tensor_view<CAMERA>(this->dev_cameras(), {m_num_cameras}, {1}, "cameras"),
         make_tensor_view<const float, CAMERA, 2>(focal_lengths, m_num_cameras, "focal_lengths"),
         make_tensor_view<const float, CAMERA, 2>(principal_points, m_num_cameras, "principal_points"),
-        m_width, m_height, m_rs_type
+        m_width, m_height, m_rs_type,
+        dev_ext_dist_params()
     );
     CUDA_CHECK(cudaGetLastError());
 }
@@ -717,7 +752,8 @@ __global__ void construct_opencv_pinhole_cameras_kernel(
     TensorView<const float, CAMERA, COEFF> radial_coeffs,
     TensorView<const float, CAMERA, COEFF> tangential_coeffs,
     TensorView<const float, CAMERA, COEFF> thin_prism_coeffs,
-    int width, int height, ShutterType rs_type
+    int width, int height, ShutterType rs_type,
+    const gsplat::extdist::BivariateWindshieldModelDeviceParams* ext_dist_params
 )
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -736,6 +772,7 @@ __global__ void construct_opencv_pinhole_cameras_kernel(
     params.principal_point = {principal_point(0), principal_point(1)};
 
     params.shutter_type = rs_type;
+    params.external_distortion_params = ext_dist_params;
 
     if (radial_coeffs)
     {
@@ -776,9 +813,13 @@ PyOpenCVPinholeCameraModel::PyOpenCVPinholeCameraModel(
     const std::optional<torch::Tensor>& radial_coeffs,
     const std::optional<torch::Tensor>& tangential_coeffs,
     const std::optional<torch::Tensor>& thin_prism_coeffs,
-    ShutterType rs_type
+    ShutterType rs_type,
+    const std::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>>& external_distortion_coeffs
 ) : PyBaseCameraModel(normalize_shape<CAMERA, 2>(focal_lengths).size(0), width, height, rs_type, focal_lengths, principal_points)
 {
+    if (external_distortion_coeffs)
+        init_external_distortion(*external_distortion_coeffs.value());
+
     cudaStream_t stream = at::cuda::getCurrentCUDAStream(focal_lengths.device().index());
 
     int threads = 256;
@@ -791,7 +832,8 @@ PyOpenCVPinholeCameraModel::PyOpenCVPinholeCameraModel(
         make_tensor_view<const float, CAMERA, COEFF>(radial_coeffs, m_num_cameras, "radial_coeffs"),
         make_tensor_view<const float, CAMERA, COEFF>(tangential_coeffs, m_num_cameras, "tangential_coeffs"),
         make_tensor_view<const float, CAMERA, COEFF>(thin_prism_coeffs, m_num_cameras, "thin_prism_coeffs"),
-        m_width, m_height, m_rs_type
+        m_width, m_height, m_rs_type,
+        dev_ext_dist_params()
     );
     CUDA_CHECK(cudaGetLastError());
 }
@@ -806,7 +848,8 @@ __global__ void construct_opencv_fisheye_cameras_kernel(
     TensorView<const float, CAMERA, 2> focal_lengths,
     TensorView<const float, CAMERA, 2> principal_points,
     TensorView<const float, CAMERA, COEFF> radial_coeffs,
-    int width, int height, ShutterType rs_type
+    int width, int height, ShutterType rs_type,
+    const gsplat::extdist::BivariateWindshieldModelDeviceParams* ext_dist_params
 )
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -825,6 +868,7 @@ __global__ void construct_opencv_fisheye_cameras_kernel(
     params.principal_point = {principal_point(0), principal_point(1)};
 
     params.shutter_type = rs_type;
+    params.external_distortion_params = ext_dist_params;
 
     if (radial_coeffs)
     {
@@ -843,9 +887,13 @@ PyOpenCVFisheyeCameraModel::PyOpenCVFisheyeCameraModel(
     int width, int height,
     const torch::Tensor& focal_lengths, const torch::Tensor& principal_points,
     const std::optional<torch::Tensor>& radial_coeffs,
-    ShutterType rs_type
+    ShutterType rs_type,
+    const std::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>>& external_distortion_coeffs
 ) : PyBaseCameraModel(normalize_shape<CAMERA, 2>(focal_lengths).size(0), width, height, rs_type, focal_lengths, principal_points)
 {
+    if (external_distortion_coeffs)
+        init_external_distortion(*external_distortion_coeffs.value());
+
     cudaStream_t stream = at::cuda::getCurrentCUDAStream(focal_lengths.device().index());
 
     int threads = 256;
@@ -856,7 +904,8 @@ PyOpenCVFisheyeCameraModel::PyOpenCVFisheyeCameraModel(
         make_tensor_view<const float, CAMERA, 2>(focal_lengths, m_num_cameras, "focal_lengths"),
         make_tensor_view<const float, CAMERA, 2>(principal_points, m_num_cameras, "principal_points"),
         make_tensor_view<const float, CAMERA, COEFF>(radial_coeffs, m_num_cameras, "radial_coeffs"),
-        m_width, m_height, m_rs_type
+        m_width, m_height, m_rs_type,
+        dev_ext_dist_params()
     );
     CUDA_CHECK(cudaGetLastError());
 }
@@ -875,7 +924,8 @@ __global__ void construct_ftheta_cameras_kernel(
     FThetaCameraDistortionParameters::PolynomialType reference_poly,
     TensorView<const float, CAMERA> max_angle,
     int width, int height,
-    ShutterType rs_type
+    ShutterType rs_type,
+    const gsplat::extdist::BivariateWindshieldModelDeviceParams* ext_dist_params
 )
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -891,6 +941,7 @@ __global__ void construct_ftheta_cameras_kernel(
     params.principal_point = {principal_point(0), principal_point(1)};
 
     params.shutter_type = rs_type;
+    params.external_distortion_params = ext_dist_params;
 
     auto p2a = pixeldist_to_angle_poly(idx);
     auto a2p = angle_to_pixeldist_poly(idx);
@@ -920,12 +971,16 @@ PyFThetaCameraModel::PyFThetaCameraModel(
     const torch::Tensor& linear_cde,
     FThetaCameraDistortionParameters::PolynomialType reference_poly,
     const torch::Tensor &max_angle,
-    ShutterType rs_type
+    ShutterType rs_type,
+    const std::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>>& external_distortion_coeffs
 ) : PyBaseCameraModel(normalize_shape<CAMERA, 2>(principal_points).size(0), width, height, rs_type,
                       // The linear component is a decent approximation of the focal length.
                       angle_to_pixeldist_poly.index_select(-1, torch::tensor({1, 1}, torch::kLong).to(angle_to_pixeldist_poly.device())),
                       principal_points)
 {
+    if (external_distortion_coeffs)
+        init_external_distortion(*external_distortion_coeffs.value());
+
     cudaStream_t stream = at::cuda::getCurrentCUDAStream(principal_points.device().index());
 
     int threads = 256;
@@ -939,7 +994,8 @@ PyFThetaCameraModel::PyFThetaCameraModel(
         make_tensor_view<const float, CAMERA, 3>(linear_cde, m_num_cameras, "linear_cde"),
         reference_poly,
         make_tensor_view<const float, CAMERA>(max_angle, m_num_cameras, "max_angle"),
-        m_width, m_height, m_rs_type
+        m_width, m_height, m_rs_type,
+        dev_ext_dist_params()
     );
 
     CUDA_CHECK(cudaGetLastError());

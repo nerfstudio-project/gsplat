@@ -28,6 +28,8 @@
 #include <torch/extension.h>
 #include <memory>
 #include "Cameras.cuh"
+#include "ExternalDistortion.h"
+#include "ExternalDistortion.cuh"
 #include "Lidars.cuh"
 #include "Ops.h"
 
@@ -129,6 +131,7 @@ public:
      * @param tangential_coeffs Optional tangential distortion coefficients
      * @param thin_prism_coeffs Optional thin prism distortion coefficients
      * @param ftheta_coeffs Optional ftheta distortion parameters
+     * @param external_distortion_coeffs Optional bivariate windshield model distortion parameters
      * @param rs_type Rolling shutter type (default: GLOBAL)
      * @return Shared pointer to created camera model
      * @note For ftheta model, focal_lengths can be empty/nullopt as focal length is embedded in polynomial
@@ -143,6 +146,7 @@ public:
         const std::optional<torch::Tensor>& focal_lengths,
         const std::optional<torch::Tensor>& thin_prism_coeffs,
         const std::optional<c10::intrusive_ptr<FThetaCameraDistortionParameters>>& ftheta_coeffs,
+        const std::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>>& external_distortion_coeffs,
         ShutterType rs_type
     );
 };
@@ -201,11 +205,28 @@ protected:
     const CameraModel* dev_cameras() const { return m_dev_cameras.get(); }
     const CameraModel* const_dev_cameras() const { return m_dev_cameras.get(); }
 
+    /**
+     * @brief Allocate and initialize external distortion device params.
+     * Must be called before constructing cameras on device.
+     * @param params External distortion parameters (with CUDA tensors)
+     */
+    void init_external_distortion(const extdist::BivariateWindshieldModelParameters& params);
+
+    /**
+     * @brief Get pointer to device-side external distortion params (or nullptr).
+     */
+    const extdist::BivariateWindshieldModelDeviceParams* dev_ext_dist_params() const {
+        return m_dev_ext_dist_params.get();
+    }
+
 private:
     std::unique_ptr<CameraModel, CudaDeleter> m_dev_cameras;
+    std::unique_ptr<extdist::BivariateWindshieldModelDeviceParams, CudaDeleter> m_dev_ext_dist_params;
 
     torch::Tensor m_focal_lengths;
     torch::Tensor m_principal_points;
+    // Keep external distortion tensors alive (they own the data pointed to by device params)
+    std::optional<extdist::BivariateWindshieldModelParameters> m_ext_dist_params_storage;
 };
 
 /**
@@ -221,13 +242,15 @@ public:
      * @param focal_lengths Focal lengths [..., 2] (fx, fy)
      * @param principal_points Principal points [..., 2] (cx, cy)
      * @param shutter_type Rolling shutter type
+     * @param external_distortion_coeffs Optional bivariate windshield model distortion parameters
      */
     PyPerfectPinholeCameraModel(
         int width,
         int height,
         const torch::Tensor& focal_lengths,
         const torch::Tensor& principal_points,
-        ShutterType rs_type
+        ShutterType rs_type,
+        const std::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>>& external_distortion_coeffs
     );
 };
 
@@ -247,6 +270,7 @@ public:
      * @param tangential_coeffs Optional tangential distortion coefficients [..., 2]
      * @param thin_prism_coeffs Optional thin prism distortion coefficients [..., 4]
      * @param shutter_type Rolling shutter type
+     * @param external_distortion_coeffs Optional bivariate windshield model distortion parameters
      */
     PyOpenCVPinholeCameraModel(
         int width,
@@ -256,7 +280,8 @@ public:
         const std::optional<torch::Tensor>& radial_coeffs,
         const std::optional<torch::Tensor>& tangential_coeffs,
         const std::optional<torch::Tensor>& thin_prism_coeffs,
-        ShutterType rs_type
+        ShutterType rs_type,
+        const std::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>>& external_distortion_coeffs
     );
 };
 
@@ -274,6 +299,7 @@ public:
      * @param principal_points Principal points [..., 2] (cx, cy)
      * @param radial_coeffs Optional radial distortion coefficients [..., 4]
      * @param shutter_type Rolling shutter type
+     * @param external_distortion_coeffs Optional bivariate windshield model distortion parameters
      */
     PyOpenCVFisheyeCameraModel(
         int width,
@@ -281,7 +307,8 @@ public:
         const torch::Tensor& focal_lengths,
         const torch::Tensor& principal_points,
         const std::optional<torch::Tensor>& radial_coeffs,  // [..., 4]
-        ShutterType rs_type
+        ShutterType rs_type,
+        const std::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>>& external_distortion_coeffs
     );
 };
 
@@ -302,6 +329,7 @@ public:
      * @param reference_poly Reference polynomial type (FThetaPolynomialType enum value)
      * @param max_angle Maximum angle for FOV clamping (radians)
      * @param shutter_type Rolling shutter type
+     * @param external_distortion_coeffs Optional bivariate windshield model distortion parameters
      */
     PyFThetaCameraModel(
         int width,
@@ -312,7 +340,8 @@ public:
         const torch::Tensor& linear_cde,               // [..., 3]
         FThetaCameraDistortionParameters::PolynomialType reference_poly,
         const torch::Tensor &max_angle,                // [...]
-        ShutterType rs_type
+        ShutterType rs_type,
+        const std::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>>& external_distortion_coeffs
     );
 };
 
