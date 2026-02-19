@@ -32,11 +32,7 @@ from ._wrapper import (
     RollingShutterType,
     FThetaPolynomialType,
     FThetaCameraDistortionParameters,
-    _make_lazy_cuda_obj
 )
-
-ShutterType = _make_lazy_cuda_obj("ShutterType")
-FThetaPolynomialTypeCUDA = _make_lazy_cuda_obj("FThetaPolynomialType")
 
 def _project_to_image(
     cam_ray: Tensor,  # [B, 2] normalized camera coordinates
@@ -223,16 +219,11 @@ class _BaseCameraModel(ABC):
         self,
         width: int,
         height: int,
-        shutter_type: RollingShutterType | ShutterType,
+        shutter_type: RollingShutterType
     ):
         self.width = width
         self.height = height
-        if isinstance(shutter_type, RollingShutterType):
-            self.shutter_type = shutter_type.to_cpp()
-        else:
-            self.shutter_type = shutter_type
-
-        assert isinstance(self.shutter_type, ShutterType), f"shutter_type must be a ShutterType, got {type(self.shutter_type)}"
+        self.shutter_type = shutter_type
 
     @staticmethod
     def create(
@@ -245,7 +236,7 @@ class _BaseCameraModel(ABC):
         tangential_coeffs: Optional[Tensor] = None,
         thin_prism_coeffs: Optional[Tensor] = None,
         ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
-        rs_type: RollingShutterType | ShutterType = RollingShutterType.GLOBAL,
+        rs_type: RollingShutterType = RollingShutterType.GLOBAL,
     ) -> '_BaseCameraModel':
         """
         Factory method to create appropriate camera model.
@@ -361,7 +352,7 @@ class _BaseCameraModel(ABC):
 
         device = pixel_coords.device
 
-        if self.shutter_type == ShutterType.GLOBAL:
+        if self.shutter_type == RollingShutterType.GLOBAL:
             # Global shutter - all pixels at time 0.0 (matches CUDA default)
             # Note: This value is typically unused since viewmats_rs is None for GLOBAL
             t = torch.full(M, 0.0, device=device, dtype=pixel_coords.dtype)
@@ -369,16 +360,16 @@ class _BaseCameraModel(ABC):
             px = pixel_coords[..., 0] # [M]
             py = pixel_coords[..., 1] # [M]
 
-            if self.shutter_type == ShutterType.ROLLING_TOP_TO_BOTTOM:
+            if self.shutter_type == RollingShutterType.ROLLING_TOP_TO_BOTTOM:
                 t = (torch.floor(py) / float(self.height - 1)) if self.height > 1 else 0.5
-            elif self.shutter_type == ShutterType.ROLLING_LEFT_TO_RIGHT:
+            elif self.shutter_type == RollingShutterType.ROLLING_LEFT_TO_RIGHT:
                 t = (torch.floor(px) / float(self.width - 1)) if self.width > 1 else 0.5
-            elif self.shutter_type == ShutterType.ROLLING_BOTTOM_TO_TOP:
+            elif self.shutter_type == RollingShutterType.ROLLING_BOTTOM_TO_TOP:
                 # TODO: this returns > 1 for the topmost row, but should be 1
                 t = ((self.height - torch.ceil(py)) / float(self.height - 1)) if self.height > 1 else 0.5
             else:
                 # TODO: this returns > 1 for the rightmost column, but should be 1
-                assert self.shutter_type == ShutterType.ROLLING_RIGHT_TO_LEFT
+                assert self.shutter_type == RollingShutterType.ROLLING_RIGHT_TO_LEFT
                 t = ((self.width - torch.ceil(px)) / float(self.width - 1)) if self.width > 1 else 0.5
 
         # Postconditions
@@ -487,7 +478,7 @@ class _BaseCameraModel(ABC):
             margin_factor
         )
 
-        if self.shutter_type == ShutterType.GLOBAL:
+        if self.shutter_type == RollingShutterType.GLOBAL:
             assert_shape("image_points_start", image_points_start, B + M + (2,))
             assert_shape("valid_start", valid_start, B + M)
             return image_points_start, valid_start
@@ -591,7 +582,7 @@ class _PerfectPinholeCameraModel(_BaseCameraModel):
         principal_points: Tensor,  # [B, 2]
         width: int,
         height: int,
-        rs_type: RollingShutterType | ShutterType,
+        rs_type: RollingShutterType
     ):
         # Preconditions
         B = focal_lengths.shape[:-1]
@@ -675,7 +666,7 @@ class _OpenCVPinholeCameraModel(_BaseCameraModel):
         principal_points: Tensor,  # [B, 2]
         width: int,
         height: int,
-        rs_type: RollingShutterType | ShutterType,
+        rs_type: RollingShutterType,
         radial_coeffs: Optional[Tensor] = None, # [B, 4] or [B, 6]
         tangential_coeffs: Optional[Tensor] = None, # [B, 2]
         thin_prism_coeffs: Optional[Tensor] = None, # [B, 4]
@@ -1063,7 +1054,7 @@ class _OpenCVFisheyeCameraModel(_BaseCameraModel):
         principal_points: Tensor,  # [B, 2]
         width: int,
         height: int,
-        rs_type: RollingShutterType | ShutterType,
+        rs_type: RollingShutterType,
         radial_coeffs: Optional[Tensor] = None,  # [B, 4]
         min_2d_norm: float = 1e-6,
         newton_iterations: int = 20,
@@ -1462,7 +1453,7 @@ class _FThetaCameraModel(_BaseCameraModel):
         principal_points: Tensor,  # [B, 2]
         width: int,
         height: int,
-        rs_type: RollingShutterType | ShutterType,
+        rs_type: RollingShutterType,
         dist_params: FThetaCameraDistortionParameters,
         min_2d_norm: float = 1e-6,
         newton_iterations: int = 3,
@@ -1498,13 +1489,7 @@ class _FThetaCameraModel(_BaseCameraModel):
 
         device = principal_points.device
         dtype = principal_points.dtype
-
-        if isinstance(dist_params.reference_poly, FThetaPolynomialType):
-            self.reference_poly_type = dist_params.reference_poly.to_cpp()
-        else:
-            self.reference_poly_type = dist_params.reference_poly
-
-        assert isinstance(self.reference_poly_type, FThetaPolynomialTypeCUDA), "reference_poly must be a FThetaPolynomialTypeCUDA"
+        self.reference_poly_type = dist_params.reference_poly
 
         # FTheta model convention: image origin = center of first pixel
         # Therefore offset principal point by +0.5 (matches CUDA lines 1075-1076)
@@ -1528,7 +1513,7 @@ class _FThetaCameraModel(_BaseCameraModel):
 
         # Compute derivative of reference polynomial (matches CUDA lines 1066-1071)
         # Derivative: d/dx[c₀ + c₁·x + c₂·x² + ...] = c₁ + 2·c₂·x + 3·c₃·x² + ...
-        if self.reference_poly_type == FThetaPolynomialTypeCUDA.PIXELDIST_TO_ANGLE:
+        if self.reference_poly_type == FThetaPolynomialType.PIXELDIST_TO_ANGLE:
             # Backward poly is reference: derivative of pixeldist_to_angle_poly
             self.dreference_poly = FullPolynomialProxy(torch.stack([
                 1.0 * self.pixeldist_to_angle_poly.coeffs[...,1],
@@ -1538,7 +1523,7 @@ class _FThetaCameraModel(_BaseCameraModel):
                 5.0 * self.pixeldist_to_angle_poly.coeffs[...,5],
             ], dim=-1))  # [B,5]
         else:
-            assert self.reference_poly_type == FThetaPolynomialTypeCUDA.ANGLE_TO_PIXELDIST
+            assert self.reference_poly_type == FThetaPolynomialType.ANGLE_TO_PIXELDIST
             # Forward poly is reference: derivative of angle_to_pixeldist_poly
             self.dreference_poly = FullPolynomialProxy(torch.stack([
                 1.0 * self.angle_to_pixeldist_poly.coeffs[...,1],
@@ -1566,10 +1551,10 @@ class _FThetaCameraModel(_BaseCameraModel):
         # Focal length is proportional to the linear term of the angle_to_pixeldist_poly
 
         # Try to use the reference polynomial for a better estimate.
-        if self.reference_poly_type == FThetaPolynomialTypeCUDA.PIXELDIST_TO_ANGLE:
+        if self.reference_poly_type == FThetaPolynomialType.PIXELDIST_TO_ANGLE:
             flen = (1.0/self.pixeldist_to_angle_poly.coeffs[..., [1,1]])
         else:
-            assert self.reference_poly_type == FThetaPolynomialTypeCUDA.ANGLE_TO_PIXELDIST
+            assert self.reference_poly_type == FThetaPolynomialType.ANGLE_TO_PIXELDIST
             flen = self.angle_to_pixeldist_poly.coeffs[..., [1,1]]
 
         return flen.expand(self.principal_points.shape)
@@ -1621,7 +1606,7 @@ class _FThetaCameraModel(_BaseCameraModel):
 
         # Evaluate forward polynomial to get delta = f(θ)
         # Choice depends on which polynomial is the reference
-        if self.reference_poly_type == FThetaPolynomialTypeCUDA.PIXELDIST_TO_ANGLE:
+        if self.reference_poly_type == FThetaPolynomialType.PIXELDIST_TO_ANGLE:
             # Backward poly is reference: forward via Newton inverse
             delta, converged = _eval_poly_inverse_horner_newton(
                 self.pixeldist_to_angle_poly,
@@ -1715,7 +1700,7 @@ class _FThetaCameraModel(_BaseCameraModel):
 
         # Evaluate backward polynomial to get θ = f⁻¹(δ)
         # Choice depends on which polynomial is the reference
-        if self.reference_poly_type == FThetaPolynomialTypeCUDA.PIXELDIST_TO_ANGLE:
+        if self.reference_poly_type == FThetaPolynomialType.PIXELDIST_TO_ANGLE:
             # Backward poly is reference: direct evaluation
             theta = self.pixeldist_to_angle_poly.eval_horner(delta)  # [M]
             converged = torch.ones_like(theta, dtype=torch.bool)  # Always converged
