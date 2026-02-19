@@ -22,13 +22,12 @@ from gsplat.cuda._torch_cameras import (  # PyTorch reference
 from gsplat._helper import assert_mismatch_ratio, assert_close
 from gsplat.cuda._wrapper import (
     RollingShutterType,
-    _make_lazy_cuda_obj,
+    _make_lazy_cuda_cls,
     FThetaPolynomialType,
-    FThetaCameraDistortionParameters
+    FThetaCameraDistortionParameters,
+    create_camera_model,
 )
 from gsplat.cuda._math import _quat_multiply, _safe_normalize, compute_inverse_polynomial
-
-BaseCameraModelCUDA = _make_lazy_cuda_obj("BaseCameraModel")
 
 SEED = 42
 
@@ -426,7 +425,7 @@ def test_camera(camera_model, batch_dims, image_dims, rs_type):
     """Create C++ camera (primary implementation)"""
     height, width = image_dims
     params = parse_camera(camera_model, batch_dims, width=width, height=height, rs_type=rs_type, seed=SEED)
-    return BaseCameraModelCUDA.create(**params)
+    return create_camera_model(**params)
 
 
 @pytest.fixture

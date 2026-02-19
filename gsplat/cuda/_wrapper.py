@@ -1,7 +1,7 @@
 import math
 import warnings
 from dataclasses import dataclass
-from enum import Enum
+from enum import IntEnum
 from typing import Any, Callable, Optional, Tuple
 
 import torch
@@ -27,6 +27,17 @@ def _make_lazy_cuda_func(name: str) -> Callable:
     return call_cuda
 
 
+def _make_lazy_cuda_cls(name: str) -> Any:
+    # The following import statement is required to ensure that C++ module
+    # gsplat/csrc.so is loaded (and JIT-compiled if necessary). Upon module
+    # load, the gsplat PyTorch custom classes are imported into the
+    # torch.classes.gsplat submodule.
+
+    # pylint: disable=import-outside-toplevel
+    from ._backend import _C
+    return getattr(torch.classes.gsplat, name)
+
+
 def _make_lazy_cuda_obj(name: str) -> Any:
     # pylint: disable=import-outside-toplevel
     from ._backend import _C
@@ -36,16 +47,36 @@ def _make_lazy_cuda_obj(name: str) -> Any:
         obj = getattr(_C, name_split)
     return obj
 
-RollingShutterType = _make_lazy_cuda_obj("ShutterType")
-FThetaPolynomialType = _make_lazy_cuda_obj("FThetaPolynomialType")
-UnscentedTransformParameters = _make_lazy_cuda_obj("UnscentedTransformParameters")
-FThetaCameraDistortionParameters = _make_lazy_cuda_obj("FThetaCameraDistortionParameters")
-ExternalDistortionReferencePolynomial = _make_lazy_cuda_obj("ExternalDistortionReferencePolynomial")
-BivariateWindshieldModelParameters = _make_lazy_cuda_obj("BivariateWindshieldModelParameters")
+class RollingShutterType(IntEnum):
+    ROLLING_TOP_TO_BOTTOM = 0
+    ROLLING_LEFT_TO_RIGHT = 1
+    ROLLING_BOTTOM_TO_TOP = 2
+    ROLLING_RIGHT_TO_LEFT = 3
+    GLOBAL = 4
+
+
+class FThetaPolynomialType(IntEnum):
+    PIXELDIST_TO_ANGLE = 0
+    ANGLE_TO_PIXELDIST = 1
+
+
+UnscentedTransformParameters = _make_lazy_cuda_cls("UnscentedTransformParameters")
+FThetaCameraDistortionParameters = _make_lazy_cuda_cls("FThetaCameraDistortionParameters")
+class ExternalDistortionReferencePolynomial(IntEnum):
+    FORWARD = 1
+    BACKWARD = 2
+
+
+BivariateWindshieldModelParameters = _make_lazy_cuda_cls("BivariateWindshieldModelParameters")
 
 def has_camera_wrappers():
     from ._backend import _C
-    return hasattr(_C, "BaseCameraModel")
+    # PyTorch will throw a RuntimeError if the class is not registered
+    # but that's okay in this case because we're just checking if it exists
+    try:
+        return hasattr(torch.classes.gsplat, "BaseCameraModel")
+    except RuntimeError:
+        return False
 
 def has_2dgs():
     from ._backend import _C
@@ -66,6 +97,32 @@ def has_adam():
 def has_reloc():
     from ._backend import _C
     return hasattr(torch.ops.gsplat, "relocation")
+
+def create_camera_model(
+    width: int,
+    height: int,
+    camera_model: str,
+    principal_points: Tensor,
+    focal_lengths: Optional[Tensor] = None,
+    radial_coeffs: Optional[Tensor] = None,
+    tangential_coeffs: Optional[Tensor] = None,
+    thin_prism_coeffs: Optional[Tensor] = None,
+    ftheta_coeffs: Optional[FThetaCameraDistortionParameters] = None,
+    rs_type: RollingShutterType = RollingShutterType.GLOBAL,
+    ):
+    BaseCameraModelCUDA = _make_lazy_cuda_cls("BaseCameraModel")
+
+    return BaseCameraModelCUDA.create(
+        width,
+        height,
+        camera_model,
+        principal_points,
+        focal_lengths,
+        radial_coeffs,
+        tangential_coeffs,
+        thin_prism_coeffs,
+        ftheta_coeffs,
+        rs_type)
 
 def world_to_cam(
     means: Tensor,  # [..., N, 3]
@@ -1310,21 +1367,7 @@ def fully_fused_projection_with_ut(
         assert viewmats_rs.shape == batch_dims + (C, 4, 4), viewmats_rs.shape
 
     camera_model_type = _make_lazy_cuda_obj(f"CameraModelType.{camera_model.upper()}")
-    ftheta_coeffs = ftheta_coeffs if ftheta_coeffs else FThetaCameraDistortionParameters()
-
-    external_distortion_reference_poly = (
-        external_distortion_coeffs.reference_poly if external_distortion_coeffs else 0
-    )
-    external_distortion_params = (
-        [
-            external_distortion_coeffs.horizontal_poly,
-            external_distortion_coeffs.vertical_poly,
-            external_distortion_coeffs.horizontal_poly_inverse,
-            external_distortion_coeffs.vertical_poly_inverse,
-        ]
-        if external_distortion_coeffs
-        else []
-    )
+    ftheta_coeffs = ftheta_coeffs if ftheta_coeffs is not None else FThetaCameraDistortionParameters()
 
     radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
         "projection_ut_3dgs_fused"
@@ -1345,22 +1388,13 @@ def fully_fused_projection_with_ut(
         calc_compensations,
         camera_model_type,
         global_z_order,
-        ut_params.alpha,
-        ut_params.beta,
-        ut_params.kappa,
-        ut_params.in_image_margin_factor,
-        ut_params.require_all_sigma_points_valid,
+        ut_params,
         rolling_shutter,
         radial_coeffs.contiguous() if radial_coeffs is not None else None,
         tangential_coeffs.contiguous() if tangential_coeffs is not None else None,
         thin_prism_coeffs.contiguous() if thin_prism_coeffs is not None else None,
-        ftheta_coeffs.reference_poly,
-        ftheta_coeffs.pixeldist_to_angle_poly,
-        ftheta_coeffs.angle_to_pixeldist_poly,
-        ftheta_coeffs.max_angle,
-        ftheta_coeffs.linear_cde,
-        external_distortion_reference_poly,
-        external_distortion_params,
+        ftheta_coeffs,
+        external_distortion_coeffs,
     )
     if not calc_compensations:
         compensations = None
@@ -1536,21 +1570,7 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
         )
-        ftheta_coeffs = ftheta_coeffs if ftheta_coeffs else FThetaCameraDistortionParameters()
-
-        external_distortion_reference_poly = (
-            external_distortion_coeffs.reference_poly if external_distortion_coeffs else 0
-        )
-        external_distortion_params = (
-            [
-                external_distortion_coeffs.horizontal_poly,
-                external_distortion_coeffs.vertical_poly,
-                external_distortion_coeffs.horizontal_poly_inverse,
-                external_distortion_coeffs.vertical_poly_inverse,
-            ]
-            if external_distortion_coeffs
-            else []
-        )
+        ftheta_coeffs = ftheta_coeffs if ftheta_coeffs is not None else FThetaCameraDistortionParameters()
 
         # Extract batch_dims for sample_counts allocation
         batch_dims = means.shape[:-2]
@@ -1594,23 +1614,14 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             viewmats_rs,
             Ks,
             camera_model_type,
-            ut_params.alpha,
-            ut_params.beta,
-            ut_params.kappa,
-            ut_params.in_image_margin_factor,
-            ut_params.require_all_sigma_points_valid,
+            ut_params,
             rolling_shutter,
             rays,
             radial_coeffs,
             tangential_coeffs,
             thin_prism_coeffs,
-            ftheta_coeffs.reference_poly,
-            ftheta_coeffs.pixeldist_to_angle_poly,
-            ftheta_coeffs.angle_to_pixeldist_poly,
-            ftheta_coeffs.max_angle,
-            ftheta_coeffs.linear_cde,
-            external_distortion_reference_poly,
-            external_distortion_params,
+            ftheta_coeffs,
+            external_distortion_coeffs,
             isect_offsets,
             flatten_ids,
             use_hit_distance,
@@ -1689,20 +1700,6 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
         external_distortion_coeffs = ctx.external_distortion_coeffs
         use_hit_distance = ctx.use_hit_distance
 
-        external_distortion_reference_poly = (
-            external_distortion_coeffs.reference_poly if external_distortion_coeffs else 0
-        )
-        external_distortion_params = (
-            [
-                external_distortion_coeffs.horizontal_poly,
-                external_distortion_coeffs.vertical_poly,
-                external_distortion_coeffs.horizontal_poly_inverse,
-                external_distortion_coeffs.vertical_poly_inverse,
-            ]
-            if external_distortion_coeffs
-            else []
-        )
-
         (v_means, v_quats, v_scales, v_colors, v_opacities, v_rays) = _make_lazy_cuda_func(
             "rasterize_to_pixels_from_world_3dgs_bwd"
         )(
@@ -1720,23 +1717,14 @@ class _RasterizeToPixelsEval3D(torch.autograd.Function):
             viewmats_rs,
             Ks,
             camera_model_type,
-            ut_params.alpha,
-            ut_params.beta,
-            ut_params.kappa,
-            ut_params.in_image_margin_factor,
-            ut_params.require_all_sigma_points_valid,
+            ut_params,
             rs_type,
             rays,
             radial_coeffs,
             tangential_coeffs,
             thin_prism_coeffs,
-            ftheta_coeffs.reference_poly,
-            ftheta_coeffs.pixeldist_to_angle_poly,
-            ftheta_coeffs.angle_to_pixeldist_poly,
-            ftheta_coeffs.max_angle,
-            ftheta_coeffs.linear_cde,
-            external_distortion_reference_poly,
-            external_distortion_params,
+            ftheta_coeffs,
+            external_distortion_coeffs,
             isect_offsets,
             flatten_ids,
             use_hit_distance,
