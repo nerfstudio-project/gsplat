@@ -956,13 +956,13 @@ projection_ut_3dgs_fused_impl(
     const CameraModelType camera_model,
     const bool global_z_order,
     // uncented transform
-    const UnscentedTransformParameters ut_params,
+    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
     ShutterType rs_type,
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs,  // [..., C, 4] optional
-    const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
-    const std::optional<extdist::BivariateWindshieldModelParameters> external_distortion_params // external distortion parameters
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs, // shared parameters for all cameras
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -987,10 +987,10 @@ projection_ut_3dgs_fused_impl(
     }
 
     if (external_distortion_params.has_value()) {
-        CHECK_INPUT(external_distortion_params->horizontal_poly);
-        CHECK_INPUT(external_distortion_params->vertical_poly);
-        CHECK_INPUT(external_distortion_params->horizontal_poly_inverse); // Could be omitted for projection
-        CHECK_INPUT(external_distortion_params->vertical_poly_inverse); // Could be omitted for projection
+        CHECK_INPUT(external_distortion_params.value()->horizontal_poly);
+        CHECK_INPUT(external_distortion_params.value()->vertical_poly);
+        CHECK_INPUT(external_distortion_params.value()->horizontal_poly_inverse); // Could be omitted for projection
+        CHECK_INPUT(external_distortion_params.value()->vertical_poly_inverse); // Could be omitted for projection
     }
 
     at::DimVector batch_dims(means.sizes().slice(0, means.dim() - 2));
@@ -1081,55 +1081,14 @@ projection_ut_3dgs_fused(
     bool calc_compensations,
     int64_t camera_model,
     bool global_z_order,
-    double alpha,
-    double beta,
-    double kappa,
-    double in_image_margin_factor,
-    bool require_all_sigma_points_valid,
+    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
     int64_t rs_type,
     const at::optional<at::Tensor> &radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> &thin_prism_coeffs,  // [..., C, 4] optional
-    int64_t reference_poly,
-    at::ArrayRef<double> pixeldist_to_angle_poly, // backward polynomial
-    at::ArrayRef<double> angle_to_pixeldist_poly, // forward polynomial
-    double max_angle,
-    at::ArrayRef<double> linear_cde,
-    int64_t external_reference_poly,
-    at::TensorList external_distortion_params
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params
 ) {
-    UnscentedTransformParameters ut_params = {
-        static_cast<float>(alpha),
-        static_cast<float>(beta),
-        static_cast<float>(kappa),
-        static_cast<float>(in_image_margin_factor),
-        require_all_sigma_points_valid
-    };
-
-    FThetaCameraDistortionParameters ftheta_coeffs;
-    ftheta_coeffs.reference_poly = static_cast<FThetaCameraDistortionParameters::PolynomialType>(reference_poly);
-    for (size_t i = 0; i < FThetaCameraDistortionParameters::PolynomialDegree; ++i) {
-        ftheta_coeffs.pixeldist_to_angle_poly[i] = static_cast<float>(pixeldist_to_angle_poly[i]);
-    }
-    for (size_t i = 0; i < FThetaCameraDistortionParameters::PolynomialDegree; ++i) {
-        ftheta_coeffs.angle_to_pixeldist_poly[i] = static_cast<float>(angle_to_pixeldist_poly[i]);
-    }
-    ftheta_coeffs.max_angle = static_cast<float>(max_angle);
-    for (size_t i = 0; i < 3; ++i) {
-        ftheta_coeffs.linear_cde[i] = static_cast<float>(linear_cde[i]);
-    }
-
-    std::optional<extdist::BivariateWindshieldModelParameters> bivariate_windshield_model_params;
-    if (external_distortion_params.size() == 4) {
-        bivariate_windshield_model_params = {
-            external_distortion_params[0],
-            external_distortion_params[1],
-            external_distortion_params[2],
-            external_distortion_params[3],
-            static_cast<extdist::ReferencePolynomialType>(external_reference_poly)
-        };
-    }
-
     return projection_ut_3dgs_fused_impl(
         means,
         quats,
@@ -1153,7 +1112,7 @@ projection_ut_3dgs_fused(
         tangential_coeffs,
         thin_prism_coeffs,
         ftheta_coeffs,
-        bivariate_windshield_model_params
+        external_distortion_params
     );
 }
 

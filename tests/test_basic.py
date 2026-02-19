@@ -39,16 +39,22 @@ from gsplat._helper import (
 import gsplat
 
 from gsplat.cuda._backend import _C
-
 if _C is None:
     pytest.skip("gsplat CUDA extension not available", allow_module_level=True)
+
+from gsplat._helper import (
+    load_test_data,
+    get_inlier_abserror_mask,
+    assert_mismatch_ratio,
+)
 
 from gsplat.cuda._wrapper import (
     CameraModel,
     RollingShutterType,
     UnscentedTransformParameters,
-    _make_lazy_cuda_obj,
+    _make_lazy_cuda_cls,
     has_camera_wrappers,
+    create_camera_model,
 )
 from gsplat.cuda._math import _safe_normalize
 from gsplat.cuda._torch_cameras import _viewmat_to_pose
@@ -937,9 +943,7 @@ def test_rasterize_to_pixels_eval3d(
         viewmats_rs = None
 
     if use_rays:
-        BaseCameraModelCUDA = _make_lazy_cuda_obj("BaseCameraModel")
-
-        camera = BaseCameraModelCUDA.create(
+        camera = create_camera_model(
             width=width,
             height=height,
             camera_model="pinhole",

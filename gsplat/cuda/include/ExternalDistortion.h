@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include <ATen/core/ivalue.h>
 #include <ATen/core/Tensor.h>
 
 // ---------------------------------------------------------------------------------------------
@@ -35,7 +36,8 @@ enum class ReferencePolynomialType {
 };
 
 // Windshield distortion model support
-struct BivariateWindshieldModelParameters {
+struct BivariateWindshieldModelParameters : public torch::CustomClassHolder {
+    BivariateWindshieldModelParameters() {};
 
     static constexpr uint8_t MAX_ORDER = 5;
     static constexpr uint8_t MAX_COEFFS = 21;

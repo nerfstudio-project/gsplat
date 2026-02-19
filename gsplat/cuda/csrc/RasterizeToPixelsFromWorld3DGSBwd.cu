@@ -70,7 +70,7 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     const scalar_t *__restrict__ radial_coeffs,     // [B, C, 6] or [B, C, 4] optional
     const scalar_t *__restrict__ tangential_coeffs, // [B, C, 2] optional
     const scalar_t *__restrict__ thin_prism_coeffs, // [B, C, 4] optional
-    const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
+    const FThetaCameraDistortionDeviceParams ftheta_device_coeffs, // shared parameters for all cameras
     const cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params,
     // intersections
     const int32_t *__restrict__ tile_offsets, // [B, C, tile_height, tile_width]
@@ -200,8 +200,8 @@ __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             cm_params.resolution = {image_width, image_height};
             cm_params.shutter_type = rs_type;
             cm_params.principal_point = { principal_point.x, principal_point.y };
-            cm_params.dist = ftheta_coeffs;
-            cm_params.external_distortion_params = external_distortion_device_params.has_value() ? 
+            cm_params.dist = ftheta_device_coeffs;
+            cm_params.external_distortion_params = external_distortion_device_params.has_value() ?
                 &external_distortion_device_params.value() : nullptr;
             FThetaCameraModel camera_model(cm_params);
             ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
@@ -600,14 +600,14 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
     const at::Tensor Ks,                      // [..., C, 3, 3]
     const CameraModelType camera_model,
     // uncented transform
-    const UnscentedTransformParameters ut_params,
+    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
     ShutterType rs_type,
     const at::optional<at::Tensor> rays,              // [..., C, H, W, 6]
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
-    const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
-    const std::optional<extdist::BivariateWindshieldModelParameters> external_distortion_params,
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs, // shared parameters for all cameras
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
     // intersections
     const at::Tensor tile_offsets,    // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,     // [n_isects]
@@ -667,9 +667,13 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         );
     }
 
+    TORCH_CHECK(ut_params, "ut_params intrusive_ptr is null");
+    TORCH_CHECK(ftheta_coeffs, "ftheta_coeffs intrusive_ptr is null");
+    FThetaCameraDistortionDeviceParams ftheta_device_coeffs(*ftheta_coeffs);
     cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params = cuda::std::nullopt;
     if (external_distortion_params.has_value()) {
-        external_distortion_device_params = extdist::BivariateWindshieldModelDeviceParams(external_distortion_params.value());
+        TORCH_CHECK(external_distortion_params.value(), "external_distortion_params intrusive_ptr is null");
+        external_distortion_device_params = extdist::BivariateWindshieldModelDeviceParams(*external_distortion_params.value());
     }
 
     rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float>
@@ -699,7 +703,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             Ks.data_ptr<float>(),
             camera_model,
             // uncented transform
-            ut_params,
+            *ut_params,
             rs_type,
             rays.has_value() ? rays.value().data_ptr<float>()
                            : nullptr,
@@ -711,7 +715,7 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
             thin_prism_coeffs.has_value()
                 ? thin_prism_coeffs.value().data_ptr<float>()
                 : nullptr,
-            ftheta_coeffs,
+            ftheta_device_coeffs,
             external_distortion_device_params,
             // intersections
             tile_offsets.data_ptr<int32_t>(),
@@ -751,14 +755,17 @@ void launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         const at::optional<at::Tensor> viewmats1,                              \
         const at::Tensor Ks,                                                   \
         const CameraModelType camera_model,                                    \
-        const UnscentedTransformParameters ut_params,                         \
+        const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,     \
         const ShutterType rs_type,                                             \
         const at::optional<at::Tensor> rays,                                   \
-        const at::optional<at::Tensor> radial_coeffs,                         \
-        const at::optional<at::Tensor> tangential_coeffs,                     \
-        const at::optional<at::Tensor> thin_prism_coeffs,                     \
-        const FThetaCameraDistortionParameters ftheta_coeffs,                 \
-        const std::optional<extdist::BivariateWindshieldModelParameters> external_distortion_params, \
+        const at::optional<at::Tensor> radial_coeffs,                          \
+        const at::optional<at::Tensor> tangential_coeffs,                      \
+        const at::optional<at::Tensor> thin_prism_coeffs,                      \
+        const c10::intrusive_ptr<FThetaCameraDistortionParameters>             \
+            &ftheta_coeffs,                                                    \
+        const at::optional<                                                    \
+            c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>>   \
+            &external_distortion_params,                                       \
         const at::Tensor tile_offsets,                                         \
         const at::Tensor flatten_ids,                                          \
         const bool use_hit_distance,                                           \

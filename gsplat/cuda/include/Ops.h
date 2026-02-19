@@ -505,22 +505,13 @@ projection_ut_3dgs_fused(
     bool calc_compensations,
     int64_t camera_model,
     bool global_z_order,
-    double alpha,
-    double beta,
-    double kappa,
-    double in_image_margin_factor,
-    bool require_all_sigma_points_valid,
+    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
     int64_t rs_type,
     const at::optional<at::Tensor> &radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> &thin_prism_coeffs,  // [..., C, 4] optional
-    int64_t reference_poly,
-    at::ArrayRef<double> pixeldist_to_angle_poly, // backward polynomial
-    at::ArrayRef<double> angle_to_pixeldist_poly, // forward polynomial
-    double max_angle,
-    at::ArrayRef<double> linear_cde,
-    int64_t external_reference_poly,
-    at::TensorList external_distortion_params
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params
 );
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor>
@@ -543,23 +534,14 @@ rasterize_to_pixels_from_world_3dgs_fwd(
     const at::Tensor &Ks,                      // [..., C, 3, 3]
     int64_t camera_model,
     // unscented transform
-    double alpha,
-    double beta,
-    double kappa,
-    double in_image_margin_factor,
-    bool require_all_sigma_points_valid,
+    const c10::intrusive_ptr<UnscentedTransformParameters>& ut_params,
     int64_t rs_type,
     const at::optional<at::Tensor> &rays, // [..., C, H, W, 6]
     const at::optional<at::Tensor> &radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> &thin_prism_coeffs,  // [..., C, 4] optional
-    int64_t ftheta_reference_poly,
-    at::ArrayRef<double> pixeldist_to_angle_poly, // backward polynomial
-    at::ArrayRef<double> angle_to_pixeldist_poly, // forward polynomial
-    double max_angle,
-    at::ArrayRef<double> linear_cde,
-    int64_t external_reference_poly,
-    at::TensorList external_distortion_params,
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters>& ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
     // intersections
     const at::Tensor &tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor &flatten_ids,   // [n_isects]
@@ -588,23 +570,14 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     const at::Tensor &Ks,                      // [..., C, 3, 3]
     int64_t camera_model,
     // unscented transform
-    double alpha,
-    double beta,
-    double kappa,
-    double in_image_margin_factor,
-    bool require_all_sigma_points_valid,
+    const c10::intrusive_ptr<UnscentedTransformParameters>& ut_params,
     int64_t rs_type,
     const at::optional<at::Tensor> &rays,    // [..., C, H, W, 6]
     const at::optional<at::Tensor> &radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> &thin_prism_coeffs,  // [..., C, 4] optional
-    int64_t ftheta_reference_poly,
-    at::ArrayRef<double> pixeldist_to_angle_poly, // backward polynomial
-    at::ArrayRef<double> angle_to_pixeldist_poly, // forward polynomial
-    double max_angle,
-    at::ArrayRef<double> linear_cde,
-    int64_t external_reference_poly,
-    at::TensorList external_distortion_params,
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters>& ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
     // intersections
     const at::Tensor &tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor &flatten_ids,  // [n_isects]

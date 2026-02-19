@@ -146,16 +146,16 @@ constexpr struct camera_tag_t {} CAMERA;
 
 // ==================== PyBaseCameraModel<> Implementations ====================
 
-std::shared_ptr<PyBaseCameraModel<>> PyBaseCameraModel<>::create(
+c10::intrusive_ptr<PyBaseCameraModel<>> PyBaseCameraModel<>::create(
     int width,
     int height,
     const std::string& camera_model,
     const torch::Tensor& principal_points,
-    std::optional<torch::Tensor> focal_lengths,
-    std::optional<torch::Tensor> radial_coeffs,
-    std::optional<torch::Tensor> tangential_coeffs,
-    std::optional<torch::Tensor> thin_prism_coeffs,
-    std::optional<FThetaCameraDistortionParameters> ftheta_coeffs,
+    const std::optional<torch::Tensor> &focal_lengths,
+    const std::optional<torch::Tensor> &radial_coeffs,
+    const std::optional<torch::Tensor> &tangential_coeffs,
+    const std::optional<torch::Tensor> &thin_prism_coeffs,
+    const std::optional<c10::intrusive_ptr<FThetaCameraDistortionParameters>> &ftheta_coeffs,
     ShutterType rs_type
 )
 {
@@ -166,13 +166,13 @@ std::shared_ptr<PyBaseCameraModel<>> PyBaseCameraModel<>::create(
 
         if(radial_coeffs || tangential_coeffs || thin_prism_coeffs)
         {
-            return std::make_shared<PyOpenCVPinholeCameraModel>(
+            return c10::make_intrusive<PyOpenCVPinholeCameraModel>(
                 width, height, *focal_lengths, principal_points, radial_coeffs, tangential_coeffs, thin_prism_coeffs, rs_type
             );
         }
         else
         {
-            return std::make_shared<PyPerfectPinholeCameraModel>(
+            return c10::make_intrusive<PyPerfectPinholeCameraModel>(
                 width, height, *focal_lengths, principal_points, rs_type
             );
         }
@@ -184,7 +184,7 @@ std::shared_ptr<PyBaseCameraModel<>> PyBaseCameraModel<>::create(
         TORCH_CHECK_ARG(!thin_prism_coeffs, "thin_prism_coeffs", "not allowed for fisheye camera model");
         TORCH_CHECK_ARG(focal_lengths, "focal_lengths", "required for fisheye camera model");
 
-        return std::make_shared<PyOpenCVFisheyeCameraModel>(
+        return c10::make_intrusive<PyOpenCVFisheyeCameraModel>(
             width, height, *focal_lengths, principal_points, radial_coeffs, rs_type
         );
     }
@@ -197,7 +197,8 @@ std::shared_ptr<PyBaseCameraModel<>> PyBaseCameraModel<>::create(
         TORCH_CHECK_ARG(!focal_lengths, "focal_lengths", "not allowed for ftheta camera model");
 
         // Get FThetaCameraDistortionParameters
-        const FThetaCameraDistortionParameters& params = *ftheta_coeffs;
+        TORCH_CHECK(ftheta_coeffs.value(), "ftheta_coeffs intrusive_ptr is null");
+        const FThetaCameraDistortionParameters& params = *ftheta_coeffs.value();
 
         // Convert polynomial arrays to tensors using from_blob
         torch::Tensor pixeldist_to_angle_poly = torch::from_blob(
@@ -220,7 +221,7 @@ std::shared_ptr<PyBaseCameraModel<>> PyBaseCameraModel<>::create(
 
         torch::Tensor max_angle = torch::full({}, params.max_angle, torch::dtype(torch::kFloat32).device(principal_points.device()));
 
-        return std::make_shared<PyFThetaCameraModel>(
+        return c10::make_intrusive<PyFThetaCameraModel>(
             width, height,
             principal_points,
             pixeldist_to_angle_poly,
@@ -767,9 +768,9 @@ __global__ void construct_opencv_pinhole_cameras_kernel(
 PyOpenCVPinholeCameraModel::PyOpenCVPinholeCameraModel(
     int width, int height,
     const torch::Tensor& focal_lengths, const torch::Tensor& principal_points,
-    std::optional<torch::Tensor> radial_coeffs,
-    std::optional<torch::Tensor> tangential_coeffs,
-    std::optional<torch::Tensor> thin_prism_coeffs,
+    const std::optional<torch::Tensor>& radial_coeffs,
+    const std::optional<torch::Tensor>& tangential_coeffs,
+    const std::optional<torch::Tensor>& thin_prism_coeffs,
     ShutterType rs_type
 ) : PyBaseCameraModel(normalize_shape<CAMERA, 2>(focal_lengths).size(0), width, height, rs_type, focal_lengths, principal_points)
 {
@@ -836,7 +837,7 @@ __global__ void construct_opencv_fisheye_cameras_kernel(
 PyOpenCVFisheyeCameraModel::PyOpenCVFisheyeCameraModel(
     int width, int height,
     const torch::Tensor& focal_lengths, const torch::Tensor& principal_points,
-    std::optional<torch::Tensor> radial_coeffs,
+    const std::optional<torch::Tensor>& radial_coeffs,
     ShutterType rs_type
 ) : PyBaseCameraModel(normalize_shape<CAMERA, 2>(focal_lengths).size(0), width, height, rs_type, focal_lengths, principal_points)
 {

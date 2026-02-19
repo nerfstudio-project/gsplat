@@ -670,14 +670,14 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
     const at::Tensor Ks,                      // [..., C, 3, 3]
     const CameraModelType camera_model,
     // uncented transform
-    const UnscentedTransformParameters ut_params,
+    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
     ShutterType rs_type,
     const at::optional<at::Tensor> rays, // [..., C, H, W, 6]
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
-    const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
-    const std::optional<extdist::BivariateWindshieldModelParameters> external_distortion_params,
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs, // shared parameters for all cameras
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
     // intersections
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
@@ -701,10 +701,12 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
     }
 
     if (external_distortion_params.has_value()) {
-        CHECK_INPUT(external_distortion_params->horizontal_poly);
-        CHECK_INPUT(external_distortion_params->vertical_poly);
-        CHECK_INPUT(external_distortion_params->horizontal_poly_inverse);
-        CHECK_INPUT(external_distortion_params->vertical_poly_inverse);
+        const auto& params = external_distortion_params.value();
+        TORCH_CHECK(params, "external_distortion_params intrusive_ptr is null");
+        CHECK_INPUT(params->horizontal_poly);
+        CHECK_INPUT(params->vertical_poly);
+        CHECK_INPUT(params->horizontal_poly_inverse);
+        CHECK_INPUT(params->vertical_poly_inverse);
     }
 
     if (sample_counts.has_value()) {
@@ -798,23 +800,14 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
     const at::Tensor &Ks,                      // [..., C, 3, 3]
     int64_t camera_model,
     // unscented transform
-    double alpha,
-    double beta,
-    double kappa,
-    double in_image_margin_factor,
-    bool require_all_sigma_points_valid,
+    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
     int64_t rs_type,
     const at::optional<at::Tensor> &rays, // [..., C, H, W, 6]
     const at::optional<at::Tensor> &radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> &thin_prism_coeffs,  // [..., C, 4] optional
-    int64_t ftheta_reference_poly,
-    at::ArrayRef<double> pixeldist_to_angle_poly, // backward polynomial
-    at::ArrayRef<double> angle_to_pixeldist_poly, // forward polynomial
-    double max_angle,
-    at::ArrayRef<double> linear_cde,
-    int64_t external_reference_poly,
-    at::TensorList external_distortion_params,
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
     // intersections
     const at::Tensor &tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor &flatten_ids,   // [n_isects]
@@ -822,41 +815,6 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
     const at::optional<at::Tensor> &sample_counts, // [..., C, image_height, image_width] optional
     const at::optional<at::Tensor> &normals // [..., C, image_height, image_width, 3] optional output tensor
 ) {
-    UnscentedTransformParameters ut_params = {
-        static_cast<float>(alpha),
-        static_cast<float>(beta),
-        static_cast<float>(kappa),
-        static_cast<float>(in_image_margin_factor),
-        require_all_sigma_points_valid
-    };
-
-    FThetaCameraDistortionParameters ftheta_coeffs;
-    ftheta_coeffs.reference_poly = static_cast<FThetaCameraDistortionParameters::PolynomialType>(ftheta_reference_poly);
-    TORCH_CHECK(pixeldist_to_angle_poly.size() == FThetaCameraDistortionParameters::PolynomialDegree);
-    for (size_t i = 0; i < FThetaCameraDistortionParameters::PolynomialDegree; ++i) {
-        ftheta_coeffs.pixeldist_to_angle_poly[i] = static_cast<float>(pixeldist_to_angle_poly[i]);
-    }
-    TORCH_CHECK(angle_to_pixeldist_poly.size() == FThetaCameraDistortionParameters::PolynomialDegree);
-    for (size_t i = 0; i < FThetaCameraDistortionParameters::PolynomialDegree; ++i) {
-        ftheta_coeffs.angle_to_pixeldist_poly[i] = static_cast<float>(angle_to_pixeldist_poly[i]);
-    }
-    ftheta_coeffs.max_angle = static_cast<float>(max_angle);
-    TORCH_CHECK(linear_cde.size() == 3);
-    for (size_t i = 0; i < 3; ++i) {
-        ftheta_coeffs.linear_cde[i] = static_cast<float>(linear_cde[i]);
-    }
-
-    std::optional<extdist::BivariateWindshieldModelParameters> bivariate_windshield_model_params;
-    if (external_distortion_params.size() == 4) {
-        bivariate_windshield_model_params = {
-            external_distortion_params[0],
-            external_distortion_params[1],
-            external_distortion_params[2],
-            external_distortion_params[3],
-            static_cast<extdist::ReferencePolynomialType>(external_reference_poly)
-        };
-    }
-
     return rasterize_to_pixels_from_world_3dgs_fwd_impl(
         means,
         quats,
@@ -879,7 +837,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> rasterize_to_pixels_from_world_3d
         tangential_coeffs,
         thin_prism_coeffs,
         ftheta_coeffs,
-        bivariate_windshield_model_params,
+        external_distortion_params,
         tile_offsets,
         flatten_ids,
         use_hit_distance,
@@ -908,14 +866,14 @@ rasterize_to_pixels_from_world_3dgs_bwd_impl(
     const at::Tensor Ks,                      // [..., C, 3, 3]
     const CameraModelType camera_model,
     // uncented transform
-    const UnscentedTransformParameters ut_params,
+    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
     ShutterType rs_type,
     const at::optional<at::Tensor> rays,    // [..., C, H, W, 6]
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
-    const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
-    const std::optional<extdist::BivariateWindshieldModelParameters> external_distortion_params,
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs, // shared parameters for all cameras
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
     // intersections
     const at::Tensor tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor flatten_ids,  // [n_isects]
@@ -954,10 +912,12 @@ rasterize_to_pixels_from_world_3dgs_bwd_impl(
     }
 
     if (external_distortion_params.has_value()) {
-        CHECK_INPUT(external_distortion_params->horizontal_poly);
-        CHECK_INPUT(external_distortion_params->vertical_poly);
-        CHECK_INPUT(external_distortion_params->horizontal_poly_inverse);
-        CHECK_INPUT(external_distortion_params->vertical_poly_inverse);
+        const auto& params = external_distortion_params.value();
+        TORCH_CHECK(params, "external_distortion_params intrusive_ptr is null");
+        CHECK_INPUT(params->horizontal_poly);
+        CHECK_INPUT(params->vertical_poly);
+        CHECK_INPUT(params->horizontal_poly_inverse);
+        CHECK_INPUT(params->vertical_poly_inverse);
     }
 
     uint32_t channels = colors.size(-1);
@@ -1046,23 +1006,14 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     const at::Tensor &Ks,                      // [..., C, 3, 3]
     int64_t camera_model,
     // unscented transform
-    double alpha,
-    double beta,
-    double kappa,
-    double in_image_margin_factor,
-    bool require_all_sigma_points_valid,
+    const c10::intrusive_ptr<UnscentedTransformParameters> &ut_params,
     int64_t rs_type,
     const at::optional<at::Tensor> &rays,    // [..., C, H, W, 6]
     const at::optional<at::Tensor> &radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> &tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> &thin_prism_coeffs,  // [..., C, 4] optional
-    int64_t ftheta_reference_poly,
-    at::ArrayRef<double> pixeldist_to_angle_poly, // backward polynomial
-    at::ArrayRef<double> angle_to_pixeldist_poly, // forward polynomial
-    double max_angle,
-    at::ArrayRef<double> linear_cde,
-    int64_t external_reference_poly,
-    at::TensorList external_distortion_params,
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs,
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params,
     // intersections
     const at::Tensor &tile_offsets, // [..., C, tile_height, tile_width]
     const at::Tensor &flatten_ids,  // [n_isects]
@@ -1075,41 +1026,6 @@ rasterize_to_pixels_from_world_3dgs_bwd(
     const at::Tensor &v_render_alphas, // [..., C, image_height, image_width, 1]
     const at::optional<at::Tensor> &v_render_normals // [..., C, image_height, image_width, 3]
 ) {
-    UnscentedTransformParameters ut_params = {
-        static_cast<float>(alpha),
-        static_cast<float>(beta),
-        static_cast<float>(kappa),
-        static_cast<float>(in_image_margin_factor),
-        require_all_sigma_points_valid
-    };
-
-    FThetaCameraDistortionParameters ftheta_coeffs;
-    ftheta_coeffs.reference_poly = static_cast<FThetaCameraDistortionParameters::PolynomialType>(ftheta_reference_poly);
-    TORCH_CHECK(pixeldist_to_angle_poly.size() == FThetaCameraDistortionParameters::PolynomialDegree);
-    for (size_t i = 0; i < FThetaCameraDistortionParameters::PolynomialDegree; ++i) {
-        ftheta_coeffs.pixeldist_to_angle_poly[i] = static_cast<float>(pixeldist_to_angle_poly[i]);
-    }
-    TORCH_CHECK(angle_to_pixeldist_poly.size() == FThetaCameraDistortionParameters::PolynomialDegree);
-    for (size_t i = 0; i < FThetaCameraDistortionParameters::PolynomialDegree; ++i) {
-        ftheta_coeffs.angle_to_pixeldist_poly[i] = static_cast<float>(angle_to_pixeldist_poly[i]);
-    }
-    ftheta_coeffs.max_angle = static_cast<float>(max_angle);
-    TORCH_CHECK(linear_cde.size() == 3);
-    for (size_t i = 0; i < 3; ++i) {
-        ftheta_coeffs.linear_cde[i] = static_cast<float>(linear_cde[i]);
-    }
-
-    std::optional<extdist::BivariateWindshieldModelParameters> bivariate_windshield_model_params;
-    if (external_distortion_params.size() == 4) {
-        bivariate_windshield_model_params = {
-            external_distortion_params[0],
-            external_distortion_params[1],
-            external_distortion_params[2],
-            external_distortion_params[3],
-            static_cast<extdist::ReferencePolynomialType>(external_reference_poly)
-        };
-    }
-
     return rasterize_to_pixels_from_world_3dgs_bwd_impl(
         means,
         quats,
@@ -1132,7 +1048,7 @@ rasterize_to_pixels_from_world_3dgs_bwd(
         tangential_coeffs,
         thin_prism_coeffs,
         ftheta_coeffs,
-        bivariate_windshield_model_params,
+        external_distortion_params,
         tile_offsets,
         flatten_ids,
         use_hit_distance,

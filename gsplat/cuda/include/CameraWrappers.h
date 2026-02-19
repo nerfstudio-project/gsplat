@@ -45,7 +45,7 @@ class PyBaseCameraModel;
  * @brief Base class for camera model wrappers (Python-compatible)
  */
 template <>
-class PyBaseCameraModel<>
+class PyBaseCameraModel<> : public torch::CustomClassHolder
 {
 public:
     virtual ~PyBaseCameraModel() = default;
@@ -131,19 +131,18 @@ public:
      * @return Shared pointer to created camera model
      * @note For ftheta model, focal_lengths can be empty/nullopt as focal length is embedded in polynomial
      */
-    static std::shared_ptr<PyBaseCameraModel> create(
+    static c10::intrusive_ptr<PyBaseCameraModel> create(
         int width,
         int height,
         const std::string& camera_model,
         const torch::Tensor& principal_points,
-        std::optional<torch::Tensor> focal_lengths,
-        std::optional<torch::Tensor> radial_coeffs,
-        std::optional<torch::Tensor> tangential_coeffs,
-        std::optional<torch::Tensor> thin_prism_coeffs,
-        std::optional<FThetaCameraDistortionParameters> ftheta_coeffs,
+        const std::optional<torch::Tensor> &focal_lengths,
+        const std::optional<torch::Tensor> &radial_coeffs,
+        const std::optional<torch::Tensor> &tangential_coeffs,
+        const std::optional<torch::Tensor> &thin_prism_coeffs,
+        const std::optional<c10::intrusive_ptr<FThetaCameraDistortionParameters>> &ftheta_coeffs,
         ShutterType rs_type
     );
-
 };
 
 template <class CameraModel>
@@ -252,9 +251,9 @@ public:
         int height,
         const torch::Tensor& focal_lengths,
         const torch::Tensor& principal_points,
-        std::optional<torch::Tensor> radial_coeffs,
-        std::optional<torch::Tensor> tangential_coeffs,
-        std::optional<torch::Tensor> thin_prism_coeffs,
+        const std::optional<torch::Tensor>& radial_coeffs,
+        const std::optional<torch::Tensor>& tangential_coeffs,
+        const std::optional<torch::Tensor>& thin_prism_coeffs,
         ShutterType rs_type
     );
 };
@@ -279,7 +278,7 @@ public:
         int height,
         const torch::Tensor& focal_lengths,
         const torch::Tensor& principal_points,
-        std::optional<torch::Tensor> radial_coeffs,  // [..., 4]
+        const std::optional<torch::Tensor>& radial_coeffs,  // [..., 4]
         ShutterType rs_type
     );
 };
