@@ -433,12 +433,20 @@ __global__ void projection_2dgs_fused_bwd_kernel(
     // #if __CUDA_ARCH__ >= 700
     // write out results with warp-level reduction
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
+    #if FOR_HIP
+    auto warp_group_g = warp; // Not used, just here to not error in the if-statements.
+    #else
     auto warp_group_g = cg::labeled_partition(warp, gid);
+    #endif
+
     if (v_means != nullptr) {
+        #if !FOR_HIP
         warpSum(v_mean, warp_group_g);
-        if (warp_group_g.thread_rank() == 0) {
+        #endif
+
+        if (FOR_HIP || warp_group_g.thread_rank() == 0) {
             v_means += bid * N * 3 + gid * 3;
-#pragma unroll
+            #pragma unroll
             for (uint32_t i = 0; i < 3; i++) {
                 gpuAtomicAdd(v_means + i, v_mean[i]);
             }
@@ -446,9 +454,12 @@ __global__ void projection_2dgs_fused_bwd_kernel(
     }
 
     // Directly output gradients w.r.t. the quaternion and scale
+    #if !FOR_HIP
     warpSum(v_quat, warp_group_g);
     warpSum(v_scale, warp_group_g);
-    if (warp_group_g.thread_rank() == 0) {
+    #endif
+
+    if (FOR_HIP || warp_group_g.thread_rank() == 0) {
         v_quats += bid * N * 4 + gid * 4;
         v_scales += bid * N * 3 + gid * 3;
         gpuAtomicAdd(v_quats, v_quat[0]);
@@ -460,14 +471,19 @@ __global__ void projection_2dgs_fused_bwd_kernel(
     }
 
     if (v_viewmats != nullptr) {
+        #if FOR_HIP
+        auto warp_group_c = warp; // Not used, just here to not error in the if-statements below.
+        #else
         auto warp_group_c = cg::labeled_partition(warp, cid);
         warpSum(v_R, warp_group_c);
         warpSum(v_t, warp_group_c);
-        if (warp_group_c.thread_rank() == 0) {
+        #endif
+
+        if (FOR_HIP || warp_group_c.thread_rank() == 0) {
             v_viewmats += bid * C * 16 + cid * 16;
-#pragma unroll
+            #pragma unroll
             for (uint32_t i = 0; i < 3; i++) {
-#pragma unroll
+                #pragma unroll
                 for (uint32_t j = 0; j < 3; j++) {
                     gpuAtomicAdd(v_viewmats + i * 4 + j, v_R[j][i]);
                 }
