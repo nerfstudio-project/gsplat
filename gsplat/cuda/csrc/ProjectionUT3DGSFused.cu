@@ -109,7 +109,8 @@ __global__ void projection_ut_3dgs_fused_kernel(
     const auto shutter_pose = interpolate_shutter_pose(0.5f, rs_params);
     const vec3 mean_c = glm::rotate(shutter_pose.q, mean) + shutter_pose.t;
 
-    if (mean_c.z < near_plane || mean_c.z > far_plane) {
+    const float cull_depth = global_z_order ? mean_c.z : glm::length(mean_c);
+    if (cull_depth < near_plane || cull_depth > far_plane) {
         radii[idx * 2] = 0;
         radii[idx * 2 + 1] = 0;
         return;
