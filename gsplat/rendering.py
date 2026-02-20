@@ -658,6 +658,10 @@ def rasterization(
                 output_splits=collected_splits,
             )
 
+            # since distributed mode does not support batch dimensions, it is safe
+            # to set image_ids to camera_ids.
+            image_ids = camera_ids
+
             # Silently change C from global #Cameras to local #Cameras.
             C = C_world[world_rank]
 
@@ -1595,23 +1599,37 @@ def rasterization_2dgs(
     #     if packed:
     #         colors = colors.view(B, C, N, -1)[batch_ids, camera_ids, gaussian_ids, :]
     if sh_degree is not None:  # SH coefficients
-        camtoworlds = torch.inverse(viewmats)
+        # Colors are SH coefficients, with shape [..., N, K, 3] or [..., C, N, K, 3]
+        campos = torch.inverse(viewmats)[..., :3, 3]  # [..., C, 3]
         if packed:
-            dirs = means[..., gaussian_ids, :] - camtoworlds[..., camera_ids, :3, 3]
+            dirs = (
+                means.view(B, N, 3)[batch_ids, gaussian_ids]
+                - campos.view(B, C, 3)[batch_ids, camera_ids]
+            )  # [nnz, 3]
+            masks = (radii > 0).all(dim=-1)  # [nnz]
+            if colors.dim() == num_batch_dims + 3:
+                # Turn [..., N, K, 3] into [nnz, 3]
+                shs = colors.view(B, N, -1, 3)[batch_ids, gaussian_ids]  # [nnz, K, 3]
+            else:
+                # Turn [..., C, N, K, 3] into [nnz, 3]
+                shs = colors.view(B, C, N, -1, 3)[
+                    batch_ids, camera_ids, gaussian_ids
+                ]  # [nnz, K, 3]
+            colors = spherical_harmonics(sh_degree, dirs, shs, masks=masks)  # [nnz, 3]
         else:
-            dirs = means[..., None, :, :] - camtoworlds[..., None, :3, 3]
-
-        if colors.dim() == num_batch_dims + 3:
-            # Turn [..., N, K, 3] into [..., C, N, K, 3]
-            shs = torch.broadcast_to(
-                colors[..., None, :, :, :], batch_dims + (C, N, -1, 3)
-            )  # [..., C, N, K, 3]
-        else:
-            # colors is already [..., C, N, K, 3]
-            shs = colors
-        colors = spherical_harmonics(
-            sh_degree, dirs, shs, masks=(radii > 0).all(dim=-1)
-        )  # [nnz, D] or [..., C, N, 3]
+            dirs = means[..., None, :, :] - campos[..., None, :]  # [..., C, N, 3]
+            masks = (radii > 0).all(dim=-1)  # [..., C, N]
+            if colors.dim() == num_batch_dims + 3:
+                # Turn [..., N, K, 3] into [..., C, N, K, 3]
+                shs = torch.broadcast_to(
+                    colors[..., None, :, :, :], batch_dims + (C, N, -1, 3)
+                )
+            else:
+                # colors is already [..., C, N, K, 3]
+                shs = colors
+            colors = spherical_harmonics(
+                sh_degree, dirs, shs, masks=masks
+            )  # [..., C, N, 3]
         # make it apple-to-apple with Inria's CUDA Backend.
         colors = torch.clamp_min(colors + 0.5, 0.0)
 
