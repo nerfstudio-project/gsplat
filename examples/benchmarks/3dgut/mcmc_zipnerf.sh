@@ -16,7 +16,7 @@ do
         --strategy.cap-max $CAP_MAX \
         --opacity_reg 0.001 \
         --init_scale 0.5 \
-        --use_bilateral_grid \
+        --post_processing bilateral_grid \
         --render_traj_path $RENDER_TRAJ_PATH \
         --camera_model fisheye \
         --data_dir $SCENE_DIR/$SCENE/ \
@@ -29,7 +29,7 @@ do
             --strategy.cap-max $CAP_MAX \
             --opacity_reg 0.001 \
             --init_scale 0.5 \
-            --use_bilateral_grid \
+            --post_processing bilateral_grid \
             --render_traj_path $RENDER_TRAJ_PATH \
             --camera_model fisheye \
             --data_dir $SCENE_DIR/$SCENE/ \

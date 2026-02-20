@@ -76,7 +76,7 @@ setup(
             "pytest-env==0.8.1",
             "pytest-xdist==2.5.0",
             "typeguard>=2.13.3",
-            "pyyaml==6.0.1",
+            "pyyaml>=6.0.1",
             "build==1.3.0",
             "twine==1.6.0",
             "cupy==13.6.0",
