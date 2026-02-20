@@ -897,6 +897,220 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
     torch.testing.assert_close(v_backgrounds, _v_backgrounds, rtol=1e-3, atol=1e-3)
 
 
+def _quat_rotation_y(angle_rad: float, device: torch.device):
+    """Quaternion for rotation around Y axis (w, x, y, z)."""
+    half = angle_rad / 2.0
+    w = math.cos(half)
+    y = math.sin(half)
+    return torch.tensor([[w, 0.0, y, 0.0]], device=device, dtype=torch.float32)
+
+
+def _expected_hit_distance_canonical_ray_distance(
+    ray_o: torch.Tensor,
+    ray_d: torch.Tensor,
+    xyz: torch.Tensor,
+    quats: torch.Tensor,
+    scales: torch.Tensor,
+) -> float:
+    """Expected hit distance using nrend canonicalRayDistance: length(scale * grd * hit_t)."""
+    from gsplat.cuda._math import _quat_scale_to_preci_half
+    from gsplat.cuda._torch_impl_eval3d import _safe_normalize
+
+    # iscl_rot = M^T with M = R * S (inverse scale-rotation); batch size 1
+    M = _quat_scale_to_preci_half(quats, scales)
+    iscl_rot = M.transpose(-2, -1)
+    # ray_o, ray_d, xyz are [3]; broadcast for matmul [1,3,3] @ [1,3,1]
+    gro = (
+        torch.matmul(iscl_rot, (ray_o - xyz).unsqueeze(0).unsqueeze(-1))
+        .squeeze(-1)
+        .squeeze(0)
+    )
+    grd = (
+        torch.matmul(iscl_rot, ray_d.unsqueeze(0).unsqueeze(-1)).squeeze(-1).squeeze(0)
+    )
+    grd = _safe_normalize(grd)
+    hit_t = (grd * (-gro)).sum().item()
+    grds = scales.squeeze(0) * grd * hit_t
+    return torch.linalg.norm(grds).item()
+
+
+def _pixel_ray_dir_pinhole(
+    px: float,
+    py: float,
+    fx: float,
+    fy: float,
+    cx: float,
+    cy: float,
+    device: torch.device,
+) -> torch.Tensor:
+    """Ray direction in world space for pinhole camera at origin (viewmat identity).
+    Returns unit vector: normalize(( (px-cx)/fx, (py-cy)/fy, 1 )).
+    """
+    dx = (px - cx) / fx
+    dy = (py - cy) / fy
+    d = torch.tensor([dx, dy, 1.0], device=device, dtype=torch.float32)
+    return d / torch.linalg.norm(d)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.skipif(not gsplat.has_3dgut(), reason="3DGUT support isn't built in")
+@pytest.mark.parametrize(
+    "means_list,quats_choice,scales_list,pixel_dx,pixel_dy",
+    [
+        # On-axis, mid distance (baseline); sample at center
+        ([[0.0, 0.0, 5.0]], "identity", (0.15, 0.15, 0.15), 0, 0),
+        # On-axis, near camera
+        ([[0.0, 0.0, 1.0]], "identity", (0.15, 0.15, 0.15), 0, 0),
+        # On-axis, far from camera (larger scale so gaussian visible at D=50)
+        ([[0.0, 0.0, 50.0]], "identity", (0.6, 0.6, 0.6), 0, 0),
+        # Anisotropic scaling (on-axis)
+        ([[0.0, 0.0, 5.0]], "identity", (0.2, 0.05, 0.15), 0, 0),
+        # Off-axis: gaussian not on principal ray; sample at center
+        ([[1.5, 0.5, 5.0]], "identity", (0.2, 0.2, 0.2), 0, 0),
+        # Rotated gaussian (45 deg around Y), isotropic scale
+        ([[0.0, 0.0, 5.0]], "rotated_y_45", (0.15, 0.15, 0.15), 0, 0),
+        # Rotated + anisotropic
+        ([[0.0, 0.0, 5.0]], "rotated_y_45", (0.2, 0.05, 0.15), 0, 0),
+        # Flat / disk-like
+        ([[0.0, 0.0, 5.0]], "identity", (0.08, 0.08, 0.25), 0, 0),
+        # Off-center rays: sample pixel offset from gaussian center so ray does NOT pass through center.
+        # Offset in pixels from gaussian center (means2d); keeps pixel inside splat.
+        ([[0.0, 0.0, 5.0]], "identity", (0.4, 0.4, 0.4), 3, 0),
+        ([[0.0, 0.0, 5.0]], "identity", (0.4, 0.4, 0.4), -2, 2),
+        ([[0.0, 0.0, 5.0]], "identity", (0.4, 0.4, 0.4), 0, -3),
+        ([[1.5, 0.0, 5.0]], "identity", (0.35, 0.35, 0.35), -2, 0),
+        ([[-1.0, 1.0, 6.0]], "identity", (0.35, 0.35, 0.35), 2, -1),
+    ],
+    ids=[
+        "on_axis_mid",
+        "on_axis_near",
+        "on_axis_far",
+        "on_axis_anisotropic",
+        "off_axis",
+        "rotated_isotropic",
+        "rotated_anisotropic",
+        "flat_disk",
+        "off_center_right",
+        "off_center_left_up",
+        "off_center_down",
+        "off_center_gauss_right_pixel_left",
+        "off_center_gauss_ul_pixel_lr",
+    ],
+)
+def test_rasterize_to_pixels_hit_distance_principal_axis(
+    means_list, quats_choice, scales_list, pixel_dx, pixel_dy
+):
+    """Check that hit distance (accumulated/alpha) matches nrend KBuffer canonicalRayDistance:
+    length(scale * grd * hit_t) with hit_t = dot(grd, -gro). Includes center and off-center
+    pixels. Failures indicate the rasterization hit-distance code should be analyzed and fixed.
+    """
+    from gsplat.cuda._wrapper import (
+        fully_fused_projection_with_ut,
+        isect_offset_encode,
+        isect_tiles,
+        rasterize_to_pixels_eval3d_extra,
+    )
+
+    width = height = 32
+    tile_size = 16
+    N = 1
+    C = 1
+    I = C
+    fx = fy = float(width)
+    cx = width / 2.0
+    cy = height / 2.0
+
+    means = torch.tensor(means_list, device=device, dtype=torch.float32)
+    if quats_choice == "identity":
+        quats = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device, dtype=torch.float32)
+    elif quats_choice == "rotated_y_45":
+        quats = _quat_rotation_y(math.pi / 4.0, device)
+    else:
+        raise ValueError(f"Unknown quats_choice: {quats_choice}")
+
+    scales = torch.tensor([list(scales_list)], device=device, dtype=torch.float32)
+    opacities = torch.tensor([1.0], device=device, dtype=torch.float32)
+
+    viewmats = torch.eye(4, device=device, dtype=torch.float32).unsqueeze(0)
+    Ks = torch.tensor(
+        [[[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]]],
+        device=device,
+        dtype=torch.float32,
+    )
+
+    colors = torch.zeros(C, N, 3, device=device, dtype=torch.float32)
+    opacities_broadcast = opacities.unsqueeze(0)
+
+    radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
+        means, quats, scales, opacities, viewmats, Ks, width, height
+    )
+    tile_width = math.ceil(width / float(tile_size))
+    tile_height = math.ceil(height / float(tile_size))
+    tiles_per_gauss, isect_ids, flatten_ids = isect_tiles(
+        means2d, radii, depths, tile_size, tile_width, tile_height
+    )
+    isect_offsets = isect_offset_encode(isect_ids, I, tile_width, tile_height)
+
+    render_colors, render_alphas, _, _, _ = rasterize_to_pixels_eval3d_extra(
+        means,
+        quats,
+        scales,
+        colors,
+        opacities_broadcast,
+        viewmats,
+        Ks,
+        width,
+        height,
+        tile_size,
+        isect_offsets,
+        flatten_ids,
+        use_hit_distance=True,
+        return_sample_counts=False,
+        return_normals=False,
+    )
+
+    # Sample pixel: center of gaussian projection, or offset from center (means2d + dx, dy) for off-center rays
+    cx_f = means2d[0, 0, 0].item()
+    cy_f = means2d[0, 0, 1].item()
+    if pixel_dx == 0 and pixel_dy == 0:
+        px_f = cx_f
+        py_f = cy_f
+    else:
+        px_f = cx_f + pixel_dx
+        py_f = cy_f + pixel_dy
+    px_int = int(round(px_f))
+    py_int = int(round(py_f))
+    px_int = max(0, min(width - 1, px_int))
+    py_int = max(0, min(height - 1, py_int))
+
+    accumulated_hit = render_colors[0, py_int, px_int, -1].item()
+    alpha = render_alphas[0, py_int, px_int, 0].item()
+
+    assert alpha > 0, (
+        f"Pixel ({px_int}, {py_int}) should hit the gaussian "
+        f"(sample px_f={px_f}, py_f={py_f}; means2d=({cx_f}, {cy_f}))"
+    )
+
+    ray_o = torch.zeros(3, device=device, dtype=torch.float32)
+    pixel_center_x = px_int + 0.5
+    pixel_center_y = py_int + 0.5
+    ray_d = _pixel_ray_dir_pinhole(
+        pixel_center_x, pixel_center_y, fx, fy, cx, cy, device
+    )
+    expected_hit = _expected_hit_distance_canonical_ray_distance(
+        ray_o, ray_d, means[0], quats, scales
+    )
+
+    observed_hit_distance = accumulated_hit / alpha
+
+    torch.testing.assert_close(
+        torch.tensor(observed_hit_distance, device=device),
+        torch.tensor(expected_hit, device=device),
+        rtol=2.5e-4,
+        atol=2e-3,
+    )
+
+
 # Since we have comprehensive camera model tests, we don't need to add
 # a camera model axis to this test. We use perfect pinhole model instead.
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
@@ -1035,7 +1249,7 @@ def test_rasterize_to_pixels_eval3d(
         rays = None
 
     # Project Gaussians to 2D for tile intersections
-    radii, means2d, depths, conics, compensations = fully_fused_projection_with_ut(
+    radii, means2d, depths, _, _ = fully_fused_projection_with_ut(
         means, quats, scales, opacities, viewmats, Ks, width, height
     )
     opacities_broadcast = torch.broadcast_to(
