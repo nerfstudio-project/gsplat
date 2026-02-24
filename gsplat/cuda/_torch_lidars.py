@@ -254,9 +254,8 @@ class _RowOffsetStructuredSpinningLidarModel(_StructuredSpinningLidarModel):
 
         # Check if within FOV+margin
         valid = (
-            self.valid_sensor_angles(angles)
-            & (rel_angles.elevation < self.fov_vert_rad.span + margin_elevation)
-            & (rel_angles.azimuth < self.fov_horiz_rad.span + margin_azimuth)
+            (rel_angles.elevation <= self.fov_vert_rad.span + margin_elevation)
+            & (rel_angles.azimuth <= self.fov_horiz_rad.span + margin_azimuth)
             & (rel_angles.elevation >= -margin_elevation)
             & (rel_angles.azimuth >= -margin_azimuth)
         )
