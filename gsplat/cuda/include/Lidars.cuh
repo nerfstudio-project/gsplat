@@ -77,7 +77,10 @@ struct RowOffsetStructuredSpinningLidarModel : BaseCameraModel<RowOffsetStructur
         __device__
         explicit Parameters(RowOffsetStructuredSpinningLidarModelParametersExtDevice lidar_params)
             // TODO: We're mapping n_rows->width and n_columns->height to conform with nrend, but this should be reverted
-            : Base::Parameters{{static_cast<unsigned int>(lidar_params.n_rows), static_cast<unsigned int>(lidar_params.n_columns)}}
+            : Base::Parameters{
+                {static_cast<unsigned int>(lidar_params.n_rows), static_cast<unsigned int>(lidar_params.n_columns)},
+                ShutterType::ROLLING_LEFT_TO_RIGHT
+              }
             , lidar(std::move(lidar_params))
         {
         }

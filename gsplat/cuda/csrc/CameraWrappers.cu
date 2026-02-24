@@ -964,10 +964,10 @@ PyRowOffsetStructuredSpinningLidarModel::PyRowOffsetStructuredSpinningLidarModel
     // TODO: We're mapping n_rows->width and n_columns->height to conform with nrend, but this should be reverted
     // once we validate that gsplat is 1:1 replacement of nrend.
     : PyBaseCameraModel(1, params.n_rows(), params.n_columns(),
-                      // Lidar doesn't use traditional focal lengths, principal points and shutter_type.
-                      // Let's use dummy values that hopefully will trigger an error if used.
-                      // TODO: need to improve the camera model hierarchy to avoid this hack.
-                      ShutterType::GLOBAL, torch::zeros({0}), torch::zeros({0}))
+                      // Spinning lidars always have rolling shutter; the actual per-sigma-point
+                      // timing is handled by shutter_relative_frame_time() in the lidar model.
+                      // Any non-GLOBAL value activates the RS iteration loop.
+                      ShutterType::ROLLING_LEFT_TO_RIGHT, torch::zeros({0}), torch::zeros({0}))
     , m_params(std::move(params))
 {
     cudaStream_t stream = at::cuda::getCurrentCUDAStream(m_params.row_elevations_rad.device().index());
