@@ -80,6 +80,8 @@ enum CameraModelType {
 #define MAX_ALPHA 0.99f
 #define TRANSMITTANCE_THRESHOLD 1e-4f
 
+#define MAX_KERNEL_DENSITY_CUTOFF 0.0113
+
 #ifdef __CUDACC__
 #   define GSPLAT_NOINLINE __noinline__
 #else

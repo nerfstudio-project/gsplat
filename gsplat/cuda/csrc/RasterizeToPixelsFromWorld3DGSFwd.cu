@@ -367,9 +367,9 @@ __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
             const vec3 gcrod = glm::cross(grd, gro);
             const float grayDist = glm::dot(gcrod, gcrod);
             const float power = -0.5f * grayDist;
-
-            float alpha = min(MAX_ALPHA, opac * __expf(power));
-            if (alpha < 1.f / 255.f) {
+            float max_response = __expf(power);
+            float alpha = min(MAX_ALPHA, opac * max_response);
+            if (alpha < 1.f / 255.f || max_response <= MAX_KERNEL_DENSITY_CUTOFF) {
                 continue;
             }
 
