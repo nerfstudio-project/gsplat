@@ -105,8 +105,6 @@ public:
         const float elevation = image_point.x * kToAngle;
         const float azimuth = image_point.y * kToAngle;
 
-        assert(this->valid_sensor_angles(elevation, azimuth));
-
         // Compute relative angles (within sensor FOV)
         const auto [rel_elevation, rel_azimuth] = this->relative_sensor_angles(elevation, azimuth);
 
@@ -120,6 +118,9 @@ public:
                 rel_elevation/lidar.map_resolution_rad.y + 0.5f,
                 0,
                 lidar.map_dim.y-1));
+
+        assert(0 <= ihoriz && ihoriz < lidar.map_dim.x);
+        assert(0 <= ivert && ivert < lidar.map_dim.y);
 
         // Lookup column index from the angle-to-column map
         // Note: map is on row-major layout
@@ -164,9 +165,8 @@ public:
 
         bool valid = rel_elevation >= -tol_elevation &&
                      rel_azimuth >= -tol_azimuth &&
-                     rel_elevation < lidar.fov_vert_rad.span + tol_elevation &&
-                     rel_azimuth < lidar.fov_horiz_rad.span + tol_azimuth &&
-                     this->valid_sensor_angles(elevation, azimuth);
+                     rel_elevation <= lidar.fov_vert_rad.span + tol_elevation &&
+                     rel_azimuth <= lidar.fov_horiz_rad.span + tol_azimuth;
 
         return {image_point, valid};
     }
