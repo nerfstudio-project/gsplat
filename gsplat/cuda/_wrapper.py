@@ -960,10 +960,17 @@ def rasterize_to_pixels_eval3d_extra(
         513,
     ):
         padded_channels = (1 << (channels - 1).bit_length()) - channels
+        # Insert padding before the last channel so that it stays at
+        # CDIM-1.  When depth is present it is always the last channel,
+        # so this keeps it where the CUDA kernel writes hit_distance.
+        # When depth is absent the last channel is preserved
+        # through the round-trip.
+        # This matches the approach used in rasterize_to_pixels_2dgs.
         colors = torch.cat(
             [
-                colors,
+                colors[..., :-1],
                 torch.zeros(*colors.shape[:-1], padded_channels, device=device),
+                colors[..., -1:],
             ],
             dim=-1,
         )
@@ -1029,7 +1036,10 @@ def rasterize_to_pixels_eval3d_extra(
     )
 
     if padded_channels > 0:
-        render_colors = render_colors[..., :-padded_channels]
+        render_colors = torch.cat(
+            [render_colors[..., : -padded_channels - 1], render_colors[..., -1:]],
+            dim=-1,
+        )
 
     return render_colors, render_alphas, last_ids, sample_counts, render_normals
 

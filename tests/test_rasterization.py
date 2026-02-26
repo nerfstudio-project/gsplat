@@ -30,6 +30,7 @@ import torch
 import gsplat
 
 from gsplat.rendering import RenderMode
+from gsplat.cuda._constants import ALPHA_THRESHOLD
 
 device = torch.device("cuda:0")
 
@@ -82,6 +83,20 @@ device = torch.device("cuda:0")
                     (None, 20),
                     (3, 3),
                 ],  # extra_signals_info (extra_signals_sh_degree,extra_signals_size)
+            ),
+            # 3DGUT hit-distance modes: exercises the padding + use_hit_distance
+            # interaction in rasterize_to_pixels_eval3d.  The (None,20) extra
+            # signals case is the critical one — it produces 24 channels
+            # (3 RGB + 20 extra + 1 depth) which gets padded to CDIM=32.
+            product(
+                [False],  # per_view_color
+                [None],  # sh_degree
+                ["RGB-d"],  # render_mode (hit distance + RGB)
+                [False],  # packed (must be False)
+                [()],  # batch_dims
+                [True],  # with_eval3d
+                [True],  # with_ut
+                [None, (None, 20)],  # extra_signals_info — (None,20) triggers padding
             ),
         )
     ],
@@ -178,12 +193,12 @@ def test_rasterization(
         extra_signals_sh_degree=extra_signals_sh_degree,
     )
 
-    if render_mode == "D":
-        assert renders.shape == batch_dims + (C, height, width, 1)
+    if render_mode in ("D", "d", "Ed"):
+        assert renders.shape == (*batch_dims, C, height, width, 1)
     elif render_mode == "RGB":
-        assert renders.shape == batch_dims + (C, height, width, 3)
-    elif render_mode == "RGB+D":
-        assert renders.shape == batch_dims + (C, height, width, 4)
+        assert renders.shape == (*batch_dims, C, height, width, 3)
+    elif render_mode in ("RGB+D", "RGB-d", "RGB-Ed"):
+        assert renders.shape == (*batch_dims, C, height, width, 4)
 
     _renders, _alphas, _meta = _rasterization(
         means=means,
@@ -205,7 +220,8 @@ def test_rasterization(
 
     rtol = 1e-4
     atol = 1e-4
-    torch.testing.assert_close(renders, _renders, rtol=rtol, atol=atol)
+    is_hit_distance = render_mode in ("d", "RGB-d", "Ed", "RGB-Ed")
+
     torch.testing.assert_close(alphas, _alphas, rtol=rtol, atol=atol)
     if extra_signals is not None:
         torch.testing.assert_close(
@@ -214,3 +230,21 @@ def test_rasterization(
             rtol=rtol,
             atol=atol,
         )
+
+    if is_hit_distance:
+        # For combined RGB+depth modes, verify RGB channels match.
+        if render_mode in ("RGB-d", "RGB-Ed"):
+            torch.testing.assert_close(
+                renders[..., :3], _renders[..., :3], rtol=rtol, atol=atol
+            )
+
+        # Verify hit distance is non-zero where pixels are visible.
+        mask = alphas[..., 0] > ALPHA_THRESHOLD
+        if mask.any():
+            hit_dist = renders[..., -1][mask]
+            assert (hit_dist > 0).all(), (
+                f"Hit-distance is zero for visible pixels "
+                f"(render_mode={render_mode}, extra_signals={extra_signals_info})"
+            )
+    else:
+        torch.testing.assert_close(renders, _renders, rtol=rtol, atol=atol)
