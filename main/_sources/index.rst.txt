@@ -59,17 +59,18 @@ This repository was born from the curiosity of people on the Nerfstudio team try
 understand a new rendering technique. We welcome contributions of any kind and are open 
 to feedback, bug-reports, and improvements to help expand the capabilities of this software.
 
-This project is developed by the following wonderful contributors (unordered):
+This project is developed by the contributors coming from following institutes (unordered):
 
-- `Angjoo Kanazawa <https://people.eecs.berkeley.edu/~kanazawa/>`_ (UC Berkeley): Advisor.
-- `Matthew Tancik <https://www.matthewtancik.com/about-me>`_ (Luma AI): Advisor.
-- `Vickie Ye <https://people.eecs.berkeley.edu/~vye/>`_ (UC Berkeley): Project lead. v0.1 lead.
-- `Matias Turkulainen <https://maturk.github.io/>`_ (Aalto University): Core developer.
-- `Ruilong Li <https://www.liruilong.cn/>`_ (UC Berkeley): Core developer. v1.0 lead.
-- `Justin Kerr <https://kerrj.github.io/>`_ (UC Berkeley): Core developer.
-- `Brent Yi <https://github.com/brentyi>`_ (UC Berkeley): Core developer.
-- `Zhuoyang Pan <https://panzhy.com/>`_ (ShanghaiTech University): Core developer.
-- `Jianbo Ye <http://www.jianboye.org/>`_ (Amazon): Core developer.
+- UC Berkeley
+- NVIDIA
+- ShanghaiTech University
+- Amazon
+- Meta
+- IIIT
+- LumaAI
+- SpectacularAI
+- Aalto University
+- CMU
 
 
 Links
