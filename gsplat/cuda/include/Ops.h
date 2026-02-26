@@ -308,7 +308,8 @@ projection_2dgs_fused_fwd(
     const float eps2d,
     const float near_plane,
     const float far_plane,
-    const float radius_clip
+    const float radius_clip,
+    const CameraModelType camera_model
 );
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 projection_2dgs_fused_bwd(
@@ -328,7 +329,8 @@ projection_2dgs_fused_bwd(
     const at::Tensor v_depths,         // [..., C, N]
     const at::Tensor v_normals,        // [..., C, N, 3]
     const at::Tensor v_ray_transforms, // [..., C, N, 3, 3]
-    const bool viewmats_requires_grad
+    const bool viewmats_requires_grad,
+    const CameraModelType camera_model
 );
 
 std::tuple<
@@ -351,7 +353,8 @@ projection_2dgs_packed_fwd(
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const float radius_clip
+    const float radius_clip,
+    const CameraModelType camera_model
 );
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 projection_2dgs_packed_bwd(
@@ -374,7 +377,8 @@ projection_2dgs_packed_bwd(
     const at::Tensor v_ray_transforms, // [nnz, 3, 3]
     const at::Tensor v_normals,        // [nnz, 3]
     const bool viewmats_requires_grad,
-    const bool sparse_grad
+    const bool sparse_grad,
+    const CameraModelType camera_model
 );
 
 std::tuple<

@@ -356,7 +356,6 @@ def fully_fused_projection(
         - **batch_ids**. The batch indices of the projected Gaussians. Int32 tensor of shape [nnz].
         - **camera_ids**. The camera indices of the projected Gaussians. Int32 tensor of shape [nnz].
         - **gaussian_ids**. The column indices of the projected Gaussians. Int32 tensor of shape [nnz].
-        - **indptr**. CSR-style index pointer into gaussian_ids for batch-camera pairs. Int32 tensor of shape [B*C+1].
         - **radii**. The maximum radius of the projected Gaussians in pixel unit. Int32 tensor of shape [nnz, 2].
         - **means**. Projected Gaussian means in 2D. [nnz, 2]
         - **depths**. The z-depth of the projected Gaussians. [nnz]
@@ -1660,7 +1659,6 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             batch_ids,
             camera_ids,
             gaussian_ids,
-            indptr,
             radii,
             means2d,
             depths,
@@ -1674,7 +1672,6 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         v_batch_ids,
         v_camera_ids,
         v_gaussian_ids,
-        v_indptr,
         v_radii,
         v_means2d,
         v_depths,
@@ -1849,6 +1846,7 @@ def fully_fused_projection_2dgs(
     radius_clip: float = 0.0,
     packed: bool = False,
     sparse_grad: bool = False,
+    camera_model: Literal["pinhole", "ortho"] = "pinhole",
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
     """Prepare Gaussians for rasterization
 
@@ -1908,6 +1906,7 @@ def fully_fused_projection_2dgs(
     scales = scales.contiguous()
     if sparse_grad:
         assert packed, "sparse_grad is only supported when packed is True"
+    assert camera_model in ["pinhole", "ortho"], camera_model
 
     viewmats = viewmats.contiguous()
     Ks = Ks.contiguous()
@@ -1924,6 +1923,7 @@ def fully_fused_projection_2dgs(
             far_plane,
             radius_clip,
             sparse_grad,
+            camera_model,
         )
     else:
         return _FullyFusedProjection2DGS.apply(
@@ -1938,6 +1938,7 @@ def fully_fused_projection_2dgs(
             near_plane,
             far_plane,
             radius_clip,
+            camera_model,
         )
 
 
@@ -1958,7 +1959,11 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
         near_plane: float,
         far_plane: float,
         radius_clip: float,
+        camera_model: Literal["pinhole", "ortho"] = "pinhole",
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        camera_model_type = _make_lazy_cuda_obj(
+            f"CameraModelType.{camera_model.upper()}"
+        )
         radii, means2d, depths, ray_transforms, normals = _make_lazy_cuda_func(
             "projection_2dgs_fused_fwd"
         )(
@@ -1973,6 +1978,7 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
             near_plane,
             far_plane,
             radius_clip,
+            camera_model_type,
         )
         ctx.save_for_backward(
             means,
@@ -1987,6 +1993,7 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
         ctx.width = width
         ctx.height = height
         ctx.eps2d = eps2d
+        ctx.camera_model_type = camera_model_type
 
         return radii, means2d, depths, ray_transforms, normals
 
@@ -2005,6 +2012,7 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
         width = ctx.width
         height = ctx.height
         eps2d = ctx.eps2d
+        camera_model_type = ctx.camera_model_type
         v_means, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
             "projection_2dgs_fused_bwd"
         )(
@@ -2022,6 +2030,7 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
             v_normals.contiguous(),
             v_ray_transforms.contiguous(),
             ctx.needs_input_grad[3],  # viewmats_requires_grad
+            camera_model_type,
         )
         if not ctx.needs_input_grad[0]:
             v_means = None
@@ -2037,6 +2046,7 @@ class _FullyFusedProjection2DGS(torch.autograd.Function):
             v_quats,
             v_scales,
             v_viewmats,
+            None,
             None,
             None,
             None,
@@ -2065,7 +2075,11 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
         far_plane: float,
         radius_clip: float,
         sparse_grad: bool,
+        camera_model: Literal["pinhole", "ortho"] = "pinhole",
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        camera_model_type = _make_lazy_cuda_obj(
+            f"CameraModelType.{camera_model.upper()}"
+        )
         (
             indptr,
             batch_ids,
@@ -2087,6 +2101,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
             near_plane,
             far_plane,
             radius_clip,
+            camera_model_type,
         )
         ctx.save_for_backward(
             batch_ids,
@@ -2102,6 +2117,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
         ctx.width = width
         ctx.height = height
         ctx.sparse_grad = sparse_grad
+        ctx.camera_model_type = camera_model_type
 
         return (
             batch_ids,
@@ -2140,6 +2156,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
         width = ctx.width
         height = ctx.height
         sparse_grad = ctx.sparse_grad
+        camera_model_type = ctx.camera_model_type
 
         v_means, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
             "projection_2dgs_packed_bwd"
@@ -2161,6 +2178,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
             v_normals.contiguous(),
             ctx.needs_input_grad[3],  # viewmats_requires_grad
             sparse_grad,
+            camera_model_type,
         )
 
         if sparse_grad:
@@ -2210,6 +2228,7 @@ class _FullyFusedProjectionPacked2DGS(torch.autograd.Function):
             v_quats,
             v_scales,
             v_viewmats,
+            None,
             None,
             None,
             None,

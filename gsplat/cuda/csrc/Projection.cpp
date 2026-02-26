@@ -563,7 +563,8 @@ projection_2dgs_fused_fwd(
     const float eps2d,
     const float near_plane,
     const float far_plane,
-    const float radius_clip
+    const float radius_clip,
+    const CameraModelType camera_model
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -609,6 +610,7 @@ projection_2dgs_fused_fwd(
         near_plane,
         far_plane,
         radius_clip,
+        camera_model,
         // outputs
         radii,
         means2d,
@@ -637,7 +639,8 @@ projection_2dgs_fused_bwd(
     const at::Tensor v_depths,         // [..., C, N]
     const at::Tensor v_normals,        // [..., C, N, 3]
     const at::Tensor v_ray_transforms, // [..., C, N, 3, 3]
-    const bool viewmats_requires_grad
+    const bool viewmats_requires_grad,
+    const CameraModelType camera_model
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -676,6 +679,7 @@ projection_2dgs_fused_bwd(
         v_normals,
         v_ray_transforms,
         viewmats_requires_grad,
+        camera_model,
         // outputs
         v_means,
         v_quats,
@@ -706,7 +710,8 @@ projection_2dgs_packed_fwd(
     const uint32_t image_height,
     const float near_plane,
     const float far_plane,
-    const float radius_clip
+    const float radius_clip,
+    const CameraModelType camera_model
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -742,6 +747,7 @@ projection_2dgs_packed_fwd(
             near_plane,
             far_plane,
             radius_clip,
+            camera_model,
             c10::nullopt, // block_accum
             // outputs
             block_cnts,
@@ -785,6 +791,7 @@ projection_2dgs_packed_fwd(
             near_plane,
             far_plane,
             radius_clip,
+            camera_model,
             block_accum,
             // outputs
             c10::nullopt, // block_cnts
@@ -836,7 +843,8 @@ projection_2dgs_packed_bwd(
     const at::Tensor v_ray_transforms, // [nnz, 3, 3]
     const at::Tensor v_normals,        // [nnz, 3]
     const bool viewmats_requires_grad,
-    const bool sparse_grad
+    const bool sparse_grad,
+    const CameraModelType camera_model
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -893,6 +901,7 @@ projection_2dgs_packed_bwd(
         v_ray_transforms,
         v_normals,
         sparse_grad,
+        camera_model,
         // outputs
         v_means,
         v_quats,
