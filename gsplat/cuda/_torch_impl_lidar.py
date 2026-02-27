@@ -70,9 +70,9 @@ def has_any_rays_in_tile(lidar: RowOffsetStructuredSpinningLidarModelParametersE
     has_rays = torch.full((N,), -1, dtype=torch.int32, device=min_az.device)
 
     # Gaussian's azimuth covers the whole fov horiz?
-    has_rays[(has_rays<0) & ((min_az < 0) & (max_az > raycdf_size_az))] = True
+    has_rays[(has_rays<0) & (min_az <= 0) & (max_az >= raycdf_size_az)] = True
     # Entirely to the left of the FOV start
-    has_rays[(has_rays<0) & (max_az < 0)] = False
+    has_rays[(has_rays<0) & (max_az <= 0)] = False
     # Entirely to the right of the FOV end
     has_rays[(has_rays<0) & (min_az >= raycdf_size_az)] = False
 
@@ -101,7 +101,7 @@ def has_any_rays_in_tile(lidar: RowOffsetStructuredSpinningLidarModelParametersE
       + cdf_region_sum(min_az=min_az+raycdf_size_az, max_az=full_az)
     )
     # max_az is inclusive, so if it's == 0, the range falls into FOV.
-    has_rays = torch.where((has_rays<0) & ((min_az < 0) & (max_az >= 0)),
+    has_rays = torch.where((has_rays<0) & ((min_az < 0) & (max_az > 0)),
                            region_sum_wraps_left > 0, has_rays)
 
     # Wraps at right edge
@@ -109,7 +109,7 @@ def has_any_rays_in_tile(lidar: RowOffsetStructuredSpinningLidarModelParametersE
         cdf_region_sum(min_az=min_az, max_az=full_az)
       + cdf_region_sum(min_az=zero_az, max_az=max_az-full_az)
     )
-    has_rays = torch.where((has_rays<0) & ((min_az < raycdf_size_az) & (max_az >= raycdf_size_az)),
+    has_rays = torch.where((has_rays<0) & ((min_az < raycdf_size_az) & (max_az > raycdf_size_az)),
                            region_sum_wraps_right > 0, has_rays)
 
     assert torch.all(has_rays >= 0)
