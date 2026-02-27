@@ -57,13 +57,13 @@ bool has_any_rays_in_tile(const int32_t *raycdf, int raycdf_size_el, int raycdf_
     int region_sum = 0;
 
     // Gaussian's azimuth covers the whole fov horiz?
-    if(range_min_az < 0 && range_max_az > raycdf_size_az)
+    if(range_min_az <= 0 && range_max_az >= raycdf_size_az)
     {
         // TODO: double check if we indeed don't need to check the elevation.
         return true;
     }
     // Entirely to the left of the FOV start
-    else if(range_max_az < 0)
+    else if(range_max_az <= 0)
     {
         return false;
     }
@@ -78,14 +78,14 @@ bool has_any_rays_in_tile(const int32_t *raycdf, int raycdf_size_el, int raycdf_
         region_sum =  cdf_region_sum(range_min_el, range_max_el, range_min_az, range_max_az);
     }
     // Wraps at left edge
-    // max_az is inclusive, so if it's == 0, the range falls into FOV.
-    else if(range_min_az < 0 && range_max_az >= 0)
+    // max_az is exclusive, so if it's == 0, the range falls outside FOV.
+    else if(range_min_az < 0 && range_max_az > 0)
     {
         region_sum =  cdf_region_sum(range_min_el, range_max_el, 0, range_max_az);
         region_sum += cdf_region_sum(range_min_el, range_max_el, range_min_az + raycdf_size_az, raycdf_size_az);
     }
     // Wraps at right edge
-    else if(range_min_az < raycdf_size_az && range_max_az >= raycdf_size_az)
+    else if(range_min_az < raycdf_size_az && range_max_az > raycdf_size_az)
     {
         region_sum =  cdf_region_sum(range_min_el, range_max_el, range_min_az, raycdf_size_az);
         region_sum += cdf_region_sum(range_min_el, range_max_el, 0, range_max_az-raycdf_size_az);
