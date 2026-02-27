@@ -449,7 +449,7 @@ class LidarTiling:
 
     def __post_init__(self):
         assert self.cdf_elevation.dtype == torch.int32, self.cdf_elevation.dtype
-        assert self.cdf_elevation.ndim == 1, self.cdf_elevation.ndim
+        assert self.cdf_elevation.ndim == 1, f"{self.cdf_elevation.shape=}"
         assert (
             self.cdf_elevation[-1].item() == self.n_bins_elevation
         ), "cdf_elevation[-1] must be equal to n_bins_elevation"

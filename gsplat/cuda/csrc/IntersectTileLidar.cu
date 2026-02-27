@@ -35,86 +35,80 @@ namespace gsplat {
 
 namespace cg = cooperative_groups;
 
-
 __device__
-// TODO: Create an bbox abstraction to avoid passing those 4 values around.
-bool has_any_rays_in_tile(const int32_t *raycdf, int raycdf_size_el, int raycdf_size_az, int range_min_el, int range_max_el, int range_min_az, int range_max_az)
+int cdf_region_sum(const int32_t *raycdf, int raycdf_stride, int range_min_el, int range_max_el, int range_min_az, int range_max_az)
 {
-    assert(0 <= range_min_el && range_min_el < range_max_el);
-    assert(range_max_el <= raycdf_size_el);
-    assert(range_min_az <= range_max_az);
-
-    auto cdf_region_sum = [&](int range_min_el, int range_max_el, int range_min_az, int range_max_az) -> int
-    {
-        int stride = raycdf_size_el+1;
-
-        return raycdf[range_max_az*stride + range_max_el]
-               - raycdf[range_min_az*stride + range_max_el]
-               - raycdf[range_max_az*stride + range_min_el]
-               + raycdf[range_min_az*stride + range_min_el];
-    };
-
-    int region_sum = 0;
-
-    // Gaussian's azimuth covers the whole fov horiz?
-    if(range_min_az <= 0 && range_max_az >= raycdf_size_az)
-    {
-        // TODO: double check if we indeed don't need to check the elevation.
-        return true;
-    }
-    // Entirely to the left of the FOV start
-    else if(range_max_az <= 0)
-    {
-        return false;
-    }
-    // Entirely to the right of the FOV end
-    else if(range_min_az >= raycdf_size_az)
-    {
-        return false;
-    }
-    // Fully inside FOV
-    else if(range_min_az >= 0 && range_max_az <= raycdf_size_az)
-    {
-        region_sum =  cdf_region_sum(range_min_el, range_max_el, range_min_az, range_max_az);
-    }
-    // Wraps at left edge
-    // max_az is exclusive, so if it's == 0, the range falls outside FOV.
-    else if(range_min_az < 0 && range_max_az > 0)
-    {
-        region_sum =  cdf_region_sum(range_min_el, range_max_el, 0, range_max_az);
-        region_sum += cdf_region_sum(range_min_el, range_max_el, range_min_az + raycdf_size_az, raycdf_size_az);
-    }
-    // Wraps at right edge
-    else if(range_min_az < raycdf_size_az && range_max_az > raycdf_size_az)
-    {
-        region_sum =  cdf_region_sum(range_min_el, range_max_el, range_min_az, raycdf_size_az);
-        region_sum += cdf_region_sum(range_min_el, range_max_el, 0, range_max_az-raycdf_size_az);
-    }
-
-    return region_sum > 0;
-}
-
-struct LidarSampleTileIdReturn
-{
-    int idx_el, idx_az;
-    int idxdense_el, idxdense_az;
+    return raycdf[range_max_az*raycdf_stride + range_max_el]
+           - raycdf[range_min_az*raycdf_stride + range_max_el]
+           - raycdf[range_max_az*raycdf_stride + range_min_el]
+           + raycdf[range_min_az*raycdf_stride + range_min_el];
 };
 
 __device__
-LidarSampleTileIdReturn lidar_sample_tileid(const RowOffsetStructuredSpinningLidarModelParametersExtDevice &lidar, float fov_span_pix_el, float fov_span_pix_az, float rel_pix_el, float rel_pix_az)
+bool has_any_rays_in_tile(
+    const RowOffsetStructuredSpinningLidarModelParametersExtDevice &lidar,
+    int raycdf_size_el,
+    int raycdf_size_az,
+    int range_min_el,
+    int range_max_el,
+    int range_min_az,
+    int range_max_az
+)
 {
-    float norm_az = rel_pix_az / fov_span_pix_az;
-    float norm_el = rel_pix_el / fov_span_pix_el;
+    if (range_min_az >= range_max_az)
+        return false;
 
-    LidarSampleTileIdReturn retval;
-    retval.idxdense_az = static_cast<int>(floorf(norm_az*lidar.cdf_resolution_azimuth));
-    retval.idxdense_el = static_cast<int>(floorf(norm_el*lidar.cdf_resolution_elevation));
-    // Clamp to valid range
-    retval.idxdense_el = min(max(retval.idxdense_el, 0), lidar.cdf_resolution_elevation-1);
+    assert(0 <= range_min_az && range_min_az <= raycdf_size_az);
+    assert(0 <= range_max_az && range_max_az <= raycdf_size_az);
 
-    retval.idx_az = static_cast<int>(floorf(norm_az*lidar.n_bins_azimuth));
-    retval.idx_el = lidar.cdf_elevation[retval.idxdense_el];
-    return retval;
+    // Optimization in case of full cover, assumes there are always rays.
+    if (range_min_az <= 0 && range_max_az >= raycdf_size_az)
+        return true;
+
+    const int raycdf_stride = raycdf_size_el + 1;
+    const int *raycdf = lidar.cdf_dense_ray_mask;
+    const int num_rays = cdf_region_sum(raycdf, raycdf_stride, range_min_el, range_max_el, range_min_az, range_max_az);
+    return num_rays > 0;
+}
+
+constexpr struct { __device__ float operator()(float x) const { return floorf(x); } } RoundFloor;
+constexpr struct { __device__ float operator()(float x) const { return ceilf(x); }  } RoundCeil;
+
+namespace {
+    template <auto RoundFn>
+    __device__ int sample_dense_az(float pix_az, float fov_span_pix_az, int cdf_resolution)
+    {
+        // NOTE: need to use proper fdiv instead of the approximation enabled with -use_fast_math
+        // So that if pix_az == fov_span_pix_az, the index is exactly cdf_resolution.
+        // It also makes the results match the reference implementation.
+        int idx = static_cast<int>(RoundFn(__fdiv_rn(pix_az, fov_span_pix_az) * cdf_resolution));
+        assert(0 <= idx);
+        assert(idx <= cdf_resolution);
+        return idx;
+    }
+
+    template <auto RoundFn>
+    __device__ int sample_dense_el(float pix_el, float fov_span_pix_el, int cdf_resolution)
+    {
+        int idx = static_cast<int>(RoundFn(__fdiv_rn(pix_el, fov_span_pix_el) * cdf_resolution));
+        assert(0 <= idx);
+        assert(idx <= cdf_resolution);
+        return idx;
+    }
+
+    template <auto RoundFn>
+    __device__ int sample_tile_az(float pix_az, float fov_span_pix_az, int n_bins)
+    {
+        int idx = static_cast<int>(RoundFn(__fdiv_rn(pix_az, fov_span_pix_az) * n_bins));
+        assert(0 <= idx);
+        assert(idx <= n_bins);
+        return idx;
+    }
+
+    inline __device__ int sample_tile_el(int dense_el, const int *cdf_elevation)
+    {
+        return cdf_elevation[dense_el];
+    }
 }
 
 template <typename scalar_t>
@@ -170,37 +164,110 @@ __global__ void intersect_tile_lidar_kernel(
 
     const float fov_span_pix_el = lidar.fov_vert_rad.span * lidar.ANGLE_TO_PIXEL_SCALING_FACTOR;
     const float fov_span_pix_az = lidar.fov_horiz_rad.span * lidar.ANGLE_TO_PIXEL_SCALING_FACTOR;
+    const float full_circle_pix = 2*PI*lidar.ANGLE_TO_PIXEL_SCALING_FACTOR;
 
-    const auto [relative_elevation_pix, relative_azimuth_pix]
+    // Compute relative angles once on the mean.
+    const auto [mean_rel_el, mean_rel_az]
         = sensor.relative_sensor_angles(elevation_pix, azimuth_pix, lidar.ANGLE_TO_PIXEL_SCALING_FACTOR);
 
-    // Calculate the gaussian extent in tiles and dense tiles (for cdf)
+    // Now calculate the gaussian range
+    const float beg_az = mean_rel_az - radius_y;
+    const float end_az_raw = mean_rel_az + radius_y;
+    const float beg_el = min(max(mean_rel_el - radius_x, 0.f), fov_span_pix_el);
+    const float end_el = min(max(mean_rel_el + radius_x, 0.f), fov_span_pix_el);
 
-    // TODO: need to transpose it to x==azimuth, y==elevation
-    const float min_pix_el = relative_elevation_pix - radius_x;
-    const float min_pix_az = relative_azimuth_pix - radius_y;
-    const float max_pix_el = relative_elevation_pix + radius_x;
-    const float max_pix_az = relative_azimuth_pix + radius_y;
+    // Check full_cover before capping to 2*pi, since the cap can push end
+    // below fov_span for wide FOVs even though the gaussian covers the full FOV.
+    const bool full_cover = (beg_az <= 0.f) && (end_az_raw >= fov_span_pix_az);
 
-    const LidarSampleTileIdReturn min_sample_tileid = lidar_sample_tileid(lidar, fov_span_pix_el, fov_span_pix_az, min_pix_el, min_pix_az);
-    const LidarSampleTileIdReturn max_sample_tileid = lidar_sample_tileid(lidar, fov_span_pix_el, fov_span_pix_az, max_pix_el, max_pix_az);
+    // Don't let gaussian size to be more than 2*pi
+    const float end_az = min(end_az_raw, beg_az + full_circle_pix);
 
-    // We know that in the relative angle space, elevation and azimuth are
-    // monotonically increasing, so we can use this to check if a wrap around
-    // the periodic boundary happens. If this happens, we need to unwrap the
-    // azimuth tile ID in order to get the correct particle projection result.
+    const bool underflows = (beg_az < 0.f) && !full_cover;
+    const bool overflows  = (end_az > full_circle_pix) && !full_cover;
 
-    const int min_dense_el = min_sample_tileid.idxdense_el;
-    const int min_dense_az = min_sample_tileid.idxdense_az;
+    // Compute region A's pixel range.
+    // full_cover:  A = [0, fov_span)
+    // underflows:  A = [0, end)
+    // overflows:   A = [beg, fc)
+    // inside:      A = [beg, end)
+    float begA_pix_az, endA_pix_az;
+    if (full_cover)
+    {
+        begA_pix_az = 0.f;
+        endA_pix_az = fov_span_pix_az;
+    }
+    else if (underflows)
+    {
+        begA_pix_az = 0.f;
+        endA_pix_az = end_az;
+    }
+    else if (overflows)
+    {
+        begA_pix_az = beg_az;
+        endA_pix_az = full_circle_pix;
+    }
+    else
+    {
+        begA_pix_az = beg_az;
+        endA_pix_az = end_az;
+    }
 
-    const int max_dense_el = min(max_sample_tileid.idxdense_el+1, min_dense_el+raycdf_size_el);
-    const int max_dense_az = min(max_sample_tileid.idxdense_az+1, min_dense_az+raycdf_size_az);
+    // Clamp pixel regions to [0, fov_span] so that the sampling functions
+    // normalize to [0, 1] and produce in-range indices.
+    begA_pix_az = min(max(begA_pix_az, 0.f), fov_span_pix_az);
+    endA_pix_az = min(max(endA_pix_az, 0.f), fov_span_pix_az);
 
-    assert(min_dense_el <= max_dense_el);
-    assert(min_dense_az <= max_dense_az);
+    const int n_bins_az = (int)lidar.n_bins_azimuth;
 
-    if(!has_any_rays_in_tile(lidar.cdf_dense_ray_mask, raycdf_size_el, raycdf_size_az,
-                             min_dense_el, max_dense_el, min_dense_az, max_dense_az))
+    // Sample elevation (shared by A and B).
+    const int min_dense_el = sample_dense_el<RoundFloor>(beg_el, fov_span_pix_el, raycdf_size_el);
+    const int max_dense_el = sample_dense_el<RoundCeil>(end_el, fov_span_pix_el, raycdf_size_el);
+    if (min_dense_el >= max_dense_el)
+    {
+        if (first_pass)
+        {
+            tiles_per_gauss[idxgauss] = 0;
+        }
+        return;
+    }
+    const int tile_min_el = sample_tile_el(min_dense_el, lidar.cdf_elevation);
+    const int tile_max_el = sample_tile_el(max_dense_el, lidar.cdf_elevation);
+
+    // Sample A azimuth.
+    const int begA_dense = sample_dense_az<RoundFloor>(begA_pix_az, fov_span_pix_az, raycdf_size_az);
+    const int endA_dense = sample_dense_az<RoundCeil>(endA_pix_az, fov_span_pix_az, raycdf_size_az);
+    const bool has_raysA = has_any_rays_in_tile(lidar, raycdf_size_el, raycdf_size_az,
+                                                min_dense_el, max_dense_el, begA_dense, endA_dense);
+
+    int begA_tile = 0, endA_tile = 0;
+    if(has_raysA)
+    {
+        begA_tile = sample_tile_az<RoundFloor>(begA_pix_az, fov_span_pix_az, n_bins_az);
+        endA_tile = sample_tile_az<RoundCeil>(endA_pix_az, fov_span_pix_az, n_bins_az);
+    }
+
+    // Sample B azimuth -- only exists for underflows or overflows.
+    // underflows: B = [beg+fc, fc),  overflows: B = [0, end-fc)
+    bool has_raysB = false;
+    int begB_tile = 0, endB_tile = 0;
+    if (underflows || overflows)
+    {
+        const float begB_pix_az = min(max(underflows ? (beg_az + full_circle_pix) : 0.f, 0.f), fov_span_pix_az);
+        const float endB_pix_az = min(max(underflows ? full_circle_pix : (end_az - full_circle_pix), 0.f), fov_span_pix_az);
+
+        const int begB_dense = sample_dense_az<RoundFloor>(begB_pix_az, fov_span_pix_az, raycdf_size_az);
+        const int endB_dense = sample_dense_az<RoundCeil>(endB_pix_az, fov_span_pix_az, raycdf_size_az);
+        has_raysB = has_any_rays_in_tile(lidar, raycdf_size_el, raycdf_size_az,
+                                         min_dense_el, max_dense_el, begB_dense, endB_dense);
+        if(has_raysB)
+        {
+            begB_tile = sample_tile_az<RoundFloor>(begB_pix_az, fov_span_pix_az, n_bins_az);
+            endB_tile = sample_tile_az<RoundCeil>(endB_pix_az, fov_span_pix_az, n_bins_az);
+        }
+    }
+
+    if (!has_raysA && !has_raysB)
     {
         if (first_pass)
         {
@@ -209,40 +276,79 @@ __global__ void intersect_tile_lidar_kernel(
         return;
     }
 
-    const int tile_min_el = min_sample_tileid.idx_el;
-    const int tile_min_az = min_sample_tileid.idx_az;
-    const int tile_max_el = min(max_sample_tileid.idx_el+1, tile_min_el+lidar.n_bins_elevation);
-    const int tile_max_az = min(max_sample_tileid.idx_az+1, tile_min_az+lidar.n_bins_azimuth);
+    const bool periodic_az = fov_span_pix_az >= full_circle_pix;
+
+    int az_ranges[2][2] = {{0, 0}, {0, 0}};
+    if (has_raysA)
+    {
+        az_ranges[0][0] = begA_tile;
+        az_ranges[0][1] = endA_tile;
+    }
+    if (has_raysB)
+    {
+        az_ranges[1][0] = begB_tile;
+        az_ranges[1][1] = endB_tile;
+    }
+
+    if (periodic_az)
+    {
+        // For periodic azimuth, tiles wrap around (tile n_bins-1 is adjacent
+        // to tile 0). Merge B into A by extending A across the 0/n_bins seam:
+        //   underflows: A=[0, endA), B=[begB, n_bins) -> merged=[begB-n_bins, endA)
+        //   overflows:  A=[begA, n_bins), B=[0, endB) -> merged=[begA, endB+n_bins)
+        // The kernel then uses az % n_bins to map back to valid tile indices.
+        if (has_raysB && underflows)
+            az_ranges[0][0] = az_ranges[1][0] - n_bins_az;
+        if (has_raysB && overflows)
+            az_ranges[0][1] = az_ranges[1][1] + n_bins_az;
+        // Cap to at most n_bins wide to prevent double-counting tiles at the
+        // seam when ceil(endA) and floor(begB) produce overlapping tile indices.
+        az_ranges[0][0] = max(az_ranges[0][0], az_ranges[0][1] - n_bins_az);
+        az_ranges[0][1] = min(az_ranges[0][1], az_ranges[0][0] + n_bins_az);
+        az_ranges[1][0] = 0;
+        az_ranges[1][1] = 0;
+    }
+    else
+    {
+        // For non-periodic azimuth, A and B are generally disjoint (e.g.,
+        // behind-sensor gaussians with tips at both edges of the FOV).
+        // However, when extent is very close to pi, ceil(endA) and floor(begB)
+        // can produce overlapping tile indices. Since one range always anchors
+        // at 0 and the other at n_bins, any overlap means the gaussian covers
+        // the entire FOV. Merge into [0, n_bins) in that case.
+        if (has_raysA && has_raysB
+            && az_ranges[1][0] < az_ranges[0][1]
+            && az_ranges[0][0] < az_ranges[1][1])
+        {
+            az_ranges[0][0] = 0;
+            az_ranges[0][1] = n_bins_az;
+            az_ranges[1][0] = 0;
+            az_ranges[1][1] = 0;
+        }
+    }
 
     assert(tile_min_el <= tile_max_el);
-    assert(tile_min_az <= tile_max_az);
 
     if (first_pass)
     {
-        // first pass only writes out tiles_per_gauss
-        // TODO: Avoid calling this kernel twice.
-        //       Since the order we write out the intersections doesn't matter at this point (they'll be sorted later),
-        //       we could use atomic ops to reserve space in the output arrays and write to them freely.
-        tiles_per_gauss[idxgauss] = (tile_max_el - tile_min_el) * (tile_max_az - tile_min_az);
+        const int az_span = max(az_ranges[0][1] - az_ranges[0][0], 0)
+                          + max(az_ranges[1][1] - az_ranges[1][0], 0);
+        tiles_per_gauss[idxgauss] = (tile_max_el - tile_min_el) * az_span;
         return;
     }
 
     int64_t image_id;
     if (packed)
     {
-        // parallelize over nnz
         image_id = image_ids[idxgauss];
     }
     else
     {
-        // parallelize over I * N
         image_id = idxgauss / N;
     }
     const int64_t image_id_enc = image_id << (32 + tile_n_bits);
 
-    // tolerance for negative depth
     int64_t depth_id_enc;
-
     if constexpr(sizeof(depths[idxgauss]) == sizeof(uint32_t))
     {
         depth_id_enc = reinterpret_cast<const uint32_t &>(depths[idxgauss]);
@@ -256,22 +362,19 @@ __global__ void intersect_tile_lidar_kernel(
     }
 
     int64_t idxflatten = (idxgauss == 0) ? 0 : cum_tiles_per_gauss[idxgauss - 1];
-    for (int32_t az = tile_min_az; az < tile_max_az; ++az)
+    #pragma unroll
+    for (int r = 0; r < 2; ++r)
     {
-        int mod_az = az%lidar.n_bins_azimuth;
-        if(mod_az < 0)
+        for (int32_t az = az_ranges[r][0]; az < az_ranges[r][1]; ++az)
         {
-            mod_az += (int)lidar.n_bins_azimuth;
-        }
-        for (int32_t el = tile_min_el; el < tile_max_el; ++el)
-        {
-            const int64_t tile_id_enc = mod_az*lidar.n_bins_elevation + el;
-            // e.g. tile_n_bits = 22:
-            // image id (10 bits) | tile id (22 bits) | depth (32 bits)
-            isect_ids[idxflatten] = image_id_enc | (tile_id_enc << 32) | depth_id_enc;
-            // the flatten index in [I * N] or [nnz]
-            flatten_ids[idxflatten] = idxgauss;
-            idxflatten += 1;
+            const int32_t actual_az = periodic_az ? ((az + n_bins_az) % n_bins_az) : az;
+            for (int32_t el = tile_min_el; el < tile_max_el; ++el)
+            {
+                const int64_t tile_id_enc = actual_az*lidar.n_bins_elevation + el;
+                isect_ids[idxflatten] = image_id_enc | (tile_id_enc << 32) | depth_id_enc;
+                flatten_ids[idxflatten] = idxgauss;
+                idxflatten += 1;
+            }
         }
     }
     assert(idxflatten == cum_tiles_per_gauss[idxgauss]);
