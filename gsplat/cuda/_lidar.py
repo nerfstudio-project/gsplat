@@ -350,7 +350,7 @@ class LidarTiling:
 
     def __post_init__(self):
         assert self.cdf_elevation.dtype == torch.int32, self.cdf_elevation.dtype
-        assert self.cdf_elevation.shape == (self.n_bins_elevation+1,), f"{self.cdf_elevation.shape=} {(self.n_bins_elevation+1,)=}"
+        assert self.cdf_elevation.ndim == 1, f"{self.cdf_elevation.shape=}"
         assert self.cdf_elevation[-1].item() == self.n_bins_elevation, "cdf_elevation[-1] must be equal to n_bins_elevation"
 
         assert self.cdf_dense_ray_mask.dtype == torch.int32, self.cdf_dense_ray_mask.dtype
@@ -715,7 +715,7 @@ def compute_histogram_equalization(parameters: RowOffsetStructuredSpinningLidarM
 
     assert isinstance(cdf_elevation, torch.Tensor)
     assert cdf_elevation[-1].item() == n_bins_elevation, f"{cdf_elevation[-1]=} {n_bins_elevation=}"
-    assert cdf_elevation.shape == (n_bins_elevation,), f"{cdf_elevation.shape=} {(n_bins_elevation+1,)=}"
+    assert cdf_elevation.shape == (resolution_elevation+1,), f"{cdf_elevation.shape=} {(resolution_elevation+1,)=}"
 
     return (
         n_bins_azimuth,
