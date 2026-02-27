@@ -6,6 +6,12 @@
 
 namespace gsplat {
 
+#if defined(__HIP__)
+    #define FOR_HIP 1
+#else
+    #define FOR_HIP 0
+#endif
+
 //
 // Some Macros.
 //
