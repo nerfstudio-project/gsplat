@@ -132,6 +132,51 @@ class SphericalUnitCoord:
             elevation=self.elevation[key], azimuth=self.azimuth[key]
         )
 
+    def _binop(self, other, op) -> "SphericalUnitCoord":
+        if isinstance(other, SphericalUnitCoord):
+            return SphericalUnitCoord(
+                elevation=op(self.elevation, other.elevation),
+                azimuth=op(self.azimuth, other.azimuth),
+            )
+        return SphericalUnitCoord(
+            elevation=op(self.elevation, other), azimuth=op(self.azimuth, other)
+        )
+
+    def _rbinop(self, other, op) -> "SphericalUnitCoord":
+        return SphericalUnitCoord(
+            elevation=op(other, self.elevation), azimuth=op(other, self.azimuth)
+        )
+
+    def __add__(self, other) -> "SphericalUnitCoord":
+        return self._binop(other, lambda a, b: a + b)
+
+    def __radd__(self, other) -> "SphericalUnitCoord":
+        return self._rbinop(other, lambda a, b: a + b)
+
+    def __sub__(self, other) -> "SphericalUnitCoord":
+        return self._binop(other, lambda a, b: a - b)
+
+    def __rsub__(self, other) -> "SphericalUnitCoord":
+        return self._rbinop(other, lambda a, b: a - b)
+
+    def __mul__(self, other) -> "SphericalUnitCoord":
+        return self._binop(other, lambda a, b: a * b)
+
+    def __rmul__(self, other) -> "SphericalUnitCoord":
+        return self._rbinop(other, lambda a, b: a * b)
+
+    def __mod__(self, other) -> "SphericalUnitCoord":
+        return self._binop(other, lambda a, b: a % b)
+
+    def __rmod__(self, other) -> "SphericalUnitCoord":
+        return self._rbinop(other, lambda a, b: a % b)
+
+    def __truediv__(self, other) -> "SphericalUnitCoord":
+        return self._binop(other, lambda a, b: a / b)
+
+    def __rtruediv__(self, other) -> "SphericalUnitCoord":
+        return self._rbinop(other, lambda a, b: a / b)
+
 
 @dataclass(kw_only=True, frozen=True)
 class FOV:
@@ -405,19 +450,17 @@ class LidarTiling:
     def __post_init__(self):
         assert self.cdf_elevation.dtype == torch.int32, self.cdf_elevation.dtype
         assert self.cdf_elevation.ndim == 1, self.cdf_elevation.ndim
-        n = float(self.cdf_elevation[-1].item())
         assert (
-            n == self.n_bins_elevation
-        ), "n_bins_elevation must be equal to cdf_elevation[-1]"
+            self.cdf_elevation[-1].item() == self.n_bins_elevation
+        ), "cdf_elevation[-1] must be equal to n_bins_elevation"
 
         assert (
             self.cdf_dense_ray_mask.dtype == torch.int32
         ), self.cdf_dense_ray_mask.dtype
         assert self.cdf_dense_ray_mask.ndim == 2, self.cdf_dense_ray_mask.ndim
-        assert self.cdf_dense_ray_mask.shape[-1] == self.cdf_elevation.shape[0], (
-            self.cdf_dense_ray_mask.shape,
-            self.cdf_elevation.shape,
-        )
+        assert (
+            self.cdf_dense_ray_mask.shape[-1] == self.cdf_elevation.shape[0]
+        ), f"{self.cdf_dense_ray_mask.shape=} {self.cdf_elevation.shape=}"
 
         assert self.tiles_pack_info.ndim == 2, self.tiles_pack_info.ndim
         assert self.tiles_pack_info.shape == (
@@ -833,18 +876,18 @@ def compute_histogram_equalization(
     )
 
     tot = torch.sum(hist)
-    cdf = torch.zeros((len(hist) + 1), device=parameters.device)
-    cdf[1:] = torch.cumsum(hist, dim=0)
-    cdf = cdf / tot * (n_bins_elevation)
+    cdf_elevation = torch.zeros((len(hist) + 1), device=parameters.device)
+    cdf_elevation[1:] = torch.cumsum(hist, dim=0)
+    cdf_elevation = cdf_elevation / tot * (n_bins_elevation)
 
     # 2. interpolate the new values
     edges_list = [0]
     curr = 1
-    for i in range(len(cdf)):
-        if cdf[i] >= curr:
+    for i in range(len(cdf_elevation)):
+        if cdf_elevation[i] >= curr:
             edges_list.append(i)
             curr += 1
-    edges_list[-1] = len(cdf) - 1
+    edges_list[-1] = len(cdf_elevation) - 1
     edges = torch.tensor(edges_list, device=parameters.device, dtype=torch.float32)
 
     # recompute the histograms
@@ -876,11 +919,17 @@ def compute_histogram_equalization(
         n_bins_azimuth += 1
         hist2d, _, _ = compute_hist2d(n_bins_azimuth)
 
-    assert isinstance(cdf, torch.Tensor)
+    assert isinstance(cdf_elevation, torch.Tensor)
+    assert (
+        cdf_elevation[-1].item() == n_bins_elevation
+    ), f"{cdf_elevation[-1]=} {n_bins_elevation=}"
+    assert cdf_elevation.shape == (
+        resolution_elevation + 1,
+    ), f"{cdf_elevation.shape=} {(resolution_elevation+1,)=}"
 
     return (
         n_bins_azimuth,
-        cdf,
+        cdf_elevation,
     )
 
 
