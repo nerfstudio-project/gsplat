@@ -748,24 +748,17 @@ def test_isect_lidar(lidar_model, batch_dims: Tuple[int, ...]):
     lidar = gsplat.RowOffsetStructuredSpinningLidarModelParametersExt(**params)
 
     B = math.prod(batch_dims)
-    C, N = 3, 1000  # cameras and gaussians
-    nrows, ncols = lidar.n_rows, lidar.n_columns
+    C, N = 3, 1000 # cameras and gaussians
 
     test_data = {
-        "means2d": torch.randn(C, N, 2, device=device)
-        * torch.tensor([nrows, ncols], device=device),
-        "radii": torch.randint(
-            0,
-            max(1, min(ncols, nrows) // 2),
-            (C, N, 2),
-            device=device,
-            dtype=torch.int32,
-        ),
+        "means2d": torch.randn(C, N, 2, device=device) * torch.tensor([math.pi, 2*math.pi], device=device),
+        # TODO: assuming .x=elevation and .y=azimuth. This must be transposed.
+        "radii": torch.randn(C, N, 2, device=device).abs().clamp(max=1) * torch.tensor([lidar.fov_vert_rad.span/2, math.pi], device=device),
         "depths": torch.rand(C, N, device=device),
     }
     test_data = expand(test_data, batch_dims)
-    means2d = test_data["means2d"] * ANGLE_TO_PIXEL_SCALING_FACTOR
-    radii = test_data["radii"] * ANGLE_TO_PIXEL_SCALING_FACTOR
+    means2d = test_data["means2d"]*ANGLE_TO_PIXEL_SCALING_FACTOR
+    radii = torch.ceil(test_data["radii"]*ANGLE_TO_PIXEL_SCALING_FACTOR).to(torch.int32)
     depths = test_data["depths"]
 
     tiles_per_gauss, isect_ids, flatten_ids = isect_tiles_lidar(
