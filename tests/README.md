@@ -123,6 +123,7 @@ This provides a development environment with:
 - Your local source code mounted at the same directory inside the container.
 - Persistent build cache at `/var/cache/ccache`
 - Ability to manually run pytest with debuggers attached.
+- Run examples and benchmark scripts.
 - sudo access
 
 The container automatically cleans up after completion, but the /var/cache
@@ -158,12 +159,29 @@ pre-configure the build environment:
 ./run_tests.sh --shell --3dgut
 ```
 
-### Running arbitrary commands
+## Running examples and benchmarks
 
-To run any command without dropping into a shell inside the container,
-pass the command and its arguments after `--shell`:
+### Pre-requisites
+
+Download the required dataset.
 
 ```bash
-# Execute a command, with arguments
-./run_tests.sh --shell python -c "import gsplat"
+./run_tests.sh --shell python examples/datasets/download_dataset.py --dataset=mipnerf360
+```
+
+Depending on the example or benchmark script, other datasets are required.
+For the list of available datasets to download, run:
+
+```bash
+./run_tests.sh --shell python examples/datasets/download_dataset.py --help
+```
+
+### Simple trainer
+```bash
+./run_tests.sh --shell python examples/simple_trainer.py mcmc
+```
+
+### Basic benchmark
+```bash
+./run_tests.sh --shell examples/benchmarks/basic.sh
 ```

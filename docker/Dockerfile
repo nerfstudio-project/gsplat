@@ -66,7 +66,7 @@ RUN --mount=type=tmpfs,target=/tmp \
         "ninja==1.13.0"
         "numpy==2.2.6"
         "jaxtyping==0.3.4"
-        "rich==12"
+        "rich==14.3.3"
         "torch==2.9.1"
         "typing_extensions; python_version<'3.8'"
     )
@@ -88,14 +88,14 @@ RUN --mount=type=tmpfs,target=/tmp \
         "pytest==7.1.3"
         "pytest-env==0.8.1"
         "pytest-xdist==2.5.0"
-        "typeguard==2.13.3"
+        "typeguard==4.5.1"
         "pyyaml==6.0.1"
         "build==1.3.0"
         "twine==1.6.0"
         "cupy==13.6.0"
         "nerfacc==0.5.3"
         "PLAS @ git+https://github.com/fraunhoferhhi/PLAS.git"
-        "imageio==2.37.2"
+        "imageio[ffmpeg]==2.37.2"
         "torchpq==0.3.0.6"
     )
 
@@ -104,6 +104,36 @@ RUN --mount=type=tmpfs,target=/tmp \
     CUPY_NUM_NVCC_THREADS=$(nproc) \
     CUPY_NVCC_GENERATE_CODE=arch=compute_80,code=compute_80 \
         pip install "${packages[@]}"
+
+    # To save space, we can remove the python cache files
+    rm -rf $PYTHONPYCACHEPREFIX/*
+EOS
+
+# Examples dependencies
+RUN --mount=type=tmpfs,target=/tmp \
+<<EOS
+    # Examples
+    packages=(
+        "torchvision==0.24.1"
+        "git+https://github.com/brandonyzhao/pycolmap@a2a5671b0f6ab641957dd4c5a78cabcf220c28ee"
+        "viser==1.0.24"
+        "git+https://github.com/nerfstudio-project/nerfview@4538024fe0d15fd1a0e4d760f3695fc44ca72787"
+        "scikit-learn==1.8.0"
+        "torchmetrics[image]==1.8.2"
+        "tyro==1.0.8"
+        "piexif==1.1.3"
+        "tensorboard==2.20.0"
+        "tensorly==0.9.0"
+        "git+https://github.com/rahul-goel/fused-ssim@328dc9836f513d00c4b5bc38fe30478b4435cbb5"
+        "git+https://github.com/harry7557558/fused-bilagrid@49f0ef06c9f81810fb9b5dd9027cf1844950cc16"
+        "splines==0.3.3"
+        "ppisp @ git+https://github.com/nv-tlabs/ppisp@v1.0.0"
+        "opencv-python-headless==4.10.0.84"
+    )
+
+    # Needs --no-build-isolation or else fused-ssim can't be installed as
+    # it needs torch in its setup.py.
+    pip install --no-build-isolation "${packages[@]}"
 
     # To save space, we can remove the python cache files
     rm -rf $PYTHONPYCACHEPREFIX/*
