@@ -58,25 +58,67 @@ EOS
 # Installs all GSplat dependencies (including dev dependencies) -----------
 FROM python as gsplat-deps
 
-COPY --link --from=gsplatrepo setup.py deps/
-COPY --link --from=gsplatrepo gsplat/version.py deps/gsplat/
+# Main library dependencies
 RUN --mount=type=tmpfs,target=/tmp \
 <<EOS
+    packages=(
+        # Library deps
+        "ninja==1.13.0"
+        "numpy==2.2.6"
+        "jaxtyping==0.3.4"
+        "rich==12"
+        "torch==2.9.1"
+        "typing_extensions; python_version<'3.8'"
+    )
 
-    pushd deps
+    pip install "${packages[@]}"
+
+    # To save space, we can remove the python cache files
+    rm -rf $PYTHONPYCACHEPREFIX/*
+EOS
+
+# Test/dev dependencies
+RUN --mount=type=tmpfs,target=/tmp \
+<<EOS
+    # Dev/test deps
+    packages=(
+        "black[jupyter]==22.3.0"
+        "isort==5.10.1"
+        "pylint==2.13.4"
+        "pytest==7.1.3"
+        "pytest-env==0.8.1"
+        "pytest-xdist==2.5.0"
+        "typeguard==2.13.3"
+        "pyyaml==6.0.1"
+        "build==1.3.0"
+        "twine==1.6.0"
+        "cupy==13.6.0"
+        "nerfacc==0.5.3"
+        "PLAS @ git+https://github.com/fraunhoferhhi/PLAS.git"
+        "imageio==2.37.2"
+        "torchpq==0.3.0.6"
+    )
 
     # Tests need cupy, let install faster (and smaller) by targeting a specific compute and rely on CUDA JIT.
     CUPY_NUM_BUILD_JOBS=$(nproc) \
     CUPY_NUM_NVCC_THREADS=$(nproc) \
     CUPY_NVCC_GENERATE_CODE=arch=compute_80,code=compute_80 \
-    BUILD_NO_CUDA=1 \
-      pip install -e .[dev]
-
-    popd
+        pip install "${packages[@]}"
 
     # To save space, we can remove the python cache files
     rm -rf $PYTHONPYCACHEPREFIX/*
+EOS
 
+# Now install the stub gsplat module, with JIT implementation.
+COPY --link --from=gsplatrepo setup.py deps/
+COPY --link --from=gsplatrepo gsplat/version.py deps/gsplat/
+RUN --mount=type=tmpfs,target=/tmp \
+<<EOS
+    pushd deps
+    BUILD_NO_CUDA=1 pip install -e .[dev]
+    popd
+
+    rm -rf $PYTHONPYCACHEPREFIX/*
     rm -rf deps
 EOS
 
