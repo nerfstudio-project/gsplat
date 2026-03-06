@@ -43,9 +43,12 @@ def get_extensions():
 
     params = get_build_parameters()
 
+    setup_dir = os.path.dirname(os.path.abspath(__file__))
+    sources = [os.path.relpath(s, setup_dir) for s in params.sources]
+
     extension = CUDAExtension(
         "gsplat.csrc",
-        sources=params.sources,
+        sources=sources,
         include_dirs=params.extra_include_paths,
         extra_compile_args={
             "cxx": params.extra_cflags,
