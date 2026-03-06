@@ -48,10 +48,10 @@ RUN --mount=type=cache,id=aptcache,target=/var/cache/apt,sharing=locked \
 EOS
 
 # Sets up python's virtual environment
-ENV PATH="~/.venv/bin:$PATH"
+ENV PATH="/root/.venv/bin:$PATH"
 RUN --mount=type=tmpfs,target=/tmp \
 <<EOS
-    python3 -m venv ~/.venv
+    python3 -m venv /root/.venv
 EOS
 
 # Installs all GSplat dependencies (including dev dependencies) -----------
