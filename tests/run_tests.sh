@@ -7,7 +7,8 @@ REPOROOT=$(realpath -e "$SDIR/..")
 
 source "$REPOROOT/docker/utils.sh"
 
-LOCAL_CACHE_NAME=gsplat-cache-$(id -un)
+LOCAL_CACHE_VOLUME=gsplat-cache
+LOCAL_HOME_VOLUME=gsplat-home-$(id -un)
 
 usage()
 {
@@ -17,7 +18,8 @@ usage()
     echo "global flags:"
     echo "   --shell    Enter into the shell inside the container."
     echo "   --sanitize Run tests under CUDA compute-sanitizer"
-    echo "   --reset    Delete the internal build cache"
+    echo "   --reset-cache  Delete the internal cache directory"
+    echo "   --reset-home   Delete the internal home directory"
     echo "   --verbose  Show intermediate information"
     echo "   --gpus=spec Use the given GPUs inside the container."
     echo "              The syntax is:"
@@ -47,7 +49,8 @@ runshell=false
 do_3dgut=false
 do_3dgs=false
 do_2dgs=false
-do_reset=false
+do_reset_home=false
+do_reset_cache=false
 do_sanitize=false
 do_debug=false
 do_verbose=false
@@ -65,8 +68,11 @@ while (( $# >= 1 )); do
     --shell)
         runshell=true
         ;;
-    --reset)
-        do_reset=true
+    --reset-cache)
+        do_reset_cache=true
+        ;;
+    --reset-home)
+        do_reset_home=true
         ;;
     --sanitize)
         do_sanitize=true
@@ -117,10 +123,17 @@ check_if_installed yq docker nvidia-container-runtime
 # Load config variables
 load_config "$REPOROOT/config.yaml"
 
-if $do_reset; then
-    echo -n "Removing gsplat's local cache volume..." >&2
-    docker volume rm "$LOCAL_CACHE_NAME" > /dev/null 2>&1 || true
-    echo " OK" >&2
+if $do_reset_home || $do_reset_cache; then
+    if $do_reset_cache; then
+        echo -n "Removing container cache volume... " >&2
+        docker volume rm "$LOCAL_CACHE_VOLUME" > /dev/null 2>&1 || true
+        echo "OK"
+    fi
+    if $do_reset_home; then
+        echo -n "Removing container home volume... " >&2
+        docker volume rm "$LOCAL_HOME_VOLUME" > /dev/null 2>&1 || true
+        echo "OK"
+    fi
     exit
 fi
 
@@ -143,7 +156,8 @@ run_args=(
     -e HOST_HOME="$HOST_HOME"
     -e TERM="$TERM"
 
-    -v "$LOCAL_CACHE_NAME:/var/cache"
+    -v "$LOCAL_HOME_VOLUME:$HOST_HOME"
+    -v "$LOCAL_CACHE_VOLUME:/var/cache"
 
     --hostname "$(hostname)-gsdev"
 )
