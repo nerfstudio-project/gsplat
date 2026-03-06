@@ -47,7 +47,7 @@ if $force_overwrite && ! $push_image; then
     die "--force only makes sense if accompanied by --push"
 fi
 
-check_if_installed yq "docker buildx"
+check_if_installed "docker buildx"
 
 load_config "$REPOROOT/config.yaml"
 

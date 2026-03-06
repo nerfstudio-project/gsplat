@@ -48,7 +48,6 @@ The script was tested on the following OSs:
 - Ubuntu 24.04
 
 The script requires the following packages to be installed:
-- `yq`: YAML processor for reading config.yaml
 - `docker.io`: Docker engine
 - `docker-buildx`: Docker BuildX support
 - `nvidia-container-runtime`: NVIDIA GPU support for containers

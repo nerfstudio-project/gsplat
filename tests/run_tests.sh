@@ -118,7 +118,7 @@ while (( $# >= 1 )); do
     shift
 done
 
-check_if_installed yq docker nvidia-container-runtime
+check_if_installed docker nvidia-container-runtime
 
 # Load config variables
 load_config "$REPOROOT/config.yaml"
