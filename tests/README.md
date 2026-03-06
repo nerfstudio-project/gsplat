@@ -17,8 +17,9 @@ You update the code locally and run the tests to see the results right away.
 - **Selective Feature Building**: Configure build scope to include only
   specific features (e.g., `--3dgut`, `--3dgs --2dgs`) for faster compilation
   and targeted testing
-- **Mounted Source Code**: Local source code mounted at `/root/gsplat` allows
-  immediate testing of code changes without rebuild delays
+- **Mounted Source Code**: Local source code mounted at the same directory as
+  on host allows immediate testing of code changes without rebuild delays,
+  and debug symbols refers to the correct source files on host.
 
 ### Reproducibility
 
@@ -119,12 +120,16 @@ To access an interactive shell in the development container:
 This provides a development environment with:
 - All GSplat dependencies pre-installed
 - GPU access enabled
-- Your local source code mounted at `/root/gsplat`
+- Your local source code mounted at the same directory inside the container.
 - Persistent build cache at `/var/cache/ccache`
 - Ability to manually run pytest with debuggers attached.
+- sudo access
 
 The container automatically cleans up after completion, but the /var/cache
 directory inside the container persists for faster subsequent builds.
+
+Any other parameters given are interpreted as an executable to be executed
+inside the container, along with its parameters.
 
 ### Example Shell Session
 

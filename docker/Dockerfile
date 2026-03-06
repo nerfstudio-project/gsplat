@@ -48,10 +48,11 @@ RUN --mount=type=cache,id=aptcache,target=/var/cache/apt,sharing=locked \
 EOS
 
 # Sets up python's virtual environment
-ENV PATH="/root/.venv/bin:$PATH"
+ENV PYTHON_VENV_PATH=/usr/local/venv
+ENV PATH="$PYTHON_VENV_PATH/bin:$PATH"
 RUN --mount=type=tmpfs,target=/tmp \
 <<EOS
-    python3 -m venv /root/.venv
+    python3 -m venv "$PYTHON_VENV_PATH"
 EOS
 
 # Installs all GSplat dependencies (including dev dependencies) -----------
@@ -85,7 +86,7 @@ EOS
 
 FROM python as main
 
-COPY --link --from=gsplat-deps /root/.venv/ /root/.venv/
+COPY --link --from=gsplat-deps "$PYTHON_VENV_PATH/" "$PYTHON_VENV_PATH/"
 COPY --link --from=ccache ccache /usr/local/bin/ccache
 
 # Now install everything else we need from apt
@@ -97,26 +98,30 @@ RUN --mount=type=cache,id=aptcache,target=/var/cache/apt,sharing=locked \
 
     packages=(
         # For JIT-build
-        ninja-build
+        ninja-build curl unzip
         # generally needed
-        vim less
+        vim less sudo
+        # For the entrypoint script
+        gosu
     )
     apt-get install "${packages[@]}"
 EOS
 
-# Set up ccache
 ENV CCACHE_CONFIGPATH=/etc/ccache.conf
 ENV PATH=/usr/local/bin:$PATH
-RUN <<EOS
-    cat <<'EOF' >> /root/.profile
 
-if [[ $CI_BUILDS_DIR ]]; then
-    export CCACHE_DIR=$CI_BUILDS_DIR/.ci-keep/ccache
-else
-    export CCACHE_DIR=/var/cache/ccache
-fi
-EOF
-    mkdir -p /var/cache/ccache
+COPY --link profile.d/00-persistent-cache.sh /etc/profile.d/
+
+# Leave some small changes last
+RUN <<EOS
+    # Make apt cache persistent
+    mkdir -p /var/cache/apt/lib
+    rm -rf /var/lib/apt
+    ln -sf /var/cache/apt/lib /var/lib/apt
+    # World-writable so any host UID mapped into the container can use the
+    # shared persistent cache (ccache, CUDA JIT, pip).  Acceptable in a
+    # local dev-only image; do NOT use in production/shared environments.
+    chmod 777 /var/cache
 
     ccache --max-size=20G
 
@@ -128,31 +133,31 @@ EOF
     # We can't use a symlink like we did with the host compilers or else
     # cuda sdk path detection done by setuptools won't work.
     mv /usr/local/cuda/bin/nvcc{,-real}
+
+    # Some of the profile scripts set up the config, we need
+    # to do it for root
+    for file in /etc/profile.d/*.sh; do
+        source "$file"
+    done
+
+    # Allow sudoers do use python venv automatically
+    echo "Defaults secure_path=\"$PYTHON_VENV_PATH/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\"" > /etc/sudoers.d/10-secure-path
+
+    # Remove all non-system users/groups (UID/GID >= 1000, except nobody/nogroup)
+    # so the entrypoint can create the host user without conflicts
+    nogroup_gid="$(getent group nogroup | cut -d: -f3)"
+    awk -F: -v ng="$nogroup_gid" '$3 >= 1000 && $1 != "nobody" && $4 != ng { print $1 }' /etc/passwd \
+        | xargs -r -n1 userdel 2>/dev/null || true
+    awk -F: '$3 >= 1000 && $1 != "nogroup" { print $1 }' /etc/group \
+        | xargs -r -n1 groupdel 2>/dev/null || true
 EOS
+
 COPY --link cuda/nvcc_wrapper.sh /usr/local/cuda/bin/nvcc
-
-# Local cache volume, they're not meant to be in the CI cache
-RUN <<EOS
-    mkdir -p /var/cache/{root,apt/lib}
-    ln -sf /var/cache/root /root/.cache
-    rm -rf /var/lib/apt
-    ln -sf /var/cache/apt/lib /var/lib/apt
-EOS
-
-# Set up the cuda JIT cache path
-RUN <<EOS
-    cat <<'EOF' >> /root/.profile
-
-if [[ $CI_BUILDS_DIR ]]; then
-    export CUDA_CACHE_PATH=$CI_BUILDS_DIR/.ci-keep/cuda
-else
-    export CUDA_CACHE_PATH=/var/cache/cuda
-fi
-EOF
-    mkdir -p /var/cache/cuda
-EOS
+COPY --chmod=755 entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["bash", "--login"]
 
 # Our local, persistent cache volume
 VOLUME /var/cache
 
-WORKDIR /root/gsplat
+WORKDIR /root

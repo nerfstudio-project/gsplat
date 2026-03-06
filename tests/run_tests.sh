@@ -3,11 +3,11 @@
 set -euo pipefail
 
 SDIR=$(dirname "$(readlink -f "$0")")
-REPOROOT=$SDIR/..
+REPOROOT=$(realpath -e "$SDIR/..")
 
 source "$REPOROOT/docker/utils.sh"
 
-LOCAL_CACHE_NAME=gsplat_cache
+LOCAL_CACHE_NAME=gsplat-cache-$(id -un)
 
 usage()
 {
@@ -121,14 +121,31 @@ if $do_reset; then
     echo -n "Removing gsplat's local cache volume..." >&2
     docker volume rm "$LOCAL_CACHE_NAME" > /dev/null 2>&1 || true
     echo " OK" >&2
+    exit
 fi
+
+HOST_USER=$(id -un)
+HOST_GROUP=$(id -gn)
+HOST_UID=$(id -u)
+HOST_GID=$(id -g)
+HOST_HOME="$HOME"
 
 run_args=(
     "--gpus=$gpus"
     --rm
-    -v "$REPOROOT:/root/gsplat"
+    -v "$REPOROOT:$REPOROOT"
+    -w "$REPOROOT"
+
+    -e HOST_USER="$HOST_USER"
+    -e HOST_GROUP="$HOST_GROUP"
+    -e HOST_UID="$HOST_UID"
+    -e HOST_GID="$HOST_GID"
+    -e HOST_HOME="$HOST_HOME"
+    -e TERM="$TERM"
+
     -v "$LOCAL_CACHE_NAME:/var/cache"
-    --entrypoint /bin/bash # To avoid the CUDA banner when the container starts.
+
+    --hostname "$(hostname)-gsdev"
 )
 
 # Add user envvars as -e KEY=VALUE pairs without breaking on spaces
@@ -151,39 +168,30 @@ if $do_debug; then
     run_args+=(-e DEBUG=1)
 fi
 
-# We need a login shell in order to load ~/.profile, it loads up the python venv.
-shell_args=(--login)
+shell_args=()
 
 if $runshell; then
     # No arguments given?
     if [[ $# == 0 ]]; then
         # Drop us into an interactive shell in the container
-        shell_args+=(-i)
         run_args+=(-ti)
-    else
-        # Execute user's commands inside the container
-        # Example: --shell pytest -k "foo and bar" stays intact
-        cmd=$1
-        user_cmd=("$@")
-        shift $#
-        shell_args+=(-c 'exec "$@"' "$cmd" "${user_cmd[@]}")
     fi
 else
-    pytest_args=("$@")
-    shift $#
-
-    if $do_verbose; then
-        pytest_args+=(-sv) # show C++ build as it happens
-    fi
-
     if $do_sanitize; then
         # CUDA compute-sanitizer needs the full path of the program to be analyzed
-        shell_args+=(-c '/usr/local/cuda/bin/compute-sanitizer "$(command -v pytest)" "$@"' pytest "${pytest_args[@]}")
+        sanitizer_cmd='/usr/local/cuda/bin/compute-sanitizer "$(command -v pytest)"'
+        if $do_verbose; then
+            sanitizer_cmd+=' -sv'
+        fi
+        shell_args+=(/bin/bash -c "$sanitizer_cmd")
         run_args+=(-e DEBUG=1) # it's helpful for triggering asserts and full symbol info
         run_args+=(--privileged) # compute-sanitizer sometimes segfaults if not running on privileged container
     else
         # We want to run pytest, possibly with users' parameters
-        shell_args+=(-c 'pytest "$@"' pytest "${pytest_args[@]}")
+        shell_args+=(pytest)
+        if $do_verbose; then
+            shell_args+=(-sv) # show C++ build as it happens
+        fi
     fi
 fi
 
@@ -191,5 +199,6 @@ if $do_verbose; then
     # Show the whole docker run invocation
     set -x
 fi
-docker run "${run_args[@]}" "$DOCKER_REGISTRY/$IMAGE_NAME:$IMAGE_TAG" "${shell_args[@]}"
+
+docker run "${run_args[@]}" "$DOCKER_REGISTRY/$IMAGE_NAME:$IMAGE_TAG" "${shell_args[@]}" "$@"
 
