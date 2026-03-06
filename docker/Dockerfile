@@ -139,19 +139,6 @@ RUN --mount=type=tmpfs,target=/tmp \
     rm -rf $PYTHONPYCACHEPREFIX/*
 EOS
 
-# Now install the stub gsplat module, with JIT implementation.
-COPY --link --from=gsplatrepo setup.py deps/
-COPY --link --from=gsplatrepo gsplat/version.py deps/gsplat/
-RUN --mount=type=tmpfs,target=/tmp \
-<<EOS
-    pushd deps
-    BUILD_NO_CUDA=1 pip install -e .[dev]
-    popd
-
-    rm -rf $PYTHONPYCACHEPREFIX/*
-    rm -rf deps
-EOS
-
 # Main image ============================================================
 # It combines the Python environment, development toolchain
 # and all gsplat dependencies into an image.

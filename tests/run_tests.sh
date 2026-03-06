@@ -156,6 +156,8 @@ run_args=(
     -e HOST_HOME="$HOST_HOME"
     -e TERM="$TERM"
 
+    -e PYTHONPATH="$REPOROOT"
+
     -v "$LOCAL_HOME_VOLUME:$HOST_HOME"
     -v "$LOCAL_CACHE_VOLUME:/var/cache"
 
