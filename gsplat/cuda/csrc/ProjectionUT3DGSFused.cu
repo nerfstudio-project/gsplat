@@ -45,7 +45,7 @@ __global__ void projection_ut_3dgs_fused_kernel(
     const scalar_t *__restrict__ radial_coeffs,     // [B, C, 6] or [B, C, 4] optional
     const scalar_t *__restrict__ tangential_coeffs, // [B, C, 2] optional
     const scalar_t *__restrict__ thin_prism_coeffs, // [B, C, 4] optional
-    const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
+    const FThetaCameraDistortionDeviceParams ftheta_device_coeffs, // shared parameters for all cameras
     const cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params, // external distortion parameters
     // outputs
     int32_t *__restrict__ radii,         // [B, C, N, 2]
@@ -152,8 +152,8 @@ __global__ void projection_ut_3dgs_fused_kernel(
         cm_params.resolution = {image_width, image_height};
         cm_params.shutter_type = rs_type;
         cm_params.principal_point = { principal_point.x, principal_point.y };
-        cm_params.dist = ftheta_coeffs;
-        cm_params.external_distortion_params = external_distortion_device_params.has_value() ? 
+        cm_params.dist = ftheta_device_coeffs;
+        cm_params.external_distortion_params = external_distortion_device_params.has_value() ?
             &external_distortion_device_params.value() : nullptr;
         FThetaCameraModel camera_model(cm_params);
         image_gaussian_return =
@@ -263,13 +263,13 @@ void launch_projection_ut_3dgs_fused_kernel(
     const CameraModelType camera_model,
     const bool global_z_order,
     // uncented transform
-    const UnscentedTransformParameters ut_params,
+    const c10::intrusive_ptr<UnscentedTransformParameters>& ut_params,
     ShutterType rs_type,
     const at::optional<at::Tensor> radial_coeffs,     // [..., C, 6] or [..., C, 4] optional
     const at::optional<at::Tensor> tangential_coeffs, // [..., C, 2] optional
     const at::optional<at::Tensor> thin_prism_coeffs, // [..., C, 4] optional
-    const FThetaCameraDistortionParameters ftheta_coeffs, // shared parameters for all cameras
-    const std::optional<extdist::BivariateWindshieldModelParameters> external_distortion_params, // external distortion parameters
+    const c10::intrusive_ptr<FThetaCameraDistortionParameters> &ftheta_coeffs, // shared parameters for all cameras
+    const at::optional<c10::intrusive_ptr<extdist::BivariateWindshieldModelParameters>> &external_distortion_params, // external distortion parameters
     // outputs
     at::Tensor radii,                      // [..., C, N, 2]
     at::Tensor means2d,                    // [..., C, N, 2]
@@ -291,9 +291,10 @@ void launch_projection_ut_3dgs_fused_kernel(
         return;
     }
 
+    FThetaCameraDistortionDeviceParams ftheta_device_coeffs(*ftheta_coeffs);
     cuda::std::optional<extdist::BivariateWindshieldModelDeviceParams> external_distortion_device_params = cuda::std::nullopt;
     if (external_distortion_params.has_value()) {
-        external_distortion_device_params = extdist::BivariateWindshieldModelDeviceParams(external_distortion_params.value());
+        external_distortion_device_params = extdist::BivariateWindshieldModelDeviceParams(*external_distortion_params.value());
     }
 
     projection_ut_3dgs_fused_kernel<float>
@@ -322,7 +323,7 @@ void launch_projection_ut_3dgs_fused_kernel(
             camera_model,
             global_z_order,
             // uncented transform
-            ut_params,
+            *ut_params,
             rs_type,
             radial_coeffs.has_value()
                 ? radial_coeffs.value().const_data_ptr<float>()
@@ -333,7 +334,7 @@ void launch_projection_ut_3dgs_fused_kernel(
             thin_prism_coeffs.has_value()
                 ? thin_prism_coeffs.value().const_data_ptr<float>()
                 : nullptr,
-            ftheta_coeffs,
+            ftheta_device_coeffs,
             external_distortion_device_params,
             radii.data_ptr<int32_t>(),
             means2d.data_ptr<float>(),
