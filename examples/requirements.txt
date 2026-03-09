@@ -1,4 +1,7 @@
-# assume torch is already installed
+# torch, torchvision MUST be pre-installed (internal builds matching each other).
+# Pin torch here so pip cannot silently downgrade it when resolving transitive
+# dependencies (e.g. torchvision from PyPI would pull a public torch build).
+torch==2.9.1
 nvidia-ncore>=19.0.0
 
 # pycolmap for data parsing
@@ -14,8 +17,8 @@ numpy
 scipy
 scikit-learn
 tqdm
-torchmetrics[image]
-opencv-python
+torchmetrics==1.8.2
+opencv-python-headless
 tyro>=0.8.8
 Pillow
 piexif
