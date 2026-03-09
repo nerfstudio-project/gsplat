@@ -26,6 +26,11 @@ usage()
     echo "                 --gpus=<count>              - use this many GPUs"
     echo "                 --gpus=device=<id1,id2,...> - use the GPUs given by their device index"
     echo "                 --gpus=all                  - use all GPUs (default)"
+    echo "   --listen=[HOST:]PORT | -p [HOST:]PORT"
+    echo "              Expose a container port on the host."
+    echo "              Can be given  multiple times."
+    echo "              PORT maps container:PORT to host:PORT;"
+    echo "              HOST:PORT maps container:PORT to host:HOST."
     echo "   --help|-h  Show this help message"
     echo "   --debug    Show the docker run invocation"
     echo "ENVVAR=value:"
@@ -57,6 +62,8 @@ do_verbose=false
 gpus=all
 
 envvars=()
+run_args=()
+port_specs=()
 
 # Prepend the parameters given by the environment variable, if any.
 if [[ -v GSPLAT_TEST_PARAMS ]]; then
@@ -94,6 +101,29 @@ while (( $# >= 1 )); do
         ;;
     --gpus=*)
         gpus=${1#--gpus=}
+        ;;
+    --listen=*)
+        val="${1#*=}"
+        if [[ -z "$val" ]]; then
+            echo "Error: --listen requires a port specification." >&2
+            exit 1
+        fi
+        if [[ "$val" != *:* ]]; then
+            val="$val:$val"
+        fi
+        port_specs+=("$val")
+        ;;
+    -p)
+        if (( $# < 2 )); then
+            echo "Error: -p requires a port specification." >&2
+            exit 1
+        fi
+        shift
+        val="$1"
+        if [[ "$val" != *:* ]]; then
+            val="$val:$val"
+        fi
+        port_specs+=("$val")
         ;;
     --help|-h)
         usage
@@ -143,7 +173,7 @@ HOST_UID=$(id -u)
 HOST_GID=$(id -g)
 HOST_HOME="$HOME"
 
-run_args=(
+run_args+=(
     "--gpus=$gpus"
     --rm
     -v "$REPOROOT:$REPOROOT"
@@ -164,6 +194,10 @@ run_args=(
     --hostname "$(hostname)-gsdev"
     --ipc=host
 )
+
+for port_spec in "${port_specs[@]}"; do
+    run_args+=(--publish "$port_spec")
+done
 
 # Add user envvars as -e KEY=VALUE pairs without breaking on spaces
 for kv in "${envvars[@]}"; do

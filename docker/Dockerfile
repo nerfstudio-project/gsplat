@@ -232,4 +232,8 @@ CMD ["bash", "--login"]
 # Our local, persistent cache volume
 VOLUME /var/cache
 
+# Viser is exposed via this port
+# Used in examples.
+EXPOSE 8080/tcp
+
 WORKDIR /root

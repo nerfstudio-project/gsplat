@@ -185,3 +185,40 @@ For the list of available datasets to download, run:
 ```bash
 ./run_tests.sh --shell examples/benchmarks/basic.sh
 ```
+
+### Visualization
+
+Some examples (e.g. `simple_viewer.py`) launch a [viser](https://viser.studio) web viewer on
+port 8080 inside the container. Use `--listen` (or its short form `-p`) to forward that port to the host:
+
+```bash
+./run_tests.sh --listen=8080 --shell python examples/simple_viewer.py
+# or equivalently
+./run_tests.sh -p 8080 --shell python examples/simple_viewer.py
+```
+
+Then open `http://localhost:8080` in your browser.
+
+If the machine running Docker is **remote**, forward the port over SSH before opening the browser:
+
+```bash
+ssh -NL 8080:localhost:8080 <remote-host>
+```
+
+## Troubleshooting
+
+### docker: Error response from daemon: driver failed programming external connectivity on endpoint ...: Bind for 0.0.0.0:8080 failed: port is already allocated.
+
+**Problem:** Another process on the host is already listening on port 8080, so Docker cannot bind to it.
+
+**Solution:** Choose a different host port using `--listen=HOST:CONTAINER`:
+
+```bash
+./run_tests.sh --listen=8090:8080 --shell python examples/simple_viewer.py
+```
+
+Then open `http://localhost:8090` in your browser. If using an SSH tunnel, adjust the port accordingly:
+
+```bash
+ssh -NL 8090:localhost:8090 <remote-host>
+```
