@@ -205,6 +205,43 @@ If the machine running Docker is **remote**, forward the port over SSH before op
 ssh -NL 8080:localhost:8080 <remote-host>
 ```
 
+## Persistent SSH Dev Container
+
+For workflows that require running multiple commands inside the container without the overhead of a new container per command, you can start a persistent container with an SSH server.
+
+This is particularly useful when:
+- **AI coding agents** (Claude Code, Cursor, etc.) need to perform multi-step tasks — build, run tests, inspect output, iterate — inside the project environment. The agent connects over SSH and issues commands directly, maintaining state between steps. The container also acts as a safety boundary: the agent operates in an isolated environment with only the project mounted, limiting the blast radius of unintended operations on the host.
+- **Interactive debugging sessions** where you need to keep a partially-built state or a running process alive between commands.
+- **Remote development** on a headless machine where you want a long-lived environment you can reconnect to.
+
+To start a persistent container with an SSH server:
+
+```bash
+# Start container with SSH on port 2222 (default)
+./run_tests.sh --ssh
+
+# Start container with SSH on a custom port
+./run_tests.sh --ssh=2200
+```
+
+When no command is given, the container stays alive until you stop it with `Ctrl-C`.
+
+Connect from the host:
+
+```bash
+ssh -p 2222 $USER@localhost
+```
+
+Combine with feature flags to pre-configure the build environment:
+
+```bash
+./run_tests.sh --ssh --3dgut
+```
+
+**Requirements:** `~/.ssh/authorized_keys` must exist on the host (key-based auth only; password auth is disabled). Only this file is bind-mounted into the container.
+
+**Note:** After rebuilding the Docker image, the SSH host keys will change. Run `ssh-keygen -R '[localhost]:2222'` on the host to clear the old entry from `~/.ssh/known_hosts`.
+
 ## Troubleshooting
 
 ### docker: Error response from daemon: driver failed programming external connectivity on endpoint ...: Bind for 0.0.0.0:8080 failed: port is already allocated.

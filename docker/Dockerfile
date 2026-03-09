@@ -175,6 +175,8 @@ RUN --mount=type=cache,id=aptcache,target=/var/cache/apt,sharing=locked \
         vim less sudo
         # For the entrypoint script
         gosu
+        # SSH server for persistent dev container access
+        openssh-server
     )
     apt-get install "${packages[@]}"
 EOS
@@ -183,6 +185,7 @@ ENV CCACHE_CONFIGPATH=/etc/ccache.conf
 ENV PATH=/usr/local/bin:$PATH
 
 COPY --link profile.d/00-persistent-cache.sh /etc/profile.d/
+COPY --link sshd_config.d/gsplat.conf /etc/ssh/sshd_config.d/
 
 # Leave some small changes last
 RUN <<EOS
@@ -215,6 +218,10 @@ RUN <<EOS
     # Allow sudoers do use python venv automatically
     echo "Defaults secure_path=\"$PYTHON_VENV_PATH/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\"" > /etc/sudoers.d/10-secure-path
 
+    # SSH server prerequisites
+    ssh-keygen -A
+    mkdir -p /run/sshd
+
     # Remove all non-system users/groups (UID/GID >= 1000, except nobody/nogroup)
     # so the entrypoint can create the host user without conflicts
     nogroup_gid="$(getent group nogroup | cut -d: -f3)"
@@ -222,6 +229,15 @@ RUN <<EOS
         | xargs -r -n1 userdel 2>/dev/null || true
     awk -F: '$3 >= 1000 && $1 != "nogroup" { print $1 }' /etc/group \
         | xargs -r -n1 groupdel 2>/dev/null || true
+
+    # Persist env vars needed for dev work into SSH sessions via /etc/environment
+    # (PAM reads this file for all login sessions, including SSH)
+    for var in PYTHONPATH PATH PYTHON_VENV_PATH CCACHE_CONFIGPATH; do
+        eval "val=\${$var:-}"
+        if [ -n "$val" ]; then
+            printf '%s="%s"\n' "$var" "$val" >> /etc/environment
+        fi
+    done
 EOS
 
 COPY --link cuda/nvcc_wrapper.sh /usr/local/cuda/bin/nvcc
@@ -235,5 +251,8 @@ VOLUME /var/cache
 # Viser is exposed via this port
 # Used in examples.
 EXPOSE 8080/tcp
+
+# SSH server for persistent dev container access
+EXPOSE 22/tcp
 
 WORKDIR /root

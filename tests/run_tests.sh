@@ -31,6 +31,10 @@ usage()
     echo "              Can be given  multiple times."
     echo "              PORT maps container:PORT to host:PORT;"
     echo "              HOST:PORT maps container:PORT to host:HOST."
+    echo "   --ssh[=PORT]"
+    echo "              Start an SSH server in the container and forward PORT (default: 2222)"
+    echo "              to port 22 inside the container. Requires ~/.ssh/authorized_keys."
+    echo "              Runs sshd in the foreground; press Ctrl-C to stop."
     echo "   --help|-h  Show this help message"
     echo "   --debug    Show the docker run invocation"
     echo "ENVVAR=value:"
@@ -64,6 +68,8 @@ gpus=all
 envvars=()
 run_args=()
 port_specs=()
+do_ssh=false
+ssh_port=2222
 
 # Prepend the parameters given by the environment variable, if any.
 if [[ -v GSPLAT_TEST_PARAMS ]]; then
@@ -125,6 +131,14 @@ while (( $# >= 1 )); do
         fi
         port_specs+=("$val")
         ;;
+    --ssh)
+        do_ssh=true
+        ssh_port=2222
+        ;;
+    --ssh=*)
+        do_ssh=true
+        ssh_port="${1#--ssh=}"
+        ;;
     --help|-h)
         usage
         exit 0
@@ -148,6 +162,11 @@ while (( $# >= 1 )); do
     shift
 done
 
+if $do_ssh && [[ $# -gt 0 ]]; then
+    echo "Error: --ssh cannot be combined with an explicit command." >&2
+    exit 1
+fi
+
 check_if_installed docker nvidia-container-runtime
 
 # Load config variables
@@ -167,11 +186,51 @@ if $do_reset_home || $do_reset_cache; then
     exit
 fi
 
-HOST_USER=$(id -un)
-HOST_GROUP=$(id -gn)
-HOST_UID=$(id -u)
-HOST_GID=$(id -g)
+
+HOST_USER="$(id -un)"
+HOST_GROUP="$(id -gn)"
+HOST_UID="$(id -u)"
+HOST_GID="$(id -g)"
 HOST_HOME="$HOME"
+RUN_AS="$HOST_USER"
+
+if $do_ssh; then
+    host_ip="$(ip route get 1.1.1.1 | sed -n 's/.* src \([^ ]*\).*/\1/p')"
+    ssh_remote="$HOST_USER@${host_ip:-localhost}"
+    container_name="gsplat-ssh-${HOST_USER}-$ssh_port"
+    run_args+=(--name "$container_name")
+
+    existing_id=$(docker ps --format '{{.ID}} {{.Ports}}' \
+                  | awk -v port=":$ssh_port->" '$0 ~ port {print $1}')
+    if [[ -n "$existing_id" ]]; then
+        existing_image=$(docker inspect "$existing_id" --format '{{.Image}}')
+        existing_name=$(docker inspect "$existing_id" --format '{{.Name}}' | sed 's|^/||')
+        new_image=$(docker image inspect "$DOCKER_REGISTRY/$IMAGE_NAME:$IMAGE_TAG" \
+                    --format '{{.Id}}' 2>/dev/null || true)
+        if [[ "$existing_image" == "$new_image" ]]; then
+            echo "SSH container ('$existing_name') already running with the current image." >&2
+            echo "Connect with: ssh -p $ssh_port $ssh_remote" >&2
+            exit 0
+        else
+            echo "Error: a container ('$existing_name') is already using port $ssh_port with a stale image." >&2
+            echo "Stop it first with: docker stop $existing_name" >&2
+            exit 1
+        fi
+    fi
+
+    run_args+=(-ti)
+    run_args+=(--init)
+    run_args+=(--publish "$ssh_port:22")
+    RUN_AS=root
+    if [[ -f "$HOME/.ssh/authorized_keys" ]]; then
+        run_args+=(-v "$HOME/.ssh/authorized_keys:$HOST_HOME/.ssh/authorized_keys:ro")
+    else
+        echo "Warning: $HOME/.ssh/authorized_keys not found; SSH key authentication unavailable." >&2
+    fi
+
+    echo "Starting SSH container. Connect with:" >&2
+    echo "  ssh -p $ssh_port $ssh_remote" >&2
+fi
 
 run_args+=(
     "--gpus=$gpus"
@@ -184,6 +243,7 @@ run_args+=(
     -e HOST_UID="$HOST_UID"
     -e HOST_GID="$HOST_GID"
     -e HOST_HOME="$HOST_HOME"
+    -e RUN_AS="$RUN_AS"
     -e TERM="$TERM"
 
     -e PYTHONPATH="$REPOROOT"
@@ -227,6 +287,11 @@ if $runshell; then
         # Drop us into an interactive shell in the container
         run_args+=(-ti)
     fi
+elif $do_ssh; then
+    # Run sshd in foreground to keep the container alive
+    # -D: foreground (doesn't detach)
+    # -e: log connections/disconnections to stderr instead of syslog
+    shell_args+=(/usr/sbin/sshd -D -e)
 else
     if $do_sanitize; then
         # CUDA compute-sanitizer needs the full path of the program to be analyzed
