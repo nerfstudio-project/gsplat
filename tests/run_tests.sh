@@ -162,6 +162,7 @@ run_args=(
     -v "$LOCAL_CACHE_VOLUME:/var/cache"
 
     --hostname "$(hostname)-gsdev"
+    --ipc=host
 )
 
 # Add user envvars as -e KEY=VALUE pairs without breaking on spaces
