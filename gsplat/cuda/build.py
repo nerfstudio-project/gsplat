@@ -207,9 +207,6 @@ def build_and_load_gsplat():
             f"[green]gsplat: CUDA extension has been set up successfully in {toc - tic:.2f} seconds.[/green]"
         )
 
-    with open(saved_build_params_fname, "wb") as f:
-        pickle.dump(build_params, f)
-
     # If the build exists, we assume the extension has been built
     # and we can load it.
     module_exists = os.path.exists(os.path.join(build_dir, f"{build_params.name}.so")) or os.path.exists(os.path.join(build_dir, f"{build_params.name}.lib"))
